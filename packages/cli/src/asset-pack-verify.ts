@@ -8,6 +8,7 @@ import {
   ZipDecodeError,
   type ExpectedZipArchive,
 } from '@mpgd/phaser-assets/archive-validation';
+import { defaultArchiveWorkerLimits } from '@mpgd/phaser-assets/archives';
 import {
   validatePhaserPackDeliveryManifest,
   type PhaserPackDeliveryManifest,
@@ -38,16 +39,20 @@ export interface AssetPackVerifyReport {
     readonly version: number;
     readonly packs: number;
   };
-  /** Referenced objects: exactly what the chosen manifest requires. */
+  /** Referenced objects as declared by the chosen manifest; verification
+   * outcomes live in `failures`, so these totals stay meaningful even
+   * when artifacts are missing or unreadable. */
   readonly referenced: {
     readonly files: number;
     readonly bytes: number;
   };
   /** Root inventory: every regular file physically under --root. Only
-   * computed when host limits are requested. */
+   * computed when host limits are requested. `largest` is the biggest
+   * regular file seen; on a truncated walk it is a lower bound. */
   readonly inventory?: {
     readonly files: number;
     readonly bytes: number;
+    readonly largest: number;
     readonly truncated: boolean;
   } | undefined;
   readonly archives: readonly {
@@ -168,11 +173,17 @@ const streamSha256 = async (
 /** Resolve one manifest artifact path under the root, rejecting absolute
  * paths, traversal, symlinks and non-regular files — checking each path
  * component by lstat so a symlink cannot hide mid-path. */
+interface ResolvedArtifact {
+  readonly path: string;
+  readonly dev: number;
+  readonly ino: number;
+}
+
 const resolveArtifactPath = async (
   root: string,
   realRoot: string,
   artifactPath: string,
-): Promise<string> => {
+): Promise<ResolvedArtifact> => {
   if (artifactPath.length === 0) {
     throw new Error('Artifact path is empty');
   }
@@ -210,7 +221,10 @@ const resolveArtifactPath = async (
   if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     throw new Error(`Artifact path escapes the root: ${artifactPath}`);
   }
-  return current;
+  // The lstat identity travels with the path so the later open() can bind
+  // to this exact inode; a component swapped for a symlink between the
+  // check and the open surfaces as a mismatch instead of a redirect.
+  return { path: current, dev: stat.dev, ino: stat.ino };
 };
 
 /** Count every regular file under the root for host-limit accounting.
@@ -219,9 +233,10 @@ const resolveArtifactPath = async (
 const inventoryRoot = async (
   root: string,
   onEntry?: () => void,
-): Promise<{ files: number; bytes: number; truncated: boolean }> => {
+): Promise<{ files: number; bytes: number; largest: number; truncated: boolean }> => {
   let files = 0;
   let bytes = 0;
+  let largest = 0;
   let truncated = false;
   const walk = async (directory: string): Promise<void> => {
     if (files >= INVENTORY_FILE_CAP) {
@@ -249,15 +264,19 @@ const inventoryRoot = async (
       const stat = await lstat(child);
       files++;
       bytes += stat.size;
+      if (stat.size > largest) {
+        largest = stat.size;
+      }
     }
   };
   await walk(root);
-  return { files, bytes, truncated };
+  return { files, bytes, largest, truncated };
 };
 
 const readManifestCapped = async (
   manifestPath: string,
   cap: number,
+  onChunk?: () => void,
 ): Promise<Buffer> => {
   const stream: ReadStream = createReadStream(resolve(manifestPath), {
     highWaterMark: STREAM_CHUNK_BYTES,
@@ -273,9 +292,10 @@ const readManifestCapped = async (
         throw new Error(`Delivery manifest exceeds ${cap} bytes`);
       }
       chunks.push(view);
+      onChunk?.();
     }
   } catch (error) {
-    if (received > cap) {
+    if (error instanceof VerifyDeadlineError || received > cap) {
       throw error;
     }
     throw new Error(`Could not read the delivery manifest: ${errorText(error)}`);
@@ -332,6 +352,21 @@ const expectedOf = (pack: PhaserPackDeliveryPack): ExpectedZipArchive => ({
   }))),
 });
 
+/** The ZIP entry path bound mirrors runtime delivery: the default worker
+ * limit raised to this pack's longest declared entry path, so a manifest
+ * the builder, validator and runtime accept never fails here. */
+const longestDeclaredPathOf = (pack: PhaserPackDeliveryPack): number => {
+  let longest = defaultArchiveWorkerLimits().maxPathLength;
+  for (const asset of pack.assets) {
+    for (const file of asset.files) {
+      if (file.path.length > longest) {
+        longest = file.path.length;
+      }
+    }
+  }
+  return longest;
+};
+
 /** Core decode limits follow the manifest's own declarations: the archive
  * byte limit is the declared archive size (already verified by hash), the
  * expanded limits are the manifest's file byte sums, and the deadline is
@@ -362,7 +397,7 @@ const coreLimitsOf = (
     ),
     totalExpandedBytes: Math.max(1, expanded),
     entryCount: Math.max(1, pack.archive?.entryCount ?? 0),
-    maxPathLength: 4096,
+    maxPathLength: longestDeclaredPathOf(pack),
     decodeDeadlineMs: Math.max(1, remainingMs),
   };
 };
@@ -413,20 +448,51 @@ export async function verifyAssetPackDelivery(
     }
     return true;
   };
+  /** I/O-internal deadline sampler: long reads abort as soon as the
+   * whole-verification budget expires instead of running to completion. */
+  const sampleDeadline = (): void => {
+    if (deadlineBreached()) {
+      throw new VerifyDeadlineError();
+    }
+  };
 
   // ---- Stage: manifest -------------------------------------------------
   let manifestBytes: Buffer | undefined;
   let manifest: PhaserPackDeliveryManifest | undefined;
   try {
-    manifestBytes = await readManifestCapped(options.manifestPath, manifestByteCap);
+    manifestBytes = await readManifestCapped(options.manifestPath, manifestByteCap, sampleDeadline);
   } catch (error) {
-    failWith(failures, 'manifest', 'manifest-unreadable', errorText(error));
+    if (!(error instanceof VerifyDeadlineError)) {
+      failWith(failures, 'manifest', 'manifest-unreadable', errorText(error));
+    }
   }
   if (manifestBytes !== undefined) {
     try {
       manifest = validatePhaserPackDeliveryManifest(JSON.parse(manifestBytes.toString('utf8')));
     } catch (error) {
       failWith(failures, 'manifest', 'manifest-invalid', errorText(error));
+    }
+  }
+
+  /** What the chosen manifest requires, independent of verification
+   * outcomes: distinct artifact objects and their declared bytes. */
+  let declaredTotals = { files: 0, bytes: 0 };
+  if (manifest !== undefined) {
+    for (const pack of manifest.packs) {
+      if (pack.delivery === 'zip') {
+        declaredTotals = {
+          files: declaredTotals.files + 1,
+          bytes: declaredTotals.bytes + (pack.archive?.bytes ?? 0),
+        };
+        continue;
+      }
+      for (const asset of pack.assets) {
+        declaredTotals = {
+          files: declaredTotals.files + asset.files.length,
+          bytes: declaredTotals.bytes
+            + asset.files.reduce((sum, file) => sum + file.bytes, 0),
+        };
+      }
     }
   }
 
@@ -448,8 +514,6 @@ export async function verifyAssetPackDelivery(
     );
   }
 
-  const referencedFiles: string[] = [];
-  let referencedBytes = 0;
   const archives: {
     packId: string;
     entries: number;
@@ -458,13 +522,6 @@ export async function verifyAssetPackDelivery(
   const seenResolved = new Map<string, string>();
 
   const realRoot = rootIsDirectory ? await realpath(root) : root;
-  /** I/O-internal deadline sampler: long reads abort as soon as the
-   * whole-verification budget expires instead of running to completion. */
-  const sampleDeadline = (): void => {
-    if (deadlineBreached()) {
-      throw new VerifyDeadlineError();
-    }
-  };
   /** Verified on-disk objects keyed by resolved path. The manifest
    * validator already rejects duplicate references, so this is
    * defense in depth for distinct manifest paths that alias the same
@@ -490,11 +547,7 @@ export async function verifyAssetPackDelivery(
                 root,
                 realRoot,
                 seenResolved,
-                referencedFiles,
                 verifiedArtifacts,
-                (bytes: number): void => {
-                  referencedBytes += bytes;
-                },
                 sampleDeadline,
               );
             }
@@ -507,12 +560,8 @@ export async function verifyAssetPackDelivery(
           root,
           realRoot,
           seenResolved,
-          referencedFiles,
           verifiedArtifacts,
           archives,
-          (bytes: number): void => {
-            referencedBytes += bytes;
-          },
           sampleDeadline,
           maxArchiveBytes,
           startedAt,
@@ -529,7 +578,7 @@ export async function verifyAssetPackDelivery(
   }
 
   // ---- Stage: limits ---------------------------------------------------
-  let inventory: { files: number; bytes: number; truncated: boolean } | undefined;
+  let inventory: { files: number; bytes: number; largest: number; truncated: boolean } | undefined;
   const limitsRequested = hostLimits !== undefined
     && Object.values(hostLimits).some((value) => value !== undefined);
   if (limitsRequested && rootIsDirectory && argsValid && !deadlineBreached()) {
@@ -546,6 +595,7 @@ export async function verifyAssetPackDelivery(
       // totals past the cap stay unknown.
       const maxFiles = hostLimits?.maxFiles;
       const maxTotalBytes = hostLimits?.maxTotalBytes;
+      const maxObjectBytes = hostLimits?.maxObjectBytes;
       if (maxFiles !== undefined && inventory.files > maxFiles) {
         failWith(
           failures,
@@ -562,30 +612,26 @@ export async function verifyAssetPackDelivery(
           `Root inventory holds ${inventory.bytes} bytes, over the limit ${maxTotalBytes}`,
         );
       }
-    }
-  }
-  if (
-    limitsRequested
-    && argsValid
-    && hostLimits?.maxObjectBytes !== undefined
-    && manifest !== undefined
-  ) {
-    // Object sizes come from the manifest's own declarations; every
-    // referenced object was also size-verified on disk.
-    for (const pack of manifest.packs) {
-      const objectBytes = pack.delivery === 'zip'
-        ? (pack.archive?.bytes ?? 0)
-        : pack.assets.reduce(
-            (max, asset) => Math.max(max, ...asset.files.map((file) => file.bytes)),
-            0,
-          );
-      if (objectBytes > hostLimits.maxObjectBytes) {
+      // Object size covers the whole deployment root — unreferenced stale
+      // revisions included — exactly like the count and total limits.
+      if (maxObjectBytes !== undefined && inventory.largest > maxObjectBytes) {
         failWith(
           failures,
           'limits',
           'max-object-bytes',
-          `Pack ${pack.packId} holds an object of ${objectBytes} bytes, over the limit ${hostLimits.maxObjectBytes}`,
-          pack.packId,
+          `Root inventory holds an object of ${inventory.largest} bytes, `
+            + `over the limit ${maxObjectBytes}`,
+        );
+      }
+      if (inventory.truncated) {
+        // The walk stopped at the cap, so the limits above were only
+        // checked against a lower bound; refuse to certify the deployment.
+        failWith(
+          failures,
+          'limits',
+          'inventory-truncated',
+          `Root inventory exceeded ${INVENTORY_FILE_CAP} files; `
+            + 'host limits could not be fully verified',
         );
       }
     }
@@ -600,10 +646,7 @@ export async function verifyAssetPackDelivery(
       version: manifest?.version ?? 0,
       packs: manifest?.packs.length ?? 0,
     },
-    referenced: {
-      files: referencedFiles.length,
-      bytes: referencedBytes,
-    },
+    referenced: declaredTotals,
     ...(inventory === undefined ? {} : { inventory }),
     archives,
     ...(limitsRequested ? { limits: usedLimits } : {}),
@@ -612,9 +655,9 @@ export async function verifyAssetPackDelivery(
   };
 }
 
-/** Resolve one manifest artifact path under the root, register it against
- * case-folded collisions, and record the referenced object — the single
- * security-critical resolve/register path shared by files and zip packs. */
+/** Resolve one manifest artifact path under the root and register it
+ * against case-folded collisions — the single security-critical
+ * resolve/register path shared by files and zip packs. */
 const resolveAndRegister = async (
   failures: FailureSink,
   pack: PhaserPackDeliveryPack,
@@ -622,36 +665,41 @@ const resolveAndRegister = async (
   realRoot: string,
   artifactPath: string,
   seenResolved: Map<string, string>,
-  referencedFiles: string[],
-): Promise<string | undefined> => {
-  let resolvedPath: string;
+): Promise<ResolvedArtifact | undefined> => {
+  let resolved: ResolvedArtifact;
   try {
-    resolvedPath = await resolveArtifactPath(root, realRoot, artifactPath);
+    resolved = await resolveArtifactPath(root, realRoot, artifactPath);
   } catch (error) {
     failWith(failures, 'paths', 'path-invalid', errorText(error), pack.packId);
     return undefined;
   }
-  const caseKey = caseKeyOf(resolvedPath);
+  const caseKey = caseKeyOf(resolved.path);
   const prior = seenResolved.get(caseKey);
   if (prior !== undefined) {
-    if (prior !== resolvedPath) {
+    if (prior !== resolved.path) {
       failWith(
         failures,
         'paths',
         'path-collision',
-        `Manifest paths ${prior} and ${resolvedPath} resolve to the same file`,
+        `Manifest paths ${prior} and ${resolved.path} resolve to the same file`,
         pack.packId,
       );
       return undefined;
     }
     // Duplicate reference to an already-registered object: the caller
     // re-checks the new declaration but the object counts once.
-    return resolvedPath;
+    return resolved;
   }
-  seenResolved.set(caseKey, resolvedPath);
-  referencedFiles.push(resolvedPath);
-  return resolvedPath;
+  seenResolved.set(caseKey, resolved.path);
+  return resolved;
 };
+
+/** Bind an opened descriptor to the identity the path checks validated:
+ * the same inode, or the component was swapped between check and open. */
+const bindsToValidated = (
+  info: { dev: number; ino: number },
+  resolved: ResolvedArtifact,
+): boolean => info.dev === resolved.dev && info.ino === resolved.ino;
 
 interface ReferencedFile {
   readonly path: string;
@@ -666,23 +714,21 @@ const verifyReferencedFile = async (
   root: string,
   realRoot: string,
   seenResolved: Map<string, string>,
-  referencedFiles: string[],
   verifiedArtifacts: Map<string, { bytes: number; sha256: string }>,
-  onVerified: (bytes: number) => void,
   sampleDeadline: () => void,
 ): Promise<void> => {
-  const resolvedPath = await resolveAndRegister(
+  const resolved = await resolveAndRegister(
     failures,
     pack,
     root,
     realRoot,
     file.path,
     seenResolved,
-    referencedFiles,
   );
-  if (resolvedPath === undefined) {
+  if (resolved === undefined) {
     return;
   }
+  const resolvedPath = resolved.path;
   try {
     const cached = verifiedArtifacts.get(resolvedPath);
     if (cached !== undefined) {
@@ -708,6 +754,16 @@ const verifyReferencedFile = async (
     const handle = await open(resolvedPath, 'r');
     let hashed: { bytes: number; sha256: string };
     try {
+      if (!bindsToValidated(await handle.stat(), resolved)) {
+        failWith(
+          failures,
+          'paths',
+          'path-invalid',
+          `Artifact path changed during verification: ${file.path}`,
+          pack.packId,
+        );
+        return;
+      }
       hashed = await streamSha256(resolvedPath, handle, createHash('sha256'), sampleDeadline);
     } finally {
       await handle.close();
@@ -733,7 +789,6 @@ const verifyReferencedFile = async (
       return;
     }
     verifiedArtifacts.set(resolvedPath, hashed);
-    onVerified(hashed.bytes);
   } catch (error) {
     if (error instanceof VerifyDeadlineError) {
       throw error;
@@ -748,10 +803,8 @@ const verifyZipPack = async (
   root: string,
   realRoot: string,
   seenResolved: Map<string, string>,
-  referencedFiles: string[],
   verifiedArtifacts: Map<string, { bytes: number; sha256: string }>,
   archives: { packId: string; entries: number; expandedBytes: number }[],
-  onVerified: (bytes: number) => void,
   sampleDeadline: () => void,
   maxArchiveBytes: number,
   startedAt: number,
@@ -768,18 +821,18 @@ const verifyZipPack = async (
     );
     return;
   }
-  const resolvedPath = await resolveAndRegister(
+  const resolved = await resolveAndRegister(
     failures,
     pack,
     root,
     realRoot,
     archivePath,
     seenResolved,
-    referencedFiles,
   );
-  if (resolvedPath === undefined) {
+  if (resolved === undefined) {
     return;
   }
+  const resolvedPath = resolved.path;
   const declaredBytes = pack.archive?.bytes ?? 0;
   if (declaredBytes > maxArchiveBytes) {
     failWith(
@@ -799,7 +852,17 @@ const verifyZipPack = async (
     try {
       const cached = verifiedArtifacts.get(resolvedPath);
       if (cached === undefined) {
-        const { size } = await handle.stat();
+        const { size, dev, ino } = await handle.stat();
+        if (!bindsToValidated({ dev, ino }, resolved)) {
+          failWith(
+            failures,
+            'paths',
+            'path-invalid',
+            `Artifact path changed during verification: ${archivePath}`,
+            pack.packId,
+          );
+          return;
+        }
         if (pack.archive !== undefined && size !== pack.archive.bytes) {
           failWith(
             failures,
@@ -835,7 +898,6 @@ const verifyZipPack = async (
           return;
         }
         verifiedArtifacts.set(resolvedPath, actual);
-        onVerified(actual.bytes);
       } else {
         if (pack.archive !== undefined && cached.bytes !== pack.archive.bytes) {
           failWith(

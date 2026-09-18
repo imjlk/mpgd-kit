@@ -152,7 +152,9 @@ limits (`--max-object-bytes`, `--max-files`, `--max-total-bytes`) evaluated
 against the entire root inventory (old revisions included) rather than just
 the referenced set. `--max-archive-bytes` caps how many bytes a single zip
 archive may declare and occupy during verification (512 MiB by default);
-larger archives fail in the `limits` stage before being read. Use `--json`
+larger archives fail in the `limits` stage before being read. Roots with
+more than a million files fail the inventory check as truncated rather
+than certifying limits that could not be fully walked. Use `--json`
 for automation; the report's `failures` list carries a stage and stable code
 per problem, and any failure exits non-zero. The command reads inputs only —
 it never extracts archives, modifies the manifest, or contacts a network. The

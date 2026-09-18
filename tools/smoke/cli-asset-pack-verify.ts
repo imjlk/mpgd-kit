@@ -423,9 +423,10 @@ const beforeSnapshot = new Map<string, Map<string, { bytes: number; sha256: stri
   assert.equal(report.ok, false);
   assert.equal(report.failures[0]!.stage, 'args');
   assert.equal(report.failures[0]!.code, 'invalid-option');
-  // Invalid arguments short-circuit the artifact and inventory stages.
+  // Invalid arguments short-circuit the artifact and inventory stages,
+  // while referenced totals still describe the manifest's requirements.
   assert.equal(report.failures.length, 1);
-  assert.equal(report.referenced.files, 0);
+  assert.equal(report.referenced.files, 2);
   assert.equal(report.inventory, undefined);
 }
 {
@@ -453,6 +454,40 @@ const beforeSnapshot = new Map<string, Map<string, { bytes: number; sha256: stri
     hostLimits: { maxFiles: 10_000, maxTotalBytes: 1024 * 1024, maxObjectBytes: 1024 * 1024 },
   });
   assert.equal(within.ok, true, JSON.stringify(within.failures));
+}
+{
+  // The object-size limit covers unreferenced objects (stale revisions):
+  // a huge artifact that no manifest entry points at still fails the cap.
+  const objRoot = join(fixtureRoot, 'out-objsize');
+  cpSync(join(fixtureRoot, filesOut), objRoot, { recursive: true });
+  const manifestDoc = JSON.parse(
+    readFileSync(
+      join(
+        objRoot,
+        'asset-pack-delivery.json',
+      ),
+      'utf8',
+    ),
+  ) as { packs: { assets: { files: { bytes: number }[] }[] }[] };
+  let declaredLargest = 0;
+  for (const pack of manifestDoc.packs) {
+    for (const asset of pack.assets) {
+      for (const file of asset.files) {
+        declaredLargest = Math.max(declaredLargest, file.bytes);
+      }
+    }
+  }
+  assert.ok(declaredLargest > 0);
+  writeFileSync(join(objRoot, 'packs', 'huge.bin'), Buffer.alloc(declaredLargest + 1024, 7));
+  const over = await verify(join(objRoot, 'asset-pack-delivery.json'), objRoot, {
+    hostLimits: { maxObjectBytes: declaredLargest },
+  });
+  assert.equal(over.ok, false);
+  assert.ok(over.failures.some((failure) => failure.code === 'max-object-bytes'));
+  const withinObject = await verify(join(objRoot, 'asset-pack-delivery.json'), objRoot, {
+    hostLimits: { maxObjectBytes: declaredLargest + 1024 },
+  });
+  assert.equal(withinObject.ok, true, JSON.stringify(withinObject.failures));
 }
 {
   // Referenced integrity alone must not report host limits as passed when
