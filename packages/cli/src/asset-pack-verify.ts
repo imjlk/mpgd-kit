@@ -634,13 +634,18 @@ export async function verifyAssetPackDelivery(
   };
 
   // ---- Stage: manifest -------------------------------------------------
+  // Invalid arguments stop all filesystem work: the deadline itself may
+  // be the invalid value (an oversized timeout clamps the platform timer
+  // to 1 ms, disarming the watchdog), so I/O must not start on it.
   let manifestBytes: Buffer | undefined;
   let manifest: PhaserPackDeliveryManifest | undefined;
-  try {
-    manifestBytes = await readManifestCapped(options.manifestPath, manifestByteCap, deadline);
-  } catch (error) {
-    if (!(error instanceof VerifyDeadlineError)) {
-      failWith(failures, 'manifest', 'manifest-unreadable', errorText(error));
+  if (argsValid) {
+    try {
+      manifestBytes = await readManifestCapped(options.manifestPath, manifestByteCap, deadline);
+    } catch (error) {
+      if (!(error instanceof VerifyDeadlineError)) {
+        failWith(failures, 'manifest', 'manifest-unreadable', errorText(error));
+      }
     }
   }
   if (manifestBytes !== undefined) {
@@ -676,19 +681,21 @@ export async function verifyAssetPackDelivery(
   const root = resolve(options.root);
   let rootIsDirectory = false;
   let rootMissing = false;
-  try {
+  if (argsValid) {
+    try {
     // The deployment root may itself be a symlink (release directories
     // often are); follow it, unlike the per-component artifact checks.
-    rootIsDirectory = (await deadline.race(stat(root))).isDirectory();
-    // An existing non-directory (a regular file, say) must fail like a
-    // missing root — skipping every stage without a failure would
-    // certify an unchecked deployment.
-    rootMissing = !rootIsDirectory;
-  } catch (error) {
-    // A stalled stat is a deadline problem, not a missing root: the
-    // deadline failure is already recorded, so the report must not add
-    // a false path diagnosis.
-    rootMissing = !(error instanceof VerifyDeadlineError);
+      rootIsDirectory = (await deadline.race(stat(root))).isDirectory();
+      // An existing non-directory (a regular file, say) must fail like a
+      // missing root — skipping every stage without a failure would
+      // certify an unchecked deployment.
+      rootMissing = !rootIsDirectory;
+    } catch (error) {
+      // A stalled stat is a deadline problem, not a missing root: the
+      // deadline failure is already recorded, so the report must not add
+      // a false path diagnosis.
+      rootMissing = !(error instanceof VerifyDeadlineError);
+    }
   }
   if (rootMissing) {
     failWith(

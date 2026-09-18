@@ -36,11 +36,19 @@ export async function verifyZipV1Archive(
   if (!ArrayBuffer.isView(archive)) {
     throw new ZipDecodeError('invalid-structure', 'ZIP archive bytes must be a typed array view');
   }
+  // Snapshot through the typed-array constructor: it reads the length and
+  // elements from the [[ArrayLength]] and indexed internal slots, while
+  // the length/buffer/byteOffset the core would read are prototype
+  // accessors a genuine view can shadow with own properties — a view
+  // holding a valid ZIP followed by trailing bytes could otherwise
+  // certify just its prefix. The copy also freezes the bytes against
+  // caller mutation while verification runs.
+  const bytes = new Uint8Array(archive);
   let entries = 0;
   let expandedBytes = 0;
   // Entry bytes are discarded as soon as the core verified them: the
   // generator holds at most one entry resident, never the whole map.
-  for await (const entry of decodeZipV1Entries(archive, expected, limits)) {
+  for await (const entry of decodeZipV1Entries(bytes, expected, limits)) {
     entries++;
     expandedBytes += entry.bytes.byteLength;
   }

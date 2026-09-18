@@ -461,10 +461,10 @@ const beforeSnapshot = new Map<string, Map<string, { bytes: number; sha256: stri
   });
   assert.equal(overRange.ok, false);
   assert.ok(overRange.failures.some((failure) => failure.code === 'invalid-option'));
-  // Invalid arguments short-circuit the artifact and inventory stages,
-  // while referenced totals still describe the manifest's requirements.
+  // Invalid arguments stop all filesystem work before the manifest is
+  // even read: the deadline itself may be the invalid value.
   assert.equal(report.failures.length, 1);
-  assert.equal(report.referenced.files, 2);
+  assert.equal(report.referenced.files, 0);
   assert.equal(report.inventory, undefined);
 }
 {
