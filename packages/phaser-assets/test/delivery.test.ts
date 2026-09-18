@@ -818,6 +818,38 @@ describe('phaser pack delivery', () => {
     zipDelivery.dispose();
   });
 
+  it('starts no archive request when the resolver spends the budget', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const clock = useMonotonicFakeClock();
+    try {
+      const origin = await startGatedOrigin();
+      servers.push(origin);
+      const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+      for (const [path, file] of packFiles) {
+        origin.files.set(path, file);
+      }
+      const workers = createFakeWorkerFactory();
+      const delivery = createPhaserPackDelivery(manifest, {
+        // The resolver is synchronous user code; it burns the whole
+        // budget before the archive request could start.
+        resolveURL: (path): string => {
+          clock.set(10_001);
+          return new URL(path, origin.url).href;
+        },
+        createWorker: workers.factory,
+        prepareTimeoutMs: 10_000,
+      });
+      await expect(delivery.prepare('solo')).rejects.toMatchObject({ code: 'deadline' });
+      expect(origin.requests).toHaveLength(0);
+      expect(workers.posted.filter((message) => message.type === 'decode')).toHaveLength(0);
+      delivery.dispose();
+    } finally {
+      vi.restoreAllMocks();
+      clock.restore();
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the preparation budget when the wall clock jumps forward', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const clock = useMonotonicFakeClock();

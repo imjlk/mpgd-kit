@@ -719,6 +719,12 @@ export function createPhaserPackDelivery(
   ): Promise<StagedPack> => {
     const archive = pack.archive!;
     const url = resolveArtifact(archive.path, { packId: pack.packId, revision: pack.revision });
+    // URL resolution runs synchronous user code; the budget gate sits
+    // immediately before the request it guards, after that code, so no
+    // archive request can start on a budget spent inside the resolver.
+    if (deadlineAt - monotonicNow() <= 0) {
+      fail('deadline', 'Delivery preparation exceeded its deadline');
+    }
     archiveRequests++;
     const bytes = await fetchDeliveryBytes(
       url,
