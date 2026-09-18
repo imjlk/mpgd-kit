@@ -26,6 +26,10 @@
       "types": "./dist/archives.d.ts",
       "default": "./dist/archives.js"
     },
+    "./delivery": {
+      "types": "./dist/delivery.d.ts",
+      "default": "./dist/delivery.js"
+    },
     "./pack-format": {
       "types": "./dist/pack-format.d.ts",
       "default": "./dist/pack-format.js"

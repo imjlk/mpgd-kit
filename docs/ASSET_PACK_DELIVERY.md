@@ -133,6 +133,14 @@ outstanding entry of backpressure, per-job cancellation with late-message
 protection, and distinct failure statuses for worker crashes and deadlines.
 See the package README for the exact contract and limitations.
 
+### Public delivery integration
+
+`@mpgd/phaser-assets/delivery` turns this manifest into the loader
+catalog plus a prepared file source (staged ZIP packs via the real
+module worker, plain HTTP for `files` packs, mixed manifests routed per
+pack). See the package README's "Prepared pack delivery" section for the
+contract — budgets, deadlines, lifetimes and error codes.
+
 ### Browser acceptance
 
 The private fixture in `examples/asset-packs` exercises the full product path

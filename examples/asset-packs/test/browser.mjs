@@ -359,7 +359,7 @@ try {
         remote.faults.set(archivePath('dunes'), { kind: 'corrupt' });
         await page.click('#retry');
         await wait('error');
-        assert.match((await state()).error, /digest mismatch/i);
+        assert.match((await state()).error, /digest (mismatch|does not match)/i);
         remote.faults.delete(archivePath('dunes'));
         await page.click('#retry');
         await wait('playing');
