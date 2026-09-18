@@ -19,7 +19,8 @@ default) plus decompression bounds `--max-entry-bytes` (256 MiB) and
 `--max-expanded-bytes` (1 GiB) that are independent of the manifest's own
 declared sizes, failing in the limits stage before reading or decoding
 oversized declarations. Reports carry
-per-stage failure codes; `--json` emits a machine-readable report
-(followed by a trailing newline; the CLI framework prints a one-line
-program banner before it) and failures exit non-zero. The check never
+per-stage failure codes; `--json` emits stdout as exactly one
+machine-readable JSON document (parseable with JSON.parse(stdout), no
+banner) on success and failure alike, framework argument errors move to
+stderr, and failures exit non-zero. The check never
 modifies inputs, extracts archives, or contacts a network.

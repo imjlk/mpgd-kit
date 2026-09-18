@@ -276,6 +276,32 @@ export async function runMpgdCli(args: readonly string[]): Promise<void> {
   await cli([...args], entryCommand, {
     name: 'mpgd',
     version: cliVersion,
+    // Machine-readable mode contract: `assets verify-delivery --json`
+    // owns stdout entirely — exactly one JSON document, parseable with
+    // JSON.parse(stdout) and nothing else. The framework's banner is
+    // suppressed for that command, and framework-level argument errors
+    // (bad value types, missing required arguments — rejected before the
+    // command handler runs) move to stderr so stdout never carries a
+    // partial document. Every other command keeps the default rendering.
+    renderHeader: async (ctx) => {
+      const values = ctx.values as Record<string, unknown>;
+      if (ctx.name === 'verify-delivery' && values.json === true) {
+        return '';
+      }
+      const title = ctx.env.description || ctx.env.name || '';
+      return title
+        ? `${title} (${ctx.env.name || ''}${ctx.env.version ? ` v${ctx.env.version}` : ''})`
+        : title;
+    },
+    renderValidationErrors: async (ctx, error) => {
+      const messages = error.errors.map((entry) => String((entry as Error).message)).join('\n');
+      const values = ctx.values as Record<string, unknown>;
+      if (ctx.name === 'verify-delivery' && values.json === true) {
+        process.stderr.write(`${messages}\n`);
+        return '';
+      }
+      return messages;
+    },
     subCommands: {
       assets: assetsCommand,
       game: gameCommand,

@@ -613,17 +613,52 @@ const beforeSnapshot = new Map<string, Map<string, { bytes: number; sha256: stri
 
 // ---- CLI behavior ---------------------------------------------------------
 {
+  // Text mode keeps its human banner.
   const run = runVerifyCli(zipManifest, join(fixtureRoot, zipOut));
   assert.equal(run.status, 0, run.stderr);
   assert.ok(run.stdout.includes('Delivery verification passed.'));
+  assert.ok(run.stdout.includes('mpgd v'));
 }
 {
+  // Machine-readable mode: stdout is exactly one JSON document —
+  // JSON.parse runs on the whole stdout, no banner stripping.
   const run = runVerifyCli(zipManifest, join(fixtureRoot, zipOut), '--json');
   assert.equal(run.status, 0, run.stderr);
-  const parsed = JSON.parse(run.stdout.slice(run.stdout.indexOf('{'))) as AssetPackVerifyReport;
+  const parsed = JSON.parse(run.stdout) as AssetPackVerifyReport;
   assert.equal(parsed.ok, true);
-  // Exactly one JSON document on stdout.
+  assert.equal(run.stdout.trim().startsWith('{'), true);
   assert.equal(run.stdout.trim().endsWith('}'), true);
+}
+{
+  // Framework-level argument errors (rejected before the command handler)
+  // keep stdout blank and report on stderr with a non-zero exit.
+  const run = runVerifyCli(zipManifest, join(fixtureRoot, zipOut), '--json', '--max-files', 'abc');
+  assert.equal(run.status, 1);
+  assert.equal(run.stdout.trim().length, 0);
+  assert.ok(run.stderr.includes('--max-files'));
+}
+{
+  // --help wins over --json: its own usage text is printed instead.
+  const help = runVerifyCli(zipManifest, join(fixtureRoot, zipOut), '--json', '--help');
+  assert.equal(help.status, 0);
+  assert.ok(help.stdout.includes('--manifest'));
+  let helpIsJson = true;
+  try {
+    JSON.parse(help.stdout);
+  } catch {
+    helpIsJson = false;
+  }
+  assert.equal(helpIsJson, false);
+}
+{
+  // --version wins over --json: only the version line is printed.
+  const version = spawnSync(
+    process.execPath,
+    ['tools/run-ttsx.mjs', '--mpgd-cli', 'packages/cli/src/bin.ts', '--version', '--json'],
+    { cwd: repoRoot, encoding: 'utf8' },
+  );
+  assert.equal(version.status, 0, version.stderr);
+  assert.match(version.stdout.trim(), /^\d+\.\d+\.\d+$/u);
 }
 {
   const run = runVerifyCli(
@@ -634,14 +669,14 @@ const beforeSnapshot = new Map<string, Map<string, { bytes: number; sha256: stri
     '1',
   );
   assert.equal(run.status, 1);
-  const parsed = JSON.parse(run.stdout.slice(run.stdout.indexOf('{'))) as AssetPackVerifyReport;
+  const parsed = JSON.parse(run.stdout) as AssetPackVerifyReport;
   assert.equal(parsed.ok, false);
   assert.ok(parsed.failures.some((failure) => failure.code === 'max-files'));
 }
 {
   const run = runVerifyCli(zipManifest, join(fixtureRoot, zipOut), '--json', '--max-files', '1.5');
   assert.equal(run.status, 1);
-  const parsed = JSON.parse(run.stdout.slice(run.stdout.indexOf('{'))) as AssetPackVerifyReport;
+  const parsed = JSON.parse(run.stdout) as AssetPackVerifyReport;
   assert.equal(parsed.ok, false);
   assert.ok(
     parsed.failures.some(
@@ -658,7 +693,7 @@ const beforeSnapshot = new Map<string, Map<string, { bytes: number; sha256: stri
     '1',
   );
   assert.equal(run.status, 1);
-  const parsed = JSON.parse(run.stdout.slice(run.stdout.indexOf('{'))) as AssetPackVerifyReport;
+  const parsed = JSON.parse(run.stdout) as AssetPackVerifyReport;
   assert.equal(parsed.ok, false);
   assert.ok(parsed.failures.some((failure) => failure.code === 'max-archive-bytes'));
 }
@@ -669,7 +704,7 @@ const beforeSnapshot = new Map<string, Map<string, { bytes: number; sha256: stri
   rmSync(join(holeRoot, 'packs', 'grove@1', 'grove.png'));
   const run = runVerifyCli(join(holeRoot, 'asset-pack-delivery.json'), holeRoot, '--json');
   assert.equal(run.status, 1);
-  const parsed = JSON.parse(run.stdout.slice(run.stdout.indexOf('{'))) as AssetPackVerifyReport;
+  const parsed = JSON.parse(run.stdout) as AssetPackVerifyReport;
   assert.equal(parsed.ok, false);
 }
 

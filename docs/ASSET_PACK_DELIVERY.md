@@ -158,12 +158,23 @@ self-consistent manifest cannot make verification allocate past them.
 Larger declarations fail in the `limits` stage before being read or
 decoded. Roots with
 more than a million files fail the inventory check as truncated rather
-than certifying limits that could not be fully walked. Use `--json`
-for automation; the report's `failures` list carries a stage and stable code
-per problem, and any failure exits non-zero. The command reads inputs only —
-it never extracts archives, modifies the manifest, or contacts a network. The
-`notVerified` field records what only the real host can confirm (CDN
-caching, CORS/Content-Type, device rendering).
+than certifying limits that could not be fully walked.
+
+`--json` is a machine-readable output contract: stdout is exactly one
+JSON document — `JSON.parse(stdout)` works with no banner stripping —
+on success and on verification failures alike, and any failure exits
+non-zero while the document still carries the `failures` list with a
+stage and stable code per problem. Two documented boundaries: framework
+argument errors rejected before the command runs (for example a
+non-numeric `--max-files` value or a missing required argument) print
+their message to stderr and leave stdout blank, and `--help` /
+`--version` take precedence over `--json`, printing their own text.
+Human-readable text mode keeps its banner and per-stage lines.
+
+The command reads inputs only — it never extracts archives, modifies
+the manifest, or contacts a network. The `notVerified` field records
+what only the real host can confirm (CDN caching, CORS/Content-Type,
+device rendering).
 
 ### Browser acceptance
 
