@@ -104,13 +104,23 @@ const INVENTORY_FILE_CAP = 1_000_000;
 /** Case-fold the collision key unconditionally: the verifier's host is not
  * the deployment's consumers, and case-duplicate artifacts are ambiguous
  * for any case-insensitive host or CDN regardless of where this runs.
- * The fold mirrors the upcase tables of the case-insensitive filesystems
- * deployments actually target (NTFS, APFS): simple case mapping, under
- * which "Straße.png" and "STRASSE.png" stay distinct. Full Unicode case
- * folding (ext4/F2FS casefold directories) is a different equivalence —
- * recorded in `notVerified` rather than approximated here, so valid
- * NTFS/APFS deployments are not falsely rejected. */
-const caseKeyOf = (resolvedPath: string): string => resolvedPath.toLowerCase();
+ * The fold mirrors the 1:1 upcase tables of the case-insensitive
+ * filesystems deployments actually target (NTFS, APFS): each code point
+ * maps through its single-code-point uppercase form, so Greek σ and ς
+ * collide (both upcase to Σ) exactly as on those hosts, while mappings
+ * that only exist as multi-character expansions — ß to SS, ﬁ to FI —
+ * stay distinct, matching a 1:1 table and keeping valid NTFS/APFS
+ * deployments from being falsely rejected. Full Unicode case folding
+ * (ext4/F2FS casefold directories) is a different equivalence, recorded
+ * in `notVerified` rather than approximated here. */
+const caseKeyOf = (resolvedPath: string): string => {
+  let key = '';
+  for (const character of resolvedPath) {
+    const upper = character.toUpperCase();
+    key += upper.length === 1 ? upper : character;
+  }
+  return key;
+};
 
 const NOT_VERIFIED: readonly string[] = [
   'CDN cache state and origin preservation',
@@ -192,7 +202,12 @@ const streamSha256 = async (
   deadline: VerifyDeadline,
 ): Promise<{ bytes: number; sha256: string }> => {
   let bytes = 0;
-  const stream = handle.createReadStream({ highWaterMark: STREAM_CHUNK_BYTES });
+  const stream = handle.createReadStream({
+    highWaterMark: STREAM_CHUNK_BYTES,
+    // closeBounded owns closure under the deadline; an implicit close
+    // after the read would not be raced and could stall the exit path.
+    autoClose: false,
+  });
   const timer = deadline.armStream(stream);
   try {
     for await (const chunk of stream) {
@@ -302,21 +317,12 @@ const inventoryRoot = async (
         }
         deadline.sample();
         const child = join(directory, entry.name);
-        if (entry.isSymbolicLink()) {
-          continue;
-        }
-        if (
-          entry.isBlockDevice() || entry.isCharacterDevice()
-          || entry.isFIFO() || entry.isSocket()
-        ) {
-          continue;
-        }
-        // Directories, regular files and unknown dirent types
-        // (UV_DIRENT_UNKNOWN on some network and FUSE filesystems) are
-        // all classified by a fresh lstat rather than the possibly stale
-        // dirent, so an entry swapped for a symlink between the readdir
-        // and the descent can neither steer the walk outside the root
-        // nor be counted as a deployed file.
+        // Every entry is classified by a fresh lstat, never by the
+        // possibly stale dirent — not even to skip obvious specials — so
+        // an entry whose type changed between the readdir and this call
+        // (symlink swapped in, special replaced by a file) can neither
+        // steer the walk outside the root nor be skipped from the
+        // host-limit counts.
         const stat = await deadline.race(lstat(child));
         if (stat.isSymbolicLink()) {
           continue;
@@ -369,7 +375,10 @@ const readManifestCapped = async (
   // open(2) before any stream event exists, and destroying a stream
   // cannot cancel that pending open.
   const handle = await deadline.race(open(resolve(manifestPath), 'r'));
-  const stream: ReadStream = handle.createReadStream({ highWaterMark: STREAM_CHUNK_BYTES });
+  const stream: ReadStream = handle.createReadStream({
+    highWaterMark: STREAM_CHUNK_BYTES,
+    autoClose: false,
+  });
   // A stalled source (a FIFO whose writer never writes, a hung network
   // mount) delivers no chunk to sample, so the watchdog enforces the
   // budget even while the read pends; the recorded failure travels on
@@ -415,7 +424,12 @@ const readExact = async (
 ): Promise<Buffer> => {
   const chunks: Buffer[] = [];
   let received = 0;
-  const stream = handle.createReadStream({ highWaterMark: STREAM_CHUNK_BYTES });
+  const stream = handle.createReadStream({
+    highWaterMark: STREAM_CHUNK_BYTES,
+    // closeBounded owns closure under the deadline; an implicit close
+    // after the read would not be raced and could stall the exit path.
+    autoClose: false,
+  });
   const timer = deadline.armStream(stream);
   try {
     for await (const chunk of stream) {
@@ -508,7 +522,9 @@ const coreLimitsOf = (
     totalExpandedBytes: Math.min(maxExpandedBytes, Math.max(1, expanded)),
     entryCount: Math.max(1, pack.archive?.entryCount ?? 0),
     maxPathLength: longestDeclaredPathOf(pack),
-    decodeDeadlineMs: Math.max(1, remainingMs),
+    // The monotonic clock yields fractional milliseconds; the core's
+    // limit checks require integers.
+    decodeDeadlineMs: Math.max(1, Math.floor(remainingMs)),
   };
 };
 
@@ -545,11 +561,13 @@ export async function verifyAssetPackDelivery(
         value,
       )),
   ].every((valid) => valid);
-  const startedAt = Date.now();
+  // Monotonic: a wall-clock correction mid-verification must not extend
+  // or shrink the budget.
+  const startedAt = performance.now();
   /** The one whole-verification budget; the pure core receives only the
    * unspent remainder so a late archive cannot restart the clock. */
   const deadlineBreached = (): boolean => {
-    if (Date.now() - startedAt <= verifyTimeoutMs) {
+    if (performance.now() - startedAt <= verifyTimeoutMs) {
       return false;
     }
     if (!failures.some((entry) => entry.code === 'deadline')) {
@@ -566,7 +584,7 @@ export async function verifyAssetPackDelivery(
    * through it, so no single stalled call can outlive the budget. */
   const deadline: VerifyDeadline = {
     breach: deadlineBreached,
-    remainingMs: (): number => verifyTimeoutMs - (Date.now() - startedAt),
+    remainingMs: (): number => verifyTimeoutMs - (performance.now() - startedAt),
     sample: (): void => {
       if (deadlineBreached()) {
         throw new VerifyDeadlineError();
@@ -582,7 +600,7 @@ export async function verifyAssetPackDelivery(
         if (deadlineBreached()) {
           stream.destroy(new VerifyDeadlineError());
         }
-      }, Math.max(1, verifyTimeoutMs - (Date.now() - startedAt) + 1)),
+      }, Math.max(1, verifyTimeoutMs - (performance.now() - startedAt) + 1)),
     race: async <T,>(operation: Promise<T>): Promise<T> => {
       let timer: NodeJS.Timeout | undefined;
       try {
@@ -593,7 +611,7 @@ export async function verifyAssetPackDelivery(
               if (deadlineBreached()) {
                 reject(new VerifyDeadlineError());
               }
-            }, Math.max(1, verifyTimeoutMs - (Date.now() - startedAt) + 1));
+            }, Math.max(1, verifyTimeoutMs - (performance.now() - startedAt) + 1));
           }),
         ]);
       } finally {
