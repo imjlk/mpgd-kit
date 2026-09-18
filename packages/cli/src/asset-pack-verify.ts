@@ -296,31 +296,34 @@ const inventoryRoot = async (
         if (entry.isSymbolicLink()) {
           continue;
         }
-        if (entry.isDirectory()) {
-          await walk(child);
-          continue;
-        }
-        let stat;
-        if (entry.isFile()) {
-          stat = await deadline.race(lstat(child));
-        } else if (
+        if (
           entry.isBlockDevice() || entry.isCharacterDevice()
           || entry.isFIFO() || entry.isSocket()
         ) {
           continue;
-        } else {
-          // UV_DIRENT_UNKNOWN (some network and FUSE filesystems): every
-          // type predicate is false, so lstat decides — recursing for an
-          // unknown directory, counting an unknown regular file — instead
-          // of silently skipping either.
-          stat = await deadline.race(lstat(child));
-          if (stat.isDirectory()) {
-            await walk(child);
-            continue;
+        }
+        // Directories, regular files and unknown dirent types
+        // (UV_DIRENT_UNKNOWN on some network and FUSE filesystems) are
+        // all classified by a fresh lstat rather than the possibly stale
+        // dirent, so an entry swapped for a symlink between the readdir
+        // and the descent can neither steer the walk outside the root
+        // nor be counted as a deployed file.
+        const stat = await deadline.race(lstat(child));
+        if (stat.isSymbolicLink()) {
+          continue;
+        }
+        if (stat.isDirectory()) {
+          await walk(child);
+          // A truncated descendant stops the entire walk, not just that
+          // subtree: ancestors must not keep scanning siblings once the
+          // cap verdict is known.
+          if (truncated) {
+            return;
           }
-          if (!stat.isFile()) {
-            continue;
-          }
+          continue;
+        }
+        if (!stat.isFile()) {
+          continue;
         }
         // Truncation is only marked for an entry that actually counts:
         // a root of exactly the cap whose next entry is a skipped

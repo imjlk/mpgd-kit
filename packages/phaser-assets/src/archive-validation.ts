@@ -5,16 +5,6 @@ import {
   type ZipDecodeLimits,
 } from './archive-zip-core.js';
 
-/** Realm-safe typed-array brand probe: ArrayBuffer.isView reads the
- * [[ViewedArrayBuffer]] internal slot — not instanceof, not
- * @@toStringTag — so genuine cross-realm Uint8Array inputs (an iframe's,
- * for example) and subclasses or instances that override their tag still
- * pass, while plain tag-spoofed objects fail here. The element size
- * excludes DataView and other view types; anything further fails closed
- * in the core's DataView snapshot probe. */
-const isUint8Array = (value: unknown): value is Uint8Array =>
-  ArrayBuffer.isView(value) && (value as Uint8Array).BYTES_PER_ELEMENT === 1;
-
 /** Statistics a successful archive verification reports. */
 export interface ZipV1VerificationStats {
   /** Verified entries (STORE and DEFLATE) inside the archive. */
@@ -37,9 +27,12 @@ export async function verifyZipV1Archive(
   expected: ExpectedZipArchive,
   limits: ZipDecodeLimits,
 ): Promise<ZipV1VerificationStats> {
-  if (!isUint8Array(archive)) {
-    throw new ZipDecodeError('invalid-structure', 'ZIP archive bytes must be a Uint8Array');
-  }
+  // No wrapper-level brand check: every property a probe could read
+  // (instanceof, @@toStringTag, BYTES_PER_ELEMENT) is either
+  // realm-sensitive or user-overridable and would reject genuine views.
+  // The core's DataView snapshot probe validates the real backing-buffer
+  // internal slot instead, failing closed as `unsupported` for anything
+  // that is not a snapshottable view.
   let entries = 0;
   let expandedBytes = 0;
   // Entry bytes are discarded as soon as the core verified them: the

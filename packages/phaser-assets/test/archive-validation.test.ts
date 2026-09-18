@@ -65,15 +65,19 @@ describe('archive validation entry', () => {
     expect(stats.entries).toBe(fixtureEntries.length);
   });
 
-  it('rejects non-Uint8Array input with a typed failure', async () => {
+  it('rejects non-view input through the core snapshot probe', async () => {
     const { expected } = buildFixture();
-    const failure = await verifyZipV1Archive(
-      undefined as unknown as Uint8Array,
-      expected,
-      limitsOf(expected.entries),
-    ).catch((error: unknown): unknown => error);
+    // A length that satisfies the core's size gate, but no real backing
+    // buffer: the DataView snapshot probe fails it closed.
+    const fake = {
+      length: expected.archive.bytes,
+      buffer: {},
+      byteOffset: 0,
+    } as unknown as Uint8Array;
+    const failure = await verifyZipV1Archive(fake, expected, limitsOf(expected.entries))
+      .catch((error: unknown): unknown => error);
     expect(failure).toBeInstanceOf(ZipDecodeError);
-    expect((failure as ZipDecodeError).code).toBe('invalid-structure');
+    expect((failure as ZipDecodeError).code).toBe('unsupported');
   });
 
   it('propagates core failures with their existing codes', async () => {
