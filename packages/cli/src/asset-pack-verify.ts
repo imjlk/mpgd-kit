@@ -284,16 +284,11 @@ const inventoryRoot = async (
     // each batch read is raced against the deadline like every other
     // blocking wait.
     const dir = await deadline.race(opendir(directory));
+    let stalled = false;
     try {
       for (;;) {
         const entry = await deadline.race(dir.read());
         if (entry === null) {
-          return;
-        }
-        // Truncation is only marked once another countable entry exists:
-        // a root of exactly the cap does not claim to be truncated.
-        if (files >= INVENTORY_FILE_CAP) {
-          truncated = true;
           return;
         }
         deadline.sample();
@@ -327,14 +322,26 @@ const inventoryRoot = async (
             continue;
           }
         }
+        // Truncation is only marked for an entry that actually counts:
+        // a root of exactly the cap whose next entry is a skipped
+        // symlink or device does not claim to be truncated.
+        if (files >= INVENTORY_FILE_CAP) {
+          truncated = true;
+          return;
+        }
         files++;
         bytes += stat.size;
         if (stat.size > largest) {
           largest = stat.size;
         }
       }
+    } catch (error) {
+      if (error instanceof VerifyDeadlineError) {
+        stalled = true;
+      }
+      throw error;
     } finally {
-      await dir.close();
+      await closeBounded(() => dir.close(), stalled);
     }
   };
   await walk(root);
@@ -358,6 +365,7 @@ const readManifestCapped = async (
   const timer = deadline.armStream(stream);
   const chunks: Buffer[] = [];
   let received = 0;
+  let stalled = false;
   try {
     for await (const chunk of stream) {
       const view = chunk as Buffer;
@@ -369,13 +377,17 @@ const readManifestCapped = async (
       chunks.push(view);
     }
   } catch (error) {
-    if (error instanceof VerifyDeadlineError || received > cap) {
+    if (error instanceof VerifyDeadlineError) {
+      stalled = true;
+      throw error;
+    }
+    if (received > cap) {
       throw error;
     }
     throw new Error(`Could not read the delivery manifest: ${errorText(error)}`);
   } finally {
     clearTimeout(timer);
-    await handle.close();
+    await closeBounded(() => handle.close(), stalled);
   }
   return Buffer.concat(chunks);
 };
@@ -843,6 +855,18 @@ const resolveAndRegister = async (
   return resolved;
 };
 
+/** Close a filesystem handle while unwinding: a stalled call queues
+ * close() behind uncancellable work, and awaiting it would stop the
+ * report from ever returning, so the deadline path fires and forgets
+ * (the CLI's forced exit releases whatever the queue still holds). */
+const closeBounded = async (close: () => Promise<void>, stalled: boolean): Promise<void> => {
+  if (stalled) {
+    void close().catch(() => {});
+    return;
+  }
+  await close();
+};
+
 /** Bind an opened descriptor to the identity the path checks validated:
  * the same inode, or the component was swapped between check and open. */
 const bindsToValidated = (
@@ -902,6 +926,7 @@ const verifyReferencedFile = async (
       return;
     }
     const handle = await deadline.race(open(resolvedPath, 'r'));
+    let stalled = false;
     let hashed: { bytes: number; sha256: string };
     try {
       const info = await deadline.race(handle.stat({ bigint: true }));
@@ -929,8 +954,13 @@ const verifyReferencedFile = async (
         return;
       }
       hashed = await streamSha256(resolvedPath, handle, createHash('sha256'), deadline);
+    } catch (error) {
+      if (error instanceof VerifyDeadlineError) {
+        stalled = true;
+      }
+      throw error;
     } finally {
-      await handle.close();
+      await closeBounded(() => handle.close(), stalled);
     }
     if (hashed.bytes !== file.bytes) {
       failWith(
@@ -1047,6 +1077,7 @@ const verifyZipPack = async (
     // One descriptor serves the size check, the digest and the decode, so
     // every check sees the same inode the path checks validated.
     const handle = await deadline.race(open(resolvedPath, 'r'));
+    let stalled = false;
     try {
       const { size, dev, ino } = await deadline.race(handle.stat({ bigint: true }));
       if (!bindsToValidated({ dev, ino }, resolved)) {
@@ -1121,8 +1152,13 @@ const verifyZipPack = async (
         // decode needs.
         archiveBytes = await readExact(resolvedPath, handle, declaredBytes, deadline);
       }
+    } catch (error) {
+      if (error instanceof VerifyDeadlineError) {
+        stalled = true;
+      }
+      throw error;
     } finally {
-      await handle.close();
+      await closeBounded(() => handle.close(), stalled);
     }
   } catch (error) {
     if (error instanceof VerifyDeadlineError) {
