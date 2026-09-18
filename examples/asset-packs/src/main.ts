@@ -329,6 +329,9 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
       throw new Error(`Delivery manifest request failed: ${errorText(error)}`);
     });
     if (!manifestResponse.ok) {
+      // Cancel the abandoned body so its connection returns to the pool
+      // instead of lingering until the deadline or GC.
+      await manifestResponse.body?.cancel().catch(() => undefined);
       throw new Error(`Delivery manifest request failed with HTTP ${manifestResponse.status}`);
     }
     const manifestBytes = await readCappedDeliveryBody(manifestResponse, DELIVERY_MANIFEST_BYTE_CAP, {

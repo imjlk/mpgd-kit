@@ -251,6 +251,14 @@ class DeliveryDeadlineAbort extends Error {}
  * caller cancellation without parsing messages. */
 class DeliveryDisposedAbort extends Error {}
 
+/** Marks the per-request timeout abort so a race with a later outer-signal
+ * abort still classifies the timeout as the first cause. */
+class DeliveryRequestTimeout extends Error {
+  constructor() {
+    super('Delivery request timed out');
+  }
+}
+
 /** Classify an aborted delivery operation from its abort reason: the
  * deadline sentinel maps to 'deadline', anything else to 'cancelled'. */
 const abortCategory = (reason: unknown, contextLabel: string): PhaserPackDeliveryError => {
@@ -262,6 +270,11 @@ const abortCategory = (reason: unknown, contextLabel: string): PhaserPackDeliver
   }
   return new PhaserPackDeliveryError('cancelled', `Delivery ${contextLabel} was cancelled`);
 };
+
+/** Map the per-request timeout sentinel to its transport delivery
+ * error with the resource noun already embedded. */
+const requestTimeoutError = (noun: string, id: string): PhaserPackDeliveryError =>
+  new PhaserPackDeliveryError('transport', `Delivery ${noun} for ${id} timed out`);
 
 /** Classify a prepare failure: delivery errors pass through, an aborted
  * controller maps to its deadline/cancelled category, and anything else is
@@ -294,6 +307,7 @@ export const readCappedDeliveryBody = async (
     readonly describeOverrun?: () => string;
   },
 ): Promise<Uint8Array> => {
+  positiveInteger(cap, 'response cap');
   const overrun = options?.describeOverrun ?? ((): string => `Delivery response exceeds ${cap} bytes`);
   // Key-presence check: an explicit reader: undefined selects the
   // no-stream path, unlike an omitted option which acquires the body's
@@ -362,10 +376,7 @@ const fetchWithin = (
   readonly settle: () => void;
 } => {
   const controller = new AbortController();
-  const timer = setTimeout(
-    (): void => controller.abort(new Error('Delivery request timed out')),
-    timeoutMs,
-  );
+  const timer = setTimeout((): void => controller.abort(new DeliveryRequestTimeout()), timeoutMs);
   // Forward the outer abort's reason (caller cancel, whole-prepare deadline,
   // delivery shutdown) instead of degrading it to a generic AbortError.
   const forward = (): void => controller.abort(signal.reason);
@@ -384,14 +395,17 @@ const fetchWithin = (
       return response;
     },
     (error) => {
+      // The attempt controller's reason remembers which abort fired
+      // first, even when the outer signal aborted later in the same turn.
+      const attemptReason = controller.signal.aborted ? controller.signal.reason : undefined;
+      if (attemptReason instanceof DeliveryRequestTimeout) {
+        throw attemptReason;
+      }
       if (signal.aborted) {
         throw error;
       }
-      // Only claim a timeout when the attempt controller was the aborter;
-      // otherwise keep the underlying transport failure visible.
-      if (controller.signal.aborted) {
-        throw new Error('Delivery request timed out');
-      }
+      // Keep the underlying transport failure visible when neither abort
+      // fired first.
       throw new Error(`Delivery request failed: ${error instanceof Error ? error.message : String(error)}`);
     },
   );
@@ -408,10 +422,10 @@ const fetchWithin = (
         return await readCapped(response, reader, cap, declaredBytes);
       } catch (error) {
         // A timeout firing mid-body rejects reader.read() with a raw abort
-        // on platforms that do not forward reasons into streams; translate
-        // it so the timeout stays diagnosable wherever it lands.
-        if (controller.signal.aborted && !signal.aborted) {
-          throw new Error('Delivery request timed out');
+        // on platforms that do not forward reasons into streams; the
+        // attempt controller's reason keeps the first-cause ordering.
+        if (controller.signal.reason instanceof DeliveryRequestTimeout) {
+          throw controller.signal.reason;
         }
         throw error;
       } finally {
@@ -704,6 +718,9 @@ export function createPhaserPackDelivery(
       if (error instanceof PhaserPackDeliveryError) {
         throw error;
       }
+      if (error instanceof DeliveryRequestTimeout) {
+        throw requestTimeoutError('archive request', pack.packId);
+      }
       if (signal.aborted) {
         throw abortCategory(signal.reason, `preparation for ${pack.packId}`);
       }
@@ -947,6 +964,9 @@ export function createPhaserPackDelivery(
                 if (error instanceof PhaserPackDeliveryError) {
                   throw error;
                 }
+                if (error instanceof DeliveryRequestTimeout) {
+                  throw requestTimeoutError('file request', request.packId);
+                }
                 if (combined.aborted && combined.reason === context.signal.reason) {
                   throw new PhaserPackDeliveryError(
                     'cancelled',
@@ -1009,6 +1029,7 @@ export function createPhaserPackDelivery(
           if (readOnce) {
             fail('config', 'Delivery file body was already read');
           }
+          assertLive();
           readOnce = true;
           return {
             bytes: toBlob(stagedFile.bytes, stagedFile.mediaType),

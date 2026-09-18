@@ -709,6 +709,88 @@ describe('phaser pack delivery', () => {
     }
   });
 
+  it('rejects invalid caps in the exported bounded read', async () => {
+    const response = new Response(new Blob([new Uint8Array(4)]));
+    await expect(readCappedDeliveryBody(response, Number.NaN)).rejects.toMatchObject({
+      code: 'config',
+      message: expect.stringMatching(/positive integer/),
+    });
+    await expect(readCappedDeliveryBody(response, Number.POSITIVE_INFINITY)).rejects.toMatchObject({
+      code: 'config',
+    });
+    await expect(readCappedDeliveryBody(response, 0)).rejects.toMatchObject({ code: 'config' });
+  });
+
+  it('rejects opened zip reads after disposal', async () => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+    for (const [path, file] of packFiles) {
+      origin.files.set(path, file);
+    }
+    const delivery = createPhaserPackDelivery(manifest, {
+      baseUrl: origin.url,
+      createWorker: createFakeWorkerFactory().factory,
+    });
+    await delivery.prepare('solo');
+    const opened = await delivery.fileSource.open(openRequest('solo'), {
+      signal: new AbortController().signal, budgets: budgets(),
+    });
+    delivery.dispose();
+    await expect(opened.read()).rejects.toMatchObject({ code: 'disposed' });
+  });
+
+  it('classifies a request timeout over a later caller abort', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      // An origin that accepts the request and never finishes the body.
+      const { createServer: hangServer } = await import('node:http');
+      const server = hangServer((request, response): void => {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.write(new Uint8Array(16));
+      });
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      const url = `http://127.0.0.1:${(address as { port: number }).port}/`;
+      const manifest = {
+        format: 'mpgd-asset-packs', version: 1,
+        packs: [{
+          packId: 'solo', revision: '1', dependencies: [], delivery: 'files',
+          assets: [{
+            assetKey: 'pilot', kind: 'spritesheet',
+            frameConfig: { frameWidth: 8, frameHeight: 8 },
+            files: [{
+              role: 'texture', mediaType: 'image/png',
+              bytes: pngBytes.byteLength, sha256: sha256(pngBytes), path: 'pilot.png',
+            }],
+          }],
+        }],
+      };
+      const delivery = createPhaserPackDelivery(manifest, {
+        baseUrl: url, requestTimeoutMs: 100,
+      });
+      const context = new AbortController();
+      const opened = await delivery.fileSource.open(openRequest('solo'), {
+        signal: context.signal, budgets: budgets(),
+      });
+      const reading = opened.read();
+      const rejection = expect(reading).rejects.toMatchObject({
+        code: 'transport',
+        message: expect.stringMatching(/timed out/),
+      });
+      // The request timeout fires first; the caller aborts later in the
+      // same turn — the first cause must win.
+      await vi.advanceTimersByTimeAsync(100);
+      context.abort();
+      await rejection;
+      delivery.dispose();
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('validates configuration before any work', () => {
     const { manifest } = buildManifest([{ id: 'solo', delivery: 'files' }]);
     expect(() => createPhaserPackDelivery(manifest, {})).toThrow(PhaserPackDeliveryError);
