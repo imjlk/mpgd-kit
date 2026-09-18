@@ -45,7 +45,21 @@ import type {
  * Requires a browser-like environment (fetch, Blob, crypto.subtle); the
  * worker itself is deployed by the application and supplied through
  * `createWorker`, never extracted from an asset archive.
+ *
+ * The whole-prepare budget is measured on one monotonic clock: it starts
+ * once per prepare, is never restarted by a later archive, hands the
+ * decoder only the unspent (floored) remainder, refuses to start new
+ * work once spent, and refuses to certify a result that lands after it
+ * is spent. The supported guarantee is elapsed-time enforcement and
+ * result acceptance, not real-time termination of running work.
  */
+
+/** Elapsed-time source for every delivery deadline and remaining-budget
+ * computation: one monotonic clock, so a wall-clock correction mid-prepare
+ * can neither extend nor shrink a budget. Display timestamps would stay on
+ * `Date.now()`; budgets never touch it. Tests drive this through the
+ * environment's `performance` (fake timers or a spy), not a public option. */
+const monotonicNow = (): number => performance.now();
 
 /** Failure categories a delivery operation can surface. Decoder statuses
  * and codes are preserved inside the message; the category stays stable for
@@ -705,6 +719,12 @@ export function createPhaserPackDelivery(
   ): Promise<StagedPack> => {
     const archive = pack.archive!;
     const url = resolveArtifact(archive.path, { packId: pack.packId, revision: pack.revision });
+    // URL resolution runs synchronous user code; the budget gate sits
+    // immediately before the request it guards, after that code, so no
+    // archive request can start on a budget spent inside the resolver.
+    if (deadlineAt - monotonicNow() <= 0) {
+      fail('deadline', 'Delivery preparation exceeded its deadline');
+    }
     archiveRequests++;
     const bytes = await fetchDeliveryBytes(
       url,
@@ -750,8 +770,12 @@ export function createPhaserPackDelivery(
     }
     const expandedBytes = expandedBytesOf(pack);
     // The whole-prepare deadline is never restarted; the decoder only ever
-    // receives the unspent remainder, exactly as #191 prescribes.
-    const remainingMs = deadlineAt - Date.now();
+    // receives the unspent remainder, exactly as #191 prescribes. Both the
+    // deadline and this remainder read the same monotonic clock, and the
+    // spent check runs before the flooring so rounding can never mint
+    // budget: a fractional remainder floors to the decoder's integer
+    // contract without ever rounding up into fresh time.
+    const remainingMs = deadlineAt - monotonicNow();
     if (remainingMs <= 0) {
       fail('deadline', 'Delivery preparation exceeded its deadline');
     }
@@ -767,7 +791,7 @@ export function createPhaserPackDelivery(
         // default; the bound follows the manifest's longest validated path
         // so a legal generated pack is never rejected on path length.
         maxPathLength,
-        decodeDeadlineMs: remainingMs,
+        decodeDeadlineMs: Math.floor(remainingMs),
       },
     });
     const mediaByPath = new Map(
@@ -1129,7 +1153,7 @@ export function createPhaserPackDelivery(
       }
       activePrepare = true;
       const controller = new AbortController();
-      const deadlineAt = Date.now() + prepareTimeoutMs;
+      const deadlineAt = monotonicNow() + prepareTimeoutMs;
       const timer = setTimeout(
         (): void => controller.abort(new DeliveryDeadlineAbort('Delivery preparation exceeded its deadline')),
         prepareTimeoutMs,
@@ -1153,7 +1177,17 @@ export function createPhaserPackDelivery(
         // Staging is deliberately sequential: the single-flight budget,
         // the one shared never-restarting deadline and the bounded
         // archive+expanded memory all depend on one stage at a time.
+        const assertBudgetLeft = (): void => {
+          // The abort timer's callback can lag the clock: no new archive
+          // request, and no successful return, may start or land on a
+          // budget the monotonic clock has already spent. The thrown
+          // reason is classified by the catch below like any abort.
+          if (deadlineAt - monotonicNow() <= 0) {
+            fail('deadline', 'Delivery preparation exceeded its deadline');
+          }
+        };
         for (const pack of missing) {
+          assertBudgetLeft();
           const stagedPack = await stagePack(pack, deadlineAt, controller.signal);
           // dispose() during an await drops everything: a late stagePack
           // result must not repopulate a cleared delivery.
@@ -1163,6 +1197,10 @@ export function createPhaserPackDelivery(
           }
           newlyStaged.push(stagedPack);
         }
+        // Final success gate: a decode that resolved after the budget was
+        // spent — with the abort callback still queued — must not certify
+        // the preparation or hand out staging handles.
+        assertBudgetLeft();
         const handles = acquireHandles(zipPacks);
         return { release: handles.release };
       } catch (thrown) {

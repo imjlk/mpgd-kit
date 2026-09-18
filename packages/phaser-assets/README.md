@@ -321,10 +321,17 @@ staging stake while registered textures stay alive under the loader lease,
 open readers keep their bytes, and re-entering re-prepares from the
 network. One finite `prepareTimeoutMs` budget covers the whole prepare
 (stages never restart it; the decoder receives only the unspent
-remainder); each HTTP attempt has its own `requestTimeoutMs` ending with
-the body; the staging budget (`stagingBudgetBytes`, independent of the
-loader's byte budget) is checked for the whole closure before any
-request. Failures throw `PhaserPackDeliveryError` with a stable
+remainder, floored to the decoder's integer contract so rounding never
+mints time). The budget is measured on one monotonic clock
+(`performance.now`): a wall-clock correction mid-prepare can neither
+extend nor shrink it, no new archive request or decode starts once the
+clock says the budget is spent, and a decode that resolves after the
+budget is spent does not earn staging handles — the supported guarantee
+is elapsed-time enforcement plus result acceptance, not real-time
+termination of already-running work. Each HTTP attempt has its own
+`requestTimeoutMs` ending with the body; the staging budget
+(`stagingBudgetBytes`, independent of the loader's byte budget) is
+checked for the whole closure before any request. Failures throw `PhaserPackDeliveryError` with a stable
 `code` (`config`, `not-prepared`, `busy`, `budget`, `transport`,
 `integrity`, `cancelled`, `deadline`, `disposed`) and preserve the
 decoder's status and code in the message; there is no silent ZIP-to-files
