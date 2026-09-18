@@ -423,6 +423,10 @@ const beforeSnapshot = new Map<string, Map<string, { bytes: number; sha256: stri
   assert.equal(report.ok, false);
   assert.equal(report.failures[0]!.stage, 'args');
   assert.equal(report.failures[0]!.code, 'invalid-option');
+  // Invalid arguments short-circuit the artifact and inventory stages.
+  assert.equal(report.failures.length, 1);
+  assert.equal(report.referenced.files, 0);
+  assert.equal(report.inventory, undefined);
 }
 {
   // Host limits: inventory over count/bytes limits (old revisions count).

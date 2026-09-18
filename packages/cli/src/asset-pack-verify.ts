@@ -120,10 +120,11 @@ const positiveIntegerOption = (
   value: number | undefined,
 ): boolean => {
   if (value === undefined) {
-    return false;
+    return true;
   }
   if (!Number.isSafeInteger(value) || value <= 0) {
     failWith(failures, 'args', 'invalid-option', `${name} must be a positive integer`);
+    return false;
   }
   return true;
 };
@@ -384,18 +385,17 @@ export async function verifyAssetPackDelivery(
     ...(hostLimits?.maxFiles === undefined ? {} : { maxFiles: hostLimits.maxFiles }),
     ...(hostLimits?.maxTotalBytes === undefined ? {} : { maxTotalBytes: hostLimits.maxTotalBytes }),
   };
-  const argsValid = ![
+  const argsValid = [
     positiveIntegerOption(failures, 'manifestByteCap', manifestByteCap),
     positiveIntegerOption(failures, 'verifyTimeoutMs', verifyTimeoutMs),
     positiveIntegerOption(failures, 'maxArchiveBytes', maxArchiveBytes),
-  ].some((valid) => valid === false);
-  for (const [name, value] of Object.entries(hostLimits ?? {})) {
-    positiveIntegerOption(
-      failures,
-      `--${name.replace(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`)}`,
-      value,
-    );
-  }
+    ...Object.entries(hostLimits ?? {}).map(([name, value]) =>
+      positiveIntegerOption(
+        failures,
+        `--${name.replace(/[A-Z]/gu, (letter) => `-${letter.toLowerCase()}`)}`,
+        value,
+      )),
+  ].every((valid) => valid);
   const startedAt = Date.now();
   /** The one whole-verification budget; the pure core receives only the
    * unspent remainder so a late archive cannot restart the clock. */
