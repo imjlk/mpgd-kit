@@ -6,7 +6,11 @@ import {
   PhaserPackDeliveryError,
   readCappedDeliveryBody,
   type PhaserPackDelivery,
+  type PhaserPackDeliveryErrorDetails,
+  type PhaserPackDeliveryEvent,
+  type PhaserPackPreparationPlan,
 } from '@mpgd/phaser-assets/delivery';
+import { ArtifactCache, type WarmReport } from './artifact-cache.js';
 import type { DeliveryPack } from './packs.js';
 import './style.css';
 
@@ -51,14 +55,110 @@ const params = new URLSearchParams(location.search);
 /** One HTTP cache policy for the page: the documented http-cache=1 flag
  * covers the files loader, the manifest fetch and delivery requests. */
 const requestCache: 'default' | 'no-store' = params.has('http-cache') ? 'default' : 'no-store';
+/** Private experiment flag: persistent artifact reuse through IndexedDB
+ * and managed Blob URLs (see artifact-cache.ts). Off by default; the
+ * acceptance runs it explicitly. */
+const persistentCache = params.has('idcache');
 const deliveryParam = params.get('delivery');
 const deliveryMode: 'zip' | 'mixed' | null = deliveryParam === 'zip' || deliveryParam === 'mixed' ? deliveryParam : null;
+/** Delivery observation view: what the UI shows is exactly what the
+ * delivery observed — no polling, no message parsing. Stale operations
+ * (an older prepare's late events) never overwrite this state. */
+interface ObservedDelivery {
+  operationId: number;
+  phase: string;
+  packId: string;
+  progress: string;
+  terminal: string;
+  fileRead: string;
+}
+const observed: ObservedDelivery = {
+  operationId: 0, phase: '', packId: '', progress: '', terminal: '', fileRead: '',
+};
+const resetObserved = (): ObservedDelivery => Object.assign(observed, {
+  operationId: 0, phase: '', packId: '', progress: '', terminal: '', fileRead: '',
+});
+const byteText = (bytes: number | undefined): string => bytes === undefined ? '?' : String(bytes);
+const progressTextOf = (event: PhaserPackDeliveryEvent): string => {
+  const progress = event.progress;
+  if (progress === undefined) return '';
+  if (progress.entriesVerified !== undefined || progress.expectedEntries !== undefined) {
+    return `entries ${progress.entriesVerified ?? 0} / ${progress.expectedEntries ?? '?'} (${byteText(progress.entryBytes)} bytes)`;
+  }
+  if (progress.bodyBytes !== undefined) {
+    return `body ${progress.bodyBytes} / ${byteText(progress.expectedBodyBytes)} bytes`;
+  }
+  return '';
+};
+const failureTextOf = (event: PhaserPackDeliveryEvent): string => {
+  const error = event.error;
+  if (error === undefined) return '';
+  const extras: string[] = [];
+  if (error.details.stage !== undefined) extras.push(`stage ${error.details.stage}`);
+  if (error.details.httpStatus !== undefined) extras.push(`HTTP ${error.details.httpStatus}`);
+  if (error.details.decoderStatus !== undefined) extras.push(`decoder ${error.details.decoderStatus}`);
+  if (error.details.decoderCode !== undefined) extras.push(`code ${error.details.decoderCode}`);
+  return [error.code, ...extras].join(' · ');
+};
+/** Safe structured summary for error text: codes and counts, never URLs
+ * or messages that might embed them. */
+const detailSummary = (details: PhaserPackDeliveryErrorDetails): string => {
+  const extras: string[] = [];
+  if (details.stage !== undefined) extras.push(details.stage);
+  if (details.httpStatus !== undefined) extras.push(`HTTP ${details.httpStatus}`);
+  if (details.decoderStatus !== undefined) extras.push(details.decoderStatus);
+  if (details.decoderCode !== undefined) extras.push(details.decoderCode);
+  return extras.length === 0 ? '' : ` [${extras.join(', ')}]`;
+};
+/** Read-only cost summary from inspectPreparation, computed once per
+ * selection — never per frame. The display explains the budget; the
+ * prepare's own admission stays authoritative either way. */
+const planTextOf = (plan: PhaserPackPreparationPlan | null): string => {
+  if (plan === null) return '';
+  const budget = `${plan.projectedStagingBytes} / ${plan.stagingBudgetBytes} B`;
+  return `${plan.closure.length} packs · ${plan.coldObjectCount} objects · `
+    + `${plan.coldBodyBytes} B artifacts · staging ${budget}${plan.fitsBudget ? '' : ' · OVER BUDGET'}`;
+};
+const onDeliveryEvent = (event: PhaserPackDeliveryEvent): void => {
+  if (event.kind === 'prepare') {
+    if (event.phase === 'planning') {
+      observed.operationId = event.operationId;
+      observed.progress = '';
+      observed.terminal = '';
+    }
+    // Late events from a superseded prepare never reach the display.
+    if (event.operationId !== observed.operationId) return;
+    observed.phase = event.phase;
+    observed.packId = event.packId;
+    // Terminals carry no progress fields; the last measured numbers stay
+    // visible instead of being wiped by the terminal event.
+    const progress = progressTextOf(event);
+    if (progress !== '') {
+      observed.progress = progress;
+    }
+    if (event.phase === 'failed' || event.phase === 'cancelled' || event.phase === 'disposed') {
+      observed.terminal = failureTextOf(event);
+    }
+  } else {
+    observed.fileRead = `${event.packId}/${event.assetKey ?? '?'} · ${event.phase} · ${progressTextOf(event)}`;
+  }
+  renderStatus();
+};
 const model = {
   phase: 'booting', requested: null as Theme | null, current: null as Theme | null, ready: 0, total: 0, error: '',
   lastPrepareMs: null as number | null,
+  observed,
+  plan: null as PhaserPackPreparationPlan | null,
+  cache: null as { report: WarmReport } | { error: string } | null,
 };
 let packs: ReturnType<typeof createPhaserAssetPackLoader> | undefined;
 let delivery: PhaserPackDelivery | undefined;
+let unsubscribeDelivery: (() => void) | undefined;
+/** Blob URL bridge for the persistent-reuse experiment; opened during
+ * delivery boot when idcache=1. Manifest metadata for warm inputs. */
+let artifactCache: ArtifactCache | undefined;
+let artifactMeta = new Map<string, { sha256: string; bytes: number; mediaType: string }>();
+let deliveryOriginBase = '';
 let pending: AbortController | undefined;
 let sequence = 0;
 let virtualTime = 0;
@@ -84,10 +184,18 @@ class Board extends Phaser.Scene {
       pending?.abort();
       pending = undefined;
       this.clear();
+      // Closing the sample detaches the observer first (idempotent):
+      // stopping to watch is not the same act as cancelling a prepare,
+      // which only the explicit cancel control and this full teardown do.
+      unsubscribeDelivery?.();
+      unsubscribeDelivery = undefined;
+      artifactCache?.close();
+      artifactCache = undefined;
       delivery?.dispose();
       delivery = undefined;
       packs = undefined;
-      Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null });
+      resetObserved();
+      Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null, cache: null });
       renderStatus();
     });
     this.showEmpty();
@@ -209,8 +317,20 @@ if (new URLSearchParams(location.search).has('zip-worker')) {
 
 function statusText(): string {
   if (model.phase === 'error') return model.error;
-  if (model.phase === 'preparing') return `Preparing ${model.requested}: ${model.ready} / ${model.total} textures`;
-  if (model.phase === 'playing') return `${model.current} ready — explore with arrow keys`;
+  if (model.phase === 'preparing') {
+    // Two distinct stages, never conflated: delivery staging (what the
+    // delivery observed) and loader texture preparation (the loader's
+    // own progress). "prepared" here means staging only.
+    const staging = observed.phase === ''
+      ? 'staging not started'
+      : `${observed.phase}${observed.progress === '' ? '' : ` · ${observed.progress}`}${observed.terminal === '' ? '' : ` · ${observed.terminal}`}`;
+    const plan = planTextOf(model.plan);
+    return `Preparing ${model.requested} [delivery: ${staging}]${plan === '' ? '' : ` · plan ${plan}`} — textures ${model.ready} / ${model.total}`;
+  }
+  if (model.phase === 'playing') {
+    const staging = observed.phase === 'prepared' ? 'staged' : observed.phase;
+    return `${model.current} ready (${staging}) — explore with arrow keys`;
+  }
   return 'No level entered';
 }
 
@@ -242,6 +362,11 @@ function enter(theme: Theme): void {
   pending?.abort();
   const controller = new AbortController();
   pending = controller;
+  resetObserved();
+  // One read-only inspection per selection: what a cold prepare of this
+  // closure costs and whether it fits the staging budget. It reserves
+  // nothing; prepare re-checks admission itself.
+  model.plan = delivery === undefined ? null : delivery.inspectPreparation(theme);
   Object.assign(model, { phase: 'preparing', requested: theme, ready: 0, total: 0, error: '', lastPrepareMs: null });
   renderStatus();
   // Enters run one at a time: a superseded enter finishes (or aborts)
@@ -273,6 +398,33 @@ async function runEnter(theme: Theme, ticket: number, controller: AbortControlle
     if (delivery === undefined) {
       lease = await packs.acquire(theme, acquireOptions);
     } else {
+      // Persistent-reuse experiment: warm the cache in the async phase
+      // (IndexedDB reads, verification, bounded origin acquisition) so
+      // the delivery's resolveURL only ever maps finished Blob URLs.
+      // A warm failure degrades to the delivery's own origin fetch —
+      // local acquisition and delivery outcomes stay separate.
+      if (artifactCache !== undefined && model.plan !== null) {
+        artifactCache.revokeAll();
+        const encodedPathOf = (path: string): string =>
+          path.split('/').map((segment) => encodeURIComponent(segment)).join('/');
+        const warmList = model.plan.coldArtifacts.flatMap((artifact) => {
+          const meta = artifactMeta.get(artifact.path);
+          if (meta === undefined) return [];
+          const encodedPath = encodedPathOf(artifact.path);
+          return [{
+            encodedPath,
+            sha256: meta.sha256,
+            bytes: meta.bytes,
+            mediaType: meta.mediaType,
+            originUrl: new URL(encodedPath, deliveryOriginBase).href,
+          }];
+        });
+        model.cache = await artifactCache.warm(warmList, controller.signal).then(
+          (report): { report: WarmReport } => ({ report }),
+          (error: unknown): { error: string } => ({ error: String(error) }),
+        );
+        renderStatus();
+      }
       // Pack preparation precedes the loader: staging (download + worker
       // decode) is returned as soon as the loader has decoded the files;
       // registered textures survive the staging release.
@@ -291,7 +443,11 @@ async function runEnter(theme: Theme, ticket: number, controller: AbortControlle
   } catch (error) {
     if (ticket !== sequence) return;
     model.phase = 'error';
-    model.error = error instanceof Error ? error.message : 'Asset preparation failed';
+    if (error instanceof PhaserPackDeliveryError) {
+      model.error = `${error.code}${detailSummary(error.details)}`;
+    } else {
+      model.error = error instanceof Error ? error.message : 'Asset preparation failed';
+    }
   } finally {
     if (ticket === sequence) { pending = undefined; renderStatus(); }
   }
@@ -306,10 +462,15 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
   // Retry replaces a half-built or failed boot: any older instance is
   // disposed before a new one is created, and the visible state returns to
   // booting so stale error text and timings cannot leak into evidence.
+  unsubscribeDelivery?.();
+  unsubscribeDelivery = undefined;
+  artifactCache?.close();
+  artifactCache = undefined;
   delivery?.dispose();
   delivery = undefined;
   packs = undefined;
-  Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null });
+  resetObserved();
+  Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null, cache: null });
   renderStatus();
   try {
     const stagingParam = Number(params.get('staging') ?? DELIVERY_STAGING_BUDGET_BYTES);
@@ -343,8 +504,24 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
     } catch (error) {
       throw new Error(`Delivery manifest is not valid JSON: ${errorText(error)}`);
     }
+    deliveryOriginBase = manifestUrl;
+    if (persistentCache) {
+      // The experiment bridge opens here; resolveURL below performs only
+      // synchronous Blob URL lookups from completed warm phases.
+      const opened = await ArtifactCache.open();
+      if (opened === 'unavailable') {
+        artifactCache = undefined;
+      } else {
+        artifactCache = opened;
+      }
+    }
     const booted = createPhaserPackDelivery(manifestDocument, {
-      baseUrl: manifestUrl,
+      ...(artifactCache === undefined
+        ? { baseUrl: manifestUrl }
+        : {
+          resolveURL: (path): string => artifactCache?.resolve(path)
+            ?? new URL(path, manifestUrl).href,
+        }),
       createWorker: (): Worker => new Worker(new URL('./archive-decode-worker.ts', import.meta.url), { type: 'module' }),
       stagingBudgetBytes: stagingParam,
       prepareTimeoutMs: DELIVERY_PREPARE_TIMEOUT_MS,
@@ -353,12 +530,39 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
       requestCache,
     });
     if (!bootStillCurrent()) {
+      // A stale boot must not leak its cache connection either.
+      artifactCache?.close();
+      artifactCache = undefined;
       booted.dispose();
       return;
+    }
+    // Warm inputs are extracted only after the delivery validated the
+    // manifest: the cast below reads a shape the public API already
+    // accepted, and an invalid manifest failed above with its own error.
+    {
+      const manifestPacks = (manifestDocument as {
+        packs: readonly {
+          archive?: { path: string; bytes: number; sha256: string };
+          delivery: 'files' | 'zip';
+          assets: readonly { files: readonly { path: string; bytes: number; sha256: string; mediaType: string }[] }[];
+        }[];
+      }).packs;
+      artifactMeta = new Map(manifestPacks.flatMap((pack) => {
+        if (pack.delivery === 'zip' && pack.archive !== undefined) {
+          return [[pack.archive.path, {
+            sha256: pack.archive.sha256, bytes: pack.archive.bytes, mediaType: 'application/zip',
+          }] as const];
+        }
+        return pack.assets.flatMap((asset) => asset.files.map((file) => [
+          file.path,
+          { sha256: file.sha256, bytes: file.bytes, mediaType: file.mediaType },
+        ] as const));
+      }));
     }
     // createPhaserAssetPackLoader is synchronous: the ticket cannot change
     // between the check above and the publish below.
     delivery = booted;
+    unsubscribeDelivery = booted.subscribe(onDeliveryEvent);
     packs = createPhaserAssetPackLoader(scene, booted.catalog, {
       ...loaderOptions,
       fileSource: booted.fileSource,
@@ -368,7 +572,9 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
     if (!bootStillCurrent()) return;
     model.phase = 'error';
     if (error instanceof PhaserPackDeliveryError) {
-      model.error = `${error.code}: ${error.message}`;
+      // The supported programmatic surface is code + details; the sample
+      // displays exactly those stable fields, never the message text.
+      model.error = `${error.code}${detailSummary(error.details)}`;
     } else if (error instanceof Error) {
       model.error = error.message;
     } else {
@@ -398,15 +604,26 @@ function wireSampleControls(): void {
     pending?.abort();
     pending = undefined;
     if (!packs) return;
+    artifactCache?.revokeAll();
     board.clear();
     board.showEmpty();
-    Object.assign(model, { phase: 'idle', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null });
+    Object.assign(model, { phase: 'idle', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null, cache: null });
     renderStatus();
   };
 }
 
   declare global {
-    interface Window { render_game_to_text: () => string; advanceTime: (milliseconds: number) => void; shutdownSample: () => number; }
+    interface Window {
+      render_game_to_text: () => string;
+      advanceTime: (milliseconds: number) => void;
+      shutdownSample: () => number;
+      /** Experiment-only acceptance hooks (private example, not product). */
+      __artifact_cache_faults: () => Record<string, boolean>;
+      __artifact_cache_set_fault: (name: string) => void;
+      __artifact_cache_usage: () => Promise<{ records: number; totalBytes: number }>;
+      __artifact_cache_delete: (identity: string) => Promise<boolean>;
+      __artifact_cache_present: () => boolean;
+    }
 }
   function state() {
     return { ...model, delivery: deliveryMode ?? 'files', staging: delivery?.snapshot() ?? null, renderer: bootedGame().config.renderType === Phaser.WEBGL ? 'webgl' : 'canvas', mode: __ASSET_PACK_MODE__, coordinateSystem: 'origin top-left; x right; y down',
@@ -417,6 +634,17 @@ function wireSampleControls(): void {
 }
 function wireWindowHooks(): void {
   window.render_game_to_text = () => JSON.stringify(state());
+  window.__artifact_cache_faults = (): Record<string, boolean> => ({ ...(artifactCache?.faults ?? {}) });
+  window.__artifact_cache_set_fault = (name: string): void => {
+    if (artifactCache !== undefined) {
+      (artifactCache.faults as Record<string, boolean>)[name] = true;
+    }
+  };
+  window.__artifact_cache_usage = (): Promise<{ records: number; totalBytes: number }> =>
+    artifactCache?.usage() ?? Promise.resolve({ records: -1, totalBytes: -1 });
+  window.__artifact_cache_delete = (identity: string): Promise<boolean> =>
+    artifactCache?.deleteRecord(identity) ?? Promise.resolve(false);
+  window.__artifact_cache_present = (): boolean => artifactCache !== undefined;
   window.advanceTime = (milliseconds) => {
   bootedGame().loop.stop();
   virtualTime = Math.max(virtualTime, performance.now());

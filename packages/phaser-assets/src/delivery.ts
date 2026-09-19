@@ -3,6 +3,7 @@ import {
   defaultArchiveWorkerLimits,
   ZipDecodeError,
   type ArchiveWorkerExpected,
+  type ArchiveWorkerStatus,
   type ZipDecodeWorkerLike,
 } from './archives.js';
 import {
@@ -45,7 +46,61 @@ import type {
  * Requires a browser-like environment (fetch, Blob, crypto.subtle); the
  * worker itself is deployed by the application and supplied through
  * `createWorker`, never extracted from an asset archive.
+ *
+ * The whole-prepare budget is measured on one monotonic clock: it starts
+ * once per prepare, is never restarted by a later archive, hands the
+ * decoder only the unspent (floored) remainder, refuses to start new
+ * work once spent, and refuses to certify a result that lands after it
+ * is spent. The supported guarantee is elapsed-time enforcement and
+ * result acceptance, not real-time termination of running work.
  */
+
+/** Elapsed-time source for every delivery deadline and remaining-budget
+ * computation: one monotonic clock, so a wall-clock correction mid-prepare
+ * can neither extend nor shrink a budget. Display timestamps would stay on
+ * `Date.now()`; budgets never touch it. Tests drive this through the
+ * environment's `performance` (fake timers or a spy), not a public option. */
+const monotonicNow = (): number => performance.now();
+
+/** Per-operation observation state: one monotonic sequence and a
+ * terminal-once latch, so a superseded operation's late progress can
+ * never be mistaken for a live one and terminals never repeat. */
+interface OperationTracker {
+  nextEvent(
+    phase: PhaserPackDeliveryEventPhase,
+    fields: Omit<PhaserPackDeliveryEvent, 'operationId' | 'kind' | 'sequence' | 'phase'>,
+  ): PhaserPackDeliveryEvent | undefined;
+}
+
+const createOperationTracker = (
+  operationId: number,
+  kind: 'prepare' | 'file-read',
+  emit: (event: PhaserPackDeliveryEvent) => void,
+): OperationTracker => {
+  let sequence = 0;
+  let done = false;
+  return {
+    nextEvent(phase, fields) {
+      if (done) {
+        return undefined;
+      }
+      if (phase === 'prepared' || phase === 'completed' || phase === 'failed'
+        || phase === 'cancelled' || phase === 'disposed') {
+        done = true;
+      }
+      sequence += 1;
+      const event: PhaserPackDeliveryEvent = {
+        operationId,
+        kind,
+        sequence,
+        ...fields,
+        phase,
+      };
+      emit(event);
+      return event;
+    },
+  };
+};
 
 /** Failure categories a delivery operation can surface. Decoder statuses
  * and codes are preserved inside the message; the category stays stable for
@@ -61,17 +116,195 @@ export type PhaserPackDeliveryErrorCode =
   | 'deadline'
   | 'disposed';
 
-/** Every delivery failure carries one stable code; `detail` keeps the
- * underlying cause (HTTP status, digest mismatch, decoder status/code). */
+/** Structured, serializable failure context. Only fields actually
+ * observed at the failing execution point are set — absent means
+ * unknown, never guessed. Values are primitives or absent optional
+ * fields only: no URLs (queries may carry credentials), no Response
+ * objects, no nested Error instances. Programs branch on `code` and
+ * these details; `message` stays human-oriented. */
+export interface PhaserPackDeliveryErrorDetails {
+  /** Which prepare/file-read stage the failure was observed in. */
+  readonly stage?: 'planning' | 'downloading' | 'decoding-and-verifying';
+  /** Correlation id of the observing operation within this delivery. */
+  readonly operationId?: number;
+  /** Which kind of operation failed. */
+  readonly kind?: 'prepare' | 'file-read';
+  readonly packId?: string;
+  readonly revision?: string;
+  readonly assetKey?: string;
+  readonly role?: string;
+  /** HTTP status of a non-OK delivery response, when one was received. */
+  readonly httpStatus?: number;
+  /** Terminal #191 decoder status, when a decode job reported one;
+   * `unsupported` and `worker-error` are the client-side terminal
+   * statuses for environment and worker failures. */
+  readonly decoderStatus?: ArchiveWorkerStatus | 'unsupported' | 'worker-error';
+  /** The #191 core failure code, when the decoder surfaced one. */
+  readonly decoderCode?: string;
+  /** Manifest-declared bytes for the object whose size mismatched. */
+  readonly expectedBytes?: number;
+  /** Bytes actually observed for that object. */
+  readonly receivedBytes?: number;
+}
+
+/** Every delivery failure carries one stable code; `details` keeps the
+ * underlying cause (HTTP status, digest mismatch, decoder status/code)
+ * as data instead of a parsed message. The constructor stays backward
+ * compatible: existing two-argument calls keep working. */
 export class PhaserPackDeliveryError extends Error {
+  /** Stable failure category. */
+  readonly code: PhaserPackDeliveryErrorCode;
+  /** Safe structured context; programs read this and `code`, never
+   * `message`. */
+  readonly details: Readonly<PhaserPackDeliveryErrorDetails>;
+
   constructor(
-    readonly code: PhaserPackDeliveryErrorCode,
+    code: PhaserPackDeliveryErrorCode,
     message: string,
+    details?: PhaserPackDeliveryErrorDetails,
   ) {
     super(message);
     // Keep the class name visible in stacks and error.name checks.
     this.name = 'PhaserPackDeliveryError';
+    this.code = code;
+    this.details = details ?? {};
   }
+
+  /** A copy with extra details layered over the existing ones; used at
+   * operation boundaries where the correlation id becomes known. */
+  withDetails(extra: PhaserPackDeliveryErrorDetails): PhaserPackDeliveryError {
+    return new PhaserPackDeliveryError(this.code, this.message, {
+      ...this.details,
+      ...extra,
+    });
+  }
+}
+
+/** Progress phases actually observed by the delivery. They describe
+ * delivery work only: `prepared` means the ZIP staging completed, never
+ * that the loader finished decoding images — combine with the loader's
+ * own progress for that. Internal hashing and inflate percentages are
+ * not observable through the #191 contract and are never fabricated. */
+export type PhaserPackDeliveryEventPhase =
+  | 'planning'
+  | 'downloading'
+  | 'decoding-and-verifying'
+  | 'prepared'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'disposed';
+
+/** Measured progress only. Every field is optional and absent when the
+ * delivery has no observation for it (absent means unknown, never a
+ * guess or a Content-Length-derived certainty); the values are kept
+ * per-stage and are never merged into one synthetic 0-100 number. */
+export interface PhaserPackDeliveryProgress {
+  /** Body bytes the network stream actually delivered to the
+   * application for the object being read (not wire-transfer bytes). */
+  readonly bodyBytes?: number;
+  /** The manifest's declared byte size of that object. */
+  readonly expectedBodyBytes?: number;
+  /** Expanded entry bytes the decoder verified so far this archive. */
+  readonly entryBytes?: number;
+  /** Entries verified so far this archive. */
+  readonly entriesVerified?: number;
+  /** Manifest entry count of the archive being decoded. */
+  readonly expectedEntries?: number;
+}
+
+/** One observation about one delivery operation. Terminal phases
+ * (`prepared`, `completed`, `failed`, `cancelled`, `disposed`) are
+ * emitted exactly once per operation, and no further events follow
+ * them for that operation. */
+export interface PhaserPackDeliveryEvent {
+  /** Correlation id, unique per operation within this delivery's
+   * lifetime (a monotonic counter). It is not an idempotency key and
+   * carries no meaning across deliveries. */
+  readonly operationId: number;
+  readonly kind: 'prepare' | 'file-read';
+  /** 1-based order of this event within its operation. */
+  readonly sequence: number;
+  readonly packId: string;
+  readonly revision: string;
+  readonly phase: PhaserPackDeliveryEventPhase;
+  readonly assetKey?: string;
+  readonly role?: string;
+  readonly progress?: Readonly<PhaserPackDeliveryProgress>;
+  /** Present on `failed`, `cancelled` and `disposed` terminals: the
+   * stable error code and its safe structured details. */
+  readonly error?: {
+    readonly code: PhaserPackDeliveryErrorCode;
+    readonly details: Readonly<PhaserPackDeliveryErrorDetails>;
+  };
+}
+
+/** Observation listener. Called synchronously; a throwing or rejecting
+ * listener never changes delivery results — exceptions are contained
+ * and rejected promises are handled, never awaited. */
+export type PhaserPackDeliveryListener = (event: PhaserPackDeliveryEvent) => void;
+
+/** One artifact this closure would download cold. A ZIP pack contributes
+ * exactly one object — its archive; entries inside are not download
+ * objects. Files packs contribute each file. Duplicate-content artifacts
+ * at different paths stay separate: the manifest's own identity rules
+ * decide duplication, never content-hash guessing. */
+export interface PhaserPackPreparationArtifact {
+  readonly packId: string;
+  readonly revision: string;
+  readonly delivery: 'files' | 'zip';
+  readonly path: string;
+  /** Manifest-declared body size of this artifact. */
+  readonly bodyBytes: number;
+}
+
+/** Read-only preparation cost plan derived from the manifest snapshot and
+ * the current staging state. `inspectPreparation` computes it without any
+ * side effect: no prepare, handles, reservations, file reads, HTTP or
+ * cache probes, workers or timers. An inspection is not a reservation —
+ * `prepare` re-runs admission on live state, so a stale `fitsBudget`
+ * never bypasses the real check. */
+export interface PhaserPackPreparationPlan {
+  readonly packId: string;
+  readonly revision: string;
+  /** The dependency closure in dependency-first order — the order
+   * `prepare` stages ZIP packs in. */
+  readonly closure: readonly {
+    readonly packId: string;
+    readonly revision: string;
+    readonly delivery: 'files' | 'zip';
+  }[];
+  /** Every artifact the closure references, assuming no HTTP or local
+   * cache exists at all. */
+  readonly coldArtifacts: readonly PhaserPackPreparationArtifact[];
+  /** Cold download objects: one per ZIP archive, one per files-delivery
+   * file. Not a request-success count. */
+  readonly coldObjectCount: number;
+  /** Sum of manifest-declared artifact body bytes, cold. Not wire bytes. */
+  readonly coldBodyBytes: number;
+  /** Sum of the closure ZIP packs' expanded original file bytes. */
+  readonly zipExpandedBytes: number;
+  /** ZIP packs whose staging already exists right now. */
+  readonly stagedZipPacks: readonly { readonly packId: string; readonly revision: string }[];
+  /** ZIP packs this prepare would have to stage. */
+  readonly missingZipPacks: readonly { readonly packId: string; readonly revision: string }[];
+  /** archive bytes + expanded file bytes of the missing packs — exactly
+   * the reservation `prepare` would add under the current policy. */
+  readonly additionalReservationBytes: number;
+  readonly stagingUsedBytes: number;
+  /** stagingUsedBytes + additionalReservationBytes. */
+  readonly projectedStagingBytes: number;
+  readonly stagingBudgetBytes: number;
+  readonly fitsBudget: boolean;
+  /** Whether another preparation is running right now. Informational;
+   * `prepare` itself still rejects with a busy error. */
+  readonly busy: boolean;
+  /** Identifies the accounting model behind the reservation numbers:
+   * per newly staged ZIP pack, archive bytes plus expanded file bytes.
+   * It deliberately excludes transport snapshots/copies, transient Blob
+   * conversions, WebCrypto/decoder-internal memory, decoded pixels and
+   * GPU resources — the budget bounds staging, not total memory. */
+  readonly accountingModel: 'archive-plus-expanded-v1';
 }
 
 export interface PhaserPackDeliveryOptions {
@@ -133,6 +366,16 @@ export interface PhaserPackDeliverySnapshot {
 export interface PhaserPackDelivery {
   /** Loader catalog derived once from the delivery manifest. */
   readonly catalog: readonly PhaserAssetPack[];
+  /** The observation API: registers a listener for prepare and
+   * files-delivery read work observed from this call onward. Returns an
+   * idempotent unsubscribe. This is the single observation surface —
+   * there is no separate onProgress callback. */
+  subscribe(listener: PhaserPackDeliveryListener): () => void;
+  /** Read-only preparation cost plan for a pack and its dependency
+   * closure, derived from the manifest snapshot and the current staging
+   * state. Starts nothing, reserves nothing, touches no network, cache,
+   * worker or timer; `prepare` re-runs admission on live state. */
+  inspectPreparation(packId: string): PhaserPackPreparationPlan;
   /** Supplies staged ZIP entries; files-delivery packs stay plain HTTP. */
   readonly fileSource: PhaserPackFileSource;
   /** Stage a pack and its dependency closure. Single-flight: a concurrent
@@ -203,13 +446,19 @@ const readCapped = async (
   reader: ReadableStreamDefaultReader<Uint8Array> | undefined,
   cap: number,
   declaredBytes?: number | undefined,
+  onBodyBytes?: (received: number) => void,
 ): Promise<Uint8Array> => readCappedDeliveryBody(response, cap, {
   reader,
   describeOverrun: (): string => declaredError(declaredBytes, cap),
+  ...(onBodyBytes === undefined ? {} : { onBodyBytes }),
 });
 
-const fail = (code: PhaserPackDeliveryErrorCode, message: string): never => {
-  throw new PhaserPackDeliveryError(code, message);
+const fail = (
+  code: PhaserPackDeliveryErrorCode,
+  message: string,
+  details?: PhaserPackDeliveryErrorDetails,
+): never => {
+  throw new PhaserPackDeliveryError(code, message, details);
 };
 
 /** The Blob constructor copies exactly the view's span by spec, so staged
@@ -250,6 +499,17 @@ class DeliveryDeadlineAbort extends Error {}
 /** Marks a dispose()-caused abort so classification distinguishes it from a
  * caller cancellation without parsing messages. */
 class DeliveryDisposedAbort extends Error {}
+
+/** Carries the HTTP status of a non-OK delivery response so catch sites
+ * read it as data instead of parsing it out of the message. */
+class DeliveryHttpStatusError extends Error {
+  constructor(
+    message: string,
+    readonly httpStatus: number,
+  ) {
+    super(message);
+  }
+}
 
 /** Marks the per-request timeout abort so a race with a later outer-signal
  * abort still classifies the timeout as the first cause. */
@@ -305,6 +565,11 @@ export const readCappedDeliveryBody = async (
   options?: {
     readonly reader?: ReadableStreamDefaultReader<Uint8Array> | undefined;
     readonly describeOverrun?: () => string;
+    /** Observation hook: called with the cumulative body bytes the
+     * stream delivered to the application, once per network chunk —
+     * chunks are already network-sized, so no additional coalescing
+     * interval exists. Purely observational. */
+    readonly onBodyBytes?: (received: number) => void;
   },
 ): Promise<Uint8Array> => {
   positiveInteger(cap, 'response cap');
@@ -343,6 +608,7 @@ export const readCappedDeliveryBody = async (
         throw new Error(overrun());
       }
       chunks.push(value);
+      options?.onBodyBytes?.(received);
     }
   } catch (error) {
     // Every failure path cancels the stream so its connection returns to
@@ -372,7 +638,11 @@ const fetchWithin = (
   requestCache: 'default' | 'no-store' | 'reload',
 ): {
   readonly response: Promise<Response>;
-  readonly body: (cap: number, declaredBytes?: number | undefined) => Promise<Uint8Array>;
+  readonly body: (
+    cap: number,
+    declaredBytes?: number | undefined,
+    onBodyBytes?: (received: number) => void,
+  ) => Promise<Uint8Array>;
   readonly settle: () => void;
 } => {
   const controller = new AbortController();
@@ -416,10 +686,14 @@ const fetchWithin = (
   };
   return {
     response: attempt,
-    body: async (cap: number, declaredBytes?: number | undefined) => {
+    body: async (
+      cap: number,
+      declaredBytes?: number | undefined,
+      onBodyBytes?: (received: number) => void,
+    ) => {
       try {
         const response = await attempt;
-        return await readCapped(response, reader, cap, declaredBytes);
+        return await readCapped(response, reader, cap, declaredBytes, onBodyBytes);
       } catch (error) {
         // A timeout firing mid-body rejects reader.read() with a raw abort
         // on platforms that do not forward reasons into streams; the
@@ -446,14 +720,15 @@ const fetchDeliveryBytes = async (
   cap: number,
   describeFailure: (status: number) => string,
   declaredBytes?: number | undefined,
+  onBodyBytes?: (received: number) => void,
 ): Promise<Uint8Array> => {
   const attempt = fetchWithin(url, timeoutMs, signal, requestCache);
   try {
     const response = await attempt.response;
     if (!response.ok) {
-      throw new Error(describeFailure(response.status));
+      throw new DeliveryHttpStatusError(describeFailure(response.status), response.status);
     }
-    return await attempt.body(cap, declaredBytes);
+    return await attempt.body(cap, declaredBytes, onBodyBytes);
   } finally {
     attempt.settle();
   }
@@ -465,6 +740,99 @@ const fetchDeliveryBytes = async (
 const expandedBytesOf = (pack: PhaserPackDeliveryPack): number => pack.assets
   .flatMap((asset) => asset.files)
   .reduce((sum, file) => sum + file.bytes, 0);
+
+/** Overflow-checked sum: a manifest whose byte totals exceed the safe
+ * integer range is a configuration problem, never a small-looking cost. */
+const safeSumBytes = (values: readonly number[], label: string): number => {
+  let total = 0;
+  for (const value of values) {
+    if (total > Number.MAX_SAFE_INTEGER - value) {
+      fail('config', `Delivery ${label} exceeds the safe integer range`);
+    }
+    total += value;
+  }
+  return total;
+};
+
+/** Pure planning core shared by `inspectPreparation` and `prepare`'s
+ * admission check, so the two can never drift. Inputs are the closure
+ * (dependency-first), which ZIP packs are already staged, the current
+ * staging usage and the budget — nothing else is read: no scene, DOM,
+ * fetch, worker, cache or timer. */
+const planPackPreparation = (
+  closure: readonly PhaserPackDeliveryPack[],
+  stagedPackIds: ReadonlySet<string>,
+  stagingUsedBytes: number,
+  stagingBudgetBytes: number,
+  busy: boolean,
+): Omit<PhaserPackPreparationPlan, 'packId' | 'revision'> => {
+  const stagedZipPacks: { packId: string; revision: string }[] = [];
+  const missingZipPacks: { packId: string; revision: string }[] = [];
+  const coldArtifacts: PhaserPackPreparationArtifact[] = [];
+  const expandedPerMissingPack: number[] = [];
+  for (const pack of closure) {
+    if (pack.delivery === 'zip') {
+      const archive = pack.archive!;
+      coldArtifacts.push({
+        packId: pack.packId,
+        revision: pack.revision,
+        delivery: 'zip',
+        path: archive.path,
+        bodyBytes: archive.bytes,
+      });
+      const reservation = safeSumBytes(
+        [archive.bytes, expandedBytesOf(pack)],
+        'staging reservation',
+      );
+      if (stagedPackIds.has(pack.packId)) {
+        stagedZipPacks.push({ packId: pack.packId, revision: pack.revision });
+      } else {
+        missingZipPacks.push({ packId: pack.packId, revision: pack.revision });
+        expandedPerMissingPack.push(reservation);
+      }
+    } else {
+      for (const asset of pack.assets) {
+        for (const file of asset.files) {
+          coldArtifacts.push({
+            packId: pack.packId,
+            revision: pack.revision,
+            delivery: 'files',
+            path: file.path,
+            bodyBytes: file.bytes,
+          });
+        }
+      }
+    }
+  }
+  const additionalReservationBytes = safeSumBytes(expandedPerMissingPack, 'staging reservation');
+  const projectedStagingBytes = safeSumBytes(
+    [stagingUsedBytes, additionalReservationBytes],
+    'projected staging',
+  );
+  return {
+    closure: closure.map((pack) => ({
+      packId: pack.packId,
+      revision: pack.revision,
+      delivery: pack.delivery,
+    })),
+    coldArtifacts,
+    coldObjectCount: coldArtifacts.length,
+    coldBodyBytes: safeSumBytes(coldArtifacts.map((artifact) => artifact.bodyBytes), 'cold artifact bytes'),
+    zipExpandedBytes: safeSumBytes(
+      closure.filter((pack) => pack.delivery === 'zip').map((pack) => expandedBytesOf(pack)),
+      'expanded zip bytes',
+    ),
+    stagedZipPacks,
+    missingZipPacks,
+    additionalReservationBytes,
+    stagingUsedBytes,
+    projectedStagingBytes,
+    stagingBudgetBytes,
+    fitsBudget: projectedStagingBytes <= stagingBudgetBytes,
+    busy,
+    accountingModel: 'archive-plus-expanded-v1',
+  };
+};
 
 const integrityOf = (file: { readonly bytes: number; readonly sha256: string }): PhaserPackFileIntegrity => ({
   bytes: file.bytes,
@@ -645,6 +1013,40 @@ export function createPhaserPackDelivery(
     assets: pack.assets.map((asset) => loaderAsset(pack, asset)),
   }));
 
+  // Observation: one subscription set for the delivery's lifetime.
+  // Registration sees only events from that point on (no replay); a
+  // throwing or rejecting listener is contained and never awaited; the
+  // unsubscribe closure is idempotent. Unsubscribed listeners are
+  // dropped immediately — no references are retained for closed UI.
+  const listeners = new Set<PhaserPackDeliveryListener>();
+  const emitEvent = (event: PhaserPackDeliveryEvent): void => {
+    for (const listener of [...listeners]) {
+      try {
+        const observed = listener(event) as unknown;
+        if (
+          observed !== null && observed !== undefined
+          && typeof observed === 'object'
+          && typeof (observed as PromiseLike<unknown>).then === 'function'
+        ) {
+          // Async observers never block delivery work and their
+          // rejections are handled, never left floating.
+          void (observed as PromiseLike<unknown>).then(undefined, () => undefined);
+        }
+      } catch {
+        // Observational only: a broken observer changes nothing.
+      }
+    }
+  };
+  const subscribe = (listener: PhaserPackDeliveryListener): (() => void) => {
+    listeners.add(listener);
+    return (): void => {
+      listeners.delete(listener);
+    };
+  };
+  let operationCounter = 0;
+  const nextOperationId = (): number => ++operationCounter;
+  const revisionOf = (packId: string): string => packIndex.get(packId)?.pack.revision ?? '';
+
   const staged = new Map<string, StagedPack>();
   let stagingUsedBytes = 0;
   let archiveRequests = 0;
@@ -702,10 +1104,29 @@ export function createPhaserPackDelivery(
     pack: PhaserPackDeliveryPack,
     deadlineAt: number,
     signal: AbortSignal,
+    tracker?: OperationTracker,
   ): Promise<StagedPack> => {
     const archive = pack.archive!;
-    const url = resolveArtifact(archive.path, { packId: pack.packId, revision: pack.revision });
+    const packContext = { packId: pack.packId, revision: pack.revision };
+    const emit = (
+      phase: 'downloading' | 'decoding-and-verifying',
+      progress: PhaserPackDeliveryProgress,
+    ): void => {
+      tracker?.nextEvent(phase, { ...packContext, progress });
+    };
+    const url = resolveArtifact(archive.path, packContext);
+    // URL resolution runs synchronous user code; the budget gate sits
+    // immediately before the request it guards, after that code, so no
+    // archive request can start on a budget spent inside the resolver.
+    if (deadlineAt - monotonicNow() <= 0) {
+      fail('deadline', 'Delivery preparation exceeded its deadline');
+    }
     archiveRequests++;
+    // Emitted once the body starts: the first observation reports zero
+    // delivered bytes against the manifest's declared size, and every
+    // network chunk updates the measured count. Content-Length alone
+    // never decides success or total size.
+    emit('downloading', { bodyBytes: 0, expectedBodyBytes: archive.bytes });
     const bytes = await fetchDeliveryBytes(
       url,
       requestTimeoutMs,
@@ -714,25 +1135,43 @@ export function createPhaserPackDelivery(
       archive.bytes,
       (status): string => `Delivery archive request failed with HTTP ${status} (${pack.packId})`,
       archive.bytes,
+      (received): void => {
+        emit('downloading', { bodyBytes: received, expectedBodyBytes: archive.bytes });
+      },
     ).catch((error: unknown) => {
       if (error instanceof PhaserPackDeliveryError) {
         throw error;
       }
       if (error instanceof DeliveryRequestTimeout) {
-        throw requestTimeoutError('archive request', pack.packId);
+        throw requestTimeoutError('archive request', pack.packId)
+          .withDetails({ stage: 'downloading', ...packContext });
       }
       if (signal.aborted) {
         throw abortCategory(signal.reason, `preparation for ${pack.packId}`);
       }
+      if (error instanceof DeliveryHttpStatusError) {
+        throw new PhaserPackDeliveryError('transport', error.message, {
+          stage: 'downloading',
+          ...packContext,
+          httpStatus: error.httpStatus,
+        });
+      }
       throw new PhaserPackDeliveryError(
         'transport',
         `Could not fetch the delivery archive for ${pack.packId}: ${error instanceof Error ? error.message : String(error)}`,
+        { stage: 'downloading', ...packContext },
       );
     });
     if (bytes.byteLength !== archive.bytes) {
       fail(
         'integrity',
         `Delivery archive size mismatch for ${pack.packId}: ${bytes.byteLength} of ${archive.bytes}`,
+        {
+          stage: 'decoding-and-verifying',
+          ...packContext,
+          expectedBytes: archive.bytes,
+          receivedBytes: bytes.byteLength,
+        },
       );
     }
     // The archive digest is verified once, inside the #191 decoder, against
@@ -750,10 +1189,17 @@ export function createPhaserPackDelivery(
     }
     const expandedBytes = expandedBytesOf(pack);
     // The whole-prepare deadline is never restarted; the decoder only ever
-    // receives the unspent remainder, exactly as #191 prescribes.
-    const remainingMs = deadlineAt - Date.now();
+    // receives the unspent remainder, exactly as #191 prescribes. Both the
+    // deadline and this remainder read the same monotonic clock, and the
+    // spent check runs before the flooring so rounding can never mint
+    // budget: a fractional remainder floors to the decoder's integer
+    // contract without ever rounding up into fresh time.
+    const remainingMs = deadlineAt - monotonicNow();
     if (remainingMs <= 0) {
-      fail('deadline', 'Delivery preparation exceeded its deadline');
+      fail('deadline', 'Delivery preparation exceeded its deadline', {
+        stage: 'decoding-and-verifying',
+        ...packContext,
+      });
     }
     const job = decoderFor().decode({
       archive: bytes,
@@ -767,7 +1213,7 @@ export function createPhaserPackDelivery(
         // default; the bound follows the manifest's longest validated path
         // so a legal generated pack is never rejected on path length.
         maxPathLength,
-        decodeDeadlineMs: remainingMs,
+        decodeDeadlineMs: Math.floor(remainingMs),
       },
     });
     const mediaByPath = new Map(
@@ -791,6 +1237,16 @@ export function createPhaserPackDelivery(
     } else {
       signal.addEventListener('abort', cancelWithJob, { once: true });
     }
+    // One observation before the first entry: verification has begun
+    // with nothing verified yet. Internal hashing/inflate percentages
+    // are not observable through the #191 contract and are not
+    // fabricated.
+    let verifiedEntryBytes = 0;
+    emit('decoding-and-verifying', {
+      entriesVerified: 0,
+      entryBytes: 0,
+      expectedEntries: expected.entries.length,
+    });
     try {
       for await (const entry of job.entries) {
         // Caller cancel and dispose() stop the decode promptly: without this
@@ -804,9 +1260,16 @@ export function createPhaserPackDelivery(
           fail(
             'integrity',
             `Delivery archive ${pack.packId} delivered an unlisted entry: ${entry.path}`,
+            { stage: 'decoding-and-verifying', ...packContext },
           );
         }
         files.set(entry.path, { bytes: entry.bytes, mediaType: mediaByPath.get(entry.path)! });
+        verifiedEntryBytes += entry.bytes.byteLength;
+        emit('decoding-and-verifying', {
+          entriesVerified: files.size,
+          entryBytes: verifiedEntryBytes,
+          expectedEntries: expected.entries.length,
+        });
       }
       const status = await job.result;
       if (status.status !== 'completed') {
@@ -827,12 +1290,19 @@ export function createPhaserPackDelivery(
         throw new PhaserPackDeliveryError(
           code,
           `Delivery archive ${pack.packId} did not decode completely: ${status.status}${status.code === undefined ? '' : ` (${status.code})`}`,
+          {
+            stage: 'decoding-and-verifying',
+            ...packContext,
+            ...(status.code === undefined ? {} : { decoderCode: status.code }),
+            decoderStatus: status.status,
+          },
         );
       }
       if (files.size !== expected.entries.length) {
         fail(
           'integrity',
           `Delivery archive ${pack.packId} staged ${files.size} of ${expected.entries.length} entries`,
+          { stage: 'decoding-and-verifying', ...packContext },
         );
       }
     } catch (error) {
@@ -852,6 +1322,12 @@ export function createPhaserPackDelivery(
           throw new PhaserPackDeliveryError(
             'config',
             `Delivery archive ${pack.packId} could not use its worker: ${error.message}`,
+            {
+              stage: 'decoding-and-verifying',
+              ...packContext,
+              decoderStatus: 'unsupported',
+              decoderCode: error.code,
+            },
           );
         }
         if (error instanceof ZipDecodeError && error.code === 'deadline') {
@@ -860,11 +1336,25 @@ export function createPhaserPackDelivery(
           throw new PhaserPackDeliveryError(
             'deadline',
             `Delivery archive ${pack.packId}: ${error.message}`,
+            {
+              stage: 'decoding-and-verifying',
+              ...packContext,
+              decoderStatus: 'deadline',
+              decoderCode: error.code,
+            },
           );
         }
         throw new PhaserPackDeliveryError(
           'integrity',
           `Delivery archive ${pack.packId} failed to decode: ${error instanceof Error ? error.message : String(error)}`,
+          {
+            stage: 'decoding-and-verifying',
+            ...packContext,
+            ...(error instanceof ZipDecodeError ? { decoderCode: error.code } : {}),
+            ...(error instanceof ZipDecodeError && error.code === 'worker-error'
+              ? { decoderStatus: 'worker-error' as const }
+              : {}),
+          },
         );
       }
       throw error;
@@ -912,6 +1402,19 @@ export function createPhaserPackDelivery(
               fail('config', 'Delivery file body was already read');
             }
             readOnce = true;
+            // One observed operation per files-delivery body read. Staged
+            // zip entries are local bytes, not origin downloads, and emit
+            // nothing.
+            const operationId = nextOperationId();
+            const tracker = createOperationTracker(operationId, 'file-read', emitEvent);
+            const requestContext = {
+              kind: 'file-read' as const,
+              operationId,
+              packId: request.packId,
+              revision: request.revision,
+              assetKey: request.assetKey,
+              role: request.role,
+            };
             // dispose() stops in-flight file reads too: combine the
             // loader's signal with the delivery shutdown so a disposed
             // delivery cannot keep streaming under a live loader permit.
@@ -952,6 +1455,13 @@ export function createPhaserPackDelivery(
               const cap = declared === undefined || declared <= 0
                 ? maxFileBytes
                 : Math.min(declared, maxFileBytes);
+              tracker.nextEvent('downloading', {
+                packId: request.packId,
+                revision: request.revision,
+                assetKey: request.assetKey,
+                role: request.role,
+                ...(declared === undefined ? {} : { progress: { bodyBytes: 0, expectedBodyBytes: declared } }),
+              });
               const bytes = await fetchDeliveryBytes(
                 url,
                 requestTimeoutMs,
@@ -960,29 +1470,60 @@ export function createPhaserPackDelivery(
                 cap,
                 (status): string => `Delivery file request failed with HTTP ${status} (${request.packId})`,
                 declared,
+                (received): void => {
+                  tracker.nextEvent('downloading', {
+                    packId: request.packId,
+                    revision: request.revision,
+                    assetKey: request.assetKey,
+                    role: request.role,
+                    ...(declared === undefined
+                      ? { progress: { bodyBytes: received } }
+                      : { progress: { bodyBytes: received, expectedBodyBytes: declared } }),
+                  });
+                },
               ).catch((error: unknown) => {
                 if (error instanceof PhaserPackDeliveryError) {
-                  throw error;
+                  throw error.withDetails({ ...requestContext, stage: 'downloading' });
                 }
                 if (error instanceof DeliveryRequestTimeout) {
-                  throw requestTimeoutError('file request', request.packId);
+                  throw requestTimeoutError('file request', request.packId)
+                    .withDetails({ ...requestContext, stage: 'downloading' });
                 }
                 if (combined.aborted && combined.reason === context.signal.reason) {
                   throw new PhaserPackDeliveryError(
                     'cancelled',
                     `Delivery file request for ${request.packId} was cancelled`,
+                    requestContext,
                   );
                 }
                 if (combined.aborted) {
                   // First-abort-wins: the combined reason remembers whether
                   // the shutdown fired before the loader signal.
                   const reason = combined.reason;
-                  throw abortCategory(reason, `file request for ${request.packId}`);
+                  throw abortCategory(reason, `file request for ${request.packId}`)
+                    .withDetails(requestContext);
+                }
+                if (error instanceof DeliveryHttpStatusError) {
+                  throw new PhaserPackDeliveryError('transport', error.message, {
+                    ...requestContext,
+                    stage: 'downloading',
+                    httpStatus: error.httpStatus,
+                  });
                 }
                 throw new PhaserPackDeliveryError(
                   'transport',
                   `Could not fetch the delivery file for ${request.packId}: ${error instanceof Error ? error.message : String(error)}`,
+                  { ...requestContext, stage: 'downloading' },
                 );
+              });
+              tracker.nextEvent('completed', {
+                packId: request.packId,
+                revision: request.revision,
+                assetKey: request.assetKey,
+                role: request.role,
+                ...(declared === undefined
+                  ? { progress: { bodyBytes: bytes.byteLength } }
+                  : { progress: { bodyBytes: bytes.byteLength, expectedBodyBytes: declared } }),
               });
               return {
                 bytes: toBlob(bytes, role.mediaType),
@@ -991,6 +1532,23 @@ export function createPhaserPackDelivery(
               };
             } catch (error) {
               readOnce = false;
+              // The files-read operation ends exactly once with the
+              // classified failure; already-terminal trackers (early
+              // cancelled/disposed paths above) stay silent.
+              if (error instanceof PhaserPackDeliveryError) {
+                const enriched = error.withDetails(requestContext);
+                tracker.nextEvent(
+                  enriched.code === 'cancelled' ? 'cancelled'
+                    : enriched.code === 'disposed' ? 'disposed' : 'failed',
+                  {
+                    packId: request.packId,
+                    revision: request.revision,
+                    assetKey: request.assetKey,
+                    role: request.role,
+                    error: { code: enriched.code, details: enriched.details },
+                  },
+                );
+              }
               throw error;
             } finally {
               bridge.dispose();
@@ -1097,6 +1655,25 @@ export function createPhaserPackDelivery(
 
   return {
     catalog,
+    /** Observation entry point (the only one): listeners receive events
+     * for operations observed after registration — no replay — and the
+     * returned unsubscribe is idempotent. */
+    subscribe,
+    inspectPreparation(packId: string): PhaserPackPreparationPlan {
+      assertLive();
+      const closure = closureOf(packId);
+      return {
+        packId,
+        revision: revisionOf(packId),
+        ...planPackPreparation(
+          closure,
+          new Set(staged.keys()),
+          stagingUsedBytes,
+          stagingBudgetBytes,
+          activePrepare,
+        ),
+      };
+    },
     fileSource,
     async prepare(packId, prepareOptions = {}) {
       assertLive();
@@ -1106,30 +1683,58 @@ export function createPhaserPackDelivery(
       const closure = closureOf(packId);
       const zipPacks = closure.filter((pack) => pack.delivery === 'zip');
       const missing = zipPacks.filter((pack) => !staged.has(pack.packId));
-      // Reservation is archive bytes plus every expanded file byte, computed
-      // for the whole closure before any network work: an oversized prepare
-      // is rejected without a single request.
-      const need = missing.reduce((sum, pack) => sum + pack.archive!.bytes + expandedBytesOf(pack), 0);
-      if (stagingUsedBytes + need > stagingBudgetBytes) {
+      // Admission runs through the same pure planner `inspectPreparation`
+      // exposes, on live state: an inspection result is never a
+      // reservation, and an oversized prepare is rejected without a
+      // single request.
+      const admission = planPackPreparation(
+        closure,
+        new Set(staged.keys()),
+        stagingUsedBytes,
+        stagingBudgetBytes,
+        false,
+      );
+      if (!admission.fitsBudget) {
         fail(
           'budget',
-          `Delivery staging budget exceeded: preparing ${packId} needs ${need} bytes with ${stagingUsedBytes} staged, over the ${stagingBudgetBytes} byte budget`,
+          `Delivery staging budget exceeded: preparing ${packId} needs `
+            + `${admission.additionalReservationBytes} bytes with ${stagingUsedBytes} staged, `
+            + `over the ${stagingBudgetBytes} byte budget`,
+          { kind: 'prepare', packId, revision: revisionOf(packId) },
         );
       }
+      const operationId = nextOperationId();
+      const tracker = createOperationTracker(operationId, 'prepare', emitEvent);
+      const requestedRevision = revisionOf(packId);
       if (missing.length === 0) {
         // Everything is already staged (or the closure is files-only): just
         // take handles, with no timer, worker or network work at all — but
         // an already-aborted caller still gets the same 'cancelled' answer
-        // the staging path would give.
+        // the staging path would give. The prepared event describes staging
+        // only: a files-only closure never downloads an image here, so
+        // "prepared" must not be rendered as images loaded.
+        tracker.nextEvent('planning', { packId, revision: requestedRevision });
         if (prepareOptions.signal?.aborted) {
-          fail('cancelled', 'Delivery preparation was cancelled');
+          const cancelled = new PhaserPackDeliveryError(
+            'cancelled',
+            'Delivery preparation was cancelled',
+            { kind: 'prepare', operationId, packId, revision: requestedRevision },
+          );
+          tracker.nextEvent('cancelled', {
+            packId,
+            revision: requestedRevision,
+            error: { code: cancelled.code, details: cancelled.details },
+          });
+          throw cancelled;
         }
         const handles = acquireHandles(zipPacks);
+        tracker.nextEvent('prepared', { packId, revision: requestedRevision });
         return { release: handles.release };
       }
+      tracker.nextEvent('planning', { packId, revision: requestedRevision });
       activePrepare = true;
       const controller = new AbortController();
-      const deadlineAt = Date.now() + prepareTimeoutMs;
+      const deadlineAt = monotonicNow() + prepareTimeoutMs;
       const timer = setTimeout(
         (): void => controller.abort(new DeliveryDeadlineAbort('Delivery preparation exceeded its deadline')),
         prepareTimeoutMs,
@@ -1153,8 +1758,18 @@ export function createPhaserPackDelivery(
         // Staging is deliberately sequential: the single-flight budget,
         // the one shared never-restarting deadline and the bounded
         // archive+expanded memory all depend on one stage at a time.
+        const assertBudgetLeft = (): void => {
+          // The abort timer's callback can lag the clock: no new archive
+          // request, and no successful return, may start or land on a
+          // budget the monotonic clock has already spent. The thrown
+          // reason is classified by the catch below like any abort.
+          if (deadlineAt - monotonicNow() <= 0) {
+            fail('deadline', 'Delivery preparation exceeded its deadline');
+          }
+        };
         for (const pack of missing) {
-          const stagedPack = await stagePack(pack, deadlineAt, controller.signal);
+          assertBudgetLeft();
+          const stagedPack = await stagePack(pack, deadlineAt, controller.signal, tracker);
           // dispose() during an await drops everything: a late stagePack
           // result must not repopulate a cleared delivery.
           if (disposed) {
@@ -1163,15 +1778,38 @@ export function createPhaserPackDelivery(
           }
           newlyStaged.push(stagedPack);
         }
+        // Final success gate: a decode that resolved after the budget was
+        // spent — with the abort callback still queued — must not certify
+        // the preparation or hand out staging handles.
+        assertBudgetLeft();
         const handles = acquireHandles(zipPacks);
+        tracker.nextEvent('prepared', { packId, revision: requestedRevision });
         return { release: handles.release };
       } catch (thrown) {
-        const error = classifyPrepareFailure(thrown, controller.signal, packId);
+        const classified = classifyPrepareFailure(thrown, controller.signal, packId);
+        // Correlation fields merge in unconditionally, but identity the
+        // failing site already recorded wins: a dependency archive's
+        // failure keeps naming that dependency, not the requested pack.
+        const error = classified.withDetails({
+          kind: 'prepare',
+          operationId,
+          ...(classified.details.packId === undefined
+            ? { packId, revision: requestedRevision }
+            : {}),
+        });
         // acquireHandles rolls its own handles back on failure, so the only
         // staged bytes to reclaim here are the ones this prepare staged.
         for (const stagedPack of newlyStaged) {
           unstage(stagedPack);
         }
+        tracker.nextEvent(
+          error.code === 'cancelled' ? 'cancelled' : error.code === 'disposed' ? 'disposed' : 'failed',
+          {
+            packId,
+            revision: requestedRevision,
+            error: { code: error.code, details: error.details },
+          },
+        );
         throw error;
       } finally {
         clearTimeout(timer);
