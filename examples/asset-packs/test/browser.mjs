@@ -311,6 +311,21 @@ try {
       assert.equal(current.pilotFrames, 4, 'Spritesheet frames arrive from the archive');
       assert.deepEqual([current.ready, current.total, current.textureCount], [2, 2, 2]);
       assert.ok(Number.isFinite(current.lastPrepareMs) && current.lastPrepareMs >= 0);
+      // Observed delivery staging is distinct from texture readiness: the
+      // prepare operation reached its terminal exactly once, with measured
+      // progress recorded and no failure terminal.
+      assert.equal(current.observed.phase, 'prepared');
+      assert.equal(current.observed.packId, 'grove');
+      assert.equal(current.observed.terminal, '');
+      assert.match(current.observed.progress, /entries 2 \/ 2/);
+      // The selection-time inspection matches what the prepare just did:
+      // the shared+grove closure fit the budget and the displayed plan
+      // describes exactly the two packs staged.
+      assert.equal(current.plan.closure.length, 2);
+      assert.equal(current.plan.coldObjectCount, 2);
+      assert.equal(current.plan.fitsBudget, true);
+      assert.ok(current.plan.additionalReservationBytes > 0);
+      assert.equal(current.plan.accountingModel, 'archive-plus-expanded-v1');
       // One archive request per pack in the closure — never one per file.
       assert.equal(zipCount('shared') - sharedBefore, 1, 'The shared archive downloads once per preparation');
       assert.equal(zipCount('grove') - groveBefore, 1, 'The theme archive downloads once per preparation');
@@ -359,7 +374,9 @@ try {
         remote.faults.set(archivePath('dunes'), { kind: 'corrupt' });
         await page.click('#retry');
         await wait('error');
-        assert.match((await state()).error, /digest (mismatch|does not match)/i);
+        // The sample displays stable fields only: the integrity code with
+        // the captured decoder stage, never the message text.
+        assert.match((await state()).error, /integrity \[decoding-and-verifying/);
         remote.faults.delete(archivePath('dunes'));
         await page.click('#retry');
         await wait('playing');
@@ -374,8 +391,13 @@ try {
         const oversizeBefore = zipCount('shared');
         await page.click('#grove');
         await wait('error');
-        assert.match((await state()).error, /staging budget/i);
+        assert.match((await state()).error, /^budget$/);
         assert.equal(zipCount('shared'), oversizeBefore, 'Oversized preparation must not hit the network');
+        // The same selection-time plan explains the refusal: over budget,
+        // with the UI display and the prepare admission agreeing.
+        const oversizePlan = (await state()).plan;
+        assert.equal(oversizePlan.fitsBudget, false);
+        assert.ok(oversizePlan.projectedStagingBytes > oversizePlan.stagingBudgetBytes);
 
         // An exact budget admits the boundary without waiting.
         await page.goto(zipApp.url + '?renderer=webgl&delivery=zip&staging=' + groveClosureNeed);
