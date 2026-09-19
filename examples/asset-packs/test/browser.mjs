@@ -311,6 +311,13 @@ try {
       assert.equal(current.pilotFrames, 4, 'Spritesheet frames arrive from the archive');
       assert.deepEqual([current.ready, current.total, current.textureCount], [2, 2, 2]);
       assert.ok(Number.isFinite(current.lastPrepareMs) && current.lastPrepareMs >= 0);
+      // Observed delivery staging is distinct from texture readiness: the
+      // prepare operation reached its terminal exactly once, with measured
+      // progress recorded and no failure terminal.
+      assert.equal(current.observed.phase, 'prepared');
+      assert.equal(current.observed.packId, 'grove');
+      assert.equal(current.observed.terminal, '');
+      assert.match(current.observed.progress, /entries 2 \/ 2/);
       // One archive request per pack in the closure — never one per file.
       assert.equal(zipCount('shared') - sharedBefore, 1, 'The shared archive downloads once per preparation');
       assert.equal(zipCount('grove') - groveBefore, 1, 'The theme archive downloads once per preparation');

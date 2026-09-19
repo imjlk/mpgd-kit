@@ -139,9 +139,10 @@ See the package README for the exact contract and limitations.
 catalog plus a prepared file source (staged ZIP packs via the real
 module worker, plain HTTP for `files` packs, mixed manifests routed per
 pack). The whole-prepare budget runs on one monotonic clock and hands
-the decoder only the unspent remainder. See the package README's
-"Prepared pack delivery" section for the contract — budgets, deadlines,
-lifetimes and error codes.
+the decoder only the unspent remainder. `delivery.subscribe(listener)`
+observes prepare and files-delivery read work with measured progress and
+structured failure details; see the package README's "Observing delivery
+work" section for the event contract and the error `details` fields.
 
 ### Browser acceptance
 
