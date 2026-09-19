@@ -347,6 +347,34 @@ URLs (queries may carry credentials), response objects or nested errors,
 and environment failures vs integrity failures stay distinguishable within
 the existing top-level codes.
 
+### Inspecting preparation costs before loading
+
+`delivery.inspectPreparation(packId)` answers, without starting anything,
+what a cold prepare of a pack and its dependency closure would cost: the
+dependency-ordered closure, the per-pack artifact list (one object per
+ZIP archive — entries are not download objects — and one per
+files-delivery file), the cold object count and body-bytes sum (assuming
+no HTTP or local cache at all; not wire bytes), the ZIP packs already
+staged versus the ones a prepare would have to stage, the additional
+staging reservation (`archive bytes + expanded file bytes` per missing
+pack), current and projected staging usage against the configured
+budget with `fitsBudget`, and whether a preparation is currently busy.
+The inspection is read-only — no prepare, handles, reservations, file
+reads, HTTP or cache probes, workers or timers — and it is not a
+reservation: `prepare` re-runs the exact same pure planner on live
+state, so a stale `fitsBudget` never bypasses admission. Duplicate
+artifacts are resolved by the manifest's own identity rules (never by
+content-hash guessing), a files-only closure reports zero ZIP cost while
+keeping its full cold file cost, and resident Phaser textures are not
+inspected — this planner never assumes an existing texture saves a
+download. Byte sums are overflow-checked; a manifest whose totals
+exceed the safe integer range is a configuration error, never a
+small-looking cost. The `accountingModel` identifier
+(`archive-plus-expanded-v1`) pins what the reservation numbers cover:
+deliberately excluded are transport snapshots/copies, transient Blob
+conversions, WebCrypto/decoder-internal memory, decoded pixels and GPU
+resources — the budget bounds staging, not total process memory.
+
 Preparation precedes `loader.acquire`: `prepared.release()` returns the
 staging stake while registered textures stay alive under the loader lease,
 open readers keep their bytes, and re-entering re-prepares from the

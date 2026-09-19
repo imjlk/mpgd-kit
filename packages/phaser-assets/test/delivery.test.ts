@@ -1597,3 +1597,202 @@ describe('delivery observation', () => {
     delivery.dispose();
   });
 });
+
+describe('delivery preparation inspection', () => {
+  const serveDelivery = async (packs: readonly ManifestPackSpec[], stagingBudgetBytes?: number) => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest(packs);
+    for (const [path, file] of packFiles) {
+      origin.files.set(path, file);
+    }
+    const workers = createFakeWorkerFactory();
+    const delivery = createPhaserPackDelivery(manifest, {
+      baseUrl: origin.url,
+      createWorker: workers.factory,
+      ...(stagingBudgetBytes === undefined ? {} : { stagingBudgetBytes }),
+    });
+    return { origin, manifest, workers, delivery };
+  };
+
+  it('plans a files-only closure with zero ZIP preparation cost', () => {
+    return (async () => {
+      const { delivery } = await serveDelivery([{ id: 'solo', delivery: 'files' }]);
+      const plan = delivery.inspectPreparation('solo');
+      expect(plan.closure.map((pack) => pack.packId)).toEqual(['solo']);
+      expect(plan.coldObjectCount).toBe(1);
+      expect(plan.coldArtifacts[0]?.delivery).toBe('files');
+      expect(plan.coldBodyBytes).toBe(pngBytes.byteLength);
+      expect(plan.zipExpandedBytes).toBe(0);
+      expect(plan.missingZipPacks).toHaveLength(0);
+      expect(plan.additionalReservationBytes).toBe(0);
+      expect(plan.projectedStagingBytes).toBe(0);
+      expect(plan.fitsBudget).toBe(true);
+      expect(plan.accountingModel).toBe('archive-plus-expanded-v1');
+      delivery.dispose();
+    })();
+  });
+
+  it('plans ZIP-only and mixed closures with dependency order', async () => {
+    const { delivery } = await serveDelivery([
+      { id: 'shared', delivery: 'zip', zip: zipFixture() },
+      { id: 'theme', dependsOn: ['shared'], delivery: 'zip', zip: zipFixture() },
+      { id: 'skin', dependsOn: ['shared'], delivery: 'files' },
+    ]);
+    const plan = delivery.inspectPreparation('skin');
+    expect(plan.closure.map((pack) => pack.packId)).toEqual(['shared', 'skin']);
+    const zipArtifacts = plan.coldArtifacts.filter((artifact) => artifact.delivery === 'zip');
+    const fileArtifacts = plan.coldArtifacts.filter((artifact) => artifact.delivery === 'files');
+    expect(zipArtifacts).toHaveLength(1);
+    expect(zipArtifacts[0]?.path).toBe('packs/shared@1.zip');
+    expect(fileArtifacts).toHaveLength(1);
+    expect(plan.coldObjectCount).toBe(2);
+    expect(plan.missingZipPacks.map((pack) => pack.packId)).toEqual(['shared']);
+    const shared = zipFixture();
+    expect(plan.additionalReservationBytes).toBe(shared.archive.byteLength + pngBytes.byteLength);
+    expect(plan.zipExpandedBytes).toBe(pngBytes.byteLength);
+    delivery.dispose();
+  });
+
+  it('counts a shared dependency once across dependents', async () => {
+    const { delivery } = await serveDelivery([
+      { id: 'shared', delivery: 'zip', zip: zipFixture() },
+      { id: 'a', dependsOn: ['shared'], delivery: 'zip', zip: zipFixture() },
+      { id: 'b', dependsOn: ['shared'], delivery: 'zip', zip: zipFixture() },
+    ]);
+    const plan = delivery.inspectPreparation('b');
+    expect(plan.closure.filter((pack) => pack.packId === 'shared')).toHaveLength(1);
+    const sharedArchives = plan.coldArtifacts.filter(
+      (artifact) => artifact.packId === 'shared',
+    );
+    expect(sharedArchives).toHaveLength(1);
+    delivery.dispose();
+  });
+
+  it('excludes already staged packs from the additional reservation', async () => {
+    const { delivery } = await serveDelivery([
+      { id: 'shared', delivery: 'zip', zip: zipFixture() },
+      { id: 'theme', dependsOn: ['shared'], delivery: 'zip', zip: zipFixture() },
+    ]);
+    const before = delivery.inspectPreparation('theme');
+    expect(before.missingZipPacks.map((pack) => pack.packId)).toEqual(['shared', 'theme']);
+    const handles = await delivery.prepare('theme');
+    // While handles keep the staging alive, the same inspection sees both
+    // packs as staged with nothing more to reserve.
+    const during = delivery.inspectPreparation('theme');
+    expect(during.stagedZipPacks.map((pack) => pack.packId).sort()).toEqual(['shared', 'theme']);
+    expect(during.missingZipPacks).toHaveLength(0);
+    expect(during.additionalReservationBytes).toBe(0);
+    expect(during.stagingUsedBytes).toBe(before.additionalReservationBytes);
+    expect(during.projectedStagingBytes).toBe(before.additionalReservationBytes);
+    handles.release();
+    // Nothing holds the staging anymore: the plan reflects re-staging cost.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const after = delivery.inspectPreparation('theme');
+    expect(after.stagingUsedBytes).toBe(0);
+    expect(after.additionalReservationBytes).toBe(before.additionalReservationBytes);
+    delivery.dispose();
+  });
+
+  it('inspects with no side effects on network, workers, handles or staging', async () => {
+    const { origin, workers, delivery } = await serveDelivery([
+      { id: 'solo', delivery: 'zip', zip: zipFixture() },
+    ]);
+    const snapshotBefore = delivery.snapshot();
+    const requestsBefore = origin.requests.length;
+    delivery.inspectPreparation('solo');
+    delivery.inspectPreparation('solo');
+    expect(origin.requests.length).toBe(requestsBefore);
+    expect(workers.posted).toHaveLength(0);
+    expect(delivery.snapshot()).toEqual(snapshotBefore);
+    delivery.dispose();
+    expect(() => delivery.inspectPreparation('solo')).toThrow(/disposed/);
+  });
+
+  it('reports the busy flag while a preparation is running', async () => {
+    const origin = await startGatedOrigin();
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+    for (const [path, file] of packFiles) {
+      origin.files.set(path, file);
+    }
+    const delivery = createPhaserPackDelivery(manifest, {
+      baseUrl: origin.url,
+      createWorker: createFakeWorkerFactory().factory,
+    });
+    const archivePath = 'packs/solo@1.zip';
+    origin.hold(archivePath);
+    expect(delivery.inspectPreparation('solo').busy).toBe(false);
+    const preparing = delivery.prepare('solo');
+    await waitForRequest(origin.requests, archivePath);
+    expect(delivery.inspectPreparation('solo').busy).toBe(true);
+    origin.release(archivePath);
+    await preparing;
+    expect(delivery.inspectPreparation('solo').busy).toBe(false);
+    delivery.dispose();
+  });
+
+  it('shares the admission formula with prepare at the exact boundary', async () => {
+    const fixture = zipFixture();
+    const closureNeed = fixture.archive.byteLength + pngBytes.byteLength;
+    const exact = await serveDelivery([{ id: 'solo', delivery: 'zip', zip: fixture }], closureNeed);
+    expect(exact.delivery.inspectPreparation('solo').fitsBudget).toBe(true);
+    const handles = await exact.delivery.prepare('solo');
+    handles.release();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    exact.delivery.dispose();
+
+    const over = await serveDelivery([{ id: 'solo', delivery: 'zip', zip: fixture }], closureNeed - 1);
+    const plan = over.delivery.inspectPreparation('solo');
+    expect(plan.fitsBudget).toBe(false);
+    // One byte over the budget: the same formula rejects the prepare with
+    // the same need number the inspection reported.
+    const failure = await over.delivery.prepare('solo').catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(PhaserPackDeliveryError);
+    expect((failure as PhaserPackDeliveryError).code).toBe('budget');
+    expect((failure as PhaserPackDeliveryError).message).toContain(String(closureNeed));
+    over.delivery.dispose();
+  });
+
+  it('rejects unknown pack ids and overflow-sized manifests as configuration errors', async () => {
+    // Unknown pack ids fail like every other delivery lookup.
+    const { delivery: zipDelivery } = await serveDelivery([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+    expect(() => zipDelivery.inspectPreparation('nope')).toThrow(/Unknown delivery pack/);
+    // A manifest whose sums exceed the safe integer range is a config
+    // problem, not a small-looking cost.
+    const huge = 2 ** 53 - 1;
+    const hugeManifest = {
+      format: 'mpgd-asset-packs', version: 1,
+      packs: [
+        {
+          packId: 'a', revision: '1', dependencies: [], delivery: 'zip',
+          archive: { path: 'packs/a@1.zip', bytes: huge, sha256: '0'.repeat(64), entryCount: 1 },
+          assets: [{
+            assetKey: 'pilot', kind: 'image' as const,
+            files: [{ role: 'texture', mediaType: 'image/png', bytes: huge, sha256: '0'.repeat(64), path: 'pilot.png', method: 'store' as const }],
+          }],
+        },
+      ],
+    };
+    const hugeDelivery = createPhaserPackDelivery(hugeManifest, {
+      baseUrl: 'http://127.0.0.1:1/',
+      createWorker: createFakeWorkerFactory().factory,
+    });
+    expect(() => hugeDelivery.inspectPreparation('a')).toThrow(/safe integer/);
+    hugeDelivery.dispose();
+    zipDelivery.dispose();
+  });
+
+  it('keeps external snapshot mutations out of the internal plan', async () => {
+    const { delivery } = await serveDelivery([
+      { id: 'solo', delivery: 'zip', zip: zipFixture() },
+    ]);
+    const plan = delivery.inspectPreparation('solo');
+    const mutated = delivery.snapshot() as { stagingUsedBytes: number };
+    mutated.stagingUsedBytes = 10 ** 12;
+    const again = delivery.inspectPreparation('solo');
+    expect(again.stagingUsedBytes).toBe(plan.stagingUsedBytes);
+    expect(again.projectedStagingBytes).toBe(plan.projectedStagingBytes);
+    delivery.dispose();
+  });
+});
