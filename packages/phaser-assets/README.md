@@ -316,15 +316,53 @@ with each path segment URL-encoded exactly once, so revisions and names
 carrying `#`, `?`, spaces or non-ASCII address the resource the static
 host serves.
 
+### Observing delivery work
+
+`delivery.subscribe(listener)` is the single observation surface (there is
+no separate onProgress callback). Listeners run synchronously, receive only
+events observed after registration (no replay), and get an idempotent
+unsubscribe; a throwing or rejecting listener is contained and never
+awaited, so observation cannot change delivery results. Events carry an
+`operationId` (unique per operation within the delivery's lifetime — a
+correlation id, not an idempotency key), the `kind` (`prepare` or
+`file-read`), a per-operation `sequence`, pack context, the observed
+`phase` (`planning`, `downloading`, `decoding-and-verifying`, then exactly
+one terminal of `prepared`/`completed`, `failed`, `cancelled` or
+`disposed`) and strictly measured progress fields — body bytes the network
+actually delivered against the manifest's declared size, and verified
+entry counts and byte totals. Internal hashing and inflate percentages
+are not observable through the archive worker contract and are never
+fabricated, per-stage numbers are never merged into one synthetic
+percentage, and absent fields mean unknown. A `prepared` event means ZIP
+staging completed — never that the loader finished decoding images; local
+staged-entry reads emit nothing, keeping origin downloads and local reads
+distinguishable for future cache support.
+
+Failures stay `PhaserPackDeliveryError` with the same codes; the optional
+`details` field now carries safe structured context (stage, operationId,
+pack/asset identity, `httpStatus`, `decoderStatus`/`decoderCode`,
+`expectedBytes`/`receivedBytes`) captured at the failing execution point —
+programs read `code` and `details`, never `message`. Details never embed
+URLs (queries may carry credentials), response objects or nested errors,
+and environment failures vs integrity failures stay distinguishable within
+the existing top-level codes.
+
 Preparation precedes `loader.acquire`: `prepared.release()` returns the
 staging stake while registered textures stay alive under the loader lease,
 open readers keep their bytes, and re-entering re-prepares from the
 network. One finite `prepareTimeoutMs` budget covers the whole prepare
 (stages never restart it; the decoder receives only the unspent
-remainder); each HTTP attempt has its own `requestTimeoutMs` ending with
-the body; the staging budget (`stagingBudgetBytes`, independent of the
-loader's byte budget) is checked for the whole closure before any
-request. Failures throw `PhaserPackDeliveryError` with a stable
+remainder, floored to the decoder's integer contract so rounding never
+mints time). The budget is measured on one monotonic clock
+(`performance.now`): a wall-clock correction mid-prepare can neither
+extend nor shrink it, no new archive request or decode starts once the
+clock says the budget is spent, and a decode that resolves after the
+budget is spent does not earn staging handles — the supported guarantee
+is elapsed-time enforcement plus result acceptance, not real-time
+termination of already-running work. Each HTTP attempt has its own
+`requestTimeoutMs` ending with the body; the staging budget
+(`stagingBudgetBytes`, independent of the loader's byte budget) is
+checked for the whole closure before any request. Failures throw `PhaserPackDeliveryError` with a stable
 `code` (`config`, `not-prepared`, `busy`, `budget`, `transport`,
 `integrity`, `cancelled`, `deadline`, `disposed`) and preserve the
 decoder's status and code in the message; there is no silent ZIP-to-files

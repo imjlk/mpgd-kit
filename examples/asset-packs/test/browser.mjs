@@ -311,6 +311,13 @@ try {
       assert.equal(current.pilotFrames, 4, 'Spritesheet frames arrive from the archive');
       assert.deepEqual([current.ready, current.total, current.textureCount], [2, 2, 2]);
       assert.ok(Number.isFinite(current.lastPrepareMs) && current.lastPrepareMs >= 0);
+      // Observed delivery staging is distinct from texture readiness: the
+      // prepare operation reached its terminal exactly once, with measured
+      // progress recorded and no failure terminal.
+      assert.equal(current.observed.phase, 'prepared');
+      assert.equal(current.observed.packId, 'grove');
+      assert.equal(current.observed.terminal, '');
+      assert.match(current.observed.progress, /entries 2 \/ 2/);
       // One archive request per pack in the closure — never one per file.
       assert.equal(zipCount('shared') - sharedBefore, 1, 'The shared archive downloads once per preparation');
       assert.equal(zipCount('grove') - groveBefore, 1, 'The theme archive downloads once per preparation');
@@ -359,7 +366,9 @@ try {
         remote.faults.set(archivePath('dunes'), { kind: 'corrupt' });
         await page.click('#retry');
         await wait('error');
-        assert.match((await state()).error, /digest (mismatch|does not match)/i);
+        // The sample displays stable fields only: the integrity code with
+        // the captured decoder stage, never the message text.
+        assert.match((await state()).error, /integrity \[decoding-and-verifying/);
         remote.faults.delete(archivePath('dunes'));
         await page.click('#retry');
         await wait('playing');
@@ -374,7 +383,7 @@ try {
         const oversizeBefore = zipCount('shared');
         await page.click('#grove');
         await wait('error');
-        assert.match((await state()).error, /staging budget/i);
+        assert.match((await state()).error, /^budget$/);
         assert.equal(zipCount('shared'), oversizeBefore, 'Oversized preparation must not hit the network');
 
         // An exact budget admits the boundary without waiting.
