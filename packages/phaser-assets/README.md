@@ -331,7 +331,7 @@ one terminal of `prepared`/`completed`, `failed`, `cancelled` or
 `disposed`) and strictly measured progress fields — body bytes the network
 actually delivered against the manifest's declared size, and verified
 entry counts and byte totals. Internal hashing and inflate percentages
-are not observable through the #191 worker contract and are never
+are not observable through the archive worker contract and are never
 fabricated, per-stage numbers are never merged into one synthetic
 percentage, and absent fields mean unknown. A `prepared` event means ZIP
 staging completed — never that the loader finished decoding images; local

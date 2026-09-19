@@ -366,7 +366,9 @@ try {
         remote.faults.set(archivePath('dunes'), { kind: 'corrupt' });
         await page.click('#retry');
         await wait('error');
-        assert.match((await state()).error, /digest (mismatch|does not match)/i);
+        // The sample displays stable fields only: the integrity code with
+        // the captured decoder stage, never the message text.
+        assert.match((await state()).error, /integrity \[decoding-and-verifying/);
         remote.faults.delete(archivePath('dunes'));
         await page.click('#retry');
         await wait('playing');
@@ -381,7 +383,7 @@ try {
         const oversizeBefore = zipCount('shared');
         await page.click('#grove');
         await wait('error');
-        assert.match((await state()).error, /staging budget/i);
+        assert.match((await state()).error, /^budget$/);
         assert.equal(zipCount('shared'), oversizeBefore, 'Oversized preparation must not hit the network');
 
         // An exact budget admits the boundary without waiting.

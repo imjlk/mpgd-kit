@@ -388,7 +388,7 @@ async function runEnter(theme: Theme, ticket: number, controller: AbortControlle
     if (ticket !== sequence) return;
     model.phase = 'error';
     if (error instanceof PhaserPackDeliveryError) {
-      model.error = `${error.code}${detailSummary(error.details)}: ${error.message}`;
+      model.error = `${error.code}${detailSummary(error.details)}`;
     } else {
       model.error = error instanceof Error ? error.message : 'Asset preparation failed';
     }
@@ -472,7 +472,9 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
     if (!bootStillCurrent()) return;
     model.phase = 'error';
     if (error instanceof PhaserPackDeliveryError) {
-      model.error = `${error.code}${detailSummary(error.details)}: ${error.message}`;
+      // The supported programmatic surface is code + details; the sample
+      // displays exactly those stable fields, never the message text.
+      model.error = `${error.code}${detailSummary(error.details)}`;
     } else if (error instanceof Error) {
       model.error = error.message;
     } else {

@@ -1415,6 +1415,10 @@ describe('delivery observation', () => {
     expect((decodeFailure as PhaserPackDeliveryError).code).toBe('integrity');
     expect(typeof (decodeFailure as PhaserPackDeliveryError).details.decoderCode).toBe('string');
     expect((decodeFailure as PhaserPackDeliveryError).details.stage).toBe('decoding-and-verifying');
+    // A core digest failure rejects the iterator before any worker
+    // terminal status exists: decoderStatus stays absent (unknown), per
+    // the absent-means-unknown contract.
+    expect((decodeFailure as PhaserPackDeliveryError).details.decoderStatus).toBeUndefined();
     tampered.dispose();
   });
 
@@ -1544,6 +1548,31 @@ describe('delivery observation', () => {
     });
     await reopened.read();
     expect(events.length).toBe(before);
+    delivery.dispose();
+  });
+
+  it('keeps the failing dependency named in prepare failure details', async () => {
+    const { manifest, origin } = await serve([
+      { id: 'shared', delivery: 'zip', zip: zipFixture() },
+      { id: 'theme', dependsOn: ['shared'], delivery: 'zip', zip: zipFixture() },
+    ]);
+    // The requested pack's dependency archive 404s: the structured
+    // details keep naming the archive that failed, not the request.
+    origin.files.delete('packs/shared@1.zip');
+    const delivery = createPhaserPackDelivery(manifest, {
+      baseUrl: origin.url,
+      createWorker: createFakeWorkerFactory().factory,
+    });
+    const { events, listener } = recorder();
+    delivery.subscribe(listener);
+    const failure = await delivery.prepare('theme').catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(PhaserPackDeliveryError);
+    expect((failure as PhaserPackDeliveryError).details.packId).toBe('shared');
+    expect((failure as PhaserPackDeliveryError).details.httpStatus).toBe(404);
+    expect((failure as PhaserPackDeliveryError).details.kind).toBe('prepare');
+    expect(typeof (failure as PhaserPackDeliveryError).details.operationId).toBe('number');
+    const terminal = events.at(-1);
+    expect(terminal?.error?.details.packId).toBe('shared');
     delivery.dispose();
   });
 

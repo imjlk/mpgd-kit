@@ -1164,7 +1164,7 @@ export function createPhaserPackDelivery(
             {
               stage: 'decoding-and-verifying',
               ...packContext,
-              decoderStatus: 'error',
+              decoderStatus: 'unsupported',
               decoderCode: error.code,
             },
           );
@@ -1190,6 +1190,9 @@ export function createPhaserPackDelivery(
             stage: 'decoding-and-verifying',
             ...packContext,
             ...(error instanceof ZipDecodeError ? { decoderCode: error.code } : {}),
+            ...(error instanceof ZipDecodeError && error.code === 'worker-error'
+              ? { decoderStatus: 'worker-error' as const }
+              : {}),
           },
         );
       }
@@ -1597,11 +1600,16 @@ export function createPhaserPackDelivery(
         tracker.nextEvent('prepared', { packId, revision: requestedRevision });
         return { release: handles.release };
       } catch (thrown) {
-        const error = classifyPrepareFailure(thrown, controller.signal, packId).withDetails({
+        const classified = classifyPrepareFailure(thrown, controller.signal, packId);
+        // Correlation fields merge in unconditionally, but identity the
+        // failing site already recorded wins: a dependency archive's
+        // failure keeps naming that dependency, not the requested pack.
+        const error = classified.withDetails({
           kind: 'prepare',
           operationId,
-          packId,
-          revision: requestedRevision,
+          ...(classified.details.packId === undefined
+            ? { packId, revision: requestedRevision }
+            : {}),
         });
         // acquireHandles rolls its own handles back on failure, so the only
         // staged bytes to reclaim here are the ones this prepare staged.
