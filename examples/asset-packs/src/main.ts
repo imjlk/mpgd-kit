@@ -189,7 +189,8 @@ class Board extends Phaser.Scene {
       // which only the explicit cancel control and this full teardown do.
       unsubscribeDelivery?.();
       unsubscribeDelivery = undefined;
-      artifactCache?.revokeAll();
+      artifactCache?.close();
+      artifactCache = undefined;
       delivery?.dispose();
       delivery = undefined;
       packs = undefined;
@@ -418,7 +419,7 @@ async function runEnter(theme: Theme, ticket: number, controller: AbortControlle
             originUrl: new URL(encodedPath, deliveryOriginBase).href,
           }];
         });
-        model.cache = await artifactCache.warm(warmList).then(
+        model.cache = await artifactCache.warm(warmList, controller.signal).then(
           (report): { report: WarmReport } => ({ report }),
           (error: unknown): { error: string } => ({ error: String(error) }),
         );
@@ -463,7 +464,8 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
   // booting so stale error text and timings cannot leak into evidence.
   unsubscribeDelivery?.();
   unsubscribeDelivery = undefined;
-  artifactCache?.revokeAll();
+  artifactCache?.close();
+  artifactCache = undefined;
   delivery?.dispose();
   delivery = undefined;
   packs = undefined;
@@ -503,26 +505,6 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
       throw new Error(`Delivery manifest is not valid JSON: ${errorText(error)}`);
     }
     deliveryOriginBase = manifestUrl;
-    // Warm inputs come from the manifest itself — the trusted basis of
-    // this experiment; no offline manifest update system exists.
-    const manifestPacks = (manifestDocument as {
-      packs: readonly {
-        archive?: { path: string; bytes: number; sha256: string };
-        delivery: 'files' | 'zip';
-        assets: readonly { files: readonly { path: string; bytes: number; sha256: string; mediaType: string }[] }[];
-      }[];
-    }).packs;
-    artifactMeta = new Map(manifestPacks.flatMap((pack) => {
-      if (pack.delivery === 'zip' && pack.archive !== undefined) {
-        return [[pack.archive.path, {
-          sha256: pack.archive.sha256, bytes: pack.archive.bytes, mediaType: 'application/zip',
-        }] as const];
-      }
-      return pack.assets.flatMap((asset) => asset.files.map((file) => [
-        file.path,
-        { sha256: file.sha256, bytes: file.bytes, mediaType: file.mediaType },
-      ] as const));
-    }));
     if (persistentCache) {
       // The experiment bridge opens here; resolveURL below performs only
       // synchronous Blob URL lookups from completed warm phases.
@@ -548,8 +530,34 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
       requestCache,
     });
     if (!bootStillCurrent()) {
+      // A stale boot must not leak its cache connection either.
+      artifactCache?.close();
+      artifactCache = undefined;
       booted.dispose();
       return;
+    }
+    // Warm inputs are extracted only after the delivery validated the
+    // manifest: the cast below reads a shape the public API already
+    // accepted, and an invalid manifest failed above with its own error.
+    {
+      const manifestPacks = (manifestDocument as {
+        packs: readonly {
+          archive?: { path: string; bytes: number; sha256: string };
+          delivery: 'files' | 'zip';
+          assets: readonly { files: readonly { path: string; bytes: number; sha256: string; mediaType: string }[] }[];
+        }[];
+      }).packs;
+      artifactMeta = new Map(manifestPacks.flatMap((pack) => {
+        if (pack.delivery === 'zip' && pack.archive !== undefined) {
+          return [[pack.archive.path, {
+            sha256: pack.archive.sha256, bytes: pack.archive.bytes, mediaType: 'application/zip',
+          }] as const];
+        }
+        return pack.assets.flatMap((asset) => asset.files.map((file) => [
+          file.path,
+          { sha256: file.sha256, bytes: file.bytes, mediaType: file.mediaType },
+        ] as const));
+      }));
     }
     // createPhaserAssetPackLoader is synchronous: the ticket cannot change
     // between the check above and the publish below.

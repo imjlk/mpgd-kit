@@ -102,6 +102,19 @@ interface CacheRecord {
 const identityOf = (artifact: { readonly sha256: string; readonly bytes: number }): string =>
   `${KEY_PREFIX}sha256|${artifact.sha256}|${artifact.bytes}`;
 
+/** Post-acquisition verification: the manifest's size and digest decide
+ * acceptance; a lying origin never reaches storage or a Blob URL. */
+const verifyAcquisition = async (
+  data: ArrayBuffer,
+  artifact: WarmArtifact,
+): Promise<ArrayBuffer> => {
+  const digest = await sha256Hex(data);
+  if (data.byteLength !== artifact.bytes || digest !== artifact.sha256) {
+    throw new Error('artifact bytes failed manifest verification at acquisition');
+  }
+  return data;
+};
+
 const sha256Hex = async (data: ArrayBuffer): Promise<string> => {
   const digest = await crypto.subtle.digest('SHA-256', data);
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -177,9 +190,19 @@ export class ArtifactCache {
   /** Warm the current selection: cache lookups, verification, origin
    * fetches for misses, bounded stores. Sequential by design — the
    * experiment measures per-artifact costs without interleaving. */
-  async warm(artifacts: readonly WarmArtifact[]): Promise<WarmReport> {
+  /** Caller cancellation: the warm stops between artifacts, in-flight
+   * fetches observe the signal, and Blob URLs created by a warm that
+   * went stale are revoked so a superseded selection cannot leave
+   * mappings behind. */
+  async warm(artifacts: readonly WarmArtifact[], signal?: AbortSignal): Promise<WarmReport> {
+    this.signal = signal;
     const entries: WarmEntry[] = [];
+    let stale = false;
     for (const artifact of artifacts) {
+      if (signal?.aborted) {
+        stale = true;
+        break;
+      }
       // Per-artifact isolation: one failed acquisition never blocks the
       // rest of the closure from warming or the delivery from running.
       try {
@@ -196,6 +219,17 @@ export class ArtifactCache {
           writeMs: null,
           blobMs: 0,
         });
+      }
+    }
+    this.signal = undefined;
+    if (stale) {
+      // A cancelled selection must not keep Blob URLs alive.
+      for (const artifact of artifacts) {
+        const url = this.urls.get(artifact.encodedPath);
+        if (url !== undefined) {
+          URL.revokeObjectURL(url);
+          this.urls.delete(artifact.encodedPath);
+        }
       }
     }
     return {
@@ -279,17 +313,64 @@ export class ArtifactCache {
     const response = await fetch(artifact.originUrl, {
       cache: 'no-store',
       credentials: 'omit',
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      signal: this.combineWithDeadline(this.signal),
     });
     if (!response.ok) {
       throw new Error(`artifact fetch failed with HTTP ${response.status}`);
     }
-    const data = await response.arrayBuffer();
-    const digest = await sha256Hex(data);
-    if (data.byteLength !== artifact.bytes || digest !== artifact.sha256) {
-      throw new Error('artifact bytes failed manifest verification at acquisition');
+    // The body is read as a bounded stream and cancelled as soon as it
+    // passes the manifest size: an oversized origin response is dropped
+    // mid-flight instead of being buffered whole first.
+    const reader = response.body?.getReader();
+    if (reader === undefined) {
+      const whole = await response.arrayBuffer();
+      if (whole.byteLength > artifact.bytes) {
+        throw new Error('artifact exceeds its declared size');
+      }
+      return verifyAcquisition(whole, artifact);
     }
-    return data;
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      received += value.byteLength;
+      if (received > artifact.bytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error('artifact exceeds its declared size');
+      }
+      chunks.push(value);
+    }
+    const data = new Uint8Array(received);
+    let offset = 0;
+    for (const chunk of chunks) {
+      data.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return verifyAcquisition(data.buffer, artifact);
+  }
+
+  /** Combines the caller's abort signal with the finite fetch deadline;
+   * manual bridge for environments without AbortSignal.any. */
+  private signal: AbortSignal | undefined;
+
+  private combineWithDeadline(callerSignal: AbortSignal | undefined): AbortSignal {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(new DOMException('artifact fetch timed out', 'TimeoutError')), FETCH_TIMEOUT_MS);
+    const abortWith = (reason: unknown): void => controller.abort(reason instanceof Error ? reason : new Error('artifact fetch aborted'));
+    const onCallerAbort = (): void => abortWith(callerSignal?.reason);
+    if (callerSignal?.aborted) {
+      abortWith(callerSignal.reason);
+    } else {
+      callerSignal?.addEventListener('abort', onCallerAbort, { once: true });
+    }
+    controller.signal.addEventListener('abort', () => {
+      clearTimeout(timeout);
+      callerSignal?.removeEventListener('abort', onCallerAbort);
+    }, { once: true });
+    return controller.signal;
   }
 
   private readRecord(identity: string): Promise<CacheRecord | null> {
@@ -321,47 +402,47 @@ export class ArtifactCache {
       usageRequest.onsuccess = () => {
         const usage = usageRequest.result as { total: number } | undefined;
         const total = usage?.total ?? 0;
-        if (total + artifact.bytes > MAX_TOTAL_BYTES) {
-          finish('origin-store-skipped');
-          tx.abort();
-          return;
-        }
-        const record: CacheRecord = {
-          schemaVersion: SCHEMA_VERSION,
-          digest: artifact.sha256,
-          bytes: artifact.bytes,
-          // Informational only: readers always take media types from the
-          // current manifest, never from this record.
-          mediaType: artifact.mediaType,
-          storedAt: Date.now(),
-          payload: data,
+        // A replacement write only grows usage by the delta over the
+        // record it overwrites, so re-storing the same identity never
+        // inflates the accounting toward the cap. The existing record is
+        // read inside the same transaction as the writes.
+        const existingRequest = store.get(identity);
+        existingRequest.onsuccess = () => {
+          const existing = existingRequest.result as CacheRecord | undefined;
+          const delta = artifact.bytes - (existing?.bytes ?? 0);
+          if (total + delta > MAX_TOTAL_BYTES) {
+            finish('origin-store-skipped');
+            tx.abort();
+            return;
+          }
+          const record: CacheRecord = {
+            schemaVersion: SCHEMA_VERSION,
+            digest: artifact.sha256,
+            bytes: artifact.bytes,
+            // Informational only: readers always take media types from
+            // the current manifest, never from this record.
+            mediaType: artifact.mediaType,
+            storedAt: Date.now(),
+            payload: data,
+          };
+          const put = store.put(record, identity);
+          if (this.faults.failPutOnce) {
+            this.faults.failPutOnce = false;
+            queueMicrotask(() => {
+              try {
+                (put as unknown as { error: DOMException }).error
+                  = new DOMException('injected store failure', 'QuotaExceededError');
+                put.dispatchEvent(new Event('error'));
+              } catch {
+                tx.abort();
+              }
+            });
+          }
+          store.put({ total: total + delta }, USAGE_KEY);
         };
-        const put = store.put(record, identity);
-        if (this.faults.failPutOnce) {
-          this.faults.failPutOnce = false;
-          put.addEventListener('error', () => {
-            /* the transaction aborts below via the error default path */
-          });
-          queueMicrotask(() => {
-            try {
-              (put as unknown as { error: DOMException }).error
-                = new DOMException('injected store failure', 'QuotaExceededError');
-              put.dispatchEvent(new Event('error'));
-            } catch {
-              tx.abort();
-            }
-          });
-        }
-        store.put({ total: total + artifact.bytes }, USAGE_KEY);
       };
-      tx.oncomplete = () => {
-        if (this.faults.abortCommitOnce) {
-          // Too late to abort a completed transaction; the fault fires
-          // before completion in the abort path below instead.
-        }
-        finish('origin-stored');
-      };
-      tx.onabort = () => finish(this.faults.abortCommitOnce ? 'origin-store-failed' : 'origin-store-failed');
+      tx.oncomplete = () => finish('origin-stored');
+      tx.onabort = () => finish('origin-store-failed');
       tx.onerror = () => undefined;
       if (this.faults.abortCommitOnce) {
         this.faults.abortCommitOnce = false;

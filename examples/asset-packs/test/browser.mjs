@@ -610,7 +610,7 @@ try {
     const cachePage = await cacheContext.newPage();
     const cacheErrors = [];
     cachePage.on('pageerror', (error) => cacheErrors.push(error.message));
-    cachePage.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+    cachePage.on('console', (message) => { if (message.type() === 'error') cacheErrors.push(message.text()); });
     const cacheState = () => cachePage.evaluate(() => JSON.parse(window.render_game_to_text()));
     const cacheWait = (phase) => cachePage.waitForFunction((expected) => JSON.parse(window.render_game_to_text()).phase === expected, phase);
     // Artifact GET counting: the ZIP app shell is local; artifacts come
