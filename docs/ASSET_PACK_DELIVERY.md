@@ -147,6 +147,41 @@ work" section for the event contract and the error `details` fields.
 download — what a cold prepare of the closure costs and whether it fits
 the staging budget; see "Inspecting preparation costs before loading".
 
+### Pre-deployment verification
+
+`mpgd assets verify-delivery --manifest <asset-pack-delivery.json> --root <dir>`
+checks the built output read-only before deployment: manifest validation,
+path safety (no absolute/traversal/symlink/non-regular artifacts), streaming
+size and SHA-256 verification of every referenced file, full ZIP v1 interior
+verification through the runtime decode core, and optional static-host object
+limits (`--max-object-bytes`, `--max-files`, `--max-total-bytes`) evaluated
+against the entire root inventory (old revisions included) rather than just
+the referenced set. `--max-archive-bytes` caps how many bytes a single zip
+archive may declare and occupy during verification (512 MiB by default),
+and `--max-entry-bytes` (256 MiB) / `--max-expanded-bytes` (1 GiB) bound
+decompression independently of the manifest's own declared sizes — a
+self-consistent manifest cannot make verification allocate past them.
+Larger declarations fail in the `limits` stage before being read or
+decoded. Roots with
+more than a million files fail the inventory check as truncated rather
+than certifying limits that could not be fully walked.
+
+`--json` is a machine-readable output contract: stdout is exactly one
+JSON document — `JSON.parse(stdout)` works with no banner stripping —
+on success and on verification failures alike, and any failure exits
+non-zero while the document still carries the `failures` list with a
+stage and stable code per problem. Two documented boundaries: framework
+argument errors rejected before the command runs (for example a
+non-numeric `--max-files` value or a missing required argument) print
+their message to stderr and leave stdout blank, and `--help` /
+`--version` take precedence over `--json`, printing their own text.
+Human-readable text mode keeps its banner and per-stage lines.
+
+The command reads inputs only — it never extracts archives, modifies
+the manifest, or contacts a network. The `notVerified` field records
+what only the real host can confirm (CDN caching, CORS/Content-Type,
+device rendering).
+
 ### Browser acceptance
 
 The private fixture in `examples/asset-packs` exercises the full product path

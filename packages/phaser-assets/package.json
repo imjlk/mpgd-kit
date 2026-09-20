@@ -26,6 +26,10 @@
       "types": "./dist/archives.d.ts",
       "default": "./dist/archives.js"
     },
+    "./archive-validation": {
+      "types": "./dist/archive-validation.d.ts",
+      "default": "./dist/archive-validation.js"
+    },
     "./delivery": {
       "types": "./dist/delivery.d.ts",
       "default": "./dist/delivery.js"

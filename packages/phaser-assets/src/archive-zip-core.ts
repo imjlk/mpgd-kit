@@ -55,6 +55,8 @@ const ENCRYPTED_FLAG = 0x0001;
 const DECODE_CHUNK_BYTES = 64 * 1024;
 const MIN_DECODE_STEP_BYTES = 64;
 const BREATHE_INPUT_BYTES = 256 * 1024;
+const CRC_CHUNK_BYTES = 1024 * 1024;
+const STORE_COPY_CHUNK_BYTES = 4 * 1024 * 1024;
 const crcTable: readonly number[] = (() => {
   const table = new Array<number>(256);
   for (let index = 0; index < 256; index++) {
@@ -66,10 +68,25 @@ const crcTable: readonly number[] = (() => {
   }
   return table;
 })();
-const crc32Of = (data: Uint8Array): number => {
+const crc32Of = async (
+  data: Uint8Array,
+  clock: () => number,
+  deadlineAt: number,
+  control: Required<Pick<ZipDecodeControl, 'shouldStop'>>,
+): Promise<number> => {
   let crc = 0xffffffff;
-  for (const byte of data) {
-    crc = crcTable[(crc ^ byte) & 0xff]! ^ (crc >>> 8);
+  for (let offset = 0; offset < data.length; offset += CRC_CHUNK_BYTES) {
+    const end = Math.min(data.length, offset + CRC_CHUNK_BYTES);
+    for (let index = offset; index < end; index++) {
+      const byte = data[index]!;
+      crc = crcTable[(crc ^ byte) & 0xff]! ^ (crc >>> 8);
+    }
+    assertControl(control, clock, deadlineAt);
+    if (end < data.length) {
+      // STORE entries do not pass through inflateBounded, so yield between
+      // CRC chunks to keep cancellation and the deadline observable.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
   }
   return (crc ^ 0xffffffff) >>> 0;
 };
@@ -442,6 +459,30 @@ async function inflateBounded(
   })();
 }
 
+/** Copy one STORE entry in bounded chunks. A single typed-array copy of a
+ * large allowed entry would block the event loop before the CRC/deadline
+ * checks below get a chance to run. */
+async function copyStoredBounded(
+  archive: Uint8Array,
+  entry: PlannedEntry,
+  clock: () => number,
+  deadlineAt: number,
+  control: Required<Pick<ZipDecodeControl, 'shouldStop'>>,
+): Promise<Uint8Array> {
+  assertControl(control, clock, deadlineAt);
+  const bytes = new Uint8Array(entry.declaredBytes);
+  for (let offset = 0; offset < bytes.length; offset += STORE_COPY_CHUNK_BYTES) {
+    const end = Math.min(bytes.length, offset + STORE_COPY_CHUNK_BYTES);
+    assertControl(control, clock, deadlineAt);
+    bytes.set(archive.subarray(entry.dataStart + offset, entry.dataStart + end), offset);
+    if (end < bytes.length) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+  }
+  assertControl(control, clock, deadlineAt);
+  return bytes;
+}
+
 /**
  * Verify an archive against its expected manifest description and yield the
  * original files one at a time. Structure and digests are checked before any
@@ -610,7 +651,7 @@ export async function* decodeZipV1Entries(
     // copy, so a Buffer input's polymorphic slice cannot hand the consumer
     // a view aliasing the archive or its larger backing buffer.
     const bytes = entry.method === 'store'
-      ? new Uint8Array(archive.subarray(entry.dataStart, entry.dataEnd))
+      ? await copyStoredBounded(archive, entry, clock, deadlineAt, wrappedControl)
       : await inflateBounded(
           archive,
           entry,
@@ -629,7 +670,7 @@ export async function* decodeZipV1Entries(
         `ZIP decode produced ${expandedTotal} bytes, exceeding the total expanded byte limit ${limits.totalExpandedBytes}`,
       );
     }
-    if (crc32Of(bytes) !== entry.declaredCrc) {
+    if (await crc32Of(bytes, clock, deadlineAt, wrappedControl) !== entry.declaredCrc) {
       throw new ZipDecodeError('integrity', `ZIP entry ${entry.path} CRC-32 mismatch`);
     }
     assertControl(wrappedControl, clock, deadlineAt);
