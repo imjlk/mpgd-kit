@@ -27,27 +27,30 @@ export async function verifyZipV1Archive(
   expected: ExpectedZipArchive,
   limits: ZipDecodeLimits,
 ): Promise<ZipV1VerificationStats> {
-  // ArrayBuffer.isView reads the [[ViewedArrayBuffer]] internal slot:
-  // realm-independent and immune to property overrides (instanceof,
-  // @@toStringTag and BYTES_PER_ELEMENT are all spoofable or
-  // realm-sensitive), so plain objects shaped like a view — even with a
-  // genuine ArrayBuffer in `buffer` — cannot reach the core's snapshot.
-  // DataView inputs pass here and fail closed at the core's length gate.
-  if (!ArrayBuffer.isView(archive)) {
-    throw new ZipDecodeError('invalid-structure', 'ZIP archive bytes must be a typed array view');
+  // ArrayBuffer.isView reads the [[ViewedArrayBuffer]] internal slot, but it
+  // also accepts DataView and every typed-array element width. Read the
+  // intrinsic typed-array brand getter directly so cross-realm Uint8Arrays
+  // work while Uint16Array/Float32Array/DataView inputs cannot be reinterpreted
+  // as a byte archive. The intrinsic getter ignores spoofed own tags.
+  let isUint8Array = false;
+  try {
+    const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+    const getTag = Object.getOwnPropertyDescriptor(typedArrayPrototype, Symbol.toStringTag)?.get;
+    isUint8Array = ArrayBuffer.isView(archive) && getTag?.call(archive) === 'Uint8Array';
+  } catch {
+    isUint8Array = false;
   }
-  // length/buffer/byteOffset/byteLength are prototype accessors a
-  // genuine view can shadow with own properties — a view holding a
-  // valid ZIP followed by trailing bytes could otherwise certify only
-  // its prefix. Only shadow-carrying views pay for a snapshot through
-  // the typed-array constructor, which reads the length and elements
-  // from the [[ArrayLength]] and indexed internal slots; clean views of
-  // any realm pass through untouched, and the core's own snapshot
-  // freezes the bytes against caller mutation during verification. A
-  // detached view fails the snapshot as a typed failure.
+  if (!isUint8Array) {
+    throw new ZipDecodeError('invalid-structure', 'ZIP archive bytes must be a Uint8Array view');
+  }
+  // A subclass, a cross-realm view, or a view with shadowed accessors can
+  // expose inherited/own length or buffer values that are not the intrinsic
+  // view span. Snapshot those views through the typed-array constructor;
+  // clean same-realm Uint8Arrays take the core's existing single snapshot.
   let bytes: Uint8Array;
   try {
-    bytes = Object.hasOwn(archive, 'length') || Object.hasOwn(archive, 'buffer')
+    bytes = Object.getPrototypeOf(archive) !== Uint8Array.prototype
+      || Object.hasOwn(archive, 'length') || Object.hasOwn(archive, 'buffer')
       || Object.hasOwn(archive, 'byteOffset') || Object.hasOwn(archive, 'byteLength')
       ? new Uint8Array(archive)
       : archive;

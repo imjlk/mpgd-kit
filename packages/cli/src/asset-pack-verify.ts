@@ -91,9 +91,11 @@ export interface AssetPackVerifyOptions {
 
 const DEFAULT_MANIFEST_BYTE_CAP = 32 * 1024 * 1024;
 const DEFAULT_VERIFY_TIMEOUT_MS = 120_000;
-/** Delays beyond the platform timer range clamp to 1 ms, which would
- * disarm the watchdog instead of arming it late. */
+/** The watchdog arms one millisecond after the deadline. Leave one
+ * millisecond of headroom so the largest accepted timeout plus that offset
+ * still fits the platform timer range instead of clamping to 1 ms. */
 const TIMER_RANGE_MS = 2 ** 31 - 1;
+const MAX_VERIFY_TIMEOUT_MS = TIMER_RANGE_MS - 1;
 const DEFAULT_MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const DEFAULT_MAX_ENTRY_BYTES = 256 * 1024 * 1024;
 const DEFAULT_MAX_EXPANDED_BYTES = 1024 * 1024 * 1024;
@@ -221,6 +223,10 @@ const streamSha256 = async (
       const view = chunk as Buffer;
       bytes += view.byteLength;
       hasher.update(view);
+      // Hashing a large chunk is synchronous; sample after it so a final
+      // chunk that crosses the budget cannot be accepted merely because the
+      // stream itself completed and its watchdog was cleared.
+      deadline.sample();
     }
   } catch (error) {
     if (error instanceof VerifyDeadlineError) {
@@ -232,6 +238,7 @@ const streamSha256 = async (
   } finally {
     clearTimeout(timer);
   }
+  deadline.sample();
   return { bytes, sha256: hasher.digest('hex') };
 };
 
@@ -323,9 +330,26 @@ const inventoryRoot = async (
     // holding more than the cap cannot materialize every dirent first;
     // each batch read is raced against the deadline like every other
     // blocking wait.
+    // Retain the directory identity before opening it. A queued directory
+    // can be replaced by a symlink or a different directory while another
+    // entry is being walked; fail closed instead of letting opendir follow a
+    // replacement outside the verified root.
+    const expectedDirectory = await deadline.race(lstat(directory, { bigint: true }));
+    if (expectedDirectory.isSymbolicLink() || !expectedDirectory.isDirectory()) {
+      throw new Error(`Directory changed during inventory: ${directory}`);
+    }
     const dir = await deadline.race(opendir(directory));
     let stalled = false;
     try {
+      const openedDirectory = await deadline.race(lstat(directory, { bigint: true }));
+      if (
+        openedDirectory.isSymbolicLink()
+        || !openedDirectory.isDirectory()
+        || openedDirectory.dev !== expectedDirectory.dev
+        || openedDirectory.ino !== expectedDirectory.ino
+      ) {
+        throw new Error(`Directory changed during inventory: ${directory}`);
+      }
       for (;;) {
         const entry = await deadline.race(dir.read());
         if (entry === null) {
@@ -552,18 +576,18 @@ export async function verifyAssetPackDelivery(
     ...(hostLimits?.maxFiles === undefined ? {} : { maxFiles: hostLimits.maxFiles }),
     ...(hostLimits?.maxTotalBytes === undefined ? {} : { maxTotalBytes: hostLimits.maxTotalBytes }),
   };
-  if (verifyTimeoutMs > TIMER_RANGE_MS) {
+  if (verifyTimeoutMs > MAX_VERIFY_TIMEOUT_MS) {
     failWith(
       failures,
       'args',
       'invalid-option',
-      `verifyTimeoutMs must be at most ${TIMER_RANGE_MS} ms (the platform timer range)`,
+      `verifyTimeoutMs must be at most ${MAX_VERIFY_TIMEOUT_MS} ms (the platform timer range minus the watchdog headroom)`,
     );
   }
   const argsValid = [
     positiveIntegerOption(failures, 'manifestByteCap', manifestByteCap),
     positiveIntegerOption(failures, 'verifyTimeoutMs', verifyTimeoutMs),
-    verifyTimeoutMs <= TIMER_RANGE_MS,
+    verifyTimeoutMs <= MAX_VERIFY_TIMEOUT_MS,
     positiveIntegerOption(failures, 'maxArchiveBytes', maxArchiveBytes),
     positiveIntegerOption(failures, 'maxEntryBytes', maxEntryBytes),
     positiveIntegerOption(failures, 'maxExpandedBytes', maxExpandedBytes),
@@ -764,7 +788,11 @@ export async function verifyAssetPackDelivery(
    * file on case-insensitive filesystems: they re-check the new
    * declaration without re-reading or re-counting the object. */
   const verifiedArtifacts = new Map<string, { bytes: number; sha256: string }>();
-  if (manifest !== undefined && rootUsable && argsValid) {
+  const declaredHostLimitExceeded = failures.some(
+    (failure) => failure.stage === 'limits'
+      && (failure.code === 'max-files' || failure.code === 'max-total-bytes'),
+  );
+  if (manifest !== undefined && rootUsable && argsValid && !declaredHostLimitExceeded) {
     try {
       for (const pack of manifest.packs) {
         if (deadline.breach()) {
@@ -821,7 +849,7 @@ export async function verifyAssetPackDelivery(
     && Object.values(hostLimits).some((value) => value !== undefined);
   if (limitsRequested && rootUsable && argsValid && !deadline.breach()) {
     try {
-      inventory = await inventoryRoot(root, deadline);
+      inventory = await inventoryRoot(realRoot, deadline);
     } catch (error) {
       if (!(error instanceof VerifyDeadlineError)) {
         failWith(failures, 'limits', 'inventory-unreadable', errorText(error));
@@ -1058,6 +1086,9 @@ const verifyReferencedFile = async (
         return;
       }
       hashed = await streamSha256(resolvedPath, handle, createHash('sha256'), deadline);
+      // Keep the deadline sentinel distinct from a later size/hash result
+      // even when the final synchronous hash update crossed the boundary.
+      deadline.sample();
     } catch (error) {
       if (error instanceof VerifyDeadlineError) {
         stalled = true;

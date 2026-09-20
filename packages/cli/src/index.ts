@@ -267,6 +267,31 @@ const acceptanceStepIds = {
  * exit (see bin.ts); in-process library callers handle it themselves. */
 let forcedExitPending = false;
 
+/** A blocked pipe must not prevent the standalone binary from reaching its
+ * forced-exit path after a deadline report. The callback may remain queued
+ * behind a stalled reader, so the drain is best effort and bounded. */
+const CLI_OUTPUT_DRAIN_TIMEOUT_MS = 250;
+const drainOutput = (stream: NodeJS.WriteStream): Promise<void> => new Promise((resolve) => {
+  let settled = false;
+  const finish = (): void => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    resolve();
+  };
+  const timer = setTimeout(finish, CLI_OUTPUT_DRAIN_TIMEOUT_MS);
+  try {
+    stream.write('', () => {
+      clearTimeout(timer);
+      finish();
+    });
+  } catch {
+    clearTimeout(timer);
+    finish();
+  }
+});
+
 export function mpgdCliNeedsForcedExit(): boolean {
   return forcedExitPending;
 }
@@ -1314,14 +1339,7 @@ const assetsCommand = defineI18n({
         if (report.failures.some((failure) => failure.code === 'deadline')) {
           // Piped console output is asynchronous; drain both streams so a
           // large report is not truncated by the binary's forced exit.
-          await Promise.all([
-            new Promise<void>((resolve) => {
-              process.stdout.write('', () => resolve());
-            }),
-            new Promise<void>((resolve) => {
-              process.stderr.write('', () => resolve());
-            }),
-          ]);
+          await Promise.all([drainOutput(process.stdout), drainOutput(process.stderr)]);
           // Stalled filesystem requests cannot be cancelled once the
           // deadline fires; the standalone binary forces its exit so a
           // pending threadpool call cannot keep the process (and its

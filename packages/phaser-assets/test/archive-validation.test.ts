@@ -76,6 +76,33 @@ describe('archive validation entry', () => {
     expect(stats.entries).toBe(fixtureEntries.length);
   });
 
+  it('rejects non-byte typed-array views', async () => {
+    const { archive, expected } = buildFixture();
+    const view = new Uint16Array(archive.buffer, archive.byteOffset, Math.floor(archive.byteLength / 2));
+    const failure = await verifyZipV1Archive(
+      view as unknown as Uint8Array,
+      expected,
+      limitsOf(expected.entries),
+    ).catch((error: unknown): unknown => error);
+    expect(failure).toBeInstanceOf(ZipDecodeError);
+    expect((failure as ZipDecodeError).code).toBe('invalid-structure');
+  });
+
+  it('does not trust inherited view accessors on subclasses', async () => {
+    const { archive, expected } = buildFixture();
+    class ShadowedView extends Uint8Array {}
+    Object.defineProperty(ShadowedView.prototype, 'length', {
+      configurable: true,
+      get: (): number => archive.byteLength,
+    });
+    const view = new ShadowedView(archive.byteLength + 4);
+    view.set(archive);
+    const failure = await verifyZipV1Archive(view, expected, limitsOf(expected.entries))
+      .catch((error: unknown): unknown => error);
+    expect(failure).toBeInstanceOf(ZipDecodeError);
+    expect((failure as ZipDecodeError).code).toBe('archive-mismatch');
+  });
+
   it('rejects non-view input through the slot-based guard', async () => {
     const { archive, expected } = buildFixture();
     // A plain object shaped like a view — even carrying a genuine
