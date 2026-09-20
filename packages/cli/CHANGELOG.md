@@ -1,5 +1,46 @@
 # @mpgd/cli
 
+## 0.32.0 — 2026-09-21
+
+### Minor changes
+
+- [66e572d](https://github.com/imjlk/mpgd-kit/commit/66e572dce7eb4a0bbbd097bf40a9ee47db44ec6b) Add `mpgd assets build-packs` for deterministic asset pack delivery builds.
+  A JSON build config (image, spritesheet and JSON atlas assets with pack ids,
+  logical revisions, dependencies and per-asset compression overrides) produces
+  individual files or per-pack ZIP artifacts plus an external versioned delivery
+  manifest: per-file media types, original bytes and SHA-256 digests, archive
+  digests, entry methods and counts. ZIP v1 uses STORE/DEFLATE only with fixed
+  metadata for reproducible bytes; pack artifacts are immutable per revision
+  while the manifest tracks the latest successful build. The new
+  `@mpgd/phaser-assets/pack-format` subpath publishes the shared pure contract
+  (types, untrusted-input validation, entry path rules) free of Node, DOM, Phaser
+  and compression concerns, and the CLI now depends on the package at runtime. — Thanks @imjlk!
+- [20e3583](https://github.com/imjlk/mpgd-kit/commit/20e3583394671dcb46157364f8bbac6799ba0dd3) Add `mpgd assets verify-delivery`, a local read-only pre-deployment check
+  for built asset pack artifacts: `--manifest <asset-pack-delivery.json>
+  --root <artifact-directory>`. The command validates the manifest against
+  the shared pack-format contract, resolves every referenced path under the
+  root (rejecting absolute paths, traversal, symlinks and non-regular
+  files), streams and SHA-256-verifies every referenced file, decodes each
+  ZIP archive through the same pure core that powers runtime delivery
+  (exposing a narrow `@mpgd/phaser-assets/archive-validation` entry), and
+  optionally checks static-host object limits (`--max-object-bytes`,
+  `--max-files`, `--max-total-bytes`) against the full root inventory —
+  distinguishing referenced integrity from deployment budget — and caps the
+  largest archive it will read with `--max-archive-bytes` (512 MiB by
+  default) plus decompression bounds `--max-entry-bytes` (256 MiB) and
+  `--max-expanded-bytes` (1 GiB) that are independent of the manifest's own
+  declared sizes, failing in the limits stage before reading or decoding
+  oversized declarations. Reports carry
+  per-stage failure codes; `--json` emits stdout as exactly one
+  machine-readable JSON document (parseable with JSON.parse(stdout), no
+  banner) on success and failure alike, framework argument errors move to
+  stderr, and failures exit non-zero. The check never
+  modifies inputs, extracts archives, or contacts a network. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: phaser-assets@0.6.0
+
 ## 0.31.0 — 2026-09-14
 
 ### Patch changes
