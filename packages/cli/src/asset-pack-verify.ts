@@ -412,27 +412,28 @@ const readManifestCapped = async (
   // open(2) before any stream event exists, and destroying a stream
   // cannot cancel that pending open.
   const handle = await deadline.race(open(resolve(manifestPath), 'r'));
-  const stream: ReadStream = handle.createReadStream({
-    highWaterMark: STREAM_CHUNK_BYTES,
-    autoClose: false,
-  });
-  // A stalled source (a FIFO whose writer never writes, a hung network
-  // mount) delivers no chunk to sample, so the watchdog enforces the
-  // budget even while the read pends; the recorded failure travels on
-  // the destroy error.
-  const timer = deadline.armStream(stream);
   const chunks: Buffer[] = [];
+  // Read through the already-opened descriptor so every individual wait is
+  // raced against the same deadline. A stream can report EOF while buffered
+  // data is still being finalized differently across filesystems; explicit
+  // reads make the bytes returned here exactly the bytes consumed from the
+  // descriptor, while the bounded chunk keeps the cap memory-safe.
+  const buffer = Buffer.allocUnsafe(Math.min(STREAM_CHUNK_BYTES, cap));
   let received = 0;
   let stalled = false;
   try {
-    for await (const chunk of stream) {
-      const view = chunk as Buffer;
-      received += view.byteLength;
+    for (;;) {
+      const read = handle.read(buffer, 0, buffer.byteLength, null);
+      const { bytesRead } = await deadline.race(read);
+      if (bytesRead === 0) {
+        break;
+      }
+      received += bytesRead;
       if (received > cap) {
-        stream.destroy();
         throw new Error(`Delivery manifest exceeds ${cap} bytes`);
       }
-      chunks.push(view);
+      chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+      deadline.sample();
     }
   } catch (error) {
     if (error instanceof VerifyDeadlineError) {
@@ -444,7 +445,6 @@ const readManifestCapped = async (
     }
     throw new Error(`Could not read the delivery manifest: ${errorText(error)}`);
   } finally {
-    clearTimeout(timer);
     await closeBounded(() => handle.close(), stalled, deadline);
   }
   return Buffer.concat(chunks);
