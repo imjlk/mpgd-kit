@@ -9,6 +9,7 @@ import {
   createPhaserPackDelivery,
   PhaserPackDeliveryError,
   readCappedDeliveryBody,
+  type PhaserPackDeliveryEvent,
 } from '../src/delivery.js';
 import type { PhaserPackFileRequest } from '../src/pack-file-source.js';
 import { buildZipV1Fixture, type ZipV1FixtureEntry } from '../src/test-utils.js';
@@ -1236,5 +1237,363 @@ describe('phaser pack delivery', () => {
     expect(() => createPhaserPackDelivery({ format: 'mpgd-asset-packs' }, {
       baseUrl: 'http://127.0.0.1:1/',
     })).toThrow(PhaserPackDeliveryError);
+  });
+});
+
+describe('delivery observation', () => {
+  const recorder = () => {
+    const events: PhaserPackDeliveryEvent[] = [];
+    return {
+      events,
+      listener: (event: PhaserPackDeliveryEvent): void => {
+        events.push(event);
+      },
+    };
+  };
+
+  const serve = async (packs: readonly ManifestPackSpec[]): Promise<{
+    origin: Awaited<ReturnType<typeof startOrigin>>;
+    manifest: Record<string, unknown>;
+  }> => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest(packs);
+    for (const [path, file] of packFiles) {
+      origin.files.set(path, file);
+    }
+    return { origin, manifest };
+  };
+
+  const zipDelivery = async (packs: readonly ManifestPackSpec[]) => {
+    const { origin, manifest } = await serve(packs);
+    const workers = createFakeWorkerFactory();
+    const delivery = createPhaserPackDelivery(manifest, {
+      baseUrl: origin.url,
+      createWorker: workers.factory,
+    });
+    return { origin, manifest, workers, delivery };
+  };
+
+  it('emits the real zip prepare event order with measured progress', async () => {
+    const { delivery } = await zipDelivery([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+    const { events, listener } = recorder();
+    const unsubscribe = delivery.subscribe(listener);
+    await delivery.prepare('solo');
+    unsubscribe();
+    const phases = events.map((event) => event.phase);
+    expect(phases[0]).toBe('planning');
+    expect(phases).toContain('downloading');
+    expect(phases).toContain('decoding-and-verifying');
+    expect(phases[phases.length - 1]).toBe('prepared');
+    for (const [index, event] of events.entries()) {
+      expect(event.sequence).toBe(index + 1);
+      expect(event.operationId).toBe(events[0]?.operationId);
+      expect(event.kind).toBe('prepare');
+    }
+    const downloads = events.filter((event) => event.phase === 'downloading');
+    const archiveBytes = zipFixture().archive.byteLength;
+    expect(downloads[0]?.progress?.bodyBytes).toBe(0);
+    expect(downloads[0]?.progress?.expectedBodyBytes).toBe(archiveBytes);
+    expect(downloads[downloads.length - 1]?.progress?.bodyBytes).toBe(archiveBytes);
+    const decoding = events.filter((event) => event.phase === 'decoding-and-verifying');
+    expect(decoding[0]?.progress?.entriesVerified).toBe(0);
+    expect(decoding[0]?.progress?.expectedEntries).toBe(1);
+    expect(decoding[decoding.length - 1]?.progress?.entriesVerified).toBe(1);
+    expect(decoding[decoding.length - 1]?.progress?.entryBytes).toBe(pngBytes.byteLength);
+    delivery.dispose();
+  });
+
+  it('keeps a files-only prepare a light two-event operation', async () => {
+    const { manifest, origin } = await serve([{ id: 'solo', delivery: 'files' }]);
+    const delivery = createPhaserPackDelivery(manifest, { baseUrl: origin.url });
+    const { events, listener } = recorder();
+    delivery.subscribe(listener);
+    await delivery.prepare('solo');
+    expect(events.map((event) => event.phase)).toEqual(['planning', 'prepared']);
+    delivery.dispose();
+  });
+
+  it('observes a files-delivery read as its own operation', async () => {
+    const { manifest, origin } = await serve([{ id: 'solo', delivery: 'files' }]);
+    const delivery = createPhaserPackDelivery(manifest, { baseUrl: origin.url });
+    await delivery.prepare('solo');
+    const { events, listener } = recorder();
+    const unsubscribe = delivery.subscribe(listener);
+    const opened = await delivery.fileSource.open(openRequest('solo'), {
+      signal: new AbortController().signal, budgets: budgets(),
+    });
+    await opened.read();
+    unsubscribe();
+    expect(events.length).toBeGreaterThanOrEqual(2);
+    expect(events.every((event) => event.kind === 'file-read')).toBe(true);
+    expect(events[0]?.phase).toBe('downloading');
+    expect(events[0]?.assetKey).toBe('pilot');
+    expect(events[0]?.role).toBe('texture');
+    expect(events[events.length - 1]?.phase).toBe('completed');
+    expect(events[events.length - 1]?.progress?.bodyBytes).toBe(pngBytes.byteLength);
+    for (const [index, event] of events.entries()) {
+      expect(event.sequence).toBe(index + 1);
+    }
+    // The files-only prepare ran before subscribing: no replay reached it.
+    expect(events.some((event) => event.kind === 'prepare')).toBe(false);
+    delivery.dispose();
+  });
+
+  it('emits nothing for staged zip entry reads', async () => {
+    const { delivery } = await zipDelivery([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+    await delivery.prepare('solo');
+    const { events, listener } = recorder();
+    const unsubscribe = delivery.subscribe(listener);
+    const opened = await delivery.fileSource.open(openRequest('solo'), {
+      signal: new AbortController().signal, budgets: budgets(),
+    });
+    await opened.read();
+    unsubscribe();
+    expect(events).toHaveLength(0);
+    delivery.dispose();
+  });
+
+  it('terminates once with structured failure details for HTTP errors', async () => {
+    const { manifest, origin } = await serve([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+    origin.files.delete('packs/solo@1.zip');
+    const delivery = createPhaserPackDelivery(manifest, {
+      baseUrl: origin.url,
+      createWorker: createFakeWorkerFactory().factory,
+    });
+    const { events, listener } = recorder();
+    delivery.subscribe(listener);
+    const failure = await delivery.prepare('solo').catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(PhaserPackDeliveryError);
+    expect((failure as PhaserPackDeliveryError).code).toBe('transport');
+    expect((failure as PhaserPackDeliveryError).details.httpStatus).toBe(404);
+    expect((failure as PhaserPackDeliveryError).details.stage).toBe('downloading');
+    expect((failure as PhaserPackDeliveryError).details.packId).toBe('solo');
+    const terminal = events.at(-1);
+    expect(terminal?.phase).toBe('failed');
+    expect(terminal?.error?.code).toBe('transport');
+    expect(terminal?.error?.details.httpStatus).toBe(404);
+    expect(terminal?.error?.details.operationId).toBe(events[0]?.operationId);
+    // Terminal is final: nothing follows it.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(events.at(-1)).toBe(terminal);
+    delivery.dispose();
+  });
+
+  it('captures decoder status and size mismatches as details, not message parsing', async () => {
+    const lying = zipFixture();
+    const { manifest, origin } = await serve([{ id: 'solo', delivery: 'zip', zip: lying }]);
+    // A manifest that declares the wrong archive size fails before decode.
+    const doctored = structuredClone(manifest) as { packs: [{ archive: { bytes: number } }] };
+    doctored.packs[0].archive.bytes += 1;
+    const delivery = createPhaserPackDelivery(doctored, {
+      baseUrl: origin.url,
+      createWorker: createFakeWorkerFactory().factory,
+    });
+    const failure = await delivery.prepare('solo').catch((error: unknown) => error);
+    expect((failure as PhaserPackDeliveryError).code).toBe('integrity');
+    expect((failure as PhaserPackDeliveryError).details.expectedBytes).toBe(lying.archive.byteLength + 1);
+    expect((failure as PhaserPackDeliveryError).details.receivedBytes).toBe(lying.archive.byteLength);
+    delivery.dispose();
+    // A tampered archive surfaces the decoder failure code as data.
+    const tamperedBytes = new Uint8Array(lying.archive);
+    const flipIndex = tamperedBytes.length - 5;
+    tamperedBytes[flipIndex] = (tamperedBytes[flipIndex] ?? 0) ^ 0xff;
+    const { origin: tamperedOrigin, manifest: honestManifest } = await serve([
+      { id: 'solo', delivery: 'zip', zip: lying },
+    ]);
+    const tamperedManifest = structuredClone(honestManifest) as {
+      packs: [{ archive: { sha256: string; bytes: number } }];
+    };
+    tamperedManifest.packs[0].archive.sha256 = sha256(tamperedBytes);
+    tamperedOrigin.files.set('packs/solo@1.zip', { bytes: tamperedBytes, mediaType: 'application/zip' });
+    const tampered = createPhaserPackDelivery(tamperedManifest, {
+      baseUrl: tamperedOrigin.url,
+      createWorker: createFakeWorkerFactory().factory,
+    });
+    const decodeFailure = await tampered.prepare('solo').catch((error: unknown) => error);
+    expect(decodeFailure).toBeInstanceOf(PhaserPackDeliveryError);
+    expect((decodeFailure as PhaserPackDeliveryError).code).toBe('integrity');
+    expect(typeof (decodeFailure as PhaserPackDeliveryError).details.decoderCode).toBe('string');
+    expect((decodeFailure as PhaserPackDeliveryError).details.stage).toBe('decoding-and-verifying');
+    // A core digest failure rejects the iterator before any worker
+    // terminal status exists: decoderStatus stays absent (unknown), per
+    // the absent-means-unknown contract.
+    expect((decodeFailure as PhaserPackDeliveryError).details.decoderStatus).toBeUndefined();
+    tampered.dispose();
+  });
+
+  it('terminates cancelled and disposed prepares exactly once', async () => {
+    const { delivery } = await zipDelivery([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+    const { events, listener } = recorder();
+    delivery.subscribe(listener);
+    const controller = new AbortController();
+    const preparing = delivery.prepare('solo', { signal: controller.signal });
+    const expectation = expect(preparing).rejects.toMatchObject({ code: 'cancelled' });
+    controller.abort();
+    await expectation;
+    const terminal = events.at(-1);
+    expect(terminal?.phase).toBe('cancelled');
+    expect(terminal?.error?.code).toBe('cancelled');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(events.at(-1)).toBe(terminal);
+    delivery.dispose();
+  });
+
+  it('terminates a disposed prepare with the disposed phase', async () => {
+    const origin = await startGatedOrigin();
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+    for (const [path, file] of packFiles) {
+      origin.files.set(path, file);
+    }
+    const delivery = createPhaserPackDelivery(manifest, {
+      baseUrl: origin.url,
+      createWorker: createFakeWorkerFactory().factory,
+    });
+    const { events, listener } = recorder();
+    delivery.subscribe(listener);
+    const archivePath = 'packs/solo@1.zip';
+    origin.hold(archivePath);
+    const preparing = delivery.prepare('solo');
+    const expectation = expect(preparing).rejects.toMatchObject({ code: 'disposed' });
+    await waitForRequest(origin.requests, archivePath);
+    delivery.dispose();
+    origin.release(archivePath);
+    await expectation;
+    const terminal = events.at(-1);
+    expect(terminal?.phase).toBe('disposed');
+    expect(terminal?.error?.code).toBe('disposed');
+  });
+
+  it('terminates a deadline prepare as failed with the deadline code', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const { origin, manifest } = await serve([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+      const stalling = (): Worker => ({
+        postMessage(): void {
+        },
+        addEventListener(): void {
+        },
+        terminate(): void {
+        },
+      } as unknown as Worker);
+      const deadlineDelivery = createPhaserPackDelivery(manifest, {
+        baseUrl: origin.url,
+        createWorker: stalling,
+        prepareTimeoutMs: 100,
+      });
+      const { events, listener } = recorder();
+      deadlineDelivery.subscribe(listener);
+      const preparing = deadlineDelivery.prepare('solo');
+      const expectation = expect(preparing).rejects.toMatchObject({ code: 'deadline' });
+      await vi.advanceTimersByTimeAsync(150);
+      await expectation;
+      const terminal = events.at(-1);
+      expect(terminal?.phase).toBe('failed');
+      expect(terminal?.error?.code).toBe('deadline');
+      deadlineDelivery.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps preparation results when listeners throw or reject', async () => {
+    const { delivery } = await zipDelivery([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+    const exploding = (event: PhaserPackDeliveryEvent): void => {
+      throw new Error(`observer exploded at ${event.phase}`);
+    };
+    const rejecting = (event: PhaserPackDeliveryEvent): Promise<never> => {
+      void event;
+      return Promise.reject(new Error('async observer rejected'));
+    };
+    const unsubscribeA = delivery.subscribe(exploding);
+    const unsubscribeB = delivery.subscribe(rejecting);
+    const handles = await delivery.prepare('solo');
+    expect(typeof handles.release).toBe('function');
+    handles.release();
+    unsubscribeA();
+    unsubscribeB();
+    delivery.dispose();
+  });
+
+  it('supports re-entrant unsubscribe and keeps listeners uncumulated', async () => {
+    const { manifest, origin } = await serve([{ id: 'solo', delivery: 'files' }]);
+    const delivery = createPhaserPackDelivery(manifest, { baseUrl: origin.url });
+    await delivery.prepare('solo');
+    const { events, listener } = recorder();
+    let unsubscribe: (() => void) | undefined;
+    unsubscribe = delivery.subscribe((event) => {
+      // Re-entrant unsubscribe on the first event: later events must not
+      // reach this listener.
+      unsubscribe?.();
+      listener(event);
+    });
+    const opened = await delivery.fileSource.open(openRequest('solo'), {
+      signal: new AbortController().signal, budgets: budgets(),
+    });
+    await opened.read();
+    // The listener unsubscribed itself during the first event, so the
+    // operation's completed event never reaches it.
+    expect(events.length).toBe(1);
+    // Repeated (re)subscription never duplicates delivery.
+    const second = delivery.subscribe(listener);
+    delivery.subscribe(listener);
+    second();
+    const unsubscribeAgain = delivery.subscribe(listener);
+    unsubscribeAgain();
+    unsubscribeAgain();
+    const before = events.length;
+    const reopened = await delivery.fileSource.open(openRequest('solo'), {
+      signal: new AbortController().signal, budgets: budgets(),
+    });
+    await reopened.read();
+    expect(events.length).toBe(before);
+    delivery.dispose();
+  });
+
+  it('keeps the failing dependency named in prepare failure details', async () => {
+    const { manifest, origin } = await serve([
+      { id: 'shared', delivery: 'zip', zip: zipFixture() },
+      { id: 'theme', dependsOn: ['shared'], delivery: 'zip', zip: zipFixture() },
+    ]);
+    // The requested pack's dependency archive 404s: the structured
+    // details keep naming the archive that failed, not the request.
+    origin.files.delete('packs/shared@1.zip');
+    const delivery = createPhaserPackDelivery(manifest, {
+      baseUrl: origin.url,
+      createWorker: createFakeWorkerFactory().factory,
+    });
+    const { events, listener } = recorder();
+    delivery.subscribe(listener);
+    const failure = await delivery.prepare('theme').catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(PhaserPackDeliveryError);
+    expect((failure as PhaserPackDeliveryError).details.packId).toBe('shared');
+    expect((failure as PhaserPackDeliveryError).details.httpStatus).toBe(404);
+    expect((failure as PhaserPackDeliveryError).details.kind).toBe('prepare');
+    expect(typeof (failure as PhaserPackDeliveryError).details.operationId).toBe('number');
+    const terminal = events.at(-1);
+    expect(terminal?.error?.details.packId).toBe('shared');
+    delivery.dispose();
+  });
+
+  it('never leaks URL queries or responses into events or details', async () => {
+    const { manifest } = await serve([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+    const secretResolver = (path: string): string => `http://127.0.0.1:1/${path}?token=secret-value`;
+    const delivery = createPhaserPackDelivery(manifest, {
+      resolveURL: secretResolver,
+      createWorker: createFakeWorkerFactory().factory,
+    });
+    const { events, listener } = recorder();
+    delivery.subscribe(listener);
+    const failure = await delivery.prepare('solo').catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(PhaserPackDeliveryError);
+    const serialized = JSON.stringify({
+      events,
+      details: (failure as PhaserPackDeliveryError).details,
+      message: (failure as PhaserPackDeliveryError).message,
+    });
+    expect(serialized).not.toContain('secret-value');
+    expect(serialized).not.toContain('token=');
+    delivery.dispose();
   });
 });

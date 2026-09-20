@@ -6,6 +6,8 @@ import {
   PhaserPackDeliveryError,
   readCappedDeliveryBody,
   type PhaserPackDelivery,
+  type PhaserPackDeliveryErrorDetails,
+  type PhaserPackDeliveryEvent,
 } from '@mpgd/phaser-assets/delivery';
 import type { DeliveryPack } from './packs.js';
 import './style.css';
@@ -53,12 +55,88 @@ const params = new URLSearchParams(location.search);
 const requestCache: 'default' | 'no-store' = params.has('http-cache') ? 'default' : 'no-store';
 const deliveryParam = params.get('delivery');
 const deliveryMode: 'zip' | 'mixed' | null = deliveryParam === 'zip' || deliveryParam === 'mixed' ? deliveryParam : null;
+/** Delivery observation view: what the UI shows is exactly what the
+ * delivery observed — no polling, no message parsing. Stale operations
+ * (an older prepare's late events) never overwrite this state. */
+interface ObservedDelivery {
+  operationId: number;
+  phase: string;
+  packId: string;
+  progress: string;
+  terminal: string;
+  fileRead: string;
+}
+const observed: ObservedDelivery = {
+  operationId: 0, phase: '', packId: '', progress: '', terminal: '', fileRead: '',
+};
+const resetObserved = (): ObservedDelivery => Object.assign(observed, {
+  operationId: 0, phase: '', packId: '', progress: '', terminal: '', fileRead: '',
+});
+const byteText = (bytes: number | undefined): string => bytes === undefined ? '?' : String(bytes);
+const progressTextOf = (event: PhaserPackDeliveryEvent): string => {
+  const progress = event.progress;
+  if (progress === undefined) return '';
+  if (progress.entriesVerified !== undefined || progress.expectedEntries !== undefined) {
+    return `entries ${progress.entriesVerified ?? 0} / ${progress.expectedEntries ?? '?'} (${byteText(progress.entryBytes)} bytes)`;
+  }
+  if (progress.bodyBytes !== undefined) {
+    return `body ${progress.bodyBytes} / ${byteText(progress.expectedBodyBytes)} bytes`;
+  }
+  return '';
+};
+const failureTextOf = (event: PhaserPackDeliveryEvent): string => {
+  const error = event.error;
+  if (error === undefined) return '';
+  const extras: string[] = [];
+  if (error.details.stage !== undefined) extras.push(`stage ${error.details.stage}`);
+  if (error.details.httpStatus !== undefined) extras.push(`HTTP ${error.details.httpStatus}`);
+  if (error.details.decoderStatus !== undefined) extras.push(`decoder ${error.details.decoderStatus}`);
+  if (error.details.decoderCode !== undefined) extras.push(`code ${error.details.decoderCode}`);
+  return [error.code, ...extras].join(' · ');
+};
+/** Safe structured summary for error text: codes and counts, never URLs
+ * or messages that might embed them. */
+const detailSummary = (details: PhaserPackDeliveryErrorDetails): string => {
+  const extras: string[] = [];
+  if (details.stage !== undefined) extras.push(details.stage);
+  if (details.httpStatus !== undefined) extras.push(`HTTP ${details.httpStatus}`);
+  if (details.decoderStatus !== undefined) extras.push(details.decoderStatus);
+  if (details.decoderCode !== undefined) extras.push(details.decoderCode);
+  return extras.length === 0 ? '' : ` [${extras.join(', ')}]`;
+};
+const onDeliveryEvent = (event: PhaserPackDeliveryEvent): void => {
+  if (event.kind === 'prepare') {
+    if (event.phase === 'planning') {
+      observed.operationId = event.operationId;
+      observed.progress = '';
+      observed.terminal = '';
+    }
+    // Late events from a superseded prepare never reach the display.
+    if (event.operationId !== observed.operationId) return;
+    observed.phase = event.phase;
+    observed.packId = event.packId;
+    // Terminals carry no progress fields; the last measured numbers stay
+    // visible instead of being wiped by the terminal event.
+    const progress = progressTextOf(event);
+    if (progress !== '') {
+      observed.progress = progress;
+    }
+    if (event.phase === 'failed' || event.phase === 'cancelled' || event.phase === 'disposed') {
+      observed.terminal = failureTextOf(event);
+    }
+  } else {
+    observed.fileRead = `${event.packId}/${event.assetKey ?? '?'} · ${event.phase} · ${progressTextOf(event)}`;
+  }
+  renderStatus();
+};
 const model = {
   phase: 'booting', requested: null as Theme | null, current: null as Theme | null, ready: 0, total: 0, error: '',
   lastPrepareMs: null as number | null,
+  observed,
 };
 let packs: ReturnType<typeof createPhaserAssetPackLoader> | undefined;
 let delivery: PhaserPackDelivery | undefined;
+let unsubscribeDelivery: (() => void) | undefined;
 let pending: AbortController | undefined;
 let sequence = 0;
 let virtualTime = 0;
@@ -84,9 +162,15 @@ class Board extends Phaser.Scene {
       pending?.abort();
       pending = undefined;
       this.clear();
+      // Closing the sample detaches the observer first (idempotent):
+      // stopping to watch is not the same act as cancelling a prepare,
+      // which only the explicit cancel control and this full teardown do.
+      unsubscribeDelivery?.();
+      unsubscribeDelivery = undefined;
       delivery?.dispose();
       delivery = undefined;
       packs = undefined;
+      resetObserved();
       Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null });
       renderStatus();
     });
@@ -209,8 +293,19 @@ if (new URLSearchParams(location.search).has('zip-worker')) {
 
 function statusText(): string {
   if (model.phase === 'error') return model.error;
-  if (model.phase === 'preparing') return `Preparing ${model.requested}: ${model.ready} / ${model.total} textures`;
-  if (model.phase === 'playing') return `${model.current} ready — explore with arrow keys`;
+  if (model.phase === 'preparing') {
+    // Two distinct stages, never conflated: delivery staging (what the
+    // delivery observed) and loader texture preparation (the loader's
+    // own progress). "prepared" here means staging only.
+    const staging = observed.phase === ''
+      ? 'staging not started'
+      : `${observed.phase}${observed.progress === '' ? '' : ` · ${observed.progress}`}${observed.terminal === '' ? '' : ` · ${observed.terminal}`}`;
+    return `Preparing ${model.requested} [delivery: ${staging}] — textures ${model.ready} / ${model.total}`;
+  }
+  if (model.phase === 'playing') {
+    const staging = observed.phase === 'prepared' ? 'staged' : observed.phase;
+    return `${model.current} ready (${staging}) — explore with arrow keys`;
+  }
   return 'No level entered';
 }
 
@@ -242,6 +337,7 @@ function enter(theme: Theme): void {
   pending?.abort();
   const controller = new AbortController();
   pending = controller;
+  resetObserved();
   Object.assign(model, { phase: 'preparing', requested: theme, ready: 0, total: 0, error: '', lastPrepareMs: null });
   renderStatus();
   // Enters run one at a time: a superseded enter finishes (or aborts)
@@ -291,7 +387,11 @@ async function runEnter(theme: Theme, ticket: number, controller: AbortControlle
   } catch (error) {
     if (ticket !== sequence) return;
     model.phase = 'error';
-    model.error = error instanceof Error ? error.message : 'Asset preparation failed';
+    if (error instanceof PhaserPackDeliveryError) {
+      model.error = `${error.code}${detailSummary(error.details)}`;
+    } else {
+      model.error = error instanceof Error ? error.message : 'Asset preparation failed';
+    }
   } finally {
     if (ticket === sequence) { pending = undefined; renderStatus(); }
   }
@@ -306,9 +406,12 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
   // Retry replaces a half-built or failed boot: any older instance is
   // disposed before a new one is created, and the visible state returns to
   // booting so stale error text and timings cannot leak into evidence.
+  unsubscribeDelivery?.();
+  unsubscribeDelivery = undefined;
   delivery?.dispose();
   delivery = undefined;
   packs = undefined;
+  resetObserved();
   Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null });
   renderStatus();
   try {
@@ -359,6 +462,7 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
     // createPhaserAssetPackLoader is synchronous: the ticket cannot change
     // between the check above and the publish below.
     delivery = booted;
+    unsubscribeDelivery = booted.subscribe(onDeliveryEvent);
     packs = createPhaserAssetPackLoader(scene, booted.catalog, {
       ...loaderOptions,
       fileSource: booted.fileSource,
@@ -368,7 +472,9 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
     if (!bootStillCurrent()) return;
     model.phase = 'error';
     if (error instanceof PhaserPackDeliveryError) {
-      model.error = `${error.code}: ${error.message}`;
+      // The supported programmatic surface is code + details; the sample
+      // displays exactly those stable fields, never the message text.
+      model.error = `${error.code}${detailSummary(error.details)}`;
     } else if (error instanceof Error) {
       model.error = error.message;
     } else {
