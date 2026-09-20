@@ -8,6 +8,7 @@ import {
   type PhaserPackDelivery,
   type PhaserPackDeliveryErrorDetails,
   type PhaserPackDeliveryEvent,
+  type PhaserPackPreparationPlan,
 } from '@mpgd/phaser-assets/delivery';
 import type { DeliveryPack } from './packs.js';
 import './style.css';
@@ -104,6 +105,15 @@ const detailSummary = (details: PhaserPackDeliveryErrorDetails): string => {
   if (details.decoderCode !== undefined) extras.push(details.decoderCode);
   return extras.length === 0 ? '' : ` [${extras.join(', ')}]`;
 };
+/** Read-only cost summary from inspectPreparation, computed once per
+ * selection — never per frame. The display explains the budget; the
+ * prepare's own admission stays authoritative either way. */
+const planTextOf = (plan: PhaserPackPreparationPlan | null): string => {
+  if (plan === null) return '';
+  const budget = `${plan.projectedStagingBytes} / ${plan.stagingBudgetBytes} B`;
+  return `${plan.closure.length} packs · ${plan.coldObjectCount} objects · `
+    + `${plan.coldBodyBytes} B artifacts · staging ${budget}${plan.fitsBudget ? '' : ' · OVER BUDGET'}`;
+};
 const onDeliveryEvent = (event: PhaserPackDeliveryEvent): void => {
   if (event.kind === 'prepare') {
     if (event.phase === 'planning') {
@@ -133,6 +143,7 @@ const model = {
   phase: 'booting', requested: null as Theme | null, current: null as Theme | null, ready: 0, total: 0, error: '',
   lastPrepareMs: null as number | null,
   observed,
+  plan: null as PhaserPackPreparationPlan | null,
 };
 let packs: ReturnType<typeof createPhaserAssetPackLoader> | undefined;
 let delivery: PhaserPackDelivery | undefined;
@@ -171,7 +182,7 @@ class Board extends Phaser.Scene {
       delivery = undefined;
       packs = undefined;
       resetObserved();
-      Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null });
+      Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null });
       renderStatus();
     });
     this.showEmpty();
@@ -300,7 +311,8 @@ function statusText(): string {
     const staging = observed.phase === ''
       ? 'staging not started'
       : `${observed.phase}${observed.progress === '' ? '' : ` · ${observed.progress}`}${observed.terminal === '' ? '' : ` · ${observed.terminal}`}`;
-    return `Preparing ${model.requested} [delivery: ${staging}] — textures ${model.ready} / ${model.total}`;
+    const plan = planTextOf(model.plan);
+    return `Preparing ${model.requested} [delivery: ${staging}]${plan === '' ? '' : ` · plan ${plan}`} — textures ${model.ready} / ${model.total}`;
   }
   if (model.phase === 'playing') {
     const staging = observed.phase === 'prepared' ? 'staged' : observed.phase;
@@ -338,6 +350,10 @@ function enter(theme: Theme): void {
   const controller = new AbortController();
   pending = controller;
   resetObserved();
+  // One read-only inspection per selection: what a cold prepare of this
+  // closure costs and whether it fits the staging budget. It reserves
+  // nothing; prepare re-checks admission itself.
+  model.plan = delivery === undefined ? null : delivery.inspectPreparation(theme);
   Object.assign(model, { phase: 'preparing', requested: theme, ready: 0, total: 0, error: '', lastPrepareMs: null });
   renderStatus();
   // Enters run one at a time: a superseded enter finishes (or aborts)
@@ -412,7 +428,7 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
   delivery = undefined;
   packs = undefined;
   resetObserved();
-  Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null });
+  Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null });
   renderStatus();
   try {
     const stagingParam = Number(params.get('staging') ?? DELIVERY_STAGING_BUDGET_BYTES);
@@ -506,7 +522,7 @@ function wireSampleControls(): void {
     if (!packs) return;
     board.clear();
     board.showEmpty();
-    Object.assign(model, { phase: 'idle', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null });
+    Object.assign(model, { phase: 'idle', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null });
     renderStatus();
   };
 }

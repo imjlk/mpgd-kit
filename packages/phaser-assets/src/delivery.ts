@@ -244,6 +244,69 @@ export interface PhaserPackDeliveryEvent {
  * and rejected promises are handled, never awaited. */
 export type PhaserPackDeliveryListener = (event: PhaserPackDeliveryEvent) => void;
 
+/** One artifact this closure would download cold. A ZIP pack contributes
+ * exactly one object — its archive; entries inside are not download
+ * objects. Files packs contribute each file. Duplicate-content artifacts
+ * at different paths stay separate: the manifest's own identity rules
+ * decide duplication, never content-hash guessing. */
+export interface PhaserPackPreparationArtifact {
+  readonly packId: string;
+  readonly revision: string;
+  readonly delivery: 'files' | 'zip';
+  readonly path: string;
+  /** Manifest-declared body size of this artifact. */
+  readonly bodyBytes: number;
+}
+
+/** Read-only preparation cost plan derived from the manifest snapshot and
+ * the current staging state. `inspectPreparation` computes it without any
+ * side effect: no prepare, handles, reservations, file reads, HTTP or
+ * cache probes, workers or timers. An inspection is not a reservation —
+ * `prepare` re-runs admission on live state, so a stale `fitsBudget`
+ * never bypasses the real check. */
+export interface PhaserPackPreparationPlan {
+  readonly packId: string;
+  readonly revision: string;
+  /** The dependency closure in dependency-first order — the order
+   * `prepare` stages ZIP packs in. */
+  readonly closure: readonly {
+    readonly packId: string;
+    readonly revision: string;
+    readonly delivery: 'files' | 'zip';
+  }[];
+  /** Every artifact the closure references, assuming no HTTP or local
+   * cache exists at all. */
+  readonly coldArtifacts: readonly PhaserPackPreparationArtifact[];
+  /** Cold download objects: one per ZIP archive, one per files-delivery
+   * file. Not a request-success count. */
+  readonly coldObjectCount: number;
+  /** Sum of manifest-declared artifact body bytes, cold. Not wire bytes. */
+  readonly coldBodyBytes: number;
+  /** Sum of the closure ZIP packs' expanded original file bytes. */
+  readonly zipExpandedBytes: number;
+  /** ZIP packs whose staging already exists right now. */
+  readonly stagedZipPacks: readonly { readonly packId: string; readonly revision: string }[];
+  /** ZIP packs this prepare would have to stage. */
+  readonly missingZipPacks: readonly { readonly packId: string; readonly revision: string }[];
+  /** archive bytes + expanded file bytes of the missing packs — exactly
+   * the reservation `prepare` would add under the current policy. */
+  readonly additionalReservationBytes: number;
+  readonly stagingUsedBytes: number;
+  /** stagingUsedBytes + additionalReservationBytes. */
+  readonly projectedStagingBytes: number;
+  readonly stagingBudgetBytes: number;
+  readonly fitsBudget: boolean;
+  /** Whether another preparation is running right now. Informational;
+   * `prepare` itself still rejects with a busy error. */
+  readonly busy: boolean;
+  /** Identifies the accounting model behind the reservation numbers:
+   * per newly staged ZIP pack, archive bytes plus expanded file bytes.
+   * It deliberately excludes transport snapshots/copies, transient Blob
+   * conversions, WebCrypto/decoder-internal memory, decoded pixels and
+   * GPU resources — the budget bounds staging, not total memory. */
+  readonly accountingModel: 'archive-plus-expanded-v1';
+}
+
 export interface PhaserPackDeliveryOptions {
   /** Base URL manifest artifact paths resolve against. The delivery encodes
    * each path segment exactly once before resolving, so revisions and file
@@ -308,6 +371,11 @@ export interface PhaserPackDelivery {
    * idempotent unsubscribe. This is the single observation surface —
    * there is no separate onProgress callback. */
   subscribe(listener: PhaserPackDeliveryListener): () => void;
+  /** Read-only preparation cost plan for a pack and its dependency
+   * closure, derived from the manifest snapshot and the current staging
+   * state. Starts nothing, reserves nothing, touches no network, cache,
+   * worker or timer; `prepare` re-runs admission on live state. */
+  inspectPreparation(packId: string): PhaserPackPreparationPlan;
   /** Supplies staged ZIP entries; files-delivery packs stay plain HTTP. */
   readonly fileSource: PhaserPackFileSource;
   /** Stage a pack and its dependency closure. Single-flight: a concurrent
@@ -672,6 +740,99 @@ const fetchDeliveryBytes = async (
 const expandedBytesOf = (pack: PhaserPackDeliveryPack): number => pack.assets
   .flatMap((asset) => asset.files)
   .reduce((sum, file) => sum + file.bytes, 0);
+
+/** Overflow-checked sum: a manifest whose byte totals exceed the safe
+ * integer range is a configuration problem, never a small-looking cost. */
+const safeSumBytes = (values: readonly number[], label: string): number => {
+  let total = 0;
+  for (const value of values) {
+    if (total > Number.MAX_SAFE_INTEGER - value) {
+      fail('config', `Delivery ${label} exceeds the safe integer range`);
+    }
+    total += value;
+  }
+  return total;
+};
+
+/** Pure planning core shared by `inspectPreparation` and `prepare`'s
+ * admission check, so the two can never drift. Inputs are the closure
+ * (dependency-first), which ZIP packs are already staged, the current
+ * staging usage and the budget — nothing else is read: no scene, DOM,
+ * fetch, worker, cache or timer. */
+const planPackPreparation = (
+  closure: readonly PhaserPackDeliveryPack[],
+  stagedPackIds: ReadonlySet<string>,
+  stagingUsedBytes: number,
+  stagingBudgetBytes: number,
+  busy: boolean,
+): Omit<PhaserPackPreparationPlan, 'packId' | 'revision'> => {
+  const stagedZipPacks: { packId: string; revision: string }[] = [];
+  const missingZipPacks: { packId: string; revision: string }[] = [];
+  const coldArtifacts: PhaserPackPreparationArtifact[] = [];
+  const expandedPerMissingPack: number[] = [];
+  for (const pack of closure) {
+    if (pack.delivery === 'zip') {
+      const archive = pack.archive!;
+      coldArtifacts.push({
+        packId: pack.packId,
+        revision: pack.revision,
+        delivery: 'zip',
+        path: archive.path,
+        bodyBytes: archive.bytes,
+      });
+      const reservation = safeSumBytes(
+        [archive.bytes, expandedBytesOf(pack)],
+        'staging reservation',
+      );
+      if (stagedPackIds.has(pack.packId)) {
+        stagedZipPacks.push({ packId: pack.packId, revision: pack.revision });
+      } else {
+        missingZipPacks.push({ packId: pack.packId, revision: pack.revision });
+        expandedPerMissingPack.push(reservation);
+      }
+    } else {
+      for (const asset of pack.assets) {
+        for (const file of asset.files) {
+          coldArtifacts.push({
+            packId: pack.packId,
+            revision: pack.revision,
+            delivery: 'files',
+            path: file.path,
+            bodyBytes: file.bytes,
+          });
+        }
+      }
+    }
+  }
+  const additionalReservationBytes = safeSumBytes(expandedPerMissingPack, 'staging reservation');
+  const projectedStagingBytes = safeSumBytes(
+    [stagingUsedBytes, additionalReservationBytes],
+    'projected staging',
+  );
+  return {
+    closure: closure.map((pack) => ({
+      packId: pack.packId,
+      revision: pack.revision,
+      delivery: pack.delivery,
+    })),
+    coldArtifacts,
+    coldObjectCount: coldArtifacts.length,
+    coldBodyBytes: safeSumBytes(coldArtifacts.map((artifact) => artifact.bodyBytes), 'cold artifact bytes'),
+    zipExpandedBytes: safeSumBytes(
+      closure.filter((pack) => pack.delivery === 'zip').map((pack) => expandedBytesOf(pack)),
+      'expanded zip bytes',
+    ),
+    stagedZipPacks,
+    missingZipPacks,
+    additionalReservationBytes,
+    stagingUsedBytes,
+    projectedStagingBytes,
+    stagingBudgetBytes,
+    fitsBudget: projectedStagingBytes <= stagingBudgetBytes,
+    busy,
+    accountingModel: 'archive-plus-expanded-v1',
+  };
+};
 
 const integrityOf = (file: { readonly bytes: number; readonly sha256: string }): PhaserPackFileIntegrity => ({
   bytes: file.bytes,
@@ -1498,6 +1659,21 @@ export function createPhaserPackDelivery(
      * for operations observed after registration — no replay — and the
      * returned unsubscribe is idempotent. */
     subscribe,
+    inspectPreparation(packId: string): PhaserPackPreparationPlan {
+      assertLive();
+      const closure = closureOf(packId);
+      return {
+        packId,
+        revision: revisionOf(packId),
+        ...planPackPreparation(
+          closure,
+          new Set(staged.keys()),
+          stagingUsedBytes,
+          stagingBudgetBytes,
+          activePrepare,
+        ),
+      };
+    },
     fileSource,
     async prepare(packId, prepareOptions = {}) {
       assertLive();
@@ -1507,14 +1683,24 @@ export function createPhaserPackDelivery(
       const closure = closureOf(packId);
       const zipPacks = closure.filter((pack) => pack.delivery === 'zip');
       const missing = zipPacks.filter((pack) => !staged.has(pack.packId));
-      // Reservation is archive bytes plus every expanded file byte, computed
-      // for the whole closure before any network work: an oversized prepare
-      // is rejected without a single request.
-      const need = missing.reduce((sum, pack) => sum + pack.archive!.bytes + expandedBytesOf(pack), 0);
-      if (stagingUsedBytes + need > stagingBudgetBytes) {
+      // Admission runs through the same pure planner `inspectPreparation`
+      // exposes, on live state: an inspection result is never a
+      // reservation, and an oversized prepare is rejected without a
+      // single request.
+      const admission = planPackPreparation(
+        closure,
+        new Set(staged.keys()),
+        stagingUsedBytes,
+        stagingBudgetBytes,
+        false,
+      );
+      if (!admission.fitsBudget) {
         fail(
           'budget',
-          `Delivery staging budget exceeded: preparing ${packId} needs ${need} bytes with ${stagingUsedBytes} staged, over the ${stagingBudgetBytes} byte budget`,
+          `Delivery staging budget exceeded: preparing ${packId} needs `
+            + `${admission.additionalReservationBytes} bytes with ${stagingUsedBytes} staged, `
+            + `over the ${stagingBudgetBytes} byte budget`,
+          { kind: 'prepare', packId, revision: revisionOf(packId) },
         );
       }
       const operationId = nextOperationId();
