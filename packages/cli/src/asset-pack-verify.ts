@@ -413,27 +413,54 @@ const readManifestCapped = async (
   // cannot cancel that pending open.
   const handle = await deadline.race(open(resolve(manifestPath), 'r'));
   const chunks: Buffer[] = [];
-  // Read through the already-opened descriptor so every individual wait is
-  // raced against the same deadline. A stream can report EOF while buffered
-  // data is still being finalized differently across filesystems; explicit
-  // reads make the bytes returned here exactly the bytes consumed from the
-  // descriptor, while the bounded chunk keeps the cap memory-safe.
-  const buffer = Buffer.allocUnsafe(Math.min(STREAM_CHUNK_BYTES, cap));
   let received = 0;
   let stalled = false;
   try {
-    for (;;) {
-      const read = handle.read(buffer, 0, buffer.byteLength, null);
-      const { bytesRead } = await deadline.race(read);
-      if (bytesRead === 0) {
-        break;
+    const info = await deadline.race(handle.stat());
+    if (info.isFile()) {
+      // Read regular files through the already-opened descriptor so every
+      // individual wait is raced against the same deadline. A stream can
+      // report EOF while buffered data is still being finalized differently
+      // across filesystems; explicit reads make the bytes returned here
+      // exactly the bytes consumed from the descriptor.
+      const buffer = Buffer.allocUnsafe(Math.min(STREAM_CHUNK_BYTES, cap));
+      for (;;) {
+        const read = handle.read(buffer, 0, buffer.byteLength, null);
+        const { bytesRead } = await deadline.race(read);
+        if (bytesRead === 0) {
+          break;
+        }
+        received += bytesRead;
+        if (received > cap) {
+          throw new Error(`Delivery manifest exceeds ${cap} bytes`);
+        }
+        chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+        deadline.sample();
       }
-      received += bytesRead;
-      if (received > cap) {
-        throw new Error(`Delivery manifest exceeds ${cap} bytes`);
+    } else {
+      // FIFOs and other non-regular sources retain the stream watchdog: a
+      // pending read must be destroyed after the deadline so a direct
+      // FileHandle.read cannot leave the smoke process alive behind a
+      // rejected race.
+      const stream: ReadStream = handle.createReadStream({
+        highWaterMark: STREAM_CHUNK_BYTES,
+        autoClose: false,
+      });
+      const timer = deadline.armStream(stream);
+      try {
+        for await (const chunk of stream) {
+          const view = chunk as Buffer;
+          received += view.byteLength;
+          if (received > cap) {
+            stream.destroy();
+            throw new Error(`Delivery manifest exceeds ${cap} bytes`);
+          }
+          chunks.push(Buffer.from(view));
+          deadline.sample();
+        }
+      } finally {
+        clearTimeout(timer);
       }
-      chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
-      deadline.sample();
     }
   } catch (error) {
     if (error instanceof VerifyDeadlineError) {
