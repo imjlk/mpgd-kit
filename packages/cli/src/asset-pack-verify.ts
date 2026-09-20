@@ -423,19 +423,30 @@ const readManifestCapped = async (
       // report EOF while buffered data is still being finalized differently
       // across filesystems; explicit reads make the bytes returned here
       // exactly the bytes consumed from the descriptor.
+      if (info.size > BigInt(cap)) {
+        throw new Error(`Delivery manifest exceeds ${cap} bytes`);
+      }
+      const expectedBytes = Number(info.size);
       const buffer = Buffer.allocUnsafe(Math.min(STREAM_CHUNK_BYTES, cap));
-      for (;;) {
-        const read = handle.read(buffer, 0, buffer.byteLength, null);
+      while (received < expectedBytes) {
+        const readLength = Math.min(buffer.byteLength, expectedBytes - received);
+        const read = handle.read(buffer, 0, readLength, received);
         const { bytesRead } = await deadline.race(read);
         if (bytesRead === 0) {
-          break;
+          throw new Error(
+            `Delivery manifest changed while reading (expected ${expectedBytes} bytes, received ${received})`,
+          );
         }
         received += bytesRead;
-        if (received > cap) {
-          throw new Error(`Delivery manifest exceeds ${cap} bytes`);
-        }
         chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
         deadline.sample();
+      }
+      const tail = Buffer.allocUnsafe(1);
+      const { bytesRead: tailBytes } = await deadline.race(handle.read(tail, 0, 1, received));
+      if (tailBytes !== 0) {
+        throw new Error(
+          `Delivery manifest changed while reading (expected ${expectedBytes} bytes, received more)`,
+        );
       }
     } else {
       // FIFOs and other non-regular sources retain the stream watchdog: a
