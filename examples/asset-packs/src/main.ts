@@ -10,6 +10,7 @@ import {
   type PhaserPackDeliveryEvent,
   type PhaserPackPreparationPlan,
 } from '@mpgd/phaser-assets/delivery';
+import { ArtifactCache, type WarmReport } from './artifact-cache.js';
 import type { DeliveryPack } from './packs.js';
 import './style.css';
 
@@ -54,6 +55,10 @@ const params = new URLSearchParams(location.search);
 /** One HTTP cache policy for the page: the documented http-cache=1 flag
  * covers the files loader, the manifest fetch and delivery requests. */
 const requestCache: 'default' | 'no-store' = params.has('http-cache') ? 'default' : 'no-store';
+/** Private experiment flag: persistent artifact reuse through IndexedDB
+ * and managed Blob URLs (see artifact-cache.ts). Off by default; the
+ * acceptance runs it explicitly. */
+const persistentCache = params.has('idcache');
 const deliveryParam = params.get('delivery');
 const deliveryMode: 'zip' | 'mixed' | null = deliveryParam === 'zip' || deliveryParam === 'mixed' ? deliveryParam : null;
 /** Delivery observation view: what the UI shows is exactly what the
@@ -144,10 +149,16 @@ const model = {
   lastPrepareMs: null as number | null,
   observed,
   plan: null as PhaserPackPreparationPlan | null,
+  cache: null as { report: WarmReport } | { error: string } | null,
 };
 let packs: ReturnType<typeof createPhaserAssetPackLoader> | undefined;
 let delivery: PhaserPackDelivery | undefined;
 let unsubscribeDelivery: (() => void) | undefined;
+/** Blob URL bridge for the persistent-reuse experiment; opened during
+ * delivery boot when idcache=1. Manifest metadata for warm inputs. */
+let artifactCache: ArtifactCache | undefined;
+let artifactMeta = new Map<string, { sha256: string; bytes: number; mediaType: string }>();
+let deliveryOriginBase = '';
 let pending: AbortController | undefined;
 let sequence = 0;
 let virtualTime = 0;
@@ -178,11 +189,13 @@ class Board extends Phaser.Scene {
       // which only the explicit cancel control and this full teardown do.
       unsubscribeDelivery?.();
       unsubscribeDelivery = undefined;
+      artifactCache?.close();
+      artifactCache = undefined;
       delivery?.dispose();
       delivery = undefined;
       packs = undefined;
       resetObserved();
-      Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null });
+      Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null, cache: null });
       renderStatus();
     });
     this.showEmpty();
@@ -385,6 +398,33 @@ async function runEnter(theme: Theme, ticket: number, controller: AbortControlle
     if (delivery === undefined) {
       lease = await packs.acquire(theme, acquireOptions);
     } else {
+      // Persistent-reuse experiment: warm the cache in the async phase
+      // (IndexedDB reads, verification, bounded origin acquisition) so
+      // the delivery's resolveURL only ever maps finished Blob URLs.
+      // A warm failure degrades to the delivery's own origin fetch —
+      // local acquisition and delivery outcomes stay separate.
+      if (artifactCache !== undefined && model.plan !== null) {
+        artifactCache.revokeAll();
+        const encodedPathOf = (path: string): string =>
+          path.split('/').map((segment) => encodeURIComponent(segment)).join('/');
+        const warmList = model.plan.coldArtifacts.flatMap((artifact) => {
+          const meta = artifactMeta.get(artifact.path);
+          if (meta === undefined) return [];
+          const encodedPath = encodedPathOf(artifact.path);
+          return [{
+            encodedPath,
+            sha256: meta.sha256,
+            bytes: meta.bytes,
+            mediaType: meta.mediaType,
+            originUrl: new URL(encodedPath, deliveryOriginBase).href,
+          }];
+        });
+        model.cache = await artifactCache.warm(warmList, controller.signal).then(
+          (report): { report: WarmReport } => ({ report }),
+          (error: unknown): { error: string } => ({ error: String(error) }),
+        );
+        renderStatus();
+      }
       // Pack preparation precedes the loader: staging (download + worker
       // decode) is returned as soon as the loader has decoded the files;
       // registered textures survive the staging release.
@@ -424,11 +464,13 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
   // booting so stale error text and timings cannot leak into evidence.
   unsubscribeDelivery?.();
   unsubscribeDelivery = undefined;
+  artifactCache?.close();
+  artifactCache = undefined;
   delivery?.dispose();
   delivery = undefined;
   packs = undefined;
   resetObserved();
-  Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null });
+  Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null, cache: null });
   renderStatus();
   try {
     const stagingParam = Number(params.get('staging') ?? DELIVERY_STAGING_BUDGET_BYTES);
@@ -462,8 +504,24 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
     } catch (error) {
       throw new Error(`Delivery manifest is not valid JSON: ${errorText(error)}`);
     }
+    deliveryOriginBase = manifestUrl;
+    if (persistentCache) {
+      // The experiment bridge opens here; resolveURL below performs only
+      // synchronous Blob URL lookups from completed warm phases.
+      const opened = await ArtifactCache.open();
+      if (opened === 'unavailable') {
+        artifactCache = undefined;
+      } else {
+        artifactCache = opened;
+      }
+    }
     const booted = createPhaserPackDelivery(manifestDocument, {
-      baseUrl: manifestUrl,
+      ...(artifactCache === undefined
+        ? { baseUrl: manifestUrl }
+        : {
+          resolveURL: (path): string => artifactCache?.resolve(path)
+            ?? new URL(path, manifestUrl).href,
+        }),
       createWorker: (): Worker => new Worker(new URL('./archive-decode-worker.ts', import.meta.url), { type: 'module' }),
       stagingBudgetBytes: stagingParam,
       prepareTimeoutMs: DELIVERY_PREPARE_TIMEOUT_MS,
@@ -472,8 +530,34 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
       requestCache,
     });
     if (!bootStillCurrent()) {
+      // A stale boot must not leak its cache connection either.
+      artifactCache?.close();
+      artifactCache = undefined;
       booted.dispose();
       return;
+    }
+    // Warm inputs are extracted only after the delivery validated the
+    // manifest: the cast below reads a shape the public API already
+    // accepted, and an invalid manifest failed above with its own error.
+    {
+      const manifestPacks = (manifestDocument as {
+        packs: readonly {
+          archive?: { path: string; bytes: number; sha256: string };
+          delivery: 'files' | 'zip';
+          assets: readonly { files: readonly { path: string; bytes: number; sha256: string; mediaType: string }[] }[];
+        }[];
+      }).packs;
+      artifactMeta = new Map(manifestPacks.flatMap((pack) => {
+        if (pack.delivery === 'zip' && pack.archive !== undefined) {
+          return [[pack.archive.path, {
+            sha256: pack.archive.sha256, bytes: pack.archive.bytes, mediaType: 'application/zip',
+          }] as const];
+        }
+        return pack.assets.flatMap((asset) => asset.files.map((file) => [
+          file.path,
+          { sha256: file.sha256, bytes: file.bytes, mediaType: file.mediaType },
+        ] as const));
+      }));
     }
     // createPhaserAssetPackLoader is synchronous: the ticket cannot change
     // between the check above and the publish below.
@@ -520,15 +604,26 @@ function wireSampleControls(): void {
     pending?.abort();
     pending = undefined;
     if (!packs) return;
+    artifactCache?.revokeAll();
     board.clear();
     board.showEmpty();
-    Object.assign(model, { phase: 'idle', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null });
+    Object.assign(model, { phase: 'idle', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null, cache: null });
     renderStatus();
   };
 }
 
   declare global {
-    interface Window { render_game_to_text: () => string; advanceTime: (milliseconds: number) => void; shutdownSample: () => number; }
+    interface Window {
+      render_game_to_text: () => string;
+      advanceTime: (milliseconds: number) => void;
+      shutdownSample: () => number;
+      /** Experiment-only acceptance hooks (private example, not product). */
+      __artifact_cache_faults: () => Record<string, boolean>;
+      __artifact_cache_set_fault: (name: string) => void;
+      __artifact_cache_usage: () => Promise<{ records: number; totalBytes: number }>;
+      __artifact_cache_delete: (identity: string) => Promise<boolean>;
+      __artifact_cache_present: () => boolean;
+    }
 }
   function state() {
     return { ...model, delivery: deliveryMode ?? 'files', staging: delivery?.snapshot() ?? null, renderer: bootedGame().config.renderType === Phaser.WEBGL ? 'webgl' : 'canvas', mode: __ASSET_PACK_MODE__, coordinateSystem: 'origin top-left; x right; y down',
@@ -539,6 +634,17 @@ function wireSampleControls(): void {
 }
 function wireWindowHooks(): void {
   window.render_game_to_text = () => JSON.stringify(state());
+  window.__artifact_cache_faults = (): Record<string, boolean> => ({ ...(artifactCache?.faults ?? {}) });
+  window.__artifact_cache_set_fault = (name: string): void => {
+    if (artifactCache !== undefined) {
+      (artifactCache.faults as Record<string, boolean>)[name] = true;
+    }
+  };
+  window.__artifact_cache_usage = (): Promise<{ records: number; totalBytes: number }> =>
+    artifactCache?.usage() ?? Promise.resolve({ records: -1, totalBytes: -1 });
+  window.__artifact_cache_delete = (identity: string): Promise<boolean> =>
+    artifactCache?.deleteRecord(identity) ?? Promise.resolve(false);
+  window.__artifact_cache_present = (): boolean => artifactCache !== undefined;
   window.advanceTime = (milliseconds) => {
   bootedGame().loop.stop();
   virtualTime = Math.max(virtualTime, performance.now());

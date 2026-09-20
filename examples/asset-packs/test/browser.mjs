@@ -565,8 +565,343 @@ try {
   assert.deepEqual(invalidErrors, []);
   await invalidContext.close();
   evidence.push({ invalidTheme: afterInvalid });
+
+    // Baseline A: HTTP-cache-only delivery (no idcache), reloaded. The
+    // delivery fetches artifacts with cache: 'no-store', so the reload
+    // re-fetches every archive — the controlled comparison the
+    // IndexedDB runs below are measured against.
+    {
+      const baselineApp = await staticServer(join(builds, 'bundled'));
+      servers.push(baselineApp);
+      const baselineContext = await browser.newContext();
+      const baselinePage = await baselineContext.newPage();
+      const baselineErrors = [];
+      baselinePage.on('pageerror', (error) => baselineErrors.push(error.message));
+      const baselineState = () => baselinePage.evaluate(() => JSON.parse(window.render_game_to_text()));
+      const baselineWait = (phase) => baselinePage.waitForFunction((expected) => JSON.parse(window.render_game_to_text()).phase === expected, phase);
+      await baselinePage.goto(baselineApp.url + '?renderer=webgl&delivery=zip');
+      await baselineWait('idle');
+      await baselinePage.click('#grove');
+      await baselineWait('playing');
+      await baselinePage.click('#unload');
+      await baselinePage.reload();
+      await baselineWait('idle');
+      const baselineBefore = remote.requests.filter((path) => path.startsWith('/delivery/zip/packs/')).length;
+      await baselinePage.click('#grove');
+      await baselineWait('playing');
+      const baseline = await baselineState();
+      const baselineGets = remote.requests.filter((path) => path.startsWith('/delivery/zip/packs/')).length - baselineBefore;
+      assert.equal(baselineGets, 2, 'Without the artifact cache a reload re-fetches both archives');
+      assert.equal(baseline.current, 'grove');
+      evidence.push({ baselineHttpOnly: { artifactGets: baselineGets, lastPrepareMs: baseline.lastPrepareMs } });
+      assert.deepEqual(baselineErrors, []);
+      await baselineContext.close();
+    }
+
+
+  // Persistent artifact reuse (private experiment, idcache=1): verified
+  // origin bytes in IndexedDB, re-served to the unchanged public
+  // delivery through managed Blob URLs. Real Chromium IndexedDB, real
+  // page reloads on the same origin.
+  {
+    const cacheApp = await staticServer(join(builds, 'bundled'));
+    servers.push(cacheApp);
+    const cacheContext = await browser.newContext();
+    const cachePage = await cacheContext.newPage();
+    const cacheErrors = [];
+    cachePage.on('pageerror', (error) => cacheErrors.push(error.message));
+    cachePage.on('console', (message) => { if (message.type() === 'error') cacheErrors.push(message.text()); });
+    const cacheState = () => cachePage.evaluate(() => JSON.parse(window.render_game_to_text()));
+    const cacheWait = (phase) => cachePage.waitForFunction((expected) => JSON.parse(window.render_game_to_text()).phase === expected, phase);
+    // Artifact GET counting: the ZIP app shell is local; artifacts come
+    // from the remote origin. Blob URL fetches never appear there.
+    const artifactGets = () => remote.requests.filter((path) => path.startsWith('/delivery/zip/packs/')).length;
+    const groveArchivePath = '/delivery/zip/packs/grove@1.zip';
+    const usage = () => cachePage.evaluate(() => window.__artifact_cache_usage());
+    const idbRaw = (fn) => cachePage.evaluate(`(${fn})(indexedDB)`);
+
+    // C. controlled baseline first (fresh context, cold IndexedDB):
+    await cachePage.goto(cacheApp.url + '?renderer=webgl&delivery=zip&idcache=1');
+    await cacheWait('idle');
+    assert.equal(await cachePage.evaluate(() => window.__artifact_cache_present()), true, 'The experiment bridge must be active under idcache=1');
+
+    // Cold run: every artifact is fetched from the origin once, verified,
+    // and committed; the delivery still verifies the Blob-served bytes.
+    const coldBefore = artifactGets();
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    let cacheNow = await cacheState();
+    assert.equal(cacheNow.current, 'grove');
+    assert.equal(cacheNow.groundFrames, 2, 'Atlas frames survive the cache bridge');
+    assert.equal(cacheNow.pilotFrames, 4, 'Spritesheet frames survive the cache bridge');
+    const coldReport = cacheNow.cache.report;
+    assert.equal(coldReport.entries.length, 2, 'shared + grove archives warmed');
+    assert.ok(coldReport.entries.every((entry) => entry.outcome === 'origin-stored'), JSON.stringify(coldReport));
+    const coldGets = artifactGets() - coldBefore;
+    assert.equal(coldGets, 2, 'Cold run fetches each archive from the origin exactly once');
+    const coldUsage = await usage();
+    assert.equal(coldUsage.records, 2, 'Two verified records committed');
+    assert.ok(coldUsage.totalBytes > 0);
+    const identities = coldReport.entries.map((entry) => entry.identity);
+    await cachePage.click('#unload');
+
+    // Idempotent duplicate storage: the same content re-warms as cache
+    // hits without growing the record set.
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    cacheNow = await cacheState();
+    assert.ok(cacheNow.cache.report.entries.every((entry) => entry.outcome === 'cache-hit'));
+    assert.equal((await usage()).records, 2, 'Duplicate stores are idempotent');
+    await cachePage.click('#unload');
+
+    // Warm run after a same-origin reload: zero origin artifact GETs.
+    const warmBefore = artifactGets();
+    await cachePage.reload();
+    await cacheWait('idle');
+    assert.equal(await cachePage.evaluate(() => window.__artifact_cache_present()), true);
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    cacheNow = await cacheState();
+    assert.equal(cacheNow.current, 'grove');
+    assert.equal(cacheNow.groundFrames, 2);
+    assert.equal(cacheNow.pilotFrames, 4);
+    assert.ok(cacheNow.cache.report.entries.every((entry) => entry.outcome === 'cache-hit'), JSON.stringify(cacheNow.cache.report));
+    assert.equal(artifactGets() - warmBefore, 0, 'Warm reload reuses stored bytes with zero origin artifact GETs');
+    const warmStats = cacheNow.cache.report.entries.map(({ identity, cacheReadMs, verifyMs, blobMs }) => ({ identity, cacheReadMs, verifyMs, blobMs }));
+    assert.ok(warmStats.every((entry) => entry.cacheReadMs !== null && entry.verifyMs !== null));
+    evidence.push({
+      persistentReuse: {
+        cold: { artifactGets: coldGets, entries: coldReport.entries.map(({ identity, outcome, fetchMs, writeMs, bodyBytes }) => ({ identity, outcome, fetchMs, writeMs, bodyBytes })) },
+        warm: { artifactGets: 0, entries: warmStats },
+      },
+    });
+
+    // Corrupt record detection: tamper a stored payload, reload, and the
+    // warm must treat it as a miss (never serve corrupt bytes) — the
+    // origin refetch restores playability.
+    const tamperedIdentity = identities[0];
+    await idbRaw(`async (db) => {
+      const open = await new Promise((resolve, reject) => {
+        const request = db.open('mpgd-asset-pack-experiment');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      await new Promise((resolve, reject) => {
+        const tx = open.transaction('artifacts', 'readwrite');
+        const store = tx.objectStore('artifacts');
+        const get = store.get(${JSON.stringify(tamperedIdentity)});
+        get.onsuccess = () => {
+          const record = get.result;
+          record.payload = record.payload.slice(0);
+          new Uint8Array(record.payload)[0] ^= 0xff;
+          store.put(record, ${JSON.stringify(tamperedIdentity)});
+        };
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      open.close();
+    }`);
+    const corruptBefore = artifactGets();
+    await cachePage.reload();
+    await cacheWait('idle');
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    cacheNow = await cacheState();
+    const corruptOutcomes = cacheNow.cache.report.entries.map((entry) => entry.outcome);
+    assert.ok(corruptOutcomes.includes('origin-stored'), JSON.stringify(corruptOutcomes));
+    assert.ok(!corruptOutcomes.every((outcome) => outcome === 'cache-hit'), 'A tampered payload is never a hit');
+    assert.equal(artifactGets() - corruptBefore, 1, 'The corrupt record is refetched from the origin');
+    await cachePage.click('#unload');
+
+    // Record present but payload missing: miss, not a hit.
+    const removedIdentity = identities[1];
+    await cachePage.evaluate((identity) => window.__artifact_cache_delete(identity), removedIdentity);
+    const deleteBefore = artifactGets();
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    cacheNow = await cacheState();
+    assert.ok(cacheNow.cache.report.entries.some((entry) => entry.identity === removedIdentity && entry.outcome === 'origin-stored'));
+    assert.equal(artifactGets() - deleteBefore, 1, 'An explicitly deleted record misses and refetches');
+    await cachePage.click('#unload');
+
+    // Fault injection: a store failure keeps the delivery outcome intact
+    // and reports failure honestly (never 'stored').
+    await cachePage.evaluate(() => window.__artifact_cache_set_fault('failPutOnce'));
+    await cachePage.evaluate((identity) => window.__artifact_cache_delete(identity), identities[0]);
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    cacheNow = await cacheState();
+    const faultEntry = cacheNow.cache.report.entries.find((entry) => entry.identity === identities[0]);
+    assert.equal(faultEntry.outcome, 'origin-store-failed', JSON.stringify(cacheNow.cache.report.entries));
+    assert.equal(cacheNow.current, 'grove', 'A store failure never breaks the online load');
+    await cachePage.click('#unload');
+
+    // Fault injection: cache unavailable degrades to the origin path.
+    // The one-shot fault fires on the first warmed artifact (shared);
+    // grove was just deleted, so both artifacts come from the origin.
+    await cachePage.evaluate((identity) => window.__artifact_cache_delete(identity), identities[1]);
+    await cachePage.evaluate(() => window.__artifact_cache_set_fault('dbUnavailableOnce'));
+    const unavailableBefore = artifactGets();
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    cacheNow = await cacheState();
+    const unavailableEntry = cacheNow.cache.report.entries.find((entry) => entry.outcome === 'cache-unavailable');
+    assert.equal(unavailableEntry?.identity, identities[0], JSON.stringify(cacheNow.cache.report.entries));
+    assert.equal(artifactGets() - unavailableBefore, 2, 'Cache-unavailable falls back to the origin');
+    await cachePage.click('#unload');
+
+    // Stored metadata tamper: a mutated digest field fails the
+    // current-manifest comparison — a miss, never a hit. Re-store both
+    // archives first: the unavailable fault above skipped shared.
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    await cachePage.click('#unload');
+    await idbRaw(`async (db) => {
+      const open = await new Promise((resolve, reject) => {
+        const request = db.open('mpgd-asset-pack-experiment');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      await new Promise((resolve, reject) => {
+        const tx = open.transaction('artifacts', 'readwrite');
+        const store = tx.objectStore('artifacts');
+        const get = store.get(${JSON.stringify(identities[0])});
+        get.onsuccess = () => {
+          const record = get.result;
+          record.digest = '0'.repeat(64);
+          record.bytes = record.bytes + 1;
+          store.put(record, ${JSON.stringify(identities[0])});
+        };
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      open.close();
+    }`);
+    const metaBefore = artifactGets();
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    cacheNow = await cacheState();
+    assert.ok(
+      cacheNow.cache.report.entries.some((entry) => entry.identity === identities[0] && entry.outcome === 'origin-stored'),
+      JSON.stringify(cacheNow.cache.report.entries),
+    );
+    assert.equal(artifactGets() - metaBefore, 1, 'Metadata-tampered records miss and refetch');
+    await cachePage.click('#unload');
+    assert.equal((await cacheState()).textureCount, 0, 'Cache-mode unload releases textures');
+
+    // Content change under the same path: the origin serves different
+    // bytes, the manifest digest no longer matches, and the stale stored
+    // record cannot be misused (identity is digest-derived). The warm
+    // acquisition fails verification and the delivery's own integrity
+    // check surfaces the error — no stale success.
+    // Drop the stored record so acquisition must hit the changed origin.
+    await cachePage.evaluate((identity) => window.__artifact_cache_delete(identity), identities[1]);
+    remote.faults.set(groveArchivePath, { kind: 'corrupt' });
+    await cachePage.click('#grove');
+    await cacheWait('error');
+    cacheNow = await cacheState();
+    assert.match(cacheNow.error, /integrity|transport/, 'Changed content must fail, not reuse stale bytes');
+    remote.faults.delete(groveArchivePath);
+    await cachePage.click('#retry');
+    await cacheWait('playing');
+
+    // Transaction abort: the failed store commits nothing (no partial
+    // record) and the previous good records stay usable.
+    await cachePage.evaluate((identity) => window.__artifact_cache_delete(identity), identities[1]);
+    await cachePage.evaluate(() => window.__artifact_cache_set_fault('abortCommitOnce'));
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    cacheNow = await cacheState();
+    const abortEntries = cacheNow.cache.report.entries;
+    assert.equal(abortEntries.find((entry) => entry.identity === identities[0])?.outcome, 'cache-hit',
+      'A previous good record stays usable while another store aborts');
+    assert.equal(abortEntries.find((entry) => entry.identity === identities[1])?.outcome, 'origin-store-failed',
+      JSON.stringify(abortEntries));
+    assert.equal((await usage()).records, 1, 'An aborted transaction leaves no partial record');
+    await cachePage.click('#unload');
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    cacheNow = await cacheState();
+    assert.equal(cacheNow.cache.report.entries.find((entry) => entry.identity === identities[1])?.outcome, 'origin-stored');
+    await cachePage.click('#unload');
+
+    // Delete vs late write under real concurrency: a delayed origin fetch
+    // keeps the warm slow while a delete races it. IDB serializes per
+    // key, so the result is complete-or-absent, and the entry outcome
+    // stays within the defined set.
+    remote.delays.set(groveArchivePath, 250);
+    await cachePage.evaluate((identity) => window.__artifact_cache_delete(identity), identities[0]);
+    const raceClick = cachePage.click('#grove');
+    await cachePage.evaluate((identity) => window.__artifact_cache_delete(identity), identities[0]);
+    await raceClick;
+    await cacheWait('playing');
+    cacheNow = await cacheState();
+    const raceOutcome = cacheNow.cache.report.entries.find((entry) => entry.identity === identities[0])?.outcome;
+    assert.ok(['cache-hit', 'origin-stored'].includes(raceOutcome), JSON.stringify(cacheNow.cache.report.entries));
+    remote.delays.delete(groveArchivePath);
+    await cachePage.click('#unload');
+
+    // Namespace isolation: foreign keys in the same store survive every
+    // experiment operation above.
+    const foreign = await idbRaw(`async (db) => {
+      const open = await new Promise((resolve, reject) => {
+        const request = db.open('mpgd-asset-pack-experiment');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      await new Promise((resolve, reject) => {
+        const tx = open.transaction('artifacts', 'readwrite');
+        tx.objectStore('artifacts').put({ foreign: true }, 'other-app|record|1');
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+      const present = await new Promise((resolve, reject) => {
+        const tx = open.transaction('artifacts', 'readonly');
+        const get = tx.objectStore('artifacts').get('other-app|record|1');
+        get.onsuccess = () => resolve(get.result !== undefined);
+        get.onerror = () => reject(get.error);
+      });
+      open.close();
+      return present;
+    }`);
+    assert.equal(foreign, true, 'A foreign record is insertable next to the experiment namespace');
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    await cachePage.click('#unload');
+    const foreignAfter = await idbRaw(`async (db) => {
+      const open = await new Promise((resolve, reject) => {
+        const request = db.open('mpgd-asset-pack-experiment');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const present = await new Promise((resolve, reject) => {
+        const tx = open.transaction('artifacts', 'readonly');
+        const get = tx.objectStore('artifacts').get('other-app|record|1');
+        get.onsuccess = () => resolve(get.result !== undefined);
+        get.onerror = () => reject(get.error);
+      });
+      open.close();
+      return present;
+    }`);
+    assert.equal(foreignAfter, true, 'Experiment operations never touch foreign records');
+
+    // Delete vs late write: the defined result is IDB's last-commit-wins
+    // per key — the store ends either absent or complete, never partial.
+    const raceIdentity = identities[0];
+    await cachePage.evaluate((identity) => window.__artifact_cache_delete(identity), raceIdentity);
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    cacheNow = await cacheState();
+    const raceEntry = cacheNow.cache.report.entries.find((entry) => entry.identity === raceIdentity);
+    assert.ok(['cache-hit', 'origin-stored'].includes(raceEntry.outcome), JSON.stringify(raceEntry));
+    await cachePage.click('#unload');
+
+    assert.deepEqual(cacheErrors, []);
+    await cacheContext.close();
+  }
+
   await writeFile(join(artifacts, 'evidence.json'), JSON.stringify(evidence, null, 2));
-  console.info('Asset pack browser checks passed: bundled/hybrid, exclusion, sharing, readiness, retries, integrity, offline failure, cancellation, release and invalid level rollback.');
+  console.info('Asset pack browser checks passed: bundled/hybrid, exclusion, sharing, readiness, retries, integrity, offline failure, cancellation, release, invalid level rollback and persistent artifact reuse (cold/warm reload, tamper, delete, quota, unavailable, abort, namespace isolation).');
 } finally {
   if (previousOrigin === undefined) delete process.env.ASSET_PACK_REMOTE_ORIGIN;
   else process.env.ASSET_PACK_REMOTE_ORIGIN = previousOrigin;
