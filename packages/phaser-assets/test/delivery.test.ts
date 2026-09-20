@@ -103,6 +103,161 @@ const createFakeWorkerFactory = () => {
   return { factory, posted };
 };
 
+/** Origin whose responses wait on per-path gates, so tests hold a
+ * download at an exact phase boundary instead of sleeping. */
+const startGatedOrigin = async (): Promise<{
+  readonly url: string;
+  readonly requests: string[];
+  readonly files: Map<string, ServedFile>;
+  readonly hold: (path: string) => void;
+  readonly release: (path: string) => void;
+  readonly close: () => Promise<void>;
+}> => {
+  const files = new Map<string, ServedFile>();
+  const requests: string[] = [];
+  const gates = new Map<string, { readonly promise: Promise<void>; readonly release: () => void }>();
+  const gateFor = (path: string): { readonly promise: Promise<void>; readonly release: () => void } => {
+    let entry = gates.get(path);
+    if (entry === undefined) {
+      let release!: () => void;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      entry = { promise, release };
+      gates.set(path, entry);
+    }
+    return entry;
+  };
+  const server: Server = createServer((request, response) => {
+    const path = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname).replace(/^\//u, '');
+    void (async (): Promise<void> => {
+      requests.push(path);
+      const gate = gates.get(path);
+      if (gate !== undefined) {
+        await gate.promise;
+      }
+      const file = files.get(path);
+      if (file === undefined) {
+        response.writeHead(404).end('missing');
+        return;
+      }
+      response.setHeader('Content-Type', file.mediaType);
+      response.setHeader('Content-Length', file.bytes.byteLength);
+      // One connection per response: these tests phase-gate downloads,
+      // and a pooled socket reused across gates adds runner-dependent
+      // transport behavior they do not aim to measure.
+      response.setHeader('Connection', 'close');
+      response.end(file.bytes);
+    })();
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('no gated origin address');
+  }
+  return {
+    url: `http://127.0.0.1:${address.port}/`,
+    requests,
+    files,
+    hold: (path: string): void => {
+      gateFor(path);
+    },
+    release: (path: string): void => {
+      gates.get(path)?.release();
+    },
+    close: async (): Promise<void> => {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    },
+  };
+};
+
+/** Wait until the gated origin has received the given request path. */
+const waitForRequest = async (requests: readonly string[], path: string): Promise<void> => {
+  while (!requests.includes(path)) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+};
+
+/** Worker substitute that queues posts and dispatches exactly one per
+ * step, so a test can move the clock between a request and its reply and
+ * land a reply's synchronous side effects before any microtask runs. */
+const createDeferredWorkerFactory = () => {
+  const posted: ArchiveWorkerRequest[] = [];
+  const queue: ArchiveWorkerRequest[] = [];
+  const listeners: ((event: MessageEvent<ArchiveWorkerResponse>) => void)[] = [];
+  let dispatch: ((message: ArchiveWorkerRequest) => void) | undefined;
+  const factory = (): Worker => {
+    dispatch = createArchiveWorkerDispatch({
+      post: (message: ArchiveWorkerResponse): void => {
+        for (const listener of [...listeners]) {
+          listener({ data: message } as MessageEvent<ArchiveWorkerResponse>);
+        }
+      },
+    });
+    return {
+      postMessage(message: ArchiveWorkerRequest): void {
+        posted.push(message);
+        queue.push(message);
+      },
+      addEventListener(
+        type: string,
+        listener: (event: never) => void,
+      ): void {
+        if (type === 'message') {
+          listeners.push(listener as (event: MessageEvent<ArchiveWorkerResponse>) => void);
+        }
+      },
+      terminate(): void {
+      },
+    } as unknown as Worker;
+  };
+  return {
+    factory,
+    posted,
+    /** Dispatches exactly one queued worker request, synchronously. */
+    step: (): boolean => {
+      const message = queue.shift();
+      if (message === undefined) {
+        return false;
+      }
+      dispatch?.(message);
+      return true;
+    },
+  };
+};
+
+/** Manual monotonic clock: performance.now moves only on explicit phase
+ * commands while Date.now is free to jump, mirroring a wall-clock
+ * correction that must not move a delivery budget. */
+const useMonotonicFakeClock = () => {
+  let elapsed = 0;
+  const spy = vi.spyOn(performance, 'now').mockImplementation(() => elapsed);
+  return {
+    advance: (ms: number): void => {
+      elapsed += ms;
+    },
+    set: (ms: number): void => {
+      elapsed = ms;
+    },
+    restore: (): void => {
+      spy.mockRestore();
+    },
+  };
+};
+
+const decodeRequest = (
+  posted: readonly ArchiveWorkerRequest[],
+  index: number,
+): { readonly limits: { readonly decodeDeadlineMs: number } } | undefined => {
+  const requests = posted.filter((message): message is Extract<ArchiveWorkerRequest, { type: 'decode' }> =>
+    message.type === 'decode');
+  return requests[index];
+};
+
 interface BuiltZip {
   readonly entries: readonly ZipV1FixtureEntry[];
   readonly archive: Uint8Array;
@@ -665,6 +820,274 @@ describe('phaser pack delivery', () => {
     await expect(zipDelivery.prepare('zippy')).rejects.toMatchObject({ code: 'config' });
     filesDelivery.dispose();
     zipDelivery.dispose();
+  });
+
+  it('starts no archive request when the resolver spends the budget', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const clock = useMonotonicFakeClock();
+    try {
+      const origin = await startGatedOrigin();
+      servers.push(origin);
+      const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+      for (const [path, file] of packFiles) {
+        origin.files.set(path, file);
+      }
+      const workers = createFakeWorkerFactory();
+      const delivery = createPhaserPackDelivery(manifest, {
+        // The resolver is synchronous user code; it burns the whole
+        // budget before the archive request could start.
+        resolveURL: (path): string => {
+          clock.set(10_001);
+          return new URL(path, origin.url).href;
+        },
+        createWorker: workers.factory,
+        prepareTimeoutMs: 10_000,
+      });
+      await expect(delivery.prepare('solo')).rejects.toMatchObject({ code: 'deadline' });
+      expect(origin.requests).toHaveLength(0);
+      expect(workers.posted.filter((message) => message.type === 'decode')).toHaveLength(0);
+      delivery.dispose();
+    } finally {
+      vi.restoreAllMocks();
+      clock.restore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the preparation budget when the wall clock jumps forward', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const clock = useMonotonicFakeClock();
+    try {
+      const origin = await startGatedOrigin();
+      servers.push(origin);
+      const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+      for (const [path, file] of packFiles) {
+        origin.files.set(path, file);
+      }
+      const workers = createFakeWorkerFactory();
+      const delivery = createPhaserPackDelivery(manifest, {
+        baseUrl: origin.url,
+        createWorker: workers.factory,
+        prepareTimeoutMs: 10_000,
+      });
+      const archivePath = 'packs/solo@1.zip';
+      origin.hold(archivePath);
+      const dateNow = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+      const preparing = delivery.prepare('solo');
+      await waitForRequest(origin.requests, archivePath);
+      // An hour-long forward wall-clock correction mid-download: the
+      // monotonic budget must not notice.
+      dateNow.mockReturnValue(1_700_000_000_000 + 3_600_000);
+      origin.release(archivePath);
+      const handles = await preparing;
+      handles.release();
+      // The decode still received the full unspent budget on the
+      // monotonic clock, ten seconds, despite the jump.
+      expect(decodeRequest(workers.posted, 0)?.limits.decodeDeadlineMs).toBe(10_000);
+      delivery.dispose();
+    } finally {
+      vi.restoreAllMocks();
+      clock.restore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('expires the preparation budget when the wall clock jumps backward', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const clock = useMonotonicFakeClock();
+    try {
+      const origin = await startOrigin();
+      servers.push(origin);
+      const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+      for (const [path, file] of packFiles) {
+        origin.files.set(path, file);
+      }
+      const stallingWorker = (): Worker => ({
+        postMessage(): void {
+        },
+        addEventListener(): void {
+        },
+        terminate(): void {
+        },
+      } as unknown as Worker);
+      const delivery = createPhaserPackDelivery(manifest, {
+        baseUrl: origin.url,
+        createWorker: stallingWorker,
+        prepareTimeoutMs: 10_000,
+      });
+      const dateNow = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+      const preparing = delivery.prepare('solo');
+      const expectation = expect(preparing).rejects.toMatchObject({ code: 'deadline' });
+      // The wall clock falls back an hour; the budget does not grow.
+      dateNow.mockReturnValue(0);
+      await vi.advanceTimersByTimeAsync(10_000 + 50);
+      await expectation;
+      delivery.dispose();
+    } finally {
+      vi.restoreAllMocks();
+      clock.restore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('spends one shared budget across dependency archives', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const clock = useMonotonicFakeClock();
+    try {
+      const origin = await startGatedOrigin();
+      servers.push(origin);
+      const { manifest, packFiles } = buildManifest([
+        { id: 'shared', delivery: 'zip', zip: zipFixture() },
+        { id: 'theme', dependsOn: ['shared'], delivery: 'zip', zip: zipFixture() },
+      ]);
+      for (const [path, file] of packFiles) {
+        origin.files.set(path, file);
+      }
+      const workers = createFakeWorkerFactory();
+      const delivery = createPhaserPackDelivery(manifest, {
+        baseUrl: origin.url,
+        createWorker: workers.factory,
+        prepareTimeoutMs: 10_000,
+      });
+      const sharedPath = 'packs/shared@1.zip';
+      const themePath = 'packs/theme@1.zip';
+      origin.hold(sharedPath);
+      origin.hold(themePath);
+      // Always-handled settlement: a transport failure fails the final
+      // assertion loudly instead of floating as an unhandled rejection
+      // while a gate wait below still spins.
+      const settled = delivery.prepare('theme').then(
+        (result): { ok: true; release: () => void } => ({ ok: true, release: result.release }),
+        (error: unknown): { ok: false; error: unknown } => ({ ok: false, error }),
+      );
+      await waitForRequest(origin.requests, sharedPath);
+      clock.advance(6_000);
+      origin.release(sharedPath);
+      await waitForRequest(origin.requests, themePath);
+      origin.release(themePath);
+      const outcome = await settled;
+      if (!outcome.ok) {
+        throw outcome.error;
+      }
+      outcome.release();
+      // The first archive consumed six seconds of the one budget; the
+      // second decode starts from the remainder, not a fresh budget.
+      expect(decodeRequest(workers.posted, 0)?.limits.decodeDeadlineMs).toBe(4_000);
+      expect(decodeRequest(workers.posted, 1)?.limits.decodeDeadlineMs).toBe(4_000);
+      delivery.dispose();
+    } finally {
+      vi.restoreAllMocks();
+      clock.restore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('reduces the decoder budget by the time the download consumed', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const clock = useMonotonicFakeClock();
+    try {
+      const origin = await startGatedOrigin();
+      servers.push(origin);
+      const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+      for (const [path, file] of packFiles) {
+        origin.files.set(path, file);
+      }
+      const workers = createFakeWorkerFactory();
+      const delivery = createPhaserPackDelivery(manifest, {
+        baseUrl: origin.url,
+        createWorker: workers.factory,
+        prepareTimeoutMs: 10_000,
+      });
+      const archivePath = 'packs/solo@1.zip';
+      origin.hold(archivePath);
+      const preparing = delivery.prepare('solo');
+      await waitForRequest(origin.requests, archivePath);
+      clock.advance(5_000);
+      origin.release(archivePath);
+      const handles = await preparing;
+      handles.release();
+      expect(decodeRequest(workers.posted, 0)?.limits.decodeDeadlineMs).toBe(5_000);
+      delivery.dispose();
+    } finally {
+      vi.restoreAllMocks();
+      clock.restore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('posts no decode once the shared budget is spent', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const clock = useMonotonicFakeClock();
+    try {
+      const origin = await startGatedOrigin();
+      servers.push(origin);
+      const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+      for (const [path, file] of packFiles) {
+        origin.files.set(path, file);
+      }
+      const workers = createFakeWorkerFactory();
+      const delivery = createPhaserPackDelivery(manifest, {
+        baseUrl: origin.url,
+        createWorker: workers.factory,
+        prepareTimeoutMs: 10_000,
+      });
+      const archivePath = 'packs/solo@1.zip';
+      origin.hold(archivePath);
+      const preparing = delivery.prepare('solo');
+      await waitForRequest(origin.requests, archivePath);
+      // The monotonic budget is gone while the abort timer callback is
+      // still queued: no decode may start on the spent budget.
+      clock.set(10_001);
+      origin.release(archivePath);
+      await expect(preparing).rejects.toMatchObject({ code: 'deadline' });
+      expect(workers.posted.filter((message) => message.type === 'decode')).toHaveLength(0);
+      delivery.dispose();
+    } finally {
+      vi.restoreAllMocks();
+      clock.restore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('refuses success handles when the budget ends after the final decode', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const clock = useMonotonicFakeClock();
+    try {
+      const origin = await startOrigin();
+      servers.push(origin);
+      const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+      for (const [path, file] of packFiles) {
+        origin.files.set(path, file);
+      }
+      const workers = createDeferredWorkerFactory();
+      const delivery = createPhaserPackDelivery(manifest, {
+        baseUrl: origin.url,
+        createWorker: workers.factory,
+        prepareTimeoutMs: 10_000,
+      });
+      const preparing = delivery.prepare('solo');
+      // The decode exchange runs one message at a time: the entry lands,
+      // the client stages it and queues its release, and the terminal
+      // reply is still pending when the whole prepare budget is spent.
+      while (!workers.step()) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
+      // Let the client stage the entry and post its release.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const expectation = expect(preparing).rejects.toMatchObject({ code: 'deadline' });
+      // Deliver the release: the worker replies 'done' synchronously, the
+      // decode completes with every deadline observation still inside the
+      // budget — and only then does the monotonic clock cross it.
+      workers.step();
+      clock.set(10_001);
+      await expectation;
+      expect(delivery.snapshot().staging).toHaveLength(0);
+      delivery.dispose();
+    } finally {
+      vi.restoreAllMocks();
+      clock.restore();
+      vi.useRealTimers();
+    }
   });
 
   it('classifies a decoder-side deadline from the entries iterator', async () => {

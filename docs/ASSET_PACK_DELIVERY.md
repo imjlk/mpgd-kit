@@ -138,8 +138,10 @@ See the package README for the exact contract and limitations.
 `@mpgd/phaser-assets/delivery` turns this manifest into the loader
 catalog plus a prepared file source (staged ZIP packs via the real
 module worker, plain HTTP for `files` packs, mixed manifests routed per
-pack). See the package README's "Prepared pack delivery" section for the
-contract — budgets, deadlines, lifetimes and error codes.
+pack). The whole-prepare budget runs on one monotonic clock and hands
+the decoder only the unspent remainder. See the package README's
+"Prepared pack delivery" section for the contract — budgets, deadlines,
+lifetimes and error codes.
 
 ### Browser acceptance
 
