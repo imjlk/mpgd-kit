@@ -9,6 +9,7 @@
     "build": "ttsc --noEmit && vite build --mode bundled && vite build --mode hybrid && node test/artifacts.mjs",
     "check": "ttsc --noEmit",
     "test:browser": "node test/browser.mjs",
+    "test:packed-consumer": "node test/packed-consumer.mjs",
     "serve:assets": "node test/static-server.mjs artifacts/origin 5196",
     "build:delivery": "node ../../tools/run-ttsx.mjs --project tsconfig.delivery-build.json test/build-delivery.ts"
   },
