@@ -8,7 +8,6 @@ packages:
 allowBuilds:
   '@sentry/cli': true
   '@swc/core': true
-  cloudflared: false
   esbuild: true
   protobufjs: true
   sharp: true
@@ -62,11 +61,7 @@ minimumReleaseAgeExclude:
   - '@devvit/web-view-scripts@0.14.1'
   - '@devvit/web@0.14.1'
   - devvit@0.14.1
-  - '@ait-co/devtools@0.1.140'
-  - '@apps-in-toss/cli@3.1.1'
-  - '@apps-in-toss/web-framework@3.1.1'
+  - '@apps-in-toss/cli@3.5.0'
+  - '@apps-in-toss/web-framework@3.5.0'
 overrides:
   '@xmldom/xmldom': '0.9.12'
-peerDependencyRules:
-  allowedVersions:
-    '@ait-co/devtools>@apps-in-toss/web-framework': '3.1.1'
