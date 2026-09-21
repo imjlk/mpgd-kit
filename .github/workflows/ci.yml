@@ -85,6 +85,10 @@ jobs:
         if: ${{ env.IS_RELEASE_PR != 'true' }}
         timeout-minutes: 5
         run: pnpm --dir examples/asset-packs test:browser
+      - name: Verify packaged asset consumer in Chromium
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        timeout-minutes: 10
+        run: pnpm --dir examples/asset-packs test:packed-consumer
       - name: Upload asset pack browser evidence
         if: ${{ always() && env.IS_RELEASE_PR != 'true' }}
         uses: actions/upload-artifact@v6
