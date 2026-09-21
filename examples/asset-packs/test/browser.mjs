@@ -291,6 +291,10 @@ try {
       });
       const state = () => page.evaluate(() => JSON.parse(window.render_game_to_text()));
       const wait = (phase) => page.waitForFunction((expected) => JSON.parse(window.render_game_to_text()).phase === expected, phase);
+      const waitForPreparing = (requested) => page.waitForFunction((expected) => {
+        const current = JSON.parse(window.render_game_to_text());
+        return current.phase === 'preparing' && current.requested === expected;
+      }, requested);
       const zipCount = (id) => remote.requests.filter((path) => path === archivePath(id)).length;
 
       await page.goto(zipApp.url + '?renderer=' + renderer + '&delivery=zip');
@@ -425,7 +429,9 @@ try {
 
         // Overlapping A → B → A transitions commit the latest choice.
         await page.click('#grove');
+        await waitForPreparing('grove');
         await page.click('#dunes');
+        await waitForPreparing('dunes');
         await page.click('#grove');
         await wait('playing');
         current = await state();
