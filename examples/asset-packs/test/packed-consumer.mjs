@@ -6,8 +6,13 @@ import { realpath } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 
 import { chromium } from 'playwright';
+
+if (process.platform === 'win32') {
+  throw new Error('The packed consumer test requires a Unix environment (macOS, Linux, or WSL).');
+}
 
 const exampleRoot = fileURLToPath(new URL('..', import.meta.url));
 const repoRoot = resolve(exampleRoot, '..', '..');
@@ -16,10 +21,6 @@ const consumerRoot = join(fixtureRoot, 'consumer');
 const tarballRoot = join(fixtureRoot, 'tarballs');
 const webRoot = join(consumerRoot, 'web');
 const webDist = join(webRoot, 'dist');
-
-function fileURLToPath(url) {
-  return decodeURIComponent(new URL(url).pathname);
-}
 
 function writeJson(path, value) {
   mkdirSync(resolve(path, '..'), { recursive: true });
@@ -33,7 +34,12 @@ function run(command, args, cwd, timeout = 180_000) {
     timeout,
     env: { ...process.env, npm_config_update_notifier: 'false' },
   });
-  if (result.error) throw result.error;
+  if (result.error) {
+    throw new Error(
+      `${command} ${args.join(' ')} failed in ${cwd}: ${result.error.message}\n${result.stdout ?? ''}${result.stderr ?? ''}`,
+      { cause: result.error },
+    );
+  }
   return result;
 }
 
@@ -48,36 +54,8 @@ function packageTarball(directory) {
 }
 
 function packsConfig(delivery) {
-  return {
-    root: 'src',
-    packs: [
-      {
-        id: 'shared',
-        revision: '1',
-        delivery: delivery === 'mixed' ? 'files' : 'zip',
-        assets: [{
-          kind: 'spritesheet',
-          key: 'pilot',
-          file: 'pilot.png',
-          frameConfig: { frameWidth: 64, frameHeight: 64 },
-        }],
-      },
-      {
-        id: 'grove',
-        revision: '1',
-        dependsOn: ['shared'],
-        delivery: 'zip',
-        assets: [{ kind: 'atlas', key: 'ground', texture: 'grove.png', atlas: 'grove.json' }],
-      },
-      {
-        id: 'dunes',
-        revision: '1',
-        dependsOn: ['shared'],
-        delivery: 'zip',
-        assets: [{ kind: 'image', key: 'ground', file: 'dunes.png' }],
-      },
-    ],
-  };
+  const config = JSON.parse(readFileSync(join(exampleRoot, 'delivery-configs', `${delivery}.json`), 'utf8'));
+  return { ...config, root: 'src' };
 }
 
 function runInstalledCli(consumer, cliBin, args) {
@@ -115,7 +93,13 @@ function createConsumerServer(directory) {
   };
   let root;
   const server = createServer(async (request, response) => {
-    const path = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
+    let path;
+    try {
+      path = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
+    } catch {
+      response.writeHead(400).end();
+      return;
+    }
     if (path === '/__packed-consumer/release') {
       slowZipArtifacts = false;
       for (const resolveWaiter of waiters) resolveWaiter();
@@ -179,8 +163,7 @@ async function execute(scene) {
   const manifestResponse = await fetch(new URL('asset-pack-delivery.json', deliveryRoot));
   check(manifestResponse.ok, 'delivery manifest request failed');
   const manifest = await manifestResponse.json();
-  let delivery;
-  delivery = createPhaserPackDelivery(manifest, {
+  const delivery = createPhaserPackDelivery(manifest, {
     resolveURL: (path) => new URL(path, deliveryRoot).href,
     createWorker: () => new Worker(workerUrl, { type: 'module' }),
     prepareTimeoutMs: 5_000,
@@ -270,28 +253,49 @@ new Phaser.Game({
 
 async function runBrowser(serverUrl) {
   const browser = await chromium.launch({ headless: true });
+  const evidenceRoot = join(exampleRoot, 'artifacts/browser/packed-consumer');
+  rmSync(evidenceRoot, { force: true, recursive: true });
+  mkdirSync(evidenceRoot, { recursive: true });
   try {
     for (const scenario of [{ mode: 'zip', cancel: true }, { mode: 'mixed', cancel: false }]) {
       const context = await browser.newContext({ viewport: { width: 320, height: 240 } });
       const page = await context.newPage();
       const errors = [];
+      let traceStarted = false;
+      let completed = false;
+      await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+      traceStarted = true;
       page.on('pageerror', (error) => errors.push(error.stack ?? error.message));
       page.on('console', (message) => {
         if (message.type() === 'error') errors.push(message.text());
       });
-      const query = new URLSearchParams({ mode: scenario.mode });
-      if (scenario.cancel) query.set('cancel', '1');
-      await page.goto(`${serverUrl}?${query}`, { waitUntil: 'load' });
-      await page.waitForFunction(() => window.__packed_consumer_ready__ === true, null, { timeout: 15_000 });
-      await page.waitForFunction(() => window.__packed_consumer_result__ !== undefined, null, { timeout: 30_000 });
-      const result = await page.evaluate(() => window.__packed_consumer_result__);
-      assert.equal(result.ok, true, `${scenario.mode} packaged browser consumer failed: ${result.error ?? errors.join('\n')}`);
-      assert.equal(result.mode, scenario.mode);
-      assert.equal(result.cancelled, scenario.cancel);
-      assert.ok(result.workerUrl.includes('archive-worker'), `unexpected worker URL: ${result.workerUrl}`);
-      assert.deepEqual(result.frames, { pilot: 4, ground: 2 });
-      assert.equal(errors.length, 0, `${scenario.mode} packaged browser console errors: ${errors.join('\n')}`);
-      await context.close();
+      try {
+        const query = new URLSearchParams({ mode: scenario.mode });
+        if (scenario.cancel) query.set('cancel', '1');
+        await page.goto(`${serverUrl}?${query}`, { waitUntil: 'load' });
+        await page.waitForFunction(() => window.__packed_consumer_ready__ === true, null, { timeout: 15_000 });
+        await page.waitForFunction(() => window.__packed_consumer_result__ !== undefined, null, { timeout: 30_000 });
+        const result = await page.evaluate(() => window.__packed_consumer_result__);
+        assert.equal(result.ok, true, `${scenario.mode} packaged browser consumer failed: ${result.error ?? errors.join('\n')}`);
+        assert.equal(result.mode, scenario.mode);
+        assert.equal(result.cancelled, scenario.cancel);
+        assert.ok(result.workerUrl.includes('archive-worker'), `unexpected worker URL: ${result.workerUrl}`);
+        assert.deepEqual(result.frames, { pilot: 4, ground: 2 });
+        assert.ok(result.archiveRequests > 0, `${scenario.mode} never fetched a ZIP archive`);
+        if (scenario.mode === 'mixed') assert.ok(result.fileRequests > 0, 'mixed mode never fetched a loose file');
+        assert.equal(errors.length, 0, `${scenario.mode} packaged browser console errors: ${errors.join('\n')}`);
+        completed = true;
+      } catch (error) {
+        await page.screenshot({ path: join(evidenceRoot, `${scenario.mode}-failure.png`), fullPage: true }).catch(() => undefined);
+        throw error;
+      } finally {
+        if (traceStarted) {
+          await context.tracing.stop({
+            ...(completed ? {} : { path: join(evidenceRoot, `${scenario.mode}-failure-trace.zip`) }),
+          }).catch(() => undefined);
+        }
+        await context.close();
+      }
     }
   } finally {
     await browser.close();
@@ -302,6 +306,14 @@ try {
   mkdirSync(consumerRoot, { recursive: true });
   const cliTarball = packageTarball('packages/cli');
   const assetsTarball = packageTarball('packages/phaser-assets');
+  const examplePackage = JSON.parse(readFileSync(join(exampleRoot, 'package.json'), 'utf8'));
+  const sourceCliPackage = JSON.parse(readFileSync(join(repoRoot, 'packages/cli/package.json'), 'utf8'));
+  const pinnedCliDependencies = Object.keys(sourceCliPackage.dependencies)
+    .filter((name) => name !== '@mpgd/phaser-assets')
+    .map((name) => {
+      const dependencyPackage = JSON.parse(readFileSync(join(repoRoot, 'packages/cli/node_modules', name, 'package.json'), 'utf8'));
+      return `${name}@${dependencyPackage.version}`;
+    });
   cpSync(join(exampleRoot, 'asset-source'), join(consumerRoot, 'src'), { recursive: true });
   writeJson(join(consumerRoot, 'package.json'), {
     name: 'mpgd-packed-consumer',
@@ -318,7 +330,8 @@ try {
     '--legacy-peer-deps',
     cliTarball,
     assetsTarball,
-    'phaser@4.2.0',
+    ...pinnedCliDependencies,
+    `phaser@${examplePackage.dependencies.phaser}`,
   ], consumerRoot);
   assert.equal(installed.status, 0, `packed consumer install failed: ${installed.stdout}\n${installed.stderr}`);
   const cliPackage = JSON.parse(readFileSync(join(consumerRoot, 'node_modules/@mpgd/cli/package.json'), 'utf8'));
@@ -377,5 +390,5 @@ try {
   }
   console.info('Packaged asset consumer checks passed: installed CLI build-packs/verify-delivery, corrupt ZIP rejection, package-only Vite imports, module Worker decode, files+ZIP delivery, cancellation re-entry, Phaser frames and texture/staging cleanup.');
 } finally {
-  rmSync(fixtureRoot, { force: true, recursive: true });
+  rmSync(fixtureRoot, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
 }
