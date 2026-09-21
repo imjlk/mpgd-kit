@@ -246,14 +246,14 @@ try {
   const assetsTarball = packageTarball('packages/phaser-assets');
   const examplePackage = JSON.parse(readFileSync(join(exampleRoot, 'package.json'), 'utf8'));
   const sourceCliPackage = JSON.parse(readFileSync(join(repoRoot, 'packages/cli/package.json'), 'utf8'));
-  const pinnedCliDependencies = Object.entries(sourceCliPackage.dependencies)
+  const expectedCliDependencyVersions = Object.entries(sourceCliPackage.dependencies)
     .filter(([, spec]) => !spec.startsWith('workspace:'))
     .map(([name]) => {
       const manifestPath = join(repoRoot, 'packages/cli/node_modules', name, 'package.json');
       if (!existsSync(manifestPath)) {
         throw new Error(`Missing ${manifestPath}; run a full 'pnpm install' at the repo root before test/packed-consumer.mjs.`);
       }
-      return `${name}@${JSON.parse(readFileSync(manifestPath, 'utf8')).version}`;
+      return [name, JSON.parse(readFileSync(manifestPath, 'utf8')).version];
     });
   cpSync(join(exampleRoot, 'asset-source'), join(consumerRoot, 'src'), { recursive: true });
   writeJson(join(consumerRoot, 'package.json'), {
@@ -261,6 +261,7 @@ try {
     version: '0.0.0',
     private: true,
     type: 'module',
+    overrides: Object.fromEntries(expectedCliDependencyVersions),
   });
   for (const mode of ['zip', 'mixed']) writeJson(join(consumerRoot, `${mode}.config.json`), packsConfig(mode));
 
@@ -271,7 +272,6 @@ try {
     '--legacy-peer-deps',
     cliTarball,
     assetsTarball,
-    ...pinnedCliDependencies,
     `phaser@${examplePackage.dependencies.phaser}`,
   ], consumerRoot);
   assert.equal(installed.status, 0, `packed consumer install failed: ${installed.stdout}\n${installed.stderr}`);
@@ -280,6 +280,15 @@ try {
   assert.equal(cliPackage.dependencies['@mpgd/phaser-assets'], assetsPackage.version);
   assert.ok(!JSON.stringify(cliPackage).includes('workspace:'), 'CLI tarball retained a workspace dependency');
   assert.ok(!JSON.stringify(assetsPackage).includes('workspace:'), 'phaser-assets tarball retained a workspace dependency');
+  for (const [name, expectedVersion] of expectedCliDependencyVersions) {
+    const installedManifestPath = [
+      join(consumerRoot, 'node_modules', name, 'package.json'),
+      join(consumerRoot, 'node_modules/@mpgd/cli/node_modules', name, 'package.json'),
+    ].find((path) => existsSync(path));
+    assert.ok(installedManifestPath, `installed CLI dependency is missing: ${name}`);
+    const installedVersion = JSON.parse(readFileSync(installedManifestPath, 'utf8')).version;
+    assert.equal(installedVersion, expectedVersion, `${name} resolved outside the repository lock state`);
+  }
 
   const cliBin = join(consumerRoot, 'node_modules/@mpgd/cli', cliPackage.bin?.mpgd ?? './dist/bin.js');
   for (const mode of ['zip', 'mixed']) {
