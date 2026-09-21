@@ -65,6 +65,7 @@ const aitWebFrameworkVersion = '3.5.0';
 const aitCliVersion = '3.5.0';
 const aitWebFrameworkPeerRange = '>=3.0.0 <4';
 const peerDependencyRuleTestSelector = '@example/devtools>@example/web-framework';
+const peerDependencyRuleTestVersion = '1.2.3';
 const aitXmldomOverrideVersion = '0.9.12';
 const aitSafeAreaWrapperRequiredTexts = [
   "from '@mpgd/adapter-ait/safe-area'",
@@ -2454,23 +2455,26 @@ function findMatchingBraceIndex(content: string, openBraceIndex: number): number
 }
 
 function validatePeerDependencyRuleParser(): void {
-  const positive = `peerDependencyRules:\n  allowedVersions:\n    '${peerDependencyRuleTestSelector}': '${aitWebFrameworkVersion}'\n`;
-  const hashValue = `peerDependencyRules:\n  allowedVersions:\n    '${peerDependencyRuleTestSelector}': ${aitWebFrameworkVersion}+build#1\n`;
+  // Keep this parser canary independent of the AIT dependency versions so
+  // SDK bumps do not rewrite an unrelated fixture.
+  const positive = `peerDependencyRules:\n  allowedVersions:\n    '${peerDependencyRuleTestSelector}': '${peerDependencyRuleTestVersion}'\n`;
+  const hashValue = `peerDependencyRules:\n  allowedVersions:\n    '${peerDependencyRuleTestSelector}': ${peerDependencyRuleTestVersion}+build#1\n`;
   const invalid = [
-    `# peerDependencyRules:\n#   allowedVersions:\n#     '${peerDependencyRuleTestSelector}': '${aitWebFrameworkVersion}'\n`,
-    `allowedVersions:\n  '${peerDependencyRuleTestSelector}': '${aitWebFrameworkVersion}'\n`,
-    `peerDependencyRules: |\n  allowedVersions:\n    '${peerDependencyRuleTestSelector}': '${aitWebFrameworkVersion}'\n`,
-    `peerDependencyRules: >\n  allowedVersions:\n    '${peerDependencyRuleTestSelector}': '${aitWebFrameworkVersion}'\n`,
-    `peerDependencyRules:\n  ignored:\n    '${peerDependencyRuleTestSelector}': '${aitWebFrameworkVersion}'\n`,
-    `peerDependencyRules:\n  allowedVersions: |\n    '${peerDependencyRuleTestSelector}': '${aitWebFrameworkVersion}'\n`,
-    `peerDependencyRules:\n  allowedVersions: >\n    '${peerDependencyRuleTestSelector}': '${aitWebFrameworkVersion}'\n`,
-    `peerDependencyRules:\n  allowedVersions: scalar\n    '${peerDependencyRuleTestSelector}': '${aitWebFrameworkVersion}'\n`,
+    `# peerDependencyRules:\n#   allowedVersions:\n#     '${peerDependencyRuleTestSelector}': '${peerDependencyRuleTestVersion}'\n`,
+    `allowedVersions:\n  '${peerDependencyRuleTestSelector}': '${peerDependencyRuleTestVersion}'\n`,
+    `peerDependencyRules: |\n  allowedVersions:\n    '${peerDependencyRuleTestSelector}': '${peerDependencyRuleTestVersion}'\n`,
+    `peerDependencyRules: >\n  allowedVersions:\n    '${peerDependencyRuleTestSelector}': '${peerDependencyRuleTestVersion}'\n`,
+    `peerDependencyRules:\n  ignored:\n    '${peerDependencyRuleTestSelector}': '${peerDependencyRuleTestVersion}'\n`,
+    `peerDependencyRules:\n  allowedVersions: |\n    '${peerDependencyRuleTestSelector}': '${peerDependencyRuleTestVersion}'\n`,
+    `peerDependencyRules:\n  allowedVersions: >\n    '${peerDependencyRuleTestSelector}': '${peerDependencyRuleTestVersion}'\n`,
+    `peerDependencyRules:\n  allowedVersions: scalar\n    '${peerDependencyRuleTestSelector}': '${peerDependencyRuleTestVersion}'\n`,
   ];
 
   if (
-    readAllowedPeerVersion(positive, peerDependencyRuleTestSelector) !== aitWebFrameworkVersion
+    readAllowedPeerVersion(positive, peerDependencyRuleTestSelector)
+      !== peerDependencyRuleTestVersion
     || readAllowedPeerVersion(hashValue, peerDependencyRuleTestSelector)
-      !== `${aitWebFrameworkVersion}+build#1`
+      !== `${peerDependencyRuleTestVersion}+build#1`
     || invalid.some(
       (source) => readAllowedPeerVersion(source, peerDependencyRuleTestSelector) !== undefined,
     )
