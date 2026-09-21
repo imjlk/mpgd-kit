@@ -6,12 +6,6 @@ on:
       - main
   pull_request:
   workflow_dispatch:
-    inputs:
-      release_pr_metadata_only:
-        description: Run the lightweight release PR metadata validation path.
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -22,16 +16,69 @@ jobs:
     timeout-minutes: 120
     outputs:
       release_pr_metadata_only: ${{ steps.release-pr-meta.outputs.enabled }}
-    env:
-      IS_RELEASE_PR: ${{ (github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/')) || (github.event_name == 'workflow_dispatch' && inputs.release_pr_metadata_only) }}
 
     steps:
-      - id: release-pr-meta
-        run: echo "enabled=${IS_RELEASE_PR}" >> "$GITHUB_OUTPUT"
-
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      - name: Determine metadata-only validation
+        id: release-pr-meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            if ! base_sha="$(git merge-base "origin/${PR_BASE_REF}" HEAD)"; then
+              echo "enabled=false" >> "$GITHUB_OUTPUT"
+              echo "Could not resolve merge base against origin/${PR_BASE_REF}; running full validation."
+              exit 0
+            fi
+          else
+            # origin/main is already fetched by checkout (fetch-depth: 0);
+            # fetching again would need credentials because persist-credentials
+            # is disabled and would fail on private repositories.
+            if ! base_sha="$(git merge-base origin/main HEAD)"; then
+              echo "enabled=false" >> "$GITHUB_OUTPUT"
+              echo "Could not resolve merge base against origin/main; running full validation."
+              exit 0
+            fi
+          fi
+
+          mapfile -t changed_files < <(git diff --no-renames --name-only "${base_sha}...HEAD")
+          metadata_only=true
+          if ((${#changed_files[@]} == 0)); then
+            metadata_only=false
+          fi
+
+          for path in "${changed_files[@]}"; do
+            case "${path}" in
+              .sampo/changesets/*.md|CHANGELOG.md|*/CHANGELOG.md)
+                ;;
+              package.json|*/package.json)
+                package_diff="$(git diff --no-renames --unified=0 "${base_sha}...HEAD" -- "${path}")" || metadata_only=false
+                package_diff="$(printf '%s\n' "${package_diff}" | grep -E '^[+-]' | grep -Ev '^(---|\+\+\+)' || true)"
+                if [[ -z "${package_diff}" ]]; then
+                  metadata_only=false
+                else
+                  non_version_lines="$(printf '%s\n' "${package_diff}" | grep -Ev '^[+-]  "version"[[:space:]]*:[[:space:]]*"[^"]*"[[:space:]]*,?[[:space:]]*$' || true)"
+                  if [[ -n "${non_version_lines}" ]]; then
+                    metadata_only=false
+                  fi
+                fi
+                ;;
+              *)
+                metadata_only=false
+                ;;
+            esac
+          done
+
+          echo "enabled=${metadata_only}" >> "$GITHUB_OUTPUT"
+          echo "Metadata-only validation: ${metadata_only}"
+          printf 'Changed files:\n%s\n' "${changed_files[*]:-<none>}"
 
       - uses: pnpm/action-setup@v6
         with:
@@ -45,95 +92,95 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Validate release PR package metadata
-        if: ${{ env.IS_RELEASE_PR == 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled == 'true' }}
         run: pnpm validate:public && pnpm pack:packages
 
       - run: pnpm check
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - run: pnpm validate:catalog
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - run: pnpm validate:ads
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - run: pnpm validate:target-config
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - run: pnpm validate:effective-config
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - run: pnpm validate:targets
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - run: pnpm build:packages
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - name: Cache example browsers
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
         uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-runtime-playwright-${{ hashFiles('examples/runtime-controls/package.json', 'examples/asset-packs/package.json') }}
           restore-keys: ${{ runner.os }}-runtime-playwright-
       - name: Install runtime fixture browser
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
         timeout-minutes: 10
         run: pnpm --dir examples/runtime-controls exec playwright install --with-deps chromium
       - name: Verify Phaser runtime controls in Chromium
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
         timeout-minutes: 5
         run: pnpm --dir examples/runtime-controls build && pnpm --dir examples/runtime-controls test:browser
       - name: Install asset pack example browser
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
         timeout-minutes: 10
         run: pnpm --dir examples/asset-packs exec playwright install --with-deps chromium
       - name: Verify asset pack delivery and lifetime in Chromium
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
         timeout-minutes: 5
         run: pnpm --dir examples/asset-packs test:browser
       - name: Verify packaged asset consumer in Chromium
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
         timeout-minutes: 10
         run: pnpm --dir examples/asset-packs test:packed-consumer
       - name: Upload asset pack browser evidence
-        if: ${{ always() && env.IS_RELEASE_PR != 'true' }}
+        if: ${{ always() && steps.release-pr-meta.outputs.enabled != 'true' }}
         uses: actions/upload-artifact@v6
         with:
           name: asset-pack-browser-evidence
           path: examples/asset-packs/artifacts/browser/
           if-no-files-found: ignore
       - run: pnpm smoke:apps-in-toss-production-evidence:prepared
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - run: tar -czf "$RUNNER_TEMP/package-dist.tgz" packages/*/dist adapters/*/dist native-plugins/*/dist
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - uses: actions/upload-artifact@v6
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
         with:
           name: package-dist-ci
           path: ${{ runner.temp }}/package-dist.tgz
       - run: pnpm graph:preflight
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - run: pnpm pack:packages:prepared
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - run: pnpm build:web
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
       - run: pnpm smoke:target web-preview
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - run: pnpm build:microsoft-store
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
           VITE_MPGD_GAME_SERVICES_URL: https://services.example.com
       - run: pnpm smoke:target microsoft-store
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - run: pnpm build:verse8
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
           VITE_MPGD_GAME_SERVICES_URL: https://services.example.com
       - run: pnpm smoke:target verse8
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - run: pnpm test:prepared
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
 
       - uses: actions/upload-artifact@v6
-        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
         with:
           name: web-preview-microsoft-store-and-verse8-ci
           path: |
@@ -143,6 +190,7 @@ jobs:
     if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' }}
     runs-on: ubuntu-latest
     needs: validate
+    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v5
@@ -196,6 +244,7 @@ jobs:
     if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' }}
     runs-on: macos-26
     needs: validate
+    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v5
@@ -239,6 +288,7 @@ jobs:
     if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' }}
     runs-on: ubuntu-latest
     needs: validate
+    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v5

@@ -1,7 +1,11 @@
 name: release
 
 on:
-  push:
+  workflow_run:
+    workflows:
+      - ci
+    types:
+      - completed
     branches:
       - main
   workflow_dispatch: {}
@@ -18,13 +22,16 @@ permissions:
 
 jobs:
   release:
+    if: ${{ (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v5
         with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
-          persist-credentials: true
+          persist-credentials: false
 
       - uses: pnpm/action-setup@v6
         with:
@@ -36,6 +43,24 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - name: Verify CI for manual release
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          runs="$(gh run list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --workflow ci.yml \
+            --commit "${GITHUB_SHA}" \
+            --limit 20 \
+            --json status,conclusion,event,headSha)"
+          conclusion="$(printf '%s' "${runs}" | jq -r --arg sha "${GITHUB_SHA}" '[.[] | select(.event == "push" and .headSha == $sha and .status == "completed")] | .[0].conclusion // empty')"
+          if [[ "${conclusion}" != "success" ]]; then
+            echo "Manual release requires a successful ci.yml push run for ${GITHUB_SHA}; got ${conclusion:-none}."
+            exit 1
+          fi
+          echo "Manual release verified ci.yml success for ${GITHUB_SHA}."
       # Build package dist and smoke npm tarballs only. Target builds run in PR CI.
       - run: pnpm pack:packages
 
@@ -62,7 +87,7 @@ jobs:
               --jq '.[0].number // empty'
           )"
           if [ -n "${release_pr}" ]; then
-            gh workflow run ci.yml --ref release/main --field release_pr_metadata_only=true
+            gh workflow run ci.yml --ref release/main
           else
             echo "No open release/main PR found; skipping release PR validation dispatch."
           fi
