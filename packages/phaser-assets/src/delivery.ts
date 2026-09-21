@@ -491,6 +491,7 @@ const fail = (
 const toBlob = (bytes: Uint8Array, mediaType: string): Blob =>
   new Blob([bytes as unknown as BlobPart], { type: mediaType });
 
+/** Return an ArrayBuffer covering exactly the supplied byte view. */
 const exactArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
   if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
     return bytes.buffer as ArrayBuffer;
@@ -498,6 +499,7 @@ const exactArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
   return bytes.slice().buffer;
 };
 
+/** Reject non-positive or unsafe integer delivery limits. */
 const positiveInteger = (value: number, label: string): void => {
   if (!Number.isSafeInteger(value) || value <= 0) {
     fail('config', `Delivery ${label} must be a positive integer`);
@@ -567,6 +569,7 @@ const abortCategory = (reason: unknown, contextLabel: string): PhaserPackDeliver
 const requestTimeoutError = (noun: string, id: string): PhaserPackDeliveryError =>
   new PhaserPackDeliveryError('transport', `Delivery ${noun} for ${id} timed out`);
 
+/** Normalize archive/file origin failures into the public delivery taxonomy. */
 const mapDeliveryFetchError = (
   error: unknown,
   options: {

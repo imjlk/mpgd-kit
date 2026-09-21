@@ -91,6 +91,7 @@ interface StoredArtifact {
   readonly bytes: number;
 }
 
+/** Convert a public content identity to this adapter's namespaced key. */
 export const artifactCacheIdentity = (key: PhaserPackCacheKey): string =>
   `${KEY_PREFIX}${key.namespace}|sha256|${key.sha256}|${key.bytes}`;
 
@@ -150,11 +151,13 @@ const withDeadline = async <T>(
   }
 };
 
+/** Read the byte-count suffix used by the adapter's accounting marker. */
 const bytesOfIdentity = (identity: string): number | undefined => {
   const bytes = Number(identity.slice(identity.lastIndexOf('|') + 1));
   return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : undefined;
 };
 
+/** Recognize the digest-only keys written by the retired private experiment. */
 const isLegacyIdentity = (identity: string): boolean => {
   if (!identity.startsWith(KEY_PREFIX)) {
     return false;
@@ -229,6 +232,7 @@ export class ArtifactCache implements PhaserPackPersistentCache {
 
   readonly faults: ArtifactCacheFaults = {};
 
+  /** Open the bounded store and retry legacy cleanup on later boots if needed. */
   static async open(): Promise<ArtifactCache | 'unavailable'> {
     if (typeof indexedDB === 'undefined') {
       return 'unavailable';
@@ -274,6 +278,7 @@ export class ArtifactCache implements PhaserPackPersistentCache {
     }
   }
 
+  /** Close the IndexedDB connection owned by this adapter instance. */
   close(): void {
     this.db.close();
   }
@@ -301,6 +306,7 @@ export class ArtifactCache implements PhaserPackPersistentCache {
     return record.payload;
   }
 
+  /** Persist one verified artifact or reject with a bounded store failure. */
   async put(key: PhaserPackCacheKey, bytes: ArrayBuffer, context: PhaserPackCacheContext = {}): Promise<void> {
     context.signal?.throwIfAborted();
     if (bytes.byteLength !== key.bytes) {
@@ -321,6 +327,7 @@ export class ArtifactCache implements PhaserPackPersistentCache {
     }
   }
 
+  /** Delete one public identity and report whether a record existed. */
   async delete(key: PhaserPackCacheKey, context: PhaserPackCacheContext = {}): Promise<boolean> {
     context.signal?.throwIfAborted();
     const removed = await this.deleteRecord(artifactCacheIdentity(key), context.signal);
@@ -328,6 +335,7 @@ export class ArtifactCache implements PhaserPackPersistentCache {
     return removed;
   }
 
+  /** Remove only records belonging to one public namespace. */
   async clear(namespace: string, context: PhaserPackCacheContext = {}): Promise<void> {
     context.signal?.throwIfAborted();
     const prefix = `${KEY_PREFIX}${namespace}|`;
@@ -335,6 +343,7 @@ export class ArtifactCache implements PhaserPackPersistentCache {
     context.signal?.throwIfAborted();
   }
 
+  /** Recompute public usage from owned identity keys. */
   async usage(namespace: string, context: PhaserPackCacheContext = {}): Promise<PhaserPackCacheUsage> {
     context.signal?.throwIfAborted();
     const prefix = `${KEY_PREFIX}${namespace}|`;

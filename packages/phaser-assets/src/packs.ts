@@ -137,12 +137,14 @@ interface Entry {
   resource?: Resource;
 }
 
+/** Infer a best-effort Blob media type while keeping pack-format canonical. */
 const mediaTypeFor = (role: PlannedFile['role'], url: string): string | undefined => {
   const path = url.split(/[?#]/u, 1)[0] as string;
   return phaserPackMediaTypeForPath(path)?.mediaType
     ?? (role === 'atlas' ? 'application/json' : undefined);
 };
 let generation = 0;
+/** Build the cancellation error shared by loader acquisition paths. */
 const abortError = () => new DOMException('Asset pack acquisition cancelled', 'AbortError');
 /** Validate a dependency graph without starting any browser work. */
 export function definePhaserAssetPacks<const T extends readonly PhaserAssetPack[]>(packs: T): T {

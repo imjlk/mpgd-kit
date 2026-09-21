@@ -206,6 +206,7 @@ export interface PhaserPackArtifactCommitOptions {
   readonly transferOwnership?: boolean;
 }
 
+/** Adapt a deferred artifact commit to the file-body persistence hook. */
 export const commitCacheOf = (
   read: PhaserPackArtifactRead,
 ): { readonly commitCache: () => Promise<void> } | Record<string, never> => {

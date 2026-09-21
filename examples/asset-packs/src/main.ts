@@ -162,6 +162,7 @@ const model = {
 
 let cacheDiagnostics: WarmDiagnostic[] = [];
 
+/** Build the compact cache report rendered by the example and browser tests. */
 const cacheReport = (): WarmReport => {
   const entries = [...cacheEntries.values()];
   return {
@@ -173,6 +174,7 @@ const cacheReport = (): WarmReport => {
   };
 };
 
+/** Clear per-selection cache evidence without closing the storage adapter. */
 const resetCacheReport = (): void => {
   cacheEntries = new Map<string, WarmEntry>();
   cacheDiagnostics = [];
