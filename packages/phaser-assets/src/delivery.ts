@@ -1187,10 +1187,9 @@ export function createPhaserPackDelivery(
     ): void => {
       tracker?.nextEvent(phase, { ...packContext, progress });
     };
-    const url = resolveArtifact(archive.path, packContext);
-    // URL resolution runs synchronous user code; the budget gate sits
-    // immediately before the request it guards, after that code, so no
-    // archive request can start on a budget spent inside the resolver.
+    // Keep this initial gate before cache access as well as origin access.
+    // URL resolution itself is deferred into fetchOrigin below so a valid
+    // cache hit never needs a live origin URL or signing state.
     if (deadlineAt - monotonicNow() <= 0) {
       fail('deadline', 'Delivery preparation exceeded its deadline');
     }
@@ -1200,6 +1199,13 @@ export function createPhaserPackDelivery(
       artifact: { kind: 'archive', ...packContext },
       signal,
       fetchOrigin: async (): Promise<ArrayBuffer> => {
+        const url = resolveArtifact(archive.path, packContext);
+        // URL resolution runs synchronous user code; the budget gate sits
+        // immediately before the request it guards, after that code, so no
+        // archive request can start on a budget spent inside the resolver.
+        if (deadlineAt - monotonicNow() <= 0) {
+          fail('deadline', 'Delivery preparation exceeded its deadline');
+        }
         archiveRequests++;
         // Emitted once the body starts: the first observation reports zero
         // delivered bytes against the manifest's declared size, and every
@@ -1510,9 +1516,6 @@ export function createPhaserPackDelivery(
               throw error;
             };
             try {
-              const url = resolveArtifact(role.path, {
-                packId: request.packId, revision: request.revision,
-              });
               // The loader reserves only the declared size in the shared
               // budget, so the streaming cap is the declared bytes (when
               // known) rather than the transport maximum, and the failure
@@ -1537,6 +1540,9 @@ export function createPhaserPackDelivery(
                 signal: combined,
                 commitSignal: context.signal,
                 fetchOrigin: async (): Promise<ArrayBuffer> => {
+                  const url = resolveArtifact(role.path, {
+                    packId: request.packId, revision: request.revision,
+                  });
                   // Only an origin fetch consumes the transfer permit; cache
                   // hits are bounded by the byte budget and do not use it.
                   const releaseTransfer = await context.budgets.transfers.acquire(combined).catch(mapReadAbort);

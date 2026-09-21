@@ -434,8 +434,12 @@ describe('phaser pack delivery', () => {
     first.dispose();
 
     const secondEvents: PhaserPackCacheEvent[] = [];
+    let secondResolverCalls = 0;
     const second = createPhaserPackDelivery(manifest, {
-      baseUrl: origin.url,
+      resolveURL: (): string => {
+        secondResolverCalls++;
+        throw new Error('origin URL is unavailable while offline');
+      },
       createWorker: createFakeWorkerFactory().factory,
       persistentCache: {
         storage,
@@ -448,12 +452,66 @@ describe('phaser pack delivery', () => {
     const secondPrepared = await second.prepare('solo');
     secondPrepared.release();
     expect(second.snapshot().archiveRequests).toBe(0);
+    expect(secondResolverCalls).toBe(0);
     expect(secondEvents.map((event) => event.outcome)).toEqual(['cache-hit']);
     expect(await storage.usage('delivery-test')).toEqual({
       records: 1,
       totalBytes: zip.archive.byteLength,
     });
     second.dispose();
+  });
+
+  it('does not resolve a file URL on a verified persistent cache hit', async () => {
+    const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'files' }]);
+    const file = packFiles.get('packs/solo@1/pilot.png')!;
+    const cacheKey = `delivery-test|${sha256(file.bytes)}|${file.bytes.byteLength}`;
+    const records = new Map<string, ArrayBuffer>([[cacheKey, file.bytes.slice().buffer]]);
+    const storage: PhaserPackPersistentCache = {
+      async get(key) {
+        return records.get(`${key.namespace}|${key.sha256}|${key.bytes}`)?.slice(0);
+      },
+      async put() {
+        throw new Error('put should not run for a hit');
+      },
+      async delete(key) {
+        return records.delete(`${key.namespace}|${key.sha256}|${key.bytes}`);
+      },
+      async clear(namespace) {
+        for (const key of records.keys()) {
+          if (key.startsWith(`${namespace}|`)) {
+            records.delete(key);
+          }
+        }
+      },
+      async usage(namespace) {
+        const owned = [...records.entries()].filter(([key]) => key.startsWith(`${namespace}|`));
+        return {
+          records: owned.length,
+          totalBytes: owned.reduce((sum, [, value]) => sum + value.byteLength, 0),
+        };
+      },
+    };
+    let resolverCalls = 0;
+    const delivery = createPhaserPackDelivery(manifest, {
+      resolveURL: (): string => {
+        resolverCalls++;
+        throw new Error('origin URL is unavailable while offline');
+      },
+      persistentCache: {
+        storage,
+        namespace: 'delivery-test',
+      },
+    });
+    const opened = await delivery.fileSource.open(openRequest('solo'), {
+      signal: new AbortController().signal,
+      budgets: budgets(),
+    });
+    const body = await opened.read();
+    expect(body.bytes.size).toBe(file.bytes.byteLength);
+    expect(resolverCalls).toBe(0);
+    body.release();
+    opened.close();
+    delivery.dispose();
   });
 
   it('keeps the verification basis after caller manifest mutation', async () => {
