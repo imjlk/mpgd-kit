@@ -5,13 +5,9 @@ __PNPM_WORKSPACE_KIT_PACKAGES__
 allowBuilds:
   '@sentry/cli': true
   '@swc/core': true
-  cloudflared: false
   esbuild: true
   protobufjs: true
   sharp: true
   workerd: true
 overrides:
   '@xmldom/xmldom': '0.9.12'
-peerDependencyRules:
-  allowedVersions:
-    '@ait-co/devtools>@apps-in-toss/web-framework': '3.1.1'
