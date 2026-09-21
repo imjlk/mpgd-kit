@@ -121,12 +121,15 @@ const sha256Hex = async (data: ArrayBuffer): Promise<string> => {
 };
 
 /** A bounded promise wrapper: DB work must never hang the prepare. */
-const withDeadline = async <T>(operation: (finish: (value: T) => void) => void, label: string): Promise<T> => {
+const withDeadline = async <T>(
+  operation: (finish: (value: T) => void, fail: (error: unknown) => void) => void,
+  label: string,
+): Promise<T> => {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await new Promise<T>((resolve, reject) => {
       timer = setTimeout(() => reject(new Error(`artifact cache ${label} timed out`)), IO_TIMEOUT_MS);
-      operation((value) => resolve(value));
+      operation((value) => resolve(value), reject);
     });
   } finally {
     clearTimeout(timer);
@@ -147,23 +150,35 @@ export class ArtifactCache {
     if (typeof indexedDB === 'undefined') {
       return 'unavailable';
     }
+    let openSettled = false;
     try {
-      const db = await withDeadline<IDBDatabase>((finish) => {
+      const db = await withDeadline<IDBDatabase>((finish, fail) => {
         const request = indexedDB.open(DB_NAME);
         request.onupgradeneeded = () => {
           if (!request.result.objectStoreNames.contains(STORE_NAME)) {
             request.result.createObjectStore(STORE_NAME);
           }
         };
-        request.onsuccess = () => finish(request.result);
-        request.onerror = () => request.transaction?.abort() ?? undefined;
+        request.onsuccess = () => {
+          // The deadline can settle before IndexedDB delivers success. A
+          // connection arriving after that point is not owned by a cache
+          // instance and must be closed immediately.
+          if (openSettled) {
+            request.result.close();
+            return;
+          }
+          finish(request.result);
+        };
+        request.onerror = () => fail(request.error ?? new Error('artifact cache open failed'));
         request.onblocked = () => undefined;
       }, 'open');
+      openSettled = true;
       // A version bump elsewhere closes our handle promptly; later
       // operations fail into 'unavailable' rather than hanging.
       db.onversionchange = () => db.close();
       return new ArtifactCache(db);
     } catch {
+      openSettled = true;
       return 'unavailable';
     }
   }

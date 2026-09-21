@@ -137,12 +137,13 @@ jobs:
         timeout-minutes: 10
         run: pnpm --dir examples/asset-packs test:packed-consumer
       - name: Upload asset pack browser evidence
-        if: ${{ always() && steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ failure() && steps.release-pr-meta.outputs.enabled != 'true' }}
         uses: actions/upload-artifact@v6
         with:
           name: asset-pack-browser-evidence
           path: examples/asset-packs/artifacts/browser/
           if-no-files-found: ignore
+          retention-days: 7
       - run: pnpm smoke:apps-in-toss-production-evidence:prepared
         if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - run: tar -czf "$RUNNER_TEMP/package-dist.tgz" packages/*/dist adapters/*/dist native-plugins/*/dist
@@ -152,6 +153,7 @@ jobs:
         with:
           name: package-dist-ci
           path: ${{ runner.temp }}/package-dist.tgz
+          retention-days: 1
       - run: pnpm graph:preflight
         if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - run: pnpm pack:packages:prepared
@@ -180,11 +182,12 @@ jobs:
         if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
 
       - uses: actions/upload-artifact@v6
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ failure() && steps.release-pr-meta.outputs.enabled != 'true' }}
         with:
           name: web-preview-microsoft-store-and-verse8-ci
           path: |
             examples/phaser-starter/artifacts/**
+          retention-days: 7
 
   build-android:
     if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' }}
@@ -234,11 +237,13 @@ jobs:
       - run: pnpm smoke:target android
 
       - uses: actions/upload-artifact@v6
+        if: ${{ failure() }}
         with:
           name: android-ci
           path: |
             examples/phaser-starter/artifacts/**
             examples/phaser-starter/release-output/**
+          retention-days: 7
 
   build-ios:
     if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' }}
@@ -279,10 +284,12 @@ jobs:
       - run: pnpm smoke:target ios
 
       - uses: actions/upload-artifact@v6
+        if: ${{ failure() }}
         with:
           name: ios-ci
           path: |
             examples/phaser-starter/artifacts/**
+          retention-days: 7
 
   build-ait:
     if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' }}
@@ -316,11 +323,13 @@ jobs:
       - run: pnpm smoke:target ait
 
       - uses: actions/upload-artifact@v6
+        if: ${{ failure() }}
         with:
           name: ait-ci
           path: |
             examples/phaser-starter/artifacts/**
             examples/phaser-starter/release-output/**
+          retention-days: 7
 
   build-devvit:
     if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' }}
@@ -356,8 +365,10 @@ jobs:
       - run: pnpm smoke:target reddit
 
       - uses: actions/upload-artifact@v6
+        if: ${{ failure() }}
         with:
           name: devvit-ci
           path: |
             examples/phaser-starter/artifacts/**
             apps/target-devvit/dist/**
+          retention-days: 7
