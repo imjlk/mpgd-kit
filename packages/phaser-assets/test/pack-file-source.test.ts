@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import type Phaser from 'phaser';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { PhaserPackCacheEvent, PhaserPackPersistentCache } from '../src/pack-cache.js';
 import { createPackUrlFileSource } from '../src/pack-file-source.js';
 import {
   createPhaserAssetPackLoader,
@@ -528,6 +529,61 @@ describe('default URL source ownership', () => {
     await expect(opened.read()).rejects.toThrow('Asset network request failed');
     expect((await opened.read()).bytes.size).toBe(3);
     expect(fetch).toHaveBeenCalledTimes(2);
+    opened.close();
+  });
+
+  it('uses verified persistent bytes before starting the origin request', async () => {
+    const records = new Map<string, ArrayBuffer>([['app|shared-file', png.buffer.slice(0)]]);
+    const events: PhaserPackCacheEvent[] = [];
+    const storage: PhaserPackPersistentCache = {
+      async get() {
+        return records.get('app|shared-file')?.slice(0);
+      },
+      async put() {
+        throw new Error('put should not run for a hit');
+      },
+      async delete() {
+        return false;
+      },
+      async clear() {
+      },
+      async usage() {
+        return { records: 1, totalBytes: png.byteLength };
+      },
+    };
+    const source = createPackUrlFileSource({
+      ...transport,
+      persistentCache: {
+        storage,
+        namespace: 'app',
+        onEvent: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('origin must not be reached');
+    }));
+    const controller = new AbortController();
+    const noop = (): void => {
+    };
+    const opened = await source.open({
+      packId: 'shared',
+      revision: '1',
+      assetKey: 'pilot',
+      role: 'texture',
+      url: '/pilot.png',
+      integrity: { bytes: png.byteLength, sha256: sha256(png) },
+    }, {
+      signal: controller.signal,
+      budgets: {
+        transfers: { acquire: async () => noop },
+        bytes: { acquire: async () => noop },
+      },
+    });
+    expect((await opened.read()).bytes.size).toBe(png.byteLength);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(events.map((event) => event.outcome)).toEqual(['cache-hit']);
     opened.close();
   });
 });

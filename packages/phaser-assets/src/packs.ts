@@ -4,6 +4,10 @@ import { digestOf } from './archive-digest.js';
 import type { PhaserAtlasAsset, PhaserImageAsset, PhaserSpritesheetAsset } from './index.js';
 import { createPackBudget } from './pack-budget.js';
 import {
+  assertPhaserPackPersistentCacheOptions,
+  type PhaserPackPersistentCacheOptions,
+} from './pack-cache.js';
+import {
   createPackUrlFileSource,
   type PhaserPackFileBody,
   type PhaserPackFileContext,
@@ -11,6 +15,7 @@ import {
   type PhaserPackFileSource,
   type PhaserPackOpenedFile,
 } from './pack-file-source.js';
+import { phaserPackMediaTypeForPath } from './pack-format.js';
 
 export type {
   PhaserPackFileBody,
@@ -22,6 +27,17 @@ export type {
   PhaserPackFileSource,
   PhaserPackOpenedFile,
 } from './pack-file-source.js';
+export type {
+  PhaserPackPersistentCache,
+  PhaserPackPersistentCacheOptions,
+  PhaserPackCacheContext,
+  PhaserPackCacheEvent,
+  PhaserPackCacheEventOutcome,
+  PhaserPackCacheKey,
+  PhaserPackCacheUsage,
+} from './pack-cache.js';
+/** Keep the cache public exports parallel with delivery.ts. */
+export { createPhaserPackCacheKey } from './pack-cache.js';
 /** Existing texture manifests can be used directly; integrity metadata is optional. */
 export type PhaserPackAsset = (PhaserImageAsset | PhaserSpritesheetAsset | PhaserAtlasAsset) & {
   readonly integrity?: {
@@ -63,6 +79,10 @@ export interface PhaserAssetPackOptions {
   /** Supplies file bytes instead of the default manifest-URL HTTP transport.
    * Integrity verification, byte reservations and decoding stay with the loader. */
   readonly fileSource?: PhaserPackFileSource;
+  /** Optional persistent storage for verified original file bytes. It applies
+   * only to the default URL source and only when the asset declares integrity;
+   * it cannot be combined with fileSource. */
+  readonly persistentCache?: PhaserPackPersistentCacheOptions;
 }
 export interface PhaserAssetPackLease {
   /** Resolve a logical manifest key to the owned Phaser texture key. Throws after release. */
@@ -101,6 +121,7 @@ interface Planned {
 interface PlannedFile {
   role: 'texture' | 'atlas';
   url: string;
+  mediaType?: string | undefined;
   integrity?: PhaserPackFileIntegrity | undefined;
 }
 interface Resource {
@@ -115,6 +136,12 @@ interface Entry {
   promise: Promise<Resource>;
   resource?: Resource;
 }
+
+const mediaTypeFor = (role: PlannedFile['role'], url: string): string | undefined => {
+  const path = url.split(/[?#]/u, 1)[0] as string;
+  return phaserPackMediaTypeForPath(path)?.mediaType
+    ?? (role === 'atlas' ? 'application/json' : undefined);
+};
 let generation = 0;
 const abortError = () => new DOMException('Asset pack acquisition cancelled', 'AbortError');
 /** Validate a dependency graph without starting any browser work. */
@@ -216,9 +243,14 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
     definePhaserAssetPacks(structuredClone(catalog)).map((pack) => [pack.id, pack]),
   );
   const customFileSource = options.fileSource;
+  const persistentCache = options.persistentCache;
   if (customFileSource !== undefined && (!customFileSource || typeof customFileSource.open !== 'function')) {
     throw new Error('Invalid asset pack file source');
   }
+  if (customFileSource !== undefined && persistentCache !== undefined) {
+    throw new Error('Asset pack persistent cache requires the default URL file source');
+  }
+  assertPhaserPackPersistentCacheOptions(persistentCache, 'Invalid asset pack persistent cache');
   const timeoutMs = options.timeoutMs ?? 15000;
   const retries = options.retries ?? 1;
   const requestTimeoutMs = options.requestTimeoutMs ?? 10000;
@@ -255,6 +287,7 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
     requestTimeoutMs,
     requestCache,
     maxFileBytes,
+    persistentCache,
   });
   const fileBudgets = {
     transfers: {
@@ -330,6 +363,7 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
       {
         role: 'texture',
         url: asset.kind === 'atlas' ? asset.textureUrl : asset.url,
+        mediaType: mediaTypeFor('texture', asset.kind === 'atlas' ? asset.textureUrl : asset.url),
         integrity: asset.integrity?.texture,
       },
     ];
@@ -337,6 +371,7 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
       files.push({
         role: 'atlas',
         url: asset.atlasUrl,
+        mediaType: mediaTypeFor('atlas', asset.atlasUrl),
         integrity: asset.integrity?.atlas,
       });
     }
@@ -374,6 +409,7 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
           assetKey: asset.key,
           role: file.role,
           url: file.url,
+          mediaType: file.mediaType,
           integrity: file.integrity,
         },
         context,
@@ -482,6 +518,11 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
         }
         if (!texture) {
           throw new Error(`Could not register texture: ${asset.key}`);
+        }
+        // The image/atlas work is complete, so deferred cache commits may
+        // transfer their origin buffers without competing with decoding.
+        for (const body of bodies) {
+          await body.commitCache?.();
         }
         let released = false;
         const textureKey = key;

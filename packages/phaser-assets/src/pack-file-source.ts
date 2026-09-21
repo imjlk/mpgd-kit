@@ -1,3 +1,8 @@
+import {
+  commitCacheOf,
+  readPhaserPackArtifactWithCommit,
+  type PhaserPackPersistentCacheOptions,
+} from './pack-cache.js';
 import { fetchPackFile } from './pack-fetch.js';
 /** Optional verification of encoded file bytes, before browser decoding. */
 export interface PhaserPackFileIntegrity {
@@ -14,6 +19,8 @@ export interface PhaserPackFileRequest {
   readonly role: PhaserPackFileRole;
   /** The original manifest file reference, before any location resolution. */
   readonly url: string;
+  /** Optional manifest or catalog hint used to preserve Blob.type on cache hits. */
+  readonly mediaType?: string | undefined;
   /** Verification the loader applies to the returned bytes after reading. */
   readonly integrity?: PhaserPackFileIntegrity | undefined;
 }
@@ -38,6 +45,8 @@ export interface PhaserPackFileContext {
 export interface PhaserPackFileBody {
   /** Encoded file body as the platform delivered it to the application. */
   readonly bytes: Blob;
+  /** Optional persistence commit, called after the loader verifies the body. */
+  readonly commitCache?: () => Promise<void>;
   /** Return the bytes after decoding/parsing; registered textures survive. */
   release(): void;
 }
@@ -69,8 +78,12 @@ export function createPackUrlFileSource(transport: {
   readonly requestTimeoutMs: number;
   readonly requestCache: RequestCache;
   readonly maxFileBytes: number;
+  /** Optional verified persistent storage for files with integrity metadata. */
+  readonly persistentCache?: PhaserPackPersistentCacheOptions | undefined;
 }): PhaserPackFileSource {
-  const { resolveURL, retries, requestTimeoutMs, requestCache, maxFileBytes } = transport;
+  const {
+    resolveURL, retries, requestTimeoutMs, requestCache, maxFileBytes, persistentCache,
+  } = transport;
   return {
     async open(request, context) {
       // Ownership is just the resolved request; the body transfer waits for
@@ -82,32 +95,69 @@ export function createPackUrlFileSource(transport: {
             throw new Error('Pack file body was already read');
           }
           readLatched = true;
-          let releaseTransfer: (() => void) | undefined;
           try {
-            releaseTransfer = await context.budgets.transfers.acquire(context.signal);
-            const blob = await fetchPackFile(
-              resolveURL(request.url, {
-                packId: request.packId, revision: request.revision,
-              }),
-              {
-                signal: context.signal,
-                retries,
-                requestTimeoutMs,
-                maxFileBytes,
-                cache: requestCache,
-                declaredBytes: request.integrity?.bytes,
+            const fetchBlob = async (): Promise<Blob> => {
+              const releaseTransfer = await context.budgets.transfers.acquire(context.signal);
+              try {
+                return await fetchPackFile(
+                  resolveURL(request.url, {
+                    packId: request.packId, revision: request.revision,
+                  }),
+                  {
+                    signal: context.signal,
+                    retries,
+                    requestTimeoutMs,
+                    maxFileBytes,
+                    cache: requestCache,
+                    declaredBytes: request.integrity?.bytes,
+                  },
+                );
+              } finally {
+                releaseTransfer();
+              }
+            };
+            if (persistentCache === undefined || request.integrity === undefined
+              || request.integrity.bytes > maxFileBytes) {
+              return {
+                bytes: await fetchBlob(), release() {
+                },
+              };
+            }
+            // Cache hits cannot observe the HTTP content type; prefer a
+            // manifest/catalog media type threaded through the request.
+            // Unknown texture extensions intentionally fall back to
+            // application/octet-stream on hits because the cache stores only
+            // bytes and the authoritative loader sniffs the content.
+            const originType = request.mediaType ?? 'application/octet-stream';
+            let originBlob: Blob | undefined;
+            const read = await readPhaserPackArtifactWithCommit({
+              persistentCache,
+              integrity: request.integrity,
+              artifact: {
+                kind: 'file',
+                packId: request.packId,
+                revision: request.revision,
+                assetKey: request.assetKey,
+                role: request.role,
               },
-            );
-            // Fetched Blobs need no source-side storage, so release is a no-op.
+              signal: context.signal,
+              commitSignal: context.signal,
+              fetchOrigin: async (): Promise<ArrayBuffer> => {
+                originBlob = await fetchBlob();
+                return originBlob.arrayBuffer();
+              },
+            });
+            const bytes = read.bytes;
+            // Reuse the fetched Blob on an origin miss; only cache hits need
+            // a reconstructed Blob from the stored bytes.
             return {
-              bytes: blob, release() {
+              bytes: originBlob ?? new Blob([bytes], { type: originType }), release() {
               },
+              ...commitCacheOf(read),
             };
           } catch (error) {
             readLatched = false;
             throw error;
-          } finally {
-            releaseTransfer?.();
           }
         },
         close() {

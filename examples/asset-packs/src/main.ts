@@ -7,10 +7,18 @@ import {
   readCappedDeliveryBody,
   type PhaserPackDelivery,
   type PhaserPackDeliveryErrorDetails,
+  type PhaserPackCacheEvent,
+  type PhaserPackCacheUsage,
   type PhaserPackDeliveryEvent,
   type PhaserPackPreparationPlan,
 } from '@mpgd/phaser-assets/delivery';
-import { ArtifactCache, type WarmReport } from './artifact-cache.js';
+import {
+  ArtifactCache,
+  artifactCacheIdentity,
+  type WarmDiagnostic,
+  type WarmEntry,
+  type WarmReport,
+} from './artifact-cache.js';
 import type { DeliveryPack } from './packs.js';
 import './style.css';
 
@@ -55,8 +63,8 @@ const params = new URLSearchParams(location.search);
 /** One HTTP cache policy for the page: the documented http-cache=1 flag
  * covers the files loader, the manifest fetch and delivery requests. */
 const requestCache: 'default' | 'no-store' = params.has('http-cache') ? 'default' : 'no-store';
-/** Private experiment flag: persistent artifact reuse through IndexedDB
- * and managed Blob URLs (see artifact-cache.ts). Off by default; the
+/** Example flag: persistent artifact reuse through the public cache boundary
+ * and the IndexedDB adapter in artifact-cache.ts. Off by default; the
  * acceptance runs it explicitly. */
 const persistentCache = params.has('idcache');
 const deliveryParam = params.get('delivery');
@@ -149,16 +157,66 @@ const model = {
   lastPrepareMs: null as number | null,
   observed,
   plan: null as PhaserPackPreparationPlan | null,
-  cache: null as { report: WarmReport } | { error: string } | null,
+  cache: null as { report: WarmReport } | null,
 };
+
+let cacheDiagnostics: WarmDiagnostic[] = [];
+
+const cacheReport = (): WarmReport => {
+  const entries = [...cacheEntries.values()];
+  return {
+    entries,
+    hits: entries.filter((entry) => entry.outcome === 'cache-hit').length,
+    downloaded: entries.filter((entry) => entry.outcome === 'origin-downloaded').length,
+    failures: entries.filter((entry) => entry.outcome === 'origin-store-failed').length,
+    diagnostics: cacheDiagnostics,
+  };
+};
+
+const resetCacheReport = (): void => {
+  cacheEntries = new Map<string, WarmEntry>();
+  cacheDiagnostics = [];
+  model.cache = null;
+};
+
+/** Adapt the public acquisition observations to the sample's compact
+ * evidence model. The package reports download/store-failure events, so the
+ * sample never infers a successful store from an origin-download event. */
+const observeCacheEvent = (event: PhaserPackCacheEvent): void => {
+  const identity = artifactCacheIdentity(event.key);
+  const previous = cacheEntries.get(identity);
+  const entry: WarmEntry = previous ?? {
+    artifactLabel: `${event.kind}:${event.packId}/${event.assetKey ?? event.role ?? 'artifact'}`,
+    identity,
+    outcome: 'origin-downloaded',
+    bodyBytes: event.key.bytes,
+  };
+  if (!['cache-hit', 'cache-store-failed', 'origin-download'].includes(event.outcome)) {
+    cacheDiagnostics.push({ identity, outcome: event.outcome });
+  }
+  if (event.outcome === 'cache-hit') {
+    cacheEntries.set(identity, { ...entry, outcome: 'cache-hit' });
+  } else if (event.outcome === 'cache-store-failed') {
+    cacheEntries.set(identity, { ...entry, outcome: 'origin-store-failed' });
+  } else if (event.outcome === 'origin-download') {
+    cacheEntries.set(identity, { ...entry, outcome: 'origin-downloaded' });
+  } else {
+    // Diagnostic cache failures do not prove that an origin download or
+    // store happened. Keep the previous report, if any, unchanged.
+    return;
+  }
+  model.cache = { report: cacheReport() };
+  renderStatus();
+};
+
 let packs: ReturnType<typeof createPhaserAssetPackLoader> | undefined;
 let delivery: PhaserPackDelivery | undefined;
 let unsubscribeDelivery: (() => void) | undefined;
-/** Blob URL bridge for the persistent-reuse experiment; opened during
- * delivery boot when idcache=1. Manifest metadata for warm inputs. */
+const PERSISTENT_CACHE_NAMESPACE = 'asset-pack-experiment';
+/** Example storage opened during delivery boot when idcache=1. The public
+ * delivery/loader APIs perform the actual read-through work. */
 let artifactCache: ArtifactCache | undefined;
-let artifactMeta = new Map<string, { sha256: string; bytes: number; mediaType: string }>();
-let deliveryOriginBase = '';
+let cacheEntries = new Map<string, WarmEntry>();
 let pending: AbortController | undefined;
 let sequence = 0;
 let virtualTime = 0;
@@ -195,7 +253,8 @@ class Board extends Phaser.Scene {
       delivery = undefined;
       packs = undefined;
       resetObserved();
-      Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null, cache: null });
+      resetCacheReport();
+      Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null });
       renderStatus();
     });
     this.showEmpty();
@@ -398,33 +457,7 @@ async function runEnter(theme: Theme, ticket: number, controller: AbortControlle
     if (delivery === undefined) {
       lease = await packs.acquire(theme, acquireOptions);
     } else {
-      // Persistent-reuse experiment: warm the cache in the async phase
-      // (IndexedDB reads, verification, bounded origin acquisition) so
-      // the delivery's resolveURL only ever maps finished Blob URLs.
-      // A warm failure degrades to the delivery's own origin fetch —
-      // local acquisition and delivery outcomes stay separate.
-      if (artifactCache !== undefined && model.plan !== null) {
-        artifactCache.revokeAll();
-        const encodedPathOf = (path: string): string =>
-          path.split('/').map((segment) => encodeURIComponent(segment)).join('/');
-        const warmList = model.plan.coldArtifacts.flatMap((artifact) => {
-          const meta = artifactMeta.get(artifact.path);
-          if (meta === undefined) return [];
-          const encodedPath = encodedPathOf(artifact.path);
-          return [{
-            encodedPath,
-            sha256: meta.sha256,
-            bytes: meta.bytes,
-            mediaType: meta.mediaType,
-            originUrl: new URL(encodedPath, deliveryOriginBase).href,
-          }];
-        });
-        model.cache = await artifactCache.warm(warmList, controller.signal).then(
-          (report): { report: WarmReport } => ({ report }),
-          (error: unknown): { error: string } => ({ error: String(error) }),
-        );
-        renderStatus();
-      }
+      resetCacheReport();
       // Pack preparation precedes the loader: staging (download + worker
       // decode) is returned as soon as the loader has decoded the files;
       // registered textures survive the staging release.
@@ -470,8 +503,10 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
   delivery = undefined;
   packs = undefined;
   resetObserved();
-  Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null, cache: null });
+  resetCacheReport();
+  Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null });
   renderStatus();
+  let bootCache: ArtifactCache | undefined;
   try {
     const stagingParam = Number(params.get('staging') ?? DELIVERY_STAGING_BUDGET_BYTES);
     // The delivery manifest is application data: the sample fetches it
@@ -504,64 +539,44 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
     } catch (error) {
       throw new Error(`Delivery manifest is not valid JSON: ${errorText(error)}`);
     }
-    deliveryOriginBase = manifestUrl;
     if (persistentCache) {
-      // The experiment bridge opens here; resolveURL below performs only
-      // synchronous Blob URL lookups from completed warm phases.
+      // The example supplies storage; the public delivery performs reads and
+      // writes at the original archive/file acquisition boundary.
       const opened = await ArtifactCache.open();
       if (opened === 'unavailable') {
-        artifactCache = undefined;
+        bootCache = undefined;
       } else {
-        artifactCache = opened;
+        bootCache = opened;
       }
     }
     const booted = createPhaserPackDelivery(manifestDocument, {
-      ...(artifactCache === undefined
-        ? { baseUrl: manifestUrl }
-        : {
-          resolveURL: (path): string => artifactCache?.resolve(path)
-            ?? new URL(path, manifestUrl).href,
-        }),
+      baseUrl: manifestUrl,
       createWorker: (): Worker => new Worker(new URL('./archive-decode-worker.ts', import.meta.url), { type: 'module' }),
       stagingBudgetBytes: stagingParam,
       prepareTimeoutMs: DELIVERY_PREPARE_TIMEOUT_MS,
       requestTimeoutMs: DELIVERY_REQUEST_TIMEOUT_MS,
       maxFileBytes: DELIVERY_MAX_FILE_BYTES,
       requestCache,
+      ...(bootCache === undefined ? {} : {
+        persistentCache: {
+          storage: bootCache,
+          namespace: PERSISTENT_CACHE_NAMESPACE,
+          onEvent: observeCacheEvent,
+        },
+      }),
     });
     if (!bootStillCurrent()) {
       // A stale boot must not leak its cache connection either.
-      artifactCache?.close();
-      artifactCache = undefined;
+      bootCache?.close();
+      bootCache = undefined;
       booted.dispose();
       return;
-    }
-    // Warm inputs are extracted only after the delivery validated the
-    // manifest: the cast below reads a shape the public API already
-    // accepted, and an invalid manifest failed above with its own error.
-    {
-      const manifestPacks = (manifestDocument as {
-        packs: readonly {
-          archive?: { path: string; bytes: number; sha256: string };
-          delivery: 'files' | 'zip';
-          assets: readonly { files: readonly { path: string; bytes: number; sha256: string; mediaType: string }[] }[];
-        }[];
-      }).packs;
-      artifactMeta = new Map(manifestPacks.flatMap((pack) => {
-        if (pack.delivery === 'zip' && pack.archive !== undefined) {
-          return [[pack.archive.path, {
-            sha256: pack.archive.sha256, bytes: pack.archive.bytes, mediaType: 'application/zip',
-          }] as const];
-        }
-        return pack.assets.flatMap((asset) => asset.files.map((file) => [
-          file.path,
-          { sha256: file.sha256, bytes: file.bytes, mediaType: file.mediaType },
-        ] as const));
-      }));
     }
     // createPhaserAssetPackLoader is synchronous: the ticket cannot change
     // between the check above and the publish below.
     delivery = booted;
+    artifactCache = bootCache;
+    bootCache = undefined;
     unsubscribeDelivery = booted.subscribe(onDeliveryEvent);
     packs = createPhaserAssetPackLoader(scene, booted.catalog, {
       ...loaderOptions,
@@ -569,6 +584,13 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
     });
     model.phase = 'idle';
   } catch (error) {
+    // A boot-local connection is never owned by a published delivery.
+    bootCache?.close();
+    bootCache = undefined;
+    if (bootStillCurrent()) {
+      artifactCache?.close();
+      artifactCache = undefined;
+    }
     if (!bootStillCurrent()) return;
     model.phase = 'error';
     if (error instanceof PhaserPackDeliveryError) {
@@ -603,11 +625,11 @@ function wireSampleControls(): void {
     ++sequence;
     pending?.abort();
     pending = undefined;
+    resetCacheReport();
     if (!packs) return;
-    artifactCache?.revokeAll();
     board.clear();
     board.showEmpty();
-    Object.assign(model, { phase: 'idle', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null, cache: null });
+    Object.assign(model, { phase: 'idle', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null });
     renderStatus();
   };
 }
@@ -620,8 +642,9 @@ function wireSampleControls(): void {
       /** Experiment-only acceptance hooks (private example, not product). */
       __artifact_cache_faults: () => Record<string, boolean>;
       __artifact_cache_set_fault: (name: string) => void;
-      __artifact_cache_usage: () => Promise<{ records: number; totalBytes: number }>;
+      __artifact_cache_usage: () => Promise<PhaserPackCacheUsage>;
       __artifact_cache_delete: (identity: string) => Promise<boolean>;
+      __artifact_cache_clear: () => Promise<void>;
       __artifact_cache_present: () => boolean;
     }
 }
@@ -640,10 +663,12 @@ function wireWindowHooks(): void {
       (artifactCache.faults as Record<string, boolean>)[name] = true;
     }
   };
-  window.__artifact_cache_usage = (): Promise<{ records: number; totalBytes: number }> =>
-    artifactCache?.usage() ?? Promise.resolve({ records: -1, totalBytes: -1 });
+  window.__artifact_cache_usage = (): Promise<PhaserPackCacheUsage> =>
+    artifactCache?.usage(PERSISTENT_CACHE_NAMESPACE) ?? Promise.resolve({ records: -1, totalBytes: -1 });
   window.__artifact_cache_delete = (identity: string): Promise<boolean> =>
     artifactCache?.deleteRecord(identity) ?? Promise.resolve(false);
+  window.__artifact_cache_clear = (): Promise<void> =>
+    artifactCache?.clear(PERSISTENT_CACHE_NAMESPACE) ?? Promise.resolve();
   window.__artifact_cache_present = (): boolean => artifactCache !== undefined;
   window.advanceTime = (milliseconds) => {
   bootedGame().loop.stop();

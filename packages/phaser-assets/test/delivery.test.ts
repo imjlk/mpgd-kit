@@ -11,6 +11,7 @@ import {
   readCappedDeliveryBody,
   type PhaserPackDeliveryEvent,
 } from '../src/delivery.js';
+import type { PhaserPackCacheEvent, PhaserPackPersistentCache } from '../src/pack-cache.js';
 import type { PhaserPackFileRequest } from '../src/pack-file-source.js';
 import { buildZipV1Fixture, type ZipV1FixtureEntry } from '../src/test-utils.js';
 
@@ -378,6 +379,81 @@ describe('phaser pack delivery', () => {
       bytes: pngBytes.byteLength, sha256: sha256(pngBytes),
     });
     delivery.dispose();
+  });
+
+  it('reuses a verified ZIP archive through the public persistent cache boundary', async () => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const zip = zipFixture();
+    const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'zip', zip }]);
+    for (const [path, file] of packFiles) {
+      origin.files.set(path, file);
+    }
+    const records = new Map<string, ArrayBuffer>();
+    const storage: PhaserPackPersistentCache = {
+      async get(key) {
+        return records.get(`${key.namespace}|${key.sha256}|${key.bytes}`)?.slice(0);
+      },
+      async put(key, bytes) {
+        records.set(`${key.namespace}|${key.sha256}|${key.bytes}`, bytes.slice(0));
+      },
+      async delete(key) {
+        return records.delete(`${key.namespace}|${key.sha256}|${key.bytes}`);
+      },
+      async clear(namespace) {
+        for (const key of records.keys()) {
+          if (key.startsWith(`${namespace}|`)) {
+            records.delete(key);
+          }
+        }
+      },
+      async usage(namespace) {
+        const owned = [...records.entries()].filter(([key]) => key.startsWith(`${namespace}|`));
+        return {
+          records: owned.length,
+          totalBytes: owned.reduce((sum, [, value]) => sum + value.byteLength, 0),
+        };
+      },
+    };
+    const firstEvents: PhaserPackCacheEvent[] = [];
+    const first = createPhaserPackDelivery(manifest, {
+      baseUrl: origin.url,
+      createWorker: createFakeWorkerFactory().factory,
+      persistentCache: {
+        storage,
+        namespace: 'delivery-test',
+        onEvent: (event: PhaserPackCacheEvent): void => {
+          firstEvents.push(event);
+        },
+      },
+    });
+    const firstPrepared = await first.prepare('solo');
+    firstPrepared.release();
+    expect(first.snapshot().archiveRequests).toBe(1);
+    expect(firstEvents.map((event) => event.outcome)).toEqual(['origin-download']);
+    first.dispose();
+
+    const secondEvents: PhaserPackCacheEvent[] = [];
+    const second = createPhaserPackDelivery(manifest, {
+      baseUrl: origin.url,
+      createWorker: createFakeWorkerFactory().factory,
+      persistentCache: {
+        storage,
+        namespace: 'delivery-test',
+        onEvent: (event: PhaserPackCacheEvent): void => {
+          secondEvents.push(event);
+        },
+      },
+    });
+    const secondPrepared = await second.prepare('solo');
+    secondPrepared.release();
+    expect(second.snapshot().archiveRequests).toBe(0);
+    expect(secondEvents.map((event) => event.outcome)).toEqual(['cache-hit']);
+    expect(await storage.usage('delivery-test')).toEqual({
+      records: 1,
+      totalBytes: zip.archive.byteLength,
+    });
+    second.dispose();
   });
 
   it('keeps the verification basis after caller manifest mutation', async () => {

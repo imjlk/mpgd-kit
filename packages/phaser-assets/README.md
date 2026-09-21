@@ -189,6 +189,44 @@ HTTP content decoding. `Content-Encoding` is never re-decoded in game code, and
 `Content-Length` is never used as size or verification evidence; actual network
 transfer can be smaller or larger than the buffered body.
 
+## Optional persistent cache
+
+Applications that have durable storage can inject it at the original byte
+acquisition boundary. The same option is accepted by the `/packs` loader and
+the `/delivery` API:
+
+```ts
+import {
+  createPhaserPackCacheKey,
+  type PhaserPackPersistentCache,
+} from '@mpgd/phaser-assets/packs';
+
+const storage: PhaserPackPersistentCache = /* IndexedDB, filesystem bridge, ... */;
+const persistentCache = {
+  storage,
+  namespace: 'my-game-assets-v1',
+  onEvent: (event) => console.info(event.outcome, event.key),
+};
+
+const packs = createPhaserAssetPackLoader(scene, catalog, { persistentCache });
+// Or: createPhaserPackDelivery(manifest, { baseUrl, persistentCache });
+```
+
+The key is `namespace + SHA-256 digest + encoded byte count`; URLs, CDN hosts
+and signed query strings are not identities. Only files and ZIP archives with
+manifest integrity metadata participate. A cache hit is still revalidated and
+then passed through the existing loader or ZIP decoder, so it does not mean
+that decoding or texture preparation is complete. Read and write failures fall
+back to the origin; caller cancellation and preparation deadlines still abort
+the operation. Cache events distinguish hits, origin downloads, provider read
+failures, corrupt records, and store failures without exposing URLs.
+
+Storage management remains application-owned:
+`await storage.usage(namespace)`, `await storage.delete(createPhaserPackCacheKey(namespace, integrity))`
+and `await storage.clear(namespace)` provide usage, entry deletion and
+namespace cleanup. The package does not impose IndexedDB, LRU, prefetch or
+platform-filesystem policy.
+
 ## Pack delivery format
 
 The `/pack-format` entrypoint is the pure, dependency-free contract shared by
