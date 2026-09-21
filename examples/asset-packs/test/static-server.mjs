@@ -5,12 +5,19 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
 /** Loopback-only test origin. Fault controls stay in-process, never in HTTP routes. */
-export async function staticServer(directory, { cors = false, port = 0 } = {}) {
+export async function staticServer(directory, { cors = false, port = 0, gate } = {}) {
   await mkdir(directory, { recursive: true });
   const root = await realpath(directory);
   const requests = [];
   const faults = new Map();
   const delays = new Map();
+  let gateReleased = gate === undefined;
+  const gateWaiters = new Set();
+  const releaseGate = () => {
+    gateReleased = true;
+    for (const resolveGate of gateWaiters) resolveGate();
+    gateWaiters.clear();
+  };
   const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
   const server = createServer(async (request, response) => {
     if (cors) response.setHeader('Access-Control-Allow-Origin', '*');
@@ -18,6 +25,18 @@ export async function staticServer(directory, { cors = false, port = 0 } = {}) {
     try {
       const path = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
       requests.push(path);
+      if (gate?.releasePath === path) {
+        releaseGate();
+        response.writeHead(204).end();
+        return;
+      }
+      if (!gateReleased && gate?.prefix !== undefined && path.startsWith(gate.prefix)) {
+        await Promise.race([
+          new Promise((resolveGate) => gateWaiters.add(resolveGate)),
+          delay(10_000),
+        ]);
+        if (response.destroyed) return;
+      }
       if (delays.has(path)) await delay(delays.get(path));
       if (response.destroyed) return;
       const fault = faults.get(path);
@@ -43,7 +62,7 @@ export async function staticServer(directory, { cors = false, port = 0 } = {}) {
   await new Promise((yes, no) => { server.once('error', no); server.listen(port, '127.0.0.1', yes); });
   return {
     url: `http://127.0.0.1:${server.address().port}/`, requests, faults, delays,
-    async close() { server.closeAllConnections(); await new Promise((yes, no) => server.close((error) => error ? no(error) : yes())); },
+    async close() { releaseGate(); server.closeAllConnections(); await new Promise((yes, no) => server.close((error) => error ? no(error) : yes())); },
   };
 }
 

@@ -1,14 +1,13 @@
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { realpath } from 'node:fs/promises';
-import { extname, join, resolve, sep } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 import { chromium } from 'playwright';
+
+import { staticServer } from './static-server.mjs';
 
 if (process.platform === 'win32') {
   throw new Error('The packed consumer test requires a Unix environment (macOS, Linux, or WSL).');
@@ -32,6 +31,7 @@ function run(command, args, cwd, timeout = 180_000) {
     cwd,
     encoding: 'utf8',
     timeout,
+    maxBuffer: 16 * 1024 * 1024,
     env: { ...process.env, npm_config_update_notifier: 'false' },
   });
   if (result.error) {
@@ -73,77 +73,14 @@ function verifyDelivery(consumer, cliBin, outputName, expectedStatus) {
     '--json',
   ]);
   assert.equal(result.status, expectedStatus, `${result.stdout}\n${result.stderr}`);
-  const report = JSON.parse(result.stdout);
+  let report;
+  try {
+    report = JSON.parse(result.stdout);
+  } catch (error) {
+    throw new Error(`verify-delivery emitted non-JSON stdout: ${result.stdout}\n${result.stderr}`, { cause: error });
+  }
   assert.equal(typeof report.ok, 'boolean');
   return report;
-}
-
-function createConsumerServer(directory) {
-  let slowZipArtifacts = true;
-  const waiters = new Set();
-  const types = {
-    '.css': 'text/css',
-    '.html': 'text/html',
-    '.js': 'text/javascript',
-    '.json': 'application/json',
-    '.map': 'application/json',
-    '.png': 'image/png',
-    '.svg': 'image/svg+xml',
-    '.wasm': 'application/wasm',
-  };
-  let root;
-  const server = createServer(async (request, response) => {
-    let path;
-    try {
-      path = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
-    } catch {
-      response.writeHead(400).end();
-      return;
-    }
-    if (path === '/__packed-consumer/release') {
-      slowZipArtifacts = false;
-      for (const resolveWaiter of waiters) resolveWaiter();
-      waiters.clear();
-      response.writeHead(204).end();
-      return;
-    }
-    if (slowZipArtifacts && path.startsWith('/delivery/zip/packs/')) {
-      await Promise.race([
-        new Promise((resolveWaiter) => waiters.add(resolveWaiter)),
-        delay(10_000),
-      ]);
-      if (response.destroyed) return;
-    }
-    try {
-      const candidate = resolve(root, `.${path === '/' ? '/index.html' : path}`);
-      if (candidate !== root && !candidate.startsWith(root + sep)) {
-        response.writeHead(403).end();
-        return;
-      }
-      const bytes = readFileSync(candidate);
-      response.setHeader('Content-Type', types[extname(candidate)] ?? 'application/octet-stream');
-      response.setHeader('Cache-Control', 'no-store');
-      response.writeHead(200).end(request.method === 'HEAD' ? undefined : bytes);
-    } catch {
-      if (!response.destroyed) response.writeHead(404).end('Not found');
-    }
-  });
-  return {
-    async listen() {
-      root = await realpath(directory);
-      await new Promise((yes, no) => {
-        server.once('error', no);
-        server.listen(0, '127.0.0.1', yes);
-      });
-      return `http://127.0.0.1:${server.address().port}/`;
-    },
-    async close() {
-      for (const resolveWaiter of waiters) resolveWaiter();
-      waiters.clear();
-      server.closeAllConnections();
-      await new Promise((yes, no) => server.close((error) => error ? no(error) : yes()));
-    },
-  };
 }
 
 function appSource() {
@@ -283,6 +220,7 @@ async function runBrowser(serverUrl) {
         assert.deepEqual(result.frames, { pilot: 4, ground: 2 });
         assert.ok(result.archiveRequests > 0, `${scenario.mode} never fetched a ZIP archive`);
         if (scenario.mode === 'mixed') assert.ok(result.fileRequests > 0, 'mixed mode never fetched a loose file');
+        else assert.equal(result.fileRequests, 0, 'zip mode fetched a loose file outside the archives');
         assert.equal(errors.length, 0, `${scenario.mode} packaged browser console errors: ${errors.join('\n')}`);
         completed = true;
       } catch (error) {
@@ -308,11 +246,14 @@ try {
   const assetsTarball = packageTarball('packages/phaser-assets');
   const examplePackage = JSON.parse(readFileSync(join(exampleRoot, 'package.json'), 'utf8'));
   const sourceCliPackage = JSON.parse(readFileSync(join(repoRoot, 'packages/cli/package.json'), 'utf8'));
-  const pinnedCliDependencies = Object.keys(sourceCliPackage.dependencies)
-    .filter((name) => name !== '@mpgd/phaser-assets')
-    .map((name) => {
-      const dependencyPackage = JSON.parse(readFileSync(join(repoRoot, 'packages/cli/node_modules', name, 'package.json'), 'utf8'));
-      return `${name}@${dependencyPackage.version}`;
+  const pinnedCliDependencies = Object.entries(sourceCliPackage.dependencies)
+    .filter(([, spec]) => !spec.startsWith('workspace:'))
+    .map(([name]) => {
+      const manifestPath = join(repoRoot, 'packages/cli/node_modules', name, 'package.json');
+      if (!existsSync(manifestPath)) {
+        throw new Error(`Missing ${manifestPath}; run a full 'pnpm install' at the repo root before test/packed-consumer.mjs.`);
+      }
+      return `${name}@${JSON.parse(readFileSync(manifestPath, 'utf8')).version}`;
     });
   cpSync(join(exampleRoot, 'asset-source'), join(consumerRoot, 'src'), { recursive: true });
   writeJson(join(consumerRoot, 'package.json'), {
@@ -340,7 +281,7 @@ try {
   assert.ok(!JSON.stringify(cliPackage).includes('workspace:'), 'CLI tarball retained a workspace dependency');
   assert.ok(!JSON.stringify(assetsPackage).includes('workspace:'), 'phaser-assets tarball retained a workspace dependency');
 
-  const cliBin = join(consumerRoot, 'node_modules/@mpgd/cli/dist/bin.js');
+  const cliBin = join(consumerRoot, 'node_modules/@mpgd/cli', cliPackage.bin?.mpgd ?? './dist/bin.js');
   for (const mode of ['zip', 'mixed']) {
     const built = runInstalledCli(consumerRoot, cliBin, [
       'assets',
@@ -358,7 +299,9 @@ try {
   const corruptRoot = join(consumerRoot, 'out-corrupt');
   cpSync(join(consumerRoot, 'out-zip'), corruptRoot, { recursive: true });
   const manifest = JSON.parse(readFileSync(join(corruptRoot, 'asset-pack-delivery.json'), 'utf8'));
-  const archive = manifest.packs.find((pack) => pack.delivery === 'zip').archive.path;
+  const zipPack = manifest.packs.find((pack) => pack.delivery === 'zip');
+  assert.ok(zipPack?.archive, 'delivery manifest has no zip pack with an archive');
+  const archive = zipPack.archive.path;
   const corrupted = Buffer.from(readFileSync(join(corruptRoot, archive)));
   corrupted[Math.floor(corrupted.length / 2)] ^= 0xff;
   writeFileSync(join(corruptRoot, archive), corrupted);
@@ -381,8 +324,10 @@ try {
   ], webRoot);
   assert.equal(webBuild.status, 0, `consumer Vite build failed: ${webBuild.stdout}\n${webBuild.stderr}`);
   assert.ok(existsSync(join(webDist, 'index.html')));
-  const server = createConsumerServer(webDist);
-  const serverUrl = await server.listen();
+  const server = await staticServer(webDist, {
+    gate: { prefix: '/delivery/zip/packs/', releasePath: '/__packed-consumer/release' },
+  });
+  const serverUrl = server.url;
   try {
     await runBrowser(serverUrl);
   } finally {
