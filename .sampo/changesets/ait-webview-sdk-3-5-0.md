@@ -1,4 +1,5 @@
 ---
+npm/@mpgd/adapter-ait: patch
 npm/@mpgd/cli: patch
 ---
 

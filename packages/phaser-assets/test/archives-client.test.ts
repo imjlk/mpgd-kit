@@ -2531,9 +2531,16 @@ describe('bounded ZIP decode client', () => {
       const zip = fixture();
       let listener: ((event: MessageEvent<ArchiveWorkerResponse>) => void) | undefined;
       const posted: ArchiveWorkerRequest[] = [];
+      let resolveDecodePosted: (() => void) | undefined;
+      const decodePosted = new Promise<void>((resolve) => {
+        resolveDecodePosted = resolve;
+      });
       const workerLike: ZipDecodeWorkerLike = {
         postMessage(message): void {
           posted.push(message);
+          if (message.type === 'decode') {
+            resolveDecodePosted?.();
+          }
           if (message.type === 'cancel') {
             // A synchronous in-process answer to the cooperative cancel.
             listener?.({
@@ -2563,10 +2570,7 @@ describe('bounded ZIP decode client', () => {
         limits: { ...defaultArchiveWorkerLimits(), decodeDeadlineMs: 1000 },
       });
       const iterator = job.entries[Symbol.asyncIterator]();
-      await vi.advanceTimersByTimeAsync(0);
-      for (let attempt = 0; attempt < 50 && !posted.some((request) => request.type === 'decode'); attempt++) {
-        await vi.advanceTimersByTimeAsync(0);
-      }
+      await decodePosted;
       expect(posted.some((request) => request.type === 'decode')).toBe(true);
       listener?.({
         data: {
