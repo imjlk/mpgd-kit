@@ -31,9 +31,14 @@ jobs:
         run: |
           set -euo pipefail
 
+          run_prepared=true
           if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            # Pull requests keep the focused checks below. The prepared smoke
+            # suite is reserved for main pushes and high-risk source changes.
+            run_prepared=false
             if ! base_sha="$(git merge-base "origin/${PR_BASE_REF}" HEAD)"; then
               echo "enabled=false" >> "$GITHUB_OUTPUT"
+              echo "run_prepared=true" >> "$GITHUB_OUTPUT"
               echo "Could not resolve merge base against origin/${PR_BASE_REF}; running full validation."
               exit 0
             fi
@@ -43,6 +48,7 @@ jobs:
             # is disabled and would fail on private repositories.
             if ! base_sha="$(git merge-base origin/main HEAD)"; then
               echo "enabled=false" >> "$GITHUB_OUTPUT"
+              echo "run_prepared=true" >> "$GITHUB_OUTPUT"
               echo "Could not resolve merge base against origin/main; running full validation."
               exit 0
             fi
@@ -52,9 +58,11 @@ jobs:
           metadata_only=true
           if ((${#changed_files[@]} == 0)); then
             metadata_only=false
+            run_prepared=true
           fi
 
           for path in "${changed_files[@]}"; do
+            version_only=false
             case "${path}" in
               .sampo/changesets/*.md|CHANGELOG.md|*/CHANGELOG.md)
                 ;;
@@ -67,6 +75,8 @@ jobs:
                   non_version_lines="$(printf '%s\n' "${package_diff}" | grep -Ev '^[+-]  "version"[[:space:]]*:[[:space:]]*"[^"]*"[[:space:]]*,?[[:space:]]*$' || true)"
                   if [[ -n "${non_version_lines}" ]]; then
                     metadata_only=false
+                  else
+                    version_only=true
                   fi
                 fi
                 ;;
@@ -74,10 +84,29 @@ jobs:
                 metadata_only=false
                 ;;
             esac
+
+            if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+              case "${path}" in
+                *.md|.github/*)
+                  ;;
+                package.json|*/package.json)
+                  if [[ "${version_only}" != "true" ]]; then
+                    run_prepared=true
+                  fi
+                  ;;
+                examples/asset-packs/asset-source/*|examples/asset-packs/delivery-configs/*)
+                  ;;
+                *)
+                  run_prepared=true
+                  ;;
+              esac
+            fi
           done
 
           echo "enabled=${metadata_only}" >> "$GITHUB_OUTPUT"
+          echo "run_prepared=${run_prepared}" >> "$GITHUB_OUTPUT"
           echo "Metadata-only validation: ${metadata_only}"
+          echo "Prepared smoke suite: ${run_prepared}"
           printf 'Changed files:\n%s\n' "${changed_files[*]:-<none>}"
 
       - uses: pnpm/action-setup@v6
@@ -136,14 +165,6 @@ jobs:
         if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
         timeout-minutes: 10
         run: pnpm --dir examples/asset-packs test:packed-consumer
-      - name: Upload asset pack browser evidence
-        if: ${{ failure() && steps.release-pr-meta.outputs.enabled != 'true' }}
-        uses: actions/upload-artifact@v6
-        with:
-          name: asset-pack-browser-evidence
-          path: examples/asset-packs/artifacts/browser/
-          if-no-files-found: ignore
-          retention-days: 7
       - run: pnpm smoke:apps-in-toss-production-evidence:prepared
         if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - run: tar -czf "$RUNNER_TEMP/package-dist.tgz" packages/*/dist adapters/*/dist native-plugins/*/dist
@@ -153,7 +174,7 @@ jobs:
         with:
           name: package-dist-ci
           path: ${{ runner.temp }}/package-dist.tgz
-          retention-days: 1
+          retention-days: 7
       - run: pnpm graph:preflight
         if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - run: pnpm pack:packages:prepared
@@ -179,7 +200,16 @@ jobs:
       - run: pnpm smoke:target verse8
         if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - run: pnpm test:prepared
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
+
+      - name: Upload asset pack browser evidence
+        if: ${{ failure() && steps.release-pr-meta.outputs.enabled != 'true' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: asset-pack-browser-evidence
+          path: examples/asset-packs/artifacts/browser/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - uses: actions/upload-artifact@v6
         if: ${{ failure() && steps.release-pr-meta.outputs.enabled != 'true' }}
