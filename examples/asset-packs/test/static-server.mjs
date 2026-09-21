@@ -4,6 +4,8 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
+const GATE_TIMEOUT_MS = 10_000;
+
 /** Loopback-only test origin. Fault controls stay in-process, never in HTTP routes. */
 export async function staticServer(directory, { cors = false, port = 0, gate } = {}) {
   await mkdir(directory, { recursive: true });
@@ -31,10 +33,22 @@ export async function staticServer(directory, { cors = false, port = 0, gate } =
         return;
       }
       if (!gateReleased && gate?.prefix !== undefined && path.startsWith(gate.prefix)) {
-        await Promise.race([
-          new Promise((resolveGate) => gateWaiters.add(resolveGate)),
-          delay(10_000),
-        ]);
+        let openGate;
+        let gateTimeout;
+        try {
+          await Promise.race([
+            new Promise((resolveGate) => {
+              openGate = resolveGate;
+              gateWaiters.add(resolveGate);
+            }),
+            new Promise((resolveTimeout) => {
+              gateTimeout = setTimeout(resolveTimeout, GATE_TIMEOUT_MS);
+            }),
+          ]);
+        } finally {
+          clearTimeout(gateTimeout);
+          gateWaiters.delete(openGate);
+        }
         if (response.destroyed) return;
       }
       if (delays.has(path)) await delay(delays.get(path));
