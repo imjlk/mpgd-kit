@@ -433,6 +433,7 @@ try {
         await page.click('#dunes');
         await waitForPreparing('dunes');
         await page.click('#grove');
+        await waitForPreparing('grove');
         await wait('playing');
         current = await state();
         assert.equal(current.current, 'grove');
