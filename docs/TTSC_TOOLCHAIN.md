@@ -29,6 +29,13 @@ templates use the same version. `pnpm validate:toolchain` detects drift before
 TypeScript-Go resolution and application arguments consistent; emitted runtime
 files are owned by ttsx. It does not delete authored `.js` or `.d.ts` source siblings.
 
+The shared tsconfig pins `rootDir` to the repository root. Workspace projects
+include/import sibling sources; a narrower inferred root can make TypeScript-Go
+emit those outside-root files beside their sources when ttsx loads a Vite config
+as a separate dependency project. The runtime-boundary canary verifies that this
+path leaves source siblings unchanged. Package builds still explicitly set their
+own `src` root and `dist` output in the generated build configuration.
+
 ## Cache ownership and measurement
 
 Run `pnpm cache:paths` to distinguish compiled plugin binaries (`requiredRoots`)

@@ -26,6 +26,9 @@ import {
 const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'mpgd-game-acceptance-'));
 const reportDir = path.join(fixtureRoot, 'core-report');
 const releaseManifestFile = path.join(fixtureRoot, 'artifacts/release-manifest.json');
+const packageManager = (JSON.parse(
+  readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
+) as { readonly packageManager: string }).packageManager;
 
 assert.equal(
   resolveGameAcceptanceReleaseManifestFile(fixtureRoot, {
@@ -245,6 +248,7 @@ try {
     `${JSON.stringify({
       name: 'acceptance-fixture',
       private: true,
+      packageManager,
       scripts: {
         check: 'node --version',
         build: 'node --version',

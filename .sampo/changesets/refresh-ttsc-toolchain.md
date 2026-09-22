@@ -23,3 +23,4 @@ npm/@mpgd/tutorial: patch (Changed)
 
 Build and validate published package metadata with ttsc 0.30.4, and generate Phaser games and target wrappers with the same toolchain. Preserve authored source siblings in the ttsx runner and verify graph presets against the current request and response contracts.
 
+Pin the monorepo runtime source root so cross-project imports keep emitted files inside the ttsx cache.
