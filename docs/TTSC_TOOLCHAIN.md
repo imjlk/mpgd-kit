@@ -35,6 +35,9 @@ emit those outside-root files beside their sources when ttsx loads a Vite config
 as a separate dependency project. The runtime-boundary canary verifies that this
 path leaves source siblings unchanged. Package builds still explicitly set their
 own `src` root and `dist` output in the generated build configuration.
+Generated standalone games use their own root; `--workspace` games explicitly
+use the common ancestor of the game and kit. Target wrappers inherit that game
+setting, so a sibling checkout does not inherit the kit's narrower root.
 
 ## Cache ownership and measurement
 

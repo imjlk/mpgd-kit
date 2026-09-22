@@ -2,6 +2,7 @@
 __TSCONFIG_EXTENDS_LINE__
   "compilerOptions": {
     "target": "ES2022",
+    "rootDir": "__TSCONFIG_ROOT_DIR__",
     "useDefineForClassFields": true,
     "strict": true,
     "strictNullChecks": true,
