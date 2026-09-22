@@ -1862,7 +1862,10 @@ export function createPhaserPackDelivery(
         tracker.nextEvent('prepared', { packId, revision: requestedRevision });
         return { release: handles.release };
       }
-      tracker.nextEvent('planning', { packId, revision: requestedRevision });
+      // A previous caller may return its final handle/reader while we await
+      // another archive. Pin resident dependencies until our complete closure
+      // has its own handles, so that late cleanup cannot evict our inputs.
+      const residentHandles = acquireHandles(zipPacks.filter((pack) => staged.has(pack.packId)));
       activePrepare = true;
       const controller = new AbortController();
       const deadlineAt = monotonicNow() + prepareTimeoutMs;
@@ -1883,6 +1886,7 @@ export function createPhaserPackDelivery(
       shutdown.signal.addEventListener('abort', forward, { once: true });
       const newlyStaged: StagedPack[] = [];
       try {
+        tracker.nextEvent('planning', { packId, revision: requestedRevision });
         if (prepareOptions.signal?.aborted) {
           fail('cancelled', 'Delivery preparation was cancelled');
         }
@@ -1943,6 +1947,7 @@ export function createPhaserPackDelivery(
         );
         throw error;
       } finally {
+        residentHandles.release();
         clearTimeout(timer);
         prepareOptions.signal?.removeEventListener('abort', forward);
         shutdown.signal.removeEventListener('abort', forward);

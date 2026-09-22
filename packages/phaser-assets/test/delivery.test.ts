@@ -810,6 +810,67 @@ describe('phaser pack delivery', () => {
     delivery.dispose();
   });
 
+  it.each(['handle', 'reader'])('pins resident dependencies while a prior %s releases during preparation', async (owner) => {
+    for (const cancel of [false, true]) {
+      const origin = await startGatedOrigin();
+      servers.push(origin);
+      const { manifest, packFiles } = buildManifest([
+        { id: 'dep', delivery: 'zip', zip: zipFixture() },
+        { id: 'top', dependsOn: ['dep'], delivery: 'zip', zip: zipFixture() },
+      ]);
+      for (const [path, file] of packFiles) {
+        origin.files.set(path, file);
+      }
+      const delivery = createPhaserPackDelivery(manifest, {
+        baseUrl: origin.url,
+        createWorker: createFakeWorkerFactory().factory,
+      });
+      const prior = await delivery.prepare('dep');
+      const opened = owner === 'reader'
+        ? await delivery.fileSource.open(openRequest('dep'), {
+            signal: new AbortController().signal, budgets: budgets(),
+          })
+        : undefined;
+      if (opened !== undefined) {
+        prior.release();
+      }
+      const path = 'packs/top@1.zip';
+      origin.hold(path);
+      const controller = new AbortController();
+      const outcome = delivery.prepare('top', { signal: controller.signal }).then(
+        (prepared) => ({ prepared, error: undefined }),
+        (error: unknown) => ({ prepared: undefined, error }),
+      );
+      try {
+        await vi.waitFor(() => expect(origin.requests).toContain(path));
+        opened?.close();
+        prior.release();
+        if (cancel) {
+          controller.abort();
+        }
+        origin.release(path);
+        const result = await outcome;
+        if (cancel) {
+          expect(result.error).toMatchObject({ code: 'cancelled' });
+        } else {
+          expect(result.error).toBeUndefined();
+          expect(delivery.snapshot().staging.map((pack) => pack.packId).sort()).toEqual(['dep', 'top']);
+          expect(delivery.snapshot().staging.every((pack) => pack.handles === 1)).toBe(true);
+          result.prepared?.release();
+        }
+        expect(delivery.snapshot().staging).toEqual([]);
+        expect(delivery.snapshot().stagingUsedBytes).toBe(0);
+      } finally {
+        controller.abort();
+        origin.release(path);
+        opened?.close();
+        prior.release();
+        delivery.dispose();
+        await outcome;
+      }
+    }
+  });
+
   it('cleans partial staging when the caller cancels mid-preparation', async () => {
     const origin = await startOrigin();
     servers.push(origin);
