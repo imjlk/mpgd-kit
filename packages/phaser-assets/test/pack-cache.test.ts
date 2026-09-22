@@ -382,6 +382,21 @@ describe('persistent pack cache boundary', () => {
     })).rejects.toMatchObject({ name: 'AbortError' });
   });
 
+  it('honors cancellation after an origin-download observer runs', async () => {
+    const controller = new AbortController();
+    const options = optionsOf(memoryCache(), []);
+    options.onEvent = (): void => {
+      controller.abort();
+    };
+    await expect(readPhaserPackArtifactWithCommit({
+      persistentCache: options,
+      integrity,
+      artifact,
+      signal: controller.signal,
+      fetchOrigin: async () => bytes.buffer.slice(0),
+    })).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
   it('stops on caller cancellation while a storage read is pending', async () => {
     const controller = new AbortController();
     const storage: PhaserPackPersistentCache = {

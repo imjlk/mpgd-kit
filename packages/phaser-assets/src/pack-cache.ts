@@ -379,6 +379,7 @@ export async function readPhaserPackArtifactWithCommit(
   const origin = await options.fetchOrigin();
   options.signal.throwIfAborted();
   emit(persistent, options.artifact, key, 'origin-download');
+  options.signal.throwIfAborted();
   return {
     bytes: origin,
     commit: async (
