@@ -82,8 +82,10 @@ a 10-second `requestTimeoutMs` for each HTTP attempt including its body,
 `maxConcurrentDownloads` defaults to 4 and `maxConcurrentDecodes` to 1.
 `maxBufferedBytes` defaults to 64 MiB across downloading, queued and decoding
 assets. The loader reserves each asset's declared file sizes before downloading;
-files without integrity reserve `maxFileBytes` each. An atlas reserves both files.
-A reservation larger than the budget fails before any network request. This
+files without integrity reserve `maxFileBytes` each. When the default URL source
+uses a persistent cache with integrity metadata, the reservation also includes
+the verified cache-commit copy. An atlas reserves both files and their eligible
+cache copies. A reservation larger than the budget fails before any network request. This
 conservative admission policy prevents completed Blobs from accumulating behind
 slow decodes. Supply integrity sizes for better utilization and tune limits using
 your devices and catalog. The sample explicitly uses 2 downloads, 1 decode and an
@@ -188,6 +190,44 @@ Integrity describes the file body the platform hands the application — after
 HTTP content decoding. `Content-Encoding` is never re-decoded in game code, and
 `Content-Length` is never used as size or verification evidence; actual network
 transfer can be smaller or larger than the buffered body.
+
+## Optional persistent cache
+
+Applications that have durable storage can inject it at the original byte
+acquisition boundary. The same option is accepted by the `/packs` loader and
+the `/delivery` API:
+
+```ts
+import {
+  createPhaserPackCacheKey,
+  type PhaserPackPersistentCache,
+} from '@mpgd/phaser-assets/packs';
+
+const storage: PhaserPackPersistentCache = /* IndexedDB, filesystem bridge, ... */;
+const persistentCache = {
+  storage,
+  namespace: 'my-game-assets-v1',
+  onEvent: (event) => console.info(event.outcome, event.key),
+};
+
+const packs = createPhaserAssetPackLoader(scene, catalog, { persistentCache });
+// Or: createPhaserPackDelivery(manifest, { baseUrl, persistentCache });
+```
+
+The key is `namespace + SHA-256 digest + encoded byte count`; URLs, CDN hosts
+and signed query strings are not identities. Only files and ZIP archives with
+manifest integrity metadata participate. A cache hit is still revalidated and
+then passed through the existing loader or ZIP decoder, so it does not mean
+that decoding or texture preparation is complete. Read and write failures fall
+back to the origin; caller cancellation and preparation deadlines still abort
+the operation. Cache events distinguish hits, origin downloads, provider read
+failures, corrupt records, and store failures without exposing URLs.
+
+Storage management remains application-owned:
+`await storage.usage(namespace)`, `await storage.delete(createPhaserPackCacheKey(namespace, integrity))`
+and `await storage.clear(namespace)` provide usage, entry deletion and
+namespace cleanup. The package does not impose IndexedDB, LRU, prefetch or
+platform-filesystem policy.
 
 ## Pack delivery format
 
@@ -396,7 +436,8 @@ checked for the whole closure before any request. Failures throw `PhaserPackDeli
 decoder's status and code in the message; there is no silent ZIP-to-files
 fallback. Preparations are single-flight — a concurrent `prepare`
 rejects with `busy` — and first-version ownership is one fixed manifest
-with one loader: no persistent cache, no prefetch, no cross-tab sharing.
+with one loader: no prefetch and no cross-tab sharing. Persistent caching is
+optional and remains application-owned at the acquisition boundary.
 Importing the module performs no network request, spawns no worker and
 arms no timer; the worker comes from the application's `createWorker`
 factory and is only created when a zip pack is actually staged. Requires

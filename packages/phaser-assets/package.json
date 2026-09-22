@@ -38,6 +38,10 @@
       "types": "./dist/pack-format.d.ts",
       "default": "./dist/pack-format.js"
     },
+    "./pack-cache": {
+      "types": "./dist/pack-cache.d.ts",
+      "default": "./dist/pack-cache.js"
+    },
     "./packs": {
       "types": "./dist/packs.d.ts",
       "default": "./dist/packs.js"

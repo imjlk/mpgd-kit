@@ -520,6 +520,9 @@ export function validatePhaserPackDeliveryManifest(input: unknown): PhaserPackDe
           throw new Error(`Invalid asset pack delivery manifest: ${fileLabel} method is inapplicable for files delivery`);
         }
         const mediaType = expectString(file.mediaType, `${fileLabel} mediaType`, deliveryManifestContext);
+        if (mediaType.trim() !== mediaType) {
+          throw new Error(`Invalid asset pack delivery manifest: ${fileLabel} mediaType must not have surrounding whitespace`);
+        }
         if (role === 'texture' && !mediaType.startsWith('image/')) {
           throw new Error(
             `Invalid asset pack delivery manifest: ${fileLabel} texture role requires an image media type`,

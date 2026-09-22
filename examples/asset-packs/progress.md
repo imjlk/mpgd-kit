@@ -80,3 +80,18 @@ invariance, files-only no-op, mixed routing, not-prepared/dispose/
 repeated release, reader lifetime, cancel/deadline cleanup, budget
 pre-rejection, read order independence, corrupt archives, URL encoding
 and config validation.
+
+PR #204 follow-up: finish cache integration and review fixes without another
+local OCR round. Reproduced the historical Chromium A-to-B-to-A transition
+timeout on the latest code: ZIP staging completed but the loader timed out
+preparing pilot; another run exposed lost staging during a subsequent prepare.
+A deterministic regression confirms a prior handle/reader can release a resident
+dependency while the next prepare downloads another archive. Pin those resident
+dependencies until the complete closure has new handles, and return provisional
+pins on failure/cancellation. The native-input-retention experiment was reverted;
+only the deterministic staging fix remains. Package tests: 385 passing. Full
+Canvas/WebGL bundled/hybrid/ZIP/mixed/cache browser acceptance passed three
+consecutive runs. The skill client also exercised movement; its playing-state
+JSON and gameplay screenshots were inspected with no console errors. Package
+build and installed-tarball Chromium validation also pass. Next: push this
+targeted fix, request GitHub re-review, and wait for the focused CI result.

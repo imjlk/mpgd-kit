@@ -99,48 +99,42 @@ limits; there is no claim of measured production memory or frame-time bounds.
 The sample uses 2 downloads, 1 decode and 8 MiB of encoded reservations. See the
 package README for fallback reservations when integrity sizes are absent.
 
-## Persistent artifact reuse experiment (`?idcache=1`)
+## Persistent artifact reuse example (`?idcache=1`)
 
-A private, example-only experiment (not a public cache API): verified
-artifact bytes — files-delivery files and ZIP archives — are persisted in
-a dedicated IndexedDB namespace and re-served to the **unchanged public
-delivery** through managed Blob URLs.
+The example supplies an IndexedDB implementation to the public
+`persistentCache` option. The package reads and stores verified original
+files-delivery files and ZIP archives at the real acquisition boundary; no
+Blob URL warm bridge or prefetch phase is involved.
+The acceptance can use a bounded separator-containing namespace through
+`cache-namespace=<ascii-name>` (up to 64 characters); the default is
+`asset-pack-experiment`.
 
 - **Stored**: original artifact bytes only. Never expanded entries,
   images/textures, code, tokens or personal data.
-- **Identity**: `namespace | sha256 | expectedDigest | expectedBytes` —
-  host- and path-independent, so the same content from another origin
-  resolves to the same record. MIME/roles always come from the current
-  manifest, never from a stored record.
-- **Write path**: bounded fetch → manifest verification → short
-  readwrite transaction → atomic commit; `stored` requires the
-  transaction's complete event. Network/crypto never run inside a
-  transaction. Aborts and quota failures keep previous good records and
-  are reported honestly (`origin-store-failed`), never as stored.
+- **Identity**: host- and path-independent `namespace | sha256 | expectedDigest |
+  expectedBytes` records remain readable for compatibility; namespaces containing
+  `|` use an unambiguous `v2:<encodedNamespace>:<expectedDigest>:<expectedBytes>`
+  form. MIME/roles always come from the current manifest, never from a stored
+  record.
+- **Write path**: bounded fetch → existing loader/decoder verification → short
+  readwrite transaction → atomic commit. Network/crypto never run inside a
+  transaction. Aborts and quota failures keep previous good records and are
+  reported honestly (`cache-store-failed`).
 - **Read path**: every hit is re-verified against the current manifest
   (size + digest); corrupt or metadata-tampered records miss and are
   dropped. A cache hit is never "ZIP verified" or "texture ready" — the
   existing decoder and loader always run.
-- **Outcomes per artifact**: `cache-hit`, `origin-stored`,
-  `origin-store-failed`, `origin-store-skipped` (caps: 32 MiB/object,
-  96 MiB total), `cache-unavailable` (bounded DB open/read/write
-  deadlines), `origin-fetch-failed` (the delivery's own origin fetch
-  then owns the outcome).
-- **Bridge**: the async warm phase finishes all IndexedDB work before
-  `prepare`; the delivery's `resolveURL` performs only synchronous
-  Blob URL lookups and falls back to the origin URL. Blob URLs are
-  revoked on unload/shutdown/next selection. This bridge is
-  experiment-only — the follow-up cache PR wires the verified store at
-  the real acquisition boundary instead.
-- **Measurements** land in `artifacts/browser/evidence.json`
-  (`baselineHttpOnly`, `persistentReuse`): origin artifact GET counts,
-  fetch/write/cache-read/verify/Blob timings per artifact. On this
-  machine: baseline reload = 2 origin GETs; cold = 2 GETs + stores;
-  warm reload = 0 GETs with single-digit-ms cache reads.
+- **Observations**: `cache-hit`, `origin-download`, `cache-read-failed`,
+  `cache-corrupt`,
+  `cache-unverifiable`, `cache-delete-failed` and `cache-store-failed` are
+  emitted without URLs. `artifacts/browser/evidence.json` records the
+  baseline and persistent-reuse origin GET counts; a warm reload performs
+  zero origin artifact GETs while the decoder and loader still verify and
+  prepare the bytes.
 
 The browser acceptance exercises cold/warm reload reuse, duplicate-store
 idempotency, payload and metadata tampering, explicit deletion,
 delete-vs-late-write races, quota and unavailable fault injection,
 transaction-abort preservation, foreign-namespace isolation, and the
-regular Phaser frame/transition/release regressions under the bridge —
-against real Chromium IndexedDB, never a fake.
+regular Phaser frame/transition/release regressions through the public
+acquisition boundary — against real Chromium IndexedDB, never a fake.

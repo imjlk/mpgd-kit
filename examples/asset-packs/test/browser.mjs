@@ -290,7 +290,14 @@ try {
         errors.push(message.text());
       });
       const state = () => page.evaluate(() => JSON.parse(window.render_game_to_text()));
-      const wait = (phase) => page.waitForFunction((expected) => JSON.parse(window.render_game_to_text()).phase === expected, phase);
+      const wait = async (phase) => {
+        try {
+          await page.waitForFunction((expected) => JSON.parse(window.render_game_to_text()).phase === expected, phase);
+        } catch (error) {
+          console.error('ZIP scenario failed', { renderer, expected: phase, actual: await state(), errors });
+          throw error;
+        }
+      };
       const waitForPreparing = (requested) => page.waitForFunction((expected) => {
         const current = JSON.parse(window.render_game_to_text());
         return current.phase === 'preparing' && current.requested === expected;
@@ -606,10 +613,9 @@ try {
     }
 
 
-  // Persistent artifact reuse (private experiment, idcache=1): verified
-  // origin bytes in IndexedDB, re-served to the unchanged public
-  // delivery through managed Blob URLs. Real Chromium IndexedDB, real
-  // page reloads on the same origin.
+  // Persistent artifact reuse (public cache API, idcache=1): verified
+  // origin bytes in IndexedDB are consumed at the delivery acquisition
+  // boundary. Real Chromium IndexedDB, real page reloads on the same origin.
   {
     const cacheApp = await staticServer(join(builds, 'bundled'));
     servers.push(cacheApp);
@@ -621,38 +627,74 @@ try {
     const cacheState = () => cachePage.evaluate(() => JSON.parse(window.render_game_to_text()));
     const cacheWait = (phase) => cachePage.waitForFunction((expected) => JSON.parse(window.render_game_to_text()).phase === expected, phase);
     // Artifact GET counting: the ZIP app shell is local; artifacts come
-    // from the remote origin. Blob URL fetches never appear there.
+    // from the remote origin. Cache hits do not emit origin requests.
     const artifactGets = () => remote.requests.filter((path) => path.startsWith('/delivery/zip/packs/')).length;
     const groveArchivePath = '/delivery/zip/packs/grove@1.zip';
+    const cacheNamespace = 'asset|pack:v2';
+    const cacheUrlSuffix = `&cache-namespace=${encodeURIComponent(cacheNamespace)}`;
     const usage = () => cachePage.evaluate(() => window.__artifact_cache_usage());
     const idbRaw = (fn) => cachePage.evaluate(`(${fn})(indexedDB)`);
+    const cacheDbName = 'mpgd-asset-pack-experiment';
+    const cacheStoreName = 'artifacts';
+    const cacheKeyPrefix = 'mpgd-asset-experiment';
+    const cacheUsageKey = `${cacheKeyPrefix}|__usage__`;
+    const cacheMigrationKey = `${cacheKeyPrefix}|__public-cache-migrated__`;
+    const idbArtifact = (mode, operation) => idbRaw(`async (db) => {
+      const open = await new Promise((resolve, reject) => {
+        const request = db.open(${JSON.stringify(cacheDbName)});
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      try {
+        return await new Promise((resolve, reject) => {
+          const tx = open.transaction(${JSON.stringify(cacheStoreName)}, ${JSON.stringify(mode)});
+          const store = tx.objectStore(${JSON.stringify(cacheStoreName)});
+          let value;
+          let operationSettled = false;
+          Promise.resolve((${operation})(store)).then((result) => {
+            value = result;
+            operationSettled = true;
+          }, reject);
+          tx.oncomplete = () => {
+            if (operationSettled) resolve(value);
+            else reject(new Error('IndexedDB fixture operation settled after transaction completion'));
+          };
+          tx.onerror = () => reject(tx.error ?? new Error('IndexedDB fixture transaction failed'));
+          tx.onabort = () => reject(tx.error ?? new Error('IndexedDB fixture transaction aborted'));
+        });
+      } finally {
+        open.close();
+      }
+    }`);
 
     // C. controlled baseline first (fresh context, cold IndexedDB):
-    await cachePage.goto(cacheApp.url + '?renderer=webgl&delivery=zip&idcache=1');
+    await cachePage.goto(cacheApp.url + `?renderer=webgl&delivery=zip&idcache=1${cacheUrlSuffix}`);
     await cacheWait('idle');
-    assert.equal(await cachePage.evaluate(() => window.__artifact_cache_present()), true, 'The experiment bridge must be active under idcache=1');
+    assert.equal(await cachePage.evaluate(() => window.__artifact_cache_present()), true, 'The public cache adapter must be active under idcache=1');
 
     // Cold run: every artifact is fetched from the origin once, verified,
-    // and committed; the delivery still verifies the Blob-served bytes.
+    // and submitted to the cache; delivery still verifies the returned bytes.
     const coldBefore = artifactGets();
     await cachePage.click('#grove');
     await cacheWait('playing');
     let cacheNow = await cacheState();
     assert.equal(cacheNow.current, 'grove');
-    assert.equal(cacheNow.groundFrames, 2, 'Atlas frames survive the cache bridge');
-    assert.equal(cacheNow.pilotFrames, 4, 'Spritesheet frames survive the cache bridge');
+    assert.equal(cacheNow.groundFrames, 2, 'Atlas frames survive cache reuse');
+    assert.equal(cacheNow.pilotFrames, 4, 'Spritesheet frames survive cache reuse');
     const coldReport = cacheNow.cache.report;
-    assert.equal(coldReport.entries.length, 2, 'shared + grove archives warmed');
-    assert.ok(coldReport.entries.every((entry) => entry.outcome === 'origin-stored'), JSON.stringify(coldReport));
+    assert.equal(coldReport.entries.length, 2, 'shared + grove archives acquired');
+    assert.ok(coldReport.entries.every((entry) => entry.outcome === 'origin-downloaded'), JSON.stringify(coldReport));
     const coldGets = artifactGets() - coldBefore;
     assert.equal(coldGets, 2, 'Cold run fetches each archive from the origin exactly once');
     const coldUsage = await usage();
     assert.equal(coldUsage.records, 2, 'Two verified records committed');
     assert.ok(coldUsage.totalBytes > 0);
     const identities = coldReport.entries.map((entry) => entry.identity);
+    assert.ok(identities.every((identity) => identity.includes('|v2:')), JSON.stringify(identities));
+    assert.ok(identities.every((identity) => identity.includes('|v2:asset%7Cpack%3Av2:')), JSON.stringify(identities));
     await cachePage.click('#unload');
 
-    // Idempotent duplicate storage: the same content re-warms as cache
+    // Idempotent duplicate storage: the same content is acquired again as cache
     // hits without growing the record set.
     await cachePage.click('#grove');
     await cacheWait('playing');
@@ -674,40 +716,170 @@ try {
     assert.equal(cacheNow.pilotFrames, 4);
     assert.ok(cacheNow.cache.report.entries.every((entry) => entry.outcome === 'cache-hit'), JSON.stringify(cacheNow.cache.report));
     assert.equal(artifactGets() - warmBefore, 0, 'Warm reload reuses stored bytes with zero origin artifact GETs');
-    const warmStats = cacheNow.cache.report.entries.map(({ identity, cacheReadMs, verifyMs, blobMs }) => ({ identity, cacheReadMs, verifyMs, blobMs }));
-    assert.ok(warmStats.every((entry) => entry.cacheReadMs !== null && entry.verifyMs !== null));
+    const warmStats = cacheNow.cache.report.entries.map(({ identity, outcome, bodyBytes }) => ({ identity, outcome, bodyBytes }));
+    assert.ok(warmStats.every((entry) => entry.outcome === 'cache-hit'));
+
+    // A legacy pipe-containing identity is read once, copied to the
+    // unambiguous v2 key, and removed without another origin request.
+    const currentIdentityParts = /(?:\||:)([0-9a-f]{64})[|:](\d+)$/iu.exec(identities[0]);
+    assert.ok(currentIdentityParts, `Unexpected cache identity: ${identities[0]}`);
+    const legacyNamespacedIdentity = `${cacheKeyPrefix}|${cacheNamespace}|sha256|${currentIdentityParts[1]}|${currentIdentityParts[2]}`;
+    await idbArtifact('readwrite', `(store) => new Promise((resolve, reject) => {
+      const current = store.get(${JSON.stringify(identities[0])});
+      current.onsuccess = () => {
+        if (current.result === undefined) {
+          reject(new Error('v2 cache record was not available for migration fixture'));
+          return;
+        }
+        store.put(current.result, ${JSON.stringify(legacyNamespacedIdentity)});
+        store.delete(${JSON.stringify(identities[0])});
+        store.put({ total: ${coldUsage.totalBytes} }, ${JSON.stringify(cacheUsageKey)});
+        resolve();
+      };
+      current.onerror = () => reject(current.error);
+    })`);
+    await cachePage.click('#unload');
+    const legacyBefore = artifactGets();
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    cacheNow = await cacheState();
+    assert.equal(artifactGets() - legacyBefore, 0, 'Legacy cache migration must not fetch origin bytes');
+    assert.ok(cacheNow.cache.report.entries.every((entry) => entry.outcome === 'cache-hit'), JSON.stringify(cacheNow.cache.report));
+    const pipeMigrationState = await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+      const current = store.get(${JSON.stringify(identities[0])});
+      const legacy = store.get(${JSON.stringify(legacyNamespacedIdentity)});
+      let pending = 2;
+      const finish = () => {
+        if (--pending === 0) resolve({ current: current.result !== undefined, legacy: legacy.result !== undefined });
+      };
+      current.onsuccess = finish;
+      legacy.onsuccess = finish;
+      current.onerror = () => reject(current.error);
+      legacy.onerror = () => reject(legacy.error);
+    })`);
+    assert.deepEqual(pipeMigrationState, { current: true, legacy: false });
+    // Reboot reconciliation removes a twin left behind after a v2 commit when
+    // the legacy delete was interrupted before the page closed.
+    await idbArtifact('readwrite', `(store) => {
+      store.put({ legacy: true }, ${JSON.stringify(legacyNamespacedIdentity)});
+    }`);
+    await cachePage.reload();
+    await cacheWait('idle');
+    const reconciledTwin = await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+      const get = store.get(${JSON.stringify(legacyNamespacedIdentity)});
+      get.onsuccess = () => resolve(get.result !== undefined);
+      get.onerror = () => reject(get.error);
+    })`);
+    assert.equal(reconciledTwin, false);
+
+    // Reboot reconciliation keeps a valid legacy twin when the v2 copy is
+    // corrupt, so the next read can safely migrate it again.
+    await idbArtifact('readwrite', `(store) => new Promise((resolve, reject) => {
+      const current = store.get(${JSON.stringify(identities[0])});
+      current.onsuccess = () => {
+        if (current.result === undefined) {
+          reject(new Error('v2 cache record was not available for corrupt twin fixture'));
+          return;
+        }
+        store.put({ ...current.result, schemaVersion: 99 }, ${JSON.stringify(identities[0])});
+        store.put(current.result, ${JSON.stringify(legacyNamespacedIdentity)});
+        resolve();
+      };
+      current.onerror = () => reject(current.error);
+    })`);
+    await cachePage.reload();
+    await cacheWait('idle');
+    const corruptTwinState = await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+      const current = store.get(${JSON.stringify(identities[0])});
+      const legacy = store.get(${JSON.stringify(legacyNamespacedIdentity)});
+      let pending = 2;
+      const finish = () => {
+        if (--pending === 0) resolve({ current: current.result !== undefined, legacy: legacy.result !== undefined });
+      };
+      current.onsuccess = finish;
+      legacy.onsuccess = finish;
+      current.onerror = () => reject(current.error);
+      legacy.onerror = () => reject(legacy.error);
+    })`);
+    assert.deepEqual(corruptTwinState, { current: false, legacy: true });
+    const corruptTwinFallbackBefore = artifactGets();
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    assert.equal(artifactGets() - corruptTwinFallbackBefore, 0, 'A valid legacy twin restores a corrupt v2 record');
+    await cachePage.click('#unload');
     evidence.push({
       persistentReuse: {
-        cold: { artifactGets: coldGets, entries: coldReport.entries.map(({ identity, outcome, fetchMs, writeMs, bodyBytes }) => ({ identity, outcome, fetchMs, writeMs, bodyBytes })) },
+        cold: { artifactGets: coldGets, entries: coldReport.entries.map(({ identity, outcome, bodyBytes }) => ({ identity, outcome, bodyBytes })) },
         warm: { artifactGets: 0, entries: warmStats },
       },
     });
+
+    // Migration sweep: the previous private experiment used a digest-only
+    // identity. Remove the migration marker, seed that legacy key beside a
+    // current and foreign record, and reload so the real IndexedDB adapter
+    // performs the one-time cleanup and usage repair.
+    const digestOnlyParts = /(?:\||:)([0-9a-f]{64})[|:](\d+)$/iu.exec(identities[0]);
+    assert.ok(digestOnlyParts, `Unexpected cache identity: ${identities[0]}`);
+    const legacyIdentity = `${cacheKeyPrefix}|sha256|${digestOnlyParts[1]}|${digestOnlyParts[2]}`;
+    const secondLegacyIdentity = `${legacyIdentity}-second`;
+    await idbArtifact('readwrite', `(store) => {
+      store.put({ legacy: true, payload: new ArrayBuffer(1) }, ${JSON.stringify(legacyIdentity)});
+      store.put({ total: Number.MAX_SAFE_INTEGER }, ${JSON.stringify(cacheUsageKey)});
+      store.put({ foreign: true }, 'other-app|migration-record|1');
+      store.delete(${JSON.stringify(cacheMigrationKey)});
+    }`);
+    await cachePage.reload();
+    await cacheWait('idle');
+    const migrationState = await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+      const legacy = store.get(${JSON.stringify(legacyIdentity)});
+      const foreign = store.get('other-app|migration-record|1');
+      let pending = 2;
+      const finish = () => {
+        if (--pending === 0) resolve({ legacy: legacy.result !== undefined, foreign: foreign.result !== undefined });
+      };
+      legacy.onsuccess = finish;
+      foreign.onsuccess = finish;
+      legacy.onerror = () => reject(legacy.error);
+      foreign.onerror = () => reject(foreign.error);
+    })`);
+    assert.deepEqual(migrationState, { legacy: false, foreign: true });
+    assert.deepEqual(await usage(), coldUsage, 'Migration repairs usage without touching current records');
+    const repairedTotal = await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+      const get = store.get(${JSON.stringify(cacheUsageKey)});
+      get.onsuccess = () => resolve(get.result?.total ?? null);
+      get.onerror = () => reject(get.error);
+    })`);
+    assert.equal(repairedTotal, coldUsage.totalBytes, 'Migration rewrites the quota marker');
+    await idbArtifact('readwrite', `(store) => {
+      store.put({ legacy: true }, ${JSON.stringify(secondLegacyIdentity)});
+    }`);
+    await cachePage.reload();
+    await cacheWait('idle');
+    assert.equal(
+      await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+        const get = store.get(${JSON.stringify(secondLegacyIdentity)});
+        get.onsuccess = () => resolve(get.result !== undefined);
+        get.onerror = () => reject(get.error);
+      })`),
+      true,
+      'Migration marker prevents a second destructive sweep',
+    );
 
     // Corrupt record detection: tamper a stored payload, reload, and the
     // warm must treat it as a miss (never serve corrupt bytes) — the
     // origin refetch restores playability.
     const tamperedIdentity = identities[0];
-    await idbRaw(`async (db) => {
-      const open = await new Promise((resolve, reject) => {
-        const request = db.open('mpgd-asset-pack-experiment');
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-      await new Promise((resolve, reject) => {
-        const tx = open.transaction('artifacts', 'readwrite');
-        const store = tx.objectStore('artifacts');
-        const get = store.get(${JSON.stringify(tamperedIdentity)});
-        get.onsuccess = () => {
-          const record = get.result;
-          record.payload = record.payload.slice(0);
-          new Uint8Array(record.payload)[0] ^= 0xff;
-          store.put(record, ${JSON.stringify(tamperedIdentity)});
-        };
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-      });
-      open.close();
-    }`);
+    await idbArtifact('readwrite', `(store) => new Promise((resolve, reject) => {
+      const get = store.get(${JSON.stringify(tamperedIdentity)});
+      get.onsuccess = () => {
+        const record = get.result;
+        record.payload = record.payload.slice(0);
+        new Uint8Array(record.payload)[0] ^= 0xff;
+        store.put(record, ${JSON.stringify(tamperedIdentity)});
+        resolve();
+      };
+      get.onerror = () => reject(get.error);
+    })`);
     const corruptBefore = artifactGets();
     await cachePage.reload();
     await cacheWait('idle');
@@ -715,7 +887,7 @@ try {
     await cacheWait('playing');
     cacheNow = await cacheState();
     const corruptOutcomes = cacheNow.cache.report.entries.map((entry) => entry.outcome);
-    assert.ok(corruptOutcomes.includes('origin-stored'), JSON.stringify(corruptOutcomes));
+    assert.ok(corruptOutcomes.includes('origin-downloaded'), JSON.stringify(corruptOutcomes));
     assert.ok(!corruptOutcomes.every((outcome) => outcome === 'cache-hit'), 'A tampered payload is never a hit');
     assert.equal(artifactGets() - corruptBefore, 1, 'The corrupt record is refetched from the origin');
     await cachePage.click('#unload');
@@ -727,7 +899,7 @@ try {
     await cachePage.click('#grove');
     await cacheWait('playing');
     cacheNow = await cacheState();
-    assert.ok(cacheNow.cache.report.entries.some((entry) => entry.identity === removedIdentity && entry.outcome === 'origin-stored'));
+    assert.ok(cacheNow.cache.report.entries.some((entry) => entry.identity === removedIdentity && entry.outcome === 'origin-downloaded'));
     assert.equal(artifactGets() - deleteBefore, 1, 'An explicitly deleted record misses and refetches');
     await cachePage.click('#unload');
 
@@ -743,53 +915,46 @@ try {
     assert.equal(cacheNow.current, 'grove', 'A store failure never breaks the online load');
     await cachePage.click('#unload');
 
-    // Fault injection: cache unavailable degrades to the origin path.
-    // The one-shot fault fires on the first warmed artifact (shared);
-    // grove was just deleted, so both artifacts come from the origin.
+    // Fault injection: a cache read failure degrades to the origin path.
+    // The one-shot fault fires on the first artifact (shared); grove was just
+    // deleted, so both artifacts come from the origin.
     await cachePage.evaluate((identity) => window.__artifact_cache_delete(identity), identities[1]);
     await cachePage.evaluate(() => window.__artifact_cache_set_fault('dbUnavailableOnce'));
     const unavailableBefore = artifactGets();
     await cachePage.click('#grove');
     await cacheWait('playing');
     cacheNow = await cacheState();
-    const unavailableEntry = cacheNow.cache.report.entries.find((entry) => entry.outcome === 'cache-unavailable');
-    assert.equal(unavailableEntry?.identity, identities[0], JSON.stringify(cacheNow.cache.report.entries));
-    assert.equal(artifactGets() - unavailableBefore, 2, 'Cache-unavailable falls back to the origin');
+    assert.ok(cacheNow.cache.report.entries.every((entry) => entry.outcome === 'origin-downloaded'), JSON.stringify(cacheNow.cache.report.entries));
+    assert.ok(
+      cacheNow.cache.report.diagnostics.some((diagnostic) => diagnostic.outcome === 'cache-read-failed'),
+      JSON.stringify(cacheNow.cache.report),
+    );
+    assert.equal(artifactGets() - unavailableBefore, 2, 'Cache read failure falls back to the origin');
     await cachePage.click('#unload');
 
     // Stored metadata tamper: a mutated digest field fails the
     // current-manifest comparison — a miss, never a hit. Re-store both
-    // archives first: the unavailable fault above skipped shared.
+    // archives first: the read-failure run restored both origin records.
     await cachePage.click('#grove');
     await cacheWait('playing');
     await cachePage.click('#unload');
-    await idbRaw(`async (db) => {
-      const open = await new Promise((resolve, reject) => {
-        const request = db.open('mpgd-asset-pack-experiment');
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-      await new Promise((resolve, reject) => {
-        const tx = open.transaction('artifacts', 'readwrite');
-        const store = tx.objectStore('artifacts');
-        const get = store.get(${JSON.stringify(identities[0])});
-        get.onsuccess = () => {
-          const record = get.result;
-          record.digest = '0'.repeat(64);
-          record.bytes = record.bytes + 1;
-          store.put(record, ${JSON.stringify(identities[0])});
-        };
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-      });
-      open.close();
-    }`);
+    await idbArtifact('readwrite', `(store) => new Promise((resolve, reject) => {
+      const get = store.get(${JSON.stringify(identities[0])});
+      get.onsuccess = () => {
+        const record = get.result;
+        record.digest = '0'.repeat(64);
+        record.bytes = record.bytes + 1;
+        store.put(record, ${JSON.stringify(identities[0])});
+        resolve();
+      };
+      get.onerror = () => reject(get.error);
+    })`);
     const metaBefore = artifactGets();
     await cachePage.click('#grove');
     await cacheWait('playing');
     cacheNow = await cacheState();
     assert.ok(
-      cacheNow.cache.report.entries.some((entry) => entry.identity === identities[0] && entry.outcome === 'origin-stored'),
+      cacheNow.cache.report.entries.some((entry) => entry.identity === identities[0] && entry.outcome === 'origin-downloaded'),
       JSON.stringify(cacheNow.cache.report.entries),
     );
     assert.equal(artifactGets() - metaBefore, 1, 'Metadata-tampered records miss and refetch');
@@ -829,7 +994,7 @@ try {
     await cachePage.click('#grove');
     await cacheWait('playing');
     cacheNow = await cacheState();
-    assert.equal(cacheNow.cache.report.entries.find((entry) => entry.identity === identities[1])?.outcome, 'origin-stored');
+    assert.equal(cacheNow.cache.report.entries.find((entry) => entry.identity === identities[1])?.outcome, 'origin-downloaded');
     await cachePage.click('#unload');
 
     // Delete vs late write under real concurrency: a delayed origin fetch
@@ -844,52 +1009,29 @@ try {
     await cacheWait('playing');
     cacheNow = await cacheState();
     const raceOutcome = cacheNow.cache.report.entries.find((entry) => entry.identity === identities[0])?.outcome;
-    assert.ok(['cache-hit', 'origin-stored'].includes(raceOutcome), JSON.stringify(cacheNow.cache.report.entries));
+    assert.ok(['cache-hit', 'origin-downloaded'].includes(raceOutcome), JSON.stringify(cacheNow.cache.report.entries));
     remote.delays.delete(groveArchivePath);
     await cachePage.click('#unload');
 
     // Namespace isolation: foreign keys in the same store survive every
     // experiment operation above.
-    const foreign = await idbRaw(`async (db) => {
-      const open = await new Promise((resolve, reject) => {
-        const request = db.open('mpgd-asset-pack-experiment');
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-      await new Promise((resolve, reject) => {
-        const tx = open.transaction('artifacts', 'readwrite');
-        tx.objectStore('artifacts').put({ foreign: true }, 'other-app|record|1');
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-      });
-      const present = await new Promise((resolve, reject) => {
-        const tx = open.transaction('artifacts', 'readonly');
-        const get = tx.objectStore('artifacts').get('other-app|record|1');
-        get.onsuccess = () => resolve(get.result !== undefined);
-        get.onerror = () => reject(get.error);
-      });
-      open.close();
-      return present;
+    await idbArtifact('readwrite', `(store) => {
+      store.put({ foreign: true }, 'other-app|record|1');
     }`);
+    const foreign = await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+      const get = store.get('other-app|record|1');
+      get.onsuccess = () => resolve(get.result !== undefined);
+      get.onerror = () => reject(get.error);
+    })`);
     assert.equal(foreign, true, 'A foreign record is insertable next to the experiment namespace');
     await cachePage.click('#grove');
     await cacheWait('playing');
     await cachePage.click('#unload');
-    const foreignAfter = await idbRaw(`async (db) => {
-      const open = await new Promise((resolve, reject) => {
-        const request = db.open('mpgd-asset-pack-experiment');
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-      const present = await new Promise((resolve, reject) => {
-        const tx = open.transaction('artifacts', 'readonly');
-        const get = tx.objectStore('artifacts').get('other-app|record|1');
-        get.onsuccess = () => resolve(get.result !== undefined);
-        get.onerror = () => reject(get.error);
-      });
-      open.close();
-      return present;
-    }`);
+    const foreignAfter = await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+      const get = store.get('other-app|record|1');
+      get.onsuccess = () => resolve(get.result !== undefined);
+      get.onerror = () => reject(get.error);
+    })`);
     assert.equal(foreignAfter, true, 'Experiment operations never touch foreign records');
 
     // Delete vs late write: the defined result is IDB's last-commit-wins
@@ -900,8 +1042,90 @@ try {
     await cacheWait('playing');
     cacheNow = await cacheState();
     const raceEntry = cacheNow.cache.report.entries.find((entry) => entry.identity === raceIdentity);
-    assert.ok(['cache-hit', 'origin-stored'].includes(raceEntry.outcome), JSON.stringify(raceEntry));
+    assert.ok(['cache-hit', 'origin-downloaded'].includes(raceEntry.outcome), JSON.stringify(raceEntry));
     await cachePage.click('#unload');
+
+    // Real aggregate quota branch: keep the migration marker, remove one
+    // current record, and make the owned usage marker full. The next origin
+    // store must abort honestly while the online load still succeeds.
+    await cachePage.evaluate((identity) => window.__artifact_cache_delete(identity), identities[1]);
+    await idbArtifact('readwrite', `(store) => {
+      store.put({ total: Number.MAX_SAFE_INTEGER }, ${JSON.stringify(cacheUsageKey)});
+    }`);
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    cacheNow = await cacheState();
+    assert.equal(
+      cacheNow.cache.report.entries.find((entry) => entry.identity === identities[1])?.outcome,
+      'origin-store-failed',
+      JSON.stringify(cacheNow.cache.report),
+    );
+    assert.equal(cacheNow.current, 'grove', 'A real quota rejection never breaks the online load');
+    await cachePage.click('#unload');
+
+    // The public key-scoped delete removes both the v2 identity and a
+    // legacy twin, unlike the private identity-only fixture hook above.
+    await idbArtifact('readwrite', `(store) => new Promise((resolve, reject) => {
+      const current = store.get(${JSON.stringify(identities[0])});
+      current.onsuccess = () => {
+        if (current.result === undefined) {
+          reject(new Error('v2 cache record was not available for public delete fixture'));
+          return;
+        }
+        store.put(current.result, ${JSON.stringify(legacyNamespacedIdentity)});
+        resolve();
+      };
+      current.onerror = () => reject(current.error);
+    })`);
+    const deletedTwin = await cachePage.evaluate((key) => window.__artifact_cache_delete_key(key), {
+      namespace: cacheNamespace,
+      sha256: currentIdentityParts[1],
+      bytes: Number(currentIdentityParts[2]),
+    });
+    assert.equal(deletedTwin, true);
+    const deletedTwinState = await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+      const current = store.get(${JSON.stringify(identities[0])});
+      const legacy = store.get(${JSON.stringify(legacyNamespacedIdentity)});
+      let pending = 2;
+      const finish = () => {
+        if (--pending === 0) resolve({ current: current.result !== undefined, legacy: legacy.result !== undefined });
+      };
+      current.onsuccess = finish;
+      legacy.onsuccess = finish;
+      current.onerror = () => reject(current.error);
+      legacy.onerror = () => reject(legacy.error);
+    })`);
+    assert.deepEqual(deletedTwinState, { current: false, legacy: false });
+
+    // Re-seed both identity forms so clear() still exercises v2 and legacy
+    // namespace matching after the key-scoped delete fixture above.
+    await idbArtifact('readwrite', `(store) => {
+      store.put({ total: 0 }, ${JSON.stringify(cacheUsageKey)});
+    }`);
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    await cachePage.click('#unload');
+    await idbArtifact('readwrite', `(store) => new Promise((resolve, reject) => {
+      const current = store.get(${JSON.stringify(identities[0])});
+      current.onsuccess = () => {
+        if (current.result === undefined) {
+          reject(new Error('v2 cache record was not available before clear fixture'));
+          return;
+        }
+        store.put(current.result, ${JSON.stringify(legacyNamespacedIdentity)});
+        resolve();
+      };
+      current.onerror = () => reject(current.error);
+    })`);
+
+    await cachePage.evaluate(() => window.__artifact_cache_clear());
+    assert.deepEqual(await usage(), { records: 0, totalBytes: 0 }, 'clear removes only the active namespace');
+    const foreignAfterClear = await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+      const get = store.get('other-app|record|1');
+      get.onsuccess = () => resolve(get.result !== undefined);
+      get.onerror = () => reject(get.error);
+    })`);
+    assert.equal(foreignAfterClear, true, 'clear never touches foreign records');
 
     assert.deepEqual(cacheErrors, []);
     await cacheContext.close();

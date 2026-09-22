@@ -7,6 +7,13 @@ import {
   type ZipDecodeWorkerLike,
 } from './archives.js';
 import {
+  assertPhaserPackPersistentCacheOptions,
+  readPhaserPackArtifactWithCommit,
+  snapshotPhaserPackPersistentCacheOptions,
+  type PhaserPackPersistentCacheOptions,
+} from './pack-cache.js';
+import { cachedCopyBufferedBytes } from './pack-file-source.js';
+import {
   PHASER_PACK_DELIVERY_VERSION,
   validatePhaserPackDeliveryManifest,
   type PhaserPackDeliveryManifest,
@@ -19,6 +26,9 @@ import type {
   PhaserPackFileIntegrity,
   PhaserPackFileSource,
 } from './packs.js';
+
+/** Keep the cache public exports parallel with packs.ts. */
+export { createPhaserPackCacheKey } from './pack-cache.js';
 
 /**
  * Prepared pack delivery: turns a delivery manifest (the `mpgd assets
@@ -338,7 +348,20 @@ export interface PhaserPackDeliveryOptions {
   /** Browser HTTP cache policy for delivery requests. Default no-store;
    * use default for immutable artifact URLs. */
   readonly requestCache?: 'default' | 'no-store' | 'reload';
+  /** Optional persistent storage for original files and ZIP archives. Cache
+   * hits still pass through the delivery decoder and loader verification. */
+  readonly persistentCache?: PhaserPackPersistentCacheOptions;
 }
+
+export type {
+  PhaserPackCacheContext,
+  PhaserPackCacheEvent,
+  PhaserPackCacheEventOutcome,
+  PhaserPackCacheKey,
+  PhaserPackCacheUsage,
+  PhaserPackPersistentCache,
+  PhaserPackPersistentCacheOptions,
+} from './pack-cache.js';
 
 export interface PreparedPhaserPack {
   /** Return this preparation's stake in the staged packs. Bytes survive
@@ -358,7 +381,9 @@ export interface PhaserPackDeliveryStaging {
 export interface PhaserPackDeliverySnapshot {
   readonly stagingUsedBytes: number;
   readonly stagingBudgetBytes: number;
+  /** Origin HTTP requests; cache hits are reported through PhaserPackCacheEvent. */
   readonly archiveRequests: number;
+  /** Origin HTTP requests; cache hits are reported through PhaserPackCacheEvent. */
   readonly fileRequests: number;
   readonly staging: readonly PhaserPackDeliveryStaging[];
 }
@@ -467,6 +492,15 @@ const fail = (
 const toBlob = (bytes: Uint8Array, mediaType: string): Blob =>
   new Blob([bytes as unknown as BlobPart], { type: mediaType });
 
+/** Return an ArrayBuffer covering exactly the supplied byte view. */
+const exactArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
+  if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength) {
+    return bytes.buffer as ArrayBuffer;
+  }
+  return bytes.slice().buffer;
+};
+
+/** Reject non-positive or unsafe integer delivery limits. */
 const positiveInteger = (value: number, label: string): void => {
   if (!Number.isSafeInteger(value) || value <= 0) {
     fail('config', `Delivery ${label} must be a positive integer`);
@@ -535,6 +569,40 @@ const abortCategory = (reason: unknown, contextLabel: string): PhaserPackDeliver
  * error with the resource noun already embedded. */
 const requestTimeoutError = (noun: string, id: string): PhaserPackDeliveryError =>
   new PhaserPackDeliveryError('transport', `Delivery ${noun} for ${id} timed out`);
+
+/** Normalize archive/file origin failures into the public delivery taxonomy. */
+const mapDeliveryFetchError = (
+  error: unknown,
+  options: {
+    readonly noun: 'archive' | 'file';
+    readonly timeoutNoun: string;
+    readonly packId: string;
+    readonly signal: AbortSignal;
+    readonly details: PhaserPackDeliveryErrorDetails;
+  },
+): never => {
+  if (error instanceof PhaserPackDeliveryError) {
+    throw error.withDetails(options.details);
+  }
+  if (error instanceof DeliveryRequestTimeout) {
+    throw requestTimeoutError(options.timeoutNoun, options.packId).withDetails(options.details);
+  }
+  if (options.signal.aborted) {
+    throw abortCategory(options.signal.reason, `${options.noun} request for ${options.packId}`)
+      .withDetails(options.details);
+  }
+  if (error instanceof DeliveryHttpStatusError) {
+    throw new PhaserPackDeliveryError('transport', error.message, {
+      ...options.details,
+      httpStatus: error.httpStatus,
+    });
+  }
+  throw new PhaserPackDeliveryError(
+    'transport',
+    `Could not fetch the delivery ${options.noun} for ${options.packId}: ${error instanceof Error ? error.message : String(error)}`,
+    options.details,
+  );
+};
 
 /** Classify a prepare failure: delivery errors pass through, an aborted
  * controller maps to its deadline/cancelled category, and anything else is
@@ -855,6 +923,8 @@ const loaderAsset = (
       key: asset.assetKey,
       textureUrl: texture.path,
       atlasUrl: atlas.path,
+      textureMediaType: texture.mediaType,
+      atlasMediaType: atlas.mediaType,
       integrity: { texture: integrityOf(texture), atlas: integrityOf(atlas) },
     };
   }
@@ -864,6 +934,7 @@ const loaderAsset = (
       kind: 'spritesheet',
       key: asset.assetKey,
       url: texture.path,
+      mediaType: texture.mediaType,
       frameConfig: {
         frameWidth: config.frameWidth,
         frameHeight: config.frameHeight,
@@ -879,6 +950,7 @@ const loaderAsset = (
     kind: 'image',
     key: asset.assetKey,
     url: texture.path,
+    mediaType: texture.mediaType,
     integrity: { texture: integrityOf(texture) },
   };
 };
@@ -912,6 +984,7 @@ export function createPhaserPackDelivery(
   const requestTimeoutMs = options.requestTimeoutMs ?? 10_000;
   const maxFileBytes = options.maxFileBytes ?? 32 * 1024 * 1024;
   const requestCache = options.requestCache ?? 'no-store';
+  const configuredPersistentCache = options.persistentCache;
   positiveInteger(stagingBudgetBytes, 'staging budget');
   timerRangeInteger(prepareTimeoutMs, 'prepare timeout');
   timerRangeInteger(requestTimeoutMs, 'request timeout');
@@ -919,6 +992,15 @@ export function createPhaserPackDelivery(
   if (!['default', 'no-store', 'reload'].includes(requestCache)) {
     fail('config', 'Delivery HTTP cache policy must be default, no-store or reload');
   }
+  try {
+    assertPhaserPackPersistentCacheOptions(
+      configuredPersistentCache,
+      'Delivery persistent cache is invalid',
+    );
+  } catch (error) {
+    fail('config', error instanceof Error ? error.message : 'Delivery persistent cache is invalid');
+  }
+  const persistentCache = snapshotPhaserPackPersistentCacheOptions(configuredPersistentCache);
   if ((options.baseUrl === undefined) === (options.resolveURL === undefined)) {
     fail('config', 'Delivery requires exactly one of baseUrl or resolveURL');
   }
@@ -1114,54 +1196,53 @@ export function createPhaserPackDelivery(
     ): void => {
       tracker?.nextEvent(phase, { ...packContext, progress });
     };
-    const url = resolveArtifact(archive.path, packContext);
-    // URL resolution runs synchronous user code; the budget gate sits
-    // immediately before the request it guards, after that code, so no
-    // archive request can start on a budget spent inside the resolver.
+    // Keep this initial gate before cache access as well as origin access.
+    // URL resolution itself is deferred into fetchOrigin below so a valid
+    // cache hit never needs a live origin URL or signing state.
     if (deadlineAt - monotonicNow() <= 0) {
       fail('deadline', 'Delivery preparation exceeded its deadline');
     }
-    archiveRequests++;
-    // Emitted once the body starts: the first observation reports zero
-    // delivered bytes against the manifest's declared size, and every
-    // network chunk updates the measured count. Content-Length alone
-    // never decides success or total size.
-    emit('downloading', { bodyBytes: 0, expectedBodyBytes: archive.bytes });
-    const bytes = await fetchDeliveryBytes(
-      url,
-      requestTimeoutMs,
+    const archiveRead = await readPhaserPackArtifactWithCommit({
+      persistentCache,
+      integrity: archive,
+      artifact: { kind: 'archive', ...packContext },
       signal,
-      requestCache,
-      archive.bytes,
-      (status): string => `Delivery archive request failed with HTTP ${status} (${pack.packId})`,
-      archive.bytes,
-      (received): void => {
-        emit('downloading', { bodyBytes: received, expectedBodyBytes: archive.bytes });
+      fetchOrigin: async (): Promise<ArrayBuffer> => {
+        const url = resolveArtifact(archive.path, packContext);
+        // URL resolution runs synchronous user code; the budget gate sits
+        // immediately before the request it guards, after that code, so no
+        // archive request can start on a budget spent inside the resolver.
+        if (deadlineAt - monotonicNow() <= 0) {
+          fail('deadline', 'Delivery preparation exceeded its deadline');
+        }
+        archiveRequests++;
+        // Emitted once the body starts: the first observation reports zero
+        // delivered bytes against the manifest's declared size, and every
+        // network chunk updates the measured count. Content-Length alone
+        // never decides success or total size.
+        emit('downloading', { bodyBytes: 0, expectedBodyBytes: archive.bytes });
+        const fetched = await fetchDeliveryBytes(
+          url,
+          requestTimeoutMs,
+          signal,
+          requestCache,
+          archive.bytes,
+          (status): string => `Delivery archive request failed with HTTP ${status} (${pack.packId})`,
+          archive.bytes,
+          (received): void => {
+            emit('downloading', { bodyBytes: received, expectedBodyBytes: archive.bytes });
+          },
+        ).catch((error: unknown) => mapDeliveryFetchError(error, {
+          noun: 'archive',
+          timeoutNoun: 'archive request',
+          packId: pack.packId,
+          signal,
+          details: { stage: 'downloading', ...packContext },
+        }));
+        return exactArrayBuffer(fetched);
       },
-    ).catch((error: unknown) => {
-      if (error instanceof PhaserPackDeliveryError) {
-        throw error;
-      }
-      if (error instanceof DeliveryRequestTimeout) {
-        throw requestTimeoutError('archive request', pack.packId)
-          .withDetails({ stage: 'downloading', ...packContext });
-      }
-      if (signal.aborted) {
-        throw abortCategory(signal.reason, `preparation for ${pack.packId}`);
-      }
-      if (error instanceof DeliveryHttpStatusError) {
-        throw new PhaserPackDeliveryError('transport', error.message, {
-          stage: 'downloading',
-          ...packContext,
-          httpStatus: error.httpStatus,
-        });
-      }
-      throw new PhaserPackDeliveryError(
-        'transport',
-        `Could not fetch the delivery archive for ${pack.packId}: ${error instanceof Error ? error.message : String(error)}`,
-        { stage: 'downloading', ...packContext },
-      );
     });
+    const bytes = new Uint8Array(archiveRead.bytes);
     if (bytes.byteLength !== archive.bytes) {
       fail(
         'integrity',
@@ -1305,6 +1386,10 @@ export function createPhaserPackDelivery(
           { stage: 'decoding-and-verifying', ...packContext },
         );
       }
+      // A completed decoder job already proves the whole-archive digest: it
+      // hashes the submitted bytes in every transport mode and rejects
+      // completion unless it matches expected.archive.sha256.
+      await archiveRead.commit?.(true, { transferOwnership: true });
     } catch (error) {
       void job.cancel().catch(() => undefined);
       // Mid-stream decode failures (entry digest mismatch, corrupt interior,
@@ -1374,6 +1459,12 @@ export function createPhaserPackDelivery(
   };
 
   const fileSource: PhaserPackFileSource = {
+    additionalBufferedBytes(request): number {
+      const entry = packIndex.get(request.packId);
+      return entry?.pack.delivery === 'files'
+        ? cachedCopyBufferedBytes(persistentCache, request.integrity, maxFileBytes)
+        : 0;
+    },
     async open(request, context) {
       assertLive();
       const entry = packIndex.get(request.packId);
@@ -1395,7 +1486,6 @@ export function createPhaserPackDelivery(
       }
       if (entry.pack.delivery === 'files') {
         let readOnce = false;
-        let transfer: (() => void) | undefined;
         return {
           async read(): Promise<PhaserPackFileBody> {
             if (readOnce) {
@@ -1423,30 +1513,31 @@ export function createPhaserPackDelivery(
             // try so the finally can dispose it.
             const bridge = bridgeSignals(context.signal, shutdown.signal);
             const combined = bridge.signal;
+            // A cache miss returns a deferred commit that runs after this
+            // read() promise settles. Keep a separate bridge alive through
+            // that later write so delivery.dispose() still aborts it.
+            const commitBridge = bridgeSignals(context.signal, shutdown.signal);
+            let commitStarted = false;
+            let commitPending = false;
+            let released = false;
+            const mapReadAbort = (error: unknown): never => {
+              if (error instanceof PhaserPackDeliveryError) {
+                throw error;
+              }
+              if (combined.aborted) {
+                if (context.signal.aborted && combined.reason === context.signal.reason) {
+                  throw new PhaserPackDeliveryError(
+                    'cancelled',
+                    `Delivery file request for ${request.packId} was cancelled`,
+                    requestContext,
+                  );
+                }
+                throw abortCategory(combined.reason, `file request for ${request.packId}`)
+                  .withDetails(requestContext);
+              }
+              throw error;
+            };
             try {
-              // The permit wait hears the combined signal too: a dispose()
-              // while this read is queued behind the transfer budget must
-              // settle it with 'disposed', not leave it queued forever.
-              transfer = await context.budgets.transfers.acquire(combined).catch(
-                (error: unknown): never => {
-                  if (combined.aborted) {
-                    // First-abort-wins: the combined reason remembers which
-                    // signal fired first even if both aborted in one turn.
-                    if (context.signal.aborted && combined.reason === context.signal.reason) {
-                      throw new PhaserPackDeliveryError(
-                        'cancelled',
-                        `Delivery file request for ${request.packId} was cancelled`,
-                      );
-                    }
-                    throw abortCategory(combined.reason, `file request for ${request.packId}`);
-                  }
-                  throw error;
-                },
-              );
-              fileRequests++;
-              const url = resolveArtifact(role.path, {
-                packId: request.packId, revision: request.revision,
-              });
               // The loader reserves only the declared size in the shared
               // budget, so the streaming cap is the declared bytes (when
               // known) rather than the transport maximum, and the failure
@@ -1455,67 +1546,72 @@ export function createPhaserPackDelivery(
               const cap = declared === undefined || declared <= 0
                 ? maxFileBytes
                 : Math.min(declared, maxFileBytes);
-              tracker.nextEvent('downloading', {
-                packId: request.packId,
-                revision: request.revision,
-                assetKey: request.assetKey,
-                role: request.role,
-                ...(declared === undefined ? {} : { progress: { bodyBytes: 0, expectedBodyBytes: declared } }),
-              });
-              const bytes = await fetchDeliveryBytes(
-                url,
-                requestTimeoutMs,
-                combined,
-                requestCache,
-                cap,
-                (status): string => `Delivery file request failed with HTTP ${status} (${request.packId})`,
-                declared,
-                (received): void => {
-                  tracker.nextEvent('downloading', {
-                    packId: request.packId,
-                    revision: request.revision,
-                    assetKey: request.assetKey,
-                    role: request.role,
-                    ...(declared === undefined
-                      ? { progress: { bodyBytes: received } }
-                      : { progress: { bodyBytes: received, expectedBodyBytes: declared } }),
-                  });
+              const cacheForRead = declared !== undefined && declared > maxFileBytes
+                ? undefined
+                : persistentCache;
+              const fileRead = await readPhaserPackArtifactWithCommit({
+                persistentCache: cacheForRead,
+                integrity: request.integrity,
+                artifact: {
+                  kind: 'file',
+                  packId: request.packId,
+                  revision: request.revision,
+                  assetKey: request.assetKey,
+                  role: request.role,
                 },
-              ).catch((error: unknown) => {
-                if (error instanceof PhaserPackDeliveryError) {
-                  throw error.withDetails({ ...requestContext, stage: 'downloading' });
-                }
-                if (error instanceof DeliveryRequestTimeout) {
-                  throw requestTimeoutError('file request', request.packId)
-                    .withDetails({ ...requestContext, stage: 'downloading' });
-                }
-                if (combined.aborted && combined.reason === context.signal.reason) {
-                  throw new PhaserPackDeliveryError(
-                    'cancelled',
-                    `Delivery file request for ${request.packId} was cancelled`,
-                    requestContext,
-                  );
-                }
-                if (combined.aborted) {
-                  // First-abort-wins: the combined reason remembers whether
-                  // the shutdown fired before the loader signal.
-                  const reason = combined.reason;
-                  throw abortCategory(reason, `file request for ${request.packId}`)
-                    .withDetails(requestContext);
-                }
-                if (error instanceof DeliveryHttpStatusError) {
-                  throw new PhaserPackDeliveryError('transport', error.message, {
-                    ...requestContext,
-                    stage: 'downloading',
-                    httpStatus: error.httpStatus,
-                  });
-                }
-                throw new PhaserPackDeliveryError(
-                  'transport',
-                  `Could not fetch the delivery file for ${request.packId}: ${error instanceof Error ? error.message : String(error)}`,
-                  { ...requestContext, stage: 'downloading' },
-                );
-              });
+                signal: combined,
+                commitSignal: commitBridge.signal,
+                fetchOrigin: async (): Promise<ArrayBuffer> => {
+                  // Only an origin fetch consumes the transfer permit; cache
+                  // hits are bounded by the byte budget and do not use it.
+                  const releaseTransfer = await context.budgets.transfers.acquire(combined).catch(mapReadAbort);
+                  try {
+                    combined.throwIfAborted();
+                    const url = resolveArtifact(role.path, {
+                      packId: request.packId, revision: request.revision,
+                    });
+                    combined.throwIfAborted();
+                    tracker.nextEvent('downloading', {
+                      packId: request.packId,
+                      revision: request.revision,
+                      assetKey: request.assetKey,
+                      role: request.role,
+                      ...(declared === undefined ? {} : { progress: { bodyBytes: 0, expectedBodyBytes: declared } }),
+                    });
+                    fileRequests++;
+                    const fetched = await fetchDeliveryBytes(
+                      url,
+                      requestTimeoutMs,
+                      combined,
+                      requestCache,
+                      cap,
+                      (status): string => `Delivery file request failed with HTTP ${status} (${request.packId})`,
+                      declared,
+                      (received): void => {
+                        tracker.nextEvent('downloading', {
+                          packId: request.packId,
+                          revision: request.revision,
+                          assetKey: request.assetKey,
+                          role: request.role,
+                          ...(declared === undefined
+                            ? { progress: { bodyBytes: received } }
+                            : { progress: { bodyBytes: received, expectedBodyBytes: declared } }),
+                        });
+                      },
+                    ).catch((error: unknown) => mapDeliveryFetchError(error, {
+                      noun: 'file',
+                      timeoutNoun: 'file request',
+                      packId: request.packId,
+                      signal: combined,
+                      details: { ...requestContext, stage: 'downloading' },
+                    }));
+                    return exactArrayBuffer(fetched);
+                  } finally {
+                    releaseTransfer();
+                  }
+                },
+              }).catch(mapReadAbort);
+              const bytes = new Uint8Array(fileRead.bytes);
               tracker.nextEvent('completed', {
                 packId: request.packId,
                 revision: request.revision,
@@ -1525,9 +1621,42 @@ export function createPhaserPackDelivery(
                   ? { progress: { bodyBytes: bytes.byteLength } }
                   : { progress: { bodyBytes: bytes.byteLength, expectedBodyBytes: declared } }),
               });
+              const commitCache = fileRead.commit === undefined
+                ? undefined
+                : async (): Promise<void> => {
+                  if (released || commitStarted) {
+                    return;
+                  }
+                  commitStarted = true;
+                  try {
+                    await fileRead.commit!(true, { transferOwnership: true });
+                  } catch (error) {
+                    if (commitBridge.signal.aborted) {
+                      throw abortCategory(
+                        commitBridge.signal.reason,
+                        `file cache commit for ${request.packId}`,
+                      ).withDetails(requestContext);
+                    }
+                    throw error;
+                  } finally {
+                    commitBridge.dispose();
+                  }
+                };
+              if (commitCache === undefined) {
+                commitStarted = true;
+                commitBridge.dispose();
+              } else {
+                commitPending = true;
+              }
               return {
                 bytes: toBlob(bytes, role.mediaType),
+                ...(commitCache === undefined ? {} : { commitCache }),
                 release(): void {
+                  released = true;
+                  if (!commitStarted) {
+                    commitStarted = true;
+                    commitBridge.dispose();
+                  }
                 },
               };
             } catch (error) {
@@ -1551,8 +1680,10 @@ export function createPhaserPackDelivery(
               }
               throw error;
             } finally {
+              if (!commitPending) {
+                commitBridge.dispose();
+              }
               bridge.dispose();
-              transfer?.();
             }
           },
           close(): void {
@@ -1731,7 +1862,10 @@ export function createPhaserPackDelivery(
         tracker.nextEvent('prepared', { packId, revision: requestedRevision });
         return { release: handles.release };
       }
-      tracker.nextEvent('planning', { packId, revision: requestedRevision });
+      // A previous caller may return its final handle/reader while we await
+      // another archive. Pin resident dependencies until our complete closure
+      // has its own handles, so that late cleanup cannot evict our inputs.
+      const residentHandles = acquireHandles(zipPacks.filter((pack) => staged.has(pack.packId)));
       activePrepare = true;
       const controller = new AbortController();
       const deadlineAt = monotonicNow() + prepareTimeoutMs;
@@ -1752,6 +1886,7 @@ export function createPhaserPackDelivery(
       shutdown.signal.addEventListener('abort', forward, { once: true });
       const newlyStaged: StagedPack[] = [];
       try {
+        tracker.nextEvent('planning', { packId, revision: requestedRevision });
         if (prepareOptions.signal?.aborted) {
           fail('cancelled', 'Delivery preparation was cancelled');
         }
@@ -1812,6 +1947,7 @@ export function createPhaserPackDelivery(
         );
         throw error;
       } finally {
+        residentHandles.release();
         clearTimeout(timer);
         prepareOptions.signal?.removeEventListener('abort', forward);
         shutdown.signal.removeEventListener('abort', forward);

@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import type Phaser from 'phaser';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { PhaserPackCacheEvent, PhaserPackPersistentCache } from '../src/pack-cache.js';
 import { createPackUrlFileSource } from '../src/pack-file-source.js';
 import {
   createPhaserAssetPackLoader,
@@ -509,12 +510,75 @@ describe('default URL source ownership', () => {
     return { opened, controller };
   };
 
+  it('reports the retained cache-copy bytes only when the source can commit them', () => {
+    const storage = {} as PhaserPackPersistentCache;
+    const integrity = { bytes: png.byteLength, sha256: sha256(png) };
+    const request: PhaserPackFileRequest = {
+      packId: 'shared',
+      revision: '1',
+      assetKey: 'pilot',
+      role: 'texture',
+      url: '/pilot.png',
+      integrity,
+    };
+    const cached = createPackUrlFileSource({
+      ...transport,
+      maxFileBytes: png.byteLength,
+      persistentCache: { storage, namespace: 'app' },
+    });
+    expect(cached.additionalBufferedBytes?.(request)).toBe(png.byteLength);
+    expect(cached.additionalBufferedBytes?.({ ...request, integrity: undefined })).toBe(0);
+    expect(cached.additionalBufferedBytes?.({
+      ...request,
+      integrity: { ...integrity, bytes: png.byteLength + 1 },
+    })).toBe(0);
+    expect(createPackUrlFileSource(transport).additionalBufferedBytes?.(request)).toBe(0);
+  });
+
   it('rejects a second read of the same opened file', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(png)));
     const { opened } = await openFile();
     expect((await opened.read()).bytes.size).toBe(3);
     await expect(opened.read()).rejects.toThrow('already read');
     expect(fetch).toHaveBeenCalledOnce();
+    opened.close();
+  });
+
+  it.each([false, true])('resolves signed URLs after admission and returns the permit (resolver throws=%s)', async (throws) => {
+    const release = vi.fn();
+    let admit!: (release: () => void) => void;
+    const admission = new Promise<() => void>((resolve) => {
+      admit = resolve;
+    });
+    const acquire = vi.fn(() => admission);
+    let signature = 'expired';
+    const resolveURL = vi.fn(() => {
+      if (throws) {
+        throw new Error('signer unavailable');
+      }
+      return `/pilot.png?signature=${signature}`;
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(png)));
+    const opened = await createPackUrlFileSource({ ...transport, resolveURL }).open({
+      packId: 'shared', revision: '1', assetKey: 'pilot', role: 'texture', url: '/pilot.png',
+    }, {
+      signal: new AbortController().signal,
+      budgets: { transfers: { acquire }, bytes: { acquire: async () => () => undefined } },
+    });
+    const reading = opened.read();
+    expect(acquire).toHaveBeenCalledOnce();
+    expect(resolveURL).not.toHaveBeenCalled();
+    signature = 'fresh';
+    admit(release);
+    if (throws) {
+      await expect(reading).rejects.toThrow('signer unavailable');
+      expect(fetch).not.toHaveBeenCalled();
+    } else {
+      const body = await reading;
+      expect(fetch).toHaveBeenCalledWith('/pilot.png?signature=fresh', expect.anything());
+      body.release();
+    }
+    expect(release).toHaveBeenCalledOnce();
     opened.close();
   });
 
@@ -528,6 +592,64 @@ describe('default URL source ownership', () => {
     await expect(opened.read()).rejects.toThrow('Asset network request failed');
     expect((await opened.read()).bytes.size).toBe(3);
     expect(fetch).toHaveBeenCalledTimes(2);
+    opened.close();
+  });
+
+  it('uses verified persistent bytes before starting the origin request', async () => {
+    const records = new Map<string, ArrayBuffer>([['app|shared-file', png.buffer.slice(0)]]);
+    const events: PhaserPackCacheEvent[] = [];
+    const storage: PhaserPackPersistentCache = {
+      async get() {
+        return records.get('app|shared-file')?.slice(0);
+      },
+      async put() {
+        throw new Error('put should not run for a hit');
+      },
+      async delete() {
+        return false;
+      },
+      async clear() {
+      },
+      async usage() {
+        return { records: 1, totalBytes: png.byteLength };
+      },
+    };
+    const source = createPackUrlFileSource({
+      ...transport,
+      persistentCache: {
+        storage,
+        namespace: 'app',
+        onEvent: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new Error('origin must not be reached');
+    }));
+    const controller = new AbortController();
+    const noop = (): void => {
+    };
+    const opened = await source.open({
+      packId: 'shared',
+      revision: '1',
+      assetKey: 'pilot',
+      role: 'texture',
+      url: '/asset',
+      mediaType: 'image/svg+xml',
+      integrity: { bytes: png.byteLength, sha256: sha256(png) },
+    }, {
+      signal: controller.signal,
+      budgets: {
+        transfers: { acquire: async () => noop },
+        bytes: { acquire: async () => noop },
+      },
+    });
+    const body = await opened.read();
+    expect(body.bytes.size).toBe(png.byteLength);
+    expect(body.bytes.type).toBe('image/svg+xml');
+    expect(fetch).not.toHaveBeenCalled();
+    expect(events.map((event) => event.outcome)).toEqual(['cache-hit']);
     opened.close();
   });
 });

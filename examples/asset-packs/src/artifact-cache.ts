@@ -1,24 +1,33 @@
 /**
- * Private experiment: persist verified artifact bytes in IndexedDB and
- * re-serve them to the existing public delivery through managed Blob
- * URLs. This module is example-only scaffolding for the reuse
- * acceptance — it is deliberately NOT a public cache API (that comes in
- * a later PR, wired at the acquisition boundary instead of Blob URLs).
+ * Example IndexedDB implementation of the public persistent cache contract.
+ * The package owns the acquisition boundary; this module only supplies
+ * storage and remains example-only.
  *
  * What is stored: original bytes of files-delivery files and ZIP
  * archives. Never stored: expanded entries (the delivery stages them
  * in memory), images/audio/textures, code, tokens or personal data.
  *
  * Identity is content-derived and host independent:
- * `${namespace}|${digestAlgorithm}|${expectedDigest}|${expectedBytes}`.
+ * `${namespace}|${digestAlgorithm}|${expectedDigest}|${expectedBytes}` for
+ * legacy records, or `v2:<encodedNamespace>:<expectedDigest>:<expectedBytes>`
+ * for new records. The v2 form has no legacy `|sha256|` marker, so namespace
+ * matching remains unambiguous even when a namespace contains separators.
  * Pack paths, CDN hosts and expiring queries are never the key, so the
  * same artifact fetched from another host resolves to the same record.
  * MIME and file roles always come from the CURRENT manifest — a stored
  * record's media type is never reused across manifests.
  */
 
+import type {
+  PhaserPackCacheContext,
+  PhaserPackCacheKey,
+  PhaserPackCacheEventOutcome,
+  PhaserPackCacheUsage,
+  PhaserPackPersistentCache,
+} from '@mpgd/phaser-assets/delivery';
+
 /** Finite limits: a single object and the total retained bytes are both
- * capped; over-cap stores are skipped explicitly, never silently. No
+ * capped; over-cap stores abort and surface as store failures. No
  * LRU/GC/pin policy exists in this experiment. */
 const MAX_OBJECT_BYTES = 32 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 96 * 1024 * 1024;
@@ -26,7 +35,6 @@ const MAX_TOTAL_BYTES = 96 * 1024 * 1024;
  * deadlines here, so a late timer resolves the whole session to
  * 'unavailable' and the origin path takes over. */
 const IO_TIMEOUT_MS = 5_000;
-const FETCH_TIMEOUT_MS = 8_000;
 
 const DB_NAME = 'mpgd-asset-pack-experiment';
 const STORE_NAME = 'artifacts';
@@ -34,52 +42,35 @@ const STORE_NAME = 'artifacts';
  * else in the store belongs to other data and is never touched. */
 const KEY_PREFIX = 'mpgd-asset-experiment|';
 const USAGE_KEY = KEY_PREFIX + '__usage__';
+const MIGRATION_KEY = KEY_PREFIX + '__public-cache-migrated__';
 const SCHEMA_VERSION = 1;
 
-/** One artifact to warm, derived from the CURRENT manifest (digest,
- * bytes, media type) plus its once-encoded delivery path. */
-export interface WarmArtifact {
-  /** Manifest artifact path, already URL-encoded exactly once. */
-  readonly encodedPath: string;
-  readonly sha256: string;
-  readonly bytes: number;
-  readonly mediaType: string;
-  /** Absolute origin URL used on a cache miss. */
-  readonly originUrl: string;
-}
-
-/** Why this artifact resolved the way it did. 'unavailable' means the
- * cache store could not be used at all (open failure/timeout) — a
- * distinct condition from a miss, a corrupt record or a store failure. */
+/** Compact evidence outcomes used by the example's render/test surface. */
 export type WarmOutcome =
   | 'cache-hit'
-  | 'origin-stored'
-  | 'origin-store-failed'
-  | 'origin-store-skipped'
-  | 'cache-unavailable'
-  /** The experiment's own acquisition failed; no Blob URL exists and
-   * the delivery's own origin fetch (with its retries and limits) owns
-   * the outcome. Local acquisition failure and delivery failure stay
-   * separate conditions. */
-  | 'origin-fetch-failed';
+  | 'origin-downloaded'
+  | 'origin-store-failed';
+
+type StoreOutcome = 'origin-stored' | 'origin-store-failed';
 
 export interface WarmEntry {
-  readonly encodedPath: string;
+  readonly artifactLabel: string;
   readonly identity: string;
   readonly outcome: WarmOutcome;
   readonly bodyBytes: number;
-  readonly cacheReadMs: number | null;
-  readonly verifyMs: number | null;
-  readonly fetchMs: number | null;
-  readonly writeMs: number | null;
-  readonly blobMs: number;
+}
+
+export interface WarmDiagnostic {
+  readonly identity: string;
+  readonly outcome: PhaserPackCacheEventOutcome;
 }
 
 export interface WarmReport {
   readonly entries: readonly WarmEntry[];
   readonly hits: number;
-  readonly stored: number;
+  readonly downloaded: number;
   readonly failures: number;
+  readonly diagnostics: readonly WarmDiagnostic[];
 }
 
 /** Test-only fault injection, set from page evaluation in the browser
@@ -94,58 +85,318 @@ interface CacheRecord {
   readonly schemaVersion: number;
   readonly digest: string;
   readonly bytes: number;
-  readonly mediaType: string;
   readonly storedAt: number;
   readonly payload: ArrayBuffer;
 }
 
-const identityOf = (artifact: { readonly sha256: string; readonly bytes: number }): string =>
-  `${KEY_PREFIX}sha256|${artifact.sha256}|${artifact.bytes}`;
+interface StoredArtifact {
+  readonly sha256: string;
+  readonly bytes: number;
+}
 
-/** Post-acquisition verification: the manifest's size and digest decide
- * acceptance; a lying origin never reaches storage or a Blob URL. */
-const verifyAcquisition = async (
-  data: ArrayBuffer,
-  artifact: WarmArtifact,
-): Promise<ArrayBuffer> => {
-  const digest = await sha256Hex(data);
-  if (data.byteLength !== artifact.bytes || digest !== artifact.sha256) {
-    throw new Error('artifact bytes failed manifest verification at acquisition');
+/** Namespaces containing `|` use an unambiguous v2 identity and retain their
+ * legacy twin only while an older record is being migrated. */
+const encodedNamespaceOf = (namespace: string): string | undefined => {
+  if (!namespace.includes('|')) {
+    return undefined;
   }
-  return data;
+  try {
+    const encoded = encodeURIComponent(namespace);
+    // Modern engines encode lone surrogates as U+FFFD instead of throwing;
+    // only use the v2 form when it decodes back to the exact namespace.
+    return decodeURIComponent(encoded) === namespace ? encoded : undefined;
+  } catch {
+    return undefined;
+  }
 };
 
-const sha256Hex = async (data: ArrayBuffer): Promise<string> => {
-  const digest = await crypto.subtle.digest('SHA-256', data);
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+const usesV2Identity = (key: PhaserPackCacheKey): boolean =>
+  encodedNamespaceOf(key.namespace) !== undefined;
+
+/** Convert a public content identity to this adapter's namespaced key. */
+export const artifactCacheIdentity = (key: PhaserPackCacheKey): string => {
+  const encodedNamespace = encodedNamespaceOf(key.namespace);
+  return encodedNamespace === undefined
+    ? `${KEY_PREFIX}${key.namespace}|sha256|${key.sha256}|${key.bytes}`
+    : `${KEY_PREFIX}v2:${encodedNamespace}:${key.sha256}:${key.bytes}`;
+};
+
+interface V2IdentityParts {
+  readonly namespace: string;
+  readonly sha256: string;
+  readonly bytes: number;
+}
+
+const v2IdentityPartsOf = (identity: string): V2IdentityParts | undefined => {
+  if (!identity.startsWith(KEY_PREFIX)) {
+    return undefined;
+  }
+  const current = /^v2:([^:]*):([0-9a-f]{64}):(\d+)$/iu.exec(identity.slice(KEY_PREFIX.length));
+  if (current === null) {
+    return undefined;
+  }
+  try {
+    return {
+      namespace: decodeURIComponent(current[1]!),
+      // Preserve the matched case: legacyTwinOf must stay byte-identical to
+      // legacyArtifactCacheIdentity, which interpolates key.sha256 verbatim
+      // (the package factory lowercases, but the raw debug-hook key in
+      // main.ts can still carry uppercase hex).
+      sha256: current[2]!,
+      bytes: Number(current[3]),
+    };
+  } catch {
+    return undefined;
+  }
+};
+
+/** Decode the namespace from current and pre-public content identities. */
+const namespaceOfIdentity = (identity: string): string | undefined => {
+  if (!identity.startsWith(KEY_PREFIX)) {
+    return undefined;
+  }
+  const current = v2IdentityPartsOf(identity);
+  if (current !== undefined) {
+    return current.namespace;
+  }
+  const rest = identity.slice(KEY_PREFIX.length);
+  // The old public form ends with `|sha256|<64 hex>|<bytes>`; the greedy
+  // group anchors to the last marker plus a validated tail, so a namespace
+  // embedding `|sha256|` or a line terminator still decodes exactly.
+  const legacy = /^(.*)\|sha256\|[0-9a-f]{64}\|\d+$/isu.exec(rest);
+  return legacy === null ? undefined : legacy[1]!;
+};
+
+const legacyArtifactCacheIdentity = (key: PhaserPackCacheKey): string =>
+  `${KEY_PREFIX}${key.namespace}|sha256|${key.sha256}|${key.bytes}`;
+
+/** Return the old-form twin of one parsed v2 identity. */
+const legacyTwinOfParts = (current: V2IdentityParts): string => {
+  return `${KEY_PREFIX}${current.namespace}|sha256|${current.sha256}|${current.bytes}`;
+};
+
+const arrayBufferByteLength = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  'byteLength',
+)!.get!;
+
+/** Accept ArrayBuffers supplied by another same-origin realm. Keep this
+ * adapter-local twin aligned with the package boundary check in
+ * packages/phaser-assets/src/pack-cache.ts; the example must validate records
+ * before it can call the public storage contract. */
+const isArrayBuffer = (value: unknown): value is ArrayBuffer => {
+  try {
+    arrayBufferByteLength.call(value);
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 /** A bounded promise wrapper: DB work must never hang the prepare. */
 const withDeadline = async <T>(
-  operation: (finish: (value: T) => void, fail: (error: unknown) => void) => void,
+  operation: (
+    finish: (value: T) => void,
+    fail: (error: unknown) => void,
+    registerAbort: (abort: () => void) => void,
+  ) => void,
   label: string,
+  signal?: AbortSignal,
 ): Promise<T> => {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let abortWork: (() => void) | undefined;
+  let abortTriggered = false;
+  let onAbort: (() => void) | undefined;
+  const abortReason = (): unknown => signal?.reason
+    ?? new DOMException('The operation was aborted', 'AbortError');
   try {
     return await new Promise<T>((resolve, reject) => {
-      timer = setTimeout(() => reject(new Error(`artifact cache ${label} timed out`)), IO_TIMEOUT_MS);
-      operation((value) => resolve(value), reject);
+      const runAbortWork = (): void => {
+        if (abortTriggered) {
+          return;
+        }
+        abortTriggered = true;
+        abortWork?.();
+      };
+      timer = setTimeout(() => {
+        runAbortWork();
+        reject(new Error(`artifact cache ${label} timed out`));
+      }, IO_TIMEOUT_MS);
+      onAbort = (): void => {
+        runAbortWork();
+        reject(abortReason());
+      };
+      signal?.addEventListener('abort', onAbort, { once: true });
+      operation(
+        (value) => resolve(value),
+        reject,
+        (abort) => {
+          abortWork = abort;
+          if (signal?.aborted) {
+            runAbortWork();
+          }
+        },
+      );
+      if (signal?.aborted) {
+        onAbort();
+      }
     });
   } finally {
     clearTimeout(timer);
+    if (onAbort !== undefined) {
+      signal?.removeEventListener('abort', onAbort);
+    }
   }
 };
 
-export class ArtifactCache {
+/** Read the byte-count suffix used by the adapter's accounting marker. */
+const bytesOfIdentity = (identity: string): number | undefined => {
+  const suffix = /[|:](\d+)$/u.exec(identity)?.[1];
+  const bytes = Number(suffix);
+  return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : undefined;
+};
+
+/** Recognize the digest-only keys written by the retired private experiment. */
+const isLegacyIdentity = (identity: string): boolean => {
+  if (!identity.startsWith(KEY_PREFIX)) {
+    return false;
+  }
+  const parts = identity.split('|');
+  return parts.length === 4 && parts[1] === 'sha256';
+};
+
+/** Apply owned-record deletions and recompute the aggregate quota marker. */
+const finishOwnedRecordRepair = (
+  store: IDBObjectStore,
+  keys: Iterable<string>,
+  deleted: ReadonlySet<string>,
+  markerKey?: string,
+): void => {
+  let remaining = 0;
+  for (const key of keys) {
+    if (key === USAGE_KEY || key === MIGRATION_KEY) {
+      continue;
+    }
+    if (deleted.has(key)) {
+      store.delete(key);
+      continue;
+    }
+    if (key.startsWith(KEY_PREFIX)) {
+      remaining += bytesOfIdentity(key) ?? 0;
+    }
+  }
+  store.put({ total: remaining }, USAGE_KEY);
+  if (markerKey !== undefined) {
+    store.put({ version: 1 }, markerKey);
+  }
+};
+
+/** Delete matching owned records and repair the aggregate quota marker in the
+ * same transaction. A migration marker can make the scan idempotent. */
+const repairOwnedRecords = async (
+  db: IDBDatabase,
+  shouldDelete: (identity: string) => boolean,
+  label: string,
+  signal?: AbortSignal,
+  markerKey?: string,
+): Promise<void> => {
+  await withDeadline<void>((finish, fail, registerAbort) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    registerAbort(() => tx.abort());
+    const store = tx.objectStore(STORE_NAME);
+    const scan = (): void => {
+      const request = store.getAllKeys();
+      request.onsuccess = () => {
+        const keys = request.result.filter((key): key is string => typeof key === 'string');
+        const deleted = new Set(keys.filter(
+          (key) => key !== USAGE_KEY && key !== MIGRATION_KEY && shouldDelete(key),
+        ));
+        finishOwnedRecordRepair(store, keys, deleted, markerKey);
+      };
+      request.onerror = () => fail(request.error ?? new Error(`artifact cache ${label} failed`));
+    };
+    if (markerKey === undefined) {
+      scan();
+    } else {
+      const marker = store.get(markerKey);
+      marker.onsuccess = () => {
+        if (marker.result !== undefined) {
+          finish(undefined);
+          return;
+        }
+        scan();
+      };
+      marker.onerror = () => fail(marker.error ?? new Error(`artifact cache ${label} failed`));
+    }
+    tx.oncomplete = () => finish(undefined);
+    tx.onabort = () => fail(tx.error ?? new Error(`artifact cache ${label} aborted`));
+    tx.onerror = () => undefined;
+  }, label, signal);
+};
+
+/** Remove records written by the pre-public Blob-URL experiment and repair
+ * the aggregate quota marker in the same transaction. */
+const sweepLegacyRecords = async (db: IDBDatabase): Promise<void> => {
+  await repairOwnedRecords(db, isLegacyIdentity, 'migration', undefined, MIGRATION_KEY);
+};
+
+/** Remove a legacy pipe-namespace twin after a v2 copy survived a reload. */
+const reconcileLegacyTwins = async (db: IDBDatabase): Promise<void> => {
+  await withDeadline<void>((finish, fail, registerAbort) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    registerAbort(() => tx.abort());
+    const store = tx.objectStore(STORE_NAME);
+    const request = store.getAllKeys();
+    request.onsuccess = () => {
+      const keys = new Set(request.result.filter((key): key is string => typeof key === 'string'));
+      const candidates = [...keys].flatMap((key) => {
+        const current = v2IdentityPartsOf(key);
+        if (current === undefined) {
+          return [];
+        }
+        const twin = legacyTwinOfParts(current);
+        return keys.has(twin) ? [{ key, twin, current }] : [];
+      });
+      const deleted = new Set<string>();
+      if (candidates.length === 0) {
+        finish(undefined);
+        return;
+      }
+      let pending = candidates.length;
+      for (const candidate of candidates) {
+        const currentRequest = store.get(candidate.key);
+        currentRequest.onsuccess = () => {
+          const record = currentRequest.result as CacheRecord | undefined;
+          const intact = record !== undefined
+            && record.schemaVersion === SCHEMA_VERSION
+            && record.digest === candidate.current.sha256
+            && record.bytes === candidate.current.bytes
+            && isArrayBuffer(record.payload)
+            && record.payload.byteLength === candidate.current.bytes;
+          deleted.add(intact ? candidate.twin : candidate.key);
+          pending--;
+          if (pending === 0) {
+            finishOwnedRecordRepair(store, keys, deleted);
+          }
+        };
+        currentRequest.onerror = () => fail(
+          currentRequest.error ?? new Error('artifact cache twin record read failed'),
+        );
+      }
+    };
+    request.onerror = () => fail(request.error ?? new Error('artifact cache twin reconciliation failed'));
+    tx.oncomplete = () => finish(undefined);
+    tx.onabort = () => fail(tx.error ?? new Error('artifact cache twin reconciliation aborted'));
+    tx.onerror = () => undefined;
+  }, 'twin-reconciliation');
+};
+
+export class ArtifactCache implements PhaserPackPersistentCache {
   private constructor(private readonly db: IDBDatabase) {}
 
-  /** Blob URLs for the current selection; revoked wholesale on the next
-   * warm, unload or shutdown. The URL is never the data identity — the
-   * content digest is. */
-  private readonly urls = new Map<string, string>();
-  readonly stats: WarmEntry[] = [];
   readonly faults: ArtifactCacheFaults = {};
 
+  /** Open the bounded store and reconcile legacy records and identity twins. */
   static async open(): Promise<ArtifactCache | 'unavailable'> {
     if (typeof indexedDB === 'undefined') {
       return 'unavailable';
@@ -176,6 +427,20 @@ export class ArtifactCache {
       // A version bump elsewhere closes our handle promptly; later
       // operations fail into 'unavailable' rather than hanging.
       db.onversionchange = () => db.close();
+      try {
+        await reconcileLegacyTwins(db);
+      } catch {
+        // Twin cleanup is optional; the failed transaction rolled back and
+        // the next open will retry it.
+      }
+      try {
+        await sweepLegacyRecords(db);
+      } catch {
+        // A slow or temporarily blocked migration must not disable the
+        // otherwise usable cache forever. The failed transaction rolled back;
+        // keep this connection usable and retry the marker-gated sweep on the
+        // next open.
+      }
       return new ArtifactCache(db);
     } catch {
       openSettled = true;
@@ -183,218 +448,151 @@ export class ArtifactCache {
     }
   }
 
-  /** Synchronous Blob URL lookup for the delivery's resolveURL: every
-   * mapping was prepared by a completed warm() in the async phase. */
-  resolve(encodedPath: string): string | undefined {
-    return this.urls.get(encodedPath);
-  }
-
-  /** Drop every Blob URL for the finished/cancelled selection. */
-  revokeAll(): void {
-    for (const url of this.urls.values()) {
-      URL.revokeObjectURL(url);
-    }
-    this.urls.clear();
-  }
-
+  /** Close the IndexedDB connection owned by this adapter instance. */
   close(): void {
-    this.revokeAll();
     this.db.close();
   }
 
-  /** Warm the current selection: cache lookups, verification, origin
-   * fetches for misses, bounded stores. Sequential by design — the
-   * experiment measures per-artifact costs without interleaving. */
-  /** Caller cancellation: the warm stops between artifacts, in-flight
-   * fetches observe the signal, and Blob URLs created by a warm that
-   * went stale are revoked so a superseded selection cannot leave
-   * mappings behind. */
-  async warm(artifacts: readonly WarmArtifact[], signal?: AbortSignal): Promise<WarmReport> {
-    this.signal = signal;
-    const entries: WarmEntry[] = [];
-    let stale = false;
-    for (const artifact of artifacts) {
-      if (signal?.aborted) {
-        stale = true;
-        break;
-      }
-      // Per-artifact isolation: one failed acquisition never blocks the
-      // rest of the closure from warming or the delivery from running.
-      try {
-        entries.push(await this.warmOne(artifact));
-      } catch {
-        entries.push({
-          encodedPath: artifact.encodedPath,
-          identity: identityOf(artifact),
-          outcome: 'origin-fetch-failed',
-          bodyBytes: 0,
-          cacheReadMs: null,
-          verifyMs: null,
-          fetchMs: null,
-          writeMs: null,
-          blobMs: 0,
-        });
-      }
-    }
-    this.signal = undefined;
-    if (stale) {
-      // A cancelled selection must not keep Blob URLs alive.
-      for (const artifact of artifacts) {
-        const url = this.urls.get(artifact.encodedPath);
-        if (url !== undefined) {
-          URL.revokeObjectURL(url);
-          this.urls.delete(artifact.encodedPath);
-        }
-      }
-    }
-    return {
-      entries,
-      hits: entries.filter((entry) => entry.outcome === 'cache-hit').length,
-      stored: entries.filter((entry) => entry.outcome === 'origin-stored').length,
-      failures: entries.filter(
-        (entry) => entry.outcome === 'origin-store-failed' || entry.outcome === 'cache-unavailable',
-      ).length,
-    };
-  }
-
-  private async warmOne(artifact: WarmArtifact): Promise<WarmEntry> {
-    const identity = identityOf(artifact);
-    const blobStart = performance.now();
-    const makeBlobUrl = (data: ArrayBuffer): string => {
-      const blob = new Blob([data], { type: artifact.mediaType });
-      const url = URL.createObjectURL(blob);
-      this.urls.set(artifact.encodedPath, url);
-      return url;
-    };
-    // The store session itself can fail late (versionchange, quota
-    // surfaced at open): reads degrade to unavailable, never to a hit.
+  /** Public acquisition-boundary storage. The package re-checks the payload
+   * digest; this adapter also rejects records whose stored metadata no longer
+   * matches the requested identity. */
+  async get(key: PhaserPackCacheKey, context: PhaserPackCacheContext = {}): Promise<ArrayBuffer | undefined> {
+    context.signal?.throwIfAborted();
     if (this.faults.dbUnavailableOnce) {
       this.faults.dbUnavailableOnce = false;
-      const fetchStarted = performance.now();
-      const data = await this.fetchOrigin(artifact);
-      const fetchMs = performance.now() - fetchStarted;
-      makeBlobUrl(data);
-      return {
-        encodedPath: artifact.encodedPath, identity, outcome: 'cache-unavailable',
-        bodyBytes: data.byteLength, cacheReadMs: null, verifyMs: null, fetchMs, writeMs: null,
-        blobMs: performance.now() - blobStart - fetchMs,
-      };
+      throw new Error('artifact cache database unavailable');
     }
-    const readStarted = performance.now();
-    const record = await this.readRecord(identity);
-    const cacheReadMs = performance.now() - readStarted;
-    if (record !== null) {
-      // Cache hits are re-verified against the CURRENT manifest before
-      // use: size and digest mismatches are corrupt records, not data.
-      const verifyStarted = performance.now();
-      const digest = await sha256Hex(record.payload);
-      const verifyMs = performance.now() - verifyStarted;
-      if (record.bytes === artifact.bytes && record.digest === artifact.sha256 && digest === artifact.sha256) {
-        makeBlobUrl(record.payload);
-        this.stats.push({
-          encodedPath: artifact.encodedPath, identity, outcome: 'cache-hit',
-          bodyBytes: record.payload.byteLength, cacheReadMs, verifyMs, fetchMs: null, writeMs: null,
-          blobMs: performance.now() - blobStart - cacheReadMs - verifyMs,
-        });
-        return this.stats[this.stats.length - 1]!;
+    const identity = artifactCacheIdentity(key);
+    let recordIdentity = identity;
+    const readValid = async (candidateIdentity: string): Promise<CacheRecord | undefined> => {
+      const candidate = await this.readRecord(candidateIdentity, context.signal);
+      if (candidate === null) {
+        return undefined;
       }
-      // Corrupt record: never served; removed best-effort so the next
-      // warm stores fresh bytes instead of re-reading corruption.
-      await this.deleteRecord(identity);
-    }
-    const fetchStarted = performance.now();
-    const data = await this.fetchOrigin(artifact);
-    const fetchMs = performance.now() - fetchStarted;
-    makeBlobUrl(data);
-    const writeStarted = performance.now();
-    const outcome = await this.storeRecord(artifact, identity, data);
-    const writeMs = performance.now() - writeStarted;
-    const entry: WarmEntry = {
-      encodedPath: artifact.encodedPath, identity, outcome,
-      bodyBytes: data.byteLength, cacheReadMs, verifyMs: null, fetchMs, writeMs,
-      blobMs: performance.now() - blobStart - fetchMs - writeMs,
+      const valid = candidate.schemaVersion === SCHEMA_VERSION
+        && candidate.digest === key.sha256
+        && candidate.bytes === key.bytes
+        && isArrayBuffer(candidate.payload)
+        && candidate.payload.byteLength === key.bytes;
+      if (!valid) {
+        await this.deleteRecord(candidateIdentity, context.signal);
+        return undefined;
+      }
+      return candidate;
     };
-    this.stats.push(entry);
-    return entry;
+    let record = await readValid(identity);
+    if (record === undefined && usesV2Identity(key)) {
+      recordIdentity = legacyArtifactCacheIdentity(key);
+      record = await readValid(recordIdentity);
+    }
+    context.signal?.throwIfAborted();
+    if (record === undefined) {
+      return undefined;
+    }
+    if (recordIdentity !== identity) {
+      // Keep a valid legacy hit usable even if migration fails. A successful
+      // copy replaces the legacy twin atomically, so usage stays size-neutral
+      // and cache reuse never depends on the migration completing.
+      try {
+        await this.storeRecord(
+          { sha256: key.sha256, bytes: key.bytes },
+          identity,
+          record.payload,
+          context.signal,
+          recordIdentity,
+        );
+      } catch (error) {
+        context.signal?.throwIfAborted();
+        console.warn('Artifact cache legacy migration failed; retaining the legacy record', error);
+      }
+    }
+    return record.payload;
   }
 
-  /** Miss acquisition keeps the delivery's disciplines: finite size cap
-   * and a request deadline. The delivery re-verifies whatever this
-   * returns — storing never bypasses integrity checks. */
-  private async fetchOrigin(artifact: WarmArtifact): Promise<ArrayBuffer> {
-    if (artifact.bytes > MAX_OBJECT_BYTES) {
-      throw new Error(`artifact exceeds the cache object cap: ${artifact.bytes}`);
+  /** Persist one verified artifact or reject with a bounded store failure. */
+  async put(key: PhaserPackCacheKey, bytes: ArrayBuffer, context: PhaserPackCacheContext = {}): Promise<void> {
+    context.signal?.throwIfAborted();
+    if (bytes.byteLength !== key.bytes) {
+      throw new Error('artifact cache store bytes do not match the declared key');
     }
-    const response = await fetch(artifact.originUrl, {
-      cache: 'no-store',
-      credentials: 'omit',
-      signal: this.combineWithDeadline(this.signal),
-    });
-    if (!response.ok) {
-      throw new Error(`artifact fetch failed with HTTP ${response.status}`);
+    if (key.bytes > MAX_OBJECT_BYTES) {
+      throw new Error(`artifact cache object exceeds its cap: ${key.bytes}`);
     }
-    // The body is read as a bounded stream and cancelled as soon as it
-    // passes the manifest size: an oversized origin response is dropped
-    // mid-flight instead of being buffered whole first.
-    const reader = response.body?.getReader();
-    if (reader === undefined) {
-      const whole = await response.arrayBuffer();
-      if (whole.byteLength > artifact.bytes) {
-        throw new Error('artifact exceeds its declared size');
-      }
-      return verifyAcquisition(whole, artifact);
+    const outcome = await this.storeRecord(
+      { sha256: key.sha256, bytes: key.bytes },
+      artifactCacheIdentity(key),
+      bytes,
+      context.signal,
+    );
+    context.signal?.throwIfAborted();
+    if (outcome !== 'origin-stored') {
+      throw new Error(`artifact cache store ${outcome}`);
     }
-    const chunks: Uint8Array[] = [];
-    let received = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      received += value.byteLength;
-      if (received > artifact.bytes) {
-        await reader.cancel().catch(() => undefined);
-        throw new Error('artifact exceeds its declared size');
-      }
-      chunks.push(value);
-    }
-    const data = new Uint8Array(received);
-    let offset = 0;
-    for (const chunk of chunks) {
-      data.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return verifyAcquisition(data.buffer, artifact);
   }
 
-  /** Combines the caller's abort signal with the finite fetch deadline;
-   * manual bridge for environments without AbortSignal.any. */
-  private signal: AbortSignal | undefined;
-
-  private combineWithDeadline(callerSignal: AbortSignal | undefined): AbortSignal {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(new DOMException('artifact fetch timed out', 'TimeoutError')), FETCH_TIMEOUT_MS);
-    const abortWith = (reason: unknown): void => controller.abort(reason instanceof Error ? reason : new Error('artifact fetch aborted'));
-    const onCallerAbort = (): void => abortWith(callerSignal?.reason);
-    if (callerSignal?.aborted) {
-      abortWith(callerSignal.reason);
-    } else {
-      callerSignal?.addEventListener('abort', onCallerAbort, { once: true });
+  /** Delete one public identity and report whether a record existed. */
+  async delete(key: PhaserPackCacheKey, context: PhaserPackCacheContext = {}): Promise<boolean> {
+    context.signal?.throwIfAborted();
+    const identities = [artifactCacheIdentity(key)];
+    if (usesV2Identity(key)) {
+      identities.push(legacyArtifactCacheIdentity(key));
     }
-    controller.signal.addEventListener('abort', () => {
-      clearTimeout(timeout);
-      callerSignal?.removeEventListener('abort', onCallerAbort);
-    }, { once: true });
-    return controller.signal;
+    const removed = await this.deleteRecords(identities, context.signal);
+    context.signal?.throwIfAborted();
+    return removed;
   }
 
-  private readRecord(identity: string): Promise<CacheRecord | null> {
-    return withDeadline<CacheRecord | null>((finish) => {
+  /** Remove only records belonging to one public namespace. */
+  async clear(namespace: string, context: PhaserPackCacheContext = {}): Promise<void> {
+    context.signal?.throwIfAborted();
+    await repairOwnedRecords(
+      this.db,
+      (identity) => namespaceOfIdentity(identity) === namespace,
+      'clear',
+      context.signal,
+    );
+    context.signal?.throwIfAborted();
+  }
+
+  /** Recompute public usage from owned identity keys. */
+  async usage(namespace: string, context: PhaserPackCacheContext = {}): Promise<PhaserPackCacheUsage> {
+    context.signal?.throwIfAborted();
+    const usage = await withDeadline<PhaserPackCacheUsage>((finish, fail, registerAbort) => {
       const tx = this.db.transaction(STORE_NAME, 'readonly');
+      registerAbort(() => tx.abort());
+      const store = tx.objectStore(STORE_NAME);
+      const request = store.getAllKeys();
+      request.onsuccess = () => {
+        let records = 0;
+        let totalBytes = 0;
+        for (const key of request.result) {
+          if (typeof key !== 'string' || namespaceOfIdentity(key) !== namespace) {
+            continue;
+          }
+          const bytes = bytesOfIdentity(key);
+          if (bytes === undefined) {
+            continue;
+          }
+          records++;
+          totalBytes += bytes;
+        }
+        finish({ records, totalBytes });
+      };
+      request.onerror = () => fail(request.error ?? new Error('artifact cache usage failed'));
+      tx.onerror = () => undefined;
+    }, 'usage', context.signal);
+    context.signal?.throwIfAborted();
+    return usage;
+  }
+
+  private readRecord(identity: string, signal?: AbortSignal): Promise<CacheRecord | null> {
+    return withDeadline<CacheRecord | null>((finish, fail, registerAbort) => {
+      const tx = this.db.transaction(STORE_NAME, 'readonly');
+      registerAbort(() => tx.abort());
       const request = tx.objectStore(STORE_NAME).get(identity);
       request.onsuccess = () => finish(request.result ?? null);
-      request.onerror = () => finish(null);
-    }, 'read');
+      request.onerror = () => fail(request.error ?? new Error('artifact cache read failed'));
+    }, 'read', signal);
   }
 
   /** Short readwrite transaction: bytes are already fetched and verified
@@ -403,57 +601,76 @@ export class ArtifactCache {
    * onsuccess alone is not a commit. An abort (fault or quota) leaves
    * the previous good record untouched. */
   private async storeRecord(
-    artifact: WarmArtifact,
+    artifact: StoredArtifact,
     identity: string,
     data: ArrayBuffer,
-  ): Promise<Exclude<WarmOutcome, 'cache-hit'>> {
-    if (artifact.bytes > MAX_OBJECT_BYTES) {
-      return 'origin-store-skipped';
-    }
-    return withDeadline<Exclude<WarmOutcome, 'cache-hit'>>((finish) => {
+    signal?: AbortSignal,
+    replacedIdentity?: string,
+  ): Promise<StoreOutcome> {
+    return withDeadline<StoreOutcome>((finish, _fail, registerAbort) => {
       const tx = this.db.transaction(STORE_NAME, 'readwrite');
+      registerAbort(() => tx.abort());
       const store = tx.objectStore(STORE_NAME);
       const usageRequest = store.get(USAGE_KEY);
       usageRequest.onsuccess = () => {
         const usage = usageRequest.result as { total: number } | undefined;
         const total = usage?.total ?? 0;
-        // A replacement write only grows usage by the delta over the
-        // record it overwrites, so re-storing the same identity never
-        // inflates the accounting toward the cap. The existing record is
-        // read inside the same transaction as the writes.
-        const existingRequest = store.get(identity);
+        // The identity includes the byte count, so a replacement has the
+        // same size and adds no usage. A legacy-to-v2 migration can replace
+        // its twin atomically, so the same transaction counts both records
+        // before writing the new usage marker.
+        const existingRequest = store.count(identity);
         existingRequest.onsuccess = () => {
-          const existing = existingRequest.result as CacheRecord | undefined;
-          const delta = artifact.bytes - (existing?.bytes ?? 0);
-          if (total + delta > MAX_TOTAL_BYTES) {
-            finish('origin-store-skipped');
-            tx.abort();
-            return;
-          }
-          const record: CacheRecord = {
-            schemaVersion: SCHEMA_VERSION,
-            digest: artifact.sha256,
-            bytes: artifact.bytes,
-            // Informational only: readers always take media types from
-            // the current manifest, never from this record.
-            mediaType: artifact.mediaType,
-            storedAt: Date.now(),
-            payload: data,
+          const replacementRequest = replacedIdentity !== undefined && replacedIdentity !== identity
+            ? store.count(replacedIdentity)
+            : undefined;
+          const commit = (): void => {
+            const existing = existingRequest.result > 0;
+            const replacement = (replacementRequest?.result ?? 0) > 0;
+            let delta: number;
+            if (existing && replacement) {
+              // Two counted records collapse into one; drop the twin's bytes.
+              delta = -artifact.bytes;
+            } else if (existing || replacement) {
+              delta = 0;
+            } else {
+              delta = artifact.bytes;
+            }
+            if (delta > 0 && total + delta > MAX_TOTAL_BYTES) {
+              tx.abort();
+              return;
+            }
+            const record: CacheRecord = {
+              schemaVersion: SCHEMA_VERSION,
+              digest: artifact.sha256,
+              bytes: artifact.bytes,
+              storedAt: Date.now(),
+              payload: data,
+            };
+            const put = store.put(record, identity);
+            if (this.faults.failPutOnce) {
+              this.faults.failPutOnce = false;
+              queueMicrotask(() => {
+                try {
+                  (put as unknown as { error: DOMException }).error
+                    = new DOMException('injected store failure', 'QuotaExceededError');
+                  put.dispatchEvent(new Event('error'));
+                } catch {
+                  tx.abort();
+                }
+              });
+            }
+            if (replacement && replacedIdentity !== undefined) {
+              store.delete(replacedIdentity);
+            }
+            store.put({ total: Math.max(0, total + delta) }, USAGE_KEY);
           };
-          const put = store.put(record, identity);
-          if (this.faults.failPutOnce) {
-            this.faults.failPutOnce = false;
-            queueMicrotask(() => {
-              try {
-                (put as unknown as { error: DOMException }).error
-                  = new DOMException('injected store failure', 'QuotaExceededError');
-                put.dispatchEvent(new Event('error'));
-              } catch {
-                tx.abort();
-              }
-            });
+          if (replacementRequest === undefined) {
+            commit();
+          } else {
+            replacementRequest.onsuccess = commit;
+            replacementRequest.onerror = () => tx.abort();
           }
-          store.put({ total: total + delta }, USAGE_KEY);
         };
       };
       tx.oncomplete = () => finish('origin-stored');
@@ -463,52 +680,99 @@ export class ArtifactCache {
         this.faults.abortCommitOnce = false;
         queueMicrotask(() => tx.abort());
       }
-    }, 'write');
+    }, 'write', signal);
   }
 
   /** Remove one record (corrupt cleanup, explicit deletion tests). Only
    * keys under the experiment prefix are ever touched. */
-  async deleteRecord(identity: string): Promise<boolean> {
-    if (!identity.startsWith(KEY_PREFIX) || identity === USAGE_KEY) {
+  async deleteRecord(identity: string, signal?: AbortSignal): Promise<boolean> {
+    if (!identity.startsWith(KEY_PREFIX) || identity === USAGE_KEY || identity === MIGRATION_KEY) {
       return false;
     }
-    return withDeadline<boolean>((finish) => {
+    return withDeadline<boolean>((finish, fail, registerAbort) => {
       const tx = this.db.transaction(STORE_NAME, 'readwrite');
+      registerAbort(() => tx.abort());
       const store = tx.objectStore(STORE_NAME);
       const usageRequest = store.get(USAGE_KEY);
+      let existed = false;
       usageRequest.onsuccess = () => {
         const usage = usageRequest.result as { total: number } | undefined;
-        const recordRequest = store.get(identity);
+        const recordRequest = store.count(identity);
         recordRequest.onsuccess = () => {
-          const record = recordRequest.result as CacheRecord | undefined;
-          if (record !== undefined) {
-            const total = Math.max(0, (usage?.total ?? record.bytes) - record.bytes);
+          existed = recordRequest.result > 0;
+          if (existed) {
+            const bytes = bytesOfIdentity(identity) ?? 0;
+            const total = Math.max(0, (usage?.total ?? bytes) - bytes);
             store.put({ total }, USAGE_KEY);
           }
           store.delete(identity);
         };
       };
-      tx.oncomplete = () => finish(true);
-      tx.onabort = () => finish(false);
+      tx.oncomplete = () => finish(existed);
+      tx.onabort = () => fail(tx.error ?? new Error('artifact cache delete aborted'));
       tx.onerror = () => undefined;
-    }, 'delete');
+    }, 'delete', signal);
   }
 
-  /** Count experiment-owned records and their retained bytes. */
-  async usage(): Promise<{ records: number; totalBytes: number }> {
-    return withDeadline<{ records: number; totalBytes: number }>((finish) => {
-      const tx = this.db.transaction(STORE_NAME, 'readonly');
-      const request = tx.objectStore(STORE_NAME).getAll();
-      request.onsuccess = () => {
-        const records = (request.result as CacheRecord[]).filter(
-          (record) => typeof record.digest === 'string' && typeof record.payload?.byteLength === 'number',
-        );
-        finish({
-          records: records.length,
-          totalBytes: records.reduce((sum, record) => sum + (record.payload?.byteLength ?? 0), 0),
-        });
+  /** Delete a public identity and any legacy twin in one transaction. */
+  private deleteRecords(identities: readonly string[], signal?: AbortSignal): Promise<boolean> {
+    const owned = [...new Set(identities.filter(
+      (identity) => identity.startsWith(KEY_PREFIX)
+        && identity !== USAGE_KEY && identity !== MIGRATION_KEY,
+    ))];
+    if (owned.length === 0) {
+      return Promise.resolve(false);
+    }
+    return withDeadline<boolean>((finish, fail, registerAbort) => {
+      const tx = this.db.transaction(STORE_NAME, 'readwrite');
+      registerAbort(() => tx.abort());
+      const store = tx.objectStore(STORE_NAME);
+      const usageRequest = store.get(USAGE_KEY);
+      let existed = false;
+      usageRequest.onsuccess = () => {
+        const usage = usageRequest.result as { total: number } | undefined;
+        const requests = owned.map((identity) => ({ identity, request: store.count(identity) }));
+        let pending = requests.length;
+        const finishCounts = (): void => {
+          if (--pending !== 0) {
+            return;
+          }
+          let removedBytes = 0;
+          for (const { identity, request } of requests) {
+            if (request.result > 0) {
+              existed = true;
+              removedBytes += bytesOfIdentity(identity) ?? 0;
+            }
+            store.delete(identity);
+          }
+          if (existed) {
+            if (usage === undefined) {
+              const allKeys = store.getAllKeys();
+              allKeys.onsuccess = () => {
+                let remaining = 0;
+                for (const key of allKeys.result) {
+                  if (typeof key === 'string' && key.startsWith(KEY_PREFIX)
+                    && key !== USAGE_KEY && key !== MIGRATION_KEY && !owned.includes(key)) {
+                    remaining += bytesOfIdentity(key) ?? 0;
+                  }
+                }
+                store.put({ total: remaining }, USAGE_KEY);
+              };
+              allKeys.onerror = () => fail(allKeys.error ?? new Error('artifact cache usage repair failed'));
+            } else {
+              store.put({ total: Math.max(0, usage.total - removedBytes) }, USAGE_KEY);
+            }
+          }
+        };
+        for (const { request } of requests) {
+          request.onsuccess = finishCounts;
+          request.onerror = () => fail(request.error ?? new Error('artifact cache delete failed'));
+        }
       };
-      request.onerror = () => finish({ records: -1, totalBytes: -1 });
-    }, 'usage');
+      usageRequest.onerror = () => fail(usageRequest.error ?? new Error('artifact cache delete failed'));
+      tx.oncomplete = () => finish(existed);
+      tx.onabort = () => fail(tx.error ?? new Error('artifact cache delete aborted'));
+      tx.onerror = () => undefined;
+    }, 'delete-many', signal);
   }
 }

@@ -3,10 +3,13 @@ import { EventEmitter } from 'node:events';
 import type Phaser from 'phaser';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { PhaserPackFileSource } from '../src/pack-file-source.js';
 import {
   createPhaserAssetPackLoader,
   definePhaserAssetPacks,
   type PhaserAssetPack,
+  type PhaserPackAsset,
+  type PhaserPackPersistentCache,
 } from '../src/packs.js';
 const catalog: readonly PhaserAssetPack[] = [
   {
@@ -117,6 +120,46 @@ describe('pack contract and ownership', () => {
         },
       }],
     }])).toThrow('Invalid integrity');
+    expect(() => definePhaserAssetPacks([{
+      id: 'bad-media', revision: '1', assets: [{
+        kind: 'image', key: 'pilot', url: '/pilot.png', mediaType: 42,
+      } as unknown as PhaserPackAsset],
+    }])).toThrow('Invalid asset media type');
+    expect(() => definePhaserAssetPacks([{
+      id: 'blank-media', revision: '1', assets: [{
+        kind: 'image', key: 'pilot', url: '/pilot.png', mediaType: '  ',
+      }],
+    }])).toThrow('Invalid asset media type');
+    expect(() => definePhaserAssetPacks([{
+      id: 'bad-media-shape', revision: '1', assets: [{
+        kind: 'image', key: 'pilot', url: '/pilot.png', mediaType: 'png',
+      }],
+    }])).toThrow('Invalid asset media type');
+    expect(() => definePhaserAssetPacks([{
+      id: 'padded-media', revision: '1', assets: [{
+        kind: 'image', key: 'pilot', url: '/pilot.png', mediaType: ' image/png ',
+      }],
+    }])).toThrow('Invalid asset media type');
+    expect(() => definePhaserAssetPacks([{
+      id: 'wrong-role-media', revision: '1', assets: [{
+        kind: 'atlas', key: 'pilot', textureUrl: '/pilot.png', atlasUrl: '/pilot.json', textureMediaType: 'application/json',
+      }],
+    }])).toThrow('Invalid asset media type');
+    expect(() => definePhaserAssetPacks([{
+      id: 'wrong-atlas-media', revision: '1', assets: [{
+        kind: 'atlas', key: 'pilot', textureUrl: '/pilot.png', atlasUrl: '/pilot.json', atlasMediaType: 'text/plain',
+      }],
+    }])).toThrow('Invalid asset media type');
+    expect(() => definePhaserAssetPacks([{
+      id: 'misplaced-media', revision: '1', assets: [{
+        kind: 'atlas', key: 'pilot', textureUrl: '/pilot.png', atlasUrl: '/pilot.json', mediaType: 'image/png',
+      } as unknown as PhaserPackAsset],
+    }])).toThrow('inapplicable media type');
+    expect(() => definePhaserAssetPacks([{
+      id: 'misplaced-atlas-media', revision: '1', assets: [{
+        kind: 'image', key: 'pilot', url: '/pilot.png', textureMediaType: 'image/png',
+      } as unknown as PhaserPackAsset],
+    }])).toThrow('inapplicable media type');
   });
   it('shares concurrent dependencies and keeps keys valid until the last owner releases', async () => {
     const f = fixture();
@@ -496,6 +539,98 @@ describe('failure isolation and bounded preparation', () => {
     await expect(tiny.acquire('shared')).rejects.toThrow('buffered byte limit');
     expect(fetch).toHaveBeenCalledTimes(1);
     tiny.dispose();
+  });
+
+  it('counts the cache commit copy in the byte reservation before fetching', async () => {
+    const f = fixture();
+    const storage: PhaserPackPersistentCache = {
+      async get() {
+        return undefined;
+      },
+      async put() {
+      },
+      async delete() {
+        return false;
+      },
+      async clear() {
+      },
+      async usage() {
+        return { records: 0, totalBytes: 0 };
+      },
+    };
+    const loader = createPhaserAssetPackLoader(f.scene, [{
+      id: 'shared',
+      revision: '1',
+      assets: [{
+        kind: 'image', key: 'pilot', url: '/pilot.png', integrity: {
+          texture: { bytes: 3, sha256: '0'.repeat(64) },
+        },
+      }],
+    }], {
+      maxFileBytes: 3,
+      maxBufferedBytes: 5,
+      persistentCache: { storage, namespace: 'app' },
+    });
+    await expect(loader.acquire('shared')).rejects.toThrow('reservation 6 exceeds buffered byte limit 5');
+    expect(fetch).not.toHaveBeenCalled();
+    loader.dispose();
+  });
+
+  it('rejects invalid additional source reservations before opening files', async () => {
+    const invalidSource = {
+      additionalBufferedBytes: null,
+      async open() {
+        throw new Error('source should not open');
+      },
+    } as unknown as PhaserPackFileSource;
+    expect(() => createPhaserAssetPackLoader(fixture().scene, [{
+      id: 'shared', revision: '1', assets: [{ kind: 'image', key: 'pilot', url: '/pilot.png' }],
+    }], { fileSource: invalidSource })).toThrow('Invalid asset pack file source');
+
+    for (const additional of [-1, Number.MAX_SAFE_INTEGER + 1, undefined as unknown as number]) {
+      const f = fixture();
+      const source: PhaserPackFileSource & { opens: unknown[] } = {
+        opens: [],
+        additionalBufferedBytes: () => additional,
+        async open(request) {
+          this.opens.push(request);
+          throw new Error('source should not open');
+        },
+      };
+      const loader = createPhaserAssetPackLoader(f.scene, [{
+        id: 'shared', revision: '1', assets: [{ kind: 'image', key: 'pilot', url: '/pilot.png' }],
+      }], { fileSource: source });
+      await expect(loader.acquire('shared')).rejects.toThrow('source reported invalid buffered byte count');
+      expect(source.opens).toHaveLength(0);
+      loader.dispose();
+    }
+  });
+
+  it('rejects additional source reservation overflow before opening files', async () => {
+    const f = fixture();
+    const source: PhaserPackFileSource & { opens: unknown[] } = {
+      opens: [],
+      additionalBufferedBytes: () => Number.MAX_SAFE_INTEGER,
+      async open(request) {
+        this.opens.push(request);
+        throw new Error('source should not open');
+      },
+    };
+    const loader = createPhaserAssetPackLoader(f.scene, [{
+      id: 'atlas-pack',
+      revision: '1',
+      assets: [{
+        kind: 'atlas',
+        key: 'terrain',
+        textureUrl: '/terrain.png',
+        atlasUrl: '/terrain.json',
+      }],
+    }], { fileSource: source });
+    await expect(loader.acquire('atlas-pack')).rejects.toThrow(
+      'buffered byte reservation exceeds the safe integer range',
+    );
+    expect(source.opens).toHaveLength(0);
+    loader.dispose();
   });
 });
 

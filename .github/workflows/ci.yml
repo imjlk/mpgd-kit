@@ -10,12 +10,17 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   validate:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     outputs:
       release_pr_metadata_only: ${{ steps.release-pr-meta.outputs.enabled }}
+      run_prepared: ${{ steps.release-pr-meta.outputs.run_prepared }}
 
     steps:
       - uses: actions/checkout@v5
@@ -31,10 +36,38 @@ jobs:
         run: |
           set -euo pipefail
 
+          command -v node >/dev/null 2>&1 || { echo "::error::node is required before setup-node to detect workspace test scripts"; exit 1; }
+          package_has_test() {
+            local dir="$1"
+            [[ "${dir}" != "packages/phaser-assets" && "${dir}" != "packages/tutorial" && -f "${dir}/package.json" ]] || return 1
+            node -e 'let j;try{j=JSON.parse(require("fs").readFileSync(process.argv[1]+"/package.json","utf8"))}catch{process.exit(2)}process.exit(j.scripts&&j.scripts.test?0:1)' "${dir}"
+          }
+          register_workspace_test() {
+            local package_dir="$1"
+            local safe_path="$2"
+            local test_status=0
+            package_has_test "${package_dir}" || test_status=$?
+            if (( test_status == 0 )); then
+              workspace_test_dirs["${package_dir}"]=1
+            elif (( test_status == 2 )); then
+              local safe_dir="${package_dir//%/%25}"
+              safe_dir="${safe_dir//$'\r'/}"
+              safe_dir="${safe_dir//$'\n'/}"
+              echo "::warning file=${safe_path}::Workspace package ${safe_dir} has malformed package.json; selective tests are skipped for it."
+            elif [[ "${package_dir}" != "packages/phaser-assets" && "${package_dir}" != "packages/tutorial" && -f "${package_dir}/package.json" ]]; then
+              local safe_dir="${package_dir//%/%25}"
+              safe_dir="${safe_dir//$'\r'/}"
+              safe_dir="${safe_dir//$'\n'/}"
+              echo "::warning file=${safe_path}::Workspace package ${safe_dir} has no test script; selective tests are skipped for it unless another change in this PR enables the prepared smoke suite."
+            fi
+          }
           run_prepared=true
+          declare -A workspace_test_dirs=()
           if [[ "${EVENT_NAME}" == "pull_request" ]]; then
             # Pull requests keep the focused checks below. The prepared smoke
-            # suite is reserved for main pushes and high-risk source changes.
+            # suite is reserved for main pushes and the small set of changes
+            # that can alter CLI/target/release acceptance contracts; normal
+            # package and example PRs must not pay the 40-minute suite cost.
             run_prepared=false
             if ! base_sha="$(git merge-base "origin/${PR_BASE_REF}" HEAD)"; then
               echo "enabled=false" >> "$GITHUB_OUTPUT"
@@ -62,21 +95,29 @@ jobs:
           fi
 
           for path in "${changed_files[@]}"; do
-            version_only=false
+            safe_path="${path//%/%25}"
+            safe_path="${safe_path//$'\r'/}"
+            safe_path="${safe_path//$'\n'/}"
+            safe_path="${safe_path//:/%3A}"
+            safe_path="${safe_path//,/%2C}"
+            package_json_has_content=false
             case "${path}" in
               .sampo/changesets/*.md|CHANGELOG.md|*/CHANGELOG.md)
                 ;;
               package.json|*/package.json)
-                package_diff="$(git diff --no-renames --unified=0 "${base_sha}...HEAD" -- "${path}")" || metadata_only=false
-                package_diff="$(printf '%s\n' "${package_diff}" | grep -E '^[+-]' | grep -Ev '^(---|\+\+\+)' || true)"
-                if [[ -z "${package_diff}" ]]; then
+                if ! package_diff="$(git diff --no-renames --unified=0 "${base_sha}...HEAD" -- "${path}")"; then
                   metadata_only=false
+                  package_json_has_content=true
                 else
+                  package_diff="$(printf '%s\n' "${package_diff}" | grep -E '^[+-]' | grep -Ev '^(---|\+\+\+)' || true)"
+                  if [[ -z "${package_diff}" ]]; then
+                    metadata_only=false
+                    package_json_has_content=true
+                  fi
                   non_version_lines="$(printf '%s\n' "${package_diff}" | grep -Ev '^[+-]  "version"[[:space:]]*:[[:space:]]*"[^"]*"[[:space:]]*,?[[:space:]]*$' || true)"
                   if [[ -n "${non_version_lines}" ]]; then
                     metadata_only=false
-                  else
-                    version_only=true
+                    package_json_has_content=true
                   fi
                 fi
                 ;;
@@ -87,17 +128,57 @@ jobs:
 
             if [[ "${EVENT_NAME}" == "pull_request" ]]; then
               case "${path}" in
-                *.md|.github/*)
+                *.md|.github/*|examples/asset-packs/asset-source/*|examples/asset-packs/delivery-configs/*)
                   ;;
-                package.json|*/package.json)
-                  if [[ "${version_only}" != "true" ]]; then
+                package.json|packages/cli/package.json|packages/create-game/package.json|packages/game-services/package.json|packages/release-manifest/package.json|packages/target-*/package.json|apps/game-services-worker/package.json|apps/target-*/package.json|apps/mobile-capacitor/package.json|packages/cli/templates/*package.json|adapters/*/package.json|native-plugins/*/package.json|backend/*/package.json)
+                  if [[ "${package_json_has_content}" == "true" ]]; then
                     run_prepared=true
                   fi
                   ;;
-                examples/asset-packs/asset-source/*|examples/asset-packs/delivery-configs/*)
+                tools/*.ts|tools/*.mjs|tools/package/*|tools/graph/*|tools/smoke/*|tools/target/*|tools/icons/*|tools/fixtures/*|packages/cli/*|packages/create-game/*|packages/game-services/*|packages/release-manifest/*|packages/target-*/*|apps/game-services-worker/*|apps/target-*/*|apps/mobile-capacitor/*|adapters/*|native-plugins/*|backend/*)
+                  run_prepared=true
+                  ;;
+                examples/phaser-starter/*)
+                  run_prepared=true
+                  ;;
+                packages/phaser-assets/src/*|examples/asset-packs/src/*)
+                  # Covered by focused package/archive tests and both source
+                  # and installed-tarball Chromium acceptance below.
+                  ;;
+                packages/*/package.json|apps/*/package.json)
+                  package_root="${path%%/*}"
+                  package_name="${path#*/}"
+                  package_name="${package_name%%/*}"
+                  register_workspace_test "${package_root}/${package_name}" "${safe_path}"
+                  ;;
+                packages/*|apps/*)
+                  package_root="${path%%/*}"
+                  package_name="${path#*/}"
+                  package_name="${package_name%%/*}"
+                  package_dir="${package_root}/${package_name}"
+                  register_workspace_test "${package_dir}" "${safe_path}"
+                  ;;
+                */package.json|pnpm-lock.yaml|pnpm-workspace.yaml|mise.toml|tsconfig*.json|vitest.config.*|vite.config.*)
+                  case "${path}" in
+                    pnpm-lock.yaml|examples/*|pnpm-workspace.yaml|mise.toml|tsconfig*.json|vitest.config.*|vite.config.*)
+                      echo "::warning file=${safe_path}::Workspace or example package change skips the prepared smoke suite; running workspace package tests instead."
+                      for package_dir in packages/* apps/* adapters/* native-plugins/* backend/* examples/*; do
+                        register_workspace_test "${package_dir}" "${safe_path}"
+                      done
+                      ;;
+                    *)
+                      echo "::warning file=${safe_path}::Unrecognized package.json location skips the prepared smoke suite; add it to the contract list if it affects CLI/target/release acceptance."
+                      ;;
+                  esac
                   ;;
                 *)
-                  run_prepared=true
+                  case "${path}" in
+                    packages/*|apps/*|tools/*|adapters/*|native-plugins/*|backend/*)
+                      echo "::warning file=${safe_path}::Unrecognized path skips the prepared smoke suite; add it to the contract list if it affects CLI/target/release acceptance."
+                      ;;
+                  esac
+                  # Intentionally fail-open: unknown paths stay focused. Any
+                  # new CLI/target/release-contract location must be added above.
                   ;;
               esac
             fi
@@ -105,6 +186,13 @@ jobs:
 
           echo "enabled=${metadata_only}" >> "$GITHUB_OUTPUT"
           echo "run_prepared=${run_prepared}" >> "$GITHUB_OUTPUT"
+          if (( ${#workspace_test_dirs[@]} > 0 )); then
+            {
+              echo 'workspace_test_dirs<<EOF'
+              printf '%s\n' "${!workspace_test_dirs[@]}" | sort
+              echo EOF
+            } >> "$GITHUB_OUTPUT"
+          fi
           echo "Metadata-only validation: ${metadata_only}"
           echo "Prepared smoke suite: ${run_prepared}"
           printf 'Changed files:\n%s\n' "${changed_files[*]:-<none>}"
@@ -138,6 +226,25 @@ jobs:
         if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - run: pnpm build:packages
         if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+      - name: Run changed workspace package tests on pull requests
+        if: ${{ github.event_name == 'pull_request' && steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared == 'false' && steps.release-pr-meta.outputs.workspace_test_dirs != '' }}
+        env:
+          WORKSPACE_TEST_DIRS: ${{ steps.release-pr-meta.outputs.workspace_test_dirs }}
+        run: |
+          failed=0
+          while IFS= read -r package_dir; do
+            [[ -z "${package_dir}" ]] && continue
+            echo "Testing changed workspace package: ${package_dir}"
+            pnpm --dir "${package_dir}" run test || failed=1
+          done <<< "${WORKSPACE_TEST_DIRS}"
+          exit "${failed}"
+      - name: Run focused package tests on pull requests
+        if: ${{ github.event_name == 'pull_request' && steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared == 'false' }}
+        run: |
+          pnpm --filter @mpgd/phaser-assets test
+          pnpm --filter @mpgd/tutorial test
+          pnpm smoke:phaser-assets-archive-decode
+          pnpm smoke:tutorial:dist
       - name: Cache example browsers
         if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
         uses: actions/cache@v5
@@ -166,39 +273,39 @@ jobs:
         timeout-minutes: 10
         run: pnpm --dir examples/asset-packs test:packed-consumer
       - run: pnpm smoke:apps-in-toss-production-evidence:prepared
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
       - run: tar -czf "$RUNNER_TEMP/package-dist.tgz" packages/*/dist adapters/*/dist native-plugins/*/dist
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
       - uses: actions/upload-artifact@v6
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
         with:
           name: package-dist-ci
           path: ${{ runner.temp }}/package-dist.tgz
           retention-days: 1
       - run: pnpm graph:preflight
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
       - run: pnpm pack:packages:prepared
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
       - run: pnpm build:web
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
       - run: pnpm smoke:target web-preview
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
       - run: pnpm build:microsoft-store
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
           VITE_MPGD_GAME_SERVICES_URL: https://services.example.com
       - run: pnpm smoke:target microsoft-store
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
       - run: pnpm build:verse8
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
           VITE_MPGD_GAME_SERVICES_URL: https://services.example.com
       - run: pnpm smoke:target verse8
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
       - run: pnpm test:prepared
         if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
 
@@ -220,7 +327,7 @@ jobs:
           retention-days: 7
 
   build-android:
-    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' }}
+    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' && needs.validate.outputs.run_prepared != 'false' }}
     runs-on: ubuntu-latest
     needs: validate
     timeout-minutes: 120
@@ -276,7 +383,7 @@ jobs:
           retention-days: 7
 
   build-ios:
-    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' }}
+    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' && needs.validate.outputs.run_prepared != 'false' }}
     runs-on: macos-26
     needs: validate
     timeout-minutes: 120
@@ -322,7 +429,7 @@ jobs:
           retention-days: 7
 
   build-ait:
-    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' }}
+    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' && needs.validate.outputs.run_prepared != 'false' }}
     runs-on: ubuntu-latest
     needs: validate
     timeout-minutes: 120
@@ -362,7 +469,7 @@ jobs:
           retention-days: 7
 
   build-devvit:
-    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' }}
+    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' && needs.validate.outputs.run_prepared != 'false' }}
     runs-on: ubuntu-latest
     needs: validate
     timeout-minutes: 30

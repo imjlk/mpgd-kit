@@ -11,6 +11,7 @@ import {
   readCappedDeliveryBody,
   type PhaserPackDeliveryEvent,
 } from '../src/delivery.js';
+import type { PhaserPackCacheEvent, PhaserPackPersistentCache } from '../src/pack-cache.js';
 import type { PhaserPackFileRequest } from '../src/pack-file-source.js';
 import { buildZipV1Fixture, type ZipV1FixtureEntry } from '../src/test-utils.js';
 
@@ -380,6 +381,254 @@ describe('phaser pack delivery', () => {
     delivery.dispose();
   });
 
+  it('reuses a verified ZIP archive through the public persistent cache boundary', async () => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const zip = zipFixture();
+    const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'zip', zip }]);
+    for (const [path, file] of packFiles) {
+      origin.files.set(path, file);
+    }
+    const records = new Map<string, ArrayBuffer>();
+    const storage: PhaserPackPersistentCache = {
+      async get(key) {
+        return records.get(`${key.namespace}|${key.sha256}|${key.bytes}`)?.slice(0);
+      },
+      async put(key, bytes) {
+        records.set(`${key.namespace}|${key.sha256}|${key.bytes}`, bytes.slice(0));
+      },
+      async delete(key) {
+        return records.delete(`${key.namespace}|${key.sha256}|${key.bytes}`);
+      },
+      async clear(namespace) {
+        for (const key of records.keys()) {
+          if (key.startsWith(`${namespace}|`)) {
+            records.delete(key);
+          }
+        }
+      },
+      async usage(namespace) {
+        const owned = [...records.entries()].filter(([key]) => key.startsWith(`${namespace}|`));
+        return {
+          records: owned.length,
+          totalBytes: owned.reduce((sum, [, value]) => sum + value.byteLength, 0),
+        };
+      },
+    };
+    const firstEvents: PhaserPackCacheEvent[] = [];
+    const first = createPhaserPackDelivery(manifest, {
+      baseUrl: origin.url,
+      createWorker: createFakeWorkerFactory().factory,
+      persistentCache: {
+        storage,
+        namespace: 'delivery-test',
+        onEvent: (event: PhaserPackCacheEvent): void => {
+          firstEvents.push(event);
+        },
+      },
+    });
+    const firstPrepared = await first.prepare('solo');
+    firstPrepared.release();
+    expect(first.snapshot().archiveRequests).toBe(1);
+    expect(firstEvents.map((event) => event.outcome)).toEqual(['origin-download']);
+    first.dispose();
+
+    const secondEvents: PhaserPackCacheEvent[] = [];
+    let secondResolverCalls = 0;
+    const secondOptions = {
+      resolveURL: (): string => {
+        secondResolverCalls++;
+        throw new Error('origin URL is unavailable while offline');
+      },
+      createWorker: createFakeWorkerFactory().factory,
+      persistentCache: {
+        storage,
+        namespace: 'delivery-test',
+        onEvent: (event: PhaserPackCacheEvent): void => {
+          secondEvents.push(event);
+        },
+      },
+    };
+    const second = createPhaserPackDelivery(manifest, secondOptions);
+    (secondOptions.persistentCache as { namespace: string }).namespace = 'other';
+    const secondPrepared = await second.prepare('solo');
+    secondPrepared.release();
+    expect(second.snapshot().archiveRequests).toBe(0);
+    expect(secondResolverCalls).toBe(0);
+    expect(secondEvents.map((event) => event.outcome)).toEqual(['cache-hit']);
+    expect(await storage.usage('delivery-test')).toEqual({
+      records: 1,
+      totalBytes: zip.archive.byteLength,
+    });
+    second.dispose();
+  });
+
+  it('does not resolve a file URL on a verified persistent cache hit', async () => {
+    const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'files' }]);
+    const file = packFiles.get('packs/solo@1/pilot.png')!;
+    const cacheKey = `delivery-test|${sha256(file.bytes)}|${file.bytes.byteLength}`;
+    const records = new Map<string, ArrayBuffer>([[cacheKey, file.bytes.slice().buffer]]);
+    const storage: PhaserPackPersistentCache = {
+      async get(key) {
+        return records.get(`${key.namespace}|${key.sha256}|${key.bytes}`)?.slice(0);
+      },
+      async put() {
+        throw new Error('put should not run for a hit');
+      },
+      async delete(key) {
+        return records.delete(`${key.namespace}|${key.sha256}|${key.bytes}`);
+      },
+      async clear(namespace) {
+        for (const key of records.keys()) {
+          if (key.startsWith(`${namespace}|`)) {
+            records.delete(key);
+          }
+        }
+      },
+      async usage(namespace) {
+        const owned = [...records.entries()].filter(([key]) => key.startsWith(`${namespace}|`));
+        return {
+          records: owned.length,
+          totalBytes: owned.reduce((sum, [, value]) => sum + value.byteLength, 0),
+        };
+      },
+    };
+    let resolverCalls = 0;
+    const delivery = createPhaserPackDelivery(manifest, {
+      resolveURL: (): string => {
+        resolverCalls++;
+        throw new Error('origin URL is unavailable while offline');
+      },
+      persistentCache: {
+        storage,
+        namespace: 'delivery-test',
+      },
+    });
+    const opened = await delivery.fileSource.open(openRequest('solo'), {
+      signal: new AbortController().signal,
+      budgets: budgets(),
+    });
+    const body = await opened.read();
+    expect(body.bytes.size).toBe(file.bytes.byteLength);
+    expect(resolverCalls).toBe(0);
+    body.release();
+    opened.close();
+    delivery.dispose();
+  });
+
+  it('reports the same retained cache-copy reservation as the default URL source', () => {
+    const { manifest } = buildManifest([{ id: 'solo', delivery: 'files' }]);
+    const storage: PhaserPackPersistentCache = {
+      async get() {
+        return undefined;
+      },
+      async put() {
+      },
+      async delete() {
+        return false;
+      },
+      async clear() {
+      },
+      async usage() {
+        return { records: 0, totalBytes: 0 };
+      },
+    };
+    const cached = createPhaserPackDelivery(manifest, {
+      resolveURL: (path) => path,
+      persistentCache: { storage, namespace: 'delivery-test' },
+    });
+    const request = openRequest('solo');
+    expect(cached.fileSource.additionalBufferedBytes?.(request)).toBe(pngBytes.byteLength);
+    cached.dispose();
+    const uncached = createPhaserPackDelivery(manifest, { resolveURL: (path) => path });
+    expect(uncached.fileSource.additionalBufferedBytes?.(request)).toBe(0);
+    uncached.dispose();
+  });
+
+  it('signs files-delivery URLs only after transfer admission', async () => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'files' }]);
+    for (const [path, file] of packFiles) {
+      origin.files.set(path, file);
+    }
+    let signature = 'expired';
+    const resolveURL = vi.fn((path: string) => `${origin.url}${path}?signature=${signature}`);
+    const delivery = createPhaserPackDelivery(manifest, { resolveURL });
+    let admit!: (release: () => void) => void;
+    const admission = new Promise<() => void>((resolve) => {
+      admit = resolve;
+    });
+    const release = vi.fn();
+    const acquire = vi.fn(() => admission);
+    const opened = await delivery.fileSource.open(openRequest('solo'), {
+      signal: new AbortController().signal,
+      budgets: { ...budgets(), transfers: { acquire } },
+    });
+    const reading = opened.read();
+    expect(acquire).toHaveBeenCalledOnce();
+    expect(resolveURL).not.toHaveBeenCalled();
+    signature = 'fresh';
+    admit(release);
+    const body = await reading;
+    expect(resolveURL).toHaveReturnedWith(`${origin.url}packs/solo%401/pilot.png?signature=fresh`);
+    expect(release).toHaveBeenCalledOnce();
+    body.release();
+    opened.close();
+    delivery.dispose();
+  });
+
+  it('aborts deferred file cache writes when delivery is disposed', async () => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'files' }]);
+    for (const [path, file] of packFiles) {
+      origin.files.set(path, file);
+    }
+    let putSignal: AbortSignal | undefined;
+    let releasePut!: () => void;
+    let rejectPut!: (reason: unknown) => void;
+    const putPending = new Promise<void>((resolve, reject) => {
+      releasePut = resolve;
+      rejectPut = reject;
+    });
+    const storage: PhaserPackPersistentCache = {
+      async get() {
+        return undefined;
+      },
+      async put(_key, _bytes, context) {
+        putSignal = context?.signal;
+        putSignal?.addEventListener('abort', () => rejectPut(putSignal?.reason), { once: true });
+        return putPending;
+      },
+      async delete() {
+        return false;
+      },
+      async clear() {
+      },
+      async usage() {
+        return { records: 0, totalBytes: 0 };
+      },
+    };
+    const delivery = createPhaserPackDelivery(manifest, {
+      baseUrl: origin.url,
+      persistentCache: { storage, namespace: 'delivery-test' },
+    });
+    const opened = await delivery.fileSource.open(openRequest('solo'), {
+      signal: new AbortController().signal,
+      budgets: budgets(),
+    });
+    const body = await opened.read();
+    const committing = body.commitCache!();
+    expect(putSignal).toBeDefined();
+    delivery.dispose();
+    expect(putSignal?.aborted).toBe(true);
+    await expect(committing).rejects.toMatchObject({ code: 'disposed' });
+    releasePut();
+    body.release();
+    opened.close();
+  });
+
   it('keeps the verification basis after caller manifest mutation', async () => {
     const origin = await startOrigin();
     servers.push(origin);
@@ -559,6 +808,67 @@ describe('phaser pack delivery', () => {
     opened.close();
     expect(delivery.snapshot().staging).toEqual([]);
     delivery.dispose();
+  });
+
+  it.each(['handle', 'reader'])('pins resident dependencies while a prior %s releases during preparation', async (owner) => {
+    for (const cancel of [false, true]) {
+      const origin = await startGatedOrigin();
+      servers.push(origin);
+      const { manifest, packFiles } = buildManifest([
+        { id: 'dep', delivery: 'zip', zip: zipFixture() },
+        { id: 'top', dependsOn: ['dep'], delivery: 'zip', zip: zipFixture() },
+      ]);
+      for (const [path, file] of packFiles) {
+        origin.files.set(path, file);
+      }
+      const delivery = createPhaserPackDelivery(manifest, {
+        baseUrl: origin.url,
+        createWorker: createFakeWorkerFactory().factory,
+      });
+      const prior = await delivery.prepare('dep');
+      const opened = owner === 'reader'
+        ? await delivery.fileSource.open(openRequest('dep'), {
+            signal: new AbortController().signal, budgets: budgets(),
+          })
+        : undefined;
+      if (opened !== undefined) {
+        prior.release();
+      }
+      const path = 'packs/top@1.zip';
+      origin.hold(path);
+      const controller = new AbortController();
+      const outcome = delivery.prepare('top', { signal: controller.signal }).then(
+        (prepared) => ({ prepared, error: undefined }),
+        (error: unknown) => ({ prepared: undefined, error }),
+      );
+      try {
+        await vi.waitFor(() => expect(origin.requests).toContain(path));
+        opened?.close();
+        prior.release();
+        if (cancel) {
+          controller.abort();
+        }
+        origin.release(path);
+        const result = await outcome;
+        if (cancel) {
+          expect(result.error).toMatchObject({ code: 'cancelled' });
+        } else {
+          expect(result.error).toBeUndefined();
+          expect(delivery.snapshot().staging.map((pack) => pack.packId).sort()).toEqual(['dep', 'top']);
+          expect(delivery.snapshot().staging.every((pack) => pack.handles === 1)).toBe(true);
+          result.prepared?.release();
+        }
+        expect(delivery.snapshot().staging).toEqual([]);
+        expect(delivery.snapshot().stagingUsedBytes).toBe(0);
+      } finally {
+        controller.abort();
+        origin.release(path);
+        opened?.close();
+        prior.release();
+        delivery.dispose();
+        await outcome;
+      }
+    }
   });
 
   it('cleans partial staging when the caller cancels mid-preparation', async () => {
