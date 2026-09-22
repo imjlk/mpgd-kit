@@ -87,7 +87,7 @@ function appSource() {
   return `
 import Phaser from 'phaser';
 import { createPhaserAssetPackLoader } from '@mpgd/phaser-assets/packs';
-import { createPhaserPackDelivery } from '@mpgd/phaser-assets/delivery';
+import { acquireDeliveredPack, createPhaserPackDelivery } from '@mpgd/phaser-assets/delivery';
 import workerUrl from '@mpgd/phaser-assets/archive-worker?worker&url';
 
 const query = new URLSearchParams(location.search);
@@ -107,11 +107,18 @@ async function execute(scene) {
     requestTimeoutMs: 5_000,
     stagingBudgetBytes: 64 * 1024 * 1024,
   });
+  const loader = createPhaserAssetPackLoader(scene, delivery.catalog, {
+    fileSource: delivery.fileSource,
+    timeoutMs: 5_000,
+    maxConcurrentDownloads: 2,
+    maxConcurrentDecodes: 1,
+    maxBufferedBytes: 16 * 1024 * 1024,
+  });
 
   let cancelled = false;
   if (query.has('cancel')) {
     const controller = new AbortController();
-    const attempt = delivery.prepare('grove', { signal: controller.signal });
+    const attempt = acquireDeliveredPack({ delivery, loader, packId: 'grove', signal: controller.signal });
     setTimeout(() => controller.abort(), 20);
     try {
       await attempt;
@@ -120,19 +127,29 @@ async function execute(scene) {
       check(error?.code === 'cancelled', 'in-flight cancellation did not return cancelled');
       cancelled = true;
     }
+    check(delivery.snapshot().stagingUsedBytes === 0, 'cancelled helper retained staging bytes');
+    check(loader.snapshot().length === 0, 'cancelled helper retained texture ownership');
     await fetch('/__packed-consumer/release');
     await wait(25);
   }
 
-  const prepared = await delivery.prepare('grove');
-  const loader = createPhaserAssetPackLoader(scene, delivery.catalog, {
-    fileSource: delivery.fileSource,
-    timeoutMs: 5_000,
-    maxConcurrentDownloads: 2,
-    maxConcurrentDecodes: 1,
-    maxBufferedBytes: 16 * 1024 * 1024,
-  });
-  const lease = await loader.acquire('grove');
+  const failedAcquire = new Error('controlled acquisition failure');
+  try {
+    await acquireDeliveredPack({
+      delivery,
+      loader: { acquire: async () => { throw failedAcquire; } },
+      packId: 'grove',
+    });
+    throw new Error('failing helper unexpectedly succeeded');
+  } catch (error) {
+    check(error === failedAcquire, 'helper replaced the acquisition error');
+  }
+  check(delivery.snapshot().stagingUsedBytes === 0, 'failed helper retained staging bytes');
+  check(delivery.snapshot().staging.length === 0, 'failed helper retained preparation handles');
+
+  const lease = await acquireDeliveredPack({ delivery, loader, packId: 'grove' });
+  check(delivery.snapshot().stagingUsedBytes === 0, 'successful helper retained staging bytes');
+  check(delivery.snapshot().staging.length === 0, 'successful helper retained preparation handles');
   const pilotKey = lease.key('shared', 'pilot');
   const groundKey = lease.key('grove', 'ground');
   check(scene.textures.exists(pilotKey), 'installed loader did not register the spritesheet');
@@ -147,7 +164,6 @@ async function execute(scene) {
   };
   image.destroy();
   lease.release();
-  prepared.release();
   check(loader.snapshot().length === 0, 'loader retained a released resource');
   check(!scene.textures.exists(pilotKey) && !scene.textures.exists(groundKey), 'released textures were not removed');
   check(loader.takeCleanupErrors().length === 0, 'texture cleanup reported an error');

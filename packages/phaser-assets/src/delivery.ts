@@ -21,6 +21,8 @@ import {
 } from './pack-format.js';
 import type {
   PhaserAssetPack,
+  PhaserAssetPackLease,
+  PhaserAssetPackLoader,
   PhaserPackAsset,
   PhaserPackFileBody,
   PhaserPackFileIntegrity,
@@ -410,6 +412,38 @@ export interface PhaserPackDelivery {
   /** Stop everything: aborts an active prepare and drops all staging. */
   dispose(): void;
   snapshot(): PhaserPackDeliverySnapshot;
+}
+
+export interface AcquireDeliveredPackOptions {
+  readonly delivery: Pick<PhaserPackDelivery, 'prepare'>;
+  /** Use a loader created with this delivery's catalog and fileSource. */
+  readonly loader: Pick<PhaserAssetPackLoader, 'acquire'>;
+  readonly packId: string;
+  readonly signal?: AbortSignal;
+  /** Texture readiness only; observe staging with delivery.subscribe(). */
+  readonly onTextureProgress?: (ready: number, total: number) => void;
+}
+
+/** Prepare a pack, acquire its textures, and always release the preparation.
+ * The returned lease belongs to the caller: this helper does not release it,
+ * dispose the loader/delivery, retry, or serialize level selections. */
+export async function acquireDeliveredPack({
+  delivery,
+  loader,
+  packId,
+  signal,
+  onTextureProgress,
+}: AcquireDeliveredPackOptions): Promise<PhaserAssetPackLease> {
+  const signalOptions = signal === undefined ? {} : { signal };
+  const prepared = await delivery.prepare(packId, signalOptions);
+  try {
+    return await loader.acquire(packId, {
+      ...signalOptions,
+      ...(onTextureProgress === undefined ? {} : { onProgress: onTextureProgress }),
+    });
+  } finally {
+    prepared.release();
+  }
 }
 
 interface RoleFile {
