@@ -308,6 +308,12 @@ export interface PhaserPackArtifactReadOptions {
 export async function readPhaserPackArtifactWithCommit(
   options: PhaserPackArtifactReadOptions,
 ): Promise<PhaserPackArtifactRead> {
+  // The exported deferred API also owns a single acquisition identity:
+  // caller mutation must not swap storage or observers before commit.
+  options = {
+    ...options,
+    persistentCache: snapshotPhaserPackPersistentCacheOptions(options.persistentCache),
+  };
   const persistent = options.persistentCache;
   const integrity = options.integrity;
   if (persistent === undefined || integrity === undefined) {

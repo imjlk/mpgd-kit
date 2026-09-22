@@ -155,6 +155,58 @@ describe('persistent pack cache boundary', () => {
     expect(storage.puts).toBe(1);
   });
 
+  it.each(['cache read', 'origin read', 'before commit'])('pins deferred cache options when mutated during %s', async (stage) => {
+    for (const failPut of [false, true]) {
+      const storage = memoryCache();
+      const replacement = memoryCache();
+      storage.failPut = failPut;
+      const events: PhaserPackCacheEvent[] = [];
+      const redirectedEvents: PhaserPackCacheEvent[] = [];
+      const configured = optionsOf(storage, events);
+      const mutate = (): void => {
+        configured.storage = replacement;
+        configured.namespace = 'redirected';
+        configured.onEvent = (event): void => {
+          redirectedEvents.push(event);
+        };
+      };
+      const originalGet = storage.get.bind(storage);
+      vi.spyOn(storage, 'get').mockImplementation(async (key, context) => {
+        if (stage === 'cache read') {
+          mutate();
+        }
+        return originalGet(key, context);
+      });
+      const read = await readPhaserPackArtifactWithCommit({
+        persistentCache: configured,
+        integrity,
+        artifact,
+        signal: new AbortController().signal,
+        fetchOrigin: async () => {
+          if (stage === 'origin read') {
+            mutate();
+          }
+          return bytes.buffer.slice(0);
+        },
+      });
+      if (stage === 'before commit') {
+        mutate();
+      }
+      await read.commit?.(true);
+      expect(storage.puts).toBe(failPut ? 0 : 1);
+      expect(replacement.puts).toBe(0);
+      expect(await storage.usage('app')).toEqual({
+        records: failPut ? 0 : 1,
+        totalBytes: failPut ? 0 : bytes.byteLength,
+      });
+      expect(events.map((event) => event.outcome)).toEqual(
+        failPut ? ['origin-download', 'cache-store-failed'] : ['origin-download'],
+      );
+      expect(events.every((event) => event.key.namespace === 'app')).toBe(true);
+      expect(redirectedEvents).toEqual([]);
+    }
+  });
+
   it('invalidates a corrupt record and falls back to origin', async () => {
     const corrupt = new Uint8Array(bytes);
     corrupt[0]! ^= 0xff;
