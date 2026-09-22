@@ -435,7 +435,7 @@ describe('phaser pack delivery', () => {
 
     const secondEvents: PhaserPackCacheEvent[] = [];
     let secondResolverCalls = 0;
-    const second = createPhaserPackDelivery(manifest, {
+    const secondOptions = {
       resolveURL: (): string => {
         secondResolverCalls++;
         throw new Error('origin URL is unavailable while offline');
@@ -448,7 +448,9 @@ describe('phaser pack delivery', () => {
           secondEvents.push(event);
         },
       },
-    });
+    };
+    const second = createPhaserPackDelivery(manifest, secondOptions);
+    (secondOptions.persistentCache as { namespace: string }).namespace = 'other';
     const secondPrepared = await second.prepare('solo');
     secondPrepared.release();
     expect(second.snapshot().archiveRequests).toBe(0);
@@ -512,6 +514,35 @@ describe('phaser pack delivery', () => {
     body.release();
     opened.close();
     delivery.dispose();
+  });
+
+  it('reports the same retained cache-copy reservation as the default URL source', () => {
+    const { manifest } = buildManifest([{ id: 'solo', delivery: 'files' }]);
+    const storage: PhaserPackPersistentCache = {
+      async get() {
+        return undefined;
+      },
+      async put() {
+      },
+      async delete() {
+        return false;
+      },
+      async clear() {
+      },
+      async usage() {
+        return { records: 0, totalBytes: 0 };
+      },
+    };
+    const cached = createPhaserPackDelivery(manifest, {
+      resolveURL: (path) => path,
+      persistentCache: { storage, namespace: 'delivery-test' },
+    });
+    const request = openRequest('solo');
+    expect(cached.fileSource.additionalBufferedBytes?.(request)).toBe(pngBytes.byteLength);
+    cached.dispose();
+    const uncached = createPhaserPackDelivery(manifest, { resolveURL: (path) => path });
+    expect(uncached.fileSource.additionalBufferedBytes?.(request)).toBe(0);
+    uncached.dispose();
   });
 
   it('keeps the verification basis after caller manifest mutation', async () => {

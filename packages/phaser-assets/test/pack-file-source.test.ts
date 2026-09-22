@@ -510,6 +510,31 @@ describe('default URL source ownership', () => {
     return { opened, controller };
   };
 
+  it('reports the retained cache-copy bytes only when the source can commit them', () => {
+    const storage = {} as PhaserPackPersistentCache;
+    const integrity = { bytes: png.byteLength, sha256: sha256(png) };
+    const request: PhaserPackFileRequest = {
+      packId: 'shared',
+      revision: '1',
+      assetKey: 'pilot',
+      role: 'texture',
+      url: '/pilot.png',
+      integrity,
+    };
+    const cached = createPackUrlFileSource({
+      ...transport,
+      maxFileBytes: png.byteLength,
+      persistentCache: { storage, namespace: 'app' },
+    });
+    expect(cached.additionalBufferedBytes?.(request)).toBe(png.byteLength);
+    expect(cached.additionalBufferedBytes?.({ ...request, integrity: undefined })).toBe(0);
+    expect(cached.additionalBufferedBytes?.({
+      ...request,
+      integrity: { ...integrity, bytes: png.byteLength + 1 },
+    })).toBe(0);
+    expect(createPackUrlFileSource(transport).additionalBufferedBytes?.(request)).toBe(0);
+  });
+
   it('rejects a second read of the same opened file', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(png)));
     const { opened } = await openFile();
@@ -572,7 +597,8 @@ describe('default URL source ownership', () => {
       revision: '1',
       assetKey: 'pilot',
       role: 'texture',
-      url: '/pilot.png',
+      url: '/asset',
+      mediaType: 'image/svg+xml',
       integrity: { bytes: png.byteLength, sha256: sha256(png) },
     }, {
       signal: controller.signal,
@@ -581,7 +607,9 @@ describe('default URL source ownership', () => {
         bytes: { acquire: async () => noop },
       },
     });
-    expect((await opened.read()).bytes.size).toBe(png.byteLength);
+    const body = await opened.read();
+    expect(body.bytes.size).toBe(png.byteLength);
+    expect(body.bytes.type).toBe('image/svg+xml');
     expect(fetch).not.toHaveBeenCalled();
     expect(events.map((event) => event.outcome)).toEqual(['cache-hit']);
     opened.close();

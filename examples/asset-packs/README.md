@@ -105,13 +105,17 @@ The example supplies an IndexedDB implementation to the public
 `persistentCache` option. The package reads and stores verified original
 files-delivery files and ZIP archives at the real acquisition boundary; no
 Blob URL warm bridge or prefetch phase is involved.
+The acceptance can use a bounded separator-containing namespace through
+`cache-namespace=<ascii-name>` (up to 64 characters); the default is
+`asset-pack-experiment`.
 
 - **Stored**: original artifact bytes only. Never expanded entries,
   images/textures, code, tokens or personal data.
-- **Identity**: `namespace | sha256 | expectedDigest | expectedBytes` —
-  host- and path-independent, so the same content from another origin
-  resolves to the same record. MIME/roles always come from the current
-  manifest, never from a stored record.
+- **Identity**: host- and path-independent `namespace | sha256 | expectedDigest |
+  expectedBytes` records remain readable for compatibility; namespaces containing
+  `|` use an unambiguous `v2:<encodedNamespace>:<expectedDigest>:<expectedBytes>`
+  form. MIME/roles always come from the current manifest, never from a stored
+  record.
 - **Write path**: bounded fetch → existing loader/decoder verification → short
   readwrite transaction → atomic commit. Network/crypto never run inside a
   transaction. Aborts and quota failures keep previous good records and are

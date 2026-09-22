@@ -623,11 +623,45 @@ try {
     // from the remote origin. Cache hits do not emit origin requests.
     const artifactGets = () => remote.requests.filter((path) => path.startsWith('/delivery/zip/packs/')).length;
     const groveArchivePath = '/delivery/zip/packs/grove@1.zip';
+    const cacheNamespace = 'asset|pack|v2';
+    const cacheUrlSuffix = `&cache-namespace=${encodeURIComponent(cacheNamespace)}`;
     const usage = () => cachePage.evaluate(() => window.__artifact_cache_usage());
     const idbRaw = (fn) => cachePage.evaluate(`(${fn})(indexedDB)`);
+    const cacheDbName = 'mpgd-asset-pack-experiment';
+    const cacheStoreName = 'artifacts';
+    const cacheKeyPrefix = 'mpgd-asset-experiment';
+    const cacheUsageKey = `${cacheKeyPrefix}|__usage__`;
+    const cacheMigrationKey = `${cacheKeyPrefix}|__public-cache-migrated__`;
+    const idbArtifact = (mode, operation) => idbRaw(`async (db) => {
+      const open = await new Promise((resolve, reject) => {
+        const request = db.open(${JSON.stringify(cacheDbName)});
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      try {
+        return await new Promise((resolve, reject) => {
+          const tx = open.transaction(${JSON.stringify(cacheStoreName)}, ${JSON.stringify(mode)});
+          const store = tx.objectStore(${JSON.stringify(cacheStoreName)});
+          let value;
+          let operationSettled = false;
+          Promise.resolve((${operation})(store)).then((result) => {
+            value = result;
+            operationSettled = true;
+          }, reject);
+          tx.oncomplete = () => {
+            if (operationSettled) resolve(value);
+            else reject(new Error('IndexedDB fixture operation settled after transaction completion'));
+          };
+          tx.onerror = () => reject(tx.error ?? new Error('IndexedDB fixture transaction failed'));
+          tx.onabort = () => reject(tx.error ?? new Error('IndexedDB fixture transaction aborted'));
+        });
+      } finally {
+        open.close();
+      }
+    }`);
 
     // C. controlled baseline first (fresh context, cold IndexedDB):
-    await cachePage.goto(cacheApp.url + '?renderer=webgl&delivery=zip&idcache=1');
+    await cachePage.goto(cacheApp.url + `?renderer=webgl&delivery=zip&idcache=1${cacheUrlSuffix}`);
     await cacheWait('idle');
     assert.equal(await cachePage.evaluate(() => window.__artifact_cache_present()), true, 'The public cache adapter must be active under idcache=1');
 
@@ -649,6 +683,7 @@ try {
     assert.equal(coldUsage.records, 2, 'Two verified records committed');
     assert.ok(coldUsage.totalBytes > 0);
     const identities = coldReport.entries.map((entry) => entry.identity);
+    assert.ok(identities.every((identity) => identity.includes('|v2:')), JSON.stringify(identities));
     await cachePage.click('#unload');
 
     // Idempotent duplicate storage: the same content is acquired again as cache
@@ -675,6 +710,95 @@ try {
     assert.equal(artifactGets() - warmBefore, 0, 'Warm reload reuses stored bytes with zero origin artifact GETs');
     const warmStats = cacheNow.cache.report.entries.map(({ identity, outcome, bodyBytes }) => ({ identity, outcome, bodyBytes }));
     assert.ok(warmStats.every((entry) => entry.outcome === 'cache-hit'));
+
+    // A legacy pipe-containing identity is read once, copied to the
+    // unambiguous v2 key, and removed without another origin request.
+    const currentIdentityParts = /(?:\||:)([0-9a-f]{64})[|:](\d+)$/iu.exec(identities[0]);
+    assert.ok(currentIdentityParts, `Unexpected cache identity: ${identities[0]}`);
+    const legacyNamespacedIdentity = `${cacheKeyPrefix}|${cacheNamespace}|sha256|${currentIdentityParts[1]}|${currentIdentityParts[2]}`;
+    await idbArtifact('readwrite', `(store) => new Promise((resolve, reject) => {
+      const current = store.get(${JSON.stringify(identities[0])});
+      current.onsuccess = () => {
+        if (current.result === undefined) {
+          reject(new Error('v2 cache record was not available for migration fixture'));
+          return;
+        }
+        store.put(current.result, ${JSON.stringify(legacyNamespacedIdentity)});
+        store.delete(${JSON.stringify(identities[0])});
+        store.put({ total: ${coldUsage.totalBytes} }, ${JSON.stringify(cacheUsageKey)});
+        resolve();
+      };
+      current.onerror = () => reject(current.error);
+    })`);
+    await cachePage.click('#unload');
+    const legacyBefore = artifactGets();
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    cacheNow = await cacheState();
+    assert.equal(artifactGets() - legacyBefore, 0, 'Legacy cache migration must not fetch origin bytes');
+    assert.ok(cacheNow.cache.report.entries.every((entry) => entry.outcome === 'cache-hit'), JSON.stringify(cacheNow.cache.report));
+    const pipeMigrationState = await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+      const current = store.get(${JSON.stringify(identities[0])});
+      const legacy = store.get(${JSON.stringify(legacyNamespacedIdentity)});
+      let pending = 2;
+      const finish = () => {
+        if (--pending === 0) resolve({ current: current.result !== undefined, legacy: legacy.result !== undefined });
+      };
+      current.onsuccess = finish;
+      legacy.onsuccess = finish;
+      current.onerror = () => reject(current.error);
+      legacy.onerror = () => reject(legacy.error);
+    })`);
+    assert.deepEqual(pipeMigrationState, { current: true, legacy: false });
+    // Reboot reconciliation removes a twin left behind after a v2 commit when
+    // the legacy delete was interrupted before the page closed.
+    await idbArtifact('readwrite', `(store) => {
+      store.put({ legacy: true }, ${JSON.stringify(legacyNamespacedIdentity)});
+    }`);
+    await cachePage.reload();
+    await cacheWait('idle');
+    const reconciledTwin = await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+      const get = store.get(${JSON.stringify(legacyNamespacedIdentity)});
+      get.onsuccess = () => resolve(get.result !== undefined);
+      get.onerror = () => reject(get.error);
+    })`);
+    assert.equal(reconciledTwin, false);
+
+    // Reboot reconciliation keeps a valid legacy twin when the v2 copy is
+    // corrupt, so the next read can safely migrate it again.
+    await idbArtifact('readwrite', `(store) => new Promise((resolve, reject) => {
+      const current = store.get(${JSON.stringify(identities[0])});
+      current.onsuccess = () => {
+        if (current.result === undefined) {
+          reject(new Error('v2 cache record was not available for corrupt twin fixture'));
+          return;
+        }
+        store.put({ ...current.result, schemaVersion: 99 }, ${JSON.stringify(identities[0])});
+        store.put(current.result, ${JSON.stringify(legacyNamespacedIdentity)});
+        resolve();
+      };
+      current.onerror = () => reject(current.error);
+    })`);
+    await cachePage.reload();
+    await cacheWait('idle');
+    const corruptTwinState = await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+      const current = store.get(${JSON.stringify(identities[0])});
+      const legacy = store.get(${JSON.stringify(legacyNamespacedIdentity)});
+      let pending = 2;
+      const finish = () => {
+        if (--pending === 0) resolve({ current: current.result !== undefined, legacy: legacy.result !== undefined });
+      };
+      current.onsuccess = finish;
+      legacy.onsuccess = finish;
+      current.onerror = () => reject(current.error);
+      legacy.onerror = () => reject(legacy.error);
+    })`);
+    assert.deepEqual(corruptTwinState, { current: false, legacy: true });
+    const corruptTwinFallbackBefore = artifactGets();
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    assert.equal(artifactGets() - corruptTwinFallbackBefore, 0, 'A valid legacy twin restores a corrupt v2 record');
+    await cachePage.click('#unload');
     evidence.push({
       persistentReuse: {
         cold: { artifactGets: coldGets, entries: coldReport.entries.map(({ identity, outcome, bodyBytes }) => ({ identity, outcome, bodyBytes })) },
@@ -686,80 +810,43 @@ try {
     // identity. Remove the migration marker, seed that legacy key beside a
     // current and foreign record, and reload so the real IndexedDB adapter
     // performs the one-time cleanup and usage repair.
-    const currentParts = identities[0].split('|');
-    const legacyIdentity = `mpgd-asset-experiment|sha256|${currentParts[currentParts.length - 2]}|${currentParts[currentParts.length - 1]}`;
+    const digestOnlyParts = /(?:\||:)([0-9a-f]{64})[|:](\d+)$/iu.exec(identities[0]);
+    assert.ok(digestOnlyParts, `Unexpected cache identity: ${identities[0]}`);
+    const legacyIdentity = `${cacheKeyPrefix}|sha256|${digestOnlyParts[1]}|${digestOnlyParts[2]}`;
     const secondLegacyIdentity = `${legacyIdentity}-second`;
-    await idbRaw(`async (db) => {
-      const open = await new Promise((resolve, reject) => {
-        const request = db.open('mpgd-asset-pack-experiment');
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-      await new Promise((resolve, reject) => {
-        const tx = open.transaction('artifacts', 'readwrite');
-        const store = tx.objectStore('artifacts');
-        store.put({ legacy: true, payload: new ArrayBuffer(1) }, ${JSON.stringify(legacyIdentity)});
-        store.put({ total: Number.MAX_SAFE_INTEGER }, 'mpgd-asset-experiment|__usage__');
-        store.put({ foreign: true }, 'other-app|migration-record|1');
-        store.delete('mpgd-asset-experiment|__public-cache-migrated__');
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-      });
-      open.close();
+    await idbArtifact('readwrite', `(store) => {
+      store.put({ legacy: true, payload: new ArrayBuffer(1) }, ${JSON.stringify(legacyIdentity)});
+      store.put({ total: Number.MAX_SAFE_INTEGER }, ${JSON.stringify(cacheUsageKey)});
+      store.put({ foreign: true }, 'other-app|migration-record|1');
+      store.delete(${JSON.stringify(cacheMigrationKey)});
     }`);
     await cachePage.reload();
     await cacheWait('idle');
-    const migrationState = await idbRaw(`async (db) => {
-      const open = await new Promise((resolve, reject) => {
-        const request = db.open('mpgd-asset-pack-experiment');
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-      const values = await new Promise((resolve, reject) => {
-        const tx = open.transaction('artifacts', 'readonly');
-        const store = tx.objectStore('artifacts');
-        const legacy = store.get(${JSON.stringify(legacyIdentity)});
-        const foreign = store.get('other-app|migration-record|1');
-        tx.oncomplete = () => resolve({ legacy: legacy.result !== undefined, foreign: foreign.result !== undefined });
-        tx.onerror = () => reject(tx.error);
-      });
-      open.close();
-      return values;
-    }`);
+    const migrationState = await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+      const legacy = store.get(${JSON.stringify(legacyIdentity)});
+      const foreign = store.get('other-app|migration-record|1');
+      let pending = 2;
+      const finish = () => {
+        if (--pending === 0) resolve({ legacy: legacy.result !== undefined, foreign: foreign.result !== undefined });
+      };
+      legacy.onsuccess = finish;
+      foreign.onsuccess = finish;
+      legacy.onerror = () => reject(legacy.error);
+      foreign.onerror = () => reject(foreign.error);
+    })`);
     assert.deepEqual(migrationState, { legacy: false, foreign: true });
     assert.deepEqual(await usage(), coldUsage, 'Migration repairs usage without touching current records');
-    await idbRaw(`async (db) => {
-      const open = await new Promise((resolve, reject) => {
-        const request = db.open('mpgd-asset-pack-experiment');
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-      await new Promise((resolve, reject) => {
-        const tx = open.transaction('artifacts', 'readwrite');
-        tx.objectStore('artifacts').put({ legacy: true }, ${JSON.stringify(secondLegacyIdentity)});
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-      });
-      open.close();
+    await idbArtifact('readwrite', `(store) => {
+      store.put({ legacy: true }, ${JSON.stringify(secondLegacyIdentity)});
     }`);
     await cachePage.reload();
     await cacheWait('idle');
     assert.equal(
-      await idbRaw(`async (db) => {
-        const open = await new Promise((resolve, reject) => {
-          const request = db.open('mpgd-asset-pack-experiment');
-          request.onsuccess = () => resolve(request.result);
-          request.onerror = () => reject(request.error);
-        });
-        const present = await new Promise((resolve, reject) => {
-          const tx = open.transaction('artifacts', 'readonly');
-          const get = tx.objectStore('artifacts').get(${JSON.stringify(secondLegacyIdentity)});
-          get.onsuccess = () => resolve(get.result !== undefined);
-          get.onerror = () => reject(get.error);
-        });
-        open.close();
-        return present;
-      }`),
+      await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+        const get = store.get(${JSON.stringify(secondLegacyIdentity)});
+        get.onsuccess = () => resolve(get.result !== undefined);
+        get.onerror = () => reject(get.error);
+      })`),
       true,
       'Migration marker prevents a second destructive sweep',
     );
@@ -768,27 +855,17 @@ try {
     // warm must treat it as a miss (never serve corrupt bytes) — the
     // origin refetch restores playability.
     const tamperedIdentity = identities[0];
-    await idbRaw(`async (db) => {
-      const open = await new Promise((resolve, reject) => {
-        const request = db.open('mpgd-asset-pack-experiment');
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-      await new Promise((resolve, reject) => {
-        const tx = open.transaction('artifacts', 'readwrite');
-        const store = tx.objectStore('artifacts');
-        const get = store.get(${JSON.stringify(tamperedIdentity)});
-        get.onsuccess = () => {
-          const record = get.result;
-          record.payload = record.payload.slice(0);
-          new Uint8Array(record.payload)[0] ^= 0xff;
-          store.put(record, ${JSON.stringify(tamperedIdentity)});
-        };
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-      });
-      open.close();
-    }`);
+    await idbArtifact('readwrite', `(store) => new Promise((resolve, reject) => {
+      const get = store.get(${JSON.stringify(tamperedIdentity)});
+      get.onsuccess = () => {
+        const record = get.result;
+        record.payload = record.payload.slice(0);
+        new Uint8Array(record.payload)[0] ^= 0xff;
+        store.put(record, ${JSON.stringify(tamperedIdentity)});
+        resolve();
+      };
+      get.onerror = () => reject(get.error);
+    })`);
     const corruptBefore = artifactGets();
     await cachePage.reload();
     await cacheWait('idle');
@@ -847,27 +924,17 @@ try {
     await cachePage.click('#grove');
     await cacheWait('playing');
     await cachePage.click('#unload');
-    await idbRaw(`async (db) => {
-      const open = await new Promise((resolve, reject) => {
-        const request = db.open('mpgd-asset-pack-experiment');
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-      await new Promise((resolve, reject) => {
-        const tx = open.transaction('artifacts', 'readwrite');
-        const store = tx.objectStore('artifacts');
-        const get = store.get(${JSON.stringify(identities[0])});
-        get.onsuccess = () => {
-          const record = get.result;
-          record.digest = '0'.repeat(64);
-          record.bytes = record.bytes + 1;
-          store.put(record, ${JSON.stringify(identities[0])});
-        };
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-      });
-      open.close();
-    }`);
+    await idbArtifact('readwrite', `(store) => new Promise((resolve, reject) => {
+      const get = store.get(${JSON.stringify(identities[0])});
+      get.onsuccess = () => {
+        const record = get.result;
+        record.digest = '0'.repeat(64);
+        record.bytes = record.bytes + 1;
+        store.put(record, ${JSON.stringify(identities[0])});
+        resolve();
+      };
+      get.onerror = () => reject(get.error);
+    })`);
     const metaBefore = artifactGets();
     await cachePage.click('#grove');
     await cacheWait('playing');
@@ -934,46 +1001,23 @@ try {
 
     // Namespace isolation: foreign keys in the same store survive every
     // experiment operation above.
-    const foreign = await idbRaw(`async (db) => {
-      const open = await new Promise((resolve, reject) => {
-        const request = db.open('mpgd-asset-pack-experiment');
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-      await new Promise((resolve, reject) => {
-        const tx = open.transaction('artifacts', 'readwrite');
-        tx.objectStore('artifacts').put({ foreign: true }, 'other-app|record|1');
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-      });
-      const present = await new Promise((resolve, reject) => {
-        const tx = open.transaction('artifacts', 'readonly');
-        const get = tx.objectStore('artifacts').get('other-app|record|1');
-        get.onsuccess = () => resolve(get.result !== undefined);
-        get.onerror = () => reject(get.error);
-      });
-      open.close();
-      return present;
+    await idbArtifact('readwrite', `(store) => {
+      store.put({ foreign: true }, 'other-app|record|1');
     }`);
+    const foreign = await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+      const get = store.get('other-app|record|1');
+      get.onsuccess = () => resolve(get.result !== undefined);
+      get.onerror = () => reject(get.error);
+    })`);
     assert.equal(foreign, true, 'A foreign record is insertable next to the experiment namespace');
     await cachePage.click('#grove');
     await cacheWait('playing');
     await cachePage.click('#unload');
-    const foreignAfter = await idbRaw(`async (db) => {
-      const open = await new Promise((resolve, reject) => {
-        const request = db.open('mpgd-asset-pack-experiment');
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-      const present = await new Promise((resolve, reject) => {
-        const tx = open.transaction('artifacts', 'readonly');
-        const get = tx.objectStore('artifacts').get('other-app|record|1');
-        get.onsuccess = () => resolve(get.result !== undefined);
-        get.onerror = () => reject(get.error);
-      });
-      open.close();
-      return present;
-    }`);
+    const foreignAfter = await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+      const get = store.get('other-app|record|1');
+      get.onsuccess = () => resolve(get.result !== undefined);
+      get.onerror = () => reject(get.error);
+    })`);
     assert.equal(foreignAfter, true, 'Experiment operations never touch foreign records');
 
     // Delete vs late write: the defined result is IDB's last-commit-wins
@@ -991,19 +1035,8 @@ try {
     // current record, and make the owned usage marker full. The next origin
     // store must abort honestly while the online load still succeeds.
     await cachePage.evaluate((identity) => window.__artifact_cache_delete(identity), identities[1]);
-    await idbRaw(`async (db) => {
-      const open = await new Promise((resolve, reject) => {
-        const request = db.open('mpgd-asset-pack-experiment');
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-      await new Promise((resolve, reject) => {
-        const tx = open.transaction('artifacts', 'readwrite');
-        tx.objectStore('artifacts').put({ total: Number.MAX_SAFE_INTEGER }, 'mpgd-asset-experiment|__usage__');
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-      });
-      open.close();
+    await idbArtifact('readwrite', `(store) => {
+      store.put({ total: Number.MAX_SAFE_INTEGER }, ${JSON.stringify(cacheUsageKey)});
     }`);
     await cachePage.click('#grove');
     await cacheWait('playing');
@@ -1016,23 +1049,68 @@ try {
     assert.equal(cacheNow.current, 'grove', 'A real quota rejection never breaks the online load');
     await cachePage.click('#unload');
 
+    // The public key-scoped delete removes both the v2 identity and a
+    // legacy twin, unlike the private identity-only fixture hook above.
+    await idbArtifact('readwrite', `(store) => new Promise((resolve, reject) => {
+      const current = store.get(${JSON.stringify(identities[0])});
+      current.onsuccess = () => {
+        if (current.result === undefined) {
+          reject(new Error('v2 cache record was not available for public delete fixture'));
+          return;
+        }
+        store.put(current.result, ${JSON.stringify(legacyNamespacedIdentity)});
+        resolve();
+      };
+      current.onerror = () => reject(current.error);
+    })`);
+    const deletedTwin = await cachePage.evaluate((key) => window.__artifact_cache_delete_key(key), {
+      namespace: cacheNamespace,
+      sha256: currentIdentityParts[1],
+      bytes: Number(currentIdentityParts[2]),
+    });
+    assert.equal(deletedTwin, true);
+    const deletedTwinState = await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+      const current = store.get(${JSON.stringify(identities[0])});
+      const legacy = store.get(${JSON.stringify(legacyNamespacedIdentity)});
+      let pending = 2;
+      const finish = () => {
+        if (--pending === 0) resolve({ current: current.result !== undefined, legacy: legacy.result !== undefined });
+      };
+      current.onsuccess = finish;
+      legacy.onsuccess = finish;
+      current.onerror = () => reject(current.error);
+      legacy.onerror = () => reject(legacy.error);
+    })`);
+    assert.deepEqual(deletedTwinState, { current: false, legacy: false });
+
+    // Re-seed both identity forms so clear() still exercises v2 and legacy
+    // namespace matching after the key-scoped delete fixture above.
+    await idbArtifact('readwrite', `(store) => {
+      store.put({ total: 0 }, ${JSON.stringify(cacheUsageKey)});
+    }`);
+    await cachePage.click('#grove');
+    await cacheWait('playing');
+    await cachePage.click('#unload');
+    await idbArtifact('readwrite', `(store) => new Promise((resolve, reject) => {
+      const current = store.get(${JSON.stringify(identities[0])});
+      current.onsuccess = () => {
+        if (current.result === undefined) {
+          reject(new Error('v2 cache record was not available before clear fixture'));
+          return;
+        }
+        store.put(current.result, ${JSON.stringify(legacyNamespacedIdentity)});
+        resolve();
+      };
+      current.onerror = () => reject(current.error);
+    })`);
+
     await cachePage.evaluate(() => window.__artifact_cache_clear());
     assert.deepEqual(await usage(), { records: 0, totalBytes: 0 }, 'clear removes only the active namespace');
-    const foreignAfterClear = await idbRaw(`async (db) => {
-      const open = await new Promise((resolve, reject) => {
-        const request = db.open('mpgd-asset-pack-experiment');
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error);
-      });
-      const present = await new Promise((resolve, reject) => {
-        const tx = open.transaction('artifacts', 'readonly');
-        const get = tx.objectStore('artifacts').get('other-app|record|1');
-        get.onsuccess = () => resolve(get.result !== undefined);
-        get.onerror = () => reject(get.error);
-      });
-      open.close();
-      return present;
-    }`);
+    const foreignAfterClear = await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+      const get = store.get('other-app|record|1');
+      get.onsuccess = () => resolve(get.result !== undefined);
+      get.onerror = () => reject(get.error);
+    })`);
     assert.equal(foreignAfterClear, true, 'clear never touches foreign records');
 
     assert.deepEqual(cacheErrors, []);

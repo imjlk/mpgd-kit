@@ -8,7 +8,10 @@
  * in memory), images/audio/textures, code, tokens or personal data.
  *
  * Identity is content-derived and host independent:
- * `${namespace}|${digestAlgorithm}|${expectedDigest}|${expectedBytes}`.
+ * `${namespace}|${digestAlgorithm}|${expectedDigest}|${expectedBytes}` for
+ * legacy records, or `v2:<encodedNamespace>:<expectedDigest>:<expectedBytes>`
+ * for new records. The v2 form has no legacy `|sha256|` marker, so namespace
+ * matching remains unambiguous even when a namespace contains separators.
  * Pack paths, CDN hosts and expiring queries are never the key, so the
  * same artifact fetched from another host resolves to the same record.
  * MIME and file roles always come from the CURRENT manifest — a stored
@@ -91,9 +94,104 @@ interface StoredArtifact {
   readonly bytes: number;
 }
 
+/** Namespaces containing `|` use an unambiguous v2 identity and retain their
+ * legacy twin only while an older record is being migrated. */
+const encodedNamespaceOf = (namespace: string): string | undefined => {
+  if (!namespace.includes('|')) {
+    return undefined;
+  }
+  try {
+    const encoded = encodeURIComponent(namespace);
+    // Modern engines encode lone surrogates as U+FFFD instead of throwing;
+    // only use the v2 form when it decodes back to the exact namespace.
+    return decodeURIComponent(encoded) === namespace ? encoded : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const usesV2Identity = (key: PhaserPackCacheKey): boolean =>
+  encodedNamespaceOf(key.namespace) !== undefined;
+
 /** Convert a public content identity to this adapter's namespaced key. */
-export const artifactCacheIdentity = (key: PhaserPackCacheKey): string =>
+export const artifactCacheIdentity = (key: PhaserPackCacheKey): string => {
+  const encodedNamespace = encodedNamespaceOf(key.namespace);
+  return encodedNamespace === undefined
+    ? `${KEY_PREFIX}${key.namespace}|sha256|${key.sha256}|${key.bytes}`
+    : `${KEY_PREFIX}v2:${encodedNamespace}:${key.sha256}:${key.bytes}`;
+};
+
+interface V2IdentityParts {
+  readonly namespace: string;
+  readonly sha256: string;
+  readonly bytes: number;
+}
+
+const v2IdentityPartsOf = (identity: string): V2IdentityParts | undefined => {
+  if (!identity.startsWith(KEY_PREFIX)) {
+    return undefined;
+  }
+  const current = /^v2:([^:]*):([0-9a-f]{64}):(\d+)$/iu.exec(identity.slice(KEY_PREFIX.length));
+  if (current === null) {
+    return undefined;
+  }
+  try {
+    return {
+      namespace: decodeURIComponent(current[1]!),
+      // Preserve the matched case: legacyTwinOf must stay byte-identical to
+      // legacyArtifactCacheIdentity, which interpolates key.sha256 verbatim
+      // (the package factory lowercases, but the raw debug-hook key in
+      // main.ts can still carry uppercase hex).
+      sha256: current[2]!,
+      bytes: Number(current[3]),
+    };
+  } catch {
+    return undefined;
+  }
+};
+
+/** Decode the namespace from current and pre-public content identities. */
+const namespaceOfIdentity = (identity: string): string | undefined => {
+  if (!identity.startsWith(KEY_PREFIX)) {
+    return undefined;
+  }
+  const current = v2IdentityPartsOf(identity);
+  if (current !== undefined) {
+    return current.namespace;
+  }
+  const rest = identity.slice(KEY_PREFIX.length);
+  // The old public form ends with `|sha256|<64 hex>|<bytes>`; the greedy
+  // group anchors to the last marker plus a validated tail, so a namespace
+  // embedding `|sha256|` or a line terminator still decodes exactly.
+  const legacy = /^(.*)\|sha256\|[0-9a-f]{64}\|\d+$/isu.exec(rest);
+  return legacy === null ? undefined : legacy[1]!;
+};
+
+const legacyArtifactCacheIdentity = (key: PhaserPackCacheKey): string =>
   `${KEY_PREFIX}${key.namespace}|sha256|${key.sha256}|${key.bytes}`;
+
+/** Return the old-form twin of one parsed v2 identity. */
+const legacyTwinOfParts = (current: V2IdentityParts): string => {
+  return `${KEY_PREFIX}${current.namespace}|sha256|${current.sha256}|${current.bytes}`;
+};
+
+const arrayBufferByteLength = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  'byteLength',
+)!.get!;
+
+/** Accept ArrayBuffers supplied by another same-origin realm. Keep this
+ * adapter-local twin aligned with the package boundary check in
+ * packages/phaser-assets/src/pack-cache.ts; the example must validate records
+ * before it can call the public storage contract. */
+const isArrayBuffer = (value: unknown): value is ArrayBuffer => {
+  try {
+    arrayBufferByteLength.call(value);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 /** A bounded promise wrapper: DB work must never hang the prepare. */
 const withDeadline = async <T>(
@@ -153,7 +251,8 @@ const withDeadline = async <T>(
 
 /** Read the byte-count suffix used by the adapter's accounting marker. */
 const bytesOfIdentity = (identity: string): number | undefined => {
-  const bytes = Number(identity.slice(identity.lastIndexOf('|') + 1));
+  const suffix = /[|:](\d+)$/u.exec(identity)?.[1];
+  const bytes = Number(suffix);
   return Number.isSafeInteger(bytes) && bytes > 0 ? bytes : undefined;
 };
 
@@ -164,6 +263,32 @@ const isLegacyIdentity = (identity: string): boolean => {
   }
   const parts = identity.split('|');
   return parts.length === 4 && parts[1] === 'sha256';
+};
+
+/** Apply owned-record deletions and recompute the aggregate quota marker. */
+const finishOwnedRecordRepair = (
+  store: IDBObjectStore,
+  keys: Iterable<string>,
+  deleted: ReadonlySet<string>,
+  markerKey?: string,
+): void => {
+  let remaining = 0;
+  for (const key of keys) {
+    if (key === USAGE_KEY || key === MIGRATION_KEY) {
+      continue;
+    }
+    if (deleted.has(key)) {
+      store.delete(key);
+      continue;
+    }
+    if (key.startsWith(KEY_PREFIX)) {
+      remaining += bytesOfIdentity(key) ?? 0;
+    }
+  }
+  store.put({ total: remaining }, USAGE_KEY);
+  if (markerKey !== undefined) {
+    store.put({ version: 1 }, markerKey);
+  }
 };
 
 /** Delete matching owned records and repair the aggregate quota marker in the
@@ -182,23 +307,11 @@ const repairOwnedRecords = async (
     const scan = (): void => {
       const request = store.getAllKeys();
       request.onsuccess = () => {
-        let remaining = 0;
-        for (const key of request.result) {
-          if (typeof key !== 'string' || key === USAGE_KEY || key === MIGRATION_KEY) {
-            continue;
-          }
-          if (shouldDelete(key)) {
-            store.delete(key);
-            continue;
-          }
-          if (key.startsWith(KEY_PREFIX)) {
-            remaining += bytesOfIdentity(key) ?? 0;
-          }
-        }
-        store.put({ total: remaining }, USAGE_KEY);
-        if (markerKey !== undefined) {
-          store.put({ version: 1 }, markerKey);
-        }
+        const keys = request.result.filter((key): key is string => typeof key === 'string');
+        const deleted = new Set(keys.filter(
+          (key) => key !== USAGE_KEY && key !== MIGRATION_KEY && shouldDelete(key),
+        ));
+        finishOwnedRecordRepair(store, keys, deleted, markerKey);
       };
       request.onerror = () => fail(request.error ?? new Error(`artifact cache ${label} failed`));
     };
@@ -227,12 +340,63 @@ const sweepLegacyRecords = async (db: IDBDatabase): Promise<void> => {
   await repairOwnedRecords(db, isLegacyIdentity, 'migration', undefined, MIGRATION_KEY);
 };
 
+/** Remove a legacy pipe-namespace twin after a v2 copy survived a reload. */
+const reconcileLegacyTwins = async (db: IDBDatabase): Promise<void> => {
+  await withDeadline<void>((finish, fail, registerAbort) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    registerAbort(() => tx.abort());
+    const store = tx.objectStore(STORE_NAME);
+    const request = store.getAllKeys();
+    request.onsuccess = () => {
+      const keys = new Set(request.result.filter((key): key is string => typeof key === 'string'));
+      const candidates = [...keys].flatMap((key) => {
+        const current = v2IdentityPartsOf(key);
+        if (current === undefined) {
+          return [];
+        }
+        const twin = legacyTwinOfParts(current);
+        return keys.has(twin) ? [{ key, twin, current }] : [];
+      });
+      const deleted = new Set<string>();
+      if (candidates.length === 0) {
+        finish(undefined);
+        return;
+      }
+      let pending = candidates.length;
+      for (const candidate of candidates) {
+        const currentRequest = store.get(candidate.key);
+        currentRequest.onsuccess = () => {
+          const record = currentRequest.result as CacheRecord | undefined;
+          const intact = record !== undefined
+            && record.schemaVersion === SCHEMA_VERSION
+            && record.digest === candidate.current.sha256
+            && record.bytes === candidate.current.bytes
+            && isArrayBuffer(record.payload)
+            && record.payload.byteLength === candidate.current.bytes;
+          deleted.add(intact ? candidate.twin : candidate.key);
+          pending--;
+          if (pending === 0) {
+            finishOwnedRecordRepair(store, keys, deleted);
+          }
+        };
+        currentRequest.onerror = () => fail(
+          currentRequest.error ?? new Error('artifact cache twin record read failed'),
+        );
+      }
+    };
+    request.onerror = () => fail(request.error ?? new Error('artifact cache twin reconciliation failed'));
+    tx.oncomplete = () => finish(undefined);
+    tx.onabort = () => fail(tx.error ?? new Error('artifact cache twin reconciliation aborted'));
+    tx.onerror = () => undefined;
+  }, 'twin-reconciliation');
+};
+
 export class ArtifactCache implements PhaserPackPersistentCache {
   private constructor(private readonly db: IDBDatabase) {}
 
   readonly faults: ArtifactCacheFaults = {};
 
-  /** Open the bounded store and retry legacy cleanup on later boots if needed. */
+  /** Open the bounded store and reconcile legacy records and identity twins. */
   static async open(): Promise<ArtifactCache | 'unavailable'> {
     if (typeof indexedDB === 'undefined') {
       return 'unavailable';
@@ -264,6 +428,12 @@ export class ArtifactCache implements PhaserPackPersistentCache {
       // operations fail into 'unavailable' rather than hanging.
       db.onversionchange = () => db.close();
       try {
+        await reconcileLegacyTwins(db);
+      } catch {
+        // Twin cleanup is optional; the failed transaction rolled back and
+        // the next open will retry it.
+      }
+      try {
         await sweepLegacyRecords(db);
       } catch {
         // A slow or temporarily blocked migration must not disable the
@@ -292,16 +462,49 @@ export class ArtifactCache implements PhaserPackPersistentCache {
       this.faults.dbUnavailableOnce = false;
       throw new Error('artifact cache database unavailable');
     }
-    const record = await this.readRecord(artifactCacheIdentity(key), context.signal);
-    context.signal?.throwIfAborted();
-    if (record === null || record.schemaVersion !== SCHEMA_VERSION
-      || record.digest !== key.sha256 || record.bytes !== key.bytes
-      || !(record.payload instanceof ArrayBuffer) || record.payload.byteLength !== key.bytes) {
-      if (record !== null) {
-        await this.deleteRecord(artifactCacheIdentity(key), context.signal);
+    const identity = artifactCacheIdentity(key);
+    let recordIdentity = identity;
+    const readValid = async (candidateIdentity: string): Promise<CacheRecord | undefined> => {
+      const candidate = await this.readRecord(candidateIdentity, context.signal);
+      if (candidate === null) {
+        return undefined;
       }
-      context.signal?.throwIfAborted();
+      const valid = candidate.schemaVersion === SCHEMA_VERSION
+        && candidate.digest === key.sha256
+        && candidate.bytes === key.bytes
+        && isArrayBuffer(candidate.payload)
+        && candidate.payload.byteLength === key.bytes;
+      if (!valid) {
+        await this.deleteRecord(candidateIdentity, context.signal);
+        return undefined;
+      }
+      return candidate;
+    };
+    let record = await readValid(identity);
+    if (record === undefined && usesV2Identity(key)) {
+      recordIdentity = legacyArtifactCacheIdentity(key);
+      record = await readValid(recordIdentity);
+    }
+    context.signal?.throwIfAborted();
+    if (record === undefined) {
       return undefined;
+    }
+    if (recordIdentity !== identity) {
+      // Keep a valid legacy hit usable even if migration fails. A successful
+      // copy replaces the legacy twin atomically, so usage stays size-neutral
+      // and cache reuse never depends on the migration completing.
+      try {
+        await this.storeRecord(
+          { sha256: key.sha256, bytes: key.bytes },
+          identity,
+          record.payload,
+          context.signal,
+          recordIdentity,
+        );
+      } catch (error) {
+        context.signal?.throwIfAborted();
+        console.warn('Artifact cache legacy migration failed; retaining the legacy record', error);
+      }
     }
     return record.payload;
   }
@@ -330,7 +533,11 @@ export class ArtifactCache implements PhaserPackPersistentCache {
   /** Delete one public identity and report whether a record existed. */
   async delete(key: PhaserPackCacheKey, context: PhaserPackCacheContext = {}): Promise<boolean> {
     context.signal?.throwIfAborted();
-    const removed = await this.deleteRecord(artifactCacheIdentity(key), context.signal);
+    const identities = [artifactCacheIdentity(key)];
+    if (usesV2Identity(key)) {
+      identities.push(legacyArtifactCacheIdentity(key));
+    }
+    const removed = await this.deleteRecords(identities, context.signal);
     context.signal?.throwIfAborted();
     return removed;
   }
@@ -338,15 +545,18 @@ export class ArtifactCache implements PhaserPackPersistentCache {
   /** Remove only records belonging to one public namespace. */
   async clear(namespace: string, context: PhaserPackCacheContext = {}): Promise<void> {
     context.signal?.throwIfAborted();
-    const prefix = `${KEY_PREFIX}${namespace}|`;
-    await repairOwnedRecords(this.db, (identity) => identity.startsWith(prefix), 'clear', context.signal);
+    await repairOwnedRecords(
+      this.db,
+      (identity) => namespaceOfIdentity(identity) === namespace,
+      'clear',
+      context.signal,
+    );
     context.signal?.throwIfAborted();
   }
 
   /** Recompute public usage from owned identity keys. */
   async usage(namespace: string, context: PhaserPackCacheContext = {}): Promise<PhaserPackCacheUsage> {
     context.signal?.throwIfAborted();
-    const prefix = `${KEY_PREFIX}${namespace}|`;
     const usage = await withDeadline<PhaserPackCacheUsage>((finish, fail, registerAbort) => {
       const tx = this.db.transaction(STORE_NAME, 'readonly');
       registerAbort(() => tx.abort());
@@ -356,7 +566,7 @@ export class ArtifactCache implements PhaserPackPersistentCache {
         let records = 0;
         let totalBytes = 0;
         for (const key of request.result) {
-          if (typeof key !== 'string' || !key.startsWith(prefix)) {
+          if (typeof key !== 'string' || namespaceOfIdentity(key) !== namespace) {
             continue;
           }
           const bytes = bytesOfIdentity(key);
@@ -395,6 +605,7 @@ export class ArtifactCache implements PhaserPackPersistentCache {
     identity: string,
     data: ArrayBuffer,
     signal?: AbortSignal,
+    replacedIdentity?: string,
   ): Promise<StoreOutcome> {
     return withDeadline<StoreOutcome>((finish, _fail, registerAbort) => {
       const tx = this.db.transaction(STORE_NAME, 'readwrite');
@@ -405,36 +616,61 @@ export class ArtifactCache implements PhaserPackPersistentCache {
         const usage = usageRequest.result as { total: number } | undefined;
         const total = usage?.total ?? 0;
         // The identity includes the byte count, so a replacement has the
-        // same size and adds no usage. The existing record is counted inside
-        // the same transaction as the writes.
+        // same size and adds no usage. A legacy-to-v2 migration can replace
+        // its twin atomically, so the same transaction counts both records
+        // before writing the new usage marker.
         const existingRequest = store.count(identity);
         existingRequest.onsuccess = () => {
-          const delta = existingRequest.result > 0 ? 0 : artifact.bytes;
-          if (delta > 0 && total + delta > MAX_TOTAL_BYTES) {
-            tx.abort();
-            return;
-          }
-          const record: CacheRecord = {
-            schemaVersion: SCHEMA_VERSION,
-            digest: artifact.sha256,
-            bytes: artifact.bytes,
-            storedAt: Date.now(),
-            payload: data,
+          const replacementRequest = replacedIdentity !== undefined && replacedIdentity !== identity
+            ? store.count(replacedIdentity)
+            : undefined;
+          const commit = (): void => {
+            const existing = existingRequest.result > 0;
+            const replacement = (replacementRequest?.result ?? 0) > 0;
+            let delta: number;
+            if (existing && replacement) {
+              // Two counted records collapse into one; drop the twin's bytes.
+              delta = -artifact.bytes;
+            } else if (existing || replacement) {
+              delta = 0;
+            } else {
+              delta = artifact.bytes;
+            }
+            if (delta > 0 && total + delta > MAX_TOTAL_BYTES) {
+              tx.abort();
+              return;
+            }
+            const record: CacheRecord = {
+              schemaVersion: SCHEMA_VERSION,
+              digest: artifact.sha256,
+              bytes: artifact.bytes,
+              storedAt: Date.now(),
+              payload: data,
+            };
+            const put = store.put(record, identity);
+            if (this.faults.failPutOnce) {
+              this.faults.failPutOnce = false;
+              queueMicrotask(() => {
+                try {
+                  (put as unknown as { error: DOMException }).error
+                    = new DOMException('injected store failure', 'QuotaExceededError');
+                  put.dispatchEvent(new Event('error'));
+                } catch {
+                  tx.abort();
+                }
+              });
+            }
+            if (replacement && replacedIdentity !== undefined) {
+              store.delete(replacedIdentity);
+            }
+            store.put({ total: Math.max(0, total + delta) }, USAGE_KEY);
           };
-          const put = store.put(record, identity);
-          if (this.faults.failPutOnce) {
-            this.faults.failPutOnce = false;
-            queueMicrotask(() => {
-              try {
-                (put as unknown as { error: DOMException }).error
-                  = new DOMException('injected store failure', 'QuotaExceededError');
-                put.dispatchEvent(new Event('error'));
-              } catch {
-                tx.abort();
-              }
-            });
+          if (replacementRequest === undefined) {
+            commit();
+          } else {
+            replacementRequest.onsuccess = commit;
+            replacementRequest.onerror = () => tx.abort();
           }
-          store.put({ total: total + delta }, USAGE_KEY);
         };
       };
       tx.oncomplete = () => finish('origin-stored');
@@ -478,4 +714,65 @@ export class ArtifactCache implements PhaserPackPersistentCache {
     }, 'delete', signal);
   }
 
+  /** Delete a public identity and any legacy twin in one transaction. */
+  private deleteRecords(identities: readonly string[], signal?: AbortSignal): Promise<boolean> {
+    const owned = [...new Set(identities.filter(
+      (identity) => identity.startsWith(KEY_PREFIX)
+        && identity !== USAGE_KEY && identity !== MIGRATION_KEY,
+    ))];
+    if (owned.length === 0) {
+      return Promise.resolve(false);
+    }
+    return withDeadline<boolean>((finish, fail, registerAbort) => {
+      const tx = this.db.transaction(STORE_NAME, 'readwrite');
+      registerAbort(() => tx.abort());
+      const store = tx.objectStore(STORE_NAME);
+      const usageRequest = store.get(USAGE_KEY);
+      let existed = false;
+      usageRequest.onsuccess = () => {
+        const usage = usageRequest.result as { total: number } | undefined;
+        const requests = owned.map((identity) => ({ identity, request: store.count(identity) }));
+        let pending = requests.length;
+        const finishCounts = (): void => {
+          if (--pending !== 0) {
+            return;
+          }
+          let removedBytes = 0;
+          for (const { identity, request } of requests) {
+            if (request.result > 0) {
+              existed = true;
+              removedBytes += bytesOfIdentity(identity) ?? 0;
+            }
+            store.delete(identity);
+          }
+          if (existed) {
+            if (usage === undefined) {
+              const allKeys = store.getAllKeys();
+              allKeys.onsuccess = () => {
+                let remaining = 0;
+                for (const key of allKeys.result) {
+                  if (typeof key === 'string' && key.startsWith(KEY_PREFIX)
+                    && key !== USAGE_KEY && key !== MIGRATION_KEY && !owned.includes(key)) {
+                    remaining += bytesOfIdentity(key) ?? 0;
+                  }
+                }
+                store.put({ total: remaining }, USAGE_KEY);
+              };
+              allKeys.onerror = () => fail(allKeys.error ?? new Error('artifact cache usage repair failed'));
+            } else {
+              store.put({ total: Math.max(0, usage.total - removedBytes) }, USAGE_KEY);
+            }
+          }
+        };
+        for (const { request } of requests) {
+          request.onsuccess = finishCounts;
+          request.onerror = () => fail(request.error ?? new Error('artifact cache delete failed'));
+        }
+      };
+      usageRequest.onerror = () => fail(usageRequest.error ?? new Error('artifact cache delete failed'));
+      tx.oncomplete = () => finish(existed);
+      tx.onabort = () => fail(tx.error ?? new Error('artifact cache delete aborted'));
+      tx.onerror = () => undefined;
+    }, 'delete-many', signal);
+  }
 }

@@ -9,6 +9,18 @@ export interface PhaserPackFileIntegrity {
   readonly bytes: number;
   readonly sha256: string;
 }
+
+/** Encoded bytes retained beside the loader's body reservation for a cache
+ * commit. Both URL file sources use this helper so their accounting cannot
+ * drift when the retention policy changes. */
+export const cachedCopyBufferedBytes = (
+  persistentCache: PhaserPackPersistentCacheOptions | undefined,
+  integrity: { readonly bytes: number } | undefined,
+  maxFileBytes: number,
+): number => persistentCache !== undefined && integrity !== undefined
+  && integrity.bytes <= maxFileBytes
+  ? integrity.bytes
+  : 0;
 /** Which manifest slot a requested file fills; atlas assets request both roles. */
 export type PhaserPackFileRole = 'texture' | 'atlas';
 /** One file the loader wants from a source. Logical identity, never a transfer URL. */
@@ -67,6 +79,11 @@ export interface PhaserPackOpenedFile {
 export interface PhaserPackFileSource {
   /** Acquire ownership of one file. Must not transfer its body. */
   open(request: PhaserPackFileRequest, context: PhaserPackFileContext): Promise<PhaserPackOpenedFile>;
+  /** Additional encoded bytes held by this source beside the loader's body
+   * reservation, for example an ArrayBuffer retained for a cache commit.
+   * Must return a non-negative safe integer per request; the loader rejects
+   * the asset acquisition before opening any file otherwise. */
+  additionalBufferedBytes?(request: PhaserPackFileRequest): number;
 }
 /** Default URL transport: one HTTP request per file through the shared budgets. */
 export function createPackUrlFileSource(transport: {
@@ -85,6 +102,9 @@ export function createPackUrlFileSource(transport: {
     resolveURL, retries, requestTimeoutMs, requestCache, maxFileBytes, persistentCache,
   } = transport;
   return {
+    additionalBufferedBytes(request): number {
+      return cachedCopyBufferedBytes(persistentCache, request.integrity, maxFileBytes);
+    },
     async open(request, context) {
       // Ownership is just the resolved request; the body transfer waits for
       // read(). A completed read is single-use; a failed one stays retryable.
@@ -97,12 +117,13 @@ export function createPackUrlFileSource(transport: {
           readLatched = true;
           try {
             const fetchBlob = async (): Promise<Blob> => {
+              const url = resolveURL(request.url, {
+                packId: request.packId, revision: request.revision,
+              });
               const releaseTransfer = await context.budgets.transfers.acquire(context.signal);
               try {
                 return await fetchPackFile(
-                  resolveURL(request.url, {
-                    packId: request.packId, revision: request.revision,
-                  }),
+                  url,
                   {
                     signal: context.signal,
                     retries,
@@ -125,9 +146,9 @@ export function createPackUrlFileSource(transport: {
             }
             // Cache hits cannot observe the HTTP content type; prefer a
             // manifest/catalog media type threaded through the request.
-            // Unknown texture extensions intentionally fall back to
-            // application/octet-stream on hits because the cache stores only
-            // bytes and the authoritative loader sniffs the content.
+            // Only requests without an explicit hint fall back to
+            // application/octet-stream because the cache stores bytes, not
+            // response headers.
             const originType = request.mediaType ?? 'application/octet-stream';
             let originBlob: Blob | undefined;
             const read = await readPhaserPackArtifactWithCommit({

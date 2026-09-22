@@ -82,8 +82,10 @@ a 10-second `requestTimeoutMs` for each HTTP attempt including its body,
 `maxConcurrentDownloads` defaults to 4 and `maxConcurrentDecodes` to 1.
 `maxBufferedBytes` defaults to 64 MiB across downloading, queued and decoding
 assets. The loader reserves each asset's declared file sizes before downloading;
-files without integrity reserve `maxFileBytes` each. An atlas reserves both files.
-A reservation larger than the budget fails before any network request. This
+files without integrity reserve `maxFileBytes` each. When the default URL source
+uses a persistent cache with integrity metadata, the reservation also includes
+the verified cache-commit copy. An atlas reserves both files and their eligible
+cache copies. A reservation larger than the budget fails before any network request. This
 conservative admission policy prevents completed Blobs from accumulating behind
 slow decodes. Supply integrity sizes for better utilization and tune limits using
 your devices and catalog. The sample explicitly uses 2 downloads, 1 decode and an
@@ -434,7 +436,8 @@ checked for the whole closure before any request. Failures throw `PhaserPackDeli
 decoder's status and code in the message; there is no silent ZIP-to-files
 fallback. Preparations are single-flight — a concurrent `prepare`
 rejects with `busy` — and first-version ownership is one fixed manifest
-with one loader: no persistent cache, no prefetch, no cross-tab sharing.
+with one loader: no prefetch and no cross-tab sharing. Persistent caching is
+optional and remains application-owned at the acquisition boundary.
 Importing the module performs no network request, spawns no worker and
 arms no timer; the worker comes from the application's `createWorker`
 factory and is only created when a zip pack is actually staged. Requires

@@ -12,6 +12,8 @@ export interface PhaserImageAsset<TKey extends string = string> {
   readonly kind: 'image';
   readonly key: TKey;
   readonly url: string;
+  /** Optional response MIME hint; when provided, it overrides URL-derived typing. */
+  readonly mediaType?: string;
 }
 
 export interface PhaserSpritesheetAsset<TKey extends string = string> {
@@ -19,6 +21,8 @@ export interface PhaserSpritesheetAsset<TKey extends string = string> {
   readonly key: TKey;
   readonly url: string;
   readonly frameConfig: Phaser.Types.Loader.FileTypes.ImageFrameConfig;
+  /** Optional response MIME hint; when provided, it overrides URL-derived typing. */
+  readonly mediaType?: string;
 }
 
 export interface PhaserAtlasAsset<TKey extends string = string> {
@@ -26,6 +30,10 @@ export interface PhaserAtlasAsset<TKey extends string = string> {
   readonly key: TKey;
   readonly textureUrl: string;
   readonly atlasUrl: string;
+  /** Optional response MIME hint for the texture response; overrides URL-derived typing. */
+  readonly textureMediaType?: string;
+  /** Optional response MIME hint for the atlas response; overrides URL-derived typing. */
+  readonly atlasMediaType?: string;
 }
 
 export interface PhaserAudioAsset<TKey extends string = string> {

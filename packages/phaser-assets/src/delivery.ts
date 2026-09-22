@@ -10,8 +10,10 @@ import {
   assertPhaserPackPersistentCacheOptions,
   commitCacheOf,
   readPhaserPackArtifactWithCommit,
+  snapshotPhaserPackPersistentCacheOptions,
   type PhaserPackPersistentCacheOptions,
 } from './pack-cache.js';
+import { cachedCopyBufferedBytes } from './pack-file-source.js';
 import {
   PHASER_PACK_DELIVERY_VERSION,
   validatePhaserPackDeliveryManifest,
@@ -922,6 +924,8 @@ const loaderAsset = (
       key: asset.assetKey,
       textureUrl: texture.path,
       atlasUrl: atlas.path,
+      textureMediaType: texture.mediaType,
+      atlasMediaType: atlas.mediaType,
       integrity: { texture: integrityOf(texture), atlas: integrityOf(atlas) },
     };
   }
@@ -931,6 +935,7 @@ const loaderAsset = (
       kind: 'spritesheet',
       key: asset.assetKey,
       url: texture.path,
+      mediaType: texture.mediaType,
       frameConfig: {
         frameWidth: config.frameWidth,
         frameHeight: config.frameHeight,
@@ -946,6 +951,7 @@ const loaderAsset = (
     kind: 'image',
     key: asset.assetKey,
     url: texture.path,
+    mediaType: texture.mediaType,
     integrity: { texture: integrityOf(texture) },
   };
 };
@@ -979,7 +985,7 @@ export function createPhaserPackDelivery(
   const requestTimeoutMs = options.requestTimeoutMs ?? 10_000;
   const maxFileBytes = options.maxFileBytes ?? 32 * 1024 * 1024;
   const requestCache = options.requestCache ?? 'no-store';
-  const persistentCache = options.persistentCache;
+  const configuredPersistentCache = options.persistentCache;
   positiveInteger(stagingBudgetBytes, 'staging budget');
   timerRangeInteger(prepareTimeoutMs, 'prepare timeout');
   timerRangeInteger(requestTimeoutMs, 'request timeout');
@@ -988,10 +994,14 @@ export function createPhaserPackDelivery(
     fail('config', 'Delivery HTTP cache policy must be default, no-store or reload');
   }
   try {
-    assertPhaserPackPersistentCacheOptions(persistentCache, 'Delivery persistent cache is invalid');
+    assertPhaserPackPersistentCacheOptions(
+      configuredPersistentCache,
+      'Delivery persistent cache is invalid',
+    );
   } catch (error) {
     fail('config', error instanceof Error ? error.message : 'Delivery persistent cache is invalid');
   }
+  const persistentCache = snapshotPhaserPackPersistentCacheOptions(configuredPersistentCache);
   if ((options.baseUrl === undefined) === (options.resolveURL === undefined)) {
     fail('config', 'Delivery requires exactly one of baseUrl or resolveURL');
   }
@@ -1450,6 +1460,12 @@ export function createPhaserPackDelivery(
   };
 
   const fileSource: PhaserPackFileSource = {
+    additionalBufferedBytes(request): number {
+      const entry = packIndex.get(request.packId);
+      return entry?.pack.delivery === 'files'
+        ? cachedCopyBufferedBytes(persistentCache, request.integrity, maxFileBytes)
+        : 0;
+    },
     async open(request, context) {
       assertLive();
       const entry = packIndex.get(request.packId);
@@ -1540,6 +1556,8 @@ export function createPhaserPackDelivery(
                 signal: combined,
                 commitSignal: context.signal,
                 fetchOrigin: async (): Promise<ArrayBuffer> => {
+                  // Resolve before acquiring the permit so synchronous user
+                  // resolver code never occupies a transfer slot.
                   const url = resolveArtifact(role.path, {
                     packId: request.packId, revision: request.revision,
                   });

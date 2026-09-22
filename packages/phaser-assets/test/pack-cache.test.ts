@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { runInNewContext } from 'node:vm';
 
 import { describe, expect, it } from 'vitest';
 
@@ -187,6 +188,62 @@ describe('persistent pack cache boundary', () => {
       fetchOrigin: async () => bytes.buffer.slice(0),
     })).resolves.toEqual(bytes.buffer);
     expect(events.map((event) => event.outcome)).toEqual(['cache-read-failed', 'origin-download']);
+  });
+
+  it('rejects origin bytes that fail integrity without a cache boundary', async () => {
+    const wrong = new Uint8Array(bytes);
+    wrong[0]! ^= 0xff;
+    await expect(readPhaserPackArtifact({
+      integrity,
+      artifact,
+      signal: new AbortController().signal,
+      fetchOrigin: async () => wrong.buffer,
+    })).rejects.toThrow('failed integrity verification');
+  });
+
+  it('rejects malformed no-cache integrity with an identity error', async () => {
+    await expect(readPhaserPackArtifact({
+      integrity: { bytes: bytes.byteLength, sha256: 42 as unknown as string },
+      artifact,
+      signal: new AbortController().signal,
+      fetchOrigin: async () => bytes.buffer.slice(0),
+    })).rejects.toThrow('Artifact integrity requires');
+  });
+
+  it('keeps observer key mutation away from cache operations', async () => {
+    const storage = memoryCache();
+    const options = optionsOf(storage, []);
+    options.onEvent = (event: PhaserPackCacheEvent): void => {
+      try {
+        (event.key as { namespace: string }).namespace = 'other';
+      } catch {
+        // Frozen diagnostic keys are intentionally read-only at runtime.
+      }
+    };
+    await readPhaserPackArtifact({
+      persistentCache: options,
+      integrity,
+      artifact,
+      signal: new AbortController().signal,
+      fetchOrigin: async () => bytes.buffer.slice(0),
+    });
+    expect(await storage.usage('app')).toEqual({ records: 1, totalBytes: bytes.byteLength });
+    expect(await storage.usage('other')).toEqual({ records: 0, totalBytes: 0 });
+  });
+
+  it('accepts a verified ArrayBuffer from another realm', async () => {
+    const foreign = runInNewContext('new Uint8Array([1, 2, 3, 4]).buffer') as ArrayBuffer;
+    const storage = memoryCache(foreign);
+    const result = await readPhaserPackArtifact({
+      persistentCache: optionsOf(storage, []),
+      integrity,
+      artifact,
+      signal: new AbortController().signal,
+      fetchOrigin: async () => {
+        throw new Error('origin must not be reached');
+      },
+    });
+    expect(new Uint8Array(result)).toEqual(bytes);
   });
 
   it('stops on caller cancellation while a storage read is pending', async () => {

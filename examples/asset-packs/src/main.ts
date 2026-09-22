@@ -8,6 +8,7 @@ import {
   type PhaserPackDelivery,
   type PhaserPackDeliveryErrorDetails,
   type PhaserPackCacheEvent,
+  type PhaserPackCacheKey,
   type PhaserPackCacheUsage,
   type PhaserPackDeliveryEvent,
   type PhaserPackPreparationPlan,
@@ -214,7 +215,13 @@ const observeCacheEvent = (event: PhaserPackCacheEvent): void => {
 let packs: ReturnType<typeof createPhaserAssetPackLoader> | undefined;
 let delivery: PhaserPackDelivery | undefined;
 let unsubscribeDelivery: (() => void) | undefined;
-const PERSISTENT_CACHE_NAMESPACE = 'asset-pack-experiment';
+const namespaceParam = params.get('cache-namespace') ?? '';
+const PERSISTENT_CACHE_NAMESPACE = /^[a-zA-Z0-9][a-zA-Z0-9|-]{0,63}$/u.test(namespaceParam)
+  ? namespaceParam
+  : 'asset-pack-experiment';
+if (namespaceParam !== '' && PERSISTENT_CACHE_NAMESPACE !== namespaceParam) {
+  console.warn(`Ignoring invalid cache-namespace parameter: ${namespaceParam}`);
+}
 /** Example storage opened during delivery boot when idcache=1. The public
  * delivery/loader APIs perform the actual read-through work. */
 let artifactCache: ArtifactCache | undefined;
@@ -646,6 +653,7 @@ function wireSampleControls(): void {
       __artifact_cache_set_fault: (name: string) => void;
       __artifact_cache_usage: () => Promise<PhaserPackCacheUsage>;
       __artifact_cache_delete: (identity: string) => Promise<boolean>;
+      __artifact_cache_delete_key: (key: PhaserPackCacheKey) => Promise<boolean>;
       __artifact_cache_clear: () => Promise<void>;
       __artifact_cache_present: () => boolean;
     }
@@ -669,6 +677,8 @@ function wireWindowHooks(): void {
     artifactCache?.usage(PERSISTENT_CACHE_NAMESPACE) ?? Promise.resolve({ records: -1, totalBytes: -1 });
   window.__artifact_cache_delete = (identity: string): Promise<boolean> =>
     artifactCache?.deleteRecord(identity) ?? Promise.resolve(false);
+  window.__artifact_cache_delete_key = (key: PhaserPackCacheKey): Promise<boolean> =>
+    artifactCache?.delete(key) ?? Promise.resolve(false);
   window.__artifact_cache_clear = (): Promise<void> =>
     artifactCache?.clear(PERSISTENT_CACHE_NAMESPACE) ?? Promise.resolve();
   window.__artifact_cache_present = (): boolean => artifactCache !== undefined;

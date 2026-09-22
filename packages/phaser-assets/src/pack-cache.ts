@@ -44,6 +44,24 @@ export interface PhaserPackPersistentCacheOptions {
   readonly onEvent?: (event: PhaserPackCacheEvent) => void;
 }
 
+/**
+ * Keep the storage and observer references while detaching the options object
+ * itself from caller-owned configuration. Public entry points use the same
+ * snapshot so later mutation cannot change an active acquisition boundary.
+ */
+export function snapshotPhaserPackPersistentCacheOptions(
+  value: PhaserPackPersistentCacheOptions | undefined,
+): PhaserPackPersistentCacheOptions | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return Object.freeze({
+    storage: value.storage,
+    namespace: value.namespace,
+    ...(value.onEvent === undefined ? {} : { onEvent: value.onEvent }),
+  });
+}
+
 /** Shared runtime validation for both public acquisition entry points. */
 export function assertPhaserPackPersistentCacheOptions(
   value: unknown,
@@ -101,16 +119,28 @@ export interface PhaserPackCacheArtifactContext {
   readonly role?: string;
 }
 
+type PhaserPackIntegrity = { readonly bytes: number; readonly sha256: string };
+
+const isValidPhaserPackIntegrity = (value: unknown): value is PhaserPackIntegrity => {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  const candidate = value as Partial<PhaserPackIntegrity>;
+  return typeof candidate.bytes === 'number'
+    && Number.isSafeInteger(candidate.bytes)
+    && candidate.bytes > 0
+    && typeof candidate.sha256 === 'string' && /^[a-f0-9]{64}$/iu.test(candidate.sha256);
+};
+
 /** Build the public identity used by both files and ZIP archive acquisition. */
 export function createPhaserPackCacheKey(
   namespace: string,
-  integrity: { readonly bytes: number; readonly sha256: string },
+  integrity: PhaserPackIntegrity,
 ): PhaserPackCacheKey {
   if (typeof namespace !== 'string' || namespace.length === 0) {
     throw new Error('Asset pack cache namespace must be a non-empty string');
   }
-  if (!Number.isSafeInteger(integrity.bytes) || integrity.bytes <= 0
-    || typeof integrity.sha256 !== 'string' || !/^[a-f0-9]{64}$/iu.test(integrity.sha256)) {
+  if (!isValidPhaserPackIntegrity(integrity)) {
     throw new Error('Asset pack cache identity requires a positive byte count and SHA-256 digest');
   }
   return {
@@ -122,6 +152,21 @@ export function createPhaserPackCacheKey(
 
 const abortReason = (signal: AbortSignal): unknown => signal.reason
   ?? new DOMException('The operation was aborted', 'AbortError');
+
+const arrayBufferByteLength = Object.getOwnPropertyDescriptor(
+  ArrayBuffer.prototype,
+  'byteLength',
+)!.get!;
+
+/** Accept ArrayBuffers supplied by another same-origin realm. */
+const isArrayBuffer = (value: unknown): value is ArrayBuffer => {
+  try {
+    arrayBufferByteLength.call(value);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 /** Await a storage call without allowing an implementation that ignores the
  * signal to hold a delivery or loader operation past its deadline. The
@@ -164,7 +209,7 @@ const emit = (
   try {
     options.onEvent?.({
       ...artifact,
-      key,
+      key: Object.freeze({ ...key }),
       outcome,
       ...(error === undefined ? {} : { error }),
     });
@@ -175,15 +220,17 @@ const emit = (
 
 const verificationOf = async (
   bytes: ArrayBuffer,
-  key: PhaserPackCacheKey,
+  expected: { readonly bytes: number; readonly sha256: string },
   signal: AbortSignal,
 ): Promise<'verified' | 'mismatch' | 'unverifiable'> => {
   signal.throwIfAborted();
-  if (bytes.byteLength !== key.bytes) {
+  if (bytes.byteLength !== expected.bytes) {
     return 'mismatch';
   }
   try {
-    return (await digestOf(new Uint8Array(bytes))) === key.sha256 ? 'verified' : 'mismatch';
+    return (await digestOf(new Uint8Array(bytes))) === expected.sha256.toLowerCase()
+      ? 'verified'
+      : 'mismatch';
   } catch (error) {
     if (signal.aborted) {
       throw error;
@@ -192,6 +239,21 @@ const verificationOf = async (
     // optional cache cannot verify in this environment, use origin and keep
     // the default failure behavior at that existing boundary.
     return 'unverifiable';
+  }
+};
+
+const assertVerifiedArtifact = async (
+  bytes: ArrayBuffer,
+  expected: { readonly bytes: number; readonly sha256: string },
+  signal: AbortSignal,
+): Promise<void> => {
+  const verification = await verificationOf(bytes, expected, signal);
+  if (verification !== 'verified') {
+    throw new Error(
+      verification === 'mismatch'
+        ? 'Artifact failed integrity verification'
+        : 'Artifact could not be verified',
+    );
   }
 };
 
@@ -256,7 +318,7 @@ export async function readPhaserPackArtifactWithCommit(
     }
     emit(persistent, options.artifact, key, 'cache-read-failed', error);
   }
-  if (cached !== undefined && !(cached instanceof ArrayBuffer)) {
+  if (cached !== undefined && !isArrayBuffer(cached)) {
     emit(
       persistent,
       options.artifact,
@@ -336,12 +398,22 @@ export async function readPhaserPackArtifactWithCommit(
 export async function readPhaserPackArtifact(
   options: PhaserPackArtifactReadOptions,
 ): Promise<ArrayBuffer> {
+  if (options.persistentCache === undefined && options.integrity !== undefined
+    && !isValidPhaserPackIntegrity(options.integrity)) {
+    throw new Error('Artifact integrity requires a positive byte count and SHA-256 digest');
+  }
   const result = await readPhaserPackArtifactWithCommit(options);
   if (result.commit === undefined) {
+    // With no cache there is no deferred commit boundary to trigger the
+    // caller's integrity check. The compatibility wrapper owns that check.
+    if (options.persistentCache === undefined && options.integrity !== undefined) {
+      await assertVerifiedArtifact(result.bytes, options.integrity, options.signal);
+    }
     return result.bytes;
   }
   // commit is only defined when both cache options and integrity were present.
   const key = createPhaserPackCacheKey(options.persistentCache!.namespace, options.integrity!);
-  await result.commit((await verificationOf(result.bytes, key, options.signal)) === 'verified');
+  await assertVerifiedArtifact(result.bytes, key, options.signal);
+  await result.commit(true);
   return result.bytes;
 }
