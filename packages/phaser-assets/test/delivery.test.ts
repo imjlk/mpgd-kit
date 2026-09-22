@@ -545,6 +545,57 @@ describe('phaser pack delivery', () => {
     uncached.dispose();
   });
 
+  it('aborts deferred file cache writes when delivery is disposed', async () => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'files' }]);
+    for (const [path, file] of packFiles) {
+      origin.files.set(path, file);
+    }
+    let putSignal: AbortSignal | undefined;
+    let releasePut!: () => void;
+    let rejectPut!: (reason: unknown) => void;
+    const putPending = new Promise<void>((resolve, reject) => {
+      releasePut = resolve;
+      rejectPut = reject;
+    });
+    const storage: PhaserPackPersistentCache = {
+      async get() {
+        return undefined;
+      },
+      async put(_key, _bytes, context) {
+        putSignal = context?.signal;
+        putSignal?.addEventListener('abort', () => rejectPut(putSignal?.reason), { once: true });
+        return putPending;
+      },
+      async delete() {
+        return false;
+      },
+      async clear() {
+      },
+      async usage() {
+        return { records: 0, totalBytes: 0 };
+      },
+    };
+    const delivery = createPhaserPackDelivery(manifest, {
+      baseUrl: origin.url,
+      persistentCache: { storage, namespace: 'delivery-test' },
+    });
+    const opened = await delivery.fileSource.open(openRequest('solo'), {
+      signal: new AbortController().signal,
+      budgets: budgets(),
+    });
+    const body = await opened.read();
+    const committing = body.commitCache!();
+    expect(putSignal).toBeDefined();
+    delivery.dispose();
+    expect(putSignal?.aborted).toBe(true);
+    await expect(committing).rejects.toBeDefined();
+    releasePut();
+    body.release();
+    opened.close();
+  });
+
   it('keeps the verification basis after caller manifest mutation', async () => {
     const origin = await startOrigin();
     servers.push(origin);

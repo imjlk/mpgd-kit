@@ -8,7 +8,6 @@ import {
 } from './archives.js';
 import {
   assertPhaserPackPersistentCacheOptions,
-  commitCacheOf,
   readPhaserPackArtifactWithCommit,
   snapshotPhaserPackPersistentCacheOptions,
   type PhaserPackPersistentCacheOptions,
@@ -1514,6 +1513,13 @@ export function createPhaserPackDelivery(
             // try so the finally can dispose it.
             const bridge = bridgeSignals(context.signal, shutdown.signal);
             const combined = bridge.signal;
+            // A cache miss returns a deferred commit that runs after this
+            // read() promise settles. Keep a separate bridge alive through
+            // that later write so delivery.dispose() still aborts it.
+            const commitBridge = bridgeSignals(context.signal, shutdown.signal);
+            let commitStarted = false;
+            let commitPending = false;
+            let released = false;
             const mapReadAbort = (error: unknown): never => {
               if (error instanceof PhaserPackDeliveryError) {
                 throw error;
@@ -1554,7 +1560,7 @@ export function createPhaserPackDelivery(
                   role: request.role,
                 },
                 signal: combined,
-                commitSignal: context.signal,
+                commitSignal: commitBridge.signal,
                 fetchOrigin: async (): Promise<ArrayBuffer> => {
                   // Resolve before acquiring the permit so synchronous user
                   // resolver code never occupies a transfer slot.
@@ -1615,10 +1621,34 @@ export function createPhaserPackDelivery(
                   ? { progress: { bodyBytes: bytes.byteLength } }
                   : { progress: { bodyBytes: bytes.byteLength, expectedBodyBytes: declared } }),
               });
+              const commitCache = fileRead.commit === undefined
+                ? undefined
+                : async (): Promise<void> => {
+                  if (released || commitStarted) {
+                    return;
+                  }
+                  commitStarted = true;
+                  try {
+                    await fileRead.commit!(true, { transferOwnership: true });
+                  } finally {
+                    commitBridge.dispose();
+                  }
+                };
+              if (commitCache === undefined) {
+                commitStarted = true;
+                commitBridge.dispose();
+              } else {
+                commitPending = true;
+              }
               return {
                 bytes: toBlob(bytes, role.mediaType),
-                ...commitCacheOf(fileRead),
+                ...(commitCache === undefined ? {} : { commitCache }),
                 release(): void {
+                  released = true;
+                  if (!commitStarted) {
+                    commitStarted = true;
+                    commitBridge.dispose();
+                  }
                 },
               };
             } catch (error) {
@@ -1642,6 +1672,9 @@ export function createPhaserPackDelivery(
               }
               throw error;
             } finally {
+              if (!commitPending) {
+                commitBridge.dispose();
+              }
               bridge.dispose();
             }
           },

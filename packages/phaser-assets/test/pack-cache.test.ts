@@ -210,6 +210,59 @@ describe('persistent pack cache boundary', () => {
     })).rejects.toThrow('Artifact integrity requires');
   });
 
+  it('honors cancellation before and after an uncached origin read', async () => {
+    const before = new AbortController();
+    before.abort();
+    let originCalls = 0;
+    await expect(readPhaserPackArtifactWithCommit({
+      artifact,
+      signal: before.signal,
+      fetchOrigin: async () => {
+        originCalls++;
+        return bytes.buffer.slice(0);
+      },
+    })).rejects.toMatchObject({ name: 'AbortError' });
+    expect(originCalls).toBe(0);
+
+    const after = new AbortController();
+    let resolveOrigin!: (value: ArrayBuffer) => void;
+    const pending = readPhaserPackArtifactWithCommit({
+      artifact,
+      signal: after.signal,
+      fetchOrigin: async () => {
+        originCalls++;
+        return new Promise<ArrayBuffer>((resolve) => {
+          resolveOrigin = resolve;
+        });
+      },
+    });
+    await Promise.resolve();
+    after.abort();
+    resolveOrigin(bytes.buffer.slice(0));
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(originCalls).toBe(1);
+  });
+
+  it('contains rejected async cache observers', async () => {
+    let rejected = false;
+    const thenable = {
+      then(_onFulfilled: undefined, onRejected: (reason: unknown) => void): void {
+        onRejected(new Error('observer rejected'));
+        rejected = true;
+      },
+    };
+    const options = optionsOf(memoryCache(), []);
+    options.onEvent = (() => thenable) as unknown as typeof options.onEvent;
+    await readPhaserPackArtifact({
+      persistentCache: options,
+      integrity,
+      artifact,
+      signal: new AbortController().signal,
+      fetchOrigin: async () => bytes.buffer.slice(0),
+    });
+    expect(rejected).toBe(true);
+  });
+
   it('keeps observer key mutation away from cache operations', async () => {
     const storage = memoryCache();
     const options = optionsOf(storage, []);

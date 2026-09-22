@@ -207,12 +207,21 @@ const emit = (
   error?: unknown,
 ): void => {
   try {
-    options.onEvent?.({
+    const observed = options.onEvent?.({
       ...artifact,
       key: Object.freeze({ ...key }),
       outcome,
       ...(error === undefined ? {} : { error }),
-    });
+    }) as unknown;
+    if (
+      observed !== null && observed !== undefined
+      && typeof observed === 'object'
+      && typeof (observed as PromiseLike<unknown>).then === 'function'
+    ) {
+      // Async observers never block cache work and their rejections must not
+      // become unhandled just because the public callback returns void.
+      void (observed as PromiseLike<unknown>).then(undefined, () => undefined);
+    }
   } catch {
     // Cache observation is diagnostic only and must never change delivery.
   }
@@ -302,7 +311,10 @@ export async function readPhaserPackArtifactWithCommit(
   const persistent = options.persistentCache;
   const integrity = options.integrity;
   if (persistent === undefined || integrity === undefined) {
-    return { bytes: await options.fetchOrigin() };
+    options.signal.throwIfAborted();
+    const origin = await options.fetchOrigin();
+    options.signal.throwIfAborted();
+    return { bytes: origin };
   }
   // Storage providers receive the same identity used for verification and
   // deferred writes. Freeze it so a provider cannot rewrite the evidence

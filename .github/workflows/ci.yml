@@ -138,6 +138,9 @@ jobs:
                 tools/*.ts|tools/*.mjs|tools/package/*|tools/graph/*|tools/smoke/*|tools/target/*|tools/icons/*|tools/fixtures/*|packages/cli/*|packages/create-game/*|packages/game-services/*|packages/release-manifest/*|packages/target-*/*|apps/game-services-worker/*|apps/target-*/*|apps/mobile-capacitor/*|adapters/*|native-plugins/*|backend/*)
                   run_prepared=true
                   ;;
+                examples/phaser-starter/*)
+                  run_prepared=true
+                  ;;
                 packages/*/package.json|apps/*/package.json)
                   package_root="${path%%/*}"
                   package_name="${path#*/}"
