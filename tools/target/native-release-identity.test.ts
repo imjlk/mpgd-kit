@@ -10,183 +10,224 @@ const shellRoot = mkdtempSync(join(os.tmpdir(), 'mpgd-native-release-'));
 try {
   writeShellFiles(shellRoot);
 
-  assert.doesNotThrow(() => assertNativeReleaseIdentity({
-    environment: {
-      APP_VERSION: '1.4.0',
-      MPGD_TARGET_VERSION_CODE: '42',
-      MPGD_TARGET_VERSION_NAME: '1.4.0',
-    },
-    metadata: { packageId: 'dev.example.game' },
-    platform: 'android',
-    required: false,
-    shellApp: shellRoot,
-  }));
+  assert.doesNotThrow(() =>
+    assertNativeReleaseIdentity({
+      environment: {
+        APP_VERSION: '1.4.0',
+        MPGD_TARGET_VERSION_CODE: '42',
+        MPGD_TARGET_VERSION_NAME: '1.4.0',
+      },
+      metadata: { packageId: 'dev.example.game' },
+      platform: 'android',
+      required: false,
+      shellApp: shellRoot,
+    }),
+  );
 
   writeAndroidWithCommentedIdentity(shellRoot);
-  assert.doesNotThrow(() => assertNativeReleaseIdentity({
-    environment: {
-      APP_VERSION: '1.4.0',
-      MPGD_TARGET_VERSION_CODE: '42',
-      MPGD_TARGET_VERSION_NAME: '1.4.0',
-    },
-    metadata: { packageId: 'dev.example.game' },
-    platform: 'android',
-    required: false,
-    shellApp: shellRoot,
-  }));
-  writeShellFiles(shellRoot);
-
-  assert.throws(() => assertNativeReleaseIdentity({
-    environment: {
-      APP_VERSION: '1.4.0',
-      MPGD_TARGET_VERSION_CODE: '43',
-      MPGD_TARGET_VERSION_NAME: '1.4.0',
-    },
-    metadata: { packageId: 'dev.example.game' },
-    platform: 'android',
-    required: false,
-    shellApp: shellRoot,
-  }), /Native release identity mismatch/u);
-
-  assert.doesNotThrow(() => assertNativeReleaseIdentity({
-    environment: {
-      APP_VERSION: '1.4.0',
-      MPGD_TARGET_BUILD_NUMBER: '42',
-      MPGD_TARGET_MARKETING_VERSION: '1.4.0',
-    },
-    metadata: { bundleId: 'dev.example.game' },
-    platform: 'ios',
-    required: false,
-    shellApp: shellRoot,
-  }));
-
-  writeIosInheritedReleaseSettings(shellRoot);
-  assert.doesNotThrow(() => assertNativeReleaseIdentity({
-    environment: {
-      APP_VERSION: '1.4.0',
-      MPGD_TARGET_BUILD_NUMBER: '42',
-      MPGD_TARGET_MARKETING_VERSION: '1.4.0',
-    },
-    metadata: { bundleId: 'dev.example.game' },
-    platform: 'ios',
-    required: false,
-    shellApp: shellRoot,
-  }));
+  assert.doesNotThrow(() =>
+    assertNativeReleaseIdentity({
+      environment: {
+        APP_VERSION: '1.4.0',
+        MPGD_TARGET_VERSION_CODE: '42',
+        MPGD_TARGET_VERSION_NAME: '1.4.0',
+      },
+      metadata: { packageId: 'dev.example.game' },
+      platform: 'android',
+      required: false,
+      shellApp: shellRoot,
+    }),
+  );
   writeShellFiles(shellRoot);
 
   assert.throws(
-    () => assertNativeReleaseIdentity({
-      environment: {},
-      metadata: { packageId: 'dev.example.game' },
-      platform: 'android',
-      required: true,
+    () =>
+      assertNativeReleaseIdentity({
+        environment: {
+          APP_VERSION: '1.4.0',
+          MPGD_TARGET_VERSION_CODE: '43',
+          MPGD_TARGET_VERSION_NAME: '1.4.0',
+        },
+        metadata: { packageId: 'dev.example.game' },
+        platform: 'android',
+        required: false,
+        shellApp: shellRoot,
+      }),
+    /Native release identity mismatch/u,
+  );
+
+  assert.doesNotThrow(() =>
+    assertNativeReleaseIdentity({
+      environment: {
+        APP_VERSION: '1.4.0',
+        MPGD_TARGET_BUILD_NUMBER: '42',
+        MPGD_TARGET_MARKETING_VERSION: '1.4.0',
+      },
+      metadata: { bundleId: 'dev.example.game' },
+      platform: 'ios',
+      required: false,
       shellApp: shellRoot,
     }),
+  );
+
+  writeIosInheritedReleaseSettings(shellRoot);
+  assert.doesNotThrow(() =>
+    assertNativeReleaseIdentity({
+      environment: {
+        APP_VERSION: '1.4.0',
+        MPGD_TARGET_BUILD_NUMBER: '42',
+        MPGD_TARGET_MARKETING_VERSION: '1.4.0',
+      },
+      metadata: { bundleId: 'dev.example.game' },
+      platform: 'ios',
+      required: false,
+      shellApp: shellRoot,
+    }),
+  );
+  writeShellFiles(shellRoot);
+
+  assert.throws(
+    () =>
+      assertNativeReleaseIdentity({
+        environment: {},
+        metadata: { packageId: 'dev.example.game' },
+        platform: 'android',
+        required: true,
+        shellApp: shellRoot,
+      }),
     /MPGD_TARGET_VERSION_CODE is required/u,
   );
 
-  assert.doesNotThrow(() => assertNativeReleaseIdentity({
-    environment: {
-      MPGD_TARGET_VERSION_CODE: '42',
-      MPGD_TARGET_VERSION_NAME: '1.4.0',
-    },
-    metadata: { packageId: 'dev.example.game' },
-    platform: 'android',
-    required: false,
-    shellApp: shellRoot,
-  }));
+  assert.doesNotThrow(() =>
+    assertNativeReleaseIdentity({
+      environment: {
+        MPGD_TARGET_VERSION_CODE: '42',
+        MPGD_TARGET_VERSION_NAME: '1.4.0',
+      },
+      metadata: { packageId: 'dev.example.game' },
+      platform: 'android',
+      required: false,
+      shellApp: shellRoot,
+    }),
+  );
 
-  assert.throws(() => assertNativeReleaseIdentity({
-    environment: {
-      APP_VERSION: '0.0.0',
-      MPGD_TARGET_VERSION_CODE: '42',
-      MPGD_TARGET_VERSION_NAME: '1.4.0',
-    },
-    metadata: { packageId: 'dev.example.game' },
-    platform: 'android',
-    required: true,
-    shellApp: shellRoot,
-  }), /APP_VERSION must be a non-default final SemVer/u);
+  assert.throws(
+    () =>
+      assertNativeReleaseIdentity({
+        environment: {
+          APP_VERSION: '0.0.0',
+          MPGD_TARGET_VERSION_CODE: '42',
+          MPGD_TARGET_VERSION_NAME: '1.4.0',
+        },
+        metadata: { packageId: 'dev.example.game' },
+        platform: 'android',
+        required: true,
+        shellApp: shellRoot,
+      }),
+    /APP_VERSION must be a non-default final SemVer/u,
+  );
 
-  assert.throws(() => assertNativeReleaseIdentity({
-    environment: {
-      APP_VERSION: '1.5.0',
-      MPGD_TARGET_VERSION_CODE: '42',
-      MPGD_TARGET_VERSION_NAME: '1.4.0',
-    },
-    metadata: { packageId: 'dev.example.game' },
-    platform: 'android',
-    required: false,
-    shellApp: shellRoot,
-  }), /Native release version mismatch/u);
+  assert.throws(
+    () =>
+      assertNativeReleaseIdentity({
+        environment: {
+          APP_VERSION: '1.5.0',
+          MPGD_TARGET_VERSION_CODE: '42',
+          MPGD_TARGET_VERSION_NAME: '1.4.0',
+        },
+        metadata: { packageId: 'dev.example.game' },
+        platform: 'android',
+        required: false,
+        shellApp: shellRoot,
+      }),
+    /Native release version mismatch/u,
+  );
 
   writeAndroidReleaseSuffix(shellRoot);
-  assert.throws(() => assertNativeReleaseIdentity({
-    environment: {
-      APP_VERSION: '1.4.0',
-      MPGD_TARGET_VERSION_CODE: '42',
-      MPGD_TARGET_VERSION_NAME: '1.4.0',
-    },
-    metadata: { packageId: 'dev.example.game' },
-    platform: 'android',
-    required: false,
-    shellApp: shellRoot,
-  }), /does not support applicationIdSuffix or versionNameSuffix/u);
+  assert.throws(
+    () =>
+      assertNativeReleaseIdentity({
+        environment: {
+          APP_VERSION: '1.4.0',
+          MPGD_TARGET_VERSION_CODE: '42',
+          MPGD_TARGET_VERSION_NAME: '1.4.0',
+        },
+        metadata: { packageId: 'dev.example.game' },
+        platform: 'android',
+        required: false,
+        shellApp: shellRoot,
+      }),
+    /does not support applicationIdSuffix or versionNameSuffix/u,
+  );
   writeShellFiles(shellRoot);
 
   writeAndroidQualifiedReleaseSuffix(shellRoot);
-  assert.throws(() => assertNativeReleaseIdentity({
-    environment: {
-      APP_VERSION: '1.4.0',
-      MPGD_TARGET_VERSION_CODE: '42',
-      MPGD_TARGET_VERSION_NAME: '1.4.0',
-    },
-    metadata: { packageId: 'dev.example.game' },
-    platform: 'android',
-    required: false,
-    shellApp: shellRoot,
-  }), /does not support applicationIdSuffix or versionNameSuffix/u);
+  assert.throws(
+    () =>
+      assertNativeReleaseIdentity({
+        environment: {
+          APP_VERSION: '1.4.0',
+          MPGD_TARGET_VERSION_CODE: '42',
+          MPGD_TARGET_VERSION_NAME: '1.4.0',
+        },
+        metadata: { packageId: 'dev.example.game' },
+        platform: 'android',
+        required: false,
+        shellApp: shellRoot,
+      }),
+    /does not support applicationIdSuffix or versionNameSuffix/u,
+  );
   writeShellFiles(shellRoot);
 
   writeAndroidNamedReleaseSuffix(shellRoot);
-  assert.throws(() => assertNativeReleaseIdentity({
-    environment: {
-      APP_VERSION: '1.4.0',
-      MPGD_TARGET_VERSION_CODE: '42',
-      MPGD_TARGET_VERSION_NAME: '1.4.0',
-    },
-    metadata: { packageId: 'dev.example.game' },
-    platform: 'android',
-    required: false,
-    shellApp: shellRoot,
-  }), /does not support applicationIdSuffix or versionNameSuffix/u);
+  assert.throws(
+    () =>
+      assertNativeReleaseIdentity({
+        environment: {
+          APP_VERSION: '1.4.0',
+          MPGD_TARGET_VERSION_CODE: '42',
+          MPGD_TARGET_VERSION_NAME: '1.4.0',
+        },
+        metadata: { packageId: 'dev.example.game' },
+        platform: 'android',
+        required: false,
+        shellApp: shellRoot,
+      }),
+    /does not support applicationIdSuffix or versionNameSuffix/u,
+  );
   writeShellFiles(shellRoot);
 
   writeAndroidSigningConfigSuffix(shellRoot);
-  assert.doesNotThrow(() => assertNativeReleaseIdentity({
-    environment: {
-      APP_VERSION: '1.4.0',
-      MPGD_TARGET_VERSION_CODE: '42',
-      MPGD_TARGET_VERSION_NAME: '1.4.0',
-    },
-    metadata: { packageId: 'dev.example.game' },
-    platform: 'android',
-    required: false,
-    shellApp: shellRoot,
-  }));
+  assert.doesNotThrow(() =>
+    assertNativeReleaseIdentity({
+      environment: {
+        APP_VERSION: '1.4.0',
+        MPGD_TARGET_VERSION_CODE: '42',
+        MPGD_TARGET_VERSION_NAME: '1.4.0',
+      },
+      metadata: { packageId: 'dev.example.game' },
+      platform: 'android',
+      required: false,
+      shellApp: shellRoot,
+    }),
+  );
   writeShellFiles(shellRoot);
 
-  assert.throws(() => assertNativeReleaseIdentity({
-    environment: {
-      APP_VERSION: '1.5.0',
-      MPGD_TARGET_BUILD_NUMBER: '42',
-      MPGD_TARGET_MARKETING_VERSION: '1.4.0',
-    },
-    metadata: { bundleId: 'dev.example.game' },
-    platform: 'ios',
-    required: false,
-    shellApp: shellRoot,
-  }), /Native release version mismatch/u);
+  assert.throws(
+    () =>
+      assertNativeReleaseIdentity({
+        environment: {
+          APP_VERSION: '1.5.0',
+          MPGD_TARGET_BUILD_NUMBER: '42',
+          MPGD_TARGET_MARKETING_VERSION: '1.4.0',
+        },
+        metadata: { bundleId: 'dev.example.game' },
+        platform: 'ios',
+        required: false,
+        shellApp: shellRoot,
+      }),
+    /Native release version mismatch/u,
+  );
 } finally {
   rmSync(shellRoot, { force: true, recursive: true });
 }

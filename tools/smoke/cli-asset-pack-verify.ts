@@ -99,9 +99,7 @@ const buildFixture = (delivery: 'files' | 'zip', out: string): void => {
         revision: '1',
         dependsOn: ['shared'],
         delivery,
-        assets: [
-          { kind: 'atlas', key: 'ground', texture: 'grove.png', atlas: 'grove.json' },
-        ],
+        assets: [{ kind: 'atlas', key: 'ground', texture: 'grove.png', atlas: 'grove.json' }],
       },
     ],
   });

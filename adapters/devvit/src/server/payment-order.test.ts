@@ -9,9 +9,7 @@ const paidOrder = Object.freeze({
   status: 'PAID',
   createdAt: '2026-07-15T00:00:00.000Z',
   updatedAt: '2026-07-15T00:01:00.000Z',
-  products: Object.freeze([
-    Object.freeze({ sku: 'ttokdoku_final_nine_ember', quantity: 1 }),
-  ]),
+  products: Object.freeze([Object.freeze({ sku: 'ttokdoku_final_nine_ember', quantity: 1 })]),
 });
 
 describe('Devvit payment order normalization', () => {

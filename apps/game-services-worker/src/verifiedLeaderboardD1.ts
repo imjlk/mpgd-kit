@@ -53,10 +53,7 @@ export function createD1VerifiedLeaderboardService(
   db: D1Database,
   input: CreateD1VerifiedLeaderboardServiceInput = {},
 ): VerifiedLeaderboardService {
-  return new D1VerifiedLeaderboardService(
-    db,
-    input.now ?? (() => new Date().toISOString()),
-  );
+  return new D1VerifiedLeaderboardService(db, input.now ?? (() => new Date().toISOString()));
 }
 
 class D1VerifiedLeaderboardService implements VerifiedLeaderboardService {
@@ -542,10 +539,7 @@ function metricsPropertyFromJson(
       metrics: normalizeVerifiedLeaderboardMetrics(parsed as Readonly<Record<string, number>>),
     };
   } catch (error) {
-    console.warn(
-      'Ignoring invalid stored verified leaderboard metrics.',
-      error,
-    );
+    console.warn('Ignoring invalid stored verified leaderboard metrics.', error);
     return {};
   }
 }

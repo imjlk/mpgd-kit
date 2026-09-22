@@ -320,9 +320,7 @@ function listArtifactFilesStrict(root: string, label: string): readonly Artifact
     }
   }
 
-  return files.sort((left, right) =>
-    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
-  );
+  return files.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
 }
 
 function relativePortablePath(root: string, absolute: string): string {
@@ -1733,9 +1731,7 @@ function verifyCloudflarePagesHeaders(
     if (sourcePaths.has(file.slice(1))) {
       requirements.push({
         requestPath: file,
-        expected: noStoreCacheControlFiles.has(file)
-          ? noStoreCacheControl
-          : freshCacheControl,
+        expected: noStoreCacheControlFiles.has(file) ? noStoreCacheControl : freshCacheControl,
         label: file.slice(1),
       });
     }

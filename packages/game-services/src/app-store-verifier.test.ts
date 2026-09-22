@@ -718,10 +718,11 @@ const abortedTransportVerifier = createVerifier({
   }),
 });
 await assertRejects(
-  () => abortedTransportVerifier.verifyPurchase({
-    ...baseInput,
-    signal: abortedController.signal,
-  }),
+  () =>
+    abortedTransportVerifier.verifyPurchase({
+      ...baseInput,
+      signal: abortedController.signal,
+    }),
   'caller cancelled',
   'caller cancellation must propagate instead of becoming a retryable provider outage',
 );
@@ -744,10 +745,11 @@ const streamingAbortVerifier = createVerifier({
   }),
 });
 await assertRejects(
-  () => streamingAbortVerifier.verifyPurchase({
-    ...baseInput,
-    signal: streamingAbortController.signal,
-  }),
+  () =>
+    streamingAbortVerifier.verifyPurchase({
+      ...baseInput,
+      signal: streamingAbortController.signal,
+    }),
   'stream caller cancelled',
   'cancellation during response streaming must propagate instead of becoming retryable',
 );
@@ -782,11 +784,12 @@ const invalidAuthorizationClient = createAppStoreServerApiClient({
   },
 });
 await assertRejects(
-  () => invalidAuthorizationClient.getTransactionInfo({
-    transactionId: baseInput.request.platformTransactionId,
-    environment: 'Production',
-    signal: controller.signal,
-  }),
+  () =>
+    invalidAuthorizationClient.getTransactionInfo({
+      transactionId: baseInput.request.platformTransactionId,
+      environment: 'Production',
+      signal: controller.signal,
+    }),
   'must not contain whitespace',
   'invalid bearer-token configuration must not be hidden as a transient network failure',
 );

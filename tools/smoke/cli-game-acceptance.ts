@@ -220,13 +220,15 @@ try {
     gameRoot: fixtureRoot,
     reportDir: path.join(fixtureRoot, 'timeout-report'),
     options: {},
-    steps: [{
-      id: 'timeout',
-      label: 'Timeout step',
-      command: process.execPath,
-      args: ['-e', 'setTimeout(() => undefined, 10000)'],
-      cwd: fixtureRoot,
-    }],
+    steps: [
+      {
+        id: 'timeout',
+        label: 'Timeout step',
+        command: process.execPath,
+        args: ['-e', 'setTimeout(() => undefined, 10000)'],
+        cwd: fixtureRoot,
+      },
+    ],
     commandTimeoutMs: 10,
     log: () => undefined,
   });
@@ -663,26 +665,29 @@ try {
 
   try {
     expectCallError(
-      () => runGameAcceptance({
-        gameRoot: cliGameRoot,
-        reportDir: path.join(cliGameRoot, 'linked-gameplay-report-output'),
-        gameplayE2EReportFile: path.join(
-          linkedGameplayReportDir,
-          'protected-gameplay-evidence.json',
-        ),
-        requireGameplayE2EReport: true,
-        gameplayE2EStepId: 'gameplay-e2e',
-        options: { profile: 'staging' },
-        steps: [{
-          id: 'gameplay-e2e',
-          label: 'Gameplay E2E',
-          command: 'noop',
-          cwd: cliGameRoot,
-        }],
-        commandRunner: () => ({ exitCode: 0 }),
-        now: createClock(),
-        log: () => undefined,
-      }),
+      () =>
+        runGameAcceptance({
+          gameRoot: cliGameRoot,
+          reportDir: path.join(cliGameRoot, 'linked-gameplay-report-output'),
+          gameplayE2EReportFile: path.join(
+            linkedGameplayReportDir,
+            'protected-gameplay-evidence.json',
+          ),
+          requireGameplayE2EReport: true,
+          gameplayE2EStepId: 'gameplay-e2e',
+          options: { profile: 'staging' },
+          steps: [
+            {
+              id: 'gameplay-e2e',
+              label: 'Gameplay E2E',
+              command: 'noop',
+              cwd: cliGameRoot,
+            },
+          ],
+          commandRunner: () => ({ exitCode: 0 }),
+          now: createClock(),
+          log: () => undefined,
+        }),
       /must not cross symbolic-link ancestors/u,
       'symlinked gameplay report ancestor',
     );

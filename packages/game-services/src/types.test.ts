@@ -33,31 +33,35 @@ assertProductGrantTransaction({
   grant: { type: 'entitlement', entitlement: 'theme.ember' },
 });
 assertThrows(
-  () => assertProductGrantTransaction({
-    ...resourceTransaction,
-    grant: { type: 'resource', resource: '', amount: 5 },
-  }),
+  () =>
+    assertProductGrantTransaction({
+      ...resourceTransaction,
+      grant: { type: 'resource', resource: '', amount: 5 },
+    }),
   'resource grants should require a non-empty resource name',
 );
 assertThrows(
-  () => assertProductGrantTransaction({
-    ...resourceTransaction,
-    grant: { type: 'resource', resource: 'hint', amount: 0 },
-  }),
+  () =>
+    assertProductGrantTransaction({
+      ...resourceTransaction,
+      grant: { type: 'resource', resource: 'hint', amount: 0 },
+    }),
   'resource grants should require a positive amount',
 );
 assertThrows(
-  () => assertProductGrantTransaction({
-    ...resourceTransaction,
-    grant: { type: 'resource', resource: 'hint', amount: Number.POSITIVE_INFINITY },
-  }),
+  () =>
+    assertProductGrantTransaction({
+      ...resourceTransaction,
+      grant: { type: 'resource', resource: 'hint', amount: Number.POSITIVE_INFINITY },
+    }),
   'resource grants should require a finite amount',
 );
 assertThrows(
-  () => assertPurchaseGrantFinalization({
-    status: 'completed',
-    alreadyCompleted: false,
-  }),
+  () =>
+    assertPurchaseGrantFinalization({
+      status: 'completed',
+      alreadyCompleted: false,
+    }),
   'completed purchase finalization should require the provider action',
 );
 

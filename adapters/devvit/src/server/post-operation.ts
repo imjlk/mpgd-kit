@@ -1361,7 +1361,8 @@ function parseStoredRecord<
     }
 
     const postIds = record.postIds.map((postId, index) =>
-      assertPostId(postId, `stored operation.postIds[${String(index)}]`));
+      assertPostId(postId, `stored operation.postIds[${String(index)}]`),
+    );
 
     if (new Set(postIds).size !== postIds.length) {
       throw new DevvitPostOperationValidationError('Stored terminal post IDs must be unique.');

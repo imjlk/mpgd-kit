@@ -40,7 +40,11 @@ export function createMonetizationFixture(execution: GameExecutionController) {
         if (outcome === 'exception') {
           throw new Error('Simulated verification exception');
         }
-        return { verified: outcome !== 'rejected', alreadyProcessed: false, ledgerEntryId: 'fixture-purchase-ledger' };
+        return {
+          verified: outcome !== 'rejected',
+          alreadyProcessed: false,
+          ledgerEntryId: 'fixture-purchase-ledger',
+        };
       },
     },
     adRewards: {
@@ -51,11 +55,18 @@ export function createMonetizationFixture(execution: GameExecutionController) {
         if (outcome === 'exception') {
           throw new Error('Simulated claim exception');
         }
-        return { granted: outcome !== 'rejected', alreadyProcessed: false, ledgerEntryId: 'fixture-ad-ledger' };
+        return {
+          granted: outcome !== 'rejected',
+          alreadyProcessed: false,
+          ledgerEntryId: 'fixture-ad-ledger',
+        };
       },
     },
-    leaderboard: { async recordScore() {
-        return { submitted: false, alreadyProcessed: false, rank: 0, ledgerEntryId: 'unused' }; } },
+    leaderboard: {
+      async recordScore() {
+        return { submitted: false, alreadyProcessed: false, rank: 0, ledgerEntryId: 'unused' };
+      },
+    },
   };
   const client = createGameServicesClient({
     gateway,
@@ -89,11 +100,21 @@ export function createMonetizationFixture(execution: GameExecutionController) {
     const ownScreen = screen;
     return {
       purchase: purchase.bindScope(scope, {
-        snapshot: (value) => ({ screen: ownScreen, status: value.status === 'running' && value.progress !== undefined ? value.progress.phase : value.status }),
+        snapshot: (value) => ({
+          screen: ownScreen,
+          status: value.status === 'running' && value.progress !== undefined
+            ? value.progress.phase
+            : value.status,
+        }),
         event: (value) => `purchase:${value.status}`,
       }),
       ad: ad.bindScope(scope, {
-        snapshot: (value) => ({ screen: ownScreen, status: value.status === 'running' && value.progress !== undefined ? value.progress.phase : value.status }),
+        snapshot: (value) => ({
+          screen: ownScreen,
+          status: value.status === 'running' && value.progress !== undefined
+            ? value.progress.phase
+            : value.status,
+        }),
         event: (value) => `ad:${value.status}`,
       }),
     };
@@ -181,7 +202,8 @@ export function createMonetizationFixture(execution: GameExecutionController) {
   const select = requireElement<HTMLSelectElement>('#action-mode');
   const change = (): void => {
     mode = select.value as Mode;
-    render(); };
+    render();
+  };
   select.addEventListener('change', change);
   listeners.push(() => select.removeEventListener('change', change));
   render();

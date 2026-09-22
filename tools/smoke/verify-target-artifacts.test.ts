@@ -15,8 +15,8 @@ const webArtifactRoot = mkdtempSync(join(tmpdir(), 'mpgd-target-smoke-installabi
 
 const expectedMiniGameOrigins = ['https://assets.example.test'];
 const exactMiniGameOriginDeclaration = createMiniGameOriginDeclaration(expectedMiniGameOrigins);
-assert.doesNotThrow(
-  () => assertMiniGameRuntimeAssetOrigins(
+assert.doesNotThrow(() =>
+  assertMiniGameRuntimeAssetOrigins(
     `${exactMiniGameOriginDeclaration},globalThis.runtime = true;\n`,
     expectedMiniGameOrigins,
   ),
@@ -36,17 +36,19 @@ assert.throws(
   /exactly one executable asset-origin declaration/u,
 );
 assert.throws(
-  () => assertMiniGameRuntimeAssetOrigins(
-    createMiniGameOriginDeclaration(expectedMiniGameOrigins, 'metadata'),
-    expectedMiniGameOrigins,
-  ),
+  () =>
+    assertMiniGameRuntimeAssetOrigins(
+      createMiniGameOriginDeclaration(expectedMiniGameOrigins, 'metadata'),
+      expectedMiniGameOrigins,
+    ),
   /exactly one executable asset-origin declaration/u,
 );
 assert.throws(
-  () => assertMiniGameRuntimeAssetOrigins(
-    createMiniGameOriginDeclaration(expectedMiniGameOrigins, 'globalThis.Object', 'metadata'),
-    expectedMiniGameOrigins,
-  ),
+  () =>
+    assertMiniGameRuntimeAssetOrigins(
+      createMiniGameOriginDeclaration(expectedMiniGameOrigins, 'globalThis.Object', 'metadata'),
+      expectedMiniGameOrigins,
+    ),
   /exactly one executable asset-origin declaration/u,
 );
 assert.throws(
@@ -70,10 +72,11 @@ for (const shadow of [
   'const Object = { defineProperty() {}, freeze(value) { return value; } };',
 ]) {
   assert.throws(
-    () => assertMiniGameRuntimeAssetOrigins(
-      `${shadow}\n${exactMiniGameOriginDeclaration}`,
-      expectedMiniGameOrigins,
-    ),
+    () =>
+      assertMiniGameRuntimeAssetOrigins(
+        `${shadow}\n${exactMiniGameOriginDeclaration}`,
+        expectedMiniGameOrigins,
+      ),
     /must not shadow the globalThis or Object intrinsic binding/u,
   );
 }
@@ -88,10 +91,11 @@ for (const unsafeDescriptor of [
     + '...{value:globalThis.Object.freeze(["https://unexpected.example.test"])}}',
 ]) {
   assert.throws(
-    () => assertMiniGameRuntimeAssetOrigins(
-      createMiniGameOriginDeclarationFromDescriptor(unsafeDescriptor),
-      expectedMiniGameOrigins,
-    ),
+    () =>
+      assertMiniGameRuntimeAssetOrigins(
+        createMiniGameOriginDeclarationFromDescriptor(unsafeDescriptor),
+        expectedMiniGameOrigins,
+      ),
     /exactly one executable asset-origin declaration/u,
   );
 }
@@ -175,7 +179,8 @@ assert.throws(
 );
 
 assert.doesNotThrow(() =>
-  assertDevvitInternalEndpoint('/internal/payments/fulfill', 'fulfillOrder'));
+  assertDevvitInternalEndpoint('/internal/payments/fulfill', 'fulfillOrder'),
+);
 assert.throws(
   () => assertDevvitInternalEndpoint('/api/payments/fulfill', 'fulfillOrder'),
   /must be a Devvit internal endpoint path/u,
@@ -200,30 +205,36 @@ const sourcePwaManifest = {
   icons: [{ src: './icon.svg', sizes: 'any', type: 'image/svg+xml' }],
 };
 
-assert.doesNotThrow(() => assertMicrosoftStorePwaManifestSourceContract(
-  {
-    ...sourcePwaManifest,
-    icons: [{
-      src: './icons/icon-any-192.png',
-      sizes: '192x192',
-      type: 'image/png',
-      purpose: 'any',
-    }],
-  },
-  sourcePwaManifest,
-));
-assert.throws(
-  () => assertMicrosoftStorePwaManifestSourceContract(
-    { ...sourcePwaManifest, description: 'Stale description' },
+assert.doesNotThrow(() =>
+  assertMicrosoftStorePwaManifestSourceContract(
+    {
+      ...sourcePwaManifest,
+      icons: [
+        {
+          src: './icons/icon-any-192.png',
+          sizes: '192x192',
+          type: 'image/png',
+          purpose: 'any',
+        },
+      ],
+    },
     sourcePwaManifest,
   ),
+);
+assert.throws(
+  () =>
+    assertMicrosoftStorePwaManifestSourceContract(
+      { ...sourcePwaManifest, description: 'Stale description' },
+      sourcePwaManifest,
+    ),
   /manifest description differs from public\/manifest\.webmanifest/u,
 );
 assert.throws(
-  () => assertMicrosoftStorePwaManifestSourceContract(
-    { ...sourcePwaManifest, categories: ['games'] },
-    sourcePwaManifest,
-  ),
+  () =>
+    assertMicrosoftStorePwaManifestSourceContract(
+      { ...sourcePwaManifest, categories: ['games'] },
+      sourcePwaManifest,
+    ),
   /manifest categories differs from public\/manifest\.webmanifest/u,
 );
 

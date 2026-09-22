@@ -671,8 +671,8 @@ try {
   assert.deepEqual(readdirSync(join(projectRoot, 'artifacts')), ['wechat']);
 
   const backupWarnings: string[] = [];
-  assert.doesNotThrow(
-    () => cleanupMiniGameArtifactBackup(
+  assert.doesNotThrow(() =>
+    cleanupMiniGameArtifactBackup(
       '/artifact-backup',
       () => {
         throw new Error('locked by scanner');
@@ -719,95 +719,123 @@ try {
     experimental: true,
     packageBudget: budget,
   } as const;
-  assert.doesNotThrow(
-    () => assertDisjointMiniGameTargetOutputs({ wechat: miniGameTarget }, resolveValidationPath),
+  assert.doesNotThrow(() =>
+    assertDisjointMiniGameTargetOutputs({ wechat: miniGameTarget }, resolveValidationPath),
   );
   assert.throws(
-    () => assertDisjointMiniGameTargetOutputs({
-      wechat: miniGameTarget,
-      tiktok: {
-        ...miniGameTarget,
-        kind: 'tiktok-minigame',
-        adapter: 'tiktok',
-        output: 'artifacts/wechat/nested',
-      },
-    }, resolveValidationPath),
+    () =>
+      assertDisjointMiniGameTargetOutputs(
+        {
+          wechat: miniGameTarget,
+          tiktok: {
+            ...miniGameTarget,
+            kind: 'tiktok-minigame',
+            adapter: 'tiktok',
+            output: 'artifacts/wechat/nested',
+          },
+        },
+        resolveValidationPath,
+      ),
     /Mini-game artifact outputs must not overlap/u,
   );
   assert.throws(
-    () => assertDisjointMiniGameTargetOutputs({
-      wechat: miniGameTarget,
-      tiktok: {
-        ...miniGameTarget,
-        kind: 'tiktok-minigame',
-        adapter: 'tiktok',
-        output: 'artifacts/wechat/..backup',
-      },
-    }, resolveValidationPath),
+    () =>
+      assertDisjointMiniGameTargetOutputs(
+        {
+          wechat: miniGameTarget,
+          tiktok: {
+            ...miniGameTarget,
+            kind: 'tiktok-minigame',
+            adapter: 'tiktok',
+            output: 'artifacts/wechat/..backup',
+          },
+        },
+        resolveValidationPath,
+      ),
     /Mini-game artifact outputs must not overlap/u,
   );
   assert.throws(
-    () => assertDisjointMiniGameTargetOutputs({
-      wechat: {
-        ...miniGameTarget,
-        output: 'artifacts/TARGET-CONFIG',
-      },
-    }, resolveValidationPath, [
-      {
-        name: 'effective target config output',
-        path: resolveValidationPath('artifacts/target-config'),
-      },
-    ]),
+    () =>
+      assertDisjointMiniGameTargetOutputs(
+        {
+          wechat: {
+            ...miniGameTarget,
+            output: 'artifacts/TARGET-CONFIG',
+          },
+        },
+        resolveValidationPath,
+        [
+          {
+            name: 'effective target config output',
+            path: resolveValidationPath('artifacts/target-config'),
+          },
+        ],
+      ),
     /Mini-game artifact output must not overlap generated output/u,
   );
   assert.throws(
-    () => assertDisjointMiniGameTargetOutputs({
-      wechat: {
-        ...miniGameTarget,
-        output: 'artifacts\\wechat',
-      },
-    }, resolveValidationPath),
+    () =>
+      assertDisjointMiniGameTargetOutputs(
+        {
+          wechat: {
+            ...miniGameTarget,
+            output: 'artifacts\\wechat',
+          },
+        },
+        resolveValidationPath,
+      ),
     /must be a safe artifact-relative path/u,
   );
   if (sep === '/') {
     assert.throws(
-      () => assertMiniGameArtifactOutputDirectory(
-        resolveValidationPath('artifacts\\wechat'),
-        validationRoot,
-      ),
+      () =>
+        assertMiniGameArtifactOutputDirectory(
+          resolveValidationPath('artifacts\\wechat'),
+          validationRoot,
+        ),
       /must be a dedicated artifacts\/ child/u,
     );
   }
   assert.throws(
-    () => assertDisjointMiniGameTargetOutputs({ wechat: miniGameTarget }, resolveValidationPath, [
-      {
-        name: 'foreign-separator protected output',
-        path: resolveValidationPath('artifacts\\wechat'),
-      },
-    ]),
+    () =>
+      assertDisjointMiniGameTargetOutputs({ wechat: miniGameTarget }, resolveValidationPath, [
+        {
+          name: 'foreign-separator protected output',
+          path: resolveValidationPath('artifacts\\wechat'),
+        },
+      ]),
     /Mini-game artifact output must not overlap generated output/u,
   );
   assert.throws(
-    () => assertDisjointMiniGameTargetOutputs({
-      wechat: {
-        ...miniGameTarget,
-        output: 'artifacts/target-config.',
-      },
-    }, resolveValidationPath),
+    () =>
+      assertDisjointMiniGameTargetOutputs(
+        {
+          wechat: {
+            ...miniGameTarget,
+            output: 'artifacts/target-config.',
+          },
+        },
+        resolveValidationPath,
+      ),
     /must be a safe artifact-relative path/u,
   );
   assert.throws(
-    () => assertDisjointMiniGameTargetOutputs({
-      wechat: {
-        ...miniGameTarget,
-        output: 'artifacts/target-config',
-      },
-    }, resolveValidationPath, [
-      {
-        name: 'Windows-trimmed protected output',
-        path: resolveValidationPath('artifacts/target-config.'),
-      },
-    ]),
+    () =>
+      assertDisjointMiniGameTargetOutputs(
+        {
+          wechat: {
+            ...miniGameTarget,
+            output: 'artifacts/target-config',
+          },
+        },
+        resolveValidationPath,
+        [
+          {
+            name: 'Windows-trimmed protected output',
+            path: resolveValidationPath('artifacts/target-config.'),
+          },
+        ],
+      ),
     /Mini-game artifact output must not overlap generated output/u,
   );
 

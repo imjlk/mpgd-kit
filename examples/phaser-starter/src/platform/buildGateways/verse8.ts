@@ -1,8 +1,5 @@
 import { createVerse8PlatformGateway } from '@mpgd/adapter-verse8';
-import {
-  resolveAdPlacementPlatformId,
-  type AdPlacements,
-} from '@mpgd/catalog';
+import { resolveAdPlacementPlatformId, type AdPlacements } from '@mpgd/catalog';
 import adPlacementsJson from '@mpgd/catalog/placements.json';
 import type { PlatformGateway } from '@mpgd/platform';
 

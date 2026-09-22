@@ -78,8 +78,8 @@ export function createMicrosoftStorePackageGenerationRuntime(
 function createPublicOnlyFetch(resolveAddresses?: MicrosoftStoreAddressResolver): typeof fetch {
   const dispatcher = new Agent({
     connect: {
-      lookup: createPublicOnlyLookup(
-        (hostname) => resolveMicrosoftStorePublicAddresses(hostname, resolveAddresses),
+      lookup: createPublicOnlyLookup((hostname) =>
+        resolveMicrosoftStorePublicAddresses(hostname, resolveAddresses),
       ),
     },
   });

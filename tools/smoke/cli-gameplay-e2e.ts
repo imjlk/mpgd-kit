@@ -67,40 +67,45 @@ assert.equal(
   path.join(fixtureRoot, 'custom/e2e.json'),
 );
 expectCallError(
-  () => resolveGameplayE2EReportFile(fixtureRoot, {
-    MPGD_GAMEPLAY_E2E_REPORT_FILE: path.join(outsideRoot, 'outside-report.json'),
-  }),
+  () =>
+    resolveGameplayE2EReportFile(fixtureRoot, {
+      MPGD_GAMEPLAY_E2E_REPORT_FILE: path.join(outsideRoot, 'outside-report.json'),
+    }),
   /must stay inside the game root/u,
   'outside gameplay report path',
 );
 expectCallError(
-  () => resolveGameplayE2EReportFile(fixtureRoot, {
-    MPGD_GAMEPLAY_E2E_REPORT_FILE: 'artifacts/gameplay-e2e/report.md',
-  }),
+  () =>
+    resolveGameplayE2EReportFile(fixtureRoot, {
+      MPGD_GAMEPLAY_E2E_REPORT_FILE: 'artifacts/gameplay-e2e/report.md',
+    }),
   /must not use a Markdown extension/u,
   'Markdown gameplay JSON report path',
 );
 
 assert.throws(() => parseGameplayE2EPlan({ ...plan, unsupported: true }), /unsupported fields/u);
 assert.throws(
-  () => parseGameplayE2EPlan({
-    schemaVersion: 1,
-    states: [plan.states[0], { ...plan.states[0] }],
-  }),
+  () =>
+    parseGameplayE2EPlan({
+      schemaVersion: 1,
+      states: [plan.states[0], { ...plan.states[0] }],
+    }),
   /duplicated/u,
 );
 assert.throws(
-  () => parseGameplayE2EPlan({
-    schemaVersion: 1,
-    states: [{ ...plan.states[0], actions: [{ type: 'tap', x: 1.1, y: 0.5 }] }],
-  }),
+  () =>
+    parseGameplayE2EPlan({
+      schemaVersion: 1,
+      states: [{ ...plan.states[0], actions: [{ type: 'tap', x: 1.1, y: 0.5 }] }],
+    }),
   /between 0 and 1/u,
 );
 assert.throws(
-  () => parseGameplayE2EPlan({
-    schemaVersion: 1,
-    states: [{ ...plan.states[0], actions: [{ type: 'key', key: 'Enter\n' }] }],
-  }),
+  () =>
+    parseGameplayE2EPlan({
+      schemaVersion: 1,
+      states: [{ ...plan.states[0], actions: [{ type: 'key', key: 'Enter\n' }] }],
+    }),
   /control characters/u,
 );
 
@@ -158,19 +163,20 @@ try {
   );
   assert.match(renderGameplayE2EMarkdown(passed.report), /Gameplay E2E Report/u);
   await expectAsyncCallError(
-    () => runGameplayE2E({
-      gameRoot: fixtureRoot,
-      reportDir,
-      reportFile: 'artifacts/gameplay-e2e/collision.MD',
-      plan: loaded?.plan ?? plan,
-      planFile: gameConfigFile,
-      target: 'android',
-      profile: 'staging',
-      artifactFile,
-      driver,
-      now: createClock(),
-      log: () => undefined,
-    }),
+    () =>
+      runGameplayE2E({
+        gameRoot: fixtureRoot,
+        reportDir,
+        reportFile: 'artifacts/gameplay-e2e/collision.MD',
+        plan: loaded?.plan ?? plan,
+        planFile: gameConfigFile,
+        target: 'android',
+        profile: 'staging',
+        artifactFile,
+        driver,
+        now: createClock(),
+        log: () => undefined,
+      }),
     /must not use a Markdown extension/u,
     'direct Markdown gameplay JSON report path',
   );
@@ -246,18 +252,19 @@ try {
 
   try {
     await expectAsyncCallError(
-      () => runGameplayE2E({
-        gameRoot: fixtureRoot,
-        reportDir: linkedReportsDir,
-        plan: loaded?.plan ?? plan,
-        planFile: gameConfigFile,
-        target: 'android',
-        profile: 'staging',
-        artifactFile,
-        driver,
-        now: createClock(),
-        log: () => undefined,
-      }),
+      () =>
+        runGameplayE2E({
+          gameRoot: fixtureRoot,
+          reportDir: linkedReportsDir,
+          plan: loaded?.plan ?? plan,
+          planFile: gameConfigFile,
+          target: 'android',
+          profile: 'staging',
+          artifactFile,
+          driver,
+          now: createClock(),
+          log: () => undefined,
+        }),
       /must not cross symbolic-link ancestors/u,
       'symlinked gameplay report directory',
     );
@@ -305,12 +312,13 @@ try {
   writeFileSync(path.join(entryLimitedArtifactDir, 'a.bin'), 'a\n');
   writeFileSync(path.join(entryLimitedArtifactDir, 'b.bin'), 'b\n');
   expectCallError(
-    () => collectGameplayE2EPathEvidence(
-      fixtureRoot,
-      entryLimitedArtifactDir,
-      'entry-limited artifact',
-      { maximumDepth: 10, maximumEntries: 2, maximumTotalFileBytes: 100 },
-    ),
+    () =>
+      collectGameplayE2EPathEvidence(
+        fixtureRoot,
+        entryLimitedArtifactDir,
+        'entry-limited artifact',
+        { maximumDepth: 10, maximumEntries: 2, maximumTotalFileBytes: 100 },
+      ),
     /maximum hash entries 2/u,
     'bounded artifact entries',
   );
@@ -320,10 +328,7 @@ try {
   let inspectCount = 0;
   const mismatchPlan = {
     schemaVersion: 1,
-    states: [
-      plan.states[2],
-      { id: 'never-run', label: 'Never run', actions: [] },
-    ],
+    states: [plan.states[2], { id: 'never-run', label: 'Never run', actions: [] }],
   } as const satisfies GameplayE2EPlan;
   const mismatchConfigFile = path.join(fixtureRoot, 'mpgd.mismatch.json');
 

@@ -63,21 +63,48 @@ const tinyPng = Buffer.concat([
 
 const basePacks = [
   {
-    id: 'shared', revision: '1', delivery: 'files', assets: [{
-      kind: 'spritesheet', key: 'pilot', file: 'shared/pilot.png', frameConfig: {
-        frameWidth: 64, frameHeight: 64, spacing: 1,
+    id: 'shared',
+    revision: '1',
+    delivery: 'files',
+    assets: [
+      {
+        kind: 'spritesheet',
+        key: 'pilot',
+        file: 'shared/pilot.png',
+        frameConfig: {
+          frameWidth: 64,
+          frameHeight: 64,
+          spacing: 1,
+        },
       },
-    }],
+    ],
   },
   {
-    id: 'grove', revision: '3', dependsOn: ['shared'], delivery: 'zip', assets: [{
-      kind: 'atlas', key: 'ground', texture: 'grove/grove.png', atlas: 'grove/grove.json',
-    }],
+    id: 'grove',
+    revision: '3',
+    dependsOn: ['shared'],
+    delivery: 'zip',
+    assets: [
+      {
+        kind: 'atlas',
+        key: 'ground',
+        texture: 'grove/grove.png',
+        atlas: 'grove/grove.json',
+      },
+    ],
   },
   {
-    id: 'dunes', revision: '1', dependsOn: ['shared'], delivery: 'files', assets: [{
-      kind: 'image', key: 'ground', file: 'dunes/dunes.png',
-    }],
+    id: 'dunes',
+    revision: '1',
+    dependsOn: ['shared'],
+    delivery: 'files',
+    assets: [
+      {
+        kind: 'image',
+        key: 'ground',
+        file: 'dunes/dunes.png',
+      },
+    ],
   },
 ];
 
@@ -298,13 +325,24 @@ try {
   const zipSharedConfig = join(fixtureRoot, 'zip-shared.config.json');
   writeJson(zipSharedConfig, {
     root: 'src',
-    packs: [{
-      id: 'shared', revision: '1', delivery: 'zip', assets: [{
-        kind: 'spritesheet', key: 'pilot', file: 'shared/pilot.png', frameConfig: {
-          frameWidth: 64, frameHeight: 64,
-        },
-      }],
-    }],
+    packs: [
+      {
+        id: 'shared',
+        revision: '1',
+        delivery: 'zip',
+        assets: [
+          {
+            kind: 'spritesheet',
+            key: 'pilot',
+            file: 'shared/pilot.png',
+            frameConfig: {
+              frameWidth: 64,
+              frameHeight: 64,
+            },
+          },
+        ],
+      },
+    ],
   });
   const zipSharedOut = join(fixtureRoot, 'out-zip-shared');
   assert.equal(runBuildCli(zipSharedConfig, zipSharedOut).status, 0, 'zipShared');
@@ -321,14 +359,31 @@ try {
     root: 'src',
     packs: [
       {
-        id: 'tiny-forced', revision: '1', delivery: 'zip', assets: [{
-          kind: 'atlas', key: 'blob', texture: 'tiny/tiny.png', atlas: 'tiny/tiny.json', compression: 'deflate',
-        }],
+        id: 'tiny-forced',
+        revision: '1',
+        delivery: 'zip',
+        assets: [
+          {
+            kind: 'atlas',
+            key: 'blob',
+            texture: 'tiny/tiny.png',
+            atlas: 'tiny/tiny.json',
+            compression: 'deflate',
+          },
+        ],
       },
       {
-        id: 'tiny-auto', revision: '1', delivery: 'zip', assets: [{
-          kind: 'atlas', key: 'blob', texture: 'tiny/tiny.png', atlas: 'tiny/tiny.json',
-        }],
+        id: 'tiny-auto',
+        revision: '1',
+        delivery: 'zip',
+        assets: [
+          {
+            kind: 'atlas',
+            key: 'blob',
+            texture: 'tiny/tiny.png',
+            atlas: 'tiny/tiny.json',
+          },
+        ],
       },
     ],
   });
@@ -429,78 +484,135 @@ try {
     {
       name: 'output inside source root',
       config: {
-        root: 'src', packs: basePacks,
+        root: 'src',
+        packs: basePacks,
       },
       outDir: join(sourceRoot, 'inside-out'),
       message: /outside the pack source root/u,
     },
     {
-      name: 'unsupported extension', config: {
+      name: 'unsupported extension',
+      config: {
         root: 'src',
-        packs: [{
-          id: 'x', revision: '1', delivery: 'files', assets: [{
-            kind: 'image', key: 'k', file: 'shared/pilot.gif',
-          }],
-        }],
-      }, message: /Unsupported pack source extension/u,
+        packs: [
+          {
+            id: 'x',
+            revision: '1',
+            delivery: 'files',
+            assets: [
+              {
+                kind: 'image',
+                key: 'k',
+                file: 'shared/pilot.gif',
+              },
+            ],
+          },
+        ],
+      },
+      message: /Unsupported pack source extension/u,
     },
     {
-      name: 'escaping path', config: {
+      name: 'escaping path',
+      config: {
         root: 'src',
-        packs: [{
-          id: 'x', revision: '1', delivery: 'files', assets: [{
-            kind: 'image', key: 'k', file: '../pilot.png',
-          }],
-        }],
-      }, message: /Invalid/u,
+        packs: [
+          {
+            id: 'x',
+            revision: '1',
+            delivery: 'files',
+            assets: [
+              {
+                kind: 'image',
+                key: 'k',
+                file: '../pilot.png',
+              },
+            ],
+          },
+        ],
+      },
+      message: /Invalid/u,
     },
     {
-      name: 'duplicate entry path', config: {
+      name: 'duplicate entry path',
+      config: {
         root: 'src',
-        packs: [{
-          id: 'x', revision: '1', delivery: 'files', assets: [
-            { kind: 'image', key: 'a', file: 'shared/pilot.png' },
-            { kind: 'image', key: 'b', file: 'shared/pilot.png' },
-          ],
-        }],
-      }, message: /duplicate file/u,
+        packs: [
+          {
+            id: 'x',
+            revision: '1',
+            delivery: 'files',
+            assets: [
+              { kind: 'image', key: 'a', file: 'shared/pilot.png' },
+              { kind: 'image', key: 'b', file: 'shared/pilot.png' },
+            ],
+          },
+        ],
+      },
+      message: /duplicate file/u,
     },
     {
-      name: 'unsupported compression', config: {
+      name: 'unsupported compression',
+      config: {
         root: 'src',
-        packs: [{
-          id: 'x', revision: '1', delivery: 'files', assets: [{
-            kind: 'image', key: 'k', file: 'shared/pilot.png', compression: 'brotli',
-          }],
-        }],
-      }, message: /Invalid/u,
+        packs: [
+          {
+            id: 'x',
+            revision: '1',
+            delivery: 'files',
+            assets: [
+              {
+                kind: 'image',
+                key: 'k',
+                file: 'shared/pilot.png',
+                compression: 'brotli',
+              },
+            ],
+          },
+        ],
+      },
+      message: /Invalid/u,
     },
     {
-      name: 'zip delivery without assets', config: {
+      name: 'zip delivery without assets',
+      config: {
         root: 'src',
         packs: [{ id: 'x', revision: '1', delivery: 'zip', assets: [] }],
-      }, message: /zip delivery requires at least one asset/u,
+      },
+      message: /zip delivery requires at least one asset/u,
     },
     {
-      name: 'unknown dependency', config: {
+      name: 'unknown dependency',
+      config: {
         root: 'src',
-        packs: [{
-          id: 'x', revision: '1', dependsOn: ['nope'], delivery: 'files', assets: [{
-            kind: 'image', key: 'k', file: 'shared/pilot.png',
-          }],
-        }],
-      }, message: /unknown dependency/u,
+        packs: [
+          {
+            id: 'x',
+            revision: '1',
+            dependsOn: ['nope'],
+            delivery: 'files',
+            assets: [
+              {
+                kind: 'image',
+                key: 'k',
+                file: 'shared/pilot.png',
+              },
+            ],
+          },
+        ],
+      },
+      message: /unknown dependency/u,
     },
   ];
   for (const { name, config, outDir, message } of badCases) {
     const configPath = join(fixtureRoot, 'bad.config.json');
     writeJson(configPath, config);
     assert.throws(
-      () => buildAssetPacks({
-        configPath,
-        outDir: outDir ?? join(fixtureRoot, 'out-bad'),
-        cwd: repoRoot,
-      }),
+      () =>
+        buildAssetPacks({
+          configPath,
+          outDir: outDir ?? join(fixtureRoot, 'out-bad'),
+          cwd: repoRoot,
+        }),
       message,
       name,
     );
@@ -508,11 +620,12 @@ try {
   const rootEqualsOutConfig = join(fixtureRoot, 'root-equals-out.config.json');
   writeJson(rootEqualsOutConfig, { root: 'src', packs: basePacks });
   assert.throws(
-    () => buildAssetPacks({
-      configPath: rootEqualsOutConfig,
-      outDir: sourceRoot,
-      cwd: repoRoot,
-    }),
+    () =>
+      buildAssetPacks({
+        configPath: rootEqualsOutConfig,
+        outDir: sourceRoot,
+        cwd: repoRoot,
+      }),
     /outside the pack source root/u,
     'output equal to the source root is rejected',
   );
@@ -530,18 +643,28 @@ try {
   const symlinkConfig = join(fixtureRoot, 'symlink.config.json');
   writeJson(symlinkConfig, {
     root: 'src',
-    packs: [{
-      id: 'x', revision: '1', delivery: 'files', assets: [{
-        kind: 'image', key: 'k', file: 'shared/link.png',
-      }],
-    }],
+    packs: [
+      {
+        id: 'x',
+        revision: '1',
+        delivery: 'files',
+        assets: [
+          {
+            kind: 'image',
+            key: 'k',
+            file: 'shared/link.png',
+          },
+        ],
+      },
+    ],
   });
   assert.throws(
-    () => buildAssetPacks({
-      configPath: symlinkConfig,
-      outDir: join(fixtureRoot, 'out-symlink'),
-      cwd: repoRoot,
-    }),
+    () =>
+      buildAssetPacks({
+        configPath: symlinkConfig,
+        outDir: join(fixtureRoot, 'out-symlink'),
+        cwd: repoRoot,
+      }),
     /must not contain symbolic links/u,
   );
   rmSync(linkPath, { force: true });
@@ -551,18 +674,28 @@ try {
   const emptyConfig = join(fixtureRoot, 'empty.config.json');
   writeJson(emptyConfig, {
     root: 'src',
-    packs: [{
-      id: 'x', revision: '1', delivery: 'files', assets: [{
-        kind: 'image', key: 'k', file: 'shared/empty.png',
-      }],
-    }],
+    packs: [
+      {
+        id: 'x',
+        revision: '1',
+        delivery: 'files',
+        assets: [
+          {
+            kind: 'image',
+            key: 'k',
+            file: 'shared/empty.png',
+          },
+        ],
+      },
+    ],
   });
   assert.throws(
-    () => buildAssetPacks({
-      configPath: emptyConfig,
-      outDir: join(fixtureRoot, 'out-empty'),
-      cwd: repoRoot,
-    }),
+    () =>
+      buildAssetPacks({
+        configPath: emptyConfig,
+        outDir: join(fixtureRoot, 'out-empty'),
+        cwd: repoRoot,
+      }),
     /Pack source file is empty/u,
   );
   const outLink = join(fixtureRoot, 'out-link');
@@ -613,40 +746,66 @@ try {
     root: 'src',
     packs: [
       {
-        id: 'Ui', revision: '1', delivery: 'files', assets: [{
-          kind: 'image', key: 'k', file: 'shared/pilot.png',
-        }],
+        id: 'Ui',
+        revision: '1',
+        delivery: 'files',
+        assets: [
+          {
+            kind: 'image',
+            key: 'k',
+            file: 'shared/pilot.png',
+          },
+        ],
       },
       {
-        id: 'UI', revision: '1', delivery: 'files', assets: [{
-          kind: 'image', key: 'k', file: 'dunes/dunes.png',
-        }],
+        id: 'UI',
+        revision: '1',
+        delivery: 'files',
+        assets: [
+          {
+            kind: 'image',
+            key: 'k',
+            file: 'dunes/dunes.png',
+          },
+        ],
       },
     ],
   });
   assert.throws(
-    () => buildAssetPacks({
-      configPath: caseConfig,
-      outDir: join(fixtureRoot, 'out-case'),
-      cwd: repoRoot,
-    }),
+    () =>
+      buildAssetPacks({
+        configPath: caseConfig,
+        outDir: join(fixtureRoot, 'out-case'),
+        cwd: repoRoot,
+      }),
     /case-colliding pack id/u,
   );
   const swappedAtlasConfig = join(fixtureRoot, 'swapped-atlas.config.json');
   writeJson(swappedAtlasConfig, {
     root: 'src',
-    packs: [{
-      id: 'swapped', revision: '1', delivery: 'zip', assets: [{
-        kind: 'atlas', key: 'ground', texture: 'grove/grove.json', atlas: 'grove/grove.png',
-      }],
-    }],
+    packs: [
+      {
+        id: 'swapped',
+        revision: '1',
+        delivery: 'zip',
+        assets: [
+          {
+            kind: 'atlas',
+            key: 'ground',
+            texture: 'grove/grove.json',
+            atlas: 'grove/grove.png',
+          },
+        ],
+      },
+    ],
   });
   assert.throws(
-    () => buildAssetPacks({
-      configPath: swappedAtlasConfig,
-      outDir: join(fixtureRoot, 'out-swapped'),
-      cwd: repoRoot,
-    }),
+    () =>
+      buildAssetPacks({
+        configPath: swappedAtlasConfig,
+        outDir: join(fixtureRoot, 'out-swapped'),
+        cwd: repoRoot,
+      }),
     /Texture sources must be images/u,
   );
   mkdirSync(join(sourceRoot, '..dots'), { recursive: true });
@@ -654,11 +813,20 @@ try {
   const dottedConfig = join(fixtureRoot, 'dotted.config.json');
   writeJson(dottedConfig, {
     root: 'src',
-    packs: [{
-      id: 'dotted', revision: '1', delivery: 'files', assets: [{
-        kind: 'image', key: 'hero', file: '..dots/hero.png',
-      }],
-    }],
+    packs: [
+      {
+        id: 'dotted',
+        revision: '1',
+        delivery: 'files',
+        assets: [
+          {
+            kind: 'image',
+            key: 'hero',
+            file: '..dots/hero.png',
+          },
+        ],
+      },
+    ],
   });
   const dottedOut = join(fixtureRoot, 'out-dotted');
   assert.equal(runBuildCli(dottedConfig, dottedOut).status, 0, 'dotted');
@@ -670,19 +838,25 @@ try {
   const casePathConfig = join(fixtureRoot, 'case-path.config.json');
   writeJson(casePathConfig, {
     root: 'src',
-    packs: [{
-      id: 'mixed', revision: '1', delivery: 'files', assets: [
-        { kind: 'image', key: 'upper', file: 'shared/Pilot.png' },
-        { kind: 'image', key: 'lower', file: 'shared/pilot.png' },
-      ],
-    }],
+    packs: [
+      {
+        id: 'mixed',
+        revision: '1',
+        delivery: 'files',
+        assets: [
+          { kind: 'image', key: 'upper', file: 'shared/Pilot.png' },
+          { kind: 'image', key: 'lower', file: 'shared/pilot.png' },
+        ],
+      },
+    ],
   });
   assert.throws(
-    () => buildAssetPacks({
-      configPath: casePathConfig,
-      outDir: join(fixtureRoot, 'out-case-path'),
-      cwd: repoRoot,
-    }),
+    () =>
+      buildAssetPacks({
+        configPath: casePathConfig,
+        outDir: join(fixtureRoot, 'out-case-path'),
+        cwd: repoRoot,
+      }),
     /case-colliding file/u,
   );
 
@@ -717,13 +891,24 @@ try {
   writeFileSync(join(consumerRoot, 'src/pilot.png'), pilotPng);
   writeJson(join(consumerRoot, 'packs.config.json'), {
     root: 'src',
-    packs: [{
-      id: 'pilot', revision: '1', delivery: 'zip', assets: [{
-        kind: 'spritesheet', key: 'pilot', file: 'pilot.png', frameConfig: {
-          frameWidth: 64, frameHeight: 64,
-        },
-      }],
-    }],
+    packs: [
+      {
+        id: 'pilot',
+        revision: '1',
+        delivery: 'zip',
+        assets: [
+          {
+            kind: 'spritesheet',
+            key: 'pilot',
+            file: 'pilot.png',
+            frameConfig: {
+              frameWidth: 64,
+              frameHeight: 64,
+            },
+          },
+        ],
+      },
+    ],
   });
   const installed = spawnSync(
     'npm',

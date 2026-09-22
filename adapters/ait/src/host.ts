@@ -316,9 +316,7 @@ export function createAitHostBridge(
   const configuredDependencies = { ...defaultDependencies, ...options.dependencies };
   const dependencies: AitHostDependencies = {
     ...configuredDependencies,
-    identityProvider: createAitSessionIdentityProvider(
-      configuredDependencies.identityProvider,
-    ),
+    identityProvider: createAitSessionIdentityProvider(configuredDependencies.identityProvider),
   };
   const appName = normalizeAppName(options.appName ?? 'mpgd-kit');
   const adGroupIds = normalizeAdGroupIds(options.adGroupIds);
@@ -1012,8 +1010,8 @@ async function authorizeAndGrantAitPromotionReward(input: {
 }
 
 function isPromotionSupported(dependencies: AitHostDependencies): boolean {
-  return isCapabilitySupported(
-    () => dependencies.isMinVersionSupported({
+  return isCapabilitySupported(() =>
+    dependencies.isMinVersionSupported({
       android: minimumPromotionTossAppVersion,
       ios: minimumPromotionTossAppVersion,
     }),
@@ -1763,7 +1761,8 @@ function isGameCenterSupported(dependencies: AitHostDependencies): boolean {
     dependencies.isMinVersionSupported({
       android: '5.221.0',
       ios: '5.221.0',
-    }));
+    }),
+  );
 }
 
 interface NormalizedAitIapProduct {
@@ -2566,9 +2565,10 @@ async function restoreAitIapProducts(
         break;
       }
       const completed = await waitForAitIapNativeCall(
-        () => input.dependencies.iap.completeProductGrant({
-          params: { orderId: order.orderId },
-        }),
+        () =>
+          input.dependencies.iap.completeProductGrant({
+            params: { orderId: order.orderId },
+          }),
         completionTimeoutMs,
       );
       if (completed === true) {

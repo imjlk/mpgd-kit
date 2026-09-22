@@ -9,7 +9,10 @@
   ],
   "tsconfig": "tsconfig.graph.json",
   "question": "What are the central Driver tutorial presentation, target resolution, accessibility ownership, target rebinding, replay trigger, and debug helper flows?",
-  "draft": "Use details because the public Driver, replay, debug, and regression-test handles are known and should remain pinned.",
+  "draft": {
+    "reason": "Use details because the public Driver, replay, debug, and regression-test handles are known and should remain pinned.",
+    "type": "details"
+  },
   "review": "Exact details handles are the smallest answer-ready evidence that enforces both the Driver integration surface and its regression-test anchors.",
   "request": {
     "type": "details",

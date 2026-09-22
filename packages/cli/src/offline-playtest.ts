@@ -652,9 +652,8 @@ function findHtmlRawTextElements(
 }
 
 function maskInertHtmlTemplateContents(html: string): string {
-  const structure = html.replace(
-    createHtmlRawTextPattern(),
-    (match) => maskTextPreservingLines(match),
+  const structure = html.replace(createHtmlRawTextPattern(), (match) =>
+    maskTextPreservingLines(match),
   );
   const ranges: SourceRange[] = [];
   const stack: Array<{
@@ -797,9 +796,8 @@ function findHtmlTagTokens(source: string): readonly HtmlTagToken[] {
 
 function findActiveHtmlStartTag(html: string, name: string): HtmlTagToken | undefined {
   const activeHtml = maskInertHtmlTemplateContents(html);
-  const structure = activeHtml.replace(
-    createHtmlRawTextPattern(),
-    (match) => maskTextPreservingLines(match),
+  const structure = activeHtml.replace(createHtmlRawTextPattern(), (match) =>
+    maskTextPreservingLines(match),
   );
   return findHtmlTagTokens(structure).find((tag) => !tag.closing && tag.name === name);
 }
@@ -1029,12 +1027,8 @@ function inlineJavaScriptAssetReferences(
 
         return readAssetDataUrl(assetSourceFile, reference, context);
       }
-    : (assetSourceFile, reference, externalError) => deferJavaScriptAsset(
-        assetSourceFile,
-        reference,
-        deferredAssets,
-        externalError,
-      );
+    : (assetSourceFile, reference, externalError) =>
+        deferJavaScriptAsset(assetSourceFile, reference, deferredAssets, externalError);
   const deferError: JavaScriptErrorDeferrer | undefined = deferredAssets === undefined
     ? undefined
     : (error) => deferJavaScriptError(error, deferredAssets);
@@ -2395,11 +2389,13 @@ function inlineStaticXmlHttpRequestOpenCalls(
     replacements.push({
       start: urlArgument.start,
       end: urlArgument.end,
-      value: JSON.stringify(readAsset(
-        documentFile,
-        reference,
-        `Offline playtest does not support network XMLHttpRequest URL: ${reference}`,
-      )),
+      value: JSON.stringify(
+        readAsset(
+          documentFile,
+          reference,
+          `Offline playtest does not support network XMLHttpRequest URL: ${reference}`,
+        ),
+      ),
     });
   }
 
@@ -3044,18 +3040,20 @@ function findVisibleJavaScriptIdentifierBinding(
       start: match.index,
     };
 
-    declarations.push(initializerStart === undefined
-      ? declaration
-      : {
-        ...declaration,
-        initializerRange: findJavaScriptExpressionRange(
-          source,
-          initializerStart,
-          source.length,
-          codePositions,
-          true,
-        ),
-      });
+    declarations.push(
+      initializerStart === undefined
+        ? declaration
+        : {
+            ...declaration,
+            initializerRange: findJavaScriptExpressionRange(
+              source,
+              initializerStart,
+              source.length,
+              codePositions,
+              true,
+            ),
+          },
+    );
   }
 
   for (const match of source.matchAll(namedDeclarationPattern)) {
@@ -4519,7 +4517,11 @@ function inlineStylesheets(
         throw new Error('Offline playtest does not support integrity-protected stylesheets.');
       }
 
-      const stylesheetFile = resolveLocalReference(context.artifactRoot, path.dirname(htmlFile), href);
+      const stylesheetFile = resolveLocalReference(
+        context.artifactRoot,
+        path.dirname(htmlFile),
+        href,
+      );
       const stylesheet = readFileSync(stylesheetFile, 'utf8');
       const inlined = inlineCssAssetReferences(stylesheet, stylesheetFile, context);
       context.inlinedAssets.add(stylesheetFile);
@@ -4989,9 +4991,8 @@ function inlineHtmlAssets(
   htmlFile: string,
   context: InliningContext,
 ): string {
-  return transformOutsideHtmlRawText(
-    html,
-    (fragment) => inlineHtmlAssetFragment(fragment, htmlFile, context),
+  return transformOutsideHtmlRawText(html, (fragment) =>
+    inlineHtmlAssetFragment(fragment, htmlFile, context),
   );
 }
 
@@ -5022,48 +5023,51 @@ function inlineHtmlAssetFragment(
     return output;
   });
 
-  return htmlWithInlineStyles.replace(/<(link|audio|body|embed|feimage|image|img|input|object|source|track|use|video)\b((?:"[^"]*"|'[^']*'|[^'">])*)>/giu, (tag, name: string, attributes: string) => {
-    const lowerName = name.toLowerCase();
-    const attributeTokens = tokenizeHtmlAttributes(attributes);
-    const rel = readHtmlRelTokenSet(attributeTokens);
-    const allowedAttributes = [...(htmlAssetAttributesByTag[lowerName] ?? ['src'])];
+  return htmlWithInlineStyles.replace(
+    /<(link|audio|body|embed|feimage|image|img|input|object|source|track|use|video)\b((?:"[^"]*"|'[^']*'|[^'">])*)>/giu,
+    (tag, name: string, attributes: string) => {
+      const lowerName = name.toLowerCase();
+      const attributeTokens = tokenizeHtmlAttributes(attributes);
+      const rel = readHtmlRelTokenSet(attributeTokens);
+      const allowedAttributes = [...(htmlAssetAttributesByTag[lowerName] ?? ['src'])];
 
-    if (lowerName === 'link') {
-      if (!['icon', 'apple-touch-icon', 'mask-icon'].some((token) => rel.has(token))) {
-        return tag;
-      }
-
-      allowedAttributes.splice(0, allowedAttributes.length, 'href');
-    }
-
-    let output = tag;
-
-    for (const attribute of allowedAttributes) {
-      const reference = readHtmlAttributeToken(attributeTokens, attribute);
-
-      if (reference === undefined || reference.startsWith('#')) {
-        continue;
-      }
-
-      let inlined: string;
-
-      if (attribute === 'srcset') {
-        inlined = inlineHtmlSrcset(htmlFile, reference, context);
-      } else if (isDataUrlReference(reference)) {
-        if (lowerName === 'embed' || lowerName === 'object') {
-          throw new Error('Offline playtest does not support embedded active data documents.');
+      if (lowerName === 'link') {
+        if (!['icon', 'apple-touch-icon', 'mask-icon'].some((token) => rel.has(token))) {
+          return tag;
         }
 
-        inlined = reference;
-      } else {
-        inlined = readAssetDataUrl(htmlFile, reference, context);
+        allowedAttributes.splice(0, allowedAttributes.length, 'href');
       }
 
-      output = replaceHtmlAttribute(output, attribute, inlined);
-    }
+      let output = tag;
 
-    return output;
-  });
+      for (const attribute of allowedAttributes) {
+        const reference = readHtmlAttributeToken(attributeTokens, attribute);
+
+        if (reference === undefined || reference.startsWith('#')) {
+          continue;
+        }
+
+        let inlined: string;
+
+        if (attribute === 'srcset') {
+          inlined = inlineHtmlSrcset(htmlFile, reference, context);
+        } else if (isDataUrlReference(reference)) {
+          if (lowerName === 'embed' || lowerName === 'object') {
+            throw new Error('Offline playtest does not support embedded active data documents.');
+          }
+
+          inlined = reference;
+        } else {
+          inlined = readAssetDataUrl(htmlFile, reference, context);
+        }
+
+        output = replaceHtmlAttribute(output, attribute, inlined);
+      }
+
+      return output;
+    },
+  );
 }
 
 function transformOutsideHtmlRawText(

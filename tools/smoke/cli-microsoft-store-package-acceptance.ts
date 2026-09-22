@@ -151,10 +151,11 @@ try {
   rmSync(wackReportFile);
   linkSync(packageFile, wackReportFile);
   assert.throws(
-    () => runMicrosoftStorePackageAcceptance(
-      { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
-      runtime,
-    ),
+    () =>
+      runMicrosoftStorePackageAcceptance(
+        { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
+        runtime,
+      ),
     /App Certification Kit report 1 must not alias Microsoft Store package/u,
   );
   assert.equal(readFileSync(packageFile, 'utf8'), packageContentsBeforeAliasCheck);
@@ -174,8 +175,8 @@ try {
   assert.equal(existsSync(wackReportFile), false, 'NOT_RUN must remove the stale WACK report');
 
   blockEvidenceWrite = true;
-  assert.throws(
-    () => runMicrosoftStorePackageAcceptance(
+  assert.throws(() =>
+    runMicrosoftStorePackageAcceptance(
       { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
       runtime,
     ),
@@ -223,9 +224,8 @@ try {
     },
   );
   assert.throws(
-    () => parseMicrosoftStorePackageIdentity(
-      `<Package>${identityTag(packageId, publisherId)}</Wrong>`,
-    ),
+    () =>
+      parseMicrosoftStorePackageIdentity(`<Package>${identityTag(packageId, publisherId)}</Wrong>`),
     /mismatched XML elements/u,
   );
   assert.throws(
@@ -239,9 +239,10 @@ try {
     /unbalanced XML elements/u,
   );
   assert.throws(
-    () => parseMicrosoftStorePackageIdentity(
-      `<Package>${identityTag(packageId, publisherId)}<!DOCTYPE Package></Package>`,
-    ),
+    () =>
+      parseMicrosoftStorePackageIdentity(
+        `<Package>${identityTag(packageId, publisherId)}<!DOCTYPE Package></Package>`,
+      ),
     /must not contain a DOCTYPE declaration/u,
   );
   assert.deepEqual(
@@ -268,10 +269,11 @@ try {
 
   certificationResult = 'FAIL';
   assert.throws(
-    () => runMicrosoftStorePackageAcceptance(
-      { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
-      runtime,
-    ),
+    () =>
+      runMicrosoftStorePackageAcceptance(
+        { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
+        runtime,
+      ),
     /Windows App Certification Kit failed/u,
   );
   assert.equal(existsSync(join(outputDir, 'package-acceptance.json')), false);
@@ -280,50 +282,55 @@ try {
 
   emittedPackageId = 'Different.Package';
   assert.throws(
-    () => runMicrosoftStorePackageAcceptance(
-      { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
-      runtime,
-    ),
+    () =>
+      runMicrosoftStorePackageAcceptance(
+        { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
+        runtime,
+      ),
     /identity Name must be/u,
   );
   emittedPackageId = packageId;
 
   emittedPublisherId = 'CN=wrong-publisher';
   assert.throws(
-    () => runMicrosoftStorePackageAcceptance(
-      { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
-      runtime,
-    ),
+    () =>
+      runMicrosoftStorePackageAcceptance(
+        { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
+        runtime,
+      ),
     /identity Publisher must be/u,
   );
   emittedPublisherId = publisherId;
 
   emitSymlinkPayload = true;
   assert.throws(
-    () => runMicrosoftStorePackageAcceptance(
-      { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
-      runtime,
-    ),
+    () =>
+      runMicrosoftStorePackageAcceptance(
+        { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
+        runtime,
+      ),
     /package symlink is not allowed/u,
   );
   emitSymlinkPayload = false;
 
   emitUnpackedPackageSymlink = true;
   assert.throws(
-    () => runMicrosoftStorePackageAcceptance(
-      { gameRoot, submissionEvidenceFile, packageFiles: [singlePackageFile], outputDir },
-      runtime,
-    ),
+    () =>
+      runMicrosoftStorePackageAcceptance(
+        { gameRoot, submissionEvidenceFile, packageFiles: [singlePackageFile], outputDir },
+        runtime,
+      ),
     /package symlink is not allowed/u,
   );
   emitUnpackedPackageSymlink = false;
 
   mutatePackageDuringCertification = true;
   assert.throws(
-    () => runMicrosoftStorePackageAcceptance(
-      { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
-      runtime,
-    ),
+    () =>
+      runMicrosoftStorePackageAcceptance(
+        { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
+        runtime,
+      ),
     /package changed during acceptance/u,
   );
   mutatePackageDuringCertification = false;
@@ -331,10 +338,11 @@ try {
 
   writeFileSync(submissionEvidenceFile, '{');
   assert.throws(
-    () => runMicrosoftStorePackageAcceptance(
-      { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
-      runtime,
-    ),
+    () =>
+      runMicrosoftStorePackageAcceptance(
+        { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
+        runtime,
+      ),
     /Failed to parse Microsoft Store submission evidence/u,
   );
   writeJson(submissionEvidenceFile, validSubmissionEvidence);
@@ -344,10 +352,11 @@ try {
   writeFileSync(outsidePackage, 'outside');
   symlinkSync(outsidePackage, escapedPackage);
   assert.throws(
-    () => runMicrosoftStorePackageAcceptance(
-      { gameRoot, submissionEvidenceFile, packageFiles: [escapedPackage], outputDir },
-      runtime,
-    ),
+    () =>
+      runMicrosoftStorePackageAcceptance(
+        { gameRoot, submissionEvidenceFile, packageFiles: [escapedPackage], outputDir },
+        runtime,
+      ),
     /Microsoft Store package must stay inside its allowed root/u,
   );
 
@@ -357,10 +366,11 @@ try {
   rmSync(acceptanceJson, { force: true });
   symlinkSync(outsideEvidence, acceptanceJson);
   assert.throws(
-    () => runMicrosoftStorePackageAcceptance(
-      { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
-      runtime,
-    ),
+    () =>
+      runMicrosoftStorePackageAcceptance(
+        { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
+        runtime,
+      ),
     /package acceptance JSON must not be a symbolic link/u,
   );
   assert.equal(readFileSync(outsideEvidence, 'utf8'), 'must remain unchanged');

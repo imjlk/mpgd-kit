@@ -40,9 +40,10 @@ try {
   assertEqual(report.passedScenarios.length, 7, 'D1 should pass every conformance scenario');
 
   const durabilityReport = await runVerifiedLeaderboardDurabilityConformance({
-    createFixture: ({ now }) => createAmbiguousCommitVerifiedLeaderboardDurabilityFixture(
-      createD1VerifiedLeaderboardService(db, { now: () => now }),
-    ),
+    createFixture: ({ now }) =>
+      createAmbiguousCommitVerifiedLeaderboardDurabilityFixture(
+        createD1VerifiedLeaderboardService(db, { now: () => now }),
+      ),
   });
   assertEqual(
     durabilityReport.passedScenarios.length,

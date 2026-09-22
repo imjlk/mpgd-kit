@@ -43,7 +43,8 @@ function setup(client: Pick<GameServicesOperationClient, 'purchase' | 'claimRewa
     client,
     ...(maxRememberedKeys === undefined ? {} : { maxRememberedKeys }),
     onObserverError: (error) => {
-      errors.push(error); },
+      errors.push(error);
+    },
   });
   const purchase = createPurchaseActionController({ coordinator });
   const ad = createRewardedAdActionController({ coordinator });
@@ -51,29 +52,47 @@ function setup(client: Pick<GameServicesOperationClient, 'purchase' | 'claimRewa
 }
 
 describe('monetization action ownership', () => {
-  it.each(['granted', 'cancelled', 'pending', 'failed', 'rejected'] as const)('preserves purchase %s and owns only its block', async (status) => {
-    const result = purchaseResult(status);
-    const { execution, purchase } = setup({ purchase: async () => result, claimRewardedAd: async () => adResult('skipped') });
-    const settings = execution.acquireBlock({ reason: 'settings', channels: ['simulation', 'gameplay-input'] });
-    const promise = purchase.execute(purchaseInput);
-    expect(execution.getSnapshot().blocks).toHaveLength(2);
-    expect(await promise).toBe(result);
-    expect(purchase.getSnapshot()).toEqual({ kind: 'purchase', operationId: 1, status });
-    expect(execution.getSnapshot().blocks).toEqual([settings.info]);
-    settings.release();
-  });
+  it.each(['granted', 'cancelled', 'pending', 'failed', 'rejected'] as const)(
+    'preserves purchase %s and owns only its block',
+    async (status) => {
+      const result = purchaseResult(status);
+      const { execution, purchase } = setup({
+        purchase: async () => result,
+        claimRewardedAd: async () => adResult('skipped'),
+      });
+      const settings = execution.acquireBlock({
+        reason: 'settings',
+        channels: ['simulation', 'gameplay-input'],
+      });
+      const promise = purchase.execute(purchaseInput);
+      expect(execution.getSnapshot().blocks).toHaveLength(2);
+      expect(await promise).toBe(result);
+      expect(purchase.getSnapshot()).toEqual({ kind: 'purchase', operationId: 1, status });
+      expect(execution.getSnapshot().blocks).toEqual([settings.info]);
+      settings.release();
+    },
+  );
 
-  it.each(['granted', 'skipped', 'unavailable', 'failed', 'rejected'] as const)('preserves ad %s', async (status) => {
-    const { execution, ad } = setup({ purchase: async () => purchaseResult('cancelled'), claimRewardedAd: async () => adResult(status) });
-    await ad.execute(adInput);
-    expect(ad.getSnapshot()).toEqual({ kind: 'rewarded-ad', operationId: 1, status });
-    expect(execution.getSnapshot().blocks).toHaveLength(0);
-  });
+  it.each(['granted', 'skipped', 'unavailable', 'failed', 'rejected'] as const)(
+    'preserves ad %s',
+    async (status) => {
+      const { execution, ad } = setup({
+        purchase: async () => purchaseResult('cancelled'),
+        claimRewardedAd: async () => adResult(status),
+      });
+      await ad.execute(adInput);
+      expect(ad.getSnapshot()).toEqual({ kind: 'rewarded-ad', operationId: 1, status });
+      expect(execution.getSnapshot().blocks).toHaveLength(0);
+    },
+  );
 
   it('shares one exact in-flight Promise across recreated controllers and rejects conflicting/concurrent inputs', async () => {
     const pending = deferred<GameServicesPurchaseResult>();
     const call = vi.fn(() => pending.promise);
-    const { execution, coordinator, purchase, ad } = setup({ purchase: call, claimRewardedAd: vi.fn() });
+    const { execution, coordinator, purchase, ad } = setup({
+      purchase: call,
+      claimRewardedAd: vi.fn(),
+    });
     const first = purchase.execute(purchaseInput);
     expect(purchase.execute(purchaseInput)).toBe(first);
     expect(coordinator.createPurchaseController().execute(purchaseInput)).toBe(first);
@@ -95,11 +114,16 @@ describe('monetization action ownership', () => {
       purchase: (_input, options) => {
         void options?.onProgress?.({ kind: 'purchase', sequence: 1, phase: 'platform-result', status: 'completed', receipt: 'secret' } as never);
         return pending.promise;
-      }, claimRewardedAd: async () => adResult('skipped'),
+      },
+      claimRewardedAd: async () => adResult('skipped'),
     });
     const promise = purchase.execute(purchaseInput);
-    expect(purchase.getSnapshot()).toEqual({ kind: 'purchase', status: 'running', operationId: 1,
-      progress: { kind: 'purchase', sequence: 1, phase: 'platform-result', status: 'completed' } });
+    expect(purchase.getSnapshot()).toEqual({
+      kind: 'purchase',
+      status: 'running',
+      operationId: 1,
+      progress: { kind: 'purchase', sequence: 1, phase: 'platform-result', status: 'completed' },
+    });
     expect(Object.isFrozen(purchase.getSnapshot())).toBe(true);
     pending.resolve(purchaseResult('rejected'));
     await promise;
@@ -108,7 +132,10 @@ describe('monetization action ownership', () => {
 
   it('falls back to running when a legacy client has no progress support', async () => {
     const pending = deferred<GameServicesPurchaseResult>();
-    const { purchase } = setup({ purchase: () => pending.promise, claimRewardedAd: async () => adResult('skipped') });
+    const { purchase } = setup({
+      purchase: () => pending.promise,
+      claimRewardedAd: async () => adResult('skipped'),
+    });
     const promise = purchase.execute(purchaseInput);
     expect(purchase.getSnapshot()).toEqual({ kind: 'purchase', status: 'running', operationId: 1 });
     pending.resolve(purchaseResult('granted'));
@@ -117,18 +144,25 @@ describe('monetization action ownership', () => {
 
   it('continues validation after scope A closes and never writes its completion into scope B', async () => {
     const pending = deferred<GameServicesPurchaseResult>();
-    const { purchase, execution } = setup({ purchase: () => pending.promise, claimRewardedAd: async () => adResult('skipped') });
+    const { purchase, execution } = setup({
+      purchase: () => pending.promise,
+      claimRewardedAd: async () => adResult('skipped'),
+    });
     const ui = createGameUiBridge<string, never, string>({ initialSnapshot: 'initial' });
     const events: string[] = [];
     const a = ui.createScope();
-    const viewA = purchase.bindScope(a, { snapshot: (value) => `A:${value.status}`, event: () => 'A:done' });
+    const viewA = purchase.bindScope(a, {
+      snapshot: (value) => `A:${value.status}`,
+      event: () => 'A:done',
+    });
     const promise = viewA.execute(purchaseInput);
     a.dispose();
     const b = ui.createScope();
     purchase.bindScope(b, { snapshot: (value) => `B:${value.status}`, event: () => 'B:done' });
     b.setSnapshot('B:idle');
     b.onEvent((value) => {
-      events.push(value); });
+      events.push(value);
+    });
     expect(execution.getSnapshot().blocked.simulation).toBe(true);
     pending.resolve(purchaseResult('granted'));
     await promise;
@@ -140,14 +174,22 @@ describe('monetization action ownership', () => {
 
   it('isolates throwing/rejecting listeners and detaches a view before late callbacks', async () => {
     const { purchase, errors } = setup();
-    const ui = createGameUiBridge<PurchaseActionSnapshot | undefined, never, string>({ initialSnapshot: undefined });
+    const ui = createGameUiBridge<PurchaseActionSnapshot | undefined, never, string>({
+      initialSnapshot: undefined,
+    });
     const scope = ui.createScope();
-    const view = purchase.bindScope(scope, { snapshot: () => {
-        throw new Error('projection'); }, event: () => 'done' });
+    const view = purchase.bindScope(scope, {
+      snapshot: () => {
+        throw new Error('projection');
+      },
+      event: () => 'done',
+    });
     purchase.subscribe(() => {
-      throw new Error('listener'); });
+      throw new Error('listener');
+    });
     purchase.subscribe(async () => {
-      throw new Error('async-listener'); });
+      throw new Error('async-listener');
+    });
     const detached = vi.fn();
     purchase.subscribe(detached)();
     expect((await view.execute(purchaseInput)).status).toBe('granted');
@@ -159,27 +201,35 @@ describe('monetization action ownership', () => {
     await expect(view.execute(purchaseInput)).rejects.toMatchObject({ code: 'disposed' });
   });
 
-  it.each(['pending', 'exception'] as const)('does not re-invoke after %s, even with a new owner/key', async (status) => {
-    const failure = new Error('provider raw detail');
-    const call = vi.fn(async () => {
+  it.each(['pending', 'exception'] as const)(
+    'does not re-invoke after %s, even with a new owner/key',
+    async (status) => {
+      const failure = new Error('provider raw detail');
+      const call = vi.fn(async () => {
+        if (status === 'exception') {
+          throw failure;
+        }
+        return purchaseResult('pending');
+      });
+      const { purchase, coordinator, execution } = setup({
+        purchase: call,
+        claimRewardedAd: async () => adResult('skipped'),
+      });
+      const promise = purchase.execute(purchaseInput);
       if (status === 'exception') {
-        throw failure; }
-      return purchaseResult('pending');
-    });
-    const { purchase, coordinator, execution } = setup({ purchase: call, claimRewardedAd: async () => adResult('skipped') });
-    const promise = purchase.execute(purchaseInput);
-    if (status === 'exception') {
-      await expect(promise).rejects.toBe(failure); }
-    else {
-      await promise; }
-    expect(purchase.getSnapshot().status).toBe(status);
-    expect(JSON.stringify(purchase.getSnapshot())).not.toContain('provider');
-    expect(execution.getSnapshot().blocks).toHaveLength(0);
-    expect(coordinator.getAvailability()).toBe('reconciliation-required');
-    expect(coordinator.createPurchaseController().execute(purchaseInput)).toBe(promise);
-    await expect(purchase.execute({ ...purchaseInput, idempotencyKey: 'new' })).rejects.toMatchObject({ code: 'reconciliation-required' });
-    expect(call).toHaveBeenCalledTimes(1);
-  });
+        await expect(promise).rejects.toBe(failure);
+      } else {
+        await promise;
+      }
+      expect(purchase.getSnapshot().status).toBe(status);
+      expect(JSON.stringify(purchase.getSnapshot())).not.toContain('provider');
+      expect(execution.getSnapshot().blocks).toHaveLength(0);
+      expect(coordinator.getAvailability()).toBe('reconciliation-required');
+      expect(coordinator.createPurchaseController().execute(purchaseInput)).toBe(promise);
+      await expect(purchase.execute({ ...purchaseInput, idempotencyKey: 'new' })).rejects.toMatchObject({ code: 'reconciliation-required' });
+      expect(call).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it('bounds key history without evicting conflict protection or replaying old purchases', async () => {
     const { purchase, coordinator } = setup(undefined, 2);
@@ -193,7 +243,10 @@ describe('monetization action ownership', () => {
 
   it('owner/coordinator disposal cannot release blocks early or discard a later result', async () => {
     const pending = deferred<GameServicesPurchaseResult>();
-    const { purchase, coordinator, execution } = setup({ purchase: () => pending.promise, claimRewardedAd: async () => adResult('skipped') });
+    const { purchase, coordinator, execution } = setup({
+      purchase: () => pending.promise,
+      claimRewardedAd: async () => adResult('skipped'),
+    });
     const promise = purchase.execute(purchaseInput);
     purchase.dispose();
     purchase.dispose();
@@ -209,9 +262,13 @@ describe('monetization action ownership', () => {
 
   it('reserves before reentrant observers and checks destruction before invoking the client', async () => {
     const call = vi.fn(async () => purchaseResult('granted'));
-    const { purchase, execution } = setup({ purchase: call, claimRewardedAd: async () => adResult('skipped') });
+    const { purchase, execution } = setup({
+      purchase: call,
+      claimRewardedAd: async () => adResult('skipped'),
+    });
     execution.subscribe(() => {
-      execution.destroy(); });
+      execution.destroy();
+    });
     await expect(purchase.execute(purchaseInput)).rejects.toMatchObject({ code: 'disposed' });
     expect(call).not.toHaveBeenCalled();
     expect(execution.getSnapshot().status).toBe('destroyed');
@@ -219,8 +276,13 @@ describe('monetization action ownership', () => {
 
   it('handles a new action started by a completion observer without stale overwrite', async () => {
     const second = deferred<GameServicesPurchaseResult>();
-    const call = vi.fn().mockResolvedValueOnce(purchaseResult('granted')).mockImplementationOnce(() => second.promise);
-    const { purchase, execution } = setup({ purchase: call, claimRewardedAd: async () => adResult('skipped') });
+    const call = vi.fn().mockResolvedValueOnce(purchaseResult('granted')).mockImplementationOnce(
+      () => second.promise,
+    );
+    const { purchase, execution } = setup({
+      purchase: call,
+      claimRewardedAd: async () => adResult('skipped'),
+    });
     let next: Promise<GameServicesPurchaseResult> | undefined;
     purchase.subscribe((value) => {
       if (value.status === 'granted' && value.operationId === 1) {
@@ -256,7 +318,8 @@ describe('monetization action ownership', () => {
     const view = purchase.bindScope(ui.createScope(), {
       snapshot: (value) => value.status,
       get event(): (value: PurchaseActionSnapshot) => string {
-        throw new Error('event getter'); },
+        throw new Error('event getter');
+      },
     });
     expect((await view.execute(purchaseInput)).status).toBe('granted');
     expect(execution.getSnapshot().blocks).toHaveLength(0);
@@ -278,7 +341,10 @@ describe('monetization action ownership', () => {
 
   it('keeps startup authority with the reserving owner when a reentrant joiner disposes', async () => {
     const call = vi.fn(async () => purchaseResult('granted'));
-    const { purchase, coordinator, execution } = setup({ purchase: call, claimRewardedAd: async () => adResult('skipped') });
+    const { purchase, coordinator, execution } = setup({
+      purchase: call,
+      claimRewardedAd: async () => adResult('skipped'),
+    });
     const joiner = coordinator.createPurchaseController();
     joiner.subscribe(() => joiner.dispose());
     let joined: Promise<GameServicesPurchaseResult> | undefined;
@@ -295,24 +361,32 @@ describe('monetization action ownership', () => {
     expect(execution.getSnapshot().blocks).toHaveLength(0);
   });
 
-  it.each(['owner', 'runtime'] as const)('publishes no business exception when %s disposal prevents invocation', async (kind) => {
-    const call = vi.fn(async () => purchaseResult('granted'));
-    const { purchase, execution } = setup({ purchase: call, claimRewardedAd: async () => adResult('skipped') });
-    const ui = createGameUiBridge<string, never, string>({ initialSnapshot: 'idle' });
-    const scope = ui.createScope();
-    const events = vi.fn();
-    scope.onEvent(events);
-    const view = purchase.bindScope(scope, { snapshot: (value) => value.status, event: (value) => value.status });
-    if (kind === 'owner') {
-      purchase.subscribe(() => purchase.dispose());
-    } else {
-      execution.subscribe(() => execution.destroy());
-    }
-    await expect(view.execute(purchaseInput)).rejects.toMatchObject({ code: 'disposed' });
-    expect(call).not.toHaveBeenCalled();
-    expect(purchase.getSnapshot()).toEqual({ kind: 'purchase', status: 'idle' });
-    expect(ui.getSnapshot()).toBe('idle');
-    expect(events).not.toHaveBeenCalled();
-  });
-
+  it.each(['owner', 'runtime'] as const)(
+    'publishes no business exception when %s disposal prevents invocation',
+    async (kind) => {
+      const call = vi.fn(async () => purchaseResult('granted'));
+      const { purchase, execution } = setup({
+        purchase: call,
+        claimRewardedAd: async () => adResult('skipped'),
+      });
+      const ui = createGameUiBridge<string, never, string>({ initialSnapshot: 'idle' });
+      const scope = ui.createScope();
+      const events = vi.fn();
+      scope.onEvent(events);
+      const view = purchase.bindScope(scope, {
+        snapshot: (value) => value.status,
+        event: (value) => value.status,
+      });
+      if (kind === 'owner') {
+        purchase.subscribe(() => purchase.dispose());
+      } else {
+        execution.subscribe(() => execution.destroy());
+      }
+      await expect(view.execute(purchaseInput)).rejects.toMatchObject({ code: 'disposed' });
+      expect(call).not.toHaveBeenCalled();
+      expect(purchase.getSnapshot()).toEqual({ kind: 'purchase', status: 'idle' });
+      expect(ui.getSnapshot()).toBe('idle');
+      expect(events).not.toHaveBeenCalled();
+    },
+  );
 });

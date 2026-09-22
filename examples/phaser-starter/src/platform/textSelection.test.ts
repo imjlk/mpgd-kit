@@ -48,14 +48,8 @@ assert.throws(
   () => resolveTextSelectionMode({ textSeletion: 'enabled' }),
   /ui\.textSeletion is not supported/u,
 );
-assert.throws(
-  () => resolveTextSelectionMode('disabled'),
-  /ui must be an object/u,
-);
-assert.throws(
-  () => resolveTextSelectionMode(null),
-  /ui must be an object/u,
-);
+assert.throws(() => resolveTextSelectionMode('disabled'), /ui must be an object/u);
+assert.throws(() => resolveTextSelectionMode(null), /ui must be an object/u);
 
 const disabledStylesheet = buildTextSelectionStylesheet('disabled');
 
@@ -91,9 +85,7 @@ assert.match(disabledStylesheet, /-webkit-touch-callout: default;/u);
 const editableLayer = disabledStylesheet.indexOf(
   ":where([contenteditable]:not([contenteditable='false']))",
 );
-const nonEditableIslandLayer = disabledStylesheet.indexOf(
-  ":where([contenteditable='false']),",
-);
+const nonEditableIslandLayer = disabledStylesheet.indexOf(":where([contenteditable='false']),");
 const selectableLayer = disabledStylesheet.indexOf(
   `:where(input, textarea, .${selectableElementClassName}),`,
 );

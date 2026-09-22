@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 
 import {
   dumpGraph,
+  graphResultAnchorCount,
   graphResultFiles,
   inspectWithDump,
   listPresetNames,
@@ -27,14 +28,18 @@ for (const presetName of requestedPresets) {
     dumps.set(key, dump);
   }
 
-  const result = await inspectWithDump(dump, preset.props);
-  const nextAction = result.next?.action;
-  const anchorCount =
-    result.answerAnchors?.length ??
-    result.anchors?.length ??
-    result.nodes?.length ??
-    result.hits?.length ??
-    0;
+  const response = await inspectWithDump(dump, preset.props);
+  if (typeof response !== 'object' || response === null || Array.isArray(response)) {
+    throw new Error(`Graph preset ${presetName} returned an invalid response envelope.`);
+  }
+
+  const { result } = response;
+  if (typeof result !== 'object' || result === null || Array.isArray(result)) {
+    throw new Error(`Graph preset ${presetName} returned no graph result.`);
+  }
+
+  const nextAction = response.next?.action;
+  const anchorCount = graphResultAnchorCount(result);
 
   if (nextAction !== 'answer') {
     throw new Error(`Graph preset ${presetName} did not produce answer-ready evidence.`);
@@ -52,5 +57,5 @@ for (const presetName of requestedPresets) {
     }
   }
 
-  console.log(`Graph preset passed ${presetName}: ${summarizeGraphResult(result)}`);
+  console.log(`Graph preset passed ${presetName}: ${summarizeGraphResult(result, nextAction)}`);
 }

@@ -132,8 +132,8 @@ assertEqual(parseMpgdReleaseRevision('42'), 42);
 assertEqual(parseMpgdReleaseRevision('  '), undefined);
 assertThrows(() => createMpgdReleaseIdentity({ gameVersion: '0.3.30-rc.1', releaseRevision: 1 }));
 assertThrows(() => createMpgdReleaseIdentity({ gameVersion: '0.3.30', releaseRevision: 0 }));
-assertThrows(
-  () => createMpgdReleaseIdentity({
+assertThrows(() =>
+  createMpgdReleaseIdentity({
     gameVersion: '0.3.30',
     releaseRevision: 1,
     expectedLabel: '0.3.30-v2',
@@ -213,29 +213,31 @@ assertEqual(isMiniGameRuntime('wechat-minigame'), true);
 assertEqual(isMiniGameRuntime('tiktok-minigame'), true);
 assertEqual(isMiniGameRuntime('web-preview'), false);
 assertThrows(
-  () => assertTargetIntegrationRuntimeBounds(
-    'wechat-minigame',
-    { identityUpgrade: 'available' },
-    'test WeChat target',
-  ),
+  () =>
+    assertTargetIntegrationRuntimeBounds(
+      'wechat-minigame',
+      { identityUpgrade: 'available' },
+      'test WeChat target',
+    ),
   /cannot configure identityUpgrade as available/u,
 );
 assertViewportPlans();
 
 const webConfig = getTargetConfig(targetConfigMatrix, targetConfigKeyForPlatform('browser'));
 assertThrows(
-  () => createEffectiveTargetConfig({
-    target: 'web-preview',
-    targetConfigVersion: targetConfigMatrix.version,
-    config: webConfig,
-    catalog: productCatalog,
-    adPlacements,
-    platformTarget: {
-      kind: 'web',
-      adapter: 'browser',
-      integrations: { notifications: 'available' },
-    },
-  }),
+  () =>
+    createEffectiveTargetConfig({
+      target: 'web-preview',
+      targetConfigVersion: targetConfigMatrix.version,
+      config: webConfig,
+      catalog: productCatalog,
+      adPlacements,
+      platformTarget: {
+        kind: 'web',
+        adapter: 'browser',
+        integrations: { notifications: 'available' },
+      },
+    }),
   /Effective target web-preview cannot configure notifications as available for web-preview runtime/u,
 );
 const webEffectiveConfig = createEffectiveTargetConfig({
@@ -794,18 +796,19 @@ const verse8ResourceTargetConfig = {
   },
 } as const satisfies TargetConfig;
 assertThrows(
-  () => createEffectiveTargetConfig({
-    target: 'verse8-staging',
-    targetConfigVersion: targetConfigMatrix.version,
-    config: verse8ResourceTargetConfig,
-    catalog: productCatalog,
-    adPlacements,
-    platformTarget: {
-      kind: 'web',
-      adapter: 'verse8',
-      integrations: { sharing: 'available' },
-    },
-  }),
+  () =>
+    createEffectiveTargetConfig({
+      target: 'verse8-staging',
+      targetConfigVersion: targetConfigMatrix.version,
+      config: verse8ResourceTargetConfig,
+      catalog: productCatalog,
+      adPlacements,
+      platformTarget: {
+        kind: 'web',
+        adapter: 'verse8',
+        integrations: { sharing: 'available' },
+      },
+    }),
   /Effective target verse8-staging cannot configure sharing as available for verse8-web runtime/u,
 );
 const verse8ResourceEffectiveConfig = createEffectiveTargetConfig({
@@ -892,16 +895,19 @@ const blankAdPlacementConfig = getEffectiveAdPlacementConfig(
 assertEqual(blankAdPlacementConfig?.reason, 'missing-platform-id');
 assertEqual(blankAdPlacementConfig?.platformPlacementId, undefined);
 
-const leaderboardUnavailableGateway = withTargetAvailability({
-  ...gateway,
-  async getCapabilities() {
-    return {
-      ...await gateway.getCapabilities(),
-      nativeLeaderboard: false,
-      remoteLeaderboard: false,
-    };
+const leaderboardUnavailableGateway = withTargetAvailability(
+  {
+    ...gateway,
+    async getCapabilities() {
+      return {
+        ...await gateway.getCapabilities(),
+        nativeLeaderboard: false,
+        remoteLeaderboard: false,
+      };
+    },
   },
-}, androidConfig);
+  androidConfig,
+);
 const delegatedCallsBeforeUnavailableLeaderboard = delegatedCalls.length;
 assertDeepEqual(
   await leaderboardUnavailableGateway.leaderboard.submitScore({
@@ -1461,17 +1467,9 @@ function assertViewportPlans(): void {
       gameAspectRatio: 0,
     }),
   );
+  assertThrows(() => resolveTargetViewportSafeArea({ width: 390, height: 844 }, { top: -1 }));
   assertThrows(() =>
-    resolveTargetViewportSafeArea(
-      { width: 390, height: 844 },
-      { top: -1 },
-    ),
-  );
-  assertThrows(() =>
-    resolveTargetViewportSafeArea(
-      { width: 390, height: 844 },
-      { bottom: Number.NaN },
-    ),
+    resolveTargetViewportSafeArea({ width: 390, height: 844 }, { bottom: Number.NaN }),
   );
   assertDeepEqual(
     resolveTargetViewportSafeArea(

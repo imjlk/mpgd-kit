@@ -40,7 +40,8 @@ const validConfig = {
 
 assert.deepEqual(assertPlatformTargetsConfigShape(validConfig), validConfig);
 assert.doesNotThrow(() =>
-  assertPlatformTargetBuildEmitterAvailable(validConfig.targets.wechat, 'wechat'));
+  assertPlatformTargetBuildEmitterAvailable(validConfig.targets.wechat, 'wechat'),
+);
 assert.throws(
   () => assertPlatformTargetBuildEmitterAvailable(validConfig.targets.tiktok, 'tiktok'),
   /cannot be built until its native artifact emitter is installed/u,
@@ -100,9 +101,8 @@ assert.throws(
   /mainBytes must not exceed 4194304 bytes/u,
 );
 assert.throws(
-  () => assertPlatformTargetsConfigShape(
-    withTikTokBudget({ independentSubpackageBytes: 31_457_281 }),
-  ),
+  () =>
+    assertPlatformTargetsConfigShape(withTikTokBudget({ independentSubpackageBytes: 31_457_281 })),
   /independentSubpackageBytes must not exceed totalBytes/u,
 );
 

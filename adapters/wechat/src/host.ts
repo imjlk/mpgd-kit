@@ -454,7 +454,8 @@ function normalizeHeaders(
 ): Readonly<Record<string, string>> {
   return Object.fromEntries(
     Object.entries(headers).flatMap(([name, value]) =>
-      typeof value === 'string' ? [[name, value] as const] : []),
+      typeof value === 'string' ? [[name, value] as const] : [],
+    ),
   );
 }
 

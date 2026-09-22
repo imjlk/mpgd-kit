@@ -75,7 +75,7 @@
   },
   "devDependencies": {
     "@apps-in-toss/web-framework": "3.5.0",
-    "ttsc": "0.18.4",
+    "ttsc": "0.30.4",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"
   },

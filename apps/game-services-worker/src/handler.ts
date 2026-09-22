@@ -1,35 +1,35 @@
 import type { AdPlacements } from '@mpgd/catalog';
 import {
+  createDevelopmentGameServicesEvidenceVerifier,
   createGameServicesBackend,
   createGameServicesBackendApiHandler,
-  createDevelopmentGameServicesEvidenceVerifier,
   createGameServicesHttpFetchHandler,
-  createGameServicesRpcFetchHandler,
   createGameServicesRouter,
+  createGameServicesRpcFetchHandler,
   createInMemoryGameServicesStore,
   createInMemoryVerifiedLeaderboardService,
   createVerifiedLeaderboardSnapshotFetchHandler,
   microsoftStoreDigitalGoodsEvidenceSchema,
   type ClaimAdRewardRequest,
+  type EvidenceVerificationDecision,
+  type FinalizePurchaseGrantInput,
   type GameServicesBackendApi,
   type GameServicesDeploymentTargetBindings,
   type GameServicesEvidenceVerifier,
   type GameServicesPurchaseGrantFinalizer,
-  type EvidenceVerificationDecision,
-  type FinalizePurchaseGrantInput,
   type GameServicesStore,
   type GameServicesStoreTarget,
   type GetVerifiedLeaderboardSnapshotRequest,
+  type PurchaseGrantFinalization,
   type RecordLeaderboardScoreRequest,
   type RecordVerifiedLeaderboardAttemptRequest,
   type RecordVerifiedLeaderboardAttemptResponse,
   type VerifiedLeaderboardService,
-  type VerifiedLeaderboardSnapshotPrincipal,
   type VerifiedLeaderboardSnapshot,
-  type VerifyPurchaseRequest,
-  type VerifyPurchaseEvidenceInput,
+  type VerifiedLeaderboardSnapshotPrincipal,
   type VerifyAdRewardEvidenceInput,
-  type PurchaseGrantFinalization,
+  type VerifyPurchaseEvidenceInput,
+  type VerifyPurchaseRequest,
 } from '@mpgd/game-services';
 import type { ProductCatalog } from '@mpgd/catalog';
 import {
@@ -160,14 +160,11 @@ export function createWorkerFetchHandler(
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   };
-  const rpcFetch = createGameServicesRpcFetchHandler(
-    createGameServicesRouter(backend),
-    {
-      prefix: '/rpc',
-      corsHeaders,
-      ...(backend.version === undefined ? {} : { version: backend.version }),
-    },
-  );
+  const rpcFetch = createGameServicesRpcFetchHandler(createGameServicesRouter(backend), {
+    prefix: '/rpc',
+    corsHeaders,
+    ...(backend.version === undefined ? {} : { version: backend.version }),
+  });
   const httpFetch = createGameServicesHttpFetchHandler(
     createGameServicesBackendApiHandler({
       catalog: productCatalog,
@@ -370,11 +367,7 @@ function resolveWorkerEvidenceVerifier(
     : undefined;
 
   if (verse8Verifier !== undefined || developmentVerifier !== undefined) {
-    return createWorkerEvidenceVerifier(
-      () => undefined,
-      verse8Verifier,
-      developmentVerifier,
-    );
+    return createWorkerEvidenceVerifier(() => undefined, verse8Verifier, developmentVerifier);
   }
 
   return undefined;
@@ -461,8 +454,8 @@ function createWorkerEvidenceVerifier(
 
       return request.target === 'verse8' && verse8Verifier !== undefined
         ? verse8Verifier.verifyAdReward(input)
-        : fallbackVerifier?.verifyAdReward(input)
-          ?? unavailableEvidenceVerificationDecision();
+        : (fallbackVerifier?.verifyAdReward(input)
+          ?? unavailableEvidenceVerificationDecision());
     },
   };
 }

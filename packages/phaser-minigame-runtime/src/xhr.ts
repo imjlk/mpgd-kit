@@ -342,10 +342,8 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
     this.#activeRequestCancellation = cancellation;
 
     try {
-      const loaded = await withTimeout(
-        this.#load(cancellation),
-        timeoutMs,
-        () => cancellation.abort(),
+      const loaded = await withTimeout(this.#load(cancellation), timeoutMs, () =>
+        cancellation.abort(),
       );
 
       if (generation !== this.#generation) {

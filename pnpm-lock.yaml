@@ -42,20 +42,20 @@ importers:
         specifier: workspace:*
         version: link:packages/target-config
       '@ttsc/graph':
-        specifier: 0.18.4
-        version: 0.18.4(@types/node@24.13.2)(supports-color@8.1.1)(zod@4.4.3)
+        specifier: 0.30.4
+        version: 0.30.4(ttsc@0.30.4)(zod@4.4.3)
       '@ttsc/lint':
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       '@ttsc/paths':
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       '@ttsc/strip':
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       '@ttsc/unplugin':
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4(ttsc@0.30.4)
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.2
@@ -66,8 +66,8 @@ importers:
         specifier: ^0.35.3
         version: 0.35.3(@types/node@24.13.2)
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -97,8 +97,8 @@ importers:
         specifier: 3.5.0
         version: 3.5.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -113,8 +113,8 @@ importers:
         version: link:../../packages/platform
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -135,8 +135,8 @@ importers:
         version: link:../../packages/platform
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -160,8 +160,8 @@ importers:
         version: link:../../packages/platform
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -188,8 +188,8 @@ importers:
         version: 2.1.0(react@18.2.0)
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -207,8 +207,8 @@ importers:
         version: link:../../packages/platform
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -238,8 +238,8 @@ importers:
         specifier: 4.20260701.0
         version: 4.20260701.0
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -269,8 +269,8 @@ importers:
         specifier: ^8.5.1
         version: 8.5.1(supports-color@8.1.1)
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -288,14 +288,14 @@ importers:
         specifier: 3.5.0
         version: 3.5.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)
       '@ttsc/unplugin':
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4(ttsc@0.30.4)
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.2
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -322,8 +322,8 @@ importers:
         specifier: 0.14.1
         version: 0.14.1(twirp-ts@2.5.0)(vite@7.3.6(@types/node@24.13.2)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))
       '@ttsc/unplugin':
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4(ttsc@0.30.4)
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.2
@@ -331,8 +331,8 @@ importers:
         specifier: 0.14.1
         version: 0.14.1(@devvit/server@0.14.1(twirp-ts@2.5.0))(@devvit/shared@0.14.1(twirp-ts@2.5.0))(@swc/core@1.15.8(@swc/helpers@0.5.23))(@types/node@24.13.2)(google-protobuf@3.21.4)(supports-color@8.1.1)(typescript@7.0.2)
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -343,8 +343,8 @@ importers:
   apps/target-web-preview:
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -365,8 +365,8 @@ importers:
         specifier: 1.62.1
         version: 1.62.1
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -417,14 +417,14 @@ importers:
         version: 4.2.0
     devDependencies:
       '@ttsc/unplugin':
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4(ttsc@0.30.4)
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.2
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -454,8 +454,8 @@ importers:
         specifier: 1.62.1
         version: 1.62.1
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -470,11 +470,11 @@ importers:
         version: link:../../packages/tutorial
     devDependencies:
       '@ttsc/unplugin':
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4(ttsc@0.30.4)
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -492,8 +492,8 @@ importers:
         version: link:../../packages/bridge
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -508,8 +508,8 @@ importers:
         version: 13.0.2(@types/node@24.13.2)
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -524,8 +524,8 @@ importers:
         version: 13.0.2(@types/node@24.13.2)
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -549,8 +549,8 @@ importers:
         specifier: ^24.0.0
         version: 24.13.2
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -565,8 +565,8 @@ importers:
         version: 13.0.2(@types/node@24.13.2)
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -638,8 +638,8 @@ importers:
         specifier: ^24.0.0
         version: 24.13.2
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -654,8 +654,8 @@ importers:
         specifier: ^24.0.0
         version: 24.13.2
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -663,8 +663,8 @@ importers:
   packages/game-anti-cheat:
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -672,8 +672,8 @@ importers:
   packages/game-core:
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -684,8 +684,8 @@ importers:
   packages/game-economy:
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -703,8 +703,8 @@ importers:
         specifier: ^4.2.0
         version: 4.2.0
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -719,8 +719,8 @@ importers:
         version: 13.0.2(@types/node@24.13.2)
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -750,8 +750,8 @@ importers:
         version: 2.0.0-beta.14
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -772,8 +772,8 @@ importers:
         specifier: ^24.0.0
         version: 24.13.2
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -781,8 +781,8 @@ importers:
   packages/input-controls:
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -800,8 +800,8 @@ importers:
         specifier: 4.2.0
         version: 4.2.0
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -818,8 +818,8 @@ importers:
         specifier: 4.2.0
         version: 4.2.0
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -830,8 +830,8 @@ importers:
   packages/platform:
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -849,8 +849,8 @@ importers:
         version: 13.0.2(@types/node@24.13.2)
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -858,8 +858,8 @@ importers:
   packages/runtime-diagnostics:
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -880,8 +880,8 @@ importers:
         version: 13.0.2(@types/node@24.13.2)
     devDependencies:
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -899,8 +899,8 @@ importers:
         specifier: 24.1.0
         version: 24.1.0
       ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
+        specifier: 0.30.4
+        version: 0.30.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -2993,54 +2993,58 @@ packages:
   '@tsconfig/node16@1.0.4':
     resolution: {integrity: sha512-vxhUy4J8lyeyinH7Azl1pdd43GJhZH/tP2weN8TntQblOY+A0XbT8DJk1/oCPuOOyg/Ja757rG0CgHcWC8OfMA==}
 
-  '@ttsc/darwin-arm64@0.18.4':
-    resolution: {integrity: sha512-XhUPqcmx1w83fUSQfYA91zoD5dQzDlTxi6fGtmDPzXz839hbI21iZ80rQtKIr0FjLqbCHWuTmz5PAbquTZ1wXA==}
+  '@ttsc/darwin-arm64@0.30.4':
+    resolution: {integrity: sha512-+x5qOR5kTTjVJKUYqZtkIs33dS3MnNflJfu4Lg1XRvipqjqzIb6RtUlYJ0uTJcGF1ZZ6N1s+ddGocpFqxD9Zpw==}
     cpu: [arm64]
     os: [darwin]
 
-  '@ttsc/darwin-x64@0.18.4':
-    resolution: {integrity: sha512-oDfrHVsHGgmbhEwNtVUmArzB4XnkfqhtjEN1h95eZWfJpTZGKhWIXwucX3ODOaJpxZFjRczvrvlpm5c5Sksw0g==}
+  '@ttsc/darwin-x64@0.30.4':
+    resolution: {integrity: sha512-thPKMLZhpqaV/HgeEEKvGq8pUrY+cV/8dLT/gF5lbBHvz3kRn5xN9CzPnommQj0dwtcpHEdn/JOSbIW16NPsCA==}
     cpu: [x64]
     os: [darwin]
 
-  '@ttsc/graph@0.18.4':
-    resolution: {integrity: sha512-f3MMvI6dG5Ry2sq780hVd6d7rd5Tci+Cw+Zjz8oAG1jD/Q9nOUColCVCVAlTNiU1kH+FipoEQBlO2oIvZ6rVhQ==}
+  '@ttsc/graph@0.30.4':
+    resolution: {integrity: sha512-n6+BF5+94aSVs0dS7Jo3ogkg47mrSA6Vp16XtJ593kAxRL7AXhjLKpkVx9dVWceh1H+FXPAqtHkIA2LGuUd7iw==}
     hasBin: true
+    peerDependencies:
+      ttsc: ^0.30.4
 
-  '@ttsc/lint@0.18.4':
-    resolution: {integrity: sha512-1LC58PoQL1ckqOg2PMpq3ZIoWUA0j9dyT6wfa/HI4QNNYA+ql9I79n+hjKPKddNjtNe/BPs+CzZWpsHLJt3udw==}
+  '@ttsc/lint@0.30.4':
+    resolution: {integrity: sha512-UB8Akjtrcc8iiXL6iuy/jfaXtoFx65VXkbT6gPSsFR/9+rvK7SBozhp09beKrjR1Bcmmvlr8apzdjhwbMo0UWA==}
 
-  '@ttsc/linux-arm64@0.18.4':
-    resolution: {integrity: sha512-y7j9rhYGxiYosDsnP2ZzTVGLo8CRm6CyK+2ex16bhdO1idkmRCvCYMN6PdtYTjFfldDROI+bqouikqwftEKylQ==}
+  '@ttsc/linux-arm64@0.30.4':
+    resolution: {integrity: sha512-05Qtl4KOHiAuQIa/qRfwvp0vU7bVWjHQcOjJe0r9R9FdUsBAm51WQe18BnJTxV6cfE0xNaV/Ja/HWm7Qsq5vGQ==}
     cpu: [arm64]
     os: [linux]
 
-  '@ttsc/linux-arm@0.18.4':
-    resolution: {integrity: sha512-B5P6a65jXh4mDYbmbSgdnGMUsZ0/gvld5KcVbQMb1Am0tl3yQ9F588zgGQm4PYAWcoqsvZ+qtNoBMQkvg93WFw==}
+  '@ttsc/linux-arm@0.30.4':
+    resolution: {integrity: sha512-qNh2qlSnJoZXdYhsejsUXfA8nbOJEyR611S30p6Meqc2Sg6TVlsQT2XaLEDF2CrEcDALCi3pOQAhfWGjwyCa+A==}
     cpu: [arm]
     os: [linux]
 
-  '@ttsc/linux-x64@0.18.4':
-    resolution: {integrity: sha512-nq6Tzm1yJf2XQ+68Sg8MIf5GoLyDFuwW0Pw+6TQCKz8mFpexiIkztoiptGYgzNJmrEqTNeiK/gs4IMIO1pkb/g==}
+  '@ttsc/linux-x64@0.30.4':
+    resolution: {integrity: sha512-JZrx4sXeQVAJeyGpA8phlffrvbeyIjwme8ZVoBG8gvyT+BswfVgKQhskBaEGDodi6VyM3k53i53e+QcywFN+xQ==}
     cpu: [x64]
     os: [linux]
 
-  '@ttsc/paths@0.18.4':
-    resolution: {integrity: sha512-d9cL4FVLOIuFD//TZJm99IAa78G6efpkE9S+ugDd60SMlaMUXrN5wEVwmJQS9omaDL0VwYfTYXHviocRYO4qPw==}
+  '@ttsc/paths@0.30.4':
+    resolution: {integrity: sha512-3gQk+h2RnEm+7ULdWMsbn4if5tO2PzKrnwOnGG9LuWG/JlvvPf097NuPVZqERQ/mwJUwx80yxdCPmjGTrF7Q+Q==}
 
-  '@ttsc/strip@0.18.4':
-    resolution: {integrity: sha512-WLrWpPGSXg8Eb+vaDvgG3tmuHSIXFfglTzbWc5H5bmSCA3m69d8bIm9V41HtiCJhFRTu+KgHZpSeRQKfV/kEjg==}
+  '@ttsc/strip@0.30.4':
+    resolution: {integrity: sha512-cDwOF6RHrdb11hnIpvYoE3g+1zI3o/oE9WrPs0OMCGVFm6Wn45BBtY/nz+fvhvplSrEtFxCP3eN14L9lMBNdIg==}
 
-  '@ttsc/unplugin@0.18.4':
-    resolution: {integrity: sha512-lbizSMFePL+dzJZIw8N/ethvsHKwqsa741H301EefMvG7u4sOEyJHiorN1H2Zp58sYb8HJYBxCtDavtHJjf9IQ==}
+  '@ttsc/unplugin@0.30.4':
+    resolution: {integrity: sha512-YzAtIzbgzLlUUMsgmoPQ2oYkYzAA+KsrpMq0BjLRa/pEve6NIOOQ1VRzS/nLrUt+VKtvGjHy4P/5w/oRLdbfUw==}
+    peerDependencies:
+      ttsc: ^0.30.4
 
-  '@ttsc/win32-arm64@0.18.4':
-    resolution: {integrity: sha512-YmEoUVZg2OAQcoWeYQw0c9aBgoz8kBvFEvbI+uAFn0+bFX1uGryD/5f6bUhS/c3Cdx7xoISumEF3KSJpkjmT9g==}
+  '@ttsc/win32-arm64@0.30.4':
+    resolution: {integrity: sha512-8B9uOwajWhuklP1wvu7ynLddvsLpDygRHtp8zATnIGpipPDqUImcFmsQ7alwI40aEeIvfbI5COFBUd5aDOfbeQ==}
     cpu: [arm64]
     os: [win32]
 
-  '@ttsc/win32-x64@0.18.4':
-    resolution: {integrity: sha512-dp+h7XLLYSw4FHSiZF+EgQs0Fu2RtPcO4lpZfA6NwtmXuTuf64kh4NSsYTDeaEv5qquTcZpFxmA9I4HMNxXWkA==}
+  '@ttsc/win32-x64@0.30.4':
+    resolution: {integrity: sha512-DDdWzQWrmzljRkoHnVxRACO8ikiM3rjuC/QRkPMmyzina0AimihHnOfOOWKdNttfkU9sAdCe3MIkg4ktpL38mQ==}
     cpu: [x64]
     os: [win32]
 
@@ -3197,13 +3201,19 @@ packages:
   '@typia/interface@13.0.2':
     resolution: {integrity: sha512-8MnKq/vs90KA1iydscUubBzP2C6qXYL4vlW83giWV8ZzCfROtyyczx29P2ZH0tvN6yRd6qQlnx6sAB4YAmr7QA==}
 
-  '@typia/mcp@13.0.2':
-    resolution: {integrity: sha512-C4Y2yg9HdReTVnQymh1luCJNA8YeyZEe1uZVU2gKP5Mom/63R/XsGW95OdQdHdfda79Qm+3+qnmEwl1nmpF3JQ==}
+  '@typia/interface@14.0.6':
+    resolution: {integrity: sha512-Ct4cW8vt1OfZNFlRBrVFeWZZrM/KvNUg4bmeIU4amXgYYp1sZkY71h+6GdrL+ApdF0KNnRxZ92hrrlbDodsjNg==}
+
+  '@typia/mcp@14.0.6':
+    resolution: {integrity: sha512-TI0QbjQ2/vQS6u/VzH8pVy93/DK4truTPLxHK9TsT41qjjVzyP0w1G1gjBMxSnYAZUxoEUTPwUuSGcEnjyuwlQ==}
     peerDependencies:
       '@modelcontextprotocol/sdk': '>=1.12.0'
 
   '@typia/utils@13.0.2':
     resolution: {integrity: sha512-xBaSdfviUgGJPdunaxKI/KFI5AFubDag2BYy8O+fd64yVaNgh/OaaWnOuHU2M7m+88pyR2WeVz0BisHcUJ7V7A==}
+
+  '@typia/utils@14.0.6':
+    resolution: {integrity: sha512-g1LLQiOdPNyFR6dEQKsaa8HQnpZAAW+XAG0tVQ3/fVCARR5n4Yn59jBSI1UcNEv4F9DaM7vzHZi0b4iS+liajw==}
 
   '@verse8/ads@0.4.0':
     resolution: {integrity: sha512-FfcriXmSe4aQr8MW3N/uNpg11iitOA/3dBAIv5uQFKH/xeqZGZDCrE/RMmiHcq0xXVlVVg1Zi24zr5dEXQMdXA==}
@@ -3265,6 +3275,11 @@ packages:
   acorn-walk@8.3.5:
     resolution: {integrity: sha512-HEHNfbars9v4pgpW6SO1KSPkfoS0xVOM/9UzkJltjlsHZmJasxg8aXkuZa7SMf8vKGIBhpUsPluQSqhJFCqebw==}
     engines: {node: '>=0.4.0'}
+
+  acorn@8.16.0:
+    resolution: {integrity: sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==}
+    engines: {node: '>=0.4.0'}
+    hasBin: true
 
   acorn@8.17.0:
     resolution: {integrity: sha512-xRQbDb9BnwDafYNn6Vwl839DYVjqXYb1XVGtWAZ1kcDc6iwAL4hg3B1dZlRiuENFeO2H53gFG3in621AdERVAg==}
@@ -3533,6 +3548,9 @@ packages:
   chownr@3.0.0:
     resolution: {integrity: sha512-+IxzY9BZOQd/XuYPRmrvEVjF/nqj5kgT4kEq7VofrDoM1MxoRjEWkrCC3EtLi59TVawxTAn+orJwFQcrqEN1+g==}
     engines: {node: '>=18'}
+
+  cjs-module-lexer@2.2.1:
+    resolution: {integrity: sha512-Ca8swihM+/4yKecYHY52kgJd300hi2lADU/a1RxNTRe+RJ9jvqQlESpbz9DnG9mowez8qwXHB8qYdIUw9e+F5Q==}
 
   clean-git-ref@2.0.1:
     resolution: {integrity: sha512-bLSptAy2P0s6hU4PzuIMKmMJJSE6gLXGH1cntDu7bWJUksvuM+7ReOK61mozULErYvP6a15rnYl0zFDef+pyPw==}
@@ -5389,8 +5407,9 @@ packages:
   tsv@0.2.0:
     resolution: {integrity: sha512-GG6xbOP85giXXom0dS6z9uyDsxktznjpa1AuDlPrIXDqDnbhjr9Vk6Us8iz6U1nENL4CPS2jZDvIjEdaZsmc4Q==}
 
-  ttsc@0.18.4:
-    resolution: {integrity: sha512-RKsPOGP0D4EpH3yMNOiDw2Ona7e2CeEX6YwybDcVu+2dN6oToHrF43rlYC9srZ6zyvEbT/4wT39QiYQNj4d9JQ==}
+  ttsc@0.30.4:
+    resolution: {integrity: sha512-JDw66o8hIkelLp0gMWj7izVzXAXxT+oObILBTOa6MxBGA8a2lqdfMsP++XN0hPYYxKNpyuLVnClBBvehNZyIpw==}
+    engines: {node: '>=22.15.0'}
     hasBin: true
 
   tunnel-agent@0.6.0:
@@ -5445,6 +5464,14 @@ packages:
   typia@13.0.2:
     resolution: {integrity: sha512-hqzvUw4dEvaGd5jmKCUpmWbsukarou92s3ZVJi8kNI3qBAgahy2XES4E8A1t/hIcwGG0vaJ3SveRxxkE1aPInQ==}
     hasBin: true
+
+  typia@14.0.6:
+    resolution: {integrity: sha512-dWtC9sMgmlR26yms6BAHWO0/P4Vzfw/cs1Mg+ZRYFlGub1CXRnF343EVgoZcxQdzoaPh50nTOtgd2Oaym73pIg==}
+    peerDependencies:
+      ttsc: '>=0.19.2'
+    peerDependenciesMeta:
+      ttsc:
+        optional: true
 
   uint8array-extras@1.5.0:
     resolution: {integrity: sha512-rvKSBiC5zqCCiDZ9kAOszZcDvdAHwwIKJG33Ykj43OKcWsnmcBRL09YTU4nOeHZ8Y2a7l1MgTd08SBe9A8Qj6A==}
@@ -7600,7 +7627,7 @@ snapshots:
       '@lix-js/sdk-linux-x64': 0.15.1
       '@lix-js/sdk-win32-x64': 0.15.1
 
-  '@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3)':
+  '@modelcontextprotocol/sdk@1.29.0(zod@4.4.3)':
     dependencies:
       '@hono/node-server': 1.19.14(hono@4.12.27)
       ajv: 8.20.0
@@ -7610,8 +7637,8 @@ snapshots:
       cross-spawn: 7.0.6
       eventsource: 3.0.7
       eventsource-parser: 3.1.0
-      express: 5.2.1(supports-color@8.1.1)
-      express-rate-limit: 8.5.2(express@5.2.1(supports-color@8.1.1))
+      express: 5.2.1
+      express-rate-limit: 8.5.2(express@5.2.1)
       hono: 4.12.27
       jose: 6.2.3
       json-schema-typed: 8.0.2
@@ -8063,46 +8090,47 @@ snapshots:
 
   '@tsconfig/node16@1.0.4': {}
 
-  '@ttsc/darwin-arm64@0.18.4':
+  '@ttsc/darwin-arm64@0.30.4':
     optional: true
 
-  '@ttsc/darwin-x64@0.18.4':
+  '@ttsc/darwin-x64@0.30.4':
     optional: true
 
-  '@ttsc/graph@0.18.4(@types/node@24.13.2)(supports-color@8.1.1)(zod@4.4.3)':
+  '@ttsc/graph@0.30.4(ttsc@0.30.4)(zod@4.4.3)':
     dependencies:
-      '@modelcontextprotocol/sdk': 1.29.0(supports-color@8.1.1)(zod@4.4.3)
-      '@typia/mcp': 13.0.2(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))
-      typia: 13.0.2(@types/node@24.13.2)
+      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      '@typia/mcp': 14.0.6(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))
+      ttsc: 0.30.4
+      typia: 14.0.6(ttsc@0.30.4)
     transitivePeerDependencies:
       - '@cfworker/json-schema'
-      - '@types/node'
       - supports-color
       - zod
 
-  '@ttsc/lint@0.18.4': {}
+  '@ttsc/lint@0.30.4': {}
 
-  '@ttsc/linux-arm64@0.18.4':
+  '@ttsc/linux-arm64@0.30.4':
     optional: true
 
-  '@ttsc/linux-arm@0.18.4':
+  '@ttsc/linux-arm@0.30.4':
     optional: true
 
-  '@ttsc/linux-x64@0.18.4':
+  '@ttsc/linux-x64@0.30.4':
     optional: true
 
-  '@ttsc/paths@0.18.4': {}
+  '@ttsc/paths@0.30.4': {}
 
-  '@ttsc/strip@0.18.4': {}
+  '@ttsc/strip@0.30.4': {}
 
-  '@ttsc/unplugin@0.18.4':
+  '@ttsc/unplugin@0.30.4(ttsc@0.30.4)':
     dependencies:
+      ttsc: 0.30.4
       unplugin: 2.3.11
 
-  '@ttsc/win32-arm64@0.18.4':
+  '@ttsc/win32-arm64@0.30.4':
     optional: true
 
-  '@ttsc/win32-x64@0.18.4':
+  '@ttsc/win32-x64@0.30.4':
     optional: true
 
   '@tybys/wasm-util@0.10.3':
@@ -8203,15 +8231,21 @@ snapshots:
 
   '@typia/interface@13.0.2': {}
 
-  '@typia/mcp@13.0.2(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))':
+  '@typia/interface@14.0.6': {}
+
+  '@typia/mcp@14.0.6(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))':
     dependencies:
-      '@modelcontextprotocol/sdk': 1.29.0(supports-color@8.1.1)(zod@4.4.3)
-      '@typia/interface': 13.0.2
-      '@typia/utils': 13.0.2
+      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      '@typia/interface': 14.0.6
+      '@typia/utils': 14.0.6
 
   '@typia/utils@13.0.2':
     dependencies:
       '@typia/interface': 13.0.2
+
+  '@typia/utils@14.0.6':
+    dependencies:
+      '@typia/interface': 14.0.6
 
   '@verse8/ads@0.4.0': {}
 
@@ -8290,6 +8324,8 @@ snapshots:
   acorn-walk@8.3.5:
     dependencies:
       acorn: 8.17.0
+
+  acorn@8.16.0: {}
 
   acorn@8.17.0: {}
 
@@ -8414,7 +8450,7 @@ snapshots:
 
   blake3-wasm@2.1.5: {}
 
-  body-parser@2.3.0(supports-color@8.1.1):
+  body-parser@2.3.0:
     dependencies:
       bytes: 3.1.2
       content-type: 2.0.0
@@ -8566,6 +8602,8 @@ snapshots:
       readdirp: 5.0.0
 
   chownr@3.0.0: {}
+
+  cjs-module-lexer@2.2.1: {}
 
   clean-git-ref@2.0.1: {}
 
@@ -8926,15 +8964,15 @@ snapshots:
 
   expect-type@1.4.0: {}
 
-  express-rate-limit@8.5.2(express@5.2.1(supports-color@8.1.1)):
+  express-rate-limit@8.5.2(express@5.2.1):
     dependencies:
-      express: 5.2.1(supports-color@8.1.1)
+      express: 5.2.1
       ip-address: 10.2.0
 
-  express@5.2.1(supports-color@8.1.1):
+  express@5.2.1:
     dependencies:
       accepts: 2.0.0
-      body-parser: 2.3.0(supports-color@8.1.1)
+      body-parser: 2.3.0
       content-disposition: 1.1.0
       content-type: 1.0.5
       cookie: 0.7.2
@@ -8944,7 +8982,7 @@ snapshots:
       encodeurl: 2.0.0
       escape-html: 1.0.3
       etag: 1.8.1
-      finalhandler: 2.1.1(supports-color@8.1.1)
+      finalhandler: 2.1.1
       fresh: 2.0.0
       http-errors: 2.0.1
       merge-descriptors: 2.0.0
@@ -8955,8 +8993,8 @@ snapshots:
       proxy-addr: 2.0.7
       qs: 6.15.3
       range-parser: 1.3.0
-      router: 2.2.0(supports-color@8.1.1)
-      send: 1.2.1(supports-color@8.1.1)
+      router: 2.2.0
+      send: 1.2.1
       serve-static: 2.2.1
       statuses: 2.0.2
       type-is: 2.1.0
@@ -9044,7 +9082,7 @@ snapshots:
     dependencies:
       to-regex-range: 5.0.1
 
-  finalhandler@2.1.1(supports-color@8.1.1):
+  finalhandler@2.1.1:
     dependencies:
       debug: 4.4.3(supports-color@8.1.1)
       encodeurl: 2.0.0
@@ -10142,7 +10180,7 @@ snapshots:
       '@rollup/rollup-win32-x64-msvc': 4.62.5
       fsevents: 2.3.3
 
-  router@2.2.0(supports-color@8.1.1):
+  router@2.2.0:
     dependencies:
       debug: 4.4.3(supports-color@8.1.1)
       depd: 2.0.0
@@ -10194,7 +10232,7 @@ snapshots:
 
   semver@7.8.5: {}
 
-  send@1.2.1(supports-color@8.1.1):
+  send@1.2.1:
     dependencies:
       debug: 4.4.3(supports-color@8.1.1)
       encodeurl: 2.0.0
@@ -10215,7 +10253,7 @@ snapshots:
       encodeurl: 2.0.0
       escape-html: 1.0.3
       parseurl: 1.3.3
-      send: 1.2.1(supports-color@8.1.1)
+      send: 1.2.1
     transitivePeerDependencies:
       - supports-color
 
@@ -10562,15 +10600,18 @@ snapshots:
 
   tsv@0.2.0: {}
 
-  ttsc@0.18.4:
+  ttsc@0.30.4:
+    dependencies:
+      acorn: 8.16.0
+      cjs-module-lexer: 2.2.1
     optionalDependencies:
-      '@ttsc/darwin-arm64': 0.18.4
-      '@ttsc/darwin-x64': 0.18.4
-      '@ttsc/linux-arm': 0.18.4
-      '@ttsc/linux-arm64': 0.18.4
-      '@ttsc/linux-x64': 0.18.4
-      '@ttsc/win32-arm64': 0.18.4
-      '@ttsc/win32-x64': 0.18.4
+      '@ttsc/darwin-arm64': 0.30.4
+      '@ttsc/darwin-x64': 0.30.4
+      '@ttsc/linux-arm': 0.30.4
+      '@ttsc/linux-arm64': 0.30.4
+      '@ttsc/linux-x64': 0.30.4
+      '@ttsc/win32-arm64': 0.30.4
+      '@ttsc/win32-x64': 0.30.4
 
   tunnel-agent@0.6.0:
     dependencies:
@@ -10643,6 +10684,14 @@ snapshots:
       tinyglobby: 0.2.17
     transitivePeerDependencies:
       - '@types/node'
+
+  typia@14.0.6(ttsc@0.30.4):
+    dependencies:
+      '@typia/interface': 14.0.6
+      '@typia/utils': 14.0.6
+      randexp: 0.5.3
+    optionalDependencies:
+      ttsc: 0.30.4
 
   uint8array-extras@1.5.0: {}
 

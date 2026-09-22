@@ -16,13 +16,19 @@ it('preserves read errors and releases the reader lock when cancelling an errore
   const failure = new Error('read failed');
   const releaseLock = vi.fn();
   const reader = {
-    read: vi.fn().mockRejectedValue(failure), cancel: vi.fn().mockRejectedValue(new Error('cancel failed')), releaseLock,
+    read: vi.fn().mockRejectedValue(failure),
+    cancel: vi.fn().mockRejectedValue(new Error('cancel failed')),
+    releaseLock,
   };
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-    ok: true, body: {
-      getReader: () => reader,
-    },
-  }));
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue({
+      ok: true,
+      body: {
+        getReader: () => reader,
+      },
+    }),
+  );
   await expect(fetchPackFile('/image.png', options())).rejects.toBe(failure);
   expect(releaseLock).toHaveBeenCalledOnce();
 });
@@ -51,10 +57,13 @@ it('passes bodies of any other shape through; final verification is the loader\u
   }
 });
 it('returns as soon as the body completes without hashing it', async () => {
-  vi.stubGlobal('fetch', vi.fn(async () => new Response(bytes)));
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => new Response(bytes)),
+  );
   vi.stubGlobal('crypto', {
     subtle: {
-      digest: () => new Promise<ArrayBuffer>(() => { }),
+      digest: () => new Promise<ArrayBuffer>(() => {}),
     },
   });
   expect((await fetchPackFile('/image.png', options())).size).toBe(3);
@@ -110,7 +119,9 @@ it('honors Retry-After and still aborts an outstanding backoff', async () => {
   expect(fetch).toHaveBeenCalledTimes(2);
   vi.mocked(fetch).mockResolvedValueOnce(serverBusy());
   const cancel = new AbortController();
-  const cancelled = expect(fetchPackFile('/image.png', { ...options(), signal: cancel.signal })).rejects.toMatchObject({ name: 'AbortError' });
+  const cancelled = expect(fetchPackFile('/image.png', { ...options(), signal: cancel.signal })).rejects.toMatchObject(
+    { name: 'AbortError' },
+  );
   await vi.advanceTimersByTimeAsync(100);
   cancel.abort();
   await cancelled;

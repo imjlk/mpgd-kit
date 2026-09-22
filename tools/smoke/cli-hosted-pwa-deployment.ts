@@ -127,9 +127,7 @@ const validRedirects = [
 
 const legalSiteManifest = {
   version: 1,
-  pages: [
-    { slug: 'privacy', path: '/privacy/', source: 'legal/privacy.html' },
-  ],
+  pages: [{ slug: 'privacy', path: '/privacy/', source: 'legal/privacy.html' }],
 };
 
 try {
@@ -176,12 +174,13 @@ try {
     `${readFileSync(join(tamperedDeployment, hashedAsset), 'utf8')}\n// different build`,
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: tamperedDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: tamperedDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /does not match the source artifact/u,
     'tampered deployment JavaScript',
   );
@@ -204,12 +203,13 @@ try {
     ),
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: staleContractSource,
-      deploymentRoot: fixtureCopy(deploymentRoot, 'stale-precache-deployment'),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: staleContractSource,
+        deploymentRoot: fixtureCopy(deploymentRoot, 'stale-precache-deployment'),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /precache contract is inconsistent/u,
     'stale precache contract',
   );
@@ -219,12 +219,13 @@ try {
     const incompleteDeployment = fixtureCopy(deploymentRoot, `missing-${missing}`);
     rmSync(join(incompleteDeployment, missing));
     assertThrows(
-      () => verifyHostedPwaDeployment({
-        sourceArtifactRoot: sourceRoot,
-        deploymentRoot: incompleteDeployment,
-        host: 'cloudflare-pages',
-        profile: 'api-only',
-      }),
+      () =>
+        verifyHostedPwaDeployment({
+          sourceArtifactRoot: sourceRoot,
+          deploymentRoot: incompleteDeployment,
+          host: 'cloudflare-pages',
+          profile: 'api-only',
+        }),
       /missing game file/u,
       `missing ${missing}`,
     );
@@ -240,12 +241,13 @@ try {
     'api-only',
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: danglingReferenceSource,
-      deploymentRoot: danglingReferenceDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: danglingReferenceSource,
+        deploymentRoot: danglingReferenceDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file/u,
     'dangling index reference',
   );
@@ -254,12 +256,13 @@ try {
   const workerlessDeployment = fixtureCopy(deploymentRoot, 'workerless');
   rmSync(join(workerlessDeployment, '_worker.js'));
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: workerlessDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: workerlessDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /missing _worker\.js/u,
     'workerless deployment',
   );
@@ -272,12 +275,13 @@ try {
   const wrongBlockDeployment = fixtureCopy(deploymentRoot, 'wrong-block');
   writeFileSync(join(wrongBlockDeployment, '_headers'), wrongBlockHeaders);
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: wrongBlockDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: wrongBlockDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /cache policy for service-worker\.js is missing/u,
     'wrong cache block',
   );
@@ -297,12 +301,13 @@ try {
     { headersOverride: placeholderHeaders },
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: placeholderSource,
-      deploymentRoot: placeholderDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: placeholderSource,
+        deploymentRoot: placeholderDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /cache policy for asset assets\/chunks\/game\.1a2b3c4d\.js is missing/u,
     'placeholder-only asset block',
   );
@@ -312,12 +317,13 @@ try {
   const conflictingDeployment = fixtureCopy(deploymentRoot, 'conflicting');
   writeFileSync(join(conflictingDeployment, '_headers'), conflictingHeaders);
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: conflictingDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: conflictingDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /comma-joined Cache-Control values/u,
     'conflicting duplicate headers',
   );
@@ -326,12 +332,13 @@ try {
   const removalDeployment = fixtureCopy(deploymentRoot, 'removal-after-add');
   writeFileSync(join(removalDeployment, '_headers'), removalAfterAddHeaders);
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: removalDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: removalDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /removal directive/u,
     'removal after add',
   );
@@ -373,12 +380,13 @@ try {
     const mismatchedDeployment = fixtureCopy(deploymentRoot, `routes-${label}`);
     writeFileSync(join(mismatchedDeployment, '_routes.json'), routes);
     assertThrows(
-      () => verifyHostedPwaDeployment({
-        sourceArtifactRoot: sourceRoot,
-        deploymentRoot: mismatchedDeployment,
-        host: 'cloudflare-pages',
-        profile: 'api-only',
-      }),
+      () =>
+        verifyHostedPwaDeployment({
+          sourceArtifactRoot: sourceRoot,
+          deploymentRoot: mismatchedDeployment,
+          host: 'cloudflare-pages',
+          profile: 'api-only',
+        }),
       pattern,
       `route mismatch: ${label}`,
     );
@@ -406,56 +414,60 @@ try {
     'unsupported profile',
   );
   await assertRejects(
-    () => runMpgdCli([
-      'target',
-      'verify-deployment',
-      'android',
-      '--source-artifact-root',
-      sourceRoot,
-      '--deployment-root',
-      deploymentRoot,
-    ]),
+    () =>
+      runMpgdCli([
+        'target',
+        'verify-deployment',
+        'android',
+        '--source-artifact-root',
+        sourceRoot,
+        '--deployment-root',
+        deploymentRoot,
+      ]),
     (error) => String(error).includes('not available for target: android'),
     'wrong target',
   );
   await assertRejects(
-    () => runMpgdCli([
-      'target',
-      'verify-deployment',
-      'microsoft-store',
-      '--source-artifact-root',
-      sourceRoot,
-      '--deployment-root',
-      deploymentRoot,
-      '--profile',
-      'bogus',
-    ]),
+    () =>
+      runMpgdCli([
+        'target',
+        'verify-deployment',
+        'microsoft-store',
+        '--source-artifact-root',
+        sourceRoot,
+        '--deployment-root',
+        deploymentRoot,
+        '--profile',
+        'bogus',
+      ]),
     (error) => String(error).includes('Unsupported cloudflare-pages deployment profile'),
     'CLI unsupported profile',
   );
   await assertRejects(
-    () => runMpgdCli([
-      'target',
-      'verify-deployment',
-      'microsoft-store',
-      '--source-artifact-root',
-      sourceRoot,
-      '--deployment-root',
-      deploymentRoot,
-      '--host',
-      'vercel',
-    ]),
+    () =>
+      runMpgdCli([
+        'target',
+        'verify-deployment',
+        'microsoft-store',
+        '--source-artifact-root',
+        sourceRoot,
+        '--deployment-root',
+        deploymentRoot,
+        '--host',
+        'vercel',
+      ]),
     (error) => String(error).includes('Unsupported hosted PWA deployment host'),
     'CLI unsupported host',
   );
   await assertRejects(
-    () => runMpgdCli([
-      'target',
-      'verify-deployment',
-      'microsoft-store',
-      '--source-artifact-root',
-      sourceRoot,
-    ]),
+    () =>
+      runMpgdCli([
+        'target',
+        'verify-deployment',
+        'microsoft-store',
+        '--source-artifact-root',
+        sourceRoot,
+      ]),
     (error) => {
       const aggregate = error as AggregateError;
       return String(aggregate.errors?.[0] ?? error).includes('deployment-root');
@@ -463,17 +475,18 @@ try {
     'missing deployment option',
   );
   await assertRejects(
-    () => runMpgdCli([
-      'target',
-      'verify-deployment',
-      'microsoft-store',
-      '--source-artifact-root',
-      sourceRoot,
-      '--deployment-root',
-      deploymentRoot,
-      '--report-dir',
-      join(deploymentRoot, 'reports'),
-    ]),
+    () =>
+      runMpgdCli([
+        'target',
+        'verify-deployment',
+        'microsoft-store',
+        '--source-artifact-root',
+        sourceRoot,
+        '--deployment-root',
+        deploymentRoot,
+        '--report-dir',
+        join(deploymentRoot, 'reports'),
+      ]),
     (error) => String(error).includes('must stay outside'),
     'report dir inside deployment',
   );
@@ -485,12 +498,13 @@ try {
     join(symlinkDeployment, 'assets', 'linked.js'),
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: symlinkDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: symlinkDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /must not contain symbolic links/u,
     'symlink escape',
   );
@@ -504,12 +518,13 @@ try {
     'api-only',
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: escapingSource,
-      deploymentRoot: escapingDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: escapingSource,
+        deploymentRoot: escapingDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /outside the artifact root/u,
     'index path escape',
   );
@@ -529,12 +544,13 @@ try {
   );
   writeFileSync(join(legalOnlyRoot, 'legal-site.json'), JSON.stringify(legalSiteManifest));
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: legalOnlyRoot,
-      deploymentRoot,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: legalOnlyRoot,
+        deploymentRoot,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /missing pwa-release\.json/u,
     'legal-only source',
   );
@@ -543,12 +559,13 @@ try {
   const broadRedirectDeployment = fixtureCopy(deploymentRoot, 'broad-redirect');
   writeFileSync(join(broadRedirectDeployment, '_redirects'), '/* /maintenance 302\n');
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: broadRedirectDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: broadRedirectDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /covers the protected PWA path/u,
     'broad wildcard redirect',
   );
@@ -563,12 +580,13 @@ try {
     'api-only',
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: danglingScriptSource,
-      deploymentRoot: danglingScriptDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: danglingScriptSource,
+        deploymentRoot: danglingScriptDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file/u,
     'dangling script src',
   );
@@ -580,12 +598,13 @@ try {
     `${readFileSync(join(staleWorkerSource, 'service-worker.js'), 'utf8')}\n`,
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: staleWorkerSource,
-      deploymentRoot: fixtureCopy(deploymentRoot, 'stale-worker-deployment'),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: staleWorkerSource,
+        deploymentRoot: fixtureCopy(deploymentRoot, 'stale-worker-deployment'),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /service worker does not match the release evidence/u,
     'stale service worker',
   );
@@ -619,26 +638,27 @@ try {
     profile: 'api-only',
   });
   verifyHostedPwaDeployment({
-      sourceArtifactRoot: stableAssetSource,
-      deploymentRoot: buildDeployment(
-        stableAssetSource,
-        join(fixtureRoot, 'deployment-stable-immutable'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
+    sourceArtifactRoot: stableAssetSource,
+    deploymentRoot: buildDeployment(
+      stableAssetSource,
+      join(fixtureRoot, 'deployment-stable-immutable'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
   });
 
   // 10f. A declared legal page that is missing from the deployment fails.
   const missingLegalDeployment = fixtureCopy(deploymentRoot, 'missing-legal-page');
   rmSync(join(missingLegalDeployment, 'privacy', 'index.html'));
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: missingLegalDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: missingLegalDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /declares a page that is not present/u,
     'missing legal page',
   );
@@ -651,12 +671,13 @@ try {
   const adjacentDeployment = fixtureCopy(deploymentRoot, 'adjacent-placeholders');
   writeFileSync(join(adjacentDeployment, '_headers'), adjacentHeaders);
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: adjacentDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: adjacentDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /at most one placeholder/u,
     'adjacent placeholders',
   );
@@ -667,17 +688,18 @@ try {
   const externalReports = join(fixtureRoot, 'external-reports-link');
   symlinkSync(internalReports, externalReports);
   await assertRejects(
-    () => runMpgdCli([
-      'target',
-      'verify-deployment',
-      'microsoft-store',
-      '--source-artifact-root',
-      sourceRoot,
-      '--deployment-root',
-      deploymentRoot,
-      '--report-dir',
-      externalReports,
-    ]),
+    () =>
+      runMpgdCli([
+        'target',
+        'verify-deployment',
+        'microsoft-store',
+        '--source-artifact-root',
+        sourceRoot,
+        '--deployment-root',
+        deploymentRoot,
+        '--report-dir',
+        externalReports,
+      ]),
     (error) => String(error).includes('must stay outside'),
     'symlinked report directory',
   );
@@ -689,12 +711,13 @@ try {
     `${validRedirects}/assets/* /moved/:splat 302\n`,
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: assetRedirectDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: assetRedirectDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /covers the protected PWA path \/assets\//u,
     'wildcard asset redirect',
   );
@@ -704,16 +727,17 @@ try {
     quotedAngleScript: './missing-quoted.js',
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: quotedAngleSource,
-      deploymentRoot: buildDeployment(
-        quotedAngleSource,
-        join(fixtureRoot, 'deployment-quoted-angle'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: quotedAngleSource,
+        deploymentRoot: buildDeployment(
+          quotedAngleSource,
+          join(fixtureRoot, 'deployment-quoted-angle'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file/u,
     'quoted-angle script src',
   );
@@ -723,16 +747,17 @@ try {
     extraSrcset: './missing-1x.png 1x, ./missing-2x.png 2x',
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: srcsetSource,
-      deploymentRoot: buildDeployment(
-        srcsetSource,
-        join(fixtureRoot, 'deployment-srcset'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: srcsetSource,
+        deploymentRoot: buildDeployment(
+          srcsetSource,
+          join(fixtureRoot, 'deployment-srcset'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file/u,
     'dangling srcset candidate',
   );
@@ -750,12 +775,13 @@ try {
     );
   }
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: mismatchedManifestSource,
-      deploymentRoot: mismatchedManifestDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: mismatchedManifestSource,
+        deploymentRoot: mismatchedManifestDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /manifest application id does not match/u,
     'manifest id mismatch',
   );
@@ -766,11 +792,7 @@ try {
   });
   verifyHostedPwaDeployment({
     sourceArtifactRoot: lazySource,
-    deploymentRoot: buildDeployment(
-      lazySource,
-      join(fixtureRoot, 'deployment-lazy'),
-      'api-only',
-    ),
+    deploymentRoot: buildDeployment(lazySource, join(fixtureRoot, 'deployment-lazy'), 'api-only'),
     host: 'cloudflare-pages',
     profile: 'api-only',
   });
@@ -780,16 +802,17 @@ try {
     extraUpperSrc: './missing-upper.js',
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: upperSource,
-      deploymentRoot: buildDeployment(
-        upperSource,
-        join(fixtureRoot, 'deployment-upper'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: upperSource,
+        deploymentRoot: buildDeployment(
+          upperSource,
+          join(fixtureRoot, 'deployment-upper'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file/u,
     'uppercase SRC attribute',
   );
@@ -855,14 +878,14 @@ try {
     profile: 'api-only',
   });
   verifyHostedPwaDeployment({
-      sourceArtifactRoot: base64HashSource,
-      deploymentRoot: buildDeployment(
-        base64HashSource,
-        join(fixtureRoot, 'deployment-b64hash-immutable'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
+    sourceArtifactRoot: base64HashSource,
+    deploymentRoot: buildDeployment(
+      base64HashSource,
+      join(fixtureRoot, 'deployment-b64hash-immutable'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
   });
 
   // 10s. A trailing-slash header path does not satisfy the exact policy.
@@ -872,12 +895,13 @@ try {
     validHeaders.replace('/service-worker.js\n', '/service-worker.js/\n'),
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: trailingSlashDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: trailingSlashDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /cache policy for service-worker\.js is missing/u,
     'trailing slash header path',
   );
@@ -886,12 +910,13 @@ try {
   const backslashDeployment = fixtureCopy(deploymentRoot, 'backslash-name');
   writeFileSync(join(backslashDeployment, 'assets\\game.js'), 'shadow');
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: backslashDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: backslashDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /backslash/u,
     'backslash file name',
   );
@@ -903,12 +928,13 @@ try {
     `${validHeaders}/unrelated/:first:second\n  X-Test: 1\n`,
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: unrelatedPlaceholderDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: unrelatedPlaceholderDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /at most one placeholder/u,
     'unrelated adjacent placeholders',
   );
@@ -920,12 +946,13 @@ try {
     spawnSync('mkfifo', [fifoPath]);
   }
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: fifoDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: fifoDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /neither a directory nor a regular file/u,
     'fifo entry',
   );
@@ -944,16 +971,17 @@ try {
     },
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: shadowedSource,
-      deploymentRoot: buildDeployment(
-        shadowedSource,
-        join(fixtureRoot, 'deployment-shadowed'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: shadowedSource,
+        deploymentRoot: buildDeployment(
+          shadowedSource,
+          join(fixtureRoot, 'deployment-shadowed'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /intercepts/u,
     'worker route shadowing',
   );
@@ -966,17 +994,18 @@ try {
     join(linkedReportDir, 'hosted-pwa-verification.json'),
   );
   await assertRejects(
-    () => runMpgdCli([
-      'target',
-      'verify-deployment',
-      'microsoft-store',
-      '--source-artifact-root',
-      sourceRoot,
-      '--deployment-root',
-      deploymentRoot,
-      '--report-dir',
-      linkedReportDir,
-    ]),
+    () =>
+      runMpgdCli([
+        'target',
+        'verify-deployment',
+        'microsoft-store',
+        '--source-artifact-root',
+        sourceRoot,
+        '--deployment-root',
+        deploymentRoot,
+        '--report-dir',
+        linkedReportDir,
+      ]),
     (error) => String(error).includes('symbolic link'),
     'symlinked report file',
   );
@@ -1010,14 +1039,14 @@ try {
     profile: 'api-only',
   });
   verifyHostedPwaDeployment({
-      sourceArtifactRoot: controlsSource,
-      deploymentRoot: buildDeployment(
-        controlsSource,
-        join(fixtureRoot, 'deployment-controls-immutable'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
+    sourceArtifactRoot: controlsSource,
+    deploymentRoot: buildDeployment(
+      controlsSource,
+      join(fixtureRoot, 'deployment-controls-immutable'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
   });
 
   // 10z. srcset values are scanned only as candidate lists.
@@ -1040,16 +1069,17 @@ try {
     withBaseTag: true,
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: baseSource,
-      deploymentRoot: buildDeployment(
-        baseSource,
-        join(fixtureRoot, 'deployment-base'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: baseSource,
+        deploymentRoot: buildDeployment(
+          baseSource,
+          join(fixtureRoot, 'deployment-base'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /base element/u,
     'base element unsupported',
   );
@@ -1089,12 +1119,13 @@ try {
   const controlSource = fixtureCopy(sourceRoot, 'source-control-file');
   writeFileSync(join(controlSource, '_redirects'), '/x /y 301\n');
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: controlSource,
-      deploymentRoot: fixtureCopy(deploymentRoot, 'deployment-control-file'),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: controlSource,
+        deploymentRoot: fixtureCopy(deploymentRoot, 'deployment-control-file'),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /Pages control file _redirects/u,
     'control file in source',
   );
@@ -1106,12 +1137,13 @@ try {
     `${validRedirects}/privacy/* /moved/:splat 302\n`,
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: legalRedirectDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: legalRedirectDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /covers the protected PWA path \/privacy\//u,
     'legal page redirect',
   );
@@ -1121,16 +1153,17 @@ try {
     withPosterRef: true,
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: posterSource,
-      deploymentRoot: buildDeployment(
-        posterSource,
-        join(fixtureRoot, 'deployment-poster'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: posterSource,
+        deploymentRoot: buildDeployment(
+          posterSource,
+          join(fixtureRoot, 'deployment-poster'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file/u,
     'poster attribute',
   );
@@ -1149,14 +1182,10 @@ try {
     },
   });
   verifyHostedPwaDeployment({
-      sourceArtifactRoot: wordySource,
-      deploymentRoot: buildDeployment(
-        wordySource,
-        join(fixtureRoot, 'deployment-wordy'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
+    sourceArtifactRoot: wordySource,
+    deploymentRoot: buildDeployment(wordySource, join(fixtureRoot, 'deployment-wordy'), 'api-only'),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
   });
 
   // 10ag. The full named-entity set decodes (&sol; becomes a slash).
@@ -1178,16 +1207,13 @@ try {
     },
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: solSource,
-      deploymentRoot: buildDeployment(
-        solSource,
-        join(fixtureRoot, 'deployment-sol'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: solSource,
+        deploymentRoot: buildDeployment(solSource, join(fixtureRoot, 'deployment-sol'), 'api-only'),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file/u,
     'named entity decodes to a path separator',
   );
@@ -1214,12 +1240,13 @@ try {
     `${validRedirects}/legal-site.json /stale.json 302\n`,
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: legalManifestRedirect,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: legalManifestRedirect,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /covers the protected PWA path \/legal-site\.json/u,
     'legal manifest redirect',
   );
@@ -1238,14 +1265,14 @@ try {
     },
   });
   verifyHostedPwaDeployment({
-      sourceArtifactRoot: playerSource,
-      deploymentRoot: buildDeployment(
-        playerSource,
-        join(fixtureRoot, 'deployment-player'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
+    sourceArtifactRoot: playerSource,
+    deploymentRoot: buildDeployment(
+      playerSource,
+      join(fixtureRoot, 'deployment-player'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
   });
 
   // 10ak. Legal pages under a worker route are rejected.
@@ -1267,12 +1294,13 @@ try {
     `${validHeaders}/api/game-services/*\n  Cache-Control: public, max-age=0, must-revalidate\n`,
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: apiLegalDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: apiLegalDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /legal page api\/game-services\/index\.html is served at \/api\/game-services\//u,
     'legal page under worker route',
   );
@@ -1282,16 +1310,17 @@ try {
     withWorkerRef: true,
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: workerRefSource,
-      deploymentRoot: buildDeployment(
-        workerRefSource,
-        join(fixtureRoot, 'deployment-worker-ref'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: workerRefSource,
+        deploymentRoot: buildDeployment(
+          workerRefSource,
+          join(fixtureRoot, 'deployment-worker-ref'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /Pages control file _worker\.js/u,
     'control file reference',
   );
@@ -1301,16 +1330,17 @@ try {
     withObjectData: './missing-widget.html',
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: objectDataSource,
-      deploymentRoot: buildDeployment(
-        objectDataSource,
-        join(fixtureRoot, 'deployment-object'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: objectDataSource,
+        deploymentRoot: buildDeployment(
+          objectDataSource,
+          join(fixtureRoot, 'deployment-object'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file/u,
     'object data URL',
   );
@@ -1337,12 +1367,13 @@ try {
     `${validRedirects}/unrelated/:first:second /target 302\n`,
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: adjacentRedirectDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: adjacentRedirectDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /at most one placeholder/u,
     'adjacent redirect placeholders',
   );
@@ -1379,12 +1410,13 @@ try {
     `${validRedirects}/docs/ /missing 302\n`,
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: docsSource,
-      deploymentRoot: docsRedirectDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: docsSource,
+        deploymentRoot: docsRedirectDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /covers the protected PWA path \/docs\//u,
     'directory reference redirect',
   );
@@ -1399,12 +1431,13 @@ try {
     }),
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: queryManifestDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: queryManifestDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /canonical slash-delimited/u,
     'non-canonical legal path',
   );
@@ -1437,14 +1470,14 @@ try {
     },
   });
   verifyHostedPwaDeployment({
-      sourceArtifactRoot: playerCaseSource,
-      deploymentRoot: buildDeployment(
-        playerCaseSource,
-        join(fixtureRoot, 'deployment-player-case'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
+    sourceArtifactRoot: playerCaseSource,
+    deploymentRoot: buildDeployment(
+      playerCaseSource,
+      join(fixtureRoot, 'deployment-player-case'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
   });
 
   // 10at. A standalone splat does not cover the slashless exact path.
@@ -1455,12 +1488,13 @@ try {
   const zeroSplatDeployment = fixtureCopy(deploymentRoot, 'zero-splat');
   writeFileSync(join(zeroSplatDeployment, '_headers'), zeroSplatHeaders);
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: zeroSplatDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: zeroSplatDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /cache policy for service-worker\.js is missing/u,
     'zero-length splat does not match the exact path',
   );
@@ -1488,12 +1522,13 @@ try {
   const relativeDocsRedirect = fixtureCopy(relativeDocsDeployment, 'relative-docs-redirect');
   writeFileSync(join(relativeDocsRedirect, '_redirects'), `${validRedirects}/docs/ /missing 302\n`);
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: relativeDocsSource,
-      deploymentRoot: relativeDocsRedirect,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: relativeDocsSource,
+        deploymentRoot: relativeDocsRedirect,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /covers the protected PWA path \/docs\//u,
     'relative directory reference redirect',
   );
@@ -1607,16 +1642,17 @@ try {
     },
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: styleAttrSource,
-      deploymentRoot: buildDeployment(
-        styleAttrSource,
-        join(fixtureRoot, 'deployment-style-attr'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: styleAttrSource,
+        deploymentRoot: buildDeployment(
+          styleAttrSource,
+          join(fixtureRoot, 'deployment-style-attr'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file/u,
     'style-attribute URL validated',
   );
@@ -1640,16 +1676,17 @@ try {
     },
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: srcsetDocSource,
-      deploymentRoot: buildDeployment(
-        srcsetDocSource,
-        join(fixtureRoot, 'deployment-srcset-doc'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: srcsetDocSource,
+        deploymentRoot: buildDeployment(
+          srcsetDocSource,
+          join(fixtureRoot, 'deployment-srcset-doc'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file/u,
     'srcdoc srcset candidate',
   );
@@ -1673,16 +1710,17 @@ try {
     },
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: entityRefreshSource,
-      deploymentRoot: buildDeployment(
-        entityRefreshSource,
-        join(fixtureRoot, 'deployment-entity-refresh'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: entityRefreshSource,
+        deploymentRoot: buildDeployment(
+          entityRefreshSource,
+          join(fixtureRoot, 'deployment-entity-refresh'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file/u,
     'entity-encoded meta refresh',
   );
@@ -1694,12 +1732,13 @@ try {
     '<!doctype html><img src="/missing-legal.png">',
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: brokenLegalDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: brokenLegalDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /legal page privacy\/index\.html references a missing file/u,
     'legal page broken reference',
   );
@@ -1725,16 +1764,17 @@ try {
     },
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: nestedDocSource,
-      deploymentRoot: buildDeployment(
-        nestedDocSource,
-        join(fixtureRoot, 'deployment-nested-doc'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: nestedDocSource,
+        deploymentRoot: buildDeployment(
+          nestedDocSource,
+          join(fixtureRoot, 'deployment-nested-doc'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file/u,
     'nested srcdoc reference',
   );
@@ -1746,12 +1786,13 @@ try {
     '<!doctype html><img srcset="./missing-legal-srcset.png 1x">',
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: legalSrcsetDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: legalSrcsetDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /legal page privacy\/index\.html references a missing file/u,
     'legal page srcset candidate',
   );
@@ -1775,16 +1816,17 @@ try {
     },
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: entityDocSource,
-      deploymentRoot: buildDeployment(
-        entityDocSource,
-        join(fixtureRoot, 'deployment-entity-doc'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: entityDocSource,
+        deploymentRoot: buildDeployment(
+          entityDocSource,
+          join(fixtureRoot, 'deployment-entity-doc'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file/u,
     'entity-encoded srcdoc markup',
   );
@@ -1796,12 +1838,13 @@ try {
     '<!doctype html><div style="background:url(./missing-legal-style.png)"></div>',
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: legalStyleDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: legalStyleDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /legal page privacy\/index\.html references a missing file/u,
     'legal page style reference',
   );
@@ -1813,12 +1856,13 @@ try {
     '<!doctype html><img src="/_headers">',
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: legalControlDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: legalControlDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /legal page privacy\/index\.html references the Pages control file/u,
     'legal page control artifact reference',
   );
@@ -1830,12 +1874,13 @@ try {
     "<!doctype html><style>body { background: url('./missing-style-block.png') }</style>",
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: legalStyleBlockDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: legalStyleBlockDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /legal page privacy\/index\.html references a missing file/u,
     'legal page style block reference',
   );
@@ -1901,16 +1946,17 @@ try {
     },
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: xlinkSource,
-      deploymentRoot: buildDeployment(
-        xlinkSource,
-        join(fixtureRoot, 'deployment-xlink'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: xlinkSource,
+        deploymentRoot: buildDeployment(
+          xlinkSource,
+          join(fixtureRoot, 'deployment-xlink'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file/u,
     'svg xlink:href reference',
   );
@@ -1935,16 +1981,17 @@ try {
     },
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: nestedEntitySource,
-      deploymentRoot: buildDeployment(
-        nestedEntitySource,
-        join(fixtureRoot, 'deployment-nested-entity'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: nestedEntitySource,
+        deploymentRoot: buildDeployment(
+          nestedEntitySource,
+          join(fixtureRoot, 'deployment-nested-entity'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file/u,
     'nested entity srcdoc',
   );
@@ -1968,16 +2015,17 @@ try {
     },
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: docStyleSource,
-      deploymentRoot: buildDeployment(
-        docStyleSource,
-        join(fixtureRoot, 'deployment-doc-style'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: docStyleSource,
+        deploymentRoot: buildDeployment(
+          docStyleSource,
+          join(fixtureRoot, 'deployment-doc-style'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file/u,
     'embedded srcdoc style block',
   );
@@ -1989,12 +2037,13 @@ try {
     '<!doctype html><meta http-equiv="refresh" content="0; url=/missing-legal-refresh.html">',
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: legalRefreshDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: legalRefreshDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /legal page privacy\/index\.html references a missing file/u,
     'legal page meta refresh',
   );
@@ -2006,12 +2055,13 @@ try {
     '<!doctype html><base href="/"><img src="icons/icon-512.png">',
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: legalBaseDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: legalBaseDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /legal page privacy\/index\.html declares a base element/u,
     'legal page base element',
   );
@@ -2052,12 +2102,13 @@ try {
     '<!doctype html><iframe srcdoc="&lt;img src=./missing-legal-doc.png&gt;"></iframe>',
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: legalSrcdocDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: legalSrcdocDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /legal page privacy\/index\.html references a missing file/u,
     'legal page srcdoc reference',
   );
@@ -2081,16 +2132,17 @@ try {
     },
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: docRefreshSource,
-      deploymentRoot: buildDeployment(
-        docRefreshSource,
-        join(fixtureRoot, 'deployment-doc-refresh'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: docRefreshSource,
+        deploymentRoot: buildDeployment(
+          docRefreshSource,
+          join(fixtureRoot, 'deployment-doc-refresh'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file/u,
     'srcdoc meta refresh',
   );
@@ -2174,16 +2226,17 @@ try {
     },
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sameSchemeSource,
-      deploymentRoot: buildDeployment(
-        sameSchemeSource,
-        join(fixtureRoot, 'deployment-same-scheme'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sameSchemeSource,
+        deploymentRoot: buildDeployment(
+          sameSchemeSource,
+          join(fixtureRoot, 'deployment-same-scheme'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file/u,
     'same-scheme reference',
   );
@@ -2207,16 +2260,17 @@ try {
     },
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: upperSchemeSource,
-      deploymentRoot: buildDeployment(
-        upperSchemeSource,
-        join(fixtureRoot, 'deployment-upper-scheme'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: upperSchemeSource,
+        deploymentRoot: buildDeployment(
+          upperSchemeSource,
+          join(fixtureRoot, 'deployment-upper-scheme'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file/u,
     'uppercase scheme reference',
   );
@@ -2228,12 +2282,13 @@ try {
     '<!doctype html><img src="https:./missing-legal-scheme.png"><img src="/icons/icon%2D512.png">',
   );
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: legalEncodedDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: legalEncodedDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /legal page privacy\/index\.html references a missing file/u,
     'legal page same-scheme reference',
   );
@@ -2285,12 +2340,13 @@ try {
   const legalIndexDeployment = fixtureCopy(deploymentRoot, 'legal-index-immutable');
   writeFileSync(join(legalIndexDeployment, '_headers'), legalIndexHeaders);
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: sourceRoot,
-      deploymentRoot: legalIndexDeployment,
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: sourceRoot,
+        deploymentRoot: legalIndexDeployment,
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /comma-joined Cache-Control values/u,
     'legal index URL immutable policy',
   );
@@ -2319,16 +2375,17 @@ try {
     },
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: cssChainSource,
-      deploymentRoot: buildDeployment(
-        cssChainSource,
-        join(fixtureRoot, 'deployment-css-chain'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: cssChainSource,
+        deploymentRoot: buildDeployment(
+          cssChainSource,
+          join(fixtureRoot, 'deployment-css-chain'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file: assets\/missing-css-target\.png/u,
     'external stylesheet url target',
   );
@@ -2383,16 +2440,17 @@ try {
     },
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: importChainSource,
-      deploymentRoot: buildDeployment(
-        importChainSource,
-        join(fixtureRoot, 'deployment-import-chain'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: importChainSource,
+        deploymentRoot: buildDeployment(
+          importChainSource,
+          join(fixtureRoot, 'deployment-import-chain'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file: assets\/missing-import-target\.png/u,
     'chained stylesheet import target with a cycle',
   );
@@ -2510,16 +2568,17 @@ try {
     },
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: cssRootImportMissing,
-      deploymentRoot: buildDeployment(
-        cssRootImportMissing,
-        join(fixtureRoot, 'deployment-css-root-import-missing'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: cssRootImportMissing,
+        deploymentRoot: buildDeployment(
+          cssRootImportMissing,
+          join(fixtureRoot, 'deployment-css-root-import-missing'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file: assets\/root-theme\.css/u,
     'root-relative stylesheet import',
   );
@@ -2548,16 +2607,17 @@ try {
     },
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: cssEscapeSource,
-      deploymentRoot: buildDeployment(
-        cssEscapeSource,
-        join(fixtureRoot, 'deployment-css-escape'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: cssEscapeSource,
+        deploymentRoot: buildDeployment(
+          cssEscapeSource,
+          join(fixtureRoot, 'deployment-css-escape'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /outside the artifact root/u,
     'escaping stylesheet reference',
   );
@@ -2717,16 +2777,17 @@ try {
     },
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: importTraversalSource,
-      deploymentRoot: buildDeployment(
-        importTraversalSource,
-        join(fixtureRoot, 'deployment-import-traversal'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: importTraversalSource,
+        deploymentRoot: buildDeployment(
+          importTraversalSource,
+          join(fixtureRoot, 'deployment-import-traversal'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file: assets\/missing-in-theme\.png/u,
     'stylesheet import traversal despite a prior reference',
   );
@@ -2756,16 +2817,17 @@ try {
     },
   });
   assertThrows(
-    () => verifyHostedPwaDeployment({
-      sourceArtifactRoot: unsuffixedImportSource,
-      deploymentRoot: buildDeployment(
-        unsuffixedImportSource,
-        join(fixtureRoot, 'deployment-unsuffixed-import'),
-        'api-only',
-      ),
-      host: 'cloudflare-pages',
-      profile: 'api-only',
-    }),
+    () =>
+      verifyHostedPwaDeployment({
+        sourceArtifactRoot: unsuffixedImportSource,
+        deploymentRoot: buildDeployment(
+          unsuffixedImportSource,
+          join(fixtureRoot, 'deployment-unsuffixed-import'),
+          'api-only',
+        ),
+        host: 'cloudflare-pages',
+        profile: 'api-only',
+      }),
     /references a missing file: assets\/missing-unsuffixed\.png/u,
     'extension-less stylesheet import traversal',
   );
@@ -3068,9 +3130,7 @@ function buildSourceArtifact(root: string, options: BuildSourceOptions = {}): st
         id: options.manifestIdOverride ?? './index.html',
         name: 'Fixture Game',
         start_url: './index.html',
-        icons: [
-          { src: './icons/icon-512.png', sizes: '512x512', type: 'image/png' },
-        ],
+        icons: [{ src: './icons/icon-512.png', sizes: '512x512', type: 'image/png' }],
       },
       null,
       2,
@@ -3115,9 +3175,7 @@ function buildDeployment(
     JSON.stringify(
       {
         version: 1,
-        include: profile === 'api-canonical-index'
-          ? ['/api/*', '/index.html']
-          : ['/api/*'],
+        include: profile === 'api-canonical-index' ? ['/api/*', '/index.html'] : ['/api/*'],
         exclude: [],
       },
       null,

@@ -527,12 +527,14 @@ const expectedOf = (pack: PhaserPackDeliveryPack): ExpectedZipArchive => ({
     bytes: pack.archive?.bytes ?? 0,
     sha256: pack.archive?.sha256 ?? '',
   },
-  entries: pack.assets.flatMap((asset) => asset.files.map((file) => ({
-    path: file.path,
-    method: file.method ?? 'store',
-    bytes: file.bytes,
-    sha256: file.sha256,
-  }))),
+  entries: pack.assets.flatMap((asset) =>
+    asset.files.map((file) => ({
+      path: file.path,
+      method: file.method ?? 'store',
+      bytes: file.bytes,
+      sha256: file.sha256,
+    })),
+  ),
 });
 
 /** The ZIP entry path bound mirrors runtime delivery: the default worker
@@ -944,7 +946,9 @@ export async function verifyAssetPackDelivery(
   return {
     ok: failures.length === 0,
     manifest: {
-      sha256: manifestBytes === undefined ? '' : createHash('sha256').update(manifestBytes).digest('hex'),
+      sha256: manifestBytes === undefined
+        ? ''
+        : createHash('sha256').update(manifestBytes).digest('hex'),
       bytes: manifestBytes?.byteLength ?? 0,
       format: manifest?.format ?? '',
       version: manifest?.version ?? 0,

@@ -43,7 +43,7 @@
     "fix": "ttsc fix"
   },
   "devDependencies": {
-    "ttsc": "0.18.4",
+    "ttsc": "0.30.4",
     "typescript": "7.0.2"
   }
 }

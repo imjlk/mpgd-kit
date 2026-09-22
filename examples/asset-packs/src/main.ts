@@ -1,6 +1,9 @@
 import Phaser from 'phaser';
 
-import { createPhaserAssetPackLoader, type PhaserAssetPackLease as PackLease } from '@mpgd/phaser-assets/packs';
+import {
+  createPhaserAssetPackLoader,
+  type PhaserAssetPackLease as PackLease,
+} from '@mpgd/phaser-assets/packs';
 import {
   createPhaserPackDelivery,
   PhaserPackDeliveryError,
@@ -53,8 +56,12 @@ const element = <T extends HTMLElement>(id: string): T => {
   if (!value) throw new Error(`Missing sample control: ${id}`);
   return value as T;
 };
-const controls = Object.fromEntries(['grove', 'dunes', 'cancel', 'retry', 'unload'].map((id) => [id, element<HTMLButtonElement>(id)]));
-const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error);
+const controls = Object.fromEntries(
+  ['grove', 'dunes', 'cancel', 'retry', 'unload'].map((id) => [id, element<HTMLButtonElement>(id)]),
+);
+const errorText = (error: unknown): string => error instanceof Error
+  ? error.message
+  : String(error);
 
 /** Artifact layout shared with test/build-delivery.ts and test/browser.mjs:
  * <origin>/delivery/<variant>/asset-pack-delivery.json. */
@@ -69,7 +76,9 @@ const requestCache: 'default' | 'no-store' = params.has('http-cache') ? 'default
  * acceptance runs it explicitly. */
 const persistentCache = params.has('idcache');
 const deliveryParam = params.get('delivery');
-const deliveryMode: 'zip' | 'mixed' | null = deliveryParam === 'zip' || deliveryParam === 'mixed' ? deliveryParam : null;
+const deliveryMode: 'zip' | 'mixed' | null = deliveryParam === 'zip' || deliveryParam === 'mixed'
+  ? deliveryParam
+  : null;
 /** Delivery observation view: what the UI shows is exactly what the
  * delivery observed — no polling, no message parsing. Stale operations
  * (an older prepare's late events) never overwrite this state. */
@@ -82,10 +91,20 @@ interface ObservedDelivery {
   fileRead: string;
 }
 const observed: ObservedDelivery = {
-  operationId: 0, phase: '', packId: '', progress: '', terminal: '', fileRead: '',
+  operationId: 0,
+  phase: '',
+  packId: '',
+  progress: '',
+  terminal: '',
+  fileRead: '',
 };
 const resetObserved = (): ObservedDelivery => Object.assign(observed, {
-  operationId: 0, phase: '', packId: '', progress: '', terminal: '', fileRead: '',
+  operationId: 0,
+  phase: '',
+  packId: '',
+  progress: '',
+  terminal: '',
+  fileRead: '',
 });
 const byteText = (bytes: number | undefined): string => bytes === undefined ? '?' : String(bytes);
 const progressTextOf = (event: PhaserPackDeliveryEvent): string => {
@@ -154,7 +173,12 @@ const onDeliveryEvent = (event: PhaserPackDeliveryEvent): void => {
   renderStatus();
 };
 const model = {
-  phase: 'booting', requested: null as Theme | null, current: null as Theme | null, ready: 0, total: 0, error: '',
+  phase: 'booting',
+  requested: null as Theme | null,
+  current: null as Theme | null,
+  ready: 0,
+  total: 0,
+  error: '',
   lastPrepareMs: null as number | null,
   observed,
   plan: null as PhaserPackPreparationPlan | null,
@@ -237,12 +261,16 @@ class Board extends Phaser.Scene {
   private lease: PackLease | undefined;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
 
-  constructor() { super('board'); }
+  constructor() {
+    super('board');
+  }
   create(): void {
     this.layer = this.add.container();
     this.cursors = this.input.keyboard!.createCursorKeys();
     const localBase = new URL(import.meta.env.BASE_URL, window.location.href);
-    const bundled = new Set(__ASSET_PACK_CATALOG__.filter((pack) => pack.packaged).map((pack) => pack.id));
+    const bundled = new Set(
+      __ASSET_PACK_CATALOG__.filter((pack) => pack.packaged).map((pack) => pack.id),
+    );
     // Register consumer cleanup before the store's shutdown hook. No display
     // object may keep using a texture after its last owner returns the lease.
     this.events.once('shutdown', () => {
@@ -308,7 +336,11 @@ class Board extends Phaser.Scene {
       }
       if (theme === 'grove') nextLayer.add(this.add.image(210, 170, ground, 'stone').setDisplaySize(220, 120));
       nextLayer.add(this.add.rectangle(480, 488, 310, 42, 0x102226, .85));
-      nextLayer.add(this.add.text(480, 488, theme === 'grove' ? 'THE GROVE' : 'THE DUNES', { fontFamily: 'monospace', fontSize: '16px', color: '#eef1d6' }).setOrigin(.5));
+      nextLayer.add(
+        this.add.text(480, 488, theme === 'grove' ? 'THE GROVE' : 'THE DUNES', { fontFamily: 'monospace', fontSize: '16px', color: '#eef1d6' }).setOrigin(
+          .5,
+        ),
+      );
       nextHero = this.add.image(480, 270, pilot, 1).setScale(1.5);
       nextLayer.add(nextHero);
     } catch (error) {
@@ -331,17 +363,29 @@ class Board extends Phaser.Scene {
     this.lease = undefined;
   }
   showEmpty(): void {
-    this.layer.add(this.add.text(480, 270, 'Choose a landscape to begin', { fontFamily: 'monospace', fontSize: '20px', color: '#9ab6ab' }).setOrigin(.5));
+    this.layer.add(
+      this.add.text(480, 270, 'Choose a landscape to begin', { fontFamily: 'monospace', fontSize: '20px', color: '#9ab6ab' }).setOrigin(
+        .5,
+      ),
+    );
   }
   frames(pack: string, key: string): number {
     if (!this.lease) return 0;
     return this.textures.get(this.lease.key(pack, key)).getFrameNames().length;
   }
   textureCount(): number {
-    const ui = new Set(this.layer.list.filter((object) => object instanceof Phaser.GameObjects.Text).map((object) => object.texture.key));
-    return this.textures.getTextureKeys().filter((key) => !ui.has(key) && !this.baselineTextures.has(key)).length;
+    const ui = new Set(
+      this.layer.list.filter((object) => object instanceof Phaser.GameObjects.Text).map(
+        (object) => object.texture.key,
+      ),
+    );
+    return this.textures.getTextureKeys().filter(
+      (key) => !ui.has(key) && !this.baselineTextures.has(key),
+    ).length;
   }
-  player() { return this.hero ? { x: this.hero.x, y: this.hero.y } : null; }
+  player() {
+    return this.hero ? { x: this.hero.x, y: this.hero.y } : null;
+  }
   override update(time: number, delta: number): void {
     if (model.phase !== 'playing' || !this.hero) return;
     const moving = this.cursors.right.isDown || this.cursors.left.isDown || this.cursors.up.isDown || this.cursors.down.isDown;
@@ -435,7 +479,14 @@ function enter(theme: Theme): void {
   // closure costs and whether it fits the staging budget. It reserves
   // nothing; prepare re-checks admission itself.
   model.plan = delivery === undefined ? null : delivery.inspectPreparation(theme);
-  Object.assign(model, { phase: 'preparing', requested: theme, ready: 0, total: 0, error: '', lastPrepareMs: null });
+  Object.assign(model, {
+    phase: 'preparing',
+    requested: theme,
+    ready: 0,
+    total: 0,
+    error: '',
+    lastPrepareMs: null,
+  });
   renderStatus();
   // Enters run one at a time: a superseded enter finishes (or aborts)
   // before the next begins, so overlapping transitions never surface the
@@ -456,11 +507,14 @@ let enterChain: Promise<void> = Promise.resolve();
 
 async function runEnter(theme: Theme, ticket: number, controller: AbortController): Promise<void> {
   if (!packs || ticket !== sequence) return;
-  const acquireOptions = { signal: controller.signal, onProgress(ready: number, total: number) {
+  const acquireOptions = {
+    signal: controller.signal,
+    onProgress(ready: number, total: number) {
     if (ticket !== sequence) return;
     Object.assign(model, { ready, total });
     renderStatus();
-  } };
+    },
+  };
   try {
     let lease: PackLease;
     if (delivery === undefined) {
@@ -479,7 +533,10 @@ async function runEnter(theme: Theme, ticket: number, controller: AbortControlle
         prepared.release();
       }
     }
-    if (ticket !== sequence) { lease.release(); return; }
+    if (ticket !== sequence) {
+      lease.release();
+      return;
+    }
     board.enter(lease, theme);
     Object.assign(model, { current: theme, phase: 'playing' });
   } catch (error) {
@@ -491,7 +548,10 @@ async function runEnter(theme: Theme, ticket: number, controller: AbortControlle
       model.error = error instanceof Error ? error.message : 'Asset preparation failed';
     }
   } finally {
-    if (ticket === sequence) { pending = undefined; renderStatus(); }
+    if (ticket === sequence) {
+      pending = undefined;
+      renderStatus();
+    }
   }
 }
 
@@ -616,10 +676,17 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
 }
 
 function wireSampleControls(): void {
-  controls.grove!.onclick = () => { enter('grove'); };
-  controls.dunes!.onclick = () => { enter('dunes'); };
+  controls.grove!.onclick = () => {
+    enter('grove');
+  };
+  controls.dunes!.onclick = () => {
+    enter('dunes');
+  };
   controls.retry!.onclick = () => {
-    if (deliveryMode !== null && !packs) { void initDelivery(board); return; }
+    if (deliveryMode !== null && !packs) {
+      void initDelivery(board);
+      return;
+    }
     if (model.requested) enter(model.requested);
   };
   controls.cancel!.onclick = () => {
@@ -643,7 +710,7 @@ function wireSampleControls(): void {
   };
 }
 
-  declare global {
+declare global {
     interface Window {
       render_game_to_text: () => string;
       advanceTime: (milliseconds: number) => void;
@@ -658,12 +725,20 @@ function wireSampleControls(): void {
       __artifact_cache_present: () => boolean;
     }
 }
-  function state() {
-    return { ...model, delivery: deliveryMode ?? 'files', staging: delivery?.snapshot() ?? null, renderer: bootedGame().config.renderType === Phaser.WEBGL ? 'webgl' : 'canvas', mode: __ASSET_PACK_MODE__, coordinateSystem: 'origin top-left; x right; y down',
+function state() {
+  return {
+    ...model,
+    delivery: deliveryMode ?? 'files',
+    staging: delivery?.snapshot() ?? null,
+    renderer: bootedGame().config.renderType === Phaser.WEBGL ? 'webgl' : 'canvas',
+    mode: __ASSET_PACK_MODE__,
+    coordinateSystem: 'origin top-left; x right; y down',
       groundFrames: model.current ? board.frames(model.current, 'ground') : 0,
       pilotFrames: model.current ? board.frames('shared', 'pilot') : 0,
-      player: model.phase === 'booting' ? null : board.player(), resources: packs?.snapshot().map((entry) => ({ ...entry, pack: entry.packId, identity: entry.packId + '/' + entry.assetKey })) ?? [],
-      textureCount: model.phase === 'booting' ? 0 : board.textureCount() };
+    player: model.phase === 'booting' ? null : board.player(),
+    resources: packs?.snapshot().map((entry) => ({ ...entry, pack: entry.packId, identity: entry.packId + '/' + entry.assetKey })) ?? [],
+    textureCount: model.phase === 'booting' ? 0 : board.textureCount(),
+  };
 }
 function wireWindowHooks(): void {
   window.render_game_to_text = () => JSON.stringify(state());
@@ -689,9 +764,12 @@ function wireWindowHooks(): void {
     virtualTime += 1000 / 60;
     bootedGame().step(virtualTime, 1000 / 60);
   }
-};
+  };
 
   // SceneManager.stop emits shutdown synchronously; count after consumer and loader cleanup.
   // Keep this direct manager call rather than queuing a ScenePlugin operation.
-  window.shutdownSample = () => { bootedGame().scene.stop('board'); return board.textureCount(); };
+  window.shutdownSample = () => {
+    bootedGame().scene.stop('board');
+    return board.textureCount();
+  };
 }

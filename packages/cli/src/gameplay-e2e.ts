@@ -255,7 +255,8 @@ export function parseGameplayE2EPlan(
 
   const stateIds = new Set<string>();
   const states = value.states.map((state, index) =>
-    parseGameplayE2EState(state, `${source}.states[${index}]`, stateIds));
+    parseGameplayE2EState(state, `${source}.states[${index}]`, stateIds),
+  );
 
   return { schemaVersion: 1, states };
 }
@@ -650,7 +651,8 @@ function parseGameplayE2EState(
   }
 
   const actions = value.actions.map((action, index) =>
-    parseGameplayE2EAction(action, `${source}.actions[${index}]`));
+    parseGameplayE2EAction(action, `${source}.actions[${index}]`),
+  );
 
   return {
     id,
@@ -691,12 +693,7 @@ function parseGameplayE2EAction(value: unknown, source: string): GameplayE2EActi
       assertOnlyKeys(value, ['type', 'durationMs'], source);
       return {
         type,
-        durationMs: readBoundedInteger(
-          value.durationMs,
-          `${source}.durationMs`,
-          0,
-          maximumWaitMs,
-        ),
+        durationMs: readBoundedInteger(value.durationMs, `${source}.durationMs`, 0, maximumWaitMs),
       };
     }
     case 'pause-resume': {

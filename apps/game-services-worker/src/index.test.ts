@@ -318,12 +318,7 @@ assertEqual(
 );
 assertDeepEqual(
   targetVerifierCalls,
-  [
-    'android:purchase:android',
-    'ios:ad-reward:ios',
-    'ait:purchase:ait',
-    'verse8:ad-reward:verse8',
-  ],
+  ['android:purchase:android', 'ios:ad-reward:ios', 'ait:purchase:ait', 'verse8:ad-reward:verse8'],
   'target-specific evidence should dispatch only to its matching binding',
 );
 assertDeepEqual(
@@ -512,25 +507,27 @@ const microsoftStoreFinalizerBinding = {
   },
 } satisfies GameServicesPurchaseGrantFinalizerBinding;
 assertThrows(
-  () => createWorkerService({
-    MPGD_STORE: 'memory',
-    GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER: {
-      async verifyPurchase() {
-        return verifiedDecision('microsoft-store:missing-finalizer');
+  () =>
+    createWorkerService({
+      MPGD_STORE: 'memory',
+      GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER: {
+        async verifyPurchase() {
+          return verifiedDecision('microsoft-store:missing-finalizer');
+        },
+        async verifyAdReward() {
+          return { status: 'rejected', reason: 'NOT_SUPPORTED' };
+        },
       },
-      async verifyAdReward() {
-        return { status: 'rejected', reason: 'NOT_SUPPORTED' };
-      },
-    },
-  }),
+    }),
   /must be configured together/u,
   'Microsoft Store verifier-only configuration must fail closed',
 );
 assertThrows(
-  () => createWorkerService({
-    MPGD_STORE: 'memory',
-    GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER: microsoftStoreFinalizerBinding,
-  }),
+  () =>
+    createWorkerService({
+      MPGD_STORE: 'memory',
+      GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER: microsoftStoreFinalizerBinding,
+    }),
   /must be configured together/u,
   'Microsoft Store finalizer-only configuration must fail closed',
 );
@@ -772,9 +769,15 @@ assertEqual(
 );
 
 const unauthorizedSnapshot = await workerFetch(
-  new Request(`${baseUrl}/game-services/verified-leaderboard/snapshot?leaderboardId=worker%3Averified`),
+  new Request(
+    `${baseUrl}/game-services/verified-leaderboard/snapshot?leaderboardId=worker%3Averified`,
+  ),
 );
-assertEqual(unauthorizedSnapshot.status, 401, 'public snapshot reads should require authentication');
+assertEqual(
+  unauthorizedSnapshot.status,
+  401,
+  'public snapshot reads should require authentication',
+);
 
 const publicSnapshot = await workerFetch(
   new Request(

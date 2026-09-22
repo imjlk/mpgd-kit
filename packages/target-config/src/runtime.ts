@@ -427,11 +427,7 @@ export function getFeatureAvailability(
     enabled,
     targetEnabled,
     capabilitySupported,
-    reason: enabled
-      ? 'available'
-      : targetEnabled
-        ? 'capability-unsupported'
-        : 'target-disabled',
+    reason: enabled ? 'available' : targetEnabled ? 'capability-unsupported' : 'target-disabled',
   };
 }
 
@@ -456,36 +452,16 @@ export function createTargetRuntimeSnapshot(input: {
   const configTarget = input.configTarget ?? targetConfigKeyForPlatform(input.target);
   const availabilityConfig = resolveAvailabilityConfig(input.config, input.effectiveConfig);
   const features = {
-    iap: getFeatureAvailability(
-      'iap',
-      availabilityConfig,
-      input.capabilities,
-    ),
-    bannerAds: getFeatureAvailability(
-      'bannerAds',
-      availabilityConfig,
-      input.capabilities,
-    ),
-    rewardedAds: getFeatureAvailability(
-      'rewardedAds',
-      availabilityConfig,
-      input.capabilities,
-    ),
+    iap: getFeatureAvailability('iap', availabilityConfig, input.capabilities),
+    bannerAds: getFeatureAvailability('bannerAds', availabilityConfig, input.capabilities),
+    rewardedAds: getFeatureAvailability('rewardedAds', availabilityConfig, input.capabilities),
     interstitialAds: getFeatureAvailability(
       'interstitialAds',
       availabilityConfig,
       input.capabilities,
     ),
-    leaderboard: getFeatureAvailability(
-      'leaderboard',
-      availabilityConfig,
-      input.capabilities,
-    ),
-    localization: getFeatureAvailability(
-      'localization',
-      availabilityConfig,
-      input.capabilities,
-    ),
+    leaderboard: getFeatureAvailability('leaderboard', availabilityConfig, input.capabilities),
+    localization: getFeatureAvailability('localization', availabilityConfig, input.capabilities),
   } satisfies Record<PlatformFeature, FeatureAvailability>;
   const integrationConfig = normalizeTargetIntegrationConfig(
     input.effectiveConfig?.integrations ?? input.config.integrations,

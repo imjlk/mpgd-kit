@@ -35,7 +35,10 @@ const startOrigin = async (): Promise<{
   const files = new Map<string, ServedFile>();
   const requests: string[] = [];
   const server: Server = createServer((request, response) => {
-    const path = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname).replace(/^\//u, '');
+    const path = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname).replace(
+      /^\//u,
+      '',
+    );
     requests.push(path);
     const file = files.get(path);
     if (file === undefined) {
@@ -1831,7 +1834,7 @@ describe('delivery observation', () => {
     const delivery = createPhaserPackDelivery(manifest, { baseUrl: origin.url });
     await delivery.prepare('solo');
     const { events, listener } = recorder();
-    let unsubscribe: (() => void) | undefined;
+    let unsubscribe: (() => void) | undefined = undefined;
     unsubscribe = delivery.subscribe((event) => {
       // Re-entrant unsubscribe on the first event: later events must not
       // reach this listener.

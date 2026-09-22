@@ -15,16 +15,34 @@ const buildConfig = (): unknown => ({
   root: 'assets',
   packs: [
     {
-      id: 'shared', revision: '1', delivery: 'files', assets: [{
-        kind: 'spritesheet', key: 'pilot', file: 'shared/pilot.png', frameConfig: {
-          frameWidth: 64, frameHeight: 64,
+      id: 'shared',
+      revision: '1',
+      delivery: 'files',
+      assets: [
+        {
+          kind: 'spritesheet',
+          key: 'pilot',
+          file: 'shared/pilot.png',
+          frameConfig: {
+            frameWidth: 64,
+            frameHeight: 64,
+          },
         },
-      }],
+      ],
     },
     {
-      id: 'grove', revision: '3', dependsOn: ['shared'], delivery: 'zip', assets: [{
-        kind: 'atlas', key: 'ground', texture: 'grove/grove.png', atlas: 'grove/grove.json',
-      }],
+      id: 'grove',
+      revision: '3',
+      dependsOn: ['shared'],
+      delivery: 'zip',
+      assets: [
+        {
+          kind: 'atlas',
+          key: 'ground',
+          texture: 'grove/grove.png',
+          atlas: 'grove/grove.json',
+        },
+      ],
     },
   ],
 });
@@ -33,28 +51,64 @@ const manifest = (): PhaserPackDeliveryManifest => ({
   version: PHASER_PACK_DELIVERY_VERSION,
   packs: [
     {
-      packId: 'shared', revision: '1', dependencies: [], delivery: 'files', assets: [{
-        assetKey: 'pilot', kind: 'spritesheet', frameConfig: {
-          frameWidth: 64, frameHeight: 64,
-        }, files: [{
-          role: 'texture', mediaType: 'image/png', bytes: 3, sha256: digest('a'), path: 'packs/shared@1/shared/pilot.png',
-        }],
-      }],
+      packId: 'shared',
+      revision: '1',
+      dependencies: [],
+      delivery: 'files',
+      assets: [
+        {
+          assetKey: 'pilot',
+          kind: 'spritesheet',
+          frameConfig: {
+            frameWidth: 64,
+            frameHeight: 64,
+          },
+          files: [
+            {
+              role: 'texture',
+              mediaType: 'image/png',
+              bytes: 3,
+              sha256: digest('a'),
+              path: 'packs/shared@1/shared/pilot.png',
+            },
+          ],
+        },
+      ],
     },
     {
-      packId: 'grove', revision: '3', dependencies: [{ packId: 'shared', revision: '1' }], delivery: 'zip',
-      assets: [{
-        assetKey: 'ground', kind: 'atlas', files: [
-          {
-            role: 'texture', mediaType: 'image/png', bytes: 4, sha256: digest('b'), path: 'grove/grove.png', method: 'store',
-          },
-          {
-            role: 'atlas', mediaType: 'application/json', bytes: 2, sha256: digest('c'), path: 'grove/grove.json', method: 'deflate',
-          },
-        ],
-      }],
+      packId: 'grove',
+      revision: '3',
+      dependencies: [{ packId: 'shared', revision: '1' }],
+      delivery: 'zip',
+      assets: [
+        {
+          assetKey: 'ground',
+          kind: 'atlas',
+          files: [
+            {
+              role: 'texture',
+              mediaType: 'image/png',
+              bytes: 4,
+              sha256: digest('b'),
+              path: 'grove/grove.png',
+              method: 'store',
+            },
+            {
+              role: 'atlas',
+              mediaType: 'application/json',
+              bytes: 2,
+              sha256: digest('c'),
+              path: 'grove/grove.json',
+              method: 'deflate',
+            },
+          ],
+        },
+      ],
       archive: {
-        path: 'packs/grove@3.zip', bytes: 9, sha256: digest('d'), entryCount: 2,
+        path: 'packs/grove@3.zip',
+        bytes: 9,
+        sha256: digest('d'),
+        entryCount: 2,
       },
     },
   ],

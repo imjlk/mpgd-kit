@@ -87,15 +87,12 @@ export function createBridgeRpcFetchHandler(
 
   return async (request) => {
     try {
-      const result = await rpcHandler.handle(
-        request,
-        {
-          prefix,
-          context: {
-            request,
-          },
-      },
-      );
+      const result = await rpcHandler.handle(request, {
+        prefix,
+        context: {
+          request,
+        },
+      });
 
       if (!result.matched) {
         return new Response('Not Found', {

@@ -109,10 +109,7 @@ export function resolveMiniGameBundleOutput(input: Readonly<{
 }>): string {
   const gameRoot = readRealDirectory(resolve(input.gameRoot), 'Mini-game game root');
   const unresolvedStagingRoot = resolve(gameRoot, input.stagingRoot);
-  const stagingRoot = readRealDirectory(
-    unresolvedStagingRoot,
-    'Mini-game bundle staging root',
-  );
+  const stagingRoot = readRealDirectory(unresolvedStagingRoot, 'Mini-game bundle staging root');
   const unresolvedOutput = resolve(gameRoot, input.outputDir);
   const stagingRelativeOutput = relative(unresolvedStagingRoot, unresolvedOutput);
 
@@ -211,7 +208,9 @@ function readMiniGameModulePackageMetadataChain(
         );
       }
       if (!isRecord(parsed)) {
-        throw new Error(`Mini-game module owner package.json must be an object: ${packageJsonPath}`);
+        throw new Error(
+          `Mini-game module owner package.json must be an object: ${packageJsonPath}`,
+        );
       }
       const repository = isRecord(parsed.repository) ? parsed.repository : undefined;
       let repositoryUrl: string | undefined;

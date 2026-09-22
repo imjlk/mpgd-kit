@@ -7,12 +7,13 @@ import {
 
 let disposeCount = 0;
 const report = await runVerifiedLeaderboardDurabilityConformance({
-  createFixture: ({ now }) => createAmbiguousCommitVerifiedLeaderboardDurabilityFixture(
-    createInMemoryVerifiedLeaderboardService({ now: () => now }),
-    () => {
-      disposeCount += 1;
-    },
-  ),
+  createFixture: ({ now }) =>
+    createAmbiguousCommitVerifiedLeaderboardDurabilityFixture(
+      createInMemoryVerifiedLeaderboardService({ now: () => now }),
+      () => {
+        disposeCount += 1;
+      },
+    ),
 });
 
 if (report.passedScenarios.length !== verifiedLeaderboardDurabilityConformanceScenarios.length) {

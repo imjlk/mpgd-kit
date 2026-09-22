@@ -2967,10 +2967,7 @@ function createDependencies(
     getTossShareLink: async () => 'https://toss.im/test',
     share: async () => {},
     grantPromotionReward: withSupportProbe(grantPromotionReward),
-    requestNotificationAgreement: withSupportProbe(
-      requestNotificationAgreement,
-      false,
-    ),
+    requestNotificationAgreement: withSupportProbe(requestNotificationAgreement, false),
     isMinVersionSupported: () => true,
     loadFullScreenAd: unsupportedAd,
     showFullScreenAd: unsupportedAd,

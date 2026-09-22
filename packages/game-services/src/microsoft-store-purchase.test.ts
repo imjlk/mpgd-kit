@@ -27,9 +27,7 @@ const assert = {
   },
   deepEqual(actual: unknown, expected: unknown): void {
     if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-      throw new Error(
-        `Expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}.`,
-      );
+      throw new Error(`Expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}.`);
     }
   },
   throws(callback: () => unknown, pattern: RegExp): void {
@@ -270,10 +268,12 @@ const historicalOwnershipStore = createInMemoryMicrosoftStoreRecoveryOwnershipSt
 const historicalOwnershipHarness = createHarness({
   recoveryOwnershipStore: historicalOwnershipStore,
   historicalProductMappings: {
-    HINT_PACK_20: [{
-      inAppOfferToken: 'ttokdoku_hint_pack_20_legacy',
-      storeId: '9N0000000000',
-    }],
+    HINT_PACK_20: [
+      {
+        inAppOfferToken: 'ttokdoku_hint_pack_20_legacy',
+        storeId: '9N0000000000',
+      },
+    ],
   },
 });
 historicalOwnershipHarness.client.queryResponse = {
@@ -600,10 +600,12 @@ const historicalInAppOfferToken = 'ttokdoku_hint_pack_20_legacy';
 const historicalStoreId = '9N0000000000';
 const historicalMapping = createHarness({
   historicalProductMappings: {
-    HINT_PACK_20: [{
-      inAppOfferToken: historicalInAppOfferToken,
-      storeId: historicalStoreId,
-    }],
+    HINT_PACK_20: [
+      {
+        inAppOfferToken: historicalInAppOfferToken,
+        storeId: historicalStoreId,
+      },
+    ],
   },
 });
 historicalMapping.client.queryResponse = {
@@ -753,9 +755,7 @@ let credentialResolutionCount = 0;
 const invalidFinalizationCredentials = createHarness({
   resolveCredentials: () => {
     credentialResolutionCount += 1;
-    return credentialResolutionCount === 1
-      ? credentials
-      : { ...credentials, userStoreId: '' };
+    return credentialResolutionCount === 1 ? credentials : { ...credentials, userStoreId: '' };
   },
 });
 const invalidFinalizationCredentialsResult =
@@ -886,10 +886,12 @@ assert.deepEqual(migratedStoreEvents, [
 const offerTokenMigrationEvents: string[] = [];
 const legacyCatalog = {
   ...catalog,
-  products: [{
-    ...catalog.products[0],
-    platformProductIds: { 'microsoft-store': historicalInAppOfferToken },
-  }],
+  products: [
+    {
+      ...catalog.products[0],
+      platformProductIds: { 'microsoft-store': historicalInAppOfferToken },
+    },
+  ],
 } satisfies ProductCatalog;
 const beforeOfferTokenMigration = createHarness({
   events: offerTokenMigrationEvents,
@@ -908,42 +910,48 @@ beforeOfferTokenMigration.client.queryResponse = {
 };
 beforeOfferTokenMigration.client.nextConsumeResponse = { malformed: true };
 const beforeOfferTokenMigrationResult =
-  await beforeOfferTokenMigration.backend.purchases.verifyPurchase(createRequest({
-    platformTransactionId: historicalInAppOfferToken,
-    idempotencyKey: 'offer-token-migration-original',
-    evidence: {
-      schema: microsoftStoreDigitalGoodsEvidenceSchema,
-      payload: {
-        itemId: historicalInAppOfferToken,
-        purchaseToken: historicalInAppOfferToken,
+  await beforeOfferTokenMigration.backend.purchases.verifyPurchase(
+    createRequest({
+      platformTransactionId: historicalInAppOfferToken,
+      idempotencyKey: 'offer-token-migration-original',
+      evidence: {
+        schema: microsoftStoreDigitalGoodsEvidenceSchema,
+        payload: {
+          itemId: historicalInAppOfferToken,
+          purchaseToken: historicalInAppOfferToken,
+        },
       },
-    },
-  }));
+    }),
+  );
 const afterOfferTokenMigration = createHarness({
   events: offerTokenMigrationEvents,
   store: beforeOfferTokenMigration.store,
   historicalProductMappings: {
-    HINT_PACK_20: [{
-      inAppOfferToken: historicalInAppOfferToken,
-      storeId: historicalStoreId,
-    }],
+    HINT_PACK_20: [
+      {
+        inAppOfferToken: historicalInAppOfferToken,
+        storeId: historicalStoreId,
+      },
+    ],
   },
 });
 afterOfferTokenMigration.client.queryResponse = structuredClone(
   beforeOfferTokenMigration.client.queryResponse,
 );
 const afterOfferTokenMigrationResult =
-  await afterOfferTokenMigration.backend.purchases.verifyPurchase(createRequest({
-    platformTransactionId: historicalInAppOfferToken,
-    idempotencyKey: 'offer-token-migration-recovery',
-    evidence: {
-      schema: microsoftStoreDigitalGoodsEvidenceSchema,
-      payload: {
-        itemId: historicalInAppOfferToken,
-        purchaseToken: historicalInAppOfferToken,
+  await afterOfferTokenMigration.backend.purchases.verifyPurchase(
+    createRequest({
+      platformTransactionId: historicalInAppOfferToken,
+      idempotencyKey: 'offer-token-migration-recovery',
+      evidence: {
+        schema: microsoftStoreDigitalGoodsEvidenceSchema,
+        payload: {
+          itemId: historicalInAppOfferToken,
+          purchaseToken: historicalInAppOfferToken,
+        },
       },
-    },
-  }));
+    }),
+  );
 assert.equal(beforeOfferTokenMigrationResult.finalization?.status, 'pending');
 assert.equal(afterOfferTokenMigrationResult.verified, true);
 assert.equal(afterOfferTokenMigrationResult.alreadyProcessed, true);
@@ -994,10 +1002,12 @@ try {
       HINT_PACK_120: '9N0000000120',
     },
     historicalProductMappings: {
-      HINT_PACK_20: [{
-        inAppOfferToken: 'ttokdoku_hint_pack_120',
-        storeId: historicalStoreId,
-      }],
+      HINT_PACK_20: [
+        {
+          inAppOfferToken: 'ttokdoku_hint_pack_120',
+          storeId: historicalStoreId,
+        },
+      ],
     },
     resolveCredentials: () => credentials,
     recoveryOwnershipStore: createInMemoryMicrosoftStoreRecoveryOwnershipStore(),

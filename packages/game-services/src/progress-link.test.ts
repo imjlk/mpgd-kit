@@ -207,40 +207,44 @@ assertEqual(
 );
 
 await assertRejects(
-  () => service.reconcileGuestProgress(
-    { authoritativePlayerId: 'player-2' },
-    {
-      ...request,
-      idempotencyKey: 'progress-link-other-player',
-    },
-  ),
+  () =>
+    service.reconcileGuestProgress(
+      { authoritativePlayerId: 'player-2' },
+      {
+        ...request,
+        idempotencyKey: 'progress-link-other-player',
+      },
+    ),
   'invalid or expired',
   'verified handoffs must stay bound to their authoritative player',
 );
 await assertRejects(
-  () => service.reconcileGuestProgress(playerContext, {
-    ...request,
-    guestId: 'guest-2',
-    idempotencyKey: 'progress-link-other-guest',
-  }),
+  () =>
+    service.reconcileGuestProgress(playerContext, {
+      ...request,
+      guestId: 'guest-2',
+      idempotencyKey: 'progress-link-other-guest',
+    }),
   'invalid or expired',
   'verified handoffs must stay bound to their guest',
 );
 await assertRejects(
-  () => service.reconcileGuestProgress(playerContext, {
-    ...request,
-    handoffNonce: 'handoff-not-issued',
-    idempotencyKey: 'progress-link-not-issued',
-  }),
+  () =>
+    service.reconcileGuestProgress(playerContext, {
+      ...request,
+      handoffNonce: 'handoff-not-issued',
+      idempotencyKey: 'progress-link-not-issued',
+    }),
   'invalid or expired',
   'arbitrary handoff nonces must be rejected',
 );
 await assertRejects(
-  () => service.reconcileGuestProgress(playerContext, {
-    ...request,
-    handoffNonce: 'handoff-expired',
-    idempotencyKey: 'progress-link-expired',
-  }),
+  () =>
+    service.reconcileGuestProgress(playerContext, {
+      ...request,
+      handoffNonce: 'handoff-expired',
+      idempotencyKey: 'progress-link-expired',
+    }),
   'invalid or expired',
   'expired handoffs must be rejected',
 );
@@ -263,47 +267,51 @@ const progressWithInvalidTime = {
 } as GameProgressSnapshot;
 
 await assertRejects(
-  () => service.reconcileGuestProgress(playerContext, {
-    ...request,
-    handoffNonce: 'handoff-entitlements',
-    idempotencyKey: 'progress-link-entitlements',
-    guestProgress: progressWithEntitlements,
-  }),
+  () =>
+    service.reconcileGuestProgress(playerContext, {
+      ...request,
+      handoffNonce: 'handoff-entitlements',
+      idempotencyKey: 'progress-link-entitlements',
+      guestProgress: progressWithEntitlements,
+    }),
   'unsupported field entitlements',
   'progress snapshots must not carry entitlement state',
 );
 await assertRejects(
-  () => service.reconcileGuestProgress(playerContext, {
-    ...request,
-    handoffNonce: 'handoff-leaderboard',
-    idempotencyKey: 'progress-link-leaderboard',
-    guestProgress: progressWithLeaderboard,
-  }),
+  () =>
+    service.reconcileGuestProgress(playerContext, {
+      ...request,
+      handoffNonce: 'handoff-leaderboard',
+      idempotencyKey: 'progress-link-leaderboard',
+      guestProgress: progressWithLeaderboard,
+    }),
   'unsupported field leaderboard',
   'progress snapshots must not carry leaderboard state',
 );
 await assertRejects(
-  () => service.reconcileGuestProgress(playerContext, {
-    ...request,
-    handoffNonce: 'handoff-invalid-time',
-    idempotencyKey: 'progress-link-invalid-time',
-    guestProgress: progressWithInvalidTime,
-  }),
+  () =>
+    service.reconcileGuestProgress(playerContext, {
+      ...request,
+      handoffNonce: 'handoff-invalid-time',
+      idempotencyKey: 'progress-link-invalid-time',
+      guestProgress: progressWithInvalidTime,
+    }),
   'greater than or equal to zero',
   'negative best times should fail validation',
 );
 await assertRejects(
-  () => service.reconcileGuestProgress(playerContext, {
-    ...request,
-    handoffNonce: 'handoff-unverified-score',
-    idempotencyKey: 'progress-link-unverified-score',
-    guestProgress: {
-      ...guestProgress,
-      bestScores: {
-        endless: 1_000_000,
+  () =>
+    service.reconcileGuestProgress(playerContext, {
+      ...request,
+      handoffNonce: 'handoff-unverified-score',
+      idempotencyKey: 'progress-link-unverified-score',
+      guestProgress: {
+        ...guestProgress,
+        bestScores: {
+          endless: 1_000_000,
+        },
       },
-    },
-  }),
+    }),
   'not server-verified',
   'guest best metrics must pass the server-owned progress verifier',
 );
@@ -338,45 +346,50 @@ const emptyProgress = {
 const sparseCompletedIds = new Array<string>(1);
 
 assertThrows(
-  () => normalizeGameProgressSnapshot({
-    ...emptyProgress,
-    completedIds: ['x'.repeat(gameProgressLimits.maxIdentifierLength + 1)],
-  }),
+  () =>
+    normalizeGameProgressSnapshot({
+      ...emptyProgress,
+      completedIds: ['x'.repeat(gameProgressLimits.maxIdentifierLength + 1)],
+    }),
   'must not exceed',
   'progress identifiers should have a fixed length bound',
 );
 assertThrows(
-  () => normalizeGameProgressSnapshot({
-    ...emptyProgress,
-    completedIds: ['stage-1\nforged-log-entry'],
-  }),
+  () =>
+    normalizeGameProgressSnapshot({
+      ...emptyProgress,
+      completedIds: ['stage-1\nforged-log-entry'],
+    }),
   'must not contain control characters',
   'progress identifiers should reject control characters',
 );
 assertThrows(
-  () => normalizeGameProgressSnapshot({
-    ...emptyProgress,
-    completedIds: sparseCompletedIds,
-  }),
+  () =>
+    normalizeGameProgressSnapshot({
+      ...emptyProgress,
+      completedIds: sparseCompletedIds,
+    }),
   'must be a non-empty',
   'sparse completed-id arrays must not leak undefined entries',
 );
 assertThrows(
-  () => normalizeGameProgressSnapshot({
-    ...emptyProgress,
-    completedIds: Array.from(
-      { length: gameProgressLimits.maxCompletedIds + 1 },
-      (_, index) => `stage-${String(index)}`,
-    ),
-  }),
+  () =>
+    normalizeGameProgressSnapshot({
+      ...emptyProgress,
+      completedIds: Array.from(
+        { length: gameProgressLimits.maxCompletedIds + 1 },
+        (_, index) => `stage-${String(index)}`,
+      ),
+    }),
   'must not contain more than',
   'completed ids should have a fixed entry bound',
 );
 assertThrows(
-  () => normalizeGameProgressSnapshot({
-    ...emptyProgress,
-    bestScores: oversizedMetricMap(),
-  }),
+  () =>
+    normalizeGameProgressSnapshot({
+      ...emptyProgress,
+      bestScores: oversizedMetricMap(),
+    }),
   'must not contain more than',
   'metric maps should enforce their entry bound before reading values',
 );
@@ -436,10 +449,11 @@ assertThrows(
   'active progress payloads should have a fixed string budget',
 );
 await assertRejects(
-  () => service.reconcileGuestProgress(
-    { authoritativePlayerId: 'x'.repeat(gameProgressLimits.maxIdentifierLength + 1) },
-    request,
-  ),
+  () =>
+    service.reconcileGuestProgress(
+      { authoritativePlayerId: 'x'.repeat(gameProgressLimits.maxIdentifierLength + 1) },
+      request,
+    ),
   'must not exceed',
   'server-resolved player identifiers should be bounded before verification',
 );

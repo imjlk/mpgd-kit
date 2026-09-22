@@ -3,8 +3,14 @@ import type {
   GameServicesPurchaseProgress,
 } from '@mpgd/game-services/operations';
 const client: GameServicesOperationClient = {
-  purchase: async () => ({ status: 'cancelled', purchase: { status: 'cancelled', entitlementIds: [] } }),
-  claimRewardedAd: async () => ({ status: 'skipped', reward: { status: 'skipped', rewardGranted: false } }),
+  purchase: async () => ({
+    status: 'cancelled',
+    purchase: { status: 'cancelled', entitlementIds: [] },
+  }),
+  claimRewardedAd: async () => ({
+    status: 'skipped',
+    reward: { status: 'skipped', rewardGranted: false },
+  }),
 };
 const progress: GameServicesPurchaseProgress = {
   kind: 'purchase',

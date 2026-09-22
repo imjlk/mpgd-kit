@@ -13,25 +13,39 @@ import {
 } from '../src/packs.js';
 const catalog: readonly PhaserAssetPack[] = [
   {
-    id: 'shared', revision: '1', assets: [{
-      kind: 'image', key: 'pilot', url: '/pilot.png',
-    }],
+    id: 'shared',
+    revision: '1',
+    assets: [
+      {
+        kind: 'image',
+        key: 'pilot',
+        url: '/pilot.png',
+      },
+    ],
   },
   {
     id: 'grove',
     revision: '1',
     dependsOn: ['shared'],
-    assets: [{
-      kind: 'image', key: 'ground', url: '/grove.png',
-    }],
+    assets: [
+      {
+        kind: 'image',
+        key: 'ground',
+        url: '/grove.png',
+      },
+    ],
   },
   {
     id: 'dunes',
     revision: '1',
     dependsOn: ['shared'],
-    assets: [{
-      kind: 'image', key: 'ground', url: '/dunes.png',
-    }],
+    assets: [
+      {
+        kind: 'image',
+        key: 'ground',
+        url: '/dunes.png',
+      },
+    ],
   },
 ];
 let decode: () => Promise<void>;
@@ -52,7 +66,11 @@ function fixture() {
   const scene = {
     events,
     textures: {
-      exists: (key: string) => values.has(key), remove, addImage: add, addAtlas: add, addSpriteSheet: add,
+      exists: (key: string) => values.has(key),
+      remove,
+      addImage: add,
+      addAtlas: add,
+      addSpriteSheet: add,
     },
   } as unknown as Phaser.Scene;
   return {
@@ -345,18 +363,24 @@ it('accepts explicitly undefined optional integrity and rejects malformed values
     expect(() => definePhaserAssetPacks(bad)).toThrow('Invalid integrity');
   }
 });
-it.each(['default', 'reload'] as const)('passes an explicit HTTP cache policy to the transport', async (requestCache) => {
+it.each(['default', 'reload'] as const)(
+  'passes an explicit HTTP cache policy to the transport',
+  async (requestCache) => {
   const f = fixture();
   const loader = createPhaserAssetPackLoader(f.scene, catalog, {
     requestCache,
   });
   const lease = await loader.acquire('shared');
-  expect(fetch).toHaveBeenCalledWith('/pilot.png', expect.objectContaining({
+    expect(fetch).toHaveBeenCalledWith(
+      '/pilot.png',
+      expect.objectContaining({
     cache: requestCache,
-  }));
+      }),
+    );
   lease.release();
   loader.dispose();
-});
+  },
+);
 it('rejects unsupported HTTP cache policies without fetching', () => {
   const f = fixture();
   expect(() => createPhaserAssetPackLoader(f.scene, catalog, {
@@ -671,7 +695,17 @@ it('rejects misspelled and inapplicable integrity fields before starting work', 
 
 it('identifies an atlas that cannot fit its reservation without rejecting smaller catalogs', async () => {
   const f = fixture();
-  const loader = createPhaserAssetPackLoader(f.scene, [{ id: 'atlas-pack', revision: '1', assets: [{ kind: 'atlas', key: 'terrain', textureUrl: '/image', atlasUrl: '/json' }] }], { maxFileBytes: 8, maxBufferedBytes: 8 });
+  const loader = createPhaserAssetPackLoader(
+    f.scene,
+    [
+      {
+        id: 'atlas-pack',
+        revision: '1',
+        assets: [{ kind: 'atlas', key: 'terrain', textureUrl: '/image', atlasUrl: '/json' }],
+      },
+    ],
+    { maxFileBytes: 8, maxBufferedBytes: 8 },
+  );
   await expect(loader.acquire('atlas-pack')).rejects.toThrow('Asset atlas-pack/terrain reservation 16 exceeds buffered byte limit 8');
   expect(fetch).not.toHaveBeenCalled();
   loader.dispose();

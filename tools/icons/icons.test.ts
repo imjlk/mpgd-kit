@@ -473,9 +473,7 @@ async function testPngAndOverrides(parent: string): Promise<void> {
   const tamperedAndroidManifest = {
     ...android.manifest,
     variantSources: {},
-    outputs: android.manifest.outputs.filter(
-      (output) => output.purpose !== 'adaptive-monochrome',
-    ),
+    outputs: android.manifest.outputs.filter((output) => output.purpose !== 'adaptive-monochrome'),
   };
   writeFileSync(android.manifestPath, `${JSON.stringify(tamperedAndroidManifest, null, 2)}\n`);
   await assert.rejects(

@@ -1,15 +1,44 @@
 {
   "name": "target-config-runtime",
   "description": "Target config runtime feature availability, effective config bundles, diagnostics, localization, and starter action flow.",
-  "expectedFiles": ["packages/target-config/", "tools/target/"],
+  "expectedFiles": [
+    "packages/target-config/",
+    "tools/target/"
+  ],
   "tsconfig": "tsconfig.graph.json",
   "question": "What are the central target config runtime and effective config flows that gate capabilities, localization, products, ads, leaderboard, and starter game actions?",
-  "draft": "Use a tour because target availability and effective config diagnostics cross the target config package, build tools, starter platform installation, and Phaser starter actions.",
+  "draft": {
+    "reason": "Use a tour because target availability and effective config diagnostics cross the target config package, build tools, starter platform installation, and Phaser starter actions.",
+    "type": "tour"
+  },
   "review": "A broad target config runtime question should use a graph tour over target availability helpers, effective config generation, diagnostics, and starter game action gating.",
   "request": {
     "type": "tour",
-    "query": "withTargetAvailability createTargetRuntimeSnapshot getTargetRuntime applyTargetConfigToCapabilities targetConfigKeyForPlatform getTargetConfig createEffectiveTargetConfig createEffectiveTargetConfigMatrix getEffectiveProductConfig getEffectiveAdPlacementConfig validateEffectiveTargetConfigMatrix writeEffectiveTargetConfigs generateEffectiveTargetConfigArtifacts resolveMpgdLocale @mpgd/i18n m app_title effective_config_summary installStarterPlatform StarterContext StarterScene capabilities localizedContent localization nativeIap rewardedAds leaderboard targetConfig effectiveConfig",
     "includeTests": true,
-    "limit": 90
+    "limit": 90,
+    "reinterpretations": [
+      "withTargetAvailability",
+      "createTargetRuntimeSnapshot",
+      "getTargetRuntime",
+      "applyTargetConfigToCapabilities",
+      "targetConfigKeyForPlatform",
+      "getTargetConfig",
+      "createEffectiveTargetConfig",
+      "createEffectiveTargetConfigMatrix",
+      "getEffectiveProductConfig",
+      "getEffectiveAdPlacementConfig",
+      "validateEffectiveTargetConfigMatrix",
+      "writeEffectiveTargetConfigs",
+      "generateEffectiveTargetConfigArtifacts",
+      "resolveMpgdLocale",
+      "installStarterPlatform",
+      "StarterContext",
+      "StarterScene",
+      "localizedContent",
+      "nativeIap",
+      "rewardedAds",
+      "targetConfig",
+      "effectiveConfig"
+    ]
   }
 }

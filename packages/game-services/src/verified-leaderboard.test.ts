@@ -158,33 +158,36 @@ assertThrows(
   'snapshots must not silently truncate remaining entries',
 );
 assertThrows(
-  () => assertVerifiedLeaderboardSnapshot({
-    ...snapshot,
-    nextCursor: createVerifiedLeaderboardCursor(
-      { ...snapshot.definition, leaderboardId: 'daily:other-board' },
-      snapshotPageEntry,
-    ),
-  }),
+  () =>
+    assertVerifiedLeaderboardSnapshot({
+      ...snapshot,
+      nextCursor: createVerifiedLeaderboardCursor(
+        { ...snapshot.definition, leaderboardId: 'daily:other-board' },
+        snapshotPageEntry,
+      ),
+    }),
   'nextCursor must continue after the final snapshot entry',
   'snapshots must bind continuation cursors to their definition and final entry',
 );
 assertThrows(
-  () => assertVerifiedLeaderboardSnapshot({
-    ...fullSnapshot,
-    entries: [
-      { ...secondFullEntry, rank: 1 },
-      { ...firstFullEntry, rank: 2 },
-    ],
-  }),
+  () =>
+    assertVerifiedLeaderboardSnapshot({
+      ...fullSnapshot,
+      entries: [
+        { ...secondFullEntry, rank: 1 },
+        { ...firstFullEntry, rank: 2 },
+      ],
+    }),
   'entries must follow the leaderboard ranking order',
   'snapshots must preserve stable leaderboard ordering',
 );
 assertThrows(
-  () => assertVerifiedLeaderboardSnapshot({
-    ...fullSnapshot,
-    entries: [firstFullEntry, { ...secondFullEntry, rank: 3 }],
-    totalParticipants: 3,
-  }),
+  () =>
+    assertVerifiedLeaderboardSnapshot({
+      ...fullSnapshot,
+      entries: [firstFullEntry, { ...secondFullEntry, rank: 3 }],
+      totalParticipants: 3,
+    }),
   'entry ranks must be contiguous within a snapshot page',
   'snapshots must not skip ranks inside a page',
 );
@@ -196,58 +199,60 @@ assertVerifiedLeaderboardSnapshot({
   },
 });
 assertThrows(
-  () => assertVerifiedLeaderboardSnapshot({
-    ...fullSnapshot,
-    participantEntry: { ...firstFullEntry, score: firstFullEntry.score + 1 },
-  }),
+  () =>
+    assertVerifiedLeaderboardSnapshot({
+      ...fullSnapshot,
+      participantEntry: { ...firstFullEntry, score: firstFullEntry.score + 1 },
+    }),
   'participantEntry must match overlapping snapshot entries',
   'snapshots must reject conflicting participant entries on the current page',
 );
 assertThrows(
-  () => assertVerifiedLeaderboardSnapshot({
-    ...fullSnapshot,
-    participantEntry: {
-      ...firstFullEntry,
-      participantId: 'conflicting-attempt-participant',
-    },
-  }),
+  () =>
+    assertVerifiedLeaderboardSnapshot({
+      ...fullSnapshot,
+      participantEntry: {
+        ...firstFullEntry,
+        participantId: 'conflicting-attempt-participant',
+      },
+    }),
   'participantEntry must match overlapping snapshot entries',
   'snapshots must reject attempt identities assigned to another participant',
 );
 assertThrows(
-  () => assertVerifiedLeaderboardSnapshot({
-    ...fullSnapshot,
-    participantEntry: {
-      ...firstFullEntry,
-      participantId: 'conflicting-rank-participant',
-      attemptId: 'conflicting-rank-attempt',
-    },
-  }),
+  () =>
+    assertVerifiedLeaderboardSnapshot({
+      ...fullSnapshot,
+      participantEntry: {
+        ...firstFullEntry,
+        participantId: 'conflicting-rank-participant',
+        attemptId: 'conflicting-rank-attempt',
+      },
+    }),
   'participantEntry must match overlapping snapshot entries',
   'snapshots must reject different entries assigned to the same rank',
 );
 assertThrows(
-  () => assertVerifiedLeaderboardSnapshot({
-    ...snapshot,
-    participantEntry: {
-      rank: 2,
-      participantId: 'out-of-order-participant',
-      attemptId: 'out-of-order-attempt',
-      score: snapshotPageEntry.score - 1,
-      completedAt: snapshotPageEntry.completedAt,
-    },
-  }),
+  () =>
+    assertVerifiedLeaderboardSnapshot({
+      ...snapshot,
+      participantEntry: {
+        rank: 2,
+        participantId: 'out-of-order-participant',
+        attemptId: 'out-of-order-attempt',
+        score: snapshotPageEntry.score - 1,
+        completedAt: snapshotPageEntry.completedAt,
+      },
+    }),
   'participantEntry must follow the leaderboard ranking order',
   'snapshots must reject off-page participant entries that contradict visible ordering',
 );
 assertThrows(
-  () => assertVerifiedLeaderboardSnapshot({
-    ...fullSnapshot,
-    nextCursor: createVerifiedLeaderboardCursor(
-      fullSnapshot.definition,
-      finalFullEntry,
-    ),
-  }),
+  () =>
+    assertVerifiedLeaderboardSnapshot({
+      ...fullSnapshot,
+      nextCursor: createVerifiedLeaderboardCursor(fullSnapshot.definition, finalFullEntry),
+    }),
   'nextCursor must be omitted after the final snapshot entry',
   'terminal snapshots must not expose looping cursors',
 );
@@ -301,40 +306,43 @@ assertEqual(
 );
 
 await assertRejects(
-  () => maximumIdentifierService.recordVerifiedAttempt(
-    createAttempt({
-      leaderboardId: `${maximumIdentifier}x`,
-      participantId: 'oversized-leaderboard-player',
-      attemptId: 'oversized-leaderboard-attempt',
-      score: 1,
-      completedAt: '2026-07-13T08:00:02.000Z',
-    }),
-  ),
+  () =>
+    maximumIdentifierService.recordVerifiedAttempt(
+      createAttempt({
+        leaderboardId: `${maximumIdentifier}x`,
+        participantId: 'oversized-leaderboard-player',
+        attemptId: 'oversized-leaderboard-attempt',
+        score: 1,
+        completedAt: '2026-07-13T08:00:02.000Z',
+      }),
+    ),
   'leaderboardId must contain at most',
   'leaderboard IDs beyond the public maximum should fail closed',
 );
 await assertRejects(
-  () => maximumIdentifierService.recordVerifiedAttempt(
-    createAttempt({
-      participantId: 'oversized-attempt-player',
-      attemptId: `${maximumIdentifier}x`,
-      score: 1,
-      completedAt: '2026-07-13T08:00:03.000Z',
-    }),
-  ),
+  () =>
+    maximumIdentifierService.recordVerifiedAttempt(
+      createAttempt({
+        participantId: 'oversized-attempt-player',
+        attemptId: `${maximumIdentifier}x`,
+        score: 1,
+        completedAt: '2026-07-13T08:00:03.000Z',
+      }),
+    ),
   'attemptId must contain at most',
   'attempt IDs beyond the public maximum should fail closed',
 );
 await assertRejects(
-  () => maximumIdentifierService.recordVerifiedAttempt(
-    createAttempt({
-      leaderboardId: 'invalid-unicode-\uD800',
-      participantId: 'invalid-unicode-player',
-      attemptId: 'invalid-unicode-attempt',
-      score: 1,
-      completedAt: '2026-07-13T08:00:04.000Z',
-    }),
-  ),
+  () =>
+    maximumIdentifierService.recordVerifiedAttempt(
+      createAttempt({
+        leaderboardId: 'invalid-unicode-\uD800',
+        participantId: 'invalid-unicode-player',
+        attemptId: 'invalid-unicode-attempt',
+        score: 1,
+        completedAt: '2026-07-13T08:00:04.000Z',
+      }),
+    ),
   'leaderboardId must contain only well-formed Unicode',
   'URL-lossy leaderboard IDs should fail closed',
 );
@@ -468,40 +476,43 @@ assertEqual(
 );
 
 await assertRejects(
-  () => service.recordVerifiedAttempt({
-    ...firstAttempt,
-    attempt: {
-      ...firstAttempt.attempt,
-      verification: {
-        ...firstAttempt.attempt.verification,
-        evidenceId: 'different-evidence',
+  () =>
+    service.recordVerifiedAttempt({
+      ...firstAttempt,
+      attempt: {
+        ...firstAttempt.attempt,
+        verification: {
+          ...firstAttempt.attempt.verification,
+          evidenceId: 'different-evidence',
+        },
       },
-    },
-  }),
+    }),
   'Attempt id conflict',
   'attempt id reuse with different evidence should fail closed',
 );
 
 await assertRejects(
-  () => service.recordVerifiedAttempt({
-    ...firstAttempt,
-    attempt: {
-      ...firstAttempt.attempt,
-      score: 1,
-    },
-  }),
+  () =>
+    service.recordVerifiedAttempt({
+      ...firstAttempt,
+      attempt: {
+        ...firstAttempt.attempt,
+        score: 1,
+      },
+    }),
   'Attempt id conflict',
   'attempt id reuse with a different score should fail closed',
 );
 
 await assertRejects(
-  () => service.recordVerifiedAttempt({
-    ...firstAttempt,
-    attempt: {
-      ...firstAttempt.attempt,
-      metrics: { elapsedMs: 9_000, hints: 1, mistakes: 1 },
-    },
-  }),
+  () =>
+    service.recordVerifiedAttempt({
+      ...firstAttempt,
+      attempt: {
+        ...firstAttempt.attempt,
+        metrics: { elapsedMs: 9_000, hints: 1, mistakes: 1 },
+      },
+    }),
   'Attempt id conflict',
   'attempt id reuse with different metrics should fail closed',
 );
@@ -551,84 +562,90 @@ await assertRejects(
 );
 
 await assertRejects(
-  () => service.recordVerifiedAttempt(
-    createAttempt({
-      participantId: 'player-timezone',
-      attemptId: 'attempt-timezone',
-      score: 1,
-      completedAt: '2026-07-13T08:07:00.000',
-    }),
-  ),
+  () =>
+    service.recordVerifiedAttempt(
+      createAttempt({
+        participantId: 'player-timezone',
+        attemptId: 'attempt-timezone',
+        score: 1,
+        completedAt: '2026-07-13T08:07:00.000',
+      }),
+    ),
   'timezone-qualified timestamp',
   'offset-less completion timestamps should fail closed',
 );
 
 await assertRejects(
-  () => service.recordVerifiedAttempt(
-    createAttempt({
-      participantId: 'player-invalid-calendar',
-      attemptId: 'attempt-invalid-calendar',
-      score: 1,
-      completedAt: '2026-02-31T08:07:00.000Z',
-    }),
-  ),
+  () =>
+    service.recordVerifiedAttempt(
+      createAttempt({
+        participantId: 'player-invalid-calendar',
+        attemptId: 'attempt-invalid-calendar',
+        score: 1,
+        completedAt: '2026-02-31T08:07:00.000Z',
+      }),
+    ),
   'timezone-qualified timestamp',
   'normalized invalid calendar timestamps should fail closed',
 );
 
 await assertRejects(
-  () => service.recordVerifiedAttempt(
-    createAttempt({
-      participantId: 'player-sub-millisecond',
-      attemptId: 'attempt-sub-millisecond',
-      score: 1,
-      completedAt: '2026-07-13T08:07:00.0001Z',
-    }),
-  ),
+  () =>
+    service.recordVerifiedAttempt(
+      createAttempt({
+        participantId: 'player-sub-millisecond',
+        attemptId: 'attempt-sub-millisecond',
+        score: 1,
+        completedAt: '2026-07-13T08:07:00.0001Z',
+      }),
+    ),
   'timezone-qualified timestamp',
   'unsupported sub-millisecond timestamps should fail closed',
 );
 
 await assertRejects(
-  () => service.recordVerifiedAttempt(
-    createAttempt({
-      participantId: 'player-invalid-metric-key',
-      attemptId: 'attempt-invalid-metric-key',
-      score: 1,
-      metrics: { '1elapsedMs': 1 },
-      completedAt: '2026-07-13T08:07:00.000Z',
-    }),
-  ),
+  () =>
+    service.recordVerifiedAttempt(
+      createAttempt({
+        participantId: 'player-invalid-metric-key',
+        attemptId: 'attempt-invalid-metric-key',
+        score: 1,
+        metrics: { '1elapsedMs': 1 },
+        completedAt: '2026-07-13T08:07:00.000Z',
+      }),
+    ),
   'metric keys must start with an ASCII letter',
   'invalid metric keys should fail closed',
 );
 
 await assertRejects(
-  () => service.recordVerifiedAttempt(
-    createAttempt({
-      participantId: 'player-invalid-metric-value',
-      attemptId: 'attempt-invalid-metric-value',
-      score: 1,
-      metrics: { elapsedMs: -1 },
-      completedAt: '2026-07-13T08:07:00.000Z',
-    }),
-  ),
+  () =>
+    service.recordVerifiedAttempt(
+      createAttempt({
+        participantId: 'player-invalid-metric-value',
+        attemptId: 'attempt-invalid-metric-value',
+        score: 1,
+        metrics: { elapsedMs: -1 },
+        completedAt: '2026-07-13T08:07:00.000Z',
+      }),
+    ),
   'metric values must be non-negative safe integers',
   'invalid metric values should fail closed',
 );
 
 await assertRejects(
-  () => service.recordVerifiedAttempt(
-    createAttempt({
-      participantId: 'player-too-many-metrics',
-      attemptId: 'attempt-too-many-metrics',
-      score: 1,
-      metrics: Object.fromEntries(
-        Array.from({ length: 17 }, (_, index) => [`metric${String(index)}`, index]),
-      ),
-      completedAt: '2026-07-13T08:07:00.000Z',
-    }),
-  ),
+  () =>
+    service.recordVerifiedAttempt(
+      createAttempt({
+        participantId: 'player-too-many-metrics',
+        attemptId: 'attempt-too-many-metrics',
+        score: 1,
+        metrics: Object.fromEntries(
+          Array.from({ length: 17 }, (_, index) => [`metric${String(index)}`, index]),
+        ),
+        completedAt: '2026-07-13T08:07:00.000Z',
+      }),
+    ),
   'metrics must contain at most 16 keys',
   'too many metrics should fail closed',
 );
@@ -640,17 +657,18 @@ const invalidEvidenceTimestampRequest = createAttempt({
   completedAt: '2026-07-13T08:07:00.000Z',
 });
 await assertRejects(
-  () => service.recordVerifiedAttempt({
-    ...invalidEvidenceTimestampRequest,
-    attempt: {
-      ...invalidEvidenceTimestampRequest.attempt,
-      verification: {
-        authorityId: 'test-attempt-coordinator',
-        evidenceId: 'evidence:attempt-evidence-timezone',
-        verifiedAt: '2026-07-13T08:07:00.000',
+  () =>
+    service.recordVerifiedAttempt({
+      ...invalidEvidenceTimestampRequest,
+      attempt: {
+        ...invalidEvidenceTimestampRequest.attempt,
+        verification: {
+          authorityId: 'test-attempt-coordinator',
+          evidenceId: 'evidence:attempt-evidence-timezone',
+          verifiedAt: '2026-07-13T08:07:00.000',
+        },
       },
-    },
-  }),
+    }),
   'timezone-qualified timestamp',
   'offset-less verification timestamps should fail closed',
 );
@@ -666,15 +684,16 @@ const unknownRecord = await service.recordVerifiedAttempt(unknownRequest);
 assertEqual(unknownRecord.recorded, true, 'runtime assertion should narrow unknown requests');
 
 await assertRejects(
-  () => service.recordVerifiedAttempt(
-    createAttempt({
-      scoreOrder: 'descending',
-      participantId: 'player-4',
-      attemptId: 'attempt-7',
-      score: 1,
-      completedAt: '2026-07-13T08:05:00.000Z',
-    }),
-  ),
+  () =>
+    service.recordVerifiedAttempt(
+      createAttempt({
+        scoreOrder: 'descending',
+        participantId: 'player-4',
+        attemptId: 'attempt-7',
+        score: 1,
+        completedAt: '2026-07-13T08:05:00.000Z',
+      }),
+    ),
   'Leaderboard definition conflict',
   'leaderboard ranking policy should be immutable',
 );

@@ -14,7 +14,9 @@ async function expectedFor(entries: readonly ZipV1FixtureEntry[]): Promise<{
 }> {
   const fixture = buildZipV1Fixture(entries);
   const digest = async (data: Uint8Array): Promise<string> => {
-    const value = new Uint8Array(await crypto.subtle.digest('SHA-256', data.slice().buffer as ArrayBuffer));
+    const value = new Uint8Array(
+      await crypto.subtle.digest('SHA-256', data.slice().buffer as ArrayBuffer),
+    );
     return [...value].map((n) => n.toString(16).padStart(2, '0')).join('');
   };
   return {
@@ -45,13 +47,18 @@ export async function runZipWorkerSelfTest(): Promise<void> {
     for (let index = 0; index < texture.length; index++) {
       texture[index] = (index * 31 + 7) & 0xff;
     }
-    const atlas = new TextEncoder().encode('{"frames":{"ground":{"frame":{"x":0,"y":0,"w":8,"h":8}}}}');
+    const atlas = new TextEncoder().encode(
+      '{"frames":{"ground":{"frame":{"x":0,"y":0,"w":8,"h":8}}}}',
+    );
     const fixture = await expectedFor([
       { path: 'grove/grove.png', data: texture, method: 'store' },
       { path: 'grove/grove.json', data: atlas, method: 'deflate' },
     ]);
     const decoder = createBoundedZipDecoder({
-      createWorker: (): Worker => new Worker(new URL('./archive-decode-worker.ts', import.meta.url), { type: 'module' }),
+      createWorker: (): Worker => new Worker(
+        new URL('./archive-decode-worker.ts', import.meta.url),
+        { type: 'module' },
+      ),
     });
     const job = decoder.decode({
       archive: fixture.archive,
@@ -83,11 +90,14 @@ export async function runZipWorkerSelfTest(): Promise<void> {
       throw new Error('atlas bytes differ');
     }
     finish({
-      status: 'passed', entries: received.length, expandedBytes: status.stats?.expandedBytes,
+      status: 'passed',
+      entries: received.length,
+      expandedBytes: status.stats?.expandedBytes,
     });
   } catch (error) {
     finish({
-      status: 'failed', error: String(error),
+      status: 'failed',
+      error: String(error),
     });
   }
 }

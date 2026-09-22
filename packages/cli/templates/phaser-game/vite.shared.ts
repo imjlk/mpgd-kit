@@ -249,9 +249,7 @@ function readRuntimePlatformTarget(
     target.authoritativeGameServices !== undefined
     && typeof target.authoritativeGameServices !== 'boolean'
   ) {
-    throw new Error(
-      `Platform target ${configTarget} authoritativeGameServices must be a boolean.`,
-    );
+    throw new Error(`Platform target ${configTarget} authoritativeGameServices must be a boolean.`);
   }
 
   return {

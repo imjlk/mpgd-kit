@@ -39,18 +39,22 @@ const profiles = {
   devvit: {
     id: 'devvit',
     version: '1.0.0',
-    outputs: [png('app-icon', 'marketing-icon-1024.png', 1024, {
-      safeZone: 0.9,
-      opaque: false,
-    })],
+    outputs: [
+      png('app-icon', 'marketing-icon-1024.png', 1024, {
+        safeZone: 0.9,
+        opaque: false,
+      }),
+    ],
   },
   ait: {
     id: 'ait',
     version: '1.0.0',
-    outputs: [png('console-icon', 'console-icon-600.png', 600, {
-      safeZone: 0.8,
-      opaque: true,
-    })],
+    outputs: [
+      png('console-icon', 'console-icon-600.png', 600, {
+        safeZone: 0.8,
+        opaque: true,
+      }),
+    ],
   },
   android: {
     id: 'android-adaptive',
@@ -82,18 +86,22 @@ const profiles = {
   ios: {
     id: 'ios-app-icon',
     version: '1.0.0',
-    outputs: [png('app-icon', 'AppIcon-1024.png', 1024, {
-      safeZone: 0.9,
-      opaque: true,
-    })],
+    outputs: [
+      png('app-icon', 'AppIcon-1024.png', 1024, {
+        safeZone: 0.9,
+        opaque: true,
+      }),
+    ],
   },
   'minigame-experimental': {
     id: 'minigame-experimental',
     version: '1.0.0',
-    outputs: [png('static-artifact-evidence', 'validation-icon-512.png', 512, {
-      safeZone: 0.9,
-      opaque: false,
-    })],
+    outputs: [
+      png('static-artifact-evidence', 'validation-icon-512.png', 512, {
+        safeZone: 0.9,
+        opaque: false,
+      }),
+    ],
   },
 } as const satisfies Record<string, TargetIconProfile>;
 

@@ -9,11 +9,11 @@ import {
   type EntitlementLedgerGrant,
   type EntitlementLedgerResult,
   type EntitlementPlatformEvidenceIdentity,
+  type GameServicesStore,
   type LeaderboardScoreTransaction,
   type ProductGrantTransaction,
   type RecordLeaderboardScoreRequest,
   type RecordLeaderboardScoreResponse,
-  type GameServicesStore,
 } from '@mpgd/game-services';
 
 type EntitlementRow = {

@@ -1976,8 +1976,7 @@ describe('Driver tutorial presenter', () => {
     setRect(replacement, { height: 40, left: 20, top: 80, width: 100 });
     document.body.appendChild(replacement);
     const onError = vi.fn();
-    let presenter!: ReturnType<typeof createDriverTutorialPresenter<typeof tutorial.steps[number]>>;
-    presenter = createDriverTutorialPresenter({
+    const presenter: ReturnType<typeof createDriverTutorialPresenter<typeof tutorial.steps[number]>> = createDriverTutorialPresenter({
       missingTarget: 'error',
       onAcknowledge: vi.fn(),
       onError: (error) => {
@@ -2012,8 +2011,7 @@ describe('Driver tutorial presenter', () => {
     setRect(replacement, { height: 40, left: 20, top: 80, width: 100 });
     document.body.append(first, replacement);
     let replaced = false;
-    let presenter!: ReturnType<typeof createDriverTutorialPresenter<typeof tutorial.steps[number]>>;
-    presenter = createDriverTutorialPresenter({
+    const presenter: ReturnType<typeof createDriverTutorialPresenter<typeof tutorial.steps[number]>> = createDriverTutorialPresenter({
       onAcknowledge: vi.fn(),
       onActiveChange: (active) => {
         if (active && !replaced) {
@@ -2045,8 +2043,7 @@ describe('Driver tutorial presenter', () => {
     document.body.append(first, replacement);
     const onError = vi.fn();
     let replaceWhenDismissed = false;
-    let presenter!: ReturnType<typeof createDriverTutorialPresenter<typeof tutorial.steps[number]>>;
-    presenter = createDriverTutorialPresenter({
+    const presenter: ReturnType<typeof createDriverTutorialPresenter<typeof tutorial.steps[number]>> = createDriverTutorialPresenter({
       missingTarget: 'error',
       onAcknowledge: vi.fn(),
       onActiveChange: (active) => {

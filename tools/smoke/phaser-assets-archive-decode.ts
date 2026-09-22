@@ -89,11 +89,21 @@ try {
   const configPath = join(fixtureRoot, 'packs.config.json');
   writeJson(configPath, {
     root: 'src',
-    packs: [{
-      id: 'grove', revision: '3', delivery: 'zip', assets: [{
-        kind: 'atlas', key: 'ground', texture: 'grove/grove.png', atlas: 'grove/grove.json',
-      }],
-    }],
+    packs: [
+      {
+        id: 'grove',
+        revision: '3',
+        delivery: 'zip',
+        assets: [
+          {
+            kind: 'atlas',
+            key: 'ground',
+            texture: 'grove/grove.png',
+            atlas: 'grove/grove.json',
+          },
+        ],
+      },
+    ],
   });
 
   // 1. Build with the PR2 CLI builder and decode with the pure core.
@@ -110,12 +120,14 @@ try {
       bytes: zipPack.archive.bytes,
       sha256: zipPack.archive.sha256,
     },
-    entries: zipPack.assets[0]!.files.map((file: { path: string; method: 'store' | 'deflate'; bytes: number; sha256: string }) => ({
-      path: file.path,
-      method: file.method,
-      bytes: file.bytes,
-      sha256: file.sha256,
-    })),
+    entries: zipPack.assets[0]!.files.map(
+      (file: { path: string; method: 'store' | 'deflate'; bytes: number; sha256: string }) => ({
+        path: file.path,
+        method: file.method,
+        bytes: file.bytes,
+        sha256: file.sha256,
+      }),
+    ),
   };
   const coreOutput: { path: string; bytes: Uint8Array }[] = [];
   for await (const entry of decodeZipV1Entries(archive, expected, {

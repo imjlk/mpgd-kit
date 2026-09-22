@@ -481,6 +481,11 @@ token-based publish path only as a fallback.
 
 ## ttsc Graph Workflow
 
+The root `ttsc` dependency is the toolchain version authority. `pnpm validate:toolchain`
+checks workspace packages, shipped game templates, and native-package age exceptions
+against it; `pnpm check` runs this guard before compiling. See
+[toolchain maintenance and cache ownership](docs/TTSC_TOOLCHAIN.md) for upgrades and CI caching.
+
 Use graph presets before changing broad TypeScript flows:
 
 ```sh
@@ -493,8 +498,10 @@ pnpm graph:target-config
 pnpm graph:preflight
 ```
 
-`pnpm graph:preflight` runs every preset against `tsconfig.graph.json` and fails
-if a preset no longer returns answer-ready anchors.
+`pnpm graph:preflight` runs every preset against its selected tsconfig and fails
+if a preset no longer returns answer-ready anchors. Presets use a structured
+`draft` and symbol `reinterpretations` for tours; the response's `next` belongs
+to the outer envelope, alongside `result`. Each cwd/tsconfig is dumped once per run.
 
 ## App Icons
 

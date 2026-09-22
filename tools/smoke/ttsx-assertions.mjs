@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
+const authoredSibling = new URL('../fixtures/ttsx-assertion-canary.js', import.meta.url);
+const authoredContent = readFileSync(authoredSibling, 'utf8');
 for (const shouldFail of [false, true]) {
   const result = spawnSync(process.execPath, [
     'tools/run-ttsx.mjs', 'tools/fixtures/ttsx-assertion-canary.ts',
     ...(shouldFail ? ['--expect-failure'] : []),
   ], { cwd: root, encoding: 'utf8', timeout: 180_000 });
   assert.ifError(result.error);
+  assert.equal(readFileSync(authoredSibling, 'utf8'), authoredContent, 'authored source siblings must survive ttsx');
   assert.equal(result.signal, null, result.stderr);
   if (shouldFail) {
     assert.notEqual(result.status, 0, 'ttsx must preserve failing assertions');

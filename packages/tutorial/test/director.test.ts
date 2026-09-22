@@ -240,8 +240,7 @@ describe('tutorial director', () => {
     let firstSave = true;
     let reentrantSkip: Promise<void> | undefined;
     let flushedSaveCount = 0;
-    let director: TutorialDirector<typeof tutorial>;
-    director = createTutorialDirector({
+    const director: TutorialDirector<typeof tutorial> = createTutorialDirector({
       autoStart: false,
       definition: tutorial,
       progressStore: {
@@ -300,10 +299,9 @@ describe('tutorial director', () => {
 
   it('does not duplicate a replay synchronously started by a custom save', async () => {
     const initial = createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z');
-    let director: TutorialDirector<typeof tutorial>;
     let replaying: Promise<void> | undefined;
     let reentered = false;
-    director = createTutorialDirector({
+    const director: TutorialDirector<typeof tutorial> = createTutorialDirector({
       autoStart: false,
       definition: tutorial,
       progressStore: {

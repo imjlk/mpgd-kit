@@ -129,23 +129,25 @@ assertEqual(
 );
 
 assertThrows(
-  () => createGameServicesRuntime({
-    gateway: createGateway(),
-    playerId,
-    authorityMode: 'non-production',
-    baseUrl: 'not a URL',
-  }),
+  () =>
+    createGameServicesRuntime({
+      gateway: createGateway(),
+      playerId,
+      authorityMode: 'non-production',
+      baseUrl: 'not a URL',
+    }),
   'valid absolute URL',
   'non-production malformed URL should fail fast',
 );
 assertThrows(
-  () => createGameServicesRuntime({
-    gateway: createGateway(),
-    playerId,
-    authorityMode: 'non-production',
-    baseUrl: 'http://localhost:5173',
-    transport: 'grpc' as never,
-  }),
+  () =>
+    createGameServicesRuntime({
+      gateway: createGateway(),
+      playerId,
+      authorityMode: 'non-production',
+      baseUrl: 'http://localhost:5173',
+      transport: 'grpc' as never,
+    }),
   'transport must be http or orpc',
   'invalid factory transport should fail fast',
 );
@@ -294,11 +296,14 @@ try {
     writable: true,
     value: async (_input: RequestInfo | URL, init?: RequestInit) => {
       observedRuntimeHeaders = new Headers(init?.headers);
-      return new Response(JSON.stringify({
-        verified: true,
-        ledgerEntryId: 'runtime-header-ledger',
-        alreadyProcessed: false,
-      }), { status: 200, headers: { 'content-type': 'application/json' } });
+      return new Response(
+        JSON.stringify({
+          verified: true,
+          ledgerEntryId: 'runtime-header-ledger',
+          alreadyProcessed: false,
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      );
     },
   });
 

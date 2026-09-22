@@ -44,8 +44,14 @@ bindGameLifecycle({
 
 // Headless declaration consumer: tsconfig deliberately has ES2022 and no DOM/Node ambient types.
 const servicePort: GameServicesOperationClient = {
-  purchase: async () => ({ status: 'cancelled', purchase: { status: 'cancelled', entitlementIds: [] } }),
-  claimRewardedAd: async () => ({ status: 'skipped', reward: { status: 'skipped', rewardGranted: false } }),
+  purchase: async () => ({
+    status: 'cancelled',
+    purchase: { status: 'cancelled', entitlementIds: [] },
+  }),
+  claimRewardedAd: async () => ({
+    status: 'skipped',
+    reward: { status: 'skipped', rewardGranted: false },
+  }),
 };
 const coordinator = createGameActionCoordinator({
   execution: createGameExecutionController(),
@@ -71,7 +77,8 @@ const recoverable = createGameActionCoordinator({
     playerId: 'player',
     async recover(operation) {
       const grantId = operation.kind === 'purchase'
-        ? operation.input.productId : operation.input.placementId;
+        ? operation.input.productId
+        : operation.input.placementId;
       return {
         operationId: operation.operationId,
         transaction: {

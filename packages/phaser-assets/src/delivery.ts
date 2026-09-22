@@ -885,7 +885,10 @@ const planPackPreparation = (
     })),
     coldArtifacts,
     coldObjectCount: coldArtifacts.length,
-    coldBodyBytes: safeSumBytes(coldArtifacts.map((artifact) => artifact.bodyBytes), 'cold artifact bytes'),
+    coldBodyBytes: safeSumBytes(
+      coldArtifacts.map((artifact) => artifact.bodyBytes),
+      'cold artifact bytes',
+    ),
     zipExpandedBytes: safeSumBytes(
       closure.filter((pack) => pack.delivery === 'zip').map((pack) => expandedBytesOf(pack)),
       'expanded zip bytes',
@@ -963,12 +966,14 @@ const expectedFor = (pack: PhaserPackDeliveryPack): ArchiveWorkerExpected => ({
     bytes: pack.archive!.bytes,
     sha256: pack.archive!.sha256,
   },
-  entries: pack.assets.flatMap((asset) => asset.files.map((file) => ({
+  entries: pack.assets.flatMap((asset) =>
+    asset.files.map((file) => ({
     path: file.path,
     method: file.method!,
     bytes: file.bytes,
     sha256: file.sha256,
-  }))),
+    })),
+  ),
 });
 
 /** Create a delivery over a validated manifest snapshot. The manifest and
@@ -1298,8 +1303,8 @@ export function createPhaserPackDelivery(
       },
     });
     const mediaByPath = new Map(
-      pack.assets.flatMap(
-        (asset) => asset.files.map((file) => [file.path, file.mediaType] as const),
+      pack.assets.flatMap((asset) =>
+        asset.files.map((file) => [file.path, file.mediaType] as const),
       ),
     );
     const files = new Map<string, { readonly bytes: Uint8Array; readonly mediaType: string }>();

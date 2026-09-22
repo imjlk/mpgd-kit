@@ -19,8 +19,14 @@ const transaction = {
 } as const;
 const recovered = { operationId: 1, transaction };
 const client = (): GameServicesOperationClient => ({
-  purchase: vi.fn<GameServicesOperationClient['purchase']>(async () => ({ status: 'pending', purchase: { status: 'pending', entitlementIds: [] } })),
-  claimRewardedAd: vi.fn<GameServicesOperationClient['claimRewardedAd']>(async () => ({ status: 'skipped', reward: { status: 'skipped', rewardGranted: false } })),
+  purchase: vi.fn<GameServicesOperationClient['purchase']>(async () => ({
+    status: 'pending',
+    purchase: { status: 'pending', entitlementIds: [] },
+  })),
+  claimRewardedAd: vi.fn<GameServicesOperationClient['claimRewardedAd']>(async () => ({
+    status: 'skipped',
+    reward: { status: 'skipped', rewardGranted: false },
+  })),
 });
 function setup(recover: GameActionReconciliationPort['recover']) {
   const service = client();

@@ -2733,9 +2733,7 @@ function createGameApp(input: {
       content: file.content,
     });
 
-    return prepared === undefined
-      ? []
-      : [{ ...file, content: renderTemplate(prepared, context) }];
+    return prepared === undefined ? [] : [{ ...file, content: renderTemplate(prepared, context) }];
   });
 
   if (input.dryRun) {

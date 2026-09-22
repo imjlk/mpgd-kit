@@ -149,7 +149,10 @@ function readNativeVersionEvidence(
 
     return {
       versionName: requireFinalSemVer(versionName, 'MPGD_TARGET_VERSION_NAME'),
-      versionCode: Number.parseInt(requirePositiveInteger(versionCode, 'MPGD_TARGET_VERSION_CODE'), 10),
+      versionCode: Number.parseInt(
+        requirePositiveInteger(versionCode, 'MPGD_TARGET_VERSION_CODE'),
+        10,
+      ),
     };
   }
 

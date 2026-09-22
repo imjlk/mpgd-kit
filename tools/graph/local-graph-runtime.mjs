@@ -48,6 +48,17 @@ export function normalizeRequest(request, source) {
     throw new Error(`Graph request is missing request payload: ${source}`);
   }
 
+  if (
+    typeof props.draft !== 'object' || props.draft === null ||
+    typeof props.draft.reason !== 'string' || typeof props.draft.type !== 'string'
+  ) {
+    throw new Error(`Graph request needs a draft with reason and type: ${source}`);
+  }
+
+  if (props.request.type === 'tour' && !Array.isArray(props.request.reinterpretations)) {
+    throw new Error(`Graph tour needs a reinterpretations array: ${source}`);
+  }
+
   return {
     name,
     description,
@@ -90,20 +101,28 @@ export function dumpGraph({ cwd, tsconfig }) {
 export async function inspectWithDump(dump, props) {
   const memory = TtscGraphMemory.from(JSON.parse(dump));
   const app = new TtscGraphApplication(memory);
-  const response = await app.inspect_typescript_graph(props);
-  return response.result;
+  return app.inspect_typescript_graph(props);
 }
 
-export function summarizeGraphResult(result) {
+export function summarizeGraphResult(result, nextAction = 'unknown') {
   const entrypointCount = result.entrypoints?.length ?? 0;
-  const anchorCount =
+  const anchorCount = graphResultAnchorCount(result);
+  return `${entrypointCount} entrypoints, ${anchorCount} anchors, next=${nextAction}`;
+}
+
+export function graphResultAnchorCount(result) {
+  if (result.type === 'trace') {
+    return result.start !== undefined && result.start !== null
+      ? 1 + (result.reached?.length ?? 0)
+      : 0;
+  }
+  return (
     result.answerAnchors?.length ??
     result.anchors?.length ??
     result.nodes?.length ??
     result.hits?.length ??
-    0;
-  const nextAction = result.next?.action ?? 'unknown';
-  return `${entrypointCount} entrypoints, ${anchorCount} anchors, next=${nextAction}`;
+    0
+  );
 }
 
 export function graphResultFiles(result) {

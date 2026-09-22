@@ -78,31 +78,35 @@ assert.deepEqual(
   releaseA,
 );
 assert.throws(
-  () => assertMicrosoftStorePwaReleaseEvidence({
-    ...releaseA,
-    sourceGitSha: '1234567',
-  }),
+  () =>
+    assertMicrosoftStorePwaReleaseEvidence({
+      ...releaseA,
+      sourceGitSha: '1234567',
+    }),
   /full 40-character lowercase Git SHA/u,
 );
 assert.throws(
-  () => assertMicrosoftStorePwaReleaseEvidence({
-    ...releaseA,
-    precacheUrls: ['./assets/game.release-a.js?stale'],
-  }),
+  () =>
+    assertMicrosoftStorePwaReleaseEvidence({
+      ...releaseA,
+      precacheUrls: ['./assets/game.release-a.js?stale'],
+    }),
   /Unsafe PWA precache URL/u,
 );
 assert.throws(
-  () => assertMicrosoftStorePwaReleaseEvidence({
-    ...releaseA,
-    precacheUrls: ['./%2e%2e/escape.js'],
-  }),
+  () =>
+    assertMicrosoftStorePwaReleaseEvidence({
+      ...releaseA,
+      precacheUrls: ['./%2e%2e/escape.js'],
+    }),
   /Unsafe PWA precache URL/u,
 );
 assert.throws(
-  () => assertMicrosoftStorePwaReleaseEvidence({
-    ...releaseA,
-    sourceGitSha: 'ABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD',
-  }),
+  () =>
+    assertMicrosoftStorePwaReleaseEvidence({
+      ...releaseA,
+      sourceGitSha: 'ABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD',
+    }),
   /full 40-character lowercase Git SHA/u,
 );
 assert.deepEqual(assertMicrosoftStorePwaCacheTransition({
@@ -136,22 +140,24 @@ assert.deepEqual((await inspectMicrosoftStorePwaBrowserCacheTransition({
 })).scopedCacheNames, scopedCacheNames);
 
 assert.throws(
-  () => assertMicrosoftStorePwaCacheTransition({
-    releaseA,
-    releaseB,
-    releaseBIndexRequestCount: 1,
-    ...observation,
-    cacheNames: [scopedCacheNames.a, scopedCacheNames.b, unrelatedCache],
-  }),
+  () =>
+    assertMicrosoftStorePwaCacheTransition({
+      releaseA,
+      releaseB,
+      releaseBIndexRequestCount: 1,
+      ...observation,
+      cacheNames: [scopedCacheNames.a, scopedCacheNames.b, unrelatedCache],
+    }),
   /Release A cache must be deleted/u,
 );
 assert.throws(
-  () => assertMicrosoftStorePwaCacheTransition({
-    releaseA,
-    releaseB,
-    releaseBIndexRequestCount: 0,
-    ...observation,
-  }),
+  () =>
+    assertMicrosoftStorePwaCacheTransition({
+      releaseA,
+      releaseB,
+      releaseBIndexRequestCount: 0,
+      ...observation,
+    }),
   /must request index\.html/u,
 );
 assert.throws(
@@ -179,10 +185,6 @@ function createReleaseEvidence(
     revision,
     cachePrefix,
     cacheNamePattern: `${cachePrefix}{scope}-${revision}`,
-    precacheUrls: [
-      `./assets/game.${buildId}.js`,
-      './index.html',
-      './pwa-release.json',
-    ],
+    precacheUrls: [`./assets/game.${buildId}.js`, './index.html', './pwa-release.json'],
   };
 }

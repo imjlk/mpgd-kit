@@ -663,8 +663,8 @@ function findEmbeddedIconManifestArtifactPath(artifact: string): string {
   const artifactPath = targetPath(artifact);
   const fileName = 'mpgd-icon-manifest.json';
   const matches = statSync(artifactPath).isDirectory()
-    ? findNamedArtifactFiles(artifactPath, fileName).map(
-        (path) => relative(artifactPath, path).replaceAll('\\', '/'),
+    ? findNamedArtifactFiles(artifactPath, fileName).map((path) =>
+        relative(artifactPath, path).replaceAll('\\', '/'),
       )
     : listZipEntries(artifactPath).filter((entry) => basename(entry) === fileName);
 

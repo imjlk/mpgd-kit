@@ -18,9 +18,18 @@ import {
 } from '../ui/index.js';
 
 export type GameActionKind = 'purchase' | 'rewarded-ad';
-interface Inputs { purchase: GameServicesPurchaseInput; 'rewarded-ad': GameServicesRewardedAdInput }
-interface Results { purchase: GameServicesPurchaseResult; 'rewarded-ad': GameServicesRewardedAdResult }
-interface Progress { purchase: GameServicesPurchaseProgress; 'rewarded-ad': GameServicesRewardedAdProgress }
+interface Inputs {
+  purchase: GameServicesPurchaseInput;
+  'rewarded-ad': GameServicesRewardedAdInput;
+}
+interface Results {
+  purchase: GameServicesPurchaseResult;
+  'rewarded-ad': GameServicesRewardedAdResult;
+}
+interface Progress {
+  purchase: GameServicesPurchaseProgress;
+  'rewarded-ad': GameServicesRewardedAdProgress;
+}
 
 export type GameActionSnapshot<K extends GameActionKind> = Readonly<{ kind: K } & (
   | { status: 'idle' }

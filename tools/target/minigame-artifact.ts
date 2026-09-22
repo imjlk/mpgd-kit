@@ -2168,11 +2168,7 @@ function collectReflectIntrinsicMethodAliases(
       aliases,
     );
     const sourceMethods = getReflectIntrinsicMethodKinds(source, ancestors, analysis);
-    const sourceContainers = getReflectIntrinsicMethodContainerKinds(
-      source,
-      ancestors,
-      analysis,
-    );
+    const sourceContainers = getReflectIntrinsicMethodContainerKinds(source, ancestors, analysis);
     const containerKinds = new Set(sourceMethods);
     addSetValues(containerKinds, sourceContainers);
     const containerChanged = addMiniGameMethodContainerBindings(
@@ -2579,11 +2575,7 @@ function collectReflectiveGlobalReadAliases(
       aliases,
     );
     const sourceMethods = getReflectiveGlobalReadKinds(source, ancestors, analysis);
-    const sourceContainers = getReflectiveGlobalReadContainerKinds(
-      source,
-      ancestors,
-      analysis,
-    );
+    const sourceContainers = getReflectiveGlobalReadContainerKinds(source, ancestors, analysis);
     const containerKinds = new Set(sourceMethods);
     addSetValues(containerKinds, sourceContainers);
     const containerChanged = addMiniGameMethodContainerBindings(
