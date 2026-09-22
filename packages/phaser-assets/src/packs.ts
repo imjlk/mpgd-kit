@@ -584,6 +584,13 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
         if (!texture) {
           throw new Error(`Could not register texture: ${asset.key}`);
         }
+        // Decoding and texture registration are complete. Release the decode
+        // slot before a slow persistent-cache write, while the byte
+        // reservation remains held by the outer cleanup until every commit
+        // settles.
+        const releaseDecode = returnDecode;
+        returnDecode = undefined;
+        releaseDecode?.();
         // The image/atlas work is complete, so deferred cache commits may
         // transfer their origin buffers without competing with decoding.
         for (const body of bodies) {

@@ -304,7 +304,10 @@ export async function readPhaserPackArtifactWithCommit(
   if (persistent === undefined || integrity === undefined) {
     return { bytes: await options.fetchOrigin() };
   }
-  const key = createPhaserPackCacheKey(persistent.namespace, integrity);
+  // Storage providers receive the same identity used for verification and
+  // deferred writes. Freeze it so a provider cannot rewrite the evidence
+  // before the cache boundary validates or commits the bytes.
+  const key = Object.freeze(createPhaserPackCacheKey(persistent.namespace, integrity));
   let cached: ArrayBuffer | undefined;
   try {
     options.signal.throwIfAborted();

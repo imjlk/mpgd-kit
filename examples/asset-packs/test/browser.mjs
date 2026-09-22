@@ -836,6 +836,12 @@ try {
     })`);
     assert.deepEqual(migrationState, { legacy: false, foreign: true });
     assert.deepEqual(await usage(), coldUsage, 'Migration repairs usage without touching current records');
+    const repairedTotal = await idbArtifact('readonly', `(store) => new Promise((resolve, reject) => {
+      const get = store.get(${JSON.stringify(cacheUsageKey)});
+      get.onsuccess = () => resolve(get.result?.total ?? null);
+      get.onerror = () => reject(get.error);
+    })`);
+    assert.equal(repairedTotal, coldUsage.totalBytes, 'Migration rewrites the quota marker');
     await idbArtifact('readwrite', `(store) => {
       store.put({ legacy: true }, ${JSON.stringify(secondLegacyIdentity)});
     }`);

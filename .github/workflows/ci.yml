@@ -20,6 +20,7 @@ jobs:
     timeout-minutes: 120
     outputs:
       release_pr_metadata_only: ${{ steps.release-pr-meta.outputs.enabled }}
+      run_prepared: ${{ steps.release-pr-meta.outputs.run_prepared }}
 
     steps:
       - uses: actions/checkout@v5
@@ -40,6 +41,25 @@ jobs:
             local dir="$1"
             [[ "${dir}" != "packages/phaser-assets" && "${dir}" != "packages/tutorial" && -f "${dir}/package.json" ]] || return 1
             node -e 'let j;try{j=JSON.parse(require("fs").readFileSync(process.argv[1]+"/package.json","utf8"))}catch{process.exit(2)}process.exit(j.scripts&&j.scripts.test?0:1)' "${dir}"
+          }
+          register_workspace_test() {
+            local package_dir="$1"
+            local safe_path="$2"
+            local test_status=0
+            package_has_test "${package_dir}" || test_status=$?
+            if (( test_status == 0 )); then
+              workspace_test_dirs["${package_dir}"]=1
+            elif (( test_status == 2 )); then
+              local safe_dir="${package_dir//%/%25}"
+              safe_dir="${safe_dir//$'\r'/}"
+              safe_dir="${safe_dir//$'\n'/}"
+              echo "::warning file=${safe_path}::Workspace package ${safe_dir} has malformed package.json; selective tests are skipped for it."
+            elif [[ "${package_dir}" != "packages/phaser-assets" && "${package_dir}" != "packages/tutorial" && -f "${package_dir}/package.json" ]]; then
+              local safe_dir="${package_dir//%/%25}"
+              safe_dir="${safe_dir//$'\r'/}"
+              safe_dir="${safe_dir//$'\n'/}"
+              echo "::warning file=${safe_path}::Workspace package ${safe_dir} has no test script; selective tests are skipped for it unless another change in this PR enables the prepared smoke suite."
+            fi
           }
           run_prepared=true
           declare -A workspace_test_dirs=()
@@ -118,42 +138,25 @@ jobs:
                 tools/*.ts|tools/*.mjs|tools/package/*|tools/graph/*|tools/smoke/*|tools/target/*|tools/icons/*|tools/fixtures/*|packages/cli/*|packages/create-game/*|packages/game-services/*|packages/release-manifest/*|packages/target-*/*|apps/game-services-worker/*|apps/target-*/*|apps/mobile-capacitor/*|adapters/*|native-plugins/*|backend/*)
                   run_prepared=true
                   ;;
+                packages/*/package.json|apps/*/package.json)
+                  package_root="${path%%/*}"
+                  package_name="${path#*/}"
+                  package_name="${package_name%%/*}"
+                  register_workspace_test "${package_root}/${package_name}" "${safe_path}"
+                  ;;
                 packages/*|apps/*)
                   package_root="${path%%/*}"
                   package_name="${path#*/}"
                   package_name="${package_name%%/*}"
                   package_dir="${package_root}/${package_name}"
-                  test_status=0
-                  package_has_test "${package_dir}" || test_status=$?
-                  if (( test_status == 0 )); then
-                    workspace_test_dirs["${package_dir}"]=1
-                  elif (( test_status == 2 )); then
-                    safe_dir="${package_dir//%/%25}"
-                    safe_dir="${safe_dir//$'\r'/}"
-                    safe_dir="${safe_dir//$'\n'/}"
-                    echo "::warning file=${safe_path}::Workspace package ${safe_dir} has malformed package.json; selective tests are skipped for it."
-                  elif [[ "${package_dir}" != "packages/phaser-assets" && "${package_dir}" != "packages/tutorial" && -f "${package_dir}/package.json" ]]; then
-                      safe_dir="${package_dir//%/%25}"
-                      safe_dir="${safe_dir//$'\r'/}"
-                      safe_dir="${safe_dir//$'\n'/}"
-                      echo "::warning file=${safe_path}::Workspace package ${safe_dir} has no test script; selective tests are skipped for it unless another change in this PR enables the prepared smoke suite."
-                  fi
+                  register_workspace_test "${package_dir}" "${safe_path}"
                   ;;
                 */package.json|pnpm-lock.yaml|pnpm-workspace.yaml|mise.toml|tsconfig*.json|vitest.config.*|vite.config.*)
                   case "${path}" in
                     pnpm-lock.yaml|examples/*|pnpm-workspace.yaml|mise.toml|tsconfig*.json|vitest.config.*|vite.config.*)
                       echo "::warning file=${safe_path}::Workspace or example package change skips the prepared smoke suite; running workspace package tests instead."
                       for package_dir in packages/* apps/* adapters/* native-plugins/* backend/* examples/*; do
-                        test_status=0
-                        package_has_test "${package_dir}" || test_status=$?
-                        if (( test_status == 0 )); then
-                          workspace_test_dirs["${package_dir}"]=1
-                        elif (( test_status == 2 )); then
-                          safe_dir="${package_dir//%/%25}"
-                          safe_dir="${safe_dir//$'\r'/}"
-                          safe_dir="${safe_dir//$'\n'/}"
-                          echo "::warning file=${safe_path}::Workspace package ${safe_dir} has malformed package.json; selective tests are skipped for it."
-                        fi
+                        register_workspace_test "${package_dir}" "${safe_path}"
                       done
                       ;;
                     *)
@@ -263,39 +266,39 @@ jobs:
         timeout-minutes: 10
         run: pnpm --dir examples/asset-packs test:packed-consumer
       - run: pnpm smoke:apps-in-toss-production-evidence:prepared
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
       - run: tar -czf "$RUNNER_TEMP/package-dist.tgz" packages/*/dist adapters/*/dist native-plugins/*/dist
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
       - uses: actions/upload-artifact@v6
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
         with:
           name: package-dist-ci
           path: ${{ runner.temp }}/package-dist.tgz
           retention-days: 1
       - run: pnpm graph:preflight
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
       - run: pnpm pack:packages:prepared
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
       - run: pnpm build:web
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
       - run: pnpm smoke:target web-preview
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
       - run: pnpm build:microsoft-store
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
           VITE_MPGD_GAME_SERVICES_URL: https://services.example.com
       - run: pnpm smoke:target microsoft-store
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
       - run: pnpm build:verse8
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
           VITE_MPGD_GAME_SERVICES_URL: https://services.example.com
       - run: pnpm smoke:target verse8
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
       - run: pnpm test:prepared
         if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
 
@@ -317,7 +320,7 @@ jobs:
           retention-days: 7
 
   build-android:
-    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' }}
+    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' && needs.validate.outputs.run_prepared != 'false' }}
     runs-on: ubuntu-latest
     needs: validate
     timeout-minutes: 120
@@ -373,7 +376,7 @@ jobs:
           retention-days: 7
 
   build-ios:
-    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' }}
+    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' && needs.validate.outputs.run_prepared != 'false' }}
     runs-on: macos-26
     needs: validate
     timeout-minutes: 120
@@ -419,7 +422,7 @@ jobs:
           retention-days: 7
 
   build-ait:
-    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' }}
+    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' && needs.validate.outputs.run_prepared != 'false' }}
     runs-on: ubuntu-latest
     needs: validate
     timeout-minutes: 120
@@ -459,7 +462,7 @@ jobs:
           retention-days: 7
 
   build-devvit:
-    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' }}
+    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' && needs.validate.outputs.run_prepared != 'false' }}
     runs-on: ubuntu-latest
     needs: validate
     timeout-minutes: 30

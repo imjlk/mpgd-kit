@@ -231,6 +231,45 @@ describe('persistent pack cache boundary', () => {
     expect(await storage.usage('other')).toEqual({ records: 0, totalBytes: 0 });
   });
 
+  it('keeps storage key mutation away from integrity verification', async () => {
+    const wrong = new Uint8Array([9, 8, 7, 6]);
+    const wrongDigest = sha256(wrong);
+    let originCalls = 0;
+    const storage: PhaserPackPersistentCache = {
+      async get(key) {
+        try {
+          (key as { bytes: number }).bytes = wrong.byteLength;
+          (key as { sha256: string }).sha256 = wrongDigest;
+        } catch {
+          // The cache boundary deliberately freezes keys before storage calls.
+        }
+        return wrong.buffer.slice(0);
+      },
+      async put() {
+      },
+      async delete() {
+        return false;
+      },
+      async clear() {
+      },
+      async usage() {
+        return { records: 0, totalBytes: 0 };
+      },
+    };
+    const result = await readPhaserPackArtifact({
+      persistentCache: optionsOf(storage, []),
+      integrity,
+      artifact,
+      signal: new AbortController().signal,
+      fetchOrigin: async () => {
+        originCalls++;
+        return bytes.buffer.slice(0);
+      },
+    });
+    expect(originCalls).toBe(1);
+    expect(new Uint8Array(result)).toEqual(bytes);
+  });
+
   it('accepts a verified ArrayBuffer from another realm', async () => {
     const foreign = runInNewContext('new Uint8Array([1, 2, 3, 4]).buffer') as ArrayBuffer;
     const storage = memoryCache(foreign);
