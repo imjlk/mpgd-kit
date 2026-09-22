@@ -216,7 +216,7 @@ let packs: ReturnType<typeof createPhaserAssetPackLoader> | undefined;
 let delivery: PhaserPackDelivery | undefined;
 let unsubscribeDelivery: (() => void) | undefined;
 const namespaceParam = params.get('cache-namespace') ?? '';
-const PERSISTENT_CACHE_NAMESPACE = /^[a-zA-Z0-9][a-zA-Z0-9|-]{0,63}$/u.test(namespaceParam)
+const PERSISTENT_CACHE_NAMESPACE = /^[a-zA-Z0-9][a-zA-Z0-9|:-]{0,63}$/u.test(namespaceParam)
   ? namespaceParam
   : 'asset-pack-experiment';
 if (namespaceParam !== '' && PERSISTENT_CACHE_NAMESPACE !== namespaceParam) {

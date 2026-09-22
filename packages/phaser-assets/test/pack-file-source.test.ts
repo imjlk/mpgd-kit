@@ -544,6 +544,44 @@ describe('default URL source ownership', () => {
     opened.close();
   });
 
+  it.each([false, true])('resolves signed URLs after admission and returns the permit (resolver throws=%s)', async (throws) => {
+    const release = vi.fn();
+    let admit!: (release: () => void) => void;
+    const admission = new Promise<() => void>((resolve) => {
+      admit = resolve;
+    });
+    const acquire = vi.fn(() => admission);
+    let signature = 'expired';
+    const resolveURL = vi.fn(() => {
+      if (throws) {
+        throw new Error('signer unavailable');
+      }
+      return `/pilot.png?signature=${signature}`;
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(png)));
+    const opened = await createPackUrlFileSource({ ...transport, resolveURL }).open({
+      packId: 'shared', revision: '1', assetKey: 'pilot', role: 'texture', url: '/pilot.png',
+    }, {
+      signal: new AbortController().signal,
+      budgets: { transfers: { acquire }, bytes: { acquire: async () => () => undefined } },
+    });
+    const reading = opened.read();
+    expect(acquire).toHaveBeenCalledOnce();
+    expect(resolveURL).not.toHaveBeenCalled();
+    signature = 'fresh';
+    admit(release);
+    if (throws) {
+      await expect(reading).rejects.toThrow('signer unavailable');
+      expect(fetch).not.toHaveBeenCalled();
+    } else {
+      const body = await reading;
+      expect(fetch).toHaveBeenCalledWith('/pilot.png?signature=fresh', expect.anything());
+      body.release();
+    }
+    expect(release).toHaveBeenCalledOnce();
+    opened.close();
+  });
+
   it('keeps a failed read retryable', async () => {
     const fetch = vi
       .fn()

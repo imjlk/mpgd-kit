@@ -1562,15 +1562,15 @@ export function createPhaserPackDelivery(
                 signal: combined,
                 commitSignal: commitBridge.signal,
                 fetchOrigin: async (): Promise<ArrayBuffer> => {
-                  // Resolve before acquiring the permit so synchronous user
-                  // resolver code never occupies a transfer slot.
-                  const url = resolveArtifact(role.path, {
-                    packId: request.packId, revision: request.revision,
-                  });
                   // Only an origin fetch consumes the transfer permit; cache
                   // hits are bounded by the byte budget and do not use it.
                   const releaseTransfer = await context.budgets.transfers.acquire(combined).catch(mapReadAbort);
                   try {
+                    combined.throwIfAborted();
+                    const url = resolveArtifact(role.path, {
+                      packId: request.packId, revision: request.revision,
+                    });
+                    combined.throwIfAborted();
                     tracker.nextEvent('downloading', {
                       packId: request.packId,
                       revision: request.revision,

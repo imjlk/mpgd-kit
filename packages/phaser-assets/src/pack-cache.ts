@@ -380,6 +380,7 @@ export async function readPhaserPackArtifactWithCommit(
     }
   }
 
+  options.signal.throwIfAborted();
   const origin = await options.fetchOrigin();
   options.signal.throwIfAborted();
   emit(persistent, options.artifact, key, 'origin-download');
@@ -404,11 +405,13 @@ export async function readPhaserPackArtifactWithCommit(
           persistent.storage.put(key, payload, { signal: commitSignal }),
           commitSignal,
         );
+        commitSignal.throwIfAborted();
       } catch (error) {
         if (commitSignal.aborted) {
           throw error;
         }
         emit(persistent, options.artifact, key, 'cache-store-failed', error);
+        commitSignal.throwIfAborted();
       }
     },
   };
@@ -419,6 +422,16 @@ export async function readPhaserPackArtifactWithCommit(
 export async function readPhaserPackArtifact(
   options: PhaserPackArtifactReadOptions,
 ): Promise<ArrayBuffer> {
+  // Verification and the deferred cache key must use the same acquisition
+  // identity, even if an origin/storage callback mutates caller options.
+  const configuredIntegrity = options.integrity;
+  options = {
+    ...options,
+    persistentCache: snapshotPhaserPackPersistentCacheOptions(options.persistentCache),
+    integrity: configuredIntegrity === undefined
+      ? undefined
+      : Object.freeze({ bytes: configuredIntegrity.bytes, sha256: configuredIntegrity.sha256 }),
+  };
   if (options.persistentCache === undefined && options.integrity !== undefined
     && !isValidPhaserPackIntegrity(options.integrity)) {
     throw new Error('Artifact integrity requires a positive byte count and SHA-256 digest');

@@ -545,6 +545,39 @@ describe('phaser pack delivery', () => {
     uncached.dispose();
   });
 
+  it('signs files-delivery URLs only after transfer admission', async () => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'files' }]);
+    for (const [path, file] of packFiles) {
+      origin.files.set(path, file);
+    }
+    let signature = 'expired';
+    const resolveURL = vi.fn((path: string) => `${origin.url}${path}?signature=${signature}`);
+    const delivery = createPhaserPackDelivery(manifest, { resolveURL });
+    let admit!: (release: () => void) => void;
+    const admission = new Promise<() => void>((resolve) => {
+      admit = resolve;
+    });
+    const release = vi.fn();
+    const acquire = vi.fn(() => admission);
+    const opened = await delivery.fileSource.open(openRequest('solo'), {
+      signal: new AbortController().signal,
+      budgets: { ...budgets(), transfers: { acquire } },
+    });
+    const reading = opened.read();
+    expect(acquire).toHaveBeenCalledOnce();
+    expect(resolveURL).not.toHaveBeenCalled();
+    signature = 'fresh';
+    admit(release);
+    const body = await reading;
+    expect(resolveURL).toHaveReturnedWith(`${origin.url}packs/solo%401/pilot.png?signature=fresh`);
+    expect(release).toHaveBeenCalledOnce();
+    body.release();
+    opened.close();
+    delivery.dispose();
+  });
+
   it('aborts deferred file cache writes when delivery is disposed', async () => {
     const origin = await startOrigin();
     servers.push(origin);

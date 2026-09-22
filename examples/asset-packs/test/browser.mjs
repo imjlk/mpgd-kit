@@ -290,7 +290,14 @@ try {
         errors.push(message.text());
       });
       const state = () => page.evaluate(() => JSON.parse(window.render_game_to_text()));
-      const wait = (phase) => page.waitForFunction((expected) => JSON.parse(window.render_game_to_text()).phase === expected, phase);
+      const wait = async (phase) => {
+        try {
+          await page.waitForFunction((expected) => JSON.parse(window.render_game_to_text()).phase === expected, phase);
+        } catch (error) {
+          console.error('ZIP scenario failed', { renderer, expected: phase, actual: await state(), errors });
+          throw error;
+        }
+      };
       const waitForPreparing = (requested) => page.waitForFunction((expected) => {
         const current = JSON.parse(window.render_game_to_text());
         return current.phase === 'preparing' && current.requested === expected;
@@ -623,7 +630,7 @@ try {
     // from the remote origin. Cache hits do not emit origin requests.
     const artifactGets = () => remote.requests.filter((path) => path.startsWith('/delivery/zip/packs/')).length;
     const groveArchivePath = '/delivery/zip/packs/grove@1.zip';
-    const cacheNamespace = 'asset|pack|v2';
+    const cacheNamespace = 'asset|pack:v2';
     const cacheUrlSuffix = `&cache-namespace=${encodeURIComponent(cacheNamespace)}`;
     const usage = () => cachePage.evaluate(() => window.__artifact_cache_usage());
     const idbRaw = (fn) => cachePage.evaluate(`(${fn})(indexedDB)`);
@@ -684,6 +691,7 @@ try {
     assert.ok(coldUsage.totalBytes > 0);
     const identities = coldReport.entries.map((entry) => entry.identity);
     assert.ok(identities.every((identity) => identity.includes('|v2:')), JSON.stringify(identities));
+    assert.ok(identities.every((identity) => identity.includes('|v2:asset%7Cpack%3Av2:')), JSON.stringify(identities));
     await cachePage.click('#unload');
 
     // Idempotent duplicate storage: the same content is acquired again as cache

@@ -117,11 +117,13 @@ export function createPackUrlFileSource(transport: {
           readLatched = true;
           try {
             const fetchBlob = async (): Promise<Blob> => {
-              const url = resolveURL(request.url, {
-                packId: request.packId, revision: request.revision,
-              });
               const releaseTransfer = await context.budgets.transfers.acquire(context.signal);
               try {
+                context.signal.throwIfAborted();
+                // Sign immediately before fetching, after any transfer queue.
+                const url = resolveURL(request.url, {
+                  packId: request.packId, revision: request.revision,
+                });
                 return await fetchPackFile(
                   url,
                   {

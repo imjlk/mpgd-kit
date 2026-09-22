@@ -210,6 +210,62 @@ describe('persistent pack cache boundary', () => {
     })).rejects.toThrow('Artifact integrity requires');
   });
 
+  it.each([false, true])('snapshots compatibility integrity before origin callbacks (cache=%s)', async (withCache) => {
+    for (const returnOriginal of [false, true]) {
+      const originalIntegrity = { ...integrity };
+      const wrong = new Uint8Array([9, 8, 7, 6]);
+      const storage = memoryCache();
+      const cacheOptions = optionsOf(storage, []);
+      const reading = readPhaserPackArtifact({
+        persistentCache: withCache ? cacheOptions : undefined,
+        integrity: originalIntegrity,
+        artifact,
+        signal: new AbortController().signal,
+        fetchOrigin: async () => {
+          originalIntegrity.sha256 = sha256(wrong);
+          cacheOptions.namespace = 'changed-after-acquisition';
+          return returnOriginal ? bytes.buffer.slice(0) : wrong.buffer;
+        },
+      });
+      if (returnOriginal) {
+        await expect(reading).resolves.toEqual(bytes.buffer);
+        expect(storage.puts).toBe(withCache ? 1 : 0);
+      } else {
+        await expect(reading).rejects.toThrow('failed integrity verification');
+        expect(storage.puts).toBe(0);
+      }
+      expect(await storage.usage('changed-after-acquisition')).toEqual({ records: 0, totalBytes: 0 });
+    }
+  });
+
+  it.each(['store callback', 'failure observer'])('honors a separate commit signal aborted by the %s', async (source) => {
+    const controller = new AbortController();
+    const reason = new Error('commit cancelled');
+    const storage = memoryCache();
+    if (source === 'store callback') {
+      storage.put = async () => {
+        controller.abort(reason);
+      };
+    } else {
+      storage.failPut = true;
+    }
+    const cacheOptions = optionsOf(storage, []);
+    cacheOptions.onEvent = (event): void => {
+      if (event.outcome === 'cache-store-failed') {
+        controller.abort(reason);
+      }
+    };
+    const read = await readPhaserPackArtifactWithCommit({
+      persistentCache: cacheOptions,
+      integrity,
+      artifact,
+      signal: new AbortController().signal,
+      commitSignal: controller.signal,
+      fetchOrigin: async () => bytes.buffer.slice(0),
+    });
+    await expect(read.commit?.(true)).rejects.toBe(reason);
+  });
+
   it('honors cancellation before and after an uncached origin read', async () => {
     const before = new AbortController();
     before.abort();
