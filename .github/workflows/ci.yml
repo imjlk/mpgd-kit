@@ -142,7 +142,8 @@ jobs:
                   run_prepared=true
                   ;;
                 packages/phaser-assets/src/*|examples/asset-packs/src/*)
-                  run_prepared=true
+                  # Covered by focused package/archive tests and both source
+                  # and installed-tarball Chromium acceptance below.
                   ;;
                 packages/*/package.json|apps/*/package.json)
                   package_root="${path%%/*}"
