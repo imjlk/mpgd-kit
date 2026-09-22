@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   createPhaserPackCacheKey,
@@ -241,6 +241,33 @@ describe('persistent pack cache boundary', () => {
     resolveOrigin(bytes.buffer.slice(0));
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
     expect(originCalls).toBe(1);
+  });
+
+  it('honors cancellation after compatibility integrity hashing', async () => {
+    const controller = new AbortController();
+    let resolveDigest!: (value: ArrayBuffer) => void;
+    vi.stubGlobal('crypto', {
+      subtle: {
+        digest: async (): Promise<ArrayBuffer> => new Promise((resolve) => {
+          resolveDigest = resolve;
+        }),
+      },
+    });
+    try {
+      const pending = readPhaserPackArtifact({
+        integrity,
+        artifact,
+        signal: controller.signal,
+        fetchOrigin: async () => bytes.buffer.slice(0),
+      });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(resolveDigest).toBeDefined();
+      controller.abort();
+      resolveDigest(new ArrayBuffer(32));
+      await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('contains rejected async cache observers', async () => {

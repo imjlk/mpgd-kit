@@ -590,7 +590,7 @@ describe('phaser pack delivery', () => {
     expect(putSignal).toBeDefined();
     delivery.dispose();
     expect(putSignal?.aborted).toBe(true);
-    await expect(committing).rejects.toBeDefined();
+    await expect(committing).rejects.toMatchObject({ code: 'disposed' });
     releasePut();
     body.release();
     opened.close();

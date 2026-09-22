@@ -1630,6 +1630,14 @@ export function createPhaserPackDelivery(
                   commitStarted = true;
                   try {
                     await fileRead.commit!(true, { transferOwnership: true });
+                  } catch (error) {
+                    if (commitBridge.signal.aborted) {
+                      throw abortCategory(
+                        commitBridge.signal.reason,
+                        `file cache commit for ${request.packId}`,
+                      ).withDetails(requestContext);
+                    }
+                    throw error;
                   } finally {
                     commitBridge.dispose();
                   }

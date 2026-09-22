@@ -237,9 +237,9 @@ const verificationOf = async (
     return 'mismatch';
   }
   try {
-    return (await digestOf(new Uint8Array(bytes))) === expected.sha256.toLowerCase()
-      ? 'verified'
-      : 'mismatch';
+    const digest = await digestOf(new Uint8Array(bytes));
+    signal.throwIfAborted();
+    return digest === expected.sha256.toLowerCase() ? 'verified' : 'mismatch';
   } catch (error) {
     if (signal.aborted) {
       throw error;
