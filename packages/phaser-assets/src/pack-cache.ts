@@ -348,6 +348,7 @@ export async function readPhaserPackArtifactWithCommit(
     if (cachedVerification === 'verified') {
       options.signal.throwIfAborted();
       emit(persistent, options.artifact, key, 'cache-hit');
+      options.signal.throwIfAborted();
       return { bytes: cached };
     }
     if (cachedVerification === 'unverifiable') {

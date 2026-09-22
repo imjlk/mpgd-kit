@@ -141,6 +141,9 @@ jobs:
                 examples/phaser-starter/*)
                   run_prepared=true
                   ;;
+                packages/phaser-assets/src/*|examples/asset-packs/src/*)
+                  run_prepared=true
+                  ;;
                 packages/*/package.json|apps/*/package.json)
                   package_root="${path%%/*}"
                   package_name="${path#*/}"
