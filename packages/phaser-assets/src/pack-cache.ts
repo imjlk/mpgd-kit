@@ -332,6 +332,7 @@ export async function readPhaserPackArtifactWithCommit(
       throw error;
     }
     emit(persistent, options.artifact, key, 'cache-read-failed', error);
+    options.signal.throwIfAborted();
   }
   if (cached !== undefined && !isArrayBuffer(cached)) {
     emit(
@@ -341,6 +342,7 @@ export async function readPhaserPackArtifactWithCommit(
       'cache-read-failed',
       new Error('Persistent cache returned a non-ArrayBuffer record'),
     );
+    options.signal.throwIfAborted();
     cached = undefined;
   }
   if (cached !== undefined) {
@@ -357,6 +359,7 @@ export async function readPhaserPackArtifactWithCommit(
       // environment can verify SHA-256. This intentionally retries the
       // diagnostic path rather than destructively discarding good bytes.
       emit(persistent, options.artifact, key, 'cache-unverifiable');
+      options.signal.throwIfAborted();
     } else {
       const invalid = new Error('Persistent asset cache record failed manifest verification');
       options.signal.throwIfAborted();
@@ -372,6 +375,7 @@ export async function readPhaserPackArtifactWithCommit(
           throw error;
         }
         emit(persistent, options.artifact, key, 'cache-delete-failed', error);
+        options.signal.throwIfAborted();
       }
     }
   }
