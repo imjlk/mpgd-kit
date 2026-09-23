@@ -110,7 +110,32 @@ jobs:
             workflow_only=true
             for path in "${changed_files[@]}"; do
               case "${path}" in
-                .github/workflows/ci.yml) workflow_only=false; break ;;
+                .github/workflows/ci.yml)
+                  # The classifier itself is exercised below. Only skip the
+                  # long suite when the surrounding workflow (including every
+                  # test and native job) is byte-for-byte unchanged.
+                  if ! ci_before="$(git show "${base_sha}:.github/workflows/ci.yml")"; then
+                    workflow_only=false
+                    break
+                  fi
+                  if ! ci_after="$(git show HEAD:.github/workflows/ci.yml)"; then
+                    workflow_only=false
+                    break
+                  fi
+                  classifier_start='      - name: Determine metadata-only validation'
+                  classifier_end='      - uses: pnpm/action-setup@v6'
+                  if [[ "${ci_before}" != *"${classifier_start}"* || "${ci_after}" != *"${classifier_start}"* || "${ci_before}" != *"${classifier_end}"* || "${ci_after}" != *"${classifier_end}"* ]]; then
+                    echo "::warning file=.github/workflows/ci.yml::Classifier step markers changed; running full validation."
+                    workflow_only=false
+                    break
+                  fi
+                  if [[ "$(awk -v marker="${classifier_start}" '{ print; if ($0 == marker) exit }' <<< "${ci_before}")" != "$(awk -v marker="${classifier_start}" '{ print; if ($0 == marker) exit }' <<< "${ci_after}")" ]] ||
+                    [[ "$(awk -v marker="${classifier_end}" '$0 == marker { copy=1 } copy { print }' <<< "${ci_before}")" != "$(awk -v marker="${classifier_end}" '$0 == marker { copy=1 } copy { print }' <<< "${ci_after}")" ]]; then
+                    echo "CI workflow changed outside the classifier; running full validation."
+                    workflow_only=false
+                    break
+                  fi
+                  ;;
                 .github/workflows/*.yml|.github/workflows/*.yaml) ;;
                 *) workflow_only=false; break ;;
               esac
