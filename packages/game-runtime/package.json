@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/game-runtime",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Gameplay execution, scoped UI and action coordination with optional Phaser scene bindings.",
   "license": "MIT",
   "keywords": ["mpgd", "phaser", "game-development", "runtime", "lifecycle"],

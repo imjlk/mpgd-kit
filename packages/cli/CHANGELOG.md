@@ -1,5 +1,18 @@
 # @mpgd/cli
 
+## 0.33.0 — 2026-09-23
+
+### Changed
+
+- [c25bfb5](https://github.com/imjlk/mpgd-kit/commit/c25bfb52149c10ab9a5ab47fd8a58a960774d232) Build and validate published package metadata with ttsc 0.30.4, and generate Phaser games and target wrappers with the same toolchain. Preserve authored source siblings in the ttsx runner and verify graph presets against the current request and response contracts.
+  
+  Pin the monorepo runtime source root so cross-project imports keep emitted files inside the ttsx cache. Generated workspace games use the common game/kit root instead of inheriting the kit's narrower source root. — Thanks @imjlk!
+
+### Patch changes
+
+- [b4b77b3](https://github.com/imjlk/mpgd-kit/commit/b4b77b3e4ab08b330d8ca67de8b0023fe143910d) Update generated Apps in Toss projects to use the 3.5.0 WebView SDK and CLI, and remove the archived SDK 2-only `@ait-co/devtools` package from the starter target. — Thanks @imjlk!
+- Updated dependencies: adapter-ait@0.12.2, adapter-browser@0.7.4, adapter-capacitor@0.4.11, adapter-devvit@0.9.9, adapter-verse8@0.3.7, analytics@0.3.13, bridge@0.9.1, catalog@0.7.3, game-services@0.15.2, i18n@0.6.2, phaser-assets@0.7.0, platform@0.12.1, target-config@0.15.1
+
 ## 0.32.0 — 2026-09-21
 
 ### Minor changes
