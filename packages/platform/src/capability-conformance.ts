@@ -57,6 +57,12 @@ export interface PlatformGatewayCapabilityConformanceReport {
  * Runs provider-neutral capability checks against real adapter gateways or
  * target-configured wrappers. Every read must return a complete boolean
  * snapshot, a fresh object, and the provider's latest state.
+ * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Checks each gateway read against the required boolean keys and expected provider state.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f83948b Reviewed the required keys, optional banner default, and fresh reread in runFixture.
+ * @evidence docs/specs/platform-capability-snapshots.md#provider-transitions Checks a fresh provider read after the optional transition update.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#provider-transitions #839c0c8 Reviewed the changed-state guard and post-update snapshot assertion.
+ * @evidence docs/specs/platform-capability-snapshots.md#fixture-validation Rejects invalid fixture sets and returns the names of passing fixtures.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#fixture-validation #d566052 Checked the nonempty and unique name guards and target assertion.
  */
 export async function runPlatformGatewayCapabilityConformance(
   input: RunPlatformGatewayCapabilityConformanceInput,

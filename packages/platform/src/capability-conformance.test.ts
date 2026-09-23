@@ -11,42 +11,13 @@ import {
 } from './index';
 
 describe('platform gateway capability conformance', () => {
-  it('rejects an empty fixture set', async () => {
-    await expect(
-      runPlatformGatewayCapabilityConformance({ fixtures: [] }),
-    ).rejects.toThrow(
-      'Platform gateway capability conformance requires at least one fixture.',
-    );
-  });
+  it('rejects an empty fixture set', rejectsEmptyFixtureSet);
 
-  it('accepts fresh snapshots and observes provider transitions', async () => {
-    let capabilities = createUnsupportedCapabilities();
-    const fixture = createFixture(() => ({ ...capabilities }), {
-      update() {
-        capabilities = {
-          ...capabilities,
-          cloudSave: true,
-        };
-      },
-      expectedCapabilities: {
-        ...createUnsupportedCapabilities(),
-        cloudSave: true,
-      },
-    });
+  it('accepts fresh snapshots and observes provider transitions', acceptsFreshSnapshotsAndTransitions);
 
-    await expect(
-      runPlatformGatewayCapabilityConformance({ fixtures: [fixture] }),
-    ).resolves.toEqual({ passedFixtures: ['test-gateway'] });
-  });
+  it('rejects incomplete or unknown capability fields', rejectsMalformedSnapshots);
 
-  it('rejects gateways that leak a shared capability object', async () => {
-    const capabilities = createUnsupportedCapabilities();
-    const fixture = createFixture(() => capabilities);
-
-    await expect(
-      runPlatformGatewayCapabilityConformance({ fixtures: [fixture] }),
-    ).rejects.toThrow('Platform gateway capability conformance failed: test-gateway.');
-  });
+  it('rejects gateways that leak a shared capability object', rejectsSharedSnapshot);
 
   it('rejects duplicate fixture names', async () => {
     const fixture = createFixture(() => createUnsupportedCapabilities());
@@ -67,6 +38,82 @@ describe('platform gateway capability conformance', () => {
     ).rejects.toThrow('Platform capability conformance fixture names must not be empty.');
   });
 });
+
+/**
+ * @evidence docs/specs/platform-capability-snapshots.md#fixture-validation An empty fixture list is rejected before a gateway is read.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#fixture-validation #d566052 Verified the empty-input assertion and related fixture-name cases in this suite.
+ */
+export async function rejectsEmptyFixtureSet(): Promise<void> {
+  await expect(
+    runPlatformGatewayCapabilityConformance({ fixtures: [] }),
+  ).rejects.toThrow(
+    'Platform gateway capability conformance requires at least one fixture.',
+  );
+}
+
+/**
+ * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Exercises fresh boolean snapshots against expected values.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f83948b Verified that the fixture returns a new object on every read.
+ * @evidence docs/specs/platform-capability-snapshots.md#provider-transitions Exercises a provider update and the expected post-update snapshot.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#provider-transitions #839c0c8 Verified that the fixture changes cloudSave and the runner rereads it.
+ */
+export async function acceptsFreshSnapshotsAndTransitions(): Promise<void> {
+  let capabilities = createUnsupportedCapabilities();
+  const fixture = createFixture(() => ({ ...capabilities }), {
+    update() {
+      capabilities = {
+        ...capabilities,
+        cloudSave: true,
+      };
+    },
+    expectedCapabilities: {
+      ...createUnsupportedCapabilities(),
+      cloudSave: true,
+    },
+  });
+
+  await expect(
+    runPlatformGatewayCapabilityConformance({ fixtures: [fixture] }),
+  ).resolves.toEqual({ passedFixtures: ['test-gateway'] });
+}
+
+/**
+ * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Rejects a provider that returns the same snapshot object twice.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f83948b Confirmed the runner rejects object reuse after its attempted mutation.
+ */
+export async function rejectsSharedSnapshot(): Promise<void> {
+  const capabilities = Object.freeze(createUnsupportedCapabilities());
+  const fixture = createFixture(() => capabilities);
+
+  await expect(
+    runPlatformGatewayCapabilityConformance({ fixtures: [fixture] }),
+  ).rejects.toMatchObject({
+    cause: { message: expect.stringContaining('getCapabilities must return a fresh snapshot') },
+  });
+}
+
+/**
+ * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Rejects a missing required key and an unknown key.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f83948b Checked both malformed snapshots against the runner's shape guard.
+ */
+export async function rejectsMalformedSnapshots(): Promise<void> {
+  const missing = { ...createUnsupportedCapabilities() };
+  Reflect.deleteProperty(missing, 'nativeIap');
+  const unknown = { ...createUnsupportedCapabilities(), unknownCapability: true };
+
+  for (const capabilities of [missing, unknown]) {
+    const fixture = createFixture(() => capabilities);
+    await expect(
+      runPlatformGatewayCapabilityConformance({ fixtures: [fixture] }),
+    ).rejects.toMatchObject({
+      cause: {
+        message: expect.stringContaining(
+          'capability snapshots must contain all required keys and no unknown keys',
+        ),
+      },
+    });
+  }
+}
 
 function createFixture(
   getCapabilities: () => Promise<PlatformCapabilities> | PlatformCapabilities,

@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": [
+    "packages/platform/src/capability-conformance.ts",
+    "packages/platform/src/capability-conformance.test.ts"
+  ]
+}
