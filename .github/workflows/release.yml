@@ -64,6 +64,13 @@ jobs:
       # Build package dist and smoke npm tarballs only. Target builds run in PR CI.
       - run: pnpm pack:packages
 
+      # Keep credentials out of checkout/install/build. The helper reads the
+      # step-scoped token when Sampo subsequently invokes git push.
+      - name: Configure git authentication for Sampo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh auth setup-git --hostname github.com
+
       - name: Run Sampo release automation
         id: sampo
         uses: bruits/sampo/crates/sampo-github-action@sampo-v0.17.4
