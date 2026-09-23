@@ -33,6 +33,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # A SHA checkout is detached; pnpm publish keeps its branch and clean-tree
+      # checks enabled, so attach that exact CI-verified commit to local main.
+      - name: Attach verified release commit to main
+        run: git switch -C main
+
       - uses: pnpm/action-setup@v6
         with:
           version: 11.7.0
@@ -70,6 +75,22 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh auth setup-git --hostname github.com
+
+      - name: Verify current main and track upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          checked_out_sha="$(git rev-parse HEAD)"
+          current_main_sha="$(git rev-parse refs/remotes/origin/main)"
+          # This preflight is a snapshot, not a lock on main. Keep pnpm's
+          # branch/upstream checks enabled and never force a stale release.
+          if [[ "${checked_out_sha}" != "${current_main_sha}" ]]; then
+            echo "::error::Verified release commit ${checked_out_sha} is not current main ${current_main_sha}."
+            exit 1
+          fi
+          git branch --set-upstream-to=origin/main main
 
       - name: Run Sampo release automation
         id: sampo

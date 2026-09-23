@@ -15,12 +15,17 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  validate:
+  prepare:
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
     runs-on: ubuntu-latest
     timeout-minutes: 120
     outputs:
       release_pr_metadata_only: ${{ steps.release-pr-meta.outputs.enabled }}
       run_prepared: ${{ steps.release-pr-meta.outputs.run_prepared }}
+      workspace_test_dirs: ${{ steps.release-pr-meta.outputs.workspace_test_dirs }}
 
     steps:
       - uses: actions/checkout@v5
@@ -33,6 +38,8 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          GH_TOKEN: ${{ github.event_name == 'push' && github.token || '' }}
         run: |
           set -euo pipefail
 
@@ -64,16 +71,52 @@ jobs:
           run_prepared=true
           declare -A workspace_test_dirs=()
           if [[ "${EVENT_NAME}" == "pull_request" ]]; then
-            # Pull requests keep the focused checks below. The prepared smoke
-            # suite is reserved for main pushes and the small set of changes
-            # that can alter CLI/target/release acceptance contracts; normal
-            # package and example PRs must not pay the 40-minute suite cost.
+            # PRs and main pushes share the focused path classifier below.
+            # Contract changes still run the prepared/native suite; ordinary
+            # package changes should not pay its 40-minute cost twice.
             run_prepared=false
             if ! base_sha="$(git merge-base "origin/${PR_BASE_REF}" HEAD)"; then
               echo "enabled=false" >> "$GITHUB_OUTPUT"
               echo "run_prepared=true" >> "$GITHUB_OUTPUT"
               echo "Could not resolve merge base against origin/${PR_BASE_REF}; running full validation."
               exit 0
+            fi
+          elif [[ "${EVENT_NAME}" == "push" ]]; then
+            # A main checkout points origin/main at HEAD. Compare the full
+            # pushed range instead; fail open to full CI for missing or
+            # rewritten history rather than misclassifying changed source.
+            if [[ ! "${PUSH_BEFORE_SHA}" =~ ^[0-9a-fA-F]{40}$ ]] || ! git merge-base --is-ancestor "${PUSH_BEFORE_SHA}" HEAD; then
+              echo "enabled=false" >> "$GITHUB_OUTPUT"
+              echo "run_prepared=true" >> "$GITHUB_OUTPUT"
+              echo "Could not resolve the previous main commit; running full validation."
+              exit 0
+            fi
+            base_sha="${PUSH_BEFORE_SHA}"
+            # Reuse focused PR CI only if it attested this exact base/head
+            # merged tree. A head-only CI run may have tested an older base.
+            read -r -a push_commit_parents <<< "$(git rev-list --parents -n 1 HEAD)"
+            if [[ ${#push_commit_parents[@]} -eq 3 && "${push_commit_parents[1]}" == "${base_sha}" ]]; then
+              if pr_data="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls")"; then
+                pr_number="$(jq -r --arg merge_sha "${GITHUB_SHA}" '[.[] | select(.merged_at != null and .merge_commit_sha == $merge_sha)] | .[0].number // empty' <<< "${pr_data}")"
+                pr_head_sha="$(jq -r --arg merge_sha "${GITHUB_SHA}" '[.[] | select(.merged_at != null and .merge_commit_sha == $merge_sha)] | .[0].head.sha // empty' <<< "${pr_data}")"
+                if [[ "${pr_head_sha}" == "${push_commit_parents[2]}" ]]; then
+                  merge_tree_sha="$(git rev-parse 'HEAD^{tree}')"
+                  expected_artifact="ci-tested-pr${pr_number}-${base_sha}-${pr_head_sha}-${merge_tree_sha}"
+                  if ci_runs="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow ci.yml --commit "${pr_head_sha}" --event pull_request --limit 30 --json databaseId,event,status,conclusion,headSha)"; then
+                    while IFS= read -r run_id; do
+                      if artifacts="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts")"; then
+                        if jq -e --arg name "${expected_artifact}" '[.artifacts[] | select(.name == $name and .expired == false)] | length > 0' <<< "${artifacts}" >/dev/null; then
+                          run_prepared=false
+                          break
+                        fi
+                      fi
+                    done < <(jq -r --arg sha "${pr_head_sha}" '.[] | select(.headSha == $sha and .status == "completed" and .conclusion == "success") | .databaseId' <<< "${ci_runs}")
+                  fi
+                fi
+              fi
+            fi
+            if [[ "${run_prepared}" == "true" ]]; then
+              echo "Main commit has no successful PR CI attestation for its exact base/head/tree; running full validation."
             fi
           else
             # origin/main is already fetched by checkout (fetch-depth: 0);
@@ -92,6 +135,47 @@ jobs:
           if ((${#changed_files[@]} == 0)); then
             metadata_only=false
             run_prepared=true
+          fi
+
+          if [[ "${EVENT_NAME}" == "push" ]] && ((${#changed_files[@]} > 0)); then
+            for path in "${changed_files[@]}"; do
+              case "${path}" in
+                .github/workflows/ci.yml)
+                  # The classifier itself is exercised below. Only skip the
+                  # long suite when the surrounding workflow (including every
+                  # test and native job) is byte-for-byte unchanged.
+                  if ! ci_before="$(git show "${base_sha}:.github/workflows/ci.yml")"; then
+                    run_prepared=true
+                    break
+                  fi
+                  if ! ci_after="$(git show HEAD:.github/workflows/ci.yml)"; then
+                    run_prepared=true
+                    break
+                  fi
+                  classifier_start='      - name: Determine metadata-only validation'
+                  classifier_end='      - uses: pnpm/action-setup@v6'
+                  if [[ "${ci_before}" != *"${classifier_start}"* || "${ci_after}" != *"${classifier_start}"* || "${ci_before}" != *"${classifier_end}"* || "${ci_after}" != *"${classifier_end}"* ]]; then
+                    echo "::warning file=.github/workflows/ci.yml::Classifier step markers changed; running full validation."
+                    run_prepared=true
+                    break
+                  fi
+                  if [[ "$(awk -v marker="${classifier_start}" '{ print; if ($0 == marker) exit }' <<< "${ci_before}")" != "$(awk -v marker="${classifier_start}" '{ print; if ($0 == marker) exit }' <<< "${ci_after}")" ]] ||
+                    [[ "$(awk -v marker="${classifier_end}" '$0 == marker { copy=1 } copy { print }' <<< "${ci_before}")" != "$(awk -v marker="${classifier_end}" '$0 == marker { copy=1 } copy { print }' <<< "${ci_after}")" ]]; then
+                    echo "CI workflow changed outside the classifier; running full validation."
+                    run_prepared=true
+                    break
+                  fi
+                  ;;
+                .github/workflows/release.yml) ;;
+                .github/workflows/*)
+                  # Other workflow files may alter native/test jobs or their
+                  # triggers; preserve full validation for those edits.
+                  run_prepared=true
+                  break
+                  ;;
+                *) continue ;;
+              esac
+            done
           fi
 
           for path in "${changed_files[@]}"; do
@@ -126,16 +210,19 @@ jobs:
                 ;;
             esac
 
-            if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            if [[ "${EVENT_NAME}" == "pull_request" || "${EVENT_NAME}" == "push" ]]; then
               case "${path}" in
                 *.md|.github/*|examples/asset-packs/asset-source/*|examples/asset-packs/delivery-configs/*)
+                  ;;
+                release.manifest.schema.json)
+                  run_prepared=true
                   ;;
                 package.json|packages/cli/package.json|packages/create-game/package.json|packages/game-services/package.json|packages/release-manifest/package.json|packages/target-*/package.json|apps/game-services-worker/package.json|apps/target-*/package.json|apps/mobile-capacitor/package.json|packages/cli/templates/*package.json|adapters/*/package.json|native-plugins/*/package.json|backend/*/package.json)
                   if [[ "${package_json_has_content}" == "true" ]]; then
                     run_prepared=true
                   fi
                   ;;
-                tools/*.ts|tools/*.mjs|tools/package/*|tools/graph/*|tools/smoke/*|tools/target/*|tools/icons/*|tools/fixtures/*|packages/cli/*|packages/create-game/*|packages/game-services/*|packages/release-manifest/*|packages/target-*/*|apps/game-services-worker/*|apps/target-*/*|apps/mobile-capacitor/*|adapters/*|native-plugins/*|backend/*)
+                tools/*.ts|tools/*.mjs|tools/ci/*|tools/package/*|tools/graph/*|tools/smoke/*|tools/target/*|tools/icons/*|tools/fixtures/*|packages/bridge/*|packages/platform/*|packages/cli/*|packages/create-game/*|packages/game-services/*|packages/release-manifest/*|packages/target-*/*|apps/game-services-worker/*|apps/target-*/*|apps/mobile-capacitor/*|adapters/*|native-plugins/*|backend/*)
                   run_prepared=true
                   ;;
                 examples/phaser-starter/*)
@@ -161,7 +248,12 @@ jobs:
                 */package.json|pnpm-lock.yaml|pnpm-workspace.yaml|mise.toml|tsconfig*.json|vitest.config.*|vite.config.*)
                   case "${path}" in
                     pnpm-lock.yaml|examples/*|pnpm-workspace.yaml|mise.toml|tsconfig*.json|vitest.config.*|vite.config.*)
-                      echo "::warning file=${safe_path}::Workspace or example package change skips the prepared smoke suite; running workspace package tests instead."
+                      case "${path}" in
+                        pnpm-lock.yaml|pnpm-workspace.yaml|mise.toml|tsconfig*.json|vitest.config.*|vite.config.*)
+                          run_prepared=true
+                          ;;
+                      esac
+                      echo "::warning file=${safe_path}::Workspace configuration changed; running affected workspace tests."
                       for package_dir in packages/* apps/* adapters/* native-plugins/* backend/* examples/*; do
                         register_workspace_test "${package_dir}" "${safe_path}"
                       done
@@ -177,8 +269,8 @@ jobs:
                       echo "::warning file=${safe_path}::Unrecognized path skips the prepared smoke suite; add it to the contract list if it affects CLI/target/release acceptance."
                       ;;
                   esac
-                  # Intentionally fail-open: unknown paths stay focused. Any
-                  # new CLI/target/release-contract location must be added above.
+                  # Unknown paths stay focused. New CLI/target/release
+                  # contract locations must be added above.
                   ;;
               esac
             fi
@@ -233,10 +325,43 @@ jobs:
         if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
       - run: pnpm build:packages
         if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
-      - name: Run changed workspace package tests on pull requests
-        if: ${{ github.event_name == 'pull_request' && steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared == 'false' && steps.release-pr-meta.outputs.workspace_test_dirs != '' }}
+      # Native and test jobs consume this immediately after package build.
+      - run: tar -czf "$RUNNER_TEMP/package-dist.tgz" packages/*/dist adapters/*/dist native-plugins/*/dist
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+      - uses: actions/upload-artifact@v6
+        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
+        with:
+          name: package-dist-ci
+          path: ${{ runner.temp }}/package-dist.tgz
+          retention-days: 1
+
+  test-focused:
+    if: ${{ github.event_name == 'pull_request' && needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.run_prepared == 'false' }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm i18n:build
+      - uses: actions/download-artifact@v7
+        with:
+          name: package-dist-ci
+          path: ${{ runner.temp }}
+      - run: tar -xzf "$RUNNER_TEMP/package-dist.tgz"
+      - name: Run changed workspace package tests
+        if: ${{ needs.prepare.outputs.workspace_test_dirs != '' }}
         env:
-          WORKSPACE_TEST_DIRS: ${{ steps.release-pr-meta.outputs.workspace_test_dirs }}
+          WORKSPACE_TEST_DIRS: ${{ needs.prepare.outputs.workspace_test_dirs }}
         run: |
           failed=0
           while IFS= read -r package_dir; do
@@ -245,79 +370,59 @@ jobs:
             pnpm --dir "${package_dir}" run test || failed=1
           done <<< "${WORKSPACE_TEST_DIRS}"
           exit "${failed}"
-      - name: Run focused package tests on pull requests
-        if: ${{ github.event_name == 'pull_request' && steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared == 'false' }}
+      - name: Run focused package tests
         run: |
           pnpm --filter @mpgd/phaser-assets test
           pnpm --filter @mpgd/tutorial test
           pnpm smoke:phaser-assets-archive-decode
           pnpm smoke:tutorial:dist
+
+  test-browser:
+    if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm i18n:build
+      - uses: actions/download-artifact@v7
+        with:
+          name: package-dist-ci
+          path: ${{ runner.temp }}
+      - run: tar -xzf "$RUNNER_TEMP/package-dist.tgz"
       - name: Cache example browsers
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
         uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-runtime-playwright-${{ hashFiles('examples/runtime-controls/package.json', 'examples/asset-packs/package.json') }}
           restore-keys: ${{ runner.os }}-runtime-playwright-
       - name: Install runtime fixture browser
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
         timeout-minutes: 10
         run: pnpm --dir examples/runtime-controls exec playwright install --with-deps chromium
       - name: Verify Phaser runtime controls in Chromium
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
         timeout-minutes: 5
         run: pnpm --dir examples/runtime-controls build && pnpm --dir examples/runtime-controls test:browser
       - name: Install asset pack example browser
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
         timeout-minutes: 10
         run: pnpm --dir examples/asset-packs exec playwright install --with-deps chromium
       - name: Verify asset pack delivery and lifetime in Chromium
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
         timeout-minutes: 5
         run: pnpm --dir examples/asset-packs test:browser
       - name: Verify packaged asset consumer in Chromium
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' }}
         timeout-minutes: 10
         run: pnpm --dir examples/asset-packs test:packed-consumer
-      - run: pnpm smoke:apps-in-toss-production-evidence:prepared
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
-      - run: tar -czf "$RUNNER_TEMP/package-dist.tgz" packages/*/dist adapters/*/dist native-plugins/*/dist
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
-      - uses: actions/upload-artifact@v6
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
-        with:
-          name: package-dist-ci
-          path: ${{ runner.temp }}/package-dist.tgz
-          retention-days: 1
-      - run: pnpm graph:preflight
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
-      - run: pnpm pack:packages:prepared
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
-      - run: pnpm build:web
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
-        env:
-          MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
-      - run: pnpm smoke:target web-preview
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
-      - run: pnpm build:microsoft-store
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
-        env:
-          MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
-          VITE_MPGD_GAME_SERVICES_URL: https://services.example.com
-      - run: pnpm smoke:target microsoft-store
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
-      - run: pnpm build:verse8
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
-        env:
-          MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
-          VITE_MPGD_GAME_SERVICES_URL: https://services.example.com
-      - run: pnpm smoke:target verse8
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
-      - run: pnpm test:prepared
-        if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.run_prepared != 'false' }}
-
       - name: Upload asset pack browser evidence
-        if: ${{ failure() && steps.release-pr-meta.outputs.enabled != 'true' }}
+        if: ${{ failure() }}
         uses: actions/upload-artifact@v6
         with:
           name: asset-pack-browser-evidence
@@ -325,18 +430,142 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  compile-tools:
+    if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm i18n:build
+      - name: Cache compiled ttsc plugins
+        uses: actions/cache@v5
+        with:
+          path: node_modules/.cache/ttsc/plugins
+          key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
+      - uses: actions/download-artifact@v7
+        with:
+          name: package-dist-ci
+          path: ${{ runner.temp }}
+      - run: tar -xzf "$RUNNER_TEMP/package-dist.tgz"
+      - run: pnpm ci:emit-tools:prepared
+      - run: tar -czf "$RUNNER_TEMP/compiled-tools.tgz" node_modules/.cache/mpgd-ci-tools
       - uses: actions/upload-artifact@v6
-        if: ${{ failure() && steps.release-pr-meta.outputs.enabled != 'true' }}
+        with:
+          name: compiled-tools-ci
+          path: ${{ runner.temp }}/compiled-tools.tgz
+          retention-days: 1
+
+  test-prepared:
+    if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
+    needs: [prepare, compile-tools]
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [contracts, cli, services]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm i18n:build
+      - name: Cache compiled ttsc plugins
+        uses: actions/cache@v5
+        with:
+          path: node_modules/.cache/ttsc/plugins
+          key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
+      - uses: actions/download-artifact@v7
+        with:
+          name: package-dist-ci
+          path: ${{ runner.temp }}
+      - run: tar -xzf "$RUNNER_TEMP/package-dist.tgz"
+      - uses: actions/download-artifact@v7
+        with:
+          name: compiled-tools-ci
+          path: ${{ runner.temp }}
+      - run: tar -xzf "$RUNNER_TEMP/compiled-tools.tgz"
+      - run: pnpm run test:prepared:${{ matrix.group }}
+        env:
+          MPGD_CI_EMIT_ROOT: ${{ github.workspace }}/node_modules/.cache/mpgd-ci-tools
+
+  build-web-targets:
+    if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm i18n:build
+      - name: Cache compiled ttsc plugins
+        uses: actions/cache@v5
+        with:
+          path: node_modules/.cache/ttsc/plugins
+          key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
+      - uses: actions/download-artifact@v7
+        with:
+          name: package-dist-ci
+          path: ${{ runner.temp }}
+      - run: tar -xzf "$RUNNER_TEMP/package-dist.tgz"
+      - run: pnpm smoke:apps-in-toss-production-evidence:prepared
+      - run: pnpm graph:preflight
+      - run: pnpm pack:packages:prepared
+      - run: pnpm build:web
+        env:
+          MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
+      - run: pnpm smoke:target web-preview
+      - run: pnpm build:microsoft-store
+        env:
+          MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
+          VITE_MPGD_GAME_SERVICES_URL: https://services.example.com
+      - run: pnpm smoke:target microsoft-store
+      - run: pnpm build:verse8
+        env:
+          MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
+          VITE_MPGD_GAME_SERVICES_URL: https://services.example.com
+      - run: pnpm smoke:target verse8
+      - uses: actions/upload-artifact@v6
+        if: ${{ failure() }}
         with:
           name: web-preview-microsoft-store-and-verse8-ci
-          path: |
-            examples/phaser-starter/artifacts/**
+          path: examples/phaser-starter/artifacts/**
           retention-days: 7
 
   build-android:
-    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' && needs.validate.outputs.run_prepared != 'false' }}
+    if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
     runs-on: ubuntu-latest
-    needs: validate
+    needs: prepare
     timeout-minutes: 120
 
     steps:
@@ -357,6 +586,10 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
 
       - uses: android-actions/setup-android@v4
         # Google removed the legacy `tools` package from the SDK repository;
@@ -397,9 +630,9 @@ jobs:
           retention-days: 7
 
   build-ios:
-    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' && needs.validate.outputs.run_prepared != 'false' }}
+    if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
     runs-on: macos-26
-    needs: validate
+    needs: prepare
     timeout-minutes: 120
 
     steps:
@@ -450,9 +683,9 @@ jobs:
           retention-days: 7
 
   build-ait:
-    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' && needs.validate.outputs.run_prepared != 'false' }}
+    if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
     runs-on: ubuntu-latest
-    needs: validate
+    needs: prepare
     timeout-minutes: 120
 
     steps:
@@ -497,9 +730,9 @@ jobs:
           retention-days: 7
 
   build-devvit:
-    if: ${{ needs.validate.outputs.release_pr_metadata_only != 'true' && needs.validate.outputs.run_prepared != 'false' }}
+    if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
     runs-on: ubuntu-latest
-    needs: validate
+    needs: prepare
     timeout-minutes: 30
     permissions:
       contents: read
@@ -543,4 +776,98 @@ jobs:
           path: |
             examples/phaser-starter/artifacts/**
             apps/target-devvit/dist/**
+          retention-days: 7
+
+  ci-required:
+    # Keep one stable required check. An unexpectedly skipped dependency must
+    # fail the workflow rather than leave a green-looking partial CI run.
+    if: ${{ always() }}
+    needs: [prepare, test-focused, test-browser, compile-tools, test-prepared, build-web-targets, build-android, build-ios, build-ait, build-devvit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      EVENT_NAME: ${{ github.event_name }}
+      METADATA_ONLY: ${{ needs.prepare.outputs.release_pr_metadata_only }}
+      RUN_PREPARED: ${{ needs.prepare.outputs.run_prepared }}
+      PREPARE_RESULT: ${{ needs.prepare.result }}
+      FOCUSED_RESULT: ${{ needs.test-focused.result }}
+      BROWSER_RESULT: ${{ needs.test-browser.result }}
+      COMPILE_RESULT: ${{ needs.compile-tools.result }}
+      PREPARED_RESULT: ${{ needs.test-prepared.result }}
+      WEB_TARGETS_RESULT: ${{ needs.build-web-targets.result }}
+      ANDROID_RESULT: ${{ needs.build-android.result }}
+      IOS_RESULT: ${{ needs.build-ios.result }}
+      AIT_RESULT: ${{ needs.build-ait.result }}
+      DEVVIT_RESULT: ${{ needs.build-devvit.result }}
+    steps:
+      - name: Verify expected CI coverage
+        id: verify-coverage
+        run: |
+          set -euo pipefail
+          failed=0
+          expect_result() {
+            local name="$1" actual="$2" expected="$3"
+            printf '| %s | %s | %s |\n' "${name}" "${expected}" "${actual}" >> "$GITHUB_STEP_SUMMARY"
+            if [[ "${actual}" != "${expected}" ]]; then
+              echo "::error::${name} should be ${expected}, got ${actual:-missing}."
+              failed=1
+            fi
+          }
+          {
+            echo '### Required CI coverage'
+            echo '| Job | Expected | Actual |'
+            echo '| --- | --- | --- |'
+          } >> "$GITHUB_STEP_SUMMARY"
+          expect_result prepare "${PREPARE_RESULT}" success
+          if [[ "${PREPARE_RESULT}" != success ]]; then
+            exit 1
+          fi
+          if [[ "${METADATA_ONLY}" == true ]]; then
+            expect_result test-focused "${FOCUSED_RESULT}" skipped
+            expect_result test-browser "${BROWSER_RESULT}" skipped
+            expected_full=skipped
+          else
+            expect_result test-browser "${BROWSER_RESULT}" success
+            if [[ "${RUN_PREPARED}" == true ]]; then
+              expect_result test-focused "${FOCUSED_RESULT}" skipped
+              expected_full=success
+            elif [[ "${RUN_PREPARED}" == false ]]; then
+              if [[ "${EVENT_NAME}" == pull_request ]]; then
+                expect_result test-focused "${FOCUSED_RESULT}" success
+              else
+                expect_result test-focused "${FOCUSED_RESULT}" skipped
+              fi
+              expected_full=skipped
+            else
+              echo "::error::prepare did not classify run_prepared."
+              exit 1
+            fi
+          fi
+          expect_result compile-tools "${COMPILE_RESULT}" "${expected_full}"
+          expect_result test-prepared "${PREPARED_RESULT}" "${expected_full}"
+          expect_result build-web-targets "${WEB_TARGETS_RESULT}" "${expected_full}"
+          expect_result build-android "${ANDROID_RESULT}" "${expected_full}"
+          expect_result build-ios "${IOS_RESULT}" "${expected_full}"
+          expect_result build-ait "${AIT_RESULT}" "${expected_full}"
+          expect_result build-devvit "${DEVVIT_RESULT}" "${expected_full}"
+          exit "${failed}"
+      - uses: actions/checkout@v5
+        id: checkout-tested
+        if: ${{ !cancelled() && steps.verify-coverage.outcome == 'success' && github.event_name == 'pull_request' }}
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Attest the exact tested PR merge tree
+        id: tested-merge
+        if: ${{ !cancelled() && steps.checkout-tested.outcome == 'success' && github.event_name == 'pull_request' }}
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node tools/ci/attest-pr-merge.mjs
+      - uses: actions/upload-artifact@v6
+        if: ${{ !cancelled() && steps.tested-merge.outcome == 'success' && github.event_name == 'pull_request' }}
+        with:
+          name: ${{ steps.tested-merge.outputs.artifact_name }}
+          path: ${{ runner.temp }}/ci-tested-merge.json
           retention-days: 7

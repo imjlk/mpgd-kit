@@ -137,10 +137,12 @@ try {
 }
 
 function install() {
+  // This isolated tarball consumer has no lockfile. Avoid CI's implicit
+  // frozen install; pnpm 11 does not forward --no-frozen-lockfile reliably
+  // when this smoke runs inside a recursive workspace test.
   run(pnpm, [
-    'install', '--offline', '--ignore-scripts', '--no-frozen-lockfile',
-    '--store-dir', join(fixture, 'store'), '--cache-dir', join(fixture, 'cache'),
-  ], consumer);
+    'install', '--offline', '--ignore-scripts', '--store-dir', join(fixture, 'store'),
+  ], consumer, false, { CI: 'false' });
 }
 
 function findInstalledDependency(from, name) {
@@ -162,9 +164,9 @@ function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function run(command, args, cwd, capture = false) {
+function run(command, args, cwd, capture = false, envOverrides = {}) {
   const result = spawnSync(command, args, {
-    cwd, env: process.env, encoding: 'utf8',
+    cwd, env: { ...process.env, ...envOverrides }, encoding: 'utf8',
     stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
   });
   if (result.error) throw result.error;

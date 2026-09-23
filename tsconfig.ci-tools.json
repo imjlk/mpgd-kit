@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.tools.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": false,
+    "outDir": "node_modules/.cache/mpgd-ci-tools"
+  }
+}
