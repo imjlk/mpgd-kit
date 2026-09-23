@@ -87,6 +87,14 @@ jobs:
             fi
             base_sha="${PUSH_BEFORE_SHA}"
             run_prepared=false
+            # Focused main validation reuses tests already run on a PR. A
+            # direct/multi-commit push has no such guarantee, so keep the
+            # full suite unless this is one merge commit atop the old tip.
+            read -r -a push_commit_parents <<< "$(git rev-list --parents -n 1 HEAD)"
+            if [[ ${#push_commit_parents[@]} -ne 3 || "${push_commit_parents[1]}" != "${base_sha}" ]]; then
+              echo "Main push is not a single PR-style merge commit; running full validation."
+              run_prepared=true
+            fi
           else
             # origin/main is already fetched by checkout (fetch-depth: 0);
             # fetching again would need credentials because persist-credentials
@@ -107,7 +115,6 @@ jobs:
           fi
 
           if [[ "${EVENT_NAME}" == "push" ]] && ((${#changed_files[@]} > 0)); then
-            workflow_only=true
             for path in "${changed_files[@]}"; do
               case "${path}" in
                 .github/workflows/ci.yml)
@@ -116,12 +123,10 @@ jobs:
                   # test and native job) is byte-for-byte unchanged.
                   if ! ci_before="$(git show "${base_sha}:.github/workflows/ci.yml")"; then
                     run_prepared=true
-                    workflow_only=false
                     break
                   fi
                   if ! ci_after="$(git show HEAD:.github/workflows/ci.yml)"; then
                     run_prepared=true
-                    workflow_only=false
                     break
                   fi
                   classifier_start='      - name: Determine metadata-only validation'
@@ -129,27 +134,25 @@ jobs:
                   if [[ "${ci_before}" != *"${classifier_start}"* || "${ci_after}" != *"${classifier_start}"* || "${ci_before}" != *"${classifier_end}"* || "${ci_after}" != *"${classifier_end}"* ]]; then
                     echo "::warning file=.github/workflows/ci.yml::Classifier step markers changed; running full validation."
                     run_prepared=true
-                    workflow_only=false
                     break
                   fi
                   if [[ "$(awk -v marker="${classifier_start}" '{ print; if ($0 == marker) exit }' <<< "${ci_before}")" != "$(awk -v marker="${classifier_start}" '{ print; if ($0 == marker) exit }' <<< "${ci_after}")" ]] ||
                     [[ "$(awk -v marker="${classifier_end}" '$0 == marker { copy=1 } copy { print }' <<< "${ci_before}")" != "$(awk -v marker="${classifier_end}" '$0 == marker { copy=1 } copy { print }' <<< "${ci_after}")" ]]; then
                     echo "CI workflow changed outside the classifier; running full validation."
                     run_prepared=true
-                    workflow_only=false
                     break
                   fi
                   ;;
-                .github/workflows/*.yml|.github/workflows/*.yaml) ;;
-                *) workflow_only=false; break ;;
+                .github/workflows/release.yml) ;;
+                .github/workflows/*)
+                  # Other workflow files may alter native/test jobs or their
+                  # triggers; preserve full validation for those edits.
+                  run_prepared=true
+                  break
+                  ;;
+                *) break ;;
               esac
             done
-            if [[ "${workflow_only}" == "true" ]]; then
-              # Workflow-only merges still run check, package builds, browser
-              # acceptance and packing, but reuse the preceding code CI for
-              # the long prepared suite and native target matrix.
-              run_prepared=false
-            fi
           fi
 
           for path in "${changed_files[@]}"; do
