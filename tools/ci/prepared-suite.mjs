@@ -71,6 +71,14 @@ export function resolvePreparedScript(script, checked) {
   return script;
 }
 
+// These scripts validate ttsx itself or dynamically import authored .ts
+// configs with extensionless imports that Node's compiled runner cannot load.
+const scriptsRequiringTtsx = new Set(['test:ttsx-assertions', 'smoke:game-config']);
+
+export function requiresTtsx(script) {
+  return scriptsRequiringTtsx.has(script);
+}
+
 function run() {
   const requestedGroup = process.argv[2] ?? 'all';
   const checked = process.argv.slice(3).includes('--checked');
@@ -93,9 +101,8 @@ function run() {
       process.stdout.write(`\n${process.env.GITHUB_ACTIONS ? '::group::' : ''}${group}: ${invokedScript}\n`);
       const child = spawnSync(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['run', invokedScript], {
         cwd: repoRoot,
-        // The assertion canary must exercise ttsx itself even when other
-        // smoke entrypoints use CI's precompiled output.
-        env: script === 'test:ttsx-assertions'
+        // Preserve ttsx semantics where a smoke needs its runtime hooks.
+        env: requiresTtsx(script)
           ? { ...process.env, MPGD_FORCE_TTSX: '1' }
           : process.env,
         stdio: 'inherit',

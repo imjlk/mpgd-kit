@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
-import { preparedGroups, resolvePreparedScript } from './prepared-suite.mjs';
+import { preparedGroups, requiresTtsx, resolvePreparedScript } from './prepared-suite.mjs';
 
 const packageJson = JSON.parse(readFileSync(resolve('package.json'), 'utf8'));
 
@@ -23,6 +23,12 @@ test('worker checks and tests run once in both local and CI paths', () => {
   assert.equal(resolvePreparedScript('test:workspaces', true), 'test:workspaces:prepared');
   assert.equal(resolvePreparedScript('smoke:game-services:worker:prepared', false), 'smoke:game-services:worker:prepared');
   assert.equal(resolvePreparedScript('smoke:game-services:worker:prepared', true), 'smoke:game-services:worker:checked');
+});
+
+test('dynamic TypeScript config import and assertion canary keep ttsx hooks', () => {
+  assert.equal(requiresTtsx('test:ttsx-assertions'), true);
+  assert.equal(requiresTtsx('smoke:game-config'), true);
+  assert.equal(requiresTtsx('smoke:target-config'), false);
 });
 
 test('prepared workspace tests run mutating builds first, then the disjoint remainder', () => {
