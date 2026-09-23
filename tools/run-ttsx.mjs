@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +23,7 @@ if (!existsSync(tsgoBinary)) {
 
 // ttsx owns its emitted files under its execution cache. Authored .js/.d.ts
 // siblings are valid inputs and must not be deleted by a repository-wide scan.
+const startedAt = process.hrtime.bigint();
 const result = spawnSync(process.execPath, [
   ttsxLauncher,
   '--cwd',
@@ -39,11 +40,33 @@ const result = spawnSync(process.execPath, [
   },
 });
 
+const seconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
+const exitCode = result.status ?? 1;
+if (process.env.GITHUB_STEP_SUMMARY) {
+  try {
+    const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+    const title = '### ttsx invocation timings';
+    const previous = existsSync(summaryPath) ? readFileSync(summaryPath, 'utf8') : '';
+    if (!previous.includes(title)) {
+      appendFileSync(summaryPath, `${title}\n\n| Project | Entry | Seconds | Exit |\n| --- | --- | ---: | ---: |\n`);
+    }
+    const safeProject = project.replaceAll('|', '\\|').replaceAll('`', "'");
+    const safeEntry = (passthroughArgs[0] ?? '<none>').replaceAll('|', '\\|').replaceAll('`', "'");
+    appendFileSync(summaryPath, `| \`${safeProject}\` | \`${safeEntry}\` | ${seconds.toFixed(1)} | ${exitCode} |\n`);
+  } catch (error) {
+    // Reporting must never turn a passing test into a CI failure.
+    console.warn(`Could not write ttsx timing summary: ${error.message}`);
+  }
+}
+if (process.env.GITHUB_ACTIONS) {
+  console.log(`ttsx ${passthroughArgs[0] ?? '<none>'}: ${seconds.toFixed(1)}s, exit ${exitCode}`);
+}
+
 if (result.error !== undefined) {
   throw result.error;
 }
 
-process.exit(result.status ?? 1);
+process.exit(exitCode);
 
 function parseRunnerArgs(args) {
   let project = process.env.TTSC_PROJECT ?? 'tsconfig.tools.json';
