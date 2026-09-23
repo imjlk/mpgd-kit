@@ -1,5 +1,11 @@
 # @mpgd/adapter-ait
 
+## 0.12.3 — 2026-09-24
+
+### Patch changes
+
+- [8e8abda](https://github.com/imjlk/mpgd-kit/commit/8e8abda65bc00e00d5cf6ad8bd810bd0655fdd03) Provide a shared AIT WebView authority fetch helper that calls injected native fetch without a dependency-object receiver, preventing valid purchase-grant requests from failing before reaching the server on iOS. — Thanks @imjlk!
+
 ## 0.12.2 — 2026-09-23
 
 ### Changed
