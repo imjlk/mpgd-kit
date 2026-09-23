@@ -49,6 +49,10 @@
       "types": "./dist/safe-area.d.ts",
       "default": "./dist/safe-area.js"
     },
+    "./authority-fetch": {
+      "types": "./dist/authority-fetch.d.ts",
+      "default": "./dist/authority-fetch.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

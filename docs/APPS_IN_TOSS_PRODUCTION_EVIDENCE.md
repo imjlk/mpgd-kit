@@ -119,6 +119,28 @@ The generic `createGameServicesClient().purchase()` flow verifies after
 `gateway.commerce.purchase()` returns, so it cannot satisfy this callback
 timing by itself. Wire the callback-specific API directly into the AIT SDK:
 
+When an AIT WebView sends callback evidence to the game authority, use
+`fetchAitAuthority()` for the HTTP call. It invokes an injected/native `fetch`
+without binding it to a dependency object, which prevents valid requests from
+failing in the iOS WebView before reaching the backend. The game still supplies
+its authentication, idempotency headers, deadline/signal, and response
+validation; a successful HTTP response alone must not grant a product.
+
+```ts
+import { fetchAitAuthority } from '@mpgd/adapter-ait/authority-fetch';
+
+const response = await fetchAitAuthority({
+  resource: verificationUrl,
+  init: {
+    method: 'POST',
+    headers: authorityHeaders,
+    body: JSON.stringify(request),
+    signal,
+  },
+  fetch: dependencies.fetch,
+});
+```
+
 ```ts
 import { IAP } from '@apps-in-toss/web-framework';
 import {
