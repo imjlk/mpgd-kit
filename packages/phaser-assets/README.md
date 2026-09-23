@@ -357,6 +357,36 @@ with each path segment URL-encoded exactly once, so revisions and names
 carrying `#`, `?`, spaces or non-ASCII address the resource the static
 host serves.
 
+### Acquiring a delivered pack
+
+`acquireDeliveredPack` joins `delivery.prepare` and `loader.acquire` and
+releases the preparation in `finally`, on success, failure, or cancellation.
+Create the loader with the same delivery's `catalog` and `fileSource`:
+
+```ts
+import { acquireDeliveredPack } from '@mpgd/phaser-assets/delivery';
+
+const lease = await acquireDeliveredPack({
+  delivery,
+  loader,
+  packId: 'grove',
+  signal: controller.signal,
+  onTextureProgress: (ready, total) => updateTextureProgress(ready, total),
+});
+// Staging has been returned; textures remain owned by this lease.
+const key = lease.key('grove', 'ground');
+// After destroying display objects/animations that use its texture keys:
+lease.release();
+```
+
+The same signal is forwarded to preparation and acquisition; texture progress
+is forwarded to the loader without merging it with staging progress. Use
+`delivery.subscribe` for staging events. The helper preserves the underlying
+errors and does not dispose either service. The game still owns successful
+leases, previous-level retention, selection ordering, retries, and shutdown.
+In particular, it does not serialize `prepare` calls or change their `busy`
+behavior, and aborting after success does not release the returned lease.
+
 ### Observing delivery work
 
 `delivery.subscribe(listener)` is the single observation surface (there is
