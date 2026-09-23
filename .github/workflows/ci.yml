@@ -33,6 +33,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
         run: |
           set -euo pipefail
 
@@ -75,6 +76,17 @@ jobs:
               echo "Could not resolve merge base against origin/${PR_BASE_REF}; running full validation."
               exit 0
             fi
+          elif [[ "${EVENT_NAME}" == "push" ]]; then
+            # A main checkout points origin/main at HEAD. Compare the full
+            # pushed range instead; fail open to full CI for missing or
+            # rewritten history rather than misclassifying changed source.
+            if [[ ! "${PUSH_BEFORE_SHA}" =~ ^[0-9a-fA-F]{40}$ ]] || ! git merge-base --is-ancestor "${PUSH_BEFORE_SHA}" HEAD; then
+              echo "enabled=false" >> "$GITHUB_OUTPUT"
+              echo "run_prepared=true" >> "$GITHUB_OUTPUT"
+              echo "Could not resolve the previous main commit; running full validation."
+              exit 0
+            fi
+            base_sha="${PUSH_BEFORE_SHA}"
           else
             # origin/main is already fetched by checkout (fetch-depth: 0);
             # fetching again would need credentials because persist-credentials
@@ -92,6 +104,23 @@ jobs:
           if ((${#changed_files[@]} == 0)); then
             metadata_only=false
             run_prepared=true
+          fi
+
+          if [[ "${EVENT_NAME}" == "push" ]] && ((${#changed_files[@]} > 0)); then
+            workflow_only=true
+            for path in "${changed_files[@]}"; do
+              case "${path}" in
+                .github/workflows/ci.yml) workflow_only=false; break ;;
+                .github/workflows/*.yml|.github/workflows/*.yaml) ;;
+                *) workflow_only=false; break ;;
+              esac
+            done
+            if [[ "${workflow_only}" == "true" ]]; then
+              # Workflow-only merges still run check, package builds, browser
+              # acceptance and packing, but reuse the preceding code CI for
+              # the long prepared suite and native target matrix.
+              run_prepared=false
+            fi
           fi
 
           for path in "${changed_files[@]}"; do

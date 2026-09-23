@@ -33,6 +33,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # A SHA checkout is detached; pnpm publish keeps its branch and clean-tree
+      # checks enabled, so attach that exact CI-verified commit to local main.
+      - name: Attach verified release commit to main
+        run: git switch -C main
+
       - uses: pnpm/action-setup@v6
         with:
           version: 11.7.0
