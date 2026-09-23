@@ -44,12 +44,14 @@ const lifecycle = bindGameLifecycle({
     onPause(callback) {
       pauses.add(callback);
       return () => {
-        pauses.delete(callback); };
+        pauses.delete(callback);
+      };
     },
     onResume(callback) {
       resumes.add(callback);
       return () => {
-        resumes.delete(callback); };
+        resumes.delete(callback);
+      };
     },
   },
 });
@@ -127,7 +129,8 @@ class Gameplay extends Phaser.Scene {
       audio: {
         getMuted: () => muted,
         setMuted: (value) => {
-          muted = value; },
+          muted = value;
+        },
       },
       onUnsupportedState: (_snapshot, reason) => report(reason),
       onError: report,

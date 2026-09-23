@@ -9,11 +9,33 @@ import type { PhaserPackAsset } from '@mpgd/phaser-assets/packs';
 const root = fileURLToPath(new URL('.', import.meta.url));
 /** Workspace subpaths the example consumes from package source, so a
  * fresh checkout builds without a prior package build step. */
-const PHASER_ASSETS_SUBPATHS = ['packs', 'pack-format', 'archives', 'delivery', 'test-utils', 'archive-worker'] as const;
+const PHASER_ASSETS_SUBPATHS = [
+  'packs',
+  'pack-format',
+  'archives',
+  'delivery',
+  'test-utils',
+  'archive-worker',
+] as const;
 const sources = [
-  { id: 'shared', dependsOn: [], files: [{ name: 'pilot.png', width: 256, height: 64, mediaType: 'image/png' }] },
-  { id: 'grove', dependsOn: ['shared'], files: [{ name: 'grove.png', width: 2048, height: 1024, mediaType: 'image/png' }, { name: 'grove.json', width: 0, height: 0, mediaType: 'application/json' }] },
-  { id: 'dunes', dependsOn: ['shared'], files: [{ name: 'dunes.png', width: 1024, height: 1024, mediaType: 'image/png' }] },
+  {
+    id: 'shared',
+    dependsOn: [],
+    files: [{ name: 'pilot.png', width: 256, height: 64, mediaType: 'image/png' }],
+  },
+  {
+    id: 'grove',
+    dependsOn: ['shared'],
+    files: [
+      { name: 'grove.png', width: 2048, height: 1024, mediaType: 'image/png' },
+      { name: 'grove.json', width: 0, height: 0, mediaType: 'application/json' },
+    ],
+  },
+  {
+    id: 'dunes',
+    dependsOn: ['shared'],
+    files: [{ name: 'dunes.png', width: 1024, height: 1024, mediaType: 'image/png' }],
+  },
 ];
 export default defineConfig(({ mode }) => {
   const hybrid = mode === 'hybrid';

@@ -451,21 +451,23 @@ function assertViteRuntimeMatrix(
 
     writeFileSync(matrixFile, '[]');
     assert.throws(
-      () => createGameViteSharedConfig({
-        gameRoot: path.resolve('examples/phaser-starter'),
-        mode: 'production',
-        project: path.resolve('examples/phaser-starter/tsconfig.json'),
-      }),
+      () =>
+        createGameViteSharedConfig({
+          gameRoot: path.resolve('examples/phaser-starter'),
+          mode: 'production',
+          project: path.resolve('examples/phaser-starter/tsconfig.json'),
+        }),
       /target config matrix must be an object/u,
     );
 
     writeFileSync(matrixFile, '{invalid');
     assert.throws(
-      () => createGameViteSharedConfig({
-        gameRoot: path.resolve('examples/phaser-starter'),
-        mode: 'production',
-        project: path.resolve('examples/phaser-starter/tsconfig.json'),
-      }),
+      () =>
+        createGameViteSharedConfig({
+          gameRoot: path.resolve('examples/phaser-starter'),
+          mode: 'production',
+          project: path.resolve('examples/phaser-starter/tsconfig.json'),
+        }),
       /Failed to read or validate MPGD_TARGET_CONFIG_MATRIX_FILE/u,
     );
   } finally {

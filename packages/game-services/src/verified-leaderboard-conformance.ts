@@ -251,10 +251,11 @@ async function runFirstSelectionAndSnapshotScenario(
     }),
   );
   await assertRejects(
-    () => context.service.getSnapshot({
-      leaderboardId: 'first:other-board',
-      cursor: firstBoardCursor,
-    }),
+    () =>
+      context.service.getSnapshot({
+        leaderboardId: 'first:other-board',
+        cursor: firstBoardCursor,
+      }),
     'cursors must remain bound to their originating leaderboard definition',
   );
 
@@ -564,76 +565,83 @@ async function runIdentityAndDefinitionConflictsScenario(
   );
 
   await assertRejects(
-    () => context.service.recordVerifiedAttempt({
-      ...request,
-      attempt: { ...request.attempt, score: 43 },
-    }),
+    () =>
+      context.service.recordVerifiedAttempt({
+        ...request,
+        attempt: { ...request.attempt, score: 43 },
+      }),
     'attempt IDs reused with a different score must fail closed',
   );
   await assertRejects(
-    () => context.service.recordVerifiedAttempt({
-      ...request,
-      attempt: {
-        ...request.attempt,
-        metrics: { elapsedMs: 42_000, hints: 0, mistakes: 2 },
-      },
-    }),
+    () =>
+      context.service.recordVerifiedAttempt({
+        ...request,
+        attempt: {
+          ...request.attempt,
+          metrics: { elapsedMs: 42_000, hints: 0, mistakes: 2 },
+        },
+      }),
     'attempt IDs reused with different metrics must fail closed',
   );
   await assertRejects(
-    () => context.service.recordVerifiedAttempt({
-      ...request,
-      attempt: {
-        ...request.attempt,
-        completedAt: '2030-01-02T02:31:00.000Z',
-      },
-    }),
+    () =>
+      context.service.recordVerifiedAttempt({
+        ...request,
+        attempt: {
+          ...request.attempt,
+          completedAt: '2030-01-02T02:31:00.000Z',
+        },
+      }),
     'attempt IDs reused with a different completion instant must fail closed',
   );
   await assertRejects(
-    () => context.service.recordVerifiedAttempt({
-      ...request,
-      attempt: {
-        ...request.attempt,
-        verification: {
-          ...request.attempt.verification,
-          evidenceId: 'evidence:different',
+    () =>
+      context.service.recordVerifiedAttempt({
+        ...request,
+        attempt: {
+          ...request.attempt,
+          verification: {
+            ...request.attempt.verification,
+            evidenceId: 'evidence:different',
+          },
         },
-      },
-    }),
+      }),
     'attempt IDs reused with different evidence must fail closed',
   );
   await assertRejects(
-    () => context.service.recordVerifiedAttempt({
-      ...request,
-      attempt: { ...request.attempt, participantId: 'participant:different' },
-    }),
+    () =>
+      context.service.recordVerifiedAttempt({
+        ...request,
+        attempt: { ...request.attempt, participantId: 'participant:different' },
+      }),
     'attempt IDs reused by another participant must fail closed',
   );
   await assertRejects(
-    () => context.service.recordVerifiedAttempt(
-      createAttempt({
-        leaderboardId: request.definition.leaderboardId,
-        scoreOrder: 'descending',
-        participantId: request.attempt.participantId,
-        attemptId: 'attempt:score-order-conflict',
-        score: request.attempt.score,
-        completedAt: request.attempt.completedAt,
-      }),
-    ),
+    () =>
+      context.service.recordVerifiedAttempt(
+        createAttempt({
+          leaderboardId: request.definition.leaderboardId,
+          scoreOrder: 'descending',
+          participantId: request.attempt.participantId,
+          attemptId: 'attempt:score-order-conflict',
+          score: request.attempt.score,
+          completedAt: request.attempt.completedAt,
+        }),
+      ),
     'leaderboard score order must be immutable',
   );
   await assertRejects(
-    () => context.service.recordVerifiedAttempt(
-      createAttempt({
-        leaderboardId: request.definition.leaderboardId,
-        attemptSelection: 'best',
-        participantId: request.attempt.participantId,
-        attemptId: 'attempt:selection-conflict',
-        score: request.attempt.score,
-        completedAt: request.attempt.completedAt,
-      }),
-    ),
+    () =>
+      context.service.recordVerifiedAttempt(
+        createAttempt({
+          leaderboardId: request.definition.leaderboardId,
+          attemptSelection: 'best',
+          participantId: request.attempt.participantId,
+          attemptId: 'attempt:selection-conflict',
+          score: request.attempt.score,
+          completedAt: request.attempt.completedAt,
+        }),
+      ),
     'leaderboard attempt selection must be immutable',
   );
 
@@ -894,133 +902,143 @@ async function runRuntimeValidationScenario(context: ScenarioContext): Promise<v
   const validVerificationTimestamp = '2030-01-02T02:00:00.000Z';
 
   await assertRejects(
-    () => context.service.recordVerifiedAttempt(
-      createAttempt({
-        leaderboardId: 'validation:calendar',
-        participantId: 'participant:calendar',
-        attemptId: 'attempt:calendar',
-        score: 1,
-        completedAt: '2030-02-31T02:00:00.000Z',
-        verifiedAt: validVerificationTimestamp,
-      }),
-    ),
+    () =>
+      context.service.recordVerifiedAttempt(
+        createAttempt({
+          leaderboardId: 'validation:calendar',
+          participantId: 'participant:calendar',
+          attemptId: 'attempt:calendar',
+          score: 1,
+          completedAt: '2030-02-31T02:00:00.000Z',
+          verifiedAt: validVerificationTimestamp,
+        }),
+      ),
     'invalid calendar timestamps must fail closed',
   );
   await assertRejects(
-    () => context.service.recordVerifiedAttempt(
-      createAttempt({
-        leaderboardId: 'validation:timezone',
-        participantId: 'participant:timezone',
-        attemptId: 'attempt:timezone',
-        score: 1,
-        completedAt: '2030-01-02T02:00:00.000',
-        verifiedAt: validVerificationTimestamp,
-      }),
-    ),
+    () =>
+      context.service.recordVerifiedAttempt(
+        createAttempt({
+          leaderboardId: 'validation:timezone',
+          participantId: 'participant:timezone',
+          attemptId: 'attempt:timezone',
+          score: 1,
+          completedAt: '2030-01-02T02:00:00.000',
+          verifiedAt: validVerificationTimestamp,
+        }),
+      ),
     'offset-less timestamps must fail closed',
   );
   await assertRejects(
-    () => context.service.recordVerifiedAttempt(
-      createAttempt({
-        leaderboardId: 'validation:precision',
-        participantId: 'participant:precision',
-        attemptId: 'attempt:precision',
-        score: 1,
-        completedAt: '2030-01-02T02:00:00.0001Z',
-        verifiedAt: validVerificationTimestamp,
-      }),
-    ),
+    () =>
+      context.service.recordVerifiedAttempt(
+        createAttempt({
+          leaderboardId: 'validation:precision',
+          participantId: 'participant:precision',
+          attemptId: 'attempt:precision',
+          score: 1,
+          completedAt: '2030-01-02T02:00:00.0001Z',
+          verifiedAt: validVerificationTimestamp,
+        }),
+      ),
     'sub-millisecond timestamps must fail closed',
   );
   await assertRejects(
-    () => context.service.recordVerifiedAttempt(
-      createAttempt({
-        leaderboardId: 'validation:evidence-timezone',
-        participantId: 'participant:evidence-timezone',
-        attemptId: 'attempt:evidence-timezone',
-        score: 1,
-        completedAt: validVerificationTimestamp,
-        verifiedAt: '2030-01-02T02:00:00.000',
-      }),
-    ),
+    () =>
+      context.service.recordVerifiedAttempt(
+        createAttempt({
+          leaderboardId: 'validation:evidence-timezone',
+          participantId: 'participant:evidence-timezone',
+          attemptId: 'attempt:evidence-timezone',
+          score: 1,
+          completedAt: validVerificationTimestamp,
+          verifiedAt: '2030-01-02T02:00:00.000',
+        }),
+      ),
     'invalid verification timestamps must fail closed independently',
   );
   await assertRejects(
-    () => context.service.recordVerifiedAttempt(
-      createAttempt({
-        leaderboardId: 'validation:score-nan',
-        participantId: 'participant:score-nan',
-        attemptId: 'attempt:score-nan',
-        score: Number.NaN,
-        completedAt: validVerificationTimestamp,
-      }),
-    ),
+    () =>
+      context.service.recordVerifiedAttempt(
+        createAttempt({
+          leaderboardId: 'validation:score-nan',
+          participantId: 'participant:score-nan',
+          attemptId: 'attempt:score-nan',
+          score: Number.NaN,
+          completedAt: validVerificationTimestamp,
+        }),
+      ),
     'NaN scores must fail closed',
   );
   await assertRejects(
-    () => context.service.recordVerifiedAttempt(
-      createAttempt({
-        leaderboardId: 'validation:score-infinity',
-        participantId: 'participant:score-infinity',
-        attemptId: 'attempt:score-infinity',
-        score: Number.POSITIVE_INFINITY,
-        completedAt: validVerificationTimestamp,
-      }),
-    ),
+    () =>
+      context.service.recordVerifiedAttempt(
+        createAttempt({
+          leaderboardId: 'validation:score-infinity',
+          participantId: 'participant:score-infinity',
+          attemptId: 'attempt:score-infinity',
+          score: Number.POSITIVE_INFINITY,
+          completedAt: validVerificationTimestamp,
+        }),
+      ),
     'infinite scores must fail closed',
   );
   await assertRejects(
-    () => context.service.recordVerifiedAttempt(
-      createAttempt({
-        leaderboardId: 'validation:metric-key',
-        participantId: 'participant:metric-key',
-        attemptId: 'attempt:metric-key',
-        score: 1,
-        metrics: { '1elapsedMs': 1 },
-        completedAt: validVerificationTimestamp,
-      }),
-    ),
+    () =>
+      context.service.recordVerifiedAttempt(
+        createAttempt({
+          leaderboardId: 'validation:metric-key',
+          participantId: 'participant:metric-key',
+          attemptId: 'attempt:metric-key',
+          score: 1,
+          metrics: { '1elapsedMs': 1 },
+          completedAt: validVerificationTimestamp,
+        }),
+      ),
     'invalid metric keys must fail closed',
   );
   await assertRejects(
-    () => context.service.recordVerifiedAttempt(
-      createAttempt({
-        leaderboardId: 'validation:metric-value',
-        participantId: 'participant:metric-value',
-        attemptId: 'attempt:metric-value',
-        score: 1,
-        metrics: { mistakes: -1 },
-        completedAt: validVerificationTimestamp,
-      }),
-    ),
+    () =>
+      context.service.recordVerifiedAttempt(
+        createAttempt({
+          leaderboardId: 'validation:metric-value',
+          participantId: 'participant:metric-value',
+          attemptId: 'attempt:metric-value',
+          score: 1,
+          metrics: { mistakes: -1 },
+          completedAt: validVerificationTimestamp,
+        }),
+      ),
     'negative metric values must fail closed',
   );
   await assertRejects(
-    () => context.service.recordVerifiedAttempt(
-      createAttempt({
-        leaderboardId: 'validation:metric-safe-integer',
-        participantId: 'participant:metric-safe-integer',
-        attemptId: 'attempt:metric-safe-integer',
-        score: 1,
-        metrics: { elapsedMs: Number.MAX_SAFE_INTEGER + 1 },
-        completedAt: validVerificationTimestamp,
-      }),
-    ),
+    () =>
+      context.service.recordVerifiedAttempt(
+        createAttempt({
+          leaderboardId: 'validation:metric-safe-integer',
+          participantId: 'participant:metric-safe-integer',
+          attemptId: 'attempt:metric-safe-integer',
+          score: 1,
+          metrics: { elapsedMs: Number.MAX_SAFE_INTEGER + 1 },
+          completedAt: validVerificationTimestamp,
+        }),
+      ),
     'unsafe integer metric values must fail closed',
   );
   await assertRejects(
-    () => context.service.recordVerifiedAttempt(
-      createAttempt({
-        leaderboardId: 'validation:metric-count',
-        participantId: 'participant:metric-count',
-        attemptId: 'attempt:metric-count',
-        score: 1,
-        metrics: Object.fromEntries(
-          Array.from({ length: 17 }, (_, index) => [`metric${String(index)}`, index]),
-        ),
-        completedAt: validVerificationTimestamp,
-      }),
-    ),
+    () =>
+      context.service.recordVerifiedAttempt(
+        createAttempt({
+          leaderboardId: 'validation:metric-count',
+          participantId: 'participant:metric-count',
+          attemptId: 'attempt:metric-count',
+          score: 1,
+          metrics: Object.fromEntries(
+            Array.from({ length: 17 }, (_, index) => [`metric${String(index)}`, index]),
+          ),
+          completedAt: validVerificationTimestamp,
+        }),
+      ),
     'oversized metric maps must fail closed',
   );
 
@@ -1067,10 +1085,11 @@ async function runRuntimeValidationScenario(context: ScenarioContext): Promise<v
     }),
   );
   await assertRejects(
-    () => context.service.getSnapshot({
-      leaderboardId: 'validation:cursor',
-      cursor: 'not-a-valid-cursor',
-    }),
+    () =>
+      context.service.getSnapshot({
+        leaderboardId: 'validation:cursor',
+        cursor: 'not-a-valid-cursor',
+      }),
     'malformed snapshot cursors must fail closed',
   );
 }

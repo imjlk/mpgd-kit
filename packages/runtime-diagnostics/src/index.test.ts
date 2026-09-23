@@ -473,7 +473,8 @@ const createLongTask = (input: Partial<LongTaskSample> = {}): LongTaskSample => 
   assertThrows(() => recorder.record(createFrame(40, 16, { previousRenderWorkMs: -1 })));
   assertThrows(() => recorder.record(createFrame(40, 16, { hidden: 1 as unknown as boolean })));
   assertThrows(() =>
-    recorder.record(createFrame(40, 16, { visibilityInterrupted: 'yes' as unknown as boolean })));
+    recorder.record(createFrame(40, 16, { visibilityInterrupted: 'yes' as unknown as boolean })),
+  );
   assertThrows(() => recorder.record(createFrame(40, 16, { heapBytes: -1 })));
   assertThrows(() => recorder.record(createFrame(40, 16, { heapBytes: Number.NaN })));
   assertThrows(() => recorder.record(createFrame(40, 16, { heapDeltaBytes: Number.NaN })));
@@ -492,7 +493,8 @@ const createLongTask = (input: Partial<LongTaskSample> = {}): LongTaskSample => 
       scriptInvocations: 1,
       startAtMs: 0,
       styleAndLayoutDurationMs: 1,
-    }));
+    }),
+  );
   assertThrows(() =>
     recorder.recordLongAnimationFrame({
       atMs: 100,
@@ -504,7 +506,8 @@ const createLongTask = (input: Partial<LongTaskSample> = {}): LongTaskSample => 
       scriptInvocations: 1.5,
       startAtMs: 0,
       styleAndLayoutDurationMs: 1,
-    }));
+    }),
+  );
   assertThrows(() =>
     recorder.recordLongAnimationFrame({
       atMs: 100,
@@ -525,7 +528,8 @@ const createLongTask = (input: Partial<LongTaskSample> = {}): LongTaskSample => 
       })),
       startAtMs: 0,
       styleAndLayoutDurationMs: 1,
-    }));
+    }),
+  );
   assertThrows(() =>
     recorder.recordLongAnimationFrame({
       atMs: 100,
@@ -548,7 +552,14 @@ const createLongTask = (input: Partial<LongTaskSample> = {}): LongTaskSample => 
       styleAndLayoutDurationMs: 1,
     }));
   assertThrows(() =>
-    recorder.recordResourceLoad({ atMs: 10, durationMs: 5, hidden: false, name: 'x', startAtMs: 50 }));
+    recorder.recordResourceLoad({
+      atMs: 10,
+      durationMs: 5,
+      hidden: false,
+      name: 'x',
+      startAtMs: 50,
+    }),
+  );
   assertThrows(() => recorder.diagnose(createFrame(50, Number.NaN)));
 
   const after = recorder.snapshot();
@@ -619,25 +630,28 @@ const createLongTask = (input: Partial<LongTaskSample> = {}): LongTaskSample => 
     'source URLs are sanitized labels',
   );
 
-  assertThrows(
-    () => createLongAnimationFrameScriptSamples([{ duration: Number.NaN }], (url) => url),
+  assertThrows(() =>
+    createLongAnimationFrameScriptSamples([{ duration: Number.NaN }], (url) => url),
   );
+  assertThrows(() => createLongAnimationFrameScriptSamples([{ duration: -1 }], (url) => url));
   assertThrows(() =>
-    createLongAnimationFrameScriptSamples([{ duration: -1 }], (url) => url));
-  assertThrows(() =>
-    createLongAnimationFrameScriptSamples([{ invoker: 5 as unknown as string }], (url) => url));
+    createLongAnimationFrameScriptSamples([{ invoker: 5 as unknown as string }], (url) => url),
+  );
   assertThrows(() =>
     createLongAnimationFrameScriptSamples(
       Array.from({ length: 1_025 }, () => ({ duration: 1 })),
       (url) => url,
-    ));
-  assertThrows(() =>
-    createLongAnimationFrameScriptSamples([{ duration: 1 }], undefined as unknown as (url: string) => string));
+    ),
+  );
   assertThrows(() =>
     createLongAnimationFrameScriptSamples(
-      [null as unknown as { duration?: number }],
-      (url) => url,
-    ));
+      [{ duration: 1 }],
+      undefined as unknown as (url: string) => string,
+    ),
+  );
+  assertThrows(() =>
+    createLongAnimationFrameScriptSamples([null as unknown as { duration?: number }], (url) => url),
+  );
 
   const unlabeled = createLongAnimationFrameScriptSamples([{ duration: 5 }], (url) => url);
   assertEqual(unlabeled[0]?.sourceUrl ?? 'missing', '', 'missing source URLs stay empty');

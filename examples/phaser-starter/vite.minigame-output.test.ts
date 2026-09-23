@@ -53,27 +53,30 @@ try {
     resolve(realpathSync(stagingRoot), 'runtime'),
   );
   assert.throws(
-    () => resolveMiniGameBundleOutput({
-      gameRoot,
-      outputDir: '.',
-      stagingRoot: gameRoot,
-    }),
+    () =>
+      resolveMiniGameBundleOutput({
+        gameRoot,
+        outputDir: '.',
+        stagingRoot: gameRoot,
+      }),
     /dedicated child|must not overlap/u,
   );
   assert.throws(
-    () => resolveMiniGameBundleOutput({
-      gameRoot,
-      outputDir: join(gameRoot, 'src'),
-      stagingRoot: gameRoot,
-    }),
+    () =>
+      resolveMiniGameBundleOutput({
+        gameRoot,
+        outputDir: join(gameRoot, 'src'),
+        stagingRoot: gameRoot,
+      }),
     /must not overlap/u,
   );
   assert.throws(
-    () => resolveMiniGameBundleOutput({
-      gameRoot,
-      outputDir: stagingRoot,
-      stagingRoot,
-    }),
+    () =>
+      resolveMiniGameBundleOutput({
+        gameRoot,
+        outputDir: stagingRoot,
+        stagingRoot,
+      }),
     /dedicated child/u,
   );
 
@@ -81,16 +84,18 @@ try {
     gameRoot: '/workspace/examples/phaser-starter',
     workspaceRoot: '/workspace',
   };
-  assert.doesNotThrow(() => assertMiniGameGameBundleModules(
-    [
-      '/workspace/examples/phaser-starter/src/minigameEntry.ts',
-      '/workspace/examples/phaser-starter/src/platform/buildGateways/wechat.ts',
-      '/workspace/packages/platform/src/index.ts',
-      '/workspace/node_modules/phaser/dist/phaser.esm.js',
-      '/workspace/node_modules/@orpc/client/dist/adapters/fetch/index.mjs',
-    ],
-    moduleBoundary,
-  ));
+  assert.doesNotThrow(() =>
+    assertMiniGameGameBundleModules(
+      [
+        '/workspace/examples/phaser-starter/src/minigameEntry.ts',
+        '/workspace/examples/phaser-starter/src/platform/buildGateways/wechat.ts',
+        '/workspace/packages/platform/src/index.ts',
+        '/workspace/node_modules/phaser/dist/phaser.esm.js',
+        '/workspace/node_modules/@orpc/client/dist/adapters/fetch/index.mjs',
+      ],
+      moduleBoundary,
+    ),
+  );
   for (const forbiddenModule of [
     '/workspace/adapters/wechat/src/index.ts',
     '/workspace/native-plugins/example/src/index.ts',
@@ -107,32 +112,29 @@ try {
   }
   const linkedAdapterRoot = join(fixtureRoot, 'linked-kit', 'wechat');
   mkdirSync(join(linkedAdapterRoot, 'dist'), { recursive: true });
-  writeFileSync(
-    join(linkedAdapterRoot, 'package.json'),
-    '{"name":"@mpgd/adapter-wechat"}\n',
-  );
+  writeFileSync(join(linkedAdapterRoot, 'package.json'), '{"name":"@mpgd/adapter-wechat"}\n');
   writeFileSync(join(linkedAdapterRoot, 'dist', 'package.json'), '{"type":"module"}\n');
   const standaloneBoundary = {
     gameRoot: join(fixtureRoot, 'standalone-game'),
     workspaceRoot: join(fixtureRoot, 'unrelated-workspace'),
   };
   assert.throws(
-    () => assertMiniGameGameBundleModules(
-      [join(linkedAdapterRoot, 'dist', 'index.js')],
-      standaloneBoundary,
-    ),
+    () =>
+      assertMiniGameGameBundleModules(
+        [join(linkedAdapterRoot, 'dist', 'index.js')],
+        standaloneBoundary,
+      ),
     /must not include platform runtime module/u,
   );
   const linkedTargetConfigRoot = join(fixtureRoot, 'linked-kit', 'target-config');
   mkdirSync(join(linkedTargetConfigRoot, 'dist'), { recursive: true });
-  writeFileSync(
-    join(linkedTargetConfigRoot, 'package.json'),
-    '{"name":"@mpgd/target-config"}\n',
+  writeFileSync(join(linkedTargetConfigRoot, 'package.json'), '{"name":"@mpgd/target-config"}\n');
+  assert.doesNotThrow(() =>
+    assertMiniGameGameBundleModules(
+      [join(linkedTargetConfigRoot, 'dist', 'runtime.js')],
+      standaloneBoundary,
+    ),
   );
-  assert.doesNotThrow(() => assertMiniGameGameBundleModules(
-    [join(linkedTargetConfigRoot, 'dist', 'runtime.js')],
-    standaloneBoundary,
-  ));
   const linkedMpgdKitRoot = join(fixtureRoot, 'linked-mpgd-kit');
   const linkedRepositoryPackageRoot = join(linkedMpgdKitRoot, 'adapters', 'wechat');
   mkdirSync(join(linkedRepositoryPackageRoot, 'dist'), { recursive: true });
@@ -151,15 +153,13 @@ try {
       },
     }),
   );
-  writeFileSync(
-    join(linkedRepositoryPackageRoot, 'dist', 'package.json'),
-    '{"type":"module"}\n',
-  );
+  writeFileSync(join(linkedRepositoryPackageRoot, 'dist', 'package.json'), '{"type":"module"}\n');
   assert.throws(
-    () => assertMiniGameGameBundleModules(
-      [join(linkedRepositoryPackageRoot, 'dist', 'index.js')],
-      standaloneBoundary,
-    ),
+    () =>
+      assertMiniGameGameBundleModules(
+        [join(linkedRepositoryPackageRoot, 'dist', 'index.js')],
+        standaloneBoundary,
+      ),
     /must not include platform runtime module/u,
   );
   const thirdPartyWorkspaceRoot = join(linkedMpgdKitRoot, 'third-party-workspace');
@@ -174,10 +174,12 @@ try {
       },
     }),
   );
-  assert.doesNotThrow(() => assertMiniGameGameBundleModules(
-    [join(thirdPartyWorkspaceRoot, 'dist', 'index.js')],
-    standaloneBoundary,
-  ));
+  assert.doesNotThrow(() =>
+    assertMiniGameGameBundleModules(
+      [join(thirdPartyWorkspaceRoot, 'dist', 'index.js')],
+      standaloneBoundary,
+    ),
+  );
   const thirdPartyVendorRoot = join(linkedMpgdKitRoot, 'vendor');
   const genericThirdPartyRoot = join(thirdPartyVendorRoot, 'adapters', 'fetch');
   mkdirSync(join(genericThirdPartyRoot, 'dist'), { recursive: true });
@@ -192,10 +194,12 @@ try {
       repository: { directory: 'adapters/fetch' },
     }),
   );
-  assert.doesNotThrow(() => assertMiniGameGameBundleModules(
-    [join(genericThirdPartyRoot, 'dist', 'index.js')],
-    standaloneBoundary,
-  ));
+  assert.doesNotThrow(() =>
+    assertMiniGameGameBundleModules(
+      [join(genericThirdPartyRoot, 'dist', 'index.js')],
+      standaloneBoundary,
+    ),
+  );
   writeFileSync(join(gameRoot, 'package.json'), '{"name":"@mpgd/example-phaser-starter"}\n');
   const thirdPartyAdapterRoot = join(gameRoot, 'node_modules', 'third-party-adapter');
   mkdirSync(join(thirdPartyAdapterRoot, 'dist'), { recursive: true });
@@ -217,10 +221,12 @@ try {
       repository: 'imjlk/mpgd-kit',
     }),
   );
-  assert.doesNotThrow(() => assertMiniGameGameBundleModules(
-    [join(thirdPartyAdapterRoot, 'dist', 'index.js')],
-    standaloneBoundary,
-  ));
+  assert.doesNotThrow(() =>
+    assertMiniGameGameBundleModules(
+      [join(thirdPartyAdapterRoot, 'dist', 'index.js')],
+      standaloneBoundary,
+    ),
+  );
   const relocatedLinkedAdapterRoot = join(fixtureRoot, 'relocated', 'renamed-wechat');
   mkdirSync(join(relocatedLinkedAdapterRoot, 'dist'), { recursive: true });
   writeFileSync(
@@ -233,15 +239,13 @@ try {
       },
     }),
   );
-  writeFileSync(
-    join(relocatedLinkedAdapterRoot, 'dist', 'package.json'),
-    '{"type":"module"}\n',
-  );
+  writeFileSync(join(relocatedLinkedAdapterRoot, 'dist', 'package.json'), '{"type":"module"}\n');
   assert.throws(
-    () => assertMiniGameGameBundleModules(
-      [join(relocatedLinkedAdapterRoot, 'dist', 'index.js')],
-      standaloneBoundary,
-    ),
+    () =>
+      assertMiniGameGameBundleModules(
+        [join(relocatedLinkedAdapterRoot, 'dist', 'index.js')],
+        standaloneBoundary,
+      ),
     /must not include platform runtime module/u,
   );
   const relocatedThirdPartyRoot = join(fixtureRoot, 'relocated', 'third-party-runtime');
@@ -256,10 +260,12 @@ try {
       },
     }),
   );
-  assert.doesNotThrow(() => assertMiniGameGameBundleModules(
-    [join(relocatedThirdPartyRoot, 'dist', 'index.js')],
-    standaloneBoundary,
-  ));
+  assert.doesNotThrow(() =>
+    assertMiniGameGameBundleModules(
+      [join(relocatedThirdPartyRoot, 'dist', 'index.js')],
+      standaloneBoundary,
+    ),
+  );
   const installedRenamedAdapterRoot = join(gameRoot, 'node_modules', 'linked-runtime');
   mkdirSync(join(installedRenamedAdapterRoot, 'dist'), { recursive: true });
   writeFileSync(
@@ -272,28 +278,24 @@ try {
       },
     }),
   );
-  writeFileSync(
-    join(installedRenamedAdapterRoot, 'dist', 'package.json'),
-    '{"type":"module"}\n',
-  );
+  writeFileSync(join(installedRenamedAdapterRoot, 'dist', 'package.json'), '{"type":"module"}\n');
   assert.throws(
-    () => assertMiniGameGameBundleModules(
-      [join(installedRenamedAdapterRoot, 'dist', 'index.js')],
-      standaloneBoundary,
-    ),
+    () =>
+      assertMiniGameGameBundleModules(
+        [join(installedRenamedAdapterRoot, 'dist', 'index.js')],
+        standaloneBoundary,
+      ),
     /must not include platform runtime module/u,
   );
   const linkedTargetAppRoot = join(fixtureRoot, 'linked-kit', 'target-devvit');
   mkdirSync(join(linkedTargetAppRoot, 'dist'), { recursive: true });
-  writeFileSync(
-    join(linkedTargetAppRoot, 'package.json'),
-    '{"name":"@mpgd/target-devvit"}\n',
-  );
+  writeFileSync(join(linkedTargetAppRoot, 'package.json'), '{"name":"@mpgd/target-devvit"}\n');
   assert.throws(
-    () => assertMiniGameGameBundleModules(
-      [join(linkedTargetAppRoot, 'dist', 'index.js')],
-      standaloneBoundary,
-    ),
+    () =>
+      assertMiniGameGameBundleModules(
+        [join(linkedTargetAppRoot, 'dist', 'index.js')],
+        standaloneBoundary,
+      ),
     /must not include platform runtime module/u,
   );
   for (const [index, platformSdkPackage] of [
@@ -313,10 +315,11 @@ try {
       `${JSON.stringify({ name: platformSdkPackage })}\n`,
     );
     assert.throws(
-      () => assertMiniGameGameBundleModules(
-        [join(platformSdkRoot, 'dist', 'index.js')],
-        standaloneBoundary,
-      ),
+      () =>
+        assertMiniGameGameBundleModules(
+          [join(platformSdkRoot, 'dist', 'index.js')],
+          standaloneBoundary,
+        ),
       /must not include platform runtime module/u,
     );
   }
@@ -330,15 +333,13 @@ try {
     'adapter-wechat',
   );
   mkdirSync(join(pnpmLinkedAdapterRoot, 'dist'), { recursive: true });
-  writeFileSync(
-    join(pnpmLinkedAdapterRoot, 'package.json'),
-    '{"name":"@mpgd/adapter-wechat"}\n',
-  );
+  writeFileSync(join(pnpmLinkedAdapterRoot, 'package.json'), '{"name":"@mpgd/adapter-wechat"}\n');
   assert.throws(
-    () => assertMiniGameGameBundleModules(
-      [join(pnpmLinkedAdapterRoot, 'dist', 'index.js')],
-      standaloneBoundary,
-    ),
+    () =>
+      assertMiniGameGameBundleModules(
+        [join(pnpmLinkedAdapterRoot, 'dist', 'index.js')],
+        standaloneBoundary,
+      ),
     /must not include platform runtime module/u,
   );
 
@@ -365,9 +366,10 @@ try {
     /Expected exactly one Phaser 4\.2\.0 dynamic global fallback, found 0/u,
   );
   assert.throws(
-    () => rewritePhaserMiniGameDynamicCode(
-      `${phaserFallback}\n${phaserFallback}\n${sceneEvaluation}\n${scriptInjections}`,
-    ),
+    () =>
+      rewritePhaserMiniGameDynamicCode(
+        `${phaserFallback}\n${phaserFallback}\n${sceneEvaluation}\n${scriptInjections}`,
+      ),
     /Expected exactly one Phaser 4\.2\.0 dynamic global fallback, found 2/u,
   );
   assert.throws(

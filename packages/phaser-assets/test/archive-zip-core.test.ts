@@ -28,12 +28,14 @@ function buildV1Zip(entries: readonly ZipV1FixtureEntry[]): {
         bytes: fixture.archive.length,
         sha256: sha256(fixture.archive),
       },
-      entries: fixture.entries.map((entry): ExpectedZipEntry => ({
-        path: entry.path,
-        method: entry.method,
-        bytes: entry.bytes,
-        sha256: sha256(entry.data),
-      })),
+      entries: fixture.entries.map(
+        (entry): ExpectedZipEntry => ({
+          path: entry.path,
+          method: entry.method,
+          bytes: entry.bytes,
+          sha256: sha256(entry.data),
+        }),
+      ),
     },
   };
 }

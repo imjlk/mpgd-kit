@@ -447,9 +447,8 @@ function dataAttributeToDatasetProperty(attribute: string): string | undefined {
     return undefined;
   }
 
-  return attribute.slice(5).replace(
-    /-([a-z])/gu,
-    (_match, character: string) => character.toUpperCase(),
+  return attribute.slice(5).replace(/-([a-z])/gu, (_match, character: string) =>
+    character.toUpperCase(),
   );
 }
 
@@ -473,11 +472,8 @@ function wrapCanvasContext(context: object, canvas: MiniGameCanvasElement): unkn
       }
 
       if (property === 'drawImage' || property === 'createPattern') {
-        const wrapped = (source: unknown, ...args: readonly unknown[]) => Reflect.apply(
-          value,
-          target,
-          [unwrapMiniGameNativeObject(source), ...args],
-        );
+        const wrapped = (source: unknown, ...args: readonly unknown[]) =>
+          Reflect.apply(value, target, [unwrapMiniGameNativeObject(source), ...args]);
         wrappedMethods.set(property, wrapped);
         return wrapped;
       }

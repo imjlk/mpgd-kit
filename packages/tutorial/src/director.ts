@@ -59,7 +59,9 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
 ): TutorialDirector<TDefinition> {
   const { definition, progressStore } = input;
   type Listener = (snapshot: TutorialDirectorSnapshot<TDefinition>) => void;
-  interface Subscription { readonly listener: Listener }
+  interface Subscription {
+    readonly listener: Listener;
+  }
   interface PendingPersistence {
     readonly progress: TutorialProgressOf<TDefinition>;
     readonly resolve: () => void;

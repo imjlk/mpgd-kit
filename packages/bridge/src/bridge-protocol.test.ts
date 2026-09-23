@@ -82,10 +82,11 @@ assertEqual(
   'a legacy raw object may use a true found field without a value field',
 );
 assertThrows(
-  () => decodeBridgeStorageLoadData({
-    __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
-    found: true,
-  }),
+  () =>
+    decodeBridgeStorageLoadData({
+      __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+      found: true,
+    }),
   'a present storage bridge response without a value should fail closed',
 );
 assertThrows(

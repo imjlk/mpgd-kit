@@ -442,11 +442,7 @@ function parseFunctionalMessageResult(
     sentInboxCount: requireCount(input.sentInboxCount, 'sentInboxCount', status),
     sentSmsCount: requireCount(input.sentSmsCount, 'sentSmsCount', status),
     sentAlimtalkCount: requireCount(input.sentAlimtalkCount, 'sentAlimtalkCount', status),
-    sentFriendtalkCount: requireCount(
-      input.sentFriendtalkCount,
-      'sentFriendtalkCount',
-      status,
-    ),
+    sentFriendtalkCount: requireCount(input.sentFriendtalkCount, 'sentFriendtalkCount', status),
     contentIds: readContentIds(input.detail),
   };
 }

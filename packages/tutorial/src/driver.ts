@@ -198,7 +198,6 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   const scheduleHostRefresh = (): void => scheduleRefresh(true);
 
   const createInstance = (presentation: DriverTutorialPresentation<TStep>): Driver => {
-    let created!: Driver;
     let modalSemanticsGuard: TutorialModalSemanticsGuard | undefined;
     let popover: HTMLElement | null = null;
     const syncCreatedModalSemantics = (): void => {
@@ -234,7 +233,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         modal,
       );
     };
-    created = driver({
+    const created: Driver = driver({
       allowClose: true,
       allowKeyboardControl: false,
       allowScroll: true,

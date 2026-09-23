@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
+    "rootDir": ".",
     "useDefineForClassFields": true,
     "strict": true,
     "strictNullChecks": true,

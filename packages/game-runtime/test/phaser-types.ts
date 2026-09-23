@@ -10,6 +10,7 @@ const binding = bindPhaserGameScene({
   renderingPolicy: 'visibility',
   resetInput: () => {},
   onUnsupportedState: (_snapshot, reason) => {
-    void reason; },
+    void reason;
+  },
 });
 binding.dispose();

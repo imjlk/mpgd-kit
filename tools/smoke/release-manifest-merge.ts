@@ -99,13 +99,14 @@ try {
     'web-preview',
   ]);
   assert.throws(
-    () => assertReleaseManifest({
-      ...matchingManifest,
-      releaseIdentity: {
-        gameVersion: ' 1.0.0 ',
-        label: '1.0.0',
-      },
-    }),
+    () =>
+      assertReleaseManifest({
+        ...matchingManifest,
+        releaseIdentity: {
+          gameVersion: ' 1.0.0 ',
+          label: '1.0.0',
+        },
+      }),
     /releaseIdentity\.gameVersion must be canonical without whitespace/u,
   );
 

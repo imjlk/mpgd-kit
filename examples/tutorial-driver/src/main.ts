@@ -1,15 +1,8 @@
 import '@mpgd/tutorial/driver.css';
 import './styles.css';
 
-import {
-  createTutorialDirector,
-  defineTutorial,
-  type TutorialStepOf,
-} from '@mpgd/tutorial';
-import {
-  bindTutorialReplayTrigger,
-  createDriverTutorialPresenter,
-} from '@mpgd/tutorial/driver';
+import { createTutorialDirector, defineTutorial, type TutorialStepOf } from '@mpgd/tutorial';
+import { bindTutorialReplayTrigger, createDriverTutorialPresenter } from '@mpgd/tutorial/driver';
 import {
   applyTutorialDebugLaunchPolicy,
   createMemoryTutorialProgressStore,
@@ -208,17 +201,21 @@ function render(): void {
     replaying: snapshot.replaying,
     status: snapshot.status,
   });
-  presenter.present(step === null ? null : {
-    copy: {
-      description: step.content.description,
-      done: 'Done',
-      next: 'Next',
-      skip: 'Skip guide',
-      title: step.content.title,
-    },
-    finalStep: step.id === tutorial.steps.at(-1)?.id,
-    step,
-  });
+  presenter.present(
+    step === null
+      ? null
+      : {
+          copy: {
+            description: step.content.description,
+            done: 'Done',
+            next: 'Next',
+            skip: 'Skip guide',
+            title: step.content.title,
+          },
+          finalStep: step.id === tutorial.steps.at(-1)?.id,
+          step,
+        },
+  );
 
   if (snapshot.currentStepId === 'wait' && hiddenSignalTimer === undefined) {
     hiddenSignalTimer = window.setTimeout(() => {

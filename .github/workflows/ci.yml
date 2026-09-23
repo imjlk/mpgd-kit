@@ -208,6 +208,13 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Cache compiled ttsc plugins
+        uses: actions/cache@v5
+        with:
+          path: node_modules/.cache/ttsc/plugins
+          key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
+
       - name: Validate release PR package metadata
         if: ${{ steps.release-pr-meta.outputs.enabled == 'true' }}
         run: pnpm validate:public && pnpm pack:packages
@@ -360,6 +367,13 @@ jobs:
 
       - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - run: pnpm install --frozen-lockfile
+
+      - name: Cache compiled ttsc plugins
+        uses: actions/cache@v5
+        with:
+          path: node_modules/.cache/ttsc/plugins
+          key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
       - uses: actions/download-artifact@v7
         with:
           name: package-dist-ci
@@ -403,6 +417,13 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      - name: Cache compiled ttsc plugins
+        uses: actions/cache@v5
+        with:
+          path: node_modules/.cache/ttsc/plugins
+          key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
       - uses: actions/download-artifact@v7
         with:
           name: package-dist-ci
@@ -449,6 +470,13 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      - name: Cache compiled ttsc plugins
+        uses: actions/cache@v5
+        with:
+          path: node_modules/.cache/ttsc/plugins
+          key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
       - uses: actions/download-artifact@v7
         with:
           name: package-dist-ci
@@ -491,6 +519,13 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      - name: Cache compiled ttsc plugins
+        uses: actions/cache@v5
+        with:
+          path: node_modules/.cache/ttsc/plugins
+          key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
       - uses: actions/download-artifact@v7
         with:
           name: package-dist-ci

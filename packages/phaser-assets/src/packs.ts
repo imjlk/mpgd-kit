@@ -448,7 +448,9 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
         throw new Error(`Asset ${pack.id}/${asset.key} source reported invalid buffered byte count`);
       }
       if (sum > Number.MAX_SAFE_INTEGER - additional) {
-        throw new Error(`Asset ${pack.id}/${asset.key} buffered byte reservation exceeds the safe integer range`);
+        throw new Error(
+          `Asset ${pack.id}/${asset.key} buffered byte reservation exceeds the safe integer range`,
+        );
       }
       return sum + additional;
     }, 0);
@@ -541,22 +543,13 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
       let key: string | undefined;
       try {
         image.src = url;
-        // Native decode cannot be cancelled reliably. Keep its slot and byte reservation
-        // until it settles, while claim's deadline promptly rejects the waiting caller.
-        const cancelImage = (): void => {
-          image.src = '';
-          URL.revokeObjectURL(url);
-        };
-        signal.addEventListener('abort', cancelImage, {
-          once: true,
-        });
-        try {
-          signal.throwIfAborted();
-          await image.decode();
-          signal.throwIfAborted();
-        } finally {
-          signal.removeEventListener('abort', cancelImage);
-        }
+        // Native decode cannot be cancelled reliably. Clearing src/revoking
+        // its URL mid-decode can leave Chromium's promise pending forever and
+        // strand the decode slot. Keep inputs, slot and byte reservation until
+        // settlement; claim's abort race still promptly rejects the caller.
+        signal.throwIfAborted();
+        await image.decode();
+        signal.throwIfAborted();
         const pixels = image.naturalWidth * image.naturalHeight;
         if (!pixels) {
           throw new Error(`Decoded image has no dimensions: ${asset.key}`);

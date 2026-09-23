@@ -150,7 +150,7 @@
     "@orpc/server": "2.0.0-beta.14"
   },
   "devDependencies": {
-    "ttsc": "0.18.4",
+    "ttsc": "0.30.4",
     "typescript": "7.0.2"
   },
   "main": "./dist/index.js",

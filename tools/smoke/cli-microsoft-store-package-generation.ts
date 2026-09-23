@@ -148,10 +148,8 @@ try {
     await requestMockAgent.close();
   }
   assert.throws(
-    () => hashMicrosoftStoreFileSnapshot(
-      join(fixtureRoot, 'missing-input'),
-      'fixture integrity input',
-    ),
+    () =>
+      hashMicrosoftStoreFileSnapshot(join(fixtureRoot, 'missing-input'), 'fixture integrity input'),
     /Failed to open fixture integrity input/u,
   );
   const generatedStarter = join(fixtureRoot, 'generated-starter');
@@ -975,24 +973,14 @@ try {
   mkdirSync(dirname(archivePlacementFailure.input.outputFile), { recursive: true });
   const archivePlacementIconInputs = [
     {
-      file: join(
-        archivePlacementFailure.gameRoot,
-        'artifacts',
-        'microsoft-store',
-        'icon-192.png',
-      ),
+      file: join(archivePlacementFailure.gameRoot, 'artifacts', 'microsoft-store', 'icon-192.png'),
       url: icon192Url,
       snapshot: { sizeBytes: icon192Bytes.length, sha256: sha256(icon192Bytes) },
       width: 192,
       height: 192,
     },
     {
-      file: join(
-        archivePlacementFailure.gameRoot,
-        'artifacts',
-        'microsoft-store',
-        'icon-512.png',
-      ),
+      file: join(archivePlacementFailure.gameRoot, 'artifacts', 'microsoft-store', 'icon-512.png'),
       url: icon512Url,
       snapshot: { sizeBytes: icon512Bytes.length, sha256: sha256(icon512Bytes) },
       width: 512,
@@ -1023,19 +1011,20 @@ try {
 
   const linkedPlacementFailure = createFixture('linked-placement-failure');
   assert.throws(
-    () => writeMicrosoftStorePackageGenerationEvidenceFiles(
-      {
-        jsonFile: linkedPlacementFailure.input.jsonFile,
-        markdownFile: linkedPlacementFailure.input.markdownFile,
-        report: { placed: true },
-        markdown: '# Placed\n',
-      },
-      {
-        afterPlacement: () => {
-          throw new Error('after link placement');
+    () =>
+      writeMicrosoftStorePackageGenerationEvidenceFiles(
+        {
+          jsonFile: linkedPlacementFailure.input.jsonFile,
+          markdownFile: linkedPlacementFailure.input.markdownFile,
+          report: { placed: true },
+          markdown: '# Placed\n',
         },
-      },
-    ),
+        {
+          afterPlacement: () => {
+            throw new Error('after link placement');
+          },
+        },
+      ),
     /after link placement/u,
   );
   assert.equal(existsSync(linkedPlacementFailure.input.jsonFile), false);
@@ -1048,19 +1037,20 @@ try {
   writeFileSync(renamedPlacementFailure.input.jsonFile, previousRenamedJson);
   writeFileSync(renamedPlacementFailure.input.markdownFile, previousRenamedMarkdown);
   assert.throws(
-    () => writeMicrosoftStorePackageGenerationEvidenceFiles(
-      {
-        jsonFile: renamedPlacementFailure.input.jsonFile,
-        markdownFile: renamedPlacementFailure.input.markdownFile,
-        report: { placed: true },
-        markdown: '# Replaced\n',
-      },
-      {
-        afterPlacement: () => {
-          throw new Error('after rename placement');
+    () =>
+      writeMicrosoftStorePackageGenerationEvidenceFiles(
+        {
+          jsonFile: renamedPlacementFailure.input.jsonFile,
+          markdownFile: renamedPlacementFailure.input.markdownFile,
+          report: { placed: true },
+          markdown: '# Replaced\n',
         },
-      },
-    ),
+        {
+          afterPlacement: () => {
+            throw new Error('after rename placement');
+          },
+        },
+      ),
     /after rename placement/u,
   );
   assert.equal(readFileSync(renamedPlacementFailure.input.jsonFile, 'utf8'), previousRenamedJson);

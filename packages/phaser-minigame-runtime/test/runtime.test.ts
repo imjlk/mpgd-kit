@@ -1814,7 +1814,6 @@ describe('Phaser mini-game runtime patch', () => {
     let pauses = 0;
     let resumes = 0;
     let sleeps = 0;
-    let installation: ReturnType<typeof installPhaserMiniGameRuntime>;
     const loop = {
       started: true,
       running: true,
@@ -1845,7 +1844,7 @@ describe('Phaser mini-game runtime patch', () => {
         this.isPaused = false;
       },
     } satisfies MiniGamePhaserGame;
-    installation = installPhaserMiniGameRuntime(game, { globals });
+    const installation: ReturnType<typeof installPhaserMiniGameRuntime> = installPhaserMiniGameRuntime(game, { globals });
 
     host.emitPause();
 
@@ -1963,7 +1962,6 @@ describe('Phaser mini-game runtime patch', () => {
     const raf = createFakePhaserRaf(() => undefined);
     let pauses = 0;
     let resumes = 0;
-    let installation: ReturnType<typeof installPhaserMiniGameRuntime>;
     const loop = {
       started: true,
       running: true,
@@ -1996,7 +1994,7 @@ describe('Phaser mini-game runtime patch', () => {
         this.isPaused = false;
       },
     } satisfies MiniGamePhaserGame;
-    installation = installPhaserMiniGameRuntime(game, { globals });
+    const installation: ReturnType<typeof installPhaserMiniGameRuntime> = installPhaserMiniGameRuntime(game, { globals });
 
     host.emitPause();
     expect(() => host.emitResume()).toThrow('late wake observer failed');
@@ -2307,7 +2305,6 @@ describe('Phaser mini-game runtime patch', () => {
     const host = new FakeMiniGameHost();
     const globals = installMiniGameGlobals(host);
     let frames = 0;
-    let installation: ReturnType<typeof installPhaserMiniGameRuntime>;
     const raf = createFakePhaserRaf(() => {
       frames += 1;
       installation.dispose();
@@ -2331,7 +2328,7 @@ describe('Phaser mini-game runtime patch', () => {
       canvas: globals.canvas,
       loop,
     } satisfies MiniGamePhaserGame;
-    installation = installPhaserMiniGameRuntime(game, { globals });
+    const installation: ReturnType<typeof installPhaserMiniGameRuntime> = installPhaserMiniGameRuntime(game, { globals });
 
     host.flushFrame(16);
     expect(installation.disposed).toBe(true);

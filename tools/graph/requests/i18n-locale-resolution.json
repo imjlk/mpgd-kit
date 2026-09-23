@@ -7,12 +7,24 @@
   ],
   "tsconfig": "tsconfig.graph.json",
   "question": "How does @mpgd/i18n collect host language preferences and resolve saved, preferred, disabled, and fallback locales?",
-  "draft": "Tour the public locale collector and resolver together so browser and Capacitor consumers share ordering without target-name defaults.",
+  "draft": {
+    "reason": "Tour the public locale collector and resolver together so browser and Capacitor consumers share ordering without target-name defaults.",
+    "type": "tour"
+  },
   "review": "The graph should anchor the public host-language seam, target capability gate, normalization path, and smoke coverage.",
   "request": {
     "type": "tour",
-    "query": "readMpgdPreferredLocales resolveMpgdLocale resolveTargetMpgdLocale normalizeMpgdLocale MpgdLocaleEnvironment preferredLocales fallbackLocale localizedContent i18n-smoke",
     "includeTests": true,
-    "limit": 20
+    "limit": 20,
+    "reinterpretations": [
+      "readMpgdPreferredLocales",
+      "resolveMpgdLocale",
+      "resolveTargetMpgdLocale",
+      "normalizeMpgdLocale",
+      "MpgdLocaleEnvironment",
+      "preferredLocales",
+      "fallbackLocale",
+      "localizedContent"
+    ]
   }
 }

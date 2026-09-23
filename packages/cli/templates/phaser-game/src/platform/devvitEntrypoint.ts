@@ -1,7 +1,4 @@
-import {
-  requestDevvitExpandedMode,
-  startDevvitPreviewWebView,
-} from '@mpgd/adapter-devvit/web';
+import { requestDevvitExpandedMode, startDevvitPreviewWebView } from '@mpgd/adapter-devvit/web';
 
 const expandedRequestRecoveryMs = 8_000;
 

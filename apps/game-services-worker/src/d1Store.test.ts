@@ -1,9 +1,6 @@
 import { readFile } from 'node:fs/promises';
 
-import {
-  EvidenceAlreadyProcessedError,
-  type EntitlementLedgerGrant,
-} from '@mpgd/game-services';
+import { EvidenceAlreadyProcessedError, type EntitlementLedgerGrant } from '@mpgd/game-services';
 import { Miniflare } from 'miniflare';
 
 import { createD1GameServicesStore } from './d1Store.js';

@@ -10,12 +10,14 @@ function source() {
     onPause(callback: () => void) {
       pauses.add(callback);
       return () => {
-        pauses.delete(callback); };
+        pauses.delete(callback);
+      };
     },
     onResume(callback: () => void) {
       resumes.add(callback);
       return () => {
-        resumes.delete(callback); };
+        resumes.delete(callback);
+      };
     },
     pause: () => pauses.forEach((callback) => callback()),
     resume: () => resumes.forEach((callback) => callback()),

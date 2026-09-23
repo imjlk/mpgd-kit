@@ -498,11 +498,13 @@ function inspectPackage(input: {
 
     return {
       identity,
-      payloadIdentities: payloads.map((payload, index) => inspectSinglePackage(
-        payload,
-        path.join(input.tempRoot, `payload-${index + 1}`),
-        input.runtime,
-      )),
+      payloadIdentities: payloads.map((payload, index) =>
+        inspectSinglePackage(
+          payload,
+          path.join(input.tempRoot, `payload-${index + 1}`),
+          input.runtime,
+        ),
+      ),
     };
   }
 

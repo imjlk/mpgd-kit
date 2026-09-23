@@ -7,12 +7,38 @@
   ],
   "tsconfig": "apps/game-services-worker/tsconfig.json",
   "question": "What are the central Game Services backend flows for oRPC contracts, client adapters, backend store handlers, verified leaderboard reads and trusted writes, Cloudflare Worker fetch handlers, service binding methods, and local smoke tests?",
-  "draft": "Use a tour because the Game Services backend crosses contract, client, backend, Worker starter, D1 store, and smoke tests.",
+  "draft": {
+    "reason": "Use a tour because the Game Services backend crosses contract, client, backend, Worker starter, D1 store, and smoke tests.",
+    "type": "tour"
+  },
   "review": "A broad backend service flow should use a focused graph tour over the Worker app tsconfig so Cloudflare-specific source is included without changing the root graph project.",
   "request": {
     "type": "tour",
-    "query": "gameServicesContract createGameServicesOrpcClient createGameServicesOrpcBackendApi createGameServicesBackend createGameServicesRouter createGameServicesRpcFetchHandler createGameServicesHttpFetchHandler GameServicesStore InMemoryGameServicesStore VerifiedLeaderboardService TrustedLeaderboardRecorder createInMemoryVerifiedLeaderboardService runVerifiedLeaderboardConformance recordVerifiedAttempt getSnapshot createD1GameServicesStore createWorkerFetchHandler createWorkerService GameServicesWorker verifyPurchase claimAdReward recordLeaderboardScore index.test verified-leaderboard.test verified-leaderboard-conformance.test",
     "includeTests": true,
-    "limit": 90
+    "limit": 90,
+    "reinterpretations": [
+      "gameServicesContract",
+      "createGameServicesOrpcClient",
+      "createGameServicesOrpcBackendApi",
+      "createGameServicesBackend",
+      "createGameServicesRouter",
+      "createGameServicesRpcFetchHandler",
+      "createGameServicesHttpFetchHandler",
+      "GameServicesStore",
+      "InMemoryGameServicesStore",
+      "VerifiedLeaderboardService",
+      "TrustedLeaderboardRecorder",
+      "createInMemoryVerifiedLeaderboardService",
+      "runVerifiedLeaderboardConformance",
+      "recordVerifiedAttempt",
+      "getSnapshot",
+      "createD1GameServicesStore",
+      "createWorkerFetchHandler",
+      "createWorkerService",
+      "GameServicesWorker",
+      "verifyPurchase",
+      "claimAdReward",
+      "recordLeaderboardScore"
+    ]
   }
 }

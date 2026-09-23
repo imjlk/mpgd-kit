@@ -349,10 +349,11 @@ assert(
 assertEqual((await raceStore.listEntitlementTransactions()).length, 1);
 
 assertThrows(
-  () => createGooglePlayProductPurchaseBoundary({
-    client: new FixtureGooglePlayClient([]),
-    packageName: 'dev.mpgd.conformance',
-  }),
+  () =>
+    createGooglePlayProductPurchaseBoundary({
+      client: new FixtureGooglePlayClient([]),
+      packageName: 'dev.mpgd.conformance',
+    }),
   'account binding must not be disabled implicitly',
 );
 
@@ -914,9 +915,7 @@ const mixedTargetBackend = createGameServicesBackend({
   catalog,
   placements,
   store: new TrackingStore(mixedTargetEvents),
-  evidenceVerifier: createDevelopmentGameServicesEvidenceVerifier(
-    () => '2030-01-02T03:04:06.000Z',
-  ),
+  evidenceVerifier: createDevelopmentGameServicesEvidenceVerifier(() => '2030-01-02T03:04:06.000Z'),
   purchaseGrantFinalizer: mixedTargetBoundary,
   now: () => '2030-01-02T03:04:07.000Z',
 });
@@ -985,9 +984,7 @@ const throwingSupportBackend = createGameServicesBackend({
   catalog,
   placements,
   store: throwingSupportStore,
-  evidenceVerifier: createDevelopmentGameServicesEvidenceVerifier(
-    () => '2030-01-02T03:04:06.000Z',
-  ),
+  evidenceVerifier: createDevelopmentGameServicesEvidenceVerifier(() => '2030-01-02T03:04:06.000Z'),
   purchaseGrantFinalizer: {
     supportsPurchaseGrant() {
       throw new Error('simulated supportsPurchaseGrant failure');

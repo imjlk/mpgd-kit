@@ -233,13 +233,14 @@ try {
   });
   writeJson(effectiveTargetFile, validMicrosoftStoreEffectiveTarget());
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: join(outputDir, 'commerce-disabled-iap-enabled.json'),
-      markdownFile: join(outputDir, 'commerce-disabled-iap-enabled.md'),
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: join(outputDir, 'commerce-disabled-iap-enabled.json'),
+        markdownFile: join(outputDir, 'commerce-disabled-iap-enabled.md'),
+      }),
     /must disable IAP when commerce mode is disabled/u,
   );
   writeJson(
@@ -247,25 +248,27 @@ try {
     validMicrosoftStoreEffectiveTarget({ iap: false, productEnabled: true }),
   );
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: join(outputDir, 'commerce-disabled-product-enabled.json'),
-      markdownFile: join(outputDir, 'commerce-disabled-product-enabled.md'),
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: join(outputDir, 'commerce-disabled-product-enabled.json'),
+        markdownFile: join(outputDir, 'commerce-disabled-product-enabled.md'),
+      }),
     /products\[0\] must be disabled when commerce mode is disabled/u,
   );
   writeJson(submissionFile, commerceConfig);
   writeJson(effectiveTargetFile, validMicrosoftStoreEffectiveTarget({ iap: false }));
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: join(outputDir, 'commerce-enabled-iap-disabled.json'),
-      markdownFile: join(outputDir, 'commerce-enabled-iap-disabled.md'),
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: join(outputDir, 'commerce-enabled-iap-disabled.json'),
+        markdownFile: join(outputDir, 'commerce-enabled-iap-disabled.md'),
+      }),
     /must enable IAP/u,
   );
   writeJson(effectiveTargetFile, validMicrosoftStoreEffectiveTarget());
@@ -294,13 +297,14 @@ try {
     validMicrosoftStoreEffectiveTarget({ platformProductId: 'stale_hint_pack_20' }),
   );
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: join(outputDir, 'commerce-stale-token.json'),
-      markdownFile: join(outputDir, 'commerce-stale-token.md'),
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: join(outputDir, 'commerce-stale-token.json'),
+        markdownFile: join(outputDir, 'commerce-stale-token.md'),
+      }),
     /InAppOfferToken ttokdoku_hint_pack_20 does not match built artifact platformProductId stale_hint_pack_20/u,
   );
   writeJson(
@@ -308,13 +312,14 @@ try {
     validMicrosoftStoreEffectiveTarget({ logicalProductId: 'HINT_PACK_120' }),
   );
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: join(outputDir, 'commerce-missing-product.json'),
-      markdownFile: join(outputDir, 'commerce-missing-product.md'),
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: join(outputDir, 'commerce-missing-product.json'),
+        markdownFile: join(outputDir, 'commerce-missing-product.md'),
+      }),
     /HINT_PACK_20 is not present in the built artifact effective target/u,
   );
   writeJson(
@@ -322,13 +327,14 @@ try {
     validMicrosoftStoreEffectiveTarget({ duplicatePlatformProductId: true }),
   );
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: join(outputDir, 'commerce-duplicate-platform-product.json'),
-      markdownFile: join(outputDir, 'commerce-duplicate-platform-product.md'),
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: join(outputDir, 'commerce-duplicate-platform-product.json'),
+        markdownFile: join(outputDir, 'commerce-duplicate-platform-product.md'),
+      }),
     /duplicates platformProductId ttokdoku_hint_pack_20/u,
   );
   writeJson(effectiveTargetFile, validMicrosoftStoreEffectiveTarget({ iap: false }));
@@ -566,13 +572,14 @@ try {
 
   writeJson(manifestFile, { ...validManifest, display: 'browser' });
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: join(outputDir, 'browser-display.json'),
-      markdownFile: join(outputDir, 'browser-display.md'),
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: join(outputDir, 'browser-display.json'),
+        markdownFile: join(outputDir, 'browser-display.md'),
+      }),
     /display must be standalone/u,
   );
   writeJson(manifestFile, {
@@ -585,13 +592,14 @@ try {
     })),
   });
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: join(outputDir, 'too-many-icons.json'),
-      markdownFile: join(outputDir, 'too-many-icons.md'),
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: join(outputDir, 'too-many-icons.json'),
+        markdownFile: join(outputDir, 'too-many-icons.md'),
+      }),
     /icons must contain at most 32 entries/u,
   );
   writeJson(manifestFile, {
@@ -610,13 +618,14 @@ try {
     icons: validManifest.icons.map((icon) => ({ ...icon, purpose: `${icon.purpose} bogus` })),
   });
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: join(outputDir, 'unsupported-icon-purpose.json'),
-      markdownFile: join(outputDir, 'unsupported-icon-purpose.md'),
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: join(outputDir, 'unsupported-icon-purpose.json'),
+        markdownFile: join(outputDir, 'unsupported-icon-purpose.md'),
+      }),
     /purpose contains an unsupported token: bogus/u,
   );
   writeJson(manifestFile, {
@@ -624,13 +633,14 @@ try {
     icons: validManifest.icons.filter((icon) => icon.purpose === 'any'),
   });
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: join(outputDir, 'missing-maskable.json'),
-      markdownFile: join(outputDir, 'missing-maskable.md'),
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: join(outputDir, 'missing-maskable.json'),
+        markdownFile: join(outputDir, 'missing-maskable.md'),
+      }),
     /must include purpose: maskable/u,
   );
   writeJson(manifestFile, {
@@ -641,72 +651,78 @@ try {
     ],
   });
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: join(outputDir, 'missing-192.json'),
-      markdownFile: join(outputDir, 'missing-192.md'),
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: join(outputDir, 'missing-192.json'),
+        markdownFile: join(outputDir, 'missing-192.md'),
+      }),
     /must include size: 192x192/u,
   );
   writeJson(manifestFile, validManifest);
 
   writeJson(manifestFile, { ...validManifest, start_url: 'https://outside.example/game' });
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: join(outputDir, 'absolute-start-url.json'),
-      markdownFile: join(outputDir, 'absolute-start-url.md'),
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: join(outputDir, 'absolute-start-url.json'),
+        markdownFile: join(outputDir, 'absolute-start-url.md'),
+      }),
     /artifact-relative URL/u,
   );
   writeJson(manifestFile, { ...validManifest, start_url: './', scope: './game/' });
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: join(outputDir, 'start-url-outside-scope.json'),
-      markdownFile: join(outputDir, 'start-url-outside-scope.md'),
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: join(outputDir, 'start-url-outside-scope.json'),
+        markdownFile: join(outputDir, 'start-url-outside-scope.md'),
+      }),
     /start_url must stay within scope/u,
   );
   writeJson(manifestFile, validManifest);
 
   rmSync(iconFile);
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: join(outputDir, 'missing-icon.json'),
-      markdownFile: join(outputDir, 'missing-icon.md'),
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: join(outputDir, 'missing-icon.json'),
+        markdownFile: join(outputDir, 'missing-icon.md'),
+      }),
     /must exist/u,
   );
   writeFileSync(iconFile, Buffer.from('not a PNG'));
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: join(outputDir, 'invalid-icon.json'),
-      markdownFile: join(outputDir, 'invalid-icon.md'),
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: join(outputDir, 'invalid-icon.json'),
+        markdownFile: join(outputDir, 'invalid-icon.md'),
+      }),
     /must be a valid PNG/u,
   );
   writeFileSync(iconFile, Buffer.alloc(2 * 1024 * 1024 + 1));
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: join(outputDir, 'oversized-icon.json'),
-      markdownFile: join(outputDir, 'oversized-icon.md'),
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: join(outputDir, 'oversized-icon.json'),
+        markdownFile: join(outputDir, 'oversized-icon.md'),
+      }),
     /exceeds its maximum file size/u,
   );
   writeFileSync(iconFile, validIcon);
@@ -724,13 +740,14 @@ try {
     ],
   });
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: join(outputDir, 'oversized-decoded-icon.json'),
-      markdownFile: join(outputDir, 'oversized-decoded-icon.md'),
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: join(outputDir, 'oversized-decoded-icon.json'),
+        markdownFile: join(outputDir, 'oversized-decoded-icon.md'),
+      }),
     /decoded pixel data is too large/u,
   );
   writeJson(manifestFile, validManifest);
@@ -747,13 +764,14 @@ try {
   ]) {
     writeFileSync(screenshotFile, invalidScreenshot);
     assert.throws(
-      () => runMicrosoftStoreSubmissionPreflight({
-        gameRoot,
-        artifactRoot,
-        configFile: submissionFile,
-        jsonFile: join(outputDir, 'invalid-screenshot.json'),
-        markdownFile: join(outputDir, 'invalid-screenshot.md'),
-      }),
+      () =>
+        runMicrosoftStoreSubmissionPreflight({
+          gameRoot,
+          artifactRoot,
+          configFile: submissionFile,
+          jsonFile: join(outputDir, 'invalid-screenshot.json'),
+          markdownFile: join(outputDir, 'invalid-screenshot.md'),
+        }),
       /must be a valid PNG|must be landscape or portrait/u,
     );
   }
@@ -761,26 +779,28 @@ try {
 
   const originalSubmission = readFileSync(submissionFile, 'utf8');
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: submissionFile,
-      markdownFile: join(outputDir, 'aliased-input.md'),
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: submissionFile,
+        markdownFile: join(outputDir, 'aliased-input.md'),
+      }),
     /must not alias Microsoft Store submission config/u,
   );
   assert.equal(readFileSync(submissionFile, 'utf8'), originalSubmission);
 
   const sharedOutputFile = join(outputDir, 'shared-evidence');
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: sharedOutputFile,
-      markdownFile: sharedOutputFile,
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: sharedOutputFile,
+        markdownFile: sharedOutputFile,
+      }),
     /must not alias submission evidence Markdown/u,
   );
 
@@ -789,13 +809,14 @@ try {
   writeFileSync(outsideOutputFile, 'outside');
   symlinkSync(outsideOutputFile, linkedOutputFile);
   assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: linkedOutputFile,
-      markdownFile: join(outputDir, 'linked-submission-preflight.md'),
-    }),
+    () =>
+      runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: linkedOutputFile,
+        markdownFile: join(outputDir, 'linked-submission-preflight.md'),
+      }),
     /must not be a symbolic link/u,
   );
 

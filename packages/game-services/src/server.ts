@@ -437,10 +437,7 @@ export function createGameServicesBackendApiHandler(
       try {
         return await routeGameServicesRequest(request.endpoint, request.body, backend);
       } catch (error) {
-        return errorResponse(
-          400,
-          error instanceof Error ? error.message : 'BAD_REQUEST',
-        );
+        return errorResponse(400, error instanceof Error ? error.message : 'BAD_REQUEST');
       }
     },
   };

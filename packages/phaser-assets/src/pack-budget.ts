@@ -37,7 +37,11 @@ export function createPackBudget(limit: number): {
       }
       return new Promise((resolve, reject) => {
         const entry = {
-          weight, signal, resolve, reject, cancel: () => {
+          weight,
+          signal,
+          resolve,
+          reject,
+          cancel: () => {
             const index = queue.indexOf(entry);
             if (index !== -1) {
               queue.splice(index, 1);

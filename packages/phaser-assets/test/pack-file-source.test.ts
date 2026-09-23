@@ -49,14 +49,21 @@ function memorySource(): PhaserPackFileSource & {
   const releases: PhaserPackFileBody[] = [];
   const closes: PhaserPackFileRequest[] = [];
   return {
-    opens, contexts, reads, releases, closes,
+    opens,
+    contexts,
+    reads,
+    releases,
+    closes,
     async open(request, context) {
       opens.push(request);
       contexts.push(context);
       return {
         read: () => new Promise<PhaserPackFileBody>((resolveBody, rejectBody) => {
           reads.push({
-            request, context, resolveBody, rejectBody,
+            request,
+            context,
+            resolveBody,
+            rejectBody,
           });
         }),
         close() {
@@ -73,7 +80,8 @@ function serveRead(source: ReturnType<typeof memorySource>, index: number): void
   const raw = read.request.url.endsWith('.json') ? atlasJson : png;
   let released = false;
   const body: PhaserPackFileBody = {
-    bytes: new Blob([raw]), release() {
+    bytes: new Blob([raw]),
+    release() {
       if (released) {
         return;
       }
@@ -657,14 +665,27 @@ describe('default URL source ownership', () => {
 describe('default URL source integrity', () => {
   it('verifies delivered body bytes, not Content-Length or Content-Encoding headers', async () => {
     const f = fixture();
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(png, {
-      headers: { 'Content-Encoding': 'gzip', 'Content-Length': '2' },
-    })));
-    const loader = createPhaserAssetPackLoader(f.scene, imageCatalog([{
-      kind: 'image', key: 'pilot', url: '/pilot.png', integrity: {
-        texture: { bytes: 3, sha256: sha256(png) },
-      },
-    }]));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () => new Response(png, {
+          headers: { 'Content-Encoding': 'gzip', 'Content-Length': '2' },
+        }),
+      ),
+    );
+    const loader = createPhaserAssetPackLoader(
+      f.scene,
+      imageCatalog([
+        {
+          kind: 'image',
+          key: 'pilot',
+          url: '/pilot.png',
+          integrity: {
+            texture: { bytes: 3, sha256: sha256(png) },
+          },
+        },
+      ]),
+    );
     const lease = await loader.acquire('shared');
     expect(f.values.size).toBe(1);
     lease.release();
@@ -673,12 +694,23 @@ describe('default URL source integrity', () => {
 
   it('rejects default-source bytes whose body digest differs from the manifest', async () => {
     const f = fixture();
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array([3, 2, 1]))));
-    const loader = createPhaserAssetPackLoader(f.scene, imageCatalog([{
-      kind: 'image', key: 'pilot', url: '/pilot.png', integrity: {
-        texture: { bytes: 3, sha256: sha256(png) },
-      },
-    }]));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(new Uint8Array([3, 2, 1]))),
+    );
+    const loader = createPhaserAssetPackLoader(
+      f.scene,
+      imageCatalog([
+        {
+          kind: 'image',
+          key: 'pilot',
+          url: '/pilot.png',
+          integrity: {
+            texture: { bytes: 3, sha256: sha256(png) },
+          },
+        },
+      ]),
+    );
     await expect(loader.acquire('shared')).rejects.toThrow('digest mismatch');
     expect(fetch).toHaveBeenCalledTimes(1);
     loader.dispose();

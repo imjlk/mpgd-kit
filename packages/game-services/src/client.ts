@@ -484,11 +484,7 @@ export function createGameServicesHttpBackendApi(
         return sendGameServicesBackendRequest<
           RecordLeaderboardScoreRequest,
           RecordLeaderboardScoreResponse
-        >(
-          input.transport,
-          gameServicesBackendEndpoints.recordLeaderboardScore,
-          body,
-        );
+        >(input.transport, gameServicesBackendEndpoints.recordLeaderboardScore, body);
       },
     },
   };

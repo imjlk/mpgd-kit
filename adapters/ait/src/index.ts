@@ -106,8 +106,7 @@ export function createAitPlatformGateway(input: {
     promotions: {
       getAvailability: (payload) =>
         request<PromotionRewardAvailability>('promotions.getAvailability', payload),
-      grantReward: (payload) =>
-        request<PromotionRewardResult>('promotions.grantReward', payload),
+      grantReward: (payload) => request<PromotionRewardResult>('promotions.grantReward', payload),
     },
     commerce: {
       getProducts: () => request('commerce.getProducts', {}),

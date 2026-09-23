@@ -76,17 +76,18 @@ assertEqual(
   'product identifiers must ignore inherited prototype keys',
 );
 assertThrows(
-  () => assertProductCatalog({
-    version: 'collision',
-    products: [
-      customTargetProduct,
-      {
-        ...customTargetProduct,
-        id: 'HINTS_10',
-        platformProductIds: { 'storefront-web': 'hints_5_web' },
-      },
-    ],
-  }),
+  () =>
+    assertProductCatalog({
+      version: 'collision',
+      products: [
+        customTargetProduct,
+        {
+          ...customTargetProduct,
+          id: 'HINTS_10',
+          platformProductIds: { 'storefront-web': 'hints_5_web' },
+        },
+      ],
+    }),
   'catalog validation should reject normalized product identifier collisions',
 );
 
@@ -126,17 +127,18 @@ assertEqual(
   'placement identifiers must ignore inherited prototype keys',
 );
 assertThrows(
-  () => assertAdPlacements({
-    version: 'collision',
-    placements: [
-      customTargetPlacement,
-      {
-        ...customTargetPlacement,
-        id: 'CUSTOM_REWARDED_DUPLICATE',
-        platformPlacementIds: { 'verse8-staging': 'rewarded_staging' },
-      },
-    ],
-  }),
+  () =>
+    assertAdPlacements({
+      version: 'collision',
+      placements: [
+        customTargetPlacement,
+        {
+          ...customTargetPlacement,
+          id: 'CUSTOM_REWARDED_DUPLICATE',
+          platformPlacementIds: { 'verse8-staging': 'rewarded_staging' },
+        },
+      ],
+    }),
   'ad placement validation should reject normalized platform identifier collisions',
 );
 

@@ -2733,9 +2733,7 @@ function createGameApp(input: {
       content: file.content,
     });
 
-    return prepared === undefined
-      ? []
-      : [{ ...file, content: renderTemplate(prepared, context) }];
+    return prepared === undefined ? [] : [{ ...file, content: renderTemplate(prepared, context) }];
   });
 
   if (input.dryRun) {
@@ -2865,8 +2863,17 @@ function createTemplateContext(input: {
     );
   }
 
-  const workspaceRoot = toTemplatePath(path.relative(input.appDir, kitPath ?? input.appDir) || '.');
+  const relativeKitPath = path.relative(input.appDir, kitPath ?? input.appDir);
+  if (input.workspace && path.isAbsolute(relativeKitPath)) {
+    throw new Error('--workspace requires the game and mpgd-kit to share a filesystem root.');
+  }
+  const workspaceRoot = toTemplatePath(relativeKitPath || '.');
   const workspacePrefix = workspaceRoot;
+  // The normalized relative path's parent hops reach the common source root.
+  // Do not inherit the kit's narrower root when the game is a sibling checkout.
+  const tsconfigRootDir = input.workspace
+    ? workspacePrefix.split('/').filter((segment) => segment === '..').join('/') || '.'
+    : '.';
   const mpgdDependencyVersionReplacements = resolveMpgdDependencyVersionReplacements({
     ...(input.dependencyVersion === undefined
       ? {}
@@ -2893,6 +2900,7 @@ function createTemplateContext(input: {
     tsconfigExtendsLine: input.workspace
       ? `  "extends": "${workspacePrefix}/tsconfig.base.json",`
       : '',
+    tsconfigRootDir,
     tsconfigWorkspaceIncludes: input.workspace
       ? [
           `,\n    "${workspacePrefix}/packages/**/*.ts"`,
@@ -3065,6 +3073,7 @@ function renderTemplate(
     .replaceAll('__PACKAGE_NAME__', context.packageName)
     .replaceAll('__MPGD_DEPENDENCY_VERSION__', context.defaultDependencyVersion)
     .replaceAll('__TSCONFIG_EXTENDS_LINE__', context.tsconfigExtendsLine)
+    .replaceAll('__TSCONFIG_ROOT_DIR__', context.tsconfigRootDir)
     .replaceAll('__TSCONFIG_WORKSPACE_INCLUDES__', context.tsconfigWorkspaceIncludes)
     .replaceAll('__TSCONFIG_WORKSPACE_EXCLUDES__', context.tsconfigWorkspaceExcludes)
     .replaceAll('__WORKSPACE_I18N_BUILD_PREFIX__', context.workspaceI18nBuildPrefix)

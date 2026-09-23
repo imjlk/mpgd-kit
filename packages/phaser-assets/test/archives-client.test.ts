@@ -1970,7 +1970,7 @@ describe('bounded ZIP decode client', () => {
       const worker = createFakeWorker();
       worker.blackhole();
       const realNow = performance.now.bind(performance);
-      let nowMs: number | undefined;
+      let nowMs: number | undefined = undefined;
       vi.spyOn(performance, 'now').mockImplementation(() => nowMs ?? realNow());
       const decoder = createBoundedZipDecoder({
         createWorker: (): FakeWorker => worker,
@@ -2460,7 +2460,7 @@ describe('bounded ZIP decode client', () => {
       const worker = createFakeWorker();
       worker.blackhole();
       const realNow = performance.now.bind(performance);
-      let nowMs: number | undefined;
+      let nowMs: number | undefined = undefined;
       vi.spyOn(performance, 'now').mockImplementation(() => nowMs ?? realNow());
       const decoder = createBoundedZipDecoder({
         createWorker: (): FakeWorker => worker,
@@ -3659,7 +3659,7 @@ describe('bounded ZIP decode client', () => {
       const worker = createFakeWorker();
       worker.blackhole();
       const realNow = performance.now.bind(performance);
-      let nowMs: number | undefined;
+      let nowMs: number | undefined = undefined;
       vi.spyOn(performance, 'now').mockImplementation(() => nowMs ?? realNow());
       const decoder = createBoundedZipDecoder({
         createWorker: (): FakeWorker => worker,
@@ -3880,9 +3880,11 @@ const jobGate = (): {
   let resolve: (() => void) | undefined;
   let opened = false;
   return {
-    wait: (): Promise<void> => (opened ? Promise.resolve() : new Promise((yes) => {
-      resolve = yes;
-    })),
+    wait: (): Promise<void> => (opened
+      ? Promise.resolve()
+      : new Promise((yes) => {
+          resolve = yes;
+        })),
     open: (): void => {
       opened = true;
       resolve?.();

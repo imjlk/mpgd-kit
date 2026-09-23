@@ -48,58 +48,78 @@ export function installMiniGameTouchInput(
   let active = true;
 
   try {
-    unsubscribers.push(assertTouchUnsubscribe(host.onTouchStart((touches) => {
-      if (!active) {
-        return;
-      }
+    unsubscribers.push(
+      assertTouchUnsubscribe(
+        host.onTouchStart((touches) => {
+          if (!active) {
+            return;
+          }
 
-      const changed = touches.map((touch) => createTouchPoint(touch, canvas));
+          const changed = touches.map((touch) => createTouchPoint(touch, canvas));
 
-      for (const touch of changed) {
-        activeTouches.set(touch.identifier, touch);
-      }
+          for (const touch of changed) {
+            activeTouches.set(touch.identifier, touch);
+          }
 
-      dispatch('touchstart', changed);
-    }), 'onTouchStart'));
-    unsubscribers.push(assertTouchUnsubscribe(host.onTouchMove((touches) => {
-      if (!active) {
-        return;
-      }
+          dispatch('touchstart', changed);
+        }),
+        'onTouchStart',
+      ),
+    );
+    unsubscribers.push(
+      assertTouchUnsubscribe(
+        host.onTouchMove((touches) => {
+          if (!active) {
+            return;
+          }
 
-      const changed = touches.map((touch) => createTouchPoint(touch, canvas));
+          const changed = touches.map((touch) => createTouchPoint(touch, canvas));
 
-      for (const touch of changed) {
-        activeTouches.set(touch.identifier, touch);
-      }
+          for (const touch of changed) {
+            activeTouches.set(touch.identifier, touch);
+          }
 
-      dispatch('touchmove', changed);
-    }), 'onTouchMove'));
-    unsubscribers.push(assertTouchUnsubscribe(host.onTouchEnd((touches) => {
-      if (!active) {
-        return;
-      }
+          dispatch('touchmove', changed);
+        }),
+        'onTouchMove',
+      ),
+    );
+    unsubscribers.push(
+      assertTouchUnsubscribe(
+        host.onTouchEnd((touches) => {
+          if (!active) {
+            return;
+          }
 
-      const changed = touches.map((touch) => createTouchPoint(touch, canvas));
+          const changed = touches.map((touch) => createTouchPoint(touch, canvas));
 
-      for (const touch of changed) {
-        activeTouches.delete(touch.identifier);
-      }
+          for (const touch of changed) {
+            activeTouches.delete(touch.identifier);
+          }
 
-      dispatch('touchend', changed);
-    }), 'onTouchEnd'));
-    unsubscribers.push(assertTouchUnsubscribe(host.onTouchCancel((touches) => {
-      if (!active) {
-        return;
-      }
+          dispatch('touchend', changed);
+        }),
+        'onTouchEnd',
+      ),
+    );
+    unsubscribers.push(
+      assertTouchUnsubscribe(
+        host.onTouchCancel((touches) => {
+          if (!active) {
+            return;
+          }
 
-      const changed = touches.map((touch) => createTouchPoint(touch, canvas));
+          const changed = touches.map((touch) => createTouchPoint(touch, canvas));
 
-      for (const touch of changed) {
-        activeTouches.delete(touch.identifier);
-      }
+          for (const touch of changed) {
+            activeTouches.delete(touch.identifier);
+          }
 
-      dispatch('touchcancel', changed);
-    }), 'onTouchCancel'));
+          dispatch('touchcancel', changed);
+        }),
+        'onTouchCancel',
+      ),
+    );
   } catch (error) {
     active = false;
     runTouchUnsubscribers(unsubscribers);

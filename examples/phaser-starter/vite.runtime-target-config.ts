@@ -30,8 +30,8 @@ const releaseProfiles = valueSet({
   'google-play': true,
   'app-store': true,
   'apps-in-toss': true,
-  'devvit': true,
-  'verse8': true,
+  devvit: true,
+  verse8: true,
   'wechat-minigame': true,
   'tiktok-minigame': true,
 } satisfies Record<ReleaseProfile, true>);

@@ -434,29 +434,31 @@ function createRenderConfigSha256(input: {
   readonly variantSources: Partial<Record<BrandImageVariant, ValidatedBrandImage>>;
   readonly externalUrl: string | undefined;
 }): string {
-  return sha256(JSON.stringify({
-    canonicalSource: {
-      path: input.canonicalSourcePath,
-      sha256: input.canonical.sha256,
-    },
-    renderSource: {
-      path: input.appIcon.source,
-      sha256: input.renderSource.sha256,
-    },
-    backgroundColor: input.backgroundColor,
-    externalUrl: input.externalUrl ?? null,
-    variants: Object.fromEntries(
-      brandImageVariants.map((variant) => [
-        variant,
-        input.variantSources[variant] === undefined
-          ? null
-          : {
-              path: input.appIcon.variants?.[variant],
-              sha256: input.variantSources[variant].sha256,
-            },
-      ]),
-    ),
-  }));
+  return sha256(
+    JSON.stringify({
+      canonicalSource: {
+        path: input.canonicalSourcePath,
+        sha256: input.canonical.sha256,
+      },
+      renderSource: {
+        path: input.appIcon.source,
+        sha256: input.renderSource.sha256,
+      },
+      backgroundColor: input.backgroundColor,
+      externalUrl: input.externalUrl ?? null,
+      variants: Object.fromEntries(
+        brandImageVariants.map((variant) => [
+          variant,
+          input.variantSources[variant] === undefined
+            ? null
+            : {
+                path: input.appIcon.variants?.[variant],
+                sha256: input.variantSources[variant].sha256,
+              },
+        ]),
+      ),
+    }),
+  );
 }
 
 function variantSourceEvidenceMatches(

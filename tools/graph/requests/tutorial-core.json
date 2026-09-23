@@ -13,12 +13,26 @@
   ],
   "tsconfig": "tsconfig.graph.json",
   "question": "What are the central tutorial definition, director transition, replay, skip, persistence queue, progress parsing, and platform storage flows and their regression tests?",
-  "draft": "Use a tour because the headless tutorial lifecycle crosses definition validation, director transitions, serialized persistence, progress parsing, storage migration, and tests.",
-  "review": "A tutorial core lifecycle question should use a focused graph tour over the headless definition, director, progress, and storage modules with their regression tests.",
+  "draft": {
+    "reason": "Use details to pin the headless public surface and every required regression-test anchor.",
+    "type": "details"
+  },
+  "review": "Tours cap their selected anchors. Exact handles keep the existing definition, lifecycle, storage, progress, and regression-test coverage deterministic.",
   "request": {
-    "type": "tour",
-    "query": "defineTutorial findTutorialStep createTutorialDirector TutorialDirector acknowledge observeAction observeScene observeSignal replay skip flush createInitialTutorialProgress createTutorialProgressAtStep parseTutorialProgress TutorialProgressStore createPlatformTutorialProgressStore createMemoryTutorialProgressStore director.test progress.test platform-storage.test",
-    "includeTests": true,
-    "limit": 90
+    "type": "details",
+    "handles": [
+      "packages/tutorial/src/definition.ts#defineTutorial:function",
+      "packages/tutorial/src/director.ts#createTutorialDirector:function",
+      "packages/tutorial/src/platform-storage.ts#createPlatformTutorialProgressStore:function",
+      "packages/tutorial/src/progress.ts#parseTutorialProgress:function",
+      "packages/tutorial/src/testing.ts#installTutorialDebugBridge:function",
+      "packages/tutorial/test/director.test.ts#tutorial:variable",
+      "packages/tutorial/test/platform-storage.test.ts#tutorial:variable",
+      "packages/tutorial/test/testing.test.ts#tutorial:variable"
+    ],
+    "neighbors": true,
+    "neighborLimit": 2,
+    "memberLimit": 24,
+    "dependencyLimit": 24
   }
 }

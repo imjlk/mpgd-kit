@@ -1,10 +1,7 @@
 import gameProjectConfig from '../mpgd.game.json';
 
 import { renderEntryFailure } from './runtime/renderEntryFailure';
-import {
-  installTextSelectionPolicy,
-  resolveTextSelectionMode,
-} from './platform/textSelection';
+import { installTextSelectionPolicy, resolveTextSelectionMode } from './platform/textSelection';
 
 try {
   installTextSelectionPolicy(

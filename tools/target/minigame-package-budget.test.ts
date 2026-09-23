@@ -31,69 +31,77 @@ try {
     },
   );
   assert.throws(
-    () => assertMiniGamePackageBudget({
-      artifactRoot: root,
-      gameConfig: { subpackages: [{ root: 'feature', independent: true }] },
-      budget: { mainBytes: 49, totalBytes: 90, independentSubpackageBytes: 40 },
-    }),
+    () =>
+      assertMiniGamePackageBudget({
+        artifactRoot: root,
+        gameConfig: { subpackages: [{ root: 'feature', independent: true }] },
+        budget: { mainBytes: 49, totalBytes: 90, independentSubpackageBytes: 40 },
+      }),
     /main package exceeds/u,
   );
   assert.throws(
-    () => assertMiniGamePackageBudget({
-      artifactRoot: root,
-      gameConfig: { subpackages: [{ root: 'feature', independent: true }] },
-      budget: { mainBytes: 50, totalBytes: 89, independentSubpackageBytes: 40 },
-    }),
+    () =>
+      assertMiniGamePackageBudget({
+        artifactRoot: root,
+        gameConfig: { subpackages: [{ root: 'feature', independent: true }] },
+        budget: { mainBytes: 50, totalBytes: 89, independentSubpackageBytes: 40 },
+      }),
     /total package exceeds/u,
   );
   assert.throws(
-    () => assertMiniGamePackageBudget({
-      artifactRoot: root,
-      gameConfig: { subpackages: [{ root: 'feature', independent: true }] },
-      budget: { mainBytes: 50, totalBytes: 90, independentSubpackageBytes: 39 },
-    }),
+    () =>
+      assertMiniGamePackageBudget({
+        artifactRoot: root,
+        gameConfig: { subpackages: [{ root: 'feature', independent: true }] },
+        budget: { mainBytes: 50, totalBytes: 90, independentSubpackageBytes: 39 },
+      }),
     /independent subpackage feature exceeds/u,
   );
   assert.throws(
-    () => assertMiniGamePackageBudget({
-      artifactRoot: root,
-      gameConfig: { subpackages: [{ root: 'feature' }, { root: 'feature/nested' }] },
-      budget: { mainBytes: 100, totalBytes: 100 },
-    }),
+    () =>
+      assertMiniGamePackageBudget({
+        artifactRoot: root,
+        gameConfig: { subpackages: [{ root: 'feature' }, { root: 'feature/nested' }] },
+        budget: { mainBytes: 100, totalBytes: 100 },
+      }),
     /unique and non-overlapping/u,
   );
   assert.throws(
-    () => assertMiniGamePackageBudget({
-      artifactRoot: root,
-      gameConfig: { subpackages: [{ root: 'feature' }, { root: 'FEATURE' }] },
-      budget: { mainBytes: 100, totalBytes: 100 },
-    }),
+    () =>
+      assertMiniGamePackageBudget({
+        artifactRoot: root,
+        gameConfig: { subpackages: [{ root: 'feature' }, { root: 'FEATURE' }] },
+        budget: { mainBytes: 100, totalBytes: 100 },
+      }),
     /unique and non-overlapping/u,
   );
   assert.throws(
-    () => assertMiniGamePackageBudget({
-      artifactRoot: root,
-      gameConfig: { subpackages: [{ root: '../outside' }] },
-      budget: { mainBytes: 100, totalBytes: 100 },
-    }),
+    () =>
+      assertMiniGamePackageBudget({
+        artifactRoot: root,
+        gameConfig: { subpackages: [{ root: '../outside' }] },
+        budget: { mainBytes: 100, totalBytes: 100 },
+      }),
     /safe artifact-relative path/u,
   );
   assert.throws(
-    () => assertMiniGamePackageBudget({
-      artifactRoot: root,
-      gameConfig: { subpackages: [{ root: 'missing' }] },
-      budget: { mainBytes: 100, totalBytes: 100 },
-    }),
+    () =>
+      assertMiniGamePackageBudget({
+        artifactRoot: root,
+        gameConfig: { subpackages: [{ root: 'missing' }] },
+        budget: { mainBytes: 100, totalBytes: 100 },
+      }),
     /does not exist/u,
   );
 
   writeBytes('game.js.map', 1);
   assert.throws(
-    () => assertMiniGamePackageBudget({
-      artifactRoot: root,
-      gameConfig: {},
-      budget: { mainBytes: 100, totalBytes: 100 },
-    }),
+    () =>
+      assertMiniGamePackageBudget({
+        artifactRoot: root,
+        gameConfig: {},
+        budget: { mainBytes: 100, totalBytes: 100 },
+      }),
     /forbidden development or credential file/u,
   );
   rmSync(join(root, 'game.js.map'));
@@ -107,11 +115,12 @@ try {
   ]) {
     writeBytes(developmentFile, 1);
     assert.throws(
-      () => assertMiniGamePackageBudget({
-        artifactRoot: root,
-        gameConfig: {},
-        budget: { mainBytes: 100, totalBytes: 100 },
-      }),
+      () =>
+        assertMiniGamePackageBudget({
+          artifactRoot: root,
+          gameConfig: {},
+          budget: { mainBytes: 100, totalBytes: 100 },
+        }),
       /forbidden development or credential file/u,
     );
     rmSync(join(root, developmentFile));
@@ -120,11 +129,12 @@ try {
   for (const forbiddenDirectory of ['Node_Modules', 'TEST', '__macosx']) {
     writeBytes(`${forbiddenDirectory}/payload.js`, 1);
     assert.throws(
-      () => assertMiniGamePackageBudget({
-        artifactRoot: root,
-        gameConfig: {},
-        budget: { mainBytes: 100, totalBytes: 100 },
-      }),
+      () =>
+        assertMiniGamePackageBudget({
+          artifactRoot: root,
+          gameConfig: {},
+          budget: { mainBytes: 100, totalBytes: 100 },
+        }),
       /forbidden development path/u,
     );
     rmSync(join(root, forbiddenDirectory), { force: true, recursive: true });
@@ -132,11 +142,12 @@ try {
 
   symlinkSync(join(root, 'game.js'), join(root, 'linked.js'));
   assert.throws(
-    () => assertMiniGamePackageBudget({
-      artifactRoot: root,
-      gameConfig: {},
-      budget: { mainBytes: 100, totalBytes: 100 },
-    }),
+    () =>
+      assertMiniGamePackageBudget({
+        artifactRoot: root,
+        gameConfig: {},
+        budget: { mainBytes: 100, totalBytes: 100 },
+      }),
     /symbolic links/u,
   );
   rmSync(join(root, 'linked.js'));

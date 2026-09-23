@@ -122,30 +122,39 @@ const baseInput = {
     targets: [{ target: 'android' }],
   });
 
-  assertThrows(() =>
-    allocatePlatformVersions({
-      ...baseInput,
-      sourceGitSha: 'd'.repeat(40),
-      existingPlan: first.plan,
-      ledger: first.ledger,
-      targets: [{ target: 'android' }],
-    }), /immutable/u);
-  assertThrows(() =>
-    allocatePlatformVersions({
-      ...baseInput,
-      kitGitSha: 'e'.repeat(40),
-      existingPlan: first.plan,
-      ledger: first.ledger,
-      targets: [{ target: 'android' }],
-    }), /kitGitSha/u);
-  assertThrows(() =>
-    allocatePlatformVersions({
-      ...baseInput,
-      targetConfigDigest: 'f'.repeat(64),
-      existingPlan: first.plan,
-      ledger: first.ledger,
-      targets: [{ target: 'android' }],
-    }), /targetConfigDigest/u);
+  assertThrows(
+    () =>
+      allocatePlatformVersions({
+        ...baseInput,
+        sourceGitSha: 'd'.repeat(40),
+        existingPlan: first.plan,
+        ledger: first.ledger,
+        targets: [{ target: 'android' }],
+      }),
+    /immutable/u,
+  );
+  assertThrows(
+    () =>
+      allocatePlatformVersions({
+        ...baseInput,
+        kitGitSha: 'e'.repeat(40),
+        existingPlan: first.plan,
+        ledger: first.ledger,
+        targets: [{ target: 'android' }],
+      }),
+    /kitGitSha/u,
+  );
+  assertThrows(
+    () =>
+      allocatePlatformVersions({
+        ...baseInput,
+        targetConfigDigest: 'f'.repeat(64),
+        existingPlan: first.plan,
+        ledger: first.ledger,
+        targets: [{ target: 'android' }],
+      }),
+    /targetConfigDigest/u,
+  );
 }
 
 // Required test 4: the same game version with new provenance is a distinct identity.
@@ -256,21 +265,27 @@ const baseInput = {
 
   const exhausted = createLegacyLedger();
   (exhausted.platforms['microsoft-store'] as { packageVersion: string }).packageVersion = '1.1.65535.0';
-  assertThrows(() =>
-    allocatePlatformVersions({
-      ...baseInput,
-      ledger: exhausted,
-      targets: [{ target: 'microsoft-store' }],
-    }), /exhausted/u);
+  assertThrows(
+    () =>
+      allocatePlatformVersions({
+        ...baseInput,
+        ledger: exhausted,
+        targets: [{ target: 'microsoft-store' }],
+      }),
+    /exhausted/u,
+  );
 
   const nonzeroFourth = createLegacyLedger();
   (nonzeroFourth.platforms['microsoft-store'] as { packageVersion: string }).packageVersion = '1.1.1.1';
-  assertThrows(() =>
-    allocatePlatformVersions({
-      ...baseInput,
-      ledger: nonzeroFourth,
-      targets: [{ target: 'microsoft-store' }],
-    }), /fourth component/u);
+  assertThrows(
+    () =>
+      allocatePlatformVersions({
+        ...baseInput,
+        ledger: nonzeroFourth,
+        targets: [{ target: 'microsoft-store' }],
+      }),
+    /fourth component/u,
+  );
 
   const exhaustedShell: PlatformVersionLedger = {
     ...createHostedPwaLedger(),
@@ -281,12 +296,15 @@ const baseInput = {
       },
     },
   };
-  assertThrows(() =>
-    allocatePlatformVersions({
-      ...baseInput,
-      ledger: exhaustedShell,
-      targets: [{ target: 'microsoft-store' }],
-    }), /exhausted/u);
+  assertThrows(
+    () =>
+      allocatePlatformVersions({
+        ...baseInput,
+        ledger: exhaustedShell,
+        targets: [{ target: 'microsoft-store' }],
+      }),
+    /exhausted/u,
+  );
 }
 
 // Required test 8: Android/iOS counter boundaries and overflow are explicit.
@@ -298,9 +316,15 @@ const baseInput = {
       android: { versionCode: ANDROID_VERSION_CODE_MAX },
     },
   };
-  assertThrows(() =>
-    allocatePlatformVersions({ ...baseInput, ledger: androidMax, targets: [{ target: 'android' }] }),
-    /documented maximum/u);
+  assertThrows(
+    () =>
+      allocatePlatformVersions({
+        ...baseInput,
+        ledger: androidMax,
+        targets: [{ target: 'android' }],
+      }),
+    /documented maximum/u,
+  );
 
   const androidEdge: PlatformVersionLedger = {
     ...createLegacyLedger(),
@@ -323,54 +347,80 @@ const baseInput = {
       ios: { buildNumber: Number.MAX_SAFE_INTEGER },
     },
   };
-  assertThrows(() =>
-    allocatePlatformVersions({ ...baseInput, ledger: iosMax, targets: [{ target: 'ios' }] }),
-    /safe integer/u);
+  assertThrows(
+    () => allocatePlatformVersions({ ...baseInput, ledger: iosMax, targets: [{ target: 'ios' }] }),
+    /safe integer/u,
+  );
 }
 
 // Required test 9: duplicate, unsupported, and malformed inputs are rejected.
 {
-  assertThrows(() =>
-    allocatePlatformVersions({ ...baseInput, ledger: createLegacyLedger(), targets: [] as never[] }), /At least one/u);
-  assertThrows(() =>
-    allocatePlatformVersions({
-      ...baseInput,
-      ledger: createLegacyLedger(),
-      targets: [{ target: 'android' }, { target: 'android' }],
-    }), /duplicates/u);
-  assertThrows(() =>
-    allocatePlatformVersions({
-      ...baseInput,
-      ledger: createLegacyLedger(),
-      targets: [{ target: 'play-web' as unknown as 'android' }],
-    }), /Unsupported release target/u);
-  assertThrows(() =>
-    allocatePlatformVersions({
-      ...baseInput,
-      ledger: createLegacyLedger(),
-      targets: [{ target: 'android', intent: 'hosted-content-only' }],
-    }), /hosted-content-only/u);
-  assertThrows(() =>
-    allocatePlatformVersions({
-      ...baseInput,
-      gameVersion: '0.3.27-beta.1',
-      ledger: createLegacyLedger(),
-      targets: [{ target: 'android' }],
-    }), /final SemVer/u);
-  assertThrows(() =>
-    allocatePlatformVersions({
-      ...baseInput,
-      sourceGitSha: 'a'.repeat(64),
-      ledger: createLegacyLedger(),
-      targets: [{ target: 'android' }],
-    }), /40-character/u);
-  assertThrows(() =>
-    allocatePlatformVersions({
-      ...baseInput,
-      targetConfigDigest: 'c'.repeat(40),
-      ledger: createLegacyLedger(),
-      targets: [{ target: 'android' }],
-    }), /SHA-256/u);
+  assertThrows(
+    () =>
+      allocatePlatformVersions({
+        ...baseInput,
+        ledger: createLegacyLedger(),
+        targets: [] as never[],
+      }),
+    /At least one/u,
+  );
+  assertThrows(
+    () =>
+      allocatePlatformVersions({
+        ...baseInput,
+        ledger: createLegacyLedger(),
+        targets: [{ target: 'android' }, { target: 'android' }],
+      }),
+    /duplicates/u,
+  );
+  assertThrows(
+    () =>
+      allocatePlatformVersions({
+        ...baseInput,
+        ledger: createLegacyLedger(),
+        targets: [{ target: 'play-web' as unknown as 'android' }],
+      }),
+    /Unsupported release target/u,
+  );
+  assertThrows(
+    () =>
+      allocatePlatformVersions({
+        ...baseInput,
+        ledger: createLegacyLedger(),
+        targets: [{ target: 'android', intent: 'hosted-content-only' }],
+      }),
+    /hosted-content-only/u,
+  );
+  assertThrows(
+    () =>
+      allocatePlatformVersions({
+        ...baseInput,
+        gameVersion: '0.3.27-beta.1',
+        ledger: createLegacyLedger(),
+        targets: [{ target: 'android' }],
+      }),
+    /final SemVer/u,
+  );
+  assertThrows(
+    () =>
+      allocatePlatformVersions({
+        ...baseInput,
+        sourceGitSha: 'a'.repeat(64),
+        ledger: createLegacyLedger(),
+        targets: [{ target: 'android' }],
+      }),
+    /40-character/u,
+  );
+  assertThrows(
+    () =>
+      allocatePlatformVersions({
+        ...baseInput,
+        targetConfigDigest: 'c'.repeat(40),
+        ledger: createLegacyLedger(),
+        targets: [{ target: 'android' }],
+      }),
+    /SHA-256/u,
+  );
 
   assertThrows(
     () => assertPlatformVersionLedger({ ...createLegacyLedger(), schemaVersion: 1 }),
@@ -456,23 +506,29 @@ const baseInput = {
   });
   const planSnapshot = JSON.stringify(first.plan);
 
-  assertThrows(() =>
-    allocatePlatformVersions({
-      ...baseInput,
-      existingPlan: first.plan,
-      ledger: first.ledger,
-      targets: [{ target: 'android' }, { target: 'play-web' as unknown as 'android' }],
-    }), /Unsupported/u);
-  assertThrows(() =>
-    allocatePlatformVersions({
-      ...baseInput,
-      existingPlan: first.plan,
-      ledger: {
-        ...first.ledger,
-        releaseRevision: { lastAllocated: 0 },
-      },
-      targets: [{ target: 'android' }],
-    }), /ahead of ledger/u);
+  assertThrows(
+    () =>
+      allocatePlatformVersions({
+        ...baseInput,
+        existingPlan: first.plan,
+        ledger: first.ledger,
+        targets: [{ target: 'android' }, { target: 'play-web' as unknown as 'android' }],
+      }),
+    /Unsupported/u,
+  );
+  assertThrows(
+    () =>
+      allocatePlatformVersions({
+        ...baseInput,
+        existingPlan: first.plan,
+        ledger: {
+          ...first.ledger,
+          releaseRevision: { lastAllocated: 0 },
+        },
+        targets: [{ target: 'android' }],
+      }),
+    /ahead of ledger/u,
+  );
 
   assertEqual(JSON.stringify(ledger), ledgerSnapshot, 'the input ledger object is unchanged');
   assertEqual(JSON.stringify(first.plan), planSnapshot, 'the existing plan object is unchanged');
@@ -673,7 +729,9 @@ const baseInput = {
         ...baseInput,
         existingPlan: {
           ...stale.plan,
-          targets: { android: { releaseLabel: '9.9.9-v999', versionCode: 13, versionName: '0.3.27' } },
+          targets: {
+            android: { releaseLabel: '9.9.9-v999', versionCode: 13, versionName: '0.3.27' },
+          },
         },
         ledger: stale.ledger,
         targets: [{ target: 'android' }],

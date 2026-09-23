@@ -331,7 +331,8 @@ export function buildAssetPacks(options: {
       packId: pack.id,
       revision: pack.revision,
       dependencies: (pack.dependsOn ?? []).map((dependency) => ({
-        packId: dependency, revision: revisions.get(dependency)!,
+        packId: dependency,
+        revision: revisions.get(dependency)!,
       })),
       delivery: pack.delivery,
       assets: planned.map(({ asset, files }) => deliveryAsset(asset, files, pack)),

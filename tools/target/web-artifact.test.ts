@@ -206,17 +206,19 @@ try {
     /artifact output and Vite output must not overlap/u,
   );
   assert.throws(
-    () => assertDisjointWebArtifactOutputs([
-      { name: 'storefront', path: artifact },
-      { name: 'archive', path: join(artifact, 'nested') },
-    ]),
+    () =>
+      assertDisjointWebArtifactOutputs([
+        { name: 'storefront', path: artifact },
+        { name: 'archive', path: join(artifact, 'nested') },
+      ]),
     /artifact outputs must not overlap: storefront .* and archive /u,
   );
   assert.throws(
-    () => assertDisjointWebArtifactOutputs([
-      { name: 'storefront', path: artifact },
-      { name: 'archive', path: join(artifact, '..backup') },
-    ]),
+    () =>
+      assertDisjointWebArtifactOutputs([
+        { name: 'storefront', path: artifact },
+        { name: 'archive', path: join(artifact, '..backup') },
+      ]),
     /artifact outputs must not overlap: storefront .* and archive /u,
   );
 
@@ -418,41 +420,53 @@ try {
     artifact: 'aab',
   } as const;
   assert.throws(
-    () => assertDisjointWebTargetOutputs({
-      storefront: {
-        kind: 'web',
-        gameApp: 'game-app',
-        adapter: 'browser',
-        output: 'native-game-app',
-      },
-      android: androidTarget,
-    }, (path) => join(root, path)),
+    () =>
+      assertDisjointWebTargetOutputs(
+        {
+          storefront: {
+            kind: 'web',
+            gameApp: 'game-app',
+            adapter: 'browser',
+            output: 'native-game-app',
+          },
+          android: androidTarget,
+        },
+        (path) => join(root, path),
+      ),
     /artifact output and Vite output must not overlap across configured targets/u,
   );
   assert.throws(
-    () => assertDisjointWebTargetOutputs({
-      storefront: {
-        kind: 'web',
-        gameApp: 'game-app',
-        adapter: 'browser',
-        output: 'artifact-root/storefront',
-        staticDir: 'native-game-app/dist/overlay',
-      },
-      android: androidTarget,
-    }, (path) => join(root, path)),
+    () =>
+      assertDisjointWebTargetOutputs(
+        {
+          storefront: {
+            kind: 'web',
+            gameApp: 'game-app',
+            adapter: 'browser',
+            output: 'artifact-root/storefront',
+            staticDir: 'native-game-app/dist/overlay',
+          },
+          android: androidTarget,
+        },
+        (path) => join(root, path),
+      ),
     /staticDir and Vite output must not overlap across configured targets/u,
   );
   assert.throws(
-    () => assertDisjointWebTargetOutputs({
-      storefront: {
-        kind: 'web',
-        gameApp: 'game-app',
-        adapter: 'browser',
-        output: 'artifact-root/storefront',
-        staticDir: 'apps/mobile/www',
-      },
-      android: androidTarget,
-    }, (path) => join(root, path)),
+    () =>
+      assertDisjointWebTargetOutputs(
+        {
+          storefront: {
+            kind: 'web',
+            gameApp: 'game-app',
+            adapter: 'browser',
+            output: 'artifact-root/storefront',
+            staticDir: 'apps/mobile/www',
+          },
+          android: androidTarget,
+        },
+        (path) => join(root, path),
+      ),
     /staticDir must not overlap generated output/u,
   );
 
@@ -494,70 +508,75 @@ try {
   );
 
   assert.throws(
-    () => assertPlatformTargetsConfigShape({
-      targets: {
-        storefront: {
-          kind: 'web',
-          gameApp: '.',
-          adapter: 'browser',
-          output: 'artifact',
-          staticDir: '   ',
+    () =>
+      assertPlatformTargetsConfigShape({
+        targets: {
+          storefront: {
+            kind: 'web',
+            gameApp: '.',
+            adapter: 'browser',
+            output: 'artifact',
+            staticDir: '   ',
+          },
         },
-      },
-    }),
+      }),
     /storefront\.staticDir must be a non-empty string/u,
   );
   assert.throws(
-    () => assertPlatformTargetsConfigShape({
-      targets: {
-        index: {
-          kind: 'web',
-          gameApp: '.',
-          adapter: 'browser',
-          output: 'artifact',
+    () =>
+      assertPlatformTargetsConfigShape({
+        targets: {
+          index: {
+            kind: 'web',
+            gameApp: '.',
+            adapter: 'browser',
+            output: 'artifact',
+          },
         },
-      },
-    }),
+      }),
     /Invalid deployment target name: index/u,
   );
   assert.throws(
-    () => assertPlatformTargetsConfigShape({
-      targets: {
-        'microsoft-store': {
-          kind: 'web',
-          gameApp: '.',
-          adapter: 'microsoft-store',
-          output: 'artifact',
-          installable: false,
+    () =>
+      assertPlatformTargetsConfigShape({
+        targets: {
+          'microsoft-store': {
+            kind: 'web',
+            gameApp: '.',
+            adapter: 'microsoft-store',
+            output: 'artifact',
+            installable: false,
+          },
         },
-      },
-    }),
+      }),
     /microsoft-store\.installable must not be false/u,
   );
   assert.throws(
-    () => assertPlatformTargetsConfigShape({
-      targets: {
-        'microsoft-store-staging': {
-          kind: 'web',
-          gameApp: '.',
-          adapter: 'microsoft-store',
-          output: 'artifact',
+    () =>
+      assertPlatformTargetsConfigShape({
+        targets: {
+          'microsoft-store-staging': {
+            kind: 'web',
+            gameApp: '.',
+            adapter: 'microsoft-store',
+            output: 'artifact',
+          },
         },
-      },
-    }),
+      }),
     /microsoft-store-staging cannot use the reserved microsoft-store adapter/u,
   );
   assert.throws(
-    () => assertPlatformTargetsConfigShape({
-      targets: {
-        'microsoft-store': {
-          kind: 'web',
-          gameApp: '.',
-          adapter: 'browser',
-          output: 'artifact',
+    () =>
+      assertPlatformTargetsConfigShape({
+        targets: {
+          'microsoft-store': {
+            kind: 'web',
+            gameApp: '.',
+            adapter: 'browser',
+            output: 'artifact',
+          },
         },
-      },
-    }),
+      }),
     /microsoft-store target must use the web kind and microsoft-store adapter/u,
   );
 
@@ -569,62 +588,68 @@ try {
     webDir: 'apps/target-ait/public/game',
     artifact: '.ait',
   } as const;
-  assert.doesNotThrow(() => assertPlatformTargetsConfigShape({
-    targets: {
-      ait: {
-        ...aitTarget,
-        navigationBar: {
-          withBackButton: false,
-          withHomeButton: false,
-          withTitle: false,
-          transparentBackground: true,
-          theme: 'dark',
-        },
-      },
-    },
-  }));
-  assert.throws(
-    () => assertPlatformTargetsConfigShape({
+  assert.doesNotThrow(() =>
+    assertPlatformTargetsConfigShape({
       targets: {
         ait: {
           ...aitTarget,
-          navigationBar: { transparentBackground: 'yes' },
+          navigationBar: {
+            withBackButton: false,
+            withHomeButton: false,
+            withTitle: false,
+            transparentBackground: true,
+            theme: 'dark',
+          },
         },
       },
     }),
+  );
+  assert.throws(
+    () =>
+      assertPlatformTargetsConfigShape({
+        targets: {
+          ait: {
+            ...aitTarget,
+            navigationBar: { transparentBackground: 'yes' },
+          },
+        },
+      }),
     /ait\.navigationBar\.transparentBackground must be a boolean/u,
   );
   assert.throws(
-    () => assertPlatformTargetsConfigShape({
-      targets: {
-        ait: {
-          ...aitTarget,
-          navigationBar: { theme: 'system' },
+    () =>
+      assertPlatformTargetsConfigShape({
+        targets: {
+          ait: {
+            ...aitTarget,
+            navigationBar: { theme: 'system' },
+          },
         },
-      },
-    }),
+      }),
     /ait\.navigationBar\.theme must be light or dark/u,
   );
   assert.throws(
-    () => assertPlatformTargetsConfigShape({
-      targets: {
-        ait: {
-          ...aitTarget,
-          navigationBar: { withTitle: 'no' },
+    () =>
+      assertPlatformTargetsConfigShape({
+        targets: {
+          ait: {
+            ...aitTarget,
+            navigationBar: { withTitle: 'no' },
+          },
         },
-      },
-    }),
+      }),
     /ait\.navigationBar\.withTitle must be a boolean/u,
   );
   assert.throws(
-    () => assertPlatformTargetsConfigShape({
-      targets: {
-        ait: {
-          ...aitTarget,
-          navigationBar: { translucent: true },
+    () =>
+      assertPlatformTargetsConfigShape({
+        targets: {
+          ait: {
+            ...aitTarget,
+            navigationBar: { translucent: true },
+          },
         },
-      },
-    }),
+      }),
     /ait\.navigationBar\.translucent is not a recognized navigation option/u,
   );
 } finally {

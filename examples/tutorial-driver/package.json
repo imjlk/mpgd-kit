@@ -16,8 +16,8 @@
     "@mpgd/tutorial": "workspace:*"
   },
   "devDependencies": {
-    "@ttsc/unplugin": "0.18.4",
-    "ttsc": "0.18.4",
+    "@ttsc/unplugin": "0.30.4",
+    "ttsc": "0.30.4",
     "typescript": "7.0.2",
     "vite": "8.1.3"
   }

@@ -214,16 +214,19 @@ export function createAdMobSsvEvidenceVerifier(
       return rejected('ADMOB_SSV_PURCHASE_EVIDENCE_UNSUPPORTED');
     },
     async verifyAdReward(verificationInput) {
-      return verifyAdMobSsvReward({
-        callbackSource: input.callbackSource,
-        publicKeySource: input.publicKeySource,
-        subtle,
-        now,
-        maximumCallbackAgeMs,
-        maximumFutureSkewMs,
-        resolveAdUnit,
-        resolveRewardItem,
-      }, verificationInput);
+      return verifyAdMobSsvReward(
+        {
+          callbackSource: input.callbackSource,
+          publicKeySource: input.publicKeySource,
+          subtle,
+          now,
+          maximumCallbackAgeMs,
+          maximumFutureSkewMs,
+          resolveAdUnit,
+          resolveRewardItem,
+        },
+        verificationInput,
+      );
     },
   };
 }

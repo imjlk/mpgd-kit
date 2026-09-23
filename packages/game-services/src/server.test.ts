@@ -284,15 +284,16 @@ const androidDeploymentPurchase = await androidDeploymentBackend.purchases.verif
   purchasedAt: '2026-07-04T00:00:00.000Z',
 });
 await assertRejects(
-  () => androidDeploymentBackend.purchases.verifyPurchase({
-    target: 'android',
-    deploymentTarget: 'android-production',
-    playerId: 'player-android-staging',
-    productId: 'COINS_100',
-    platformTransactionId: 'android-production-transaction',
-    idempotencyKey: 'android-production-purchase',
-    purchasedAt: '2026-07-04T00:00:00.000Z',
-  }),
+  () =>
+    androidDeploymentBackend.purchases.verifyPurchase({
+      target: 'android',
+      deploymentTarget: 'android-production',
+      playerId: 'player-android-staging',
+      productId: 'COINS_100',
+      platformTransactionId: 'android-production-transaction',
+      idempotencyKey: 'android-production-purchase',
+      purchasedAt: '2026-07-04T00:00:00.000Z',
+    }),
   /deploymentTarget must match the backend binding for android/u,
   'purchase deployment targets must be bound by the backend',
 );
@@ -336,15 +337,16 @@ const verse8DeploymentReward = await verse8DeploymentBackend.adRewards.claimAdRe
   completedAt: '2026-07-04T00:00:01.000Z',
 });
 await assertRejects(
-  () => verse8DeploymentBackend.adRewards.claimAdReward({
-    target: 'verse8',
-    deploymentTarget: 'verse8-production',
-    playerId: 'player-verse8-staging',
-    placementId: 'CONTINUE_AFTER_FAIL',
-    platformImpressionId: 'verse8-production-impression',
-    idempotencyKey: 'verse8-production-reward',
-    completedAt: '2026-07-04T00:00:01.000Z',
-  }),
+  () =>
+    verse8DeploymentBackend.adRewards.claimAdReward({
+      target: 'verse8',
+      deploymentTarget: 'verse8-production',
+      playerId: 'player-verse8-staging',
+      placementId: 'CONTINUE_AFTER_FAIL',
+      platformImpressionId: 'verse8-production-impression',
+      idempotencyKey: 'verse8-production-reward',
+      completedAt: '2026-07-04T00:00:01.000Z',
+    }),
   /deploymentTarget must match the backend binding for verse8/u,
   'reward deployment targets must be bound by the backend',
 );
@@ -589,10 +591,14 @@ const timeoutBackend = createGameServicesBackend({
   evidenceVerifier: {
     verifyPurchase({ signal }) {
       return new Promise<never>((_resolve, reject) => {
-        signal.addEventListener('abort', () => {
-          timeoutSignalAborted = signal.aborted;
-          reject(new Error('provider request aborted'));
-        }, { once: true });
+        signal.addEventListener(
+          'abort',
+          () => {
+            timeoutSignalAborted = signal.aborted;
+            reject(new Error('provider request aborted'));
+          },
+          { once: true },
+        );
       });
     },
     async verifyAdReward() {

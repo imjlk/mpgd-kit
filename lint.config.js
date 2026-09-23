@@ -1,5 +1,5 @@
 export default {
-  ignores: ['packages/i18n/src/paraglide/**'],
+  ignores: ['**/node_modules/**', 'packages/i18n/src/paraglide/**'],
   format: {
     severity: 'error',
     printWidth: 100,

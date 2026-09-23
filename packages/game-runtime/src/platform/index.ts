@@ -110,11 +110,13 @@ export function bindGameLifecycle(input: LifecycleInitialization & {
   }
 
   try {
-    own(controller.subscribe((snapshot) => {
-      if (snapshot.status === 'destroyed') {
-        dispose();
-      }
-    }));
+    own(
+      controller.subscribe((snapshot) => {
+        if (snapshot.status === 'destroyed') {
+          dispose();
+        }
+      }),
+    );
     own(source.onPause(() => receive('inactive')));
     if (!disposed) {
       own(source.onResume(() => receive('active')));

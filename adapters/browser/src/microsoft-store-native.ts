@@ -222,21 +222,20 @@ export function createMicrosoftStoreNativeBridgeClient(
       } catch (cause) {
         pending.delete(requestId);
         clearTimeout(timeout);
-        reject(new MicrosoftStoreNativeBridgeError(
-          'NATIVE_OPERATION_FAILED',
-          'Native bridge transport rejected the request.',
-          { cause },
-        ));
+        reject(
+          new MicrosoftStoreNativeBridgeError(
+            'NATIVE_OPERATION_FAILED',
+            'Native bridge transport rejected the request.',
+            { cause },
+          ),
+        );
       }
     });
   };
 
   const client: MicrosoftStoreNativeBridgeClient = {
     async signIn() {
-      return readPlayerSession(
-        await request('identity.signIn', {}, signInTimeoutMs),
-        now(),
-      );
+      return readPlayerSession(await request('identity.signIn', {}, signInTimeoutMs), now());
     },
     async getDetails(itemIds: readonly string[]) {
       const normalized = normalizeItemIds(itemIds);
@@ -439,23 +438,25 @@ function readPurchases(input: unknown): readonly MicrosoftStoreDigitalGoodsPurch
     throw protocolError('Native purchases are invalid.');
   }
   const seen = new Set<string>();
-  return Object.freeze(record.items.map((candidate) => {
-    const purchase = requireRecord(candidate, 'native purchase');
-    const itemId = requireNativeIdentifier(purchase.itemId, 'Microsoft Store item ID', 256);
-    if (seen.has(itemId)) {
-      throw protocolError('Native purchase identity is duplicated.');
-    }
-    seen.add(itemId);
-    const purchaseToken = requireNativeIdentifier(
-      purchase.purchaseToken,
-      'Microsoft Store purchase token',
-      1_024,
-    );
-    if (purchaseToken !== itemId) {
-      throw protocolError('Native purchase token must equal its Microsoft Store item ID.');
-    }
-    return Object.freeze({ itemId, purchaseToken });
-  }));
+  return Object.freeze(
+    record.items.map((candidate) => {
+      const purchase = requireRecord(candidate, 'native purchase');
+      const itemId = requireNativeIdentifier(purchase.itemId, 'Microsoft Store item ID', 256);
+      if (seen.has(itemId)) {
+        throw protocolError('Native purchase identity is duplicated.');
+      }
+      seen.add(itemId);
+      const purchaseToken = requireNativeIdentifier(
+        purchase.purchaseToken,
+        'Microsoft Store purchase token',
+        1_024,
+      );
+      if (purchaseToken !== itemId) {
+        throw protocolError('Native purchase token must equal its Microsoft Store item ID.');
+      }
+      return Object.freeze({ itemId, purchaseToken });
+    }),
+  );
 }
 
 function readPlayerSession(
@@ -486,11 +487,7 @@ function readPlayerSession(
   }
   return Object.freeze({
     expiresAt,
-    playerId: requireNativeIdentifier(
-      session.playerId,
-      'native player ID',
-      maximumPlayerIdLength,
-    ),
+    playerId: requireNativeIdentifier(session.playerId, 'native player ID', maximumPlayerIdLength),
     sessionToken,
   });
 }
@@ -499,8 +496,8 @@ function normalizeItemIds(input: readonly string[]): readonly string[] {
   if (input.length === 0 || input.length > maximumItemCount) {
     throw new TypeError(`Microsoft Store item IDs must contain 1-${maximumItemCount} values.`);
   }
-  const normalized = input.map(
-    (itemId) => requireIdentifier(itemId, 'Microsoft Store item ID', 256),
+  const normalized = input.map((itemId) =>
+    requireIdentifier(itemId, 'Microsoft Store item ID', 256),
   );
   if (new Set(normalized).size !== normalized.length) {
     throw new TypeError('Microsoft Store item IDs must be unique.');

@@ -477,10 +477,7 @@ export function normalizeDeliveryReceipt(input: unknown): DeliveryReceipt {
   assertRecord(input, 'DeliveryReceipt');
 
   return {
-    providerMessageId: normalizeIdentifier(
-      input.providerMessageId,
-      'providerMessageId',
-    ),
+    providerMessageId: normalizeIdentifier(input.providerMessageId, 'providerMessageId'),
     acceptedAt: normalizeTimestamp(input.acceptedAt, 'acceptedAt'),
   };
 }

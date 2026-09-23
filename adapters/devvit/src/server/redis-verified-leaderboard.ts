@@ -365,8 +365,8 @@ async function tryReadRankedAttempts(
   }
 
   assertUniqueRetainedParticipants(rankedAttempts, keys.entries);
-  return rankedAttempts.sort(
-    (left, right) => compareAttempts(definition.scoreOrder, left.attempt, right.attempt),
+  return rankedAttempts.sort((left, right) =>
+    compareAttempts(definition.scoreOrder, left.attempt, right.attempt),
   );
 }
 

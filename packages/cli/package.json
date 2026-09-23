@@ -69,7 +69,7 @@
     "@mpgd/platform": "workspace:*",
     "@mpgd/target-config": "workspace:*",
     "@types/node": "^24.0.0",
-    "ttsc": "0.18.4",
+    "ttsc": "0.30.4",
     "typescript": "7.0.2"
   },
   "main": "./dist/index.js",

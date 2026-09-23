@@ -13,25 +13,39 @@ import {
 } from '../src/packs.js';
 const catalog: readonly PhaserAssetPack[] = [
   {
-    id: 'shared', revision: '1', assets: [{
-      kind: 'image', key: 'pilot', url: '/pilot.png',
-    }],
+    id: 'shared',
+    revision: '1',
+    assets: [
+      {
+        kind: 'image',
+        key: 'pilot',
+        url: '/pilot.png',
+      },
+    ],
   },
   {
     id: 'grove',
     revision: '1',
     dependsOn: ['shared'],
-    assets: [{
-      kind: 'image', key: 'ground', url: '/grove.png',
-    }],
+    assets: [
+      {
+        kind: 'image',
+        key: 'ground',
+        url: '/grove.png',
+      },
+    ],
   },
   {
     id: 'dunes',
     revision: '1',
     dependsOn: ['shared'],
-    assets: [{
-      kind: 'image', key: 'ground', url: '/dunes.png',
-    }],
+    assets: [
+      {
+        kind: 'image',
+        key: 'ground',
+        url: '/dunes.png',
+      },
+    ],
   },
 ];
 let decode: () => Promise<void>;
@@ -52,7 +66,11 @@ function fixture() {
   const scene = {
     events,
     textures: {
-      exists: (key: string) => values.has(key), remove, addImage: add, addAtlas: add, addSpriteSheet: add,
+      exists: (key: string) => values.has(key),
+      remove,
+      addImage: add,
+      addAtlas: add,
+      addSpriteSheet: add,
     },
   } as unknown as Phaser.Scene;
   return {
@@ -212,7 +230,7 @@ describe('pack contract and ownership', () => {
     lease.release();
     loader.dispose();
   });
-  it('times out a stuck decoder, revokes its URL, and admits a retry after native decode settles', async () => {
+  it('times out promptly but retains native image inputs until decode settles before retrying', async () => {
     vi.useFakeTimers();
     const f = fixture();
     const gate = deferred<void>();
@@ -227,17 +245,21 @@ describe('pack contract and ownership', () => {
     });
     const failed = expect(loader.acquire('shared')).rejects.toThrow('timed out');
     await started.promise;
+    const nativeUrl = images[0]!.src;
     await vi.advanceTimersByTimeAsync(30);
     await failed;
     expect(loader.snapshot()).toEqual([]);
-    expect(revoke).toHaveBeenCalledOnce();
-    expect(images[0]!.src).toBe('');
+    expect(nativeUrl).toMatch(/^blob:/u);
+    expect(revoke).not.toHaveBeenCalled();
+    expect(images[0]!.src).toBe(nativeUrl);
     decode = async () => {
     };
     const retry = loader.acquire('shared');
     gate.resolve();
     const next = await retry;
     await Promise.resolve();
+    expect(revoke.mock.calls.filter(([url]) => url === nativeUrl)).toHaveLength(1);
+    expect(images[0]!.src).toBe('');
     expect(f.values.size).toBe(1);
     expect(f.values.has(next.key('shared', 'pilot'))).toBe(true);
     next.release();
@@ -345,18 +367,24 @@ it('accepts explicitly undefined optional integrity and rejects malformed values
     expect(() => definePhaserAssetPacks(bad)).toThrow('Invalid integrity');
   }
 });
-it.each(['default', 'reload'] as const)('passes an explicit HTTP cache policy to the transport', async (requestCache) => {
-  const f = fixture();
-  const loader = createPhaserAssetPackLoader(f.scene, catalog, {
-    requestCache,
-  });
-  const lease = await loader.acquire('shared');
-  expect(fetch).toHaveBeenCalledWith('/pilot.png', expect.objectContaining({
-    cache: requestCache,
-  }));
-  lease.release();
-  loader.dispose();
-});
+it.each(['default', 'reload'] as const)(
+  'passes an explicit HTTP cache policy to the transport',
+  async (requestCache) => {
+    const f = fixture();
+    const loader = createPhaserAssetPackLoader(f.scene, catalog, {
+      requestCache,
+    });
+    const lease = await loader.acquire('shared');
+    expect(fetch).toHaveBeenCalledWith(
+      '/pilot.png',
+      expect.objectContaining({
+        cache: requestCache,
+      }),
+    );
+    lease.release();
+    loader.dispose();
+  },
+);
 it('rejects unsupported HTTP cache policies without fetching', () => {
   const f = fixture();
   expect(() => createPhaserAssetPackLoader(f.scene, catalog, {
@@ -461,9 +489,15 @@ describe('failure isolation and bounded preparation', () => {
     f.events.emit('shutdown');
     await failed;
     expect(loader.snapshot()).toEqual([]);
-    expect(images.every((image) => image.src === '')).toBe(true);
+    if (stage === 'decode') {
+      expect(images).toHaveLength(1);
+      expect(images[0]!.src).toMatch(/^blob:/u);
+    } else {
+      expect(images).toEqual([]);
+    }
     gate.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(images.every((image) => image.src === '')).toBe(true);
     expect(f.add).not.toHaveBeenCalled();
     await expect(loader.acquire('shared')).rejects.toThrow('disposed');
   });
@@ -488,7 +522,7 @@ describe('failure isolation and bounded preparation', () => {
     (await one).release();
     loader.dispose();
   });
-  it('reserves bytes before download and holds decode slots through native cancellation', async () => {
+  it.each(['resolve', 'reject'])('holds inputs, bytes and decode slots until native cancellation settles (%s)', async (settlement) => {
     const f = fixture();
     const gate = deferred<void>();
     const started = deferred<void>();
@@ -496,7 +530,11 @@ describe('failure isolation and bounded preparation', () => {
     decode = () => {
       if (++calls === 1) {
         started.resolve();
-        return gate.promise;
+        return gate.promise.then(() => {
+          if (settlement === 'reject') {
+            throw new Error('Native decode failed after cancellation');
+          }
+        });
       }
       return Promise.resolve();
     };
@@ -504,16 +542,22 @@ describe('failure isolation and bounded preparation', () => {
       maxFileBytes: 3, maxBufferedBytes: 3, maxConcurrentDownloads: 3, maxConcurrentDecodes: 1,
     });
     const cancel = new AbortController();
+    const revoke = vi.spyOn(URL, 'revokeObjectURL');
     const first = expect(loader.acquire('shared', { signal: cancel.signal })).rejects.toMatchObject({ name: 'AbortError' });
     await started.promise;
+    const nativeUrl = images[0]!.src;
     cancel.abort();
     await first;
+    expect(images[0]!.src).toBe(nativeUrl);
+    expect(revoke).not.toHaveBeenCalled();
     const next = loader.acquire('dunes');
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(calls).toBe(1);
     gate.resolve();
     (await next).release();
+    expect(revoke.mock.calls.filter(([url]) => url === nativeUrl)).toHaveLength(1);
+    expect(images[0]!.src).toBe('');
     expect(fetch).toHaveBeenCalledTimes(3);
     expect(calls).toBe(3);
     loader.dispose();
@@ -671,7 +715,17 @@ it('rejects misspelled and inapplicable integrity fields before starting work', 
 
 it('identifies an atlas that cannot fit its reservation without rejecting smaller catalogs', async () => {
   const f = fixture();
-  const loader = createPhaserAssetPackLoader(f.scene, [{ id: 'atlas-pack', revision: '1', assets: [{ kind: 'atlas', key: 'terrain', textureUrl: '/image', atlasUrl: '/json' }] }], { maxFileBytes: 8, maxBufferedBytes: 8 });
+  const loader = createPhaserAssetPackLoader(
+    f.scene,
+    [
+      {
+        id: 'atlas-pack',
+        revision: '1',
+        assets: [{ kind: 'atlas', key: 'terrain', textureUrl: '/image', atlasUrl: '/json' }],
+      },
+    ],
+    { maxFileBytes: 8, maxBufferedBytes: 8 },
+  );
   await expect(loader.acquire('atlas-pack')).rejects.toThrow('Asset atlas-pack/terrain reservation 16 exceeds buffered byte limit 8');
   expect(fetch).not.toHaveBeenCalled();
   loader.dispose();

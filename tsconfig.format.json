@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node", "vite/client"]
+  },
+  "include": [
+    "adapters/**/*.ts",
+    "apps/**/*.ts",
+    "backend/**/*.ts",
+    "examples/**/*.ts",
+    "native-plugins/**/*.ts",
+    "packages/**/*.ts",
+    "tools/**/*.ts"
+  ],
+  "exclude": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/artifacts/**",
+    "**/release-output/**",
+    "packages/i18n/src/paraglide/**"
+  ]
+}

@@ -39,10 +39,11 @@ assert.throws(
   /differs from target configuration/u,
 );
 assert.throws(
-  () => requireStarterMiniGameRuntimeAssetOrigins(
-    { __MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__: [...expectedOrigins] },
-    expectedOrigins,
-  ),
+  () =>
+    requireStarterMiniGameRuntimeAssetOrigins(
+      { __MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__: [...expectedOrigins] },
+      expectedOrigins,
+    ),
   /unavailable or mutable/u,
 );
 
@@ -51,18 +52,19 @@ const constructionCleanupFailure = new Error('runtime cleanup failed');
 let constructionCleanupCalls = 0;
 const reportedConstructionCleanupErrors: unknown[] = [];
 assert.throws(
-  () => runStarterMiniGameBootstrapStep({
-    run() {
-      throw constructionFailure;
-    },
-    cleanup() {
-      constructionCleanupCalls += 1;
-      throw constructionCleanupFailure;
-    },
-    reportCleanupError(error) {
-      reportedConstructionCleanupErrors.push(error);
-    },
-  }),
+  () =>
+    runStarterMiniGameBootstrapStep({
+      run() {
+        throw constructionFailure;
+      },
+      cleanup() {
+        constructionCleanupCalls += 1;
+        throw constructionCleanupFailure;
+      },
+      reportCleanupError(error) {
+        reportedConstructionCleanupErrors.push(error);
+      },
+    }),
   (error) => error === constructionFailure,
 );
 assert.equal(constructionCleanupCalls, 1);

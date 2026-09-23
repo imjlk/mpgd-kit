@@ -18,58 +18,64 @@ assertDeepEqual(request, {
   playerId: 'microsoft.0123456789abcdef',
 });
 
-assertDeepEqual(createMicrosoftStoreIdentityCredentialsResponse({
-  request,
-  credentials: {
+assertDeepEqual(
+  createMicrosoftStoreIdentityCredentialsResponse({
+    request,
+    credentials: {
+      accessToken: 'service-token',
+      userStoreId: 'user-store-id',
+      accountBindingId: 'account-binding-id',
+      sandbox: 'RETAIL',
+    },
+  }),
+  {
+    schema: microsoftStoreIdentityCredentialsSchema,
+    gameId: 'ttokdoku',
+    playerId: 'microsoft.0123456789abcdef',
     accessToken: 'service-token',
     userStoreId: 'user-store-id',
     accountBindingId: 'account-binding-id',
     sandbox: 'RETAIL',
   },
-}), {
-  schema: microsoftStoreIdentityCredentialsSchema,
-  gameId: 'ttokdoku',
-  playerId: 'microsoft.0123456789abcdef',
-  accessToken: 'service-token',
-  userStoreId: 'user-store-id',
-  accountBindingId: 'account-binding-id',
-  sandbox: 'RETAIL',
-});
+);
 
 assertThrows(
-  () => parseMicrosoftStoreIdentityCredentialsRequest({
-    schema: microsoftStoreIdentityCredentialsSchema,
-    gameId: 'ttokdoku',
-    playerId: 'player',
-    authority: 'client-controlled',
-  }),
+  () =>
+    parseMicrosoftStoreIdentityCredentialsRequest({
+      schema: microsoftStoreIdentityCredentialsSchema,
+      gameId: 'ttokdoku',
+      playerId: 'player',
+      authority: 'client-controlled',
+    }),
   /shape is invalid/u,
 );
 
 assertThrows(
-  () => parseMicrosoftStoreIdentityCredentialsResponse(
-    {
-      schema: microsoftStoreIdentityCredentialsSchema,
-      gameId: 'revolving-cards',
-      playerId: request.playerId,
-      accessToken: 'service-token',
-      userStoreId: 'user-store-id',
-      accountBindingId: 'account-binding-id',
-    },
-    request,
-  ),
+  () =>
+    parseMicrosoftStoreIdentityCredentialsResponse(
+      {
+        schema: microsoftStoreIdentityCredentialsSchema,
+        gameId: 'revolving-cards',
+        playerId: request.playerId,
+        accessToken: 'service-token',
+        userStoreId: 'user-store-id',
+        accountBindingId: 'account-binding-id',
+      },
+      request,
+    ),
   /scope does not match/u,
 );
 
 assertThrows(
-  () => parseMicrosoftStoreIdentityCredentialsResponse({
-    schema: microsoftStoreIdentityCredentialsSchema,
-    gameId: request.gameId,
-    playerId: request.playerId,
-    accessToken: 'x'.repeat(4_097),
-    userStoreId: 'user-store-id',
-    accountBindingId: 'account-binding-id',
-  }),
+  () =>
+    parseMicrosoftStoreIdentityCredentialsResponse({
+      schema: microsoftStoreIdentityCredentialsSchema,
+      gameId: request.gameId,
+      playerId: request.playerId,
+      accessToken: 'x'.repeat(4_097),
+      userStoreId: 'user-store-id',
+      accountBindingId: 'account-binding-id',
+    }),
   /access token is invalid/u,
 );
 
@@ -115,11 +121,17 @@ const errorResponseAbortReason = new Error('caller stopped error response cleanu
 await assertRejectsSame(
   resolveMicrosoftStoreIdentityCredentials({
     authority: {
-      fetch: () => Promise.resolve(new Response(new ReadableStream({
-        cancel() {
-          errorResponseAbort.abort(errorResponseAbortReason);
-        },
-      }), { status: 404 })),
+      fetch: () =>
+        Promise.resolve(
+          new Response(
+            new ReadableStream({
+              cancel() {
+                errorResponseAbort.abort(errorResponseAbortReason);
+              },
+            }),
+            { status: 404 },
+          ),
+        ),
     },
     gameId: request.gameId,
     playerId: request.playerId,
@@ -131,14 +143,17 @@ await assertRejectsSame(
 await assertRejects(
   resolveMicrosoftStoreIdentityCredentials({
     authority: {
-      fetch: () => Promise.resolve(Response.json({
-        schema: microsoftStoreIdentityCredentialsSchema,
-        gameId: 'revolving-cards',
-        playerId: 'microsoft.0123456789abcdef',
-        accessToken: 'service-token',
-        userStoreId: 'user-store-id',
-        accountBindingId: 'account-binding-id',
-      })),
+      fetch: () =>
+        Promise.resolve(
+          Response.json({
+            schema: microsoftStoreIdentityCredentialsSchema,
+            gameId: 'revolving-cards',
+            playerId: 'microsoft.0123456789abcdef',
+            accessToken: 'service-token',
+            userStoreId: 'user-store-id',
+            accountBindingId: 'account-binding-id',
+          }),
+        ),
     },
     gameId: 'ttokdoku',
     playerId: 'microsoft.0123456789abcdef',
@@ -151,11 +166,17 @@ const invalidBodyCleanupAbortReason = new Error('caller stopped invalid-body cle
 await assertRejectsSame(
   resolveMicrosoftStoreIdentityCredentials({
     authority: {
-      fetch: () => Promise.resolve(new Response(new ReadableStream({
-        cancel() {
-          invalidBodyCleanupAbort.abort(invalidBodyCleanupAbortReason);
-        },
-      }), { headers: { 'Content-Length': 'not-a-number' } })),
+      fetch: () =>
+        Promise.resolve(
+          new Response(
+            new ReadableStream({
+              cancel() {
+                invalidBodyCleanupAbort.abort(invalidBodyCleanupAbortReason);
+              },
+            }),
+            { headers: { 'Content-Length': 'not-a-number' } },
+          ),
+        ),
     },
     gameId: request.gameId,
     playerId: request.playerId,
@@ -222,16 +243,18 @@ await assertRejects(
   'MICROSOFT_STORE_IDENTITY_UNAVAILABLE',
 );
 
-const timeoutError = await captureRejection(resolveMicrosoftStoreIdentityCredentials({
-  authority: {
-    fetch() {
-      return new Promise<Response>(() => undefined);
+const timeoutError = await captureRejection(
+  resolveMicrosoftStoreIdentityCredentials({
+    authority: {
+      fetch() {
+        return new Promise<Response>(() => undefined);
+      },
     },
-  },
-  gameId: 'ttokdoku',
-  playerId: 'microsoft.0123456789abcdef',
-  timeoutMs: 1,
-}));
+    gameId: 'ttokdoku',
+    playerId: 'microsoft.0123456789abcdef',
+    timeoutMs: 1,
+  }),
+);
 assertMatch(timeoutError, /timed out/u);
 
 const stalledFetchAbort = new AbortController();
@@ -247,16 +270,23 @@ const stalledFetch = resolveMicrosoftStoreIdentityCredentials({
 stalledFetchAbort.abort(stalledFetchAbortReason);
 await assertRejectsSame(stalledFetch, stalledFetchAbortReason);
 
-const stalledBodyTimeout = await captureRejection(resolveMicrosoftStoreIdentityCredentials({
-  authority: {
-    fetch: () => Promise.resolve(new Response(new ReadableStream({
-      pull: () => new Promise<void>(() => undefined),
-    }))),
-  },
-  gameId: request.gameId,
-  playerId: request.playerId,
-  timeoutMs: 1,
-}));
+const stalledBodyTimeout = await captureRejection(
+  resolveMicrosoftStoreIdentityCredentials({
+    authority: {
+      fetch: () =>
+        Promise.resolve(
+          new Response(
+            new ReadableStream({
+              pull: () => new Promise<void>(() => undefined),
+            }),
+          ),
+        ),
+    },
+    gameId: request.gameId,
+    playerId: request.playerId,
+    timeoutMs: 1,
+  }),
+);
 assertMatch(stalledBodyTimeout, /timed out/u);
 
 const wrappedBodyAbort = new AbortController();
@@ -264,12 +294,17 @@ const wrappedBodyAbortReason = new Error('caller stopped response streaming');
 await assertRejectsSame(
   resolveMicrosoftStoreIdentityCredentials({
     authority: {
-      fetch: () => Promise.resolve(new Response(new ReadableStream({
-        pull(controller) {
-          wrappedBodyAbort.abort(wrappedBodyAbortReason);
-          controller.error(new DOMException('wrapped body abort', 'AbortError'));
-        },
-      }))),
+      fetch: () =>
+        Promise.resolve(
+          new Response(
+            new ReadableStream({
+              pull(controller) {
+                wrappedBodyAbort.abort(wrappedBodyAbortReason);
+                controller.error(new DOMException('wrapped body abort', 'AbortError'));
+              },
+            }),
+          ),
+        ),
     },
     gameId: 'ttokdoku',
     playerId: 'microsoft.0123456789abcdef',
@@ -283,14 +318,19 @@ const oversizedBodyCleanupAbortReason = new Error('caller stopped oversized-body
 await assertRejectsSame(
   resolveMicrosoftStoreIdentityCredentials({
     authority: {
-      fetch: () => Promise.resolve(new Response(new ReadableStream({
-        pull(controller) {
-          controller.enqueue(new Uint8Array(16 * 1_024 + 1));
-        },
-        cancel() {
-          oversizedBodyCleanupAbort.abort(oversizedBodyCleanupAbortReason);
-        },
-      }))),
+      fetch: () =>
+        Promise.resolve(
+          new Response(
+            new ReadableStream({
+              pull(controller) {
+                controller.enqueue(new Uint8Array(16 * 1_024 + 1));
+              },
+              cancel() {
+                oversizedBodyCleanupAbort.abort(oversizedBodyCleanupAbortReason);
+              },
+            }),
+          ),
+        ),
     },
     gameId: request.gameId,
     playerId: request.playerId,
@@ -302,9 +342,12 @@ await assertRejectsSame(
 await assertRejects(
   resolveMicrosoftStoreIdentityCredentials({
     authority: {
-      fetch: () => Promise.resolve(new Response('{}', {
-        headers: { 'Content-Length': 'not-a-number' },
-      })),
+      fetch: () =>
+        Promise.resolve(
+          new Response('{}', {
+            headers: { 'Content-Length': 'not-a-number' },
+          }),
+        ),
     },
     gameId: 'ttokdoku',
     playerId: 'microsoft.0123456789abcdef',
@@ -323,9 +366,12 @@ for (const contentLength of [
   await assertRejects(
     resolveMicrosoftStoreIdentityCredentials({
       authority: {
-        fetch: () => Promise.resolve(new Response('{}', {
-          headers: { 'Content-Length': contentLength },
-        })),
+        fetch: () =>
+          Promise.resolve(
+            new Response('{}', {
+              headers: { 'Content-Length': contentLength },
+            }),
+          ),
       },
       gameId: 'ttokdoku',
       playerId: 'microsoft.0123456789abcdef',
@@ -361,14 +407,17 @@ await assertRejects(
 await assertRejects(
   resolveMicrosoftStoreIdentityCredentials({
     authority: {
-      fetch: () => Promise.resolve(Response.json({
-        schema: microsoftStoreIdentityCredentialsSchema,
-        gameId: request.gameId,
-        playerId: request.playerId,
-        accessToken: 'service-token',
-        userStoreId: 'user-store-id',
-        accountBindingId: '\ud800',
-      })),
+      fetch: () =>
+        Promise.resolve(
+          Response.json({
+            schema: microsoftStoreIdentityCredentialsSchema,
+            gameId: request.gameId,
+            playerId: request.playerId,
+            accessToken: 'service-token',
+            userStoreId: 'user-store-id',
+            accountBindingId: '\ud800',
+          }),
+        ),
     },
     gameId: request.gameId,
     playerId: request.playerId,

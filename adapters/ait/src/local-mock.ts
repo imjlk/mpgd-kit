@@ -82,10 +82,7 @@ export const showFullScreenAd = Object.assign(
 );
 
 export const TossAds = {
-  initialize: Object.assign(
-    (_options: unknown): void => {},
-    { isSupported: unsupported },
-  ),
+  initialize: Object.assign((_options: unknown): void => {}, { isSupported: unsupported }),
   attachBanner: Object.assign(
     (_adGroupId: string, _target: string | HTMLElement, _options?: unknown) => ({
       destroy(): void {},
@@ -115,5 +112,7 @@ export const IAP = {
     async (): Promise<{ readonly orders: readonly unknown[] }> => ({ orders: [] }),
     { isSupported: unsupported },
   ),
-  completeProductGrant: Object.assign(async (): Promise<boolean> => false, { isSupported: unsupported }),
+  completeProductGrant: Object.assign(async (): Promise<boolean> => false, {
+    isSupported: unsupported,
+  }),
 };

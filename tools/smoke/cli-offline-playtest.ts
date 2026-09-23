@@ -77,19 +77,21 @@ try {
   };
   new Script(runtimeGuardSource).runInNewContext(runtimeGuardContext);
   assert.throws(
-    () => RuntimeGuardDocument.prototype.createElementNS.call(
-      new RuntimeGuardDocument(),
-      'http://www.w3.org/2000/svg',
-      'script',
-    ),
+    () =>
+      RuntimeGuardDocument.prototype.createElementNS.call(
+        new RuntimeGuardDocument(),
+        'http://www.w3.org/2000/svg',
+        'script',
+      ),
     /document\.createElementNS blocked network access: script/u,
   );
   assert.throws(
-    () => RuntimeGuardDocument.prototype.createElementNS.call(
-      new RuntimeGuardDocument(),
-      'http://www.w3.org/2000/svg',
-      'svg:script',
-    ),
+    () =>
+      RuntimeGuardDocument.prototype.createElementNS.call(
+        new RuntimeGuardDocument(),
+        'http://www.w3.org/2000/svg',
+        'svg:script',
+      ),
     /document\.createElementNS blocked network access: svg:script/u,
   );
   assert.throws(
@@ -129,19 +131,21 @@ try {
   }
 
   await assert.rejects(
-    () => runOfflinePlaytestPackaging({
-      gameRoot,
-      artifactDir: 'artifacts/web-preview',
-      outputDir: 'artifacts/web-preview/offline',
-    }),
+    () =>
+      runOfflinePlaytestPackaging({
+        gameRoot,
+        artifactDir: 'artifacts/web-preview',
+        outputDir: 'artifacts/web-preview/offline',
+      }),
     /must not overlap/u,
   );
   await assert.rejects(
-    () => runOfflinePlaytestPackaging({
-      gameRoot,
-      artifactDir: 'artifacts/web-preview',
-      outputDir: 'artifacts/web-preview',
-    }),
+    () =>
+      runOfflinePlaytestPackaging({
+        gameRoot,
+        artifactDir: 'artifacts/web-preview',
+        outputDir: 'artifacts/web-preview',
+      }),
     /must not overlap/u,
   );
   await assert.rejects(
@@ -2330,9 +2334,13 @@ try {
   });
   const appendedImages: { src: string }[] = [];
   executeBundledFixtureModule(identifiedBrowserImageHtml, {
-    document: { body: { append(image: { src: string }) {
-      appendedImages.push(image);
-    } } },
+    document: {
+      body: {
+        append(image: { src: string }) {
+          appendedImages.push(image);
+        },
+      },
+    },
     Image: class { src = ''; },
   });
   assert.equal(appendedImages.length, 1);
@@ -3541,10 +3549,11 @@ try {
   const symlinkParentGame = createPreviewFixture('symlink-output-parent');
   fs.symlinkSync(outsideRoot, path.join(symlinkParentGame, 'artifacts/linked-output'), 'dir');
   await assert.rejects(
-    () => runOfflinePlaytestPackaging({
-      gameRoot: symlinkParentGame,
-      outputDir: 'artifacts/linked-output/offline-playtest',
-    }),
+    () =>
+      runOfflinePlaytestPackaging({
+        gameRoot: symlinkParentGame,
+        outputDir: 'artifacts/linked-output/offline-playtest',
+      }),
     /cannot cross a symbolic link/u,
   );
 

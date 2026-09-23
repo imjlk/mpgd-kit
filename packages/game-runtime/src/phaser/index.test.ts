@@ -36,7 +36,8 @@ function fakeScene(initial: 'creating' | 'running' | 'paused' | 'sleeping' | 'st
     sys,
     input,
     state: () => state,
-    listenerCount: () => events.eventNames().reduce((total, event) => total + events.listenerCount(event), 0),
+    listenerCount: () =>
+      events.eventNames().reduce((total, event) => total + events.listenerCount(event), 0),
     stop() {
       state = 'stopped';
       events.emit('shutdown');
@@ -75,76 +76,98 @@ function audioSink(initial = false) {
 const gameplayChannels = ['simulation', 'gameplay-input'] as const;
 
 describe('Phaser scene execution binding (headless fakes)', () => {
-  it.each(['error-observer', 'sink'] as const)('guards disposal retry reentry from %s', (origin) => {
-    const controller = createGameExecutionController();
-    const gameplay = fakeScene();
-    const audio = audioSink();
-    let cleanup = (): void => {};
-    const onError = vi.fn(() => {
-      if (origin === 'error-observer') {
-        cleanup();
-      }
-    });
-    const binding = bindPhaserGameScene({
-      controller, scene: gameplay.scene, audio, onError,
-      renderingPolicy: 'visibility', resetInput: vi.fn(), onUnsupportedState: vi.fn(),
-    });
-    cleanup = binding.dispose;
-    controller.acquireBlock({ reason: 'audio', channels: ['audio'] });
-    audio.setMuted.mockImplementation(() => {
-      if (origin === 'sink') {
-        cleanup();
-      }
-      throw new Error('persistent unmute failure');
-    });
-    binding.dispose();
-    expect(onError).toHaveBeenCalledTimes(1);
-    expect(gameplay.listenerCount()).toBe(0);
-    binding.dispose();
-    expect(onError).toHaveBeenCalledTimes(2);
-    expect(audio.getMuted()).toBe(true);
-  });
-
-  it.each(['dispose', 'shutdown'] as const)('retries an initial %s audio cleanup failure without retaining listeners', (mode) => {
-    const controller = createGameExecutionController();
-    const gameplay = fakeScene();
-    const audio = audioSink();
-    const binding = bindPhaserGameScene({
-      controller, scene: gameplay.scene, audio,
-      renderingPolicy: 'visibility', resetInput: vi.fn(), onUnsupportedState: vi.fn(),
-    });
-    controller.acquireBlock({ reason: 'audio', channels: ['audio'] });
-    const setMuted = audio.setMuted.getMockImplementation();
-    audio.setMuted.mockImplementationOnce(() => {
-      throw new Error('cleanup failed'); });
-    if (mode === 'shutdown') {
-      gameplay.sys.events.emit('shutdown');
-    } else {
+  it.each(['error-observer', 'sink'] as const)(
+    'guards disposal retry reentry from %s',
+    (origin) => {
+      const controller = createGameExecutionController();
+      const gameplay = fakeScene();
+      const audio = audioSink();
+      let cleanup = (): void => {};
+      const onError = vi.fn(() => {
+        if (origin === 'error-observer') {
+          cleanup();
+        }
+      });
+      const binding = bindPhaserGameScene({
+        controller,
+        scene: gameplay.scene,
+        audio,
+        onError,
+        renderingPolicy: 'visibility',
+        resetInput: vi.fn(),
+        onUnsupportedState: vi.fn(),
+      });
+      cleanup = binding.dispose;
+      controller.acquireBlock({ reason: 'audio', channels: ['audio'] });
+      audio.setMuted.mockImplementation(() => {
+        if (origin === 'sink') {
+          cleanup();
+        }
+        throw new Error('persistent unmute failure');
+      });
       binding.dispose();
-    }
-    expect(audio.getMuted()).toBe(true);
-    expect(gameplay.sys.events.listenerCount('shutdown')).toBe(0);
-    audio.setMuted.mockImplementation((value) => {
-      setMuted?.(value); });
-    binding.dispose();
-    expect(audio.getMuted()).toBe(false);
-    const calls = audio.setMuted.mock.calls.length;
-    binding.dispose();
-    expect(audio.setMuted).toHaveBeenCalledTimes(calls);
-    expect(gameplay.sys.resume).not.toHaveBeenCalled();
-  });
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(gameplay.listenerCount()).toBe(0);
+      binding.dispose();
+      expect(onError).toHaveBeenCalledTimes(2);
+      expect(audio.getMuted()).toBe(true);
+    },
+  );
+
+  it.each(['dispose', 'shutdown'] as const)(
+    'retries an initial %s audio cleanup failure without retaining listeners',
+    (mode) => {
+      const controller = createGameExecutionController();
+      const gameplay = fakeScene();
+      const audio = audioSink();
+      const binding = bindPhaserGameScene({
+        controller,
+        scene: gameplay.scene,
+        audio,
+        renderingPolicy: 'visibility',
+        resetInput: vi.fn(),
+        onUnsupportedState: vi.fn(),
+      });
+      controller.acquireBlock({ reason: 'audio', channels: ['audio'] });
+      const setMuted = audio.setMuted.getMockImplementation();
+      audio.setMuted.mockImplementationOnce(() => {
+        throw new Error('cleanup failed');
+      });
+      if (mode === 'shutdown') {
+        gameplay.sys.events.emit('shutdown');
+      } else {
+        binding.dispose();
+      }
+      expect(audio.getMuted()).toBe(true);
+      expect(gameplay.sys.events.listenerCount('shutdown')).toBe(0);
+      audio.setMuted.mockImplementation((value) => {
+        setMuted?.(value);
+      });
+      binding.dispose();
+      expect(audio.getMuted()).toBe(false);
+      const calls = audio.setMuted.mock.calls.length;
+      binding.dispose();
+      expect(audio.setMuted).toHaveBeenCalledTimes(calls);
+      expect(gameplay.sys.resume).not.toHaveBeenCalled();
+    },
+  );
 
   it('never retries failed audio cleanup after terminal runtime destruction', () => {
     const controller = createGameExecutionController();
     const gameplay = fakeScene();
     const audio = audioSink();
     const binding = bindPhaserGameScene({
-      controller, scene: gameplay.scene, audio,
-      renderingPolicy: 'visibility', resetInput: vi.fn(), onUnsupportedState: vi.fn(),
+      controller,
+      scene: gameplay.scene,
+      audio,
+      renderingPolicy: 'visibility',
+      resetInput: vi.fn(),
+      onUnsupportedState: vi.fn(),
     });
     controller.acquireBlock({ reason: 'audio', channels: ['audio'] });
     audio.setMuted.mockImplementationOnce(() => {
-      throw new Error('cleanup failed'); });
+      throw new Error('cleanup failed');
+    });
     binding.dispose();
     const calls = audio.setMuted.mock.calls.length;
     controller.destroy();
@@ -158,8 +181,13 @@ describe('Phaser scene execution binding (headless fakes)', () => {
     const audio = audioSink();
     const onError = vi.fn();
     const binding = bindPhaserGameScene({
-      controller, scene: gameplay.scene, audio, onError,
-      renderingPolicy: 'visibility', resetInput: vi.fn(), onUnsupportedState: vi.fn(),
+      controller,
+      scene: gameplay.scene,
+      audio,
+      onError,
+      renderingPolicy: 'visibility',
+      resetInput: vi.fn(),
+      onUnsupportedState: vi.fn(),
     });
     const block = controller.acquireBlock({ reason: 'audio', channels: ['audio'] });
     const setMuted = audio.setMuted.getMockImplementation();
@@ -200,8 +228,13 @@ describe('Phaser scene execution binding (headless fakes)', () => {
     const scope = { dispose: vi.fn() };
     const onError = vi.fn();
     const binding = bindPhaserGameScene({
-      controller, scene: gameplay.scene, uiScope: scope, onError,
-      renderingPolicy: 'visibility', resetInput: vi.fn(), onUnsupportedState: vi.fn(),
+      controller,
+      scene: gameplay.scene,
+      uiScope: scope,
+      onError,
+      renderingPolicy: 'visibility',
+      resetInput: vi.fn(),
+      onUnsupportedState: vi.fn(),
     });
     runtime.acquireBlock({ reason: 'settings', channels: gameplayChannels });
     throwOnRead = true;
@@ -216,7 +249,10 @@ describe('Phaser scene execution binding (headless fakes)', () => {
     const controller = { ...runtime, getSnapshot: () => ({ ...runtime.getSnapshot() }) };
     const gameplay = fakeScene();
     const binding = bindPhaserGameScene({
-      controller, scene: gameplay.scene, renderingPolicy: 'visibility', resetInput: vi.fn(),
+      controller,
+      scene: gameplay.scene,
+      renderingPolicy: 'visibility',
+      resetInput: vi.fn(),
       onUnsupportedState: vi.fn(),
     });
     const token = runtime.acquireBlock({ reason: 'settings', channels: gameplayChannels });
@@ -237,13 +273,20 @@ describe('Phaser scene execution binding (headless fakes)', () => {
       get: () => enabled,
       set(value: boolean) {
         if (value) {
-          throw new Error('plugin destroyed'); }
+          throw new Error('plugin destroyed');
+        }
         enabled = value;
       },
     });
     const binding = bindPhaserGameScene({
-      controller, scene: gameplay.scene, audio, uiScope: scope, onError,
-      renderingPolicy: 'visibility', resetInput: vi.fn(), onUnsupportedState: vi.fn(),
+      controller,
+      scene: gameplay.scene,
+      audio,
+      uiScope: scope,
+      onError,
+      renderingPolicy: 'visibility',
+      resetInput: vi.fn(),
+      onUnsupportedState: vi.fn(),
     });
     controller.acquireBlock({ reason: 'all', channels: [...gameplayChannels, 'audio'] });
     expect(() => binding.dispose()).not.toThrow();
@@ -260,11 +303,18 @@ describe('Phaser scene execution binding (headless fakes)', () => {
     const gameplay = fakeScene();
     const audio = audioSink();
     const options = {
-      controller, scene: gameplay.scene, audio,
-      renderingPolicy: 'visibility' as const, resetInput: vi.fn(), onUnsupportedState: vi.fn(),
+      controller,
+      scene: gameplay.scene,
+      audio,
+      renderingPolicy: 'visibility' as const,
+      resetInput: vi.fn(),
+      onUnsupportedState: vi.fn(),
     };
     const binding = bindPhaserGameScene(options);
-    const token = controller.acquireBlock({ reason: 'all', channels: [...gameplayChannels, 'rendering', 'audio'] });
+    const token = controller.acquireBlock({
+      reason: 'all',
+      channels: [...gameplayChannels, 'rendering', 'audio'],
+    });
     let next: ReturnType<typeof bindPhaserGameScene> | undefined;
     gameplay.sys.events.once('resume', () => {
       gameplay.stop();
@@ -289,11 +339,18 @@ describe('Phaser scene execution binding (headless fakes)', () => {
     const audio = audioSink();
     let next: ReturnType<typeof bindPhaserGameScene> | undefined;
     const options = {
-      controller, scene: gameplay.scene, audio,
-      renderingPolicy: 'visibility' as const, resetInput: vi.fn(), onUnsupportedState: vi.fn(),
+      controller,
+      scene: gameplay.scene,
+      audio,
+      renderingPolicy: 'visibility' as const,
+      resetInput: vi.fn(),
+      onUnsupportedState: vi.fn(),
     };
     const binding = bindPhaserGameScene(options);
-    const token = controller.acquireBlock({ reason: 'all', channels: [...gameplayChannels, 'audio'] });
+    const token = controller.acquireBlock({
+      reason: 'all',
+      channels: [...gameplayChannels, 'audio'],
+    });
     const originalSetMuted = audio.setMuted.getMockImplementation();
     audio.setMuted.mockImplementation((value) => {
       originalSetMuted?.(value);
@@ -316,7 +373,10 @@ describe('Phaser scene execution binding (headless fakes)', () => {
     const gameplay = fakeScene();
     gameplay.sys.events.once('resume', () => gameplay.sys.pause());
     const binding = bindPhaserGameScene({
-      controller, scene: gameplay.scene, renderingPolicy: 'visibility', resetInput: vi.fn(),
+      controller,
+      scene: gameplay.scene,
+      renderingPolicy: 'visibility',
+      resetInput: vi.fn(),
       onUnsupportedState: vi.fn(),
     });
     const token = controller.acquireBlock({ reason: 'settings', channels: gameplayChannels });
@@ -328,7 +388,10 @@ describe('Phaser scene execution binding (headless fakes)', () => {
 
     const active = fakeScene();
     const next = bindPhaserGameScene({
-      controller, scene: active.scene, renderingPolicy: 'visibility', resetInput: vi.fn(),
+      controller,
+      scene: active.scene,
+      renderingPolicy: 'visibility',
+      resetInput: vi.fn(),
       onUnsupportedState: vi.fn(),
     });
     const block = controller.acquireBlock({ reason: 'settings', channels: gameplayChannels });
@@ -344,7 +407,10 @@ describe('Phaser scene execution binding (headless fakes)', () => {
     const gameplay = fakeScene();
     const onUnsupportedState = vi.fn();
     const binding = bindPhaserGameScene({
-      controller, scene: gameplay.scene, renderingPolicy: 'visibility', resetInput: vi.fn(),
+      controller,
+      scene: gameplay.scene,
+      renderingPolicy: 'visibility',
+      resetInput: vi.fn(),
       onUnsupportedState,
     });
     const audio = controller.acquireBlock({ reason: 'audio', channels: ['audio'] });
@@ -362,7 +428,10 @@ describe('Phaser scene execution binding (headless fakes)', () => {
     controller.acquireBlock({ reason: 'initial background', channels: gameplayChannels });
     const gameplay = fakeScene('creating');
     const binding = bindPhaserGameScene({
-      controller, scene: gameplay.scene, renderingPolicy: 'visibility', resetInput: vi.fn(),
+      controller,
+      scene: gameplay.scene,
+      renderingPolicy: 'visibility',
+      resetInput: vi.fn(),
       onUnsupportedState: vi.fn(),
     });
     gameplay.created();
@@ -377,12 +446,17 @@ describe('Phaser scene execution binding (headless fakes)', () => {
     const resetInput = vi.fn();
     const audio = audioSink();
     const binding = bindPhaserGameScene({
-      controller, scene: gameplay.scene, renderingPolicy: 'visibility', resetInput,
-      audio, onUnsupportedState: vi.fn(),
+      controller,
+      scene: gameplay.scene,
+      renderingPolicy: 'visibility',
+      resetInput,
+      audio,
+      onUnsupportedState: vi.fn(),
     });
     const settings = controller.acquireBlock({ reason: 'settings', channels: gameplayChannels });
     const background = controller.acquireBlock({
-      reason: 'background', channels: [...gameplayChannels, 'rendering', 'audio'],
+      reason: 'background',
+      channels: [...gameplayChannels, 'rendering', 'audio'],
     });
     expect(gameplay.state()).toBe('paused');
     expect(gameplay.sys.isVisible()).toBe(false);
@@ -406,7 +480,10 @@ describe('Phaser scene execution binding (headless fakes)', () => {
     gameplay.input.gamepad.enabled = false;
     const resetInput = vi.fn();
     const binding = bindPhaserGameScene({
-      controller, scene: gameplay.scene, renderingPolicy: 'visibility', resetInput,
+      controller,
+      scene: gameplay.scene,
+      renderingPolicy: 'visibility',
+      resetInput,
       onUnsupportedState: vi.fn(),
     });
     const first = controller.acquireBlock({ reason: 'input', channels: ['gameplay-input'] });
@@ -423,19 +500,25 @@ describe('Phaser scene execution binding (headless fakes)', () => {
     binding.dispose();
   });
 
-  it.each(['paused', 'sleeping', 'stopped'] as const)('does not resume a preexisting %s scene', (initial) => {
-    const controller = createGameExecutionController();
-    const gameplay = fakeScene(initial);
-    const binding = bindPhaserGameScene({
-      controller, scene: gameplay.scene, renderingPolicy: 'visibility', resetInput: vi.fn(),
-      onUnsupportedState: vi.fn(),
-    });
-    const block = controller.acquireBlock({ reason: 'settings', channels: gameplayChannels });
-    block.release();
-    binding.dispose();
-    expect(gameplay.state()).toBe(initial);
-    expect(gameplay.sys.resume).not.toHaveBeenCalled();
-  });
+  it.each(['paused', 'sleeping', 'stopped'] as const)(
+    'does not resume a preexisting %s scene',
+    (initial) => {
+      const controller = createGameExecutionController();
+      const gameplay = fakeScene(initial);
+      const binding = bindPhaserGameScene({
+        controller,
+        scene: gameplay.scene,
+        renderingPolicy: 'visibility',
+        resetInput: vi.fn(),
+        onUnsupportedState: vi.fn(),
+      });
+      const block = controller.acquireBlock({ reason: 'settings', channels: gameplayChannels });
+      block.release();
+      binding.dispose();
+      expect(gameplay.state()).toBe(initial);
+      expect(gameplay.sys.resume).not.toHaveBeenCalled();
+    },
+  );
 
   it('hides rendering without sleep and preserves a preexisting hidden scene and mute', () => {
     const controller = createGameExecutionController();
@@ -443,7 +526,11 @@ describe('Phaser scene execution binding (headless fakes)', () => {
     const audio = audioSink(true);
     gameplay.sys.setVisible(false);
     const binding = bindPhaserGameScene({
-      controller, scene: gameplay.scene, audio, renderingPolicy: 'visibility', resetInput: vi.fn(),
+      controller,
+      scene: gameplay.scene,
+      audio,
+      renderingPolicy: 'visibility',
+      resetInput: vi.fn(),
       onUnsupportedState: vi.fn(),
     });
     const block = controller.acquireBlock({ reason: 'overlay', channels: ['rendering', 'audio'] });
@@ -459,7 +546,10 @@ describe('Phaser scene execution binding (headless fakes)', () => {
     const controller = createGameExecutionController();
     const gameplay = fakeScene();
     const binding = bindPhaserGameScene({
-      controller, scene: gameplay.scene, renderingPolicy: 'visibility', resetInput: vi.fn(),
+      controller,
+      scene: gameplay.scene,
+      renderingPolicy: 'visibility',
+      resetInput: vi.fn(),
       onUnsupportedState: vi.fn(),
     });
     const block = controller.acquireBlock({ reason: 'input', channels: ['gameplay-input'] });
@@ -478,7 +568,10 @@ describe('Phaser scene execution binding (headless fakes)', () => {
     const resetInput = vi.fn();
     const block = controller.acquireBlock({ reason: 'settings', channels: gameplayChannels });
     const binding = bindPhaserGameScene({
-      controller, scene: gameplay.scene, renderingPolicy: 'visibility', resetInput,
+      controller,
+      scene: gameplay.scene,
+      renderingPolicy: 'visibility',
+      resetInput,
       onUnsupportedState: vi.fn(),
     });
     expect(gameplay.state()).toBe('sleeping');
@@ -497,8 +590,12 @@ describe('Phaser scene execution binding (headless fakes)', () => {
       gameplay.start();
       const scope = { dispose: vi.fn() };
       const binding = bindPhaserGameScene({
-        controller, scene: gameplay.scene, renderingPolicy: 'visibility', resetInput: vi.fn(),
-        uiScope: scope, onUnsupportedState: vi.fn(),
+        controller,
+        scene: gameplay.scene,
+        renderingPolicy: 'visibility',
+        resetInput: vi.fn(),
+        uiScope: scope,
+        onUnsupportedState: vi.fn(),
       });
       const block = controller.acquireBlock({ reason: 'settings', channels: gameplayChannels });
       gameplay.stop();
@@ -519,10 +616,18 @@ describe('Phaser scene execution binding (headless fakes)', () => {
     const audio = audioSink();
     const scope = { dispose: vi.fn() };
     const binding = bindPhaserGameScene({
-      controller, scene: gameplay.scene, audio, uiScope: scope,
-      renderingPolicy: 'visibility', resetInput: vi.fn(), onUnsupportedState: vi.fn(),
+      controller,
+      scene: gameplay.scene,
+      audio,
+      uiScope: scope,
+      renderingPolicy: 'visibility',
+      resetInput: vi.fn(),
+      onUnsupportedState: vi.fn(),
     });
-    const block = controller.acquireBlock({ reason: 'background', channels: [...gameplayChannels, 'audio'] });
+    const block = controller.acquireBlock({
+      reason: 'background',
+      channels: [...gameplayChannels, 'audio'],
+    });
     controller.destroy();
     block.release();
     binding.dispose();
@@ -538,8 +643,12 @@ describe('Phaser scene execution binding (headless fakes)', () => {
     const gameplay = fakeScene();
     const audio = audioSink();
     bindPhaserGameScene({
-      controller, scene: gameplay.scene, audio,
-      renderingPolicy: 'visibility', resetInput: vi.fn(), onUnsupportedState: vi.fn(),
+      controller,
+      scene: gameplay.scene,
+      audio,
+      renderingPolicy: 'visibility',
+      resetInput: vi.fn(),
+      onUnsupportedState: vi.fn(),
     });
     controller.acquireBlock({ reason: 'operation', channels: [...gameplayChannels, 'audio'] });
     gameplay.stop();
@@ -553,9 +662,14 @@ describe('Phaser scene execution binding (headless fakes)', () => {
     const gameplay = fakeScene();
     const onError = vi.fn();
     const resetInput = vi.fn<() => void>(() => {
-      throw new Error('input reset'); });
+      throw new Error('input reset');
+    });
     const binding = bindPhaserGameScene({
-      controller, scene: gameplay.scene, renderingPolicy: 'visibility', resetInput, onError,
+      controller,
+      scene: gameplay.scene,
+      renderingPolicy: 'visibility',
+      resetInput,
+      onError,
       onUnsupportedState: vi.fn(),
     });
     const first = controller.acquireBlock({ reason: 'settings', channels: gameplayChannels });
@@ -563,7 +677,8 @@ describe('Phaser scene execution binding (headless fakes)', () => {
     expect(gameplay.state()).toBe('paused');
     first.release();
     resetInput.mockImplementation(() => {
-      binding.dispose(); });
+      binding.dispose();
+    });
     controller.acquireBlock({ reason: 'settings', channels: gameplayChannels });
     expect(gameplay.state()).toBe('running');
     expect(gameplay.input.enabled).toBe(true);
@@ -574,15 +689,24 @@ describe('Phaser scene execution binding (headless fakes)', () => {
     const gameplay = fakeScene();
     const onUnsupportedState = vi.fn();
     const binding = bindPhaserGameScene({
-      controller, scene: gameplay.scene, renderingPolicy: 'visibility', resetInput: vi.fn(),
+      controller,
+      scene: gameplay.scene,
+      renderingPolicy: 'visibility',
+      resetInput: vi.fn(),
       onUnsupportedState,
     });
     const simulation = controller.acquireBlock({ reason: 'simulation', channels: ['simulation'] });
-    expect(onUnsupportedState).toHaveBeenLastCalledWith(controller.getSnapshot(), 'simulation-requires-input-block');
+    expect(onUnsupportedState).toHaveBeenLastCalledWith(
+      controller.getSnapshot(),
+      'simulation-requires-input-block',
+    );
     expect(gameplay.state()).toBe('running');
     simulation.release();
     controller.acquireBlock({ reason: 'audio', channels: ['audio'] });
-    expect(onUnsupportedState).toHaveBeenLastCalledWith(controller.getSnapshot(), 'audio-sink-missing');
+    expect(onUnsupportedState).toHaveBeenLastCalledWith(
+      controller.getSnapshot(),
+      'audio-sink-missing',
+    );
     binding.dispose();
   });
 });

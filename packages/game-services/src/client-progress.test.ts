@@ -77,8 +77,10 @@ function harness(options: {
           throw options.serverError;
         }
         return {
-          verified: options.verified ?? true, ledgerEntryId: 'private-purchase-ledger',
-          alreadyProcessed: true, reason: 'private-server-detail',
+          verified: options.verified ?? true,
+          ledgerEntryId: 'private-purchase-ledger',
+          alreadyProcessed: true,
+          reason: 'private-server-detail',
         };
       },
     },
@@ -90,14 +92,17 @@ function harness(options: {
           throw options.serverError;
         }
         return {
-          granted: options.claimed ?? true, ledgerEntryId: 'private-ad-ledger',
-          alreadyProcessed: true, reason: 'private-server-detail',
+          granted: options.claimed ?? true,
+          ledgerEntryId: 'private-ad-ledger',
+          alreadyProcessed: true,
+          reason: 'private-server-detail',
         };
       },
     },
     leaderboard: {
       async recordScore() {
-        return { submitted: false, alreadyProcessed: false, ledgerEntryId: 'unused', rank: 0 }; },
+        return { submitted: false, alreadyProcessed: false, ledgerEntryId: 'unused', rank: 0 };
+      },
     },
   };
   return {
@@ -106,7 +111,10 @@ function harness(options: {
     gateway,
     backend,
     client: createGameServicesClient({
-      gateway, backend, target: options.target ?? 'android', playerId: 'private-player',
+      gateway,
+      backend,
+      target: options.target ?? 'android',
+      playerId: 'private-player',
       now: options.now ?? (() => '2026-09-13T00:00:00.000Z'),
     }),
   };
@@ -184,7 +192,8 @@ const ad = harness();
 const adEvents: GameServicesRewardedAdProgress[] = [];
 const adResult = await ad.client.claimRewardedAd(rewardInput, {
   onProgress: (event) => {
-    adEvents.push(event); },
+    adEvents.push(event);
+  },
 });
 equal(adResult.status, 'granted', 'Claimed ad stays granted');
 equal(
@@ -205,7 +214,8 @@ for (const status of ['cancelled', 'pending', 'failed'] as const) {
   const events: GameServicesPurchaseProgress[] = [];
   const result = await current.client.purchase(purchaseInput, {
     onProgress: (event) => {
-      events.push(event); },
+      events.push(event);
+    },
   });
   equal(result.status, status, `Purchase ${status} remains distinct`);
   equal(
@@ -225,7 +235,8 @@ for (const status of ['skipped', 'unavailable', 'failed'] as const) {
   const events: GameServicesRewardedAdProgress[] = [];
   const result = await current.client.claimRewardedAd(rewardInput, {
     onProgress: (event) => {
-      events.push(event); },
+      events.push(event);
+    },
   });
   equal(result.status, status, `Ad ${status} remains distinct`);
   equal(
@@ -276,7 +287,8 @@ for (const kind of ['purchase', 'rewarded-ad'] as const) {
     const events: GameServicesOperationProgress[] = [];
     const options = {
       onProgress: (event: GameServicesOperationProgress) => {
-        events.push(event); },
+        events.push(event);
+      },
     };
     await rejects(
       kind === 'purchase'
@@ -312,11 +324,13 @@ const unsupported = harness({ target: 'reddit' });
 const unsupportedEvents: GameServicesOperationProgress[] = [];
 await unsupported.client.purchase(purchaseInput, {
   onProgress: (event) => {
-    unsupportedEvents.push(event); },
+    unsupportedEvents.push(event);
+  },
 });
 await unsupported.client.claimRewardedAd(rewardInput, {
   onProgress: (event) => {
-    unsupportedEvents.push(event); },
+    unsupportedEvents.push(event);
+  },
 });
 equal(
   phases(unsupportedEvents),
@@ -332,14 +346,16 @@ equal(
 const authoritative = harness({
   target: 'microsoft-store',
   purchase: {
-    ...completedPurchase, transactionId: 'authoritative-ledger',
+    ...completedPurchase,
+    transactionId: 'authoritative-ledger',
     authoritativeGrant: { ledgerEntryId: 'authoritative-ledger', alreadyProcessed: true },
   },
 });
 const authoritativeEvents: GameServicesPurchaseProgress[] = [];
 const authoritativeResult = await authoritative.client.purchase(purchaseInput, {
   onProgress: (event) => {
-    authoritativeEvents.push(event); },
+    authoritativeEvents.push(event);
+  },
 });
 equal(authoritativeResult.status, 'granted', 'Authoritative completion is preserved');
 equal(authoritativeResult.ledgerEntryId, 'authoritative-ledger', 'Authority ledger retained');
@@ -355,7 +371,8 @@ for (const status of ['completed', 'pending'] as const) {
   const events: GameServicesPurchaseProgress[] = [];
   const result = await verse8.client.purchase(purchaseInput, {
     onProgress: (event) => {
-      events.push(event); },
+      events.push(event);
+    },
   });
   equal(
     result.status,
@@ -410,13 +427,16 @@ equal(
 const concurrent = harness();
 const pending: ((value: PurchaseResult) => void)[] = [];
 const concurrentClient = createGameServicesClient({
-  target: 'android', playerId: 'private-player', backend: concurrent.backend,
+  target: 'android',
+  playerId: 'private-player',
+  backend: concurrent.backend,
   gateway: {
     ...concurrent.gateway,
     commerce: {
       ...concurrent.gateway.commerce,
       purchase: () => new Promise<PurchaseResult>((resolve) => {
-        pending.push(resolve); }),
+        pending.push(resolve);
+      }),
     },
   },
 });
@@ -424,13 +444,21 @@ const firstEvents: GameServicesPurchaseProgress[] = [];
 const secondEvents: GameServicesPurchaseProgress[] = [];
 const first = concurrentClient.purchase(
   { ...purchaseInput, idempotencyKey: 'one' },
-  { correlationId: 'view-one', onProgress: (event) => {
-    firstEvents.push(event); } },
+  {
+    correlationId: 'view-one',
+    onProgress: (event) => {
+      firstEvents.push(event);
+    },
+  },
 );
 const second = concurrentClient.purchase(
   { ...purchaseInput, idempotencyKey: 'two' },
-  { correlationId: 'view-two', onProgress: (event) => {
-    secondEvents.push(event); } },
+  {
+    correlationId: 'view-two',
+    onProgress: (event) => {
+      secondEvents.push(event);
+    },
+  },
 );
 pending[1]?.(completedPurchase);
 await second;
@@ -455,10 +483,8 @@ for (const [events, correlation] of [
 for (const event of [...purchaseEvents, ...adEvents]) {
   ok(Object.isFrozen(event), 'Progress data is immutable');
   ok(
-    Object.keys(event).every(
-      (key) => ['kind', 'phase', 'sequence', 'correlationId', 'status', 'accepted', 'at'].includes(
-        key,
-      ),
+    Object.keys(event).every((key) =>
+      ['kind', 'phase', 'sequence', 'correlationId', 'status', 'accepted', 'at'].includes(key),
     ),
     'Progress contains only allowed fields',
   );
@@ -472,9 +498,19 @@ for (const privateValue of ['secret', 'private', 'backend-purchase-key', 'backen
 }
 
 const legacy: GameServicesClient = {
-  purchase: async (_input) => ({ status: 'pending', purchase: { status: 'pending', entitlementIds: [] } }),
-  claimRewardedAd: async (_input) => ({ status: 'unavailable', reward: { status: 'unavailable', rewardGranted: false } }),
-  submitLeaderboardScore: async (_input) => ({ submitted: false, platformSubmitted: false, alreadyProcessed: false }),
+  purchase: async (_input) => ({
+    status: 'pending',
+    purchase: { status: 'pending', entitlementIds: [] },
+  }),
+  claimRewardedAd: async (_input) => ({
+    status: 'unavailable',
+    reward: { status: 'unavailable', rewardGranted: false },
+  }),
+  submitLeaderboardScore: async (_input) => ({
+    submitted: false,
+    platformSubmitted: false,
+    alreadyProcessed: false,
+  }),
 };
 equal(
   (await legacy.purchase(purchaseInput, { onProgress: () => {} })).status,

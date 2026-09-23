@@ -297,22 +297,23 @@ try {
   const applyRollbackGame = createGame('apply-rollback');
   const beforeApplyRollback = snapshotTree(applyRollbackGame);
   assert.throws(
-    () => initializeMicrosoftStoreStarter(
-      {
-        gameRoot: applyRollbackGame,
-        templateRoot,
-        defaultKitPath: relative(applyRollbackGame, kitRoot),
-        adapterDependencyVersion: 'workspace:*',
-        dryRun: false,
-      },
-      {
-        beforeCommit: (relativePath) => {
-          if (relativePath === 'mpgd.targets.json') {
-            throw new Error('injected mid-apply failure');
-          }
+    () =>
+      initializeMicrosoftStoreStarter(
+        {
+          gameRoot: applyRollbackGame,
+          templateRoot,
+          defaultKitPath: relative(applyRollbackGame, kitRoot),
+          adapterDependencyVersion: 'workspace:*',
+          dryRun: false,
         },
-      },
-    ),
+        {
+          beforeCommit: (relativePath) => {
+            if (relativePath === 'mpgd.targets.json') {
+              throw new Error('injected mid-apply failure');
+            }
+          },
+        },
+      ),
     /injected mid-apply failure/u,
   );
   assert.deepEqual(snapshotTree(applyRollbackGame), beforeApplyRollback);
@@ -321,22 +322,23 @@ try {
   rmSync(join(directoryRollbackGame, '.agents'), { force: true, recursive: true });
   const beforeDirectoryRollback = snapshotTree(directoryRollbackGame);
   assert.throws(
-    () => initializeMicrosoftStoreStarter(
-      {
-        gameRoot: directoryRollbackGame,
-        templateRoot,
-        defaultKitPath: relative(directoryRollbackGame, kitRoot),
-        adapterDependencyVersion: 'workspace:*',
-        dryRun: false,
-      },
-      {
-        beforeCommit: (relativePath) => {
-          if (relativePath === 'mpgd.microsoft-store.json') {
-            throw new Error('injected after nested directories were created');
-          }
+    () =>
+      initializeMicrosoftStoreStarter(
+        {
+          gameRoot: directoryRollbackGame,
+          templateRoot,
+          defaultKitPath: relative(directoryRollbackGame, kitRoot),
+          adapterDependencyVersion: 'workspace:*',
+          dryRun: false,
         },
-      },
-    ),
+        {
+          beforeCommit: (relativePath) => {
+            if (relativePath === 'mpgd.microsoft-store.json') {
+              throw new Error('injected after nested directories were created');
+            }
+          },
+        },
+      ),
     /injected after nested directories were created/u,
   );
   assert.deepEqual(snapshotTree(directoryRollbackGame), beforeDirectoryRollback);
@@ -347,27 +349,28 @@ try {
     'utf8',
   );
   assert.throws(
-    () => initializeMicrosoftStoreStarter(
-      {
-        gameRoot: incompleteRollbackGame,
-        templateRoot,
-        defaultKitPath: relative(incompleteRollbackGame, kitRoot),
-        adapterDependencyVersion: 'workspace:*',
-        dryRun: false,
-      },
-      {
-        beforeCommit: (relativePath) => {
-          if (relativePath === 'src/main.ts') {
-            throw new Error('injected after two committed writes');
-          }
+    () =>
+      initializeMicrosoftStoreStarter(
+        {
+          gameRoot: incompleteRollbackGame,
+          templateRoot,
+          defaultKitPath: relative(incompleteRollbackGame, kitRoot),
+          adapterDependencyVersion: 'workspace:*',
+          dryRun: false,
         },
-        beforeRollbackEntry: (relativePath) => {
-          if (relativePath === 'mpgd.targets.json') {
-            throw new Error('injected rollback failure');
-          }
+        {
+          beforeCommit: (relativePath) => {
+            if (relativePath === 'src/main.ts') {
+              throw new Error('injected after two committed writes');
+            }
+          },
+          beforeRollbackEntry: (relativePath) => {
+            if (relativePath === 'mpgd.targets.json') {
+              throw new Error('injected rollback failure');
+            }
+          },
         },
-      },
-    ),
+      ),
     /rollback was incomplete: mpgd\.targets\.json: injected rollback failure/u,
   );
   assert.equal(
@@ -385,13 +388,14 @@ try {
   const unsafeShellPathGame = createGame('unsafe-shell-path');
   const beforeUnsafeShellPath = snapshotTree(unsafeShellPathGame);
   assert.throws(
-    () => initializeMicrosoftStoreStarter({
-      gameRoot: unsafeShellPathGame,
-      templateRoot,
-      defaultKitPath: '%PATH%',
-      adapterDependencyVersion: 'workspace:*',
-      dryRun: false,
-    }),
+    () =>
+      initializeMicrosoftStoreStarter({
+        gameRoot: unsafeShellPathGame,
+        templateRoot,
+        defaultKitPath: '%PATH%',
+        adapterDependencyVersion: 'workspace:*',
+        dryRun: false,
+      }),
     /unsafe in a shell parameter default/u,
   );
   assert.deepEqual(snapshotTree(unsafeShellPathGame), beforeUnsafeShellPath);
@@ -506,14 +510,18 @@ try {
     );
   }
 
-  assertConflictIsAtomic('bootstrap-conflict', (gameRoot) => {
-    const mainFile = join(gameRoot, 'src/main.ts');
-    const source = readFileSync(mainFile, 'utf8').replace(
-      "import { installPlatform } from './platform/installPlatform';",
-      "import { installPlatform } from './platform/customInstallPlatform';",
-    );
-    writeFileSync(mainFile, source);
-  }, /platform import must contain exactly one canonical insertion anchor/u);
+  assertConflictIsAtomic(
+    'bootstrap-conflict',
+    (gameRoot) => {
+      const mainFile = join(gameRoot, 'src/main.ts');
+      const source = readFileSync(mainFile, 'utf8').replace(
+        "import { installPlatform } from './platform/installPlatform';",
+        "import { installPlatform } from './platform/customInstallPlatform';",
+      );
+      writeFileSync(mainFile, source);
+    },
+    /platform import must contain exactly one canonical insertion anchor/u,
+  );
 
   const symlinkGame = createGame('symlink-conflict');
   const outside = join(fixtureRoot, 'outside');

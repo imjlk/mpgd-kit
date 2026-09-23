@@ -115,24 +115,26 @@ assertEqual(
   'a 401 anonymous-key result should be treated as invalid identity',
 );
 
-responses.push(jsonResponse({
-  resultType: 'SUCCESS',
-  success: {
-    msgCount: 1,
-    sentPushCount: 1,
-    sentInboxCount: 0,
-    sentSmsCount: 0,
-    sentAlimtalkCount: 0,
-    sentFriendtalkCount: 0,
-    detail: {
-      sentPush: [{ contentId: 'message-1' }],
-      sentInbox: [],
-      sentSms: [],
-      sentAlimtalk: [],
-      sentFriendtalk: [],
+responses.push(
+  jsonResponse({
+    resultType: 'SUCCESS',
+    success: {
+      msgCount: 1,
+      sentPushCount: 1,
+      sentInboxCount: 0,
+      sentSmsCount: 0,
+      sentAlimtalkCount: 0,
+      sentFriendtalkCount: 0,
+      detail: {
+        sentPush: [{ contentId: 'message-1' }],
+        sentInbox: [],
+        sentSms: [],
+        sentAlimtalk: [],
+        sentFriendtalk: [],
+      },
     },
-  },
-}));
+  }),
+);
 const message = await client.sendFunctionalMessage({
   recipient: { type: 'anonymous', key: 'anon-key-1' },
   templateSetCode: 'TTOKDOKU_STREAK_AT_RISK',
@@ -171,18 +173,20 @@ await assertRejects(
 );
 
 const prototypeContext = JSON.parse('{"__proto__":"safe"}') as Record<string, string>;
-responses.push(jsonResponse({
-  resultType: 'SUCCESS',
-  success: {
-    msgCount: 0,
-    sentPushCount: 0,
-    sentInboxCount: 0,
-    sentSmsCount: 0,
-    sentAlimtalkCount: 0,
-    sentFriendtalkCount: 0,
-    detail: {},
-  },
-}));
+responses.push(
+  jsonResponse({
+    resultType: 'SUCCESS',
+    success: {
+      msgCount: 0,
+      sentPushCount: 0,
+      sentInboxCount: 0,
+      sentSmsCount: 0,
+      sentAlimtalkCount: 0,
+      sentFriendtalkCount: 0,
+      detail: {},
+    },
+  }),
+);
 await client.sendFunctionalMessage({
   recipient: { type: 'toss-user', key: 'toss-user-key-1' },
   templateSetCode: 'SAFE_CONTEXT',
@@ -205,17 +209,19 @@ assertThrows(
   'credential-free HTTPS URL',
 );
 assertThrows(
-  () => createAppsInTossPartnerApiClient({
-    mtls,
-    baseUrl: 'https://ait-partner.example?environment=staging',
-  }),
+  () =>
+    createAppsInTossPartnerApiClient({
+      mtls,
+      baseUrl: 'https://ait-partner.example?environment=staging',
+    }),
   'credential-free HTTPS URL',
 );
 assertThrows(
-  () => createAppsInTossPartnerApiClient({
-    mtls,
-    baseUrl: 'https://ait-partner.example#credentials',
-  }),
+  () =>
+    createAppsInTossPartnerApiClient({
+      mtls,
+      baseUrl: 'https://ait-partner.example#credentials',
+    }),
   'credential-free HTTPS URL',
 );
 assertThrows(() => createAppsInTossPartnerApiClient({ mtls, timeoutMs: 0 }), 'between 1 and 60000');
@@ -234,11 +240,12 @@ const oversizedContext = Object.fromEntries(
   Array.from({ length: 129 }, (_, index) => [`field${String(index)}`, index]),
 );
 await assertRejectsError(
-  () => client.sendFunctionalMessage({
-    recipient: { type: 'anonymous', key: 'anon-key-1' },
-    templateSetCode: 'TOO_MANY_FIELDS',
-    context: oversizedContext,
-  }),
+  () =>
+    client.sendFunctionalMessage({
+      recipient: { type: 'anonymous', key: 'anon-key-1' },
+      templateSetCode: 'TOO_MANY_FIELDS',
+      context: oversizedContext,
+    }),
   'more than 128 values',
 );
 
@@ -288,24 +295,27 @@ const abortClient = createAppsInTossPartnerApiClient({
   },
 });
 await assertRejects(
-  () => abortClient.verifyAnonymousKey({
-    anonymousKey: 'aborted-key',
-    signal: abortController.signal,
-  }),
+  () =>
+    abortClient.verifyAnonymousKey({
+      anonymousKey: 'aborted-key',
+      signal: abortController.signal,
+    }),
   'was aborted',
   'ABORTED',
 );
 
-responses.push(jsonResponse({
-  resultType: 'SUCCESS',
-  success: {
-    tokenType: 'bearer',
-    accessToken: 'access-token-1',
-    refreshToken: 'refresh-token-1',
-    expiresIn: '3600',
-    scope: 'user_key',
-  },
-}));
+responses.push(
+  jsonResponse({
+    resultType: 'SUCCESS',
+    success: {
+      tokenType: 'bearer',
+      accessToken: 'access-token-1',
+      refreshToken: 'refresh-token-1',
+      expiresIn: '3600',
+      scope: 'user_key',
+    },
+  }),
+);
 const loginToken = await client.exchangeLoginAuthorizationCode({
   authorizationCode: 'authorization-code-1',
   referrer: 'SANDBOX',
@@ -362,16 +372,18 @@ assertEqual(
   'login user lookups should keep the access token on the server-side Authorization header',
 );
 
-responses.push(jsonResponse({
-  resultType: 'SUCCESS',
-  success: {
-    orderId: 'order-1',
-    sku: 'ait.hint-pack-5',
-    statusDeterminedAt: '2026-08-08T10:00:00',
-    status: 'PAYMENT_COMPLETED',
-    reason: 'Payment completed; product grant is pending.',
-  },
-}));
+responses.push(
+  jsonResponse({
+    resultType: 'SUCCESS',
+    success: {
+      orderId: 'order-1',
+      sku: 'ait.hint-pack-5',
+      statusDeterminedAt: '2026-08-08T10:00:00',
+      status: 'PAYMENT_COMPLETED',
+      reason: 'Payment completed; product grant is pending.',
+    },
+  }),
+);
 const order = await client.getIapOrderStatus({
   orderId: 'order-1',
   tossUserKey: '443731104',
@@ -404,15 +416,17 @@ assertDeepEqual(
   'IAP lookups should query only the requested order id',
 );
 
-responses.push(jsonResponse({
-  resultType: 'SUCCESS',
-  success: {
-    orderId: 'order-without-login',
-    sku: 'ait.hint-pack-5',
-    statusDeterminedAt: '2026-08-08T10:01:00',
-    status: 'PAYMENT_COMPLETED',
-  },
-}));
+responses.push(
+  jsonResponse({
+    resultType: 'SUCCESS',
+    success: {
+      orderId: 'order-without-login',
+      sku: 'ait.hint-pack-5',
+      statusDeterminedAt: '2026-08-08T10:01:00',
+      status: 'PAYMENT_COMPLETED',
+    },
+  }),
+);
 await client.getIapOrderStatus({ orderId: 'order-without-login' });
 const anonymousOrderCall = calls[calls.length - 1];
 assertEqual(
@@ -421,37 +435,43 @@ assertEqual(
   'IAP lookups should allow the documented order-id-only flow without forcing Toss Login',
 );
 
-responses.push(jsonResponse({
-  resultType: 'SUCCESS',
-  success: {
-    orderId: 'different-order',
-    sku: 'ait.hint-pack-5',
-    statusDeterminedAt: '2026-08-08T10:00:00',
-    status: 'PAYMENT_COMPLETED',
-  },
-}));
-await assertRejects(
-  () => client.getIapOrderStatus({
-    orderId: 'expected-order',
-    tossUserKey: '443731104',
+responses.push(
+  jsonResponse({
+    resultType: 'SUCCESS',
+    success: {
+      orderId: 'different-order',
+      sku: 'ait.hint-pack-5',
+      statusDeterminedAt: '2026-08-08T10:00:00',
+      status: 'PAYMENT_COMPLETED',
+    },
   }),
+);
+await assertRejects(
+  () =>
+    client.getIapOrderStatus({
+      orderId: 'expected-order',
+      tossUserKey: '443731104',
+    }),
   'mismatched order id',
 );
 
-responses.push(jsonResponse({
-  resultType: 'SUCCESS',
-  success: {
-    orderId: 'order-unknown',
-    sku: 'ait.hint-pack-5',
-    statusDeterminedAt: '2026-08-08T10:00:00',
-    status: 'UNEXPECTED_STATUS',
-  },
-}));
-await assertRejects(
-  () => client.getIapOrderStatus({
-    orderId: 'order-unknown',
-    tossUserKey: '443731104',
+responses.push(
+  jsonResponse({
+    resultType: 'SUCCESS',
+    success: {
+      orderId: 'order-unknown',
+      sku: 'ait.hint-pack-5',
+      statusDeterminedAt: '2026-08-08T10:00:00',
+      status: 'UNEXPECTED_STATUS',
+    },
   }),
+);
+await assertRejects(
+  () =>
+    client.getIapOrderStatus({
+      orderId: 'order-unknown',
+      tossUserKey: '443731104',
+    }),
   'unknown IAP order status',
 );
 

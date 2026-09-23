@@ -141,46 +141,51 @@ assert.match(
 assert.equal(normalizedNavigation.headers.get('content-encoding'), null);
 assert.equal(normalizedNavigation.headers.get('content-length'), null);
 assert.throws(
-  () => createMicrosoftStorePwaReleaseEvidence({
-    ...provenance,
-    pwaId: './fixture-game',
-    revision,
-    precacheUrls: ['./index.html', './index.html'],
-  }),
+  () =>
+    createMicrosoftStorePwaReleaseEvidence({
+      ...provenance,
+      pwaId: './fixture-game',
+      revision,
+      precacheUrls: ['./index.html', './index.html'],
+    }),
   /must be unique/u,
 );
 assert.throws(
-  () => createMicrosoftStorePwaReleaseEvidence({
-    ...provenance,
-    pwaId: './fixture-game',
-    revision,
-    precacheUrls: ['../escape.js'],
-  }),
+  () =>
+    createMicrosoftStorePwaReleaseEvidence({
+      ...provenance,
+      pwaId: './fixture-game',
+      revision,
+      precacheUrls: ['../escape.js'],
+    }),
   /Unsafe PWA precache URL/u,
 );
 assert.throws(
-  () => createMicrosoftStorePwaReleaseEvidence({
-    ...provenance,
-    pwaId: './',
-    revision,
-    precacheUrls: ['./index.html'],
-  }),
+  () =>
+    createMicrosoftStorePwaReleaseEvidence({
+      ...provenance,
+      pwaId: './',
+      revision,
+      precacheUrls: ['./index.html'],
+    }),
   /must be game-specific/u,
 );
 assert.throws(
-  () => assertMicrosoftStorePwaProvenance({
-    ...provenance,
-    sourceGitSha: 'uncommitted',
-  }),
+  () =>
+    assertMicrosoftStorePwaProvenance({
+      ...provenance,
+      sourceGitSha: 'uncommitted',
+    }),
   /full 40-character hexadecimal SHA/u,
 );
 assert.throws(
-  () => createMicrosoftStorePwaReleaseEvidence({
-    ...provenance,
-    pwaId: './fixture-game',
-    revision,
-    precacheUrls: ['./%2e%2e/escape.js'],
-  }),
+  () =>
+    createMicrosoftStorePwaReleaseEvidence({
+      ...provenance,
+      pwaId: './fixture-game',
+      revision,
+      precacheUrls: ['./%2e%2e/escape.js'],
+    }),
   /Unsafe PWA precache URL/u,
 );
 

@@ -94,10 +94,9 @@ export class MiniGameDocument extends MiniGameEventTarget {
       );
     }
 
-    const element = new MiniGameHTMLElement(
-      normalized,
-      () => (getMiniGameCanvasBounds(this.#host.getWindowInfo())),
-    );
+    const element = new MiniGameHTMLElement(normalized, () => (getMiniGameCanvasBounds(
+      this.#host.getWindowInfo(),
+    )));
     element.ownerDocument = this;
 
     if (normalized === 'audio' || normalized === 'video') {

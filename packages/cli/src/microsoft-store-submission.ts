@@ -341,37 +341,39 @@ export function assertMicrosoftStoreEffectiveTarget(
   }
   const seenProductIds = new Set<string>();
   const seenPlatformProductIds = new Set<string>();
-  const products: MicrosoftStoreEffectiveTargetProduct[] = rawProducts.flatMap((rawProduct, index) => {
-    const product = requireRecord(
-      rawProduct,
-      `Microsoft Store effective target config products[${String(index)}]`,
-    );
-    if (product.enabled !== true) {
-      return [];
-    }
-    if (product.type !== 'consumable') {
-      throw new Error('Microsoft Store effective target config can only enable consumables.');
-    }
-    const id = requireProductionString(
-      product.id,
-      `Microsoft Store effective target config products[${String(index)}].id`,
-    );
-    const platformProductId = requireProductionString(
-      product.platformProductId,
-      `Microsoft Store effective target config products[${String(index)}].platformProductId`,
-    );
-    if (seenProductIds.has(id)) {
-      throw new Error(`Microsoft Store effective target config duplicates product ${id}.`);
-    }
-    if (seenPlatformProductIds.has(platformProductId)) {
-      throw new Error(
-        `Microsoft Store effective target config duplicates platformProductId ${platformProductId}.`,
+  const products: MicrosoftStoreEffectiveTargetProduct[] = rawProducts.flatMap(
+    (rawProduct, index) => {
+      const product = requireRecord(
+        rawProduct,
+        `Microsoft Store effective target config products[${String(index)}]`,
       );
-    }
-    seenProductIds.add(id);
-    seenPlatformProductIds.add(platformProductId);
-    return [{ id, platformProductId }];
-  });
+      if (product.enabled !== true) {
+        return [];
+      }
+      if (product.type !== 'consumable') {
+        throw new Error('Microsoft Store effective target config can only enable consumables.');
+      }
+      const id = requireProductionString(
+        product.id,
+        `Microsoft Store effective target config products[${String(index)}].id`,
+      );
+      const platformProductId = requireProductionString(
+        product.platformProductId,
+        `Microsoft Store effective target config products[${String(index)}].platformProductId`,
+      );
+      if (seenProductIds.has(id)) {
+        throw new Error(`Microsoft Store effective target config duplicates product ${id}.`);
+      }
+      if (seenPlatformProductIds.has(platformProductId)) {
+        throw new Error(
+          `Microsoft Store effective target config duplicates platformProductId ${platformProductId}.`,
+        );
+      }
+      seenProductIds.add(id);
+      seenPlatformProductIds.add(platformProductId);
+      return [{ id, platformProductId }];
+    },
+  );
 
   if (products.length !== commerce.products.length) {
     throw new Error(

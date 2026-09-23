@@ -1,10 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import {
-  extractAitAdBridgeConfig,
-  type AitAdBridgeConfig,
-} from '@mpgd/adapter-ait/ad-config';
+import { extractAitAdBridgeConfig, type AitAdBridgeConfig } from '@mpgd/adapter-ait/ad-config';
 import ttsc from '@ttsc/unplugin/vite';
 import { defineConfig, type Plugin } from 'vite';
 
@@ -69,9 +66,7 @@ function createAitRuntimeConfigPlugin(input: Readonly<{
       return id === publicId ? resolvedId : null;
     },
     load(id) {
-      return id === resolvedId
-        ? `export default Object.freeze(${JSON.stringify(input)});\n`
-        : null;
+      return id === resolvedId ? `export default Object.freeze(${JSON.stringify(input)});\n` : null;
     },
   };
 }

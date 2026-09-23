@@ -92,8 +92,9 @@ your devices and catalog. The sample explicitly uses 2 downloads, 1 decode and a
 8 MiB encoded reservation budget.
 
 Timeout aborts actual fetch/body reads. A browser's native decode may keep running
-after cancellation: the caller rejects promptly, its image URL is revoked, and
-its decode slot and byte reservation remain occupied until native completion.
+after cancellation: the caller rejects promptly, but its image input, Blob URL,
+decode slot and byte reservation stay alive until native completion. Clearing the
+input mid-decode can strand the browser's decode promise; cleanup runs afterward.
 Late completion cannot register a texture. A decoder that never settles can thus
 stall the decode queue; later callers still hit their own preparation deadlines.
 Encoded reservations are a logical payload bound, not an exact heap/GPU bound:

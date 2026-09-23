@@ -1,8 +1,8 @@
-import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
 import type {
   MiniGamePhaserConfigOverrides,
   MiniGamePhaserGame,
 } from '@mpgd/phaser-minigame-runtime';
+import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
 
 export interface StarterMiniGameRuntimeBridge {
   readonly target: 'wechat' | 'tiktok';

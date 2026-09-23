@@ -327,7 +327,9 @@ export function validatePhaserPackBuildConfig(input: unknown): PhaserPackBuildCo
     const id = expectString(pack.id, `${label} id`);
     const revision = expectString(pack.revision, `${label} revision`);
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(id)) {
-      throw new Error(`Invalid asset pack build config: ${label} id must match [A-Za-z0-9][A-Za-z0-9._-]*`);
+      throw new Error(
+        `Invalid asset pack build config: ${label} id must match [A-Za-z0-9][A-Za-z0-9._-]*`,
+      );
     }
     if (!/^[A-Za-z0-9][A-Za-z0-9._+=-]*$/u.test(revision)) {
       throw new Error(
@@ -335,7 +337,9 @@ export function validatePhaserPackBuildConfig(input: unknown): PhaserPackBuildCo
       );
     }
     const delivery = expectDeliveryKind(pack.delivery, `Invalid asset pack build config: ${label}`);
-    const dependsOn = pack.dependsOn === undefined ? [] : expectStringArray(pack.dependsOn, `${label} dependsOn`);
+    const dependsOn = pack.dependsOn === undefined
+      ? []
+      : expectStringArray(pack.dependsOn, `${label} dependsOn`);
     if (new Set(dependsOn).size !== dependsOn.length) {
       throw new Error(`Invalid asset pack build config: ${label} dependsOn contains duplicates`);
     }
@@ -343,12 +347,13 @@ export function validatePhaserPackBuildConfig(input: unknown): PhaserPackBuildCo
       throw new Error(`Invalid asset pack build config: ${label} assets must be an array`);
     }
     if (delivery === 'zip' && pack.assets.length === 0) {
-      throw new Error(`Invalid asset pack build config: ${label} zip delivery requires at least one asset`);
+      throw new Error(
+        `Invalid asset pack build config: ${label} zip delivery requires at least one asset`,
+      );
     }
-    const assets = pack.assets.map((asset, assetIndex) => parseBuildAsset(
-      asset,
-      `${label} assets[${assetIndex}]`,
-    ));
+    const assets = pack.assets.map((asset, assetIndex) =>
+      parseBuildAsset(asset, `${label} assets[${assetIndex}]`),
+    );
     return { id, revision, dependsOn, delivery, assets };
   });
   const ids = new Set<string>();

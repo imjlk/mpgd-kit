@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import { createServer, context, getServerPort, reddit, redis } from '@devvit/web/server';
+import { context, createServer, getServerPort, reddit, redis } from '@devvit/web/server';
 import type { UiResponse } from '@devvit/web/shared';
 import {
   bridgeStorageLoadProtocol,
@@ -9,23 +9,17 @@ import {
   type BridgeResponse,
   type BridgeStorageLoadData,
 } from '@mpgd/bridge';
-import {
-  createBridgeRpcRouter,
-  defaultBridgeRpcEndpoint,
-} from '@mpgd/bridge/orpc';
+import { createBridgeRpcRouter, defaultBridgeRpcEndpoint } from '@mpgd/bridge/orpc';
 import { createBridgeRpcNodeHandler } from '@mpgd/bridge/orpc/node';
 
 const maxStorageKeyLength = 128;
 const maxEncodedStorageKeyLength = 384;
 const maxStorageValueBytes = 262_144;
 const maxRequestBodySize = 1_048_576;
-const bridgeRpcHandler = createBridgeRpcNodeHandler(
-  createBridgeRpcRouter(handleBridgeRequest),
-  {
-    maxBodySize: maxRequestBodySize,
-    prefix: defaultBridgeRpcEndpoint,
-  },
-);
+const bridgeRpcHandler = createBridgeRpcNodeHandler(createBridgeRpcRouter(handleBridgeRequest), {
+  maxBodySize: maxRequestBodySize,
+  prefix: defaultBridgeRpcEndpoint,
+});
 
 async function handleHttpRequest(
   request: IncomingMessage,

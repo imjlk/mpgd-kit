@@ -75,12 +75,13 @@ assertDeepEqual(
   'the service should select by target and send a completed idempotency key once',
 );
 await assertRejects(
-  () => deliveryService.deliver({
-    ...androidRequest,
-    templateData: {
-      playerName: 'Different Player',
-    },
-  }),
+  () =>
+    deliveryService.deliver({
+      ...androidRequest,
+      templateData: {
+        playerName: 'Different Player',
+      },
+    }),
   'cannot be reused',
   'ledger idempotency keys must bind the complete normalized request payload',
 );
@@ -367,11 +368,12 @@ const expiredLeaseService = createNotificationDeliveryService({
 });
 
 await assertRejects(
-  () => expiredLeaseService.deliver({
-    ...uncertainRequest,
-    target: 'browser',
-    idempotencyKey: 'notification-expired-custom-lease',
-  }),
+  () =>
+    expiredLeaseService.deliver({
+      ...uncertainRequest,
+      target: 'browser',
+      idempotencyKey: 'notification-expired-custom-lease',
+    }),
   'expire in the future',
   'an expired custom ledger claim must be rejected before provider delivery',
 );
@@ -403,8 +405,8 @@ const staleReleaseService = createNotificationDeliveryService({
   ledger: staleReleaseLedger,
   now: () => '2026-07-10T01:09:00.000Z',
 });
-const capturedNotSentError = await captureRejection(
-  () => staleReleaseService.deliver({
+const capturedNotSentError = await captureRejection(() =>
+  staleReleaseService.deliver({
     ...uncertainRequest,
     target: 'ios',
     idempotencyKey: 'notification-stale-release',
@@ -555,8 +557,8 @@ const exhaustedCompletionService = createNotificationDeliveryService({
   ledger: exhaustedCompletionLedger,
   now: () => '2026-07-10T01:20:00.000Z',
 });
-const exhaustedCompletionError = await captureRejection(
-  () => exhaustedCompletionService.deliver({
+const exhaustedCompletionError = await captureRejection(() =>
+  exhaustedCompletionService.deliver({
     ...uncertainRequest,
     target: 'reddit',
     idempotencyKey: 'notification-exhausted-completion',
@@ -641,54 +643,60 @@ assertEqual(
 assertEqual(recoveredUnavailableCalls, 1, 'the newly available provider should be called');
 
 await assertRejects(
-  () => deliveryService.deliver({
-    ...androidRequest,
-    idempotencyKey: 'notification-invalid-link',
-    deepLink: 'javascript:alert(1)',
-  }),
+  () =>
+    deliveryService.deliver({
+      ...androidRequest,
+      idempotencyKey: 'notification-invalid-link',
+      deepLink: 'javascript:alert(1)',
+    }),
   'HTTP(S)',
   'unsafe deep links should fail validation',
 );
 await assertRejects(
-  () => deliveryService.deliver({
-    ...androidRequest,
-    idempotencyKey: 'notification-untrusted-origin',
-    deepLink: 'https://phishing.example/daily',
-  }),
+  () =>
+    deliveryService.deliver({
+      ...androidRequest,
+      idempotencyKey: 'notification-untrusted-origin',
+      deepLink: 'https://phishing.example/daily',
+    }),
   'origin is not allowed',
   'absolute notification links should require a configured trusted origin',
 );
 await assertRejects(
-  () => deliveryService.deliver({
-    ...androidRequest,
-    idempotencyKey: 'notification-backslash-link',
-    deepLink: '/\\phishing.example/daily',
-  }),
+  () =>
+    deliveryService.deliver({
+      ...androidRequest,
+      idempotencyKey: 'notification-backslash-link',
+      deepLink: '/\\phishing.example/daily',
+    }),
   'configured game origin',
   'root-relative links must not escape through URL backslashes',
 );
 await assertRejects(
-  () => deliveryService.deliver({
-    ...androidRequest,
-    idempotencyKey: 'notification-invalid-recipient',
-    recipient: '',
-  }),
+  () =>
+    deliveryService.deliver({
+      ...androidRequest,
+      idempotencyKey: 'notification-invalid-recipient',
+      recipient: '',
+    }),
   'recipient must be a non-empty',
   'empty recipients should fail validation',
 );
 await assertRejects(
-  () => deliveryService.deliver({
-    ...androidRequest,
-    idempotencyKey: '',
-  }),
+  () =>
+    deliveryService.deliver({
+      ...androidRequest,
+      idempotencyKey: '',
+    }),
   'idempotencyKey must be a non-empty',
   'empty idempotency keys should fail validation',
 );
 await assertRejects(
-  () => deliveryService.deliver({
-    ...androidRequest,
-    idempotencyKey: 'notification\ninjected',
-  }),
+  () =>
+    deliveryService.deliver({
+      ...androidRequest,
+      idempotencyKey: 'notification\ninjected',
+    }),
   'control characters',
   'provider identifiers must reject header and log injection characters',
 );
@@ -706,11 +714,12 @@ await assertRejects(
   'nested template data should fail validation',
 );
 await assertRejects(
-  () => deliveryService.deliver({
-    ...androidRequest,
-    idempotencyKey: 'notification-oversized-template',
-    templateData: oversizedTemplateData(),
-  }),
+  () =>
+    deliveryService.deliver({
+      ...androidRequest,
+      idempotencyKey: 'notification-oversized-template',
+      templateData: oversizedTemplateData(),
+    }),
   'templateData must not contain more than 128 entries',
   'template data should enforce its entry bound before reading values',
 );

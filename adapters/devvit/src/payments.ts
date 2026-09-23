@@ -100,25 +100,27 @@ function normalizeProducts(
   const productIds = new Set<string>();
   const skus = new Set<string>();
 
-  return Object.freeze(input.map((product) => {
-    if (productIds.has(product.info.id)) {
-      throw new TypeError(`Duplicate Devvit logical product ID: ${product.info.id}`);
-    }
-    if (skus.has(product.sku)) {
-      throw new TypeError(`Duplicate Devvit product SKU: ${product.sku}`);
-    }
-    if (product.sku.length === 0 || product.sku.trim() !== product.sku) {
-      throw new TypeError('Devvit product SKU must be a non-empty identifier.');
-    }
+  return Object.freeze(
+    input.map((product) => {
+      if (productIds.has(product.info.id)) {
+        throw new TypeError(`Duplicate Devvit logical product ID: ${product.info.id}`);
+      }
+      if (skus.has(product.sku)) {
+        throw new TypeError(`Duplicate Devvit product SKU: ${product.sku}`);
+      }
+      if (product.sku.length === 0 || product.sku.trim() !== product.sku) {
+        throw new TypeError('Devvit product SKU must be a non-empty identifier.');
+      }
 
-    productIds.add(product.info.id);
-    skus.add(product.sku);
+      productIds.add(product.info.id);
+      skus.add(product.sku);
 
-    return Object.freeze({
-      info: Object.freeze({ ...product.info }),
-      sku: product.sku,
-    });
-  }));
+      return Object.freeze({
+        info: Object.freeze({ ...product.info }),
+        sku: product.sku,
+      });
+    }),
+  );
 }
 
 function failedPurchase(): PurchaseResult {

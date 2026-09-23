@@ -268,10 +268,9 @@ async function runPurchaseProductGrantCallbackScenario(
   const failClosedContext = createScenarioContext(createVerifier, now, {}, failClosedStore);
   const backendFailures: unknown[] = [];
   const failClosedCallback = createAppsInTossProductGrantCallback({
-    purchaseVerification: createConformanceProductGrantVerificationPort(
-      (request, signal) => failClosedStore.runWithGrantSignal(
-        signal,
-        () => failClosedContext.backend.purchases.verifyPurchase(request),
+    purchaseVerification: createConformanceProductGrantVerificationPort((request, signal) =>
+      failClosedStore.runWithGrantSignal(signal, () =>
+        failClosedContext.backend.purchases.verifyPurchase(request),
       ),
     ),
     playerId: 'ait-player-1',
@@ -295,11 +294,9 @@ async function runPurchaseProductGrantCallbackScenario(
   );
   const transportFailures: unknown[] = [];
   const transportFailureCallback = createAppsInTossProductGrantCallback({
-    purchaseVerification: createAppsInTossProductGrantVerificationPort(
-      async () => {
-        throw new Error('simulated callback transport failure');
-      },
-    ),
+    purchaseVerification: createAppsInTossProductGrantVerificationPort(async () => {
+      throw new Error('simulated callback transport failure');
+    }),
     playerId: 'ait-player-1',
     productId: 'CONFORMANCE_COINS',
     platformSku: 'ait.conformance.coins',
@@ -317,15 +314,20 @@ async function runPurchaseProductGrantCallbackScenario(
   const deadlineAuthorityGate = createVoidDeferred();
   const deadlineAuthorityStarted = createVoidDeferred();
   const lateVerificationSettled = createVoidDeferred();
-  const deadlineContext = createScenarioContext(createVerifier, now, {
-    purchaseAuthority: {
-      async getOrderStatus() {
-        deadlineAuthorityStarted.resolve();
-        await deadlineAuthorityGate.promise;
-        return resolvedOrder({ orderId: 'ait-order-deadline' });
+  const deadlineContext = createScenarioContext(
+    createVerifier,
+    now,
+    {
+      purchaseAuthority: {
+        async getOrderStatus() {
+          deadlineAuthorityStarted.resolve();
+          await deadlineAuthorityGate.promise;
+          return resolvedOrder({ orderId: 'ait-order-deadline' });
+        },
       },
     },
-  }, deadlineStore);
+    deadlineStore,
+  );
   const deadlineCallback = createAppsInTossProductGrantCallback({
     purchaseVerification: createConformanceProductGrantVerificationPort(
       async (request, signal) => {
@@ -365,11 +367,8 @@ async function runPurchaseProductGrantCallbackScenario(
     store,
   );
   const callback = createAppsInTossProductGrantCallback({
-    purchaseVerification: createConformanceProductGrantVerificationPort(
-      (request, signal) => store.runWithGrantSignal(
-        signal,
-        () => context.backend.purchases.verifyPurchase(request),
-      ),
+    purchaseVerification: createConformanceProductGrantVerificationPort((request, signal) =>
+      store.runWithGrantSignal(signal, () => context.backend.purchases.verifyPurchase(request)),
     ),
     playerId: 'ait-player-1',
     productId: 'CONFORMANCE_COINS',
@@ -402,13 +401,15 @@ async function runPurchasePendingOrderRestoreScenario(
     purchaseAuthority: fixture.purchaseAuthority,
   });
   const initial = await context.backend.purchases.verifyPurchase(purchaseRequest());
-  const restored = await context.backend.purchases.verifyPurchase(purchaseRequest({
-    evidence: createAppsInTossPurchaseCallbackEvidence({
-      orderId: 'ait-order-1',
-      platformSku: 'ait.conformance.coins',
-      source: 'pending-order-restore',
+  const restored = await context.backend.purchases.verifyPurchase(
+    purchaseRequest({
+      evidence: createAppsInTossPurchaseCallbackEvidence({
+        orderId: 'ait-order-1',
+        platformSku: 'ait.conformance.coins',
+        source: 'pending-order-restore',
+      }),
     }),
-  }));
+  );
 
   assertEqual(initial.verified, false, 'server failure must not grant');
   assertEqual(

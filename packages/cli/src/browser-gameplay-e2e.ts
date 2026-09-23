@@ -76,9 +76,7 @@ export function createBrowserGameplayE2EDriver<
         default: {
           const unsupportedAction: never = action;
 
-          throw new Error(
-            `Unsupported browser Gameplay E2E action: ${String(unsupportedAction)}`,
-          );
+          throw new Error(`Unsupported browser Gameplay E2E action: ${String(unsupportedAction)}`);
         }
       }
     },

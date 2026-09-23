@@ -6,7 +6,10 @@
   ],
   "tsconfig": "apps/game-services-worker/tsconfig.json",
   "question": "What are the central Game Services oRPC contract and adapter symbols that connect the contract, client, and backend router?",
-  "draft": "Use details because this preset is meant to pin exact exported oRPC symbols rather than discover broad flow.",
+  "draft": {
+    "reason": "Use details because this preset is meant to pin exact exported oRPC symbols rather than discover broad flow.",
+    "type": "details"
+  },
   "review": "The backend flow is covered by a separate tour; exact details handles are the smallest graph evidence that anchors the contract export plus the client and backend adapters.",
   "request": {
     "type": "details",

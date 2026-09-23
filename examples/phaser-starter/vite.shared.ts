@@ -256,9 +256,7 @@ function readRuntimePlatformTarget(
     target.authoritativeGameServices !== undefined
     && typeof target.authoritativeGameServices !== 'boolean'
   ) {
-    throw new Error(
-      `Platform target ${configTarget} authoritativeGameServices must be a boolean.`,
-    );
+    throw new Error(`Platform target ${configTarget} authoritativeGameServices must be a boolean.`);
   }
   const remoteAssetOrigins = readMiniGameRemoteAssetOrigins(
     target.remoteAssetOrigins,
@@ -337,9 +335,7 @@ function readMiniGameRemoteAssetOrigins(
 // dependency. Platform-target validation uses the runtime parser directly; this mirrors its exact
 // ASCII authority grammar as a template-local defense in depth.
 function normalizeRuntimeCompatibleMiniGameHttpsOrigin(value: string): string {
-  const match = /^https:\/\/([A-Za-z\d](?:[A-Za-z\d.-]*[A-Za-z\d])?)(?::(\d{1,5}))?$/u.exec(
-    value,
-  );
+  const match = /^https:\/\/([A-Za-z\d](?:[A-Za-z\d.-]*[A-Za-z\d])?)(?::(\d{1,5}))?$/u.exec(value);
 
   if (match === null) {
     throw new TypeError('Mini-game remote origin is invalid.');
