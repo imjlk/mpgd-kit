@@ -1,5 +1,22 @@
 # @mpgd/phaser-assets
 
+## 0.7.0 — 2026-09-23
+
+### Changed
+
+- [c25bfb5](https://github.com/imjlk/mpgd-kit/commit/c25bfb52149c10ab9a5ab47fd8a58a960774d232) Build and validate published package metadata with ttsc 0.30.4, and generate Phaser games and target wrappers with the same toolchain. Preserve authored source siblings in the ttsx runner and verify graph presets against the current request and response contracts.
+  
+  Pin the monorepo runtime source root so cross-project imports keep emitted files inside the ttsx cache. Generated workspace games use the common game/kit root instead of inheriting the kit's narrower source root. — Thanks @imjlk!
+
+### Minor changes
+
+- [7f24a39](https://github.com/imjlk/mpgd-kit/commit/7f24a39a01b3bffc9441271b278a0e72b8fc6024) Expose an optional persistent cache boundary for verified original asset files and ZIP archives, including cache management and acquisition observability. — Thanks @imjlk!
+- [a8b89ee](https://github.com/imjlk/mpgd-kit/commit/a8b89eef91547a11fdd78942859b6351f40929c4) Add acquireDeliveredPack to prepare a delivered pack, acquire its texture lease, and return preparation ownership on success, failure, or cancellation while leaving the successful lease with the caller. — Thanks @imjlk!
+
+### Patch changes
+
+- [9df07b8](https://github.com/imjlk/mpgd-kit/commit/9df07b85a3bca9fc8e042e10925a6606d5516780) Retain image inputs until native decoding settles after cancellation or timeout, preventing rapid scene transitions from permanently blocking the decode queue while still rejecting cancelled callers promptly. — Thanks @imjlk!
+
 ## 0.6.0 — 2026-09-21
 
 ### Minor changes

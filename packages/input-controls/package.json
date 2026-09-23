@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/input-controls",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Headless virtual joystick state core: dynamic eight-way touch input with pointer ownership, dead zone, and clamped handle geometry.",
   "license": "MIT",
   "repository": {
