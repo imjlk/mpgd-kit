@@ -93,7 +93,11 @@ function run() {
       process.stdout.write(`\n${process.env.GITHUB_ACTIONS ? '::group::' : ''}${group}: ${invokedScript}\n`);
       const child = spawnSync(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['run', invokedScript], {
         cwd: repoRoot,
-        env: process.env,
+        // The assertion canary must exercise ttsx itself even when other
+        // smoke entrypoints use CI's precompiled output.
+        env: script === 'test:ttsx-assertions'
+          ? { ...process.env, MPGD_FORCE_TTSX: '1' }
+          : process.env,
         stdio: 'inherit',
       });
       if (process.env.GITHUB_ACTIONS) process.stdout.write('::endgroup::\n');

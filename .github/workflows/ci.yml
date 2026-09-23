@@ -92,23 +92,31 @@ jobs:
               exit 0
             fi
             base_sha="${PUSH_BEFORE_SHA}"
-            # Focused main validation reuses tests already run on the exact
-            # PR head. A direct or untested merge must retain the full suite.
+            # Reuse focused PR CI only if it attested this exact base/head
+            # merged tree. A head-only CI run may have tested an older base.
             read -r -a push_commit_parents <<< "$(git rev-list --parents -n 1 HEAD)"
             if [[ ${#push_commit_parents[@]} -eq 3 && "${push_commit_parents[1]}" == "${base_sha}" ]]; then
               if pr_data="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls")"; then
+                pr_number="$(jq -r --arg merge_sha "${GITHUB_SHA}" '[.[] | select(.merged_at != null and .merge_commit_sha == $merge_sha)] | .[0].number // empty' <<< "${pr_data}")"
                 pr_head_sha="$(jq -r --arg merge_sha "${GITHUB_SHA}" '[.[] | select(.merged_at != null and .merge_commit_sha == $merge_sha)] | .[0].head.sha // empty' <<< "${pr_data}")"
                 if [[ "${pr_head_sha}" == "${push_commit_parents[2]}" ]]; then
-                  if ci_runs="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow ci.yml --commit "${pr_head_sha}" --limit 20 --json event,status,conclusion,headSha)"; then
-                    if [[ "$(jq -r --arg sha "${pr_head_sha}" '[.[] | select(.headSha == $sha and .status == "completed" and .conclusion == "success" and (.event == "pull_request" or .event == "workflow_dispatch"))] | length > 0' <<< "${ci_runs}")" == "true" ]]; then
-                      run_prepared=false
-                    fi
+                  merge_tree_sha="$(git rev-parse 'HEAD^{tree}')"
+                  expected_artifact="ci-tested-pr${pr_number}-${base_sha}-${pr_head_sha}-${merge_tree_sha}"
+                  if ci_runs="$(gh run list --repo "${GITHUB_REPOSITORY}" --workflow ci.yml --commit "${pr_head_sha}" --event pull_request --limit 30 --json databaseId,event,status,conclusion,headSha)"; then
+                    while IFS= read -r run_id; do
+                      if artifacts="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts")"; then
+                        if jq -e --arg name "${expected_artifact}" '[.artifacts[] | select(.name == $name and .expired == false)] | length > 0' <<< "${artifacts}" >/dev/null; then
+                          run_prepared=false
+                          break
+                        fi
+                      fi
+                    done < <(jq -r --arg sha "${pr_head_sha}" '.[] | select(.headSha == $sha and .status == "completed" and .conclusion == "success") | .databaseId' <<< "${ci_runs}")
                   fi
                 fi
               fi
             fi
             if [[ "${run_prepared}" == "true" ]]; then
-              echo "Main commit has no matching merged PR with successful CI on its exact head; running full validation."
+              echo "Main commit has no successful PR CI attestation for its exact base/head/tree; running full validation."
             fi
           else
             # origin/main is already fetched by checkout (fetch-depth: 0);
@@ -214,7 +222,7 @@ jobs:
                     run_prepared=true
                   fi
                   ;;
-                tools/*.ts|tools/*.mjs|tools/package/*|tools/graph/*|tools/smoke/*|tools/target/*|tools/icons/*|tools/fixtures/*|packages/bridge/*|packages/platform/*|packages/cli/*|packages/create-game/*|packages/game-services/*|packages/release-manifest/*|packages/target-*/*|apps/game-services-worker/*|apps/target-*/*|apps/mobile-capacitor/*|adapters/*|native-plugins/*|backend/*)
+                tools/*.ts|tools/*.mjs|tools/ci/*|tools/package/*|tools/graph/*|tools/smoke/*|tools/target/*|tools/icons/*|tools/fixtures/*|packages/bridge/*|packages/platform/*|packages/cli/*|packages/create-game/*|packages/game-services/*|packages/release-manifest/*|packages/target-*/*|apps/game-services-worker/*|apps/target-*/*|apps/mobile-capacitor/*|adapters/*|native-plugins/*|backend/*)
                   run_prepared=true
                   ;;
                 examples/phaser-starter/*)
@@ -422,9 +430,46 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  test-prepared:
+  compile-tools:
     if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
     needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm i18n:build
+      - name: Cache compiled ttsc plugins
+        uses: actions/cache@v5
+        with:
+          path: node_modules/.cache/ttsc/plugins
+          key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
+      - uses: actions/download-artifact@v7
+        with:
+          name: package-dist-ci
+          path: ${{ runner.temp }}
+      - run: tar -xzf "$RUNNER_TEMP/package-dist.tgz"
+      - run: pnpm ci:emit-tools:prepared
+      - run: tar -czf "$RUNNER_TEMP/compiled-tools.tgz" node_modules/.cache/mpgd-ci-tools
+      - uses: actions/upload-artifact@v6
+        with:
+          name: compiled-tools-ci
+          path: ${{ runner.temp }}/compiled-tools.tgz
+          retention-days: 1
+
+  test-prepared:
+    if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
+    needs: [prepare, compile-tools]
     runs-on: ubuntu-latest
     timeout-minutes: 75
     strategy:
@@ -455,7 +500,14 @@ jobs:
           name: package-dist-ci
           path: ${{ runner.temp }}
       - run: tar -xzf "$RUNNER_TEMP/package-dist.tgz"
+      - uses: actions/download-artifact@v7
+        with:
+          name: compiled-tools-ci
+          path: ${{ runner.temp }}
+      - run: tar -xzf "$RUNNER_TEMP/compiled-tools.tgz"
       - run: pnpm run test:prepared:${{ matrix.group }}
+        env:
+          MPGD_CI_EMIT_ROOT: ${{ github.workspace }}/node_modules/.cache/mpgd-ci-tools
 
   build-web-targets:
     if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
@@ -730,7 +782,7 @@ jobs:
     # Keep one stable required check. An unexpectedly skipped dependency must
     # fail the workflow rather than leave a green-looking partial CI run.
     if: ${{ always() }}
-    needs: [prepare, test-focused, test-browser, test-prepared, build-web-targets, build-android, build-ios, build-ait, build-devvit]
+    needs: [prepare, test-focused, test-browser, compile-tools, test-prepared, build-web-targets, build-android, build-ios, build-ait, build-devvit]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -740,6 +792,7 @@ jobs:
       PREPARE_RESULT: ${{ needs.prepare.result }}
       FOCUSED_RESULT: ${{ needs.test-focused.result }}
       BROWSER_RESULT: ${{ needs.test-browser.result }}
+      COMPILE_RESULT: ${{ needs.compile-tools.result }}
       PREPARED_RESULT: ${{ needs.test-prepared.result }}
       WEB_TARGETS_RESULT: ${{ needs.build-web-targets.result }}
       ANDROID_RESULT: ${{ needs.build-android.result }}
@@ -748,6 +801,7 @@ jobs:
       DEVVIT_RESULT: ${{ needs.build-devvit.result }}
     steps:
       - name: Verify expected CI coverage
+        id: verify-coverage
         run: |
           set -euo pipefail
           failed=0
@@ -789,6 +843,7 @@ jobs:
               exit 1
             fi
           fi
+          expect_result compile-tools "${COMPILE_RESULT}" "${expected_full}"
           expect_result test-prepared "${PREPARED_RESULT}" "${expected_full}"
           expect_result build-web-targets "${WEB_TARGETS_RESULT}" "${expected_full}"
           expect_result build-android "${ANDROID_RESULT}" "${expected_full}"
@@ -796,3 +851,23 @@ jobs:
           expect_result build-ait "${AIT_RESULT}" "${expected_full}"
           expect_result build-devvit "${DEVVIT_RESULT}" "${expected_full}"
           exit "${failed}"
+      - uses: actions/checkout@v5
+        id: checkout-tested
+        if: ${{ !cancelled() && steps.verify-coverage.outcome == 'success' && github.event_name == 'pull_request' }}
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Attest the exact tested PR merge tree
+        id: tested-merge
+        if: ${{ !cancelled() && steps.checkout-tested.outcome == 'success' && github.event_name == 'pull_request' }}
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node tools/ci/attest-pr-merge.mjs
+      - uses: actions/upload-artifact@v6
+        if: ${{ !cancelled() && steps.tested-merge.outcome == 'success' && github.event_name == 'pull_request' }}
+        with:
+          name: ${{ steps.tested-merge.outputs.artifact_name }}
+          path: ${{ runner.temp }}/ci-tested-merge.json
+          retention-days: 7
