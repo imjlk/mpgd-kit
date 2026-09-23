@@ -112,3 +112,30 @@ only one low-severity comment indentation issue, which was corrected. No local
 test:prepared rerun. The original toolchain worktree's two uncommitted diagnostic
 files were left untouched. Next: push the rebased PR, request fresh GitHub review,
 and address CI/review findings before merging; keep the release PR last.
+
+PR #205 native-decode follow-up: CI run 35816796332 showed that rebasing alone
+did not eliminate the transition failure. With #204's staging fix present,
+Chromium tracing reproduced a separate race: one decode started, cancellation
+cleared its image src about 0.8 ms later, and that promise never resolved or
+rejected; subsequent pilot preparation timed out behind its occupied slot.
+The corresponding cancellation/deadline input-lifetime regressions failed
+before the fix. Preserve image input and Blob URL until native settlement,
+while the existing abort race rejects callers promptly; late success/failure
+still returns reservations and cannot register a cancelled texture. Shutdown
+coverage now checks both pre-settlement input retention and eventual cleanup.
+All 386 package tests and the package check pass. Initial source browser runs
+passed 20 overlapping WebGL transitions both with diagnostic instrumentation and
+with that instrumentation removed. Scoped OCR identified that this repeat loop
+was WebGL-only; the shared check now also runs for Canvas, and failure diagnostics
+preserve the original error if reading page state fails. CI retains three bounded
+repetitions; a validated local stress override permits up to 100. No acceptance
+assertion or timeout was relaxed. Next: verify 20 transitions on both renderers,
+push the native-decode fix, and request a new review for the resulting head.
+
+Final native-decode validation: the uninstrumented suite explicitly reported
+20 overlapping ZIP transitions for WebGL and 20 for Canvas, then passed all
+remaining source acceptance checks. The rebuilt package's installed-tarball
+consumer and gameplay client also pass; screenshots and playing-state JSON were
+inspected. Sampo dry-run accepts the focused runtime patch changeset. Scoped OCR
+reported no medium/high/critical findings; both low-severity test findings
+(failure-state fallback and missing Canvas transition coverage) were addressed.

@@ -230,7 +230,7 @@ describe('pack contract and ownership', () => {
     lease.release();
     loader.dispose();
   });
-  it('times out a stuck decoder, revokes its URL, and admits a retry after native decode settles', async () => {
+  it('times out promptly but retains native image inputs until decode settles before retrying', async () => {
     vi.useFakeTimers();
     const f = fixture();
     const gate = deferred<void>();
@@ -245,17 +245,21 @@ describe('pack contract and ownership', () => {
     });
     const failed = expect(loader.acquire('shared')).rejects.toThrow('timed out');
     await started.promise;
+    const nativeUrl = images[0]!.src;
     await vi.advanceTimersByTimeAsync(30);
     await failed;
     expect(loader.snapshot()).toEqual([]);
-    expect(revoke).toHaveBeenCalledOnce();
-    expect(images[0]!.src).toBe('');
+    expect(nativeUrl).toMatch(/^blob:/u);
+    expect(revoke).not.toHaveBeenCalled();
+    expect(images[0]!.src).toBe(nativeUrl);
     decode = async () => {
     };
     const retry = loader.acquire('shared');
     gate.resolve();
     const next = await retry;
     await Promise.resolve();
+    expect(revoke.mock.calls.filter(([url]) => url === nativeUrl)).toHaveLength(1);
+    expect(images[0]!.src).toBe('');
     expect(f.values.size).toBe(1);
     expect(f.values.has(next.key('shared', 'pilot'))).toBe(true);
     next.release();
@@ -485,9 +489,15 @@ describe('failure isolation and bounded preparation', () => {
     f.events.emit('shutdown');
     await failed;
     expect(loader.snapshot()).toEqual([]);
-    expect(images.every((image) => image.src === '')).toBe(true);
+    if (stage === 'decode') {
+      expect(images).toHaveLength(1);
+      expect(images[0]!.src).toMatch(/^blob:/u);
+    } else {
+      expect(images).toEqual([]);
+    }
     gate.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(images.every((image) => image.src === '')).toBe(true);
     expect(f.add).not.toHaveBeenCalled();
     await expect(loader.acquire('shared')).rejects.toThrow('disposed');
   });
@@ -512,7 +522,7 @@ describe('failure isolation and bounded preparation', () => {
     (await one).release();
     loader.dispose();
   });
-  it('reserves bytes before download and holds decode slots through native cancellation', async () => {
+  it.each(['resolve', 'reject'])('holds inputs, bytes and decode slots until native cancellation settles (%s)', async (settlement) => {
     const f = fixture();
     const gate = deferred<void>();
     const started = deferred<void>();
@@ -520,7 +530,11 @@ describe('failure isolation and bounded preparation', () => {
     decode = () => {
       if (++calls === 1) {
         started.resolve();
-        return gate.promise;
+        return gate.promise.then(() => {
+          if (settlement === 'reject') {
+            throw new Error('Native decode failed after cancellation');
+          }
+        });
       }
       return Promise.resolve();
     };
@@ -528,16 +542,22 @@ describe('failure isolation and bounded preparation', () => {
       maxFileBytes: 3, maxBufferedBytes: 3, maxConcurrentDownloads: 3, maxConcurrentDecodes: 1,
     });
     const cancel = new AbortController();
+    const revoke = vi.spyOn(URL, 'revokeObjectURL');
     const first = expect(loader.acquire('shared', { signal: cancel.signal })).rejects.toMatchObject({ name: 'AbortError' });
     await started.promise;
+    const nativeUrl = images[0]!.src;
     cancel.abort();
     await first;
+    expect(images[0]!.src).toBe(nativeUrl);
+    expect(revoke).not.toHaveBeenCalled();
     const next = loader.acquire('dunes');
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(calls).toBe(1);
     gate.resolve();
     (await next).release();
+    expect(revoke.mock.calls.filter(([url]) => url === nativeUrl)).toHaveLength(1);
+    expect(images[0]!.src).toBe('');
     expect(fetch).toHaveBeenCalledTimes(3);
     expect(calls).toBe(3);
     loader.dispose();

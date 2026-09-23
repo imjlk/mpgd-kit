@@ -13,6 +13,10 @@ import { staticServer } from './static-server.mjs';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const artifacts = join(root, 'artifacts/browser');
 const builds = join(root, 'artifacts/browser-build');
+// Keep CI bounded; raise this locally when investigating transition races.
+const transitionRepeats = Number(process.env.ASSET_PACK_TRANSITION_REPEATS ?? 3);
+assert.ok(Number.isSafeInteger(transitionRepeats) && transitionRepeats >= 1 && transitionRepeats <= 100,
+  'ASSET_PACK_TRANSITION_REPEATS must be an integer between 1 and 100');
 await mkdir(artifacts, { recursive: true });
 const remote = await staticServer(join(root, 'artifacts/origin'), { cors: true });
 const previousOrigin = process.env.ASSET_PACK_REMOTE_ORIGIN;
@@ -294,7 +298,11 @@ try {
         try {
           await page.waitForFunction((expected) => JSON.parse(window.render_game_to_text()).phase === expected, phase);
         } catch (error) {
-          console.error('ZIP scenario failed', { renderer, expected: phase, actual: await state(), errors });
+          let actual;
+          try { actual = await state(); } catch { actual = 'unavailable'; }
+          console.error('ZIP scenario failed', JSON.stringify({
+            renderer, expected: phase, actual, errors,
+          }, null, 2));
           throw error;
         }
       };
@@ -302,6 +310,25 @@ try {
         const current = JSON.parse(window.render_game_to_text());
         return current.phase === 'preparing' && current.requested === expected;
       }, requested);
+      const checkOverlappingTransitions = async () => {
+        for (let attempt = 0; attempt < transitionRepeats; attempt++) {
+          await page.click('#grove');
+          await waitForPreparing('grove');
+          await page.click('#dunes');
+          await waitForPreparing('dunes');
+          await page.click('#grove');
+          await waitForPreparing('grove');
+          await wait('playing');
+          const current = await state();
+          assert.equal(current.current, 'grove');
+          assert.equal(current.groundFrames, 2);
+          assert.equal(current.pilotFrames, 4);
+          assert.equal(current.textureCount, 2);
+          assert.equal(current.staging.stagingUsedBytes, 0);
+          await page.click('#unload');
+        }
+        console.info(`Verified ${transitionRepeats} overlapping ZIP transitions (${renderer})`);
+      };
       const zipCount = (id) => remote.requests.filter((path) => path === archivePath(id)).length;
 
       await page.goto(zipApp.url + '?renderer=' + renderer + '&delivery=zip');
@@ -435,20 +462,7 @@ try {
         await page.click('#unload');
 
         // Overlapping A → B → A transitions commit the latest choice.
-        await page.click('#grove');
-        await waitForPreparing('grove');
-        await page.click('#dunes');
-        await waitForPreparing('dunes');
-        await page.click('#grove');
-        await waitForPreparing('grove');
-        await wait('playing');
-        current = await state();
-        assert.equal(current.current, 'grove');
-        assert.equal(current.groundFrames, 2);
-        assert.equal(current.pilotFrames, 4);
-        assert.equal(current.textureCount, 2);
-        assert.equal(current.staging.stagingUsedBytes, 0);
-        await page.click('#unload');
+        await checkOverlappingTransitions();
 
         // Scene shutdown during preparation aborts the delivery cleanly.
         remote.delays.set(archivePath('shared'), 300);
@@ -467,6 +481,9 @@ try {
         await page.click('#grove');
         await wait('playing');
         assert.equal(await page.evaluate(() => window.shutdownSample()), 0);
+      } else {
+        // The native image-decode lifecycle is renderer-independent.
+        await checkOverlappingTransitions();
       }
       assert.deepEqual(errors, []);
       await context.close();
