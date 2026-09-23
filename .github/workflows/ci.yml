@@ -65,10 +65,9 @@ jobs:
           run_prepared=true
           declare -A workspace_test_dirs=()
           if [[ "${EVENT_NAME}" == "pull_request" ]]; then
-            # Pull requests keep the focused checks below. The prepared smoke
-            # suite is reserved for main pushes and the small set of changes
-            # that can alter CLI/target/release acceptance contracts; normal
-            # package and example PRs must not pay the 40-minute suite cost.
+            # PRs and main pushes share the focused path classifier below.
+            # Contract changes still run the prepared/native suite; ordinary
+            # package changes should not pay its 40-minute cost twice.
             run_prepared=false
             if ! base_sha="$(git merge-base "origin/${PR_BASE_REF}" HEAD)"; then
               echo "enabled=false" >> "$GITHUB_OUTPUT"
@@ -87,6 +86,7 @@ jobs:
               exit 0
             fi
             base_sha="${PUSH_BEFORE_SHA}"
+            run_prepared=false
           else
             # origin/main is already fetched by checkout (fetch-depth: 0);
             # fetching again would need credentials because persist-credentials
@@ -115,10 +115,12 @@ jobs:
                   # long suite when the surrounding workflow (including every
                   # test and native job) is byte-for-byte unchanged.
                   if ! ci_before="$(git show "${base_sha}:.github/workflows/ci.yml")"; then
+                    run_prepared=true
                     workflow_only=false
                     break
                   fi
                   if ! ci_after="$(git show HEAD:.github/workflows/ci.yml)"; then
+                    run_prepared=true
                     workflow_only=false
                     break
                   fi
@@ -126,12 +128,14 @@ jobs:
                   classifier_end='      - uses: pnpm/action-setup@v6'
                   if [[ "${ci_before}" != *"${classifier_start}"* || "${ci_after}" != *"${classifier_start}"* || "${ci_before}" != *"${classifier_end}"* || "${ci_after}" != *"${classifier_end}"* ]]; then
                     echo "::warning file=.github/workflows/ci.yml::Classifier step markers changed; running full validation."
+                    run_prepared=true
                     workflow_only=false
                     break
                   fi
                   if [[ "$(awk -v marker="${classifier_start}" '{ print; if ($0 == marker) exit }' <<< "${ci_before}")" != "$(awk -v marker="${classifier_start}" '{ print; if ($0 == marker) exit }' <<< "${ci_after}")" ]] ||
                     [[ "$(awk -v marker="${classifier_end}" '$0 == marker { copy=1 } copy { print }' <<< "${ci_before}")" != "$(awk -v marker="${classifier_end}" '$0 == marker { copy=1 } copy { print }' <<< "${ci_after}")" ]]; then
                     echo "CI workflow changed outside the classifier; running full validation."
+                    run_prepared=true
                     workflow_only=false
                     break
                   fi
@@ -180,7 +184,7 @@ jobs:
                 ;;
             esac
 
-            if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            if [[ "${EVENT_NAME}" == "pull_request" || "${EVENT_NAME}" == "push" ]]; then
               case "${path}" in
                 *.md|.github/*|examples/asset-packs/asset-source/*|examples/asset-packs/delivery-configs/*)
                   ;;
@@ -231,8 +235,8 @@ jobs:
                       echo "::warning file=${safe_path}::Unrecognized path skips the prepared smoke suite; add it to the contract list if it affects CLI/target/release acceptance."
                       ;;
                   esac
-                  # Intentionally fail-open: unknown paths stay focused. Any
-                  # new CLI/target/release-contract location must be added above.
+                  # Unknown paths stay focused. New CLI/target/release
+                  # contract locations must be added above.
                   ;;
               esac
             fi
