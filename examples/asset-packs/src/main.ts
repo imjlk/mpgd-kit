@@ -8,11 +8,11 @@ import {
   createPhaserPackDelivery,
   PhaserPackDeliveryError,
   readCappedDeliveryBody,
-  type PhaserPackDelivery,
-  type PhaserPackDeliveryErrorDetails,
   type PhaserPackCacheEvent,
   type PhaserPackCacheKey,
   type PhaserPackCacheUsage,
+  type PhaserPackDelivery,
+  type PhaserPackDeliveryErrorDetails,
   type PhaserPackDeliveryEvent,
   type PhaserPackPreparationPlan,
 } from '@mpgd/phaser-assets/delivery';
@@ -469,7 +469,7 @@ function renderStatus(): void {
 function enter(theme: Theme): void {
   if (!packs) return;
   const active = bootedGame();
-    if (!active.loop.running) active.loop.start(active.step.bind(active));
+  if (!active.loop.running) active.loop.start(active.step.bind(active));
   const ticket = ++sequence;
   pending?.abort();
   const controller = new AbortController();
@@ -510,9 +510,9 @@ async function runEnter(theme: Theme, ticket: number, controller: AbortControlle
   const acquireOptions = {
     signal: controller.signal,
     onProgress(ready: number, total: number) {
-    if (ticket !== sequence) return;
-    Object.assign(model, { ready, total });
-    renderStatus();
+      if (ticket !== sequence) return;
+      Object.assign(model, { ready, total });
+      renderStatus();
     },
   };
   try {
@@ -573,7 +573,16 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
   packs = undefined;
   resetObserved();
   resetCacheReport();
-  Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null });
+  Object.assign(model, {
+    phase: 'booting',
+    current: null,
+    requested: null,
+    ready: 0,
+    total: 0,
+    error: '',
+    lastPrepareMs: null,
+    plan: null,
+  });
   renderStatus();
   let bootCache: ArtifactCache | undefined;
   try {
@@ -711,19 +720,19 @@ function wireSampleControls(): void {
 }
 
 declare global {
-    interface Window {
-      render_game_to_text: () => string;
-      advanceTime: (milliseconds: number) => void;
-      shutdownSample: () => number;
-      /** Experiment-only acceptance hooks (private example, not product). */
-      __artifact_cache_faults: () => Record<string, boolean>;
-      __artifact_cache_set_fault: (name: string) => void;
-      __artifact_cache_usage: () => Promise<PhaserPackCacheUsage>;
-      __artifact_cache_delete: (identity: string) => Promise<boolean>;
-      __artifact_cache_delete_key: (key: PhaserPackCacheKey) => Promise<boolean>;
-      __artifact_cache_clear: () => Promise<void>;
-      __artifact_cache_present: () => boolean;
-    }
+  interface Window {
+    render_game_to_text: () => string;
+    advanceTime: (milliseconds: number) => void;
+    shutdownSample: () => number;
+    /** Experiment-only acceptance hooks (private example, not product). */
+    __artifact_cache_faults: () => Record<string, boolean>;
+    __artifact_cache_set_fault: (name: string) => void;
+    __artifact_cache_usage: () => Promise<PhaserPackCacheUsage>;
+    __artifact_cache_delete: (identity: string) => Promise<boolean>;
+    __artifact_cache_delete_key: (key: PhaserPackCacheKey) => Promise<boolean>;
+    __artifact_cache_clear: () => Promise<void>;
+    __artifact_cache_present: () => boolean;
+  }
 }
 function state() {
   return {
@@ -733,8 +742,8 @@ function state() {
     renderer: bootedGame().config.renderType === Phaser.WEBGL ? 'webgl' : 'canvas',
     mode: __ASSET_PACK_MODE__,
     coordinateSystem: 'origin top-left; x right; y down',
-      groundFrames: model.current ? board.frames(model.current, 'ground') : 0,
-      pilotFrames: model.current ? board.frames('shared', 'pilot') : 0,
+    groundFrames: model.current ? board.frames(model.current, 'ground') : 0,
+    pilotFrames: model.current ? board.frames('shared', 'pilot') : 0,
     player: model.phase === 'booting' ? null : board.player(),
     resources: packs?.snapshot().map((entry) => ({ ...entry, pack: entry.packId, identity: entry.packId + '/' + entry.assetKey })) ?? [],
     textureCount: model.phase === 'booting' ? 0 : board.textureCount(),
@@ -758,12 +767,12 @@ function wireWindowHooks(): void {
     artifactCache?.clear(PERSISTENT_CACHE_NAMESPACE) ?? Promise.resolve();
   window.__artifact_cache_present = (): boolean => artifactCache !== undefined;
   window.advanceTime = (milliseconds) => {
-  bootedGame().loop.stop();
-  virtualTime = Math.max(virtualTime, performance.now());
-  for (let index = 0; index < Math.max(1, Math.round(milliseconds / (1000 / 60))); index++) {
-    virtualTime += 1000 / 60;
-    bootedGame().step(virtualTime, 1000 / 60);
-  }
+    bootedGame().loop.stop();
+    virtualTime = Math.max(virtualTime, performance.now());
+    for (let index = 0; index < Math.max(1, Math.round(milliseconds / (1000 / 60))); index++) {
+      virtualTime += 1000 / 60;
+      bootedGame().step(virtualTime, 1000 / 60);
+    }
   };
 
   // SceneManager.stop emits shutdown synchronously; count after consumer and loader cleanup.

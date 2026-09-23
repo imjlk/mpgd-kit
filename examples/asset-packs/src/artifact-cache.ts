@@ -20,8 +20,8 @@
 
 import type {
   PhaserPackCacheContext,
-  PhaserPackCacheKey,
   PhaserPackCacheEventOutcome,
+  PhaserPackCacheKey,
   PhaserPackCacheUsage,
   PhaserPackPersistentCache,
 } from '@mpgd/phaser-assets/delivery';
@@ -586,13 +586,17 @@ export class ArtifactCache implements PhaserPackPersistentCache {
   }
 
   private readRecord(identity: string, signal?: AbortSignal): Promise<CacheRecord | null> {
-    return withDeadline<CacheRecord | null>((finish, fail, registerAbort) => {
-      const tx = this.db.transaction(STORE_NAME, 'readonly');
-      registerAbort(() => tx.abort());
-      const request = tx.objectStore(STORE_NAME).get(identity);
-      request.onsuccess = () => finish(request.result ?? null);
-      request.onerror = () => fail(request.error ?? new Error('artifact cache read failed'));
-    }, 'read', signal);
+    return withDeadline<CacheRecord | null>(
+      (finish, fail, registerAbort) => {
+        const tx = this.db.transaction(STORE_NAME, 'readonly');
+        registerAbort(() => tx.abort());
+        const request = tx.objectStore(STORE_NAME).get(identity);
+        request.onsuccess = () => finish(request.result ?? null);
+        request.onerror = () => fail(request.error ?? new Error('artifact cache read failed'));
+      },
+      'read',
+      signal,
+    );
   }
 
   /** Short readwrite transaction: bytes are already fetched and verified

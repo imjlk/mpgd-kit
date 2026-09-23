@@ -366,19 +366,19 @@ it('accepts explicitly undefined optional integrity and rejects malformed values
 it.each(['default', 'reload'] as const)(
   'passes an explicit HTTP cache policy to the transport',
   async (requestCache) => {
-  const f = fixture();
-  const loader = createPhaserAssetPackLoader(f.scene, catalog, {
-    requestCache,
-  });
-  const lease = await loader.acquire('shared');
+    const f = fixture();
+    const loader = createPhaserAssetPackLoader(f.scene, catalog, {
+      requestCache,
+    });
+    const lease = await loader.acquire('shared');
     expect(fetch).toHaveBeenCalledWith(
       '/pilot.png',
       expect.objectContaining({
-    cache: requestCache,
+        cache: requestCache,
       }),
     );
-  lease.release();
-  loader.dispose();
+    lease.release();
+    loader.dispose();
   },
 );
 it('rejects unsupported HTTP cache policies without fetching', () => {

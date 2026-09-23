@@ -448,7 +448,9 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
         throw new Error(`Asset ${pack.id}/${asset.key} source reported invalid buffered byte count`);
       }
       if (sum > Number.MAX_SAFE_INTEGER - additional) {
-        throw new Error(`Asset ${pack.id}/${asset.key} buffered byte reservation exceeds the safe integer range`);
+        throw new Error(
+          `Asset ${pack.id}/${asset.key} buffered byte reservation exceeds the safe integer range`,
+        );
       }
       return sum + additional;
     }, 0);

@@ -669,7 +669,7 @@ describe('default URL source integrity', () => {
       'fetch',
       vi.fn(
         async () => new Response(png, {
-      headers: { 'Content-Encoding': 'gzip', 'Content-Length': '2' },
+          headers: { 'Content-Encoding': 'gzip', 'Content-Length': '2' },
         }),
       ),
     );
@@ -681,8 +681,8 @@ describe('default URL source integrity', () => {
           key: 'pilot',
           url: '/pilot.png',
           integrity: {
-        texture: { bytes: 3, sha256: sha256(png) },
-      },
+            texture: { bytes: 3, sha256: sha256(png) },
+          },
         },
       ]),
     );
@@ -706,8 +706,8 @@ describe('default URL source integrity', () => {
           key: 'pilot',
           url: '/pilot.png',
           integrity: {
-        texture: { bytes: 3, sha256: sha256(png) },
-      },
+            texture: { bytes: 3, sha256: sha256(png) },
+          },
         },
       ]),
     );

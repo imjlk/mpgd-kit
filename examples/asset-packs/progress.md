@@ -95,3 +95,20 @@ consecutive runs. The skill client also exercised movement; its playing-state
 JSON and gameplay screenshots were inspected with no console errors. Package
 build and installed-tarball Chromium validation also pass. Next: push this
 targeted fix, request GitHub re-review, and wait for the focused CI result.
+
+PR #205 integration (2026-09-23): rebased the ttsc 0.30.4 upgrade after
+#204 merged as dbdfb089. Resolved the two example conflicts by retaining the
+public persistent-cache boundary, then applied the current formatter. Runtime
+AST comparisons against main preserve the overlapping implementation; the
+existing test-only explicit undefined initialization remains intentional.
+The earlier A-to-B-to-A CI failure is covered by #204's resident-dependency
+fix, not a timeout increase or disabled acceptance test. Validation passed:
+root check, 385 asset tests, six tooling tests, assertion and CLI-output canaries,
+all ten graph presets, package builds, full source Chromium acceptance, installed
+tarball Chromium acceptance, and the Sampo release dry-run. The skill client
+confirmed Grove gameplay and rightward movement with ready 2/2, two textures,
+matching screenshots/state, and no console errors. Scoped integration OCR found
+only one low-severity comment indentation issue, which was corrected. No local
+test:prepared rerun. The original toolchain worktree's two uncommitted diagnostic
+files were left untouched. Next: push the rebased PR, request fresh GitHub review,
+and address CI/review findings before merging; keep the release PR last.

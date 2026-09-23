@@ -968,10 +968,10 @@ const expectedFor = (pack: PhaserPackDeliveryPack): ArchiveWorkerExpected => ({
   },
   entries: pack.assets.flatMap((asset) =>
     asset.files.map((file) => ({
-    path: file.path,
-    method: file.method!,
-    bytes: file.bytes,
-    sha256: file.sha256,
+      path: file.path,
+      method: file.method!,
+      bytes: file.bytes,
+      sha256: file.sha256,
     })),
   ),
 });
