@@ -15,6 +15,7 @@ import {
   type ProductInfo,
   type ProductType,
   type ShareResult,
+  type ViewportAdapter,
 } from '@mpgd/platform';
 import {
   createCapacitorAppEvents,
@@ -28,6 +29,7 @@ import {
   type CapacitorServiceProvider,
   type NativeBridge,
 } from './providers.js';
+import { createCapacitorViewport } from './viewport.js';
 
 export {
   createCapacitorProviderRegistry,
@@ -49,6 +51,12 @@ export {
   type CapacitorNativeJsonTransport,
   type CreateCapacitorNativeJsonTransportInput,
 } from './native-http.js';
+export {
+  createCapacitorViewport,
+  type CapacitorOccupiedSurfaceInput,
+  type CapacitorViewportController,
+  type CapacitorViewportHost,
+} from './viewport.js';
 
 const externalActivityMethods = new Set<BridgeMethod>([
   'commerce.purchase',
@@ -79,6 +87,7 @@ export function createCapacitorPlatformGateway(input: {
   readonly classifyIncomingUrl?: (url: string) => CapacitorIncomingUrlKind | null;
   readonly historyBack?: () => void;
   readonly onAppEventError?: (error: unknown) => void;
+  readonly viewport?: ViewportAdapter;
 }): PlatformGateway {
   const bridge = input.bridge ?? CapacitorGameServices;
   const providers = createCapacitorProviderRegistry(input.providers ?? []);
@@ -92,6 +101,21 @@ export function createCapacitorPlatformGateway(input: {
     ...(input.historyBack === undefined ? {} : { historyBack: input.historyBack }),
     ...(input.onAppEventError === undefined ? {} : { onError: input.onAppEventError }),
   });
+  const viewport = input.viewport ?? createCapacitorViewport({
+    ...(input.onAppEventError === undefined ? {} : { onError: input.onAppEventError }),
+  });
+  const gatewayLifecycle = {
+    ...lifecycle,
+    async dispose() {
+      try {
+        await lifecycle.dispose?.();
+      } finally {
+        if (input.viewport === undefined) {
+          viewport.dispose?.();
+        }
+      }
+    },
+  };
 
   async function request<TData>(
     method: BridgeMethod,
@@ -253,7 +277,8 @@ export function createCapacitorPlatformGateway(input: {
         return request('leaderboard.open', payload, route);
       },
     },
-    lifecycle,
+    lifecycle: gatewayLifecycle,
+    viewport,
     storage: {
       async load(payload) {
         return decodeBridgeStorageLoadData(await request<unknown>('storage.load', payload));

@@ -458,6 +458,44 @@ export interface NativeBackButtonEvent {
   readonly canGoBack: boolean;
 }
 
+/** Full WebView viewport geometry in CSS pixels, before applying game-owned padding. */
+export interface PlatformViewportInsets {
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+  readonly left: number;
+}
+
+export interface PlatformViewportBounds {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/** An occupied game surface with stable identity, not an extra inset to sum. */
+export interface PlatformViewportOccupiedSurface {
+  readonly surfaceId: string;
+  readonly edge: 'top' | 'right' | 'bottom' | 'left';
+  readonly bounds: PlatformViewportBounds;
+}
+
+export interface PlatformViewportState {
+  readonly width: number;
+  readonly height: number;
+  readonly safeAreaInsets: PlatformViewportInsets;
+  readonly systemBarInsets: PlatformViewportInsets;
+  readonly keyboardInsets: PlatformViewportInsets;
+  readonly occupiedSurfaces: readonly PlatformViewportOccupiedSurface[];
+}
+
+/** Optional native viewport source; consumers use one owner for canvas and DOM layout. */
+export interface ViewportAdapter {
+  getState(): PlatformViewportState;
+  onChange(callback: (state: PlatformViewportState) => void): () => void;
+  dispose?(): void;
+}
+
 export interface LifecycleAdapter {
   onPause(callback: () => void): () => void;
   onResume(callback: () => void): () => void;
@@ -504,6 +542,7 @@ export interface PlatformGateway {
   readonly ads: AdAdapter;
   readonly leaderboard: LeaderboardAdapter;
   readonly lifecycle: LifecycleAdapter;
+  readonly viewport?: ViewportAdapter;
   readonly storage: StorageAdapter;
   readonly presentation?: PresentationAdapter;
   readonly sharing?: ShareAdapter;

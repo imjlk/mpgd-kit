@@ -155,3 +155,61 @@ receive-memory cap. The injected Http tests and platform staging builds cover
 the contract, not real network behavior on both physical OSes. See the
 [Capacitor HTTP API](https://capacitorjs.com/docs/apis/http) for the native
 helper and its redirect/timeout options.
+
+## Usable viewport and native occupied surfaces
+
+`gateway.viewport` reports the full WebView size and separate safe-area,
+system-bar, keyboard, and named occupied-surface measurements in **CSS pixels**.
+Pass the state to `resolveTargetViewportUsableArea` from `@mpgd/target-config`;
+it takes the furthest intrusion per edge rather than summing overlapping
+safe-area, system-bar, keyboard, and banner values. The default host reads the
+starter's `--mpgd-safe-area-*` CSS variables, Capacitor SystemBars'
+`--safe-area-inset-*` fallback, and `visualViewport` changes. On Android,
+SystemBars injects fallback CSS variables for older WebViews whose CSS `env`
+safe-area values are incorrect; see the [SystemBars API](https://capacitorjs.com/docs/apis/system-bars).
+Keyboard behavior also depends on the native [Keyboard resize mode](https://capacitorjs.com/docs/apis/keyboard),
+so inspect the actual device layout before promising a particular inset.
+
+Choose **one layout owner**. The starter's existing CSS padding already
+reserves safe-area space; do not apply `usableArea.contentBounds` to that
+already-padded `#game` element. For a JS-owned full-viewport canvas and DOM
+overlay, remove the host's safe-area padding and apply the same rectangle to
+both elements:
+
+```ts
+import { resolveTargetViewportUsableArea } from '@mpgd/target-config';
+import type { PlatformGateway } from '@mpgd/platform';
+
+export function mountUsableViewport(
+  gateway: PlatformGateway,
+  canvasHost: HTMLElement,
+  overlayHost: HTMLElement,
+): () => void {
+  const viewport = gateway.viewport;
+  if (viewport === undefined) return () => undefined;
+  const apply = () => {
+    const state = viewport.getState();
+    const bounds = resolveTargetViewportUsableArea(state, state).contentBounds;
+    for (const element of [canvasHost, overlayHost]) {
+      element.style.position = 'absolute';
+      element.style.left = `${bounds.x}px`;
+      element.style.top = `${bounds.y}px`;
+      element.style.width = `${bounds.width}px`;
+      element.style.height = `${bounds.height}px`;
+    }
+  };
+  apply();
+  return viewport.onChange(apply);
+}
+
+// Call the returned unsubscribe during game teardown. lifecycle.dispose()
+// tears down the gateway-owned native viewport listeners.
+```
+
+Future banner providers can call `createCapacitorViewport()` and pass that
+controller to `createCapacitorPlatformGateway({ viewport })`, then report
+actual `surfaceId` bounds with `setOccupiedSurface`. For physical-pixel
+measurements, the provider supplies `pixelsPerCssPixel`; the game never guesses
+device pixel ratio. A caller-injected controller remains caller-owned and must
+be disposed separately. Tests cover layout, rotation, multiple surfaces, and
+unsubscribe, but do not establish physical-device inset or keyboard accuracy.
