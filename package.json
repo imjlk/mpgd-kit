@@ -43,7 +43,7 @@
     "test:prepared:services": "node tools/ci/prepared-suite.mjs services --checked",
     "ci:emit-tools:prepared": "ttsc -p tsconfig.ci-tools.json",
     "test:cli-output": "node tools/smoke/cli-output.mjs",
-    "test:tooling": "node --test tools/toolchain.test.mjs tools/graph-runtime.test.mjs tools/ci/prepared-suite.test.mjs",
+    "test:tooling": "node --test tools/toolchain.test.mjs tools/graph-runtime.test.mjs tools/ci/prepared-suite.test.mjs tools/ci/native-scope.test.mjs tools/ci/verify-coverage.test.mjs",
     "validate:toolchain": "node tools/validate-toolchain.mjs",
     "validate:capacitor-alignment": "node tools/validate-capacitor-alignment.mjs",
     "validate:capacitor-fail-closed": "node tools/validate-capacitor-fail-closed.mjs",

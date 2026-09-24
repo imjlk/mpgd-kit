@@ -25,6 +25,7 @@ jobs:
     outputs:
       release_pr_metadata_only: ${{ steps.release-pr-meta.outputs.enabled }}
       run_prepared: ${{ steps.release-pr-meta.outputs.run_prepared }}
+      run_native: ${{ steps.release-pr-meta.outputs.run_native }}
       workspace_test_dirs: ${{ steps.release-pr-meta.outputs.workspace_test_dirs }}
       docs_only: ${{ steps.release-pr-meta.outputs.docs_only }}
       docs_validation: ${{ steps.release-pr-meta.outputs.docs_validation }}
@@ -71,6 +72,7 @@ jobs:
             fi
           }
           run_prepared=true
+          run_native=false
           declare -A workspace_test_dirs=()
           if [[ "${EVENT_NAME}" == "pull_request" ]]; then
             # PRs and main pushes share the focused path classifier below.
@@ -80,6 +82,7 @@ jobs:
             if ! base_sha="$(git merge-base "origin/${PR_BASE_REF}" HEAD)"; then
               echo "enabled=false" >> "$GITHUB_OUTPUT"
               echo "run_prepared=true" >> "$GITHUB_OUTPUT"
+              echo "run_native=false" >> "$GITHUB_OUTPUT"
               echo "docs_only=false" >> "$GITHUB_OUTPUT"
               echo "docs_validation=true" >> "$GITHUB_OUTPUT"
               echo "Could not resolve merge base against origin/${PR_BASE_REF}; running full validation."
@@ -92,6 +95,7 @@ jobs:
             if [[ ! "${PUSH_BEFORE_SHA}" =~ ^[0-9a-fA-F]{40}$ ]] || ! git merge-base --is-ancestor "${PUSH_BEFORE_SHA}" HEAD; then
               echo "enabled=false" >> "$GITHUB_OUTPUT"
               echo "run_prepared=true" >> "$GITHUB_OUTPUT"
+              echo "run_native=false" >> "$GITHUB_OUTPUT"
               echo "docs_only=false" >> "$GITHUB_OUTPUT"
               echo "docs_validation=true" >> "$GITHUB_OUTPUT"
               echo "Could not resolve the previous main commit; running full validation."
@@ -131,6 +135,7 @@ jobs:
             if ! base_sha="$(git merge-base origin/main HEAD)"; then
               echo "enabled=false" >> "$GITHUB_OUTPUT"
               echo "run_prepared=true" >> "$GITHUB_OUTPUT"
+              echo "run_native=false" >> "$GITHUB_OUTPUT"
               echo "docs_only=false" >> "$GITHUB_OUTPUT"
               echo "docs_validation=true" >> "$GITHUB_OUTPUT"
               echo "Could not resolve merge base against origin/main; running full validation."
@@ -337,8 +342,18 @@ jobs:
             # also applies to unattested docs-only pushes on main.
             run_prepared=false
           fi
+          if [[ "${EVENT_NAME}" == "pull_request" && "${metadata_only}" == "false" ]] &&
+            [[ "$(node tools/ci/native-scope.mjs "${changed_files[@]}")" == true ]]; then
+            # Only native-owned paths (and their Sampo changeset) qualify.
+            # Keep the adapter's unit tests plus the Android/iOS build jobs;
+            # shared contracts, lockfiles, and unknown paths remain full CI.
+            run_prepared=false
+            run_native=true
+            register_workspace_test adapters/capacitor adapters/capacitor
+          fi
           echo "enabled=${metadata_only}" >> "$GITHUB_OUTPUT"
           echo "run_prepared=${run_prepared}" >> "$GITHUB_OUTPUT"
+          echo "run_native=${run_native}" >> "$GITHUB_OUTPUT"
           echo "docs_only=${docs_only}" >> "$GITHUB_OUTPUT"
           echo "docs_validation=${docs_validation}" >> "$GITHUB_OUTPUT"
           if (( ${#workspace_test_dirs[@]} > 0 )); then
@@ -350,6 +365,7 @@ jobs:
           fi
           echo "Metadata-only validation: ${metadata_only}"
           echo "Prepared smoke suite: ${run_prepared}"
+          echo "Native-only scope: ${run_native}"
           echo "Documentation-only validation: ${docs_only}"
           echo "Documentation checks: ${docs_validation}"
           printf 'Changed files:\n%s\n' "${changed_files[*]:-<none>}"
@@ -472,14 +488,23 @@ jobs:
           done <<< "${WORKSPACE_TEST_DIRS}"
           exit "${failed}"
       - name: Run focused package tests
+        if: ${{ needs.prepare.outputs.run_native != 'true' }}
         run: |
           pnpm --filter @mpgd/phaser-assets test
           pnpm --filter @mpgd/tutorial test
           pnpm smoke:phaser-assets-archive-decode
           pnpm smoke:tutorial:dist
+      - name: Verify native adapter contracts
+        if: ${{ needs.prepare.outputs.run_native == 'true' }}
+        run: |
+          pnpm pack:packages:prepared
+          pnpm smoke:adapter-effective-config
+          pnpm smoke:platform-capability-conformance
+          pnpm smoke:storage-adapter-conformance
+          pnpm smoke:native-release-identity
 
   test-browser:
-    if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' }}
+    if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' && needs.prepare.outputs.run_native != 'true' }}
     needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -664,7 +689,7 @@ jobs:
           retention-days: 7
 
   build-android:
-    if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
+    if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' && (needs.prepare.outputs.run_prepared == 'true' || needs.prepare.outputs.run_native == 'true') }}
     runs-on: ubuntu-latest
     needs: prepare
     timeout-minutes: 120
@@ -731,7 +756,7 @@ jobs:
           retention-days: 7
 
   build-ios:
-    if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
+    if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' && (needs.prepare.outputs.run_prepared == 'true' || needs.prepare.outputs.run_native == 'true') }}
     runs-on: macos-26
     needs: prepare
     timeout-minutes: 120
@@ -890,6 +915,7 @@ jobs:
       EVENT_NAME: ${{ github.event_name }}
       METADATA_ONLY: ${{ needs.prepare.outputs.release_pr_metadata_only }}
       RUN_PREPARED: ${{ needs.prepare.outputs.run_prepared }}
+      RUN_NATIVE: ${{ needs.prepare.outputs.run_native }}
       DOCS_ONLY: ${{ needs.prepare.outputs.docs_only }}
       DOCS_VALIDATION: ${{ needs.prepare.outputs.docs_validation }}
       PREPARE_RESULT: ${{ needs.prepare.result }}
@@ -904,78 +930,16 @@ jobs:
       AIT_RESULT: ${{ needs.build-ait.result }}
       DEVVIT_RESULT: ${{ needs.build-devvit.result }}
     steps:
-      - name: Verify expected CI coverage
-        id: verify-coverage
-        run: |
-          set -euo pipefail
-          failed=0
-          expect_result() {
-            local name="$1" actual="$2" expected="$3"
-            printf '| %s | %s | %s |\n' "${name}" "${expected}" "${actual}" >> "$GITHUB_STEP_SUMMARY"
-            if [[ "${actual}" != "${expected}" ]]; then
-              echo "::error::${name} should be ${expected}, got ${actual:-missing}."
-              failed=1
-            fi
-          }
-          {
-            echo '### Required CI coverage'
-            echo '| Job | Expected | Actual |'
-            echo '| --- | --- | --- |'
-          } >> "$GITHUB_STEP_SUMMARY"
-          expect_result prepare "${PREPARE_RESULT}" success
-          if [[ "${PREPARE_RESULT}" != success ]]; then
-            exit 1
-          fi
-          if [[ "${DOCS_VALIDATION}" == true ]]; then
-            expect_result docs-validation "${DOCS_RESULT}" success
-          elif [[ "${DOCS_VALIDATION}" == false ]]; then
-            expect_result docs-validation "${DOCS_RESULT}" skipped
-          else
-            echo "::error::prepare did not classify docs_validation."
-            exit 1
-          fi
-          if [[ "${DOCS_ONLY}" == true ]]; then
-            expect_result test-focused "${FOCUSED_RESULT}" skipped
-            expect_result test-browser "${BROWSER_RESULT}" skipped
-            expected_full=skipped
-          elif [[ "${METADATA_ONLY}" == true ]]; then
-            expect_result test-focused "${FOCUSED_RESULT}" skipped
-            expect_result test-browser "${BROWSER_RESULT}" skipped
-            expected_full=skipped
-          else
-            expect_result test-browser "${BROWSER_RESULT}" success
-            if [[ "${RUN_PREPARED}" == true ]]; then
-              expect_result test-focused "${FOCUSED_RESULT}" skipped
-              expected_full=success
-            elif [[ "${RUN_PREPARED}" == false ]]; then
-              if [[ "${EVENT_NAME}" == pull_request ]]; then
-                expect_result test-focused "${FOCUSED_RESULT}" success
-              else
-                expect_result test-focused "${FOCUSED_RESULT}" skipped
-              fi
-              expected_full=skipped
-            else
-              echo "::error::prepare did not classify run_prepared."
-              exit 1
-            fi
-          fi
-          expect_result compile-tools "${COMPILE_RESULT}" "${expected_full}"
-          expect_result test-prepared "${PREPARED_RESULT}" "${expected_full}"
-          expect_result build-web-targets "${WEB_TARGETS_RESULT}" "${expected_full}"
-          expect_result build-android "${ANDROID_RESULT}" "${expected_full}"
-          expect_result build-ios "${IOS_RESULT}" "${expected_full}"
-          expect_result build-ait "${AIT_RESULT}" "${expected_full}"
-          expect_result build-devvit "${DEVVIT_RESULT}" "${expected_full}"
-          exit "${failed}"
       - uses: actions/checkout@v5
-        id: checkout-tested
-        if: ${{ !cancelled() && steps.verify-coverage.outcome == 'success' && github.event_name == 'pull_request' }}
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Verify expected CI coverage
+        id: verify-coverage
+        run: node tools/ci/verify-coverage.mjs
       - name: Attest the exact tested PR merge tree
         id: tested-merge
-        if: ${{ !cancelled() && steps.checkout-tested.outcome == 'success' && github.event_name == 'pull_request' }}
+        if: ${{ !cancelled() && steps.verify-coverage.outcome == 'success' && github.event_name == 'pull_request' }}
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
