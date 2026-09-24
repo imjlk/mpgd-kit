@@ -117,6 +117,11 @@ function assertAndroidIdentity(file: string, expected: AndroidIdentity): void {
 function assertIosIdentity(file: string, expected: IosIdentity): void {
   const source = readRequiredFile(file, 'iOS Xcode project configuration');
   const releaseSettings = readIosAppReleaseSettings(source, file);
+  if ([releaseSettings.target, releaseSettings.project].some((settings) =>
+    /\bPRODUCT_BUNDLE_IDENTIFIER\s*\[[^\]\r\n]+\]["']?\s*=/u.test(stripComments(settings)),
+  )) {
+    throw new Error(`Native release preflight does not support conditional bundle IDs in ${file}.`);
+  }
 
   assertIosSetting(
     releaseSettings,

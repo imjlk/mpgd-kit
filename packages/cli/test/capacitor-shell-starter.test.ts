@@ -168,6 +168,7 @@ try {
         const required = platform === 'android'
           ? [
               'android/gradlew',
+              'android/build.gradle',
               'android/gradle/wrapper/gradle-wrapper.jar',
               'android/gradle/wrapper/gradle-wrapper.properties',
               'android/settings.gradle',
@@ -234,6 +235,10 @@ try {
   renameSync(androidWrapper, `${androidWrapper}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /android project is incomplete/u);
   renameSync(`${androidWrapper}.saved`, androidWrapper);
+  const androidRootBuild = path.join(root, 'apps/mobile-capacitor/android/build.gradle');
+  renameSync(androidRootBuild, `${androidRootBuild}.saved`);
+  assert.throws(() => planCapacitorShellStarter(options), /android project is incomplete/u);
+  renameSync(`${androidRootBuild}.saved`, androidRootBuild);
   const wrapperJar = path.join(
     root,
     'apps/mobile-capacitor/android/gradle/wrapper/gradle-wrapper.jar',
@@ -274,6 +279,11 @@ try {
   );
   writeFileSync(iosProjectFile, `${omittedIosId}\n${projectReleaseSettings}`);
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(iosProjectFile, `${omittedIosId.replace(
+    'DDDDDDDD /* Release */ = { isa = XCBuildConfiguration; buildSettings = {',
+    'DDDDDDDD /* Release */ = { isa = XCBuildConfiguration; buildSettings = { "PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = dev.other.game;',
+  )}\n${projectReleaseSettings}`);
+  assert.throws(() => planCapacitorShellStarter(options), /conditional Release bundle ID/u);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle').replace(
     'PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle;',
@@ -492,6 +502,16 @@ try {
   renameSync(envFile, backupFile);
   symlinkSync(path.join(root, 'missing.env'), envFile);
   assert.throws(() => planCapacitorShellStarter(options), /symbolic link/u);
+  const previousManifest = readFileSync(manifestFile, 'utf8');
+  const noBackendManifest = JSON.parse(previousManifest) as Record<string, unknown>;
+  delete noBackendManifest.backendUrl;
+  writeFileSync(manifestFile, `${JSON.stringify(noBackendManifest, null, 2)}\n`);
+  assert.deepEqual(planCapacitorShellStarter({
+    gameRoot: root,
+    appId: options.appId,
+    displayName: options.displayName,
+  }).changedFiles, []);
+  writeFileSync(manifestFile, previousManifest);
   unlinkSync(envFile);
   renameSync(backupFile, envFile);
 

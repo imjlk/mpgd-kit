@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import { join } from 'node:path';
 
@@ -148,6 +148,26 @@ try {
       required: false,
       shellApp: shellRoot,
     }),
+  );
+  const iosProject = join(shellRoot, 'ios/App/App.xcodeproj/project.pbxproj');
+  writeFileSync(iosProject, readFileSync(iosProject, 'utf8').replace(
+    'PRODUCT_BUNDLE_IDENTIFIER = "$(inherited)";',
+    '"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = dev.other.game;\n    PRODUCT_BUNDLE_IDENTIFIER = "$(inherited)";',
+  ));
+  assert.throws(
+    () =>
+      assertNativeReleaseIdentity({
+        environment: {
+          APP_VERSION: '1.4.0',
+          MPGD_TARGET_BUILD_NUMBER: '42',
+          MPGD_TARGET_MARKETING_VERSION: '1.4.0',
+        },
+        metadata: { bundleId: 'dev.example.game' },
+        platform: 'ios',
+        required: false,
+        shellApp: shellRoot,
+      }),
+    /does not support conditional bundle IDs/u,
   );
   writeShellFiles(shellRoot);
 

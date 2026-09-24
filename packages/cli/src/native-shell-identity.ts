@@ -128,6 +128,9 @@ function readIosReleaseBundleId(source: string, listId: string): string | undefi
     throw new Error('Existing ios project App Release configuration is missing or ambiguous.');
   }
   const configuration = stripGradleComments(readPbxObject(source, releaseIds[0] ?? ''));
+  if (/\bPRODUCT_BUNDLE_IDENTIFIER\s*\[[^\]\r\n]+\]["']?\s*=/u.test(configuration)) {
+    throw new Error('Existing ios project conditional Release bundle ID is unsupported.');
+  }
   const values = [...configuration.matchAll(/\bPRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;]+);/gu)]
     .map((match) => match[1]?.trim().replace(/^["']|["']$/gu, ''));
   if (values.length > 1) {

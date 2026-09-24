@@ -78,7 +78,6 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     : relativeGameFile(gameRoot, input.iconSource);
   for (const managedPath of [
     'mpgd.targets.json',
-    '.env.production',
     shellPath,
     `${shellPath}/package.json`,
     `${shellPath}/capacitor.config.ts`,
@@ -301,6 +300,7 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     },
   ];
   if (requestedBackendUrl !== undefined) {
+    safeDestination(gameRoot, '.env.production');
     const validatedBackendUrl = normalizeBackendUrl(requestedBackendUrl);
     const envFile = path.join(gameRoot, '.env.production');
     const current = readExisting(envFile) ?? '';
@@ -480,6 +480,7 @@ function assertNativePlatformComplete(
     ? requireOneNativeFile(nativeDirectory, ['app/build.gradle', 'app/build.gradle.kts'], platform)
     : requireOneNativeFile(nativeDirectory, ['App/App.xcodeproj/project.pbxproj'], platform);
   if (platform === 'android') {
+    requireOneNativeFile(nativeDirectory, ['build.gradle', 'build.gradle.kts'], platform);
     requireOneNativeFile(nativeDirectory, ['settings.gradle', 'settings.gradle.kts'], platform);
   } else {
     const hasSpm = isNativeFile(nativeDirectory, 'App/CapApp-SPM/Package.swift');
