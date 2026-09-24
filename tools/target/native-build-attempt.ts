@@ -50,6 +50,19 @@ export function readNativeBuildAttempt(
   return record as unknown as NativeBuildAttemptRecord;
 }
 
+export function assertFreshNativeBuildArtifact(
+  gameRoot: string,
+  target: string,
+  artifact: string,
+): NativeBuildAttemptRecord | undefined {
+  const attempt = readNativeBuildAttempt(gameRoot, target);
+  if (attempt !== undefined
+    && (attempt.status !== 'success' || attempt.artifact !== artifact)) {
+    throw new Error(`Native target ${target} has no successful current build artifact.`);
+  }
+  return attempt;
+}
+
 export function beginNativeBuildAttempt(gameRoot: string, target: string): NativeBuildAttempt {
   const file = nativeBuildAttemptPath(gameRoot, target);
   const record: NativeBuildAttemptRecord = {

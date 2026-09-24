@@ -7,7 +7,7 @@ import { Script } from 'node:vm';
 import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
 
 import { readJsonFile } from '../io';
-import { readNativeBuildAttempt } from '../target/native-build-attempt';
+import { assertFreshNativeBuildArtifact } from '../target/native-build-attempt';
 import {
   createMicrosoftStorePwaRevision,
   readMicrosoftStorePwaReleaseEvidence,
@@ -87,11 +87,11 @@ export function verifyTargetArtifacts(
     }
 
     if (targetConfig.kind === 'capacitor-android' || targetConfig.kind === 'capacitor-ios') {
-      const attempt = readNativeBuildAttempt(loadedPlatformTargets.baseDir, target);
-      if (attempt !== undefined
-        && (attempt.status !== 'success' || attempt.artifact !== entry.artifact)) {
-        throw new Error(`Native target ${target} has no successful current build artifact.`);
-      }
+      const attempt = assertFreshNativeBuildArtifact(
+        loadedPlatformTargets.baseDir,
+        target,
+        entry.artifact,
+      );
       if ((attempt !== undefined || entry.profile === 'production')
         && entry.nativeDelivery === undefined) {
         throw new Error(`Native target ${target} is missing build-mode evidence.`);
