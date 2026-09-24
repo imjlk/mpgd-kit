@@ -4,6 +4,7 @@ import Foundation
 @objc(CapacitorGameServicesPlugin)
 public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
     private let storageLoadProtocol = "mpgd.storage.load.v1"
+    private let credentialLoadProtocol = "mpgd.credentials.load.v1"
     public let identifier = "CapacitorGameServicesPlugin"
     public let jsName = "CapacitorGameServices"
     public let pluginMethods: [CAPPluginMethod] = [
@@ -15,6 +16,7 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
             legacyDefaults: .standard
         )
     )
+    private lazy var secureCredentials = SecureCredentialStorage()
 
     @objc func request(_ call: CAPPluginCall) {
         guard let id = call.getString("id"), !id.isEmpty else {
@@ -65,6 +67,12 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
             loadStorage(call, id: id)
         case "storage.save":
             saveStorage(call, id: id)
+        case "credentials.load":
+            loadCredential(call, id: id)
+        case "credentials.save":
+            saveCredential(call, id: id)
+        case "credentials.remove":
+            removeCredential(call, id: id)
         default:
             call.resolve(errorResponse(id: id, code: "UNSUPPORTED_METHOD", message: "Unsupported bridge method: \(method)"))
         }
@@ -209,6 +217,60 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func storageKey(_ call: CAPPluginCall) -> String? {
         return call.getObject("payload")?["key"] as? String
+    }
+
+    private func loadCredential(_ call: CAPPluginCall, id: String) {
+        let key = storageKey(call) ?? ""
+        do {
+            if let value = try secureCredentials.load(key: key) {
+                call.resolve(okResponse(id: id, data: [
+                    "__mpgdBridgeProtocol": credentialLoadProtocol,
+                    "found": true,
+                    "value": value
+                ]))
+            } else {
+                call.resolve(okResponse(id: id, data: [
+                    "__mpgdBridgeProtocol": credentialLoadProtocol,
+                    "found": false
+                ]))
+            }
+        } catch let error as SecureCredentialStorageError {
+            call.resolve(errorResponse(id: id, code: error.bridgeCode,
+                message: error.bridgeCode, retryable: error.retryable))
+        } catch {
+            call.resolve(errorResponse(id: id, code: "NATIVE_CREDENTIAL_STORE_UNAVAILABLE",
+                message: "Secure credential store unavailable."))
+        }
+    }
+
+    private func saveCredential(_ call: CAPPluginCall, id: String) {
+        let payload = call.getObject("payload")
+        let key = payload?["key"] as? String ?? ""
+        let value = payload?["value"] as? String ?? ""
+        do {
+            try secureCredentials.save(key: key, value: value)
+            call.resolve(okResponse(id: id, data: ["saved": true]))
+        } catch let error as SecureCredentialStorageError {
+            call.resolve(errorResponse(id: id, code: error.bridgeCode,
+                message: error.bridgeCode, retryable: error.retryable))
+        } catch {
+            call.resolve(errorResponse(id: id, code: "NATIVE_CREDENTIAL_STORE_UNAVAILABLE",
+                message: "Secure credential store unavailable."))
+        }
+    }
+
+    private func removeCredential(_ call: CAPPluginCall, id: String) {
+        let key = storageKey(call) ?? ""
+        do {
+            try secureCredentials.remove(key: key)
+            call.resolve(okResponse(id: id, data: ["removed": true]))
+        } catch let error as SecureCredentialStorageError {
+            call.resolve(errorResponse(id: id, code: error.bridgeCode,
+                message: error.bridgeCode, retryable: error.retryable))
+        } catch {
+            call.resolve(errorResponse(id: id, code: "NATIVE_CREDENTIAL_STORE_UNAVAILABLE",
+                message: "Secure credential store unavailable."))
+        }
     }
 
     private func capabilities() -> [String: Any] {
