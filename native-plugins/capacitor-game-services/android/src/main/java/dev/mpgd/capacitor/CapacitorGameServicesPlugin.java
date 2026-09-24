@@ -22,7 +22,8 @@ public class CapacitorGameServicesPlugin extends Plugin {
         String method = call.getString("method");
 
         if (id == null || id.isEmpty()) {
-            id = "android-native-mock";
+            call.resolve(errorResponse("", "INVALID_BRIDGE_REQUEST", "Bridge request ID is required."));
+            return;
         }
 
         if (method == null || method.isEmpty()) {
@@ -67,37 +68,21 @@ public class CapacitorGameServicesPlugin extends Plugin {
                 call.resolve(okResponse(id, "unavailable"));
                 return;
             case "commerce.getProducts":
-                call.resolve(okResponse(id, new Object[] { product() }));
-                return;
             case "commerce.purchase":
-                call.resolve(okResponse(id, new JSObject()
-                    .put("status", "completed")
-                    .put("transactionId", "android-mock-" + id)
-                    .put("entitlementIds", new String[] { "COINS_100" })));
-                return;
             case "commerce.restore":
-                call.resolve(okResponse(id, new JSObject().put("restoredEntitlements", new Object[] {})));
-                return;
             case "commerce.getEntitlements":
-                call.resolve(okResponse(id, new Object[] {}));
+                call.resolve(errorResponse(id, "NATIVE_IAP_UNAVAILABLE", "No native store provider is installed."));
                 return;
             case "ads.preload":
-                call.resolve(okResponse(id, new JSObject()));
-                return;
             case "ads.showRewarded":
-                call.resolve(okResponse(id, new JSObject()
-                    .put("status", "completed")
-                    .put("rewardGranted", true)
-                    .put("ledgerEntryId", "android-reward-" + id)));
-                return;
             case "ads.showInterstitial":
-                call.resolve(okResponse(id, new JSObject().put("status", "shown")));
+            case "ads.mountBanner":
+            case "ads.unmountBanner":
+                call.resolve(errorResponse(id, "NATIVE_ADS_UNAVAILABLE", "No native ads provider is installed."));
                 return;
             case "leaderboard.submitScore":
-                call.resolve(okResponse(id, new JSObject().put("submitted", true)));
-                return;
             case "leaderboard.open":
-                call.resolve(okResponse(id, new JSObject().put("opened", true)));
+                call.resolve(errorResponse(id, "NATIVE_LEADERBOARD_UNAVAILABLE", "No native leaderboard provider is installed."));
                 return;
             case "storage.load":
                 loadStorage(call, id);
@@ -291,17 +276,18 @@ public class CapacitorGameServicesPlugin extends Plugin {
 
     private JSObject capabilities() {
         return new JSObject()
-            .put("nativeIap", true)
-            .put("nativeAds", true)
-            .put("rewardedAds", true)
-            .put("interstitialAds", true)
-            .put("nativeLeaderboard", true)
+            .put("nativeIap", false)
+            .put("nativeAds", false)
+            .put("rewardedAds", false)
+            .put("interstitialAds", false)
+            .put("bannerAds", false)
+            .put("nativeLeaderboard", false)
             .put("remoteLeaderboard", false)
             .put("achievements", false)
             .put("cloudSave", false)
             .put("socialShare", false)
-            .put("haptics", true)
-            .put("localizedContent", true);
+            .put("haptics", false)
+            .put("localizedContent", false);
     }
 
     private JSObject player() {
@@ -310,14 +296,4 @@ public class CapacitorGameServicesPlugin extends Plugin {
             .put("displayName", "Android Local Player");
     }
 
-    private JSObject product() {
-        return new JSObject()
-            .put("id", "COINS_100")
-            .put("type", "consumable")
-            .put("title", "100 Coins")
-            .put("description", "Adds 100 demo coins.")
-            .put("price", new JSObject()
-                .put("formatted", "$0.99")
-                .put("currencyCode", "USD"));
-    }
 }

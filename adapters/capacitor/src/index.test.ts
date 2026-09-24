@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { bridgeStorageLoadProtocol, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
+import { PlatformOperationError } from '@mpgd/platform';
 
 import { createCapacitorPlatformGateway, type NativeBridge } from './index';
 
@@ -92,7 +93,7 @@ describe('adapter-capacitor', () => {
     await expect(gateway.storage.load({ key: 'missing:v1' })).resolves.toBeNull();
   });
 
-  it('throws native bridge errors as JavaScript errors', async () => {
+  it('preserves native bridge failure codes and retryability', async () => {
     const bridge: NativeBridge = {
       async request(input) {
         return {
@@ -114,7 +115,39 @@ describe('adapter-capacitor', () => {
       bridge,
     });
 
-    await expect(gateway.commerce.getProducts()).rejects.toThrow('Store unavailable.');
+    await expect(gateway.commerce.getProducts()).rejects.toMatchObject({
+      name: 'PlatformOperationError',
+      code: 'STORE_UNAVAILABLE',
+      message: 'Store unavailable.',
+      retryable: true,
+    } satisfies Partial<PlatformOperationError>);
+  });
+
+  it.each([
+    { name: 'mismatched ID', response: { id: 'other', ok: true, data: [] } },
+    { name: 'missing success data', response: { ok: true } },
+    {
+      name: 'malformed error',
+      response: { ok: false, error: { code: 'NATIVE_IAP_UNAVAILABLE', message: 'Unavailable.' } },
+    },
+  ])('rejects a $name rather than trusting malformed native data', async ({ response }) => {
+    const bridge: NativeBridge = {
+      async request(input) {
+        return { id: input.id, ...response } as BridgeResponse;
+      },
+    };
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android',
+      appVersion: '1.2.3',
+      buildId: 'build-android',
+      bridge,
+    });
+
+    await expect(gateway.commerce.getProducts()).rejects.toMatchObject({
+      name: 'PlatformOperationError',
+      code: 'NATIVE_BRIDGE_INVALID_RESPONSE',
+      retryable: false,
+    });
   });
 
   it('delegates shared launch, identity, share, and notification flows', async () => {

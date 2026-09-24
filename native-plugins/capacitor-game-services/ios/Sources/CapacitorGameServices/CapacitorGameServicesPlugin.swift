@@ -17,7 +17,10 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
     )
 
     @objc func request(_ call: CAPPluginCall) {
-        let id = call.getString("id") ?? "ios-native-mock"
+        guard let id = call.getString("id"), !id.isEmpty else {
+            call.resolve(errorResponse(id: "", code: "INVALID_BRIDGE_REQUEST", message: "Bridge request ID is required."))
+            return
+        }
 
         guard let method = call.getString("method"), !method.isEmpty else {
             call.resolve(errorResponse(id: id, code: "INVALID_BRIDGE_REQUEST", message: "Bridge method is required."))
@@ -52,32 +55,12 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
             call.resolve(okResponse(id: id, data: "configuration-required"))
         case "notifications.requestSubscription":
             call.resolve(okResponse(id: id, data: "unavailable"))
-        case "commerce.getProducts":
-            call.resolve(okResponse(id: id, data: [product()]))
-        case "commerce.purchase":
-            call.resolve(okResponse(id: id, data: [
-                "status": "completed",
-                "transactionId": "ios-mock-\(id)",
-                "entitlementIds": ["COINS_100"]
-            ]))
-        case "commerce.restore":
-            call.resolve(okResponse(id: id, data: ["restoredEntitlements": []]))
-        case "commerce.getEntitlements":
-            call.resolve(okResponse(id: id, data: []))
-        case "ads.preload":
-            call.resolve(okResponse(id: id, data: [:]))
-        case "ads.showRewarded":
-            call.resolve(okResponse(id: id, data: [
-                "status": "completed",
-                "rewardGranted": true,
-                "ledgerEntryId": "ios-reward-\(id)"
-            ]))
-        case "ads.showInterstitial":
-            call.resolve(okResponse(id: id, data: ["status": "shown"]))
-        case "leaderboard.submitScore":
-            call.resolve(okResponse(id: id, data: ["submitted": true]))
-        case "leaderboard.open":
-            call.resolve(okResponse(id: id, data: ["opened": true]))
+        case "commerce.getProducts", "commerce.purchase", "commerce.restore", "commerce.getEntitlements":
+            call.resolve(errorResponse(id: id, code: "NATIVE_IAP_UNAVAILABLE", message: "No native store provider is installed."))
+        case "ads.preload", "ads.showRewarded", "ads.showInterstitial", "ads.mountBanner", "ads.unmountBanner":
+            call.resolve(errorResponse(id: id, code: "NATIVE_ADS_UNAVAILABLE", message: "No native ads provider is installed."))
+        case "leaderboard.submitScore", "leaderboard.open":
+            call.resolve(errorResponse(id: id, code: "NATIVE_LEADERBOARD_UNAVAILABLE", message: "No native leaderboard provider is installed."))
         case "storage.load":
             loadStorage(call, id: id)
         case "storage.save":
@@ -230,17 +213,18 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func capabilities() -> [String: Any] {
         return [
-            "nativeIap": true,
-            "nativeAds": true,
-            "rewardedAds": true,
-            "interstitialAds": true,
-            "nativeLeaderboard": true,
+            "nativeIap": false,
+            "nativeAds": false,
+            "rewardedAds": false,
+            "interstitialAds": false,
+            "bannerAds": false,
+            "nativeLeaderboard": false,
             "remoteLeaderboard": false,
             "achievements": false,
             "cloudSave": false,
             "socialShare": false,
-            "haptics": true,
-            "localizedContent": true
+            "haptics": false,
+            "localizedContent": false
         ]
     }
 
@@ -251,16 +235,4 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
         ]
     }
 
-    private func product() -> [String: Any] {
-        return [
-            "id": "COINS_100",
-            "type": "consumable",
-            "title": "100 Coins",
-            "description": "Adds 100 demo coins.",
-            "price": [
-                "formatted": "$0.99",
-                "currencyCode": "USD"
-            ]
-        ]
-    }
 }
