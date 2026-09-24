@@ -1,6 +1,7 @@
 node_modules/
 .pnpm-store/
 dist/
+doc_build/
 artifacts/
 release-output/
 release-input/

@@ -3,7 +3,7 @@
 [Issue #173](https://github.com/imjlk/mpgd-kit/issues/173) remains open for the
 production delivery/storage work listed below. The initial private study is now a
 consumer of the opt-in `@mpgd/phaser-assets/packs` API, in the existing package.
-See [API usage and lifecycle rules](../packages/phaser-assets/README.md).
+See [API usage and lifecycle rules](https://github.com/imjlk/mpgd-kit/blob/main/packages/phaser-assets/README.md).
 
 ## Ownership and boundaries
 

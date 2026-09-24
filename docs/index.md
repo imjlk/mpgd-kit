@@ -10,9 +10,9 @@ explains identity, capability, sharing, and notification boundaries.
 - [Read platform capabilities](guides/platform-capabilities.md) explains fresh
   gateway snapshots, fixture validation, failure paths, and the difference
   between contract checks and device readiness.
-- [Platform capability examples](examples/platform-capabilities.ts) are checked
-  with `pnpm docs:examples:check`; their local behavior test is run with
-  `pnpm docs:examples:test` after building `@mpgd/platform`.
+- [Platform capability examples](https://github.com/imjlk/mpgd-kit/blob/main/docs/examples/platform-capabilities.ts) are checked
+  with `pnpm docs:examples:check` and run against local source fixtures with
+  `pnpm docs:examples:test`; neither step certifies a published tarball.
 
 The [documentation evidence policy](DOCUMENTATION_EVIDENCE.md) names the exact
 API, spec, implementation, test, and example populations currently enforced by

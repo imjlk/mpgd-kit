@@ -33,7 +33,7 @@ to distinguish temporary bridge trouble from missing setup; otherwise fail
 closed. Keep handling operation failure even after a successful `true` read.
 
 See the type-checked
-[`readRewardedAdAvailability` example](../examples/platform-capabilities.ts)
+[`readRewardedAdAvailability` example](https://github.com/imjlk/mpgd-kit/blob/main/docs/examples/platform-capabilities.ts)
 for a decision-point read that keeps a rejected bridge call distinct from a
 resolved `false` flag. Handle an actual ad operation result separately.
 
@@ -62,7 +62,7 @@ and target-wrapper fixtures. None of these commands is a physical-device or
 release-readiness certification.
 
 The type-checked
-[`verifyCapabilityFixture` example](../examples/platform-capabilities.ts)
+[`verifyCapabilityFixture` example](https://github.com/imjlk/mpgd-kit/blob/main/docs/examples/platform-capabilities.ts)
 shows the runner input and report shape.
 
 ## Recheck after a provider change
@@ -79,11 +79,10 @@ state and require the next snapshot to match it. This checks that the adapter
 or target wrapper does not keep returning its initial state; it still does
 not prove that the corresponding platform SDK works on a real device.
 The type-checked
-[`readCloudSaveTransition` example](../examples/platform-capabilities.ts)
+[`readCloudSaveTransition` example](https://github.com/imjlk/mpgd-kit/blob/main/docs/examples/platform-capabilities.ts)
 shows why the second read must happen after the provider update.
 
 From the repository root, `pnpm docs:examples:check` checks these example
-types. To run their local Vitest checks against the published package exports,
-build that one package with `pnpm build:packages @mpgd/platform`, then run
-`pnpm docs:examples:test`. These checks use a fake gateway; they do not call a
-platform SDK or certify a device.
+types, and `pnpm docs:examples:test` runs their source-backed Vitest fixtures
+without a package build. The tests use a fake gateway; they do not validate a
+published tarball, call a platform SDK, or certify a device.
