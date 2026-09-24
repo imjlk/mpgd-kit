@@ -277,7 +277,10 @@ native platforms. The initializer writes a private shell under
 `apps/mobile-capacitor`, installs its pinned dependencies, adds missing Android
 and iOS projects, and updates both `mpgd.targets.json` entries. Rerunning is
 safe after an interrupted dependency install and does not overwrite existing
-native projects, signing files, or custom controllers. If `cap add` created an
+native projects, signing files, or custom controllers. It rejects a preserved
+native project whose app ID differs, or a dynamic Capacitor config whose
+identity and web directory cannot be checked safely. Existing file permissions
+are retained when managed content changes. If `cap add` created an
 incomplete `android` or `ios` directory, repair or remove only that game-owned
 directory before retrying; the initializer refuses to replace it. `--providers` records selection
 metadata only; it neither installs provider SDKs nor declares a capability

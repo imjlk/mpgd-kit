@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -7,6 +8,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -145,17 +147,23 @@ try {
           : 'ios/App/App.xcodeproj/project.pbxproj';
         const file = path.join(root, 'apps/mobile-capacitor', sentinel);
         mkdirSync(path.dirname(file), { recursive: true });
-        writeFileSync(file, 'generated-native-project');
+        writeFileSync(
+          file,
+          platform === 'android'
+            ? 'applicationId "dev.example.puzzle"'
+            : 'PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle;',
+        );
       }
     },
   });
   assert.deepEqual(commands, [
     'pnpm install --no-frozen-lockfile',
+    'pnpm --dir apps/mobile-capacitor install --ignore-workspace --no-frozen-lockfile',
     'pnpm --dir apps/mobile-capacitor cap add android',
     'pnpm --dir apps/mobile-capacitor cap add ios',
   ]);
   const cli = path.join(root, 'apps/mobile-capacitor/node_modules/.bin/cap');
-  unlinkSync(cli);
+  assert.equal(existsSync(cli), true);
   const retryCommands: string[] = [];
   materializeCapacitorShellStarter(planCapacitorShellStarter(options), {
     run(command, args, cwd) {
@@ -176,7 +184,10 @@ try {
       completeRetryCommands.push(`${command} ${args.join(' ')}`);
     },
   });
-  assert.deepEqual(completeRetryCommands, ['pnpm install --no-frozen-lockfile']);
+  assert.deepEqual(completeRetryCommands, [
+    'pnpm install --no-frozen-lockfile',
+    'pnpm --dir apps/mobile-capacitor install --ignore-workspace --no-frozen-lockfile',
+  ]);
   writeFileSync(path.join(root, 'apps/mobile-capacitor/ios/CustomViewController.swift'), 'custom');
   const withNativeProjects = planCapacitorShellStarter(options);
   assert.deepEqual(withNativeProjects.changedFiles, []);
@@ -188,6 +199,9 @@ try {
   renameSync(iosProjectFile, `${iosProjectFile}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /ios project is incomplete/u);
   renameSync(`${iosProjectFile}.saved`, iosProjectFile);
+  writeFileSync(iosProjectFile, 'PRODUCT_BUNDLE_IDENTIFIER = dev.other.game;');
+  assert.throws(() => planCapacitorShellStarter(options), /ios project app ID differs/u);
+  writeFileSync(iosProjectFile, 'PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle;');
   applyCapacitorShellStarter(withNativeProjects);
   assert.equal(
     readFileSync(path.join(root, 'apps/mobile-capacitor/ios/CustomViewController.swift'), 'utf8'),
@@ -204,6 +218,16 @@ try {
   assert.throws(() => planCapacitorShellStarter(options), /display name differs/u);
   writeFileSync(configFile, originalConfig);
   writeFileSync(configFile, originalConfig.replace("webDir: 'www'", "webDir: 'other-www'"));
+  assert.throws(() => planCapacitorShellStarter(options), /webDir differs/u);
+  writeFileSync(configFile, originalConfig);
+  writeFileSync(
+    configFile,
+    originalConfig.replace('  appId:', '  // appId: "dev.other.game",\n  appId:'),
+  );
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(configFile, originalConfig.replace('  appName:', '  ...overrides,\n  appName:'));
+  assert.throws(() => planCapacitorShellStarter(options), /ambiguous dynamic syntax/u);
+  writeFileSync(configFile, originalConfig.replace('  webDir:', '  webDir: "other",\n  webDir:'));
   assert.throws(() => planCapacitorShellStarter(options), /webDir differs/u);
   writeFileSync(configFile, originalConfig);
   const quotedName = 'King\'s "Quest" \\ Game';
@@ -270,9 +294,16 @@ try {
 
   const envFile = path.join(root, '.env.production');
   const originalEnv = readFileSync(envFile, 'utf8');
+  const originalEnvMode = statSync(envFile).mode & 0o777;
+  writeFileSync(envFile, 'GAME_PRIVATE_VALUE=secret\n');
+  chmodSync(envFile, 0o600);
+  applyCapacitorShellStarter(planCapacitorShellStarter(options));
+  assert.equal(statSync(envFile).mode & 0o777, 0o600);
+  assert.match(readFileSync(envFile, 'utf8'), /GAME_PRIVATE_VALUE=secret/u);
   writeFileSync(envFile, 'VITE_MPGD_GAME_SERVICES_URL="https://api.example.com/"\r\n');
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   writeFileSync(envFile, originalEnv);
+  chmodSync(envFile, originalEnvMode);
   const backupFile = path.join(root, '.env.production.saved');
   renameSync(envFile, backupFile);
   symlinkSync(path.join(root, 'missing.env'), envFile);
@@ -284,6 +315,30 @@ try {
   renameSync(adapterFile, `${adapterFile}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /Install game dependencies/u);
   renameSync(`${adapterFile}.saved`, adapterFile);
+
+  writeFileSync(path.join(root, 'public/icon2.svg'), '<svg/>');
+  const beforeRollbackTargets = readFileSync(path.join(root, 'mpgd.targets.json'), 'utf8');
+  const beforeRollbackManifest = readFileSync(manifestFile, 'utf8');
+  const rollbackPlan = planCapacitorShellStarter({
+    ...options,
+    iconSource: 'public/icon2.svg',
+    providerIds: ['identity', 'new-provider'],
+  });
+  assert.ok(rollbackPlan.changedFiles.length > 1);
+  let installs = 0;
+  assert.throws(
+    () =>
+      applyCapacitorShellStarter(rollbackPlan, (temporary, destination) => {
+        installs += 1;
+        if (installs === 2) {
+          throw new Error('simulated later rename failure');
+        }
+        renameSync(temporary, destination);
+      }),
+    /simulated later rename failure/u,
+  );
+  assert.equal(readFileSync(path.join(root, 'mpgd.targets.json'), 'utf8'), beforeRollbackTargets);
+  assert.equal(readFileSync(manifestFile, 'utf8'), beforeRollbackManifest);
 
   console.info('Game-owned Capacitor shell planning and preservation passed.');
 } finally {
