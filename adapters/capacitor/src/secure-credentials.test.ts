@@ -51,7 +51,7 @@ describe('Capacitor secure credential boundary', () => {
 
   it('rejects malformed values and native failure without plaintext fallback', async () => {
     const calls: string[] = [];
-    let mode: 'malformed' | 'empty' | 'native-error' | 'transport-error' = 'malformed';
+    let mode: 'malformed' | 'empty' | 'oversized' | 'native-error' | 'transport-error' = 'malformed';
     const gateway = createCapacitorPlatformGateway({
       target: 'ios', appVersion: '1.0.0', buildId: 'credentials-test',
       bridge: {
@@ -68,6 +68,11 @@ describe('Capacitor secure credential boundary', () => {
           if (mode === 'malformed') {
             return { id: input.id, ok: true, data: {
               __mpgdBridgeProtocol: loadProtocol, found: true, value: 42,
+            } };
+          }
+          if (mode === 'oversized') {
+            return { id: input.id, ok: true, data: {
+              __mpgdBridgeProtocol: loadProtocol, found: true, value: '한'.repeat(6000),
             } };
           }
           return { id: input.id, ok: false, error: {
@@ -87,6 +92,9 @@ describe('Capacitor secure credential boundary', () => {
     mode = 'empty';
     await expect(credentials.load({ key: 'session.refresh' }))
       .rejects.toMatchObject({ code: 'NATIVE_CREDENTIAL_INVALID_RESPONSE' });
+    mode = 'oversized';
+    await expect(credentials.load({ key: 'session.refresh' }))
+      .rejects.toMatchObject({ code: 'NATIVE_CREDENTIAL_INVALID_RESPONSE' });
     mode = 'native-error';
     await expect(credentials.load({ key: 'session.refresh' }))
       .rejects.toMatchObject({ code: 'NATIVE_CREDENTIAL_LOAD_FAILED' });
@@ -99,6 +107,7 @@ describe('Capacitor secure credential boundary', () => {
       .rejects.toMatchObject({ code: 'NATIVE_CREDENTIAL_INVALID_VALUE' });
     expect(calls).toEqual([
       'credentials.load', 'credentials.load', 'credentials.load', 'credentials.load',
+      'credentials.load',
     ]);
   });
 });
