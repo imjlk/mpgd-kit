@@ -26,6 +26,7 @@ jobs:
       release_pr_metadata_only: ${{ steps.release-pr-meta.outputs.enabled }}
       run_prepared: ${{ steps.release-pr-meta.outputs.run_prepared }}
       workspace_test_dirs: ${{ steps.release-pr-meta.outputs.workspace_test_dirs }}
+      run_evidence: ${{ steps.release-pr-meta.outputs.run_evidence }}
 
     steps:
       - uses: actions/checkout@v5
@@ -78,6 +79,7 @@ jobs:
             if ! base_sha="$(git merge-base "origin/${PR_BASE_REF}" HEAD)"; then
               echo "enabled=false" >> "$GITHUB_OUTPUT"
               echo "run_prepared=true" >> "$GITHUB_OUTPUT"
+              echo "run_evidence=true" >> "$GITHUB_OUTPUT"
               echo "Could not resolve merge base against origin/${PR_BASE_REF}; running full validation."
               exit 0
             fi
@@ -88,6 +90,7 @@ jobs:
             if [[ ! "${PUSH_BEFORE_SHA}" =~ ^[0-9a-fA-F]{40}$ ]] || ! git merge-base --is-ancestor "${PUSH_BEFORE_SHA}" HEAD; then
               echo "enabled=false" >> "$GITHUB_OUTPUT"
               echo "run_prepared=true" >> "$GITHUB_OUTPUT"
+              echo "run_evidence=true" >> "$GITHUB_OUTPUT"
               echo "Could not resolve the previous main commit; running full validation."
               exit 0
             fi
@@ -125,6 +128,7 @@ jobs:
             if ! base_sha="$(git merge-base origin/main HEAD)"; then
               echo "enabled=false" >> "$GITHUB_OUTPUT"
               echo "run_prepared=true" >> "$GITHUB_OUTPUT"
+              echo "run_evidence=true" >> "$GITHUB_OUTPUT"
               echo "Could not resolve merge base against origin/main; running full validation."
               exit 0
             fi
@@ -132,9 +136,11 @@ jobs:
 
           mapfile -t changed_files < <(git diff --no-renames --name-only "${base_sha}...HEAD")
           metadata_only=true
+          run_evidence=false
           if ((${#changed_files[@]} == 0)); then
             metadata_only=false
             run_prepared=true
+            run_evidence=true
           fi
 
           if [[ "${EVENT_NAME}" == "push" ]] && ((${#changed_files[@]} > 0)); then
@@ -179,6 +185,11 @@ jobs:
           fi
 
           for path in "${changed_files[@]}"; do
+            case "${path}" in
+              docs/*|lint.config.js|tsconfig.evidence.json|packages/platform/src/capability-conformance.ts|packages/platform/src/capability-conformance.test.ts|packages/platform/package.json|package.json|pnpm-lock.yaml)
+                run_evidence=true
+                ;;
+            esac
             safe_path="${path//%/%25}"
             safe_path="${safe_path//$'\r'/}"
             safe_path="${safe_path//$'\n'/}"
@@ -278,6 +289,7 @@ jobs:
 
           echo "enabled=${metadata_only}" >> "$GITHUB_OUTPUT"
           echo "run_prepared=${run_prepared}" >> "$GITHUB_OUTPUT"
+          echo "run_evidence=${run_evidence}" >> "$GITHUB_OUTPUT"
           if (( ${#workspace_test_dirs[@]} > 0 )); then
             {
               echo 'workspace_test_dirs<<EOF'
@@ -287,6 +299,7 @@ jobs:
           fi
           echo "Metadata-only validation: ${metadata_only}"
           echo "Prepared smoke suite: ${run_prepared}"
+          echo "Documentation Evidence: ${run_evidence}"
           printf 'Changed files:\n%s\n' "${changed_files[*]:-<none>}"
 
       - uses: pnpm/action-setup@v6
@@ -306,6 +319,10 @@ jobs:
           path: node_modules/.cache/ttsc/plugins
           key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
+
+      - name: Verify documentation evidence
+        if: ${{ steps.release-pr-meta.outputs.run_evidence == 'true' && steps.release-pr-meta.outputs.enabled != 'true' }}
+        run: pnpm docs:evidence
 
       - name: Validate release PR package metadata
         if: ${{ steps.release-pr-meta.outputs.enabled == 'true' }}
