@@ -39,6 +39,6 @@ void reason;
 const nativeJson: CapacitorNativeJsonTransport = createCapacitorNativeJsonTransport({
   target: 'ios',
   baseUrl: 'https://api.example.com',
-  allowedOrigins: ['https://api.example.com'],
+  allowedOrigin: 'https://api.example.com',
 });
 void nativeJson;

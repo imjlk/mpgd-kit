@@ -122,7 +122,7 @@ const baseUrl = 'https://api.example.com';
 const httpTransport = createCapacitorNativeJsonTransport({
   target: 'android',
   baseUrl,
-  allowedOrigins: ['https://api.example.com'],
+  allowedOrigin: 'https://api.example.com',
 });
 const runtime = createGameServicesRuntime({
   gateway,
@@ -136,13 +136,16 @@ const runtime = createGameServicesRuntime({
 ```
 
 The game supplies its real gateway, player ID, and token resolver. The native
-transport permits only configured HTTPS origins and relative JSON API paths;
-it rejects changed response URLs and 3xx responses. It requests
+transport permits only its configured HTTPS origin and relative JSON API paths;
+it rejects 3xx responses and changed routes while tolerating equivalent native
+URL encoding of the same path or query. It requests
 `disableRedirects: true` from Capacitor. A native implementation that ignored
 that option could have followed a redirect before JS sees the result, so
 redirect and credential handling still require native integration testing.
-The transport supports GET and POST JSON only, not streaming, file uploads,
-or arbitrary Fetch semantics. `AbortSignal` and the overall timeout stop the
+The transport owns `Accept: application/json` and POST `Content-Type`; callers
+supplying either header are rejected instead of having it silently rewritten.
+It supports GET and POST JSON only, not streaming, file uploads, or arbitrary
+Fetch semantics. `AbortSignal` and the overall timeout stop the
 JS wait; they do **not** prove the native request or server operation was
 canceled. Reconcile purchases and reward claims before retrying them.
 

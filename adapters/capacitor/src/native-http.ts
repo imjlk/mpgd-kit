@@ -57,8 +57,8 @@ export interface CapacitorNativeJsonTransport {
 export interface CreateCapacitorNativeJsonTransportInput {
   readonly target: 'android' | 'ios';
   readonly baseUrl: string;
-  /** Explicit HTTPS origins permitted for the initial request. */
-  readonly allowedOrigins: readonly string[];
+  /** Exact HTTPS origin of the API; initial requests never use another origin. */
+  readonly allowedOrigin: string;
   readonly connectTimeoutMs?: number;
   readonly readTimeoutMs?: number;
   readonly overallTimeoutMs?: number;
@@ -82,16 +82,8 @@ export function createCapacitorNativeJsonTransport(
   input: CreateCapacitorNativeJsonTransportInput,
 ): CapacitorNativeJsonTransport {
   const base = parseHttpsUrl(input.baseUrl);
-  const allowedOrigins = new Set(
-    input.allowedOrigins.map((origin) => {
-      const parsed = parseHttpsUrl(origin);
-      if (parsed.href !== `${parsed.origin}/`) {
-        throw new CapacitorNativeHttpError('NATIVE_HTTP_CONFIGURATION');
-      }
-      return parsed.origin;
-    }),
-  );
-  if (allowedOrigins.size === 0 || !allowedOrigins.has(base.origin)
+  const allowedOrigin = parseHttpsUrl(input.allowedOrigin);
+  if (allowedOrigin.href !== `${allowedOrigin.origin}/` || allowedOrigin.origin !== base.origin
     || base.username !== '' || base.password !== ''
     || base.search !== '' || base.hash !== '') {
     throw new CapacitorNativeHttpError('NATIVE_HTTP_CONFIGURATION');
@@ -165,8 +157,14 @@ export function createCapacitorNativeJsonTransport(
     } catch {
       throw new CapacitorNativeHttpError('NATIVE_HTTP_INVALID_RESPONSE');
     }
-    if (responseUrl.origin !== url.origin || responseUrl.href !== url.href) {
+    if (responseUrl.origin !== url.origin) {
       throw new CapacitorNativeHttpError('NATIVE_HTTP_CROSS_ORIGIN');
+    }
+    if (responseUrl.username !== '' || responseUrl.password !== '' || responseUrl.hash !== ''
+      || normalizeNativePath(responseUrl.pathname) !== normalizeNativePath(url.pathname)
+      || new URLSearchParams(responseUrl.search).toString()
+        !== new URLSearchParams(url.search).toString()) {
+      throw new CapacitorNativeHttpError('NATIVE_HTTP_REDIRECT_BLOCKED');
     }
     const raw = response.data as unknown;
     let serialized: string;
@@ -241,12 +239,21 @@ function resolvePath(path: string, base: URL, basePath: string): URL {
   return resolved;
 }
 
+/** Native URL stacks may decode harmless path escapes while preserving the route. */
+function normalizeNativePath(path: string): string {
+  return path.replace(/%([0-9a-f]{2})/giu, (_match, hex: string) => {
+    const character = String.fromCharCode(Number.parseInt(hex, 16));
+    return /^[A-Za-z0-9._~,*-]$/u.test(character) ? character : `%${hex.toUpperCase()}`;
+  });
+}
+
 function normalizeHeaders(input: Readonly<Record<string, string>> | undefined): Record<string, string> {
   const headers: Record<string, string> = {};
   for (const [rawName, value] of Object.entries(input ?? {})) {
     const name = rawName.toLowerCase();
     if (!headerNamePattern.test(name) || typeof value !== 'string'
-      || /[\r\n]/u.test(value) || name === 'host' || name === 'content-length') {
+      || /[\r\n]/u.test(value) || name === 'host' || name === 'content-length'
+      || name === 'accept' || name === 'content-type') {
       throw new CapacitorNativeHttpError('NATIVE_HTTP_INVALID_REQUEST');
     }
     headers[name] = value;

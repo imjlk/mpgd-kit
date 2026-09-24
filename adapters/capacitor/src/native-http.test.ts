@@ -8,7 +8,7 @@ import {
 } from './native-http.js';
 
 const baseUrl = 'https://api.example.com/api';
-const allowedOrigins = ['https://api.example.com'];
+const allowedOrigin = 'https://api.example.com';
 
 function createFake(input: {
   target?: 'android' | 'ios';
@@ -20,7 +20,7 @@ function createFake(input: {
   const transport = createCapacitorNativeJsonTransport({
     target,
     baseUrl,
-    allowedOrigins,
+    allowedOrigin,
     getPlatform: () => target,
     http: {
       async request(options) {
@@ -104,15 +104,31 @@ describe('scoped Capacitor native JSON transport', () => {
     }) });
     await expect(changed.transport.request({ method: 'GET', path: '/secret' }))
       .rejects.toMatchObject({ code: 'NATIVE_HTTP_CROSS_ORIGIN' });
+    const changedRoute = createFake({ response: () => ({
+      status: 200, url: 'https://api.example.com/api/other', headers: {}, data: { ok: true },
+    }) });
+    await expect(changedRoute.transport.request({ method: 'GET', path: '/expected' }))
+      .rejects.toMatchObject({ code: 'NATIVE_HTTP_REDIRECT_BLOCKED' });
     expect(redirect.calls[0]?.disableRedirects).toBe(true);
+  });
+
+  it('accepts equivalent native URL encoding without allowing a changed route', async () => {
+    const nativeNormalized = createFake({ response: (options) => ({
+      status: 200,
+      url: options.url.replace('%7E', '~').replace('%2C', ','),
+      headers: {}, data: { ok: true },
+    }) });
+    await expect(nativeNormalized.transport.request({
+      method: 'GET', path: '/players/%7Eguest?ids=a%2Cb',
+    })).resolves.toEqual({ status: 200, body: { ok: true } });
   });
 
   it('fails closed for invalid origins, escaped paths, binary payloads, and wrong platforms', async () => {
     expect(() => createCapacitorNativeJsonTransport({
-      target: 'android', baseUrl: 'http://api.example.com', allowedOrigins,
+      target: 'android', baseUrl: 'http://api.example.com', allowedOrigin,
     })).toThrow();
     expect(() => createCapacitorNativeJsonTransport({
-      target: 'android', baseUrl, allowedOrigins: ['https://elsewhere.example'],
+      target: 'android', baseUrl, allowedOrigin: 'https://elsewhere.example',
     })).toThrow();
     const { transport, calls } = createFake({ options: { maxRequestBytes: 6 } });
     await expect(transport.request({ method: 'GET', path: '/../outside' }))
@@ -134,6 +150,12 @@ describe('scoped Capacitor native JSON transport', () => {
     })).rejects.toMatchObject({ code: 'NATIVE_HTTP_INVALID_REQUEST' });
     await expect(transport.request({
       method: 'GET', path: '/health', headers: { host: 'evil.example' },
+    })).rejects.toMatchObject({ code: 'NATIVE_HTTP_INVALID_REQUEST' });
+    await expect(transport.request({
+      method: 'GET', path: '/health', headers: { Accept: 'application/json;profile=v2' },
+    })).rejects.toMatchObject({ code: 'NATIVE_HTTP_INVALID_REQUEST' });
+    await expect(transport.request({
+      method: 'POST', path: '/health', body: {}, headers: { 'Content-Type': 'text/plain' },
     })).rejects.toMatchObject({ code: 'NATIVE_HTTP_INVALID_REQUEST' });
     const controller = new AbortController();
     controller.abort();

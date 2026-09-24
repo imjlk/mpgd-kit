@@ -8,7 +8,7 @@ const sent = [];
 const httpTransport = createCapacitorNativeJsonTransport({
   target: 'android',
   baseUrl,
-  allowedOrigins: [baseUrl],
+  allowedOrigin: baseUrl,
   getPlatform: () => 'android',
   http: {
     async request(options) {

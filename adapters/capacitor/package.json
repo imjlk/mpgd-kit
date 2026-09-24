@@ -52,6 +52,7 @@
   },
   "devDependencies": {
     "@capacitor/core": "8.5.2",
+    "@mpgd/game-services": "workspace:*",
     "ttsc": "0.30.4",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"
