@@ -23,6 +23,8 @@ distribution target gets the right adapter and validation path.
   [Evidence-backed guide](docs/guides/platform-capabilities.md) covers live
   capability snapshots and their conformance runner; [documentation evidence](docs/DOCUMENTATION_EVIDENCE.md)
   explains the enforced scope.
+- [Documentation index](docs/README.md) separates verified guides, integration
+  notes, and roadmap material.
 - Paraglide-backed `@mpgd/i18n` translation-key/message catalog.
 - Ledger-first game-services backend contracts, client orchestration, in-memory store, D1 store, HTTP endpoints, oRPC v2 beta procedures, and Cloudflare Worker starter.
 - Agent-facing Phaser starter manifests, generated-game `AGENTS.md`, a kit workflow

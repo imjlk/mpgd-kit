@@ -47,6 +47,8 @@
     "validate:toolchain": "node tools/validate-toolchain.mjs",
     "cache:paths": "node node_modules/ttsc/lib/launcher/ttsc.js cache paths --json",
     "docs:evidence": "MPGD_EVIDENCE=1 ttsc --noEmit -p tsconfig.evidence.json",
+    "docs:examples:check": "ttsc --noEmit -p tsconfig.docs-examples.json",
+    "docs:examples:test": "vitest run docs/examples/platform-capabilities.test.ts",
     "test:ttsx-assertions": "node tools/smoke/ttsx-assertions.mjs",
     "test:icons": "node tools/run-ttsx.mjs tools/icons/icons.test.ts",
     "test:target-artifacts": "node tools/run-ttsx.mjs tools/target/platform-targets.test.ts && node tools/run-ttsx.mjs tools/target/minigame-package-budget.test.ts && node tools/run-ttsx.mjs tools/target/minigame-project-files.test.ts && node tools/run-ttsx.mjs tools/target/minigame-artifact.test.ts && node tools/run-ttsx.mjs --project examples/phaser-starter/tsconfig.minigame-bridge-test.json examples/phaser-starter/src/platform/minigameBridgeLifecycle.test.ts && node tools/run-ttsx.mjs --project examples/phaser-starter/tsconfig.text-selection-test.json examples/phaser-starter/src/platform/textSelection.test.ts && node tools/run-ttsx.mjs --project examples/phaser-starter/tsconfig.minigame-output-test.json examples/phaser-starter/vite.minigame-output.test.ts && MPGD_PLATFORM_TARGETS_FILE=examples/phaser-starter/mpgd.targets.json node tools/run-ttsx.mjs tools/smoke/verify-target-artifacts.test.ts && node tools/run-ttsx.mjs tools/target/web-artifact.test.ts",
