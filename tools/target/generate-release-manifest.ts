@@ -44,6 +44,7 @@ export interface GenerateReleaseManifestInput {
   readonly profile: string;
   readonly artifact: string;
   readonly iconManifestArtifactPath: string;
+  readonly nativeDelivery?: ReleaseManifest['targets'][string]['nativeDelivery'];
   readonly outputPath?: string;
 }
 
@@ -125,6 +126,7 @@ function generateReleaseManifestWithProvenance(
           digest: effectiveConfig.digest,
         },
         iconManifest,
+        ...(input.nativeDelivery === undefined ? {} : { nativeDelivery: input.nativeDelivery }),
         ...(input.target === 'ait'
           ? {
               appName: readOptionalString(process.env.MPGD_AIT_APP_NAME)

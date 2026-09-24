@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
+import { withReleaseManifestLock } from './release-manifest-lock';
+
 export interface NativeBuildAttemptRecord {
   readonly target: string;
   readonly runId: string;
@@ -50,17 +52,19 @@ export function readNativeBuildAttempt(
 
 export function beginNativeBuildAttempt(gameRoot: string, target: string): NativeBuildAttempt {
   const file = nativeBuildAttemptPath(gameRoot, target);
-  const previous = readNativeBuildAttempt(gameRoot, target);
-  if (previous?.status === 'building' && isProcessAlive(previous.pid)) {
-    throw new Error(`Native target ${target} already has a live build.`);
-  }
   const record: NativeBuildAttemptRecord = {
     target,
     runId: randomUUID(),
     pid: process.pid,
     status: 'building',
   };
-  writeRecord(file, record);
+  withReleaseManifestLock(file, () => {
+    const previous = readNativeBuildAttempt(gameRoot, target);
+    if (previous?.status === 'building' && isProcessAlive(previous.pid)) {
+      throw new Error(`Native target ${target} already has a live build.`);
+    }
+    writeRecord(file, record);
+  });
 
   function settle(status: 'failed' | 'success', artifact?: string): void {
     const current = readNativeBuildAttempt(gameRoot, target);
@@ -73,7 +77,7 @@ export function beginNativeBuildAttempt(gameRoot: string, target: string): Nativ
   return {
     runId: record.runId,
     complete(artifact) {
-      if (!artifact.startsWith('release-output/native/') || path.isAbsolute(artifact)
+      if (!artifact.startsWith(`release-output/native/${target}/`) || path.isAbsolute(artifact)
         || artifact.split(/[\\/]/u).some((segment) => segment === '' || segment === '..')) {
         throw new Error('Native build artifact path is invalid.');
       }

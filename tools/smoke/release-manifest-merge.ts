@@ -77,6 +77,42 @@ try {
 
   const matchingManifest = readManifest(matchingManifestFile);
 
+  const nativeTarget = matchingManifest.targets['web-preview'];
+  assert.ok(nativeTarget);
+  const withNativeDelivery = (delivery: ReleaseManifest['targets'][string]['nativeDelivery']) =>
+    assertReleaseManifest({
+      ...matchingManifest,
+      targets: {
+        android: { ...nativeTarget, nativeDelivery: delivery },
+      },
+    });
+  assert.equal(withNativeDelivery({
+    platform: 'android',
+    mode: 'signed-archive',
+    signed: true,
+    submissionCandidate: true,
+  }).targets.android?.nativeDelivery?.submissionCandidate, true);
+  assert.throws(
+    () =>
+      withNativeDelivery({
+        platform: 'android',
+        mode: 'unsigned-archive',
+        signed: false,
+        submissionCandidate: true,
+      }),
+    /native delivery state is inconsistent/u,
+  );
+  assert.throws(
+    () =>
+      withNativeDelivery({
+        platform: 'ios',
+        mode: 'signed-archive',
+        signed: true,
+        submissionCandidate: true,
+      }),
+    /native delivery state is inconsistent/u,
+  );
+
   assertManifestMatchesTopLevelSchema(matchingManifest);
   assert.equal(matchingManifest.gitSha, 'game-source-sha');
   assert.equal(matchingManifest.kitGitSha, firstKitGitSha);

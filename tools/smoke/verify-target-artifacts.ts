@@ -92,6 +92,13 @@ export function verifyTargetArtifacts(
         && (attempt.status !== 'success' || attempt.artifact !== entry.artifact)) {
         throw new Error(`Native target ${target} has no successful current build artifact.`);
       }
+      if ((attempt !== undefined || entry.profile === 'production')
+        && entry.nativeDelivery === undefined) {
+        throw new Error(`Native target ${target} is missing build-mode evidence.`);
+      }
+      if (entry.nativeDelivery !== undefined) {
+        assertNativeDeliveryArtifact(target, targetConfig, entry);
+      }
     }
 
     if (entry.artifact.length === 0) {
@@ -190,6 +197,38 @@ export function assertWebArtifactInstallability(
     assertNonInstallableWebArtifact(artifactPath);
   } else {
     assertInstallableWebArtifact(artifactPath);
+  }
+}
+
+function assertNativeDeliveryArtifact(
+  target: string,
+  config: SmokePlatformTargetConfig,
+  entry: ReleaseManifest['targets'][string],
+): void {
+  const delivery = entry.nativeDelivery;
+  if (delivery === undefined) {
+    return;
+  }
+  const platform = config.kind === 'capacitor-android' ? 'android' : 'ios';
+  if (delivery.platform !== platform) {
+    throw new Error(`Native target ${target} build platform does not match its configuration.`);
+  }
+  const expectedSuffix = delivery.mode === 'sync'
+    ? '/capacitor-sync'
+    : delivery.mode === 'debug'
+      ? '.apk'
+      : delivery.mode === 'simulator'
+        ? '.app'
+        : delivery.mode === 'store-export'
+          ? '.ipa'
+          : delivery.platform === 'android'
+            ? '.aab'
+            : '.xcarchive';
+  if (!entry.artifact.endsWith(expectedSuffix)) {
+    throw new Error(`Native target ${target} artifact does not match its build mode.`);
+  }
+  if (entry.profile === 'production' && !delivery.signed) {
+    throw new Error(`Native target ${target} production artifact is unsigned.`);
   }
 }
 

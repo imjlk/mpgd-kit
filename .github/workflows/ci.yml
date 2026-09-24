@@ -788,6 +788,7 @@ jobs:
           name: package-dist-ci
           path: ${{ runner.temp }}
       - run: tar -xzf "$RUNNER_TEMP/package-dist.tgz"
+      - run: node tools/run-ttsx.mjs tools/target/native-ios-signing.test.ts
       - run: pnpm build:target ios staging
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'

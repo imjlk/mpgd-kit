@@ -63,6 +63,28 @@ export function inspectSignedAndroidBundle(input: {
     }),
   ) as Record<'packageId' | 'versionCode' | 'versionName', string>;
 
+  const runtimeConfig = runner.run('unzip', [
+    '-p',
+    input.bundle,
+    'base/assets/capacitor.config.json',
+  ]);
+  if (runtimeConfig.status !== 0 || runtimeConfig.stdout.trim() === '') {
+    throw new Error('Android bundle Capacitor configuration could not be inspected.');
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(runtimeConfig.stdout);
+  } catch {
+    throw new Error('Android bundle Capacitor configuration is malformed.');
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('Android bundle Capacitor configuration is malformed.');
+  }
+  const server = (parsed as Record<string, unknown>).server;
+  if (typeof server === 'object' && server !== null && 'url' in server) {
+    throw new Error('Android bundle retains a live-reload bridge configuration.');
+  }
+
   return { ...observed, signed: true };
 }
 

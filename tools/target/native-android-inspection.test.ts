@@ -20,6 +20,9 @@ try {
       if (command === 'jarsigner') {
         return { status: 0, stdout: 'jar verified.\n', stderr: '' };
       }
+      if (command === 'unzip') {
+        return { status: 0, stdout: '{"server":{"androidScheme":"https"}}', stderr: '' };
+      }
       const xpath = args.find((argument) => argument.startsWith('--xpath='));
       const value = xpath?.endsWith('@package')
         ? 'dev.example.game'
@@ -41,7 +44,7 @@ try {
     versionName: '1.4.0',
     signed: true,
   });
-  assert.equal(calls.length, 4);
+  assert.equal(calls.length, 5);
   assert.throws(
     () =>
       inspectSignedAndroidBundle({
@@ -58,6 +61,20 @@ try {
         runner: { run: () => ({ status: 0, stdout: 'jar is unsigned.', stderr: '' }) },
       }),
     /not verifiably signed/u,
+  );
+  assert.throws(
+    () => inspectSignedAndroidBundle({
+      ...expected,
+      runner: {
+        run(command, args) {
+          if (command === 'unzip') {
+            return { status: 0, stdout: '{"server":{"url":"http://localhost:5173"}}', stderr: '' };
+          }
+          return runner.run(command, args);
+        },
+      },
+    }),
+    /live-reload bridge/u,
   );
   console.info('Signed Android app bundle inspection passed.');
 } finally {

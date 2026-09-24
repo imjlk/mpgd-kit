@@ -23,6 +23,7 @@ try {
 
   const third = beginNativeBuildAttempt(root, 'android');
   assert.throws(() => third.complete('../escape.aab'), /path is invalid/u);
+  assert.throws(() => third.complete('release-output/native/ios/other.aab'), /path is invalid/u);
   third.complete('release-output/native/android/three.aab');
   assert.equal(
     readNativeBuildAttempt(root, 'android')?.artifact,

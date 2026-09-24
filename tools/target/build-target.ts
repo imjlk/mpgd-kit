@@ -43,6 +43,8 @@ import { inspectSignedAndroidBundle } from './native-android-inspection';
 import { beginNativeBuildAttempt } from './native-build-attempt';
 import { resolveNativeBuildPlan } from './native-build-mode';
 import { createNativeShellStage } from './native-build-stage';
+import { inspectSignedIosArchive, inspectSignedIosIpa } from './native-ios-inspection';
+import { resolveIosSigningPlan } from './native-ios-signing';
 import {
   assertNativeReleaseIdentity,
   runNativeSyncWithIdentityCheck,
@@ -556,8 +558,74 @@ try {
             '@capacitor/app',
             'CapacitorApp',
           );
+        } else if (nativePlan.mode === 'signed-archive'
+          || nativePlan.mode === 'store-export') {
+          const signing = resolveIosSigningPlan(env, nativePlan.mode);
+          const archiveArtifact = `${nativeArtifactRoot}/App.xcarchive`;
+          mkdirSync(dirname(targetPath(archiveArtifact)), { recursive: true });
+          run(
+            'xcodebuild',
+            [
+              'archive',
+              '-project',
+              'App/App.xcodeproj',
+              '-scheme',
+              'App',
+              '-configuration',
+              'Release',
+              '-destination',
+              'generic/platform=iOS',
+              '-archivePath',
+              targetPath(archiveArtifact),
+              ...signing.archiveBuildSettings,
+            ],
+            env,
+            `${stage.shellApp}/ios`,
+          );
+          const expectedIosIdentity = {
+            expectedBundleId: requireString(target.metadata?.bundleId, 'iOS bundle ID'),
+            expectedMarketingVersion: requireString(
+              env.MPGD_TARGET_MARKETING_VERSION,
+              'MPGD_TARGET_MARKETING_VERSION',
+            ),
+            expectedBuildNumber: requireString(
+              env.MPGD_TARGET_BUILD_NUMBER,
+              'MPGD_TARGET_BUILD_NUMBER',
+            ),
+            expectedTeamId: signing.teamId,
+          };
+          inspectSignedIosArchive(targetPath(archiveArtifact), expectedIosIdentity);
+          releaseArtifact = archiveArtifact;
+          if (nativePlan.mode === 'store-export') {
+            const exportRoot = mkdtempSync(join(tmpdir(), 'mpgd-ios-export-'));
+            try {
+              run(
+                'xcodebuild',
+                [
+                  '-exportArchive',
+                  '-archivePath',
+                  targetPath(archiveArtifact),
+                  '-exportPath',
+                  exportRoot,
+                  '-exportOptionsPlist',
+                  requireString(signing.exportOptionsPlist, 'iOS export options plist'),
+                ],
+                env,
+                `${stage.shellApp}/ios`,
+              );
+              const exportedIpas = readdirSync(exportRoot).filter((name) => name.endsWith('.ipa'));
+              if (exportedIpas.length !== 1) {
+                throw new Error('iOS store export must produce exactly one IPA.');
+              }
+              releaseArtifact = `${nativeArtifactRoot}/App.ipa`;
+              copyFile(join(exportRoot, exportedIpas[0] ?? ''), targetPath(releaseArtifact));
+              inspectSignedIosIpa(targetPath(releaseArtifact), expectedIosIdentity);
+            } finally {
+              rmSync(exportRoot, { recursive: true, force: true });
+            }
+          }
         } else {
-          throw new Error('Signed iOS archive and store export are not configured yet.');
+          throw new Error(`Unsupported iOS build mode: ${nativePlan.mode}.`);
         }
 
         writeManifest(targetName, profile, releaseArtifact, env);
@@ -805,6 +873,14 @@ function writeManifest(
       profile: releaseProfile,
       artifact,
       iconManifestArtifactPath: findEmbeddedIconManifestArtifactPath(artifact),
+      ...(nativePlan === undefined ? {} : {
+        nativeDelivery: {
+          platform: nativePlan.platform,
+          mode: nativePlan.mode,
+          signed: nativePlan.mode === 'signed-archive' || nativePlan.mode === 'store-export',
+          submissionCandidate: nativePlan.submissionCandidate,
+        },
+      }),
       outputPath: releaseManifestPath(configBaseDir),
     }),
   );
