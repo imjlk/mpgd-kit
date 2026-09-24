@@ -63,9 +63,14 @@ interface IosIdentity {
 
 type NativeIdentity = AndroidIdentity | IosIdentity;
 
+interface IosBuildSettings {
+  readonly values: string;
+  readonly hasBaseConfiguration: boolean;
+}
+
 interface IosReleaseBuildSettings {
-  readonly project: string;
-  readonly target: string;
+  readonly project: IosBuildSettings;
+  readonly target: IosBuildSettings;
 }
 
 function resolveExpectedNativeIdentity(
@@ -117,35 +122,9 @@ function assertAndroidIdentity(file: string, expected: AndroidIdentity): void {
 function assertIosIdentity(file: string, expected: IosIdentity): void {
   const source = readRequiredFile(file, 'iOS Xcode project configuration');
   const releaseSettings = readIosAppReleaseSettings(source, file);
-  const conditionalBundleId = /\bPRODUCT_BUNDLE_IDENTIFIER\s*\[[^\]\r\n]+\]["']?\s*=/u;
-  const targetSettings = stripComments(releaseSettings.target);
-  const targetHasConcreteBundleId = readSettingValues(
-    targetSettings,
-    /\bPRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;]+);/u,
-  ).some((value) => value !== '$(inherited)');
-  if (conditionalBundleId.test(targetSettings)
-    || (!targetHasConcreteBundleId && conditionalBundleId.test(stripComments(releaseSettings.project)))) {
-    throw new Error(`Native release preflight does not support conditional bundle IDs in ${file}.`);
-  }
-
-  assertIosSetting(
-    releaseSettings,
-    /\bPRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;]+);/u,
-    expected.bundleId,
-    file,
-  );
-  assertIosSetting(
-    releaseSettings,
-    /\bMARKETING_VERSION\s*=\s*([^;]+);/u,
-    expected.marketingVersion,
-    file,
-  );
-  assertIosSetting(
-    releaseSettings,
-    /\bCURRENT_PROJECT_VERSION\s*=\s*([^;]+);/u,
-    expected.buildNumber,
-    file,
-  );
+  assertIosSetting(releaseSettings, 'PRODUCT_BUNDLE_IDENTIFIER', expected.bundleId, file);
+  assertIosSetting(releaseSettings, 'MARKETING_VERSION', expected.marketingVersion, file);
+  assertIosSetting(releaseSettings, 'CURRENT_PROJECT_VERSION', expected.buildNumber, file);
 }
 
 function assertSetting(source: string, expression: RegExp, expected: string, file: string): void {
@@ -154,15 +133,29 @@ function assertSetting(source: string, expression: RegExp, expected: string, fil
 
 function assertIosSetting(
   settings: IosReleaseBuildSettings,
-  expression: RegExp,
+  key: 'PRODUCT_BUNDLE_IDENTIFIER' | 'MARKETING_VERSION' | 'CURRENT_PROJECT_VERSION',
   expected: string,
   file: string,
 ): void {
-  const targetValues = readSettingValues(settings.target, expression)
+  const expression = new RegExp(`\\b${key}\\s*=\\s*([^;]+);`, 'u');
+  const conditional = new RegExp(`\\b${key}\\s*\\[[^\\]\\r\\n]+\\]["']?\\s*=`, 'u');
+  const target = stripComments(settings.target.values);
+  const project = stripComments(settings.project.values);
+  const targetValues = readSettingValues(target, expression)
     .filter((value) => value !== '$(inherited)');
-  const values = targetValues.length > 0
-    ? targetValues
-    : readSettingValues(settings.project, expression);
+  if (conditional.test(target) || (targetValues.length === 0 && conditional.test(project))) {
+    throw new Error(`Native release preflight does not support conditional ${key} in ${file}.`);
+  }
+  if (targetValues.length === 0 && settings.target.hasBaseConfiguration) {
+    throw new Error(`Native release preflight cannot resolve Release xcconfig ${key} in ${file}.`);
+  }
+  const projectValues = readSettingValues(project, expression)
+    .filter((value) => value !== '$(inherited)');
+  if (targetValues.length === 0 && projectValues.length === 0
+    && settings.project.hasBaseConfiguration) {
+    throw new Error(`Native release preflight cannot resolve Release xcconfig ${key} in ${file}.`);
+  }
+  const values = targetValues.length > 0 ? targetValues : projectValues;
 
   assertSettingValues(values, expression, expected, file);
 }
@@ -274,7 +267,7 @@ function readIosAppReleaseSettings(source: string, file: string): IosReleaseBuil
 
   return {
     project: projectConfigurationListId === undefined
-      ? ''
+      ? { values: '', hasBaseConfiguration: false }
       : readPbxReleaseBuildSettings(source, projectConfigurationListId, 'Xcode project', file),
     target: readPbxReleaseBuildSettings(source, targetConfigurationListId, 'App target', file),
   };
@@ -324,7 +317,7 @@ function readPbxReleaseBuildSettings(
   configurationListId: string,
   label: string,
   file: string,
-): string {
+): IosBuildSettings {
   const configurationList = readPbxObject(source, configurationListId, file);
   const releaseConfigurationId = readPbxReference(
     configurationList,
@@ -334,7 +327,10 @@ function readPbxReleaseBuildSettings(
   );
   const releaseConfiguration = readPbxObject(source, releaseConfigurationId, file);
 
-  return readPbxBuildSettings(releaseConfiguration, `${label} Release build settings`, file);
+  return {
+    values: readPbxBuildSettings(releaseConfiguration, `${label} Release build settings`, file),
+    hasBaseConfiguration: /\bbaseConfigurationReference\s*=/u.test(releaseConfiguration),
+  };
 }
 
 function readPbxBuildSettings(source: string, label: string, file: string): string {

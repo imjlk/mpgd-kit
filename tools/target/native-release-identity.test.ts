@@ -168,7 +168,7 @@ try {
         required: false,
         shellApp: shellRoot,
       }),
-    /does not support conditional bundle IDs/u,
+    /does not support conditional PRODUCT_BUNDLE_IDENTIFIER/u,
   );
   const conditionalProjectSource = inheritedIosSource.replace(
     'PRODUCT_BUNDLE_IDENTIFIER = dev.example.game;',
@@ -188,7 +188,7 @@ try {
         required: false,
         shellApp: shellRoot,
       }),
-    /does not support conditional bundle IDs/u,
+    /does not support conditional PRODUCT_BUNDLE_IDENTIFIER/u,
   );
   writeFileSync(
     iosProject,
@@ -210,7 +210,52 @@ try {
       shellApp: shellRoot,
     }),
   );
+  writeFileSync(iosProject, inheritedIosSource.replace(
+    '003 /* Release */ = {\n  isa = XCBuildConfiguration;',
+    '003 /* Release */ = {\n  isa = XCBuildConfiguration;\n  baseConfigurationReference = 99999999;',
+  ));
+  assert.throws(
+    () =>
+      assertNativeReleaseIdentity({
+        environment: {
+          APP_VERSION: '1.4.0',
+          MPGD_TARGET_BUILD_NUMBER: '42',
+          MPGD_TARGET_MARKETING_VERSION: '1.4.0',
+        },
+        metadata: { bundleId: 'dev.example.game' },
+        platform: 'ios',
+        required: false,
+        shellApp: shellRoot,
+      }),
+    /cannot resolve Release xcconfig PRODUCT_BUNDLE_IDENTIFIER/u,
+  );
   writeShellFiles(shellRoot);
+  const inlineIosSource = readFileSync(iosProject, 'utf8');
+  for (const [key, value] of [
+    ['MARKETING_VERSION', '2.0.0'],
+    ['CURRENT_PROJECT_VERSION', '99'],
+  ]) {
+    writeFileSync(iosProject, inlineIosSource.replace(
+      `${key} = ${key === 'MARKETING_VERSION' ? '1.4.0' : '42'};`,
+      `${key} = ${key === 'MARKETING_VERSION' ? '1.4.0' : '42'};\n    "${key}[sdk=iphoneos*]" = ${value};`,
+    ));
+    assert.throws(
+      () =>
+        assertNativeReleaseIdentity({
+          environment: {
+            APP_VERSION: '1.4.0',
+            MPGD_TARGET_BUILD_NUMBER: '42',
+            MPGD_TARGET_MARKETING_VERSION: '1.4.0',
+          },
+          metadata: { bundleId: 'dev.example.game' },
+          platform: 'ios',
+          required: false,
+          shellApp: shellRoot,
+        }),
+      new RegExp(`does not support conditional ${key}`, 'u'),
+    );
+  }
+  writeFileSync(iosProject, inlineIosSource);
 
   assert.throws(
     () =>

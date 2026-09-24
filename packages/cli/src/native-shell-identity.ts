@@ -128,6 +128,7 @@ function readIosReleaseBundleId(source: string, listId: string): string | undefi
     throw new Error('Existing ios project App Release configuration is missing or ambiguous.');
   }
   const configuration = stripGradleComments(readPbxObject(source, releaseIds[0] ?? ''));
+  const hasBaseConfiguration = /\bbaseConfigurationReference\s*=/u.test(configuration);
   if (/\bPRODUCT_BUNDLE_IDENTIFIER\s*\[[^\]\r\n]+\]["']?\s*=/u.test(configuration)) {
     throw new Error('Existing ios project conditional Release bundle ID is unsupported.');
   }
@@ -135,6 +136,9 @@ function readIosReleaseBundleId(source: string, listId: string): string | undefi
     .map((match) => match[1]?.trim().replace(/^["']|["']$/gu, ''));
   if (values.length > 1) {
     throw new Error('Existing ios project Release bundle ID is ambiguous.');
+  }
+  if ((values[0] === undefined || values[0] === '$(inherited)') && hasBaseConfiguration) {
+    throw new Error('Existing ios project Release xcconfig identity cannot be read safely.');
   }
   return values[0];
 }

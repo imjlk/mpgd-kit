@@ -43,6 +43,10 @@ function iosProjectWithAppId(appId: string): string {
     `DDDDDDDD /* Release */ = { isa = XCBuildConfiguration; buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = ${appId}; }; };`,
     'EEEEEEEE /* NotificationService */ = { isa = PBXNativeTarget; name = NotificationService;',
     '  buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle.NotificationService; }; };',
+    '/* SceneDelegate.swift in Sources */',
+    '/* Main.storyboard in Resources */',
+    '/* LaunchScreen.storyboard in Resources */',
+    '/* Assets.xcassets in Resources */',
   ].join('\n');
 }
 
@@ -182,7 +186,11 @@ try {
             ]
           : [
               'ios/App/App/AppDelegate.swift',
+              'ios/App/App/SceneDelegate.swift',
               'ios/App/App/Info.plist',
+              'ios/App/App/Base.lproj/Main.storyboard',
+              'ios/App/App/Base.lproj/LaunchScreen.storyboard',
+              'ios/App/App/Assets.xcassets/Contents.json',
               'ios/App/CapApp-SPM/Package.swift',
             ];
         for (const relative of required) {
@@ -195,6 +203,8 @@ try {
               'apply from: "../capacitor-cordova-android-plugins/cordova.variables.gradle"',
             'android/app/src/main/res/values/strings.xml':
               '<resources><string name="app_name">Puzzle Game</string></resources>',
+            'android/app/src/main/AndroidManifest.xml':
+              '<manifest><application android:label="@string/app_name" /></manifest>',
             'ios/App/App/Info.plist':
               '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string></dict></plist>',
           };
@@ -252,6 +262,10 @@ try {
   renameSync(iosProjectFile, `${iosProjectFile}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /ios project is incomplete/u);
   renameSync(`${iosProjectFile}.saved`, iosProjectFile);
+  const sceneDelegate = path.join(root, 'apps/mobile-capacitor/ios/App/App/SceneDelegate.swift');
+  renameSync(sceneDelegate, `${sceneDelegate}.saved`);
+  assert.throws(() => planCapacitorShellStarter(options), /referenced app file/u);
+  renameSync(`${sceneDelegate}.saved`, sceneDelegate);
   const androidWrapper = path.join(root, 'apps/mobile-capacitor/android/gradlew');
   renameSync(androidWrapper, `${androidWrapper}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /android project is incomplete/u);
@@ -264,6 +278,13 @@ try {
   renameSync(androidVariables, `${androidVariables}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /applied Gradle script/u);
   renameSync(`${androidVariables}.saved`, androidVariables);
+  writeFileSync(androidRootBuild, 'apply from: file("missing.gradle")');
+  assert.throws(() => planCapacitorShellStarter(options), /applied Gradle script/u);
+  writeFileSync(androidRootBuild, 'apply(from = file("missing.gradle"))');
+  assert.throws(() => planCapacitorShellStarter(options), /applied Gradle script/u);
+  writeFileSync(androidRootBuild, 'apply from: dynamicScript()');
+  assert.throws(() => planCapacitorShellStarter(options), /unsupported Gradle apply expression/u);
+  writeFileSync(androidRootBuild, 'apply from: "variables.gradle"');
   const capacitorGradle = path.join(
     root,
     'apps/mobile-capacitor/android/app/capacitor.build.gradle',
@@ -290,6 +311,24 @@ try {
   writeFileSync(
     androidStrings,
     '<resources><string name="app_name">Puzzle Game</string></resources>',
+  );
+  const androidManifest = path.join(
+    root,
+    'apps/mobile-capacitor/android/app/src/main/AndroidManifest.xml',
+  );
+  writeFileSync(androidManifest, '<manifest><application android:label="Other Game" /></manifest>');
+  assert.throws(() => planCapacitorShellStarter(options), /application label differs/u);
+  writeFileSync(androidManifest, [
+    '<manifest><application android:label="@string/app_name">',
+    '<activity android:label="Other Game"><intent-filter>',
+    '<action android:name="android.intent.action.MAIN"/>',
+    '<category android:name="android.intent.category.LAUNCHER"/>',
+    '</intent-filter></activity></application></manifest>',
+  ].join(''));
+  assert.throws(() => planCapacitorShellStarter(options), /launcher label differs/u);
+  writeFileSync(
+    androidManifest,
+    '<manifest><application android:label="@string/app_name" /></manifest>',
   );
   const iosInfo = path.join(root, 'apps/mobile-capacitor/ios/App/App/Info.plist');
   writeFileSync(
@@ -334,6 +373,11 @@ try {
   );
   writeFileSync(iosProjectFile, `${omittedIosId}\n${projectReleaseSettings}`);
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(iosProjectFile, `${omittedIosId.replace(
+    'DDDDDDDD /* Release */ = { isa = XCBuildConfiguration;',
+    'DDDDDDDD /* Release */ = { isa = XCBuildConfiguration; baseConfigurationReference = 12345678;',
+  )}\n${projectReleaseSettings}`);
+  assert.throws(() => planCapacitorShellStarter(options), /Release xcconfig identity/u);
   writeFileSync(iosProjectFile, `${omittedIosId.replace(
     'DDDDDDDD /* Release */ = { isa = XCBuildConfiguration; buildSettings = {',
     'DDDDDDDD /* Release */ = { isa = XCBuildConfiguration; buildSettings = { "PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = dev.other.game;',
@@ -546,6 +590,10 @@ try {
   assert.throws(
     () => planCapacitorShellStarter({ ...options, appId: 'dev.example.my_game' }),
     /app ID/u,
+  );
+  assert.throws(
+    () => planCapacitorShellStarter({ ...options, appId: 'io.mygame' }),
+    /conflicts|differs/u,
   );
   assert.throws(
     () => planCapacitorShellStarter({ ...options, iconSource: '../outside.svg' }),

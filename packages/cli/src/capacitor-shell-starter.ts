@@ -22,7 +22,7 @@ const shellPath = 'apps/mobile-capacitor';
 const webPath = `${shellPath}/www`;
 const referenceShellPath = '${MPGD_KIT_PATH}/apps/mobile-capacitor';
 const providerIdPattern = /^[a-z][a-z0-9-]*$/u;
-const appIdPattern = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*){2,}$/u;
+const appIdPattern = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/u;
 
 interface PlannedFile {
   readonly path: string;
@@ -538,7 +538,36 @@ function assertNativePlatformComplete(
   }
   const content = readFileSync(path.join(nativeDirectory, required), 'utf8');
   assertNativeShellIdentity(platform, content, expectedAppId);
+  if (platform === 'ios') {
+    assertReferencedIosFiles(nativeDirectory, content);
+  }
   assertNativeDisplayName(nativeDirectory, platform, expectedDisplayName);
+}
+
+function assertReferencedIosFiles(nativeDirectory: string, project: string): void {
+  const references: readonly [RegExp, string][] = [
+    [/\/\*\s*SceneDelegate\.swift in Sources\s*\*\//u, 'App/App/SceneDelegate.swift'],
+    [/\/\*\s*Main\.storyboard in Resources\s*\*\//u, 'App/App/Base.lproj/Main.storyboard'],
+    [
+      /\/\*\s*LaunchScreen\.storyboard in Resources\s*\*\//u,
+      'App/App/Base.lproj/LaunchScreen.storyboard',
+    ],
+    [/\/\*\s*Assets\.xcassets in Resources\s*\*\//u, 'App/App/Assets.xcassets/Contents.json'],
+  ];
+  for (const [marker, relative] of references) {
+    if (marker.test(project) && !isNativeFile(nativeDirectory, relative)) {
+      throw new Error(
+        `Existing ios project is incomplete; referenced app file ${relative} is missing.`,
+      );
+    }
+  }
+  const info = readFileSync(path.join(nativeDirectory, 'App/App/Info.plist'), 'utf8');
+  if (/UISceneDelegateClassName<\/key>\s*<string>[^<]*\.SceneDelegate<\/string>/u.test(info)
+    && !isNativeFile(nativeDirectory, 'App/App/SceneDelegate.swift')) {
+    throw new Error(
+      'Existing ios project is incomplete; referenced SceneDelegate.swift is missing.',
+    );
+  }
 }
 
 function assertAppliedGradleScripts(
@@ -559,9 +588,15 @@ function assertAppliedGradleScripts(
   const expressions = [
     /\bapply\s+from\s*:\s*["']([^"']+)["']/gu,
     /\bapply\s*\(\s*from\s*=\s*["']([^"']+)["']\s*\)/gu,
+    /\bapply\s+from\s*:\s*file\s*\(\s*["']([^"']+)["']\s*\)/gu,
+    /\bapply\s*\(\s*from\s*=\s*file\s*\(\s*["']([^"']+)["']\s*\)\s*\)/gu,
   ];
+  const matched = new Set<number>();
   for (const expression of expressions) {
     for (const match of source.matchAll(expression)) {
+      if (match.index !== undefined) {
+        matched.add(match.index);
+      }
       const requested = match[1] ?? '';
       const resolved = path.resolve(nativeDirectory, path.dirname(script), requested);
       const relative = path.relative(nativeDirectory, resolved);
@@ -571,6 +606,11 @@ function assertAppliedGradleScripts(
       }
       assertAppliedGradleScripts(nativeDirectory, relative, visited);
     }
+  }
+  const applyExpressions = [/\bapply\s+from\s*:/gu, /\bapply\s*\(\s*from\s*=/gu];
+  if (applyExpressions.some((expression) => [...source.matchAll(expression)]
+    .some((match) => match.index !== undefined && !matched.has(match.index)))) {
+    throw new Error('Existing android project has an unsupported Gradle apply expression.');
   }
 }
 
@@ -595,6 +635,64 @@ function assertNativeDisplayName(
   if (labels.length !== 1 || labels[0] !== expectedDisplayName) {
     throw new Error(`Existing ${platform} project display name differs or cannot be read safely.`);
   }
+  if (platform === 'android') {
+    const manifest = readFileSync(
+      path.join(nativeDirectory, 'app/src/main/AndroidManifest.xml'),
+      'utf8',
+    );
+    const application = /<application\b([^>]*)>/u.exec(manifest)?.[1];
+    const label = application === undefined
+      ? undefined
+      : /\bandroid:label\s*=\s*["']([^"']+)["']/u.exec(application)?.[1];
+    if (label === undefined) {
+      throw new Error('Existing android project application label is missing.');
+    }
+    const effective = resolveAndroidLabel(source, label);
+    if (effective !== expectedDisplayName) {
+      throw new Error(
+        'Existing android project application label differs from the requested name.',
+      );
+    }
+    for (const activity of manifest.matchAll(
+      /<(activity|activity-alias)\b([^>]*)>([\s\S]*?)<\/\1>/gu,
+    )) {
+      const body = activity[3] ?? '';
+      if (!/android\.intent\.action\.MAIN/u.test(body)
+        || !/android\.intent\.category\.LAUNCHER/u.test(body)) {
+        continue;
+      }
+      const launcherLabel = /\bandroid:label\s*=\s*["']([^"']+)["']/u.exec(activity[2] ?? '')?.[1];
+      if (launcherLabel !== undefined
+        && resolveAndroidLabel(source, launcherLabel) !== expectedDisplayName) {
+        throw new Error('Existing android project launcher label differs from the requested name.');
+      }
+    }
+  }
+}
+
+function resolveAndroidLabel(resources: string, label: string): string {
+  if (label.startsWith('@string/')) {
+    return readAndroidString(resources, label.slice('@string/'.length));
+  }
+  if (label.startsWith('@')) {
+    throw new Error('Existing android project application label resource is unsupported.');
+  }
+  return decodeXmlLabel(label);
+}
+
+function readAndroidString(source: string, key: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)) {
+    throw new Error('Existing android project application label is unsupported.');
+  }
+  const expression = new RegExp(
+    `<string\\b[^>]*\\bname\\s*=\\s*["']${key}["'][^>]*>([^<]*)<\\/string>`,
+    'gu',
+  );
+  const values = [...source.matchAll(expression)].map((match) => decodeXmlLabel(match[1] ?? ''));
+  if (values.length !== 1) {
+    throw new Error('Existing android project application label resource is missing or ambiguous.');
+  }
+  return values[0] ?? '';
 }
 
 function decodeXmlLabel(value: string): string {
