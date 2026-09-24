@@ -7,6 +7,7 @@ import { Script } from 'node:vm';
 import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
 
 import { readJsonFile } from '../io';
+import { readNativeBuildAttempt } from '../target/native-build-attempt';
 import {
   createMicrosoftStorePwaRevision,
   readMicrosoftStorePwaReleaseEvidence,
@@ -83,6 +84,14 @@ export function verifyTargetArtifacts(
 
     if (targetConfig === undefined) {
       throw new Error(`Missing platform target config: ${target}`);
+    }
+
+    if (targetConfig.kind === 'capacitor-android' || targetConfig.kind === 'capacitor-ios') {
+      const attempt = readNativeBuildAttempt(loadedPlatformTargets.baseDir, target);
+      if (attempt !== undefined
+        && (attempt.status !== 'success' || attempt.artifact !== entry.artifact)) {
+        throw new Error(`Native target ${target} has no successful current build artifact.`);
+      }
     }
 
     if (entry.artifact.length === 0) {
@@ -358,13 +367,21 @@ function readReleaseIconManifest(
         `${target} web artifact`,
       );
     case 'capacitor-android':
-      return readArtifactTextFromZip(artifactPath, iconManifestPath, `${target} release AAB`);
+      return artifactPath.endsWith('/capacitor-sync')
+        ? readArtifactTextFromDirectory(
+            artifactPath,
+            iconManifestPath,
+            `${target} native sync artifact`,
+          )
+        : readArtifactTextFromZip(artifactPath, iconManifestPath, `${target} native archive`);
     case 'capacitor-ios':
-      return readArtifactTextFromDirectory(
-        artifactPath,
-        iconManifestPath,
-        `${target} native artifact`,
-      );
+      return artifactPath.endsWith('.ipa')
+        ? readArtifactTextFromZip(artifactPath, iconManifestPath, `${target} store IPA`)
+        : readArtifactTextFromDirectory(
+            artifactPath,
+            iconManifestPath,
+            `${target} native artifact`,
+          );
     case 'apps-in-toss':
       return artifactPath.endsWith('.ait')
         ? readArtifactTextFromZip(artifactPath, iconManifestPath, `${target} release artifact`)
@@ -431,9 +448,13 @@ function readReleaseEmbeddedTargetConfig(
         'web-preview artifact',
       );
     case 'capacitor-android':
-      return readEmbeddedTargetConfigFromZip(artifactPath, `${target} release AAB`);
+      return artifactPath.endsWith('/capacitor-sync')
+        ? readEmbeddedTargetConfigFromDirectory(artifactPath, `${target} native sync artifact`)
+        : readEmbeddedTargetConfigFromZip(artifactPath, `${target} native archive`);
     case 'capacitor-ios':
-      return readEmbeddedTargetConfigFromDirectory(artifactPath, `${target} native artifact`);
+      return artifactPath.endsWith('.ipa')
+        ? readEmbeddedTargetConfigFromZip(artifactPath, `${target} store IPA`)
+        : readEmbeddedTargetConfigFromDirectory(artifactPath, `${target} native artifact`);
     case 'apps-in-toss':
       if (artifactPath.endsWith('.ait')) {
         return readEmbeddedTargetConfigFromZip(artifactPath, `${target} release artifact`);
