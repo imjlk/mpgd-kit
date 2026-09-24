@@ -128,11 +128,15 @@ export interface PurchaseSettlement {
   readonly productId: LogicalProductId;
   readonly status: 'granted' | 'refunded';
   readonly ledgerEntryId?: string;
+  readonly alreadyProcessed?: boolean;
 }
 
 /**
  * Resolve a specific purchase from authoritative checkout or restore evidence.
  * A completed native checkout without authoritativeGrant is still unconfirmed.
+ * This is UI status evidence, never permission to credit a wallet locally.
+ * The caller must pair `purchase` with its requested `productId` because
+ * PurchaseResult itself does not carry a product identifier.
  */
 export function findAuthoritativePurchaseSettlement(input: {
   readonly productId: LogicalProductId;
@@ -140,9 +144,10 @@ export function findAuthoritativePurchaseSettlement(input: {
   readonly purchase?: PurchaseResult;
   readonly restore?: PurchaseRestoreResult;
 }): PurchaseSettlement | null {
+  const effectiveTransactionId = input.transactionId ?? input.purchase?.transactionId;
   const matchingRestored = input.restore?.settledPurchases?.filter((settlement) =>
     settlement.productId === input.productId
-    && (input.transactionId === undefined || settlement.transactionId === input.transactionId),
+    && (effectiveTransactionId === undefined || settlement.transactionId === effectiveTransactionId),
   );
   // Without an order ID, multiple historical outcomes are ambiguous.
   if (matchingRestored !== undefined && matchingRestored.length > 1) {
@@ -156,7 +161,7 @@ export function findAuthoritativePurchaseSettlement(input: {
     purchase?.status !== 'completed'
     || purchase.transactionId === undefined
     || purchase.authoritativeGrant === undefined
-    || (input.transactionId !== undefined && input.transactionId !== purchase.transactionId)
+    || (effectiveTransactionId !== undefined && effectiveTransactionId !== purchase.transactionId)
   ) {
     return null;
   }
@@ -165,6 +170,9 @@ export function findAuthoritativePurchaseSettlement(input: {
     productId: input.productId,
     status: 'granted',
     ledgerEntryId: purchase.authoritativeGrant.ledgerEntryId,
+    ...(purchase.authoritativeGrant.alreadyProcessed === undefined
+      ? {}
+      : { alreadyProcessed: purchase.authoritativeGrant.alreadyProcessed }),
   };
 }
 

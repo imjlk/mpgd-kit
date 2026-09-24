@@ -63,6 +63,30 @@ describe('authoritative purchase settlement', () => {
     })).toMatchObject({ status: 'refunded' });
   });
 
+  it('does not let a different restored order shadow a confirmed checkout', () => {
+    expect(findAuthoritativePurchaseSettlement({
+      productId: 'hint-20',
+      purchase: {
+        status: 'completed',
+        transactionId: 'fresh-order',
+        entitlementIds: ['hint-20'],
+        authoritativeGrant: { ledgerEntryId: 'fresh-ledger', alreadyProcessed: true },
+      },
+      restore: {
+        restoredEntitlements: [],
+        settledPurchases: [{
+          transactionId: 'old-order',
+          productId: 'hint-20',
+          status: 'refunded',
+        }],
+      },
+    })).toMatchObject({
+      transactionId: 'fresh-order',
+      status: 'granted',
+      alreadyProcessed: true,
+    });
+  });
+
   it('does not guess which historical order settled when no transaction ID is known', () => {
     expect(findAuthoritativePurchaseSettlement({
       productId: 'hint-20',
