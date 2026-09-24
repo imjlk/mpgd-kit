@@ -56,7 +56,7 @@ describe('scoped Capacitor native JSON transport', () => {
     expect(calls[0]).toMatchObject({ method: 'GET', disableRedirects: true, responseType: 'json' });
     expect(calls[1]).toMatchObject({
       method: 'POST', disableRedirects: true,
-      data: '{"idempotencyKey":"purchase-1"}',
+      data: { idempotencyKey: 'purchase-1' },
       headers: { authorization: 'Bearer scoped', 'content-type': 'application/json' },
     });
   });

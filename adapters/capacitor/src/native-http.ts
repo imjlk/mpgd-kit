@@ -107,7 +107,8 @@ export function createCapacitorNativeJsonTransport(
     }
     const url = resolvePath(inputRequest.path, base, basePath);
     const headers = normalizeHeaders(inputRequest.headers);
-    let data: string | undefined;
+    let data: unknown;
+    let serializedData: string | undefined;
     if (inputRequest.method === 'GET') {
       if (inputRequest.body !== undefined) {
         throw new CapacitorNativeHttpError('NATIVE_HTTP_INVALID_REQUEST');
@@ -115,11 +116,15 @@ export function createCapacitorNativeJsonTransport(
     } else if (inputRequest.method === 'POST') {
       try {
         assertJsonValue(inputRequest.body, new WeakSet<object>(), 0);
-        data = JSON.stringify(inputRequest.body);
+        serializedData = JSON.stringify(inputRequest.body);
+        data = inputRequest.body;
       } catch {
         throw new CapacitorNativeHttpError('NATIVE_HTTP_INVALID_REQUEST');
       }
-      if (encoder.encode(data).byteLength > maxRequestBytes) {
+      if (serializedData === undefined) {
+        throw new CapacitorNativeHttpError('NATIVE_HTTP_INVALID_REQUEST');
+      }
+      if (encoder.encode(serializedData).byteLength > maxRequestBytes) {
         throw new CapacitorNativeHttpError('NATIVE_HTTP_REQUEST_TOO_LARGE');
       }
       headers['content-type'] = 'application/json';
@@ -135,7 +140,7 @@ export function createCapacitorNativeJsonTransport(
       disableRedirects: true,
       connectTimeout: connectTimeoutMs,
       readTimeout: readTimeoutMs,
-      ...(data === undefined ? {} : { data }),
+      ...(inputRequest.method === 'POST' ? { data } : {}),
     };
     const response = await waitForNativeResponse(
       http,
