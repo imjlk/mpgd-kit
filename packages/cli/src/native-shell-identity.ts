@@ -18,9 +18,27 @@ function assertAndroidIdentity(source: string, expectedAppId: string): void {
   const mentions = [...clean.matchAll(/\bapplicationId\b/gu)].length;
   if (assignments.length === 0 || assignments.length !== mentions
     || assignments.some((value) => value !== expectedAppId)
-    || /\bapplicationIdSuffix\b/u.test(clean)) {
+    || hasAndroidReleaseIdSuffix(clean)) {
     throw new Error('Existing android project app ID differs or cannot be read safely.');
   }
+}
+
+function hasAndroidReleaseIdSuffix(source: string): boolean {
+  if (/\bbuildTypes\s*\.\s*release\s*\.\s*applicationIdSuffix\b/u.test(source)
+    || /\bbuildTypes\s*\.\s*(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*applicationIdSuffix\b/u
+      .test(source)) {
+    return true;
+  }
+  const releaseBlocks = [
+    /\brelease\s*\{/gu,
+    /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\{/gu,
+  ];
+  return releaseBlocks.some((expression) => [...source.matchAll(expression)]
+    .some((match) => match.index !== undefined
+      && /\bapplicationIdSuffix\b/u.test(readBracedText(
+        source,
+        source.indexOf('{', match.index),
+      ))));
 }
 
 function stripGradleComments(source: string): string {
@@ -80,19 +98,17 @@ function assertIosAppIdentity(source: string, expectedAppId: string): void {
   }
   const list = readPbxObject(source, listId);
   const configurations = /\bbuildConfigurations\s*=\s*\(([^)]*)\)/u.exec(list)?.[1];
-  const ids = configurations === undefined ? []
-    : [...configurations.matchAll(/\b([A-F0-9]+)\s*\/\*[^*]+\*\//gu)]
+  const releaseIds = configurations === undefined ? []
+    : [...configurations.matchAll(/\b([A-F0-9]+)\s*\/\*\s*Release\s*\*\//gu)]
       .map((match) => match[1]);
-  if (ids.length === 0) {
-    throw new Error('Existing ios project App build configurations are missing.');
+  if (releaseIds.length !== 1) {
+    throw new Error('Existing ios project App Release configuration is missing or ambiguous.');
   }
-  for (const id of ids) {
-    const configuration = stripGradleComments(readPbxObject(source, id ?? ''));
-    const values = [...configuration.matchAll(/\bPRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;]+);/gu)]
-      .map((match) => match[1]?.trim().replace(/^["']|["']$/gu, ''));
-    if (values.length !== 1 || values[0] !== expectedAppId) {
-      throw new Error('Existing ios project app ID differs or cannot be read safely.');
-    }
+  const configuration = stripGradleComments(readPbxObject(source, releaseIds[0] ?? ''));
+  const values = [...configuration.matchAll(/\bPRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;]+);/gu)]
+    .map((match) => match[1]?.trim().replace(/^["']|["']$/gu, ''));
+  if (values.length !== 1 || values[0] !== expectedAppId) {
+    throw new Error('Existing ios project app ID differs or cannot be read safely.');
   }
 }
 
@@ -102,6 +118,13 @@ function readPbxObject(source: string, id: string): string {
     throw new Error(`Existing ios project object ${id} could not be read safely.`);
   }
   const opening = source.indexOf('{', marker.index);
+  return readBracedText(source, opening);
+}
+
+function readBracedText(source: string, opening: number): string {
+  if (opening < 0) {
+    throw new Error('Existing native project block is missing.');
+  }
   let depth = 0;
   let quote = false;
   let blockComment = false;
@@ -137,5 +160,5 @@ function readPbxObject(source: string, id: string): string {
       }
     }
   }
-  throw new Error(`Existing ios project object ${id} is incomplete.`);
+  throw new Error('Existing native project block is incomplete.');
 }

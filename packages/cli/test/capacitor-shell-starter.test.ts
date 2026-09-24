@@ -235,18 +235,62 @@ try {
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.other.game'));
   assert.throws(() => planCapacitorShellStarter(options), /ios project app ID differs/u);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
+  writeFileSync(
+    iosProjectFile,
+    iosProjectWithAppId('dev.example.puzzle').replace(
+      'PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle;',
+      'PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle.debug;',
+    ),
+  );
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle').replace(
     'PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle;',
     '/* PRODUCT_BUNDLE_IDENTIFIER = dev.other.game; */ PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle;',
   ));
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
+  const spmPackage = path.join(root, 'apps/mobile-capacitor/ios/App/CapApp-SPM/Package.swift');
+  renameSync(spmPackage, `${spmPackage}.saved`);
+  const podfile = path.join(root, 'apps/mobile-capacitor/ios/App/Podfile');
+  const workspaceFile = path.join(
+    root,
+    'apps/mobile-capacitor/ios/App/App.xcworkspace/contents.xcworkspacedata',
+  );
+  mkdirSync(path.dirname(workspaceFile), { recursive: true });
+  writeFileSync(podfile, 'platform :ios, "15.0"');
+  writeFileSync(workspaceFile, '<Workspace/>');
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  rmSync(podfile);
+  rmSync(workspaceFile);
+  renameSync(`${spmPackage}.saved`, spmPackage);
   const androidProjectFile = path.join(root, 'apps/mobile-capacitor/android/app/build.gradle');
   writeFileSync(androidProjectFile, [
     'defaultConfig { applicationId nativeId }',
     '// applicationId "dev.example.puzzle"',
   ].join('\n'));
   assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
+  writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
+    'buildTypes { debug { applicationIdSuffix ".debug" } }',
+  ].join('\n'));
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
+    'buildTypes { release { applicationIdSuffix ".release" } }',
+  ].join('\n'));
+  assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
+  writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');
+  const kotlinGradle = `${androidProjectFile}.kts`;
+  const groovySettings = path.join(root, 'apps/mobile-capacitor/android/settings.gradle');
+  const kotlinSettings = `${groovySettings}.kts`;
+  renameSync(androidProjectFile, kotlinGradle);
+  renameSync(groovySettings, kotlinSettings);
+  writeFileSync(kotlinGradle, 'applicationId = "dev.example.puzzle"');
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  renameSync(kotlinGradle, androidProjectFile);
+  renameSync(kotlinSettings, groovySettings);
   writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');
   applyCapacitorShellStarter(withNativeProjects);
   assert.equal(
@@ -279,6 +323,16 @@ try {
     ),
   );
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(
+    configFile,
+    originalConfig.replace('  server:', '  includePlugins: ["@capacitor/app"],\n  server:'),
+  );
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(
+    configFile,
+    originalConfig.replace('  server:', '  ["appId"]: "dev.other.game",\n  server:'),
+  );
+  assert.throws(() => planCapacitorShellStarter(options), /ambiguous dynamic syntax/u);
   writeFileSync(configFile, originalConfig.replace('  appName:', '  ...overrides,\n  appName:'));
   assert.throws(() => planCapacitorShellStarter(options), /ambiguous dynamic syntax/u);
   writeFileSync(configFile, originalConfig.replace('  appName:', '  appName,\n  appName:'));
@@ -375,6 +429,10 @@ try {
   assert.equal(statSync(envFile).mode & 0o777, 0o600);
   assert.match(readFileSync(envFile, 'utf8'), /GAME_PRIVATE_VALUE=secret/u);
   writeFileSync(envFile, 'VITE_MPGD_GAME_SERVICES_URL="https://api.example.com/"\r\n');
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(envFile, 'VITE_MPGD_GAME_SERVICES_URL=https://api.example.com # production\n');
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(envFile, 'VITE_MPGD_GAME_SERVICES_URL="https://api.example.com" # production\n');
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   writeFileSync(envFile, [
     'VITE_MPGD_GAME_SERVICES_URL=https://api.example.com',

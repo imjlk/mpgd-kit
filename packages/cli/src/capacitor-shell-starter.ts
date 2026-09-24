@@ -310,7 +310,9 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     if (definitions.length > 1) {
       throw new Error('Duplicate production Game Services URLs are not allowed.');
     }
-    const existing = definitions[0]?.[1]?.trim().replace(/^["'](.*)["']$/u, '$1');
+    const existing = definitions[0]?.[1] === undefined
+      ? undefined
+      : readDotenvValue(definitions[0][1] ?? '');
     if (existing !== undefined && normalizeBackendUrl(existing) !== validatedBackendUrl) {
       throw new Error('Existing production Game Services URL differs; refusing to overwrite it.');
     }
@@ -469,23 +471,28 @@ function assertNativePlatformComplete(
   expectedAppId: string,
 ): void {
   const nativeDirectory = path.join(gameRoot, shellPath, platform);
-  const required = platform === 'android'
-    ? 'app/build.gradle'
-    : 'App/App.xcodeproj/project.pbxproj';
-  if (!existsSync(nativeDirectory) || !lstatSync(nativeDirectory).isDirectory()
-    || !existsSync(path.join(nativeDirectory, required))
-    || !lstatSync(path.join(nativeDirectory, required)).isFile()) {
+  if (!existsSync(nativeDirectory) || !lstatSync(nativeDirectory).isDirectory()) {
     throw new Error(
       `Existing ${platform} project is incomplete; repair or remove only that game-owned directory before retrying.`,
     );
   }
+  const required = platform === 'android'
+    ? requireOneNativeFile(nativeDirectory, ['app/build.gradle', 'app/build.gradle.kts'], platform)
+    : requireOneNativeFile(nativeDirectory, ['App/App.xcodeproj/project.pbxproj'], platform);
+  if (platform === 'android') {
+    requireOneNativeFile(nativeDirectory, ['settings.gradle', 'settings.gradle.kts'], platform);
+  } else {
+    const hasSpm = isNativeFile(nativeDirectory, 'App/CapApp-SPM/Package.swift');
+    const hasPods = isNativeFile(nativeDirectory, 'App/Podfile')
+      && isNativeFile(nativeDirectory, 'App/App.xcworkspace/contents.xcworkspacedata');
+    if (!hasSpm && !hasPods) {
+      throw new Error('Existing ios project is incomplete; SPM or CocoaPods files are missing.');
+    }
+  }
   const additional = platform === 'android'
-    ? ['gradlew', 'settings.gradle', 'app/src/main/AndroidManifest.xml']
-    : ['App/App/AppDelegate.swift', 'App/App/Info.plist', 'App/CapApp-SPM/Package.swift'];
-  if (additional.some((relative) =>
-    !existsSync(path.join(nativeDirectory, relative))
-    || !lstatSync(path.join(nativeDirectory, relative)).isFile(),
-  )) {
+    ? ['gradlew', 'app/src/main/AndroidManifest.xml']
+    : ['App/App/AppDelegate.swift', 'App/App/Info.plist'];
+  if (additional.some((relative) => !isNativeFile(nativeDirectory, relative))) {
     throw new Error(
       `Existing ${platform} project is incomplete; required native files are missing.`,
     );
@@ -503,6 +510,25 @@ function assertNativePlatformComplete(
   }
   const content = readFileSync(path.join(nativeDirectory, required), 'utf8');
   assertNativeShellIdentity(platform, content, expectedAppId);
+}
+
+function requireOneNativeFile(
+  directory: string,
+  candidates: readonly string[],
+  platform: 'android' | 'ios',
+): string {
+  const present = candidates.filter((relative) => isNativeFile(directory, relative));
+  if (present.length !== 1) {
+    throw new Error(
+      `Existing ${platform} project is incomplete or ambiguous: ${candidates.join(', ')}.`,
+    );
+  }
+  return present[0] ?? '';
+}
+
+function isNativeFile(directory: string, relative: string): boolean {
+  const file = path.join(directory, relative);
+  return existsSync(file) && lstatSync(file).isFile();
 }
 
 function runCommand(command: string, args: readonly string[], cwd: string): void {
@@ -573,6 +599,26 @@ function normalizeBackendUrl(value: string): string {
     throw new Error('Backend URL must use a public HTTPS hostname for production.');
   }
   return parsed.href.replace(/\/$/u, '');
+}
+
+function readDotenvValue(source: string): string {
+  const value = source.trim();
+  if (!value.startsWith('"') && !value.startsWith("'")) {
+    return value.split('#', 1)[0]?.trim() ?? '';
+  }
+  const quote = value[0];
+  let closing = -1;
+  for (let index = 1; index < value.length; index += 1) {
+    if (value[index] === quote && value[index - 1] !== '\\') {
+      closing = index;
+      break;
+    }
+  }
+  if (closing < 0 || (value.slice(closing + 1).trim() !== ''
+    && !value.slice(closing + 1).trim().startsWith('#'))) {
+    throw new Error('Production Game Services URL has malformed dotenv syntax.');
+  }
+  return value.slice(1, closing);
 }
 
 function readCapacitorConfigLiteral(source: string, key: 'appId' | 'appName' | 'webDir'):
@@ -689,7 +735,8 @@ function requireStaticCapacitorConfig(source: string): string {
   const identityKeysAreUnique = (['appId', 'appName', 'webDir'] as const).every((key) =>
     [...topLevelCode.matchAll(new RegExp(`\\b${key}\\b`, 'gu'))].length === 1,
   );
-  if (configReferences !== 2 || topLevelCode.includes('...') || topLevelCode.includes('[')
+  const hasComputedKey = /(?:\{|,)[ \t\n]*\[[^\]]*\][ \t\n]*:/u.test(topLevelCode);
+  if (configReferences !== 2 || topLevelCode.includes('...') || hasComputedKey
     || !identityKeysAreUnique
     || /^[ \t]*["'](?:appId|appName|webDir)["'][ \t]*:/mu.test(topLevelSource)
     || !/\bexport\s+default\s+config\s*;/u.test(codeOnly)) {
