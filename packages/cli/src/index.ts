@@ -20,6 +20,10 @@ import { cli } from 'gunshi';
 import { buildAssetPacks } from './asset-pack-build.js';
 import { verifyAssetPackDelivery } from './asset-pack-verify.js';
 import {
+  materializeCapacitorShellStarter,
+  planCapacitorShellStarter,
+} from './capacitor-shell-starter.js';
+import {
   normalizeConfiguredBuildTargets,
   normalizeBuildTarget as normalizeConfiguredTargetName,
   supportedBuildTargets,
@@ -79,6 +83,15 @@ export {
   type RunGameAcceptanceInput,
   type RunGameAcceptanceResult,
 } from './game-acceptance.js';
+
+export {
+  applyCapacitorShellStarter,
+  materializeCapacitorShellStarter,
+  planCapacitorShellStarter,
+  type CapacitorShellCommandRunner,
+  type CapacitorShellStarterInput,
+  type CapacitorShellStarterPlan,
+} from './capacitor-shell-starter.js';
 
 export {
   createBrowserGameplayE2EDriver,
@@ -1430,8 +1443,8 @@ const targetCommand = defineI18n({
         },
         {
           target: {
-            en: 'Target to initialize. Currently supports microsoft-store.',
-            ko: '초기화할 타깃. 현재 microsoft-store를 지원합니다.',
+            en: 'Target to initialize: microsoft-store or capacitor.',
+            ko: '초기화할 타깃: microsoft-store 또는 capacitor.',
           },
           game: {
             en: 'Existing game root. Defaults to the current directory.',
@@ -1445,13 +1458,33 @@ const targetCommand = defineI18n({
             en: 'Validate and print planned file changes without writing them.',
             ko: '파일을 쓰지 않고 예정 변경을 검증하고 출력합니다.',
           },
+          'app-id': {
+            en: 'Game-owned Android package ID and iOS bundle ID.',
+            ko: '게임 소유 Android 패키지 ID 및 iOS 번들 ID.',
+          },
+          'display-name': {
+            en: 'Native application display name.',
+            ko: '네이티브 앱 표시 이름.',
+          },
+          'icon-source': {
+            en: 'Game-owned native icon source file.',
+            ko: '게임 소유 네이티브 아이콘 원본 파일.',
+          },
+          'backend-url': {
+            en: 'Production HTTPS Game Services base URL.',
+            ko: '프로덕션 HTTPS Game Services 기본 URL.',
+          },
+          providers: {
+            en: 'Comma-separated requested provider IDs; this does not install SDKs.',
+            ko: '쉼표로 구분한 요청 provider ID. SDK를 설치하지는 않습니다.',
+          },
         },
       ),
       args: {
         target: {
           type: 'positional',
           required: true,
-          description: 'Target to initialize. Currently supports microsoft-store.',
+          description: 'Target to initialize: microsoft-store or capacitor.',
         },
         game: {
           type: 'string',
@@ -1469,10 +1502,75 @@ const targetCommand = defineI18n({
           required: false,
           description: 'Validate and print planned file changes without writing them.',
         },
+        'app-id': {
+          type: 'string',
+          required: false,
+          description: 'Game-owned Android package ID and iOS bundle ID.',
+        },
+        'display-name': {
+          type: 'string',
+          required: false,
+          description: 'Native application display name.',
+        },
+        'icon-source': {
+          type: 'string',
+          required: false,
+          description: 'Game-owned native icon source file.',
+        },
+        'backend-url': {
+          type: 'string',
+          required: false,
+          description: 'Production HTTPS Game Services base URL.',
+        },
+        providers: {
+          type: 'string',
+          required: false,
+          description: 'Comma-separated requested provider IDs; this does not install SDKs.',
+        },
       },
       run: (ctx) => {
         const positionals = readLocalPositionals(ctx.positionals, ['target', 'init']);
         const requestedTarget = readRequiredPositional(positionals, 0, 'target');
+        const gameRoot = path.resolve(readOptionalString(ctx.values.game) ?? '.');
+        const dryRun = ctx.values['dry-run'] === true;
+
+        if (requestedTarget === 'capacitor') {
+          if (ctx.values['kit-path'] !== undefined) {
+            throw new Error('--kit-path is not used by the game-owned Capacitor initializer.');
+          }
+          const appId = readOptionalString(ctx.values['app-id']);
+          const displayName = readOptionalString(ctx.values['display-name']);
+          if (appId === undefined || displayName === undefined) {
+            throw new Error('Capacitor initialization requires --app-id and --display-name.');
+          }
+          const iconSource = readOptionalString(ctx.values['icon-source']);
+          const backendUrl = readOptionalString(ctx.values['backend-url']);
+          const selectedProviders = readOptionalString(ctx.values.providers);
+          const plan = planCapacitorShellStarter({
+            gameRoot,
+            appId,
+            displayName,
+            ...(iconSource === undefined ? {} : { iconSource }),
+            ...(backendUrl === undefined ? {} : { backendUrl }),
+            ...(selectedProviders === undefined ? {} : {
+              providerIds: selectedProviders.split(',').map((id) => id.trim()),
+            }),
+          });
+          if (!dryRun) {
+            materializeCapacitorShellStarter(plan);
+          }
+          console.info(`${dryRun ? 'Would update' : 'Updated'} game-owned Capacitor shell: ${plan.changedFiles.length} file(s).`);
+          for (const file of plan.changedFiles) {
+            console.info(`- ${file}`);
+          }
+          for (const platform of plan.nativePlatformsToAdd) {
+            console.info(`${dryRun ? 'Would add' : 'Added'} native platform: ${platform}`);
+          }
+          if (!dryRun) {
+            console.info('Production native builds still require release identity and signing checks.');
+          }
+          return;
+        }
         const target = normalizeConfiguredBuildTarget(requestedTarget);
 
         if (target !== 'microsoft-store') {
@@ -1481,7 +1579,14 @@ const targetCommand = defineI18n({
           );
         }
 
-        const gameRoot = path.resolve(readOptionalString(ctx.values.game) ?? '.');
+        for (const option of [
+          'app-id', 'display-name', 'icon-source', 'backend-url', 'providers',
+        ] as const) {
+          if (ctx.values[option] !== undefined) {
+            throw new Error(`--${option} is only available for capacitor initialization.`);
+          }
+        }
+
         const configuredKitPath = readOptionalString(ctx.values['kit-path']);
         const resolvedKitPath = configuredKitPath === undefined
           ? detectedKitRoot
@@ -1490,7 +1595,6 @@ const targetCommand = defineI18n({
         const defaultKitPath = resolvedKitPath === undefined
           ? defaultMpgdKitPath
           : toTemplatePath(path.relative(canonicalGameRoot, resolvedKitPath) || '.');
-        const dryRun = ctx.values['dry-run'] === true;
         const adapterDependencyVersion = resolveMicrosoftStoreAdapterDependencyVersion(
           requireMpgdDependencyVersion(
             resolveMpgdDependencyVersionReplacements({

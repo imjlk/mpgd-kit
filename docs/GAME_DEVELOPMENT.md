@@ -260,9 +260,28 @@ Run `pnpm devvit:login`, `pnpm devvit:init`, and `pnpm devvit:playtest` from the
 game root when you are ready to create the Reddit-side app record and test it.
 The starter owns its Apps in Toss wrapper in `apps/target-ait`, including app
 identity, Granite configuration, community devtools, and console metadata. It
-still uses kit reference Capacitor shells for Android and iOS artifact smoke
-checks. Copy or create game-owned mobile shells before App Store or Google Play
-submission metadata is needed.
+initially uses kit reference Capacitor shells for Android and iOS artifact smoke
+checks. Initialize a game-owned shell from an installed game before preparing
+App Store or Google Play submissions:
+
+```sh
+pnpm exec mpgd target init capacitor --game . \
+  --app-id dev.example.mygame --display-name "My Game" \
+  --icon-source public/icon.png \
+  --backend-url https://api.example.com \
+  --providers identity,game-platform
+```
+
+Run with `--dry-run` first to see file changes without installing or adding
+native platforms. The initializer writes a private shell under
+`apps/mobile-capacitor`, installs its pinned dependencies, adds missing Android
+and iOS projects, and updates both `mpgd.targets.json` entries. Rerunning is
+safe after an interrupted dependency install and does not overwrite existing
+native projects, signing files, or custom controllers. If `cap add` created an
+incomplete `android` or `ios` directory, repair or remove only that game-owned
+directory before retrying; the initializer refuses to replace it. `--providers` records selection
+metadata only; it neither installs provider SDKs nor declares a capability
+available. Backend and provider implementations still belong to the game.
 
 Use the kit CLI for generated target builds because it resolves
 `${MPGD_KIT_PATH}` tokens in the game's `mpgd.targets.json` before invoking the

@@ -1,0 +1,551 @@
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  writeFileSync,
+} from 'node:fs';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+import { isNonPublicServiceHostname } from './production-target-readiness.js';
+
+const shellPath = 'apps/mobile-capacitor';
+const webPath = `${shellPath}/www`;
+const providerIdPattern = /^[a-z][a-z0-9-]*$/u;
+const appIdPattern = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*){2,}$/u;
+
+interface PlannedFile {
+  readonly path: string;
+  readonly content: string;
+}
+
+export interface CapacitorShellStarterInput {
+  readonly gameRoot: string;
+  readonly appId: string;
+  readonly displayName: string;
+  readonly iconSource?: string;
+  readonly backendUrl?: string;
+  /** Selection metadata only; a provider SDK is not installed or enabled here. */
+  readonly providerIds?: readonly string[];
+}
+
+export interface CapacitorShellStarterPlan {
+  readonly gameRoot: string;
+  readonly changedFiles: readonly string[];
+  readonly nativePlatformsToAdd: readonly ('android' | 'ios')[];
+  readonly files: readonly PlannedFile[];
+}
+
+/**
+ * Produce the complete game-owned shell change list before writing anything.
+ * Existing Android/iOS projects, signing files, and custom controllers are
+ * never rewritten by this initializer.
+ */
+export function planCapacitorShellStarter(input: CapacitorShellStarterInput): CapacitorShellStarterPlan {
+  if (!existsSync(input.gameRoot)) {
+    throw new Error(`Game root does not exist: ${input.gameRoot}`);
+  }
+  const gameRoot = realpathSync(input.gameRoot);
+  if (!lstatSync(gameRoot).isDirectory()) {
+    throw new Error('Capacitor shell game root must be a directory.');
+  }
+  if (!appIdPattern.test(input.appId)) {
+    throw new Error('Capacitor app ID must be a lowercase reverse-domain identifier.');
+  }
+  if (input.displayName.trim() !== input.displayName
+    || input.displayName.length === 0 || input.displayName.length > 80) {
+    throw new Error('Capacitor display name must be 1-80 characters without outer whitespace.');
+  }
+  const providerIds = [...new Set(input.providerIds ?? [])].sort();
+  if (providerIds.some((id) => !providerIdPattern.test(id))) {
+    throw new Error('Capacitor provider IDs must be lowercase hyphenated names.');
+  }
+  const backendUrl = input.backendUrl === undefined
+    ? undefined
+    : normalizeBackendUrl(input.backendUrl);
+  const iconSource = input.iconSource === undefined
+    ? undefined
+    : relativeGameFile(gameRoot, input.iconSource);
+  for (const managedPath of [
+    'mpgd.targets.json',
+    '.env.production',
+    shellPath,
+    `${shellPath}/package.json`,
+    `${shellPath}/capacitor.config.ts`,
+    `${shellPath}/mpgd.native-shell.json`,
+    `${shellPath}/README.md`,
+    `${shellPath}/www/index.html`,
+    `${shellPath}/android`,
+    `${shellPath}/ios`,
+  ]) {
+    safeDestination(gameRoot, managedPath);
+  }
+  const gamePackageFile = path.join(gameRoot, 'package.json');
+  if (!existsSync(gamePackageFile)) {
+    throw new Error('Game root must contain package.json.');
+  }
+  const gamePackage = readJsonObject(gamePackageFile);
+  const gamePackageName = requireString(gamePackage.name, 'game package name');
+  const gameDependencies = requireObject(gamePackage.dependencies, 'game dependencies');
+  const capacitorVersion = requireString(gameDependencies['@capacitor/core'], '@capacitor/core');
+  const appVersion = requireString(gameDependencies['@capacitor/app'], '@capacitor/app');
+  if (!/^\d+\.\d+\.\d+$/u.test(capacitorVersion)
+    || !/^\d+\.\d+\.\d+$/u.test(appVersion)) {
+    throw new Error('Capacitor shell requires exact @capacitor/core and @capacitor/app versions.');
+  }
+  const adapterFile = path.join(gameRoot, 'node_modules/@mpgd/adapter-capacitor/package.json');
+  if (!existsSync(adapterFile)) {
+    throw new Error('Install game dependencies before initializing the Capacitor shell.');
+  }
+  const adapter = readJsonObject(adapterFile);
+  const adapterDependencies = requireObject(adapter.dependencies, 'Capacitor adapter dependencies');
+  const pluginRequirement = requireString(
+    adapterDependencies['@mpgd/capacitor-game-services'],
+    '@mpgd/capacitor-game-services',
+  );
+  const pluginVersion = resolveInstalledPluginVersion(gameRoot, pluginRequirement);
+
+  const targetsFile = path.join(gameRoot, 'mpgd.targets.json');
+  if (!existsSync(targetsFile)) {
+    throw new Error('Game root must contain mpgd.targets.json.');
+  }
+  const targets = readJsonObject(targetsFile);
+  const cliPackage = readJsonObject(fileURLToPath(new URL('../package.json', import.meta.url)));
+  const cliDevelopmentDependencies = requireObject(
+    cliPackage.devDependencies,
+    'CLI dev dependencies',
+  );
+  const typescriptVersion = requireString(
+    cliDevelopmentDependencies.typescript,
+    'CLI TypeScript version',
+  );
+  const targetMap = requireObject(targets.targets, 'targets');
+  for (const [targetName, kind, identityKey] of [
+    ['android', 'capacitor-android', 'packageId'],
+    ['ios', 'capacitor-ios', 'bundleId'],
+  ] as const) {
+    const target = requireObject(targetMap[targetName], `${targetName} target`);
+    if (target.kind !== kind) {
+      throw new Error(`${targetName} must be a ${kind} target.`);
+    }
+    const configuredShell = requireString(target.shellApp, `${targetName}.shellApp`);
+    if (configuredShell !== shellPath && !configuredShell.includes('${MPGD_KIT_PATH}')) {
+      throw new Error(`${targetName} already points at another shell; refusing to replace it.`);
+    }
+    const metadata = target.metadata === undefined
+      ? {}
+      : requireObject(target.metadata, `${targetName}.metadata`);
+    if (metadata[identityKey] !== undefined && metadata[identityKey] !== input.appId) {
+      throw new Error(`${targetName} ${identityKey} conflicts with the requested app ID.`);
+    }
+    if (metadata.displayName !== undefined && metadata.displayName !== input.displayName) {
+      throw new Error(`${targetName} display name conflicts with the requested name.`);
+    }
+    target.shellApp = shellPath;
+    target.webDir = webPath;
+    target.metadata = { ...metadata, [identityKey]: input.appId, displayName: input.displayName };
+    if (iconSource !== undefined) {
+      const icon = target.icon === undefined
+        ? {}
+        : requireObject(target.icon, `${targetName}.icon`);
+      target.icon = { ...icon, source: iconSource };
+    }
+  }
+
+  const packageFile = path.join(gameRoot, shellPath, 'package.json');
+  const configFile = path.join(gameRoot, shellPath, 'capacitor.config.ts');
+  const manifestFile = path.join(gameRoot, shellPath, 'mpgd.native-shell.json');
+  const packageContent = readExisting(packageFile);
+  const configContent = readExisting(configFile);
+  const manifestContent = readExisting(manifestFile);
+  const existingManifest = manifestContent === undefined
+    ? undefined
+    : parseJsonObject(manifestContent, 'existing native shell manifest');
+  if (existingManifest !== undefined
+    && (existingManifest.appId !== input.appId
+      || existingManifest.displayName !== input.displayName)) {
+    throw new Error('Existing native shell identity differs; refusing to overwrite it.');
+  }
+  const requestedProviderIds = input.providerIds === undefined
+    && Array.isArray(existingManifest?.requestedProviderIds)
+    ? existingManifest.requestedProviderIds : providerIds;
+  const requestedBackendUrl = backendUrl ?? (typeof existingManifest?.backendUrl === 'string'
+    ? existingManifest.backendUrl : undefined);
+  if (packageContent !== undefined) {
+    assertCompatibleExistingPackage(
+      packageContent,
+      capacitorVersion,
+      appVersion,
+      pluginVersion,
+      typescriptVersion,
+    );
+  }
+  if (configContent !== undefined) {
+    const existingAppId = /\bappId:\s*['"]([^'"]+)['"]/u.exec(configContent)?.[1];
+    if (existingAppId === undefined) {
+      throw new Error('Existing Capacitor shell app ID could not be read safely.');
+    }
+    if (existingAppId !== input.appId) {
+      throw new Error('Existing Capacitor shell app ID differs; refusing to overwrite it.');
+    }
+    const existingAppName = /\bappName:\s*['"]([^'"]+)['"]/u.exec(configContent)?.[1];
+    if (existingAppName === undefined) {
+      throw new Error('Existing Capacitor shell display name could not be read safely.');
+    }
+    if (existingAppName !== input.displayName) {
+      throw new Error('Existing Capacitor shell display name differs; refusing to overwrite it.');
+    }
+  }
+  const requestedFiles: PlannedFile[] = [
+    { path: 'mpgd.targets.json', content: json(targets) },
+    {
+      path: `${shellPath}/package.json`,
+      content: packageContent ?? json({
+        name: `${gamePackageName}-native-shell`,
+        private: true,
+        version: '0.0.0',
+        type: 'module',
+        scripts: {
+          cap: 'cap',
+          'sync:android': 'cap sync android',
+          'sync:ios': 'cap sync ios',
+        },
+        dependencies: {
+          '@capacitor/android': capacitorVersion,
+          '@capacitor/app': appVersion,
+          '@capacitor/core': capacitorVersion,
+          '@capacitor/ios': capacitorVersion,
+          '@mpgd/capacitor-game-services': pluginVersion,
+        },
+        devDependencies: {
+          '@capacitor/cli': capacitorVersion,
+          typescript: typescriptVersion,
+        },
+      }),
+    },
+    {
+      path: `${shellPath}/capacitor.config.ts`,
+      content: configContent ?? [
+        "import type { CapacitorConfig } from '@capacitor/cli';",
+        '',
+        'const config: CapacitorConfig = {',
+        `  appId: ${JSON.stringify(input.appId)},`,
+        `  appName: ${JSON.stringify(input.displayName)},`,
+        "  webDir: 'www',",
+        "  server: { androidScheme: 'https' },",
+        "  ios: { contentInset: 'automatic' },",
+        '  android: { allowMixedContent: false },',
+        '};',
+        '',
+        'export default config;',
+        '',
+      ].join('\n'),
+    },
+    {
+      path: `${shellPath}/mpgd.native-shell.json`,
+      content: json({
+        schemaVersion: 1,
+        appId: input.appId,
+        displayName: input.displayName,
+        requestedProviderIds,
+        ...(requestedBackendUrl === undefined ? {} : { backendUrl: requestedBackendUrl }),
+      }),
+    },
+    {
+      path: `${shellPath}/README.md`,
+      content: readExisting(path.join(gameRoot, shellPath, 'README.md')) ?? [
+        '# Game-owned Capacitor shell',
+        '',
+        'This private shell belongs to this game. The initializer installs game',
+        'dependencies and uses the pinned Capacitor CLI to add missing Android',
+        'and iOS projects. Rerun it after an interrupted dependency install.',
+        'If cap add left an incomplete native directory, repair or remove only',
+        'that game-owned directory before retrying; it is never overwritten.',
+        'Existing native files, signing settings, and custom',
+        'ViewControllers are never replaced by mpgd target init capacitor.',
+        '',
+        'requestedProviderIds is selection metadata only: it does not install an',
+        'SDK or report a feature as available. Register provider modules explicitly.',
+        'Production builds require a real game-owned backend when grants are enabled.',
+        '',
+      ].join('\n'),
+    },
+    {
+      path: `${shellPath}/www/index.html`,
+      content: readExisting(path.join(gameRoot, shellPath, 'www/index.html')) ?? [
+        '<!doctype html>',
+        '<html lang="en"><head><meta charset="utf-8"><title>Native shell setup</title></head>',
+        '<body>Run mpgd target build to replace this setup page with the game bundle.</body></html>',
+        '',
+      ].join('\n'),
+    },
+  ];
+  if (backendUrl !== undefined) {
+    const envFile = path.join(gameRoot, '.env.production');
+    const current = readExisting(envFile) ?? '';
+    const existing = /^VITE_MPGD_GAME_SERVICES_URL=(.*)$/mu.exec(current)?.[1]
+      ?.trim().replace(/^["'](.*)["']$/u, '$1');
+    if (existing !== undefined && normalizeBackendUrl(existing) !== backendUrl) {
+      throw new Error('Existing production Game Services URL differs; refusing to overwrite it.');
+    }
+    requestedFiles.push({
+      path: '.env.production',
+      content: existing === undefined
+        ? appendEnvLine(current, `VITE_MPGD_GAME_SERVICES_URL=${backendUrl}`)
+        : current,
+    });
+  }
+  const files = requestedFiles.filter(
+    (file) => readExisting(path.join(gameRoot, file.path)) !== file.content,
+  );
+  const nativePlatformsToAdd = (['android', 'ios'] as const).filter((platform) => {
+    const nativeDirectory = path.join(gameRoot, shellPath, platform);
+    if (!existsSync(nativeDirectory)) {
+      return true;
+    }
+    assertNativePlatformComplete(gameRoot, platform);
+    return false;
+  });
+  return {
+    gameRoot,
+    files,
+    changedFiles: files.map((file) => file.path),
+    nativePlatformsToAdd,
+  };
+}
+
+export function applyCapacitorShellStarter(plan: CapacitorShellStarterPlan): void {
+  for (const file of plan.files) {
+    const destination = safeDestination(plan.gameRoot, file.path);
+    mkdirSync(path.dirname(destination), { recursive: true });
+    assertNotSymlink(destination);
+    const temporary = `${destination}.mpgd-${randomUUID()}.tmp`;
+    writeFileSync(temporary, file.content, { flag: 'wx' });
+    renameSync(temporary, destination);
+  }
+}
+
+function safeDestination(gameRoot: string, relative: string): string {
+  if (relative === '' || path.isAbsolute(relative)) {
+    throw new Error('Managed shell path must be relative to the game.');
+  }
+  const canonicalRoot = realpathSync(gameRoot);
+  const destination = path.resolve(canonicalRoot, relative);
+  const within = path.relative(canonicalRoot, destination);
+  if (within === '' || within.startsWith('..') || path.isAbsolute(within)) {
+    throw new Error('Managed shell path must stay inside the game.');
+  }
+  let current = canonicalRoot;
+  for (const segment of within.split(path.sep)) {
+    current = path.join(current, segment);
+    assertNotSymlink(current);
+  }
+  return destination;
+}
+
+export interface CapacitorShellCommandRunner {
+  run(command: string, args: readonly string[], cwd: string): void;
+}
+
+/** Materialize only missing native projects after the non-destructive plan is applied. */
+export function materializeCapacitorShellStarter(
+  plan: CapacitorShellStarterPlan,
+  runner: CapacitorShellCommandRunner = { run: runCommand },
+): void {
+  if (plan.changedFiles.length === 0 && plan.nativePlatformsToAdd.length === 0) {
+    return;
+  }
+  applyCapacitorShellStarter(plan);
+  // Native projects are generated by the pinned Capacitor CLI within the
+  // game workspace. No paths or plugins are copied from an mpgd-kit checkout.
+  runner.run('pnpm', ['install', '--no-frozen-lockfile'], plan.gameRoot);
+  for (const platform of plan.nativePlatformsToAdd) {
+    if (!existsSync(path.join(plan.gameRoot, shellPath, platform))) {
+      runner.run('pnpm', ['--dir', shellPath, 'cap', 'add', platform], plan.gameRoot);
+    }
+    assertNativePlatformComplete(plan.gameRoot, platform);
+  }
+}
+
+function assertNativePlatformComplete(gameRoot: string, platform: 'android' | 'ios'): void {
+  const nativeDirectory = path.join(gameRoot, shellPath, platform);
+  const required = platform === 'android'
+    ? 'app/build.gradle'
+    : 'App/App.xcodeproj/project.pbxproj';
+  if (!existsSync(nativeDirectory) || !lstatSync(nativeDirectory).isDirectory()
+    || !existsSync(path.join(nativeDirectory, required))
+    || !lstatSync(path.join(nativeDirectory, required)).isFile()) {
+    throw new Error(
+      `Existing ${platform} project is incomplete; repair or remove only that game-owned directory before retrying.`,
+    );
+  }
+}
+
+function runCommand(command: string, args: readonly string[], cwd: string): void {
+  const resolvedCommand = process.platform === 'win32' && command === 'pnpm' ? 'pnpm.cmd' : command;
+  const result = spawnSync(resolvedCommand, [...args], {
+    cwd,
+    stdio: 'inherit',
+    env: process.env,
+    shell: process.platform === 'win32',
+    timeout: 600_000,
+  });
+  if (result.error !== undefined) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `${command} ${args.join(' ')} failed. The shell files remain for a safe retry.`,
+    );
+  }
+}
+
+function assertCompatibleExistingPackage(
+  source: string,
+  capacitorVersion: string,
+  appVersion: string,
+  pluginVersion: string,
+  typescriptVersion: string,
+): void {
+  const value = parseJsonObject(source, 'existing shell package');
+  if (value.private !== true) {
+    throw new Error('Existing Capacitor shell package must stay private.');
+  }
+  const dependencies = requireObject(value.dependencies, 'existing shell dependencies');
+  for (const [name, version] of Object.entries({
+    '@capacitor/android': capacitorVersion,
+    '@capacitor/app': appVersion,
+    '@capacitor/core': capacitorVersion,
+    '@capacitor/ios': capacitorVersion,
+    '@mpgd/capacitor-game-services': pluginVersion,
+  })) {
+    if (dependencies[name] !== version) {
+      throw new Error(`Existing shell ${name} differs; refusing to rewrite dependencies.`);
+    }
+  }
+  const scripts = requireObject(value.scripts, 'existing shell scripts');
+  if (scripts.cap !== 'cap') {
+    throw new Error('Existing shell must expose the standard cap script.');
+  }
+  const devDependencies = requireObject(value.devDependencies, 'existing shell dev dependencies');
+  if (devDependencies['@capacitor/cli'] !== capacitorVersion
+    || devDependencies.typescript !== typescriptVersion) {
+    throw new Error('Existing shell must include the pinned Capacitor CLI and TypeScript.');
+  }
+}
+
+function normalizeBackendUrl(value: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error('Backend URL must be an absolute HTTPS URL.');
+  }
+  if (parsed.protocol !== 'https:' || parsed.username !== '' || parsed.password !== ''
+    || parsed.hash !== '' || parsed.search !== '') {
+    throw new Error('Backend URL must be HTTPS without credentials, search, or fragment.');
+  }
+  if (isNonPublicServiceHostname(parsed.hostname)) {
+    throw new Error('Backend URL must use a public HTTPS hostname for production.');
+  }
+  return parsed.href.replace(/\/$/u, '');
+}
+
+function appendEnvLine(current: string, line: string): string {
+  const separator = current !== '' && !current.endsWith('\n') ? '\n' : '';
+  return `${current}${separator}${line}\n`;
+}
+
+function relativeGameFile(gameRoot: string, file: string): string {
+  const canonical = realpathSync(path.resolve(gameRoot, file));
+  const relative = path.relative(gameRoot, canonical);
+  if (relative === '' || relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error('Icon source must be a game-owned file.');
+  }
+  if (!lstatSync(canonical).isFile()) {
+    throw new Error('Icon source must be a file.');
+  }
+  return relative.split(path.sep).join('/');
+}
+
+function readExisting(file: string): string | undefined {
+  if (!existsSync(file)) {
+    return undefined;
+  }
+  assertNotSymlink(file);
+  return readFileSync(file, 'utf8');
+}
+
+function assertNotSymlink(file: string): void {
+  try {
+    if (lstatSync(file).isSymbolicLink()) {
+      throw new Error(`Refusing to write through a symbolic link: ${file}`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw error;
+    }
+  }
+}
+
+function resolveInstalledPluginVersion(gameRoot: string, requirement: string): string {
+  const adapterRoot = path.dirname(
+    realpathSync(path.join(gameRoot, 'node_modules/@mpgd/adapter-capacitor/package.json')),
+  );
+  const installedPackage = path.join(
+    adapterRoot,
+    'node_modules/@mpgd/capacitor-game-services/package.json',
+  );
+  const fallbackPackage = path.join(
+    gameRoot,
+    'node_modules/@mpgd/capacitor-game-services/package.json',
+  );
+  const installedFile = existsSync(installedPackage) ? installedPackage : fallbackPackage;
+  const installed = existsSync(installedFile)
+    ? requireString(readJsonObject(installedFile).version, 'installed game-services plugin version')
+    : undefined;
+  const version = installed ?? requirement;
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(version)) {
+    throw new Error(
+      'Install a concrete Capacitor game-services plugin before initializing the shell.',
+    );
+  }
+  return version;
+}
+
+function readJsonObject(file: string): Record<string, unknown> {
+  return parseJsonObject(readFileSync(file, 'utf8'), file);
+}
+
+function parseJsonObject(source: string, label: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    throw new Error(`${label} must contain valid JSON.`);
+  }
+  return requireObject(parsed, label);
+}
+
+function requireObject(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`${label} must be a non-empty string.`);
+  }
+  return value;
+}
+
+function json(value: unknown): string {
+  return `${JSON.stringify(value, null, 2)}\n`;
+}
