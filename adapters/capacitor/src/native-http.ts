@@ -117,7 +117,6 @@ export function createCapacitorNativeJsonTransport(
       try {
         assertJsonValue(inputRequest.body, new WeakSet<object>(), 0);
         serializedData = JSON.stringify(inputRequest.body);
-        data = inputRequest.body;
       } catch {
         throw new CapacitorNativeHttpError('NATIVE_HTTP_INVALID_REQUEST');
       }
@@ -127,6 +126,10 @@ export function createCapacitorNativeJsonTransport(
       if (encoder.encode(serializedData).byteLength > maxRequestBytes) {
         throw new CapacitorNativeHttpError('NATIVE_HTTP_REQUEST_TOO_LARGE');
       }
+      // Native serializers must receive a JSON value, never its serialized
+      // string. Parse the size-checked snapshot so caller mutation cannot
+      // change the native request after validation.
+      data = JSON.parse(serializedData) as unknown;
       headers['content-type'] = 'application/json';
     } else {
       throw new CapacitorNativeHttpError('NATIVE_HTTP_INVALID_REQUEST');

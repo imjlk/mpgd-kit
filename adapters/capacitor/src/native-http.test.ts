@@ -61,6 +61,16 @@ describe('scoped Capacitor native JSON transport', () => {
     });
   });
 
+  it('passes a detached request snapshot to the deferred native bridge', async () => {
+    const { transport, calls } = createFake({});
+    const body = { purchase: { id: 'before' } };
+    const pending = transport.request({ method: 'POST', path: '/verify', body });
+    body.purchase.id = 'after';
+    await pending;
+    expect(calls[0]?.data).toEqual({ purchase: { id: 'before' } });
+    expect(calls[0]?.data).not.toBe(body);
+  });
+
   it('returns empty JSON as null and parses a JSON string', async () => {
     const empty = createFake({ response: (options) => ({
       status: 204, url: options.url, headers: {}, data: '',
