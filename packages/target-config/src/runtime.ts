@@ -667,8 +667,16 @@ export function withTargetAvailability(
     return availabilityConfig.features[adPlacementFeatureFor(expectedType)] === true;
   };
 
-  const canPreloadAdPlacement = (placementId: string): boolean => {
-    const actualType = options.resolveAdPlacementType?.(placementId);
+  const canPreloadAdPlacement = (
+    placementId: string,
+    requestedFormat?: AdPlacementType,
+  ): boolean => {
+    const resolvedType = options.resolveAdPlacementType?.(placementId);
+    if (resolvedType !== undefined && requestedFormat !== undefined
+      && resolvedType !== requestedFormat) {
+      return false;
+    }
+    const actualType = resolvedType ?? requestedFormat;
 
     if (actualType !== undefined) {
       return actualType !== 'banner'
@@ -774,8 +782,8 @@ export function withTargetAvailability(
     },
     ads: {
       async preload(input) {
-        if (canPreloadAdPlacement(input.placementId)) {
-          const format = options.resolveAdPlacementType?.(input.placementId);
+        if (canPreloadAdPlacement(input.placementId, input.format)) {
+          const format = options.resolveAdPlacementType?.(input.placementId) ?? input.format;
           await gateway.ads.preload(format === undefined ? input : { ...input, format });
         }
       },

@@ -119,6 +119,27 @@ const configuredAds = withTargetAvailability(adGateway, android, {
 });
 await configuredAds.ads.preload({ placementId: 'STAGE_END_INTERSTITIAL' });
 assert.deepEqual(preloadFormats, ['interstitial']);
+await configuredAds.ads.preload({
+  placementId: 'STAGE_END_INTERSTITIAL',
+  format: 'rewarded',
+});
+assert.deepEqual(preloadFormats, ['interstitial']);
+const rewardOnlyConfig = {
+  ...android,
+  features: { ...android.features, interstitialAds: false },
+};
+const explicitAds = withTargetAvailability(adGateway, rewardOnlyConfig);
+await explicitAds.ads.preload({
+  placementId: 'STAGE_END_INTERSTITIAL',
+  format: 'interstitial',
+});
+await explicitAds.ads.preload({ placementId: 'BANNER_HOME', format: 'banner' });
+assert.deepEqual(preloadFormats, ['interstitial']);
+await explicitAds.ads.preload({
+  placementId: 'CONTINUE_AFTER_FAIL',
+  format: 'rewarded',
+});
+assert.deepEqual(preloadFormats, ['interstitial', 'rewarded']);
 
 const gateway = {
   identity: {
