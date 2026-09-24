@@ -235,6 +235,12 @@ try {
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.other.game'));
   assert.throws(() => planCapacitorShellStarter(options), /ios project app ID differs/u);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
+  writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle').replace(
+    'PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle;',
+    '/* PRODUCT_BUNDLE_IDENTIFIER = dev.other.game; */ PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle;',
+  ));
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
   const androidProjectFile = path.join(root, 'apps/mobile-capacitor/android/app/build.gradle');
   writeFileSync(androidProjectFile, [
     'defaultConfig { applicationId nativeId }',
@@ -267,12 +273,14 @@ try {
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   writeFileSync(configFile, originalConfig.replace('  appName:', '  ...overrides,\n  appName:'));
   assert.throws(() => planCapacitorShellStarter(options), /ambiguous dynamic syntax/u);
+  writeFileSync(configFile, originalConfig.replace('  appName:', '  appName,\n  appName:'));
+  assert.throws(() => planCapacitorShellStarter(options), /ambiguous dynamic syntax/u);
   writeFileSync(configFile, originalConfig
     .replace('const config: CapacitorConfig = {', 'const config = Object.assign({')
     .replace('};\n\nexport default config;', '}, overrides);\n\nexport default config;'));
   assert.throws(() => planCapacitorShellStarter(options), /ambiguous dynamic syntax/u);
   writeFileSync(configFile, originalConfig.replace('  webDir:', '  webDir: "other",\n  webDir:'));
-  assert.throws(() => planCapacitorShellStarter(options), /webDir differs/u);
+  assert.throws(() => planCapacitorShellStarter(options), /ambiguous dynamic syntax/u);
   writeFileSync(configFile, originalConfig);
   const quotedName = 'King\'s "Quest" \\ Game';
   const quotedConfig = originalConfig.replace(

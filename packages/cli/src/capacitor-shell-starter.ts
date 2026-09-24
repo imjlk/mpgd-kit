@@ -491,10 +491,13 @@ function assertNativePlatformComplete(
     );
   }
   if (platform === 'android') {
-    const javaDirectory = path.join(nativeDirectory, 'app/src/main/java');
-    if (!existsSync(javaDirectory) || !readdirSync(javaDirectory, { recursive: true })
-      .some((name) => typeof name === 'string'
-        && /(?:^|[\\/])MainActivity\.(?:java|kt)$/u.test(name))) {
+    const sourceRoots = ['java', 'kotlin'].map((language) =>
+      path.join(nativeDirectory, 'app/src/main', language),
+    );
+    if (!sourceRoots.some((sourceRoot) => existsSync(sourceRoot)
+      && readdirSync(sourceRoot, { recursive: true })
+        .some((name) => typeof name === 'string'
+          && /(?:^|[\\/])MainActivity\.(?:java|kt)$/u.test(name)))) {
       throw new Error('Existing android project is incomplete; MainActivity is missing.');
     }
   }
@@ -676,7 +679,11 @@ function requireStaticCapacitorConfig(source: string): string {
     index += 1;
   }
   const configReferences = [...codeOnly.matchAll(/\bconfig\b/gu)].length;
+  const identityKeysAreUnique = (['appId', 'appName', 'webDir'] as const).every((key) =>
+    [...codeOnly.matchAll(new RegExp(`\\b${key}\\b`, 'gu'))].length === 1,
+  );
   if (configReferences !== 2 || codeOnly.includes('...') || codeOnly.includes('[')
+    || !identityKeysAreUnique || /["'](?:appId|appName|webDir)["']\s*:/u.test(withoutComments)
     || !/\bconst\s+config\s*:\s*CapacitorConfig\s*=\s*\{/u.test(codeOnly)
     || !/\bexport\s+default\s+config\s*;/u.test(codeOnly)) {
     throw new Error('Existing Capacitor config has ambiguous dynamic syntax.');

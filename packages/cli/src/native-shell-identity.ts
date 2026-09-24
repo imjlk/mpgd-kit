@@ -87,7 +87,7 @@ function assertIosAppIdentity(source: string, expectedAppId: string): void {
     throw new Error('Existing ios project App build configurations are missing.');
   }
   for (const id of ids) {
-    const configuration = readPbxObject(source, id ?? '');
+    const configuration = stripGradleComments(readPbxObject(source, id ?? ''));
     const values = [...configuration.matchAll(/\bPRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;]+);/gu)]
       .map((match) => match[1]?.trim().replace(/^["']|["']$/gu, ''));
     if (values.length !== 1 || values[0] !== expectedAppId) {
