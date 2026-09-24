@@ -222,7 +222,7 @@ to run xcodebuild archive.
 ## Phase 17 - Adapter Effective Config Parity
 
 - [x] browser adapter smoke verifies web-preview disables mapped products and ads
-- [x] Capacitor Android/iOS smoke verifies enabled effective config delegates purchase, rewarded ad, and leaderboard calls
+- [x] Capacitor Android/iOS adapter smoke verifies enabled effective config delegates purchase, rewarded ad, and leaderboard calls through injected bridge fixtures; the reference native shell reports uninstalled providers as unavailable
 - [x] Apps in Toss smoke verifies enabled effective config delegates purchase, rewarded ad, and leaderboard calls
 - [x] root test command runs effective config and adapter parity smoke
 - [x] CI and release workflows run effective config validation and parity smoke

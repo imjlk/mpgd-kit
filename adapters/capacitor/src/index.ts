@@ -5,22 +5,27 @@ import {
   type BridgeResponse,
 } from '@mpgd/bridge';
 import { CapacitorGameServices } from '@mpgd/capacitor-game-services';
-import type {
-  IdentitySession,
-  IdentityUpgradeResult,
-  InboundShare,
-  LaunchIntent,
-  NotificationSubscriptionResult,
-  NotificationSubscriptionStatus,
-  PlatformCapabilities,
-  PlatformGateway,
-  PlatformTarget,
-  PresentationResult,
-  ShareResult,
+import {
+  PlatformOperationError,
+  type IdentitySession,
+  type IdentityUpgradeResult,
+  type InboundShare,
+  type LaunchIntent,
+  type NotificationSubscriptionResult,
+  type NotificationSubscriptionStatus,
+  type PlatformCapabilities,
+  type PlatformGateway,
+  type PlatformTarget,
+  type PresentationResult,
+  type ShareResult,
 } from '@mpgd/platform';
 
 export interface NativeBridge {
   request(input: BridgeRequest): Promise<BridgeResponse>;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 export function createCapacitorPlatformGateway(input: {
@@ -32,8 +37,9 @@ export function createCapacitorPlatformGateway(input: {
   const bridge = input.bridge ?? CapacitorGameServices;
 
   async function request<TData>(method: BridgeMethod, payload: unknown): Promise<TData> {
-    const response = (await bridge.request({
-      id: crypto.randomUUID(),
+    const id = crypto.randomUUID();
+    const response: unknown = await bridge.request({
+      id,
       method,
       payload,
       meta: {
@@ -42,13 +48,38 @@ export function createCapacitorPlatformGateway(input: {
         buildId: input.buildId,
         sentAt: new Date().toISOString(),
       },
-    })) as BridgeResponse<TData>;
+    });
 
-    if (!response.ok) {
-      throw new Error(response.error.message);
+    if (!isRecord(response) || response.id !== id || typeof response.ok !== 'boolean') {
+      throw new PlatformOperationError({
+        code: 'NATIVE_BRIDGE_INVALID_RESPONSE',
+        message: `Native bridge returned an invalid response for ${method}.`,
+      });
     }
 
-    return response.data;
+    if (response.ok) {
+      if (!Object.hasOwn(response, 'data')) {
+        throw new PlatformOperationError({
+          code: 'NATIVE_BRIDGE_INVALID_RESPONSE',
+          message: `Native bridge omitted response data for ${method}.`,
+        });
+      }
+      return response.data as TData;
+    }
+
+    if (
+      !isRecord(response.error)
+      || typeof response.error.code !== 'string'
+      || typeof response.error.message !== 'string'
+      || typeof response.error.retryable !== 'boolean'
+    ) {
+      throw new PlatformOperationError({
+        code: 'NATIVE_BRIDGE_INVALID_RESPONSE',
+        message: `Native bridge returned an invalid error for ${method}.`,
+      });
+    }
+
+    throw new PlatformOperationError(response.error);
   }
 
   return {

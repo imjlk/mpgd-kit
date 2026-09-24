@@ -29,7 +29,7 @@
   },
   "scripts": {
     "i18n:build": "pnpm --dir packages/i18n paraglide:build",
-    "check": "pnpm validate:toolchain && pnpm validate:capacitor-alignment && pnpm i18n:build && pnpm validate:public && ttsc --noEmit -p tsconfig.tools.json && pnpm validate:starter-workflow && pnpm -r --if-present check",
+    "check": "pnpm validate:toolchain && pnpm validate:capacitor-alignment && pnpm validate:capacitor-fail-closed && pnpm i18n:build && pnpm validate:public && ttsc --noEmit -p tsconfig.tools.json && pnpm validate:starter-workflow && pnpm -r --if-present check",
     "dev:game": "pnpm --dir examples/phaser-starter dev",
     "dev:tutorial": "pnpm --dir examples/tutorial-driver dev",
     "build:tutorial": "pnpm --dir examples/tutorial-driver build",
@@ -46,6 +46,7 @@
     "test:tooling": "node --test tools/toolchain.test.mjs tools/graph-runtime.test.mjs tools/ci/prepared-suite.test.mjs",
     "validate:toolchain": "node tools/validate-toolchain.mjs",
     "validate:capacitor-alignment": "node tools/validate-capacitor-alignment.mjs",
+    "validate:capacitor-fail-closed": "node tools/validate-capacitor-fail-closed.mjs",
     "cache:paths": "node node_modules/ttsc/lib/launcher/ttsc.js cache paths --json",
     "docs:evidence": "node tools/docs/verify-evidence-entrypoints.mjs && MPGD_EVIDENCE=1 ttsc --noEmit -p tsconfig.evidence.json",
     "docs:examples:check": "ttsc --noEmit -p tsconfig.docs-examples.json",

@@ -406,8 +406,10 @@ new starter `@mpgd/*` pins without a separate hard-coded template version edit.
 
 - `packages/catalog/catalog.json` uses sample product IDs.
 - `packages/catalog/placements.json` uses sample ad placement IDs.
-- Browser, Capacitor, Apps in Toss, and Devvit adapters include mock or bridge-contract
-  behavior suitable for local validation.
+- Browser, Apps in Toss, and Devvit adapters include mock or bridge-contract
+  behavior suitable for local validation. The reference Capacitor shell preserves
+  native storage but reports uninstalled store, ad, and leaderboard providers as
+  unavailable; adapter tests use injected bridge fixtures for those flows.
 - Worker `MPGD_STORE = "memory"` is a starter default, not production persistence.
 - The development backend verifier accepts sample evidence. Production AdMob
   rewards can use the reusable [SSV verification boundary](docs/ADMOB_SSV.md);
