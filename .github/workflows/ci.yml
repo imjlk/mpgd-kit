@@ -322,9 +322,14 @@ jobs:
             fi
           done
 
+          if [[ "${metadata_only}" == "true" ]]; then
+            # Release metadata cannot change the docs site or its evidence.
+            docs_validation=false
+          fi
           if [[ "${docs_only}" == "true" ]]; then
             # Only Markdown or private example sources changed. The docs job
-            # supplies Evidence, example, site-build, and link coverage.
+            # supplies Evidence, example, site-build, and link coverage. This
+            # also applies to unattested docs-only pushes on main.
             run_prepared=false
           fi
           echo "enabled=${metadata_only}" >> "$GITHUB_OUTPUT"
@@ -421,8 +426,6 @@ jobs:
       - run: pnpm docs:examples:check
       - run: pnpm docs:examples:test
       - run: pnpm docs:site:build
-      - uses: actions/configure-pages@v5
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - uses: actions/upload-pages-artifact@v5
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         with:
@@ -984,6 +987,7 @@ jobs:
     if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.prepare.outputs.docs_validation == 'true' && needs.docs-validation.result == 'success' && needs.ci-required.result == 'success' }}
     needs: [prepare, docs-validation, ci-required]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     concurrency:
       group: mpgd-kit-github-pages
       cancel-in-progress: false

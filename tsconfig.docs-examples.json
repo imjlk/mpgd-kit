@@ -5,6 +5,7 @@
     "types": ["node"]
   },
   "include": [
-    "docs/examples/**/*.ts"
+    "docs/examples/**/*.ts",
+    "rspress.config.ts"
   ]
 }

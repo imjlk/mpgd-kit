@@ -8,7 +8,11 @@ const platformManifest = JSON.parse(
 // Claim 1 in lint.config.js reads the source behind this published subpath.
 // Fail if the package stops exporting it or repoints it without revisiting
 // the Evidence population and its guide.
-assert.deepEqual(platformManifest.exports?.['./capability-conformance'], {
-  types: './dist/capability-conformance.d.ts',
-  default: './dist/capability-conformance.js',
-});
+assert.deepEqual(
+  platformManifest.exports?.['./capability-conformance'],
+  {
+    types: './dist/capability-conformance.d.ts',
+    default: './dist/capability-conformance.js',
+  },
+  'Revisit the Evidence claim and guide if the published capability-conformance subpath changes.',
+);
