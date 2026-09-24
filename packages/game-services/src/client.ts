@@ -101,15 +101,18 @@ export interface CreateGameServicesFetchBackendTransportInput {
   readonly baseUrl: string;
   readonly fetch?: GameServicesFetch;
   readonly headers?: Record<string, string>;
-  readonly getHeaders?: () => Readonly<Record<string, string>> | Promise<Readonly<Record<string, string>>>;
+  readonly getHeaders?: GameServicesHeaderResolver;
 }
 
 export interface CreateGameServicesOrpcClientInput {
   readonly url: string;
   readonly fetch?: typeof fetch;
   readonly headers?: Record<string, string>;
-  readonly getHeaders?: () => Readonly<Record<string, string>> | Promise<Readonly<Record<string, string>>>;
+  readonly getHeaders?: GameServicesHeaderResolver;
 }
+
+export type GameServicesHeaderResolver =
+  () => Readonly<Record<string, string>> | Promise<Readonly<Record<string, string>>>;
 
 export type GameServicesFetch = (
   url: string,
@@ -148,6 +151,34 @@ export class GameServicesBackendTransportError extends Error {
     this.name = 'GameServicesBackendTransportError';
     this.endpoint = endpoint;
   }
+}
+
+/** Credentials could not be resolved; no backend request was dispatched. */
+export class GameServicesHeaderResolutionError extends Error {
+  constructor() {
+    super('Game Services request headers could not be resolved before dispatch.');
+    this.name = 'GameServicesHeaderResolutionError';
+  }
+}
+
+/** Resolve rotating credentials once and preserve static → dynamic → request precedence. */
+export async function resolveGameServicesRequestHeaders(input: {
+  readonly headers?: Readonly<Record<string, string>> | undefined;
+  readonly getHeaders?: GameServicesHeaderResolver | undefined;
+  readonly requestHeaders?: Readonly<Record<string, string>> | undefined;
+}): Promise<Readonly<Record<string, string>>> {
+  let dynamicHeaders: Readonly<Record<string, string>> | undefined;
+  try {
+    dynamicHeaders = await input.getHeaders?.();
+  } catch {
+    // Resolver exceptions can contain credentials; expose a stable outcome.
+    throw new GameServicesHeaderResolutionError();
+  }
+  return {
+    ...(input.headers ?? {}),
+    ...(dynamicHeaders ?? {}),
+    ...(input.requestHeaders ?? {}),
+  };
 }
 
 export interface GameServicesClient extends GameServicesOperationClient {
@@ -511,13 +542,15 @@ export function createGameServicesFetchBackendTransport(
 
   return {
     async send(request) {
-      const dynamicHeaders = await input.getHeaders?.();
+      const headers = await resolveGameServicesRequestHeaders({
+        headers: input.headers,
+        getHeaders: input.getHeaders,
+        requestHeaders: request.headers,
+      });
       const response = await fetcher(joinUrl(input.baseUrl, request.endpoint), {
         method: request.method,
         headers: {
-          ...(input.headers ?? {}),
-          ...(dynamicHeaders ?? {}),
-          ...(request.headers ?? {}),
+          ...headers,
           'content-type': 'application/json',
         },
         body: JSON.stringify(request.body),
@@ -540,10 +573,7 @@ export function createGameServicesOrpcClient(
     ...(input.headers === undefined && input.getHeaders === undefined
       ? {}
       : {
-          headers: async () => ({
-            ...(input.headers ?? {}),
-            ...(await input.getHeaders?.() ?? {}),
-          }),
+          headers: () => resolveGameServicesRequestHeaders(input),
         }),
   } as never);
 
@@ -651,7 +681,10 @@ async function sendGameServicesBackendRequest<TRequest, TResponse>(
       endpoint,
       body,
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof GameServicesHeaderResolutionError) {
+      throw error;
+    }
     // Do not leak SDK or native transport exceptions (which can contain
     // request headers); the caller must reconcile uncertain server outcomes.
     throw new GameServicesBackendTransportError(endpoint);

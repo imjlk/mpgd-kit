@@ -7,9 +7,11 @@ import {
   createGameServicesHttpBackendApi,
   createGameServicesOrpcBackendApi,
   createGameServicesOrpcClient,
+  resolveGameServicesRequestHeaders,
   type GameServicesBackendApi,
   type GameServicesBackendTransport,
   type GameServicesClient,
+  type GameServicesHeaderResolver,
 } from './client.js';
 import type { GameServicesLedgerTarget } from './types.js';
 
@@ -40,7 +42,7 @@ interface CreateGameServicesRuntimeCommonInput {
   /** Static headers sent with every authoritative game-services request. */
   readonly headers?: Record<string, string>;
   /** Resolve rotating credentials at request time, not runtime creation time. */
-  readonly getHeaders?: () => Readonly<Record<string, string>> | Promise<Readonly<Record<string, string>>>;
+  readonly getHeaders?: GameServicesHeaderResolver;
   readonly allowLocalBackend?: boolean;
   readonly localBackend?: GameServicesBackendApi;
   readonly analytics?: AnalyticsSink;
@@ -150,14 +152,14 @@ function withRuntimeHeaders(
 ): GameServicesBackendTransport {
   return {
     async send(request) {
-      const dynamicHeaders = await input.getHeaders?.();
+      const headers = await resolveGameServicesRequestHeaders({
+        headers: input.headers,
+        getHeaders: input.getHeaders,
+        requestHeaders: request.headers,
+      });
       return transport.send({
         ...request,
-        headers: {
-          ...(input.headers ?? {}),
-          ...(dynamicHeaders ?? {}),
-          ...(request.headers ?? {}),
-        },
+        headers,
       });
     },
   };

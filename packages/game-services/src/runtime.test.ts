@@ -4,6 +4,7 @@ import {
   createGameServicesRuntime,
   GameServicesBackendError,
   GameServicesBackendTransportError,
+  GameServicesHeaderResolutionError,
   resolveGameServicesAuthorityMode,
   resolveGameServicesTransport,
   type GameServicesBackendApi,
@@ -327,6 +328,37 @@ try {
     'custom transport should receive static backend headers',
   );
   assertEqual(unexpectedFetchCalls, 0, 'custom HTTP transport must not call default fetch');
+
+  const headerFailureRuntime = createGameServicesRuntime({
+    gateway: createGateway(),
+    playerId,
+    authorityMode: 'production',
+    baseUrl: 'https://services.example.com',
+    httpTransport,
+    getHeaders: () => {
+      throw new Error('Bearer secret-refresh-token');
+    },
+  });
+  const sentBeforeHeaderFailure = customRequests.length;
+  try {
+    await requireValue(headerFailureRuntime.client, 'header failure client').purchase({
+      productId: 'COINS_100',
+      source: 'shop',
+      idempotencyKey: 'header-failure',
+    });
+    throw new Error('Failed header resolution unexpectedly sent a request.');
+  } catch (error) {
+    if (!(error instanceof GameServicesHeaderResolutionError)
+      || error.message.includes('secret-refresh-token')) {
+      throw error;
+    }
+  }
+  assertEqual(
+    customRequests.length,
+    sentBeforeHeaderFailure,
+    'header failure must not dispatch an uncertain backend operation',
+  );
+  assertEqual(unexpectedFetchCalls, 0, 'header failure must not use fallback fetch');
 
   failCustomRequest = true;
   try {
