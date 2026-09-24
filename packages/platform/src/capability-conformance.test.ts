@@ -17,6 +17,23 @@ describe('platform gateway capability conformance', () => {
 
   it('rejects incomplete or unknown capability fields', rejectsMalformedSnapshots);
 
+  it.each([
+    [],
+    '',
+    null,
+    { unknownFeature: 'available' },
+    { nativeIap: 'ready' },
+  ])('rejects malformed provider availability %j', async (providerAvailability) => {
+    const fixture = createFixture(() => ({
+      ...createUnsupportedCapabilities(),
+      providerAvailability: providerAvailability as NonNullable<
+        PlatformCapabilities['providerAvailability']
+      >,
+    }));
+    await expect(runPlatformGatewayCapabilityConformance({ fixtures: [fixture] }))
+      .rejects.toThrow('Platform gateway capability conformance failed: test-gateway.');
+  });
+
   it('rejects gateways that leak a shared capability object', rejectsSharedSnapshot);
 
   it('rejects a provider mutation hidden by an aliased fixture expectation', rejectsAliasedExpectation);

@@ -320,6 +320,39 @@ describe('Capacitor optional provider composition', () => {
     ]);
   });
 
+  it('allows banner cleanup after the provider stops serving new banners', async () => {
+    const requests: BridgeRequest[] = [];
+    let ready = true;
+    const provider: CapacitorServiceProvider = {
+      id: 'banner-cleanup',
+      features: ['bannerAds'],
+      methods: ['ads.mountBanner', 'ads.unmountBanner'],
+      async getAvailability() {
+        return { bannerAds: ready ? 'available' : 'temporarily-unavailable' };
+      },
+      bridge: {
+        async request(input) {
+          requests.push(input);
+          return { id: input.id, ok: true,
+            data: input.method === 'ads.mountBanner' ? { status: 'mounted' } : undefined };
+        },
+      },
+    };
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android', appVersion: '1', buildId: 'banner-cleanup',
+      bridge: baseBridge([]), providers: [provider],
+    });
+    await gateway.ads.mountBanner?.({ placementId: 'BANNER_HOME', surfaceId: 'home' });
+    ready = false;
+    await expect(gateway.ads.mountBanner?.({
+      placementId: 'BANNER_HOME', surfaceId: 'other',
+    })).rejects.toMatchObject({ code: 'NATIVE_PROVIDER_TEMPORARILY_UNAVAILABLE' });
+    await expect(gateway.ads.unmountBanner?.({ surfaceId: 'home' })).resolves.toBeUndefined();
+    expect(requests.map((request) => request.method)).toEqual([
+      'ads.mountBanner', 'ads.unmountBanner',
+    ]);
+  });
+
   it('degrades initialization failures without breaking guest identity', async () => {
     const provider: CapacitorServiceProvider = {
       id: 'identity-provider',

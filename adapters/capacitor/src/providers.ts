@@ -182,6 +182,11 @@ export function createCapacitorProviderRegistry(
       if (provider === undefined) {
         return;
       }
+      if (method === 'ads.unmountBanner') {
+        // Teardown must reach the provider that mounted the banner even after
+        // its serving state becomes unavailable.
+        return;
+      }
       // An unrelated provider must not delay a purchase, ad, or identity call.
       const states = await readProviderStates(provider);
       let relevant = provider.features.filter((feature) =>

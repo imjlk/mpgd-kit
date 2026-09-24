@@ -1,4 +1,10 @@
-import type { PlatformCapabilities, PlatformGateway, PlatformTarget } from './index.js';
+import type {
+  PlatformCapabilities,
+  PlatformGateway,
+  PlatformProviderAvailability,
+  PlatformProviderFeature,
+  PlatformTarget,
+} from './index.js';
 
 export const platformCapabilityKeys = Object.freeze([
   'nativeIap',
@@ -29,6 +35,23 @@ const allowedPlatformCapabilityKeySet = new Set<keyof PlatformCapabilities>([
 const optionalPlatformCapabilityKeySet = new Set<keyof PlatformCapabilities>(
   optionalPlatformCapabilityKeys,
 );
+const providerFeatureSet = new Set<PlatformProviderFeature>([
+  'nativeIap',
+  'subscriptionIap',
+  'rewardedAds',
+  'interstitialAds',
+  'bannerAds',
+  'nativeLeaderboard',
+  'identityUpgrade',
+  'pushNotifications',
+]);
+const providerAvailabilitySet = new Set<PlatformProviderAvailability>([
+  'unsupported',
+  'configuration-required',
+  'action-required',
+  'temporarily-unavailable',
+  'available',
+]);
 
 export interface PlatformGatewayCapabilityConformanceTransition {
   readonly update: () => Promise<void> | void;
@@ -175,11 +198,29 @@ function assertCapabilitySnapshot(
       `capability ${key} must match the expected provider state`,
     );
   }
+  assertProviderAvailabilityShape(actual.providerAvailability);
   assertEqual(
     normalizedAvailability(actual.providerAvailability),
     normalizedAvailability(expected.providerAvailability),
     'provider availability must match the expected provider state',
   );
+}
+
+function assertProviderAvailabilityShape(value: unknown): void {
+  if (value === undefined) {
+    return;
+  }
+  assert(
+    typeof value === 'object' && value !== null && !Array.isArray(value),
+    'provider availability must be a non-array record',
+  );
+  for (const [feature, state] of Object.entries(value)) {
+    assert(
+      providerFeatureSet.has(feature as PlatformProviderFeature)
+        && providerAvailabilitySet.has(state as PlatformProviderAvailability),
+      'provider availability must contain only known features and readiness states',
+    );
+  }
 }
 
 function cloneExpectedCapabilities(value: PlatformCapabilities): PlatformCapabilities {
