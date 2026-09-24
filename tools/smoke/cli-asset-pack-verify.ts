@@ -486,6 +486,21 @@ const beforeSnapshot = new Map<string, Map<string, { bytes: number; sha256: stri
     rmSync(fifoPath, { force: true });
   }
 }
+if (process.platform !== 'win32') {
+  // An empty character device is EOF, not a FIFO waiting for a writer.
+  const startedAt = performance.now();
+  const report = await verifyAssetPackDelivery({
+    manifestPath: '/dev/null',
+    root: join(fixtureRoot, zipOut),
+    verifyTimeoutMs: 5000,
+  });
+  assert.ok(performance.now() - startedAt < 3000, 'Character-device EOF returned too late.');
+  assert.equal(report.ok, false);
+  assert.ok(
+    report.failures.some((failure) => failure.code === 'manifest-invalid'),
+    JSON.stringify(report.failures),
+  );
+}
 {
   // Traversal: manifest path escaping the root.
   const escapeRoot = join(fixtureRoot, 'out-escape');

@@ -453,6 +453,7 @@ const readManifestCapped = async (
       // some Linux hosts. O_NONBLOCK bounds each read: EAGAIN means a writer
       // is connected but has no data; a later zero-byte read is its EOF.
       const buffer = Buffer.allocUnsafe(Math.min(STREAM_CHUNK_BYTES, cap + 1));
+      const isFifo = info.isFIFO();
       let writerObserved = false;
       while (true) {
         deadline.sample();
@@ -474,9 +475,9 @@ const readManifestCapped = async (
           bytesRead = 0;
         }
         if (bytesRead === 0) {
-          // A writer that produced no bytes still has an observable hangup
-          // after EAGAIN. Only a FIFO with no writer yet waits for one.
-          if (!wouldBlock && writerObserved) {
+          // Other sources have an ordinary EOF. Only an unconnected FIFO
+          // waits for a writer; a previously observed writer has hung up.
+          if (!wouldBlock && (!isFifo || writerObserved)) {
             break;
           }
           const waitMs = Math.min(10, Math.max(1, deadline.remainingMs()));
