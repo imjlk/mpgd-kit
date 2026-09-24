@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import { join } from 'node:path';
 
@@ -23,6 +23,51 @@ try {
       shellApp: shellRoot,
     }),
   );
+  const groovy = join(shellRoot, 'android/app/build.gradle');
+  const kotlin = `${groovy}.kts`;
+  renameSync(groovy, kotlin);
+  writeFileSync(kotlin, [
+    'defaultConfig {',
+    '  applicationId = "dev.example.game"',
+    '  versionCode = 42',
+    '  versionName = "1.4.0"',
+    '}',
+  ].join('\n'));
+  assert.doesNotThrow(() =>
+    assertNativeReleaseIdentity({
+      environment: {
+        APP_VERSION: '1.4.0',
+        MPGD_TARGET_VERSION_CODE: '42',
+        MPGD_TARGET_VERSION_NAME: '1.4.0',
+      },
+      metadata: { packageId: 'dev.example.game' },
+      platform: 'android',
+      required: false,
+      shellApp: shellRoot,
+    }),
+  );
+  writeFileSync(kotlin, [
+    'defaultConfig { applicationId = "dev.example.game"; versionCode = 42;',
+    '  versionName = "1.4.0" }',
+    'buildTypes { getByName("release").applicationIdSuffix = ".store" }',
+  ].join('\n'));
+  assert.throws(
+    () =>
+      assertNativeReleaseIdentity({
+        environment: {
+          APP_VERSION: '1.4.0',
+          MPGD_TARGET_VERSION_CODE: '42',
+          MPGD_TARGET_VERSION_NAME: '1.4.0',
+        },
+        metadata: { packageId: 'dev.example.game' },
+        platform: 'android',
+        required: false,
+        shellApp: shellRoot,
+      }),
+    /does not support applicationIdSuffix/u,
+  );
+  renameSync(kotlin, groovy);
+  writeShellFiles(shellRoot);
 
   writeAndroidWithCommentedIdentity(shellRoot);
   assert.doesNotThrow(() =>

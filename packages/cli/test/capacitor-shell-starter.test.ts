@@ -244,6 +244,22 @@ try {
   );
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
+  const inheritedIosProject = iosProjectWithAppId('dev.example.puzzle').replace(
+    'DDDDDDDD /* Release */ = { isa = XCBuildConfiguration; buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle;',
+    'DDDDDDDD /* Release */ = { isa = XCBuildConfiguration; buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = "$(inherited)";',
+  );
+  writeFileSync(iosProjectFile, inheritedIosProject);
+  assert.throws(() => planCapacitorShellStarter(options), /no project configuration/u);
+  writeFileSync(iosProjectFile, [
+    inheritedIosProject,
+    'FFFFFFFF /* Project */ = { isa = PBXProject; buildConfigurationList = 99999999; };',
+    '99999999 /* Project configurations */ = { isa = XCConfigurationList;',
+    '  buildConfigurations = (88888888 /* Release */,); };',
+    '88888888 /* Release */ = { isa = XCBuildConfiguration;',
+    '  buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle; }; };',
+  ].join('\n'));
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle').replace(
     'PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle;',
     '/* PRODUCT_BUNDLE_IDENTIFIER = dev.other.game; */ PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle;',
@@ -260,7 +276,7 @@ try {
   mkdirSync(path.dirname(workspaceFile), { recursive: true });
   writeFileSync(podfile, 'platform :ios, "15.0"');
   writeFileSync(workspaceFile, '<Workspace/>');
-  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  assert.throws(() => planCapacitorShellStarter(options), /SPM files are required/u);
   rmSync(podfile);
   rmSync(workspaceFile);
   renameSync(`${spmPackage}.saved`, spmPackage);
@@ -279,6 +295,11 @@ try {
   writeFileSync(androidProjectFile, [
     'applicationId "dev.example.puzzle"',
     'buildTypes { release { applicationIdSuffix ".release" } }',
+  ].join('\n'));
+  assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
+    'buildTypes { getByName("release").applicationIdSuffix = ".store" }',
   ].join('\n'));
   assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
   writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');
@@ -304,6 +325,9 @@ try {
   );
   const configFile = path.join(root, 'apps/mobile-capacitor/capacitor.config.ts');
   const originalConfig = readFileSync(configFile, 'utf8');
+  writeFileSync(configFile, originalConfig.replaceAll('\n', '\r\n'));
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(configFile, originalConfig);
   writeFileSync(configFile, originalConfig.replace('Puzzle Game', 'Other Game'));
   assert.throws(() => planCapacitorShellStarter(options), /display name differs/u);
   writeFileSync(configFile, originalConfig);

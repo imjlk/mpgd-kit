@@ -33,7 +33,14 @@ export function assertNativeReleaseIdentity(input: NativeReleaseIdentityInput): 
   assertNativeVersionMatchesGameVersion(expected, input.environment, input.required);
 
   if (expected.kind === 'android') {
-    assertAndroidIdentity(join(input.shellApp, 'android/app/build.gradle'), expected);
+    const candidates = [
+      join(input.shellApp, 'android/app/build.gradle'),
+      join(input.shellApp, 'android/app/build.gradle.kts'),
+    ].filter((file) => existsSync(file));
+    if (candidates.length !== 1) {
+      throw new Error('Android native release requires exactly one Gradle app build file.');
+    }
+    assertAndroidIdentity(candidates[0] ?? '', expected);
     return;
   }
 
@@ -212,6 +219,8 @@ function assertNoAndroidReleaseIdentitySuffix(source: string, file: string): voi
   const qualifiedReleaseSuffixes = [
     /\bbuildTypes\s*\.\s*release\s*\.\s*(?:applicationIdSuffix|versionNameSuffix)\b/u,
     /\bbuildTypes\s*\.\s*(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*(?:applicationIdSuffix|versionNameSuffix)\b/u,
+    /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*(?:applicationIdSuffix|versionNameSuffix)\b/u,
+    /\brelease\s*\.\s*(?:applicationIdSuffix|versionNameSuffix)\b/u,
   ];
 
   if (qualifiedReleaseSuffixes.some((expression) => expression.test(source))) {

@@ -26,7 +26,10 @@ function assertAndroidIdentity(source: string, expectedAppId: string): void {
 function hasAndroidReleaseIdSuffix(source: string): boolean {
   if (/\bbuildTypes\s*\.\s*release\s*\.\s*applicationIdSuffix\b/u.test(source)
     || /\bbuildTypes\s*\.\s*(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*applicationIdSuffix\b/u
-      .test(source)) {
+      .test(source)
+    || /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*applicationIdSuffix\b/u
+      .test(source)
+    || /\brelease\s*\.\s*applicationIdSuffix\b/u.test(source)) {
     return true;
   }
   const releaseBlocks = [
@@ -96,6 +99,25 @@ function assertIosAppIdentity(source: string, expectedAppId: string): void {
   if (listId === undefined) {
     throw new Error('Existing ios project App target configuration is missing.');
   }
+  let actual = readIosReleaseBundleId(source, listId);
+  if (actual === '$(inherited)') {
+    const projects = [...source.matchAll(/\b([A-F0-9]+)\s*\/\*[^*]+\*\/\s*=\s*\{/gu)]
+      .map((match) => readPbxObject(source, match[1] ?? ''))
+      .filter((block) => /\bisa\s*=\s*PBXProject;/u.test(block));
+    const projectListId = projects.length === 1
+      ? /\bbuildConfigurationList\s*=\s*([A-F0-9]+)\b/u.exec(projects[0] ?? '')?.[1]
+      : undefined;
+    if (projectListId === undefined) {
+      throw new Error('Existing ios project inherited App ID has no project configuration.');
+    }
+    actual = readIosReleaseBundleId(source, projectListId);
+  }
+  if (actual !== expectedAppId) {
+    throw new Error('Existing ios project app ID differs or cannot be read safely.');
+  }
+}
+
+function readIosReleaseBundleId(source: string, listId: string): string {
   const list = readPbxObject(source, listId);
   const configurations = /\bbuildConfigurations\s*=\s*\(([^)]*)\)/u.exec(list)?.[1];
   const releaseIds = configurations === undefined ? []
@@ -107,9 +129,10 @@ function assertIosAppIdentity(source: string, expectedAppId: string): void {
   const configuration = stripGradleComments(readPbxObject(source, releaseIds[0] ?? ''));
   const values = [...configuration.matchAll(/\bPRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;]+);/gu)]
     .map((match) => match[1]?.trim().replace(/^["']|["']$/gu, ''));
-  if (values.length !== 1 || values[0] !== expectedAppId) {
-    throw new Error('Existing ios project app ID differs or cannot be read safely.');
+  if (values.length !== 1 || values[0] === undefined) {
+    throw new Error('Existing ios project Release bundle ID is missing or ambiguous.');
   }
+  return values[0];
 }
 
 function readPbxObject(source: string, id: string): string {

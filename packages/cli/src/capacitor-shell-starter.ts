@@ -483,10 +483,8 @@ function assertNativePlatformComplete(
     requireOneNativeFile(nativeDirectory, ['settings.gradle', 'settings.gradle.kts'], platform);
   } else {
     const hasSpm = isNativeFile(nativeDirectory, 'App/CapApp-SPM/Package.swift');
-    const hasPods = isNativeFile(nativeDirectory, 'App/Podfile')
-      && isNativeFile(nativeDirectory, 'App/App.xcworkspace/contents.xcworkspacedata');
-    if (!hasSpm && !hasPods) {
-      throw new Error('Existing ios project is incomplete; SPM or CocoaPods files are missing.');
+    if (!hasSpm) {
+      throw new Error('Existing ios project is incomplete; SPM files are required by the builder.');
     }
   }
   const additional = platform === 'android'
@@ -624,7 +622,7 @@ function readDotenvValue(source: string): string {
 function readCapacitorConfigLiteral(source: string, key: 'appId' | 'appName' | 'webDir'):
   string | undefined {
   const expression = new RegExp(
-    `^[ \\t]*${key}:[ \\t]*("(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*')[ \\t]*,?[ \\t]*$`,
+    `^[ \\t]*${key}:[ \\t]*("(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*')[ \\t]*,?[ \\t]*\\r?$`,
     'gmu',
   );
   const matches = [...source.matchAll(expression)];
