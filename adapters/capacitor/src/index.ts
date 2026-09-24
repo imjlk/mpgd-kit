@@ -12,6 +12,8 @@ import {
   type PlatformGateway,
   type PlatformTarget,
   type PresentationResult,
+  type ProductInfo,
+  type ProductType,
   type ShareResult,
 } from '@mpgd/platform';
 import {
@@ -31,6 +33,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+const safeFallbackMethods = new Set<BridgeMethod>([
+  'identity.getPlayer', 'identity.getSession', 'notifications.getStatus',
+]);
+
 export function createCapacitorPlatformGateway(input: {
   readonly target: Extract<PlatformTarget, 'android' | 'ios'>;
   readonly appVersion: string;
@@ -46,27 +52,44 @@ export function createCapacitorPlatformGateway(input: {
     payload: unknown,
     leaderboardRoute?: 'native' | 'remote',
   ): Promise<TData> {
-    const id = crypto.randomUUID();
-    let provider = leaderboardRoute === 'remote' && (
+    const provider = leaderboardRoute === 'remote' && (
       method === 'leaderboard.submitScore' || method === 'leaderboard.open'
     ) ? undefined : providers.byMethod.get(method);
     if (provider !== undefined) {
+      let productType: ProductType | undefined;
+      if (method === 'commerce.purchase' && provider.features.includes('nativeIap')
+        && provider.features.includes('subscriptionIap')) {
+        // The caller supplies only an ID. Resolve its provider-owned type before
+        // selecting a store route; a forged or unknown ID must not bypass it.
+        const products = await request<ProductInfo[]>('commerce.getProducts', {});
+        const productId = isRecord(payload) ? payload.productId : undefined;
+        const matches = products.filter((product) => product.id === productId);
+        if (matches.length !== 1) {
+          throw new PlatformOperationError({ code: 'NATIVE_PROVIDER_PRODUCT_UNKNOWN' });
+        }
+        productType = matches[0]?.type;
+      }
       try {
-        await providers.assertMethodReady(method, payload);
+        await providers.assertMethodReady(method, payload, productType);
+        return await sendRequest<TData>(method, payload, provider);
       } catch (error) {
-        // An unconfigured or failed optional identity/push provider must not
-        // prevent guest boot or a status query through the base bridge.
-        if (
-          error instanceof PlatformOperationError
-          && (method === 'identity.getPlayer' || method === 'identity.getSession'
-            || method === 'notifications.getStatus')
-        ) {
-          provider = undefined;
-        } else {
+        // Only non-mutating guest/status queries may degrade. A stale readiness
+        // snapshot, SDK rejection, or malformed provider response is no safer
+        // than initialization failure for these queries.
+        if (!safeFallbackMethods.has(method)) {
           throw error;
         }
       }
     }
+    return sendRequest<TData>(method, payload, undefined);
+  }
+
+  async function sendRequest<TData>(
+    method: BridgeMethod,
+    payload: unknown,
+    provider: CapacitorServiceProvider | undefined,
+  ): Promise<TData> {
+    const id = crypto.randomUUID();
     const response: unknown = await (provider?.bridge ?? bridge).request({
       id,
       method,

@@ -3,6 +3,7 @@ import {
   PlatformOperationError,
   type PlatformProviderAvailability,
   type PlatformProviderFeature,
+  type ProductType,
 } from '@mpgd/platform';
 
 export interface NativeBridge {
@@ -60,7 +61,11 @@ const availabilityTimeoutMs = 3_000;
 
 export interface CapacitorProviderRegistry {
   readonly byMethod: ReadonlyMap<BridgeMethod, CapacitorServiceProvider>;
-  assertMethodReady(method: BridgeMethod, payload?: unknown): Promise<void>;
+  assertMethodReady(
+    method: BridgeMethod,
+    payload?: unknown,
+    productType?: ProductType,
+  ): Promise<void>;
   getAvailability(): Promise<Readonly<Record<
     PlatformProviderFeature,
     PlatformProviderAvailability
@@ -172,7 +177,7 @@ export function createCapacitorProviderRegistry(
   return {
     byMethod,
     getAvailability,
-    async assertMethodReady(method, payload) {
+    async assertMethodReady(method, payload, productType) {
       const provider = byMethod.get(method);
       if (provider === undefined) {
         return;
@@ -182,6 +187,13 @@ export function createCapacitorProviderRegistry(
       let relevant = provider.features.filter((feature) =>
         (featureMethods[feature] as readonly BridgeMethod[]).includes(method),
       );
+      if (method === 'commerce.purchase' && relevant.length > 1) {
+        relevant = relevant.filter((feature) => feature === (
+          productType === 'subscription' ? 'subscriptionIap'
+            : productType === 'consumable' || productType === 'non_consumable'
+              ? 'nativeIap' : undefined
+        ));
+      }
       const preloadFormat = method === 'ads.preload' && isRecord(payload)
         ? payload.format
         : undefined;
@@ -194,9 +206,15 @@ export function createCapacitorProviderRegistry(
         relevant = feature === undefined ? [] : relevant.filter((item) => item === feature);
       }
       if (relevant.length === 0) {
-        throw new PlatformOperationError({ code: 'NATIVE_PROVIDER_UNSUPPORTED' });
+        throw new PlatformOperationError({
+          code: method === 'commerce.purchase'
+            ? 'NATIVE_PROVIDER_PRODUCT_TYPE_REQUIRED'
+            : 'NATIVE_PROVIDER_UNSUPPORTED',
+        });
       }
-      const ready = method === 'ads.preload' && preloadFormat === undefined
+      const ready = (method === 'ads.preload' && preloadFormat === undefined)
+        || ((method === 'commerce.restore' || method === 'commerce.getEntitlements')
+          && relevant.length > 1)
         ? relevant.every((feature) => states[feature] === 'available')
         : relevant.some((feature) => states[feature] === 'available');
       if (ready) {
@@ -329,7 +347,10 @@ function isValidProviderData(method: BridgeMethod, value: unknown): boolean {
           typeof value.rank === 'number' && Number.isFinite(value.rank)
         ));
     case 'identity.getPlayer':
-      return value === null || (isRecord(value) && isString(value.playerId));
+      return value === null || (isRecord(value)
+        && isString(value.playerId)
+        && (value.displayName === undefined || isString(value.displayName))
+        && (value.avatarUrl === undefined || isString(value.avatarUrl)));
     case 'identity.getSession':
       return isRecord(value)
         && ['guest', 'platform-anonymous', 'authenticated'].includes(value.identityLevel as string)

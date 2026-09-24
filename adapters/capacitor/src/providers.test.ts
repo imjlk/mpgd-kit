@@ -135,6 +135,47 @@ describe('Capacitor optional provider composition', () => {
     expect(providerRequests).toHaveLength(0);
   });
 
+  it('resolves product type before purchasing through a mixed-readiness store', async () => {
+    const requests: BridgeRequest[] = [];
+    const provider: CapacitorServiceProvider = {
+      id: 'mixed-store',
+      features: ['nativeIap', 'subscriptionIap'],
+      methods: commerceMethods,
+      async getAvailability() {
+        return { nativeIap: 'available', subscriptionIap: 'configuration-required' };
+      },
+      bridge: {
+        async request(input) {
+          requests.push(input);
+          const product = (id: string, type: 'consumable' | 'subscription') => ({
+            id, type, title: id, description: id,
+            price: { formatted: '$1', currencyCode: 'USD' },
+          });
+          return { id: input.id, ok: true, data: input.method === 'commerce.getProducts'
+            ? [product('COINS_100', 'consumable'), product('PASS_MONTHLY', 'subscription')]
+            : { status: 'pending', entitlementIds: [] } };
+        },
+      },
+    };
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android', appVersion: '1', buildId: 'mixed', bridge: baseBridge([]),
+      providers: [provider],
+    });
+    await expect(gateway.commerce.purchase({
+      productId: 'PASS_MONTHLY', source: 'shop', idempotencyKey: 'sub',
+    })).rejects.toMatchObject({ code: 'NATIVE_PROVIDER_CONFIGURATION_REQUIRED' });
+    await expect(gateway.commerce.purchase({
+      productId: 'UNKNOWN', source: 'shop', idempotencyKey: 'unknown',
+    })).rejects.toMatchObject({ code: 'NATIVE_PROVIDER_PRODUCT_UNKNOWN' });
+    await expect(gateway.commerce.purchase({
+      productId: 'COINS_100', source: 'shop', idempotencyKey: 'coins',
+    })).resolves.toMatchObject({ status: 'pending' });
+    await expect(gateway.commerce.restore?.()).rejects.toMatchObject({
+      code: 'NATIVE_PROVIDER_CONFIGURATION_REQUIRED',
+    });
+    expect(requests.filter((request) => request.method === 'commerce.purchase')).toHaveLength(1);
+  });
+
   it('keeps subscription, rewarded, and interstitial readiness independent', async () => {
     const adRequests: BridgeRequest[] = [];
     const subscription: CapacitorServiceProvider = {
@@ -300,6 +341,72 @@ describe('Capacitor optional provider composition', () => {
     await expect(gateway.identity.requestUpgrade?.({ reason: 'save' })).rejects.toMatchObject({
       code: 'NATIVE_PROVIDER_TEMPORARILY_UNAVAILABLE', retryable: true,
     });
+  });
+
+  it('falls back for failed safe provider reads, including invalid optional player data', async () => {
+    const baseRequests: BridgeRequest[] = [];
+    const provider: CapacitorServiceProvider = {
+      id: 'failed-identity',
+      features: ['identityUpgrade'],
+      methods: ['identity.getPlayer', 'identity.getSession', 'identity.requestUpgrade'],
+      async getAvailability() { return { identityUpgrade: 'available' }; },
+      bridge: {
+        async request(input) {
+          if (input.method === 'identity.getPlayer') {
+            return { id: input.id, ok: true, data: { playerId: 'p1', displayName: 42 } };
+          }
+          if (input.method === 'identity.getSession') {
+            throw new Error('SDK session read failed');
+          }
+          return { id: input.id, ok: false,
+            error: { code: 'SDK_FAILED', message: 'Upgrade failed', retryable: false } };
+        },
+      },
+    };
+    const gateway = createCapacitorPlatformGateway({
+      target: 'ios', appVersion: '1', buildId: 'fallback',
+      bridge: baseBridge(baseRequests), providers: [provider],
+    });
+    await expect(gateway.identity.getPlayer()).resolves.toBeNull();
+    await expect(gateway.identity.getSession?.()).resolves.toMatchObject({ identityLevel: 'guest' });
+    await expect(gateway.identity.requestUpgrade?.({ reason: 'save' })).rejects.toMatchObject({
+      code: 'SDK_FAILED',
+    });
+    expect(baseRequests.map((request) => request.method)).toEqual([
+      'identity.getPlayer', 'identity.getSession',
+    ]);
+  });
+
+  it('falls back for an errored notification status read without retrying mutations', async () => {
+    const baseRequests: BridgeRequest[] = [];
+    const provider: CapacitorServiceProvider = {
+      id: 'failed-push',
+      features: ['pushNotifications'],
+      methods: ['notifications.getStatus', 'notifications.requestSubscription'],
+      async getAvailability() { return { pushNotifications: 'available' }; },
+      bridge: {
+        async request(input) {
+          return { id: input.id, ok: false,
+            error: { code: 'PUSH_FAILED', message: 'Push is offline', retryable: true } };
+        },
+      },
+    };
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android', appVersion: '1', buildId: 'push-fallback', providers: [provider],
+      bridge: {
+        async request(input) {
+          baseRequests.push(input);
+          return { id: input.id, ok: true, data: 'configuration-required' };
+        },
+      },
+    });
+    await expect(gateway.notifications?.getStatus('daily-ready')).resolves.toBe(
+      'configuration-required',
+    );
+    await expect(gateway.notifications?.requestSubscription('daily-ready')).rejects.toMatchObject({
+      code: 'PUSH_FAILED',
+    });
+    expect(baseRequests.map((request) => request.method)).toEqual(['notifications.getStatus']);
   });
 
   it('bounds a stalled identity provider before guest fallback', async () => {
