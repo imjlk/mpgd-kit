@@ -1,5 +1,11 @@
 # @mpgd/adapter-browser
 
+## 0.7.5 — 2026-09-24
+
+### Patch changes
+
+- Updated dependencies: platform@0.12.2
+
 ## 0.7.4 — 2026-09-23
 
 ### Changed

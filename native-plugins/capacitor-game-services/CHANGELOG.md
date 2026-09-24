@@ -1,5 +1,12 @@
 # @mpgd/capacitor-game-services
 
+## 0.5.4 — 2026-09-24
+
+### Patch changes
+
+- [52026ee](https://github.com/imjlk/mpgd-kit/commit/52026eed535a6414a53f88fa8f5db496beac3e68) Use the host's Capacitor core as a peer dependency throughout the native plugin and adapter, and include it in generated game dependencies. Allow compatible Capacitor 8 Swift Package Manager versions instead of pinning the native plugin to 8.5.1. The reference mobile shell now resolves Capacitor 8.5.2 consistently across npm, Android, and iOS. — Thanks @imjlk!
+- [a3c5b76](https://github.com/imjlk/mpgd-kit/commit/a3c5b763ddcc5aef76bd98d9080c33f26390a2ff) Stop returning demo purchase, ad reward, interstitial, and leaderboard successes from the reference native plugin when no real provider is installed. Report those capabilities as unavailable on Android and iOS, reject their operations with stable non-retryable codes, and preserve bridge error codes and retry hints in the Capacitor adapter. — Thanks @imjlk!
+
 ## 0.5.3 — 2026-09-23
 
 ### Changed

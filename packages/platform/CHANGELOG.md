@@ -1,5 +1,17 @@
 # @mpgd/platform
 
+## 0.12.2 — 2026-09-24
+
+### Added
+
+- [095d603](https://github.com/imjlk/mpgd-kit/commit/095d603e33061975bfd1e46a5e24639eee2e8597) Expose server-confirmed consumable purchase settlements from restore flows and
+  provide a shared resolver that never treats native checkout completion alone as
+  a durable grant. — Thanks @imjlk!
+
+### Patch changes
+
+- [a8cba3e](https://github.com/imjlk/mpgd-kit/commit/a8cba3e5168d94c0bdfc13b0992e7e8c32bcdb2c) The capability conformance runner now rejects a provider that reuses an earlier snapshot after a transition or mutates the fixture's aliased expectation, even when later values appear to match. — Thanks @imjlk!
+
 ## 0.12.1 — 2026-09-23
 
 ### Changed
