@@ -64,7 +64,7 @@ try {
   }, null, 2)}\n`);
   writeFileSync(
     path.join(gameRoot, 'pnpm-workspace.yaml'),
-    "packages:\n  - '.'\n  - 'apps/*'\nallowBuilds:\n  esbuild: true\n",
+    "packages:\n  - '.'\nallowBuilds:\n  esbuild: true\n",
   );
   writeFileSync(path.join(gameRoot, 'mpgd.targets.json'), `${JSON.stringify({
     targets: {

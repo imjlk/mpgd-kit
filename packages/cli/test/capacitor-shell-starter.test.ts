@@ -133,6 +133,11 @@ try {
     run(command, args, cwd) {
       assert.equal(cwd, realpathSync(root));
       commands.push(`${command} ${args.join(' ')}`);
+      if (args[0] === 'install') {
+        const cli = path.join(root, 'apps/mobile-capacitor/node_modules/.bin/cap');
+        mkdirSync(path.dirname(cli), { recursive: true });
+        writeFileSync(cli, 'pinned-capacitor-cli');
+      }
       if (args.at(-2) === 'add') {
         const platform = String(args.at(-1));
         const sentinel = platform === 'android'
@@ -149,6 +154,29 @@ try {
     'pnpm --dir apps/mobile-capacitor cap add android',
     'pnpm --dir apps/mobile-capacitor cap add ios',
   ]);
+  const cli = path.join(root, 'apps/mobile-capacitor/node_modules/.bin/cap');
+  unlinkSync(cli);
+  const retryCommands: string[] = [];
+  materializeCapacitorShellStarter(planCapacitorShellStarter(options), {
+    run(command, args, cwd) {
+      assert.equal(cwd, realpathSync(root));
+      retryCommands.push(`${command} ${args.join(' ')}`);
+      if (args.includes('--ignore-workspace')) {
+        writeFileSync(cli, 'standalone-capacitor-cli');
+      }
+    },
+  });
+  assert.deepEqual(retryCommands, [
+    'pnpm install --no-frozen-lockfile',
+    'pnpm --dir apps/mobile-capacitor install --ignore-workspace --no-frozen-lockfile',
+  ]);
+  const completeRetryCommands: string[] = [];
+  materializeCapacitorShellStarter(planCapacitorShellStarter(options), {
+    run(command, args) {
+      completeRetryCommands.push(`${command} ${args.join(' ')}`);
+    },
+  });
+  assert.deepEqual(completeRetryCommands, ['pnpm install --no-frozen-lockfile']);
   writeFileSync(path.join(root, 'apps/mobile-capacitor/ios/CustomViewController.swift'), 'custom');
   const withNativeProjects = planCapacitorShellStarter(options);
   assert.deepEqual(withNativeProjects.changedFiles, []);
