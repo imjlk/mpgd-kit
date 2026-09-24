@@ -6,8 +6,20 @@ import {
   createGameServicesHttpBackendApi,
   createGameServicesIdempotencyKey,
   gameServicesBackendEndpoints,
+  resolveGameServicesRequestHeaders,
   type GameServicesBackendApi,
 } from './index';
+
+const canonicalHeaders = await resolveGameServicesRequestHeaders({
+  headers: { Authorization: 'Bearer stale', 'X-Mode': 'static' },
+  getHeaders: async () => ({ authorization: 'Bearer refreshed', 'x-mode': 'dynamic' }),
+  requestHeaders: { AUTHORIZATION: 'Bearer operation' },
+});
+assertEqual(
+  JSON.stringify(canonicalHeaders),
+  JSON.stringify({ authorization: 'Bearer operation', 'x-mode': 'dynamic' }),
+  'header layers must override names case-insensitively without forwarding stale credentials',
+);
 
 let purchaseClaims = 0;
 let rewardClaims = 0;

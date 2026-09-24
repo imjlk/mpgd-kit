@@ -2,9 +2,13 @@ import type { PlatformGateway } from '@mpgd/platform';
 
 import {
   createGameServicesRuntime,
+  GameServicesBackendError,
+  GameServicesBackendTransportError,
+  GameServicesHeaderResolutionError,
   resolveGameServicesAuthorityMode,
   resolveGameServicesTransport,
   type GameServicesBackendApi,
+  type GameServicesBackendTransportRequest,
 } from './index';
 
 const playerId = 'runtime-player';
@@ -254,6 +258,201 @@ assertEqual(remoteRuntime.target, 'android', 'runtime should preserve the ledger
 assertNotEqual(remoteRuntime.client, undefined, 'remote production should expose a client');
 assertLocalCalls(1, 'remote production factory creation');
 
+const customRequests: GameServicesBackendTransportRequest[] = [];
+let currentAuthorization = 'Bearer first';
+let failCustomRequest = false;
+let throwCustomRequest = false;
+let malformedCustomResponse = false;
+let unexpectedFetchCalls = 0;
+const originalCustomFetch = Object.getOwnPropertyDescriptor(globalThis, 'fetch');
+try {
+  Object.defineProperty(globalThis, 'fetch', {
+    configurable: true,
+    writable: true,
+    value: async () => {
+      unexpectedFetchCalls += 1;
+      throw new Error('Default fetch must not run when an HTTP transport is injected.');
+    },
+  });
+  const httpTransport = {
+    async send(request: GameServicesBackendTransportRequest) {
+      customRequests.push(request);
+      if (throwCustomRequest) {
+        throw new Error('Native SDK request included a secret header.');
+      }
+      return {
+        status: malformedCustomResponse ? Number.NaN : failCustomRequest ? 503 : 200,
+        body: failCustomRequest
+          ? { code: 'unavailable' }
+          : { verified: true, ledgerEntryId: 'custom-ledger', alreadyProcessed: false },
+      };
+    },
+  };
+  const customRuntime = createGameServicesRuntime({
+    gateway: createGateway(),
+    playerId,
+    authorityMode: 'production',
+    baseUrl: 'https://services.example.com',
+    httpTransport,
+    headers: { Authorization: 'Bearer stale', 'x-game-target': 'android' },
+    getHeaders: () => ({ authorization: currentAuthorization }),
+  });
+  const customClient = requireValue(customRuntime.client, 'custom transport client');
+  const first = await customClient.purchase({
+    productId: 'COINS_100',
+    source: 'shop',
+    idempotencyKey: 'custom-first',
+  });
+  assertEqual(first.status, 'granted', 'custom HTTP transport should reach the backend API');
+  currentAuthorization = 'Bearer refreshed';
+  const second = await customClient.purchase({
+    productId: 'COINS_100',
+    source: 'shop',
+    idempotencyKey: 'custom-second',
+  });
+  assertEqual(second.status, 'granted', 'custom HTTP transport should remain selected');
+  assertEqual(customRequests.length, 2, 'each purchase should make exactly one backend request');
+  assertEqual(
+    customRequests[0]?.headers?.authorization,
+    'Bearer first',
+    'the first request should use its current authorization',
+  );
+  assertEqual(
+    Object.keys(customRequests[0]?.headers ?? {}).filter((name) => name.toLowerCase() === 'authorization').length,
+    1,
+    'custom transport must receive only one canonical authorization header',
+  );
+  assertEqual(
+    customRequests[1]?.headers?.authorization,
+    'Bearer refreshed',
+    'the next request should resolve refreshed authorization',
+  );
+  assertEqual(
+    customRequests[1]?.headers?.['x-game-target'],
+    'android',
+    'custom transport should receive static backend headers',
+  );
+  assertEqual(unexpectedFetchCalls, 0, 'custom HTTP transport must not call default fetch');
+
+  const headerFailureRuntime = createGameServicesRuntime({
+    gateway: createGateway(),
+    playerId,
+    authorityMode: 'production',
+    baseUrl: 'https://services.example.com',
+    httpTransport,
+    getHeaders: () => {
+      throw new Error('Bearer secret-refresh-token');
+    },
+  });
+  const sentBeforeHeaderFailure = customRequests.length;
+  try {
+    await requireValue(headerFailureRuntime.client, 'header failure client').purchase({
+      productId: 'COINS_100',
+      source: 'shop',
+      idempotencyKey: 'header-failure',
+    });
+    throw new Error('Failed header resolution unexpectedly sent a request.');
+  } catch (error) {
+    if (!(error instanceof GameServicesHeaderResolutionError)
+      || error.message.includes('secret-refresh-token')) {
+      throw error;
+    }
+  }
+  assertEqual(
+    customRequests.length,
+    sentBeforeHeaderFailure,
+    'header failure must not dispatch an uncertain backend operation',
+  );
+  assertEqual(unexpectedFetchCalls, 0, 'header failure must not use fallback fetch');
+
+  failCustomRequest = true;
+  try {
+    await customClient.purchase({
+      productId: 'COINS_100',
+      source: 'shop',
+      idempotencyKey: 'custom-failure',
+    });
+    throw new Error('Custom backend failure unexpectedly succeeded.');
+  } catch (error) {
+    if (!(error instanceof GameServicesBackendError) || error.status !== 503) {
+      throw error;
+    }
+  }
+  assertEqual(unexpectedFetchCalls, 0, 'failed custom requests must not fall back to fetch');
+
+  failCustomRequest = false;
+  throwCustomRequest = true;
+  try {
+    await customClient.purchase({
+      productId: 'COINS_100',
+      source: 'shop',
+      idempotencyKey: 'custom-throw',
+    });
+    throw new Error('Thrown custom transport failure unexpectedly succeeded.');
+  } catch (error) {
+    if (!(error instanceof GameServicesBackendTransportError)
+      || error.message.includes('secret header')) {
+      throw error;
+    }
+  }
+  throwCustomRequest = false;
+  malformedCustomResponse = true;
+  try {
+    await customClient.purchase({
+      productId: 'COINS_100',
+      source: 'shop',
+      idempotencyKey: 'custom-malformed',
+    });
+    throw new Error('Malformed custom transport response unexpectedly succeeded.');
+  } catch (error) {
+    if (!(error instanceof GameServicesBackendTransportError)) {
+      throw error;
+    }
+  }
+  malformedCustomResponse = false;
+  assertEqual(unexpectedFetchCalls, 0, 'transport failures must not fall back to fetch');
+
+  const rejectedProduction = createGameServicesRuntime({
+    gateway: createGateway(),
+    playerId,
+    authorityMode: 'production',
+    baseUrl: 'http://localhost:5173',
+    httpTransport,
+  });
+  assertEqual(
+    rejectedProduction.reason,
+    'invalid_authoritative_backend',
+    'custom transport must not bypass production base URL validation',
+  );
+  assertEqual(customRequests.length, 5, 'invalid production runtime must not invoke transport');
+  assertThrows(
+    () =>
+      createGameServicesRuntime({
+        gateway: createGateway(),
+        playerId,
+        authorityMode: 'non-production',
+        httpTransport,
+      }),
+    'requires an authoritative baseUrl',
+    'custom HTTP transport should not silently select a local backend',
+  );
+  assertThrows(
+    () => createGameServicesRuntime({
+      gateway: createGateway(), playerId, authorityMode: 'production',
+      baseUrl: 'https://services.example.com/rpc', transport: 'orpc',
+      httpTransport,
+    } as never),
+    'cannot be used with oRPC',
+    'JSON HTTP transport must not masquerade as oRPC fetch',
+  );
+} finally {
+  if (originalCustomFetch === undefined) {
+    Reflect.deleteProperty(globalThis, 'fetch');
+  } else {
+    Object.defineProperty(globalThis, 'fetch', originalCustomFetch);
+  }
+}
+
 const microsoftStoreRuntime = createGameServicesRuntime({
   gateway: createGateway('microsoft-store'),
   playerId,
@@ -290,6 +489,7 @@ assertNotEqual(orpcRuntime.client, undefined, 'oRPC production should expose a c
 
 const originalFetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'fetch');
 let observedRuntimeHeaders: Headers | undefined;
+let rotatingHeader = 'Bearer initial';
 try {
   Object.defineProperty(globalThis, 'fetch', {
     configurable: true,
@@ -316,6 +516,7 @@ try {
       'x-ttokdoku-player-key': 'ait-player-key',
       'x-ttokdoku-target': 'ait',
     },
+    getHeaders: () => ({ authorization: rotatingHeader }),
   });
   const headerClient = requireValue(headerRuntime.client, 'header runtime client');
   await headerClient.purchase({
@@ -333,6 +534,22 @@ try {
     'ait',
     'remote runtimes should forward configured target headers',
   );
+  assertEqual(
+    observedRuntimeHeaders?.get('authorization'),
+    'Bearer initial',
+    'default HTTP should resolve authorization when sending',
+  );
+  rotatingHeader = 'Bearer refreshed';
+  await headerClient.purchase({
+    productId: 'COINS_100',
+    source: 'shop',
+    idempotencyKey: 'runtime-header-refresh',
+  });
+  assertEqual(
+    observedRuntimeHeaders?.get('authorization'),
+    'Bearer refreshed',
+    'default HTTP should refresh authorization per request',
+  );
 
   observedRuntimeHeaders = undefined;
   const orpcHeaderRuntime = createGameServicesRuntime({
@@ -345,6 +562,7 @@ try {
       'x-ttokdoku-player-key': 'ait-player-key',
       'x-ttokdoku-target': 'ait',
     },
+    getHeaders: () => ({ authorization: rotatingHeader }),
   });
   const orpcHeaderClient = requireValue(orpcHeaderRuntime.client, 'oRPC header runtime client');
   await orpcHeaderClient.purchase({
@@ -364,6 +582,23 @@ try {
     readObservedRuntimeHeader(observedRuntimeHeaders, 'x-ttokdoku-target'),
     'ait',
     'oRPC runtimes should forward configured target headers',
+  );
+  assertEqual(
+    readObservedRuntimeHeader(observedRuntimeHeaders, 'authorization'),
+    'Bearer refreshed',
+    'oRPC should resolve authorization when sending',
+  );
+  rotatingHeader = 'Bearer rpc-rotated';
+  observedRuntimeHeaders = undefined;
+  await orpcHeaderClient.purchase({
+    productId: 'COINS_100', source: 'shop', idempotencyKey: 'runtime-orpc-header-refresh',
+  }).catch(() => {
+    // The HTTP-shaped fixture response still does not implement oRPC.
+  });
+  assertEqual(
+    readObservedRuntimeHeader(observedRuntimeHeaders, 'authorization'),
+    'Bearer rpc-rotated',
+    'oRPC should refresh authorization per request',
   );
 } finally {
   if (originalFetchDescriptor === undefined) {

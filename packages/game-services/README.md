@@ -71,6 +71,53 @@ and retry policy are not redesigned by this observer API.
 The root `pnpm test` pipeline includes compiled client JS and public declaration
 consumption checks alongside the client and target conformance suites.
 
+## Runtime backend transport
+
+`createGameServicesRuntime` accepts `httpTransport` for its HTTP JSON backend
+path. This is a `GameServicesBackendTransport` with fixed Game Services
+endpoints, not a general `fetch` implementation. It is never used for the
+`orpc` path. A production runtime still requires a valid public HTTPS
+`baseUrl`; supplying a custom transport does not enable a local backend or
+silently fall back to the default network path.
+
+```ts
+import { createGameServicesRuntime } from '@mpgd/game-services/runtime';
+import type { GameServicesBackendTransport } from '@mpgd/game-services/client';
+
+declare const gateway: Parameters<typeof createGameServicesRuntime>[0]['gateway'];
+declare const nativeJsonTransport: GameServicesBackendTransport;
+declare const currentAccessToken: () => string;
+
+const runtime = createGameServicesRuntime({
+  gateway,
+  playerId: 'game-player',
+  authorityMode: 'production',
+  baseUrl: 'https://api.example.com',
+  transport: 'http',
+  httpTransport: nativeJsonTransport,
+  getHeaders: () => ({ authorization: `Bearer ${currentAccessToken()}` }),
+});
+```
+
+`headers` remains available for static values. `getHeaders` is evaluated for
+every backend request, including default HTTP and oRPC requests, so session
+rotation does not retain an old token. An injected HTTP transport receives
+those headers only with a Game Services endpoint request and must itself
+enforce its configured HTTPS origin, redirect policy, and response limits;
+the runtime cannot inspect a transport's internal network destinations.
+Static headers are overridden by refreshed headers, then by explicit
+per-request headers, with names compared case-insensitively. If `getHeaders`
+fails, the runtime throws a sanitized
+`GameServicesHeaderResolutionError` **before** sending the request; this is
+distinct from an uncertain network outcome.
+Non-2xx HTTP transport responses still become `GameServicesBackendError` and
+are not retried through default fetch. Invalid responses and thrown native
+transport errors become `GameServicesBackendTransportError` without embedding
+the original exception, which might contain credentials. A failed request can
+still have completed on the server: reconcile it before retrying a purchase
+or reward claim. Do not forward these headers to an unrelated origin or copy
+them into analytics or logs.
+
 All published entrypoints use explicit internal ESM module paths and are smoke-tested
 with native Node imports, without a bundler or TypeScript runtime loader.
 
