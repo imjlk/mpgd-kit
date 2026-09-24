@@ -66,6 +66,26 @@ try {
       }),
     /does not support applicationIdSuffix/u,
   );
+  writeFileSync(kotlin, [
+    'defaultConfig { applicationId = "dev.example.game"; versionCode = 42;',
+    '  versionName = "1.4.0" }',
+    'buildTypes { val release by getting { applicationIdSuffix = ".store" } }',
+  ].join('\n'));
+  assert.throws(
+    () =>
+      assertNativeReleaseIdentity({
+        environment: {
+          APP_VERSION: '1.4.0',
+          MPGD_TARGET_VERSION_CODE: '42',
+          MPGD_TARGET_VERSION_NAME: '1.4.0',
+        },
+        metadata: { packageId: 'dev.example.game' },
+        platform: 'android',
+        required: false,
+        shellApp: shellRoot,
+      }),
+    /does not support applicationIdSuffix/u,
+  );
   renameSync(kotlin, groovy);
   writeShellFiles(shellRoot);
 

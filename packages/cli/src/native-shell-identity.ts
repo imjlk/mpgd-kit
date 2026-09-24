@@ -34,6 +34,7 @@ function hasAndroidReleaseIdSuffix(source: string): boolean {
   }
   const releaseBlocks = [
     /\brelease\s*\{/gu,
+    /\brelease\s+by\s+getting\s*\{/gu,
     /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\{/gu,
   ];
   return releaseBlocks.some((expression) => [...source.matchAll(expression)]
@@ -100,7 +101,7 @@ function assertIosAppIdentity(source: string, expectedAppId: string): void {
     throw new Error('Existing ios project App target configuration is missing.');
   }
   let actual = readIosReleaseBundleId(source, listId);
-  if (actual === '$(inherited)') {
+  if (actual === undefined || actual === '$(inherited)') {
     const projects = [...source.matchAll(/\b([A-F0-9]+)\s*\/\*[^*]+\*\/\s*=\s*\{/gu)]
       .map((match) => readPbxObject(source, match[1] ?? ''))
       .filter((block) => /\bisa\s*=\s*PBXProject;/u.test(block));
@@ -117,7 +118,7 @@ function assertIosAppIdentity(source: string, expectedAppId: string): void {
   }
 }
 
-function readIosReleaseBundleId(source: string, listId: string): string {
+function readIosReleaseBundleId(source: string, listId: string): string | undefined {
   const list = readPbxObject(source, listId);
   const configurations = /\bbuildConfigurations\s*=\s*\(([^)]*)\)/u.exec(list)?.[1];
   const releaseIds = configurations === undefined ? []
@@ -129,8 +130,8 @@ function readIosReleaseBundleId(source: string, listId: string): string {
   const configuration = stripGradleComments(readPbxObject(source, releaseIds[0] ?? ''));
   const values = [...configuration.matchAll(/\bPRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;]+);/gu)]
     .map((match) => match[1]?.trim().replace(/^["']|["']$/gu, ''));
-  if (values.length !== 1 || values[0] === undefined) {
-    throw new Error('Existing ios project Release bundle ID is missing or ambiguous.');
+  if (values.length > 1) {
+    throw new Error('Existing ios project Release bundle ID is ambiguous.');
   }
   return values[0];
 }

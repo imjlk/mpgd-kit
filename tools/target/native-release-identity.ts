@@ -346,6 +346,7 @@ function readAndroidReleaseBlocks(source: string, file: string): readonly string
   );
   const nestedReleaseBlockExpressions = [
     /\brelease\s*\{/gu,
+    /\brelease\s+by\s+getting\s*\{/gu,
     /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\{/gu,
   ];
   const qualifiedReleaseBlockExpressions = [

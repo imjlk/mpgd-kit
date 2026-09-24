@@ -168,6 +168,8 @@ try {
         const required = platform === 'android'
           ? [
               'android/gradlew',
+              'android/gradle/wrapper/gradle-wrapper.jar',
+              'android/gradle/wrapper/gradle-wrapper.properties',
               'android/settings.gradle',
               'android/app/src/main/AndroidManifest.xml',
               'android/app/src/main/java/dev/example/puzzle/MainActivity.java',
@@ -232,6 +234,13 @@ try {
   renameSync(androidWrapper, `${androidWrapper}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /android project is incomplete/u);
   renameSync(`${androidWrapper}.saved`, androidWrapper);
+  const wrapperJar = path.join(
+    root,
+    'apps/mobile-capacitor/android/gradle/wrapper/gradle-wrapper.jar',
+  );
+  renameSync(wrapperJar, `${wrapperJar}.saved`);
+  assert.throws(() => planCapacitorShellStarter(options), /android project is incomplete/u);
+  renameSync(`${wrapperJar}.saved`, wrapperJar);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.other.game'));
   assert.throws(() => planCapacitorShellStarter(options), /ios project app ID differs/u);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
@@ -250,14 +259,20 @@ try {
   );
   writeFileSync(iosProjectFile, inheritedIosProject);
   assert.throws(() => planCapacitorShellStarter(options), /no project configuration/u);
-  writeFileSync(iosProjectFile, [
-    inheritedIosProject,
+  const projectReleaseSettings = [
     'FFFFFFFF /* Project */ = { isa = PBXProject; buildConfigurationList = 99999999; };',
     '99999999 /* Project configurations */ = { isa = XCConfigurationList;',
     '  buildConfigurations = (88888888 /* Release */,); };',
     '88888888 /* Release */ = { isa = XCBuildConfiguration;',
     '  buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle; }; };',
-  ].join('\n'));
+  ].join('\n');
+  writeFileSync(iosProjectFile, `${inheritedIosProject}\n${projectReleaseSettings}`);
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  const omittedIosId = inheritedIosProject.replace(
+    'PRODUCT_BUNDLE_IDENTIFIER = "$(inherited)";',
+    '',
+  );
+  writeFileSync(iosProjectFile, `${omittedIosId}\n${projectReleaseSettings}`);
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle').replace(
@@ -300,6 +315,11 @@ try {
   writeFileSync(androidProjectFile, [
     'applicationId "dev.example.puzzle"',
     'buildTypes { getByName("release").applicationIdSuffix = ".store" }',
+  ].join('\n'));
+  assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
+    'buildTypes { val release by getting { applicationIdSuffix = ".store" } }',
   ].join('\n'));
   assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
   writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');

@@ -488,7 +488,12 @@ function assertNativePlatformComplete(
     }
   }
   const additional = platform === 'android'
-    ? ['gradlew', 'app/src/main/AndroidManifest.xml']
+    ? [
+        'gradlew',
+        'gradle/wrapper/gradle-wrapper.jar',
+        'gradle/wrapper/gradle-wrapper.properties',
+        'app/src/main/AndroidManifest.xml',
+      ]
     : ['App/App/AppDelegate.swift', 'App/App/Info.plist'];
   if (additional.some((relative) => !isNativeFile(nativeDirectory, relative))) {
     throw new Error(
