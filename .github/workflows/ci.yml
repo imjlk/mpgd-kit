@@ -497,6 +497,7 @@ jobs:
       - name: Verify native adapter contracts
         if: ${{ needs.prepare.outputs.run_native == 'true' }}
         run: |
+          pnpm pack:packages:prepared
           pnpm smoke:adapter-effective-config
           pnpm smoke:platform-capability-conformance
           pnpm smoke:storage-adapter-conformance
