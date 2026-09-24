@@ -192,12 +192,12 @@ jobs:
 
           for path in "${changed_files[@]}"; do
             case "${path}" in
-              docs/*|lint.config.js|tsconfig.evidence.json|packages/platform/src/capability-conformance.ts|packages/platform/src/capability-conformance.test.ts|packages/platform/package.json|package.json|pnpm-lock.yaml)
+              docs/*|lint.config.js|tsconfig.base.json|tsconfig.evidence.json|packages/platform/*|package.json|pnpm-lock.yaml)
                 run_evidence=true
                 ;;
             esac
             case "${path}" in
-              docs/examples/*|docs/guides/platform-capabilities.md|tsconfig.docs-examples.json|package.json)
+              docs/examples/*|docs/guides/platform-capabilities.md|packages/platform/*|tsconfig.base.json|tsconfig.docs-examples.json|lint.config.js|package.json|pnpm-lock.yaml)
                 run_examples=true
                 ;;
             esac
