@@ -1,9 +1,9 @@
 ---
-npm/@mpgd/platform: minor (Added)
-npm/@mpgd/target-config: minor (Added)
-npm/@mpgd/adapter-capacitor: minor (Added)
-npm/@mpgd/capacitor-game-services: patch (Fixed)
-npm/@mpgd/cli: patch (Fixed)
+npm/@mpgd/platform: minor
+npm/@mpgd/target-config: minor
+npm/@mpgd/adapter-capacitor: minor
+npm/@mpgd/capacitor-game-services: patch
+npm/@mpgd/cli: patch
 ---
 
 Add optional Capacitor provider composition with per-method bridge validation and
