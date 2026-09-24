@@ -117,6 +117,11 @@ try {
   assert.ok(existsSync(path.join(shell, 'ios/App/App.xcodeproj/project.pbxproj')));
   assertNoKitReferences(shell);
   const targetsBefore = readFileSync(path.join(gameRoot, 'mpgd.targets.json'), 'utf8');
+  const nativeTargets = JSON.parse(targetsBefore) as {
+    targets: { android: { artifact: string }; ios: { artifact: string } };
+  };
+  assert.equal(nativeTargets.targets.android.artifact, 'aab');
+  assert.equal(nativeTargets.targets.ios.artifact, 'ipa');
   const manifestBefore = readFileSync(path.join(shell, 'mpgd.native-shell.json'), 'utf8');
   const second = run(command, args, packedCli === undefined ? kitRoot : gameRoot);
   assert.match(second, /0 file\(s\)/u);

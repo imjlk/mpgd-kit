@@ -169,10 +169,15 @@ try {
           ? [
               'android/gradlew',
               'android/build.gradle',
+              'android/variables.gradle',
               'android/gradle/wrapper/gradle-wrapper.jar',
               'android/gradle/wrapper/gradle-wrapper.properties',
               'android/settings.gradle',
+              'android/capacitor.settings.gradle',
+              'android/app/capacitor.build.gradle',
+              'android/capacitor-cordova-android-plugins/cordova.variables.gradle',
               'android/app/src/main/AndroidManifest.xml',
+              'android/app/src/main/res/values/strings.xml',
               'android/app/src/main/java/dev/example/puzzle/MainActivity.java',
             ]
           : [
@@ -183,7 +188,23 @@ try {
         for (const relative of required) {
           const requiredFile = path.join(root, 'apps/mobile-capacitor', relative);
           mkdirSync(path.dirname(requiredFile), { recursive: true });
-          writeFileSync(requiredFile, 'generated-native-project');
+          const contents: Record<string, string> = {
+            'android/build.gradle': 'apply from: "variables.gradle"',
+            'android/settings.gradle': "apply from: 'capacitor.settings.gradle'",
+            'android/app/capacitor.build.gradle':
+              'apply from: "../capacitor-cordova-android-plugins/cordova.variables.gradle"',
+            'android/app/src/main/res/values/strings.xml':
+              '<resources><string name="app_name">Puzzle Game</string></resources>',
+            'ios/App/App/Info.plist':
+              '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string></dict></plist>',
+          };
+          writeFileSync(requiredFile, contents[relative] ?? 'generated-native-project');
+        }
+        if (platform === 'android') {
+          writeFileSync(file, [
+            'applicationId "dev.example.puzzle"',
+            "apply from: 'capacitor.build.gradle'",
+          ].join('\n'));
         }
       }
     },
@@ -239,6 +260,17 @@ try {
   renameSync(androidRootBuild, `${androidRootBuild}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /android project is incomplete/u);
   renameSync(`${androidRootBuild}.saved`, androidRootBuild);
+  const androidVariables = path.join(root, 'apps/mobile-capacitor/android/variables.gradle');
+  renameSync(androidVariables, `${androidVariables}.saved`);
+  assert.throws(() => planCapacitorShellStarter(options), /applied Gradle script/u);
+  renameSync(`${androidVariables}.saved`, androidVariables);
+  const capacitorGradle = path.join(
+    root,
+    'apps/mobile-capacitor/android/app/capacitor.build.gradle',
+  );
+  renameSync(capacitorGradle, `${capacitorGradle}.saved`);
+  assert.throws(() => planCapacitorShellStarter(options), /applied Gradle script/u);
+  renameSync(`${capacitorGradle}.saved`, capacitorGradle);
   const wrapperJar = path.join(
     root,
     'apps/mobile-capacitor/android/gradle/wrapper/gradle-wrapper.jar',
@@ -246,6 +278,29 @@ try {
   renameSync(wrapperJar, `${wrapperJar}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /android project is incomplete/u);
   renameSync(`${wrapperJar}.saved`, wrapperJar);
+  const androidStrings = path.join(
+    root,
+    'apps/mobile-capacitor/android/app/src/main/res/values/strings.xml',
+  );
+  writeFileSync(
+    androidStrings,
+    '<resources><string name="app_name">Other Game</string></resources>',
+  );
+  assert.throws(() => planCapacitorShellStarter(options), /android project display name differs/u);
+  writeFileSync(
+    androidStrings,
+    '<resources><string name="app_name">Puzzle Game</string></resources>',
+  );
+  const iosInfo = path.join(root, 'apps/mobile-capacitor/ios/App/App/Info.plist');
+  writeFileSync(
+    iosInfo,
+    '<plist><dict><key>CFBundleDisplayName</key><string>Other Game</string></dict></plist>',
+  );
+  assert.throws(() => planCapacitorShellStarter(options), /ios project display name differs/u);
+  writeFileSync(
+    iosInfo,
+    '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string></dict></plist>',
+  );
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.other.game'));
   assert.throws(() => planCapacitorShellStarter(options), /ios project app ID differs/u);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
@@ -336,12 +391,17 @@ try {
   const kotlinGradle = `${androidProjectFile}.kts`;
   const groovySettings = path.join(root, 'apps/mobile-capacitor/android/settings.gradle');
   const kotlinSettings = `${groovySettings}.kts`;
+  const kotlinRootBuild = `${androidRootBuild}.kts`;
   renameSync(androidProjectFile, kotlinGradle);
   renameSync(groovySettings, kotlinSettings);
+  renameSync(androidRootBuild, kotlinRootBuild);
   writeFileSync(kotlinGradle, 'applicationId = "dev.example.puzzle"');
+  writeFileSync(kotlinRootBuild, 'apply(from = "variables.gradle")');
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   renameSync(kotlinGradle, androidProjectFile);
   renameSync(kotlinSettings, groovySettings);
+  renameSync(kotlinRootBuild, androidRootBuild);
+  writeFileSync(androidRootBuild, 'apply from: "variables.gradle"');
   writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');
   applyCapacitorShellStarter(withNativeProjects);
   assert.equal(
@@ -404,6 +464,14 @@ try {
     JSON.stringify(quotedName),
   );
   writeFileSync(configFile, quotedConfig);
+  writeFileSync(
+    androidStrings,
+    `<resources><string name="app_name">${quotedName}</string></resources>`,
+  );
+  writeFileSync(
+    iosInfo,
+    `<plist><dict><key>CFBundleDisplayName</key><string>${quotedName}</string></dict></plist>`,
+  );
   const quotedTargets = readJson('mpgd.targets.json');
   const quotedTargetMap = quotedTargets.targets as Record<string, Record<string, unknown>>;
   for (const target of Object.values(quotedTargetMap)) {
@@ -421,6 +489,24 @@ try {
     [],
   );
   writeFileSync(manifestFile, originalManifest);
+  writeJson('apps/mobile-capacitor/mpgd.native-shell.json', {
+    ...(JSON.parse(originalManifest) as Record<string, unknown>),
+    schemaVersion: 2,
+    futureField: 'preserve-me',
+  });
+  assert.throws(
+    () => planCapacitorShellStarter({ ...options, displayName: quotedName }),
+    /manifest schema is unsupported/u,
+  );
+  writeFileSync(manifestFile, originalManifest);
+  writeFileSync(
+    androidStrings,
+    '<resources><string name="app_name">Puzzle Game</string></resources>',
+  );
+  writeFileSync(
+    iosInfo,
+    '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string></dict></plist>',
+  );
   for (const target of Object.values(quotedTargetMap)) {
     const metadata = target.metadata as Record<string, unknown>;
     metadata.displayName = options.displayName;
@@ -473,6 +559,22 @@ try {
   assert.throws(() => planCapacitorShellStarter(options), /display name conflicts/u);
   (androidTarget.metadata as Record<string, unknown>).displayName = options.displayName;
   writeJson('mpgd.targets.json', targetsWithConflictingName);
+  const noArtifactTargets = readJson('mpgd.targets.json');
+  const noArtifactMap = noArtifactTargets.targets as Record<string, Record<string, unknown>>;
+  assert.ok(noArtifactMap.android && noArtifactMap.ios);
+  delete noArtifactMap.android.artifact;
+  delete noArtifactMap.ios.artifact;
+  writeJson('mpgd.targets.json', noArtifactTargets);
+  const defaultArtifactPlan = planCapacitorShellStarter(options);
+  assert.ok(defaultArtifactPlan.changedFiles.includes('mpgd.targets.json'));
+  const artifactFile = defaultArtifactPlan.files.find((file) => file.path === 'mpgd.targets.json');
+  assert.ok(artifactFile);
+  const completedTargets = JSON.parse(artifactFile.content) as {
+    targets: { android: { artifact: string }; ios: { artifact: string } };
+  };
+  assert.equal(completedTargets.targets.android.artifact, 'aab');
+  assert.equal(completedTargets.targets.ios.artifact, 'ipa');
+  applyCapacitorShellStarter(defaultArtifactPlan);
 
   const envFile = path.join(root, '.env.production');
   const originalEnv = readFileSync(envFile, 'utf8');

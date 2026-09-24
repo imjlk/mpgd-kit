@@ -45,7 +45,7 @@ function hasAndroidReleaseIdSuffix(source: string): boolean {
       ))));
 }
 
-function stripGradleComments(source: string): string {
+export function stripGradleComments(source: string): string {
   let output = '';
   let quote: '"' | "'" | undefined;
   for (let index = 0; index < source.length; index += 1) {

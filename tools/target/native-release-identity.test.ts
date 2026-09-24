@@ -150,7 +150,8 @@ try {
     }),
   );
   const iosProject = join(shellRoot, 'ios/App/App.xcodeproj/project.pbxproj');
-  writeFileSync(iosProject, readFileSync(iosProject, 'utf8').replace(
+  const inheritedIosSource = readFileSync(iosProject, 'utf8');
+  writeFileSync(iosProject, inheritedIosSource.replace(
     'PRODUCT_BUNDLE_IDENTIFIER = "$(inherited)";',
     '"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = dev.other.game;\n    PRODUCT_BUNDLE_IDENTIFIER = "$(inherited)";',
   ));
@@ -168,6 +169,46 @@ try {
         shellApp: shellRoot,
       }),
     /does not support conditional bundle IDs/u,
+  );
+  const conditionalProjectSource = inheritedIosSource.replace(
+    'PRODUCT_BUNDLE_IDENTIFIER = dev.example.game;',
+    '"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = dev.other.game;\n    PRODUCT_BUNDLE_IDENTIFIER = dev.example.game;',
+  );
+  writeFileSync(iosProject, conditionalProjectSource);
+  assert.throws(
+    () =>
+      assertNativeReleaseIdentity({
+        environment: {
+          APP_VERSION: '1.4.0',
+          MPGD_TARGET_BUILD_NUMBER: '42',
+          MPGD_TARGET_MARKETING_VERSION: '1.4.0',
+        },
+        metadata: { bundleId: 'dev.example.game' },
+        platform: 'ios',
+        required: false,
+        shellApp: shellRoot,
+      }),
+    /does not support conditional bundle IDs/u,
+  );
+  writeFileSync(
+    iosProject,
+    conditionalProjectSource.replace(
+      'PRODUCT_BUNDLE_IDENTIFIER = "$(inherited)";',
+      'PRODUCT_BUNDLE_IDENTIFIER = dev.example.game;',
+    ),
+  );
+  assert.doesNotThrow(() =>
+    assertNativeReleaseIdentity({
+      environment: {
+        APP_VERSION: '1.4.0',
+        MPGD_TARGET_BUILD_NUMBER: '42',
+        MPGD_TARGET_MARKETING_VERSION: '1.4.0',
+      },
+      metadata: { bundleId: 'dev.example.game' },
+      platform: 'ios',
+      required: false,
+      shellApp: shellRoot,
+    }),
   );
   writeShellFiles(shellRoot);
 

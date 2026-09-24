@@ -16,7 +16,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { isNonPublicServiceHostname } from './production-target-readiness.js';
-import { assertNativeShellIdentity } from './native-shell-identity.js';
+import { assertNativeShellIdentity, stripGradleComments } from './native-shell-identity.js';
 
 const shellPath = 'apps/mobile-capacitor';
 const webPath = `${shellPath}/www`;
@@ -155,6 +155,11 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     if (metadata.displayName !== undefined && metadata.displayName !== input.displayName) {
       throw new Error(`${targetName} display name conflicts with the requested name.`);
     }
+    if (target.artifact === undefined) {
+      target.artifact = targetName === 'android' ? 'aab' : 'ipa';
+    } else if (typeof target.artifact !== 'string' || target.artifact.trim() === '') {
+      throw new Error(`${targetName}.artifact must be a non-empty native artifact name.`);
+    }
     target.shellApp = shellPath;
     target.webDir = webPath;
     target.metadata = { ...metadata, [identityKey]: input.appId, displayName: input.displayName };
@@ -175,6 +180,11 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
   const existingManifest = manifestContent === undefined
     ? undefined
     : parseJsonObject(manifestContent, 'existing native shell manifest');
+  if (existingManifest !== undefined && existingManifest.schemaVersion !== 1) {
+    throw new Error(
+      'Existing native shell manifest schema is unsupported; refusing to downgrade it.',
+    );
+  }
   if (existingManifest !== undefined
     && (existingManifest.appId !== input.appId
       || existingManifest.displayName !== input.displayName)) {
@@ -331,7 +341,7 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     if (!existsSync(nativeDirectory)) {
       return true;
     }
-    assertNativePlatformComplete(gameRoot, platform, input.appId);
+    assertNativePlatformComplete(gameRoot, platform, input.appId, input.displayName);
     return false;
   });
   return {
@@ -461,6 +471,7 @@ export function materializeCapacitorShellStarter(
       plan.gameRoot,
       platform,
       requireString(manifest.appId, 'shell app ID'),
+      requireString(manifest.displayName, 'shell display name'),
     );
   }
 }
@@ -469,6 +480,7 @@ function assertNativePlatformComplete(
   gameRoot: string,
   platform: 'android' | 'ios',
   expectedAppId: string,
+  expectedDisplayName: string,
 ): void {
   const nativeDirectory = path.join(gameRoot, shellPath, platform);
   if (!existsSync(nativeDirectory) || !lstatSync(nativeDirectory).isDirectory()) {
@@ -480,8 +492,20 @@ function assertNativePlatformComplete(
     ? requireOneNativeFile(nativeDirectory, ['app/build.gradle', 'app/build.gradle.kts'], platform)
     : requireOneNativeFile(nativeDirectory, ['App/App.xcodeproj/project.pbxproj'], platform);
   if (platform === 'android') {
-    requireOneNativeFile(nativeDirectory, ['build.gradle', 'build.gradle.kts'], platform);
-    requireOneNativeFile(nativeDirectory, ['settings.gradle', 'settings.gradle.kts'], platform);
+    const rootBuild = requireOneNativeFile(
+      nativeDirectory,
+      ['build.gradle', 'build.gradle.kts'],
+      platform,
+    );
+    const settings = requireOneNativeFile(
+      nativeDirectory,
+      ['settings.gradle', 'settings.gradle.kts'],
+      platform,
+    );
+    const visited = new Set<string>();
+    for (const script of [rootBuild, settings, required]) {
+      assertAppliedGradleScripts(nativeDirectory, script, visited);
+    }
   } else {
     const hasSpm = isNativeFile(nativeDirectory, 'App/CapApp-SPM/Package.swift');
     if (!hasSpm) {
@@ -514,6 +538,92 @@ function assertNativePlatformComplete(
   }
   const content = readFileSync(path.join(nativeDirectory, required), 'utf8');
   assertNativeShellIdentity(platform, content, expectedAppId);
+  assertNativeDisplayName(nativeDirectory, platform, expectedDisplayName);
+}
+
+function assertAppliedGradleScripts(
+  nativeDirectory: string,
+  script: string,
+  visited: Set<string>,
+): void {
+  if (visited.has(script)) {
+    return;
+  }
+  visited.add(script);
+  if (!isNativeFile(nativeDirectory, script)) {
+    throw new Error(
+      `Existing android project is incomplete; applied Gradle script ${script} is missing.`,
+    );
+  }
+  const source = stripGradleComments(readFileSync(path.join(nativeDirectory, script), 'utf8'));
+  const expressions = [
+    /\bapply\s+from\s*:\s*["']([^"']+)["']/gu,
+    /\bapply\s*\(\s*from\s*=\s*["']([^"']+)["']\s*\)/gu,
+  ];
+  for (const expression of expressions) {
+    for (const match of source.matchAll(expression)) {
+      const requested = match[1] ?? '';
+      const resolved = path.resolve(nativeDirectory, path.dirname(script), requested);
+      const relative = path.relative(nativeDirectory, resolved);
+      if (requested.includes('$') || relative === '' || relative.startsWith('..')
+        || path.isAbsolute(relative)) {
+        throw new Error('Existing android project has an unsupported applied Gradle script path.');
+      }
+      assertAppliedGradleScripts(nativeDirectory, relative, visited);
+    }
+  }
+}
+
+function assertNativeDisplayName(
+  nativeDirectory: string,
+  platform: 'android' | 'ios',
+  expectedDisplayName: string,
+): void {
+  const relative = platform === 'android'
+    ? 'app/src/main/res/values/strings.xml'
+    : 'App/App/Info.plist';
+  if (!isNativeFile(nativeDirectory, relative)) {
+    throw new Error(
+      `Existing ${platform} project is incomplete; native display name resource is missing.`,
+    );
+  }
+  const source = readFileSync(path.join(nativeDirectory, relative), 'utf8');
+  const expression = platform === 'android'
+    ? /<string\b[^>]*\bname\s*=\s*["']app_name["'][^>]*>([^<]*)<\/string>/gu
+    : /<key>CFBundleDisplayName<\/key>\s*<string>([^<]*)<\/string>/gu;
+  const labels = [...source.matchAll(expression)].map((match) => decodeXmlLabel(match[1] ?? ''));
+  if (labels.length !== 1 || labels[0] !== expectedDisplayName) {
+    throw new Error(`Existing ${platform} project display name differs or cannot be read safely.`);
+  }
+}
+
+function decodeXmlLabel(value: string): string {
+  const trimmed = value.trim();
+  let unsupported = false;
+  const decoded = trimmed.replace(/&([^;]+);/gu,
+    (_match, entity: string) => {
+      const named: Record<string, string> = {
+        amp: '&', lt: '<', gt: '>', quot: '"', apos: "'",
+      };
+      if (entity.startsWith('#')) {
+        const point = entity[1]?.toLowerCase() === 'x'
+          ? Number.parseInt(entity.slice(2), 16)
+          : Number.parseInt(entity.slice(1), 10);
+        if (Number.isInteger(point) && point > 0 && point <= 0x10ffff
+          && !(point >= 0xd800 && point <= 0xdfff)) {
+          return String.fromCodePoint(point);
+        }
+      }
+      if (Object.hasOwn(named, entity)) {
+        return named[entity] ?? '';
+      }
+      unsupported = true;
+      return '';
+    });
+  if (unsupported || trimmed.replace(/&[^;]+;/gu, '').includes('&')) {
+    throw new Error('Existing native display name contains an unsupported XML entity.');
+  }
+  return decoded;
 }
 
 function requireOneNativeFile(
@@ -531,8 +641,19 @@ function requireOneNativeFile(
 }
 
 function isNativeFile(directory: string, relative: string): boolean {
-  const file = path.join(directory, relative);
-  return existsSync(file) && lstatSync(file).isFile();
+  const file = path.resolve(directory, relative);
+  const within = path.relative(directory, file);
+  if (within === '' || within.startsWith('..') || path.isAbsolute(within)) {
+    return false;
+  }
+  let current = directory;
+  for (const segment of within.split(path.sep)) {
+    current = path.join(current, segment);
+    if (!existsSync(current) || lstatSync(current).isSymbolicLink()) {
+      return false;
+    }
+  }
+  return lstatSync(file).isFile();
 }
 
 function runCommand(command: string, args: readonly string[], cwd: string): void {
