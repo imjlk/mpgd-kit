@@ -2,7 +2,7 @@
 @evidence docs/standards/documentation-principles.md#readiness-levels Separates the shared contract, fixture checks, device validation, and release readiness below.
 @evidenceReview docs/standards/documentation-principles.md#readiness-levels #69ee134 Reviewed the stated scope of each validation level against this guide.
 @evidence docs/standards/documentation-principles.md#failure-paths Explains absent capabilities and operations that fail after a positive read.
-@evidenceReview docs/standards/documentation-principles.md#failure-paths #2ed77d9 Checked that both unsupported and post-check failure paths are described.
+@evidenceReview docs/standards/documentation-principles.md#failure-paths #2ed77d9 Checked rejected reads, unsupported capabilities, and post-check operation failures.
 @evidence docs/standards/documentation-principles.md#execution-context Names the workspace command and its local, non-device validation scope.
 @evidenceReview docs/standards/documentation-principles.md#execution-context #066647a Checked the command's package script and its validation boundary.
 -->
@@ -24,6 +24,13 @@ optional `bannerAds` field behaves as `false` when absent. Re-read before a
 feature is shown or used. If a capability is `false`, hide or disable that
 path. Even after a `true` snapshot, handle an operation that fails or becomes
 unavailable; the snapshot is not a promise that the operation succeeds.
+On bridged targets, `getCapabilities()` itself may reject when the bridge is
+missing or the method is unsupported. Catch that rejection, treat availability
+as unknown, and keep the gated action disabled while showing a retry or setup
+path appropriate to the target. Do not present a rejected read as an all-`false`
+snapshot. Where an error exposes a platform code or `retryable` flag, use it
+to distinguish temporary bridge trouble from missing setup; otherwise fail
+closed. Keep handling operation failure even after a successful `true` read.
 
 ## Verify a gateway fixture
 
@@ -39,10 +46,15 @@ its expected target, and its expected capability state. The runner rejects an
 empty fixture set, blank or duplicate names, and mismatched gateways; on
 success it returns the names that passed.
 
-From the repository root, `pnpm --dir packages/platform test` runs the shared
-package's automated tests. `pnpm smoke:platform-capability-conformance` also
-checks configured adapter and target-wrapper fixtures. Neither command is a
-physical-device or release-readiness certification.
+From the repository root,
+`pnpm --dir packages/platform exec vitest run src/capability-conformance.test.ts`
+runs the source tests without a package build. For the package's full test
+script and dist-import checks, first run `pnpm build:packages @mpgd/platform`,
+then `pnpm --dir packages/platform test`. For the cross-adapter smoke, first
+run `pnpm build:packages`, then
+`pnpm smoke:platform-capability-conformance`; it checks configured adapter
+and target-wrapper fixtures. None of these commands is a physical-device or
+release-readiness certification.
 
 ## Recheck after a provider change
 

@@ -133,6 +133,10 @@ async function runFixture(
     updated !== second,
     'getCapabilities must return a fresh snapshot after a provider transition',
   );
+  assert(
+    updated !== first,
+    'getCapabilities must not reuse an earlier snapshot after a provider transition',
+  );
   assertCapabilitySnapshot(updated, fixture.transition.expectedCapabilities);
 }
 

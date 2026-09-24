@@ -19,6 +19,8 @@ describe('platform gateway capability conformance', () => {
 
   it('rejects gateways that leak a shared capability object', rejectsSharedSnapshot);
 
+  it('rejects a snapshot recycled after a provider transition', rejectsEarlierSnapshotAfterTransition);
+
   it('rejects duplicate fixture names', async () => {
     const fixture = createFixture(() => createUnsupportedCapabilities());
 
@@ -89,6 +91,38 @@ export async function rejectsSharedSnapshot(): Promise<void> {
     runPlatformGatewayCapabilityConformance({ fixtures: [fixture] }),
   ).rejects.toMatchObject({
     cause: { message: expect.stringContaining('getCapabilities must return a fresh snapshot') },
+  });
+}
+
+/**
+ * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Rejects reuse of a non-adjacent snapshot object.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f83948b Verified the third read returns the first object after restoring its expected values.
+ * @evidence docs/specs/platform-capability-snapshots.md#provider-transitions Covers identity reuse after an otherwise valid provider transition.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#provider-transitions #839c0c8 Checked the update changes cloudSave before the third read.
+ */
+export async function rejectsEarlierSnapshotAfterTransition(): Promise<void> {
+  const first = { ...createUnsupportedCapabilities() };
+  const second = { ...createUnsupportedCapabilities() };
+  let reads = 0;
+  const fixture = createFixture(
+    () => {
+      reads += 1;
+      return reads === 2 ? second : first;
+    },
+    {
+      update() {
+        Object.assign(first, { nativeIap: false, cloudSave: true });
+      },
+      expectedCapabilities: { ...createUnsupportedCapabilities(), cloudSave: true },
+    },
+  );
+
+  await expect(
+    runPlatformGatewayCapabilityConformance({ fixtures: [fixture] }),
+  ).rejects.toMatchObject({
+    cause: {
+      message: expect.stringContaining('must not reuse an earlier snapshot'),
+    },
   });
 }
 
