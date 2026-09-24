@@ -51,13 +51,21 @@ describe('Capacitor secure credential boundary', () => {
 
   it('rejects malformed values and native failure without plaintext fallback', async () => {
     const calls: string[] = [];
-    let malformed = true;
+    let mode: 'malformed' | 'empty' | 'native-error' | 'transport-error' = 'malformed';
     const gateway = createCapacitorPlatformGateway({
       target: 'ios', appVersion: '1.0.0', buildId: 'credentials-test',
       bridge: {
         async request(input) {
           calls.push(input.method);
-          if (malformed) {
+          if (mode === 'transport-error') {
+            throw new Error('bridge disconnected');
+          }
+          if (mode === 'empty') {
+            return { id: input.id, ok: true, data: {
+              __mpgdBridgeProtocol: loadProtocol, found: true, value: '',
+            } };
+          }
+          if (mode === 'malformed') {
             return { id: input.id, ok: true, data: {
               __mpgdBridgeProtocol: loadProtocol, found: true, value: 42,
             } };
@@ -76,13 +84,21 @@ describe('Capacitor secure credential boundary', () => {
     }
     await expect(credentials.load({ key: 'session.refresh' }))
       .rejects.toMatchObject({ code: 'NATIVE_CREDENTIAL_INVALID_RESPONSE' });
-    malformed = false;
+    mode = 'empty';
+    await expect(credentials.load({ key: 'session.refresh' }))
+      .rejects.toMatchObject({ code: 'NATIVE_CREDENTIAL_INVALID_RESPONSE' });
+    mode = 'native-error';
     await expect(credentials.load({ key: 'session.refresh' }))
       .rejects.toMatchObject({ code: 'NATIVE_CREDENTIAL_LOAD_FAILED' });
+    mode = 'transport-error';
+    await expect(credentials.load({ key: 'session.refresh' }))
+      .rejects.toThrow('bridge disconnected');
     await expect(credentials.save({ key: '../unsafe', value: 'secret' }))
       .rejects.toMatchObject({ code: 'NATIVE_CREDENTIAL_INVALID_KEY' });
     await expect(credentials.save({ key: 'session.refresh', value: '' }))
       .rejects.toMatchObject({ code: 'NATIVE_CREDENTIAL_INVALID_VALUE' });
-    expect(calls).toEqual(['credentials.load', 'credentials.load']);
+    expect(calls).toEqual([
+      'credentials.load', 'credentials.load', 'credentials.load', 'credentials.load',
+    ]);
   });
 });

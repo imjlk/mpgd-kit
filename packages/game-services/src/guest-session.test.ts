@@ -69,10 +69,11 @@ function session(
   refreshToken: string,
   identityLevel: 'guest' | 'authenticated' = 'guest',
   serverUserId = 'server-user-1',
+  sessionId = 'server-session-1',
 ): ServerGuestSessionCredentials {
   return {
     serverUserId,
-    sessionId: 'server-session-1',
+    sessionId,
     identityLevel,
     accessToken,
     refreshToken,
@@ -111,11 +112,17 @@ function credentialFixture() {
     failNextLoad() {
       failLoad = true;
     },
+    recoverLoad() {
+      failLoad = false;
+    },
     failNextSave() {
       failSave = true;
     },
     failNextRemove() {
       failRemove = true;
+    },
+    recoverRemove() {
+      failRemove = false;
     },
   };
 }
@@ -172,6 +179,15 @@ function backendFixture() {
   assert.deepEqual(server.calls.revoke, ['refresh-1']);
   assert.equal(native.values.size, 0);
   assert.throws(() => coordinator.getHeaders(), { code: 'GUEST_SESSION_CLOSED' });
+  await assert.rejects(coordinator.start(), { code: 'GUEST_SESSION_CLOSED' });
+  await assert.rejects(coordinator.refresh(), { code: 'GUEST_SESSION_CLOSED' });
+  await assert.rejects(
+    coordinator.bindAccount({
+      externalProof: 'proof',
+      idempotencyKey: 'closed-bind',
+    }),
+    { code: 'GUEST_SESSION_CLOSED' },
+  );
 }
 
 {
@@ -184,8 +200,10 @@ function backendFixture() {
     installationId: 'local-install-1',
     now,
   });
-  await assert.rejects(coordinator.start(), /native load failed/u);
+  await assert.rejects(coordinator.start(), { code: 'GUEST_SESSION_CREDENTIAL_LOAD_FAILED' });
   assert.equal(server.calls.issue, 0, 'credential loss must not silently mint a new guest');
+  native.recoverLoad();
+  assert.equal((await coordinator.start()).serverUserId, 'server-user-1');
 }
 
 {
@@ -227,23 +245,37 @@ function backendFixture() {
 
   server.setBindResult({
     status: 'bound',
-    session: session('bound-access', 'bound-refresh', 'authenticated'),
+    session: session(
+      'bound-access',
+      'bound-refresh',
+      'authenticated',
+      'server-user-1',
+      'server-session-2',
+    ),
   });
   assert.deepEqual(await coordinator.bindAccount({
     externalProof: 'owned-proof', idempotencyKey: 'bind-3',
   }), { status: 'bound' });
   assert.equal(coordinator.getHeaders().authorization, 'Bearer bound-access');
   assert.equal(native.values.get('mpgd.guest.refresh'), 'bound-refresh');
+  assert.equal((await coordinator.start()).sessionId, 'server-session-2');
 
   server.setBindResult({
     status: 'already-bound',
-    session: session('retry-access', 'retry-refresh', 'authenticated'),
+    session: session(
+      'retry-access',
+      'retry-refresh',
+      'authenticated',
+      'server-user-1',
+      'server-session-3',
+    ),
   });
   assert.deepEqual(await coordinator.bindAccount({
     externalProof: 'owned-proof', idempotencyKey: 'bind-3',
   }), { status: 'already-bound' });
   assert.equal(coordinator.getHeaders().authorization, 'Bearer retry-access');
   assert.equal(native.values.get('mpgd.guest.refresh'), 'retry-refresh');
+  assert.equal((await coordinator.start()).sessionId, 'server-session-3');
 }
 
 {
@@ -298,6 +330,99 @@ function backendFixture() {
   await assert.rejects(refreshing, { code: 'GUEST_SESSION_CLOSED' });
   await loggingOut;
   assert.deepEqual(server.calls.revoke, ['late-refresh']);
+  assert.equal(native.values.size, 0);
+}
+
+{
+  const native = credentialFixture();
+  const server = backendFixture();
+  let failRevoke = true;
+  const backend: GuestSessionBackend = {
+    ...server.backend,
+    async revoke(input) {
+      if (failRevoke) {
+        failRevoke = false;
+        throw new Error('sensitive refresh token');
+      }
+      await server.backend.revoke(input);
+    },
+  };
+  const coordinator = createGuestSessionCoordinator({
+    backend,
+    credentials: native.credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  await coordinator.start();
+  await assert.rejects(coordinator.logout(), { code: 'GUEST_SESSION_LOGOUT_UNCERTAIN' });
+  assert.equal(native.values.get('mpgd.guest.refresh'), 'refresh-1');
+  assert.throws(() => coordinator.getHeaders(), { code: 'GUEST_SESSION_CLOSED' });
+  await coordinator.logout();
+  assert.deepEqual(server.calls.revoke, ['refresh-1']);
+  assert.equal(native.values.size, 0);
+}
+
+{
+  const native = credentialFixture();
+  const server = backendFixture();
+  const coordinator = createGuestSessionCoordinator({
+    backend: server.backend,
+    credentials: native.credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  await coordinator.start();
+  native.failNextRemove();
+  await assert.rejects(coordinator.logout(), { code: 'GUEST_SESSION_LOGOUT_UNCERTAIN' });
+  assert.equal(native.values.get('mpgd.guest.refresh'), 'refresh-1');
+  native.recoverRemove();
+  await coordinator.logout();
+  assert.deepEqual(server.calls.revoke, ['refresh-1', 'refresh-1']);
+  assert.equal(native.values.size, 0);
+}
+
+{
+  const native = credentialFixture();
+  native.values.set('mpgd.guest.refresh', 'stored-refresh');
+  native.failNextLoad();
+  const server = backendFixture();
+  const coordinator = createGuestSessionCoordinator({
+    backend: server.backend,
+    credentials: native.credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  await assert.rejects(coordinator.logout(), { code: 'GUEST_SESSION_LOGOUT_UNCERTAIN' });
+  assert.equal(native.values.get('mpgd.guest.refresh'), 'stored-refresh');
+  native.recoverLoad();
+  await coordinator.logout();
+  assert.deepEqual(server.calls.revoke, ['stored-refresh']);
+  assert.equal(native.values.size, 0);
+}
+
+{
+  const native = credentialFixture();
+  const backend: GuestSessionBackend = {
+    ...backendFixture().backend,
+    async issueGuest() {
+      throw new Error('secret bearer token');
+    },
+  };
+  const coordinator = createGuestSessionCoordinator({
+    backend,
+    credentials: native.credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  const error: unknown = await coordinator.start().then(
+    () => undefined,
+    (reason: unknown) => reason,
+  );
+  assert.equal(error instanceof GuestSessionCoordinatorError, true);
+  if (error instanceof GuestSessionCoordinatorError) {
+    assert.equal(error.code, 'GUEST_SESSION_BACKEND_FAILED');
+    assert.equal(error.message.includes('secret bearer token'), false);
+  }
   assert.equal(native.values.size, 0);
 }
 

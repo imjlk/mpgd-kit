@@ -23,6 +23,7 @@ export interface StorePurchaseAccountBinding {
 /** Only a trusted server may issue this opaque-token response. */
 export interface ServerGuestSessionCredentials {
   readonly serverUserId: string;
+  /** May rotate on refresh or binding; serverUserId remains the ownership key. */
   readonly sessionId: string;
   readonly identityLevel: 'guest' | 'authenticated';
   readonly accessToken: string;
@@ -57,8 +58,11 @@ export interface GuestSessionBackend {
 export type GuestSessionCoordinatorErrorCode =
   | 'GUEST_SESSION_CLOSED'
   | 'GUEST_SESSION_NOT_READY'
+  | 'GUEST_SESSION_INVALID_INPUT'
   | 'GUEST_SESSION_INVALID_RESPONSE'
   | 'GUEST_SESSION_OWNERSHIP_CONFLICT'
+  | 'GUEST_SESSION_BACKEND_FAILED'
+  | 'GUEST_SESSION_CREDENTIAL_LOAD_FAILED'
   | 'GUEST_SESSION_CREDENTIAL_SAVE_FAILED'
   | 'GUEST_SESSION_LOGOUT_UNCERTAIN';
 
@@ -97,10 +101,13 @@ export function createGuestSessionCoordinator(input: {
   readonly credentialKey?: string;
   readonly now?: () => number;
 }): GuestSessionCoordinator {
-  if (input.installationId.trim() === '') {
-    throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_RESPONSE');
+  if (typeof input.installationId !== 'string' || input.installationId.trim() === '') {
+    throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_INPUT');
   }
   const credentialKey = input.credentialKey ?? defaultCredentialKey;
+  if (credentialKey.trim() === '') {
+    throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_INPUT');
+  }
   const now = input.now ?? Date.now;
   let current: ServerGuestSessionCredentials | undefined;
   let status: 'idle' | 'active' | 'failed' | 'closed' = 'idle';
@@ -128,6 +135,28 @@ export function createGuestSessionCoordinator(input: {
     return current;
   }
 
+  async function loadStoredRefreshToken(): Promise<string | null> {
+    try {
+      const stored = await input.credentials.load({ key: credentialKey });
+      if (stored !== null && (typeof stored !== 'string' || stored === '')) {
+        throw new Error('Invalid stored refresh token.');
+      }
+      return stored;
+    } catch {
+      throw new GuestSessionCoordinatorError('GUEST_SESSION_CREDENTIAL_LOAD_FAILED');
+    }
+  }
+
+  async function fromBackend<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch {
+      // Backend exceptions can contain URLs, proofs, or tokens. The public
+      // coordinator surface intentionally exposes only a stable error code.
+      throw new GuestSessionCoordinatorError('GUEST_SESSION_BACKEND_FAILED');
+    }
+  }
+
   async function persist(next: ServerGuestSessionCredentials): Promise<void> {
     try {
       await input.credentials.save({ key: credentialKey, value: next.refreshToken });
@@ -135,7 +164,9 @@ export function createGuestSessionCoordinator(input: {
       // Keep the latest token only for an explicit revoke; never expose it as
       // an active session after native persistence failed.
       current = next;
-      status = 'failed';
+      if (status !== 'closed') {
+        status = 'failed';
+      }
       throw new GuestSessionCoordinatorError('GUEST_SESSION_CREDENTIAL_SAVE_FAILED');
     }
     current = next;
@@ -145,7 +176,7 @@ export function createGuestSessionCoordinator(input: {
   }
 
   return {
-    start() {
+    async start() {
       assertOpen();
       if (status === 'active' && current !== undefined) {
         return Promise.resolve(view(current));
@@ -158,26 +189,26 @@ export function createGuestSessionCoordinator(input: {
       }
       startInFlight = enqueue(async () => {
         assertOpen();
-        const stored = await input.credentials.load({ key: credentialKey });
+        const stored = await loadStoredRefreshToken();
         const next = validateSession(stored === null
-          ? await input.backend.issueGuest({ installationId: input.installationId })
-          : await input.backend.refresh({ refreshToken: stored }), now);
+          ? await fromBackend(() => input.backend.issueGuest({ installationId: input.installationId }))
+          : await fromBackend(() => input.backend.refresh({ refreshToken: stored })), now);
         await persist(next);
         assertOpen();
         return view(next);
       }).finally(() => { startInFlight = undefined; });
       return startInFlight;
     },
-    refresh() {
+    async refresh() {
       assertOpen();
       if (refreshInFlight !== undefined) {
         return refreshInFlight;
       }
       refreshInFlight = enqueue(async () => {
         const previous = requireCurrent();
-        const next = validateSession(await input.backend.refresh({
+        const next = validateSession(await fromBackend(() => input.backend.refresh({
           refreshToken: previous.refreshToken,
-        }), now);
+        })), now);
         assertSameOwner(previous, next);
         await persist(next);
         assertOpen();
@@ -185,18 +216,22 @@ export function createGuestSessionCoordinator(input: {
       }).finally(() => { refreshInFlight = undefined; });
       return refreshInFlight;
     },
-    bindAccount(binding) {
+    async bindAccount(binding) {
       assertOpen();
-      if (binding.externalProof.trim() === '' || binding.idempotencyKey.trim() === '') {
-        return Promise.reject(new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_RESPONSE'));
+      if (typeof binding.externalProof !== 'string' || binding.externalProof.trim() === ''
+        || typeof binding.idempotencyKey !== 'string' || binding.idempotencyKey.trim() === '') {
+        throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_INPUT');
       }
       return enqueue(async () => {
         const previous = requireCurrent();
-        const result = await input.backend.bindAccount({
+        const result = await fromBackend(() => input.backend.bindAccount({
           refreshToken: previous.refreshToken,
           externalProof: binding.externalProof,
           idempotencyKey: binding.idempotencyKey,
-        });
+        }));
+        if (typeof result !== 'object' || result === null || !('status' in result)) {
+          throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_RESPONSE');
+        }
         if (result.status === 'conflict') {
           assertOpen();
           return { status: 'conflict' as const };
@@ -227,32 +262,35 @@ export function createGuestSessionCoordinator(input: {
         return logoutInFlight;
       }
       status = 'closed';
-      logoutInFlight = enqueue(async () => {
-        let revokeFailed = false;
+      const attempt = enqueue(async () => {
         let token = current?.refreshToken;
         if (token === undefined) {
           try {
             token = (await input.credentials.load({ key: credentialKey })) ?? undefined;
           } catch {
-            revokeFailed = true;
+            // Keep the credential intact so a later logout can retry the load.
+            throw new GuestSessionCoordinatorError('GUEST_SESSION_LOGOUT_UNCERTAIN');
           }
         }
         if (token !== undefined) {
           try {
             await input.backend.revoke({ refreshToken: token });
           } catch {
-            revokeFailed = true;
+            // Do not delete a still-live refresh token on revoke failure.
+            throw new GuestSessionCoordinatorError('GUEST_SESSION_LOGOUT_UNCERTAIN');
           }
         }
         try {
           await input.credentials.remove({ key: credentialKey });
         } catch {
-          revokeFailed = true;
-        }
-        current = undefined;
-        if (revokeFailed) {
           throw new GuestSessionCoordinatorError('GUEST_SESSION_LOGOUT_UNCERTAIN');
         }
+        current = undefined;
+      });
+      logoutInFlight = attempt;
+      void attempt.catch(() => {
+        // A failed revoke or remove can be retried on this closed coordinator.
+        logoutInFlight = undefined;
       });
       return logoutInFlight;
     },
@@ -269,10 +307,10 @@ function view(session: ServerGuestSessionCredentials): ServerGuestSessionView {
 }
 
 function validateSession(
-  value: ServerGuestSessionCredentials,
+  value: unknown,
   now: () => number,
 ): ServerGuestSessionCredentials {
-  if (typeof value !== 'object' || value === null
+  if (!isRecord(value)
     || typeof value.serverUserId !== 'string' || value.serverUserId.trim() === ''
     || typeof value.sessionId !== 'string' || value.sessionId.trim() === ''
     || (value.identityLevel !== 'guest' && value.identityLevel !== 'authenticated')
@@ -283,14 +321,25 @@ function validateSession(
     || Date.parse(value.accessExpiresAt) <= now()) {
     throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_RESPONSE');
   }
-  return value;
+  return {
+    serverUserId: value.serverUserId,
+    sessionId: value.sessionId,
+    identityLevel: value.identityLevel,
+    accessToken: value.accessToken,
+    refreshToken: value.refreshToken,
+    accessExpiresAt: value.accessExpiresAt,
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function assertSameOwner(
   previous: ServerGuestSessionCredentials,
   next: ServerGuestSessionCredentials,
 ): void {
-  if (previous.serverUserId !== next.serverUserId || previous.sessionId !== next.sessionId) {
+  if (previous.serverUserId !== next.serverUserId) {
     throw new GuestSessionCoordinatorError('GUEST_SESSION_OWNERSHIP_CONFLICT');
   }
 }

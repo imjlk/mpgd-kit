@@ -84,8 +84,13 @@ const guest = createGuestSessionCoordinator({
   now: () => Date.parse('2029-01-01T00:00:00Z'),
 });
 const session = await guest.start();
+assert.equal(secureValues.get('mpgd.guest.refresh'), 'packed-refresh');
 assert.equal(session.serverUserId, 'packed-server-user');
 assert.equal(Object.hasOwn(session, 'accessToken'), false);
+assert.deepEqual(guest.getHeaders(), { authorization: 'Bearer packed-access' });
+assert.deepEqual(await guest.bindAccount({
+  externalProof: 'packed-proof', idempotencyKey: 'packed-bind',
+}), { status: 'conflict' });
 assert.deepEqual(guest.getHeaders(), { authorization: 'Bearer packed-access' });
 await guest.logout();
 assert.equal(secureValues.size, 0);

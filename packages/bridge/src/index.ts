@@ -82,7 +82,8 @@ export function decodeBridgeCredentialLoadData(input: unknown): string | null {
   if (input.found === false && !('value' in input)) {
     return null;
   }
-  if (input.found === true && 'value' in input && typeof input.value === 'string') {
+  if (input.found === true && 'value' in input
+    && typeof input.value === 'string' && input.value !== '') {
     return input.value;
   }
   throw new Error('Credential bridge load returned an invalid response.');

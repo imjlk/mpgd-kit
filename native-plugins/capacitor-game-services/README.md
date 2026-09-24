@@ -19,9 +19,10 @@ the JavaScript bridge boundary separately.
 `credentials.load`, `credentials.save`, and `credentials.remove` are a distinct
 opaque-string credential store for guest/session tokens. Android encrypts values
 with an AES-GCM key held by Android Keystore and persists only ciphertext in
-separate preferences. iOS uses a device-only Keychain generic-password item
-accessible while unlocked. Neither path falls back to `storage.save`, a file,
-or plaintext preferences. A missing device key, unreadable ciphertext, or
+atomic files beneath the app no-backup directory, outside Android Auto Backup.
+iOS uses a device-only Keychain generic-password item
+accessible while unlocked. Neither path falls back to `storage.save`, ordinary
+game JSON files, or plaintext preferences. A missing device key, unreadable ciphertext, or
 Keychain failure returns a bridge error rather than silently reporting a new
 guest or authenticated session. The host may remove an unreadable credential
 only as part of an explicit recovery or logout flow. The Java and Swift tests

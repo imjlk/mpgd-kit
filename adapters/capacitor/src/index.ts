@@ -314,12 +314,10 @@ export function createCapacitorPlatformGateway(input: {
     secureCredentials: {
       async load({ key }) {
         assertCredentialKey(key);
+        const data = await request<unknown>('credentials.load', { key });
         try {
-          return decodeBridgeCredentialLoadData(await request<unknown>('credentials.load', { key }));
-        } catch (error) {
-          if (error instanceof PlatformOperationError) {
-            throw error;
-          }
+          return decodeBridgeCredentialLoadData(data);
+        } catch {
           throw new PlatformOperationError({ code: 'NATIVE_CREDENTIAL_INVALID_RESPONSE' });
         }
       },

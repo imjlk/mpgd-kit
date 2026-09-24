@@ -130,7 +130,9 @@ authentication from `installationId` or a local `playerId`. The backend must
 authenticate opaque refresh tokens, verify external account proofs, atomically
 deduplicate account binding by idempotency key, return `conflict` for an account
 owned by another server user, and revoke sessions durably. It must define
-token rotation, expiry, replay response, and database transactions; the
+token rotation, expiry, replay response, idempotent revocation, and database
+transactions. The session ID may rotate during refresh or binding, but the
+server user ID must remain the same; the
 injected contract is not a production identity provider by itself.
 
 The coordinator loads and saves the refresh token only through secure native
@@ -138,7 +140,11 @@ credential storage. A load failure never silently starts a new guest, and a
 failed save cannot expose a new access token as active. Concurrent refreshes
 share one backend call; logout closes header access immediately and waits for
 in-flight token changes before revoking the latest token and removing the
-credential. `getHeaders()` can be passed as the Game Services runtime's
+credential. Failed revocation or native removal leaves the credential intact
+and allows a later logout retry; callers must treat an uncertain logout as a
+server-side session that may still be live. Backend and native load errors are
+normalized to token-free coordinator codes, not forwarded with raw messages.
+`getHeaders()` can be passed as the Game Services runtime's
 `getHeaders` resolver. The public session view omits both bearer tokens.
 
 Binding an external account never switches to a different server user on a

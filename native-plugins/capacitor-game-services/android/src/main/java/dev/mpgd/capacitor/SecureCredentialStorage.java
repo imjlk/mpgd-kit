@@ -1,12 +1,18 @@
 package dev.mpgd.capacitor;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
+import android.util.AtomicFile;
 import android.util.Base64;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyStore;
+import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.regex.Pattern;
 import javax.crypto.Cipher;
@@ -14,11 +20,12 @@ import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
 
-/** Device-key-encrypted credentials, intentionally separate from game JSON storage. */
+/** Device-key-encrypted credentials in no-backup storage, separate from game JSON. */
 final class SecureCredentialStorage {
     private static final int MAXIMUM_VALUE_BYTES = 16 * 1024;
+    private static final int MAXIMUM_CIPHERTEXT_BYTES = 32 * 1024;
     private static final Pattern KEY_PATTERN = Pattern.compile("[A-Za-z0-9._:-]{1,128}");
-    private static final String PREFERENCES = "dev.mpgd.capacitor.credentials.v1";
+    private static final String STORAGE_DIRECTORY = "dev.mpgd.capacitor.credentials.v1";
     private static final String KEY_ALIAS = "dev.mpgd.capacitor.credentials.aes.v1";
     private static final int IV_BYTES = 12;
     private static final byte FORMAT_VERSION = 1;
@@ -57,7 +64,7 @@ final class SecureCredentialStorage {
     private final CiphertextBackend backend;
 
     SecureCredentialStorage(Context context) {
-        this(new KeystoreCipher(), new PreferencesBackend(context));
+        this(new KeystoreCipher(), new NoBackupFileBackend(context));
     }
 
     SecureCredentialStorage(CipherBackend cipher, CiphertextBackend backend) {
@@ -129,29 +136,73 @@ final class SecureCredentialStorage {
 
     private static final class MissingKeyException extends Exception { }
 
-    private static final class PreferencesBackend implements CiphertextBackend {
-        private final SharedPreferences preferences;
+    private static final class NoBackupFileBackend implements CiphertextBackend {
+        private final File directory;
 
-        PreferencesBackend(Context context) {
-            preferences = context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE);
+        NoBackupFileBackend(Context context) {
+            directory = new File(context.getNoBackupFilesDir(), STORAGE_DIRECTORY);
+        }
+
+        private File fileFor(String key) throws Exception {
+            byte[] hash = MessageDigest.getInstance("SHA-256")
+                .digest(key.getBytes(StandardCharsets.UTF_8));
+            StringBuilder name = new StringBuilder(hash.length * 2 + 5);
+            for (byte part : hash) {
+                name.append(Character.forDigit((part >>> 4) & 0xf, 16));
+                name.append(Character.forDigit(part & 0xf, 16));
+            }
+            return new File(directory, name.append(".blob").toString());
+        }
+
+        private boolean hasStoredFile(File file) {
+            return file.exists()
+                || new File(file.getPath() + ".bak").exists()
+                || new File(file.getPath() + ".new").exists();
         }
 
         @Override
-        public String get(String key) {
-            return preferences.getString(key, null);
+        public String get(String key) throws Exception {
+            File file = fileFor(key);
+            if (!hasStoredFile(file)) {
+                return null;
+            }
+            try (FileInputStream input = new AtomicFile(file).openRead();
+                 ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+                byte[] chunk = new byte[4096];
+                int count;
+                while ((count = input.read(chunk)) != -1) {
+                    if (output.size() + count > MAXIMUM_CIPHERTEXT_BYTES) {
+                        throw new IOException("Encrypted credential exceeded its size limit.");
+                    }
+                    output.write(chunk, 0, count);
+                }
+                return output.toString(StandardCharsets.UTF_8.name());
+            }
         }
 
         @Override
         public void set(String key, String ciphertext) throws Exception {
-            if (!preferences.edit().putString(key, ciphertext).commit()) {
-                throw new Exception("Encrypted credential commit failed.");
+            if (!directory.isDirectory() && !directory.mkdirs()) {
+                throw new IOException("Secure credential directory could not be created.");
+            }
+            AtomicFile file = new AtomicFile(fileFor(key));
+            FileOutputStream output = file.startWrite();
+            try {
+                output.write(ciphertext.getBytes(StandardCharsets.UTF_8));
+                file.finishWrite(output);
+            } catch (Exception error) {
+                file.failWrite(output);
+                throw error;
             }
         }
 
         @Override
         public void remove(String key) throws Exception {
-            if (!preferences.edit().remove(key).commit()) {
-                throw new Exception("Encrypted credential removal failed.");
+            File file = fileFor(key);
+            AtomicFile atomic = new AtomicFile(file);
+            atomic.delete();
+            if (hasStoredFile(file)) {
+                throw new IOException("Encrypted credential removal failed.");
             }
         }
     }
