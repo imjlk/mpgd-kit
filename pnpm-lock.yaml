@@ -142,6 +142,9 @@ importers:
       '@mpgd/platform':
         specifier: workspace:*
         version: link:../../packages/platform
+      '@mpgd/target-config':
+        specifier: workspace:*
+        version: link:../../packages/target-config
     devDependencies:
       '@capacitor/core':
         specifier: 8.5.2

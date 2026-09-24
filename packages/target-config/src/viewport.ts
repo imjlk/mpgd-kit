@@ -134,6 +134,30 @@ export interface TargetViewportSafeArea {
 }
 
 /**
+ * A named host-owned surface in full-viewport CSS-pixel coordinates. The
+ * effective inset extends from `edge` to the surface's far bound, so any gap
+ * between a floating surface and that edge is conservatively treated as used.
+ */
+export interface TargetViewportOccupiedSurface {
+  readonly surfaceId: string;
+  readonly edge: 'top' | 'right' | 'bottom' | 'left';
+  readonly bounds: TargetViewportBounds;
+}
+
+/** Independent occlusion measurements. Overlap is combined, never summed. */
+export interface TargetViewportUsableAreaInput {
+  readonly safeAreaInsets?: Partial<TargetViewportSafeAreaInsets>;
+  readonly systemBarInsets?: Partial<TargetViewportSafeAreaInsets>;
+  readonly keyboardInsets?: Partial<TargetViewportSafeAreaInsets>;
+  readonly occupiedSurfaces?: readonly TargetViewportOccupiedSurface[];
+}
+
+/** Remaining geometry shared by a canvas and any DOM overlays. */
+export interface TargetViewportUsableArea extends TargetViewportSafeArea {
+  readonly occupiedSurfaceIds: readonly string[];
+}
+
+/**
  * A viewport plan enriched with concrete safe-area geometry. It is assignable
  * to `TargetViewportPlan`, so existing scene code can adopt it incrementally.
  */
@@ -528,6 +552,79 @@ export function resolveTargetViewportSafeArea(
       width: layout.width - left - right,
       height: layout.height - top - bottom,
     },
+  };
+}
+
+/**
+ * Resolve all edge occlusions in one CSS-pixel coordinate space. System bars
+ * and CSS safe-area measurements can describe the same pixels, as can a banner
+ * and the home-indicator inset. Taking the maximum intrusion per edge avoids
+ * subtracting those regions twice. A surface's bounds are absolute viewport
+ * coordinates, not a banner height to add to another inset.
+ */
+export function resolveTargetViewportUsableArea(
+  layout: Pick<TargetViewportLayout, 'width' | 'height'>,
+  input: TargetViewportUsableAreaInput = {},
+): TargetViewportUsableArea {
+  const viewport = {
+    width: normalizeViewportDimension(layout.width, 'width'),
+    height: normalizeViewportDimension(layout.height, 'height'),
+  };
+  const safeArea = normalizeTargetViewportSafeAreaInsets(input.safeAreaInsets);
+  const systemBars = normalizeTargetViewportSafeAreaInsets(input.systemBarInsets);
+  const keyboard = normalizeTargetViewportSafeAreaInsets(input.keyboardInsets);
+  const insets = {
+    top: Math.max(safeArea.top, systemBars.top, keyboard.top),
+    right: Math.max(safeArea.right, systemBars.right, keyboard.right),
+    bottom: Math.max(safeArea.bottom, systemBars.bottom, keyboard.bottom),
+    left: Math.max(safeArea.left, systemBars.left, keyboard.left),
+  };
+  const occupiedSurfaceIds = new Set<string>();
+  for (const surface of input.occupiedSurfaces ?? []) {
+    if (surface.surfaceId.trim() === '' || occupiedSurfaceIds.has(surface.surfaceId)) {
+      throw new Error('Viewport occupied surface IDs must be non-empty and unique.');
+    }
+    occupiedSurfaceIds.add(surface.surfaceId);
+    const { x: rawX, y: rawY, width: rawWidth, height: rawHeight } = surface.bounds;
+    if (![rawX, rawY, rawWidth, rawHeight].every(Number.isFinite)
+      || rawX < 0 || rawY < 0 || rawWidth < 0 || rawHeight < 0) {
+      throw new Error(`Viewport occupied surface ${surface.surfaceId} is outside the viewport.`);
+    }
+    // Round endpoints using the same whole-CSS-pixel convention as viewport
+    // dimensions. Rounding an origin and size separately can make a valid
+    // full-width fractional surface appear to exceed the rounded viewport.
+    const x = Math.round(rawX);
+    const y = Math.round(rawY);
+    const right = Math.round(rawX + rawWidth);
+    const bottom = Math.round(rawY + rawHeight);
+    const width = right - x;
+    const height = bottom - y;
+    if (right > viewport.width || bottom > viewport.height) {
+      throw new Error(`Viewport occupied surface ${surface.surfaceId} is outside the viewport.`);
+    }
+    if (width === 0 || height === 0) {
+      continue;
+    }
+    switch (surface.edge) {
+      case 'top':
+        insets.top = Math.max(insets.top, y + height);
+        break;
+      case 'right':
+        insets.right = Math.max(insets.right, viewport.width - x);
+        break;
+      case 'bottom':
+        insets.bottom = Math.max(insets.bottom, viewport.height - y);
+        break;
+      case 'left':
+        insets.left = Math.max(insets.left, x + width);
+        break;
+      default:
+        throw new Error('Viewport occupied surface edge is invalid.');
+    }
+  }
+  return {
+    ...resolveTargetViewportSafeArea(viewport, insets),
+    occupiedSurfaceIds: [...occupiedSurfaceIds],
   };
 }
 

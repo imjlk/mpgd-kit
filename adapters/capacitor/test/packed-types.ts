@@ -2,8 +2,14 @@ import {
   createCapacitorNativeJsonTransport,
   type CapacitorNativeJsonTransport,
   type CapacitorServiceProvider,
+  type CapacitorViewportBaseState,
+  type CapacitorViewportController,
 } from '@mpgd/adapter-capacitor';
-import type { PlatformProviderAvailability, PlatformProviderFeature } from '@mpgd/platform';
+import type {
+  PlatformProviderAvailability,
+  PlatformProviderFeature,
+  PlatformViewportState,
+} from '@mpgd/platform';
 import type { FeatureAvailabilityReason, PlatformFeature } from '@mpgd/target-config';
 
 const feature: PlatformProviderFeature = 'subscriptionIap';
@@ -42,3 +48,9 @@ const nativeJson: CapacitorNativeJsonTransport = createCapacitorNativeJsonTransp
   allowedOrigin: 'https://api.example.com',
 });
 void nativeJson;
+
+declare const viewport: CapacitorViewportController;
+const viewportState: PlatformViewportState = viewport.getState();
+void viewportState;
+declare const hostState: CapacitorViewportBaseState;
+void hostState;

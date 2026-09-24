@@ -45,7 +45,8 @@
     "@capacitor/app": "8.1.1",
     "@mpgd/bridge": "workspace:*",
     "@mpgd/capacitor-game-services": "workspace:*",
-    "@mpgd/platform": "workspace:*"
+    "@mpgd/platform": "workspace:*",
+    "@mpgd/target-config": "workspace:*"
   },
   "peerDependencies": {
     "@capacitor/core": "^8.5.1"

@@ -35,6 +35,7 @@ import {
   resolveTargetViewportSafeArea,
   resolveTargetViewportSizeClass,
   resolveTargetViewportSnapshot,
+  resolveTargetViewportUsableArea,
   targetViewportShellForConfig,
 } from '../src/viewport';
 
@@ -1302,6 +1303,152 @@ function assertViewportPlans(): void {
       height: 786,
     },
   });
+  const mobileOcclusions = {
+    safeAreaInsets: { top: 24, bottom: 34 },
+    systemBarInsets: { top: 30, bottom: 24 },
+    occupiedSurfaces: [
+      {
+        surfaceId: 'banner-home',
+        edge: 'bottom',
+        bounds: {
+          x: 0,
+          y: 780,
+          width: 390,
+          height: 64,
+        },
+      },
+      {
+        surfaceId: 'banner-overlay',
+        edge: 'bottom',
+        bounds: {
+          x: 0,
+          y: 800,
+          width: 390,
+          height: 44,
+        },
+      },
+    ],
+  } as const;
+  assertDeepEqual(resolveTargetViewportUsableArea(phoneWebViewDimensions, mobileOcclusions), {
+    insets: { top: 30, right: 0, bottom: 64, left: 0 },
+    contentBounds: { x: 0, y: 30, width: 390, height: 750 },
+    occupiedSurfaceIds: ['banner-home', 'banner-overlay'],
+  });
+  assertDeepEqual(
+    resolveTargetViewportUsableArea(phoneWebViewDimensions, {
+      ...mobileOcclusions,
+      keyboardInsets: { bottom: 290 },
+    }).contentBounds,
+    { x: 0, y: 30, width: 390, height: 524 },
+  );
+  assertDeepEqual(
+    resolveTargetViewportUsableArea(phoneWebViewDimensions, {
+      safeAreaInsets: { top: 100, bottom: 100 },
+      keyboardInsets: { bottom: 800 },
+    }),
+    {
+      insets: { top: 100, right: 0, bottom: 744, left: 0 },
+      contentBounds: { x: 0, y: 100, width: 390, height: 0 },
+      occupiedSurfaceIds: [],
+    },
+  );
+  assertDeepEqual(
+    resolveTargetViewportUsableArea(phoneWebViewDimensions, {
+      occupiedSurfaces: [
+        {
+          surfaceId: 'stale',
+          edge: 'left',
+          bounds: {
+            x: 390,
+            y: 0,
+            width: 0,
+            height: 100,
+          },
+        },
+      ],
+    }),
+    {
+      insets: { top: 0, right: 0, bottom: 0, left: 0 },
+      contentBounds: { x: 0, y: 0, width: 390, height: 844 },
+      occupiedSurfaceIds: ['stale'],
+    },
+  );
+  assertDeepEqual(
+    resolveTargetViewportUsableArea(
+      { width: 100, height: 80 },
+      {
+        occupiedSurfaces: [
+          { surfaceId: 'left', edge: 'left', bounds: { x: 0, y: 0, width: 10, height: 80 } },
+          { surfaceId: 'right', edge: 'right', bounds: { x: 80, y: 0, width: 20, height: 80 } },
+        ],
+      },
+    ),
+    {
+      insets: { top: 0, right: 20, bottom: 0, left: 10 },
+      contentBounds: { x: 10, y: 0, width: 70, height: 80 },
+      occupiedSurfaceIds: ['left', 'right'],
+    },
+  );
+  assertDeepEqual(
+    resolveTargetViewportUsableArea(
+      { width: 390.4, height: 844.4 },
+      {
+        occupiedSurfaces: [
+          {
+            surfaceId: 'fractional-top',
+            edge: 'top',
+            bounds: { x: 0, y: 0, width: 390.4, height: 10.4 },
+          },
+        ],
+      },
+    ),
+    {
+      insets: { top: 10, right: 0, bottom: 0, left: 0 },
+      contentBounds: { x: 0, y: 10, width: 390, height: 834 },
+      occupiedSurfaceIds: ['fractional-top'],
+    },
+  );
+  assertThrows(
+    () =>
+      resolveTargetViewportUsableArea(phoneWebViewDimensions, {
+        occupiedSurfaces: [
+          {
+            surfaceId: ' ',
+            edge: 'top',
+            bounds: { x: 0, y: 0, width: 0, height: 0 },
+          },
+        ],
+      }),
+    /unique/u,
+  );
+  assertThrows(
+    () =>
+      resolveTargetViewportUsableArea(phoneWebViewDimensions, {
+        occupiedSurfaces: [
+          ...mobileOcclusions.occupiedSurfaces,
+          mobileOcclusions.occupiedSurfaces[0],
+        ],
+      }),
+    /unique/u,
+  );
+  assertThrows(
+    () =>
+      resolveTargetViewportUsableArea(phoneWebViewDimensions, {
+        occupiedSurfaces: [
+          {
+            surfaceId: 'outside',
+            edge: 'bottom',
+            bounds: {
+              x: 0,
+              y: 840,
+              width: 390,
+              height: 10,
+            },
+          },
+        ],
+      }),
+    /outside/u,
+  );
   assertDeepEqual(
     resolveTargetViewportSafeArea(
       {
