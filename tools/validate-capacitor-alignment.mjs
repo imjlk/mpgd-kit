@@ -10,12 +10,17 @@ const shell = readJson('apps/mobile-capacitor/package.json');
 for (const name of ['@capacitor/android', '@capacitor/core', '@capacitor/ios']) {
   assert.equal(shell.dependencies[name], shellVersion, `${name} must match the native shell version`);
 }
-assert.equal(shell.devDependencies['@capacitor/cli'], shellVersion);
+assert.equal(shell.devDependencies['@capacitor/cli'], shellVersion, '@capacitor/cli must match the native shell version');
 
 const plugin = readJson('native-plugins/capacitor-game-services/package.json');
 assert.equal(plugin.dependencies['@capacitor/core'], undefined, 'The host must supply Capacitor core');
 assert.equal(plugin.peerDependencies['@capacitor/core'], `^${pluginMinimum}`);
 assert.equal(plugin.devDependencies['@capacitor/core'], shellVersion);
+const adapter = readJson('adapters/capacitor/package.json');
+assert.equal(adapter.peerDependencies['@capacitor/core'], plugin.peerDependencies['@capacitor/core']);
+assert.equal(adapter.devDependencies['@capacitor/core'], shellVersion);
+const gameTemplate = readJson('packages/cli/templates/phaser-game/package.json');
+assert.equal(gameTemplate.dependencies['@capacitor/core'], shellVersion);
 
 const swiftPackageUrl = 'https://github.com/ionic-team/capacitor-swift-pm.git';
 const shellSwift = read('apps/mobile-capacitor/ios/App/CapApp-SPM/Package.swift');
@@ -32,7 +37,11 @@ assert.ok(
 const resolved = readJson('apps/mobile-capacitor/ios/App/App.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved');
 const capacitorPin = resolved.pins.find((pin) => pin.identity === 'capacitor-swift-pm');
 assert.equal(capacitorPin?.state.version, shellVersion, 'Xcode SPM resolution is stale');
-assert.match(capacitorPin?.state.revision ?? '', /^[0-9a-f]{40}$/);
+assert.match(
+  capacitorPin?.state.revision ?? '',
+  /^[0-9a-f]{40}$/,
+  'The capacitor-swift-pm pin must record a full-length commit revision',
+);
 
 const gradleSettings = read('apps/mobile-capacitor/android/capacitor.settings.gradle');
 const androidResolution = gradleSettings.match(

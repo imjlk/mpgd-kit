@@ -45,7 +45,11 @@
     "@mpgd/capacitor-game-services": "workspace:*",
     "@mpgd/platform": "workspace:*"
   },
+  "peerDependencies": {
+    "@capacitor/core": "^8.5.1"
+  },
   "devDependencies": {
+    "@capacitor/core": "8.5.2",
     "ttsc": "0.30.4",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"
