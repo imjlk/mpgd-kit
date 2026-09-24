@@ -128,7 +128,8 @@ export function createCapacitorAppEvents(input: CreateCapacitorAppEventsInput): 
     if (kind === null) {
       return;
     }
-    if (!initialResolved) {
+    const callbacks = kind === 'game' ? gameUrlCallbacks : oauthCallbacks;
+    if (!initialResolved && callbacks.size > 0) {
       // Keep enough recent entries to suppress a cold/warm duplicate without
       // retaining an unbounded history when the host never requests cold URLs.
       if (warmUrlsBeforeInitial.size >= maxWarmUrlsBeforeInitial) {
@@ -140,7 +141,6 @@ export function createCapacitorAppEvents(input: CreateCapacitorAppEventsInput): 
       warmUrlsBeforeInitial.add(url);
     }
     const event = { url, source: 'warm' } as const;
-    const callbacks = kind === 'game' ? gameUrlCallbacks : oauthCallbacks;
     for (const callback of [...callbacks]) {
       try {
         callback(event);

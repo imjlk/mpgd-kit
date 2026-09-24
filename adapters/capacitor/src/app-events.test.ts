@@ -210,6 +210,21 @@ describe('Capacitor App event ownership', () => {
     await events.dispose?.();
   });
 
+  it('preserves a cold URL when a warm event had no matching subscriber', async () => {
+    const fake = new FakeApp();
+    let finishLaunch: ((value: { url: string }) => void) | undefined;
+    fake.getLaunchUrl = () => new Promise((resolve) => { finishLaunch = resolve; });
+    const events = createCapacitorAppEvents({
+      target: 'ios', app: asApp(fake), visibility: null,
+      classifyIncomingUrl: () => 'game',
+    });
+    const cold = events.getInitialGameUrl?.();
+    fake.emit('appUrlOpen', { url: 'mpgd://game/unread' });
+    finishLaunch?.({ url: 'mpgd://game/unread' });
+    await expect(cold).resolves.toEqual({ url: 'mpgd://game/unread', source: 'cold' });
+    await events.dispose?.();
+  });
+
   it('lets the game handle back and applies fallback only when unhandled', async () => {
     const fake = new FakeApp();
     let historyBacks = 0;
