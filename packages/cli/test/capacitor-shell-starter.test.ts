@@ -271,6 +271,14 @@ try {
     originalConfig.replace('  appId:', '  // appId: "dev.other.game",\n  appId:'),
   );
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(
+    configFile,
+    originalConfig.replace(
+      '  server:',
+      '  plugins: { FacebookLogin: { appId: "social-provider", scopes: ["profile"] } },\n  server:',
+    ),
+  );
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   writeFileSync(configFile, originalConfig.replace('  appName:', '  ...overrides,\n  appName:'));
   assert.throws(() => planCapacitorShellStarter(options), /ambiguous dynamic syntax/u);
   writeFileSync(configFile, originalConfig.replace('  appName:', '  appName,\n  appName:'));
@@ -327,7 +335,7 @@ try {
   delete renamedMap.android;
   delete renamedMap.ios;
   writeJson('mpgd.targets.json', renamedTargets);
-  assert.deepEqual(planCapacitorShellStarter(options).nativePlatformsToAdd, []);
+  assert.throws(() => planCapacitorShellStarter(options), /canonical android target name/u);
   renamedMap.android = renamedMap['google-play'] ?? {};
   renamedMap.ios = renamedMap['app-store'] ?? {};
   delete renamedMap['google-play'];

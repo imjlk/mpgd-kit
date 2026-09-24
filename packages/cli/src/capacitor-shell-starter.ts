@@ -130,19 +130,19 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     'CLI TypeScript version',
   );
   const targetMap = requireObject(targets.targets, 'targets');
-  for (const [kind, identityKey] of [
-    ['capacitor-android', 'packageId'],
-    ['capacitor-ios', 'bundleId'],
+  for (const [targetName, kind, identityKey] of [
+    ['android', 'capacitor-android', 'packageId'],
+    ['ios', 'capacitor-ios', 'bundleId'],
   ] as const) {
-    const candidates = Object.entries(targetMap).filter(([, value]) =>
-      typeof value === 'object' && value !== null && !Array.isArray(value)
-      && (value as Record<string, unknown>).kind === kind,
-    );
-    if (candidates.length !== 1) {
-      throw new Error(`Expected exactly one ${kind} target; found ${candidates.length}.`);
+    if (targetMap[targetName] === undefined) {
+      throw new Error(
+        `Capacitor initialization requires the canonical ${targetName} target name used by the build CLI.`,
+      );
     }
-    const [targetName, candidate] = candidates[0] ?? [];
-    const target = requireObject(candidate, `${targetName} target`);
+    const target = requireObject(targetMap[targetName], `${targetName} target`);
+    if (target.kind !== kind) {
+      throw new Error(`${targetName} must be a ${kind} target.`);
+    }
     const configuredShell = requireString(target.shellApp, `${targetName}.shellApp`);
     if (configuredShell !== shellPath && configuredShell !== referenceShellPath) {
       throw new Error(`${targetName} already points at another shell; refusing to replace it.`);
@@ -679,16 +679,48 @@ function requireStaticCapacitorConfig(source: string): string {
     index += 1;
   }
   const configReferences = [...codeOnly.matchAll(/\bconfig\b/gu)].length;
+  const declaration = /\bconst\s+config\s*:\s*CapacitorConfig\s*=\s*\{/u.exec(codeOnly);
+  if (declaration?.index === undefined) {
+    throw new Error('Existing Capacitor config has ambiguous dynamic syntax.');
+  }
+  const opening = declaration.index + declaration[0].length - 1;
+  const topLevelSource = maskNestedConfig(withoutComments, codeOnly, opening);
+  const topLevelCode = maskNestedConfig(codeOnly, codeOnly, opening);
   const identityKeysAreUnique = (['appId', 'appName', 'webDir'] as const).every((key) =>
-    [...codeOnly.matchAll(new RegExp(`\\b${key}\\b`, 'gu'))].length === 1,
+    [...topLevelCode.matchAll(new RegExp(`\\b${key}\\b`, 'gu'))].length === 1,
   );
-  if (configReferences !== 2 || codeOnly.includes('...') || codeOnly.includes('[')
-    || !identityKeysAreUnique || /["'](?:appId|appName|webDir)["']\s*:/u.test(withoutComments)
-    || !/\bconst\s+config\s*:\s*CapacitorConfig\s*=\s*\{/u.test(codeOnly)
+  if (configReferences !== 2 || topLevelCode.includes('...') || topLevelCode.includes('[')
+    || !identityKeysAreUnique
+    || /^[ \t]*["'](?:appId|appName|webDir)["'][ \t]*:/mu.test(topLevelSource)
     || !/\bexport\s+default\s+config\s*;/u.test(codeOnly)) {
     throw new Error('Existing Capacitor config has ambiguous dynamic syntax.');
   }
-  return withoutComments;
+  return topLevelSource;
+}
+
+function maskNestedConfig(source: string, code: string, opening: number): string {
+  const output: string[] = source.split('').map((character) => character === '\n' ? '\n' : ' ');
+  let depth = 0;
+  for (let index = opening; index < code.length; index += 1) {
+    const character = code[index];
+    if (character === '{') {
+      depth += 1;
+      if (depth === 1) {
+        output[index] = source[index] ?? ' ';
+      }
+    } else if (character === '}') {
+      if (depth === 1) {
+        output[index] = source[index] ?? ' ';
+      }
+      depth -= 1;
+      if (depth === 0) {
+        return output.join('');
+      }
+    } else if (depth === 1) {
+      output[index] = source[index] ?? ' ';
+    }
+  }
+  throw new Error('Existing Capacitor config object is incomplete.');
 }
 
 function appendEnvLine(current: string, line: string): string {

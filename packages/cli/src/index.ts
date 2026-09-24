@@ -1566,6 +1566,9 @@ const targetCommand = defineI18n({
           for (const platform of plan.nativePlatformsToAdd) {
             console.info(`${dryRun ? 'Would add' : 'Added'} native platform: ${platform}`);
           }
+          console.info(
+            'File count covers managed shell files only; pnpm may also update root or shell lockfiles.',
+          );
           if (!dryRun) {
             console.info('Production native builds still require release identity and signing checks.');
           }

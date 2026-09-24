@@ -103,8 +103,16 @@ try {
     '--display-name',
     'External Game',
   ];
+  const preview = run(
+    command,
+    [...args, '--dry-run'],
+    packedCli === undefined ? kitRoot : gameRoot,
+  );
+  assert.match(preview, /pnpm may also update root or shell lockfiles/u);
+  assert.equal(existsSync(shell), false);
   const first = run(command, args, packedCli === undefined ? kitRoot : gameRoot);
   assert.match(first, /Updated game-owned Capacitor shell/u);
+  assert.match(first, /pnpm may also update root or shell lockfiles/u);
   assert.ok(existsSync(path.join(shell, 'android/app/build.gradle')));
   assert.ok(existsSync(path.join(shell, 'ios/App/App.xcodeproj/project.pbxproj')));
   assertNoKitReferences(shell);
