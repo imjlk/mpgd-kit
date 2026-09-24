@@ -18,7 +18,7 @@ tests to cite each confirmed section of
 Claim 5 uses a checklist so each selected guide must acknowledge each
 applicable [documentation principle](standards/documentation-principles.md).
 The source of truth for the claim definitions is the Evidence block in
-[`lint.config.js`](../lint.config.js).
+[`lint.config.js`](https://github.com/imjlk/mpgd-kit/blob/main/lint.config.js).
 
 This scope does **not** cover every `@mpgd/platform` export or the historical
 documents in `docs/`. It does not treat roadmap, proposal, operational, or
@@ -27,14 +27,16 @@ published entrypoint or subpath and a deliberately selected guide/spec/test
 population; do not use whichever symbols happen to appear in examples as the
 API inventory. Keep documentation, implementation, and test coverage in
 separate claims so one citation cannot satisfy another obligation.
+The `docs:evidence` command also checks that the claimed conformance source
+still backs the package's published `./capability-conformance` export.
 
 The follow-on example claim selects
-[`platform-capabilities.ts`](examples/platform-capabilities.ts) separately
+[`platform-capabilities.ts`](https://github.com/imjlk/mpgd-kit/blob/main/docs/examples/platform-capabilities.ts) separately
 from the platform test claim. Each spec section must therefore have an
 example citation as well as a test citation; neither population stands in for
-the other. Run `pnpm docs:examples:check` for TypeScript validity, then
-`pnpm build:packages @mpgd/platform` and `pnpm docs:examples:test` for the
-local behavior checks. These examples do not extend the enforced public API
+the other. Run `pnpm docs:examples:check` for TypeScript validity and
+`pnpm docs:examples:test` for source-backed local behavior checks. These
+examples do not validate the published tarball or extend the enforced public API
 inventory beyond the pilot subpath.
 
 ## Authoring and review
@@ -56,6 +58,21 @@ inventory beyond the pilot subpath.
   separately; Evidence is not a runtime test.
 
 The guide for this pilot is
-[`platform-capabilities.md`](guides/platform-capabilities.md). The scope is
-intentionally small; additional guides and a published site can reuse these
-same Markdown sources after their claims and examples are verified.
+[`platform-capabilities.md`](guides/platform-capabilities.md). The enforced
+scope is intentionally small; additional guides should join it only after
+their claims and examples are verified. The site can still label and display
+legacy reference material without treating it as a confirmed spec.
+
+## Site and CI
+
+Rspress builds the original files under `docs/` without copying their prose
+into another site tree. The index distinguishes enforced guides and specs from
+older integration notes and roadmaps. `pnpm docs:site:build` checks internal
+page links and anchors while building the static site.
+
+For PRs that change only `docs/**` or the root README, the main CI classifier
+skips package, browser, game, and native jobs; `docs-validation` runs Evidence,
+example type checks and source-backed tests, and the site/link build. Changes
+to the conformance implementation or its test still run normal code CI and
+documentation validation. A successful Evidence result or Pages deployment
+does not upgrade local checks into device or release verification.
