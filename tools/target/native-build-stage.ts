@@ -18,14 +18,32 @@ export function createNativeShellStage(input: {
   readonly webDir: string;
 }): NativeShellStage {
   const sourceShell = realpathSync(input.shellApp);
-  const sourceWeb = realpathSync(input.webDir);
-  if (!lstatSync(sourceShell).isDirectory() || !lstatSync(sourceWeb).isDirectory()) {
-    throw new Error('Native shell and web directory must be directories.');
+  const declaredShell = path.resolve(input.shellApp);
+  const declaredWeb = path.resolve(input.webDir);
+  if (!lstatSync(sourceShell).isDirectory()) {
+    throw new Error('Native shell must be a directory.');
   }
-  const webRelative = path.relative(sourceShell, sourceWeb);
+  const webRelative = path.relative(declaredShell, declaredWeb);
   if (webRelative === '' || webRelative.startsWith('..')
     || path.isAbsolute(webRelative)) {
     throw new Error('Native web directory must be inside its game-owned shell.');
+  }
+  const sourceWeb = path.join(sourceShell, webRelative);
+  let checkedPath = sourceShell;
+  for (const segment of webRelative.split(path.sep)) {
+    checkedPath = path.join(checkedPath, segment);
+    try {
+      if (lstatSync(checkedPath).isSymbolicLink()) {
+        throw new Error('Native web directory must not traverse a symbolic link.');
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+  if (existsSync(sourceWeb) && !lstatSync(sourceWeb).isDirectory()) {
+    throw new Error('Native web directory must be a directory when it exists.');
   }
   const stage = path.join(path.dirname(sourceShell), `.mpgd-native-stage-${randomUUID()}`);
   if (existsSync(stage)) {

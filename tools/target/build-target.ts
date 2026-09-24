@@ -39,6 +39,7 @@ import {
 import { assembleMiniGameArtifact, assertDisjointMiniGameTargetOutputs } from './minigame-artifact';
 import { wechatStagingAppId, writeWechatMiniGameProjectFiles } from './minigame-project-files';
 import { normalizeMonetizationCatalogEnv } from './monetization-catalog-env';
+import { inspectSignedAndroidBundle } from './native-android-inspection';
 import { beginNativeBuildAttempt } from './native-build-attempt';
 import { resolveNativeBuildPlan } from './native-build-mode';
 import { createNativeShellStage } from './native-build-stage';
@@ -418,15 +419,32 @@ try {
             `${androidProject}/app/build/outputs/apk/debug/app-debug.apk`,
             targetPath(releaseArtifact),
           );
-        } else if (nativePlan.mode === 'unsigned-archive') {
+        } else if (nativePlan.mode === 'unsigned-archive'
+          || nativePlan.mode === 'signed-archive') {
           run('./gradlew', ['bundleRelease', '--no-daemon'], env, androidProject);
           releaseArtifact = `${nativeArtifactRoot}/app-release.aab`;
           copyFile(
             `${androidProject}/app/build/outputs/bundle/release/app-release.aab`,
             targetPath(releaseArtifact),
           );
+          if (nativePlan.mode === 'signed-archive') {
+            inspectSignedAndroidBundle({
+              bundle: targetPath(releaseArtifact),
+              expectedPackageId: requireString(target.metadata?.packageId, 'Android package ID'),
+              expectedVersionCode: requireString(
+                env.MPGD_TARGET_VERSION_CODE,
+                'MPGD_TARGET_VERSION_CODE',
+              ),
+              expectedVersionName: requireString(
+                env.MPGD_TARGET_VERSION_NAME,
+                'MPGD_TARGET_VERSION_NAME',
+              ),
+              ...(env.MPGD_BUNDLETOOL_JAR === undefined
+                ? {} : { bundletoolJar: env.MPGD_BUNDLETOOL_JAR }),
+            });
+          }
         } else {
-          throw new Error('Signed Android bundle inspection is not configured yet.');
+          throw new Error(`Unsupported Android build mode: ${nativePlan.mode}.`);
         }
         writeManifest(targetName, profile, releaseArtifact, env);
         nativeAttempt.complete(releaseArtifact);

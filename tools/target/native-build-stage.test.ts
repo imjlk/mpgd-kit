@@ -55,6 +55,13 @@ try {
   }
   assert.equal(existsSync(first.shellApp), false);
   assert.equal(existsSync(second.shellApp), false);
+  const missingWeb = path.join(shell, 'future-web');
+  const missingStage = createNativeShellStage({ shellApp: shell, webDir: missingWeb });
+  try {
+    assert.equal(existsSync(missingStage.webDir), false);
+  } finally {
+    missingStage.dispose();
+  }
   assert.throws(
     () =>
       createNativeShellStage({
