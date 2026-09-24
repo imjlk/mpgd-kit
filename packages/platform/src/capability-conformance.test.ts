@@ -31,6 +31,43 @@ describe('platform gateway capability conformance', () => {
     ).rejects.toThrow('Duplicate platform capability conformance fixture: test-gateway.');
   });
 
+  it('accepts transitions that only change provider readiness', async () => {
+    let readiness: 'configuration-required' | 'temporarily-unavailable' = 'configuration-required';
+    const base = createUnsupportedCapabilities();
+    const fixture = {
+      ...createFixture(() => ({
+        ...base,
+        providerAvailability: { nativeIap: readiness },
+      }), {
+        update() { readiness = 'temporarily-unavailable'; },
+        expectedCapabilities: {
+          ...base,
+          providerAvailability: { nativeIap: 'temporarily-unavailable' },
+        },
+      }),
+      expectedCapabilities: {
+        ...base,
+        providerAvailability: { nativeIap: 'configuration-required' as const },
+      },
+    };
+    await expect(runPlatformGatewayCapabilityConformance({ fixtures: [fixture] }))
+      .resolves.toEqual({ passedFixtures: ['test-gateway'] });
+  });
+
+  it('rejects a provider-owned readiness record shared across snapshots', async () => {
+    const readiness = { nativeIap: 'unsupported' as const };
+    const base = createUnsupportedCapabilities();
+    const fixture = {
+      ...createFixture(() => ({ ...base, providerAvailability: readiness })),
+      expectedCapabilities: {
+        ...base,
+        providerAvailability: { nativeIap: 'unsupported' as const },
+      },
+    };
+    await expect(runPlatformGatewayCapabilityConformance({ fixtures: [fixture] }))
+      .rejects.toThrow('Platform gateway capability conformance failed: test-gateway.');
+  });
+
   it('rejects empty fixture names', async () => {
     const fixture = {
       ...createFixture(() => createUnsupportedCapabilities()),

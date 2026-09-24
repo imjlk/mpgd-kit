@@ -276,8 +276,29 @@ export interface LeaderboardAdapter {
   open(input?: { readonly leaderboardId?: string }): Promise<void>;
 }
 
+/** Readiness of an installed platform provider, independent of target policy. */
+export type PlatformProviderAvailability =
+  | 'unsupported'
+  | 'configuration-required'
+  | 'action-required'
+  | 'temporarily-unavailable'
+  | 'available';
+
+/** Existing capabilities and integrations annotated by optional providers. */
+export type PlatformProviderFeature =
+  | 'nativeIap'
+  | 'subscriptionIap'
+  | 'rewardedAds'
+  | 'interstitialAds'
+  | 'bannerAds'
+  | 'nativeLeaderboard'
+  | 'identityUpgrade'
+  | 'pushNotifications';
+
 export interface PlatformCapabilities {
   readonly nativeIap: boolean;
+  /** Optional for adapters published before subscription-specific support. */
+  readonly subscriptionIap?: boolean;
   readonly nativeAds: boolean;
   readonly rewardedAds: boolean;
   readonly interstitialAds: boolean;
@@ -291,6 +312,11 @@ export interface PlatformCapabilities {
   readonly socialShare: boolean;
   readonly haptics: boolean;
   readonly localizedContent: boolean;
+  /** Explains a false capability without claiming an unavailable SDK works. */
+  readonly providerAvailability?: Readonly<Partial<Record<
+    PlatformProviderFeature,
+    PlatformProviderAvailability
+  >>>;
 }
 
 export interface PlayerIdentity {

@@ -1,11 +1,18 @@
 import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge';
-import type { PlatformCapabilities, PlatformGateway, PlatformTarget } from '@mpgd/platform';
+import type {
+  PlatformCapabilities,
+  PlatformGateway,
+  PlatformProviderAvailability,
+  PlatformProviderFeature,
+  PlatformTarget,
+} from '@mpgd/platform';
 import {
   platformCapabilityKeys,
   runPlatformGatewayCapabilityConformance,
   type PlatformGatewayCapabilityConformanceFixture,
 } from '@mpgd/platform/capability-conformance';
 import {
+  applyTargetConfigToCapabilities,
   getTargetConfig,
   withTargetAvailability,
   type TargetConfig,
@@ -294,15 +301,45 @@ function createBridgeGateway(
       ? createAitPlatformGateway(commonInput)
       : createDevvitPlatformGateway(commonInput);
 
+  const expectedInitial = configTarget === 'android' || configTarget === 'ios'
+    ? withoutCapacitorProviders(initialBridgeCapabilities)
+    : initialBridgeCapabilities;
+  const expectedUpdated = configTarget === 'android' || configTarget === 'ios'
+    ? withoutCapacitorProviders(updatedBridgeCapabilities)
+    : updatedBridgeCapabilities;
+
   return {
     gateway,
-    expectedCapabilities: initialBridgeCapabilities,
+    expectedCapabilities: expectedInitial,
     transition: {
       update() {
         mutableBridge.setCapabilities(updatedBridgeCapabilities);
       },
-      expectedCapabilities: updatedBridgeCapabilities,
+      expectedCapabilities: expectedUpdated,
     },
+  };
+}
+
+function withoutCapacitorProviders(base: PlatformCapabilities): PlatformCapabilities {
+  return {
+    ...base,
+    nativeIap: false,
+    subscriptionIap: false,
+    nativeAds: false,
+    rewardedAds: false,
+    interstitialAds: false,
+    bannerAds: false,
+    nativeLeaderboard: false,
+    providerAvailability: {
+      nativeIap: 'unsupported',
+      subscriptionIap: 'unsupported',
+      rewardedAds: 'unsupported',
+      interstitialAds: 'unsupported',
+      bannerAds: 'unsupported',
+      nativeLeaderboard: 'unsupported',
+      identityUpgrade: 'unsupported',
+      pushNotifications: 'unsupported',
+    } satisfies Readonly<Record<PlatformProviderFeature, PlatformProviderAvailability>>,
   };
 }
 
@@ -338,23 +375,7 @@ function maskCapabilities(
   capabilities: PlatformCapabilities,
   config: TargetConfig,
 ): PlatformCapabilities {
-  return {
-    ...capabilities,
-    nativeIap: capabilities.nativeIap && config.features.iap,
-    nativeAds:
-      capabilities.nativeAds
-      && (
-        config.features.bannerAds === true
-        || config.features.rewardedAds
-        || config.features.interstitialAds
-      ),
-    bannerAds: capabilities.bannerAds === true && config.features.bannerAds === true,
-    rewardedAds: capabilities.rewardedAds && config.features.rewardedAds,
-    interstitialAds: capabilities.interstitialAds && config.features.interstitialAds,
-    nativeLeaderboard: capabilities.nativeLeaderboard && config.features.leaderboard,
-    remoteLeaderboard: capabilities.remoteLeaderboard && config.features.leaderboard,
-    localizedContent: capabilities.localizedContent && config.features.localization,
-  };
+  return applyTargetConfigToCapabilities(capabilities, config);
 }
 
 function assertCapabilitiesEqual(

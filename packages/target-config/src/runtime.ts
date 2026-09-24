@@ -1,14 +1,21 @@
 import type { MpgdLocale } from '@mpgd/i18n';
-import type { PlatformCapabilities, PlatformGateway } from '@mpgd/platform';
+import type {
+  PlatformCapabilities,
+  PlatformGateway,
+  PlatformProviderAvailability,
+} from '@mpgd/platform';
 
 import type { EffectiveTargetConfig } from './effective.js';
 
 export type PlatformFeature =
   | 'iap'
+  | 'subscriptions'
   | 'bannerAds'
   | 'rewardedAds'
   | 'interstitialAds'
   | 'leaderboard'
+  | 'nativeLeaderboard'
+  | 'remoteLeaderboard'
   | 'localization';
 
 export type AdPlacementType = 'rewarded' | 'interstitial' | 'banner';
@@ -56,7 +63,9 @@ export type IntegrationAvailabilityState =
   | 'available'
   | 'disabled'
   | 'approval-required'
+  | 'action-required'
   | 'configuration-required'
+  | 'temporarily-unavailable'
   | 'unsupported';
 
 export type PresentationMode = 'fullscreen' | 'inline-expanded';
@@ -72,11 +81,16 @@ export interface TargetIntegrationConfig {
 
 export interface TargetFeatureConfig {
   readonly iap: boolean;
+  /** Optional for matrices authored before subscriptions were distinct. */
+  readonly subscriptions?: boolean;
   /** Optional for target matrices authored before inline banner support. */
   readonly bannerAds?: boolean;
   readonly rewardedAds: boolean;
   readonly interstitialAds: boolean;
   readonly leaderboard: boolean;
+  /** Optional narrower policies; absent values inherit leaderboard. */
+  readonly nativeLeaderboard?: boolean;
+  readonly remoteLeaderboard?: boolean;
   readonly localization: boolean;
 }
 
@@ -133,7 +147,10 @@ export interface TargetConfigMatrix {
 export type FeatureAvailabilityReason =
   | 'available'
   | 'target-disabled'
-  | 'capability-unsupported';
+  | 'capability-unsupported'
+  | 'configuration-required'
+  | 'action-required'
+  | 'temporarily-unavailable';
 
 export interface FeatureAvailability {
   readonly feature: PlatformFeature;
@@ -190,10 +207,13 @@ export interface TargetConfiguredGateway extends PlatformGateway {
 
 export const platformFeatures = [
   'iap',
+  'subscriptions',
   'bannerAds',
   'rewardedAds',
   'interstitialAds',
   'leaderboard',
+  'nativeLeaderboard',
+  'remoteLeaderboard',
   'localization',
 ] as const satisfies readonly PlatformFeature[];
 
@@ -251,7 +271,9 @@ const integrationAvailabilityStateValues = [
   'available',
   'disabled',
   'approval-required',
+  'action-required',
   'configuration-required',
+  'temporarily-unavailable',
   'unsupported',
 ] as const satisfies readonly IntegrationAvailabilityState[];
 export const integrationAvailabilityStates: CompleteValueList<
@@ -387,7 +409,18 @@ export function isPlatformFeatureEnabled(
   config: TargetConfig,
   feature: PlatformFeature,
 ): boolean {
-  return config.features[feature] === true;
+  switch (feature) {
+    case 'subscriptions':
+      return config.features.iap && config.features.subscriptions === true;
+    case 'nativeLeaderboard':
+      return config.features.leaderboard
+        && (config.features.nativeLeaderboard ?? config.leaderboard.native);
+    case 'remoteLeaderboard':
+      return config.features.leaderboard
+        && (config.features.remoteLeaderboard ?? true);
+    default:
+      return config.features[feature] === true;
+  }
 }
 
 export function applyTargetConfigToCapabilities(
@@ -401,14 +434,17 @@ export function applyTargetConfigToCapabilities(
   return {
     ...capabilities,
     nativeIap: capabilities.nativeIap && config.features.iap,
+    ...(capabilities.subscriptionIap === undefined
+      ? {}
+      : { subscriptionIap: capabilities.subscriptionIap && isPlatformFeatureEnabled(config, 'subscriptions') }),
     nativeAds:
       capabilities.nativeAds &&
       (bannerAds || rewardedAds || interstitialAds),
     bannerAds,
     rewardedAds,
     interstitialAds,
-    nativeLeaderboard: capabilities.nativeLeaderboard && config.features.leaderboard,
-    remoteLeaderboard: capabilities.remoteLeaderboard && config.features.leaderboard,
+    nativeLeaderboard: capabilities.nativeLeaderboard && isPlatformFeatureEnabled(config, 'nativeLeaderboard'),
+    remoteLeaderboard: capabilities.remoteLeaderboard && isPlatformFeatureEnabled(config, 'remoteLeaderboard'),
     localizedContent: capabilities.localizedContent && config.features.localization,
   };
 }
@@ -418,16 +454,27 @@ export function getFeatureAvailability(
   config: TargetConfig,
   capabilities: PlatformCapabilities,
 ): FeatureAvailability {
-  const targetEnabled = config.features[feature] === true;
-  const capabilitySupported = isFeatureCapabilitySupported(feature, capabilities);
-  const enabled = targetEnabled && capabilitySupported;
+  const targetEnabled = isPlatformFeatureEnabled(config, feature);
+  const capabilitySupported = isFeatureCapabilitySupported(feature, capabilities, config);
+  const providerState = getFeatureProviderAvailability(feature, capabilities, config);
+  const enabled = targetEnabled && capabilitySupported && (
+    providerState === undefined || providerState === 'available'
+  );
 
   return {
     feature,
     enabled,
     targetEnabled,
     capabilitySupported,
-    reason: enabled ? 'available' : targetEnabled ? 'capability-unsupported' : 'target-disabled',
+    reason: !targetEnabled
+      ? 'target-disabled'
+      : enabled
+        ? 'available'
+        : providerState === 'configuration-required'
+          || providerState === 'action-required'
+          || providerState === 'temporarily-unavailable'
+          ? providerState
+          : 'capability-unsupported',
   };
 }
 
@@ -435,9 +482,15 @@ export function getIntegrationAvailability(
   integration: TargetIntegration,
   config: TargetConfig,
   gateway?: PlatformGateway,
+  capabilities?: PlatformCapabilities,
 ): IntegrationAvailability {
   const integrations = normalizeTargetIntegrationConfig(config.integrations);
-  return createIntegrationAvailability(integration, integrations[integration], gateway);
+  return createIntegrationAvailability(
+    integration,
+    integrations[integration],
+    gateway,
+    capabilities,
+  );
 }
 
 export function createTargetRuntimeSnapshot(input: {
@@ -453,6 +506,7 @@ export function createTargetRuntimeSnapshot(input: {
   const availabilityConfig = resolveAvailabilityConfig(input.config, input.effectiveConfig);
   const features = {
     iap: getFeatureAvailability('iap', availabilityConfig, input.capabilities),
+    subscriptions: getFeatureAvailability('subscriptions', availabilityConfig, input.capabilities),
     bannerAds: getFeatureAvailability('bannerAds', availabilityConfig, input.capabilities),
     rewardedAds: getFeatureAvailability('rewardedAds', availabilityConfig, input.capabilities),
     interstitialAds: getFeatureAvailability(
@@ -461,6 +515,16 @@ export function createTargetRuntimeSnapshot(input: {
       input.capabilities,
     ),
     leaderboard: getFeatureAvailability('leaderboard', availabilityConfig, input.capabilities),
+    nativeLeaderboard: getFeatureAvailability(
+      'nativeLeaderboard',
+      availabilityConfig,
+      input.capabilities,
+    ),
+    remoteLeaderboard: getFeatureAvailability(
+      'remoteLeaderboard',
+      availabilityConfig,
+      input.capabilities,
+    ),
     localization: getFeatureAvailability('localization', availabilityConfig, input.capabilities),
   } satisfies Record<PlatformFeature, FeatureAvailability>;
   const integrationConfig = normalizeTargetIntegrationConfig(
@@ -471,6 +535,7 @@ export function createTargetRuntimeSnapshot(input: {
       integration,
       integrationConfig[integration],
       input.gateway,
+      input.capabilities,
     );
 
     return [integration, availability] as const;
@@ -554,16 +619,29 @@ export function withTargetAvailability(
           ...(exposeInboundShare ? { readInboundShare } : {}),
         };
   const notifications = notificationsAvailable ? gatewayNotifications : undefined;
-  const isIapAvailable = async (): Promise<boolean> => (
-    availabilityConfig.features.iap && (await getGatewayCapabilities()).nativeIap
-  );
+  const getIapAvailability = async () => {
+    const oneTimeEnabled = availabilityConfig.features.iap;
+    const subscriptionsEnabled = isPlatformFeatureEnabled(availabilityConfig, 'subscriptions');
+    if (!oneTimeEnabled && !subscriptionsEnabled) {
+      return { oneTime: false, subscriptions: false };
+    }
+    const capabilities = await getGatewayCapabilities();
+    return {
+      oneTime: oneTimeEnabled && capabilities.nativeIap,
+      subscriptions: subscriptionsEnabled && capabilities.subscriptionIap === true,
+    };
+  };
   const isLeaderboardAvailable = async (): Promise<boolean> => {
     if (!availabilityConfig.features.leaderboard) {
       return false;
     }
 
     const capabilities = await getGatewayCapabilities();
-    return capabilities.nativeLeaderboard || capabilities.remoteLeaderboard;
+    return (
+      capabilities.nativeLeaderboard && isPlatformFeatureEnabled(availabilityConfig, 'nativeLeaderboard')
+    ) || (
+      capabilities.remoteLeaderboard && isPlatformFeatureEnabled(availabilityConfig, 'remoteLeaderboard')
+    );
   };
   const isAdPlacementAllowed = (
     placementId: string,
@@ -627,10 +705,29 @@ export function withTargetAvailability(
     },
     commerce: {
       async getProducts() {
-        return await isIapAvailable() ? gateway.commerce.getProducts() : [];
+        const available = await getIapAvailability();
+        if (!available.oneTime && !available.subscriptions) {
+          return [];
+        }
+        return (await gateway.commerce.getProducts()).filter((product) =>
+          product.type === 'subscription' ? available.subscriptions : available.oneTime,
+        );
       },
       async purchase(input) {
-        if (!await isIapAvailable()) {
+        const available = await getIapAvailability();
+        let productType = options.effectiveConfig?.monetization.products.find(
+          (product) => product.id === input.productId,
+        )?.type;
+        if (productType === undefined && available.subscriptions) {
+          productType = (await gateway.commerce.getProducts()).find(
+            (product) => product.id === input.productId,
+          )?.type;
+        }
+        // A subscription-only provider must not handle an unknown product.
+        const allowed = productType === 'subscription'
+          ? available.subscriptions
+          : available.oneTime;
+        if (!allowed) {
           return {
             status: 'cancelled',
             entitlementIds: [],
@@ -640,7 +737,8 @@ export function withTargetAvailability(
         return gateway.commerce.purchase(input);
       },
       async restore() {
-        if (!await isIapAvailable() || gateway.commerce.restore === undefined) {
+        const available = await getIapAvailability();
+        if ((!available.oneTime && !available.subscriptions) || gateway.commerce.restore === undefined) {
           return {
             restoredEntitlements: [],
           };
@@ -649,7 +747,10 @@ export function withTargetAvailability(
         return gateway.commerce.restore();
       },
       async getEntitlements() {
-        return await isIapAvailable() ? gateway.commerce.getEntitlements() : [];
+        const available = await getIapAvailability();
+        return available.oneTime || available.subscriptions
+          ? gateway.commerce.getEntitlements()
+          : [];
       },
     },
     ads: {
@@ -736,10 +837,13 @@ export function isTargetConfiguredGateway(
 function isFeatureCapabilitySupported(
   feature: PlatformFeature,
   capabilities: PlatformCapabilities,
+  config: TargetConfig,
 ): boolean {
   switch (feature) {
     case 'iap':
       return capabilities.nativeIap;
+    case 'subscriptions':
+      return capabilities.subscriptionIap === true;
     case 'bannerAds':
       return capabilities.bannerAds === true;
     case 'rewardedAds':
@@ -747,9 +851,53 @@ function isFeatureCapabilitySupported(
     case 'interstitialAds':
       return capabilities.interstitialAds;
     case 'leaderboard':
-      return capabilities.nativeLeaderboard || capabilities.remoteLeaderboard;
+      return (
+        capabilities.nativeLeaderboard && isPlatformFeatureEnabled(config, 'nativeLeaderboard')
+      ) || (
+        capabilities.remoteLeaderboard && isPlatformFeatureEnabled(config, 'remoteLeaderboard')
+      );
+    case 'nativeLeaderboard':
+      return capabilities.nativeLeaderboard;
+    case 'remoteLeaderboard':
+      return capabilities.remoteLeaderboard;
     case 'localization':
       return capabilities.localizedContent;
+  }
+}
+
+function getFeatureProviderAvailability(
+  feature: PlatformFeature,
+  capabilities: PlatformCapabilities,
+  config: TargetConfig,
+): PlatformProviderAvailability | undefined {
+  const states = capabilities.providerAvailability;
+  if (states === undefined) {
+    return undefined;
+  }
+
+  switch (feature) {
+    case 'iap':
+      return states.nativeIap;
+    case 'subscriptions':
+      return states.subscriptionIap;
+    case 'rewardedAds':
+      return states.rewardedAds;
+    case 'interstitialAds':
+      return states.interstitialAds;
+    case 'bannerAds':
+      return states.bannerAds;
+    case 'nativeLeaderboard':
+      return states.nativeLeaderboard;
+    case 'leaderboard':
+      // A game-owned remote leaderboard remains usable without a native provider.
+      return capabilities.remoteLeaderboard && isPlatformFeatureEnabled(config, 'remoteLeaderboard')
+        ? 'available'
+        : isPlatformFeatureEnabled(config, 'nativeLeaderboard')
+          ? states.nativeLeaderboard
+          : undefined;
+    case 'remoteLeaderboard':
+    case 'localization':
+      return undefined;
   }
 }
 
@@ -785,12 +933,25 @@ function createIntegrationAvailability(
   integration: TargetIntegration,
   configuredState: IntegrationAvailabilityState,
   gateway: PlatformGateway | undefined,
+  capabilities?: PlatformCapabilities,
 ): IntegrationAvailability {
   const adapterSupported = isIntegrationAdapterSupported(integration, gateway);
+  const providerState = integration === 'identityUpgrade'
+    ? capabilities?.providerAvailability?.identityUpgrade
+    : integration === 'notifications'
+      ? capabilities?.providerAvailability?.pushNotifications
+      : undefined;
+  const state = configuredState === 'disabled' || configuredState === 'unsupported'
+    ? configuredState
+    : !adapterSupported || providerState === 'unsupported'
+      ? 'unsupported'
+      : providerState !== undefined && providerState !== 'available'
+        ? providerState
+        : configuredState;
 
   return {
     integration,
-    state: adapterSupported ? configuredState : 'unsupported',
+    state,
     configuredState,
     adapterSupported,
   };

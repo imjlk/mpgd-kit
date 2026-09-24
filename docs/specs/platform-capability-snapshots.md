@@ -9,7 +9,10 @@ a physical device or is ready for release.
 
 Every `getCapabilities()` read must return a new object with every required
 `PlatformCapabilities` key, no unknown keys, and boolean values. `bannerAds` is
-optional and is treated as `false` when absent. Mutating or retaining one
+optional and is treated as `false` when absent; `subscriptionIap` follows the
+same rule. The optional `providerAvailability` record contains per-feature
+readiness states and is compared with the fixture's expected provider state,
+not treated as a boolean capability. Mutating or retaining one
 snapshot must not change the result of the next read. The runner compares each
 read with the fixture's expected provider state.
 

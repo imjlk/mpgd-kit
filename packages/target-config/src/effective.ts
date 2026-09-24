@@ -65,6 +65,7 @@ export interface EffectiveAdPlacementConfig {
 
 export interface EffectiveMonetizationConfig {
   readonly iap: boolean;
+  readonly subscriptions?: boolean;
   readonly products: readonly EffectiveProductConfig[];
 }
 
@@ -133,6 +134,7 @@ export interface CreateEffectiveTargetConfigMatrixInput {
 export const defaultLeaderboardId = 'default';
 const disabledAuthoritativeMonetization = {
   iap: false,
+  subscriptions: false,
   bannerAds: false,
   rewardedAds: false,
   interstitialAds: false,
@@ -184,6 +186,9 @@ export function createEffectiveTargetConfig(
     },
     monetization: {
       iap: config.monetization.iap,
+      subscriptions: config.features.iap
+        && config.features.subscriptions === true
+        && config.monetization.iap,
       products,
     },
     ads: {
@@ -280,7 +285,7 @@ function createEffectiveProductConfig(
   const platformProductId = resolveProductPlatformId(product, target);
   const reason = effectiveProductReason(
     config.runtime,
-    config.features.iap,
+    config.features.iap && (product.type !== 'subscription' || config.features.subscriptions === true),
     product,
     platformProductId,
   );

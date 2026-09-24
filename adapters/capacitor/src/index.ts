@@ -1,9 +1,4 @@
-import {
-  decodeBridgeStorageLoadData,
-  type BridgeMethod,
-  type BridgeRequest,
-  type BridgeResponse,
-} from '@mpgd/bridge';
+import { decodeBridgeStorageLoadData, type BridgeMethod } from '@mpgd/bridge';
 import { CapacitorGameServices } from '@mpgd/capacitor-game-services';
 import {
   PlatformOperationError,
@@ -19,10 +14,18 @@ import {
   type PresentationResult,
   type ShareResult,
 } from '@mpgd/platform';
+import {
+  assertProviderResponseData,
+  createCapacitorProviderRegistry,
+  type CapacitorServiceProvider,
+  type NativeBridge,
+} from './providers.js';
 
-export interface NativeBridge {
-  request(input: BridgeRequest): Promise<BridgeResponse>;
-}
+export {
+  createCapacitorProviderRegistry,
+  type CapacitorServiceProvider,
+  type NativeBridge,
+} from './providers.js';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -33,12 +36,32 @@ export function createCapacitorPlatformGateway(input: {
   readonly appVersion: string;
   readonly buildId: string;
   readonly bridge?: NativeBridge;
+  readonly providers?: readonly CapacitorServiceProvider[];
 }): PlatformGateway {
   const bridge = input.bridge ?? CapacitorGameServices;
+  const providers = createCapacitorProviderRegistry(input.providers ?? []);
 
   async function request<TData>(method: BridgeMethod, payload: unknown): Promise<TData> {
     const id = crypto.randomUUID();
-    const response: unknown = await bridge.request({
+    let provider = providers.byMethod.get(method);
+    if (provider !== undefined) {
+      try {
+        await providers.assertMethodReady(method);
+      } catch (error) {
+        // An unconfigured or failed optional identity/push provider must not
+        // prevent guest boot or a status query through the base bridge.
+        if (
+          error instanceof PlatformOperationError
+          && (method === 'identity.getPlayer' || method === 'identity.getSession'
+            || method === 'notifications.getStatus')
+        ) {
+          provider = undefined;
+        } else {
+          throw error;
+        }
+      }
+    }
+    const response: unknown = await (provider?.bridge ?? bridge).request({
       id,
       method,
       payload,
@@ -64,6 +87,9 @@ export function createCapacitorPlatformGateway(input: {
           message: `Native bridge omitted response data for ${method}.`,
         });
       }
+      if (provider !== undefined) {
+        assertProviderResponseData(method, response.data);
+      }
       return response.data as TData;
     }
 
@@ -85,7 +111,22 @@ export function createCapacitorPlatformGateway(input: {
   return {
     target: input.target,
     async getCapabilities() {
-      return { ...await request<PlatformCapabilities>('runtime.getCapabilities', {}) };
+      const base = await request<PlatformCapabilities>('runtime.getCapabilities', {});
+      const states = await providers.getAvailability();
+      const rewardedAds = states.rewardedAds === 'available';
+      const interstitialAds = states.interstitialAds === 'available';
+      const bannerAds = states.bannerAds === 'available';
+      return {
+        ...base,
+        nativeIap: states.nativeIap === 'available',
+        subscriptionIap: states.subscriptionIap === 'available',
+        nativeAds: rewardedAds || interstitialAds || bannerAds,
+        rewardedAds,
+        interstitialAds,
+        bannerAds,
+        nativeLeaderboard: states.nativeLeaderboard === 'available',
+        providerAvailability: states,
+      };
     },
     identity: {
       getPlayer: () => request('identity.getPlayer', {}),
@@ -118,6 +159,8 @@ export function createCapacitorPlatformGateway(input: {
       preload: (payload) => request('ads.preload', payload),
       showRewarded: (payload) => request('ads.showRewarded', payload),
       showInterstitial: (payload) => request('ads.showInterstitial', payload),
+      mountBanner: (payload) => request('ads.mountBanner', payload),
+      unmountBanner: (payload) => request('ads.unmountBanner', payload),
     },
     leaderboard: {
       submitScore: (payload) => request('leaderboard.submitScore', payload),

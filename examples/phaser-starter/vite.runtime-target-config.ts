@@ -44,7 +44,9 @@ const integrationAvailabilityValues = valueSet({
   available: true,
   disabled: true,
   'approval-required': true,
+  'action-required': true,
   'configuration-required': true,
+  'temporarily-unavailable': true,
   unsupported: true,
 } satisfies Record<IntegrationAvailabilityState, true>);
 const presentationModeValues = valueSet({

@@ -11,11 +11,12 @@ import {
 } from '../../packages/target-config/src/effective';
 import {
   getTargetConfig,
+  isPlatformFeatureEnabled,
   isTargetConfiguredGateway,
   normalizeTargetIntegrationConfig,
+  platformFeatures,
   targetIntegrations,
   withTargetAvailability,
-  type PlatformFeature,
   type TargetConfigMatrix,
   type TargetConfiguredGateway,
 } from '../../packages/target-config/src/runtime';
@@ -27,13 +28,6 @@ const targetConfigMatrix = readJsonFile(
 const adPlacements = readJsonFile('packages/catalog/placements.json') as AdPlacements;
 const productCatalog = readJsonFile('packages/catalog/catalog.json') as ProductCatalog;
 
-const platformFeatures = [
-  'iap',
-  'rewardedAds',
-  'interstitialAds',
-  'leaderboard',
-  'localization',
-] as const satisfies readonly PlatformFeature[];
 const configTargets = [
   'web-preview',
   'microsoft-store',
@@ -93,7 +87,7 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
 
     assertEqual(
       featureRuntime.targetEnabled,
-      config.features[feature],
+      isPlatformFeatureEnabled(config, feature),
       `${configTarget} ${feature} config should match`,
     );
     assertEqual(

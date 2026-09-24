@@ -16,14 +16,16 @@ export const platformCapabilityKeys = Object.freeze([
 
 export const optionalPlatformCapabilityKeys = Object.freeze([
   'bannerAds',
+  'subscriptionIap',
 ] as const satisfies readonly (keyof PlatformCapabilities)[]);
 const allowedPlatformCapabilityKeys = Object.freeze([
   ...platformCapabilityKeys,
   ...optionalPlatformCapabilityKeys,
 ] as const satisfies readonly (keyof PlatformCapabilities)[]);
-const allowedPlatformCapabilityKeySet = new Set<keyof PlatformCapabilities>(
-  allowedPlatformCapabilityKeys,
-);
+const allowedPlatformCapabilityKeySet = new Set<keyof PlatformCapabilities>([
+  ...allowedPlatformCapabilityKeys,
+  'providerAvailability',
+]);
 const optionalPlatformCapabilityKeySet = new Set<keyof PlatformCapabilities>(
   optionalPlatformCapabilityKeys,
 );
@@ -104,10 +106,10 @@ async function runFixture(
 ): Promise<void> {
   // A fixture may accidentally share its expected object with the provider.
   // Keep the oracle independent before tryMutateSnapshot probes isolation.
-  const initialExpected = { ...fixture.expectedCapabilities };
+  const initialExpected = cloneExpectedCapabilities(fixture.expectedCapabilities);
   const transitionExpected = fixture.transition === undefined
     ? undefined
-    : { ...fixture.transition.expectedCapabilities };
+    : cloneExpectedCapabilities(fixture.transition.expectedCapabilities);
   assertEqual(
     fixture.gateway.target,
     fixture.expectedTarget,
@@ -173,6 +175,24 @@ function assertCapabilitySnapshot(
       `capability ${key} must match the expected provider state`,
     );
   }
+  assertEqual(
+    normalizedAvailability(actual.providerAvailability),
+    normalizedAvailability(expected.providerAvailability),
+    'provider availability must match the expected provider state',
+  );
+}
+
+function cloneExpectedCapabilities(value: PlatformCapabilities): PlatformCapabilities {
+  return {
+    ...value,
+    ...(value.providerAvailability === undefined
+      ? {}
+      : { providerAvailability: { ...value.providerAvailability } }),
+  };
+}
+
+function normalizedAvailability(value: PlatformCapabilities['providerAvailability']): string {
+  return JSON.stringify(Object.entries(value ?? {}).sort(([a], [b]) => a.localeCompare(b)));
 }
 
 function tryMutateSnapshot(snapshot: PlatformCapabilities): void {
@@ -181,6 +201,16 @@ function tryMutateSnapshot(snapshot: PlatformCapabilities): void {
   } catch {
     // Frozen snapshots already satisfy the isolation requirement.
   }
+  if (snapshot.providerAvailability !== undefined) {
+    try {
+      const next = snapshot.providerAvailability.nativeIap === 'available'
+        ? 'unsupported'
+        : 'available';
+      Reflect.set(snapshot.providerAvailability, 'nativeIap', next);
+    } catch {
+      // A frozen nested readiness record already satisfies isolation.
+    }
+  }
 }
 
 function hasCapabilityDifference(
@@ -188,7 +218,9 @@ function hasCapabilityDifference(
   second: PlatformCapabilities,
 ): boolean {
   return allowedPlatformCapabilityKeys
-    .some((key) => (first[key] ?? false) !== (second[key] ?? false));
+    .some((key) => (first[key] ?? false) !== (second[key] ?? false))
+    || normalizedAvailability(first.providerAvailability)
+      !== normalizedAvailability(second.providerAvailability);
 }
 
 function assert(condition: unknown, message: string): asserts condition {
