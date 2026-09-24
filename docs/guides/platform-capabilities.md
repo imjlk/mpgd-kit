@@ -33,8 +33,9 @@ to distinguish temporary bridge trouble from missing setup; otherwise fail
 closed. Keep handling operation failure even after a successful `true` read.
 
 See the type-checked
-[`canOfferRewardedAd` example](../examples/platform-capabilities.ts) for a
-decision-point read. Handle an actual ad operation result separately.
+[`readRewardedAdAvailability` example](../examples/platform-capabilities.ts)
+for a decision-point read that keeps a rejected bridge call distinct from a
+resolved `false` flag. Handle an actual ad operation result separately.
 
 ## Verify a gateway fixture
 

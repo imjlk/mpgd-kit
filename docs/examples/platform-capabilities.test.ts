@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { createUnsupportedCapabilities, type PlatformGateway } from '@mpgd/platform';
 
 import {
-  canOfferRewardedAd,
   readCloudSaveTransition,
+  readRewardedAdAvailability,
   verifyCapabilityFixture,
 } from './platform-capabilities';
 
@@ -17,9 +17,23 @@ describe('published platform capability examples', () => {
       },
     } satisfies Pick<PlatformGateway, 'getCapabilities'>;
 
-    await expect(canOfferRewardedAd(gateway)).resolves.toBe(false);
+    await expect(readRewardedAdAvailability(gateway)).resolves.toEqual({ status: 'unavailable' });
     rewardedAds = true;
-    await expect(canOfferRewardedAd(gateway)).resolves.toBe(true);
+    await expect(readRewardedAdAvailability(gateway)).resolves.toEqual({ status: 'available' });
+  });
+
+  it('keeps a rejected capability read distinct from false', async () => {
+    const failure = new Error('bridge unavailable');
+    const gateway = {
+      async getCapabilities(): Promise<never> {
+        throw failure;
+      },
+    } satisfies Pick<PlatformGateway, 'getCapabilities'>;
+
+    await expect(readRewardedAdAvailability(gateway)).resolves.toEqual({
+      status: 'unknown',
+      error: failure,
+    });
   });
 
   it('reads a changed provider after an update', async () => {

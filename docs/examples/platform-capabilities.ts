@@ -5,16 +5,24 @@ import {
   type PlatformGatewayCapabilityConformanceReport,
 } from '@mpgd/platform/capability-conformance';
 
+export type RewardedAdAvailability =
+  | { readonly status: 'available' | 'unavailable' }
+  | { readonly status: 'unknown'; readonly error: unknown };
+
 /**
- * Read at the decision point, rather than caching the provider state at startup.
- * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Gets the current snapshot for this decision.
- * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f83948b Checked that a fresh getCapabilities call supplies the current rewarded-ad flag.
+ * Read at the decision point and keep a failed read distinct from a false flag.
+ * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Gets the current snapshot for this decision, if the read succeeds.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f83948b Checked the fresh read and separate unknown state after a rejection.
  */
-export async function canOfferRewardedAd(
+export async function readRewardedAdAvailability(
   gateway: Pick<PlatformGateway, 'getCapabilities'>,
-): Promise<boolean> {
-  const capabilities = await gateway.getCapabilities();
-  return capabilities.rewardedAds;
+): Promise<RewardedAdAvailability> {
+  try {
+    const capabilities = await gateway.getCapabilities();
+    return { status: capabilities.rewardedAds ? 'available' : 'unavailable' };
+  } catch (error) {
+    return { status: 'unknown', error };
+  }
 }
 
 /**
