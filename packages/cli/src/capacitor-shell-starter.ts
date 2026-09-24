@@ -16,7 +16,11 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { isNonPublicServiceHostname } from './production-target-readiness.js';
-import { assertNativeShellIdentity, stripGradleComments } from './native-shell-identity.js';
+import {
+  assertNativeShellIdentity,
+  readIosReleaseInfoPlist,
+  stripGradleComments,
+} from './native-shell-identity.js';
 
 const shellPath = 'apps/mobile-capacitor';
 const webPath = `${shellPath}/www`;
@@ -334,9 +338,6 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
         : current,
     });
   }
-  const files = requestedFiles.filter(
-    (file) => readExisting(path.join(gameRoot, file.path)) !== file.content,
-  );
   const nativePlatformsToAdd = (['android', 'ios'] as const).filter((platform) => {
     const nativeDirectory = path.join(gameRoot, shellPath, platform);
     if (!existsSync(nativeDirectory)) {
@@ -345,6 +346,16 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     assertNativePlatformComplete(gameRoot, platform, input.appId, input.displayName);
     return false;
   });
+  if (existsSync(path.join(gameRoot, shellPath, 'ios'))) {
+    const smokePath = `${shellPath}/ios/App/App/Info-Smoke.plist`;
+    safeDestination(gameRoot, smokePath);
+    if (readExisting(path.join(gameRoot, smokePath)) === undefined) {
+      requestedFiles.push({ path: smokePath, content: smokeInfoPlist(input.displayName) });
+    }
+  }
+  const files = requestedFiles.filter(
+    (file) => readExisting(path.join(gameRoot, file.path)) !== file.content,
+  );
   return {
     gameRoot,
     files,
@@ -468,6 +479,17 @@ export function materializeCapacitorShellStarter(
       runner.run('pnpm', ['--dir', shellPath, 'cap', 'add', platform], plan.gameRoot);
     }
     const manifest = readJsonObject(path.join(plan.gameRoot, shellPath, 'mpgd.native-shell.json'));
+    if (platform === 'ios') {
+      const relative = `${shellPath}/ios/App/App/Info-Smoke.plist`;
+      const destination = safeDestination(plan.gameRoot, relative);
+      if (!existsSync(destination)) {
+        writeFileSync(
+          destination,
+          smokeInfoPlist(requireString(manifest.displayName, 'shell display name')),
+          { flag: 'wx' },
+        );
+      }
+    }
     assertNativePlatformComplete(
       plan.gameRoot,
       platform,
@@ -520,7 +542,7 @@ function assertNativePlatformComplete(
         'gradle/wrapper/gradle-wrapper.properties',
         'app/src/main/AndroidManifest.xml',
       ]
-    : ['App/App/AppDelegate.swift', 'App/App/Info.plist'];
+    : ['App/App/AppDelegate.swift'];
   if (additional.some((relative) => !isNativeFile(nativeDirectory, relative))) {
     throw new Error(
       `Existing ${platform} project is incomplete; required native files are missing.`,
@@ -540,12 +562,20 @@ function assertNativePlatformComplete(
   const content = readFileSync(path.join(nativeDirectory, required), 'utf8');
   assertNativeShellIdentity(platform, content, expectedAppId);
   if (platform === 'ios') {
-    assertReferencedIosFiles(nativeDirectory, content);
+    const infoPlist = readIosReleaseInfoPlist(content);
+    const infoRelative = path.join('App', infoPlist);
+    if (!isNativeFile(nativeDirectory, infoRelative)) {
+      throw new Error('Existing ios project Release Info.plist is missing or unsafe.');
+    }
+    assertReferencedIosFiles(nativeDirectory, content, infoRelative);
+    assertNativeDisplayName(nativeDirectory, platform, expectedDisplayName, infoRelative);
+  } else {
+    assertAndroidManifestResources(nativeDirectory);
+    assertNativeDisplayName(nativeDirectory, platform, expectedDisplayName);
   }
-  assertNativeDisplayName(nativeDirectory, platform, expectedDisplayName);
 }
 
-function assertReferencedIosFiles(nativeDirectory: string, project: string): void {
+function assertReferencedIosFiles(nativeDirectory: string, project: string, infoRelative: string): void {
   const references: readonly [RegExp, string][] = [
     [/\/\*\s*SceneDelegate\.swift in Sources\s*\*\//u, 'App/App/SceneDelegate.swift'],
     [/\/\*\s*Main\.storyboard in Resources\s*\*\//u, 'App/App/Base.lproj/Main.storyboard'],
@@ -562,13 +592,77 @@ function assertReferencedIosFiles(nativeDirectory: string, project: string): voi
       );
     }
   }
-  const info = readFileSync(path.join(nativeDirectory, 'App/App/Info.plist'), 'utf8');
+  const info = readFileSync(path.join(nativeDirectory, infoRelative), 'utf8');
   if (/UISceneDelegateClassName<\/key>\s*<string>[^<]*\.SceneDelegate<\/string>/u.test(info)
     && !isNativeFile(nativeDirectory, 'App/App/SceneDelegate.swift')) {
     throw new Error(
       'Existing ios project is incomplete; referenced SceneDelegate.swift is missing.',
     );
   }
+}
+
+function assertAndroidManifestResources(nativeDirectory: string): void {
+  const manifest = readFileSync(
+    path.join(nativeDirectory, 'app/src/main/AndroidManifest.xml'),
+    'utf8',
+  ).replace(/<!--[\s\S]*?-->/gu, '');
+  const resourceRoot = path.join(nativeDirectory, 'app/src/main/res');
+  const references = [...manifest.matchAll(/(?<![\w+])@([a-z]+)\/([A-Za-z_][A-Za-z0-9_.]*)/gu)];
+  for (const reference of references) {
+    const type = reference[1] ?? '';
+    const name = reference[2] ?? '';
+    const folders = existsSync(resourceRoot)
+      ? readdirSync(resourceRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+      : [];
+    const found = folders.some((folder) => {
+      if (folder === type || folder.startsWith(`${type}-`)) {
+        return readdirSync(path.join(resourceRoot, folder)).some((file) =>
+          file === `${name}.xml` || file.startsWith(`${name}.`));
+      }
+      if (folder !== 'values' && !folder.startsWith('values-')) {
+        return false;
+      }
+      return readdirSync(path.join(resourceRoot, folder)).some((file) => {
+        if (!file.endsWith('.xml')) {
+          return false;
+        }
+        const source = readFileSync(path.join(resourceRoot, folder, file), 'utf8');
+        const escaped = name.replace(/\./gu, '\\.');
+        return new RegExp(`<${type}\\b[^>]*\\bname\\s*=\\s*["']${escaped}["']`, 'u').test(source);
+      });
+    });
+    if (!found) {
+      throw new Error(`Existing android project manifest resource @${type}/${name} is missing.`);
+    }
+  }
+}
+
+function smokeInfoPlist(displayName: string): string {
+  const name = displayName.replace(/&/gu, '&amp;').replace(/</gu, '&lt;')
+    .replace(/>/gu, '&gt;').replace(/"/gu, '&quot;').replace(/'/gu, '&apos;');
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+    '<plist version="1.0"><dict>',
+    '<key>CFBundleDisplayName</key>', `<string>${name}</string>`,
+    '<key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>',
+    '<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>',
+    '<key>CFBundleName</key><string>$(PRODUCT_NAME)</string>',
+    '<key>CFBundlePackageType</key><string>APPL</string>',
+    '<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>',
+    '<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>',
+    '<key>UIApplicationSceneManifest</key><dict>',
+    '<key>UIApplicationSupportsMultipleScenes</key><false/>',
+    '<key>UISceneConfigurations</key><dict>',
+    '<key>UIWindowSceneSessionRoleApplication</key><array><dict>',
+    '<key>UISceneConfigurationName</key><string>Default Configuration</string>',
+    '<key>UISceneDelegateClassName</key><string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>',
+    '</dict></array></dict></dict>',
+    '<key>UILaunchScreen</key><dict/>',
+    '</dict></plist>',
+    '',
+  ].join('\n');
 }
 
 function assertAppliedGradleScripts(
@@ -619,10 +713,11 @@ function assertNativeDisplayName(
   nativeDirectory: string,
   platform: 'android' | 'ios',
   expectedDisplayName: string,
+  iosInfoRelative?: string,
 ): void {
   const relative = platform === 'android'
     ? 'app/src/main/res/values/strings.xml'
-    : 'App/App/Info.plist';
+    : (iosInfoRelative ?? 'App/App/Info.plist');
   if (!isNativeFile(nativeDirectory, relative)) {
     throw new Error(
       `Existing ${platform} project is incomplete; native display name resource is missing.`,

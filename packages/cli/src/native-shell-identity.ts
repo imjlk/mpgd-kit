@@ -89,17 +89,7 @@ export function stripGradleComments(source: string): string {
 }
 
 function assertIosAppIdentity(source: string, expectedAppId: string): void {
-  const appTargets = [...source.matchAll(/\b([A-F0-9]+)\s*\/\*\s*App\s*\*\/\s*=\s*\{/gu)]
-    .map((match) => readPbxObject(source, match[1] ?? ''))
-    .filter((block) => /\bisa\s*=\s*PBXNativeTarget;/u.test(block)
-      && /\bname\s*=\s*"?App"?\s*;/u.test(block));
-  if (appTargets.length !== 1) {
-    throw new Error('Existing ios project App target could not be read safely.');
-  }
-  const listId = /\bbuildConfigurationList\s*=\s*([A-F0-9]+)\b/u.exec(appTargets[0] ?? '')?.[1];
-  if (listId === undefined) {
-    throw new Error('Existing ios project App target configuration is missing.');
-  }
+  const listId = readIosAppConfigurationList(source);
   let actual = readIosReleaseBundleId(source, listId);
   if (actual === undefined || actual === '$(inherited)') {
     const projects = [...source.matchAll(/\b([A-F0-9]+)\s*\/\*[^*]+\*\/\s*=\s*\{/gu)]
@@ -118,16 +108,42 @@ function assertIosAppIdentity(source: string, expectedAppId: string): void {
   }
 }
 
-function readIosReleaseBundleId(source: string, listId: string): string | undefined {
-  const list = readPbxObject(source, listId);
-  const configurations = /\bbuildConfigurations\s*=\s*\(([^)]*)\)/u.exec(list)?.[1];
-  const releaseIds = configurations === undefined ? []
-    : [...configurations.matchAll(/\b([A-F0-9]+)\s*\/\*\s*Release\s*\*\//gu)]
-      .map((match) => match[1]);
-  if (releaseIds.length !== 1) {
-    throw new Error('Existing ios project App Release configuration is missing or ambiguous.');
+export function readIosReleaseInfoPlist(source: string): string {
+  const configuration = readIosReleaseConfiguration(source, readIosAppConfigurationList(source));
+  if (/\bINFOPLIST_FILE\s*(?:\[[^\]\r\n]+\])+["']?\s*=/u.test(configuration)) {
+    throw new Error('Existing ios project conditional Release Info.plist is unsupported.');
   }
-  const configuration = stripGradleComments(readPbxObject(source, releaseIds[0] ?? ''));
+  const values = [...configuration.matchAll(/\bINFOPLIST_FILE\s*=\s*([^;]+);/gu)]
+    .map((match) => match[1]?.trim().replace(/^["']|["']$/gu, ''));
+  const value = values.length === 1 ? values[0] : undefined;
+  if (value === undefined || value.includes('$') || value.includes('\\')
+    || pathIsUnsafe(value)) {
+    throw new Error('Existing ios project Release Info.plist cannot be read safely.');
+  }
+  return value;
+}
+
+function pathIsUnsafe(value: string): boolean {
+  return value.startsWith('/') || value.split('/').some((part) => part === '..' || part === '');
+}
+
+function readIosAppConfigurationList(source: string): string {
+  const appTargets = [...source.matchAll(/\b([A-F0-9]+)\s*\/\*\s*App\s*\*\/\s*=\s*\{/gu)]
+    .map((match) => readPbxObject(source, match[1] ?? ''))
+    .filter((block) => /\bisa\s*=\s*PBXNativeTarget;/u.test(block)
+      && /\bname\s*=\s*"?App"?\s*;/u.test(block));
+  if (appTargets.length !== 1) {
+    throw new Error('Existing ios project App target could not be read safely.');
+  }
+  const listId = /\bbuildConfigurationList\s*=\s*([A-F0-9]+)\b/u.exec(appTargets[0] ?? '')?.[1];
+  if (listId === undefined) {
+    throw new Error('Existing ios project App target configuration is missing.');
+  }
+  return listId;
+}
+
+function readIosReleaseBundleId(source: string, listId: string): string | undefined {
+  const configuration = readIosReleaseConfiguration(source, listId);
   const hasBaseConfiguration = /\bbaseConfigurationReference\s*=/u.test(configuration);
   if (/\bPRODUCT_BUNDLE_IDENTIFIER\s*(?:\[[^\]\r\n]+\])+["']?\s*=/u.test(configuration)) {
     throw new Error('Existing ios project conditional Release bundle ID is unsupported.');
@@ -141,6 +157,18 @@ function readIosReleaseBundleId(source: string, listId: string): string | undefi
     throw new Error('Existing ios project Release xcconfig identity cannot be read safely.');
   }
   return values[0];
+}
+
+function readIosReleaseConfiguration(source: string, listId: string): string {
+  const list = readPbxObject(source, listId);
+  const configurations = /\bbuildConfigurations\s*=\s*\(([^)]*)\)/u.exec(list)?.[1];
+  const releaseIds = configurations === undefined ? []
+    : [...configurations.matchAll(/\b([A-F0-9]+)\s*\/\*\s*Release\s*\*\//gu)]
+      .map((match) => match[1]);
+  if (releaseIds.length !== 1) {
+    throw new Error('Existing ios project App Release configuration is missing or ambiguous.');
+  }
+  return stripGradleComments(readPbxObject(source, releaseIds[0] ?? ''));
 }
 
 function readPbxObject(source: string, id: string): string {

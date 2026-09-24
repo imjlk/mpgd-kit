@@ -40,7 +40,7 @@ function iosProjectWithAppId(appId: string): string {
     'BBBBBBBB /* App configurations */ = { isa = XCConfigurationList; buildConfigurations = (',
     '  CCCCCCCC /* Debug */, DDDDDDDD /* Release */,); };',
     `CCCCCCCC /* Debug */ = { isa = XCBuildConfiguration; buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = ${appId}; }; };`,
-    `DDDDDDDD /* Release */ = { isa = XCBuildConfiguration; buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = ${appId}; }; };`,
+    `DDDDDDDD /* Release */ = { isa = XCBuildConfiguration; buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = ${appId}; INFOPLIST_FILE = App/Info.plist; }; };`,
     'EEEEEEEE /* NotificationService */ = { isa = PBXNativeTarget; name = NotificationService;',
     '  buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle.NotificationService; }; };',
     '/* SceneDelegate.swift in Sources */',
@@ -182,6 +182,7 @@ try {
               'android/capacitor-cordova-android-plugins/cordova.variables.gradle',
               'android/app/src/main/AndroidManifest.xml',
               'android/app/src/main/res/values/strings.xml',
+              'android/app/src/main/res/values/styles.xml',
               'android/app/src/main/java/dev/example/puzzle/MainActivity.java',
             ]
           : [
@@ -203,8 +204,10 @@ try {
               'apply from: "../capacitor-cordova-android-plugins/cordova.variables.gradle"',
             'android/app/src/main/res/values/strings.xml':
               '<resources><string name="app_name">Puzzle Game</string></resources>',
+            'android/app/src/main/res/values/styles.xml':
+              '<resources><style name="AppTheme" /></resources>',
             'android/app/src/main/AndroidManifest.xml':
-              '<manifest><application android:label="@string/app_name" /></manifest>',
+              '<manifest><application android:label="@string/app_name" android:theme="@style/AppTheme" /></manifest>',
             'ios/App/App/Info.plist':
               '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string></dict></plist>',
           };
@@ -227,6 +230,19 @@ try {
   ]);
   const cli = path.join(root, 'apps/mobile-capacitor/node_modules/.bin/cap');
   assert.equal(existsSync(cli), true);
+  const smokeInfo = path.join(root, 'apps/mobile-capacitor/ios/App/App/Info-Smoke.plist');
+  assert.match(readFileSync(smokeInfo, 'utf8'), /<string>Puzzle Game<\/string>/u);
+  assert.doesNotMatch(readFileSync(smokeInfo, 'utf8'), /UIMainStoryboardFile/u);
+  renameSync(smokeInfo, `${smokeInfo}.saved`);
+  const smokeRepair = planCapacitorShellStarter(options);
+  assert.deepEqual(smokeRepair.changedFiles, [
+    'apps/mobile-capacitor/ios/App/App/Info-Smoke.plist',
+  ]);
+  assert.deepEqual(smokeRepair.nativePlatformsToAdd, []);
+  applyCapacitorShellStarter(smokeRepair);
+  assert.equal(existsSync(smokeInfo), true);
+  unlinkSync(smokeInfo);
+  renameSync(`${smokeInfo}.saved`, smokeInfo);
   const retryCommands: string[] = [];
   materializeCapacitorShellStarter(planCapacitorShellStarter(options), {
     run(command, args, cwd) {
@@ -328,8 +344,18 @@ try {
   assert.throws(() => planCapacitorShellStarter(options), /launcher label differs/u);
   writeFileSync(
     androidManifest,
-    '<manifest><application android:label="@string/app_name" /></manifest>',
+    '<manifest><application android:label="@string/app_name" android:theme="@style/AppTheme" /></manifest>',
   );
+  const androidStyles = path.join(
+    root,
+    'apps/mobile-capacitor/android/app/src/main/res/values/styles.xml',
+  );
+  renameSync(androidStyles, `${androidStyles}.saved`);
+  assert.throws(
+    () => planCapacitorShellStarter(options),
+    /manifest resource @style\/AppTheme is missing/u,
+  );
+  renameSync(`${androidStyles}.saved`, androidStyles);
   const iosInfo = path.join(root, 'apps/mobile-capacitor/ios/App/App/Info.plist');
   writeFileSync(
     iosInfo,
@@ -340,6 +366,35 @@ try {
     iosInfo,
     '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string></dict></plist>',
   );
+  const iosReleaseInfo = path.join(root, 'apps/mobile-capacitor/ios/App/App/Info-Release.plist');
+  writeFileSync(
+    iosReleaseInfo,
+    '<plist><dict><key>CFBundleDisplayName</key><string>Other Game</string></dict></plist>',
+  );
+  const releaseProject = iosProjectWithAppId('dev.example.puzzle').replace(
+    'INFOPLIST_FILE = App/Info.plist;',
+    'INFOPLIST_FILE = App/Info-Release.plist;',
+  );
+  writeFileSync(iosProjectFile, releaseProject);
+  assert.throws(() => planCapacitorShellStarter(options), /ios project display name differs/u);
+  writeFileSync(
+    iosReleaseInfo,
+    '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string></dict></plist>',
+  );
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(
+    iosProjectFile,
+    releaseProject.replace(
+      'INFOPLIST_FILE = App/Info-Release.plist;',
+      'INFOPLIST_FILE = "$(CONFIGURATION)/Info.plist";',
+    ),
+  );
+  assert.throws(
+    () => planCapacitorShellStarter(options),
+    /Release Info.plist cannot be read safely/u,
+  );
+  writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
+  unlinkSync(iosReleaseInfo);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.other.game'));
   assert.throws(() => planCapacitorShellStarter(options), /ios project app ID differs/u);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));

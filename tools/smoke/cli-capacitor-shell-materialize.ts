@@ -115,6 +115,9 @@ try {
   assert.match(first, /pnpm may also update root or shell lockfiles/u);
   assert.ok(existsSync(path.join(shell, 'android/app/build.gradle')));
   assert.ok(existsSync(path.join(shell, 'ios/App/App.xcodeproj/project.pbxproj')));
+  const smokeInfo = readFileSync(path.join(shell, 'ios/App/App/Info-Smoke.plist'), 'utf8');
+  assert.match(smokeInfo, /<key>CFBundleDisplayName<\/key>\s*<string>External Game<\/string>/u);
+  assert.doesNotMatch(smokeInfo, /UIMainStoryboardFile|UILaunchStoryboardName/u);
   assertNoKitReferences(shell);
   const targetsBefore = readFileSync(path.join(gameRoot, 'mpgd.targets.json'), 'utf8');
   const nativeTargets = JSON.parse(targetsBefore) as {
