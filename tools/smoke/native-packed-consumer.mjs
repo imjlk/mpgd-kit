@@ -113,6 +113,8 @@ function verifyNativeTarball(tarball) {
   const js = run('tar', ['-xOf', tarball, 'package/dist/index.js'], repoRoot);
   assert.match(js, /registerPlugin\(['"]CapacitorGameServices['"]\)/u);
   const manifest = JSON.parse(run('tar', ['-xOf', tarball, 'package/package.json'], repoRoot));
+  assert.ok(manifest.capacitor?.android && manifest.capacitor?.ios,
+    'Published native plugin must declare capacitor platform sources');
   assert.equal(manifest.capacitor.android.src, 'android');
   assert.equal(manifest.capacitor.ios.src, 'ios');
 }

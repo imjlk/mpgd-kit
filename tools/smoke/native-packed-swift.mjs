@@ -34,9 +34,13 @@ try {
   const description = JSON.parse(run('swift', ['package', 'dump-package', '--package-path', extracted], extracted));
   const target = description.targets.find((item) => item.name === 'MpgdCapacitorGameServices');
   assert.ok(target, 'Packed Swift package target is missing.');
-  assert.ok(target.resources?.some((resource) =>
-    resource.path === 'PrivacyInfo.xcprivacy' && resource.rule?.process !== undefined),
-  'Packed Swift target does not process the privacy resource.');
+  assert.ok(target.resources?.some((resource) => {
+    if (resource.path !== 'PrivacyInfo.xcprivacy') {
+      return false;
+    }
+    const rule = resource.rule;
+    return rule === 'process' || rule?.process !== undefined || rule?.kind === 'process';
+  }), 'Packed Swift target does not process the privacy resource.');
   console.log('Packed Swift Package and privacy resource passed.');
 } finally {
   rmSync(fixtureRoot, { recursive: true, force: true });
