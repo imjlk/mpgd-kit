@@ -133,7 +133,11 @@ export interface TargetViewportSafeArea {
   readonly contentBounds: TargetViewportBounds;
 }
 
-/** A named host-owned surface in full-viewport CSS-pixel coordinates. */
+/**
+ * A named host-owned surface in full-viewport CSS-pixel coordinates. The
+ * effective inset extends from `edge` to the surface's far bound, so any gap
+ * between a floating surface and that edge is conservatively treated as used.
+ */
 export interface TargetViewportOccupiedSurface {
   readonly surfaceId: string;
   readonly edge: 'top' | 'right' | 'bottom' | 'left';
@@ -581,10 +585,21 @@ export function resolveTargetViewportUsableArea(
       throw new Error('Viewport occupied surface IDs must be non-empty and unique.');
     }
     occupiedSurfaceIds.add(surface.surfaceId);
-    const { x, y, width, height } = surface.bounds;
-    if (![x, y, width, height].every(Number.isFinite)
-      || x < 0 || y < 0 || width < 0 || height < 0
-      || x + width > viewport.width || y + height > viewport.height) {
+    const { x: rawX, y: rawY, width: rawWidth, height: rawHeight } = surface.bounds;
+    if (![rawX, rawY, rawWidth, rawHeight].every(Number.isFinite)
+      || rawX < 0 || rawY < 0 || rawWidth < 0 || rawHeight < 0) {
+      throw new Error(`Viewport occupied surface ${surface.surfaceId} is outside the viewport.`);
+    }
+    // Round endpoints using the same whole-CSS-pixel convention as viewport
+    // dimensions. Rounding an origin and size separately can make a valid
+    // full-width fractional surface appear to exceed the rounded viewport.
+    const x = Math.round(rawX);
+    const y = Math.round(rawY);
+    const right = Math.round(rawX + rawWidth);
+    const bottom = Math.round(rawY + rawHeight);
+    const width = right - x;
+    const height = bottom - y;
+    if (right > viewport.width || bottom > viewport.height) {
       throw new Error(`Viewport occupied surface ${surface.surfaceId} is outside the viewport.`);
     }
     if (width === 0 || height === 0) {

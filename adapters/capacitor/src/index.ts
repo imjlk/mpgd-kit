@@ -53,6 +53,7 @@ export {
 } from './native-http.js';
 export {
   createCapacitorViewport,
+  type CapacitorViewportBaseState,
   type CapacitorOccupiedSurfaceInput,
   type CapacitorViewportController,
   type CapacitorViewportHost,

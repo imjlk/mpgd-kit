@@ -90,6 +90,10 @@ describe('Capacitor viewport', () => {
     const host = fixture();
     const viewport = createCapacitorViewport({ host: host.host });
     expect(() => viewport.setOccupiedSurface({
+      surfaceId: 'invalid-unit', edge: 'bottom', unit: 'other' as 'css-px',
+      bounds: { x: 0, y: 0, width: 200, height: 30 },
+    })).toThrow(/unit/u);
+    expect(() => viewport.setOccupiedSurface({
       surfaceId: 'banner', edge: 'bottom', unit: 'physical-px',
       bounds: { x: 0, y: 0, width: 200, height: 30 },
     })).toThrow(/scale/u);

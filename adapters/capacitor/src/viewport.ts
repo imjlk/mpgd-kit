@@ -6,10 +6,10 @@ import type {
 } from '@mpgd/platform';
 import { readTargetViewportSafeAreaInsets } from '@mpgd/target-config';
 
-type ViewportBaseState = Omit<PlatformViewportState, 'occupiedSurfaces'>;
+export type CapacitorViewportBaseState = Omit<PlatformViewportState, 'occupiedSurfaces'>;
 
 export interface CapacitorViewportHost {
-  readState(): ViewportBaseState;
+  readState(): CapacitorViewportBaseState;
   onChange(callback: () => void): () => void;
 }
 
@@ -38,7 +38,7 @@ export function createCapacitorViewport(
   const surfaces = new Map<string, PlatformViewportOccupiedSurface>();
   let unsubscribeHost: (() => void) | undefined;
   let disposed = false;
-  let lastState: PlatformViewportState | undefined;
+  let lastStateJson: string | undefined;
 
   function getState(): PlatformViewportState {
     if (disposed) {
@@ -74,10 +74,11 @@ export function createCapacitorViewport(
       input.onError?.(error);
       return;
     }
-    if (JSON.stringify(state) === JSON.stringify(lastState)) {
+    const stateJson = JSON.stringify(state);
+    if (stateJson === lastStateJson) {
       return;
     }
-    lastState = state;
+    lastStateJson = stateJson;
     for (const listener of [...listeners]) {
       try {
         listener(state);
@@ -96,11 +97,11 @@ export function createCapacitorViewport(
       listeners.add(callback);
       if (unsubscribeHost === undefined) {
         try {
-          lastState = getState();
+          lastStateJson = JSON.stringify(getState());
           unsubscribeHost = host.onChange(notify);
         } catch (error) {
           listeners.delete(callback);
-          lastState = undefined;
+          lastStateJson = undefined;
           throw error;
         }
       }
@@ -114,7 +115,7 @@ export function createCapacitorViewport(
         if (listeners.size === 0) {
           unsubscribeHost?.();
           unsubscribeHost = undefined;
-          lastState = undefined;
+          lastStateJson = undefined;
         }
       };
     },
@@ -127,6 +128,9 @@ export function createCapacitorViewport(
       }
       if (!['top', 'right', 'bottom', 'left'].includes(surface.edge)) {
         throw new Error('Occupied surface edge is invalid.');
+      }
+      if (surface.unit !== 'css-px' && surface.unit !== 'physical-px') {
+        throw new Error('Occupied surface unit is invalid.');
       }
       const scale = surface.unit === 'physical-px' ? surface.pixelsPerCssPixel : 1;
       if (scale === undefined || !Number.isFinite(scale) || scale <= 0) {
@@ -163,7 +167,7 @@ export function createCapacitorViewport(
       unsubscribeHost = undefined;
       listeners.clear();
       surfaces.clear();
-      lastState = undefined;
+      lastStateJson = undefined;
     },
   };
 }
@@ -186,7 +190,7 @@ function createWebViewHost(): CapacitorViewportHost {
     bottom: '--safe-area-inset-bottom',
     left: '--safe-area-inset-left',
   };
-  function readState(): ViewportBaseState {
+  function readState(): CapacitorViewportBaseState {
     if (typeof window === 'undefined' || typeof document === 'undefined') {
       throw new Error('Capacitor viewport requires a WebView host.');
     }
@@ -194,6 +198,7 @@ function createWebViewHost(): CapacitorViewportHost {
     const height = Math.max(1, Math.round(window.innerHeight));
     const visual = window.visualViewport;
     const style = getComputedStyle(document.documentElement);
+    // This delta is only a keyboard heuristic without zoom or horizontal pan.
     const keyboardBottom = visual !== null && visual !== undefined
       && visual.scale === 1 && visual.width >= width - 1
       ? Math.max(0, Math.round(height - visual.offsetTop - visual.height))

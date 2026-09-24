@@ -480,6 +480,11 @@ export interface PlatformViewportOccupiedSurface {
   readonly bounds: PlatformViewportBounds;
 }
 
+/**
+ * Structurally matches `TargetViewportUsableAreaInput` in @mpgd/target-config
+ * (field names, CSS-pixel units, and edge union), so consumers can pass the
+ * same state to `resolveTargetViewportUsableArea` without conversion.
+ */
 export interface PlatformViewportState {
   readonly width: number;
   readonly height: number;

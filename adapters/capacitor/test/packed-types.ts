@@ -2,6 +2,7 @@ import {
   createCapacitorNativeJsonTransport,
   type CapacitorNativeJsonTransport,
   type CapacitorServiceProvider,
+  type CapacitorViewportBaseState,
   type CapacitorViewportController,
 } from '@mpgd/adapter-capacitor';
 import type {
@@ -51,3 +52,5 @@ void nativeJson;
 declare const viewport: CapacitorViewportController;
 const viewportState: PlatformViewportState = viewport.getState();
 void viewportState;
+declare const hostState: CapacitorViewportBaseState;
+void hostState;

@@ -166,7 +166,10 @@ safe-area, system-bar, keyboard, and banner values. The default host reads the
 starter's `--mpgd-safe-area-*` CSS variables, Capacitor SystemBars'
 `--safe-area-inset-*` fallback, and `visualViewport` changes. On Android,
 SystemBars injects fallback CSS variables for older WebViews whose CSS `env`
-safe-area values are incorrect; see the [SystemBars API](https://capacitorjs.com/docs/apis/system-bars).
+safe-area values are incorrect. The injected `--safe-area-inset-*` values must
+be valid CSS lengths on `documentElement` (`:root`); putting them only on
+`body` or a nested container does not update the root aliases. See the
+[SystemBars API](https://capacitorjs.com/docs/apis/system-bars).
 Keyboard behavior also depends on the native [Keyboard resize mode](https://capacitorjs.com/docs/apis/keyboard),
 so inspect the actual device layout before promising a particular inset.
 
