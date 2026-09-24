@@ -322,8 +322,13 @@ jobs:
             fi
           done
 
-          if [[ "${metadata_only}" == "true" ]]; then
-            # Release metadata cannot change the docs site or its evidence.
+          if [[ "${EVENT_NAME}" == "push" ]]; then
+            # Every successful main push publishes the current site. If an
+            # earlier run skips a stale artifact, this run replaces it even
+            # when its own changed paths do not touch documentation.
+            docs_validation=true
+          elif [[ "${metadata_only}" == "true" ]]; then
+            # A metadata-only release PR does not need docs validation.
             docs_validation=false
           fi
           if [[ "${docs_only}" == "true" ]]; then

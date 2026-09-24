@@ -76,3 +76,8 @@ example type checks and source-backed tests, and the site/link build. Changes
 to the conformance implementation or its test still run normal code CI and
 documentation validation. A successful Evidence result or Pages deployment
 does not upgrade local checks into device or release verification.
+
+Every successful `main` push also rebuilds and publishes the current site.
+This ensures a newer, unrelated push can publish the site when an older Pages
+artifact is skipped as stale; it does not add the prepared/native suite to
+documentation-only PRs.
