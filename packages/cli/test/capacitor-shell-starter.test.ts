@@ -50,8 +50,13 @@ function iosProjectWithAppId(appId: string): string {
   ].join('\n');
 }
 
+const androidManifestOpen = [
+  '<manifest xmlns:android="http://schemas.android.com/apk/res/android"',
+  ' package="dev.example.puzzle">',
+].join('');
+
 const completeAndroidManifest = [
-  '<manifest package="dev.example.puzzle">',
+  androidManifestOpen,
   '<application android:label="@string/app_name" android:theme="@style/AppTheme">',
   '<activity android:name=".MainActivity"><intent-filter>',
   '<action android:name="android.intent.action.MAIN"/>',
@@ -116,6 +121,19 @@ try {
   );
 
   const dryRun = planCapacitorShellStarter(options);
+  const baseTargets = readJson('mpgd.targets.json');
+  const baseMap = baseTargets.targets as Record<string, Record<string, unknown>>;
+  const initialAndroidTarget = baseMap.android;
+  assert.ok(initialAndroidTarget);
+  delete initialAndroidTarget.gameApp;
+  writeJson('mpgd.targets.json', baseTargets);
+  assert.throws(() => planCapacitorShellStarter(options), /android.gameApp/u);
+  initialAndroidTarget.gameApp = '.';
+  delete initialAndroidTarget.adapter;
+  writeJson('mpgd.targets.json', baseTargets);
+  assert.throws(() => planCapacitorShellStarter(options), /android.adapter/u);
+  initialAndroidTarget.adapter = 'capacitor';
+  writeJson('mpgd.targets.json', baseTargets);
   assert.ok(dryRun.changedFiles.includes('mpgd.targets.json'));
   assert.ok(dryRun.changedFiles.includes('apps/mobile-capacitor/capacitor.config.ts'));
   assert.ok(dryRun.changedFiles.includes('apps/mobile-capacitor/www/index.html'));
@@ -269,6 +287,13 @@ try {
   );
   assert.throws(() => planCapacitorShellStarter(options), /simulator Info.plist is malformed/u);
   writeFileSync(smokeInfo, originalSmoke);
+  const invalidSmoke = originalSmoke.replace(
+    '</dict></plist>',
+    '<key>Extra</key><bogus/></dict></plist>',
+  );
+  writeFileSync(smokeInfo, invalidSmoke);
+  assert.throws(() => planCapacitorShellStarter(options), /unsupported value node/u);
+  writeFileSync(smokeInfo, originalSmoke);
   renameSync(smokeInfo, `${smokeInfo}.saved`);
   const smokeRepair = planCapacitorShellStarter(options);
   assert.deepEqual(smokeRepair.changedFiles, [
@@ -349,6 +374,15 @@ try {
   renameSync(capacitorGradle, `${capacitorGradle}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /applied Gradle script/u);
   renameSync(`${capacitorGradle}.saved`, capacitorGradle);
+  writeFileSync(capacitorGradle, 'applicationId "dev.other.game"');
+  assert.throws(
+    () => planCapacitorShellStarter(options),
+    /applied Gradle script changes identity/u,
+  );
+  writeFileSync(
+    capacitorGradle,
+    'apply from: "../capacitor-cordova-android-plugins/cordova.variables.gradle"',
+  );
   const wrapperJar = path.join(
     root,
     'apps/mobile-capacitor/android/gradle/wrapper/gradle-wrapper.jar',
@@ -384,11 +418,11 @@ try {
     root,
     'apps/mobile-capacitor/android/app/src/main/AndroidManifest.xml',
   );
-  const wrongLabelManifest = '<manifest><application android:label="Other Game" /></manifest>';
+  const wrongLabelManifest = `${androidManifestOpen}<application android:label="Other Game" /></manifest>`;
   writeFileSync(androidManifest, wrongLabelManifest);
   assert.throws(() => planCapacitorShellStarter(options), /application label differs/u);
   writeFileSync(androidManifest, [
-    '<manifest><application android:label="@string/app_name">',
+    `${androidManifestOpen}<application android:label="@string/app_name">`,
     '<activity android:label="Other Game"><intent-filter>',
     '<action android:name="android.intent.action.MAIN"/>',
     '<category android:name="android.intent.category.LAUNCHER"/>',
@@ -396,11 +430,29 @@ try {
   ].join(''));
   assert.throws(() => planCapacitorShellStarter(options), /launcher label differs/u);
   writeFileSync(androidManifest, completeAndroidManifest);
+  const releaseManifest = path.join(
+    root,
+    'apps/mobile-capacitor/android/app/src/release/AndroidManifest.xml',
+  );
+  writeFileSync(
+    releaseManifest,
+    `${androidManifestOpen}<application android:label="Other Game" /></manifest>`,
+  );
+  assert.throws(() => planCapacitorShellStarter(options), /Release application label differs/u);
+  writeFileSync(releaseManifest, [
+    androidManifestOpen,
+    '<application><activity android:name=".MainActivity" android:label="Other Game"/>',
+    '</application></manifest>',
+  ].join(''));
+  assert.throws(() => planCapacitorShellStarter(options), /Release launcher label differs/u);
+  unlinkSync(releaseManifest);
   const mainActivity = path.join(
     root,
     'apps/mobile-capacitor/android/app/src/main/java/dev/example/puzzle/MainActivity.java',
   );
   writeFileSync(mainActivity, 'package dev.other.puzzle; public class MainActivity {}');
+  assert.throws(() => planCapacitorShellStarter(options), /launcher class.*missing/u);
+  writeFileSync(mainActivity, 'package dev.example.puzzle; // class MainActivity {}');
   assert.throws(() => planCapacitorShellStarter(options), /launcher class.*missing/u);
   writeFileSync(mainActivity, 'package dev.example.puzzle; public class MainActivity {}');
   const androidStyles = path.join(
@@ -413,6 +465,12 @@ try {
     /manifest resource @style\/AppTheme is missing/u,
   );
   renameSync(`${androidStyles}.saved`, androidStyles);
+  writeFileSync(androidStyles, '<resources><!-- <style name="AppTheme" /> --></resources>');
+  assert.throws(
+    () => planCapacitorShellStarter(options),
+    /manifest resource @style\/AppTheme is missing/u,
+  );
+  writeFileSync(androidStyles, '<resources><style name="AppTheme" /></resources>');
   const iosInfo = path.join(root, 'apps/mobile-capacitor/ios/App/App/Info.plist');
   writeFileSync(
     iosInfo,
@@ -439,6 +497,15 @@ try {
     '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string></dict></plist>',
   );
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(
+    iosReleaseInfo,
+    '<plist><dict><!-- <key>CFBundleDisplayName</key><string>Puzzle Game</string> --></dict></plist>',
+  );
+  assert.throws(() => planCapacitorShellStarter(options), /ios project display name differs/u);
+  writeFileSync(
+    iosReleaseInfo,
+    '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string></dict></plist>',
+  );
   writeFileSync(
     iosProjectFile,
     releaseProject.replace(

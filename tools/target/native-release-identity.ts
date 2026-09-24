@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { isMpgdFinalSemVer } from '@mpgd/target-config';
 
@@ -41,6 +41,7 @@ export function assertNativeReleaseIdentity(input: NativeReleaseIdentityInput): 
       throw new Error('Android native release requires exactly one Gradle app build file.');
     }
     assertAndroidIdentity(candidates[0] ?? '', expected);
+    assertAndroidAppliedScripts(candidates[0] ?? '', join(input.shellApp, 'android'));
     return;
   }
 
@@ -117,6 +118,50 @@ function assertAndroidIdentity(file: string, expected: AndroidIdentity): void {
   assertSetting(source, /\bapplicationId\s*(?:=\s*)?["']([^"']+)["']/u, expected.packageId, file);
   assertSetting(source, /\bversionCode\s*(?:=\s*)?(\d+)/u, expected.versionCode, file);
   assertSetting(source, /\bversionName\s*(?:=\s*)?["']([^"']+)["']/u, expected.versionName, file);
+}
+
+function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): void {
+  const visited = new Set<string>();
+  const inspect = (file: string): void => {
+    if (visited.has(file)) {
+      return;
+    }
+    visited.add(file);
+    const source = stripComments(readRequiredFile(file, 'applied Android Gradle script'));
+    if (file !== appBuild && /\b(?:applicationId|applicationIdSuffix|versionNameSuffix)\b/u.test(source)) {
+      throw new Error(
+        `Native release preflight found identity override in applied Gradle script: ${file}.`,
+      );
+    }
+    const expressions = [
+      /\bapply\s+from\s*:\s*["']([^"']+)["']/gu,
+      /\bapply\s*\(\s*from\s*=\s*["']([^"']+)["']\s*\)/gu,
+      /\bapply\s+from\s*:\s*file\s*\(\s*["']([^"']+)["']\s*\)/gu,
+      /\bapply\s*\(\s*from\s*=\s*file\s*\(\s*["']([^"']+)["']\s*\)\s*\)/gu,
+    ];
+    const matched = new Set<number>();
+    for (const expression of expressions) {
+      for (const match of source.matchAll(expression)) {
+        if (match.index !== undefined) {
+          matched.add(match.index);
+        }
+        const requested = match[1] ?? '';
+        const resolved = resolve(dirname(file), requested);
+        const within = relative(androidRoot, resolved);
+        if (requested.includes('$') || within === '' || within.startsWith('..')
+          || isAbsolute(within)) {
+          throw new Error('Native release preflight cannot resolve an applied Gradle script.');
+        }
+        inspect(resolved);
+      }
+    }
+    const applies = [ /\bapply\s+from\s*:/gu, /\bapply\s*\(\s*from\s*=/gu ];
+    if (applies.some((expression) => [...source.matchAll(expression)]
+      .some((match) => match.index !== undefined && !matched.has(match.index)))) {
+      throw new Error('Native release preflight cannot resolve an applied Gradle script.');
+    }
+  };
+  inspect(appBuild);
 }
 
 function assertIosIdentity(file: string, expected: IosIdentity): void {

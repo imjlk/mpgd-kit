@@ -14,7 +14,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { DOMParser } from '@xmldom/xmldom';
+import { DOMParser, type Document, type Element } from '@xmldom/xmldom';
 
 import { isNonPublicServiceHostname } from './production-target-readiness.js';
 import {
@@ -155,6 +155,10 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     const target = requireObject(targetMap[targetName], `${targetName} target`);
     if (target.kind !== kind) {
       throw new Error(`${targetName} must be a ${kind} target.`);
+    }
+    requireString(target.gameApp, `${targetName}.gameApp`);
+    if (requireString(target.adapter, `${targetName}.adapter`) !== 'capacitor') {
+      throw new Error(`${targetName}.adapter must be capacitor.`);
     }
     const configuredShell = requireString(target.shellApp, `${targetName}.shellApp`);
     if (configuredShell !== shellPath && configuredShell !== referenceShellPath) {
@@ -539,6 +543,17 @@ function assertNativePlatformComplete(
     for (const script of [rootBuild, settings, required]) {
       assertAppliedGradleScripts(nativeDirectory, script, visited);
     }
+    for (const script of visited) {
+      if (script === required) {
+        continue;
+      }
+      const source = stripGradleComments(readFileSync(path.join(nativeDirectory, script), 'utf8'));
+      if (/\b(?:applicationId|applicationIdSuffix|versionNameSuffix)\b/u.test(source)) {
+        throw new Error(
+          `Existing android project applied Gradle script changes identity: ${script}`,
+        );
+      }
+    }
   } else {
     const hasSpm = isNativeFile(nativeDirectory, 'App/CapApp-SPM/Package.swift');
     if (!hasSpm) {
@@ -631,7 +646,9 @@ function assertAndroidLauncherClasses(nativeDirectory: string, gradle: string): 
       if (!isNativeFile(nativeDirectory, relative)) {
         return false;
       }
-      const source = readFileSync(path.join(nativeDirectory, relative), 'utf8');
+      const source = stripSourceCommentsAndStrings(
+        readFileSync(path.join(nativeDirectory, relative), 'utf8'),
+      );
       const declaredPackage = /\bpackage\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)+)\s*;?/u
         .exec(source)?.[1];
       return declaredPackage === packageName
@@ -643,42 +660,80 @@ function assertAndroidLauncherClasses(nativeDirectory: string, gradle: string): 
   }
 }
 
+function stripSourceCommentsAndStrings(source: string): string {
+  let output = '';
+  let quote: '"' | "'" | undefined;
+  let blockComment = false;
+  let lineComment = false;
+  let rawString = false;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index] ?? '';
+    const next = source[index + 1] ?? '';
+    if (lineComment) {
+      if (character === '\n') {
+        lineComment = false;
+        output += '\n';
+      } else {
+        output += ' ';
+      }
+      continue;
+    }
+    if (blockComment) {
+      if (character === '*' && next === '/') {
+        blockComment = false;
+        output += '  ';
+        index += 1;
+      } else {
+        output += character === '\n' ? '\n' : ' ';
+      }
+      continue;
+    }
+    if (rawString) {
+      if (source.startsWith('"""', index)) {
+        rawString = false;
+        output += '   ';
+        index += 2;
+      } else {
+        output += character === '\n' ? '\n' : ' ';
+      }
+      continue;
+    }
+    if (quote !== undefined) {
+      if (character === '\\' && next !== '') {
+        output += '  ';
+        index += 1;
+      } else if (character === quote) {
+        quote = undefined;
+        output += ' ';
+      } else {
+        output += character === '\n' ? '\n' : ' ';
+      }
+      continue;
+    }
+    if (character === '/' && next === '/') {
+      lineComment = true;
+      output += '  ';
+      index += 1;
+    } else if (character === '/' && next === '*') {
+      blockComment = true;
+      output += '  ';
+      index += 1;
+    } else if (source.startsWith('"""', index)) {
+      rawString = true;
+      output += '   ';
+      index += 2;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+      output += ' ';
+    } else {
+      output += character;
+    }
+  }
+  return output;
+}
+
 function assertSmokeInfoPlist(source: string, expectedDisplayName: string): void {
-  let document;
-  try {
-    document = new DOMParser({
-      onError(_level, message) { throw new Error(message); },
-    }).parseFromString(source, 'application/xml');
-  } catch {
-    throw new Error('Existing ios project simulator Info.plist is malformed.');
-  }
-  const plist = document.documentElement;
-  const roots = plist === null
-    ? []
-    : Array.from(plist.childNodes).filter((node) => node.nodeType === 1);
-  const dict = roots[0];
-  if (plist?.tagName !== 'plist' || roots.length !== 1 || dict?.nodeName !== 'dict') {
-    throw new Error('Existing ios project simulator Info.plist is malformed.');
-  }
-  const elements = Array.from(dict.childNodes).filter((node) => node.nodeType === 1);
-  if (elements.length % 2 !== 0) {
-    throw new Error('Existing ios project simulator Info.plist is malformed.');
-  }
-  const values = new Map<string, string[]>();
-  for (let index = 0; index < elements.length; index += 2) {
-    const key = elements[index];
-    const value = elements[index + 1];
-    if (key?.nodeName !== 'key' || value === undefined) {
-      throw new Error('Existing ios project simulator Info.plist is malformed.');
-    }
-    const name = key.textContent?.trim() ?? '';
-    if (name.length === 0) {
-      throw new Error('Existing ios project simulator Info.plist is malformed.');
-    }
-    const entries = values.get(name) ?? [];
-    entries.push(value.nodeName === 'string' ? (value.textContent ?? '') : '');
-    values.set(name, entries);
-  }
+  const values = parsePlistDictionary(source, 'simulator');
   const required: readonly [string, string][] = [
     ['CFBundleDisplayName', expectedDisplayName],
     ['CFBundleExecutable', '$(EXECUTABLE_NAME)'],
@@ -689,14 +744,78 @@ function assertSmokeInfoPlist(source: string, expectedDisplayName: string): void
     ['CFBundleVersion', '$(CURRENT_PROJECT_VERSION)'],
   ];
   for (const [key, expected] of required) {
-    const actual = values.get(key) ?? [];
-    if (actual.length !== 1 || actual[0] !== expected) {
+    const actual = values.get(key);
+    if (actual?.tagName !== 'string' || actual.textContent !== expected) {
       throw new Error(`Existing ios project simulator Info.plist ${key} differs or is missing.`);
     }
   }
   if (values.has('UIMainStoryboardFile') || values.has('UILaunchStoryboardName')) {
     throw new Error('Existing ios project simulator Info.plist references excluded storyboards.');
   }
+}
+
+function parseXml(source: string, label: string): Document {
+  try {
+    return new DOMParser({
+      onError(_level, message) { throw new Error(message); },
+    }).parseFromString(source, 'application/xml');
+  } catch {
+    throw new Error(`Existing ${label} is malformed.`);
+  }
+}
+
+function childElements(element: Element): Element[] {
+  return Array.from(element.childNodes)
+    .filter((node): node is Element => node.nodeType === 1);
+}
+
+function parsePlistDictionary(source: string, label: string): Map<string, Element> {
+  const plist = parseXml(source, `ios project ${label} Info.plist`).documentElement;
+  const children = plist === null ? [] : childElements(plist);
+  const dictionary = children[0];
+  if (plist?.tagName !== 'plist' || children.length !== 1
+    || dictionary?.tagName !== 'dict') {
+    throw new Error(`Existing ios project ${label} Info.plist is malformed.`);
+  }
+  return parsePlistEntries(dictionary, label);
+}
+
+function parsePlistEntries(dictionary: Element, label: string): Map<string, Element> {
+  const children = childElements(dictionary);
+  if (children.length % 2 !== 0) {
+    throw new Error(`Existing ios project ${label} Info.plist is malformed.`);
+  }
+  const entries = new Map<string, Element>();
+  for (let index = 0; index < children.length; index += 2) {
+    const key = children[index];
+    const value = children[index + 1];
+    const name = key?.textContent?.trim() ?? '';
+    if (key?.tagName !== 'key' || value === undefined || name.length === 0
+      || entries.has(name)) {
+      throw new Error(`Existing ios project ${label} Info.plist is malformed.`);
+    }
+    assertPlistValue(value, label);
+    entries.set(name, value);
+  }
+  return entries;
+}
+
+function assertPlistValue(value: Element, label: string): void {
+  if (value.tagName === 'dict') {
+    parsePlistEntries(value, label);
+    return;
+  }
+  if (value.tagName === 'array') {
+    for (const child of childElements(value)) {
+      assertPlistValue(child, label);
+    }
+    return;
+  }
+  if (['string', 'integer', 'real', 'date', 'data', 'true', 'false'].includes(value.tagName)
+    && childElements(value).length === 0) {
+    return;
+  }
+  throw new Error(`Existing ios project ${label} Info.plist has an unsupported value node.`);
 }
 
 function assertReferencedIosFiles(nativeDirectory: string, project: string, infoRelative: string): void {
@@ -751,9 +870,9 @@ function assertAndroidManifestResources(nativeDirectory: string): void {
         if (!file.endsWith('.xml')) {
           return false;
         }
-        const source = readFileSync(path.join(resourceRoot, folder, file), 'utf8');
-        const escaped = name.replace(/\./gu, '\\.');
-        return new RegExp(`<${type}\\b[^>]*\\bname\\s*=\\s*["']${escaped}["']`, 'u').test(source);
+        return readAndroidValueResource(
+          path.join(resourceRoot, folder, file), type, name,
+        ).length > 0;
       });
     });
     if (!found) {
@@ -850,21 +969,18 @@ function assertNativeDisplayName(
   const source = readFileSync(path.join(nativeDirectory, relative), 'utf8');
   const labels = platform === 'android'
     ? [readAndroidString(nativeDirectory, 'app_name')]
-    : [...source.matchAll(/<key>CFBundleDisplayName<\/key>\s*<string>([^<]*)<\/string>/gu)]
-      .map((match) => decodeXmlLabel(match[1] ?? ''));
+    : [parsePlistDictionary(source, 'Release').get('CFBundleDisplayName')]
+      .filter((value) => value?.tagName === 'string')
+      .map((value) => value?.textContent ?? '');
   if (labels.length !== 1 || labels[0] !== expectedDisplayName) {
     throw new Error(`Existing ${platform} project display name differs or cannot be read safely.`);
   }
   if (platform === 'android') {
-    const manifest = readFileSync(
+    const main = readAndroidApplication(
       path.join(nativeDirectory, 'app/src/main/AndroidManifest.xml'),
-      'utf8',
     );
-    const application = /<application\b([^>]*)>/u.exec(manifest)?.[1];
-    const label = application === undefined
-      ? undefined
-      : /\bandroid:label\s*=\s*["']([^"']+)["']/u.exec(application)?.[1];
-    if (label === undefined) {
+    const label = main.getAttribute('android:label');
+    if (label === null) {
       throw new Error('Existing android project application label is missing.');
     }
     const effective = resolveAndroidLabel(nativeDirectory, label);
@@ -873,21 +989,65 @@ function assertNativeDisplayName(
         'Existing android project application label differs from the requested name.',
       );
     }
-    for (const activity of manifest.matchAll(
-      /<(activity|activity-alias)\b([^>]*)>([\s\S]*?)<\/\1>/gu,
-    )) {
-      const body = activity[3] ?? '';
-      if (!/android\.intent\.action\.MAIN/u.test(body)
-        || !/android\.intent\.category\.LAUNCHER/u.test(body)) {
-        continue;
-      }
-      const launcherLabel = /\bandroid:label\s*=\s*["']([^"']+)["']/u.exec(activity[2] ?? '')?.[1];
-      if (launcherLabel !== undefined
+    const launchers = readAndroidLaunchers(main);
+    for (const launcher of launchers) {
+      const launcherLabel = launcher.getAttribute('android:label');
+      if (launcherLabel !== null
         && resolveAndroidLabel(nativeDirectory, launcherLabel) !== expectedDisplayName) {
         throw new Error('Existing android project launcher label differs from the requested name.');
       }
     }
+    const overlayFile = path.join(nativeDirectory, 'app/src/release/AndroidManifest.xml');
+    if (existsSync(overlayFile)) {
+      const release = readAndroidApplication(overlayFile);
+      const releaseLabel = release.getAttribute('android:label');
+      if (releaseLabel !== null
+        && resolveAndroidLabel(nativeDirectory, releaseLabel) !== expectedDisplayName) {
+        throw new Error(
+          'Existing android Release application label differs from the requested name.',
+        );
+      }
+      const launcherNames = new Set(launchers.map((item) => item.getAttribute('android:name')));
+      for (const activity of childElements(release)) {
+        if (activity.tagName !== 'activity' && activity.tagName !== 'activity-alias') {
+          continue;
+        }
+        const sameLauncher = launcherNames.has(activity.getAttribute('android:name'));
+        const releaseLauncher = readAndroidLaunchers(release).includes(activity);
+        const activityLabel = activity.getAttribute('android:label');
+        if ((sameLauncher || releaseLauncher) && activityLabel !== null
+          && resolveAndroidLabel(nativeDirectory, activityLabel) !== expectedDisplayName) {
+          throw new Error(
+            'Existing android Release launcher label differs from the requested name.',
+          );
+        }
+      }
+    }
   }
+}
+
+function readAndroidApplication(file: string): Element {
+  const root = parseXml(readFileSync(file, 'utf8'), 'android manifest').documentElement;
+  const application = root === null
+    ? undefined
+    : childElements(root).find((element) => element.tagName === 'application');
+  if (root?.tagName !== 'manifest' || application === undefined) {
+    throw new Error('Existing android project manifest application is missing.');
+  }
+  return application;
+}
+
+function readAndroidLaunchers(application: Element): Element[] {
+  return childElements(application).filter((activity) => {
+    if (activity.tagName !== 'activity' && activity.tagName !== 'activity-alias') {
+      return false;
+    }
+    return childElements(activity).some((filter) => filter.tagName === 'intent-filter'
+      && childElements(filter).some((item) => item.tagName === 'action'
+        && item.getAttribute('android:name') === 'android.intent.action.MAIN')
+      && childElements(filter).some((item) => item.tagName === 'category'
+        && item.getAttribute('android:name') === 'android.intent.category.LAUNCHER'));
+  });
 }
 
 function resolveAndroidLabel(nativeDirectory: string, label: string): string {
@@ -904,27 +1064,29 @@ function readAndroidString(nativeDirectory: string, key: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)) {
     throw new Error('Existing android project application label is unsupported.');
   }
-  const expression = new RegExp(
-    `<string\\b[^>]*\\bname\\s*=\\s*["']${key}["'][^>]*>([^<]*)<\\/string>`,
-    'gu',
-  );
   const overlay = path.join(nativeDirectory, 'app/src/release/res/values');
   const overlayValues = existsSync(overlay) && lstatSync(overlay).isDirectory()
     ? readdirSync(overlay).filter((file) => file.endsWith('.xml'))
-      .flatMap((file) => [...readFileSync(path.join(overlay, file), 'utf8').matchAll(expression)])
-        .map((match) => decodeXmlLabel(match[1] ?? ''))
+      .flatMap((file) => readAndroidValueResource(path.join(overlay, file), 'string', key))
     : [];
-  const main = readFileSync(
-    path.join(nativeDirectory, 'app/src/main/res/values/strings.xml'),
-    'utf8',
-  );
+  const mainFile = path.join(nativeDirectory, 'app/src/main/res/values/strings.xml');
   const values = overlayValues.length > 0
     ? overlayValues
-    : [...main.matchAll(expression)].map((match) => decodeXmlLabel(match[1] ?? ''));
+    : readAndroidValueResource(mainFile, 'string', key);
   if (values.length !== 1) {
     throw new Error('Existing android project application label resource is missing or ambiguous.');
   }
   return values[0] ?? '';
+}
+
+function readAndroidValueResource(file: string, type: string, name: string): string[] {
+  const root = parseXml(readFileSync(file, 'utf8'), 'android values resource').documentElement;
+  if (root?.tagName !== 'resources') {
+    throw new Error('Existing android values resource is malformed.');
+  }
+  return childElements(root)
+    .filter((element) => element.tagName === type && element.getAttribute('name') === name)
+    .map((element) => element.textContent ?? '');
 }
 
 function decodeXmlLabel(value: string): string {

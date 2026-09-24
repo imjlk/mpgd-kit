@@ -88,6 +88,26 @@ try {
   );
   renameSync(kotlin, groovy);
   writeShellFiles(shellRoot);
+  const appliedIdentity = join(shellRoot, 'android/app/identity.gradle');
+  writeFileSync(appliedIdentity, 'applicationId "dev.other.game"');
+  writeFileSync(groovy, `${readFileSync(groovy, 'utf8')}\napply from: 'identity.gradle'\n`);
+  const appliedIdentityInput = {
+    environment: {
+      APP_VERSION: '1.4.0',
+      MPGD_TARGET_VERSION_CODE: '42',
+      MPGD_TARGET_VERSION_NAME: '1.4.0',
+    },
+    metadata: { packageId: 'dev.example.game' },
+    platform: 'android' as const,
+    required: false,
+    shellApp: shellRoot,
+  };
+  assert.throws(
+    () => assertNativeReleaseIdentity(appliedIdentityInput),
+    /identity override in applied Gradle script/u,
+  );
+  rmSync(appliedIdentity);
+  writeShellFiles(shellRoot);
 
   writeAndroidWithCommentedIdentity(shellRoot);
   assert.doesNotThrow(() =>
