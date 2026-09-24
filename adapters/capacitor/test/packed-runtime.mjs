@@ -96,3 +96,35 @@ const state = viewport.getState();
 assert.deepEqual(resolveTargetViewportUsableArea(state, state).contentBounds,
   { x: 0, y: 30, width: 390, height: 750 });
 viewport.dispose();
+
+const secureValues = new Map();
+const credentialGateway = createCapacitorPlatformGateway({
+  target: 'ios', appVersion: '1', buildId: 'packed-credentials',
+  bridge: {
+    async request(input) {
+      const { key, value } = input.payload;
+      if (input.method === 'credentials.load') {
+        const stored = secureValues.get(key);
+        return { id: input.id, ok: true, data: stored === undefined
+          ? { __mpgdBridgeProtocol: 'mpgd.credentials.load.v1', found: false }
+          : { __mpgdBridgeProtocol: 'mpgd.credentials.load.v1', found: true, value: stored } };
+      }
+      if (input.method === 'credentials.save') {
+        secureValues.set(key, value);
+        return { id: input.id, ok: true, data: { saved: true } };
+      }
+      if (input.method === 'credentials.remove') {
+        secureValues.delete(key);
+        return { id: input.id, ok: true, data: { removed: true } };
+      }
+      throw new Error(`Unexpected bridge method: ${input.method}`);
+    },
+  },
+});
+const credentials = credentialGateway.secureCredentials;
+assert.ok(credentials);
+await credentials.save({ key: 'packed.refresh', value: 'opaque-token' });
+assert.equal(await credentials.load({ key: 'packed.refresh' }), 'opaque-token');
+await credentials.remove({ key: 'packed.refresh' });
+assert.equal(await credentials.load({ key: 'packed.refresh' }), null);
+assert.equal(secureValues.size, 0);

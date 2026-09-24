@@ -60,6 +60,13 @@ The source tests and installed-tarball consumer validate composition, types,
 error paths, and fallback behavior. They do not establish that any optional
 SDK works on a physical device or that a store/ad setup is release-ready.
 
+`gateway.secureCredentials` uses dedicated native Keychain/Keystore methods for
+opaque session credentials. Its absence or a native error must not be hidden by
+writing the secret into `gateway.storage`. Keys are bounded, values are
+size-limited, and malformed bridge responses fail closed. This is a storage
+boundary, not proof of server authentication: an installation ID or local
+`playerId` is never a server principal by itself.
+
 ## App lifecycle and native entry
 
 The adapter uses the official Capacitor App plugin for foreground state,

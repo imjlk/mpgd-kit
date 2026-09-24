@@ -121,6 +121,41 @@ them into analytics or logs.
 All published entrypoints use explicit internal ESM module paths and are smoke-tested
 with native Node imports, without a bundler or TypeScript runtime loader.
 
+## Guest session and account binding foundation
+
+`createGuestSessionCoordinator` from `@mpgd/game-services/guest-session`
+accepts a game-owned `GuestSessionBackend` and a dedicated
+`SecureCredentialStore`. The kit does **not** issue tokens or infer server
+authentication from `installationId` or a local `playerId`. The backend must
+authenticate opaque refresh tokens, verify external account proofs, atomically
+deduplicate account binding by idempotency key, return `conflict` for an account
+owned by another server user, and revoke sessions durably. It must define
+token rotation, expiry, replay response, idempotent revocation, and database
+transactions. The session ID may rotate during refresh or binding, but the
+server user ID must remain the same; the
+injected contract is not a production identity provider by itself.
+
+The coordinator loads and saves the refresh token only through secure native
+credential storage. A load failure never silently starts a new guest, and a
+failed save cannot expose a new access token as active. Concurrent refreshes
+share one backend call; logout closes header access immediately and waits for
+in-flight token changes before revoking the latest token and removing the
+credential. Failed revocation or native removal leaves the credential intact
+and allows a later logout retry; callers must treat an uncertain logout as a
+server-side session that may still be live. Backend and native load errors are
+normalized to token-free coordinator codes, not forwarded with raw messages.
+`getHeaders()` can be passed as the Game Services runtime's
+`getHeaders` resolver. The public session view omits both bearer tokens.
+
+Binding an external account never switches to a different server user on a
+client callback. It does not merge purchases, currency, or progress. Use the
+existing `progress-link` nonce/idempotency service separately for a
+server-verified guest-progress handoff. A platform player ID and store purchase
+binding remain distinct from the server user and external provider subject.
+The tests use a fake backend and secure-storage port; they do not prove an
+OAuth provider, durable session database, or device Keychain/Keystore is
+correctly configured.
+
 Headless consumers can import operation input/result/progress types and the two-method
 `GameServicesOperationClient` port from `@mpgd/game-services/operations`. This entrypoint
 has no runtime implementation and its declarations require no DOM or fetch globals.

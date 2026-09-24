@@ -14,7 +14,9 @@ public class CapacitorGameServicesPlugin extends Plugin {
     private static final String STORAGE_PREFERENCES =
         "dev.mpgd.capacitor.gameservices.storage";
     private static final String STORAGE_LOAD_PROTOCOL = "mpgd.storage.load.v1";
+    private static final String CREDENTIAL_LOAD_PROTOCOL = "mpgd.credentials.load.v1";
     private LocalJsonStorage localStorage;
+    private SecureCredentialStorage credentialStorage;
 
     @PluginMethod
     public void request(PluginCall call) {
@@ -89,6 +91,15 @@ public class CapacitorGameServicesPlugin extends Plugin {
                 return;
             case "storage.save":
                 saveStorage(call, id);
+                return;
+            case "credentials.load":
+                loadCredential(call, id);
+                return;
+            case "credentials.save":
+                saveCredential(call, id);
+                return;
+            case "credentials.remove":
+                removeCredential(call, id);
                 return;
             default:
                 call.resolve(errorResponse(id, "UNSUPPORTED_METHOD", "Unsupported bridge method: " + method));
@@ -231,6 +242,50 @@ public class CapacitorGameServicesPlugin extends Plugin {
         return storageKey(call.getObject("payload"));
     }
 
+    private void loadCredential(PluginCall call, String id) {
+        String key = storageKey(call);
+        try {
+            String value = secureCredentialStorage().load(key);
+            JSObject data = new JSObject()
+                .put("__mpgdBridgeProtocol", CREDENTIAL_LOAD_PROTOCOL)
+                .put("found", value != null);
+            if (value != null) {
+                data.put("value", value);
+            }
+            call.resolve(okResponse(id, data));
+        } catch (SecureCredentialStorage.StorageException error) {
+            call.resolve(errorResponse(id, error.getCode(), error.getCode(), error.isRetryable()));
+        } catch (Exception error) {
+            call.resolve(errorResponse(id, "NATIVE_CREDENTIAL_STORE_UNAVAILABLE", "Secure credential store unavailable."));
+        }
+    }
+
+    private void saveCredential(PluginCall call, String id) {
+        JSObject payload = call.getObject("payload");
+        String key = storageKey(payload);
+        String value = payload == null ? null : payload.getString("value");
+        try {
+            secureCredentialStorage().save(key, value);
+            call.resolve(okResponse(id, new JSObject().put("saved", true)));
+        } catch (SecureCredentialStorage.StorageException error) {
+            call.resolve(errorResponse(id, error.getCode(), error.getCode(), error.isRetryable()));
+        } catch (Exception error) {
+            call.resolve(errorResponse(id, "NATIVE_CREDENTIAL_STORE_UNAVAILABLE", "Secure credential store unavailable."));
+        }
+    }
+
+    private void removeCredential(PluginCall call, String id) {
+        String key = storageKey(call);
+        try {
+            secureCredentialStorage().remove(key);
+            call.resolve(okResponse(id, new JSObject().put("removed", true)));
+        } catch (SecureCredentialStorage.StorageException error) {
+            call.resolve(errorResponse(id, error.getCode(), error.getCode(), error.isRetryable()));
+        } catch (Exception error) {
+            call.resolve(errorResponse(id, "NATIVE_CREDENTIAL_STORE_UNAVAILABLE", "Secure credential store unavailable."));
+        }
+    }
+
     private String storageKey(JSObject payload) {
         return payload == null ? null : payload.getString("key");
     }
@@ -272,6 +327,13 @@ public class CapacitorGameServicesPlugin extends Plugin {
             }
         });
         return localStorage;
+    }
+
+    private synchronized SecureCredentialStorage secureCredentialStorage() {
+        if (credentialStorage == null) {
+            credentialStorage = new SecureCredentialStorage(getContext());
+        }
+        return credentialStorage;
     }
 
     private JSObject capabilities() {

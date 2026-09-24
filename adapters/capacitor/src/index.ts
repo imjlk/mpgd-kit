@@ -1,4 +1,8 @@
-import { decodeBridgeStorageLoadData, type BridgeMethod } from '@mpgd/bridge';
+import {
+  decodeBridgeCredentialLoadData,
+  decodeBridgeStorageLoadData,
+  type BridgeMethod,
+} from '@mpgd/bridge';
 import { CapacitorGameServices } from '@mpgd/capacitor-game-services';
 import {
   PlatformOperationError,
@@ -76,6 +80,27 @@ const safeFallbackMethods = new Set<BridgeMethod>([
   'identity.getSession',
   'notifications.getStatus',
 ]);
+const credentialKeyPattern = /^[A-Za-z0-9._:-]{1,128}$/u;
+const maximumCredentialBytes = 16 * 1024;
+
+function assertCredentialKey(key: string): void {
+  if (typeof key !== 'string' || !credentialKeyPattern.test(key)) {
+    throw new PlatformOperationError({ code: 'NATIVE_CREDENTIAL_INVALID_KEY' });
+  }
+}
+
+function assertCredentialValue(value: string): void {
+  if (typeof value !== 'string' || value.length === 0
+    || new TextEncoder().encode(value).byteLength > maximumCredentialBytes) {
+    throw new PlatformOperationError({ code: 'NATIVE_CREDENTIAL_INVALID_VALUE' });
+  }
+}
+
+function assertCredentialMutationResponse(input: unknown, field: 'saved' | 'removed'): void {
+  if (!isRecord(input) || input[field] !== true) {
+    throw new PlatformOperationError({ code: 'NATIVE_CREDENTIAL_INVALID_RESPONSE' });
+  }
+}
 
 export function createCapacitorPlatformGateway(input: {
   readonly target: Extract<PlatformTarget, 'android' | 'ios'>;
@@ -285,6 +310,36 @@ export function createCapacitorPlatformGateway(input: {
         return decodeBridgeStorageLoadData(await request<unknown>('storage.load', payload));
       },
       save: (payload) => request('storage.save', payload),
+    },
+    secureCredentials: {
+      async load({ key }) {
+        assertCredentialKey(key);
+        const data = await request<unknown>('credentials.load', { key });
+        try {
+          const value = decodeBridgeCredentialLoadData(data);
+          if (value !== null) {
+            assertCredentialValue(value);
+          }
+          return value;
+        } catch {
+          throw new PlatformOperationError({ code: 'NATIVE_CREDENTIAL_INVALID_RESPONSE' });
+        }
+      },
+      async save({ key, value }) {
+        assertCredentialKey(key);
+        assertCredentialValue(value);
+        assertCredentialMutationResponse(
+          await request<unknown>('credentials.save', { key, value }),
+          'saved',
+        );
+      },
+      async remove({ key }) {
+        assertCredentialKey(key);
+        assertCredentialMutationResponse(
+          await request<unknown>('credentials.remove', { key }),
+          'removed',
+        );
+      },
     },
   };
 }

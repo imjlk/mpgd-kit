@@ -25,7 +25,10 @@ export type BridgeMethod =
   | 'leaderboard.submitScore'
   | 'leaderboard.open'
   | 'storage.load'
-  | 'storage.save';
+  | 'storage.save'
+  | 'credentials.load'
+  | 'credentials.save'
+  | 'credentials.remove';
 
 export interface BridgeRequest<TPayload = unknown> {
   readonly id: string;
@@ -56,6 +59,35 @@ export type BridgeResponse<TData = unknown> =
     };
 
 export const bridgeStorageLoadProtocol = 'mpgd.storage.load.v1' as const;
+export const bridgeCredentialLoadProtocol = 'mpgd.credentials.load.v1' as const;
+
+export type BridgeCredentialLoadData =
+  | {
+      readonly __mpgdBridgeProtocol: typeof bridgeCredentialLoadProtocol;
+      readonly found: false;
+    }
+  | {
+      readonly __mpgdBridgeProtocol: typeof bridgeCredentialLoadProtocol;
+      readonly found: true;
+      readonly value: string;
+    };
+
+export function decodeBridgeCredentialLoadData(input: unknown): string | null {
+  if (typeof input !== 'object' || input === null
+    || !('__mpgdBridgeProtocol' in input)
+    || input.__mpgdBridgeProtocol !== bridgeCredentialLoadProtocol
+    || !('found' in input)) {
+    throw new Error('Credential bridge load returned an invalid response.');
+  }
+  if (input.found === false && !('value' in input)) {
+    return null;
+  }
+  if (input.found === true && 'value' in input
+    && typeof input.value === 'string' && input.value !== '') {
+    return input.value;
+  }
+  throw new Error('Credential bridge load returned an invalid response.');
+}
 
 export type BridgeStorageLoadData =
   | {

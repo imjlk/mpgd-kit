@@ -539,6 +539,13 @@ export interface StorageAdapter {
   save(input: { readonly key: string; readonly value: unknown }): Promise<void>;
 }
 
+/** Device-protected opaque credentials; never backed by ordinary game storage. */
+export interface SecureCredentialStore {
+  load(input: { readonly key: string }): Promise<string | null>;
+  save(input: { readonly key: string; readonly value: string }): Promise<void>;
+  remove(input: { readonly key: string }): Promise<void>;
+}
+
 export interface PlatformGateway {
   readonly target: PlatformTarget;
   getCapabilities(): Promise<PlatformCapabilities>;
@@ -549,6 +556,8 @@ export interface PlatformGateway {
   readonly lifecycle: LifecycleAdapter;
   readonly viewport?: ViewportAdapter;
   readonly storage: StorageAdapter;
+  /** Optional: missing native support must not fall back to plaintext storage. */
+  readonly secureCredentials?: SecureCredentialStore;
   readonly presentation?: PresentationAdapter;
   readonly sharing?: ShareAdapter;
   readonly notifications?: NotificationSubscriptionAdapter;

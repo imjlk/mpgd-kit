@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createGameServicesRuntime } from '@mpgd/game-services/runtime';
 import { GameServicesBackendError } from '@mpgd/game-services/client';
+import { createGuestSessionCoordinator } from '@mpgd/game-services/guest-session';
 
 let defaultFetchCalls = 0;
 globalThis.fetch = async () => {
@@ -59,4 +60,38 @@ await assert.rejects(runtime.client.purchase({
   productId: 'COINS_100', source: 'shop', idempotencyKey: 'failed',
 }), (error) => error instanceof GameServicesBackendError && error.status === 503);
 assert.equal(defaultFetchCalls, 0);
+
+const secureValues = new Map();
+const guest = createGuestSessionCoordinator({
+  installationId: 'packed-installation',
+  credentials: {
+    async load({ key }) { return secureValues.get(key) ?? null; },
+    async save({ key, value }) { secureValues.set(key, value); },
+    async remove({ key }) { secureValues.delete(key); },
+  },
+  backend: {
+    async issueGuest() {
+      return {
+        serverUserId: 'packed-server-user', sessionId: 'packed-session',
+        identityLevel: 'guest', accessToken: 'packed-access',
+        refreshToken: 'packed-refresh', accessExpiresAt: '2030-01-01T00:00:00Z',
+      };
+    },
+    async refresh() { throw new Error('Unexpected refresh'); },
+    async revoke() {},
+    async bindAccount() { return { status: 'conflict' }; },
+  },
+  now: () => Date.parse('2029-01-01T00:00:00Z'),
+});
+const session = await guest.start();
+assert.equal(secureValues.get('mpgd.guest.refresh'), 'packed-refresh');
+assert.equal(session.serverUserId, 'packed-server-user');
+assert.equal(Object.hasOwn(session, 'accessToken'), false);
+assert.deepEqual(guest.getHeaders(), { authorization: 'Bearer packed-access' });
+assert.deepEqual(await guest.bindAccount({
+  externalProof: 'packed-proof', idempotencyKey: 'packed-bind',
+}), { status: 'conflict' });
+assert.deepEqual(guest.getHeaders(), { authorization: 'Bearer packed-access' });
+await guest.logout();
+assert.equal(secureValues.size, 0);
 console.info('Packed @mpgd/game-services custom runtime transport passed.');

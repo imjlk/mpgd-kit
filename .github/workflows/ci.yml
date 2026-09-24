@@ -798,6 +798,11 @@ jobs:
             native-plugins/capacitor-game-services/ios/Tests/LocalJsonStorageConformance/main.swift \
             -o "$RUNNER_TEMP/native-storage-conformance"
           "$RUNNER_TEMP/native-storage-conformance"
+          xcrun swiftc \
+            native-plugins/capacitor-game-services/ios/Sources/CapacitorGameServices/SecureCredentialStorage.swift \
+            native-plugins/capacitor-game-services/ios/Tests/SecureCredentialStorageConformance/main.swift \
+            -o "$RUNNER_TEMP/native-credential-conformance"
+          "$RUNNER_TEMP/native-credential-conformance"
       - run: pnpm smoke:target ios
 
       - uses: actions/upload-artifact@v6
