@@ -102,6 +102,12 @@ export async function runPlatformGatewayCapabilityConformance(
 async function runFixture(
   fixture: PlatformGatewayCapabilityConformanceFixture,
 ): Promise<void> {
+  // A fixture may accidentally share its expected object with the provider.
+  // Keep the oracle independent before tryMutateSnapshot probes isolation.
+  const initialExpected = { ...fixture.expectedCapabilities };
+  const transitionExpected = fixture.transition === undefined
+    ? undefined
+    : { ...fixture.transition.expectedCapabilities };
   assertEqual(
     fixture.gateway.target,
     fixture.expectedTarget,
@@ -109,20 +115,20 @@ async function runFixture(
   );
 
   const first = await fixture.gateway.getCapabilities();
-  assertCapabilitySnapshot(first, fixture.expectedCapabilities);
+  assertCapabilitySnapshot(first, initialExpected);
 
   tryMutateSnapshot(first);
 
   const second = await fixture.gateway.getCapabilities();
   assert(second !== first, 'getCapabilities must return a fresh snapshot object for every read');
-  assertCapabilitySnapshot(second, fixture.expectedCapabilities);
+  assertCapabilitySnapshot(second, initialExpected);
 
-  if (fixture.transition === undefined) {
+  if (fixture.transition === undefined || transitionExpected === undefined) {
     return;
   }
 
   assert(
-    hasCapabilityDifference(fixture.expectedCapabilities, fixture.transition.expectedCapabilities),
+    hasCapabilityDifference(initialExpected, transitionExpected),
     'a transition fixture must change at least one capability',
   );
 
@@ -137,7 +143,7 @@ async function runFixture(
     updated !== first,
     'getCapabilities must not reuse an earlier snapshot after a provider transition',
   );
-  assertCapabilitySnapshot(updated, fixture.transition.expectedCapabilities);
+  assertCapabilitySnapshot(updated, transitionExpected);
 }
 
 function assertCapabilitySnapshot(

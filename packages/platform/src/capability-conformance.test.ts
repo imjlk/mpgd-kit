@@ -19,6 +19,8 @@ describe('platform gateway capability conformance', () => {
 
   it('rejects gateways that leak a shared capability object', rejectsSharedSnapshot);
 
+  it('rejects a provider mutation hidden by an aliased fixture expectation', rejectsAliasedExpectation);
+
   it('rejects a snapshot recycled after a provider transition', rejectsEarlierSnapshotAfterTransition);
 
   it('rejects duplicate fixture names', async () => {
@@ -91,6 +93,30 @@ export async function rejectsSharedSnapshot(): Promise<void> {
     runPlatformGatewayCapabilityConformance({ fixtures: [fixture] }),
   ).rejects.toMatchObject({
     cause: { message: expect.stringContaining('getCapabilities must return a fresh snapshot') },
+  });
+}
+
+/**
+ * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Ensures the expected state cannot move with a provider-owned snapshot.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f83948b Compared the first and second reads when the fixture expectation aliases the first result.
+ */
+export async function rejectsAliasedExpectation(): Promise<void> {
+  const expected = { ...createUnsupportedCapabilities() };
+  let reads = 0;
+  const fixture = {
+    ...createFixture(() => {
+      reads += 1;
+      return reads === 1 ? expected : { ...expected };
+    }),
+    expectedCapabilities: expected,
+  };
+
+  await expect(
+    runPlatformGatewayCapabilityConformance({ fixtures: [fixture] }),
+  ).rejects.toMatchObject({
+    cause: {
+      message: expect.stringContaining('capability nativeIap must match the expected provider state'),
+    },
   });
 }
 
