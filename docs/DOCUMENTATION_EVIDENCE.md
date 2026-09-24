@@ -28,6 +28,15 @@ population; do not use whichever symbols happen to appear in examples as the
 API inventory. Keep documentation, implementation, and test coverage in
 separate claims so one citation cannot satisfy another obligation.
 
+The follow-on example claim selects
+[`platform-capabilities.ts`](examples/platform-capabilities.ts) separately
+from the platform test claim. Each spec section must therefore have an
+example citation as well as a test citation; neither population stands in for
+the other. Run `pnpm docs:examples:check` for TypeScript validity, then
+`pnpm build:packages @mpgd/platform` and `pnpm docs:examples:test` for the
+local behavior checks. These examples do not extend the enforced public API
+inventory beyond the pilot subpath.
+
 ## Authoring and review
 
 - Put Markdown citations in HTML comments next to the paragraph they justify.

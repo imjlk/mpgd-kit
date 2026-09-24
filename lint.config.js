@@ -48,6 +48,13 @@ const evidenceGraph = {
       reference: capabilitySpec,
     },
     {
+      name: 'typed examples demonstrate capability behavior',
+      type: 'typescript',
+      files: ['docs/examples/platform-capabilities.ts'],
+      symbol: 'function',
+      reference: capabilitySpec,
+    },
+    {
       name: 'each guide applies documentation principles',
       type: 'markdown',
       files: ['docs/guides/platform-capabilities.md'],

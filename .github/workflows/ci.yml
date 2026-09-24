@@ -228,10 +228,35 @@ jobs:
                 release.manifest.schema.json)
                   run_prepared=true
                   ;;
-                package.json|packages/cli/package.json|packages/create-game/package.json|packages/game-services/package.json|packages/release-manifest/package.json|packages/target-*/package.json|apps/game-services-worker/package.json|apps/target-*/package.json|apps/mobile-capacitor/package.json|packages/cli/templates/*package.json|adapters/*/package.json|native-plugins/*/package.json|backend/*/package.json)
+                package.json)
+                  if [[ "${package_json_has_content}" == "true" ]]; then
+                    # Private docs command changes do not affect package or
+                    # target runtime contracts. Keep the prepared suite for
+                    # every other root manifest edit.
+                    if ! node -e '
+                      const { execFileSync } = require("node:child_process");
+                      const { readFileSync } = require("node:fs");
+                      const before = JSON.parse(execFileSync("git", ["show", process.argv[1] + ":package.json"], { encoding: "utf8" }));
+                      const after = JSON.parse(readFileSync("package.json", "utf8"));
+                      for (const manifest of [before, after]) {
+                        for (const name of Object.keys(manifest.scripts ?? {})) {
+                          if (name.startsWith("docs:")) delete manifest.scripts[name];
+                        }
+                      }
+                      process.exit(JSON.stringify(before) === JSON.stringify(after) ? 0 : 1);
+                    ' "${base_sha}"; then
+                      run_prepared=true
+                    fi
+                  fi
+                  ;;
+                packages/cli/package.json|packages/create-game/package.json|packages/game-services/package.json|packages/release-manifest/package.json|packages/target-*/package.json|apps/game-services-worker/package.json|apps/target-*/package.json|apps/mobile-capacitor/package.json|packages/cli/templates/*package.json|adapters/*/package.json|native-plugins/*/package.json|backend/*/package.json)
                   if [[ "${package_json_has_content}" == "true" ]]; then
                     run_prepared=true
                   fi
+                  ;;
+                tsconfig.evidence.json|tsconfig.docs-examples.json)
+                  # Narrow documentation Programs cannot change published
+                  # packages or the prepared runtime suite.
                   ;;
                 tools/*.ts|tools/*.mjs|tools/ci/*|tools/package/*|tools/graph/*|tools/smoke/*|tools/target/*|tools/icons/*|tools/fixtures/*|packages/bridge/*|packages/platform/*|packages/cli/*|packages/create-game/*|packages/game-services/*|packages/release-manifest/*|packages/target-*/*|apps/game-services-worker/*|apps/target-*/*|apps/mobile-capacitor/*|adapters/*|native-plugins/*|backend/*)
                   run_prepared=true

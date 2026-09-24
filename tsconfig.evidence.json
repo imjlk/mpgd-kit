@@ -6,6 +6,7 @@
   },
   "include": [
     "packages/platform/src/capability-conformance.ts",
-    "packages/platform/src/capability-conformance.test.ts"
+    "packages/platform/src/capability-conformance.test.ts",
+    "docs/examples/platform-capabilities.ts"
   ]
 }
