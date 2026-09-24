@@ -226,4 +226,34 @@ assert.equal((await disabledGateway.commerce.purchase({
 })).status, 'cancelled');
 assert.equal(purchaseCalls, 2);
 
+let oneTimeProductType: 'subscription' | 'consumable' = 'subscription';
+let oneTimePurchases = 0;
+const oneTimeGateway: PlatformGateway = {
+  ...subscriptionGateway,
+  getCapabilities: async () => ({ ...createUnsupportedCapabilities(), nativeIap: true }),
+  commerce: {
+    ...subscriptionGateway.commerce,
+    getProducts: async () => [{ ...subscriptionProduct, type: oneTimeProductType }],
+    async purchase() {
+      oneTimePurchases += 1;
+      return { status: 'pending', entitlementIds: [] };
+    },
+  },
+};
+const oneTimeConfigured = withTargetAvailability(oneTimeGateway, android);
+assert.deepEqual(await oneTimeConfigured.commerce.getProducts(), []);
+assert.equal((await oneTimeConfigured.commerce.purchase({
+  productId: product.id, source: 'shop', idempotencyKey: 'subscription-bypass',
+})).status, 'cancelled');
+assert.equal(oneTimePurchases, 0);
+oneTimeProductType = 'consumable';
+assert.equal((await oneTimeConfigured.commerce.purchase({
+  productId: product.id, source: 'shop', idempotencyKey: 'one-time-allowed',
+})).status, 'pending');
+assert.equal(oneTimePurchases, 1);
+assert.equal((await oneTimeConfigured.commerce.purchase({
+  productId: 'UNKNOWN_PRODUCT', source: 'shop', idempotencyKey: 'unknown-product',
+})).status, 'cancelled');
+assert.equal(oneTimePurchases, 1);
+
 console.log('Provider readiness and subscription distinction smoke passed.');

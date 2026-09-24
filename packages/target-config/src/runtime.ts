@@ -715,19 +715,27 @@ export function withTargetAvailability(
       },
       async purchase(input) {
         const available = await getIapAvailability();
-        let productType = options.effectiveConfig?.monetization.products.find(
+        const configuredProduct = options.effectiveConfig?.monetization.products.find(
           (product) => product.id === input.productId,
-        )?.type;
-        if (productType === undefined && available.subscriptions) {
+        );
+        let productType = configuredProduct?.type;
+        if (
+          productType === undefined
+          && options.effectiveConfig === undefined
+          && available.oneTime !== available.subscriptions
+        ) {
           productType = (await gateway.commerce.getProducts()).find(
             (product) => product.id === input.productId,
           )?.type;
         }
-        // A subscription-only provider must not handle an unknown product.
+        // When only one purchase route is available, unknown product types
+        // must not fall through to that route. An effective catalog is binding.
         const allowed = productType === 'subscription'
           ? available.subscriptions
-          : available.oneTime;
-        if (!allowed) {
+          : productType === undefined
+            ? available.oneTime && available.subscriptions
+            : available.oneTime;
+        if (!allowed || (options.effectiveConfig !== undefined && configuredProduct?.enabled !== true)) {
           return {
             status: 'cancelled',
             entitlementIds: [],
