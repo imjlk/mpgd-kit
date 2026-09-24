@@ -34,7 +34,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const safeFallbackMethods = new Set<BridgeMethod>([
-  'identity.getPlayer', 'identity.getSession', 'notifications.getStatus',
+  'identity.getPlayer',
+  'identity.getSession',
+  'notifications.getStatus',
 ]);
 
 export function createCapacitorPlatformGateway(input: {
