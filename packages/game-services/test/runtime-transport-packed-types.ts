@@ -3,10 +3,24 @@ import {
   type CreateGameServicesRuntimeInput,
 } from '@mpgd/game-services/runtime';
 import type { GameServicesBackendTransport } from '@mpgd/game-services/client';
-import type { PlatformGateway } from '@mpgd/platform';
+import {
+  createGuestSessionCoordinator,
+  type GuestSessionBackend,
+} from '@mpgd/game-services/guest-session';
+import type { PlatformGateway, SecureCredentialStore } from '@mpgd/platform';
 
 declare const gateway: PlatformGateway;
 declare const transport: GameServicesBackendTransport;
+declare const secureCredentials: SecureCredentialStore;
+declare const guestBackend: GuestSessionBackend;
+
+const guest = createGuestSessionCoordinator({
+  installationId: 'packed-installation',
+  credentials: secureCredentials,
+  backend: guestBackend,
+});
+const guestHeaders: Readonly<Record<'authorization', string>> = guest.getHeaders();
+void guestHeaders;
 
 const http: CreateGameServicesRuntimeInput = {
   gateway,

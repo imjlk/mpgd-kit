@@ -3,6 +3,7 @@ export * from './app-store-verifier.js';
 export * from './apps-in-toss-evidence-verification.js';
 export * from './apps-in-toss-partner-api.js';
 export * from './client.js';
+export * from './guest-session.js';
 export * from './contract.js';
 export * from './evidence-verification.js';
 export * from './google-play-purchase.js';
