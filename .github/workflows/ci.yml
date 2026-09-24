@@ -498,6 +498,7 @@ jobs:
         if: ${{ needs.prepare.outputs.run_native == 'true' }}
         run: |
           pnpm pack:packages:prepared
+          pnpm smoke:native-packed-consumer
           pnpm smoke:adapter-effective-config
           pnpm smoke:platform-capability-conformance
           pnpm smoke:storage-adapter-conformance
@@ -667,6 +668,7 @@ jobs:
       - run: pnpm smoke:apps-in-toss-production-evidence:prepared
       - run: pnpm graph:preflight
       - run: pnpm pack:packages:prepared
+      - run: pnpm smoke:native-packed-consumer
       - run: pnpm build:web
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
