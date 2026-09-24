@@ -224,7 +224,7 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
             "cloudSave": false,
             "socialShare": false,
             "haptics": false,
-            "localizedContent": false
+            "localizedContent": true
         ]
     }
 

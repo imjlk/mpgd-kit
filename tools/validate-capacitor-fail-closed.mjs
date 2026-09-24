@@ -5,11 +5,11 @@ const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf
 const implementations = [
   {
     path: 'native-plugins/capacitor-game-services/android/src/main/java/dev/mpgd/capacitor/CapacitorGameServicesPlugin.java',
-    capability: (name) => new RegExp(`\\.put\\("${name}", false\\)`),
+    capability: (name, enabled) => new RegExp(`\\.put\\("${name}", ${enabled}\\)`),
   },
   {
     path: 'native-plugins/capacitor-game-services/ios/Sources/CapacitorGameServices/CapacitorGameServicesPlugin.swift',
-    capability: (name) => new RegExp(`"${name}": false`),
+    capability: (name, enabled) => new RegExp(`"${name}": ${enabled}`),
   },
 ];
 
@@ -24,8 +24,13 @@ for (const implementation of implementations) {
     'bannerAds',
     'nativeLeaderboard',
   ]) {
-    assert.match(source, implementation.capability(name), `${implementation.path}: ${name} must be disabled without a provider`);
+    assert.match(source, implementation.capability(name, false), `${implementation.path}: ${name} must be disabled without a provider`);
   }
+  assert.match(
+    source,
+    implementation.capability('localizedContent', true),
+    `${implementation.path}: WebView localization remains available without native providers`,
+  );
 
   for (const code of ['NATIVE_IAP_UNAVAILABLE', 'NATIVE_ADS_UNAVAILABLE', 'NATIVE_LEADERBOARD_UNAVAILABLE']) {
     assert.ok(source.includes(code), `${implementation.path}: missing fail-closed ${code} response`);

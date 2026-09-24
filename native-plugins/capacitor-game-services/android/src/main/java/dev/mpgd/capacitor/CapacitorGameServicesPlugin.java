@@ -287,7 +287,7 @@ public class CapacitorGameServicesPlugin extends Plugin {
             .put("cloudSave", false)
             .put("socialShare", false)
             .put("haptics", false)
-            .put("localizedContent", false);
+            .put("localizedContent", true);
     }
 
     private JSObject player() {
