@@ -989,7 +989,10 @@ jobs:
           retention-days: 7
 
   docs-deploy:
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.prepare.outputs.docs_validation == 'true' && needs.docs-validation.result == 'success' && needs.ci-required.result == 'success' }}
+    # ci-required succeeds with intentionally skipped test jobs in its needs
+    # chain. Override Actions' implicit success() so that skip does not
+    # suppress the deployment after the required gate has passed.
+    if: ${{ always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.prepare.outputs.docs_validation == 'true' && needs.docs-validation.result == 'success' && needs.ci-required.result == 'success' }}
     needs: [prepare, docs-validation, ci-required]
     runs-on: ubuntu-latest
     timeout-minutes: 10
