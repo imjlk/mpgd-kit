@@ -91,6 +91,7 @@ export interface AssetPackVerifyOptions {
 
 const DEFAULT_MANIFEST_BYTE_CAP = 32 * 1024 * 1024;
 const DEFAULT_VERIFY_TIMEOUT_MS = 120_000;
+const FIFO_WRITER_GRACE_MS = 1000;
 /** The watchdog arms one millisecond after the deadline. Leave one
  * millisecond of headroom so the largest accepted timeout plus that offset
  * still fits the platform timer range instead of clamping to 1 ms. */
@@ -454,6 +455,10 @@ const readManifestCapped = async (
       // is connected but has no data; a later zero-byte read is its EOF.
       const buffer = Buffer.allocUnsafe(Math.min(STREAM_CHUNK_BYTES, cap + 1));
       const isFifo = info.isFIFO();
+      // A writer can open and close between read polls without ever yielding
+      // EAGAIN. Bound the initial connection wait so that empty EOF cannot
+      // consume the default two-minute verification budget.
+      const writerGraceUntil = performance.now() + Math.min(FIFO_WRITER_GRACE_MS, deadline.remainingMs());
       let writerObserved = false;
       while (true) {
         deadline.sample();
@@ -475,9 +480,12 @@ const readManifestCapped = async (
           bytesRead = 0;
         }
         if (bytesRead === 0) {
-          // Other sources have an ordinary EOF. Only an unconnected FIFO
-          // waits for a writer; a previously observed writer has hung up.
-          if (!wouldBlock && (!isFifo || writerObserved)) {
+          // Other sources have ordinary EOF. An unconnected FIFO waits only
+          // for its bounded startup grace; an observed writer has hung up.
+          if (
+            !wouldBlock
+            && (!isFifo || writerObserved || performance.now() >= writerGraceUntil)
+          ) {
             break;
           }
           const waitMs = Math.min(10, Math.max(1, deadline.remainingMs()));

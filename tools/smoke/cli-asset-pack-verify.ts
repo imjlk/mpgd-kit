@@ -454,15 +454,8 @@ const beforeSnapshot = new Map<string, Map<string, { bytes: number; sha256: stri
   const fifoPath = join(fixtureRoot, 'empty-manifest.fifo');
   const fifoResult = spawnSync('mkfifo', [fifoPath]);
   assert.equal(fifoResult.status, 0, fifoResult.error?.message ?? 'mkfifo failed');
-  const writer = spawn(
-    process.execPath,
-    [
-      '-e',
-      'require("node:fs").openSync(process.argv[1], "w"); setTimeout(() => process.exit(0), 500);',
-      fifoPath,
-    ],
-    { stdio: 'ignore' },
-  );
+  const writerCode = 'require("node:fs").openSync(process.argv[1], "w"); process.exit(0);';
+  const writer = spawn(process.execPath, ['-e', writerCode, fifoPath], { stdio: 'ignore' });
   const writerDone = new Promise<void>((resolve, reject) => {
     writer.once('close', () => resolve());
     writer.once('error', reject);
@@ -483,6 +476,28 @@ const beforeSnapshot = new Map<string, Map<string, { bytes: number; sha256: stri
   } finally {
     writer.kill();
     await writerDone.catch(() => {});
+    rmSync(fifoPath, { force: true });
+  }
+}
+if (process.platform !== 'win32') {
+  // A FIFO with no writer also stops after the bounded connection grace.
+  const fifoPath = join(fixtureRoot, 'unconnected-manifest.fifo');
+  const fifoResult = spawnSync('mkfifo', [fifoPath]);
+  assert.equal(fifoResult.status, 0, fifoResult.error?.message ?? 'mkfifo failed');
+  try {
+    const startedAt = performance.now();
+    const report = await verifyAssetPackDelivery({
+      manifestPath: fifoPath,
+      root: join(fixtureRoot, zipOut),
+      verifyTimeoutMs: 5000,
+    });
+    assert.ok(performance.now() - startedAt < 3000, 'Unconnected FIFO returned too late.');
+    assert.equal(report.ok, false);
+    assert.ok(
+      report.failures.some((failure) => failure.code === 'manifest-invalid'),
+      JSON.stringify(report.failures),
+    );
+  } finally {
     rmSync(fifoPath, { force: true });
   }
 }
