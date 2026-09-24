@@ -97,6 +97,15 @@ try {
     providerIds: ['game-platform', 'identity', 'identity'],
   } as const;
 
+  assert.throws(
+    () => planCapacitorShellStarter({ ...options, displayName: 'Bad\u0001Name' }),
+    /invalid in native XML/u,
+  );
+  assert.throws(
+    () => planCapacitorShellStarter({ ...options, displayName: 'Bad\ud800Name' }),
+    /invalid in native XML/u,
+  );
+
   const dryRun = planCapacitorShellStarter(options);
   assert.ok(dryRun.changedFiles.includes('mpgd.targets.json'));
   assert.ok(dryRun.changedFiles.includes('apps/mobile-capacitor/capacitor.config.ts'));
@@ -231,8 +240,17 @@ try {
   const cli = path.join(root, 'apps/mobile-capacitor/node_modules/.bin/cap');
   assert.equal(existsSync(cli), true);
   const smokeInfo = path.join(root, 'apps/mobile-capacitor/ios/App/App/Info-Smoke.plist');
-  assert.match(readFileSync(smokeInfo, 'utf8'), /<string>Puzzle Game<\/string>/u);
-  assert.doesNotMatch(readFileSync(smokeInfo, 'utf8'), /UIMainStoryboardFile/u);
+  const originalSmoke = readFileSync(smokeInfo, 'utf8');
+  assert.match(originalSmoke, /<string>Puzzle Game<\/string>/u);
+  assert.doesNotMatch(originalSmoke, /UIMainStoryboardFile/u);
+  writeFileSync(smokeInfo, originalSmoke.replace('Puzzle Game', 'Other Game'));
+  assert.throws(
+    () => planCapacitorShellStarter(options),
+    /simulator Info.plist CFBundleDisplayName/u,
+  );
+  writeFileSync(smokeInfo, '<plist><dict><key>CFBundleDisplayName</key>');
+  assert.throws(() => planCapacitorShellStarter(options), /simulator Info.plist is malformed/u);
+  writeFileSync(smokeInfo, originalSmoke);
   renameSync(smokeInfo, `${smokeInfo}.saved`);
   const smokeRepair = planCapacitorShellStarter(options);
   assert.deepEqual(smokeRepair.changedFiles, [
@@ -418,9 +436,21 @@ try {
     '99999999 /* Project configurations */ = { isa = XCConfigurationList;',
     '  buildConfigurations = (88888888 /* Release */,); };',
     '88888888 /* Release */ = { isa = XCBuildConfiguration;',
-    '  buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle; }; };',
+    '  buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle;',
+    '    INFOPLIST_FILE = App/Info.plist; }; };',
   ].join('\n');
   writeFileSync(iosProjectFile, `${inheritedIosProject}\n${projectReleaseSettings}`);
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  const inheritedInfo = inheritedIosProject.replace(
+    'INFOPLIST_FILE = App/Info.plist;',
+    'INFOPLIST_FILE = "$(inherited)";',
+  );
+  writeFileSync(iosProjectFile, `${inheritedInfo}\n${projectReleaseSettings}`);
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(iosProjectFile, `${inheritedInfo.replace(
+    'INFOPLIST_FILE = "$(inherited)";',
+    '',
+  )}\n${projectReleaseSettings}`);
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   const omittedIosId = inheritedIosProject.replace(
     'PRODUCT_BUNDLE_IDENTIFIER = "$(inherited)";',
@@ -428,6 +458,11 @@ try {
   );
   writeFileSync(iosProjectFile, `${omittedIosId}\n${projectReleaseSettings}`);
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(iosProjectFile, `${omittedIosId.replace(
+    'INFOPLIST_FILE = App/Info.plist;',
+    '"PRODUCT_BUNDLE_IDENTIFIER" = dev.other.game; INFOPLIST_FILE = App/Info.plist;',
+  )}\n${projectReleaseSettings}`);
+  assert.throws(() => planCapacitorShellStarter(options), /ios project app ID differs/u);
   writeFileSync(iosProjectFile, `${omittedIosId.replace(
     'DDDDDDDD /* Release */ = { isa = XCBuildConfiguration;',
     'DDDDDDDD /* Release */ = { isa = XCBuildConfiguration; baseConfigurationReference = 12345678;',
@@ -576,6 +611,7 @@ try {
     iosInfo,
     `<plist><dict><key>CFBundleDisplayName</key><string>${quotedName}</string></dict></plist>`,
   );
+  writeFileSync(smokeInfo, originalSmoke.replace('Puzzle Game', quotedName));
   const quotedTargets = readJson('mpgd.targets.json');
   const quotedTargetMap = quotedTargets.targets as Record<string, Record<string, unknown>>;
   for (const target of Object.values(quotedTargetMap)) {
@@ -611,6 +647,7 @@ try {
     iosInfo,
     '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string></dict></plist>',
   );
+  writeFileSync(smokeInfo, originalSmoke);
   for (const target of Object.values(quotedTargetMap)) {
     const metadata = target.metadata as Record<string, unknown>;
     metadata.displayName = options.displayName;

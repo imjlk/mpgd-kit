@@ -92,12 +92,7 @@ function assertIosAppIdentity(source: string, expectedAppId: string): void {
   const listId = readIosAppConfigurationList(source);
   let actual = readIosReleaseBundleId(source, listId);
   if (actual === undefined || actual === '$(inherited)') {
-    const projects = [...source.matchAll(/\b([A-F0-9]+)\s*\/\*[^*]+\*\/\s*=\s*\{/gu)]
-      .map((match) => readPbxObject(source, match[1] ?? ''))
-      .filter((block) => /\bisa\s*=\s*PBXProject;/u.test(block));
-    const projectListId = projects.length === 1
-      ? /\bbuildConfigurationList\s*=\s*([A-F0-9]+)\b/u.exec(projects[0] ?? '')?.[1]
-      : undefined;
+    const projectListId = readIosProjectConfigurationList(source);
     if (projectListId === undefined) {
       throw new Error('Existing ios project inherited App ID has no project configuration.');
     }
@@ -109,15 +104,42 @@ function assertIosAppIdentity(source: string, expectedAppId: string): void {
 }
 
 export function readIosReleaseInfoPlist(source: string): string {
-  const configuration = readIosReleaseConfiguration(source, readIosAppConfigurationList(source));
-  if (/\bINFOPLIST_FILE\s*(?:\[[^\]\r\n]+\])+["']?\s*=/u.test(configuration)) {
+  const target = readIosReleaseConfiguration(source, readIosAppConfigurationList(source));
+  let value = readIosInfoPlistSetting(target);
+  if (value === undefined) {
+    if (/\bbaseConfigurationReference\s*=/u.test(target)) {
+      throw new Error('Existing ios project Release Info.plist xcconfig cannot be read safely.');
+    }
+    const projectListId = readIosProjectConfigurationList(source);
+    if (projectListId === undefined) {
+      throw new Error('Existing ios project Release Info.plist has no project configuration.');
+    }
+    const project = readIosReleaseConfiguration(source, projectListId);
+    value = readIosInfoPlistSetting(project);
+    if (value === undefined && /\bbaseConfigurationReference\s*=/u.test(project)) {
+      throw new Error('Existing ios project Release Info.plist xcconfig cannot be read safely.');
+    }
+  }
+  if (value === undefined) {
+    throw new Error('Existing ios project Release Info.plist cannot be read safely.');
+  }
+  return value;
+}
+
+function readIosInfoPlistSetting(configuration: string): string | undefined {
+  if (/(?:^|[\s{;])["']?INFOPLIST_FILE(?:\[[^\]\r\n]+\])+["']?\s*=/u.test(configuration)) {
     throw new Error('Existing ios project conditional Release Info.plist is unsupported.');
   }
-  const values = [...configuration.matchAll(/\bINFOPLIST_FILE\s*=\s*([^;]+);/gu)]
+  const values = [...configuration.matchAll(/(?:^|[\s{;])["']?INFOPLIST_FILE["']?\s*=\s*([^;]+);/gu)]
     .map((match) => match[1]?.trim().replace(/^["']|["']$/gu, ''));
-  const value = values.length === 1 ? values[0] : undefined;
-  if (value === undefined || value.includes('$') || value.includes('\\')
-    || pathIsUnsafe(value)) {
+  if (values.length > 1) {
+    throw new Error('Existing ios project Release Info.plist is ambiguous.');
+  }
+  const value = values[0];
+  if (value === undefined || value === '$(inherited)') {
+    return undefined;
+  }
+  if (value.includes('$') || value.includes('\\') || pathIsUnsafe(value)) {
     throw new Error('Existing ios project Release Info.plist cannot be read safely.');
   }
   return value;
@@ -142,13 +164,23 @@ function readIosAppConfigurationList(source: string): string {
   return listId;
 }
 
+function readIosProjectConfigurationList(source: string): string | undefined {
+  const projects = [...source.matchAll(/\b([A-F0-9]+)\s*\/\*[^*]+\*\/\s*=\s*\{/gu)]
+    .map((match) => readPbxObject(source, match[1] ?? ''))
+    .filter((block) => /\bisa\s*=\s*PBXProject;/u.test(block));
+  return projects.length === 1
+    ? /\bbuildConfigurationList\s*=\s*([A-F0-9]+)\b/u.exec(projects[0] ?? '')?.[1]
+    : undefined;
+}
+
 function readIosReleaseBundleId(source: string, listId: string): string | undefined {
   const configuration = readIosReleaseConfiguration(source, listId);
   const hasBaseConfiguration = /\bbaseConfigurationReference\s*=/u.test(configuration);
-  if (/\bPRODUCT_BUNDLE_IDENTIFIER\s*(?:\[[^\]\r\n]+\])+["']?\s*=/u.test(configuration)) {
+  const conditionalId = /(?:^|[\s{;])["']?PRODUCT_BUNDLE_IDENTIFIER(?:\[[^\]\r\n]+\])+["']?\s*=/u;
+  if (conditionalId.test(configuration)) {
     throw new Error('Existing ios project conditional Release bundle ID is unsupported.');
   }
-  const values = [...configuration.matchAll(/\bPRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;]+);/gu)]
+  const values = [...configuration.matchAll(/(?:^|[\s{;])["']?PRODUCT_BUNDLE_IDENTIFIER["']?\s*=\s*([^;]+);/gu)]
     .map((match) => match[1]?.trim().replace(/^["']|["']$/gu, ''));
   if (values.length > 1) {
     throw new Error('Existing ios project Release bundle ID is ambiguous.');

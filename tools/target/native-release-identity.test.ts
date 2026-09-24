@@ -151,6 +151,29 @@ try {
   );
   const iosProject = join(shellRoot, 'ios/App/App.xcodeproj/project.pbxproj');
   const inheritedIosSource = readFileSync(iosProject, 'utf8');
+  const iosInput = {
+    environment: {
+      APP_VERSION: '1.4.0',
+      MPGD_TARGET_BUILD_NUMBER: '42',
+      MPGD_TARGET_MARKETING_VERSION: '1.4.0',
+    },
+    metadata: { bundleId: 'dev.example.game' },
+    platform: 'ios' as const,
+    required: false,
+    shellApp: shellRoot,
+  };
+  for (const [key, invalid] of [
+    ['PRODUCT_BUNDLE_IDENTIFIER', 'dev.other.game'],
+    ['MARKETING_VERSION', '2.0.0'],
+    ['CURRENT_PROJECT_VERSION', '99'],
+  ]) {
+    writeFileSync(
+      iosProject,
+      inheritedIosSource.replace(`${key} = "$(inherited)";`, `"${key}" = ${invalid};`),
+    );
+    assert.throws(() => assertNativeReleaseIdentity(iosInput), /Native release identity mismatch/u);
+  }
+  writeFileSync(iosProject, inheritedIosSource);
   writeFileSync(iosProject, inheritedIosSource.replace(
     'PRODUCT_BUNDLE_IDENTIFIER = "$(inherited)";',
     '"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = dev.other.game;\n    PRODUCT_BUNDLE_IDENTIFIER = "$(inherited)";',

@@ -70,6 +70,15 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     || input.displayName.length === 0 || input.displayName.length > 80) {
     throw new Error('Capacitor display name must be 1-80 characters without outer whitespace.');
   }
+  for (const scalar of input.displayName) {
+    const point = scalar.codePointAt(0) ?? 0;
+    if (point !== 0x9 && point !== 0xa && point !== 0xd
+      && !(point >= 0x20 && point <= 0xd7ff)
+      && !(point >= 0xe000 && point <= 0xfffd)
+      && !(point >= 0x10000 && point <= 0x10ffff)) {
+      throw new Error('Capacitor display name contains a character invalid in native XML.');
+    }
+  }
   const providerIds = [...new Set(input.providerIds ?? [])].sort();
   if (providerIds.some((id) => !providerIdPattern.test(id))) {
     throw new Error('Capacitor provider IDs must be lowercase hyphenated names.');
@@ -569,9 +578,45 @@ function assertNativePlatformComplete(
     }
     assertReferencedIosFiles(nativeDirectory, content, infoRelative);
     assertNativeDisplayName(nativeDirectory, platform, expectedDisplayName, infoRelative);
+    const smokeRelative = 'App/App/Info-Smoke.plist';
+    if (existsSync(path.join(nativeDirectory, smokeRelative))) {
+      if (!isNativeFile(nativeDirectory, smokeRelative)) {
+        throw new Error('Existing ios project simulator Info.plist is unsafe.');
+      }
+      assertSmokeInfoPlist(
+        readFileSync(path.join(nativeDirectory, smokeRelative), 'utf8'),
+        expectedDisplayName,
+      );
+    }
   } else {
     assertAndroidManifestResources(nativeDirectory);
     assertNativeDisplayName(nativeDirectory, platform, expectedDisplayName);
+  }
+}
+
+function assertSmokeInfoPlist(source: string, expectedDisplayName: string): void {
+  const clean = source.replace(/<!--[\s\S]*?-->/gu, '');
+  if (!/<plist\b[^>]*>\s*<dict>\s*[\s\S]*<\/dict>\s*<\/plist>\s*$/u.test(clean)) {
+    throw new Error('Existing ios project simulator Info.plist is malformed.');
+  }
+  const required: readonly [string, string][] = [
+    ['CFBundleDisplayName', expectedDisplayName],
+    ['CFBundleExecutable', '$(EXECUTABLE_NAME)'],
+    ['CFBundleIdentifier', '$(PRODUCT_BUNDLE_IDENTIFIER)'],
+    ['CFBundleName', '$(PRODUCT_NAME)'],
+    ['CFBundlePackageType', 'APPL'],
+    ['CFBundleShortVersionString', '$(MARKETING_VERSION)'],
+    ['CFBundleVersion', '$(CURRENT_PROJECT_VERSION)'],
+  ];
+  for (const [key, expected] of required) {
+    const expression = new RegExp(`<key>${key}<\\/key>\\s*<string>([^<]*)<\\/string>`, 'gu');
+    const values = [...clean.matchAll(expression)].map((match) => decodeXmlLabel(match[1] ?? ''));
+    if (values.length !== 1 || values[0] !== expected) {
+      throw new Error(`Existing ios project simulator Info.plist ${key} differs or is missing.`);
+    }
+  }
+  if (/<key>(?:UIMainStoryboardFile|UILaunchStoryboardName)<\/key>/u.test(clean)) {
+    throw new Error('Existing ios project simulator Info.plist references excluded storyboards.');
   }
 }
 
