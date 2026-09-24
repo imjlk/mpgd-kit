@@ -140,6 +140,9 @@ importers:
         specifier: workspace:*
         version: link:../../packages/platform
     devDependencies:
+      '@capacitor/core':
+        specifier: 8.5.2
+        version: 8.5.2
       ttsc:
         specifier: 0.30.4
         version: 0.30.4
@@ -259,21 +262,21 @@ importers:
   apps/mobile-capacitor:
     dependencies:
       '@capacitor/android':
-        specifier: ^8.5.1
-        version: 8.5.1(@capacitor/core@8.5.1)
+        specifier: 8.5.2
+        version: 8.5.2(@capacitor/core@8.5.2)
       '@capacitor/core':
-        specifier: ^8.5.1
-        version: 8.5.1
+        specifier: 8.5.2
+        version: 8.5.2
       '@capacitor/ios':
-        specifier: ^8.5.1
-        version: 8.5.1(@capacitor/core@8.5.1)
+        specifier: 8.5.2
+        version: 8.5.2(@capacitor/core@8.5.2)
       '@mpgd/capacitor-game-services':
         specifier: workspace:*
         version: link:../../native-plugins/capacitor-game-services
     devDependencies:
       '@capacitor/cli':
-        specifier: ^8.5.1
-        version: 8.5.1(supports-color@8.1.1)
+        specifier: 8.5.2
+        version: 8.5.2(supports-color@8.1.1)
       ttsc:
         specifier: 0.30.4
         version: 0.30.4
@@ -490,13 +493,13 @@ importers:
 
   native-plugins/capacitor-game-services:
     dependencies:
-      '@capacitor/core':
-        specifier: ^8.5.1
-        version: 8.5.1
       '@mpgd/bridge':
         specifier: workspace:*
         version: link:../../packages/bridge
     devDependencies:
+      '@capacitor/core':
+        specifier: 8.5.2
+        version: 8.5.2
       ttsc:
         specifier: 0.30.4
         version: 0.30.4
@@ -1491,21 +1494,21 @@ packages:
   '@borewit/text-codec@0.2.2':
     resolution: {integrity: sha512-DDaRehssg1aNrH4+2hnj1B7vnUGEjU6OIlyRdkMd0aUdIUvKXrJfXsy8LVtXAy7DRvYVluWbMspsRhz2lcW0mQ==}
 
-  '@capacitor/android@8.5.1':
-    resolution: {integrity: sha512-o8fUIPDSEASeXHHrDz26WU7OlyiRb+QqtI9KFdnLS1jUL77o5iGrvegibaZX8rWpiCyDJ6jlUhhhHlfeq3ou9A==}
+  '@capacitor/android@8.5.2':
+    resolution: {integrity: sha512-rtiaz78egCcS+vs29wkWCL3C+RhazKMSygXcjutwWP8NmO6r5UBxOvGf3Wjz5+ahobyQ723tn9gCePwRwcNDZQ==}
     peerDependencies:
       '@capacitor/core': ^8.5.0
 
-  '@capacitor/cli@8.5.1':
-    resolution: {integrity: sha512-LKQFSyLg1QbTN6CGDoFqeRtAlj8C3c9OymP8OuhwlmkbSQwh9i1HQjwUCaNyVem2XkY9rv0v2UOfVlgoxH5pAw==}
+  '@capacitor/cli@8.5.2':
+    resolution: {integrity: sha512-O2kpA5ZPJUAmliDCcmpMf8xnJwMezxlFPUrlyOAjbL3U9MFNY3l4ZpPI/UXwvyPmR8ETcVF9pFr+VdWq61rqTQ==}
     engines: {node: '>=22.0.0'}
     hasBin: true
 
-  '@capacitor/core@8.5.1':
-    resolution: {integrity: sha512-IOQ7ynG1qgrJ/RLuCO3WgyRGmkmmG/cdStRR4ftU2dWEN1FdtLrnI/XpZmZuUsOEHEnzBRJY/PmRH8eTLiXfhA==}
+  '@capacitor/core@8.5.2':
+    resolution: {integrity: sha512-agnQbGdhGw/KZFuLf7H9SY2o+oE7upkr/WPQsYaokXP6f9chaE8iVmbKkfN6SVl4w3pmz7oZ3Ur1hbkmy1hx+w==}
 
-  '@capacitor/ios@8.5.1':
-    resolution: {integrity: sha512-0EVqwCYf3RUp2JAjUGZ04xmG6dSpIsPmPacI9zKxn6mu9RSiHhmFF230ghe00HrkyB6ig6SfNdoADvVODxYhlQ==}
+  '@capacitor/ios@8.5.2':
+    resolution: {integrity: sha512-eOT2S67AfTFG7KN0T3oxwAajrJz4rSye+ODfvChiwrk0F/+kWufFM1qU6cDjGJUOfwdAoeuEpZyWHSwZlu4GFg==}
     peerDependencies:
       '@capacitor/core': ^8.5.0
 
@@ -7487,11 +7490,11 @@ snapshots:
 
   '@borewit/text-codec@0.2.2': {}
 
-  '@capacitor/android@8.5.1(@capacitor/core@8.5.1)':
+  '@capacitor/android@8.5.2(@capacitor/core@8.5.2)':
     dependencies:
-      '@capacitor/core': 8.5.1
+      '@capacitor/core': 8.5.2
 
-  '@capacitor/cli@8.5.1(supports-color@8.1.1)':
+  '@capacitor/cli@8.5.2(supports-color@8.1.1)':
     dependencies:
       '@ionic/cli-framework-output': 2.2.8(supports-color@8.1.1)
       '@ionic/utils-subprocess': 3.0.1(supports-color@8.1.1)
@@ -7514,13 +7517,13 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@capacitor/core@8.5.1':
+  '@capacitor/core@8.5.2':
     dependencies:
       tslib: 2.8.1
 
-  '@capacitor/ios@8.5.1(@capacitor/core@8.5.1)':
+  '@capacitor/ios@8.5.2(@capacitor/core@8.5.2)':
     dependencies:
-      '@capacitor/core': 8.5.1
+      '@capacitor/core': 8.5.2
 
   '@clack/core@1.4.3':
     dependencies:

@@ -51,10 +51,13 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
-    "@capacitor/core": "^8.5.1",
     "@mpgd/bridge": "workspace:*"
   },
+  "peerDependencies": {
+    "@capacitor/core": "^8.5.1"
+  },
   "devDependencies": {
+    "@capacitor/core": "8.5.2",
     "ttsc": "0.30.4",
     "typescript": "7.0.2"
   },
