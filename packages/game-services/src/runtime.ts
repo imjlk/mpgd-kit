@@ -8,6 +8,7 @@ import {
   createGameServicesOrpcBackendApi,
   createGameServicesOrpcClient,
   type GameServicesBackendApi,
+  type GameServicesBackendTransport,
   type GameServicesClient,
 } from './client.js';
 import type { GameServicesLedgerTarget } from './types.js';
@@ -29,16 +30,17 @@ export interface GameServicesRuntime {
   readonly client?: GameServicesClient;
 }
 
-export interface CreateGameServicesRuntimeInput {
+interface CreateGameServicesRuntimeCommonInput {
   readonly gateway: PlatformGateway;
   readonly playerId: string;
   readonly authorityMode: GameServicesAuthorityMode;
   readonly target?: PlatformTarget | string;
   readonly deploymentTarget?: string;
   readonly baseUrl?: string;
-  readonly transport?: 'http' | 'orpc';
   /** Static headers sent with every authoritative game-services request. */
   readonly headers?: Record<string, string>;
+  /** Resolve rotating credentials at request time, not runtime creation time. */
+  readonly getHeaders?: () => Readonly<Record<string, string>> | Promise<Readonly<Record<string, string>>>;
   readonly allowLocalBackend?: boolean;
   readonly localBackend?: GameServicesBackendApi;
   readonly analytics?: AnalyticsSink;
@@ -46,11 +48,26 @@ export interface CreateGameServicesRuntimeInput {
   readonly now?: () => string;
 }
 
+export type CreateGameServicesRuntimeInput = CreateGameServicesRuntimeCommonInput & (
+  | {
+      readonly transport?: 'http';
+      /** A JSON endpoint transport, not a replacement for the Fetch API. */
+      readonly httpTransport?: GameServicesBackendTransport;
+    }
+  | {
+      readonly transport: 'orpc';
+      readonly httpTransport?: never;
+    }
+);
+
 export function createGameServicesRuntime(
   input: CreateGameServicesRuntimeInput,
 ): GameServicesRuntime {
   assertAuthorityMode(input.authorityMode);
   assertTransport(input.transport);
+  if (input.transport === 'orpc' && input.httpTransport !== undefined) {
+    throw new Error('Game Services httpTransport cannot be used with oRPC.');
+  }
 
   const target = resolveGameServicesLedgerTarget(input.target ?? input.gateway.target);
 
@@ -59,6 +76,9 @@ export function createGameServicesRuntime(
   }
 
   const baseUrl = normalizeBaseUrl(input.baseUrl);
+  if (input.httpTransport !== undefined && baseUrl === undefined) {
+    throw new Error('Game Services httpTransport requires an authoritative baseUrl.');
+  }
   let backend: GameServicesBackendApi;
   let mode: Exclude<GameServicesRuntimeMode, 'disabled'>;
 
@@ -78,12 +98,13 @@ export function createGameServicesRuntime(
       ? createGameServicesOrpcBackendApi(createGameServicesOrpcClient({
           url: baseUrl,
           ...(input.headers === undefined ? {} : { headers: input.headers }),
+          ...(input.getHeaders === undefined ? {} : { getHeaders: input.getHeaders }),
         }))
       : createGameServicesHttpBackendApi({
-          transport: createGameServicesFetchBackendTransport({
-            baseUrl,
-            ...(input.headers === undefined ? {} : { headers: input.headers }),
-          }),
+          transport: withRuntimeHeaders(
+            input.httpTransport ?? createGameServicesFetchBackendTransport({ baseUrl }),
+            input,
+          ),
         });
   } else {
     if (input.authorityMode === 'production') {
@@ -120,6 +141,25 @@ export function createGameServicesRuntime(
         : { analyticsSessionId: input.analyticsSessionId }),
       ...(input.now === undefined ? {} : { now: input.now }),
     }),
+  };
+}
+
+function withRuntimeHeaders(
+  transport: GameServicesBackendTransport,
+  input: CreateGameServicesRuntimeCommonInput,
+): GameServicesBackendTransport {
+  return {
+    async send(request) {
+      const dynamicHeaders = await input.getHeaders?.();
+      return transport.send({
+        ...request,
+        headers: {
+          ...(input.headers ?? {}),
+          ...(dynamicHeaders ?? {}),
+          ...(request.headers ?? {}),
+        },
+      });
+    },
   };
 }
 

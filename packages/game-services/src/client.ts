@@ -80,6 +80,8 @@ export interface GameServicesBackendTransportRequest<TBody = unknown> {
   readonly method: 'POST';
   readonly endpoint: GameServicesBackendEndpoint;
   readonly body: TBody;
+  /** Resolved for this request only; custom transports must not forward elsewhere. */
+  readonly headers?: Readonly<Record<string, string>>;
 }
 
 export interface GameServicesBackendTransportResponse<TBody = unknown> {
@@ -99,12 +101,14 @@ export interface CreateGameServicesFetchBackendTransportInput {
   readonly baseUrl: string;
   readonly fetch?: GameServicesFetch;
   readonly headers?: Record<string, string>;
+  readonly getHeaders?: () => Readonly<Record<string, string>> | Promise<Readonly<Record<string, string>>>;
 }
 
 export interface CreateGameServicesOrpcClientInput {
   readonly url: string;
   readonly fetch?: typeof fetch;
   readonly headers?: Record<string, string>;
+  readonly getHeaders?: () => Readonly<Record<string, string>> | Promise<Readonly<Record<string, string>>>;
 }
 
 export type GameServicesFetch = (
@@ -133,6 +137,16 @@ export class GameServicesBackendError extends Error {
     this.endpoint = endpoint;
     this.status = status;
     this.body = body;
+  }
+}
+
+export class GameServicesBackendTransportError extends Error {
+  readonly endpoint: GameServicesBackendEndpoint;
+
+  constructor(endpoint: GameServicesBackendEndpoint) {
+    super(`GameServices backend transport failed: ${endpoint}`);
+    this.name = 'GameServicesBackendTransportError';
+    this.endpoint = endpoint;
   }
 }
 
@@ -497,10 +511,13 @@ export function createGameServicesFetchBackendTransport(
 
   return {
     async send(request) {
+      const dynamicHeaders = await input.getHeaders?.();
       const response = await fetcher(joinUrl(input.baseUrl, request.endpoint), {
         method: request.method,
         headers: {
           ...(input.headers ?? {}),
+          ...(dynamicHeaders ?? {}),
+          ...(request.headers ?? {}),
           'content-type': 'application/json',
         },
         body: JSON.stringify(request.body),
@@ -520,10 +537,13 @@ export function createGameServicesOrpcClient(
   const link = new RPCLink({
     origin: input.url,
     ...(input.fetch === undefined ? {} : { fetch: input.fetch }),
-    ...(input.headers === undefined
+    ...(input.headers === undefined && input.getHeaders === undefined
       ? {}
       : {
-          headers: () => input.headers,
+          headers: async () => ({
+            ...(input.headers ?? {}),
+            ...(await input.getHeaders?.() ?? {}),
+          }),
         }),
   } as never);
 
@@ -624,11 +644,23 @@ async function sendGameServicesBackendRequest<TRequest, TResponse>(
   endpoint: GameServicesBackendEndpoint,
   body: TRequest,
 ): Promise<TResponse> {
-  const response = await transport.send({
-    method: 'POST',
-    endpoint,
-    body,
-  });
+  let response: GameServicesBackendTransportResponse;
+  try {
+    response = await transport.send({
+      method: 'POST',
+      endpoint,
+      body,
+    });
+  } catch {
+    // Do not leak SDK or native transport exceptions (which can contain
+    // request headers); the caller must reconcile uncertain server outcomes.
+    throw new GameServicesBackendTransportError(endpoint);
+  }
+
+  if (!Number.isInteger(response?.status) || response.status < 100 || response.status > 599
+    || !Object.hasOwn(response, 'body')) {
+    throw new GameServicesBackendTransportError(endpoint);
+  }
 
   if (response.status < 200 || response.status >= 300) {
     throw new GameServicesBackendError(endpoint, response.status, response.body);
