@@ -606,6 +606,9 @@ importers:
       '@mpgd/phaser-assets':
         specifier: workspace:*
         version: link:../phaser-assets
+      '@xmldom/xmldom':
+        specifier: 0.9.12
+        version: 0.9.12
       entities:
         specifier: ^8.0.0
         version: 8.0.0

@@ -14,6 +14,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { DOMParser } from '@xmldom/xmldom';
 
 import { isNonPublicServiceHostname } from './production-target-readiness.js';
 import {
@@ -557,16 +558,9 @@ function assertNativePlatformComplete(
       `Existing ${platform} project is incomplete; required native files are missing.`,
     );
   }
-  if (platform === 'android') {
-    const sourceRoots = ['java', 'kotlin'].map((language) =>
-      path.join(nativeDirectory, 'app/src/main', language),
-    );
-    if (!sourceRoots.some((sourceRoot) => existsSync(sourceRoot)
-      && readdirSync(sourceRoot, { recursive: true })
-        .some((name) => typeof name === 'string'
-          && /(?:^|[\\/])MainActivity\.(?:java|kt)$/u.test(name)))) {
-      throw new Error('Existing android project is incomplete; MainActivity is missing.');
-    }
+  if (platform === 'android' && process.platform !== 'win32'
+    && (lstatSync(path.join(nativeDirectory, 'gradlew')).mode & 0o111) === 0) {
+    throw new Error('Existing android project Gradle wrapper is not executable.');
   }
   const content = readFileSync(path.join(nativeDirectory, required), 'utf8');
   assertNativeShellIdentity(platform, content, expectedAppId);
@@ -591,13 +585,99 @@ function assertNativePlatformComplete(
   } else {
     assertAndroidManifestResources(nativeDirectory);
     assertNativeDisplayName(nativeDirectory, platform, expectedDisplayName);
+    assertAndroidLauncherClasses(nativeDirectory, content);
+  }
+}
+
+function assertAndroidLauncherClasses(nativeDirectory: string, gradle: string): void {
+  const manifest = readFileSync(
+    path.join(nativeDirectory, 'app/src/main/AndroidManifest.xml'),
+    'utf8',
+  ).replace(/<!--[\s\S]*?-->/gu, '');
+  const namespace = /\bnamespace\s*(?:=\s*)?["']([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)+)["']/u
+    .exec(stripGradleComments(gradle))?.[1]
+    ?? /<manifest\b[^>]*\bpackage\s*=\s*["']([^"']+)["']/u.exec(manifest)?.[1];
+  const launchers = [...manifest.matchAll(/<(activity|activity-alias)\b([^>]*)>([\s\S]*?)<\/\1>/gu)]
+    .filter((match) => /android\.intent\.action\.MAIN/u.test(match[3] ?? '')
+      && /android\.intent\.category\.LAUNCHER/u.test(match[3] ?? ''));
+  if (launchers.length === 0) {
+    throw new Error('Existing android project launcher activity is missing.');
+  }
+  for (const launcher of launchers) {
+    const attributes = launcher[2] ?? '';
+    const attribute = launcher[1] === 'activity-alias' ? 'targetActivity' : 'name';
+    const name = new RegExp(`\\bandroid:${attribute}\\s*=\\s*["']([^"']+)["']`, 'u')
+      .exec(attributes)?.[1];
+    if (name === undefined || (name.startsWith('.') || !name.includes('.'))
+      && namespace === undefined) {
+      throw new Error('Existing android project launcher class cannot be resolved.');
+    }
+    let qualified = name;
+    if (name.startsWith('.')) {
+      qualified = `${namespace}${name}`;
+    } else if (!name.includes('.')) {
+      qualified = `${namespace}.${name}`;
+    }
+    if (!/^[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)+$/u.test(qualified)) {
+      throw new Error('Existing android project launcher class cannot be resolved.');
+    }
+    const className = qualified.slice(qualified.lastIndexOf('.') + 1);
+    const packageName = qualified.slice(0, qualified.lastIndexOf('.'));
+    const sourcePath = qualified.replaceAll('.', '/');
+    const candidates = ['java', 'kotlin'].flatMap((language) =>
+      ['java', 'kt'].map((extension) =>
+        `app/src/main/${language}/${sourcePath}.${extension}`));
+    const found = candidates.some((relative) => {
+      if (!isNativeFile(nativeDirectory, relative)) {
+        return false;
+      }
+      const source = readFileSync(path.join(nativeDirectory, relative), 'utf8');
+      const declaredPackage = /\bpackage\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)+)\s*;?/u
+        .exec(source)?.[1];
+      return declaredPackage === packageName
+        && new RegExp(`\\bclass\\s+${className}\\b`, 'u').test(source);
+    });
+    if (!found) {
+      throw new Error(`Existing android project launcher class ${qualified} is missing.`);
+    }
   }
 }
 
 function assertSmokeInfoPlist(source: string, expectedDisplayName: string): void {
-  const clean = source.replace(/<!--[\s\S]*?-->/gu, '');
-  if (!/<plist\b[^>]*>\s*<dict>\s*[\s\S]*<\/dict>\s*<\/plist>\s*$/u.test(clean)) {
+  let document;
+  try {
+    document = new DOMParser({
+      onError(_level, message) { throw new Error(message); },
+    }).parseFromString(source, 'application/xml');
+  } catch {
     throw new Error('Existing ios project simulator Info.plist is malformed.');
+  }
+  const plist = document.documentElement;
+  const roots = plist === null
+    ? []
+    : Array.from(plist.childNodes).filter((node) => node.nodeType === 1);
+  const dict = roots[0];
+  if (plist?.tagName !== 'plist' || roots.length !== 1 || dict?.nodeName !== 'dict') {
+    throw new Error('Existing ios project simulator Info.plist is malformed.');
+  }
+  const elements = Array.from(dict.childNodes).filter((node) => node.nodeType === 1);
+  if (elements.length % 2 !== 0) {
+    throw new Error('Existing ios project simulator Info.plist is malformed.');
+  }
+  const values = new Map<string, string[]>();
+  for (let index = 0; index < elements.length; index += 2) {
+    const key = elements[index];
+    const value = elements[index + 1];
+    if (key?.nodeName !== 'key' || value === undefined) {
+      throw new Error('Existing ios project simulator Info.plist is malformed.');
+    }
+    const name = key.textContent?.trim() ?? '';
+    if (name.length === 0) {
+      throw new Error('Existing ios project simulator Info.plist is malformed.');
+    }
+    const entries = values.get(name) ?? [];
+    entries.push(value.nodeName === 'string' ? (value.textContent ?? '') : '');
+    values.set(name, entries);
   }
   const required: readonly [string, string][] = [
     ['CFBundleDisplayName', expectedDisplayName],
@@ -609,13 +689,12 @@ function assertSmokeInfoPlist(source: string, expectedDisplayName: string): void
     ['CFBundleVersion', '$(CURRENT_PROJECT_VERSION)'],
   ];
   for (const [key, expected] of required) {
-    const expression = new RegExp(`<key>${key}<\\/key>\\s*<string>([^<]*)<\\/string>`, 'gu');
-    const values = [...clean.matchAll(expression)].map((match) => decodeXmlLabel(match[1] ?? ''));
-    if (values.length !== 1 || values[0] !== expected) {
+    const actual = values.get(key) ?? [];
+    if (actual.length !== 1 || actual[0] !== expected) {
       throw new Error(`Existing ios project simulator Info.plist ${key} differs or is missing.`);
     }
   }
-  if (/<key>(?:UIMainStoryboardFile|UILaunchStoryboardName)<\/key>/u.test(clean)) {
+  if (values.has('UIMainStoryboardFile') || values.has('UILaunchStoryboardName')) {
     throw new Error('Existing ios project simulator Info.plist references excluded storyboards.');
   }
 }
@@ -769,10 +848,10 @@ function assertNativeDisplayName(
     );
   }
   const source = readFileSync(path.join(nativeDirectory, relative), 'utf8');
-  const expression = platform === 'android'
-    ? /<string\b[^>]*\bname\s*=\s*["']app_name["'][^>]*>([^<]*)<\/string>/gu
-    : /<key>CFBundleDisplayName<\/key>\s*<string>([^<]*)<\/string>/gu;
-  const labels = [...source.matchAll(expression)].map((match) => decodeXmlLabel(match[1] ?? ''));
+  const labels = platform === 'android'
+    ? [readAndroidString(nativeDirectory, 'app_name')]
+    : [...source.matchAll(/<key>CFBundleDisplayName<\/key>\s*<string>([^<]*)<\/string>/gu)]
+      .map((match) => decodeXmlLabel(match[1] ?? ''));
   if (labels.length !== 1 || labels[0] !== expectedDisplayName) {
     throw new Error(`Existing ${platform} project display name differs or cannot be read safely.`);
   }
@@ -788,7 +867,7 @@ function assertNativeDisplayName(
     if (label === undefined) {
       throw new Error('Existing android project application label is missing.');
     }
-    const effective = resolveAndroidLabel(source, label);
+    const effective = resolveAndroidLabel(nativeDirectory, label);
     if (effective !== expectedDisplayName) {
       throw new Error(
         'Existing android project application label differs from the requested name.',
@@ -804,16 +883,16 @@ function assertNativeDisplayName(
       }
       const launcherLabel = /\bandroid:label\s*=\s*["']([^"']+)["']/u.exec(activity[2] ?? '')?.[1];
       if (launcherLabel !== undefined
-        && resolveAndroidLabel(source, launcherLabel) !== expectedDisplayName) {
+        && resolveAndroidLabel(nativeDirectory, launcherLabel) !== expectedDisplayName) {
         throw new Error('Existing android project launcher label differs from the requested name.');
       }
     }
   }
 }
 
-function resolveAndroidLabel(resources: string, label: string): string {
+function resolveAndroidLabel(nativeDirectory: string, label: string): string {
   if (label.startsWith('@string/')) {
-    return readAndroidString(resources, label.slice('@string/'.length));
+    return readAndroidString(nativeDirectory, label.slice('@string/'.length));
   }
   if (label.startsWith('@')) {
     throw new Error('Existing android project application label resource is unsupported.');
@@ -821,7 +900,7 @@ function resolveAndroidLabel(resources: string, label: string): string {
   return decodeXmlLabel(label);
 }
 
-function readAndroidString(source: string, key: string): string {
+function readAndroidString(nativeDirectory: string, key: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)) {
     throw new Error('Existing android project application label is unsupported.');
   }
@@ -829,7 +908,19 @@ function readAndroidString(source: string, key: string): string {
     `<string\\b[^>]*\\bname\\s*=\\s*["']${key}["'][^>]*>([^<]*)<\\/string>`,
     'gu',
   );
-  const values = [...source.matchAll(expression)].map((match) => decodeXmlLabel(match[1] ?? ''));
+  const overlay = path.join(nativeDirectory, 'app/src/release/res/values');
+  const overlayValues = existsSync(overlay) && lstatSync(overlay).isDirectory()
+    ? readdirSync(overlay).filter((file) => file.endsWith('.xml'))
+      .flatMap((file) => [...readFileSync(path.join(overlay, file), 'utf8').matchAll(expression)])
+        .map((match) => decodeXmlLabel(match[1] ?? ''))
+    : [];
+  const main = readFileSync(
+    path.join(nativeDirectory, 'app/src/main/res/values/strings.xml'),
+    'utf8',
+  );
+  const values = overlayValues.length > 0
+    ? overlayValues
+    : [...main.matchAll(expression)].map((match) => decodeXmlLabel(match[1] ?? ''));
   if (values.length !== 1) {
     throw new Error('Existing android project application label resource is missing or ambiguous.');
   }

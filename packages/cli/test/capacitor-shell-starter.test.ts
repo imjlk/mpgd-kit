@@ -50,6 +50,15 @@ function iosProjectWithAppId(appId: string): string {
   ].join('\n');
 }
 
+const completeAndroidManifest = [
+  '<manifest package="dev.example.puzzle">',
+  '<application android:label="@string/app_name" android:theme="@style/AppTheme">',
+  '<activity android:name=".MainActivity"><intent-filter>',
+  '<action android:name="android.intent.action.MAIN"/>',
+  '<category android:name="android.intent.category.LAUNCHER"/>',
+  '</intent-filter></activity></application></manifest>',
+].join('');
+
 try {
   writeJson('package.json', {
     name: '@game/puzzle',
@@ -216,7 +225,9 @@ try {
             'android/app/src/main/res/values/styles.xml':
               '<resources><style name="AppTheme" /></resources>',
             'android/app/src/main/AndroidManifest.xml':
-              '<manifest><application android:label="@string/app_name" android:theme="@style/AppTheme" /></manifest>',
+              completeAndroidManifest,
+            'android/app/src/main/java/dev/example/puzzle/MainActivity.java':
+              'package dev.example.puzzle; public class MainActivity {}',
             'ios/App/App/Info.plist':
               '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string></dict></plist>',
           };
@@ -224,9 +235,11 @@ try {
         }
         if (platform === 'android') {
           writeFileSync(file, [
+            'namespace "dev.example.puzzle"',
             'applicationId "dev.example.puzzle"',
             "apply from: 'capacitor.build.gradle'",
           ].join('\n'));
+          chmodSync(path.join(root, 'apps/mobile-capacitor/android/gradlew'), 0o755);
         }
       }
     },
@@ -249,6 +262,11 @@ try {
     /simulator Info.plist CFBundleDisplayName/u,
   );
   writeFileSync(smokeInfo, '<plist><dict><key>CFBundleDisplayName</key>');
+  assert.throws(() => planCapacitorShellStarter(options), /simulator Info.plist is malformed/u);
+  writeFileSync(
+    smokeInfo,
+    originalSmoke.replace('<plist version="1.0"><dict>', '<plist version="1.0"><dict><dict>'),
+  );
   assert.throws(() => planCapacitorShellStarter(options), /simulator Info.plist is malformed/u);
   writeFileSync(smokeInfo, originalSmoke);
   renameSync(smokeInfo, `${smokeInfo}.saved`);
@@ -304,6 +322,11 @@ try {
   renameSync(androidWrapper, `${androidWrapper}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /android project is incomplete/u);
   renameSync(`${androidWrapper}.saved`, androidWrapper);
+  if (process.platform !== 'win32') {
+    chmodSync(androidWrapper, 0o644);
+    assert.throws(() => planCapacitorShellStarter(options), /Gradle wrapper is not executable/u);
+    chmodSync(androidWrapper, 0o755);
+  }
   const androidRootBuild = path.join(root, 'apps/mobile-capacitor/android/build.gradle');
   renameSync(androidRootBuild, `${androidRootBuild}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /android project is incomplete/u);
@@ -346,11 +369,23 @@ try {
     androidStrings,
     '<resources><string name="app_name">Puzzle Game</string></resources>',
   );
+  const releaseValues = path.join(
+    root,
+    'apps/mobile-capacitor/android/app/src/release/res/values/strings.xml',
+  );
+  mkdirSync(path.dirname(releaseValues), { recursive: true });
+  writeFileSync(
+    releaseValues,
+    '<resources><string name="app_name">Other Game</string></resources>',
+  );
+  assert.throws(() => planCapacitorShellStarter(options), /android project display name differs/u);
+  unlinkSync(releaseValues);
   const androidManifest = path.join(
     root,
     'apps/mobile-capacitor/android/app/src/main/AndroidManifest.xml',
   );
-  writeFileSync(androidManifest, '<manifest><application android:label="Other Game" /></manifest>');
+  const wrongLabelManifest = '<manifest><application android:label="Other Game" /></manifest>';
+  writeFileSync(androidManifest, wrongLabelManifest);
   assert.throws(() => planCapacitorShellStarter(options), /application label differs/u);
   writeFileSync(androidManifest, [
     '<manifest><application android:label="@string/app_name">',
@@ -360,10 +395,14 @@ try {
     '</intent-filter></activity></application></manifest>',
   ].join(''));
   assert.throws(() => planCapacitorShellStarter(options), /launcher label differs/u);
-  writeFileSync(
-    androidManifest,
-    '<manifest><application android:label="@string/app_name" android:theme="@style/AppTheme" /></manifest>',
+  writeFileSync(androidManifest, completeAndroidManifest);
+  const mainActivity = path.join(
+    root,
+    'apps/mobile-capacitor/android/app/src/main/java/dev/example/puzzle/MainActivity.java',
   );
+  writeFileSync(mainActivity, 'package dev.other.puzzle; public class MainActivity {}');
+  assert.throws(() => planCapacitorShellStarter(options), /launcher class.*missing/u);
+  writeFileSync(mainActivity, 'package dev.example.puzzle; public class MainActivity {}');
   const androidStyles = path.join(
     root,
     'apps/mobile-capacitor/android/app/src/main/res/values/styles.xml',
