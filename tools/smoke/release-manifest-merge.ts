@@ -105,6 +105,16 @@ try {
   assert.throws(
     () =>
       withNativeDelivery({
+        platform: 'android',
+        mode: 'unsigned-archive',
+        signed: false,
+        submissionCandidate: false,
+      }),
+    /production native delivery is unsigned/u,
+  );
+  assert.throws(
+    () =>
+      withNativeDelivery({
         platform: 'ios',
         mode: 'signed-archive',
         signed: true,

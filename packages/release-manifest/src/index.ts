@@ -83,6 +83,9 @@ export function assertReleaseManifest(input: unknown): ReleaseManifest {
       || delivery.submissionCandidate !== expectedCandidate) {
       throw new TypeError(`Release manifest native delivery state is inconsistent: ${target}.`);
     }
+    if (entry.profile === 'production' && !delivery.signed) {
+      throw new TypeError(`Release manifest production native delivery is unsigned: ${target}.`);
+    }
   }
 
   if (!fullGitShaPattern.test(manifest.kitGitSha)) {
