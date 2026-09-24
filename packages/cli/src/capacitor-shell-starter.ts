@@ -155,10 +155,11 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     if (metadata.displayName !== undefined && metadata.displayName !== input.displayName) {
       throw new Error(`${targetName} display name conflicts with the requested name.`);
     }
+    const expectedArtifact = targetName === 'android' ? 'aab' : 'ipa';
     if (target.artifact === undefined) {
-      target.artifact = targetName === 'android' ? 'aab' : 'ipa';
-    } else if (typeof target.artifact !== 'string' || target.artifact.trim() === '') {
-      throw new Error(`${targetName}.artifact must be a non-empty native artifact name.`);
+      target.artifact = expectedArtifact;
+    } else if (target.artifact !== expectedArtifact) {
+      throw new Error(`${targetName}.artifact must be ${expectedArtifact} for this native shell.`);
     }
     target.shellApp = shellPath;
     target.webDir = webPath;

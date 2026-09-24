@@ -138,7 +138,7 @@ function assertIosSetting(
   file: string,
 ): void {
   const expression = new RegExp(`\\b${key}\\s*=\\s*([^;]+);`, 'u');
-  const conditional = new RegExp(`\\b${key}\\s*\\[[^\\]\\r\\n]+\\]["']?\\s*=`, 'u');
+  const conditional = new RegExp(`\\b${key}\\s*(?:\\[[^\\]\\r\\n]+\\])+["']?\\s*=`, 'u');
   const target = stripComments(settings.target.values);
   const project = stripComments(settings.project.values);
   const targetValues = readSettingValues(target, expression)

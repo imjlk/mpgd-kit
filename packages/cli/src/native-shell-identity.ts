@@ -129,7 +129,7 @@ function readIosReleaseBundleId(source: string, listId: string): string | undefi
   }
   const configuration = stripGradleComments(readPbxObject(source, releaseIds[0] ?? ''));
   const hasBaseConfiguration = /\bbaseConfigurationReference\s*=/u.test(configuration);
-  if (/\bPRODUCT_BUNDLE_IDENTIFIER\s*\[[^\]\r\n]+\]["']?\s*=/u.test(configuration)) {
+  if (/\bPRODUCT_BUNDLE_IDENTIFIER\s*(?:\[[^\]\r\n]+\])+["']?\s*=/u.test(configuration)) {
     throw new Error('Existing ios project conditional Release bundle ID is unsupported.');
   }
   const values = [...configuration.matchAll(/\bPRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;]+);/gu)]

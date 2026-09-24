@@ -383,6 +383,11 @@ try {
     'DDDDDDDD /* Release */ = { isa = XCBuildConfiguration; buildSettings = { "PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = dev.other.game;',
   )}\n${projectReleaseSettings}`);
   assert.throws(() => planCapacitorShellStarter(options), /conditional Release bundle ID/u);
+  writeFileSync(iosProjectFile, `${omittedIosId.replace(
+    'DDDDDDDD /* Release */ = { isa = XCBuildConfiguration; buildSettings = {',
+    'DDDDDDDD /* Release */ = { isa = XCBuildConfiguration; buildSettings = { "PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*][arch=arm64]" = dev.other.game;',
+  )}\n${projectReleaseSettings}`);
+  assert.throws(() => planCapacitorShellStarter(options), /conditional Release bundle ID/u);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle').replace(
     'PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle;',
@@ -623,6 +628,18 @@ try {
   assert.equal(completedTargets.targets.android.artifact, 'aab');
   assert.equal(completedTargets.targets.ios.artifact, 'ipa');
   applyCapacitorShellStarter(defaultArtifactPlan);
+  const wrongArtifactTargets = readJson('mpgd.targets.json');
+  const wrongArtifactMap = wrongArtifactTargets.targets as Record<string, Record<string, unknown>>;
+  assert.ok(wrongArtifactMap.android && wrongArtifactMap.ios);
+  wrongArtifactMap.android.artifact = 'ipa';
+  writeJson('mpgd.targets.json', wrongArtifactTargets);
+  assert.throws(() => planCapacitorShellStarter(options), /android.artifact must be aab/u);
+  wrongArtifactMap.android.artifact = 'aab';
+  wrongArtifactMap.ios.artifact = 'aab';
+  writeJson('mpgd.targets.json', wrongArtifactTargets);
+  assert.throws(() => planCapacitorShellStarter(options), /ios.artifact must be ipa/u);
+  wrongArtifactMap.ios.artifact = 'ipa';
+  writeJson('mpgd.targets.json', wrongArtifactTargets);
 
   const envFile = path.join(root, '.env.production');
   const originalEnv = readFileSync(envFile, 'utf8');

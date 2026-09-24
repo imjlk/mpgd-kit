@@ -170,6 +170,25 @@ try {
       }),
     /does not support conditional PRODUCT_BUNDLE_IDENTIFIER/u,
   );
+  writeFileSync(iosProject, inheritedIosSource.replace(
+    'PRODUCT_BUNDLE_IDENTIFIER = "$(inherited)";',
+    '"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*][arch=arm64]" = dev.other.game;\n    PRODUCT_BUNDLE_IDENTIFIER = "$(inherited)";',
+  ));
+  assert.throws(
+    () =>
+      assertNativeReleaseIdentity({
+        environment: {
+          APP_VERSION: '1.4.0',
+          MPGD_TARGET_BUILD_NUMBER: '42',
+          MPGD_TARGET_MARKETING_VERSION: '1.4.0',
+        },
+        metadata: { bundleId: 'dev.example.game' },
+        platform: 'ios',
+        required: false,
+        shellApp: shellRoot,
+      }),
+    /does not support conditional PRODUCT_BUNDLE_IDENTIFIER/u,
+  );
   const conditionalProjectSource = inheritedIosSource.replace(
     'PRODUCT_BUNDLE_IDENTIFIER = dev.example.game;',
     '"PRODUCT_BUNDLE_IDENTIFIER[sdk=iphoneos*]" = dev.other.game;\n    PRODUCT_BUNDLE_IDENTIFIER = dev.example.game;',
@@ -235,25 +254,27 @@ try {
     ['MARKETING_VERSION', '2.0.0'],
     ['CURRENT_PROJECT_VERSION', '99'],
   ]) {
-    writeFileSync(iosProject, inlineIosSource.replace(
-      `${key} = ${key === 'MARKETING_VERSION' ? '1.4.0' : '42'};`,
-      `${key} = ${key === 'MARKETING_VERSION' ? '1.4.0' : '42'};\n    "${key}[sdk=iphoneos*]" = ${value};`,
-    ));
-    assert.throws(
-      () =>
-        assertNativeReleaseIdentity({
-          environment: {
-            APP_VERSION: '1.4.0',
-            MPGD_TARGET_BUILD_NUMBER: '42',
-            MPGD_TARGET_MARKETING_VERSION: '1.4.0',
-          },
-          metadata: { bundleId: 'dev.example.game' },
-          platform: 'ios',
-          required: false,
-          shellApp: shellRoot,
-        }),
-      new RegExp(`does not support conditional ${key}`, 'u'),
-    );
+    for (const conditions of ['[sdk=iphoneos*]', '[sdk=iphoneos*][arch=arm64]']) {
+      writeFileSync(iosProject, inlineIosSource.replace(
+        `${key} = ${key === 'MARKETING_VERSION' ? '1.4.0' : '42'};`,
+        `${key} = ${key === 'MARKETING_VERSION' ? '1.4.0' : '42'};\n    "${key}${conditions}" = ${value};`,
+      ));
+      assert.throws(
+        () =>
+          assertNativeReleaseIdentity({
+            environment: {
+              APP_VERSION: '1.4.0',
+              MPGD_TARGET_BUILD_NUMBER: '42',
+              MPGD_TARGET_MARKETING_VERSION: '1.4.0',
+            },
+            metadata: { bundleId: 'dev.example.game' },
+            platform: 'ios',
+            required: false,
+            shellApp: shellRoot,
+          }),
+        new RegExp(`does not support conditional ${key}`, 'u'),
+      );
+    }
   }
   writeFileSync(iosProject, inlineIosSource);
 
