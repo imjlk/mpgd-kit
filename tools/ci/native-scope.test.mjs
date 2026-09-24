@@ -49,6 +49,8 @@ test('CI wires native classification to both platform jobs and the required gate
     assert.match(job ?? '', /needs\.prepare\.outputs\.run_native == 'true'/);
   }
   assert.match(workflow, /RUN_NATIVE: \$\{\{ needs\.prepare\.outputs\.run_native \}\}/);
-  assert.match(workflow, /Verify native adapter contracts[\s\S]*?pnpm pack:packages:prepared/);
+  const nativeStep = workflow.split(/\r?\n      - name: Verify native adapter contracts\r?\n/)[1]
+    ?.split(/\r?\n(?:      - |  [a-z0-9][a-z0-9_-]*:\r?\n)/)[0];
+  assert.match(nativeStep ?? '', /pnpm pack:packages:prepared/);
   assert.match(workflow, /run: node tools\/ci\/verify-coverage\.mjs/);
 });
