@@ -134,6 +134,10 @@ final class SecureCredentialStorage {
         }
     }
 
+    static boolean hasCommittedFile(File file) {
+        return file.exists() || new File(file.getPath() + ".bak").exists();
+    }
+
     private static final class MissingKeyException extends Exception { }
 
     private static final class NoBackupFileBackend implements CiphertextBackend {
@@ -155,15 +159,13 @@ final class SecureCredentialStorage {
         }
 
         private boolean hasStoredFile(File file) {
-            return file.exists()
-                || new File(file.getPath() + ".bak").exists()
-                || new File(file.getPath() + ".new").exists();
+            return hasCommittedFile(file) || new File(file.getPath() + ".new").exists();
         }
 
         @Override
         public String get(String key) throws Exception {
             File file = fileFor(key);
-            if (!hasStoredFile(file)) {
+            if (!hasCommittedFile(file)) {
                 return null;
             }
             try (FileInputStream input = new AtomicFile(file).openRead();

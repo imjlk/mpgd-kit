@@ -3,13 +3,35 @@ package dev.mpgd.capacitor;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import java.io.File;
+import java.nio.file.Files;
 import java.util.HashMap;
 import java.util.Map;
 import org.junit.Test;
 
 public class SecureCredentialStorageTest {
+    @Test
+    public void orphanNewFileIsNotACommittedCredential() throws Exception {
+        File directory = Files.createTempDirectory("mpgd-credential-").toFile();
+        File base = new File(directory, "credential.blob");
+        File pending = new File(base.getPath() + ".new");
+        File legacyBackup = new File(base.getPath() + ".bak");
+        try {
+            Files.write(pending.toPath(), new byte[] { 1 });
+            assertFalse(SecureCredentialStorage.hasCommittedFile(base));
+            Files.write(legacyBackup.toPath(), new byte[] { 2 });
+            assertTrue(SecureCredentialStorage.hasCommittedFile(base));
+        } finally {
+            Files.deleteIfExists(pending.toPath());
+            Files.deleteIfExists(legacyBackup.toPath());
+            Files.deleteIfExists(base.toPath());
+            Files.deleteIfExists(directory.toPath());
+        }
+    }
+
     @Test
     public void storesOnlySealedValuesAndRemovesThem() throws Exception {
         FakeBackend backend = new FakeBackend();

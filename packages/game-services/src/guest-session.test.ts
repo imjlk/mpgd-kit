@@ -440,8 +440,34 @@ function backendFixture() {
     installationId: 'local-install-1',
     now,
   });
-  await assert.rejects(coordinator.start(), GuestSessionCoordinatorError);
-  assert.equal(native.values.size, 0);
+  await coordinator.start();
+  assert.equal(native.values.get('mpgd.guest.refresh'), 'refresh');
+  assert.throws(() => coordinator.getHeaders(), { code: 'GUEST_SESSION_NOT_READY' });
+}
+
+{
+  const native = credentialFixture();
+  const server = backendFixture();
+  const backend: GuestSessionBackend = {
+    ...server.backend,
+    async refresh({ refreshToken }) {
+      assert.equal(refreshToken, 'refresh-1');
+      return {
+        ...session('expired-access', 'rotated-refresh'),
+        accessExpiresAt: '2020-01-01T00:00:00Z',
+      };
+    },
+  };
+  const coordinator = createGuestSessionCoordinator({
+    backend,
+    credentials: native.credentials,
+    installationId: 'local-install-1',
+    now,
+  });
+  await coordinator.start();
+  await coordinator.refresh();
+  assert.equal(native.values.get('mpgd.guest.refresh'), 'rotated-refresh');
+  assert.throws(() => coordinator.getHeaders(), { code: 'GUEST_SESSION_NOT_READY' });
 }
 
 console.info('Guest session coordinator conformance passed.');

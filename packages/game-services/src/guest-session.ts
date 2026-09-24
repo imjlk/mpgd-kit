@@ -192,7 +192,7 @@ export function createGuestSessionCoordinator(input: {
         const stored = await loadStoredRefreshToken();
         const next = validateSession(stored === null
           ? await fromBackend(() => input.backend.issueGuest({ installationId: input.installationId }))
-          : await fromBackend(() => input.backend.refresh({ refreshToken: stored })), now);
+          : await fromBackend(() => input.backend.refresh({ refreshToken: stored })));
         await persist(next);
         assertOpen();
         return view(next);
@@ -208,7 +208,7 @@ export function createGuestSessionCoordinator(input: {
         const previous = requireCurrent();
         const next = validateSession(await fromBackend(() => input.backend.refresh({
           refreshToken: previous.refreshToken,
-        })), now);
+        })));
         assertSameOwner(previous, next);
         await persist(next);
         assertOpen();
@@ -239,7 +239,7 @@ export function createGuestSessionCoordinator(input: {
         if (result.status !== 'bound' && result.status !== 'already-bound') {
           throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_RESPONSE');
         }
-        const next = validateSession(result.session, now);
+        const next = validateSession(result.session);
         assertSameOwner(previous, next);
         if (next.identityLevel !== 'authenticated') {
           throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_RESPONSE');
@@ -306,10 +306,9 @@ function view(session: ServerGuestSessionCredentials): ServerGuestSessionView {
   };
 }
 
-function validateSession(
-  value: unknown,
-  now: () => number,
-): ServerGuestSessionCredentials {
+// A server may already have consumed the previous refresh token. Persist a
+// well-formed rotated token even when the device clock makes access look expired.
+function validateSession(value: unknown): ServerGuestSessionCredentials {
   if (!isRecord(value)
     || typeof value.serverUserId !== 'string' || value.serverUserId.trim() === ''
     || typeof value.sessionId !== 'string' || value.sessionId.trim() === ''
@@ -317,8 +316,7 @@ function validateSession(
     || typeof value.accessToken !== 'string' || value.accessToken.trim() === ''
     || typeof value.refreshToken !== 'string' || value.refreshToken.trim() === ''
     || typeof value.accessExpiresAt !== 'string'
-    || !Number.isFinite(Date.parse(value.accessExpiresAt))
-    || Date.parse(value.accessExpiresAt) <= now()) {
+    || !Number.isFinite(Date.parse(value.accessExpiresAt))) {
     throw new GuestSessionCoordinatorError('GUEST_SESSION_INVALID_RESPONSE');
   }
   return {
