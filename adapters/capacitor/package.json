@@ -41,6 +41,7 @@
     "test": "vitest run && node test/package-import.mjs"
   },
   "dependencies": {
+    "@capacitor/app": "8.1.1",
     "@mpgd/bridge": "workspace:*",
     "@mpgd/capacitor-game-services": "workspace:*",
     "@mpgd/platform": "workspace:*"

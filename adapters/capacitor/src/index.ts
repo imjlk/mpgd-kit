@@ -17,6 +17,12 @@ import {
   type ShareResult,
 } from '@mpgd/platform';
 import {
+  createCapacitorAppEvents,
+  type CapacitorAppEventsApi,
+  type CapacitorIncomingUrlKind,
+  type CapacitorVisibilitySource,
+} from './app-events.js';
+import {
   assertProviderResponseData,
   createCapacitorProviderRegistry,
   type CapacitorServiceProvider,
@@ -28,6 +34,20 @@ export {
   type CapacitorServiceProvider,
   type NativeBridge,
 } from './providers.js';
+export {
+  createCapacitorAppEvents,
+  type CapacitorAppEventsApi,
+  type CapacitorIncomingUrlKind,
+  type CapacitorVisibilitySource,
+} from './app-events.js';
+
+const externalActivityMethods = new Set<BridgeMethod>([
+  'commerce.purchase',
+  'ads.showRewarded',
+  'ads.showInterstitial',
+  'identity.requestUpgrade',
+  'notifications.requestSubscription',
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -45,45 +65,69 @@ export function createCapacitorPlatformGateway(input: {
   readonly buildId: string;
   readonly bridge?: NativeBridge;
   readonly providers?: readonly CapacitorServiceProvider[];
+  readonly app?: CapacitorAppEventsApi;
+  readonly visibility?: CapacitorVisibilitySource | null;
+  readonly classifyIncomingUrl?: (url: string) => CapacitorIncomingUrlKind | null;
+  readonly historyBack?: () => void;
+  readonly onAppEventError?: (error: unknown) => void;
 }): PlatformGateway {
   const bridge = input.bridge ?? CapacitorGameServices;
   const providers = createCapacitorProviderRegistry(input.providers ?? []);
+  const lifecycle = createCapacitorAppEvents({
+    target: input.target,
+    ...(input.app === undefined ? {} : { app: input.app }),
+    ...(input.visibility === undefined ? {} : { visibility: input.visibility }),
+    ...(input.classifyIncomingUrl === undefined
+      ? {}
+      : { classifyIncomingUrl: input.classifyIncomingUrl }),
+    ...(input.historyBack === undefined ? {} : { historyBack: input.historyBack }),
+    ...(input.onAppEventError === undefined ? {} : { onError: input.onAppEventError }),
+  });
 
   async function request<TData>(
     method: BridgeMethod,
     payload: unknown,
     leaderboardRoute?: 'native' | 'remote',
   ): Promise<TData> {
-    const provider = leaderboardRoute === 'remote' && (
-      method === 'leaderboard.submitScore' || method === 'leaderboard.open'
-    ) ? undefined : providers.byMethod.get(method);
-    if (provider !== undefined) {
-      let productType: ProductType | undefined;
-      if (method === 'commerce.purchase' && provider.features.includes('nativeIap')
-        && provider.features.includes('subscriptionIap')) {
-        // The caller supplies only an ID. Resolve its provider-owned type before
-        // selecting a store route; a forged or unknown ID must not bypass it.
-        const products = await request<ProductInfo[]>('commerce.getProducts', {});
-        const productId = isRecord(payload) ? payload.productId : undefined;
-        const matches = products.filter((product) => product.id === productId);
-        if (matches.length !== 1) {
-          throw new PlatformOperationError({ code: 'NATIVE_PROVIDER_PRODUCT_UNKNOWN' });
+    const releaseExternalActivity = externalActivityMethods.has(method)
+      ? lifecycle.beginExternalActivity?.()
+      : undefined;
+    try {
+      const provider = leaderboardRoute === 'remote'
+        && (method === 'leaderboard.submitScore' || method === 'leaderboard.open')
+        ? undefined
+        : providers.byMethod.get(method);
+      if (provider !== undefined) {
+        let productType: ProductType | undefined;
+        if (method === 'commerce.purchase'
+          && provider.features.includes('nativeIap')
+          && provider.features.includes('subscriptionIap')) {
+          // The caller supplies only an ID. Resolve its provider-owned type before
+          // selecting a store route; a forged or unknown ID must not bypass it.
+          const products = await request<ProductInfo[]>('commerce.getProducts', {});
+          const productId = isRecord(payload) ? payload.productId : undefined;
+          const matches = products.filter((product) => product.id === productId);
+          if (matches.length !== 1) {
+            throw new PlatformOperationError({ code: 'NATIVE_PROVIDER_PRODUCT_UNKNOWN' });
+          }
+          productType = matches[0]?.type;
         }
-        productType = matches[0]?.type;
-      }
-      try {
-        await providers.assertMethodReady(method, payload, productType);
-        return await sendRequest<TData>(method, payload, provider);
-      } catch (error) {
-        // Only non-mutating guest/status queries may degrade. A stale readiness
-        // snapshot, SDK rejection, or malformed provider response is no safer
-        // than initialization failure for these queries.
-        if (!safeFallbackMethods.has(method)) {
-          throw error;
+        try {
+          await providers.assertMethodReady(method, payload, productType);
+          return await sendRequest<TData>(method, payload, provider);
+        } catch (error) {
+          // Only non-mutating guest/status queries may degrade. A stale readiness
+          // snapshot, SDK rejection, or malformed provider response is no safer
+          // than initialization failure for these queries.
+          if (!safeFallbackMethods.has(method)) {
+            throw error;
+          }
         }
       }
+      return await sendRequest<TData>(method, payload, undefined);
+    } finally {
+      releaseExternalActivity?.();
     }
-    return sendRequest<TData>(method, payload, undefined);
   }
 
   async function sendRequest<TData>(
@@ -200,14 +244,7 @@ export function createCapacitorPlatformGateway(input: {
         return request('leaderboard.open', payload, route);
       },
     },
-    lifecycle: {
-      onPause() {
-        return () => {};
-      },
-      onResume() {
-        return () => {};
-      },
-    },
+    lifecycle,
     storage: {
       async load(payload) {
         return decodeBridgeStorageLoadData(await request<unknown>('storage.load', payload));
