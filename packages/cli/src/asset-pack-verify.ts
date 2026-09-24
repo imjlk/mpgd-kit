@@ -450,9 +450,10 @@ const readManifestCapped = async (
       }
     } else if (process.platform !== 'win32') {
       // A blocking FIFO read can remain pending after stream.destroy() on
-      // some Linux hosts. O_NONBLOCK makes each read bounded; EAGAIN and an
-      // empty FIFO wait for the shared deadline rather than a writer exit.
+      // some Linux hosts. O_NONBLOCK bounds each read: EAGAIN means a writer
+      // is connected but has no data; a later zero-byte read is its EOF.
       const buffer = Buffer.allocUnsafe(Math.min(STREAM_CHUNK_BYTES, cap + 1));
+      let writerObserved = false;
       while (true) {
         deadline.sample();
         let bytesRead: number;
@@ -468,17 +469,21 @@ const readManifestCapped = async (
           ) {
             throw error;
           }
+          writerObserved = true;
           wouldBlock = true;
           bytesRead = 0;
         }
         if (bytesRead === 0) {
-          if (!wouldBlock && received > 0) {
+          // A writer that produced no bytes still has an observable hangup
+          // after EAGAIN. Only a FIFO with no writer yet waits for one.
+          if (!wouldBlock && writerObserved) {
             break;
           }
           const waitMs = Math.min(10, Math.max(1, deadline.remainingMs()));
           await deadline.race(new Promise<void>((resume) => setTimeout(resume, waitMs)));
           continue;
         }
+        writerObserved = true;
         received += bytesRead;
         if (received > cap) {
           throw new Error(`Delivery manifest exceeds ${cap} bytes`);
