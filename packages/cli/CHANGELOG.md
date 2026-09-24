@@ -1,5 +1,13 @@
 # @mpgd/cli
 
+## 0.33.2 — 2026-09-24
+
+### Patch changes
+
+- [52026ee](https://github.com/imjlk/mpgd-kit/commit/52026eed535a6414a53f88fa8f5db496beac3e68) Use the host's Capacitor core as a peer dependency throughout the native plugin and adapter, and include it in generated game dependencies. Allow compatible Capacitor 8 Swift Package Manager versions instead of pinning the native plugin to 8.5.1. The reference mobile shell now resolves Capacitor 8.5.2 consistently across npm, Android, and iOS. — Thanks @imjlk!
+- [87d32f6](https://github.com/imjlk/mpgd-kit/commit/87d32f6098ad4b416c355dd5d802a9f556d8529e) Use nonblocking POSIX reads for FIFO delivery manifests so a stalled writer cannot hold verification past its deadline. Bound the initial wait for a FIFO writer to one second, so an empty writer that disconnects between read polls is rejected as an invalid manifest instead of consuming the full verification budget. Keep FIFO smoke writers owned by their tests and verify both stalled and streamed cases. — Thanks @imjlk!
+- Updated dependencies: adapter-ait@0.12.4, adapter-browser@0.7.5, adapter-capacitor@0.4.12, adapter-devvit@0.9.10, adapter-verse8@0.3.8, analytics@0.3.14, catalog@0.7.4, game-services@0.15.3, i18n@0.6.3, platform@0.12.2, target-config@0.15.2
+
 ## 0.33.1 — 2026-09-24
 
 ### Patch changes
