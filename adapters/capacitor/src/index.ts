@@ -41,12 +41,18 @@ export function createCapacitorPlatformGateway(input: {
   const bridge = input.bridge ?? CapacitorGameServices;
   const providers = createCapacitorProviderRegistry(input.providers ?? []);
 
-  async function request<TData>(method: BridgeMethod, payload: unknown): Promise<TData> {
+  async function request<TData>(
+    method: BridgeMethod,
+    payload: unknown,
+    leaderboardRoute?: 'native' | 'remote',
+  ): Promise<TData> {
     const id = crypto.randomUUID();
-    let provider = providers.byMethod.get(method);
+    let provider = leaderboardRoute === 'remote' && (
+      method === 'leaderboard.submitScore' || method === 'leaderboard.open'
+    ) ? undefined : providers.byMethod.get(method);
     if (provider !== undefined) {
       try {
-        await providers.assertMethodReady(method);
+        await providers.assertMethodReady(method, payload);
       } catch (error) {
         // An unconfigured or failed optional identity/push provider must not
         // prevent guest boot or a status query through the base bridge.
@@ -163,8 +169,11 @@ export function createCapacitorPlatformGateway(input: {
       unmountBanner: (payload) => request('ads.unmountBanner', payload),
     },
     leaderboard: {
-      submitScore: (payload) => request('leaderboard.submitScore', payload),
-      open: (payload) => request('leaderboard.open', payload ?? {}),
+      submitScore: ({ route, ...payload }) => request('leaderboard.submitScore', payload, route),
+      open: (input) => {
+        const { route, ...payload } = input ?? {};
+        return request('leaderboard.open', payload, route);
+      },
     },
     lifecycle: {
       onPause() {

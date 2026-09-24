@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { bridgeStorageLoadProtocol, type BridgeRequest } from '@mpgd/bridge';
 import { createUnsupportedCapabilities } from '@mpgd/platform';
@@ -153,7 +153,10 @@ describe('Capacitor optional provider composition', () => {
       bridge: {
         async request(input) {
           adRequests.push(input);
-          return { id: input.id, ok: true, data: { status: 'shown' } };
+          return {
+            id: input.id, ok: true,
+            data: input.method === 'ads.preload' ? undefined : { status: 'shown' },
+          };
         },
       },
     };
@@ -170,10 +173,56 @@ describe('Capacitor optional provider composition', () => {
     await expect(gateway.ads.showRewarded({
       placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'ad-1',
     })).rejects.toMatchObject({ code: 'NATIVE_PROVIDER_TEMPORARILY_UNAVAILABLE' });
+    await expect(gateway.ads.preload({
+      placementId: 'CONTINUE_AFTER_FAIL', format: 'rewarded',
+    })).rejects.toMatchObject({ code: 'NATIVE_PROVIDER_TEMPORARILY_UNAVAILABLE' });
+    await expect(gateway.ads.preload({
+      placementId: 'STAGE_END_INTERSTITIAL',
+    })).rejects.toMatchObject({ code: 'NATIVE_PROVIDER_TEMPORARILY_UNAVAILABLE' });
+    await expect(gateway.ads.preload({
+      placementId: 'STAGE_END_INTERSTITIAL', format: 'interstitial',
+    })).resolves.toBeUndefined();
     await expect(gateway.ads.showInterstitial?.({
       placementId: 'STAGE_END_INTERSTITIAL',
     })).resolves.toEqual({ status: 'shown' });
-    expect(adRequests.map((request) => request.method)).toEqual(['ads.showInterstitial']);
+    expect(adRequests.map((request) => request.method)).toEqual([
+      'ads.preload', 'ads.showInterstitial',
+    ]);
+  });
+
+  it('keeps a target-selected remote leaderboard off the native provider', async () => {
+    const baseRequests: BridgeRequest[] = [];
+    const nativeRequests: BridgeRequest[] = [];
+    const native: CapacitorServiceProvider = {
+      id: 'native-leaderboard',
+      features: ['nativeLeaderboard'],
+      methods: ['leaderboard.submitScore', 'leaderboard.open'],
+      async getAvailability() { return { nativeLeaderboard: 'available' }; },
+      bridge: {
+        async request(input) {
+          nativeRequests.push(input);
+          return { id: input.id, ok: true, data: { submitted: true } };
+        },
+      },
+    };
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android', appVersion: '1', buildId: 'routes',
+      bridge: {
+        async request(input) {
+          baseRequests.push(input);
+          return { id: input.id, ok: true, data: { submitted: true } };
+        },
+      },
+      providers: [native],
+    });
+    const score = {
+      leaderboardId: 'daily', score: 10, runId: 'run-1', submittedAt: '2026-09-24T00:00:00Z',
+    };
+    await gateway.leaderboard.submitScore({ ...score, route: 'remote' });
+    expect(baseRequests.map((request) => request.method)).toEqual(['leaderboard.submitScore']);
+    expect(nativeRequests).toHaveLength(0);
+    await gateway.leaderboard.submitScore({ ...score, route: 'native' });
+    expect(nativeRequests.map((request) => request.method)).toEqual(['leaderboard.submitScore']);
   });
 
   it('cannot claim an ad reward without a backend ledger entry', async () => {
@@ -251,6 +300,30 @@ describe('Capacitor optional provider composition', () => {
     await expect(gateway.identity.requestUpgrade?.({ reason: 'save' })).rejects.toMatchObject({
       code: 'NATIVE_PROVIDER_TEMPORARILY_UNAVAILABLE', retryable: true,
     });
+  });
+
+  it('bounds a stalled identity provider before guest fallback', async () => {
+    vi.useFakeTimers();
+    try {
+      const provider: CapacitorServiceProvider = {
+        id: 'stalled-identity',
+        features: ['identityUpgrade'],
+        methods: ['identity.getPlayer', 'identity.getSession', 'identity.requestUpgrade'],
+        async getAvailability() {
+          return await new Promise<{ identityUpgrade: 'available' }>(() => {});
+        },
+        bridge: { async request() { throw new Error('must not be invoked'); } },
+      };
+      const gateway = createCapacitorPlatformGateway({
+        target: 'ios', appVersion: '1', buildId: 'stalled', bridge: baseBridge([]),
+        providers: [provider],
+      });
+      const session = gateway.identity.getSession?.();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await expect(session).resolves.toMatchObject({ identityLevel: 'guest' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([

@@ -12,7 +12,7 @@ export type RewardedAdAvailability =
 /**
  * Read at the decision point and keep a failed read distinct from a false flag.
  * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Gets the current snapshot for this decision, if the read succeeds.
- * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f83948b Checked the fresh read and separate unknown state after a rejection.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #a1834db Checked the fresh boolean read and separate unknown state after a rejection; this example does not infer readiness details.
  */
 export async function readRewardedAdAvailability(
   gateway: Pick<PlatformGateway, 'getCapabilities'>,

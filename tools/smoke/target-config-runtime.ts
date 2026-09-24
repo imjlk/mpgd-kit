@@ -1,8 +1,12 @@
+import assert from 'node:assert/strict';
+
 import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
 
 import { createBrowserPlatformGateway } from '../../adapters/browser/src/index';
 import { createVerse8PlatformGateway } from '../../adapters/verse8/src/index';
+import { assertRuntimeTargetConfigMatrix as assertStarterMatrix } from '../../examples/phaser-starter/vite.runtime-target-config';
+import { assertRuntimeTargetConfigMatrix as assertTemplateMatrix } from '../../packages/cli/templates/phaser-game/vite.runtime-target-config';
 import { resolveTargetMpgdLocale } from '../../packages/i18n/src/index';
 import {
   createEffectiveTargetConfig,
@@ -27,6 +31,18 @@ const targetConfigMatrix = readJsonFile(
 ) as TargetConfigMatrix;
 const adPlacements = readJsonFile('packages/catalog/placements.json') as AdPlacements;
 const productCatalog = readJsonFile('packages/catalog/catalog.json') as ProductCatalog;
+
+for (const validate of [assertStarterMatrix, assertTemplateMatrix]) {
+  for (const field of ['subscriptions', 'nativeLeaderboard', 'remoteLeaderboard']) {
+    const invalid = structuredClone(targetConfigMatrix) as unknown as {
+      targets: Record<string, { features: Record<string, unknown> }>;
+    };
+    const android = invalid.targets.android;
+    assert.ok(android);
+    android.features[field] = 'false';
+    assert.throws(() => validate(invalid), new RegExp(`features\\.${field} must be a boolean`));
+  }
+}
 
 const configTargets = [
   'web-preview',

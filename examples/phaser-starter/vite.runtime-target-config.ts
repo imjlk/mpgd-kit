@@ -85,6 +85,9 @@ function assertTargetConfig(input: unknown, label: string): asserts input is Tar
     `${label}.features`,
   );
   assertOptionalBoolean(input.features.bannerAds, `${label}.features.bannerAds`);
+  assertOptionalBoolean(input.features.subscriptions, `${label}.features.subscriptions`);
+  assertOptionalBoolean(input.features.nativeLeaderboard, `${label}.features.nativeLeaderboard`);
+  assertOptionalBoolean(input.features.remoteLeaderboard, `${label}.features.remoteLeaderboard`);
 
   assertRecord(input.capabilities, `${label}.capabilities`);
   assertOneOf(input.capabilities.storage, storageSupportValues, `${label}.capabilities.storage`);

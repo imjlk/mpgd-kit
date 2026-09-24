@@ -60,7 +60,7 @@ export interface PlatformGatewayCapabilityConformanceReport {
  * target-configured wrappers. Every read must return a complete boolean
  * snapshot, a fresh object, and the provider's latest state.
  * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Checks each gateway read against the required boolean keys and expected provider state.
- * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f83948b Reviewed the required keys, optional banner default, and fresh reread in runFixture.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #a1834db Reviewed required booleans, optional banner/subscription defaults, ordered readiness comparison, and fresh nested rereads.
  * @evidence docs/specs/platform-capability-snapshots.md#provider-transitions Checks a fresh provider read after the optional transition update.
  * @evidenceReview docs/specs/platform-capability-snapshots.md#provider-transitions #839c0c8 Reviewed the changed-state guard and post-update snapshot assertion.
  * @evidence docs/specs/platform-capability-snapshots.md#fixture-validation Rejects invalid fixture sets and returns the names of passing fixtures.

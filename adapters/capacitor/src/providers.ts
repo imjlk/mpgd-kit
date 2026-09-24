@@ -56,10 +56,11 @@ const availabilitySet = new Set<PlatformProviderAvailability>([
   'temporarily-unavailable',
   'available',
 ]);
+const availabilityTimeoutMs = 3_000;
 
 export interface CapacitorProviderRegistry {
   readonly byMethod: ReadonlyMap<BridgeMethod, CapacitorServiceProvider>;
-  assertMethodReady(method: BridgeMethod): Promise<void>;
+  assertMethodReady(method: BridgeMethod, payload?: unknown): Promise<void>;
   getAvailability(): Promise<Readonly<Record<
     PlatformProviderFeature,
     PlatformProviderAvailability
@@ -124,13 +125,24 @@ export function createCapacitorProviderRegistry(
     provider: CapacitorServiceProvider,
   ): Promise<Partial<Record<PlatformProviderFeature, PlatformProviderAvailability>>> => {
     let reported: Readonly<Partial<Record<PlatformProviderFeature, PlatformProviderAvailability>>>;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      reported = await provider.getAvailability();
+      reported = await Promise.race([
+        Promise.resolve().then(() => provider.getAvailability()),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('Provider availability timed out.')),
+            availabilityTimeoutMs);
+        }),
+      ]);
       if (!isRecord(reported)) {
         throw new Error('Invalid provider availability.');
       }
     } catch {
       reported = {};
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
     }
     const states: Partial<Record<PlatformProviderFeature, PlatformProviderAvailability>> = {};
     for (const feature of provider.features) {
@@ -160,17 +172,34 @@ export function createCapacitorProviderRegistry(
   return {
     byMethod,
     getAvailability,
-    async assertMethodReady(method) {
+    async assertMethodReady(method, payload) {
       const provider = byMethod.get(method);
       if (provider === undefined) {
         return;
       }
       // An unrelated provider must not delay a purchase, ad, or identity call.
       const states = await readProviderStates(provider);
-      const relevant = provider.features.filter((feature) =>
+      let relevant = provider.features.filter((feature) =>
         (featureMethods[feature] as readonly BridgeMethod[]).includes(method),
       );
-      if (relevant.some((feature) => states[feature] === 'available')) {
+      const preloadFormat = method === 'ads.preload' && isRecord(payload)
+        ? payload.format
+        : undefined;
+      if (method === 'ads.preload' && preloadFormat !== undefined) {
+        const feature = preloadFormat === 'rewarded'
+          ? 'rewardedAds'
+          : preloadFormat === 'interstitial'
+            ? 'interstitialAds'
+            : undefined;
+        relevant = feature === undefined ? [] : relevant.filter((item) => item === feature);
+      }
+      if (relevant.length === 0) {
+        throw new PlatformOperationError({ code: 'NATIVE_PROVIDER_UNSUPPORTED' });
+      }
+      const ready = method === 'ads.preload' && preloadFormat === undefined
+        ? relevant.every((feature) => states[feature] === 'available')
+        : relevant.some((feature) => states[feature] === 'available');
+      if (ready) {
         return;
       }
       // These methods exist to explain or resolve an action-required state.
@@ -185,7 +214,7 @@ export function createCapacitorProviderRegistry(
       }
 
       const state = relevant.map((feature) => states[feature] ?? 'temporarily-unavailable').find((value) =>
-        value !== 'unsupported') ?? 'unsupported';
+        value !== 'unsupported' && value !== 'available') ?? 'unsupported';
       const code = {
         unsupported: 'NATIVE_PROVIDER_UNSUPPORTED',
         'configuration-required': 'NATIVE_PROVIDER_CONFIGURATION_REQUIRED',

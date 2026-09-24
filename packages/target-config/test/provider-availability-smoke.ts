@@ -73,6 +73,52 @@ assert.equal(
   getFeatureAvailability('leaderboard', android, remoteOnlyCapabilities).reason,
   'available',
 );
+const selectedRoutes: Array<'native' | 'remote' | undefined> = [];
+const remoteGateway: PlatformGateway = {
+  ...createBrowserPlatformGateway(),
+  target: 'android',
+  async getCapabilities() {
+    return remoteOnlyCapabilities;
+  },
+  leaderboard: {
+    async submitScore(input) {
+      selectedRoutes.push(input.route);
+      return { submitted: true };
+    },
+    async open(input) {
+      selectedRoutes.push(input?.route);
+    },
+  },
+};
+const remoteConfigured = withTargetAvailability(remoteGateway, android);
+const remoteSubmission = await remoteConfigured.leaderboard.submitScore({
+  leaderboardId: 'daily',
+  score: 10,
+  runId: 'run-1',
+  submittedAt: '2026-09-24T00:00:00Z',
+});
+assert.equal(remoteSubmission.submitted, true);
+await remoteConfigured.leaderboard.open({ leaderboardId: 'daily' });
+assert.deepEqual(selectedRoutes, ['remote', 'remote']);
+
+const preloadFormats: Array<'rewarded' | 'interstitial' | 'banner' | undefined> = [];
+const adGateway: PlatformGateway = {
+  ...createBrowserPlatformGateway(),
+  target: 'android',
+  ads: {
+    async preload(input) {
+      preloadFormats.push(input.format);
+    },
+    async showRewarded() {
+      return { status: 'unavailable', rewardGranted: false };
+    },
+  },
+};
+const configuredAds = withTargetAvailability(adGateway, android, {
+  resolveAdPlacementType: () => 'interstitial',
+});
+await configuredAds.ads.preload({ placementId: 'STAGE_END_INTERSTITIAL' });
+assert.deepEqual(preloadFormats, ['interstitial']);
 
 const gateway = {
   identity: {
@@ -91,6 +137,42 @@ const snapshot = createTargetRuntimeSnapshot({
 });
 assert.equal(snapshot.integrations.identityUpgrade.state, 'action-required');
 assert.equal(snapshot.integrations.notifications.state, 'temporarily-unavailable');
+const actionableConfig = {
+  ...config,
+  integrations: {
+    ...config.integrations,
+    identityUpgrade: 'action-required',
+    notifications: 'action-required',
+  },
+} as const;
+const actionableGateway: PlatformGateway = {
+  ...createBrowserPlatformGateway(),
+  target: 'android',
+  getCapabilities: async () => ({
+    ...createUnsupportedCapabilities(),
+    providerAvailability: {
+      identityUpgrade: 'action-required',
+      pushNotifications: 'action-required',
+    },
+  }),
+  identity: {
+    getPlayer: async () => null,
+    requestUpgrade: async () => ({ status: 'completed', reloadExpected: false }),
+  },
+  notifications: {
+    getStatus: async () => 'not-subscribed',
+    requestSubscription: async () => 'subscribed',
+  },
+};
+const actionableConfigured = withTargetAvailability(actionableGateway, actionableConfig);
+const actionableRuntime = await actionableConfigured.getTargetRuntime();
+assert.equal(actionableRuntime.integrations.identityUpgrade.state, 'action-required');
+const upgradeResult = await actionableConfigured.identity.requestUpgrade?.({ reason: 'save' });
+assert.equal(upgradeResult?.status, 'completed');
+const subscriptionResult = await actionableConfigured.notifications?.requestSubscription(
+  'daily-ready',
+);
+assert.equal(subscriptionResult, 'subscribed');
 assert.equal(createTargetRuntimeSnapshot({
   target: 'android',
   config: {

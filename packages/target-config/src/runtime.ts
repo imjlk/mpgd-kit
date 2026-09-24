@@ -588,15 +588,22 @@ export function withTargetAvailability(
   const integrations = normalizeTargetIntegrationConfig(
     options.effectiveConfig?.integrations ?? config.integrations,
   );
-  const isIntegrationAvailable = (integration: TargetIntegration): boolean => (
-    createIntegrationAvailability(integration, integrations[integration], gateway).state
-      === 'available'
-  );
-  const identityUpgradeAvailable = isIntegrationAvailable('identityUpgrade');
-  const presentationAvailable = isIntegrationAvailable('presentation');
-  const sharingAvailable = isIntegrationAvailable('sharing');
-  const inboundShareAvailable = isIntegrationAvailable('inboundShare');
-  const notificationsAvailable = isIntegrationAvailable('notifications');
+  const isIntegrationCallable = (integration: TargetIntegration): boolean => {
+    const state = createIntegrationAvailability(
+      integration,
+      integrations[integration],
+      gateway,
+    ).state;
+    return state === 'available' || (
+      state === 'action-required'
+      && (integration === 'identityUpgrade' || integration === 'notifications')
+    );
+  };
+  const identityUpgradeAvailable = isIntegrationCallable('identityUpgrade');
+  const presentationAvailable = isIntegrationCallable('presentation');
+  const sharingAvailable = isIntegrationCallable('sharing');
+  const inboundShareAvailable = isIntegrationCallable('inboundShare');
+  const notificationsAvailable = isIntegrationCallable('notifications');
   const getIdentitySession = gatewayIdentity.getSession?.bind(gatewayIdentity);
   const requestIdentityUpgrade = gatewayIdentity.requestUpgrade?.bind(gatewayIdentity);
   const shareOutbound = gatewaySharing?.share?.bind(gatewaySharing);
@@ -631,17 +638,21 @@ export function withTargetAvailability(
       subscriptions: subscriptionsEnabled && capabilities.subscriptionIap === true,
     };
   };
-  const isLeaderboardAvailable = async (): Promise<boolean> => {
+  const getLeaderboardRoute = async (): Promise<'native' | 'remote' | null> => {
     if (!availabilityConfig.features.leaderboard) {
-      return false;
+      return null;
     }
 
     const capabilities = await getGatewayCapabilities();
-    return (
-      capabilities.nativeLeaderboard && isPlatformFeatureEnabled(availabilityConfig, 'nativeLeaderboard')
-    ) || (
-      capabilities.remoteLeaderboard && isPlatformFeatureEnabled(availabilityConfig, 'remoteLeaderboard')
-    );
+    if (capabilities.nativeLeaderboard
+      && isPlatformFeatureEnabled(availabilityConfig, 'nativeLeaderboard')) {
+      return 'native';
+    }
+    if (capabilities.remoteLeaderboard
+      && isPlatformFeatureEnabled(availabilityConfig, 'remoteLeaderboard')) {
+      return 'remote';
+    }
+    return null;
   };
   const isAdPlacementAllowed = (
     placementId: string,
@@ -660,13 +671,13 @@ export function withTargetAvailability(
     const actualType = options.resolveAdPlacementType?.(placementId);
 
     if (actualType !== undefined) {
-      return availabilityConfig.features[adPlacementFeatureFor(actualType)] === true;
+      return actualType !== 'banner'
+        && availabilityConfig.features[adPlacementFeatureFor(actualType)] === true;
     }
 
     return (
       availabilityConfig.features.rewardedAds ||
-      availabilityConfig.features.interstitialAds ||
-      availabilityConfig.features.bannerAds === true
+      availabilityConfig.features.interstitialAds
     );
   };
 
@@ -764,7 +775,8 @@ export function withTargetAvailability(
     ads: {
       async preload(input) {
         if (canPreloadAdPlacement(input.placementId)) {
-          await gateway.ads.preload(input);
+          const format = options.resolveAdPlacementType?.(input.placementId);
+          await gateway.ads.preload(format === undefined ? input : { ...input, format });
         }
       },
       async showRewarded(input) {
@@ -807,17 +819,27 @@ export function withTargetAvailability(
     },
     leaderboard: {
       async submitScore(input) {
-        if (!await isLeaderboardAvailable()) {
+        const route = await getLeaderboardRoute();
+        if (route === null) {
           return {
             submitted: false,
           };
         }
 
-        return gateway.leaderboard.submitScore(input);
+        return gateway.leaderboard.submitScore(
+          gateway.target === 'android' || gateway.target === 'ios'
+            ? { ...input, route }
+            : input,
+        );
       },
       async open(input) {
-        if (await isLeaderboardAvailable()) {
-          await gateway.leaderboard.open(input);
+        const route = await getLeaderboardRoute();
+        if (route !== null) {
+          await gateway.leaderboard.open(
+            gateway.target === 'android' || gateway.target === 'ios'
+              ? { ...input, route }
+              : input,
+          );
         }
       },
     },

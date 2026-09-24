@@ -210,7 +210,11 @@ export interface CommerceAdapter {
 }
 
 export interface AdAdapter {
-  preload(input: { readonly placementId: LogicalAdPlacementId }): Promise<void>;
+  preload(input: {
+    readonly placementId: LogicalAdPlacementId;
+    /** Allows a shared provider preload method to enforce format readiness. */
+    readonly format?: 'rewarded' | 'interstitial' | 'banner';
+  }): Promise<void>;
   showRewarded(input: {
     readonly placementId: LogicalAdPlacementId;
     readonly idempotencyKey: string;
@@ -264,6 +268,8 @@ export interface LeaderboardScoreInput {
   readonly score: number;
   readonly runId: string;
   readonly submittedAt: string;
+  /** Optional target-selected route when native and remote backends coexist. */
+  readonly route?: 'native' | 'remote';
 }
 
 export interface LeaderboardSubmitResult {
@@ -273,7 +279,7 @@ export interface LeaderboardSubmitResult {
 
 export interface LeaderboardAdapter {
   submitScore(input: LeaderboardScoreInput): Promise<LeaderboardSubmitResult>;
-  open(input?: { readonly leaderboardId?: string }): Promise<void>;
+  open(input?: { readonly leaderboardId?: string; readonly route?: 'native' | 'remote' }): Promise<void>;
 }
 
 /** Readiness of an installed platform provider, independent of target policy. */

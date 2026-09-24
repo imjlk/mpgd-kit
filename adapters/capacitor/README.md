@@ -32,9 +32,17 @@ purchases; `subscriptionIap` is separate. Rewarded, interstitial, and banner
 ads and native versus remote leaderboards remain distinct. Target-config
 applies the configured upper bound to this live provider state.
 
-Provider initialization failures leave the base bridge and local guest boot
-available. A registered provider never silently falls back for purchase, ad,
-or leaderboard operations; errors retain a stable code and retry hint. The
+When native and remote leaderboard routes coexist, the target-config wrapper
+selects a `route` on score/open calls; direct adapter callers can request
+`route: 'remote'` to use the base remote bridge instead of the native provider.
+When one ads provider handles multiple formats, pass `format` to `ads.preload`
+so its readiness check cannot use an available format for an unavailable one.
+
+Provider initialization failures and availability reads stalled beyond three
+seconds leave the base bridge and local guest boot available. A registered
+provider never silently falls back for purchase, ad, or native leaderboard
+operations; an explicit remote leaderboard route is a separate path. Errors
+retain a stable code and retry hint. The
 provider bridge must return a method-shaped response. In particular, an ad
 `rewardGranted: true` result requires a backend ledger entry. A native callback
 alone is evidence, not a grant. Game-specific product, consent, entitlement,

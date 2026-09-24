@@ -16,11 +16,14 @@ operation will complete.
 ## Read a fresh snapshot
 
 <!--
-@evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Explains the required boolean fields, optional banner field, and fresh-read guarantee.
-@evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f83948b Compared the snapshot description with the runner and gateway type.
+@evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Explains required booleans, optional fields, provider readiness, and fresh reads.
+@evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #a1834db Checked optional subscription and readiness fields against the gateway type and runner.
 -->
 Each read returns a separate object. Required fields are booleans; the
-optional `bannerAds` field behaves as `false` when absent. Re-read before a
+optional `bannerAds` and `subscriptionIap` fields behave as `false` when absent.
+The optional `providerAvailability` record explains why an installed provider
+is unavailable; its values are readiness states, not boolean capabilities.
+Re-read before a
 feature is shown or used. If a capability is `false`, hide or disable that
 path. Even after a `true` snapshot, handle an operation that fails or becomes
 unavailable; the snapshot is not a promise that the operation succeeds.
