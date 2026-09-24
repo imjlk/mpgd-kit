@@ -106,7 +106,8 @@ those headers only with a Game Services endpoint request and must itself
 enforce its configured HTTPS origin, redirect policy, and response limits;
 the runtime cannot inspect a transport's internal network destinations.
 Static headers are overridden by refreshed headers, then by explicit
-per-request headers. If `getHeaders` fails, the runtime throws a sanitized
+per-request headers, with names compared case-insensitively. If `getHeaders`
+fails, the runtime throws a sanitized
 `GameServicesHeaderResolutionError` **before** sending the request; this is
 distinct from an uncertain network outcome.
 Non-2xx HTTP transport responses still become `GameServicesBackendError` and

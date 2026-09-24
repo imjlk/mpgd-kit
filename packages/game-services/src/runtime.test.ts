@@ -294,7 +294,7 @@ try {
     authorityMode: 'production',
     baseUrl: 'https://services.example.com',
     httpTransport,
-    headers: { 'x-game-target': 'android' },
+    headers: { Authorization: 'Bearer stale', 'x-game-target': 'android' },
     getHeaders: () => ({ authorization: currentAuthorization }),
   });
   const customClient = requireValue(customRuntime.client, 'custom transport client');
@@ -316,6 +316,11 @@ try {
     customRequests[0]?.headers?.authorization,
     'Bearer first',
     'the first request should use its current authorization',
+  );
+  assertEqual(
+    Object.keys(customRequests[0]?.headers ?? {}).filter((name) => name.toLowerCase() === 'authorization').length,
+    1,
+    'custom transport must receive only one canonical authorization header',
   );
   assertEqual(
     customRequests[1]?.headers?.authorization,

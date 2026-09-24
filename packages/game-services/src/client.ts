@@ -174,11 +174,13 @@ export async function resolveGameServicesRequestHeaders(input: {
     // Resolver exceptions can contain credentials; expose a stable outcome.
     throw new GameServicesHeaderResolutionError();
   }
-  return {
-    ...(input.headers ?? {}),
-    ...(dynamicHeaders ?? {}),
-    ...(input.requestHeaders ?? {}),
-  };
+  const merged = new Map<string, string>();
+  for (const layer of [input.headers, dynamicHeaders, input.requestHeaders]) {
+    for (const [name, value] of Object.entries(layer ?? {})) {
+      merged.set(name.toLowerCase(), value);
+    }
+  }
+  return Object.fromEntries(merged);
 }
 
 export interface GameServicesClient extends GameServicesOperationClient {
