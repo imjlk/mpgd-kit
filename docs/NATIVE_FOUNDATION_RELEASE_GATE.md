@@ -20,7 +20,9 @@ The same smoke checks that the published plugin tarball contains its Java and
 Swift implementation, Capacitor registration metadata, Swift Package manifest,
 and `PrivacyInfo.xcprivacy`. The privacy manifest declares the legacy
 `UserDefaults` migration reason; an app must still review its own privacy
-disclosures and other SDKs. The CI native jobs separately compile and exercise
+disclosures and other SDKs. The macOS CI job also runs
+`pnpm smoke:native-packed-swift` to parse the Swift Package and privacy resource
+from the extracted npm tarball. The CI native jobs separately compile and exercise
 the Android and iOS source helpers, then build unsigned staging targets. The
 tarball check is not a substitute for compiling a signed external app.
 

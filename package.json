@@ -118,6 +118,7 @@
     "smoke:cli-capacitor-shell-starter": "node tools/run-ttsx.mjs packages/cli/test/capacitor-shell-starter.test.ts",
     "smoke:cli-capacitor-shell-materialize": "node tools/run-ttsx.mjs tools/smoke/cli-capacitor-shell-materialize.ts",
     "smoke:native-packed-consumer": "node tools/smoke/native-packed-consumer.mjs",
+    "smoke:native-packed-swift": "node tools/smoke/native-packed-swift.mjs",
     "smoke:production-target-readiness": "node tools/run-ttsx.mjs tools/smoke/production-target-readiness.ts",
     "smoke:native-release-identity": "node tools/run-ttsx.mjs tools/target/native-release-identity.test.ts",
     "smoke:release-manifest-merge": "MPGD_PLATFORM_TARGETS_FILE=${MPGD_PLATFORM_TARGETS_FILE:-examples/phaser-starter/mpgd.targets.json} node tools/run-ttsx.mjs tools/smoke/release-manifest-merge.ts",

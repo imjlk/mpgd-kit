@@ -57,5 +57,8 @@ test('CI wires native classification to both platform jobs and the required gate
   assert.match(nativeStep ?? '', /pnpm pack:packages:prepared/);
   assert.match(nativeStep ?? '', /pnpm smoke:native-packed-consumer/);
   assert.match(workflow, /- run: pnpm smoke:native-packed-consumer/);
+  const iosJob = workflow.split(/\r?\n  build-ios:\r?\n/)[1]
+    ?.split(/\r?\n  [a-z0-9][a-z0-9_-]*:\r?\n/)[0];
+  assert.match(iosJob ?? '', /pnpm smoke:native-packed-swift/);
   assert.match(workflow, /run: node tools\/ci\/verify-coverage\.mjs/);
 });
