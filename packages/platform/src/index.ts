@@ -119,6 +119,61 @@ export interface PurchaseResult {
 
 export interface PurchaseRestoreResult {
   readonly restoredEntitlements: readonly Entitlement[];
+  /** Server-confirmed consumable outcomes; native order visibility alone is not a grant. */
+  readonly settledPurchases?: readonly PurchaseSettlement[];
+}
+
+export interface PurchaseSettlement {
+  readonly transactionId: string;
+  readonly productId: LogicalProductId;
+  readonly status: 'granted' | 'refunded';
+  readonly ledgerEntryId?: string;
+  readonly alreadyProcessed?: boolean;
+}
+
+/**
+ * Resolve a specific purchase from authoritative checkout or restore evidence.
+ * A completed native checkout without authoritativeGrant is still unconfirmed.
+ * This is UI status evidence, never permission to credit a wallet locally.
+ * The caller must pair `purchase` with its requested `productId` because
+ * PurchaseResult itself does not carry a product identifier.
+ */
+export function findAuthoritativePurchaseSettlement(input: {
+  readonly productId: LogicalProductId;
+  readonly transactionId?: string;
+  readonly purchase?: PurchaseResult;
+  readonly restore?: PurchaseRestoreResult;
+}): PurchaseSettlement | null {
+  const effectiveTransactionId = input.transactionId ?? input.purchase?.transactionId;
+  const matchingRestored = input.restore?.settledPurchases?.filter((settlement) =>
+    settlement.productId === input.productId
+    && (effectiveTransactionId === undefined || settlement.transactionId === effectiveTransactionId),
+  );
+  // Without an order ID, multiple historical outcomes are ambiguous.
+  if (matchingRestored !== undefined && matchingRestored.length > 1) {
+    return null;
+  }
+  if (matchingRestored?.[0] !== undefined) {
+    return matchingRestored[0];
+  }
+  const purchase = input.purchase;
+  if (
+    purchase?.status !== 'completed'
+    || purchase.transactionId === undefined
+    || purchase.authoritativeGrant === undefined
+    || (effectiveTransactionId !== undefined && effectiveTransactionId !== purchase.transactionId)
+  ) {
+    return null;
+  }
+  return {
+    transactionId: purchase.transactionId,
+    productId: input.productId,
+    status: 'granted',
+    ledgerEntryId: purchase.authoritativeGrant.ledgerEntryId,
+    ...(purchase.authoritativeGrant.alreadyProcessed === undefined
+      ? {}
+      : { alreadyProcessed: purchase.authoritativeGrant.alreadyProcessed }),
+  };
 }
 
 export interface RewardedAdResult {
