@@ -9,6 +9,7 @@ import type {
   PlatformProviderAvailability,
   PlatformProviderFeature,
   PlatformViewportState,
+  SecureCredentialStore,
 } from '@mpgd/platform';
 import type { FeatureAvailabilityReason, PlatformFeature } from '@mpgd/target-config';
 
@@ -54,3 +55,7 @@ const viewportState: PlatformViewportState = viewport.getState();
 void viewportState;
 declare const hostState: CapacitorViewportBaseState;
 void hostState;
+
+declare const packedGateway: import('@mpgd/platform').PlatformGateway;
+const secureCredentials: SecureCredentialStore | undefined = packedGateway.secureCredentials;
+void secureCredentials;
