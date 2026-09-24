@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { resolveTargetViewportUsableArea } from '@mpgd/target-config';
 
 import { createCapacitorPlatformGateway } from './index.js';
@@ -56,6 +56,60 @@ describe('Capacitor viewport', () => {
     viewport.dispose();
     viewport.dispose();
     expect(() => viewport.getState()).toThrow(/disposed/u);
+  });
+
+  it('keeps delivering after a subscriber and its error reporter both throw', () => {
+    const host = fixture();
+    const viewport = createCapacitorViewport({
+      host: host.host,
+      onError: () => { throw new Error('diagnostic failed'); },
+    });
+    const received: number[] = [];
+    viewport.onChange(() => { throw new Error('subscriber failed'); });
+    viewport.onChange((state) => { received.push(state.width); });
+    expect(() => host.update({ width: 400 })).not.toThrow();
+    expect(received).toEqual([400]);
+    viewport.dispose();
+  });
+
+  it('tracks visual viewport top and root CSS inset changes without a resize', () => {
+    const css = new Map<string, string>([['--safe-area-inset-top', '0px']]);
+    const root = {};
+    let observerCallback: (() => void) | undefined;
+    let disconnected = false;
+    class FakeMutationObserver {
+      constructor(callback: () => void) { observerCallback = callback; }
+      observe(target: unknown) { expect(target).toBe(root); }
+      disconnect() { disconnected = true; }
+    }
+    const visual = {
+      scale: 1, width: 390, height: 400, offsetTop: 200,
+      addEventListener() {}, removeEventListener() {},
+    };
+    vi.stubGlobal('window', {
+      innerWidth: 390, innerHeight: 800, visualViewport: visual,
+      addEventListener() {}, removeEventListener() {},
+    });
+    vi.stubGlobal('document', { documentElement: root });
+    vi.stubGlobal('getComputedStyle', () => ({
+      getPropertyValue: (name: string) => css.get(name) ?? '',
+    }));
+    vi.stubGlobal('MutationObserver', FakeMutationObserver);
+    try {
+      const viewport = createCapacitorViewport();
+      expect(viewport.getState().keyboardInsets)
+        .toEqual({ top: 200, right: 0, bottom: 200, left: 0 });
+      const received: number[] = [];
+      const off = viewport.onChange((state) => { received.push(state.systemBarInsets.top); });
+      css.set('--safe-area-inset-top', '42px');
+      observerCallback?.();
+      expect(received).toEqual([42]);
+      off();
+      expect(disconnected).toBe(true);
+      viewport.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('converts provider-owned native pixels and shares one usable area', () => {

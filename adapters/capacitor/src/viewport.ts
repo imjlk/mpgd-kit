@@ -40,6 +40,15 @@ export function createCapacitorViewport(
   let disposed = false;
   let lastStateJson: string | undefined;
 
+  function reportError(error: unknown): void {
+    try {
+      input.onError?.(error);
+    } catch {
+      // A diagnostic callback must not prevent another viewport subscriber
+      // from seeing the same state change.
+    }
+  }
+
   function getState(): PlatformViewportState {
     if (disposed) {
       throw new Error('Capacitor viewport is disposed.');
@@ -71,7 +80,7 @@ export function createCapacitorViewport(
     try {
       state = getState();
     } catch (error) {
-      input.onError?.(error);
+      reportError(error);
       return;
     }
     const stateJson = JSON.stringify(state);
@@ -83,7 +92,7 @@ export function createCapacitorViewport(
       try {
         listener(state);
       } catch (error) {
-        input.onError?.(error);
+        reportError(error);
       }
     }
   }
@@ -198,9 +207,13 @@ function createWebViewHost(): CapacitorViewportHost {
     const height = Math.max(1, Math.round(window.innerHeight));
     const visual = window.visualViewport;
     const style = getComputedStyle(document.documentElement);
-    // This delta is only a keyboard heuristic without zoom or horizontal pan.
-    const keyboardBottom = visual !== null && visual !== undefined
-      && visual.scale === 1 && visual.width >= width - 1
+    // The visual viewport can be panned above the keyboard. At scale 1 and
+    // full layout width, both its top offset and remaining bottom gap obscure
+    // persistent controls; zoom/pan at another scale is not a keyboard inset.
+    const visualUsable = visual !== null && visual !== undefined
+      && visual.scale === 1 && visual.width >= width - 1;
+    const keyboardTop = visualUsable ? Math.max(0, Math.round(visual.offsetTop)) : 0;
+    const keyboardBottom = visualUsable
       ? Math.max(0, Math.round(height - visual.offsetTop - visual.height))
       : 0;
     return {
@@ -208,7 +221,7 @@ function createWebViewHost(): CapacitorViewportHost {
       height,
       safeAreaInsets: readTargetViewportSafeAreaInsets(style),
       systemBarInsets: readTargetViewportSafeAreaInsets(style, systemBarCssVariables),
-      keyboardInsets: { top: 0, right: 0, bottom: keyboardBottom, left: 0 },
+      keyboardInsets: { top: keyboardTop, right: 0, bottom: keyboardBottom, left: 0 },
     };
   }
 
@@ -220,11 +233,19 @@ function createWebViewHost(): CapacitorViewportHost {
       const visual = window.visualViewport;
       visual?.addEventListener('resize', callback);
       visual?.addEventListener('scroll', callback);
+      const rootStyleObserver = typeof MutationObserver === 'undefined'
+        ? undefined
+        : new MutationObserver(callback);
+      rootStyleObserver?.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['style', 'class'],
+      });
       return () => {
         window.removeEventListener('resize', callback);
         window.removeEventListener('orientationchange', callback);
         visual?.removeEventListener('resize', callback);
         visual?.removeEventListener('scroll', callback);
+        rootStyleObserver?.disconnect();
       };
     },
   };
