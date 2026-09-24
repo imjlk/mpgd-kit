@@ -24,6 +24,7 @@ import {
 import {
   assertReleaseManifest,
   type ReleaseManifest,
+  type ReleaseNativeDelivery,
 } from '../../packages/release-manifest/src/index';
 import { adPlacementsFilePath, productCatalogFilePath } from '../catalog-paths';
 import { isCliEntrypoint, readJsonFile } from '../io';
@@ -44,7 +45,7 @@ export interface GenerateReleaseManifestInput {
   readonly profile: string;
   readonly artifact: string;
   readonly iconManifestArtifactPath: string;
-  readonly nativeDelivery?: ReleaseManifest['targets'][string]['nativeDelivery'];
+  readonly nativeDelivery?: ReleaseNativeDelivery;
   readonly outputPath?: string;
 }
 

@@ -12,7 +12,11 @@ import {
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
-import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
+import {
+  assertReleaseManifest,
+  type ReleaseManifest,
+  type ReleaseNativeDelivery,
+} from '@mpgd/release-manifest';
 
 import { requireCanonicalAppVersion } from '../target/app-version';
 
@@ -79,11 +83,11 @@ try {
 
   const nativeTarget = matchingManifest.targets['web-preview'];
   assert.ok(nativeTarget);
-  const withNativeDelivery = (delivery: ReleaseManifest['targets'][string]['nativeDelivery']) =>
+  const withNativeDelivery = (delivery: ReleaseNativeDelivery) =>
     assertReleaseManifest({
       ...matchingManifest,
       targets: {
-        android: { ...nativeTarget, nativeDelivery: delivery },
+        [delivery.platform]: { ...nativeTarget, nativeDelivery: delivery },
       },
     });
   assert.equal(withNativeDelivery({
@@ -92,6 +96,12 @@ try {
     signed: true,
     submissionCandidate: true,
   }).targets.android?.nativeDelivery?.submissionCandidate, true);
+  assert.equal(withNativeDelivery({
+    platform: 'ios',
+    mode: 'store-export',
+    signed: true,
+    submissionCandidate: true,
+  }).targets.ios?.nativeDelivery?.submissionCandidate, true);
   assert.throws(
     () =>
       withNativeDelivery({

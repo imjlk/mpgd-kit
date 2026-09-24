@@ -6,6 +6,15 @@ import {
   type MpgdReleaseIdentity,
 } from '@mpgd/target-config';
 
+export interface ReleaseNativeDelivery {
+  readonly platform: 'android' | 'ios';
+  readonly mode: 'sync' | 'debug' | 'simulator' | 'unsigned-archive'
+    | 'signed-archive' | 'store-export';
+  readonly signed: boolean;
+  /** Candidate for store submission; not proof of store acceptance. */
+  readonly submissionCandidate: boolean;
+}
+
 export interface ReleaseTargetManifest {
   readonly artifact: string;
   readonly profile?: string;
@@ -28,14 +37,7 @@ export interface ReleaseTargetManifest {
   readonly versionCode?: number;
   readonly marketingVersion?: string;
   readonly buildNumber?: string;
-  readonly nativeDelivery?: {
-    readonly platform: 'android' | 'ios';
-    readonly mode: 'sync' | 'debug' | 'simulator' | 'unsigned-archive'
-      | 'signed-archive' | 'store-export';
-    readonly signed: boolean;
-    /** Candidate for store submission; not proof of store acceptance. */
-    readonly submissionCandidate: boolean;
-  };
+  readonly nativeDelivery?: ReleaseNativeDelivery;
   readonly appName?: string;
   readonly sdkMajor?: number;
 }

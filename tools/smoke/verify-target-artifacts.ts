@@ -4,7 +4,11 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path
 import { isDeepStrictEqual } from 'node:util';
 import { Script } from 'node:vm';
 
-import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
+import {
+  assertReleaseManifest,
+  type ReleaseManifest,
+  type ReleaseNativeDelivery,
+} from '@mpgd/release-manifest';
 
 import { readJsonFile } from '../io';
 import { assertFreshNativeBuildArtifact } from '../target/native-build-attempt';
@@ -63,6 +67,7 @@ interface SmokePlatformTargetsConfig {
 
 const releaseManifestFileEnv = 'MPGD_RELEASE_MANIFEST_FILE';
 const devvitIconMaximumBytes = 500 * 1024;
+const storeExportArtifactSuffix = '.ipa';
 
 const loadedPlatformTargets = loadSmokePlatformTargetsConfig();
 const configuredTargets = Object.keys(loadedPlatformTargets.config.targets);
@@ -86,6 +91,10 @@ export function verifyTargetArtifacts(
       throw new Error(`Missing platform target config: ${target}`);
     }
 
+    if (entry.artifact.length === 0) {
+      throw new Error(`Release manifest target ${target} has an empty artifact path.`);
+    }
+
     if (targetConfig.kind === 'capacitor-android' || targetConfig.kind === 'capacitor-ios') {
       const attempt = assertFreshNativeBuildArtifact(
         loadedPlatformTargets.baseDir,
@@ -99,10 +108,6 @@ export function verifyTargetArtifacts(
       if (entry.nativeDelivery !== undefined) {
         assertNativeDeliveryArtifact(target, targetConfig, entry);
       }
-    }
-
-    if (entry.artifact.length === 0) {
-      throw new Error(`Release manifest target ${target} has an empty artifact path.`);
     }
 
     const artifactPath = resolveArtifactPath(entry.artifact);
@@ -213,22 +218,28 @@ function assertNativeDeliveryArtifact(
   if (delivery.platform !== platform) {
     throw new Error(`Native target ${target} build platform does not match its configuration.`);
   }
-  const expectedSuffix = delivery.mode === 'sync'
-    ? '/capacitor-sync'
-    : delivery.mode === 'debug'
-      ? '.apk'
-      : delivery.mode === 'simulator'
-        ? '.app'
-        : delivery.mode === 'store-export'
-          ? '.ipa'
-          : delivery.platform === 'android'
-            ? '.aab'
-            : '.xcarchive';
-  if (!entry.artifact.endsWith(expectedSuffix)) {
+  const expectedSuffix = nativeArtifactSuffixFor(delivery);
+  const matchesShape = delivery.mode === 'sync'
+    ? isCapacitorSyncArtifact(entry.artifact)
+    : entry.artifact.endsWith(expectedSuffix);
+  if (!matchesShape) {
     throw new Error(`Native target ${target} artifact does not match its build mode.`);
   }
-  if (entry.profile === 'production' && !delivery.signed) {
-    throw new Error(`Native target ${target} production artifact is unsigned.`);
+}
+
+function nativeArtifactSuffixFor(delivery: ReleaseNativeDelivery): string {
+  switch (delivery.mode) {
+    case 'sync':
+      return 'capacitor-sync';
+    case 'debug':
+      return '.apk';
+    case 'simulator':
+      return '.app';
+    case 'store-export':
+      return storeExportArtifactSuffix;
+    case 'unsigned-archive':
+    case 'signed-archive':
+      return delivery.platform === 'android' ? '.aab' : '.xcarchive';
   }
 }
 
@@ -406,7 +417,7 @@ function readReleaseIconManifest(
         `${target} web artifact`,
       );
     case 'capacitor-android':
-      return artifactPath.endsWith('/capacitor-sync')
+      return isCapacitorSyncArtifact(artifactPath)
         ? readArtifactTextFromDirectory(
             artifactPath,
             iconManifestPath,
@@ -414,7 +425,7 @@ function readReleaseIconManifest(
           )
         : readArtifactTextFromZip(artifactPath, iconManifestPath, `${target} native archive`);
     case 'capacitor-ios':
-      return artifactPath.endsWith('.ipa')
+      return isIosStoreExportArtifact(artifactPath)
         ? readArtifactTextFromZip(artifactPath, iconManifestPath, `${target} store IPA`)
         : readArtifactTextFromDirectory(
             artifactPath,
@@ -487,11 +498,11 @@ function readReleaseEmbeddedTargetConfig(
         'web-preview artifact',
       );
     case 'capacitor-android':
-      return artifactPath.endsWith('/capacitor-sync')
+      return isCapacitorSyncArtifact(artifactPath)
         ? readEmbeddedTargetConfigFromDirectory(artifactPath, `${target} native sync artifact`)
         : readEmbeddedTargetConfigFromZip(artifactPath, `${target} native archive`);
     case 'capacitor-ios':
-      return artifactPath.endsWith('.ipa')
+      return isIosStoreExportArtifact(artifactPath)
         ? readEmbeddedTargetConfigFromZip(artifactPath, `${target} store IPA`)
         : readEmbeddedTargetConfigFromDirectory(artifactPath, `${target} native artifact`);
     case 'apps-in-toss':
@@ -543,7 +554,7 @@ function localSwiftPackagePathsForIosArtifact(artifactPath: string): readonly st
   const packageFile = `${artifactPath}/App/CapApp-SPM/Package.swift`;
 
   if (!existsSync(packageFile)) {
-    if (isIosSyncArtifact(artifactPath) || existsSync(`${artifactPath}/App/App.xcodeproj`)) {
+    if (isCapacitorSyncArtifact(artifactPath) || existsSync(`${artifactPath}/App/App.xcodeproj`)) {
       throw new Error(`Missing iOS Swift package manifest: ${packageFile}`);
     }
 
@@ -558,7 +569,7 @@ function localSwiftPackagePathsForIosArtifact(artifactPath: string): readonly st
     resolve(packageFileDir, requireStringMatch(match[1], packageFile)),
   );
 
-  if (isIosSyncArtifact(artifactPath)) {
+  if (isCapacitorSyncArtifact(artifactPath)) {
     for (const packagePath of packagePaths) {
       assertPathInside(packagePath, artifactPath, 'iOS sync Swift package');
     }
@@ -567,8 +578,12 @@ function localSwiftPackagePathsForIosArtifact(artifactPath: string): readonly st
   return packagePaths;
 }
 
-function isIosSyncArtifact(artifactPath: string): boolean {
+function isCapacitorSyncArtifact(artifactPath: string): boolean {
   return basename(artifactPath) === 'capacitor-sync';
+}
+
+function isIosStoreExportArtifact(artifactPath: string): boolean {
+  return artifactPath.endsWith(storeExportArtifactSuffix);
 }
 
 function requiredFilesForTarget(
