@@ -2,5 +2,8 @@
 include ':capacitor-android'
 project(':capacitor-android').projectDir = new File('../../../node_modules/.pnpm/@capacitor+android@8.5.2_@capacitor+core@8.5.2/node_modules/@capacitor/android/capacitor')
 
+include ':capacitor-app'
+project(':capacitor-app').projectDir = new File('../../../node_modules/.pnpm/@capacitor+app@8.1.1_@capacitor+core@8.5.2/node_modules/@capacitor/app/android')
+
 include ':mpgd-capacitor-game-services'
 project(':mpgd-capacitor-game-services').projectDir = new File('../node_modules/@mpgd/capacitor-game-services/android')

@@ -447,9 +447,43 @@ export interface NotificationSubscriptionAdapter {
   requestSubscription(topic: NotificationTopic): Promise<NotificationSubscriptionResult>;
 }
 
+/** The source of an app URL, not a claim that the URL is trusted. */
+export interface NativeOpenUrlEvent {
+  readonly url: string;
+  readonly source: 'cold' | 'warm';
+}
+
+export interface NativeBackButtonEvent {
+  /** Whether the WebView history can navigate back, not the game's own scene stack. */
+  readonly canGoBack: boolean;
+}
+
 export interface LifecycleAdapter {
   onPause(callback: () => void): () => void;
   onResume(callback: () => void): () => void;
+  /**
+   * Android handlers run last-registered-first until one returns true. If none
+   * consumes the event, Capacitor navigates WebView history when possible or
+   * exits the app. The method's presence does not imply support on iOS: check
+   * the gateway target. Persist progress at checkpoints; back/exit callbacks
+   * are not guaranteed to run before process termination.
+   */
+  onBackButton?(
+    handler: (event: NativeBackButtonEvent) => boolean | Promise<boolean>,
+  ): () => void;
+  /** Game links and OAuth redirects use separate callbacks. */
+  onGameUrlOpen?(callback: (event: NativeOpenUrlEvent) => void): () => void;
+  onOAuthRedirect?(callback: (event: NativeOpenUrlEvent) => void): () => void;
+  getInitialGameUrl?(): Promise<NativeOpenUrlEvent | null>;
+  getInitialOAuthRedirect?(): Promise<NativeOpenUrlEvent | null>;
+  /**
+   * Keep execution paused while external UI is open. Call the returned
+   * idempotent release function when it closes, including failure paths;
+   * otherwise execution remains paused.
+   */
+  beginExternalActivity?(): () => void;
+  /** Remove only the native listeners owned by this adapter instance. */
+  dispose?(): Promise<void>;
 }
 
 export interface StorageLoadResult {

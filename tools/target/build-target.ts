@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, relative } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import { loadEnv } from 'vite';
 
@@ -445,7 +445,13 @@ try {
           );
           releaseArtifact = 'release-output/ios/capacitor-sync';
           replaceDirectory(`${shellApp}/ios`, targetPath(releaseArtifact));
-          copyIosSyncSwiftPackage(shellApp, releaseArtifact, '@mpgd/capacitor-game-services');
+          copyIosSyncSwiftPackage(
+            shellApp,
+            releaseArtifact,
+            '@mpgd/capacitor-game-services',
+            'MpgdCapacitorGameServices',
+          );
+          copyIosSyncSwiftPackage(shellApp, releaseArtifact, '@capacitor/app', 'CapacitorApp');
         }
 
         writeManifest(targetName, profile, releaseArtifact, env);
@@ -573,6 +579,7 @@ function copyIosSyncSwiftPackage(
   shellApp: string,
   releaseArtifact: string,
   packageName: string,
+  swiftPackageName: string,
 ): void {
   const linkedPackage = `${shellApp}/node_modules/${packageName}`;
   let resolvedPackage: string;
@@ -583,24 +590,54 @@ function copyIosSyncSwiftPackage(
     throw new Error(`Missing iOS Swift package dependency: ${linkedPackage}`);
   }
 
+  const shellPackageFile = `${shellApp}/ios/App/CapApp-SPM/Package.swift`;
+  const shellReference = readSwiftPackagePath(shellPackageFile, swiftPackageName);
+  let referencedPackage: string;
+  try {
+    referencedPackage = realpathSync(resolve(dirname(shellPackageFile), shellReference));
+  } catch {
+    throw new Error(`Missing iOS Swift package reference: ${swiftPackageName}`);
+  }
+  if (referencedPackage !== resolvedPackage) {
+    throw new Error(`iOS Swift package reference does not match ${packageName}.`);
+  }
+
   replaceDirectoryWithoutNodeModules(
     resolvedPackage,
     targetPath(`${releaseArtifact}/node_modules/${packageName}`),
   );
-  rewriteIosSyncSwiftPackagePath(releaseArtifact, packageName);
+  rewriteIosSyncSwiftPackagePath(releaseArtifact, packageName, swiftPackageName);
 }
 
-function rewriteIosSyncSwiftPackagePath(releaseArtifact: string, packageName: string): void {
+function rewriteIosSyncSwiftPackagePath(
+  releaseArtifact: string,
+  packageName: string,
+  swiftPackageName: string,
+): void {
   const packageFile = targetPath(`${releaseArtifact}/App/CapApp-SPM/Package.swift`);
   const contents = readFileSync(packageFile, 'utf8');
-  const shellRelativePath = `path: "../../../node_modules/${packageName}"`;
-  const artifactRelativePath = `path: "../../node_modules/${packageName}"`;
+  const originalPath = readSwiftPackagePath(packageFile, swiftPackageName);
+  const rewrittenPath = `../../node_modules/${packageName}`;
+  const marker = `.package(name: "${swiftPackageName}", path: "`;
+  writeFileSync(
+    packageFile,
+    contents.replace(`${marker}${originalPath}"`, `${marker}${rewrittenPath}"`),
+  );
+}
 
-  if (!contents.includes(shellRelativePath)) {
-    throw new Error(`Missing iOS Swift package reference for ${packageName}: ${packageFile}`);
+function readSwiftPackagePath(packageFile: string, swiftPackageName: string): string {
+  const contents = readFileSync(packageFile, 'utf8');
+  const marker = `.package(name: "${swiftPackageName}", path: "`;
+  const index = contents.indexOf(marker);
+  if (index < 0 || contents.indexOf(marker, index + marker.length) >= 0) {
+    throw new Error(`Missing or duplicate iOS Swift package reference: ${swiftPackageName}`);
   }
-
-  writeFileSync(packageFile, contents.replace(shellRelativePath, artifactRelativePath));
+  const pathStart = index + marker.length;
+  const pathEnd = contents.indexOf('"', pathStart);
+  if (pathEnd < 0) {
+    throw new Error(`Malformed iOS Swift package reference: ${swiftPackageName}`);
+  }
+  return contents.slice(pathStart, pathEnd);
 }
 
 function copyFile(source: string, destination: string): void {
