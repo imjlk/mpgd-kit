@@ -1,8 +1,12 @@
+import assert from 'node:assert/strict';
+
 import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
 
 import { createBrowserPlatformGateway } from '../../adapters/browser/src/index';
 import { createVerse8PlatformGateway } from '../../adapters/verse8/src/index';
+import { assertRuntimeTargetConfigMatrix as assertStarterMatrix } from '../../examples/phaser-starter/vite.runtime-target-config';
+import { assertRuntimeTargetConfigMatrix as assertTemplateMatrix } from '../../packages/cli/templates/phaser-game/vite.runtime-target-config';
 import { resolveTargetMpgdLocale } from '../../packages/i18n/src/index';
 import {
   createEffectiveTargetConfig,
@@ -11,11 +15,12 @@ import {
 } from '../../packages/target-config/src/effective';
 import {
   getTargetConfig,
+  isPlatformFeatureEnabled,
   isTargetConfiguredGateway,
   normalizeTargetIntegrationConfig,
+  platformFeatures,
   targetIntegrations,
   withTargetAvailability,
-  type PlatformFeature,
   type TargetConfigMatrix,
   type TargetConfiguredGateway,
 } from '../../packages/target-config/src/runtime';
@@ -27,13 +32,18 @@ const targetConfigMatrix = readJsonFile(
 const adPlacements = readJsonFile('packages/catalog/placements.json') as AdPlacements;
 const productCatalog = readJsonFile('packages/catalog/catalog.json') as ProductCatalog;
 
-const platformFeatures = [
-  'iap',
-  'rewardedAds',
-  'interstitialAds',
-  'leaderboard',
-  'localization',
-] as const satisfies readonly PlatformFeature[];
+for (const validate of [assertStarterMatrix, assertTemplateMatrix]) {
+  for (const field of ['subscriptions', 'nativeLeaderboard', 'remoteLeaderboard']) {
+    const invalid = structuredClone(targetConfigMatrix) as unknown as {
+      targets: Record<string, { features: Record<string, unknown> }>;
+    };
+    const android = invalid.targets.android;
+    assert.ok(android);
+    android.features[field] = 'false';
+    assert.throws(() => validate(invalid), new RegExp(`features\\.${field} must be a boolean`));
+  }
+}
+
 const configTargets = [
   'web-preview',
   'microsoft-store',
@@ -93,7 +103,7 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
 
     assertEqual(
       featureRuntime.targetEnabled,
-      config.features[feature],
+      isPlatformFeatureEnabled(config, feature),
       `${configTarget} ${feature} config should match`,
     );
     assertEqual(

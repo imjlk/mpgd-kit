@@ -323,6 +323,40 @@ async function verifyCapacitorAdapter(target: CapacitorBridgeTarget): Promise<vo
       appVersion: '1.0.0',
       buildId: `build-${target}`,
       bridge,
+      providers: [
+        {
+          id: 'store',
+          bridge,
+          features: ['nativeIap'],
+          methods: [
+            'commerce.getProducts',
+            'commerce.purchase',
+            'commerce.restore',
+            'commerce.getEntitlements',
+          ],
+          async getAvailability() {
+            return { nativeIap: 'available' };
+          },
+        },
+        {
+          id: 'rewarded',
+          bridge,
+          features: ['rewardedAds'],
+          methods: ['ads.preload', 'ads.showRewarded'],
+          async getAvailability() {
+            return { rewardedAds: 'available' };
+          },
+        },
+        {
+          id: 'game-platform',
+          bridge,
+          features: ['nativeLeaderboard'],
+          methods: ['leaderboard.submitScore', 'leaderboard.open'],
+          async getAvailability() {
+            return { nativeLeaderboard: 'available' };
+          },
+        },
+      ],
     }),
   );
   const runtime = await gateway.getTargetRuntime();
@@ -639,6 +673,7 @@ function responseDataForMethod(
       return {
         status: 'completed',
         rewardGranted: true,
+        ledgerEntryId: 'smoke-reward-ledger',
       };
     case 'ads.showInterstitial':
       return {

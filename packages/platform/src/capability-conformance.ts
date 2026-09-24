@@ -1,4 +1,10 @@
-import type { PlatformCapabilities, PlatformGateway, PlatformTarget } from './index.js';
+import type {
+  PlatformCapabilities,
+  PlatformGateway,
+  PlatformProviderAvailability,
+  PlatformProviderFeature,
+  PlatformTarget,
+} from './index.js';
 
 export const platformCapabilityKeys = Object.freeze([
   'nativeIap',
@@ -16,17 +22,36 @@ export const platformCapabilityKeys = Object.freeze([
 
 export const optionalPlatformCapabilityKeys = Object.freeze([
   'bannerAds',
+  'subscriptionIap',
 ] as const satisfies readonly (keyof PlatformCapabilities)[]);
 const allowedPlatformCapabilityKeys = Object.freeze([
   ...platformCapabilityKeys,
   ...optionalPlatformCapabilityKeys,
 ] as const satisfies readonly (keyof PlatformCapabilities)[]);
-const allowedPlatformCapabilityKeySet = new Set<keyof PlatformCapabilities>(
-  allowedPlatformCapabilityKeys,
-);
+const allowedPlatformCapabilityKeySet = new Set<keyof PlatformCapabilities>([
+  ...allowedPlatformCapabilityKeys,
+  'providerAvailability',
+]);
 const optionalPlatformCapabilityKeySet = new Set<keyof PlatformCapabilities>(
   optionalPlatformCapabilityKeys,
 );
+const providerFeatureSet = new Set<PlatformProviderFeature>([
+  'nativeIap',
+  'subscriptionIap',
+  'rewardedAds',
+  'interstitialAds',
+  'bannerAds',
+  'nativeLeaderboard',
+  'identityUpgrade',
+  'pushNotifications',
+]);
+const providerAvailabilitySet = new Set<PlatformProviderAvailability>([
+  'unsupported',
+  'configuration-required',
+  'action-required',
+  'temporarily-unavailable',
+  'available',
+]);
 
 export interface PlatformGatewayCapabilityConformanceTransition {
   readonly update: () => Promise<void> | void;
@@ -58,7 +83,7 @@ export interface PlatformGatewayCapabilityConformanceReport {
  * target-configured wrappers. Every read must return a complete boolean
  * snapshot, a fresh object, and the provider's latest state.
  * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Checks each gateway read against the required boolean keys and expected provider state.
- * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f83948b Reviewed the required keys, optional banner default, and fresh reread in runFixture.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #a1834db Reviewed required booleans, optional banner/subscription defaults, ordered readiness comparison, and fresh nested rereads.
  * @evidence docs/specs/platform-capability-snapshots.md#provider-transitions Checks a fresh provider read after the optional transition update.
  * @evidenceReview docs/specs/platform-capability-snapshots.md#provider-transitions #839c0c8 Reviewed the changed-state guard and post-update snapshot assertion.
  * @evidence docs/specs/platform-capability-snapshots.md#fixture-validation Rejects invalid fixture sets and returns the names of passing fixtures.
@@ -104,10 +129,10 @@ async function runFixture(
 ): Promise<void> {
   // A fixture may accidentally share its expected object with the provider.
   // Keep the oracle independent before tryMutateSnapshot probes isolation.
-  const initialExpected = { ...fixture.expectedCapabilities };
+  const initialExpected = cloneExpectedCapabilities(fixture.expectedCapabilities);
   const transitionExpected = fixture.transition === undefined
     ? undefined
-    : { ...fixture.transition.expectedCapabilities };
+    : cloneExpectedCapabilities(fixture.transition.expectedCapabilities);
   assertEqual(
     fixture.gateway.target,
     fixture.expectedTarget,
@@ -173,6 +198,42 @@ function assertCapabilitySnapshot(
       `capability ${key} must match the expected provider state`,
     );
   }
+  assertProviderAvailabilityShape(actual.providerAvailability);
+  assertEqual(
+    normalizedAvailability(actual.providerAvailability),
+    normalizedAvailability(expected.providerAvailability),
+    'provider availability must match the expected provider state',
+  );
+}
+
+function assertProviderAvailabilityShape(value: unknown): void {
+  if (value === undefined) {
+    return;
+  }
+  assert(
+    typeof value === 'object' && value !== null && !Array.isArray(value),
+    'provider availability must be a non-array record',
+  );
+  for (const [feature, state] of Object.entries(value)) {
+    assert(
+      providerFeatureSet.has(feature as PlatformProviderFeature)
+        && providerAvailabilitySet.has(state as PlatformProviderAvailability),
+      'provider availability must contain only known features and readiness states',
+    );
+  }
+}
+
+function cloneExpectedCapabilities(value: PlatformCapabilities): PlatformCapabilities {
+  return {
+    ...value,
+    ...(value.providerAvailability === undefined
+      ? {}
+      : { providerAvailability: { ...value.providerAvailability } }),
+  };
+}
+
+function normalizedAvailability(value: PlatformCapabilities['providerAvailability']): string {
+  return JSON.stringify(Object.entries(value ?? {}).sort(([a], [b]) => a.localeCompare(b)));
 }
 
 function tryMutateSnapshot(snapshot: PlatformCapabilities): void {
@@ -181,6 +242,16 @@ function tryMutateSnapshot(snapshot: PlatformCapabilities): void {
   } catch {
     // Frozen snapshots already satisfy the isolation requirement.
   }
+  if (snapshot.providerAvailability !== undefined) {
+    try {
+      const next = snapshot.providerAvailability.nativeIap === 'available'
+        ? 'unsupported'
+        : 'available';
+      Reflect.set(snapshot.providerAvailability, 'nativeIap', next);
+    } catch {
+      // A frozen nested readiness record already satisfies isolation.
+    }
+  }
 }
 
 function hasCapabilityDifference(
@@ -188,7 +259,9 @@ function hasCapabilityDifference(
   second: PlatformCapabilities,
 ): boolean {
   return allowedPlatformCapabilityKeys
-    .some((key) => (first[key] ?? false) !== (second[key] ?? false));
+    .some((key) => (first[key] ?? false) !== (second[key] ?? false))
+    || normalizedAvailability(first.providerAvailability)
+      !== normalizedAvailability(second.providerAvailability);
 }
 
 function assert(condition: unknown, message: string): asserts condition {
