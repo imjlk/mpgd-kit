@@ -175,6 +175,46 @@ try {
   writeFileSync(configFile, originalConfig.replace('Puzzle Game', 'Other Game'));
   assert.throws(() => planCapacitorShellStarter(options), /display name differs/u);
   writeFileSync(configFile, originalConfig);
+  writeFileSync(configFile, originalConfig.replace("webDir: 'www'", "webDir: 'other-www'"));
+  assert.throws(() => planCapacitorShellStarter(options), /webDir differs/u);
+  writeFileSync(configFile, originalConfig);
+  const quotedName = 'King\'s "Quest" \\ Game';
+  const quotedConfig = originalConfig.replace(
+    JSON.stringify(options.displayName),
+    JSON.stringify(quotedName),
+  );
+  writeFileSync(configFile, quotedConfig);
+  const quotedTargets = readJson('mpgd.targets.json');
+  const quotedTargetMap = quotedTargets.targets as Record<string, Record<string, unknown>>;
+  for (const target of Object.values(quotedTargetMap)) {
+    const metadata = target.metadata as Record<string, unknown>;
+    metadata.displayName = quotedName;
+  }
+  writeJson('mpgd.targets.json', quotedTargets);
+  const manifestFile = path.join(root, 'apps/mobile-capacitor/mpgd.native-shell.json');
+  const originalManifest = readFileSync(manifestFile, 'utf8');
+  const quotedManifest = JSON.parse(originalManifest) as Record<string, unknown>;
+  quotedManifest.displayName = quotedName;
+  writeJson('apps/mobile-capacitor/mpgd.native-shell.json', quotedManifest);
+  assert.deepEqual(
+    planCapacitorShellStarter({ ...options, displayName: quotedName }).changedFiles,
+    [],
+  );
+  writeFileSync(manifestFile, originalManifest);
+  for (const target of Object.values(quotedTargetMap)) {
+    const metadata = target.metadata as Record<string, unknown>;
+    metadata.displayName = options.displayName;
+  }
+  writeJson('mpgd.targets.json', quotedTargets);
+  writeFileSync(configFile, originalConfig);
+  const customShellTargets = readJson('mpgd.targets.json');
+  const customShellTargetMap = customShellTargets.targets as Record<string, Record<string, unknown>>;
+  assert.ok(customShellTargetMap.android);
+  customShellTargetMap.android.shellApp = '${MPGD_KIT_PATH}/apps/company-shell';
+  writeJson('mpgd.targets.json', customShellTargets);
+  assert.throws(() => planCapacitorShellStarter(options), /another shell/u);
+  customShellTargetMap.android.shellApp = 'apps/mobile-capacitor';
+  writeJson('mpgd.targets.json', customShellTargets);
   assert.throws(
     () => planCapacitorShellStarter({ ...options, backendUrl: 'http://api.example.com' }),
     /HTTPS/u,

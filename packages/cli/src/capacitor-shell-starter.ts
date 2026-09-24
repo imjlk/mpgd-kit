@@ -16,6 +16,7 @@ import { isNonPublicServiceHostname } from './production-target-readiness.js';
 
 const shellPath = 'apps/mobile-capacitor';
 const webPath = `${shellPath}/www`;
+const referenceShellPath = '${MPGD_KIT_PATH}/apps/mobile-capacitor';
 const providerIdPattern = /^[a-z][a-z0-9-]*$/u;
 const appIdPattern = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*){2,}$/u;
 
@@ -134,7 +135,7 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
       throw new Error(`${targetName} must be a ${kind} target.`);
     }
     const configuredShell = requireString(target.shellApp, `${targetName}.shellApp`);
-    if (configuredShell !== shellPath && !configuredShell.includes('${MPGD_KIT_PATH}')) {
+    if (configuredShell !== shellPath && configuredShell !== referenceShellPath) {
       throw new Error(`${targetName} already points at another shell; refusing to replace it.`);
     }
     const metadata = target.metadata === undefined
@@ -186,19 +187,23 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     );
   }
   if (configContent !== undefined) {
-    const existingAppId = /\bappId:\s*['"]([^'"]+)['"]/u.exec(configContent)?.[1];
+    const existingAppId = readCapacitorConfigLiteral(configContent, 'appId');
     if (existingAppId === undefined) {
       throw new Error('Existing Capacitor shell app ID could not be read safely.');
     }
     if (existingAppId !== input.appId) {
       throw new Error('Existing Capacitor shell app ID differs; refusing to overwrite it.');
     }
-    const existingAppName = /\bappName:\s*['"]([^'"]+)['"]/u.exec(configContent)?.[1];
+    const existingAppName = readCapacitorConfigLiteral(configContent, 'appName');
     if (existingAppName === undefined) {
       throw new Error('Existing Capacitor shell display name could not be read safely.');
     }
     if (existingAppName !== input.displayName) {
       throw new Error('Existing Capacitor shell display name differs; refusing to overwrite it.');
+    }
+    const existingWebDir = readCapacitorConfigLiteral(configContent, 'webDir');
+    if (existingWebDir !== 'www') {
+      throw new Error('Existing Capacitor shell webDir differs; refusing to overwrite it.');
     }
   }
   const requestedFiles: PlannedFile[] = [
@@ -454,6 +459,45 @@ function normalizeBackendUrl(value: string): string {
     throw new Error('Backend URL must use a public HTTPS hostname for production.');
   }
   return parsed.href.replace(/\/$/u, '');
+}
+
+function readCapacitorConfigLiteral(source: string, key: 'appId' | 'appName' | 'webDir'):
+  string | undefined {
+  const expression = new RegExp(`\\b${key}:\\s*("(?:\\\\.|[^"\\\\])*"|'(?:\\\\.|[^'\\\\])*')`, 'u');
+  const literal = expression.exec(source)?.[1];
+  if (literal === undefined) {
+    return undefined;
+  }
+  if (literal.startsWith('"')) {
+    try {
+      return JSON.parse(literal) as string;
+    } catch {
+      return undefined;
+    }
+  }
+  const body = literal.slice(1, -1);
+  let value = '';
+  for (let index = 0; index < body.length; index += 1) {
+    const character = body[index];
+    if (character !== '\\') {
+      value += character;
+      continue;
+    }
+    const escaped = body[++index];
+    const replacements: Record<string, string> = {
+      "'": "'",
+      '"': '"',
+      '\\': '\\',
+      n: '\n',
+      r: '\r',
+      t: '\t',
+    };
+    if (escaped === undefined || !(escaped in replacements)) {
+      return undefined;
+    }
+    value += replacements[escaped];
+  }
+  return value;
 }
 
 function appendEnvLine(current: string, line: string): string {
