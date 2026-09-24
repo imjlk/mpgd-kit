@@ -3,6 +3,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -15,6 +16,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import { isNonPublicServiceHostname } from './production-target-readiness.js';
+import { assertNativeShellIdentity } from './native-shell-identity.js';
 
 const shellPath = 'apps/mobile-capacitor';
 const webPath = `${shellPath}/www`;
@@ -128,14 +130,19 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     'CLI TypeScript version',
   );
   const targetMap = requireObject(targets.targets, 'targets');
-  for (const [targetName, kind, identityKey] of [
-    ['android', 'capacitor-android', 'packageId'],
-    ['ios', 'capacitor-ios', 'bundleId'],
+  for (const [kind, identityKey] of [
+    ['capacitor-android', 'packageId'],
+    ['capacitor-ios', 'bundleId'],
   ] as const) {
-    const target = requireObject(targetMap[targetName], `${targetName} target`);
-    if (target.kind !== kind) {
-      throw new Error(`${targetName} must be a ${kind} target.`);
+    const candidates = Object.entries(targetMap).filter(([, value]) =>
+      typeof value === 'object' && value !== null && !Array.isArray(value)
+      && (value as Record<string, unknown>).kind === kind,
+    );
+    if (candidates.length !== 1) {
+      throw new Error(`Expected exactly one ${kind} target; found ${candidates.length}.`);
     }
+    const [targetName, candidate] = candidates[0] ?? [];
+    const target = requireObject(candidate, `${targetName} target`);
     const configuredShell = requireString(target.shellApp, `${targetName}.shellApp`);
     if (configuredShell !== shellPath && configuredShell !== referenceShellPath) {
       throw new Error(`${targetName} already points at another shell; refusing to replace it.`);
@@ -293,18 +300,24 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
       ].join('\n'),
     },
   ];
-  if (backendUrl !== undefined) {
+  if (requestedBackendUrl !== undefined) {
+    const validatedBackendUrl = normalizeBackendUrl(requestedBackendUrl);
     const envFile = path.join(gameRoot, '.env.production');
     const current = readExisting(envFile) ?? '';
-    const existing = /^VITE_MPGD_GAME_SERVICES_URL=(.*)$/mu.exec(current)?.[1]
-      ?.trim().replace(/^["'](.*)["']$/u, '$1');
-    if (existing !== undefined && normalizeBackendUrl(existing) !== backendUrl) {
+    const definitions = [...current.matchAll(
+      /^[ \t]*(?:export[ \t]+)?VITE_MPGD_GAME_SERVICES_URL[ \t]*=[ \t]*(.*)$/gmu,
+    )];
+    if (definitions.length > 1) {
+      throw new Error('Duplicate production Game Services URLs are not allowed.');
+    }
+    const existing = definitions[0]?.[1]?.trim().replace(/^["'](.*)["']$/u, '$1');
+    if (existing !== undefined && normalizeBackendUrl(existing) !== validatedBackendUrl) {
       throw new Error('Existing production Game Services URL differs; refusing to overwrite it.');
     }
     requestedFiles.push({
       path: '.env.production',
       content: existing === undefined
-        ? appendEnvLine(current, `VITE_MPGD_GAME_SERVICES_URL=${backendUrl}`)
+        ? appendEnvLine(current, `VITE_MPGD_GAME_SERVICES_URL=${validatedBackendUrl}`)
         : current,
     });
   }
@@ -466,16 +479,27 @@ function assertNativePlatformComplete(
       `Existing ${platform} project is incomplete; repair or remove only that game-owned directory before retrying.`,
     );
   }
-  const content = readFileSync(path.join(nativeDirectory, required), 'utf8');
-  const expression = platform === 'android'
-    ? /\bapplicationId\s*(?:=\s*)?["']([^"']+)["']/gu
-    : /\bPRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;]+);/gu;
-  const identities = [...content.matchAll(expression)].map((match) =>
-    match[1]?.trim().replace(/^["']|["']$/gu, ''),
-  );
-  if (identities.length === 0 || identities.some((identity) => identity !== expectedAppId)) {
-    throw new Error(`Existing ${platform} project app ID differs or cannot be read safely.`);
+  const additional = platform === 'android'
+    ? ['gradlew', 'settings.gradle', 'app/src/main/AndroidManifest.xml']
+    : ['App/App/AppDelegate.swift', 'App/App/Info.plist', 'App/CapApp-SPM/Package.swift'];
+  if (additional.some((relative) =>
+    !existsSync(path.join(nativeDirectory, relative))
+    || !lstatSync(path.join(nativeDirectory, relative)).isFile(),
+  )) {
+    throw new Error(
+      `Existing ${platform} project is incomplete; required native files are missing.`,
+    );
   }
+  if (platform === 'android') {
+    const javaDirectory = path.join(nativeDirectory, 'app/src/main/java');
+    if (!existsSync(javaDirectory) || !readdirSync(javaDirectory, { recursive: true })
+      .some((name) => typeof name === 'string'
+        && /(?:^|[\\/])MainActivity\.(?:java|kt)$/u.test(name))) {
+      throw new Error('Existing android project is incomplete; MainActivity is missing.');
+    }
+  }
+  const content = readFileSync(path.join(nativeDirectory, required), 'utf8');
+  assertNativeShellIdentity(platform, content, expectedAppId);
 }
 
 function runCommand(command: string, args: readonly string[], cwd: string): void {
@@ -653,6 +677,7 @@ function requireStaticCapacitorConfig(source: string): string {
   }
   const configReferences = [...codeOnly.matchAll(/\bconfig\b/gu)].length;
   if (configReferences !== 2 || codeOnly.includes('...') || codeOnly.includes('[')
+    || !/\bconst\s+config\s*:\s*CapacitorConfig\s*=\s*\{/u.test(codeOnly)
     || !/\bexport\s+default\s+config\s*;/u.test(codeOnly)) {
     throw new Error('Existing Capacitor config has ambiguous dynamic syntax.');
   }

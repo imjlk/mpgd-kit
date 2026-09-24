@@ -34,6 +34,18 @@ function readJson(relative: string): Record<string, unknown> {
   return JSON.parse(readFileSync(path.join(root, relative), 'utf8')) as Record<string, unknown>;
 }
 
+function iosProjectWithAppId(appId: string): string {
+  return [
+    'AAAAAAAA /* App */ = { isa = PBXNativeTarget; name = App; buildConfigurationList = BBBBBBBB; };',
+    'BBBBBBBB /* App configurations */ = { isa = XCConfigurationList; buildConfigurations = (',
+    '  CCCCCCCC /* Debug */, DDDDDDDD /* Release */,); };',
+    `CCCCCCCC /* Debug */ = { isa = XCBuildConfiguration; buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = ${appId}; }; };`,
+    `DDDDDDDD /* Release */ = { isa = XCBuildConfiguration; buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = ${appId}; }; };`,
+    'EEEEEEEE /* NotificationService */ = { isa = PBXNativeTarget; name = NotificationService;',
+    '  buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle.NotificationService; }; };',
+  ].join('\n');
+}
+
 try {
   writeJson('package.json', {
     name: '@game/puzzle',
@@ -151,8 +163,25 @@ try {
           file,
           platform === 'android'
             ? 'applicationId "dev.example.puzzle"'
-            : 'PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle;',
+            : iosProjectWithAppId('dev.example.puzzle'),
         );
+        const required = platform === 'android'
+          ? [
+              'android/gradlew',
+              'android/settings.gradle',
+              'android/app/src/main/AndroidManifest.xml',
+              'android/app/src/main/java/dev/example/puzzle/MainActivity.java',
+            ]
+          : [
+              'ios/App/App/AppDelegate.swift',
+              'ios/App/App/Info.plist',
+              'ios/App/CapApp-SPM/Package.swift',
+            ];
+        for (const relative of required) {
+          const requiredFile = path.join(root, 'apps/mobile-capacitor', relative);
+          mkdirSync(path.dirname(requiredFile), { recursive: true });
+          writeFileSync(requiredFile, 'generated-native-project');
+        }
       }
     },
   });
@@ -199,9 +228,20 @@ try {
   renameSync(iosProjectFile, `${iosProjectFile}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /ios project is incomplete/u);
   renameSync(`${iosProjectFile}.saved`, iosProjectFile);
-  writeFileSync(iosProjectFile, 'PRODUCT_BUNDLE_IDENTIFIER = dev.other.game;');
+  const androidWrapper = path.join(root, 'apps/mobile-capacitor/android/gradlew');
+  renameSync(androidWrapper, `${androidWrapper}.saved`);
+  assert.throws(() => planCapacitorShellStarter(options), /android project is incomplete/u);
+  renameSync(`${androidWrapper}.saved`, androidWrapper);
+  writeFileSync(iosProjectFile, iosProjectWithAppId('dev.other.game'));
   assert.throws(() => planCapacitorShellStarter(options), /ios project app ID differs/u);
-  writeFileSync(iosProjectFile, 'PRODUCT_BUNDLE_IDENTIFIER = dev.example.puzzle;');
+  writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
+  const androidProjectFile = path.join(root, 'apps/mobile-capacitor/android/app/build.gradle');
+  writeFileSync(androidProjectFile, [
+    'defaultConfig { applicationId nativeId }',
+    '// applicationId "dev.example.puzzle"',
+  ].join('\n'));
+  assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
+  writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');
   applyCapacitorShellStarter(withNativeProjects);
   assert.equal(
     readFileSync(path.join(root, 'apps/mobile-capacitor/ios/CustomViewController.swift'), 'utf8'),
@@ -226,6 +266,10 @@ try {
   );
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   writeFileSync(configFile, originalConfig.replace('  appName:', '  ...overrides,\n  appName:'));
+  assert.throws(() => planCapacitorShellStarter(options), /ambiguous dynamic syntax/u);
+  writeFileSync(configFile, originalConfig
+    .replace('const config: CapacitorConfig = {', 'const config = Object.assign({')
+    .replace('};\n\nexport default config;', '}, overrides);\n\nexport default config;'));
   assert.throws(() => planCapacitorShellStarter(options), /ambiguous dynamic syntax/u);
   writeFileSync(configFile, originalConfig.replace('  webDir:', '  webDir: "other",\n  webDir:'));
   assert.throws(() => planCapacitorShellStarter(options), /webDir differs/u);
@@ -267,6 +311,20 @@ try {
   assert.throws(() => planCapacitorShellStarter(options), /another shell/u);
   customShellTargetMap.android.shellApp = 'apps/mobile-capacitor';
   writeJson('mpgd.targets.json', customShellTargets);
+  const renamedTargets = readJson('mpgd.targets.json');
+  const renamedMap = renamedTargets.targets as Record<string, Record<string, unknown>>;
+  assert.ok(renamedMap.android && renamedMap.ios);
+  renamedMap['google-play'] = renamedMap.android;
+  renamedMap['app-store'] = renamedMap.ios;
+  delete renamedMap.android;
+  delete renamedMap.ios;
+  writeJson('mpgd.targets.json', renamedTargets);
+  assert.deepEqual(planCapacitorShellStarter(options).nativePlatformsToAdd, []);
+  renamedMap.android = renamedMap['google-play'] ?? {};
+  renamedMap.ios = renamedMap['app-store'] ?? {};
+  delete renamedMap['google-play'];
+  delete renamedMap['app-store'];
+  writeJson('mpgd.targets.json', renamedTargets);
   assert.throws(
     () => planCapacitorShellStarter({ ...options, backendUrl: 'http://api.example.com' }),
     /HTTPS/u,
@@ -302,6 +360,14 @@ try {
   assert.match(readFileSync(envFile, 'utf8'), /GAME_PRIVATE_VALUE=secret/u);
   writeFileSync(envFile, 'VITE_MPGD_GAME_SERVICES_URL="https://api.example.com/"\r\n');
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(envFile, [
+    'VITE_MPGD_GAME_SERVICES_URL=https://api.example.com',
+    'VITE_MPGD_GAME_SERVICES_URL=https://other.example.com',
+  ].join('\n'));
+  assert.throws(
+    () => planCapacitorShellStarter(options),
+    /Duplicate production Game Services URLs/u,
+  );
   writeFileSync(envFile, originalEnv);
   chmodSync(envFile, originalEnvMode);
   const backupFile = path.join(root, '.env.production.saved');
