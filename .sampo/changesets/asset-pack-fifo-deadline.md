@@ -2,4 +2,4 @@
 npm/@mpgd/cli: patch
 ---
 
-Return an asset-pack delivery deadline failure even when a FIFO manifest reader remains blocked after stream destruction. Keep the timeout smoke writer owned by the test so its lifetime is deterministic in CI.
+Use nonblocking POSIX reads for FIFO delivery manifests so a stalled writer cannot hold verification past its deadline. Keep the timeout smoke writer owned by the test and verify that a streamed manifest still succeeds.

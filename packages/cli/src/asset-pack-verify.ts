@@ -1,5 +1,5 @@
 import { createHash, type Hash } from 'node:crypto';
-import { createReadStream, type ReadStream } from 'node:fs';
+import { constants, createReadStream, type ReadStream } from 'node:fs';
 import { lstat, open, opendir, realpath, stat, type FileHandle } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
@@ -408,10 +408,10 @@ const readManifestCapped = async (
   cap: number,
   deadline: VerifyDeadline,
 ): Promise<Buffer> => {
-  // Open through the deadline: a FIFO with no writer blocks inside
-  // open(2) before any stream event exists, and destroying a stream
-  // cannot cancel that pending open.
-  const handle = await deadline.race(open(resolve(manifestPath), 'r'));
+  // Open through the deadline. POSIX O_NONBLOCK keeps FIFO open/read calls
+  // bounded; Windows retains the stream fallback under the same deadline.
+  const flags = process.platform === 'win32' ? 'r' : constants.O_RDONLY | constants.O_NONBLOCK;
+  const handle = await deadline.race(open(resolve(manifestPath), flags));
   const chunks: Buffer[] = [];
   let received = 0;
   let stalled = false;
@@ -448,11 +448,48 @@ const readManifestCapped = async (
           `Delivery manifest changed while reading (expected ${expectedBytes} bytes, received more)`,
         );
       }
+    } else if (process.platform !== 'win32') {
+      // A blocking FIFO read can remain pending after stream.destroy() on
+      // some Linux hosts. O_NONBLOCK makes each read bounded; EAGAIN and an
+      // empty FIFO wait for the shared deadline rather than a writer exit.
+      const buffer = Buffer.allocUnsafe(Math.min(STREAM_CHUNK_BYTES, cap + 1));
+      while (true) {
+        deadline.sample();
+        let bytesRead: number;
+        let wouldBlock = false;
+        try {
+          ({ bytesRead } = await deadline.race(handle.read(buffer, 0, buffer.byteLength, null)));
+        } catch (error) {
+          if (
+            typeof error !== 'object'
+            || error === null
+            || !('code' in error)
+            || (error.code !== 'EAGAIN' && error.code !== 'EWOULDBLOCK')
+          ) {
+            throw error;
+          }
+          wouldBlock = true;
+          bytesRead = 0;
+        }
+        if (bytesRead === 0) {
+          if (!wouldBlock && received > 0) {
+            break;
+          }
+          const waitMs = Math.min(10, Math.max(1, deadline.remainingMs()));
+          await deadline.race(new Promise<void>((resume) => setTimeout(resume, waitMs)));
+          continue;
+        }
+        received += bytesRead;
+        if (received > cap) {
+          throw new Error(`Delivery manifest exceeds ${cap} bytes`);
+        }
+        chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+        deadline.sample();
+      }
     } else {
-      // FIFOs and other non-regular sources retain the stream watchdog: a
-      // pending read must be destroyed after the deadline so a direct
-      // FileHandle.read cannot leave the smoke process alive behind a
-      // rejected race.
+      // Windows non-regular sources retain the stream watchdog. A pending
+      // read must be destroyed at the deadline, then the race can return
+      // without waiting for that read to settle.
       const stream: ReadStream = handle.createReadStream({
         highWaterMark: STREAM_CHUNK_BYTES,
         autoClose: false,

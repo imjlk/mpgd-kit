@@ -422,6 +422,34 @@ const beforeSnapshot = new Map<string, Map<string, { bytes: number; sha256: stri
   }
 }
 {
+  // A FIFO with real manifest bytes must still parse and verify normally.
+  const fifoPath = join(fixtureRoot, 'streamed-manifest.fifo');
+  const fifoResult = spawnSync('mkfifo', [fifoPath]);
+  assert.equal(fifoResult.status, 0, fifoResult.error?.message ?? 'mkfifo failed');
+  const writer = spawn(process.execPath, [
+    '-e',
+    'require("node:fs").writeFileSync(process.argv[1], require("node:fs").readFileSync(process.argv[2]));',
+    fifoPath,
+    zipManifest,
+  ], { stdio: 'ignore' });
+  const writerDone = new Promise<void>((resolve, reject) => {
+    writer.once('close', () => resolve());
+    writer.once('error', reject);
+  });
+  try {
+    const report = await verifyAssetPackDelivery({
+      manifestPath: fifoPath,
+      root: join(fixtureRoot, zipOut),
+      verifyTimeoutMs: 5000,
+    });
+    assert.equal(report.ok, true, JSON.stringify(report.failures));
+  } finally {
+    writer.kill();
+    await writerDone.catch(() => {});
+    rmSync(fifoPath, { force: true });
+  }
+}
+{
   // Traversal: manifest path escaping the root.
   const escapeRoot = join(fixtureRoot, 'out-escape');
   cpSync(join(fixtureRoot, filesOut), escapeRoot, { recursive: true });
