@@ -106,3 +106,52 @@ export function attachCheckpointSaving(
 // The game also awaits saveCheckpoint() at level and transaction boundaries;
 // it must never defer its only save until a close, back, or pause event.
 ```
+
+## Scoped native JSON HTTP
+
+`createCapacitorNativeJsonTransport` uses the explicit `CapacitorHttp.request`
+helper from `@capacitor/core`; it does not enable global `fetch` or XHR patching.
+Use it with the HTTP JSON path of `createGameServicesRuntime`, not the oRPC
+path. The game imports only public kit APIs:
+
+```ts
+import { createCapacitorNativeJsonTransport } from '@mpgd/adapter-capacitor';
+import { createGameServicesRuntime } from '@mpgd/game-services/runtime';
+
+const baseUrl = 'https://api.example.com';
+const httpTransport = createCapacitorNativeJsonTransport({
+  target: 'android',
+  baseUrl,
+  allowedOrigin: 'https://api.example.com',
+});
+const runtime = createGameServicesRuntime({
+  gateway,
+  playerId,
+  authorityMode: 'production',
+  baseUrl,
+  transport: 'http',
+  httpTransport,
+  getHeaders: () => ({ authorization: `Bearer ${currentAccessToken()}` }),
+});
+```
+
+The game supplies its real gateway, player ID, and token resolver. The native
+transport permits only its configured HTTPS origin and relative JSON API paths;
+it rejects 3xx responses and changed routes while tolerating equivalent native
+URL encoding of the same path or query. It requests
+`disableRedirects: true` from Capacitor. A native implementation that ignored
+that option could have followed a redirect before JS sees the result, so
+redirect and credential handling still require native integration testing.
+The transport owns `Accept: application/json` and POST `Content-Type`; callers
+supplying either header are rejected instead of having it silently rewritten.
+It supports GET and POST JSON only, not streaming, file uploads, or arbitrary
+Fetch semantics. `AbortSignal` and the overall timeout stop the
+JS wait; they do **not** prove the native request or server operation was
+canceled. Reconcile purchases and reward claims before retrying them.
+
+Request size is checked before calling the native bridge. The response size
+limit is checked **after** Capacitor returns data to JS; it is not a native
+receive-memory cap. The injected Http tests and platform staging builds cover
+the contract, not real network behavior on both physical OSes. See the
+[Capacitor HTTP API](https://capacitorjs.com/docs/apis/http) for the native
+helper and its redirect/timeout options.

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 
-import { createCapacitorPlatformGateway } from '@mpgd/adapter-capacitor';
+import {
+  createCapacitorNativeJsonTransport,
+  createCapacitorPlatformGateway,
+} from '@mpgd/adapter-capacitor';
 import { createUnsupportedCapabilities } from '@mpgd/platform';
 import { getFeatureAvailability } from '@mpgd/target-config';
 
@@ -52,3 +55,23 @@ assert.equal((await composed.getCapabilities()).nativeIap, true);
 assert.equal((await composed.commerce.purchase({
   productId: 'COINS_100', source: 'shop', idempotencyKey: 'packed-order',
 })).status, 'pending');
+
+let sent;
+const nativeJson = createCapacitorNativeJsonTransport({
+  target: 'android',
+  baseUrl: 'https://api.example.com',
+  allowedOrigin: 'https://api.example.com',
+  getPlatform: () => 'android',
+  http: {
+    async request(options) {
+      sent = options;
+      return { status: 200, url: options.url, headers: {}, data: { verified: true } };
+    },
+  },
+});
+assert.deepEqual(await nativeJson.send({
+  method: 'POST', endpoint: '/game-services/purchases/verify',
+  body: { idempotencyKey: 'packed-native' },
+}), { status: 200, body: { verified: true } });
+assert.equal(sent.disableRedirects, true);
+assert.equal(sent.url, 'https://api.example.com/game-services/purchases/verify');

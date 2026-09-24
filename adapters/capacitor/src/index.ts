@@ -40,6 +40,15 @@ export {
   type CapacitorIncomingUrlKind,
   type CapacitorVisibilitySource,
 } from './app-events.js';
+export {
+  CapacitorNativeHttpError,
+  createCapacitorNativeJsonTransport,
+  type CapacitorJsonRequest,
+  type CapacitorJsonResponse,
+  type CapacitorNativeHttpErrorCode,
+  type CapacitorNativeJsonTransport,
+  type CreateCapacitorNativeJsonTransportInput,
+} from './native-http.js';
 
 const externalActivityMethods = new Set<BridgeMethod>([
   'commerce.purchase',
