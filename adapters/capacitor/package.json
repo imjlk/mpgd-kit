@@ -38,7 +38,8 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "vitest run && node test/package-import.mjs"
+    "test:native-http-runtime": "node test/native-http-runtime.mjs",
+    "test": "vitest run && node test/package-import.mjs && node test/native-http-runtime.mjs"
   },
   "dependencies": {
     "@capacitor/app": "8.1.1",

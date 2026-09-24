@@ -1,4 +1,8 @@
-import type { CapacitorServiceProvider } from '@mpgd/adapter-capacitor';
+import {
+  createCapacitorNativeJsonTransport,
+  type CapacitorNativeJsonTransport,
+  type CapacitorServiceProvider,
+} from '@mpgd/adapter-capacitor';
 import type { PlatformProviderAvailability, PlatformProviderFeature } from '@mpgd/platform';
 import type { FeatureAvailabilityReason, PlatformFeature } from '@mpgd/target-config';
 
@@ -31,3 +35,10 @@ const provider: CapacitorServiceProvider = {
 void provider;
 void targetFeature;
 void reason;
+
+const nativeJson: CapacitorNativeJsonTransport = createCapacitorNativeJsonTransport({
+  target: 'ios',
+  baseUrl: 'https://api.example.com',
+  allowedOrigins: ['https://api.example.com'],
+});
+void nativeJson;
