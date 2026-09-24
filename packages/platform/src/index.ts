@@ -119,6 +119,53 @@ export interface PurchaseResult {
 
 export interface PurchaseRestoreResult {
   readonly restoredEntitlements: readonly Entitlement[];
+  /** Server-confirmed consumable outcomes; native order visibility alone is not a grant. */
+  readonly settledPurchases?: readonly PurchaseSettlement[];
+}
+
+export interface PurchaseSettlement {
+  readonly transactionId: string;
+  readonly productId: LogicalProductId;
+  readonly status: 'granted' | 'refunded';
+  readonly ledgerEntryId?: string;
+}
+
+/**
+ * Resolve a specific purchase from authoritative checkout or restore evidence.
+ * A completed native checkout without authoritativeGrant is still unconfirmed.
+ */
+export function findAuthoritativePurchaseSettlement(input: {
+  readonly productId: LogicalProductId;
+  readonly transactionId?: string;
+  readonly purchase?: PurchaseResult;
+  readonly restore?: PurchaseRestoreResult;
+}): PurchaseSettlement | null {
+  const matchingRestored = input.restore?.settledPurchases?.filter((settlement) =>
+    settlement.productId === input.productId
+    && (input.transactionId === undefined || settlement.transactionId === input.transactionId),
+  );
+  // Without an order ID, multiple historical outcomes are ambiguous.
+  if (matchingRestored !== undefined && matchingRestored.length > 1) {
+    return null;
+  }
+  if (matchingRestored?.[0] !== undefined) {
+    return matchingRestored[0];
+  }
+  const purchase = input.purchase;
+  if (
+    purchase?.status !== 'completed'
+    || purchase.transactionId === undefined
+    || purchase.authoritativeGrant === undefined
+    || (input.transactionId !== undefined && input.transactionId !== purchase.transactionId)
+  ) {
+    return null;
+  }
+  return {
+    transactionId: purchase.transactionId,
+    productId: input.productId,
+    status: 'granted',
+    ledgerEntryId: purchase.authoritativeGrant.ledgerEntryId,
+  };
 }
 
 export interface RewardedAdResult {
