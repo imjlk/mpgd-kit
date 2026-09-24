@@ -155,6 +155,30 @@ describe('Capacitor App event ownership', () => {
     expect(visibility.listeners.size).toBe(0);
   });
 
+  it('does not deliver a stale resume after a subscriber reenters pause', async () => {
+    const fake = new FakeApp();
+    const events = createCapacitorAppEvents({ target: 'android', app: asApp(fake), visibility: null });
+    let openExternal = true;
+    let release: (() => void) | undefined;
+    const later: string[] = [];
+    events.onResume(() => {
+      if (openExternal) {
+        openExternal = false;
+        release = events.beginExternalActivity?.();
+      }
+    });
+    events.onPause(() => { later.push('pause'); });
+    events.onResume(() => { later.push('resume'); });
+    await settle();
+    fake.emit('appStateChange', { isActive: false });
+    fake.emit('appStateChange', { isActive: true });
+    expect(later.at(-1)).toBe('pause');
+    expect(later).not.toContain('resume');
+    release?.();
+    expect(later.at(-1)).toBe('resume');
+    await events.dispose?.();
+  });
+
   it('keeps game links and OAuth redirects on separate cold and warm paths', async () => {
     const fake = new FakeApp();
     fake.launchUrl = 'mpgd://game/daily';

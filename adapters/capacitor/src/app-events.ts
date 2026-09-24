@@ -52,6 +52,7 @@ export function createCapacitorAppEvents(input: CreateCapacitorAppEventsInput): 
   let appActive = true;
   let visibilityActive = visibility?.hidden !== true;
   let currentActive = true;
+  let transitionVersion = 0;
   let stateEvents = 0;
   let externalActivities = 0;
   let backInProgress = false;
@@ -75,8 +76,13 @@ export function createCapacitorAppEvents(input: CreateCapacitorAppEventsInput): 
     }
   };
 
-  function emit(callbacks: ReadonlySet<() => void>): void {
+  function emit(callbacks: ReadonlySet<() => void>, version: number): void {
     for (const callback of [...callbacks]) {
+      // A callback can open or close external UI and reenter reconcile().
+      // Never continue an older resume/pause emission after that transition.
+      if (disposed || version !== transitionVersion) {
+        return;
+      }
       try {
         callback();
       } catch (error) {
@@ -94,7 +100,8 @@ export function createCapacitorAppEvents(input: CreateCapacitorAppEventsInput): 
       return;
     }
     currentActive = active;
-    emit(active ? resumeCallbacks : pauseCallbacks);
+    transitionVersion += 1;
+    emit(active ? resumeCallbacks : pauseCallbacks, transitionVersion);
   }
 
   function classify(url: string): CapacitorIncomingUrlKind | null {
