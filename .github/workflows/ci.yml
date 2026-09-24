@@ -342,7 +342,7 @@ jobs:
             # also applies to unattested docs-only pushes on main.
             run_prepared=false
           fi
-          if [[ "${EVENT_NAME}" == "pull_request" ]] &&
+          if [[ "${EVENT_NAME}" == "pull_request" && "${metadata_only}" == "false" ]] &&
             [[ "$(node tools/ci/native-scope.mjs "${changed_files[@]}")" == true ]]; then
             # Only native-owned paths (and their Sampo changeset) qualify.
             # Keep the adapter's unit tests plus the Android/iOS build jobs;

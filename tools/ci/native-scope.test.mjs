@@ -43,8 +43,9 @@ test('CI wires native classification to both platform jobs and the required gate
   const workflow = readFileSync(fileURLToPath(new URL('../../.github/workflows/ci.yml', import.meta.url)), 'utf8');
   assert.match(workflow, /run_native: \$\{\{ steps\.release-pr-meta\.outputs\.run_native \}\}/);
   assert.match(workflow, /node tools\/ci\/native-scope\.mjs "\$\{changed_files\[@\]\}"/);
+  assert.match(workflow, /EVENT_NAME\}" == "pull_request" && "\$\{metadata_only\}" == "false"/);
   for (const name of ['build-android', 'build-ios']) {
-    const job = workflow.split(`\n  ${name}:\n`)[1]?.split(/\n  [a-z][a-z-]*:\n/)[0];
+    const job = workflow.split(new RegExp(`\\r?\\n  ${name}:\\r?\\n`))[1]?.split(/\r?\n  [a-z0-9][a-z0-9_-]*:\r?\n/)[0];
     assert.match(job ?? '', /needs\.prepare\.outputs\.run_native == 'true'/);
   }
   assert.match(workflow, /RUN_NATIVE: \$\{\{ needs\.prepare\.outputs\.run_native \}\}/);
