@@ -459,18 +459,25 @@ const readManifestCapped = async (
       });
       const timer = deadline.armStream(stream);
       try {
-        for await (const chunk of stream) {
-          const view = chunk as Buffer;
-          received += view.byteLength;
-          if (received > cap) {
-            stream.destroy();
-            throw new Error(`Delivery manifest exceeds ${cap} bytes`);
+        await deadline.race((async () => {
+          for await (const chunk of stream) {
+            const view = chunk as Buffer;
+            received += view.byteLength;
+            if (received > cap) {
+              stream.destroy();
+              throw new Error(`Delivery manifest exceeds ${cap} bytes`);
+            }
+            chunks.push(Buffer.from(view));
+            deadline.sample();
           }
-          chunks.push(Buffer.from(view));
-          deadline.sample();
-        }
+        })());
       } finally {
+        // Destroy may not wake a pending FIFO read until its writer closes.
+        // The raced deadline returns the report without waiting for that read.
         clearTimeout(timer);
+        if (!stream.destroyed) {
+          stream.destroy();
+        }
       }
     }
   } catch (error) {

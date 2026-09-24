@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
+import { spawn, spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   cpSync,
@@ -11,6 +11,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { performance } from 'node:perf_hooks';
 
 import { buildAssetPacks } from '../../packages/cli/src/asset-pack-build';
 import {
@@ -376,23 +377,49 @@ const beforeSnapshot = new Map<string, Map<string, { bytes: number; sha256: stri
   // to sample; the stream watchdog must abort it at the deadline instead
   // of hanging forever.
   const fifoPath = join(fixtureRoot, 'stalled-manifest.fifo');
-  spawnSync('mkfifo', [fifoPath]);
-  // A background writer holds the FIFO open without writing, so the read
-  // side pairs up and then pends without data or EOF.
-  // stdio ignore keeps spawnSync from waiting on the background writer's
-  // inherited pipes (its FIFO open blocks until the reader below pairs).
-  spawnSync('sh', ['-c', '(exec sleep 30 > "$1") &', 'sh', fifoPath], { stdio: 'ignore' });
-  const report = await verifyAssetPackDelivery({
-    manifestPath: fifoPath,
-    root: join(fixtureRoot, zipOut),
-    verifyTimeoutMs: 300,
-  });
-  assert.equal(report.ok, false);
-  assert.ok(
-    report.failures.some((failure) => failure.code === 'deadline'),
-    JSON.stringify(report.failures),
+  const fifoResult = spawnSync('mkfifo', [fifoPath]);
+  assert.equal(
+    fifoResult.status,
+    0,
+    fifoResult.error?.message ?? fifoResult.stderr?.toString() ?? 'mkfifo failed',
   );
-  rmSync(fifoPath, { force: true });
+  // Keep the writer process owned by this test. A detached shell background
+  // job can exit before the deadline on CI and turn this into an EOF test.
+  const writer = spawn(
+    process.execPath,
+    [
+      '-e',
+      [
+        'require("node:fs").openSync(process.argv[1], "w");',
+        'setTimeout(() => process.exit(0), 10000);',
+        'setInterval(() => {}, 1000);',
+      ].join(' '),
+      fifoPath,
+    ],
+    { stdio: 'ignore' },
+  );
+  const writerDone = new Promise<void>((resolve, reject) => {
+    writer.once('close', () => resolve());
+    writer.once('error', reject);
+  });
+  try {
+    const startedAt = performance.now();
+    const report = await verifyAssetPackDelivery({
+      manifestPath: fifoPath,
+      root: join(fixtureRoot, zipOut),
+      verifyTimeoutMs: 300,
+    });
+    assert.ok(performance.now() - startedAt < 5000, 'FIFO deadline returned too late.');
+    assert.equal(report.ok, false);
+    assert.ok(
+      report.failures.some((failure) => failure.code === 'deadline'),
+      JSON.stringify(report.failures),
+    );
+  } finally {
+    writer.kill();
+    await writerDone.catch(() => {});
+    rmSync(fifoPath, { force: true });
+  }
 }
 {
   // Traversal: manifest path escaping the root.
