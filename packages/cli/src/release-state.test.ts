@@ -227,6 +227,7 @@ process.exit(result.status ?? 1);
     target: 'android' as const,
     buildRunId: 'run-123',
     kitPackageVersion: '0.35.0',
+    buildConfigDigest: 'f'.repeat(64),
     artifactFile,
     expectedArtifactSha256: sha256(artifactFile),
     artifactLocation: 'release-output/android/game.aab',
@@ -237,6 +238,8 @@ process.exit(result.status ?? 1);
   };
   const built = await recordNativeReleaseBuild(buildInput);
   assert.match(built.record.artifactSha256, /^[a-f0-9]{64}$/u);
+  assert.equal(built.record.gameVersion, '1.0.0');
+  assert.equal(built.record.platformVersion.versionCode, 41);
   const repeated = await recordNativeReleaseBuild(buildInput);
   assert.deepEqual(repeated, built);
   writeFileSync(artifactFile, 'different bytes');

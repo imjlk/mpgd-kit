@@ -104,7 +104,8 @@ observed. Reusing the same key and provenance returns the stored plan without
 consuming another number; changing its target set or provenance fails.
 
 `recordNativeReleaseBuild()` appends a content-hashed record for one reserved
-Android or iOS build, including source/Kit/config provenance, artifact
+Android or iOS build, including game/Kit versions, source/Kit/config provenance,
+the build-configuration digest and reserved platform numbers, artifact
 location and SHA-256, manifest SHA-256, build run ID, and identity/signing
 inspection supplied by the verified builder. It checks the copied artifact
 and manifest against expected hashes and compares the signed manifest with

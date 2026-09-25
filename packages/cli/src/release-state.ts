@@ -39,10 +39,13 @@ export interface ImmutableNativeBuildRecord {
   readonly releaseKey: string;
   readonly target: 'android' | 'ios';
   readonly buildRunId: string;
+  readonly gameVersion: string;
   readonly sourceGitSha: string;
   readonly kitGitSha: string;
   readonly kitPackageVersion: string;
+  readonly buildConfigDigest: string;
   readonly targetConfigDigest: string;
+  readonly platformVersion: Readonly<Record<string, unknown>>;
   readonly artifactLocation: string;
   readonly artifactSha256: string;
   readonly releaseManifestSha256: string;
@@ -57,6 +60,7 @@ export interface RecordNativeBuildInput {
   readonly target: 'android' | 'ios';
   readonly buildRunId: string;
   readonly kitPackageVersion: string;
+  readonly buildConfigDigest: string;
   readonly artifactFile: string;
   readonly expectedArtifactSha256: string;
   readonly artifactLocation: string;
@@ -165,7 +169,8 @@ export async function recordNativeReleaseBuild(
 ): Promise<{ readonly record: ImmutableNativeBuildRecord; readonly stateCommit: string }> {
   assertReleaseKey(input.releaseKey);
   if (input.buildRunId.trim() === '' || input.artifactLocation.trim() === ''
-    || input.inspectedAppId.trim() === '' || !sha256Pattern.test(input.inspectedSignerSha256)) {
+    || input.inspectedAppId.trim() === '' || !sha256Pattern.test(input.inspectedSignerSha256)
+    || !sha256Pattern.test(input.buildConfigDigest)) {
     throw new Error('Native build record is missing a run ID, artifact location, or inspection.');
   }
   if (!statSync(input.artifactFile).isFile() || !statSync(input.releaseManifestFile).isFile()) {
@@ -229,10 +234,13 @@ export async function recordNativeReleaseBuild(
       releaseKey: input.releaseKey,
       target: input.target,
       buildRunId: input.buildRunId,
+      gameVersion: plan.gameVersion,
       sourceGitSha: plan.sourceGitSha,
       kitGitSha: plan.kitGitSha,
       kitPackageVersion: input.kitPackageVersion,
+      buildConfigDigest: input.buildConfigDigest,
       targetConfigDigest: plan.targetConfigDigest,
+      platformVersion: plannedTarget,
       artifactLocation: input.artifactLocation,
       artifactSha256,
       releaseManifestSha256,
