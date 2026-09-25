@@ -1,5 +1,40 @@
 # @mpgd/adapter-capacitor
 
+## 0.5.0 — 2026-09-25
+
+### Minor changes
+
+- [bd7d0125](https://github.com/imjlk/mpgd-kit/commit/bd7d0125fc8201e17f92988c4ad177563e004175) Connect Capacitor app state, Android back navigation, and classified cold/warm
+  URL entry to the platform lifecycle contract. Keep OAuth redirects separate
+  from game links, own and dispose only registered listeners, and hold game
+  execution while optional external provider UI is still active. Include the
+  App plugin in generated native projects. — Thanks @imjlk!
+- [f6e47baa](https://github.com/imjlk/mpgd-kit/commit/f6e47baa9c84aee3b3ea67bdba192bbeae2ba4af) Add optional Capacitor provider composition with per-method bridge validation and
+  fail-closed readiness reporting. Distinguish uninstalled, unconfigured,
+  action-required, transient, and available features without changing existing
+  purchase result states. Expose subscription and native/remote leaderboard
+  availability separately while preserving legacy target configuration defaults.
+  Fix the base plugin's ESM-relative export so the published tarball can be
+  imported by Node-based consumers and native build tooling.
+  Keep generated starter target-availability checks aligned with the new readiness states. — Thanks @imjlk!
+- [7a27b7f8](https://github.com/imjlk/mpgd-kit/commit/7a27b7f8b033ca987eefe859a702d0c08eba0800) Expose an optional Capacitor viewport state and change subscription with
+  separate safe-area, system-bar, keyboard, and named occupied-surface geometry.
+  Resolve one usable CSS-pixel rectangle without double-counting overlapping
+  native or CSS insets, and convert provider-owned physical-pixel surfaces at
+  the adapter boundary.
+  Align newly scaffolded games with the SystemBars CSS safe-area fallback. — Thanks @imjlk!
+- [f23df41f](https://github.com/imjlk/mpgd-kit/commit/f23df41fd114b81096450a579f9a2aaead12bd09) Add a scoped Capacitor native JSON HTTP transport for HTTPS GET and POST
+  requests, including explicit origin selection, redirect blocking, bounded
+  timeouts and JS-side size checks, and public Game Services runtime composition. — Thanks @imjlk!
+- [b7ffbf9d](https://github.com/imjlk/mpgd-kit/commit/b7ffbf9d8baedbae894063e89a07509fc96dfd46) Add a separate fail-closed credential storage contract to the Capacitor base
+  bridge. Android uses a Keystore-held AES-GCM key with no-backup ciphertext
+  files, and iOS uses device-only
+  Keychain items; neither falls back to ordinary game JSON storage. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: bridge@0.10.0, capacitor-game-services@0.6.0, game-services@0.16.0, platform@0.13.0, target-config@0.16.0
+
 ## 0.4.12 — 2026-09-24
 
 ### Patch changes

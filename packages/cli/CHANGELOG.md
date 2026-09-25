@@ -1,5 +1,40 @@
 # @mpgd/cli
 
+## 0.34.0 — 2026-09-25
+
+### Minor changes
+
+- [13cd18f4](https://github.com/imjlk/mpgd-kit/commit/13cd18f432ca28cc89fc9e4da9828a24f0922042) Add isolated native target staging, explicit signed archive and iOS store export
+  modes, and fail-closed inspection of the emitted binary identity and signature.
+  Native release manifests now distinguish smoke artifacts from submission
+  candidates; signed builds still require game-owned host signing credentials. — Thanks @imjlk!
+- [3e01a3e8](https://github.com/imjlk/mpgd-kit/commit/3e01a3e8688a017e84a09854d35ee1f081db6e1d) Add a non-destructive game-owned Capacitor shell initializer that plans Android
+  and iOS shell configuration, release identity, icon and backend inputs before
+  writing. It does not bundle provider SDKs or overwrite existing native projects. — Thanks @imjlk!
+
+### Patch changes
+
+- [bd7d0125](https://github.com/imjlk/mpgd-kit/commit/bd7d0125fc8201e17f92988c4ad177563e004175) Connect Capacitor app state, Android back navigation, and classified cold/warm
+  URL entry to the platform lifecycle contract. Keep OAuth redirects separate
+  from game links, own and dispose only registered listeners, and hold game
+  execution while optional external provider UI is still active. Include the
+  App plugin in generated native projects. — Thanks @imjlk!
+- [f6e47baa](https://github.com/imjlk/mpgd-kit/commit/f6e47baa9c84aee3b3ea67bdba192bbeae2ba4af) Add optional Capacitor provider composition with per-method bridge validation and
+  fail-closed readiness reporting. Distinguish uninstalled, unconfigured,
+  action-required, transient, and available features without changing existing
+  purchase result states. Expose subscription and native/remote leaderboard
+  availability separately while preserving legacy target configuration defaults.
+  Fix the base plugin's ESM-relative export so the published tarball can be
+  imported by Node-based consumers and native build tooling.
+  Keep generated starter target-availability checks aligned with the new readiness states. — Thanks @imjlk!
+- [7a27b7f8](https://github.com/imjlk/mpgd-kit/commit/7a27b7f8b033ca987eefe859a702d0c08eba0800) Expose an optional Capacitor viewport state and change subscription with
+  separate safe-area, system-bar, keyboard, and named occupied-surface geometry.
+  Resolve one usable CSS-pixel rectangle without double-counting overlapping
+  native or CSS insets, and convert provider-owned physical-pixel surfaces at
+  the adapter boundary.
+  Align newly scaffolded games with the SystemBars CSS safe-area fallback. — Thanks @imjlk!
+- Updated dependencies: adapter-ait@0.12.5, adapter-browser@0.7.6, adapter-capacitor@0.5.0, adapter-devvit@0.9.11, adapter-verse8@0.3.9, analytics@0.3.15, bridge@0.10.0, catalog@0.7.5, game-services@0.16.0, i18n@0.6.4, platform@0.13.0, target-config@0.16.0
+
 ## 0.33.2 — 2026-09-24
 
 ### Patch changes

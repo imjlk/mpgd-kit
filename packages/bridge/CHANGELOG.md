@@ -1,5 +1,14 @@
 # @mpgd/bridge
 
+## 0.10.0 — 2026-09-25
+
+### Minor changes
+
+- [b7ffbf9d](https://github.com/imjlk/mpgd-kit/commit/b7ffbf9d8baedbae894063e89a07509fc96dfd46) Add a separate fail-closed credential storage contract to the Capacitor base
+  bridge. Android uses a Keystore-held AES-GCM key with no-backup ciphertext
+  files, and iOS uses device-only
+  Keychain items; neither falls back to ordinary game JSON storage. — Thanks @imjlk!
+
 ## 0.9.1 — 2026-09-23
 
 ### Changed

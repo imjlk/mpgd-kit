@@ -1,5 +1,28 @@
 # @mpgd/target-config
 
+## 0.16.0 — 2026-09-25
+
+### Minor changes
+
+- [f6e47baa](https://github.com/imjlk/mpgd-kit/commit/f6e47baa9c84aee3b3ea67bdba192bbeae2ba4af) Add optional Capacitor provider composition with per-method bridge validation and
+  fail-closed readiness reporting. Distinguish uninstalled, unconfigured,
+  action-required, transient, and available features without changing existing
+  purchase result states. Expose subscription and native/remote leaderboard
+  availability separately while preserving legacy target configuration defaults.
+  Fix the base plugin's ESM-relative export so the published tarball can be
+  imported by Node-based consumers and native build tooling.
+  Keep generated starter target-availability checks aligned with the new readiness states. — Thanks @imjlk!
+- [7a27b7f8](https://github.com/imjlk/mpgd-kit/commit/7a27b7f8b033ca987eefe859a702d0c08eba0800) Expose an optional Capacitor viewport state and change subscription with
+  separate safe-area, system-bar, keyboard, and named occupied-surface geometry.
+  Resolve one usable CSS-pixel rectangle without double-counting overlapping
+  native or CSS insets, and convert provider-owned physical-pixel surfaces at
+  the adapter boundary.
+  Align newly scaffolded games with the SystemBars CSS safe-area fallback. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: catalog@0.7.5, i18n@0.6.4, platform@0.13.0
+
 ## 0.15.2 — 2026-09-24
 
 ### Patch changes

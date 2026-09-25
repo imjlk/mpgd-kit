@@ -1,5 +1,28 @@
 # @mpgd/capacitor-game-services
 
+## 0.6.0 — 2026-09-25
+
+### Minor changes
+
+- [b7ffbf9d](https://github.com/imjlk/mpgd-kit/commit/b7ffbf9d8baedbae894063e89a07509fc96dfd46) Add a separate fail-closed credential storage contract to the Capacitor base
+  bridge. Android uses a Keystore-held AES-GCM key with no-backup ciphertext
+  files, and iOS uses device-only
+  Keychain items; neither falls back to ordinary game JSON storage. — Thanks @imjlk!
+
+### Patch changes
+
+- [f6e47baa](https://github.com/imjlk/mpgd-kit/commit/f6e47baa9c84aee3b3ea67bdba192bbeae2ba4af) Add optional Capacitor provider composition with per-method bridge validation and
+  fail-closed readiness reporting. Distinguish uninstalled, unconfigured,
+  action-required, transient, and available features without changing existing
+  purchase result states. Expose subscription and native/remote leaderboard
+  availability separately while preserving legacy target configuration defaults.
+  Fix the base plugin's ESM-relative export so the published tarball can be
+  imported by Node-based consumers and native build tooling.
+  Keep generated starter target-availability checks aligned with the new readiness states. — Thanks @imjlk!
+- [2812253e](https://github.com/imjlk/mpgd-kit/commit/2812253e50fa375532f3fbbcdd48a2fd7760d791) Bundle the iOS privacy manifest with the Capacitor Swift Package and declare
+  the required-reason API usage for legacy UserDefaults storage migration. — Thanks @imjlk!
+- Updated dependencies: bridge@0.10.0
+
 ## 0.5.4 — 2026-09-24
 
 ### Patch changes

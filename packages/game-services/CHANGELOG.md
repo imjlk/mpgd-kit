@@ -1,5 +1,22 @@
 # @mpgd/game-services
 
+## 0.16.0 — 2026-09-25
+
+### Minor changes
+
+- [f5974b1d](https://github.com/imjlk/mpgd-kit/commit/f5974b1d87b4eb9d085211ffeaf43fb740b5baf5) Allow an HTTP JSON backend transport to be injected through
+  `createGameServicesRuntime` while preserving authoritative backend validation,
+  backend status handling, and per-request credential resolution. Keep oRPC on
+  its distinct Fetch-based path. — Thanks @imjlk!
+- [ffc27594](https://github.com/imjlk/mpgd-kit/commit/ffc27594d7284be851003f34898e73b6be75d8af) Add a guest session coordinator that stores refresh tokens only through a
+  dedicated secure credential port, serializes refresh and logout, rejects
+  principal changes, and delegates server issuance, revocation, and verified
+  account binding to an injected authoritative backend. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: analytics@0.3.15, catalog@0.7.5, platform@0.13.0
+
 ## 0.15.3 — 2026-09-24
 
 ### Patch changes
