@@ -1,0 +1,27 @@
+{
+  "name": "@mpgd/deploy-tooling-compat",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "check": "ttsc --noEmit -p tsconfig.json",
+    "build": "ttsc -p tsconfig.json",
+    "test": "pnpm build && node --test test/*.test.mjs && node ../../tools/deploy/store-tooling-packed-consumer.mjs"
+  },
+  "dependencies": {
+    "@googleapis/androidpublisher": "42.0.0",
+    "appstore-connect-sdk": "2.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "ttsc": "0.30.4",
+    "typescript": "7.0.2"
+  }
+}

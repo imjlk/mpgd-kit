@@ -1,0 +1,26 @@
+{
+  "repository": "rorkai/App-Store-Connect-CLI",
+  "version": "5.5.0",
+  "assets": {
+    "darwin-arm64": {
+      "name": "asc_5.5.0_macOS_arm64",
+      "sha256": "8d0c38ad9c7e3094d2fc9b7b5a86d7c9a08fd2b36a3df081aefbf60503035b29"
+    },
+    "darwin-x64": {
+      "name": "asc_5.5.0_macOS_amd64",
+      "sha256": "296553af9cd63f9f93782f22dc12077c3d6678ee57cf52e05aee7e850fe13f63"
+    },
+    "linux-arm64": {
+      "name": "asc_5.5.0_linux_arm64",
+      "sha256": "c8f6d0adf7ca3ad41391adda3c83ff2023b921f4f9b077c6498c6d18b39aaebd"
+    },
+    "linux-x64": {
+      "name": "asc_5.5.0_linux_amd64",
+      "sha256": "712b29762c7ad8c2624bccc9752a30ff3c1d4c5b4cb689a00680f45081939239"
+    },
+    "win32-x64": {
+      "name": "asc_5.5.0_windows_amd64.exe",
+      "sha256": "52d1eb290139570b377b8fca439c84be7275934209dd342bb2a8b44f14e00c89"
+    }
+  }
+}
