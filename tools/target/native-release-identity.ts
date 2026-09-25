@@ -128,7 +128,9 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
     }
     visited.add(file);
     const source = stripComments(readRequiredFile(file, 'applied Android Gradle script'));
-    if (file !== appBuild && /\b(?:applicationId|applicationIdSuffix|versionNameSuffix)\b/u.test(source)) {
+    if (file !== appBuild
+      && /\b(?:applicationId|applicationIdSuffix|versionCode|versionName|versionNameSuffix)\b/u
+        .test(source)) {
       throw new Error(
         `Native release preflight found identity override in applied Gradle script: ${file}.`,
       );

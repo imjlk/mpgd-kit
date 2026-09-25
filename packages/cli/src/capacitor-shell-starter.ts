@@ -360,12 +360,10 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     assertNativePlatformComplete(gameRoot, platform, input.appId, input.displayName);
     return false;
   });
-  if (existsSync(path.join(gameRoot, shellPath, 'ios'))) {
-    const smokePath = `${shellPath}/ios/App/App/Info-Smoke.plist`;
-    safeDestination(gameRoot, smokePath);
-    if (readExisting(path.join(gameRoot, smokePath)) === undefined) {
-      requestedFiles.push({ path: smokePath, content: smokeInfoPlist(input.displayName) });
-    }
+  const smokePath = `${shellPath}/ios/App/App/Info-Smoke.plist`;
+  safeDestination(gameRoot, smokePath);
+  if (readExisting(path.join(gameRoot, smokePath)) === undefined) {
+    requestedFiles.push({ path: smokePath, content: smokeInfoPlist(input.displayName) });
   }
   const files = requestedFiles.filter(
     (file) => readExisting(path.join(gameRoot, file.path)) !== file.content,
@@ -382,7 +380,8 @@ export function applyCapacitorShellStarter(
   plan: CapacitorShellStarterPlan,
   installStagedFile: (temporary: string, destination: string) => void = renameSync,
 ): void {
-  const staged = plan.files.map((file) => {
+  const staged = plan.files.filter((file) => !plan.nativePlatformsToAdd.some((platform) =>
+    file.path.startsWith(`${shellPath}/${platform}/`))).map((file) => {
     const destination = safeDestination(plan.gameRoot, file.path);
     mkdirSync(path.dirname(destination), { recursive: true });
     assertNotSymlink(destination);
@@ -497,11 +496,11 @@ export function materializeCapacitorShellStarter(
       const relative = `${shellPath}/ios/App/App/Info-Smoke.plist`;
       const destination = safeDestination(plan.gameRoot, relative);
       if (!existsSync(destination)) {
-        writeFileSync(
-          destination,
-          smokeInfoPlist(requireString(manifest.displayName, 'shell display name')),
-          { flag: 'wx' },
-        );
+        const planned = plan.files.find((file) => file.path === relative);
+        if (planned === undefined) {
+          throw new Error('New ios project simulator Info.plist was not planned.');
+        }
+        writeFileSync(destination, planned.content, { flag: 'wx' });
       }
     }
     assertNativePlatformComplete(
@@ -548,7 +547,8 @@ function assertNativePlatformComplete(
         continue;
       }
       const source = stripGradleComments(readFileSync(path.join(nativeDirectory, script), 'utf8'));
-      if (/\b(?:applicationId|applicationIdSuffix|versionNameSuffix)\b/u.test(source)) {
+      if (/\b(?:applicationId|applicationIdSuffix|versionCode|versionName|versionNameSuffix)\b/u
+        .test(source)) {
         throw new Error(
           `Existing android project applied Gradle script changes identity: ${script}`,
         );
@@ -774,7 +774,7 @@ function parsePlistDictionary(source: string, label: string): Map<string, Elemen
   const children = plist === null ? [] : childElements(plist);
   const dictionary = children[0];
   if (plist?.tagName !== 'plist' || children.length !== 1
-    || dictionary?.tagName !== 'dict') {
+    || dictionary?.tagName !== 'dict' || hasNonWhitespaceText(plist)) {
     throw new Error(`Existing ios project ${label} Info.plist is malformed.`);
   }
   return parsePlistEntries(dictionary, label);
@@ -782,7 +782,7 @@ function parsePlistDictionary(source: string, label: string): Map<string, Elemen
 
 function parsePlistEntries(dictionary: Element, label: string): Map<string, Element> {
   const children = childElements(dictionary);
-  if (children.length % 2 !== 0) {
+  if (children.length % 2 !== 0 || hasNonWhitespaceText(dictionary)) {
     throw new Error(`Existing ios project ${label} Info.plist is malformed.`);
   }
   const entries = new Map<string, Element>();
@@ -790,7 +790,8 @@ function parsePlistEntries(dictionary: Element, label: string): Map<string, Elem
     const key = children[index];
     const value = children[index + 1];
     const name = key?.textContent?.trim() ?? '';
-    if (key?.tagName !== 'key' || value === undefined || name.length === 0
+    if (key?.tagName !== 'key' || childElements(key).length > 0
+      || value === undefined || name.length === 0
       || entries.has(name)) {
       throw new Error(`Existing ios project ${label} Info.plist is malformed.`);
     }
@@ -806,16 +807,48 @@ function assertPlistValue(value: Element, label: string): void {
     return;
   }
   if (value.tagName === 'array') {
+    if (hasNonWhitespaceText(value)) {
+      throw new Error(`Existing ios project ${label} Info.plist is malformed.`);
+    }
     for (const child of childElements(value)) {
       assertPlistValue(child, label);
     }
     return;
   }
-  if (['string', 'integer', 'real', 'date', 'data', 'true', 'false'].includes(value.tagName)
-    && childElements(value).length === 0) {
-    return;
+  if (childElements(value).length === 0) {
+    const text = value.textContent?.trim() ?? '';
+    if (value.tagName === 'string') {
+      return;
+    }
+    if (value.tagName === 'integer' && /^-?\d+$/u.test(text)) {
+      return;
+    }
+    if (value.tagName === 'real'
+      && /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/u.test(text)
+      && Number.isFinite(Number(text))) {
+      return;
+    }
+    if (value.tagName === 'date'
+      && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/u.test(text)
+      && Number.isFinite(Date.parse(text))) {
+      return;
+    }
+    if (value.tagName === 'data'
+      && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u
+        .test(text.replace(/\s+/gu, ''))) {
+      return;
+    }
+    if ((value.tagName === 'true' || value.tagName === 'false') && text === '') {
+      return;
+    }
   }
   throw new Error(`Existing ios project ${label} Info.plist has an unsupported value node.`);
+}
+
+function hasNonWhitespaceText(element: Element): boolean {
+  return Array.from(element.childNodes).some((node) =>
+    (node.nodeType === 3 || node.nodeType === 4)
+    && (node.textContent?.trim().length ?? 0) > 0);
 }
 
 function assertReferencedIosFiles(nativeDirectory: string, project: string, infoRelative: string): void {
@@ -845,34 +878,36 @@ function assertReferencedIosFiles(nativeDirectory: string, project: string, info
 }
 
 function assertAndroidManifestResources(nativeDirectory: string): void {
-  const manifest = readFileSync(
-    path.join(nativeDirectory, 'app/src/main/AndroidManifest.xml'),
-    'utf8',
-  ).replace(/<!--[\s\S]*?-->/gu, '');
-  const resourceRoot = path.join(nativeDirectory, 'app/src/main/res');
-  const references = [...manifest.matchAll(/(?<![\w+])@([a-z]+)\/([A-Za-z_][A-Za-z0-9_.]*)/gu)];
+  const manifestFiles = ['main', 'release']
+    .map((sourceSet) => path.join(nativeDirectory, `app/src/${sourceSet}/AndroidManifest.xml`))
+    .filter((file) => existsSync(file));
+  const resourceRoots = ['main', 'release']
+    .map((sourceSet) => path.join(nativeDirectory, `app/src/${sourceSet}/res`));
+  const references = manifestFiles.flatMap((file) => {
+    const manifest = readFileSync(file, 'utf8').replace(/<!--[\s\S]*?-->/gu, '');
+    return [...manifest.matchAll(/(?<![\w+])@([a-z]+)\/([A-Za-z_][A-Za-z0-9_.]*)/gu)];
+  });
   for (const reference of references) {
     const type = reference[1] ?? '';
     const name = reference[2] ?? '';
-    const folders = existsSync(resourceRoot)
-      ? readdirSync(resourceRoot, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory()).map((entry) => entry.name)
-      : [];
-    const found = folders.some((folder) => {
-      if (folder === type || folder.startsWith(`${type}-`)) {
-        return readdirSync(path.join(resourceRoot, folder)).some((file) =>
-          file === `${name}.xml` || file.startsWith(`${name}.`));
-      }
-      if (folder !== 'values' && !folder.startsWith('values-')) {
+    const found = resourceRoots.some((resourceRoot) => {
+      if (!existsSync(resourceRoot)) {
         return false;
       }
-      return readdirSync(path.join(resourceRoot, folder)).some((file) => {
-        if (!file.endsWith('.xml')) {
+      const folders = readdirSync(resourceRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+      return folders.some((folder) => {
+        if (folder === type || folder.startsWith(`${type}-`)) {
+          return readdirSync(path.join(resourceRoot, folder)).some((file) =>
+            file === `${name}.xml` || file.startsWith(`${name}.`));
+        }
+        if (folder !== 'values' && !folder.startsWith('values-')) {
           return false;
         }
-        return readAndroidValueResource(
-          path.join(resourceRoot, folder, file), type, name,
-        ).length > 0;
+        return readdirSync(path.join(resourceRoot, folder)).some((file) =>
+          file.endsWith('.xml') && readAndroidValueResource(
+            path.join(resourceRoot, folder, file), type, name,
+          ).length > 0);
       });
     });
     if (!found) {
@@ -979,6 +1014,9 @@ function assertNativeDisplayName(
     const main = readAndroidApplication(
       path.join(nativeDirectory, 'app/src/main/AndroidManifest.xml'),
     );
+    if (main === undefined) {
+      throw new Error('Existing android project application label is missing.');
+    }
     const label = main.getAttribute('android:label');
     if (label === null) {
       throw new Error('Existing android project application label is missing.');
@@ -999,39 +1037,41 @@ function assertNativeDisplayName(
     }
     const overlayFile = path.join(nativeDirectory, 'app/src/release/AndroidManifest.xml');
     if (existsSync(overlayFile)) {
-      const release = readAndroidApplication(overlayFile);
-      const releaseLabel = release.getAttribute('android:label');
-      if (releaseLabel !== null
-        && resolveAndroidLabel(nativeDirectory, releaseLabel) !== expectedDisplayName) {
-        throw new Error(
-          'Existing android Release application label differs from the requested name.',
-        );
-      }
-      const launcherNames = new Set(launchers.map((item) => item.getAttribute('android:name')));
-      for (const activity of childElements(release)) {
-        if (activity.tagName !== 'activity' && activity.tagName !== 'activity-alias') {
-          continue;
-        }
-        const sameLauncher = launcherNames.has(activity.getAttribute('android:name'));
-        const releaseLauncher = readAndroidLaunchers(release).includes(activity);
-        const activityLabel = activity.getAttribute('android:label');
-        if ((sameLauncher || releaseLauncher) && activityLabel !== null
-          && resolveAndroidLabel(nativeDirectory, activityLabel) !== expectedDisplayName) {
+      const release = readAndroidApplication(overlayFile, false);
+      if (release !== undefined) {
+        const releaseLabel = release.getAttribute('android:label');
+        if (releaseLabel !== null
+          && resolveAndroidLabel(nativeDirectory, releaseLabel) !== expectedDisplayName) {
           throw new Error(
-            'Existing android Release launcher label differs from the requested name.',
+            'Existing android Release application label differs from the requested name.',
           );
+        }
+        const launcherNames = new Set(launchers.map((item) => item.getAttribute('android:name')));
+        const releaseLaunchers = readAndroidLaunchers(release);
+        for (const activity of childElements(release)) {
+          if (activity.tagName !== 'activity' && activity.tagName !== 'activity-alias') {
+            continue;
+          }
+          const sameLauncher = launcherNames.has(activity.getAttribute('android:name'));
+          const activityLabel = activity.getAttribute('android:label');
+          if ((sameLauncher || releaseLaunchers.includes(activity)) && activityLabel !== null
+            && resolveAndroidLabel(nativeDirectory, activityLabel) !== expectedDisplayName) {
+            throw new Error(
+              'Existing android Release launcher label differs from the requested name.',
+            );
+          }
         }
       }
     }
   }
 }
 
-function readAndroidApplication(file: string): Element {
+function readAndroidApplication(file: string, required = true): Element | undefined {
   const root = parseXml(readFileSync(file, 'utf8'), 'android manifest').documentElement;
   const application = root === null
     ? undefined
     : childElements(root).find((element) => element.tagName === 'application');
-  if (root?.tagName !== 'manifest' || application === undefined) {
+  if (root?.tagName !== 'manifest' || (required && application === undefined)) {
     throw new Error('Existing android project manifest application is missing.');
   }
   return application;
@@ -1057,7 +1097,7 @@ function resolveAndroidLabel(nativeDirectory: string, label: string): string {
   if (label.startsWith('@')) {
     throw new Error('Existing android project application label resource is unsupported.');
   }
-  return decodeXmlLabel(label);
+  return label;
 }
 
 function readAndroidString(nativeDirectory: string, key: string): string {

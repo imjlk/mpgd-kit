@@ -106,6 +106,11 @@ try {
     () => assertNativeReleaseIdentity(appliedIdentityInput),
     /identity override in applied Gradle script/u,
   );
+  writeFileSync(appliedIdentity, 'versionCode 99');
+  assert.throws(
+    () => assertNativeReleaseIdentity(appliedIdentityInput),
+    /identity override in applied Gradle script/u,
+  );
   rmSync(appliedIdentity);
   writeShellFiles(shellRoot);
 

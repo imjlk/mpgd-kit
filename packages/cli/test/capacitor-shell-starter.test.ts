@@ -137,8 +137,12 @@ try {
   assert.ok(dryRun.changedFiles.includes('mpgd.targets.json'));
   assert.ok(dryRun.changedFiles.includes('apps/mobile-capacitor/capacitor.config.ts'));
   assert.ok(dryRun.changedFiles.includes('apps/mobile-capacitor/www/index.html'));
+  const smokePath = 'apps/mobile-capacitor/ios/App/App/Info-Smoke.plist';
+  assert.ok(dryRun.changedFiles.includes(smokePath));
+  assert.ok(dryRun.files.some((file) => file.path === smokePath));
   assert.equal(existsSync(path.join(root, 'apps/mobile-capacitor')), false);
   applyCapacitorShellStarter(dryRun);
+  assert.equal(existsSync(path.join(root, 'apps/mobile-capacitor/ios')), false);
 
   const targets = readJson('mpgd.targets.json').targets as Record<string, Record<string, unknown>>;
   assert.equal(targets.android?.shellApp, 'apps/mobile-capacitor');
@@ -174,14 +178,14 @@ try {
   );
 
   const repeat = planCapacitorShellStarter(options);
-  assert.deepEqual(repeat.changedFiles, []);
+  assert.deepEqual(repeat.changedFiles, [smokePath]);
   assert.deepEqual(repeat.nativePlatformsToAdd, ['android', 'ios']);
   const omittedSelections = planCapacitorShellStarter({
     gameRoot: root,
     appId: options.appId,
     displayName: options.displayName,
   });
-  assert.deepEqual(omittedSelections.changedFiles, []);
+  assert.deepEqual(omittedSelections.changedFiles, [smokePath]);
   const commands: string[] = [];
   materializeCapacitorShellStarter(repeat, {
     run(command, args, cwd) {
@@ -292,6 +296,13 @@ try {
     '<key>Extra</key><bogus/></dict></plist>',
   );
   writeFileSync(smokeInfo, invalidSmoke);
+  assert.throws(() => planCapacitorShellStarter(options), /unsupported value node/u);
+  writeFileSync(smokeInfo, originalSmoke);
+  const invalidInteger = originalSmoke.replace(
+    '</dict></plist>',
+    '<key>Extra</key><integer>bogus</integer></dict></plist>',
+  );
+  writeFileSync(smokeInfo, invalidInteger);
   assert.throws(() => planCapacitorShellStarter(options), /unsupported value node/u);
   writeFileSync(smokeInfo, originalSmoke);
   renameSync(smokeInfo, `${smokeInfo}.saved`);
@@ -445,6 +456,20 @@ try {
     '</application></manifest>',
   ].join(''));
   assert.throws(() => planCapacitorShellStarter(options), /Release launcher label differs/u);
+  writeFileSync(releaseManifest, [
+    androidManifestOpen,
+    '<uses-permission android:name="android.permission.CAMERA"/>',
+    '</manifest>',
+  ].join(''));
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(releaseManifest, [
+    androidManifestOpen,
+    '<application android:theme="@style/ReleaseTheme"/></manifest>',
+  ].join(''));
+  assert.throws(
+    () => planCapacitorShellStarter(options),
+    /manifest resource @style\/ReleaseTheme is missing/u,
+  );
   unlinkSync(releaseManifest);
   const mainActivity = path.join(
     root,
@@ -703,7 +728,8 @@ try {
   writeFileSync(configFile, originalConfig.replace('  webDir:', '  webDir: "other",\n  webDir:'));
   assert.throws(() => planCapacitorShellStarter(options), /ambiguous dynamic syntax/u);
   writeFileSync(configFile, originalConfig);
-  const quotedName = 'King\'s "Quest" \\ Game';
+  const quotedName = 'King\'s "Quest" & \\ Game';
+  const xmlQuotedName = quotedName.replace(/&/gu, '&amp;').replace(/"/gu, '&quot;');
   const quotedConfig = originalConfig.replace(
     JSON.stringify(options.displayName),
     JSON.stringify(quotedName),
@@ -711,13 +737,13 @@ try {
   writeFileSync(configFile, quotedConfig);
   writeFileSync(
     androidStrings,
-    `<resources><string name="app_name">${quotedName}</string></resources>`,
+    `<resources><string name="app_name">${xmlQuotedName}</string></resources>`,
   );
   writeFileSync(
     iosInfo,
-    `<plist><dict><key>CFBundleDisplayName</key><string>${quotedName}</string></dict></plist>`,
+    `<plist><dict><key>CFBundleDisplayName</key><string>${xmlQuotedName}</string></dict></plist>`,
   );
-  writeFileSync(smokeInfo, originalSmoke.replace('Puzzle Game', quotedName));
+  writeFileSync(smokeInfo, originalSmoke.replace('Puzzle Game', xmlQuotedName));
   const quotedTargets = readJson('mpgd.targets.json');
   const quotedTargetMap = quotedTargets.targets as Record<string, Record<string, unknown>>;
   for (const target of Object.values(quotedTargetMap)) {
@@ -734,6 +760,16 @@ try {
     planCapacitorShellStarter({ ...options, displayName: quotedName }).changedFiles,
     [],
   );
+  const literalManifest = completeAndroidManifest.replace(
+    'android:label="@string/app_name"',
+    `android:label="${xmlQuotedName}"`,
+  );
+  writeFileSync(androidManifest, literalManifest);
+  assert.deepEqual(
+    planCapacitorShellStarter({ ...options, displayName: quotedName }).changedFiles,
+    [],
+  );
+  writeFileSync(androidManifest, completeAndroidManifest);
   writeFileSync(manifestFile, originalManifest);
   writeJson('apps/mobile-capacitor/mpgd.native-shell.json', {
     ...(JSON.parse(originalManifest) as Record<string, unknown>),
