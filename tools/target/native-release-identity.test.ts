@@ -111,6 +111,7 @@ try {
     'applicationId(project.findProperty("id"))',
     'setApplicationId("dev.other.game")',
     'versionCode(computeCode())',
+    "android.defaultConfig.setProperty('versionCode', 99)",
   ]) {
     writeFileSync(appliedIdentity, mutation);
     assert.throws(
@@ -165,6 +166,13 @@ try {
     () => assertNativeReleaseIdentity(appliedIdentityInput),
     /settings Gradle project callbacks/u,
   );
+  writeShellFiles(shellRoot);
+  writeFileSync(groovy, [
+    readFileSync(groovy, 'utf8'),
+    'println(android.defaultConfig.versionName)',
+    'println("versionCode")',
+  ].join('\n'));
+  assert.doesNotThrow(() => assertNativeReleaseIdentity(appliedIdentityInput));
   writeShellFiles(shellRoot);
   writeFileSync(groovy, `${readFileSync(groovy, 'utf8')}\nversionCode releaseCode\n`);
   assert.throws(

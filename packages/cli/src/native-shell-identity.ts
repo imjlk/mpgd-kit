@@ -15,7 +15,7 @@ function assertAndroidIdentity(source: string, expectedAppId: string): void {
   const clean = stripGradleComments(source);
   const assignments = [...clean.matchAll(/\bapplicationId\s*(?:=\s*)?["']([^"']+)["'](?=\s*(?:;|\r?\n|\}|$))/gu)]
     .map((match) => match[1]);
-  const mentions = [...clean.matchAll(/\bapplicationId\b/gu)].length;
+  const mentions = countGradleIdentityWrites(clean, 'applicationId');
   if (assignments.length === 0 || assignments.length !== mentions
     || assignments.some((value) => value !== expectedAppId)
     || hasAndroidReleaseIdSuffix(clean)) {
@@ -90,6 +90,34 @@ export function stripGradleComments(source: string): string {
 
 export function hasGradleIdentityMutation(source: string): boolean {
   const clean = stripGradleComments(source);
+  const masked = maskGradleStrings(clean);
+  const quotedSetter = /\bsetProperty\s*\(\s*["'](?:applicationId|applicationIdSuffix|versionCode|versionName|versionNameSuffix)["']\s*,/u;
+  if (quotedSetter.test(clean)) {
+    return true;
+  }
+  const setter = /\bset(?:ApplicationId|ApplicationIdSuffix|VersionCode|VersionName|VersionNameSuffix)\s*\(/u;
+  const field = '(?:applicationId|applicationIdSuffix|versionCode|versionName|versionNameSuffix)';
+  const assignment = new RegExp(
+    `\\b${field}(?:\\s*(?:\\+?=|\\(|["'\\d]|\\.set\\s*\\()|[ \\t]+[A-Za-z_$])`,
+    'u',
+  );
+  return setter.test(masked) || assignment.test(masked);
+}
+
+export function countGradleIdentityWrites(source: string, key: string): number {
+  const masked = maskGradleStrings(stripGradleComments(source));
+  const expression = new RegExp(`\\b${key}\\b`, 'gu');
+  return [...masked.matchAll(expression)].filter((match) => {
+    const index = match.index ?? 0;
+    if (masked[index - 1] === '.') {
+      return false;
+    }
+    const rest = masked.slice(index + key.length);
+    return /^\s*(?:=|\(|["'\d]|[A-Za-z_$])/u.test(rest);
+  }).length;
+}
+
+function maskGradleStrings(clean: string): string {
   let masked = '';
   let quote: '"' | "'" | undefined;
   for (let index = 0; index < clean.length; index += 1) {
@@ -111,13 +139,7 @@ export function hasGradleIdentityMutation(source: string): boolean {
       masked += character;
     }
   }
-  const setter = /\bset(?:ApplicationId|ApplicationIdSuffix|VersionCode|VersionName|VersionNameSuffix)\s*\(/u;
-  const field = '(?:applicationId|applicationIdSuffix|versionCode|versionName|versionNameSuffix)';
-  const assignment = new RegExp(
-    `\\b${field}(?:\\s*(?:\\+?=|\\(|["'\\d]|\\.set\\s*\\()|[ \\t]+[A-Za-z_$])`,
-    'u',
-  );
-  return setter.test(masked) || assignment.test(masked);
+  return masked;
 }
 
 function assertIosAppIdentity(source: string, expectedAppId: string): void {

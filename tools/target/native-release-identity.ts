@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { isMpgdFinalSemVer } from '@mpgd/target-config';
 import { assertIosReleasePlistIdentity } from '../../packages/cli/src/capacitor-shell-starter.js';
 import {
+  countGradleIdentityWrites,
   hasGradleIdentityMutation,
   readIosReleaseInfoPlist,
 } from '../../packages/cli/src/native-shell-identity.js';
@@ -123,6 +124,11 @@ function assertAndroidIdentity(file: string, expected: AndroidIdentity): void {
     throw new Error('Native release preflight does not support Android product flavors.');
   }
   assertNoAndroidReleaseIdentitySuffix(source, file);
+  if (/\bset(?:ApplicationId|VersionCode|VersionName)\s*\(/u.test(source)
+    || /\bsetProperty\s*\(\s*["'](?:applicationId|versionCode|versionName)["']\s*,/u
+      .test(source)) {
+    throw new Error(`Native release preflight cannot resolve Android identity setters in ${file}.`);
+  }
   const end = '(?=\\s*(?:;|\\r?\\n|\\}|$))';
   const appIdPattern = new RegExp(`\\bapplicationId\\s*(?:=\\s*)?["']([^"']+)["']${end}`, 'u');
   const codePattern = new RegExp(`\\bversionCode\\s*(?:=\\s*)?(\\d+)${end}`, 'u');
@@ -139,7 +145,7 @@ function assertAndroidSetting(
   expected: string,
   file: string,
 ): void {
-  const mentions = [...source.matchAll(new RegExp(`\\b${key}\\b`, 'gu'))].length;
+  const mentions = countGradleIdentityWrites(source, key);
   const values = readSettingValues(source, expression);
   if (values.length !== mentions) {
     throw new Error(`Native release preflight cannot read every ${key} assignment in ${file}.`);

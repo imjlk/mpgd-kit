@@ -72,6 +72,9 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     || input.displayName.length === 0 || input.displayName.length > 80) {
     throw new Error('Capacitor display name must be 1-80 characters without outer whitespace.');
   }
+  if (/\$\(|\$\{/u.test(input.displayName)) {
+    throw new Error('Capacitor display name cannot contain Xcode build-setting expansions.');
+  }
   for (const scalar of input.displayName) {
     const point = scalar.codePointAt(0) ?? 0;
     if (point !== 0x9 && point !== 0xa
@@ -621,14 +624,10 @@ function assertNativePlatformComplete(
       }
       const smoke = readFileSync(path.join(nativeDirectory, smokeRelative), 'utf8');
       assertSmokeInfoPlist(smoke, expectedDisplayName);
-      if (referencesSceneDelegate(smoke)
-        && !isNativeFile(nativeDirectory, 'App/App/SceneDelegate.swift')) {
-        throw new Error(
-          'Existing ios project simulator Info.plist references SceneDelegate.swift.',
-        );
-      }
-    } else if (!isNativeFile(nativeDirectory, 'App/App/SceneDelegate.swift')) {
-      throw new Error('Generated ios simulator Info.plist references SceneDelegate.swift.');
+      assertSceneDelegateFiles(nativeDirectory, smoke, 'simulator');
+    } else {
+      const generatedSmoke = smokeInfoPlist(expectedDisplayName);
+      assertSceneDelegateFiles(nativeDirectory, generatedSmoke, 'simulator');
     }
   } else {
     if (/\bproductFlavors\b/u.test(stripGradleComments(content))) {
@@ -647,6 +646,7 @@ function assertAndroidLauncherClasses(nativeDirectory: string, gradle: string): 
   if (application === undefined) {
     throw new Error('Existing android project launcher activity is missing.');
   }
+  assertAndroidLauncherEnabled(application, 'main application');
   const manifestRoot = application.parentNode as Element | null;
   const manifestPackage = manifestRoot?.getAttribute('package');
   const namespace = /\bnamespace\s*(?:=\s*)?["']([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)+)["']/u
@@ -654,6 +654,9 @@ function assertAndroidLauncherClasses(nativeDirectory: string, gradle: string): 
     ?? (manifestPackage === null || manifestPackage === '' ? undefined : manifestPackage);
   const releaseFile = path.join(nativeDirectory, 'app/src/release/AndroidManifest.xml');
   const release = existsSync(releaseFile) ? readAndroidApplication(releaseFile, false) : undefined;
+  if (release !== undefined) {
+    assertAndroidLauncherEnabled(release, 'Release application');
+  }
   const launchers = [
     ...readAndroidLaunchers(application).map((element) => ({ element, release: false })),
     ...(release === undefined ? [] : readAndroidLaunchers(release)
@@ -663,6 +666,7 @@ function assertAndroidLauncherClasses(nativeDirectory: string, gradle: string): 
     throw new Error('Existing android project launcher activity is missing.');
   }
   for (const { element: launcher, release: releaseLauncher } of launchers) {
+    assertAndroidLauncherEnabled(launcher, 'launcher');
     const isAlias = launcher.tagName === 'activity-alias';
     const attribute = isAlias ? 'android:targetActivity' : 'android:name';
     const name = launcher.getAttribute(attribute) ?? undefined;
@@ -687,7 +691,7 @@ function assertAndroidLauncherClasses(nativeDirectory: string, gradle: string): 
       ['java', 'kotlin'].flatMap((language) =>
         ['java', 'kt'].map((extension) =>
           `app/src/${sourceSet}/${language}/${sourcePath}.${extension}`)));
-    const found = candidates.some((relative) => {
+    const declaredIn = (relative: string): boolean => {
       if (!isNativeFile(nativeDirectory, relative)) {
         return false;
       }
@@ -698,9 +702,53 @@ function assertAndroidLauncherClasses(nativeDirectory: string, gradle: string): 
         .exec(source)?.[1];
       return declaredPackage === packageName
         && new RegExp(`\\bclass\\s+${className}\\b`, 'u').test(source);
-    });
+    };
+    const found = candidates.some(declaredIn) || sourceSets.some((sourceSet) =>
+      ['java', 'kotlin'].some((language) =>
+        listNativeFiles(nativeDirectory, `app/src/${sourceSet}/${language}`, '.kt')
+          .some(declaredIn)));
     if (!found) {
       throw new Error(`Existing android project launcher class ${qualified} is missing.`);
+    }
+  }
+}
+
+function listNativeFiles(
+  nativeDirectory: string,
+  relativeRoot: string,
+  extension: string,
+): string[] {
+  const pending = [relativeRoot];
+  const files: string[] = [];
+  while (pending.length > 0) {
+    const relative = pending.pop() ?? '';
+    const full = path.join(nativeDirectory, relative);
+    if (!existsSync(full) || lstatSync(full).isSymbolicLink()) {
+      continue;
+    }
+    for (const entry of readdirSync(full, { withFileTypes: true })) {
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
+      const child = path.join(relative, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(child);
+      } else if (entry.isFile() && entry.name.endsWith(extension)) {
+        files.push(child);
+        if (files.length > 10_000) {
+          throw new Error('Existing native project has too many source files to inspect.');
+        }
+      }
+    }
+  }
+  return files;
+}
+
+function assertAndroidLauncherEnabled(element: Element, label: string): void {
+  for (const attribute of ['android:enabled', 'android:exported']) {
+    const value = element.getAttribute(attribute);
+    if (value !== null && value !== 'true') {
+      throw new Error(`Existing android project ${label} ${attribute} is unsupported.`);
     }
   }
 }
@@ -794,7 +842,8 @@ function assertSmokeInfoPlist(source: string, expectedDisplayName: string): void
       throw new Error(`Existing ios project simulator Info.plist ${key} differs or is missing.`);
     }
   }
-  if (values.has('UIMainStoryboardFile') || values.has('UILaunchStoryboardName')) {
+  if ([...values.keys()].some((key) => ['UIMainStoryboardFile', 'UILaunchStoryboardName']
+    .some((name) => key === name || key.startsWith(`${name}~`) || key.startsWith(`${name}-`)))) {
     throw new Error('Existing ios project simulator Info.plist references excluded storyboards.');
   }
 }
@@ -913,6 +962,7 @@ function hasNonWhitespaceText(element: Element): boolean {
 }
 
 function assertReferencedIosFiles(nativeDirectory: string, project: string, infoRelative: string): void {
+  assertAppBuildPhaseInputs(nativeDirectory, project);
   const references: readonly [RegExp, string][] = [
     [/\/\*\s*SceneDelegate\.swift in Sources\s*\*\//u, 'App/App/SceneDelegate.swift'],
     [/\/\*\s*Main\.storyboard in Resources\s*\*\//u, 'App/App/Base.lproj/Main.storyboard'],
@@ -930,17 +980,131 @@ function assertReferencedIosFiles(nativeDirectory: string, project: string, info
     }
   }
   const info = readFileSync(path.join(nativeDirectory, infoRelative), 'utf8');
-  if (referencesSceneDelegate(info)
-    && !isNativeFile(nativeDirectory, 'App/App/SceneDelegate.swift')) {
-    throw new Error(
-      'Existing ios project is incomplete; referenced SceneDelegate.swift is missing.',
-    );
+  assertSceneDelegateFiles(nativeDirectory, info, 'Release');
+}
+
+function assertAppBuildPhaseInputs(nativeDirectory: string, project: string): void {
+  const targets = [...project.matchAll(/\b([A-F0-9]+)\s*\/\*\s*App\s*\*\/\s*=\s*\{/gu)]
+    .map((match) => readPbxObjectBody(project, match[1] ?? ''))
+    .filter((body) => /\bisa\s*=\s*PBXNativeTarget\s*;/u.test(body)
+      && /\bname\s*=\s*"?App"?\s*;/u.test(body));
+  if (targets.length !== 1) {
+    throw new Error('Existing ios project App target is missing or ambiguous.');
+  }
+  const phaseIds = readPbxIds(targets[0] ?? '', 'buildPhases');
+  for (const phaseId of phaseIds) {
+    const phase = readPbxObjectBody(project, phaseId);
+    if (!/\bisa\s*=\s*PBX(?:Sources|Resources)BuildPhase\s*;/u.test(phase)) {
+      continue;
+    }
+    for (const buildId of readPbxIds(phase, 'files')) {
+      const build = readPbxObjectBody(project, buildId);
+      const referenceId = /\bfileRef\s*=\s*([A-F0-9]+)\b/u.exec(build)?.[1];
+      if (referenceId === undefined) {
+        throw new Error('Existing ios project App build input has no file reference.');
+      }
+      assertPbxFileReference(nativeDirectory, project, referenceId);
+    }
   }
 }
 
-function referencesSceneDelegate(source: string): boolean {
-  return /UISceneDelegateClassName<\/key>\s*<string>[^<]*\.SceneDelegate<\/string>/u
-    .test(source);
+function readPbxObjectBody(project: string, id: string): string {
+  const marker = new RegExp(`\\b${id}\\s*(?:/\\*[^*]*\\*/)?\\s*=\\s*\\{([\\s\\S]*?)\\};`, 'u');
+  const body = marker.exec(project)?.[1];
+  if (body === undefined) {
+    throw new Error(`Existing ios project build object ${id} is missing.`);
+  }
+  return body;
+}
+
+function readPbxIds(object: string, key: string): string[] {
+  const list = new RegExp(`\\b${key}\\s*=\\s*\\(([^)]*)\\)\\s*;`, 'u').exec(object)?.[1];
+  return list === undefined ? [] : [...list.matchAll(/\b([A-F0-9]+)\b/gu)]
+    .map((match) => match[1] ?? '');
+}
+
+function assertPbxFileReference(
+  nativeDirectory: string,
+  project: string,
+  referenceId: string,
+): void {
+  const reference = readPbxObjectBody(project, referenceId);
+  if (/\bisa\s*=\s*PBXVariantGroup\s*;/u.test(reference)) {
+    for (const child of readPbxIds(reference, 'children')) {
+      assertPbxFileReference(nativeDirectory, project, child);
+    }
+    return;
+  }
+  if (!/\bisa\s*=\s*PBXFileReference\s*;/u.test(reference)) {
+    throw new Error('Existing ios project App build input has an unsupported file reference.');
+  }
+  const relative = /\bpath\s*=\s*(?:"([^"]+)"|([^;]+))\s*;/u.exec(reference);
+  const filePath = (relative?.[1] ?? relative?.[2])?.trim();
+  if (filePath === undefined || filePath.includes('$') || path.isAbsolute(filePath)) {
+    throw new Error('Existing ios project App build input path is unsupported.');
+  }
+  if (filePath === 'public' || filePath === 'capacitor.config.json') {
+    return; // cap sync creates these inputs in the staged shell.
+  }
+  const candidates = [`App/App/${filePath}`, `App/${filePath}`];
+  if (!candidates.some((candidate) => isNativeEntry(nativeDirectory, candidate))) {
+    throw new Error(`Existing ios project App build input ${filePath} is missing.`);
+  }
+}
+
+function isNativeEntry(directory: string, relative: string): boolean {
+  const file = path.resolve(directory, relative);
+  const within = path.relative(directory, file);
+  if (within === '' || within.startsWith('..') || path.isAbsolute(within)) {
+    return false;
+  }
+  let current = directory;
+  for (const segment of within.split(path.sep)) {
+    current = path.join(current, segment);
+    if (!existsSync(current) || lstatSync(current).isSymbolicLink()) {
+      return false;
+    }
+  }
+  return lstatSync(file).isFile() || lstatSync(file).isDirectory();
+}
+
+function assertSceneDelegateFiles(
+  nativeDirectory: string,
+  source: string,
+  label: string,
+): void {
+  const values = parsePlistDictionary(source, label);
+  const delegates: string[] = [];
+  const visit = (value: Element): void => {
+    if (value.tagName === 'dict') {
+      for (const [key, child] of parsePlistEntries(value, label)) {
+        if (key === 'UISceneDelegateClassName') {
+          if (child.tagName !== 'string') {
+            throw new Error(`Existing ios project ${label} scene delegate is invalid.`);
+          }
+          delegates.push(child.textContent ?? '');
+        } else {
+          visit(child);
+        }
+      }
+    } else if (value.tagName === 'array') {
+      childElements(value).forEach(visit);
+    }
+  };
+  [...values.values()].forEach(visit);
+  const sources = listNativeFiles(nativeDirectory, 'App/App', '.swift');
+  for (const delegate of delegates) {
+    const className = /^(?:\$\(PRODUCT_MODULE_NAME\)|[A-Za-z_]\w*)\.([A-Za-z_]\w*)$/u
+      .exec(delegate)?.[1];
+    if (className === undefined || !sources.some((relative) => {
+      const text = stripSourceCommentsAndStrings(
+        readFileSync(path.join(nativeDirectory, relative), 'utf8'),
+      );
+      return new RegExp(`\\bclass\\s+${className}\\b`, 'u').test(text);
+    })) {
+      throw new Error(`Existing ios project ${label} scene delegate ${delegate} is missing.`);
+    }
+  }
 }
 
 function assertAndroidManifestResources(nativeDirectory: string): void {
@@ -963,7 +1127,10 @@ function assertAndroidManifestResources(nativeDirectory: string): void {
       const folders = readdirSync(resourceRoot, { withFileTypes: true })
         .filter((entry) => entry.isDirectory()).map((entry) => entry.name);
       return folders.some((folder) => {
-        if (folder === type || folder.startsWith(`${type}-`)) {
+        const densityFallback = (type === 'mipmap' || type === 'drawable')
+          && new RegExp(`^${type}-(?:ldpi|mdpi|hdpi|xhdpi|xxhdpi|xxxhdpi|nodpi|anydpi)$`, 'u')
+            .test(folder);
+        if (folder === type || densityFallback) {
           return readdirSync(path.join(resourceRoot, folder)).some((file) =>
             file === `${name}.xml` || file.startsWith(`${name}.`));
         }
@@ -1127,6 +1294,9 @@ function assertNativeDisplayName(
             && hasAndroidMergerDirective(activity)) {
             throw new Error('Existing android Release manifest changes a launcher node.');
           }
+          if (sameLauncher || releaseLaunchers.includes(activity)) {
+            assertAndroidLauncherEnabled(activity, 'Release launcher');
+          }
           if ((sameLauncher || releaseLaunchers.includes(activity)) && activityLabel !== null
             && resolveAndroidLabel(nativeDirectory, activityLabel) !== expectedDisplayName) {
             throw new Error(
@@ -1205,7 +1375,9 @@ function readAndroidValueResource(file: string, type: string, name: string): str
     throw new Error('Existing android values resource is malformed.');
   }
   return childElements(root)
-    .filter((element) => element.tagName === type && element.getAttribute('name') === name)
+    .filter((element) => (element.tagName === type
+      || element.tagName === 'item' && element.getAttribute('type') === type)
+      && element.getAttribute('name') === name)
     .map((element) => element.textContent ?? '');
 }
 
@@ -1507,6 +1679,10 @@ function assertNoCapacitorServerUrl(source: string, code: string, topLevel: stri
       depth -= 1;
       if (depth === 0) {
         const body = source.slice(opening, index + 1);
+        if (body.includes('...') || /(?:^|[,\s{])(?:get|set)\s+\w+\s*\(/u.test(body)
+          || /(?:^|[,\s{])\[[^\]]+\]\s*:/u.test(body)) {
+          throw new Error('Existing Capacitor config server field has dynamic properties.');
+        }
         if (/(?:^|[,\s{])["']?url["']?\s*:/u.test(body)) {
           throw new Error('Existing Capacitor config server.url is unsupported.');
         }

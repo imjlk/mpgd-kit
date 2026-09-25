@@ -124,6 +124,10 @@ try {
     () => planCapacitorShellStarter({ ...options, displayName: 'Bad\rName' }),
     /invalid in native XML/u,
   );
+  assert.throws(
+    () => planCapacitorShellStarter({ ...options, displayName: 'Puzzle $(PRODUCT_NAME)' }),
+    /Xcode build-setting expansions/u,
+  );
 
   const dryRun = planCapacitorShellStarter(options);
   const baseTargets = readJson('mpgd.targets.json');
@@ -261,6 +265,7 @@ try {
               'package dev.example.puzzle; public class MainActivity {}',
             'ios/App/App/Info.plist':
               '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string></dict></plist>',
+            'ios/App/App/SceneDelegate.swift': 'class SceneDelegate {}',
           };
           writeFileSync(requiredFile, contents[relative] ?? 'generated-native-project');
         }
@@ -299,6 +304,15 @@ try {
     originalSmoke.replace('<plist version="1.0"><dict>', '<plist version="1.0"><dict><dict>'),
   );
   assert.throws(() => planCapacitorShellStarter(options), /simulator Info.plist is malformed/u);
+  writeFileSync(smokeInfo, originalSmoke);
+  writeFileSync(
+    smokeInfo,
+    originalSmoke.replace(
+      '</dict></plist>',
+      '<key>UIMainStoryboardFile~ipad</key><string>Main</string></dict></plist>',
+    ),
+  );
+  assert.throws(() => planCapacitorShellStarter(options), /excluded storyboards/u);
   writeFileSync(smokeInfo, originalSmoke);
   writeFileSync(
     smokeInfo,
@@ -377,6 +391,24 @@ try {
     root,
     'apps/mobile-capacitor/ios/App/App.xcodeproj/project.pbxproj',
   );
+  const customBuildFile = path.join(root, 'apps/mobile-capacitor/ios/App/App/CustomView.swift');
+  writeFileSync(customBuildFile, 'class CustomView {}');
+  const customProject = iosProjectWithAppId('dev.example.puzzle').replace(
+    'buildConfigurationList = BBBBBBBB; };',
+    'buildConfigurationList = BBBBBBBB; buildPhases = (11111111 /* Sources */); };',
+  ) + '\n' + [
+    '11111111 /* Sources */ = { isa = PBXSourcesBuildPhase;',
+    'files = (22222222 /* CustomView.swift in Sources */); };',
+    '22222222 /* CustomView.swift in Sources */ = { isa = PBXBuildFile;',
+    'fileRef = 33333333 /* CustomView.swift */; };',
+    '33333333 /* CustomView.swift */ = { isa = PBXFileReference;',
+    'path = CustomView.swift; sourceTree = "<group>"; };',
+  ].join('\n');
+  writeFileSync(iosProjectFile, customProject);
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  unlinkSync(customBuildFile);
+  assert.throws(() => planCapacitorShellStarter(options), /App build input.*missing/u);
+  writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
   renameSync(iosProjectFile, `${iosProjectFile}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /ios project is incomplete/u);
   renameSync(`${iosProjectFile}.saved`, iosProjectFile);
@@ -388,10 +420,18 @@ try {
     '',
   );
   writeFileSync(iosProjectFile, appOnlyProject);
-  assert.throws(
-    () => planCapacitorShellStarter(options),
-    /simulator Info.plist references SceneDelegate/u,
+  assert.throws(() => planCapacitorShellStarter(options), /simulator scene delegate.*missing/u);
+  const customScene = path.join(root, 'apps/mobile-capacitor/ios/App/App/CustomScenes.swift');
+  const customSmoke = originalSmoke.replace(
+    '$(PRODUCT_MODULE_NAME).SceneDelegate',
+    '$(PRODUCT_MODULE_NAME).GameSceneDelegate',
   );
+  writeFileSync(customScene, 'class GameSceneDelegate {}');
+  writeFileSync(smokeInfo, customSmoke);
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  unlinkSync(customScene);
+  assert.throws(() => planCapacitorShellStarter(options), /GameSceneDelegate.*missing/u);
+  writeFileSync(smokeInfo, originalSmoke);
   const smokeWithoutScene = originalSmoke.replace(
     '<key>UISceneDelegateClassName</key><string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>',
     '',
@@ -445,6 +485,7 @@ try {
     'applicationId(project.findProperty("id"))',
     'setApplicationId("dev.other.game")',
     'versionCode(computeCode())',
+    "android.defaultConfig.setProperty('versionCode', 99)",
   ]) {
     writeFileSync(capacitorGradle, mutation);
     assert.throws(
@@ -522,6 +563,12 @@ try {
   ].join(''));
   assert.throws(() => planCapacitorShellStarter(options), /Release launcher label differs/u);
   writeFileSync(releaseManifest, [
+    androidManifestOpen,
+    '<application><activity android:name=".MainActivity" android:enabled="false"/>',
+    '</application></manifest>',
+  ].join(''));
+  assert.throws(() => planCapacitorShellStarter(options), /android:enabled/u);
+  writeFileSync(releaseManifest, [
     androidManifestOpen.replace(' package=',
       ' xmlns:tools="http://schemas.android.com/tools" package='),
     '<application><activity android:name=".MainActivity" tools:node="remove"/>',
@@ -542,6 +589,21 @@ try {
     () => planCapacitorShellStarter(options),
     /manifest resource @style\/ReleaseTheme is missing/u,
   );
+  const nightDrawable = path.join(
+    root,
+    'apps/mobile-capacitor/android/app/src/main/res/drawable-night',
+  );
+  mkdirSync(nightDrawable, { recursive: true });
+  writeFileSync(path.join(nightDrawable, 'only_night.xml'), '<shape/>');
+  writeFileSync(releaseManifest, [
+    androidManifestOpen,
+    '<application android:icon="@drawable/only_night"/></manifest>',
+  ].join(''));
+  assert.throws(
+    () => planCapacitorShellStarter(options),
+    /manifest resource @drawable\/only_night is missing/u,
+  );
+  unlinkSync(path.join(nightDrawable, 'only_night.xml'));
   writeFileSync(releaseManifest, [
     androidManifestOpen,
     '<application><activity android:name=".MissingActivity"><intent-filter>',
@@ -567,6 +629,14 @@ try {
   assert.throws(() => planCapacitorShellStarter(options), /launcher class.*missing/u);
   writeFileSync(mainActivity, 'package dev.example.puzzle; // class MainActivity {}');
   assert.throws(() => planCapacitorShellStarter(options), /launcher class.*missing/u);
+  const kotlinLauncher = path.join(
+    root,
+    'apps/mobile-capacitor/android/app/src/main/kotlin/dev/example/puzzle/Launcher.kt',
+  );
+  mkdirSync(path.dirname(kotlinLauncher), { recursive: true });
+  writeFileSync(kotlinLauncher, 'package dev.example.puzzle\nclass MainActivity {}');
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  unlinkSync(kotlinLauncher);
   writeFileSync(mainActivity, 'package dev.example.puzzle; public class MainActivity {}');
   const androidStyles = path.join(
     root,
@@ -607,6 +677,11 @@ try {
   writeFileSync(
     alternateStrings,
     '<resources><string name="app_name">Puzzle Game</string></resources>',
+  );
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(
+    alternateStrings,
+    '<resources><item type="string" name="app_name">Puzzle Game</item></resources>',
   );
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   unlinkSync(alternateStrings);
@@ -826,6 +901,18 @@ try {
   );
   writeFileSync(configFile, remoteConfig);
   assert.throws(() => planCapacitorShellStarter(options), /server.url is unsupported/u);
+  const spreadServer = originalConfig.replace(
+    "server: { androidScheme: 'https' }",
+    "server: { ...remote, androidScheme: 'https' }",
+  );
+  writeFileSync(configFile, spreadServer);
+  assert.throws(() => planCapacitorShellStarter(options), /dynamic properties/u);
+  const getterServer = originalConfig.replace(
+    "server: { androidScheme: 'https' }",
+    "server: { get url() { return 'https://stale.example'; } }",
+  );
+  writeFileSync(configFile, getterServer);
+  assert.throws(() => planCapacitorShellStarter(options), /dynamic properties/u);
   writeFileSync(configFile, originalConfig);
   writeFileSync(
     configFile,
