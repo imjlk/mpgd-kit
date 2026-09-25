@@ -169,6 +169,7 @@ export async function submitVerifiedIosBuildWithRunner(
         'builds', 'upload', '--app', input.appStoreAppId,
         '--ipa', input.ipaFile, '--platform', 'IOS',
         '--version', marketingVersion, '--build-number', buildNumber,
+        '--checksum',
       ], uploadTimeoutMs);
     } catch {
       const observed = await lookupBuild(input, marketingVersion, buildNumber, run).catch(

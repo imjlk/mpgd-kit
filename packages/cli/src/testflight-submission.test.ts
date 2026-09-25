@@ -173,6 +173,11 @@ try {
     processing.state.commands.some((command) => command.includes('--wait')),
     false,
   );
+  assert.equal(
+    processing.state.commands.some((command) => command.startsWith('builds upload ')
+      && command.includes('--checksum')),
+    true,
+  );
 
   const valid = mock({ processingState: 'VALID' });
   const ready = await submitVerifiedIosBuildWithRunner(input, valid.run);

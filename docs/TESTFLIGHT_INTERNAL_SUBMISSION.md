@@ -20,6 +20,8 @@ existing version/build number before uploading, then uses separate `asc builds
 upload`, build lookup, and group-assignment commands. It never uses `asc
 publish` or an all-in-one public-release command. An upload result is not
 treated as a processed or tester-ready build.
+The upload requests checksum verification when Apple provides a source-file
+checksum; its absence is not represented as a successful checksum proof.
 
 Possible result statuses are `uploaded`, `processing`, `testflight-ready`,
 `action-required`, `failed`, and `unknown`. Only a processed build whose
