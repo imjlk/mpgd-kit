@@ -4,11 +4,11 @@ export interface ReleaseProcessInput {
   readonly command: string;
   readonly args: readonly string[];
   readonly cwd: string;
-  readonly environment?: NodeJS.ProcessEnv;
+  readonly environment?: NodeJS.ProcessEnv | undefined;
   readonly timeoutMs: number;
-  readonly maxOutputBytes?: number;
-  readonly secretValues?: readonly string[];
-  readonly signal?: AbortSignal;
+  readonly maxOutputBytes?: number | undefined;
+  readonly secretValues?: readonly string[] | undefined;
+  readonly signal?: AbortSignal | undefined;
 }
 
 export interface ReleaseProcessResult {
