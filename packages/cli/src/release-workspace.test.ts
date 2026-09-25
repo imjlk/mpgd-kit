@@ -10,6 +10,8 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -258,6 +260,33 @@ fs.writeFileSync(manifest, JSON.stringify({
   first.dispose();
   assert.equal(existsSync(first.workspaceRoot), false);
   assert.equal(existsSync(second.workspaceRoot), true);
+  const outsideOutput = path.join(fixture, 'outside-output');
+  mkdirSync(outsideOutput);
+  for (const name of ['artifacts', 'release-output', 'dist']) {
+    const link = path.join(second.gameRoot, name);
+    symlinkSync(outsideOutput, link, 'dir');
+    await assert.rejects(
+      runPinnedNativeBuild(second, {
+        target: 'android',
+        profile: 'production',
+        mode: 'signed-archive',
+      }),
+      /output path is symlinked/u,
+    );
+    unlinkSync(link);
+  }
+  mkdirSync(path.join(second.gameRoot, 'artifacts'));
+  const nestedLink = path.join(second.gameRoot, 'artifacts', 'native-build-status');
+  symlinkSync(outsideOutput, nestedLink, 'dir');
+  await assert.rejects(
+    runPinnedNativeBuild(second, {
+      target: 'android',
+      profile: 'production',
+      mode: 'signed-archive',
+    }),
+    /output path is symlinked/u,
+  );
+  assert.deepEqual(readdirSync(outsideOutput), []);
   second.dispose();
   assert.deepEqual(readdirSync(workspaces), []);
 

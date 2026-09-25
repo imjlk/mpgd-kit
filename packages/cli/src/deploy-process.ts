@@ -77,40 +77,55 @@ export async function runReleaseProcess(input: ReleaseProcessInput): Promise<Rel
       reject(new ReleaseProcessError('spawn', ''));
       return;
     }
-    const chunks: Buffer[] = [];
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
     let capturedBytes = 0;
     let truncated = false;
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
     let stopReason: 'abort' | 'timeout' | undefined;
     let settled = false;
     let escalation: NodeJS.Timeout | undefined;
 
-    const capture = (chunk: Buffer): void => {
+    const capture = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
       const available = Math.max(0, outputLimit - capturedBytes);
       if (available > 0) {
         const selected = chunk.subarray(0, available);
-        chunks.push(selected);
+        (stream === 'stdout' ? stdoutChunks : stderrChunks).push(selected);
         capturedBytes += selected.length;
       }
       if (chunk.length > available) {
         truncated = true;
+        if (stream === 'stdout') {
+          stdoutTruncated = true;
+        } else {
+          stderrTruncated = true;
+        }
       }
     };
-    child.stdout?.on('data', capture);
-    child.stderr?.on('data', capture);
+    child.stdout?.on('data', (chunk: Buffer) => capture('stdout', chunk));
+    child.stderr?.on('data', (chunk: Buffer) => capture('stderr', chunk));
 
     const renderOutput = (): string => {
-      const captured = Buffer.concat(chunks);
       const longestSecretBytes = secrets.reduce(
         (longest, secret) => Math.max(longest, Buffer.byteLength(secret)),
         0,
       );
-      const safeBytes = truncated
-        ? captured.subarray(0, Math.max(0, captured.length - longestSecretBytes))
-        : captured;
-      let output = safeBytes.toString('utf8');
-      for (const secret of [...new Set(secrets)].sort((a, b) => b.length - a.length)) {
-        output = output.replaceAll(secret, '[REDACTED]');
-      }
+      const renderStream = (chunks: readonly Buffer[], wasTruncated: boolean): string => {
+        const captured = Buffer.concat(chunks);
+        const safeBytes = wasTruncated
+          ? captured.subarray(0, Math.max(0, captured.length - longestSecretBytes))
+          : captured;
+        let output = safeBytes.toString('utf8');
+        for (const secret of [...new Set(secrets)].sort((a, b) => b.length - a.length)) {
+          output = output.replaceAll(secret, '[REDACTED]');
+        }
+        return output;
+      };
+      const output = [
+        renderStream(stdoutChunks, stdoutTruncated),
+        renderStream(stderrChunks, stderrTruncated),
+      ].filter((part) => part !== '').join('\n');
       return truncated ? `${output}\n[output truncated]` : output;
     };
     const terminate = (reason: 'abort' | 'timeout'): void => {

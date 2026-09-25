@@ -1,5 +1,14 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -160,6 +169,7 @@ export async function preparePinnedReleaseWorkspace(
       throw new Error('Pinned game Git revision changed during workspace preparation.');
     }
     const gameRoot = path.join(workspaceRoot, relativeGame);
+    assertWorkspaceOutputRoots(workspaceRoot, gameRoot);
     assertPinnedFiles(workspaceRoot, gameRoot, input);
     return {
       workspaceRoot,
@@ -202,6 +212,7 @@ export async function installPinnedReleaseDependencies(
     readonly timeoutMs?: number;
   } = {},
 ): Promise<void> {
+  assertWorkspaceOutputRoots(workspace.workspaceRoot, workspace.gameRoot);
   assertPinnedFiles(workspace.workspaceRoot, workspace.gameRoot, workspace.input);
   await runReleaseProcess({
     command: 'pnpm',
@@ -211,6 +222,7 @@ export async function installPinnedReleaseDependencies(
     timeoutMs: options.timeoutMs ?? defaultInstallTimeoutMs,
     signal: options.signal,
   });
+  assertWorkspaceOutputRoots(workspace.workspaceRoot, workspace.gameRoot);
   assertPinnedFiles(workspace.workspaceRoot, workspace.gameRoot, workspace.input);
 }
 
@@ -227,6 +239,7 @@ export async function runPinnedNativeBuild(
     readonly secretValues?: readonly string[];
   },
 ): Promise<PinnedNativeBuildResult> {
+  assertWorkspaceOutputRoots(workspace.workspaceRoot, workspace.gameRoot);
   assertPinnedFiles(workspace.workspaceRoot, workspace.gameRoot, workspace.input);
   if (!workspace.input.targets.includes(input.target)
     || input.profile !== workspace.input.buildProfile) {
@@ -358,6 +371,39 @@ function assertPinnedFiles(
     const actual = sha256(file);
     if (actual !== expected) {
       throw new Error(`Pinned release input differs from its plan: ${path.basename(file)}`);
+    }
+  }
+}
+
+function assertWorkspaceOutputRoots(workspaceRoot: string, gameRoot: string): void {
+  const canonicalWorkspace = realpathSync(workspaceRoot);
+  const canonicalGame = realpathSync(gameRoot);
+  const relativeGame = path.relative(canonicalWorkspace, canonicalGame);
+  if (relativeGame === '..' || relativeGame.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relativeGame)) {
+    throw new Error('Pinned game resolves outside its release checkout.');
+  }
+  for (const name of ['artifacts', 'release-output', 'dist']) {
+    assertNoOutputSymlinks(path.join(gameRoot, name));
+  }
+}
+
+function assertNoOutputSymlinks(candidate: string): void {
+  let entry: ReturnType<typeof lstatSync>;
+  try {
+    entry = lstatSync(candidate);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return;
+    }
+    throw error;
+  }
+  if (entry.isSymbolicLink()) {
+    throw new Error(`Pinned native build output path is symlinked: ${candidate}`);
+  }
+  if (entry.isDirectory()) {
+    for (const child of readdirSync(candidate)) {
+      assertNoOutputSymlinks(path.join(candidate, child));
     }
   }
 }

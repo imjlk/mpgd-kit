@@ -71,3 +71,5 @@ release-manifest, effective-config output, and icon-manifest path overrides.
 Place configuration files in the committed game checkout so the build cannot
 read or write through mutable paths in the original working directory. A
 build target and build profile must also match the pinned deployment plan.
+Existing symlinks under the standard `artifacts`, `release-output`, or `dist`
+output roots are rejected before installation or build rather than followed.

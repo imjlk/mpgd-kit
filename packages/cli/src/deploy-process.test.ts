@@ -16,6 +16,25 @@ const redacted = await runReleaseProcess({
 });
 assert.equal(redacted.output, '[REDACTED]');
 assert.equal(redacted.truncated, false);
+const interleaved = runReleaseProcess({
+  command: process.execPath,
+  args: ['-e', [
+    'process.stdout.write(process.env.MPGD_API_TOKEN.slice(0, 8));',
+    'setTimeout(() => process.stderr.write("warning"), 20);',
+    'setTimeout(() => process.stdout.write(process.env.MPGD_API_TOKEN.slice(8)), 40);',
+    'setTimeout(() => process.exit(5), 80);',
+  ].join('')],
+  cwd,
+  environment: { ...process.env, MPGD_API_TOKEN: secret },
+  timeoutMs: 5_000,
+});
+await assert.rejects(interleaved, (error: unknown) => {
+  assert.ok(error instanceof ReleaseProcessError);
+  assert.match(error.output, /\[REDACTED\]/u);
+  assert.match(error.output, /warning/u);
+  assert.doesNotMatch(error.output, /private-|deploy-token/u);
+  return true;
+});
 const shortSecret = await runReleaseProcess({
   command: process.execPath,
   args: ['-e', 'process.stdout.write("prefixpost")'],
