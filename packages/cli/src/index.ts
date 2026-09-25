@@ -2586,6 +2586,9 @@ const kitCommand = defineI18n({
           for (const note of plan.notes) {
             console.info('Note: ' + note);
           }
+          for (const advisory of plan.targetAdvisories) {
+            console.info('Target advisory [' + advisory.target + ']: ' + advisory.message);
+          }
           for (const blocker of plan.blockers) {
             console.error('Blocked: ' + blocker);
           }

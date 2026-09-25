@@ -603,9 +603,15 @@ importers:
       '@gunshi/resources':
         specifier: ^0.35.1
         version: 0.35.1
+      '@mpgd/catalog':
+        specifier: workspace:*
+        version: link:../catalog
       '@mpgd/phaser-assets':
         specifier: workspace:*
         version: link:../phaser-assets
+      '@mpgd/target-config':
+        specifier: workspace:*
+        version: link:../target-config
       '@xmldom/xmldom':
         specifier: 0.9.12
         version: 0.9.12
@@ -646,9 +652,6 @@ importers:
       '@mpgd/bridge':
         specifier: workspace:*
         version: link:../bridge
-      '@mpgd/catalog':
-        specifier: workspace:*
-        version: link:../catalog
       '@mpgd/game-services':
         specifier: workspace:*
         version: link:../game-services
@@ -658,9 +661,6 @@ importers:
       '@mpgd/platform':
         specifier: workspace:*
         version: link:../platform
-      '@mpgd/target-config':
-        specifier: workspace:*
-        version: link:../target-config
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.2

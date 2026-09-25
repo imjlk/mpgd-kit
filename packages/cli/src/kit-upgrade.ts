@@ -6,6 +6,11 @@ import { promisify } from 'node:util';
 
 import { compare, intersects, minVersion, satisfies, valid, validRange } from 'semver';
 
+import {
+  inspectKitUpgradeTargetReadiness,
+  type KitUpgradeTargetAdvisory,
+} from './kit-upgrade-target-readiness.js';
+
 const execFile = promisify(execFileCallback);
 const dependencySections = ['dependencies', 'devDependencies', 'optionalDependencies'] as const;
 type JsonObject = Record<string, unknown>;
@@ -30,6 +35,7 @@ export interface KitUpgradePlan {
   readonly updates: readonly KitUpgradeUpdate[];
   readonly blockers: readonly string[];
   readonly notes: readonly string[];
+  readonly targetAdvisories: readonly KitUpgradeTargetAdvisory[];
   readonly manifestDigests: Readonly<Record<string, string>>;
   readonly targetConfigDigest: { readonly file: string; readonly sha256: string | null };
   readonly lockfileDigests: Readonly<Record<string, string>>;
@@ -62,6 +68,7 @@ export async function planKitUpgrade(
     blockers,
     targetsFileName,
   );
+  const targetAdvisories = inspectKitUpgradeTargetReadiness(gameRoot, targetConfigDigest.file);
   const manifestDigests: Record<string, string> = {};
   const requested = new Set<string>();
   const parsedManifests = new Map<string, JsonObject>();
@@ -175,6 +182,7 @@ export async function planKitUpgrade(
     updates,
     blockers,
     notes: [...new Set(notes)],
+    targetAdvisories,
     manifestDigests,
     targetConfigDigest,
     lockfileDigests,
