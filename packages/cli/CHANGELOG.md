@@ -1,5 +1,13 @@
 # @mpgd/cli
 
+## 0.35.0 — 2026-09-25
+
+### Minor changes
+
+- [f01f6061](https://github.com/imjlk/mpgd-kit/commit/f01f6061abaf38ec914b6694cb35ee9db4e7324d) Add a game-owned Kit dependency upgrade planner that resolves each public Kit
+  package's npm latest tag, checks declared peer compatibility, and can update
+  configured target manifests and pnpm lockfiles with rollback on failure. — Thanks @imjlk!
+
 ## 0.34.0 — 2026-09-25
 
 ### Minor changes
