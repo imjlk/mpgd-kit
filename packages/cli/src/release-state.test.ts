@@ -216,8 +216,28 @@ process.exit(result.status ?? 1);
     git(['rev-parse', 'refs/heads/release-state'], fetchMirror),
     pushedSeparately.stateCommit,
   );
+  const secondPush = await reserveNativeRelease({
+    ...firstInput,
+    releaseKey: 'push-url-test-2',
+    sourceGitSha: nextGameSha,
+    initialLedger: undefined,
+  });
+  assert.equal(secondPush.plan.targets.android?.versionCode, 46);
+  assert.equal(git(['rev-parse', 'refs/heads/release-state'], pushOrigin), secondPush.stateCommit);
   git(['config', 'remote.origin.url', bare], game);
   git(['config', '--unset', 'remote.origin.pushurl'], game);
+  const nestedGame = path.join(game, 'games', 'nested');
+  mkdirSync(nestedGame, { recursive: true });
+  git(['config', 'remote.origin.url', '../remote.git'], game);
+  const nestedRelease = await reserveNativeRelease({
+    ...firstInput,
+    gameRoot: nestedGame,
+    releaseKey: 'nested-relative-remote',
+    sourceGitSha: nextGameSha,
+    initialLedger: undefined,
+  });
+  assert.equal(git(['rev-parse', 'refs/heads/release-state'], bare), nestedRelease.stateCommit);
+  git(['config', 'remote.origin.url', bare], game);
   const unsignedState = await reserveNativeRelease({
     ...firstInput,
     releaseKey: 'unsigned-state-commit',
@@ -228,6 +248,7 @@ process.exit(result.status ?? 1);
       GIT_CONFIG_COUNT: '1',
       GIT_CONFIG_KEY_0: 'commit.gpgSign',
       GIT_CONFIG_VALUE_0: 'true',
+      GIT_DEFAULT_HASH: 'sha256',
     },
   });
   assert.match(unsignedState.stateCommit, /^[a-f0-9]{40}$/u);
@@ -375,6 +396,39 @@ process.exit(result.status ?? 1);
   git(['push', 'origin', 'HEAD:release-state'], stateEdit);
   const reorderedRetry = await recordNativeReleaseBuild(buildInput);
   assert.deepEqual(reorderedRetry.record, built.record);
+  reordered.games.alpha.builds['beta-01/android'].kitPackageVersion = '';
+  writeFileSync(stateFile, `${JSON.stringify(reordered)}\n`);
+  git(['add', '.'], stateEdit);
+  git(
+    [
+      '-c',
+      'user.name=mpgd-test',
+      '-c',
+      'user.email=mpgd-test@example.invalid',
+      'commit',
+      '-qm',
+      'corrupt stored Kit version',
+    ],
+    stateEdit,
+  );
+  git(['push', 'origin', 'HEAD:release-state'], stateEdit);
+  await assert.rejects(recordNativeReleaseBuild(buildInput), /invalid build record/u);
+  reordered.games.alpha.builds['beta-01/android'].kitPackageVersion = '0.35.0';
+  writeFileSync(stateFile, `${JSON.stringify(reordered)}\n`);
+  git(['add', '.'], stateEdit);
+  git(
+    [
+      '-c',
+      'user.name=mpgd-test',
+      '-c',
+      'user.email=mpgd-test@example.invalid',
+      'commit',
+      '-qm',
+      'restore stored Kit version',
+    ],
+    stateEdit,
+  );
+  git(['push', 'origin', 'HEAD:release-state'], stateEdit);
   reordered.games.alpha.reservations['beta-01'].targets.ios.buildNumber = 50;
   writeFileSync(stateFile, `${JSON.stringify(reordered)}\n`);
   git(['add', '.'], stateEdit);
@@ -427,6 +481,26 @@ process.exit(result.status ?? 1);
   await assert.rejects(
     reserveNativeRelease({ ...firstInput, initialLedger: undefined }),
     /invalid reservation beta-01/u,
+  );
+  reordered.games.alpha.reservations = {};
+  writeFileSync(stateFile, `${JSON.stringify(reordered)}\n`);
+  git(['add', '.'], stateEdit);
+  git(
+    [
+      '-c',
+      'user.name=mpgd-test',
+      '-c',
+      'user.email=mpgd-test@example.invalid',
+      'commit',
+      '-qm',
+      'drop all reservation history',
+    ],
+    stateEdit,
+  );
+  git(['push', 'origin', 'HEAD:release-state'], stateEdit);
+  await assert.rejects(
+    reserveNativeRelease({ ...firstInput, initialLedger: undefined }),
+    /no reservation history/u,
   );
   console.info('Git-backed release reservation and immutable build record passed.');
 } finally {
