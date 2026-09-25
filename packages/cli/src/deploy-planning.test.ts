@@ -7,6 +7,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -32,6 +33,8 @@ try {
     targets: {
       android: {
         kind: 'capacitor-android',
+        adapter: 'capacitor',
+        artifact: 'aab',
         gameApp: '.',
         shellApp: 'apps/mobile',
         webDir: 'apps/mobile/www',
@@ -39,6 +42,8 @@ try {
       },
       ios: {
         kind: 'capacitor-ios',
+        adapter: 'capacitor',
+        artifact: 'ipa',
         gameApp: '.',
         shellApp: 'apps/mobile',
         webDir: 'apps/mobile/www',
@@ -118,6 +123,32 @@ try {
   });
   assert.ok(conflictingSdk.checks.some((check) => check.name === 'Android SDK'
     && check.detail.includes('different directories')));
+  const invalidJavaHome = doctorNativeDeployment({
+    game,
+    profile: 'beta',
+    targets: ['android'],
+    environment: { JAVA_HOME: join(fixture, 'missing-jdk') },
+  });
+  assert.ok(invalidJavaHome.checks.some((check) => check.name === 'JDK'
+    && check.status === 'missing'));
+  if (process.platform !== 'win32') {
+    const sdk = join(fixture, 'android-sdk');
+    const sdkAlias = join(fixture, 'android-sdk-link');
+    mkdirSync(join(sdk, 'platform-tools'), { recursive: true });
+    mkdirSync(join(sdk, 'platforms'), { recursive: true });
+    mkdirSync(join(sdk, 'build-tools'), { recursive: true });
+    writeFileSync(join(sdk, 'platforms', 'installed'), 'yes');
+    writeFileSync(join(sdk, 'build-tools', 'installed'), 'yes');
+    symlinkSync(sdk, sdkAlias, 'dir');
+    const aliasedSdk = doctorNativeDeployment({
+      game,
+      profile: 'beta',
+      targets: ['android'],
+      environment: { ANDROID_HOME: sdk, ANDROID_SDK_ROOT: sdkAlias },
+    });
+    assert.ok(aliasedSdk.checks.some((check) => check.name === 'Android SDK'
+      && check.status === 'ok'));
+  }
 
   assert.deepEqual(parseDeployTargets('android,ios'), ['android', 'ios']);
   assert.throws(() => parseDeployTargets('android,android'), /duplicates/u);
@@ -132,6 +163,34 @@ try {
   );
   delete config.profiles.beta.targets.android.submissionCredential.token;
   writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
+  targets.targets.android.webDir = 'apps/other/www';
+  writeFileSync(targetsFile, `${JSON.stringify(targets, null, 2)}\n`);
+  assert.throws(
+    () => planNativeDeployment({ game, profile: 'beta', targets: ['android'] }),
+    /webDir must be inside its shellApp/u,
+  );
+  targets.targets.android.webDir = 'apps/mobile/www';
+  targets.targets.android.adapter = '';
+  writeFileSync(targetsFile, `${JSON.stringify(targets, null, 2)}\n`);
+  assert.throws(
+    () => planNativeDeployment({ game, profile: 'beta', targets: ['android'] }),
+    /Invalid android target/u,
+  );
+  targets.targets.android.adapter = 'capacitor';
+  targets.targets.android.artifact = 'apk';
+  writeFileSync(targetsFile, `${JSON.stringify(targets, null, 2)}\n`);
+  assert.throws(
+    () => planNativeDeployment({ game, profile: 'beta', targets: ['android'] }),
+    /Invalid android target/u,
+  );
+  targets.targets.android.artifact = 'aab';
+  targets.targets.android.metadata.packageId = ' dev.mpgd.game ';
+  writeFileSync(targetsFile, `${JSON.stringify(targets, null, 2)}\n`);
+  assert.throws(
+    () => planNativeDeployment({ game, profile: 'beta', targets: ['android'] }),
+    /lowercase reverse-domain/u,
+  );
+  targets.targets.android.metadata.packageId = 'dev.mpgd.game';
   targets.targets.android.shellApp = '../outside';
   writeFileSync(targetsFile, `${JSON.stringify(targets, null, 2)}\n`);
   assert.throws(

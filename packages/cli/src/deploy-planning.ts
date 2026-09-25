@@ -3,6 +3,8 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
+import { assertCapacitorAppId } from './capacitor-shell-starter.js';
+
 export type NativeDeployTarget = 'android' | 'ios';
 
 export interface CredentialReference {
@@ -29,6 +31,8 @@ export interface DeployConfig {
 
 interface NativeTargetConfig {
   readonly kind: 'capacitor-android' | 'capacitor-ios';
+  readonly adapter: 'capacitor';
+  readonly artifact: 'aab' | 'ipa';
   readonly shellApp: string;
   readonly webDir: string;
   readonly gameApp: string;
@@ -146,6 +150,7 @@ export function planNativeDeployment(input: {
     if (appId === undefined || appId.trim() === '') {
       throw new Error(`${target} must have its app ID in mpgd.targets.json metadata.`);
     }
+    assertCapacitorAppId(appId);
     if (target === 'ios' && targetProfile.testGroup === undefined) {
       throw new Error('TestFlight deployment requires a testGroup in mpgd.deploy.json.');
     }
@@ -211,11 +216,12 @@ export function doctorNativeDeployment(input: {
       throw new Error(`Missing deployment profile target: ${target.target}`);
     }
     if (target.target === 'android') {
-      checks.push(commandCheck('JDK', 'javac', ['-version']));
+      checks.push(checkSelectedJdk(environment));
       const sdk = environment.ANDROID_HOME ?? environment.ANDROID_SDK_ROOT;
       const conflictingSdkRoots = environment.ANDROID_HOME !== undefined
         && environment.ANDROID_SDK_ROOT !== undefined
-        && resolve(environment.ANDROID_HOME) !== resolve(environment.ANDROID_SDK_ROOT);
+        && canonicalSdkRoot(environment.ANDROID_HOME)
+          !== canonicalSdkRoot(environment.ANDROID_SDK_ROOT);
       checks.push({
         name: 'Android SDK',
         status: !conflictingSdkRoots && sdk !== undefined
@@ -317,6 +323,8 @@ function readNativeTargets(
       continue;
     }
     if (!isObject(value) || value.kind !== kind
+      || value.adapter !== 'capacitor'
+      || value.artifact !== (target === 'android' ? 'aab' : 'ipa')
       || typeof value.gameApp !== 'string'
       || typeof value.shellApp !== 'string'
       || typeof value.webDir !== 'string'
@@ -340,6 +348,7 @@ function assertGameOwnedNativePaths(
   config: NativeTargetConfig,
 ): void {
   const root = realpathSync(gameRoot);
+  const canonicalPaths: Partial<Record<'shellApp' | 'webDir', string>> = {};
   for (const field of ['gameApp', 'shellApp', 'webDir'] as const) {
     const value = config[field];
     if (value.includes('${MPGD_KIT_PATH}')) {
@@ -360,6 +369,9 @@ function assertGameOwnedNativePaths(
       ancestor = parent;
     }
     const canonical = resolve(realpathSync(ancestor), relative(ancestor, candidate));
+    if (field !== 'gameApp') {
+      canonicalPaths[field] = canonical;
+    }
     const fromRoot = relative(root, canonical);
     if (fromRoot === '..' || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
       throw new Error(`${target} ${field} must stay inside the game project.`);
@@ -369,6 +381,16 @@ function assertGameOwnedNativePaths(
         `${target} shellApp is missing its package.json; run mpgd target init capacitor.`,
       );
     }
+  }
+  const shell = canonicalPaths.shellApp;
+  const web = canonicalPaths.webDir;
+  if (shell === undefined || web === undefined) {
+    throw new Error(`${target} native shell paths are missing.`);
+  }
+  const webWithinShell = relative(shell, web);
+  if (webWithinShell === '' || webWithinShell === '..'
+    || webWithinShell.startsWith(`..${sep}`) || isAbsolute(webWithinShell)) {
+    throw new Error(`${target} webDir must be inside its shellApp.`);
   }
 }
 
@@ -418,6 +440,32 @@ function hasDirectoryEntries(directory: string): boolean {
   } catch {
     return false;
   }
+}
+
+function canonicalSdkRoot(directory: string): string {
+  let canonical: string;
+  try {
+    canonical = realpathSync(directory);
+  } catch {
+    canonical = resolve(directory);
+  }
+  return process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+}
+
+function checkSelectedJdk(environment: NodeJS.ProcessEnv): DeployDoctorCheck {
+  const javaHome = environment.JAVA_HOME?.trim();
+  const binaryName = process.platform === 'win32' ? '.exe' : '';
+  const java = javaHome ? join(javaHome, 'bin', `java${binaryName}`) : 'java';
+  const javac = javaHome ? join(javaHome, 'bin', `javac${binaryName}`) : 'javac';
+  const javaCheck = commandCheck('Java', java, ['-version']);
+  const javacCheck = commandCheck('Javac', javac, ['-version']);
+  return {
+    name: 'JDK',
+    status: javaCheck.status === 'ok' && javacCheck.status === 'ok' ? 'ok' : 'missing',
+    detail: javaHome === undefined || javaHome === ''
+      ? 'java and javac must be available on PATH.'
+      : `JAVA_HOME must contain usable bin/java and bin/javac: ${javaHome}`,
+  };
 }
 
 function commandCheck(name: string, command: string, args: readonly string[]): DeployDoctorCheck {

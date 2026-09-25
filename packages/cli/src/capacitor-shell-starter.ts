@@ -84,12 +84,7 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
   if (!lstatSync(gameRoot).isDirectory()) {
     throw new Error('Capacitor shell game root must be a directory.');
   }
-  if (!appIdPattern.test(input.appId)) {
-    throw new Error('Capacitor app ID must be a lowercase reverse-domain identifier.');
-  }
-  if (input.appId.split('.').some((segment) => javaKeywords.has(segment))) {
-    throw new Error('Capacitor app ID cannot contain Java keyword segments.');
-  }
+  assertCapacitorAppId(input.appId);
   if (input.displayName.trim() !== input.displayName
     || input.displayName.length === 0 || input.displayName.length > 80) {
     throw new Error('Capacitor display name must be 1-80 characters without outer whitespace.');
@@ -427,6 +422,15 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     changedFiles: files.map((file) => file.path),
     nativePlatformsToAdd,
   };
+}
+
+export function assertCapacitorAppId(appId: string): void {
+  if (!appIdPattern.test(appId)) {
+    throw new Error('Capacitor app ID must be a lowercase reverse-domain identifier.');
+  }
+  if (appId.split('.').some((segment) => javaKeywords.has(segment))) {
+    throw new Error('Capacitor app ID cannot contain Java keyword segments.');
+  }
 }
 
 export function applyCapacitorShellStarter(
