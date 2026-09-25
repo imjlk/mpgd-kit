@@ -89,6 +89,7 @@ for (const workspacePackage of sortByWorkspaceDependencies(packages)) {
     );
     buildPlayPublisherAdapter(distDir);
     copyFileSync(join('tools', 'deploy', 'asc-pin.json'), join(distDir, 'asc-pin.json'));
+    buildPackagedIosInspection(distDir);
     buildPackagedNativeTarget(workspacePackage, distDir);
   }
   console.log(`Built ${workspacePackage.name}`);
@@ -107,6 +108,21 @@ function buildPlayPublisherAdapter(distDir: string): void {
   });
   if (result.metafile.outputs[output] === undefined) {
     throw new Error('Packaged Google Play adapter is missing.');
+  }
+}
+
+function buildPackagedIosInspection(distDir: string): void {
+  const output = join(distDir, 'ios-ipa-inspection.js');
+  const result = buildSync({
+    entryPoints: [join('tools', 'target', 'native-ios-inspection.ts')],
+    outfile: output,
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    metafile: true,
+  });
+  if (result.metafile.outputs[output] === undefined) {
+    throw new Error('Packaged iOS IPA inspector is missing.');
   }
 }
 

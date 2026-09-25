@@ -142,6 +142,7 @@ try {
   const cliDist = join(gameRoot, 'node_modules/@mpgd/cli/dist');
   const ascPin = JSON.parse(readFileSync(join(cliDist, 'asc-pin.json'), 'utf8'));
   assert.equal(ascPin.version, '5.5.0');
+  assert.equal(existsSync(join(cliDist, 'ios-ipa-inspection.js')), true);
   const installedCli = await import(pathToFileURL(join(cliDist, 'index.js')).href);
   assert.equal(typeof installedCli.submitVerifiedIosBuild, 'function');
   mustRun('git', ['init', '-q'], gameRoot);

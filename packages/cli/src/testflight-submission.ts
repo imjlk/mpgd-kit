@@ -90,6 +90,25 @@ export async function submitVerifiedIosBuild(
     const stagedIpa = path.join(tempRoot, 'release.ipa');
     copyFileSync(input.ipaFile, stagedIpa);
     const stagedInput = { ...input, ipaFile: stagedIpa };
+    const { marketingVersion, buildNumber } = await preflight(stagedInput);
+    if (process.platform !== 'darwin') {
+      throw new Error('Signed iOS IPA verification requires macOS.');
+    }
+    const { inspectSignedIosIpa } = await import(
+      new URL('./ios-ipa-inspection.js', import.meta.url).href
+    ) as { inspectSignedIosIpa: (file: string, expected: {
+      expectedBundleId: string;
+      expectedMarketingVersion: string;
+      expectedBuildNumber: string;
+      expectedTeamId: string;
+    }) => unknown
+    };
+    inspectSignedIosIpa(stagedIpa, {
+      expectedBundleId: input.bundleId,
+      expectedMarketingVersion: marketingVersion,
+      expectedBuildNumber: buildNumber,
+      expectedTeamId: input.record.inspectedTeamId ?? '',
+    });
     const environment = isolatedAscEnvironment(input, tempRoot);
     const runner: AscJsonRunner = async (args, timeoutMs) => {
       const result = await runReleaseProcess({

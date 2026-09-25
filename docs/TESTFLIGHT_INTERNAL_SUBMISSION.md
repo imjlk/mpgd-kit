@@ -15,6 +15,9 @@ redacts credentials, and removes the temporary session afterward. The `.p8`
 API key is not the iOS signing private key.
 It stages and hashes a private copy of the IPA so the upload reads the same
 bytes that passed preflight even if the caller's original file changes.
+On macOS, the existing Kit IPA inspector also verifies the staged app's code
+signature, team, bundle ID, and versions before any App Store Connect mutation.
+The first iOS submission implementation does not run on Linux or Windows.
 
 The submission confirms the numeric App Store Connect app ID has the expected
 bundle ID and the configured TestFlight group is internal. It checks for an
