@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { isMpgdFinalSemVer } from '@mpgd/target-config';
 import {
   assertAndroidReleaseDisplayName,
+  assertAndroidReleaseLauncherIntegrity,
   assertIosArchiveScheme,
   assertIosReleaseDisplayName,
   assertIosReleasePlistIdentity,
@@ -14,6 +15,7 @@ import {
   assertIosReleaseProductName,
   countGradleIdentityWrites,
   hasAndroidDisplayNameResourceOverride,
+  hasAndroidResourceSourceSetOverride,
   hasGradleBracketIdentityWrite,
   hasGradleIdentityMutation,
   hasGradlePropertySetter,
@@ -63,6 +65,7 @@ export function assertNativeReleaseIdentity(input: NativeReleaseIdentityInput): 
     if (input.required) {
       const name = requireValue(input.metadata?.displayName, 'Android target metadata displayName');
       assertAndroidReleaseDisplayName(input.shellApp, name);
+      assertAndroidReleaseLauncherIntegrity(input.shellApp);
     }
     return;
   }
@@ -156,6 +159,11 @@ function assertAndroidIdentity(file: string, expected: AndroidIdentity): void {
   if (hasAndroidDisplayNameResourceOverride(source)) {
     throw new Error(`Native release preflight cannot resolve generated app_name in ${file}.`);
   }
+  if (hasAndroidResourceSourceSetOverride(source)) {
+    throw new Error(
+      `Native release preflight cannot resolve custom resource sourceSets in ${file}.`,
+    );
+  }
   if (/\bproductFlavors\b/u.test(code)) {
     throw new Error('Native release preflight does not support Android product flavors.');
   }
@@ -203,6 +211,9 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
     if (hasAndroidDisplayNameResourceOverride(source)) {
       throw new Error('Native release preflight cannot resolve generated app_name resources.');
     }
+    if (hasAndroidResourceSourceSetOverride(source)) {
+      throw new Error('Native release preflight cannot resolve custom resource sourceSets.');
+    }
     if (isSettingsScript) {
       assertAndroidSettingsNoAppRemap(source);
     }
@@ -237,7 +248,7 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
         inspect(resolved, isSettingsScript);
       }
     }
-    const applies = [ /\bapply\s+from\s*:/gu, /\bapply\s*\(\s*from\s*=/gu ];
+    const applies = [ /\bapply\s+from\s*:/gu, /\bapply\s*\(/gu ];
     if (applies.some((expression) => [...source.matchAll(expression)]
       .some((match) => match.index !== undefined
         && code.slice(match.index, match.index + 5) === 'apply'
@@ -535,18 +546,18 @@ function readAndroidReleaseBlocks(source: string, file: string): readonly string
   const nestedReleaseBlockExpressions = [
     /\brelease\s*\{/gu,
     /\brelease\s+by\s+getting\s*\{/gu,
-    /\brelease\s*\.\s*apply\s*\{/gu,
+    /\brelease\s*\.\s*(?:apply|configure)\s*\{/gu,
     /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\{/gu,
-    /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*apply\s*\{/gu,
+    /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*(?:apply|configure)\s*\{/gu,
     /\bbuildTypes\s*\[\s*["']release["']\s*\]\s*\{/gu,
-    /\bbuildTypes\s*\[\s*["']release["']\s*\]\s*\.\s*apply\s*\{/gu,
+    /\bbuildTypes\s*\[\s*["']release["']\s*\]\s*\.\s*(?:apply|configure)\s*\{/gu,
   ];
   const qualifiedReleaseBlockExpressions = [
     /\bbuildTypes\s*\.\s*release\s*\{/gu,
-    /\bbuildTypes\s*\.\s*release\s*\.\s*apply\s*\{/gu,
-    /\bbuildTypes\s*\[\s*["']release["']\s*\]\s*\.\s*apply\s*\{/gu,
+    /\bbuildTypes\s*\.\s*release\s*\.\s*(?:apply|configure)\s*\{/gu,
+    /\bbuildTypes\s*\[\s*["']release["']\s*\]\s*\.\s*(?:apply|configure)\s*\{/gu,
     /\bbuildTypes\s*\.\s*(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\{/gu,
-    /\bbuildTypes\s*\.\s*(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*apply\s*\{/gu,
+    /\bbuildTypes\s*\.\s*(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*(?:apply|configure)\s*\{/gu,
   ];
 
   return [

@@ -23,6 +23,7 @@ import {
   assertIosReleaseProductName,
   assertNativeShellIdentity,
   hasAndroidDisplayNameResourceOverride,
+  hasAndroidResourceSourceSetOverride,
   hasGradleIdentityMutation,
   maskGradleStrings,
   readIosAppTargetId,
@@ -60,6 +61,7 @@ export interface CapacitorShellStarterInput {
 
 export interface CapacitorShellStarterPlan {
   readonly gameRoot: string;
+  readonly input: CapacitorShellStarterInput;
   readonly changedFiles: readonly string[];
   readonly nativePlatformsToAdd: readonly ('android' | 'ios')[];
   readonly files: readonly PlannedFile[];
@@ -409,6 +411,11 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
   );
   return {
     gameRoot,
+    input: {
+      ...input,
+      gameRoot,
+      ...(input.providerIds === undefined ? {} : { providerIds: [...input.providerIds] }),
+    },
     files,
     changedFiles: files.map((file) => file.path),
     nativePlatformsToAdd,
@@ -550,6 +557,10 @@ export function materializeCapacitorShellStarter(
       requireString(manifest.displayName, 'shell display name'),
     );
   }
+  const afterInstall = planCapacitorShellStarter(plan.input);
+  if (afterInstall.changedFiles.length > 0 || afterInstall.nativePlatformsToAdd.length > 0) {
+    throw new Error('Capacitor shell changed during installation; rerun the initializer.');
+  }
 }
 
 function materializeIosArchiveScheme(gameRoot: string): void {
@@ -633,6 +644,9 @@ function assertNativePlatformComplete(
       if (hasAndroidDisplayNameResourceOverride(source)) {
         throw new Error('Existing android project generates an unsupported app_name resource.');
       }
+      if (hasAndroidResourceSourceSetOverride(source)) {
+        throw new Error('Existing android project custom resource sourceSets are unsupported.');
+      }
       if (script === required) {
         continue;
       }
@@ -677,9 +691,10 @@ function assertNativePlatformComplete(
     if (!isNativeFile(nativeDirectory, infoRelative)) {
       throw new Error('Existing ios project Release Info.plist is missing or unsafe.');
     }
-    assertReferencedIosFiles(nativeDirectory, content, infoRelative);
+    const compiledSources = assertReferencedIosFiles(nativeDirectory, content, infoRelative);
     assertNativeDisplayName(nativeDirectory, platform, expectedDisplayName, infoRelative);
     assertIosReleasePlistIdentity(readFileSync(path.join(nativeDirectory, infoRelative), 'utf8'));
+    assertNoIosLocalizedDisplayNameOverride(nativeDirectory, content);
     assertIosArchiveScheme(path.join(gameRoot, shellPath));
     const smokeRelative = 'App/App/Info-Smoke.plist';
     if (existsSync(path.join(nativeDirectory, smokeRelative))) {
@@ -688,10 +703,10 @@ function assertNativePlatformComplete(
       }
       const smoke = readFileSync(path.join(nativeDirectory, smokeRelative), 'utf8');
       assertSmokeInfoPlist(smoke, expectedDisplayName);
-      assertSceneDelegateFiles(nativeDirectory, smoke, 'simulator');
+      assertSceneDelegateFiles(nativeDirectory, smoke, 'simulator', compiledSources);
     } else {
       const generatedSmoke = smokeInfoPlist(expectedDisplayName);
-      assertSceneDelegateFiles(nativeDirectory, generatedSmoke, 'simulator');
+      assertSceneDelegateFiles(nativeDirectory, generatedSmoke, 'simulator', compiledSources);
     }
   } else {
     if (/\bproductFlavors\b/u.test(maskGradleStrings(stripGradleComments(content)))) {
@@ -1131,8 +1146,12 @@ function hasNonWhitespaceText(element: Element): boolean {
     && (node.textContent?.trim().length ?? 0) > 0);
 }
 
-function assertReferencedIosFiles(nativeDirectory: string, project: string, infoRelative: string): void {
-  assertAppBuildPhaseInputs(nativeDirectory, project);
+function assertReferencedIosFiles(
+  nativeDirectory: string,
+  project: string,
+  infoRelative: string,
+): Set<string> {
+  const compiledSources = assertAppBuildPhaseInputs(nativeDirectory, project);
   const references: readonly [RegExp, string][] = [
     [/\/\*\s*SceneDelegate\.swift in Sources\s*\*\//u, 'App/App/SceneDelegate.swift'],
     [/\/\*\s*Main\.storyboard in Resources\s*\*\//u, 'App/App/Base.lproj/Main.storyboard'],
@@ -1150,11 +1169,13 @@ function assertReferencedIosFiles(nativeDirectory: string, project: string, info
     }
   }
   const info = readFileSync(path.join(nativeDirectory, infoRelative), 'utf8');
-  assertSceneDelegateFiles(nativeDirectory, info, 'Release');
+  assertSceneDelegateFiles(nativeDirectory, info, 'Release', compiledSources);
+  return compiledSources;
 }
 
-function assertAppBuildPhaseInputs(nativeDirectory: string, project: string): void {
+function assertAppBuildPhaseInputs(nativeDirectory: string, project: string): Set<string> {
   const parentGroups = readPbxParentGroups(project);
+  const compiledSources = new Set<string>();
   const targets = [...project.matchAll(/\b([A-F0-9]+)\s*\/\*\s*App\s*\*\/\s*=\s*\{/gu)]
     .map((match) => readPbxObjectBody(project, match[1] ?? ''))
     .filter((body) => /\bisa\s*=\s*PBXNativeTarget\s*;/u.test(body)
@@ -1165,7 +1186,8 @@ function assertAppBuildPhaseInputs(nativeDirectory: string, project: string): vo
   const phaseIds = readPbxIds(targets[0] ?? '', 'buildPhases');
   for (const phaseId of phaseIds) {
     const phase = readPbxObjectBody(project, phaseId);
-    if (!/\bisa\s*=\s*PBX(?:Sources|Resources)BuildPhase\s*;/u.test(phase)) {
+    const isSources = /\bisa\s*=\s*PBXSourcesBuildPhase\s*;/u.test(phase);
+    if (!isSources && !/\bisa\s*=\s*PBXResourcesBuildPhase\s*;/u.test(phase)) {
       continue;
     }
     for (const buildId of readPbxIds(phase, 'files')) {
@@ -1174,9 +1196,13 @@ function assertAppBuildPhaseInputs(nativeDirectory: string, project: string): vo
       if (referenceId === undefined) {
         throw new Error('Existing ios project App build input has no file reference.');
       }
-      assertPbxFileReference(nativeDirectory, project, referenceId, parentGroups);
+      const files = assertPbxFileReference(nativeDirectory, project, referenceId, parentGroups);
+      if (isSources) {
+        files.forEach((file) => compiledSources.add(file));
+      }
     }
   }
+  return compiledSources;
 }
 
 function readPbxObjectBody(project: string, id: string): string {
@@ -1261,13 +1287,14 @@ function assertPbxFileReference(
   project: string,
   referenceId: string,
   parentGroups: Map<string, string>,
-): void {
+): string[] {
   const reference = readPbxObjectBody(project, referenceId);
   if (/\bisa\s*=\s*PBXVariantGroup\s*;/u.test(reference)) {
+    const files: string[] = [];
     for (const child of readPbxIds(reference, 'children')) {
-      assertPbxFileReference(nativeDirectory, project, child, parentGroups);
+      files.push(...assertPbxFileReference(nativeDirectory, project, child, parentGroups));
     }
-    return;
+    return files;
   }
   if (!/\bisa\s*=\s*PBXFileReference\s*;/u.test(reference)) {
     throw new Error('Existing ios project App build input has an unsupported file reference.');
@@ -1278,7 +1305,7 @@ function assertPbxFileReference(
     throw new Error('Existing ios project App build input path is unsupported.');
   }
   if (filePath === 'public' || filePath === 'capacitor.config.json') {
-    return; // cap sync creates these inputs in the staged shell.
+    return []; // cap sync creates these inputs in the staged shell.
   }
   const sourceTree = /\bsourceTree\s*=\s*(?:"([^"]+)"|([^;]+))\s*;/u.exec(reference);
   const tree = (sourceTree?.[1] ?? sourceTree?.[2])?.trim();
@@ -1294,9 +1321,11 @@ function assertPbxFileReference(
   } else {
     candidates = [`App/${groupPath}/${filePath}`];
   }
-  if (!candidates.some((candidate) => isNativeEntry(nativeDirectory, candidate))) {
+  const resolved = candidates.find((candidate) => isNativeEntry(nativeDirectory, candidate));
+  if (resolved === undefined) {
     throw new Error(`Existing ios project App build input ${filePath} is missing.`);
   }
+  return [resolved];
 }
 
 function isNativeEntry(directory: string, relative: string): boolean {
@@ -1319,6 +1348,7 @@ function assertSceneDelegateFiles(
   nativeDirectory: string,
   source: string,
   label: string,
+  compiledSources: Set<string>,
 ): void {
   const values = parsePlistDictionary(source, label);
   const delegates: string[] = [];
@@ -1344,12 +1374,17 @@ function assertSceneDelegateFiles(
     const className = /^(?:\$\(PRODUCT_MODULE_NAME\)|[A-Za-z_]\w*)\.([A-Za-z_]\w*)$/u
       .exec(delegate)?.[1];
     if (className === undefined || !sources.some((relative) => {
+      if (!compiledSources.has(relative)) {
+        return false;
+      }
       const text = stripSourceCommentsAndStrings(
         readFileSync(path.join(nativeDirectory, relative), 'utf8'),
       );
       return new RegExp(`\\bclass\\s+${className}\\b`, 'u').test(text);
     })) {
-      throw new Error(`Existing ios project ${label} scene delegate ${delegate} is missing.`);
+      throw new Error(
+        `Existing ios project ${label} scene delegate ${delegate} is missing from App Sources.`,
+      );
     }
   }
 }
@@ -1469,7 +1504,7 @@ function assertAppliedGradleScripts(
       assertAppliedGradleScripts(nativeDirectory, relative, visited, isSettingsScript);
     }
   }
-  const applyExpressions = [/\bapply\s+from\s*:/gu, /\bapply\s*\(\s*from\s*=/gu];
+  const applyExpressions = [/\bapply\s+from\s*:/gu, /\bapply\s*\(/gu];
   if (applyExpressions.some((expression) => [...source.matchAll(expression)]
     .some((match) => match.index !== undefined
       && code.slice(match.index, match.index + 5) === 'apply'
@@ -1597,6 +1632,17 @@ export function assertAndroidReleaseDisplayName(
   assertNativeDisplayName(nativeDirectory, 'android', expectedDisplayName);
 }
 
+export function assertAndroidReleaseLauncherIntegrity(shellApp: string): void {
+  const nativeDirectory = path.join(shellApp, 'android');
+  const gradleRelative = requireOneNativeFile(
+    nativeDirectory,
+    ['app/build.gradle', 'app/build.gradle.kts'],
+    'android',
+  );
+  const gradle = readFileSync(path.join(nativeDirectory, gradleRelative), 'utf8');
+  assertAndroidLauncherClasses(nativeDirectory, gradle);
+}
+
 export function assertIosReleaseDisplayName(
   shellApp: string,
   expectedDisplayName: string,
@@ -1609,6 +1655,20 @@ export function assertIosReleaseDisplayName(
     throw new Error('Existing ios project Release Info.plist is missing or unsafe.');
   }
   assertNativeDisplayName(nativeDirectory, 'ios', expectedDisplayName, infoRelative);
+  assertNoIosLocalizedDisplayNameOverride(nativeDirectory, project);
+  assertReferencedIosFiles(nativeDirectory, project, infoRelative);
+}
+
+function assertNoIosLocalizedDisplayNameOverride(
+  nativeDirectory: string,
+  project: string,
+): void {
+  const files = listNativeFiles(nativeDirectory, 'App/App', '.strings');
+  if (/\bInfoPlist\.strings\b/u.test(project)
+    || isNativeFile(nativeDirectory, 'App/InfoPlist.strings')
+    || files.some((relative) => path.basename(relative) === 'InfoPlist.strings')) {
+    throw new Error('Existing ios project localized InfoPlist.strings overrides are unsupported.');
+  }
 }
 
 export function assertIosArchiveScheme(shellApp: string): void {
@@ -1640,6 +1700,12 @@ export function assertIosArchiveScheme(shellApp: string): void {
     : [];
   const references = entries.length === 1 ? childElements(entries[0] as Element) : [];
   const reference = references.length === 1 ? references[0] : undefined;
+  const hasSchemeActions = (element: Element): boolean => childElements(element).some((item) =>
+    item.tagName === 'PreActions' || item.tagName === 'PostActions' || hasSchemeActions(item));
+  if ((build[0] !== undefined && hasSchemeActions(build[0]))
+    || (archive[0] !== undefined && hasSchemeActions(archive[0]))) {
+    throw new Error('Existing ios project App archive scheme actions are unsupported.');
+  }
   if (archive.length !== 1 || archive[0]?.getAttribute('buildConfiguration') !== 'Release'
     || reference?.tagName !== 'BuildableReference'
     || reference.getAttribute('BlueprintIdentifier') !== appTargetId

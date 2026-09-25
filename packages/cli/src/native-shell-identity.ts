@@ -47,11 +47,11 @@ function hasAndroidReleaseIdSuffix(source: string): boolean {
   const releaseBlocks = [
     /\brelease\s*\{/gu,
     /\brelease\s+by\s+getting\s*\{/gu,
-    /\brelease\s*\.\s*apply\s*\{/gu,
+    /\brelease\s*\.\s*(?:apply|configure)\s*\{/gu,
     /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\{/gu,
-    /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*apply\s*\{/gu,
+    /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*(?:apply|configure)\s*\{/gu,
     /\bbuildTypes\s*\[\s*["']release["']\s*\]\s*\{/gu,
-    /\bbuildTypes\s*\[\s*["']release["']\s*\]\s*\.\s*apply\s*\{/gu,
+    /\bbuildTypes\s*\[\s*["']release["']\s*\]\s*\.\s*(?:apply|configure)\s*\{/gu,
   ];
   return releaseBlocks.some((expression) => [...source.matchAll(expression)]
     .some((match) => match.index !== undefined
@@ -76,8 +76,9 @@ export function assertAndroidSettingsAppProject(source: string): void {
 export function assertAndroidSettingsNoAppRemap(source: string): void {
   const clean = stripGradleComments(source);
   const code = maskGradleStrings(clean);
-  const appRemap = [...clean.matchAll(/\bproject\s*\(\s*["']:app["']\s*\)/gu)]
-    .some((match) => code.slice(match.index, match.index + 7) === 'project');
+  const appRemap = [...clean.matchAll(/\b(project|findProject)\s*\(\s*["']:app["']\s*\)/gu)]
+    .some((match) => code.slice(match.index, match.index + (match[1]?.length ?? 0))
+      === match[1]);
   if (appRemap) {
     throw new Error('Android settings must include :app at android/app without remapping it.');
   }
@@ -161,6 +162,11 @@ export function hasAndroidDisplayNameResourceOverride(source: string): boolean {
     const literal = /^resValue\s*(?:\(\s*)?["'][^"']+["']\s*,\s*["']([^"']+)["']/u.exec(tail);
     return literal === null || literal[1] === 'app_name';
   });
+}
+
+export function hasAndroidResourceSourceSetOverride(source: string): boolean {
+  const code = maskGradleStrings(stripGradleComments(source));
+  return /\bsourceSets\b/u.test(code) && /\bres\b/u.test(code);
 }
 
 export function hasGradlePropertySetter(source: string): boolean {
@@ -326,7 +332,21 @@ export function readIosAppTargetId(source: string): string {
   if (appTargets.length !== 1) {
     throw new Error('Existing ios project App target could not be read safely.');
   }
-  return appTargets[0] ?? '';
+  const targetId = appTargets[0] ?? '';
+  const target = readPbxObject(source, targetId);
+  const productId = /\bproductReference\s*=\s*([A-F0-9]+)\b/u.exec(target)?.[1];
+  if (!/\bproductType\s*=\s*"?com\.apple\.product-type\.application"?\s*;/u.test(target)
+    || productId === undefined) {
+    throw new Error('Existing ios App target must produce an application.');
+  }
+  const product = readPbxObject(source, productId);
+  if (!/\bisa\s*=\s*PBXFileReference\s*;/u.test(product)
+    || !/\b(?:explicitFileType|lastKnownFileType)\s*=\s*wrapper\.application\s*;/u.test(product)
+    || !/\bpath\s*=\s*"?App\.app"?\s*;/u.test(product)
+    || !/\bsourceTree\s*=\s*BUILT_PRODUCTS_DIR\s*;/u.test(product)) {
+    throw new Error('Existing ios App target product must be App.app.');
+  }
+  return targetId;
 }
 
 function readIosProjectConfigurationList(source: string): string | undefined {

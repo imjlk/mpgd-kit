@@ -42,7 +42,11 @@ function readJson(relative: string): Record<string, unknown> {
 
 function iosProjectWithAppId(appId: string): string {
   return [
-    'AAAAAAAA /* App */ = { isa = PBXNativeTarget; name = App; buildConfigurationList = BBBBBBBB; };',
+    'AAAAAAAA /* App */ = { isa = PBXNativeTarget; name = App; buildConfigurationList = BBBBBBBB; buildPhases = (11111111 /* Sources */); productReference = 77777777 /* App.app */; productType = "com.apple.product-type.application"; };',
+    '77777777 /* App.app */ = { isa = PBXFileReference; explicitFileType = wrapper.application; path = App.app; sourceTree = BUILT_PRODUCTS_DIR; };',
+    '11111111 /* Sources */ = { isa = PBXSourcesBuildPhase; files = (22222222 /* SceneDelegate.swift in Sources */); };',
+    '22222222 /* SceneDelegate.swift in Sources */ = { isa = PBXBuildFile; fileRef = 33333333 /* SceneDelegate.swift */; };',
+    '33333333 /* SceneDelegate.swift */ = { isa = PBXFileReference; path = SceneDelegate.swift; sourceTree = "<group>"; };',
     'BBBBBBBB /* App configurations */ = { isa = XCConfigurationList; buildConfigurations = (',
     '  CCCCCCCC /* Debug */, DDDDDDDD /* Release */,); };',
     `CCCCCCCC /* Debug */ = { isa = XCBuildConfiguration; buildSettings = { PRODUCT_BUNDLE_IDENTIFIER = ${appId}; }; };`,
@@ -418,6 +422,19 @@ try {
   const withNativeProjects = planCapacitorShellStarter(options);
   assert.deepEqual(withNativeProjects.changedFiles, []);
   assert.deepEqual(withNativeProjects.nativePlatformsToAdd, []);
+  const preservedConfigFile = path.join(root, 'apps/mobile-capacitor/capacitor.config.ts');
+  const preservedConfig = readFileSync(preservedConfigFile, 'utf8');
+  const mutateConfigRunner = {
+    run(): void {
+      const changed = preservedConfig.replace('dev.example.puzzle', 'dev.other.game');
+      writeFileSync(preservedConfigFile, changed);
+    },
+  };
+  const mutatePreservedConfig = (): void => {
+    materializeCapacitorShellStarter(withNativeProjects, mutateConfigRunner);
+  };
+  assert.throws(mutatePreservedConfig, /Existing Capacitor shell app ID differs/u);
+  writeFileSync(preservedConfigFile, preservedConfig);
   const iosSchemeFile = path.join(
     root,
     'apps/mobile-capacitor/ios/App/App.xcodeproj/xcshareddata/xcschemes/App.xcscheme',
@@ -425,6 +442,12 @@ try {
   const originalIosScheme = readFileSync(iosSchemeFile, 'utf8');
   writeFileSync(iosSchemeFile, originalIosScheme.replace('AAAAAAAA', 'FFFFFFFF'));
   assert.throws(() => planCapacitorShellStarter(options), /archive scheme.*App target/u);
+  const mutatingScheme = originalIosScheme.replace(
+    '</BuildAction>',
+    '<PreActions><ExecutionAction/></PreActions></BuildAction>',
+  );
+  writeFileSync(iosSchemeFile, mutatingScheme);
+  assert.throws(() => planCapacitorShellStarter(options), /archive scheme actions/u);
   unlinkSync(iosSchemeFile);
   assert.throws(() => planCapacitorShellStarter(options), /archive scheme is missing/u);
   writeFileSync(iosSchemeFile, originalIosScheme);
@@ -432,6 +455,16 @@ try {
     root,
     'apps/mobile-capacitor/ios/App/App.xcodeproj/project.pbxproj',
   );
+  const invalidProduct = iosProjectWithAppId('dev.example.puzzle').replace(
+    'com.apple.product-type.application',
+    'com.apple.product-type.framework',
+  );
+  writeFileSync(iosProjectFile, invalidProduct);
+  assert.throws(
+    () => planCapacitorShellStarter(options),
+    /App target must produce an application/u,
+  );
+  writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
   writeFileSync(
     iosProjectFile,
     iosProjectWithAppId('dev.example.puzzle').replace(
@@ -444,14 +477,14 @@ try {
   const customBuildFile = path.join(root, 'apps/mobile-capacitor/ios/App/App/CustomView.swift');
   writeFileSync(customBuildFile, 'class CustomView {}');
   const customProject = iosProjectWithAppId('dev.example.puzzle').replace(
-    'buildConfigurationList = BBBBBBBB; };',
-    'buildConfigurationList = BBBBBBBB; buildPhases = (11111111 /* Sources */); };',
+    'buildPhases = (11111111 /* Sources */);',
+    'buildPhases = (11111111 /* Sources */, 44444444 /* Custom Sources */);',
   ) + '\n' + [
-    '11111111 /* Sources */ = { isa = PBXSourcesBuildPhase;',
-    'files = (22222222 /* CustomView.swift in Sources */); };',
-    '22222222 /* CustomView.swift in Sources */ = { isa = PBXBuildFile;',
-    'fileRef = 33333333 /* CustomView.swift */; };',
-    '33333333 /* CustomView.swift */ = { isa = PBXFileReference;',
+    '44444444 /* Custom Sources */ = { isa = PBXSourcesBuildPhase;',
+    'files = (55555555 /* CustomView.swift in Sources */); };',
+    '55555555 /* CustomView.swift in Sources */ = { isa = PBXBuildFile;',
+    'fileRef = 66666666 /* CustomView.swift */; };',
+    '66666666 /* CustomView.swift */ = { isa = PBXFileReference;',
     'path = CustomView.swift; sourceTree = "<group>"; };',
   ].join('\n');
   writeFileSync(iosProjectFile, customProject);
@@ -466,9 +499,9 @@ try {
   unlinkSync(customBuildFile);
   assert.throws(() => planCapacitorShellStarter(options), /App build input.*missing/u);
   const groupedProject = customProject + '\n' + [
-    '44444444 /* App */ = { isa = PBXGroup; children = (55555555);',
+    '88888888 /* App */ = { isa = PBXGroup; children = (99999999);',
     'path = App; sourceTree = "<group>"; };',
-    '55555555 /* Controllers */ = { isa = PBXGroup; children = (33333333);',
+    '99999999 /* Controllers */ = { isa = PBXGroup; children = (66666666);',
     'path = Controllers; sourceTree = "<group>"; };',
   ].join('\n');
   const groupedView = path.join(
@@ -494,13 +527,15 @@ try {
   renameSync(`${iosProjectFile}.saved`, iosProjectFile);
   const sceneDelegate = path.join(root, 'apps/mobile-capacitor/ios/App/App/SceneDelegate.swift');
   renameSync(sceneDelegate, `${sceneDelegate}.saved`);
-  assert.throws(() => planCapacitorShellStarter(options), /referenced app file/u);
+  assert.throws(() => planCapacitorShellStarter(options), /App build input.*missing/u);
+  renameSync(`${sceneDelegate}.saved`, sceneDelegate);
   const appOnlyProject = readFileSync(iosProjectFile, 'utf8').replace(
-    '/* SceneDelegate.swift in Sources */',
-    '',
+    'files = (22222222 /* SceneDelegate.swift in Sources */);',
+    'files = ();',
   );
   writeFileSync(iosProjectFile, appOnlyProject);
-  assert.throws(() => planCapacitorShellStarter(options), /simulator scene delegate.*missing/u);
+  assert.throws(() => planCapacitorShellStarter(options), /scene delegate.*App Sources/u);
+  writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
   const customScene = path.join(root, 'apps/mobile-capacitor/ios/App/App/CustomScenes.swift');
   const customSmoke = originalSmoke.replace(
     '$(PRODUCT_MODULE_NAME).SceneDelegate',
@@ -508,9 +543,21 @@ try {
   );
   writeFileSync(customScene, 'class GameSceneDelegate {}');
   writeFileSync(smokeInfo, customSmoke);
+  assert.throws(() => planCapacitorShellStarter(options), /simulator scene delegate.*App Sources/u);
+  const compiledCustomScene = iosProjectWithAppId('dev.example.puzzle').replace(
+    'files = (22222222 /* SceneDelegate.swift in Sources */);',
+    'files = (22222222 /* SceneDelegate.swift in Sources */, 44444444 /* CustomScenes.swift in Sources */);',
+  ) + '\n' + [
+    '44444444 /* CustomScenes.swift in Sources */ = { isa = PBXBuildFile;',
+    'fileRef = 55555555 /* CustomScenes.swift */; };',
+    '55555555 /* CustomScenes.swift */ = { isa = PBXFileReference;',
+    'path = CustomScenes.swift; sourceTree = "<group>"; };',
+  ].join('\n');
+  writeFileSync(iosProjectFile, compiledCustomScene);
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   unlinkSync(customScene);
-  assert.throws(() => planCapacitorShellStarter(options), /GameSceneDelegate.*missing/u);
+  assert.throws(() => planCapacitorShellStarter(options), /App build input.*missing/u);
+  writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
   writeFileSync(smokeInfo, originalSmoke);
   const smokeWithoutScene = originalSmoke.replace(
     '<key>UISceneDelegateClassName</key><string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>',
@@ -520,7 +567,6 @@ try {
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   writeFileSync(smokeInfo, originalSmoke);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
-  renameSync(`${sceneDelegate}.saved`, sceneDelegate);
   const androidWrapper = path.join(root, 'apps/mobile-capacitor/android/gradlew');
   renameSync(androidWrapper, `${androidWrapper}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /android project is incomplete/u);
@@ -542,6 +588,8 @@ try {
   assert.throws(() => planCapacitorShellStarter(options), /applied Gradle script/u);
   writeFileSync(androidRootBuild, 'apply(from = file("missing.gradle"))');
   assert.throws(() => planCapacitorShellStarter(options), /applied Gradle script/u);
+  writeFileSync(androidRootBuild, 'apply(mapOf("from" to "missing.gradle"))');
+  assert.throws(() => planCapacitorShellStarter(options), /unsupported Gradle apply expression/u);
   writeFileSync(androidRootBuild, 'apply from: dynamicScript()');
   assert.throws(() => planCapacitorShellStarter(options), /unsupported Gradle apply expression/u);
   const rootCallback = 'project(":app") { afterEvaluate { android.defaultConfig.versionName = "9.0.0" } }';
@@ -560,6 +608,11 @@ try {
   writeFileSync(
     androidSettingsFile,
     `${originalSettings}\nproject(":app").projectDir = file("elsewhere")\n`,
+  );
+  assert.throws(() => planCapacitorShellStarter(options), /without remapping/u);
+  writeFileSync(
+    androidSettingsFile,
+    `${originalSettings}\nfindProject(":app")?.projectDir = file("elsewhere")\n`,
   );
   assert.throws(() => planCapacitorShellStarter(options), /without remapping/u);
   writeFileSync(androidSettingsFile, originalSettings);
@@ -899,6 +952,14 @@ try {
   writeFileSync(androidManifest, completeAndroidManifest);
   writeFileSync(mainStrings, '<resources><string name="app_name">Puzzle Game</string></resources>');
   const iosInfo = path.join(root, 'apps/mobile-capacitor/ios/App/App/Info.plist');
+  const localizedNameFile = path.join(
+    root,
+    'apps/mobile-capacitor/ios/App/App/en.lproj/InfoPlist.strings',
+  );
+  mkdirSync(path.dirname(localizedNameFile), { recursive: true });
+  writeFileSync(localizedNameFile, '"CFBundleDisplayName" = "Other Game";');
+  assert.throws(() => planCapacitorShellStarter(options), /localized InfoPlist.strings/u);
+  unlinkSync(localizedNameFile);
   const originalIosInfo = readFileSync(iosInfo, 'utf8');
   writeFileSync(iosInfo, originalIosInfo.replace('Puzzle Game', 'Other Game'));
   assert.throws(() => planCapacitorShellStarter(options), /ios project display name differs/u);
@@ -1061,6 +1122,11 @@ try {
     'buildTypes { release { resValue "string", "app_name", "Other Game" } }',
   ].join('\n'));
   assert.throws(() => planCapacitorShellStarter(options), /app_name resource/u);
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
+    'sourceSets.release.res.srcDirs = ["src/store/res"]',
+  ].join('\n'));
+  assert.throws(() => planCapacitorShellStarter(options), /custom resource sourceSets/u);
   writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');
   writeFileSync(androidProjectFile, [
     'applicationId "dev.example.puzzle"',
@@ -1080,6 +1146,11 @@ try {
   writeFileSync(androidProjectFile, [
     'applicationId "dev.example.puzzle"',
     'buildTypes { getByName("release").applicationIdSuffix = ".store" }',
+  ].join('\n'));
+  assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
+    'buildTypes.named("release").configure { applicationIdSuffix = ".store" }',
   ].join('\n'));
   assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
   writeFileSync(androidProjectFile, [
