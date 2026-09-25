@@ -177,8 +177,7 @@ export function hasAndroidManifestSourceSetOverride(source: string): boolean {
 export function hasGradleTaskAction(source: string): boolean {
   const code = maskGradleStrings(stripGradleComments(source));
   return /\b(?:doFirst|doLast|whenTaskAdded|whenReady)\s*(?:\(|\{)/u.test(code)
-    || /\btasks\s*\.\s*(?:register|create|named|getByName|withType|configureEach|all)\s*\(/u
-      .test(code);
+    || /\btasks\s*(?:\.|\[|\{)/u.test(code);
 }
 
 export function hasGradlePropertySetter(source: string): boolean {

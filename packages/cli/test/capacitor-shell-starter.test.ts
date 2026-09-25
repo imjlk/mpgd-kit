@@ -315,7 +315,8 @@ try {
               '<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>',
               '</dict></plist>',
             ].join(''),
-            'ios/App/App/SceneDelegate.swift': 'class SceneDelegate {}',
+            'ios/App/App/SceneDelegate.swift':
+              'class SceneDelegate: UIResponder, UIWindowSceneDelegate {}',
           };
           writeFileSync(requiredFile, contents[relative] ?? 'generated-native-project');
         }
@@ -504,6 +505,14 @@ try {
   writeFileSync(iosProjectFile, dependentScriptProject);
   assert.throws(() => planCapacitorShellStarter(options), /shell script build phases/u);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
+  const scriptedRuleProject = iosProjectWithAppId('dev.example.puzzle').replace(
+    'buildPhases = (11111111 /* Sources */);',
+    'buildPhases = (11111111 /* Sources */); buildRules = (ABABABAB /* Script */);',
+  ) + '\nABABABAB /* Script */ = { isa = PBXBuildRule; '
+    + 'compilerSpec = com.apple.compilers.proxy.script; script = "echo hi"; };';
+  writeFileSync(iosProjectFile, scriptedRuleProject);
+  assert.throws(() => planCapacitorShellStarter(options), /executable build rules/u);
+  writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
   writeFileSync(
     iosProjectFile,
     iosProjectWithAppId('dev.example.puzzle').replace(
@@ -591,7 +600,12 @@ try {
   assert.throws(() => planCapacitorShellStarter(options), /App build input.*missing/u);
   renameSync(`${sceneDelegate}.saved`, sceneDelegate);
   const originalSceneSource = readFileSync(sceneDelegate, 'utf8');
-  writeFileSync(sceneDelegate, 'class Holder { class SceneDelegate {} }');
+  writeFileSync(
+    sceneDelegate,
+    'class Holder { class SceneDelegate: UIResponder, UIWindowSceneDelegate {} }',
+  );
+  assert.throws(() => planCapacitorShellStarter(options), /simulator scene delegate.*App Sources/u);
+  writeFileSync(sceneDelegate, 'class SceneDelegate {}');
   assert.throws(() => planCapacitorShellStarter(options), /simulator scene delegate.*App Sources/u);
   writeFileSync(sceneDelegate, originalSceneSource);
   const appOnlyProject = readFileSync(iosProjectFile, 'utf8').replace(
@@ -606,7 +620,7 @@ try {
     '$(PRODUCT_MODULE_NAME).SceneDelegate',
     '$(PRODUCT_MODULE_NAME).GameSceneDelegate',
   );
-  writeFileSync(customScene, 'class GameSceneDelegate {}');
+  writeFileSync(customScene, 'class GameSceneDelegate: UIResponder, UIWindowSceneDelegate {}');
   writeFileSync(smokeInfo, customSmoke);
   assert.throws(() => planCapacitorShellStarter(options), /simulator scene delegate.*App Sources/u);
   const compiledCustomScene = iosProjectWithAppId('dev.example.puzzle').replace(
@@ -666,6 +680,21 @@ try {
   ].join('\n'));
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   writeFileSync(androidRootBuild, 'apply from: "variables.gradle"');
+  const appGradleForNested = path.join(root, 'apps/mobile-capacitor/android/app/build.gradle');
+  const originalAppGradle = readFileSync(appGradleForNested, 'utf8');
+  const nestedGradleRoot = path.join(root, 'apps/mobile-capacitor/android/gradle');
+  const nestedScript = path.join(nestedGradleRoot, 'one.gradle');
+  const harmlessNested = path.join(nestedGradleRoot, 'two.gradle');
+  const executedNested = path.join(root, 'apps/mobile-capacitor/android/app/two.gradle');
+  writeFileSync(nestedScript, "apply from: 'two.gradle'");
+  writeFileSync(harmlessNested, 'println("safe")');
+  writeFileSync(executedNested, 'applicationId "dev.other.game"');
+  writeFileSync(appGradleForNested, `${originalAppGradle}\napply from: '../gradle/one.gradle'`);
+  assert.throws(() => planCapacitorShellStarter(options), /changes identity/u);
+  writeFileSync(appGradleForNested, originalAppGradle);
+  unlinkSync(nestedScript);
+  unlinkSync(harmlessNested);
+  unlinkSync(executedNested);
   const androidSettingsFile = path.join(root, 'apps/mobile-capacitor/android/settings.gradle');
   const originalSettings = readFileSync(androidSettingsFile, 'utf8');
   writeFileSync(androidSettingsFile, 'include ":other"\n');
@@ -801,6 +830,29 @@ try {
     '</intent-filter></activity></application></manifest>',
   ].join(''));
   assert.throws(() => planCapacitorShellStarter(options), /launcher label differs/u);
+  writeFileSync(androidManifest, completeAndroidManifest);
+  const missingApplicationManifest = completeAndroidManifest.replace(
+    '<application android:label=',
+    '<application android:name=".MissingApplication" android:label=',
+  );
+  writeFileSync(androidManifest, missingApplicationManifest);
+  assert.throws(() => planCapacitorShellStarter(options), /Application class.*missing/u);
+  const customApplication = path.join(
+    root,
+    'apps/mobile-capacitor/android/app/src/main/java/dev/example/puzzle/CustomApplication.java',
+  );
+  const customApplicationManifest = missingApplicationManifest
+    .replace('.MissingApplication', '.CustomApplication');
+  writeFileSync(androidManifest, customApplicationManifest);
+  writeFileSync(customApplication, [
+    'package dev.example.puzzle;',
+    'import android.app.Application;',
+    'public class CustomApplication extends Application {}',
+  ].join(' '));
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(customApplication, 'package dev.example.puzzle; public class CustomApplication {}');
+  assert.throws(() => planCapacitorShellStarter(options), /Application class.*invalid/u);
+  unlinkSync(customApplication);
   writeFileSync(androidManifest, completeAndroidManifest);
   writeFileSync(androidManifest, [
     androidManifestOpen,
@@ -1235,6 +1287,13 @@ try {
   writeFileSync(androidProjectFile, [
     'applicationId "dev.example.puzzle"',
     'preBuild.doLast { file("src/main/res/values/strings.xml").text = "Other Game" }',
+  ].join('\n'));
+  assert.throws(() => planCapacitorShellStarter(options), /Gradle task actions/u);
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
+    'tasks.matching { it.name == "preBuild" }.all {',
+    '  file("src/main/res/values/strings.xml").text = "Other Game"',
+    '}',
   ].join('\n'));
   assert.throws(() => planCapacitorShellStarter(options), /Gradle task actions/u);
   writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');

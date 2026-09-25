@@ -209,11 +209,12 @@ function assertAndroidSetting(
 
 function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): void {
   const visited = new Set<string>();
-  const inspect = (file: string, isSettingsScript = false): void => {
-    if (visited.has(file)) {
+  const inspect = (file: string, isSettingsScript: boolean, ownerDirectory: string): void => {
+    const visitKey = `${ownerDirectory}\0${isSettingsScript}\0${file}`;
+    if (visited.has(visitKey)) {
       return;
     }
-    visited.add(file);
+    visited.add(visitKey);
     const source = stripComments(readRequiredFile(file, 'applied Android Gradle script'));
     const code = maskGradleStrings(source);
     if (/(?:^|[\s;{])apply\s*\{/u.test(code)) {
@@ -256,13 +257,14 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
         }
         matched.add(match.index);
         const requested = match[1] ?? '';
-        const resolved = resolve(dirname(file), requested);
+        // Applied script paths stay relative to the owning Gradle project or settings.
+        const resolved = resolve(ownerDirectory, requested);
         const within = relative(androidRoot, resolved);
         if (requested.includes('$') || within === '' || within.startsWith('..')
           || isAbsolute(within)) {
           throw new Error('Native release preflight cannot resolve an applied Gradle script.');
         }
-        inspect(resolved, isSettingsScript);
+        inspect(resolved, isSettingsScript, ownerDirectory);
       }
     }
     const applies = [ /\bapply\s+from\s*:/gu, /\bapply\s*\(/gu ];
@@ -299,9 +301,9 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
     .test(maskGradleStrings(settingsSource))) {
     throw new Error('Native release preflight cannot resolve settings Gradle project callbacks.');
   }
-  inspect(settingsFile, true);
-  inspect(rootFile);
-  inspect(appBuild);
+  inspect(settingsFile, true, androidRoot);
+  inspect(rootFile, false, androidRoot);
+  inspect(appBuild, false, dirname(appBuild));
 }
 
 function assertIosIdentity(file: string, expected: IosIdentity): void {

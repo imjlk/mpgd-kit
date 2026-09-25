@@ -642,10 +642,21 @@ function assertNativePlatformComplete(
       throw new Error('Existing android project has unsupported settings Gradle callbacks.');
     }
     const visited = new Set<string>();
+    const inspectedScripts = new Set<string>();
     for (const script of [settings, rootBuild, required]) {
-      assertAppliedGradleScripts(nativeDirectory, script, visited, script === settings);
+      const ownerDirectory = script === required
+        ? path.join(nativeDirectory, 'app')
+        : nativeDirectory;
+      assertAppliedGradleScripts(
+        nativeDirectory,
+        script,
+        visited,
+        inspectedScripts,
+        script === settings,
+        ownerDirectory,
+      );
     }
-    for (const script of visited) {
+    for (const script of inspectedScripts) {
       const source = stripGradleComments(readFileSync(path.join(nativeDirectory, script), 'utf8'));
       if (hasAndroidDisplayNameResourceOverride(source)) {
         throw new Error('Existing android project generates an unsupported app_name resource.');
@@ -749,6 +760,7 @@ function assertAndroidLauncherClasses(nativeDirectory: string, gradle: string): 
   if (release !== undefined) {
     assertAndroidLauncherEnabled(release, 'Release application');
   }
+  assertAndroidApplicationClasses(nativeDirectory, application, release, namespace);
   const launchers = [
     ...readAndroidLaunchers(application).map((element) => ({ element, release: false })),
     ...(release === undefined ? [] : readAndroidLaunchers(release)
@@ -822,7 +834,14 @@ function assertAndroidLauncherClasses(nativeDirectory: string, gradle: string): 
           `app/src/${sourceSet}/${language}`,
           extension,
         )))))];
-    if (!resolvesAndroidActivityClass(nativeDirectory, qualified, sources, new Set())) {
+    const validActivity = resolvesAndroidClass(
+      nativeDirectory,
+      qualified,
+      sources,
+      new Set(),
+      androidActivityBases,
+    );
+    if (!validActivity) {
       throw new Error(
         `Existing android project launcher class ${qualified} is missing or not an Android Activity.`,
       );
@@ -838,13 +857,60 @@ const androidActivityBases = new Set([
   'androidx.fragment.app.FragmentActivity',
 ]);
 
-function resolvesAndroidActivityClass(
+const androidApplicationBases = new Set([
+  'android.app.Application',
+  'androidx.multidex.MultiDexApplication',
+]);
+
+function assertAndroidApplicationClasses(
+  nativeDirectory: string,
+  main: Element,
+  release: Element | undefined,
+  namespace: string | undefined,
+): void {
+  const variants = [
+    { application: main, sourceSets: ['main'] },
+    ...(release === undefined ? [] : [
+      { application: release, sourceSets: ['main', 'release'] },
+    ]),
+  ];
+  for (const { application, sourceSets } of variants) {
+    const name = application.getAttribute('android:name');
+    if (name === null) {
+      continue;
+    }
+    const qualified = qualifyAndroidActivityName(name, namespace);
+    if (qualified === undefined) {
+      throw new Error('Existing android project Application class cannot be resolved.');
+    }
+    const sources = [...new Set(sourceSets.flatMap((sourceSet) =>
+      ['java', 'kotlin'].flatMap((language) =>
+        ['.java', '.kt'].flatMap((extension) => listNativeFiles(
+          nativeDirectory, `app/src/${sourceSet}/${language}`, extension,
+        )))))];
+    const validApplication = resolvesAndroidClass(
+      nativeDirectory,
+      qualified,
+      sources,
+      new Set(),
+      androidApplicationBases,
+    );
+    if (!validApplication) {
+      throw new Error(
+        `Existing android project Application class ${qualified} is missing or invalid.`,
+      );
+    }
+  }
+}
+
+function resolvesAndroidClass(
   nativeDirectory: string,
   qualified: string,
   sourceFiles: readonly string[],
   visited: Set<string>,
+  bases: ReadonlySet<string>,
 ): boolean {
-  if (androidActivityBases.has(qualified)) {
+  if (bases.has(qualified)) {
     return true;
   }
   if (visited.has(qualified)) {
@@ -874,7 +940,7 @@ function resolvesAndroidActivityClass(
       .map((match) => match[1] ?? '')
       .find((name) => name.endsWith(`.${base}`));
     const resolved = base.includes('.') ? base : (imported ?? `${packageName}.${base}`);
-    if (resolvesAndroidActivityClass(nativeDirectory, resolved, sourceFiles, visited)) {
+    if (resolvesAndroidClass(nativeDirectory, resolved, sourceFiles, visited, bases)) {
       return true;
     }
   }
@@ -1233,6 +1299,9 @@ function assertNoIosTargetScriptPhases(
   if (!/\bisa\s*=\s*PBX(?:Native|Aggregate)Target\s*;/u.test(target)) {
     throw new Error('Existing ios project App target dependency is unsupported.');
   }
+  if (readPbxIds(target, 'buildRules').length > 0) {
+    throw new Error('Existing ios project App executable build rules are unsupported.');
+  }
   for (const phaseId of readPbxIds(target, 'buildPhases')) {
     const phase = readPbxObjectBody(project, phaseId);
     if (/\bisa\s*=\s*PBXShellScriptBuildPhase\s*;/u.test(phase)) {
@@ -1425,7 +1494,7 @@ function assertSceneDelegateFiles(
       const text = stripSourceCommentsAndStrings(
         readFileSync(path.join(nativeDirectory, relative), 'utf8'),
       );
-      return hasTopLevelSwiftClass(text, className);
+      return hasUsableTopLevelSwiftSceneDelegate(text, className);
     })) {
       throw new Error(
         `Existing ios project ${label} scene delegate ${delegate} is missing from App Sources.`,
@@ -1434,8 +1503,8 @@ function assertSceneDelegateFiles(
   }
 }
 
-function hasTopLevelSwiftClass(source: string, className: string): boolean {
-  const declaration = new RegExp(`\\bclass\\s+${className}\\b`, 'gu');
+function hasUsableTopLevelSwiftSceneDelegate(source: string, className: string): boolean {
+  const declaration = new RegExp(`\\bclass\\s+${className}\\b([^{};]*)\\{`, 'gu');
   let cursor = 0;
   let depth = 0;
   for (const match of source.matchAll(declaration)) {
@@ -1443,7 +1512,10 @@ function hasTopLevelSwiftClass(source: string, className: string): boolean {
     for (; cursor < index; cursor += 1) {
       depth += source[cursor] === '{' ? 1 : source[cursor] === '}' ? -1 : 0;
     }
-    if (depth === 0) {
+    const inheritance = match[1] ?? '';
+    const supported = /:\s*(?:UIResponder|NSObject)\s*,\s*(?:UIWindowSceneDelegate|UISceneDelegate)(?:\s*,|\s*$)/u
+      .test(inheritance.trim());
+    if (depth === 0 && supported) {
       return true;
     }
   }
@@ -1523,12 +1595,16 @@ function assertAppliedGradleScripts(
   nativeDirectory: string,
   script: string,
   visited: Set<string>,
+  inspectedScripts: Set<string>,
   isSettingsScript: boolean,
+  ownerDirectory: string,
 ): void {
-  if (visited.has(script)) {
+  const visitKey = `${ownerDirectory}\0${isSettingsScript}\0${script}`;
+  if (visited.has(visitKey)) {
     return;
   }
-  visited.add(script);
+  visited.add(visitKey);
+  inspectedScripts.add(script);
   if (!isNativeFile(nativeDirectory, script)) {
     throw new Error(
       `Existing android project is incomplete; applied Gradle script ${script} is missing.`,
@@ -1556,13 +1632,21 @@ function assertAppliedGradleScripts(
       }
       matched.add(match.index);
       const requested = match[1] ?? '';
-      const resolved = path.resolve(nativeDirectory, path.dirname(script), requested);
+      // Gradle resolves nested script paths against the owning project or settings directory.
+      const resolved = path.resolve(ownerDirectory, requested);
       const relative = path.relative(nativeDirectory, resolved);
       if (requested.includes('$') || relative === '' || relative.startsWith('..')
         || path.isAbsolute(relative)) {
         throw new Error('Existing android project has an unsupported applied Gradle script path.');
       }
-      assertAppliedGradleScripts(nativeDirectory, relative, visited, isSettingsScript);
+      assertAppliedGradleScripts(
+        nativeDirectory,
+        relative,
+        visited,
+        inspectedScripts,
+        isSettingsScript,
+        ownerDirectory,
+      );
     }
   }
   const applyExpressions = [/\bapply\s+from\s*:/gu, /\bapply\s*\(/gu];

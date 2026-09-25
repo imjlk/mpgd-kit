@@ -182,6 +182,13 @@ try {
   writeFileSync(launcherSource, 'package dev.example.game; public class MainActivity {}');
   assert.throws(() => assertNativeReleaseIdentity(productionInput), /not an Android Activity/u);
   writeShellFiles(shellRoot);
+  const missingApplicationManifest = validLauncherManifest.replace(
+    '<application android:label=',
+    '<application android:name=".MissingApplication" android:label=',
+  );
+  writeFileSync(launcherManifest, missingApplicationManifest);
+  assert.throws(() => assertNativeReleaseIdentity(productionInput), /Application class.*missing/u);
+  writeShellFiles(shellRoot);
   const releaseManifest = join(shellRoot, 'android/app/src/release/AndroidManifest.xml');
   mkdirSync(join(shellRoot, 'android/app/src/release'), { recursive: true });
   writeFileSync(releaseManifest, [
@@ -192,6 +199,11 @@ try {
     () => assertNativeReleaseIdentity(productionInput),
     /Release application label differs/u,
   );
+  writeFileSync(releaseManifest, [
+    '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+    '<application android:name=".MissingApplication"/></manifest>',
+  ].join(''));
+  assert.throws(() => assertNativeReleaseIdentity(productionInput), /Application class.*missing/u);
   writeFileSync(launcherManifest, [
     '<manifest xmlns:android="http://schemas.android.com/apk/res/android"',
     ' package="dev.example.game"><application android:label="@string/app_name">',
@@ -287,6 +299,14 @@ try {
   ].join('\n'));
   assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /task actions/u);
   writeShellFiles(shellRoot);
+  writeFileSync(groovy, [
+    readFileSync(groovy, 'utf8'),
+    'tasks.matching { it.name == "preBuild" }.all {',
+    '  file("src/main/res/values/strings.xml").text = "Other Game"',
+    '}',
+  ].join('\n'));
+  assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /task actions/u);
+  writeShellFiles(shellRoot);
   const androidRootGradle = join(shellRoot, 'android/build.gradle');
   writeFileSync(androidRootGradle, 'apply(mapOf("from" to "missing.gradle"))');
   assert.throws(
@@ -294,6 +314,23 @@ try {
     /applied Gradle script/u,
     'map-based Gradle apply must fail',
   );
+  writeShellFiles(shellRoot);
+  const nestedGradleRoot = join(shellRoot, 'android/gradle');
+  mkdirSync(nestedGradleRoot, { recursive: true });
+  const nestedScript = join(nestedGradleRoot, 'one.gradle');
+  const harmlessNested = join(nestedGradleRoot, 'two.gradle');
+  const executedNested = join(shellRoot, 'android/app/two.gradle');
+  writeFileSync(nestedScript, "apply from: 'two.gradle'");
+  writeFileSync(harmlessNested, 'println("safe")');
+  writeFileSync(executedNested, 'applicationId "dev.other.game"');
+  writeFileSync(groovy, `${readFileSync(groovy, 'utf8')}\napply from: '../gradle/one.gradle'`);
+  assert.throws(
+    () => assertNativeReleaseIdentity(appliedIdentityInput),
+    /identity override in applied Gradle script/u,
+  );
+  rmSync(nestedScript);
+  rmSync(harmlessNested);
+  rmSync(executedNested);
   writeShellFiles(shellRoot);
   const androidSettingsGradle = join(shellRoot, 'android/settings.gradle');
   writeFileSync(androidSettingsGradle, [
@@ -482,12 +519,20 @@ try {
   );
   writeFileSync(iosProject, inheritedIosSource);
   const sceneDelegateSource = join(shellRoot, 'ios/App/App/SceneDelegate.swift');
-  writeFileSync(sceneDelegateSource, 'class Holder { class SceneDelegate {} }');
+  writeFileSync(
+    sceneDelegateSource,
+    'class Holder { class SceneDelegate: UIResponder, UIWindowSceneDelegate {} }',
+  );
   assert.throws(
     () => assertNativeReleaseIdentity(productionIosInput),
     /Release scene delegate.*App Sources/u,
   );
   writeFileSync(sceneDelegateSource, 'class SceneDelegate {}');
+  assert.throws(
+    () => assertNativeReleaseIdentity(productionIosInput),
+    /Release scene delegate.*App Sources/u,
+  );
+  writeFileSync(sceneDelegateSource, 'class SceneDelegate: UIResponder, UIWindowSceneDelegate {}');
   const compiledIosProject = readFileSync(iosProject, 'utf8');
   const scriptedIosProject = compiledIosProject.replace(
     'buildPhases = (00000009 /* Sources */);',
@@ -514,6 +559,14 @@ try {
     () => assertNativeReleaseIdentity(productionIosInput),
     /shell script build phases/u,
   );
+  writeFileSync(iosProject, compiledIosProject);
+  const scriptedRuleProject = compiledIosProject.replace(
+    'buildPhases = (00000009 /* Sources */);',
+    'buildPhases = (00000009 /* Sources */); buildRules = (00000015 /* Script */);',
+  ) + '\n00000015 /* Script */ = { isa = PBXBuildRule; '
+    + 'compilerSpec = com.apple.compilers.proxy.script; script = "echo hi"; };';
+  writeFileSync(iosProject, scriptedRuleProject);
+  assert.throws(() => assertNativeReleaseIdentity(productionIosInput), /build rules/u);
   writeFileSync(iosProject, compiledIosProject);
   const uncompiledIosProject = compiledIosProject.replace(
     'files = (00000008 /* SceneDelegate.swift in Sources */);',
@@ -920,7 +973,10 @@ function writeShellFiles(root: string): void {
     '</dict>',
     '</dict></plist>',
   ].join(''));
-  writeFileSync(join(root, 'ios/App/App/SceneDelegate.swift'), 'class SceneDelegate {}');
+  writeFileSync(
+    join(root, 'ios/App/App/SceneDelegate.swift'),
+    'class SceneDelegate: UIResponder, UIWindowSceneDelegate {}',
+  );
   writeFileSync(
     join(root, 'ios/App/App.xcodeproj/xcshareddata/xcschemes/App.xcscheme'),
     '<Scheme><BuildAction><BuildActionEntries><BuildActionEntry buildForArchiving="YES"><BuildableReference BlueprintIdentifier="001" BlueprintName="App" BuildableName="App.app" ReferencedContainer="container:App.xcodeproj"/></BuildActionEntry></BuildActionEntries></BuildAction><ArchiveAction buildConfiguration="Release"/></Scheme>',
