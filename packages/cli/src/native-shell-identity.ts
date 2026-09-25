@@ -176,8 +176,15 @@ export function hasAndroidManifestSourceSetOverride(source: string): boolean {
 
 export function hasGradleTaskAction(source: string): boolean {
   const code = maskGradleStrings(stripGradleComments(source));
-  return /\b(?:doFirst|doLast|whenTaskAdded|whenReady)\s*(?:\(|\{)/u.test(code)
-    || /\btasks\s*(?:\.|\[|\{)/u.test(code);
+  const withoutStandardClean = code.replace(
+    /\btask\s+clean\s*\(\s*type\s*:\s*Delete\s*\)\s*\{\s*delete\s+rootProject\.buildDir\s*;?\s*\}/gu,
+    '',
+  );
+  return /\b(?:doFirst|doLast|whenTaskAdded|whenReady)\s*(?:\(|\{)/u.test(withoutStandardClean)
+    || /\btasks\s*(?:\.|\[|\{)/u.test(withoutStandardClean)
+    || /\btask\s*(?:\([^)]*\)|[A-Za-z_]\w*(?:\s*\([^)]*\))?)\s*\{/u.test(
+      withoutStandardClean,
+    );
 }
 
 export function hasGradlePropertySetter(source: string): boolean {
@@ -292,6 +299,50 @@ export function assertIosReleaseInfoPlistExpansion(source: string): void {
   const projectList = readIosProjectConfigurationList(source);
   if (projectList !== undefined) {
     assertIosInfoPlistExpansionSetting(readIosReleaseConfiguration(source, projectList));
+  }
+}
+
+export function assertIosReleasePackagingSettings(source: string): void {
+  const target = readIosReleaseConfiguration(source, readIosAppConfigurationList(source));
+  const projectList = readIosProjectConfigurationList(source);
+  const project = projectList === undefined
+    ? undefined
+    : readIosReleaseConfiguration(source, projectList);
+  const setting = (configuration: string | undefined, key: string): string | undefined => {
+    if (configuration === undefined) {
+      return undefined;
+    }
+    const conditional = new RegExp(`\\b${key}\\[[^\\]\\r\\n]+\\]`, 'u');
+    if (conditional.test(configuration)) {
+      throw new Error(`Existing ios project conditional Release ${key} is unsupported.`);
+    }
+    const expression = `(?:^|[\\s{;])["']?${key}["']?\\s*=\\s*([^;]+);`;
+    const pattern = new RegExp(expression, 'gu');
+    const values = [...configuration.matchAll(pattern)]
+      .map((match) => match[1]?.trim().replace(/^["']|["']$/gu, ''));
+    if (values.length > 1 || /\bbaseConfigurationReference\s*=/u.test(configuration)) {
+      throw new Error(`Existing ios project Release ${key} cannot be read safely.`);
+    }
+    return values[0];
+  };
+  const effective = (key: string): string | undefined => {
+    const targetValue = setting(target, key);
+    return targetValue === undefined || targetValue === '$(inherited)'
+      ? setting(project, key)
+      : targetValue;
+  };
+  const preprocessing = effective('INFOPLIST_PREPROCESS');
+  if (preprocessing !== undefined && preprocessing !== 'NO') {
+    throw new Error('Existing ios project Release Info.plist preprocessing is unsupported.');
+  }
+  for (const key of ['INFOPLIST_PREPROCESSOR_DEFINITIONS', 'INFOPLIST_PREFIX_HEADER']) {
+    if (effective(key) !== undefined) {
+      throw new Error(`Existing ios project Release ${key} is unsupported.`);
+    }
+  }
+  const skipInstall = effective('SKIP_INSTALL');
+  if (skipInstall !== undefined && skipInstall !== 'NO') {
+    throw new Error('Existing ios project Release SKIP_INSTALL must be NO.');
   }
 }
 

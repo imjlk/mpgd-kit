@@ -13,6 +13,7 @@ import {
   assertAndroidSettingsAppProject,
   assertAndroidSettingsNoAppRemap,
   assertIosReleaseInfoPlistExpansion,
+  assertIosReleasePackagingSettings,
   assertIosReleaseProductName,
   countGradleIdentityWrites,
   hasAndroidDisplayNameResourceOverride,
@@ -310,6 +311,7 @@ function assertIosIdentity(file: string, expected: IosIdentity): void {
   const source = readRequiredFile(file, 'iOS Xcode project configuration');
   assertIosReleaseProductName(source);
   assertIosReleaseInfoPlistExpansion(source);
+  assertIosReleasePackagingSettings(source);
   const releaseSettings = readIosAppReleaseSettings(source, file);
   assertIosSetting(releaseSettings, 'PRODUCT_BUNDLE_IDENTIFIER', expected.bundleId, file);
   assertIosSetting(releaseSettings, 'MARKETING_VERSION', expected.marketingVersion, file);

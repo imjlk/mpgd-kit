@@ -307,7 +307,22 @@ try {
   ].join('\n'));
   assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /task actions/u);
   writeShellFiles(shellRoot);
+  writeFileSync(groovy, [
+    readFileSync(groovy, 'utf8'),
+    'task mutateInputs { file("src/main/res/values/strings.xml").text = "Other Game" }',
+  ].join('\n'));
+  assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /task actions/u);
+  writeShellFiles(shellRoot);
   const androidRootGradle = join(shellRoot, 'android/build.gradle');
+  writeFileSync(androidRootGradle, 'task clean(type: Delete) { delete rootProject.buildDir }');
+  assert.doesNotThrow(() => assertNativeReleaseIdentity(appliedIdentityInput));
+  writeFileSync(androidRootGradle, [
+    'task clean(type: Delete) {',
+    '  delete rootProject.buildDir',
+    '  file("app/src/main/res/values/strings.xml").text = "Other Game"',
+    '}',
+  ].join('\n'));
+  assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /task actions/u);
   writeFileSync(androidRootGradle, 'apply(mapOf("from" to "missing.gradle"))');
   assert.throws(
     () => assertNativeReleaseIdentity(appliedIdentityInput),
@@ -517,6 +532,17 @@ try {
     () => assertNativeReleaseIdentity(productionIosInput),
     /INFOPLIST_EXPAND_BUILD_SETTINGS/u,
   );
+  for (const setting of ['INFOPLIST_PREPROCESS = YES;', 'SKIP_INSTALL = YES;']) {
+    const configured = inheritedIosSource.replace(
+      'INFOPLIST_FILE = App/Info.plist;',
+      `${setting} INFOPLIST_FILE = App/Info.plist;`,
+    );
+    writeFileSync(iosProject, configured);
+    assert.throws(
+      () => assertNativeReleaseIdentity(productionIosInput),
+      /Info.plist preprocessing|SKIP_INSTALL/u,
+    );
+  }
   writeFileSync(iosProject, inheritedIosSource);
   const sceneDelegateSource = join(shellRoot, 'ios/App/App/SceneDelegate.swift');
   writeFileSync(

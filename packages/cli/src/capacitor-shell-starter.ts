@@ -21,6 +21,7 @@ import {
   assertAndroidSettingsAppProject,
   assertAndroidSettingsNoAppRemap,
   assertIosReleaseInfoPlistExpansion,
+  assertIosReleasePackagingSettings,
   assertIosReleaseProductName,
   assertNativeShellIdentity,
   hasAndroidDisplayNameResourceOverride,
@@ -710,6 +711,7 @@ function assertNativePlatformComplete(
   if (platform === 'ios') {
     assertIosReleaseProductName(content);
     assertIosReleaseInfoPlistExpansion(content);
+    assertIosReleasePackagingSettings(content);
     const infoPlist = readIosReleaseInfoPlist(content);
     const infoRelative = path.join('App', infoPlist);
     if (!isNativeFile(nativeDirectory, infoRelative)) {
@@ -840,6 +842,7 @@ function assertAndroidLauncherClasses(nativeDirectory: string, gradle: string): 
       sources,
       new Set(),
       androidActivityBases,
+      true,
     );
     if (!validActivity) {
       throw new Error(
@@ -894,6 +897,7 @@ function assertAndroidApplicationClasses(
       sources,
       new Set(),
       androidApplicationBases,
+      true,
     );
     if (!validApplication) {
       throw new Error(
@@ -909,6 +913,7 @@ function resolvesAndroidClass(
   sourceFiles: readonly string[],
   visited: Set<string>,
   bases: ReadonlySet<string>,
+  manifestClass = false,
 ): boolean {
   if (bases.has(qualified)) {
     return true;
@@ -932,10 +937,17 @@ function resolvesAndroidClass(
     if (declaredPackage !== packageName) {
       continue;
     }
-    const base = readTopLevelAndroidSuperclass(source, className);
-    if (base === undefined) {
+    const declaration = readTopLevelAndroidSuperclass(source, className);
+    if (declaration === undefined) {
       continue;
     }
+    if (manifestClass && (relative.endsWith('.java')
+      ? !/\bpublic\b/u.test(declaration.modifiers)
+        || /\babstract\b/u.test(declaration.modifiers)
+      : /\b(?:abstract|private|protected)\b/u.test(declaration.modifiers))) {
+      return false;
+    }
+    const base = declaration.base;
     const imported = [...source.matchAll(/\bimport\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)+)\s*;?/gu)]
       .map((match) => match[1] ?? '')
       .find((name) => name.endsWith(`.${base}`));
@@ -947,7 +959,10 @@ function resolvesAndroidClass(
   return false;
 }
 
-function readTopLevelAndroidSuperclass(source: string, className: string): string | undefined {
+function readTopLevelAndroidSuperclass(
+  source: string,
+  className: string,
+): { base: string; modifiers: string } | undefined {
   const expression = new RegExp(`\\bclass\\s+${className}\\b([^{};\\r\\n]*)(?:\\{|$)`, 'gmu');
   for (const match of source.matchAll(expression)) {
     let depth = 0;
@@ -958,8 +973,18 @@ function readTopLevelAndroidSuperclass(source: string, className: string): strin
       continue;
     }
     const header = match[1] ?? '';
-    return /\bextends\s+([A-Za-z_][\w.]*)/u.exec(header)?.[1]
+    const base = /\bextends\s+([A-Za-z_][\w.]*)/u.exec(header)?.[1]
       ?? /:\s*([A-Za-z_][\w.]*)\s*\(/u.exec(header)?.[1];
+    if (base === undefined) {
+      return undefined;
+    }
+    const before = source.slice(0, match.index);
+    const modifiers = before.slice(Math.max(
+      before.lastIndexOf('\n'),
+      before.lastIndexOf(';'),
+      before.lastIndexOf('}'),
+    ) + 1);
+    return { base, modifiers };
   }
   return undefined;
 }
@@ -1268,6 +1293,21 @@ function assertAppBuildPhaseInputs(nativeDirectory: string, project: string): Se
       throw new Error('Existing ios project App shell script build phases are unsupported.');
     }
     const isSources = /\bisa\s*=\s*PBXSourcesBuildPhase\s*;/u.test(phase);
+    if (/\bisa\s*=\s*PBXFrameworksBuildPhase\s*;/u.test(phase)) {
+      const linked = readPbxIds(phase, 'files').map((buildId) => {
+        const build = readPbxObjectBody(project, buildId);
+        return /\bfileRef\s*=\s*([A-F0-9]+)\b/u.exec(build)?.[1];
+      });
+      const otherProducts = [...project.matchAll(
+        /\b([A-F0-9]+)\s*(?:\/\*[^*]*\*\/)?\s*=\s*\{([^{}]*)\};/gu,
+      )].filter((match) => match[1] !== targetId
+        && /\bisa\s*=\s*PBXNativeTarget\s*;/u.test(match[2] ?? ''))
+        .map((match) => /\bproductReference\s*=\s*([A-F0-9]+)\b/u.exec(match[2] ?? '')?.[1]);
+      if (linked.some((reference) => reference !== undefined
+        && otherProducts.includes(reference))) {
+        throw new Error('Existing ios project implicit App target dependencies are unsupported.');
+      }
+    }
     if (!isSources && !/\bisa\s*=\s*PBXResourcesBuildPhase\s*;/u.test(phase)) {
       continue;
     }
@@ -2270,7 +2310,8 @@ function requireStaticCapacitorConfig(source: string): string {
   const identityKeysAreUnique = (['appId', 'appName', 'webDir'] as const).every((key) =>
     [...topLevelCode.matchAll(new RegExp(`\\b${key}\\b`, 'gu'))].length === 1,
   );
-  const hasComputedKey = /(?:\{|,)[ \t\n]*\[[^\]]*\][ \t\n]*:/u.test(topLevelCode);
+  const computedProperty = /(?:\{|,)[ \t\n]*(?:(?:get|set)[ \t\n]+)?\[[^\]]*\][ \t\n]*(?::|\()/u;
+  const hasComputedKey = computedProperty.test(topLevelCode);
   if (configUses !== 1 || topLevelCode.includes('...') || hasComputedKey
     || /\\u(?:[0-9a-fA-F]{4}|\{[0-9a-fA-F]+\})/u.test(topLevelCode)
     || !identityKeysAreUnique
@@ -2314,7 +2355,7 @@ function assertNoCapacitorServerUrl(source: string, code: string, topLevel: stri
         if (body.includes('...')
           || /\\u(?:[0-9a-fA-F]{4}|\{[0-9a-fA-F]+\})/u.test(body)
           || /(?:^|[,\s{])(?:get|set)\s+\w+\s*\(/u.test(body)
-          || /(?:^|[,\s{])\[[^\]]+\]\s*:/u.test(body)) {
+          || /(?:^|[,\s{])(?:(?:get|set)\s+)?\[[^\]]+\]\s*(?::|\()/u.test(body)) {
           throw new Error('Existing Capacitor config server field has dynamic properties.');
         }
         const bodyCode = code.slice(opening, index + 1);

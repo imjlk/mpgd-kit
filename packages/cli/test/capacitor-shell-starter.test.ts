@@ -505,6 +505,23 @@ try {
   writeFileSync(iosProjectFile, dependentScriptProject);
   assert.throws(() => planCapacitorShellStarter(options), /shell script build phases/u);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
+  const implicitScriptProject = iosProjectWithAppId('dev.example.puzzle').replace(
+    'buildPhases = (11111111 /* Sources */);',
+    'buildPhases = (11111111 /* Sources */, ABABABAB /* Frameworks */);',
+  ) + '\n' + [
+    'ABABABAB /* Frameworks */ = { isa = PBXFrameworksBuildPhase;',
+    'files = (BCBCBCBC /* Helper.framework in Frameworks */); };',
+    'BCBCBCBC /* Helper.framework in Frameworks */ = { isa = PBXBuildFile;',
+    'fileRef = CDCDCDCD /* Helper.framework */; };',
+    'EFEFEFEF /* Helper */ = { isa = PBXNativeTarget; name = Helper;',
+    'productReference = CDCDCDCD /* Helper.framework */;',
+    'buildPhases = (DEDEDEDE /* Script */); };',
+    'DEDEDEDE /* Script */ = { isa = PBXShellScriptBuildPhase;',
+    'shellScript = "echo hi"; };',
+  ].join('\n');
+  writeFileSync(iosProjectFile, implicitScriptProject);
+  assert.throws(() => planCapacitorShellStarter(options), /implicit App target dependencies/u);
+  writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
   const scriptedRuleProject = iosProjectWithAppId('dev.example.puzzle').replace(
     'buildPhases = (11111111 /* Sources */);',
     'buildPhases = (11111111 /* Sources */); buildRules = (ABABABAB /* Script */);',
@@ -537,6 +554,19 @@ try {
     () => planCapacitorShellStarter(options),
     /conditional Release Info.plist expansion/u,
   );
+  for (const setting of [
+    'INFOPLIST_PREPROCESS = YES;',
+    'INFOPLIST_PREPROCESSOR_DEFINITIONS = "Puzzle=Other";',
+    'INFOPLIST_PREFIX_HEADER = Prefix.h;',
+    'SKIP_INSTALL = YES;',
+  ]) {
+    const configured = iosProjectWithAppId('dev.example.puzzle').replace(
+      'INFOPLIST_FILE = App/Info.plist;',
+      `${setting} INFOPLIST_FILE = App/Info.plist;`,
+    );
+    writeFileSync(iosProjectFile, configured);
+    assert.throws(() => planCapacitorShellStarter(options), /Release .*unsupported|SKIP_INSTALL/u);
+  }
   const inheritedPlistExpansion = iosProjectWithAppId('dev.example.puzzle').replace(
     'DDDDDDDD /* Release */ = { isa = XCBuildConfiguration; buildSettings = {',
     'DDDDDDDD /* Release */ = { isa = XCBuildConfiguration; baseConfigurationReference = 12345678; buildSettings = { PRODUCT_NAME = App;',
@@ -850,6 +880,18 @@ try {
     'public class CustomApplication extends Application {}',
   ].join(' '));
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(customApplication, [
+    'package dev.example.puzzle;',
+    'import android.app.Application;',
+    'class CustomApplication extends Application {}',
+  ].join(' '));
+  assert.throws(() => planCapacitorShellStarter(options), /Application class.*invalid/u);
+  writeFileSync(customApplication, [
+    'package dev.example.puzzle;',
+    'import android.app.Application;',
+    'public abstract class CustomApplication extends Application {}',
+  ].join(' '));
+  assert.throws(() => planCapacitorShellStarter(options), /Application class.*invalid/u);
   writeFileSync(customApplication, 'package dev.example.puzzle; public class CustomApplication {}');
   assert.throws(() => planCapacitorShellStarter(options), /Application class.*invalid/u);
   unlinkSync(customApplication);
@@ -996,6 +1038,16 @@ try {
   writeFileSync(mainActivity, 'package dev.example.puzzle; // class MainActivity {}');
   assert.throws(() => planCapacitorShellStarter(options), /launcher class.*missing/u);
   writeFileSync(mainActivity, 'package dev.example.puzzle; public class MainActivity {}');
+  assert.throws(() => planCapacitorShellStarter(options), /not an Android Activity/u);
+  writeFileSync(mainActivity, [
+    'package dev.example.puzzle;',
+    'class MainActivity extends com.getcapacitor.BridgeActivity {}',
+  ].join(' '));
+  assert.throws(() => planCapacitorShellStarter(options), /not an Android Activity/u);
+  writeFileSync(mainActivity, [
+    'package dev.example.puzzle;',
+    'public abstract class MainActivity extends com.getcapacitor.BridgeActivity {}',
+  ].join(' '));
   assert.throws(() => planCapacitorShellStarter(options), /not an Android Activity/u);
   writeFileSync(mainActivity, [
     'package dev.example.puzzle;',
@@ -1291,6 +1343,24 @@ try {
   assert.throws(() => planCapacitorShellStarter(options), /Gradle task actions/u);
   writeFileSync(androidProjectFile, [
     'applicationId "dev.example.puzzle"',
+    'task clean(type: Delete) { delete rootProject.buildDir }',
+  ].join('\n'));
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
+    'task clean(type: Delete) {',
+    '  delete rootProject.buildDir',
+    '  file("src/main/res/values/strings.xml").text = "Other Game"',
+    '}',
+  ].join('\n'));
+  assert.throws(() => planCapacitorShellStarter(options), /Gradle task actions/u);
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
+    'task mutateInputs { file("src/main/res/values/strings.xml").text = "Other Game" }',
+  ].join('\n'));
+  assert.throws(() => planCapacitorShellStarter(options), /Gradle task actions/u);
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
     'tasks.matching { it.name == "preBuild" }.all {',
     '  file("src/main/res/values/strings.xml").text = "Other Game"',
     '}',
@@ -1399,6 +1469,12 @@ try {
   );
   writeFileSync(configFile, getterServer);
   assert.throws(() => planCapacitorShellStarter(options), /dynamic properties/u);
+  const computedServer = originalConfig.replace(
+    "server: { androidScheme: 'https' }",
+    "get [key]() { return { url: 'https://stale.example' }; }",
+  ).replace('const config =', "const key = 'server';\nconst config =");
+  writeFileSync(configFile, computedServer);
+  assert.throws(() => planCapacitorShellStarter(options), /ambiguous dynamic syntax/u);
   const escapedServer = originalConfig.replace(
     "server: { androidScheme: 'https' }",
     "s\\u0065rver: { url: 'https://stale.example' }",
