@@ -46,6 +46,7 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
+    "@googleapis/androidpublisher": "42.0.0",
     "@gunshi/plugin-completion": "^0.35.1",
     "@gunshi/plugin-i18n": "^0.35.1",
     "@gunshi/resources": "^0.35.1",

@@ -134,6 +134,13 @@ export {
 } from './release-state.js';
 
 export {
+  PlaySubmissionUncertainError,
+  submitVerifiedAndroidBundle,
+  type PlayInternalSubmissionInput,
+  type PlayInternalSubmissionResult,
+} from './play-internal-submission.js';
+
+export {
   createBrowserGameplayE2EDriver,
   type BrowserGameplayE2EInspectInput,
   type BrowserGameplayE2EPage,

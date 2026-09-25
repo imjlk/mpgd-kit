@@ -123,6 +123,7 @@
     "smoke:cli-android-signing": "node tools/run-ttsx.mjs packages/cli/src/android-signing-session.test.ts",
     "smoke:cli-release-state": "node tools/run-ttsx.mjs packages/cli/src/release-state.test.ts",
     "smoke:cli-ios-signing": "node tools/run-ttsx.mjs packages/cli/src/ios-keychain-import.test.ts && node tools/run-ttsx.mjs packages/cli/src/ios-signing-session.test.ts",
+    "smoke:cli-play-internal-submission": "node tools/run-ttsx.mjs adapters/play-publisher/src/play-internal-submission.test.ts",
     "smoke:cli-capacitor-shell-materialize": "node tools/run-ttsx.mjs tools/smoke/cli-capacitor-shell-materialize.ts",
     "smoke:native-packed-consumer": "node tools/smoke/native-packed-consumer.mjs",
     "smoke:native-cli-packed-consumer": "node tools/smoke/native-cli-packed-consumer.mjs",

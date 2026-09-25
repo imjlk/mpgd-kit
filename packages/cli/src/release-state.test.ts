@@ -9,6 +9,8 @@ import { assertReleaseManifest } from '@mpgd/release-manifest';
 import { formatMpgdReleaseId, type PlatformVersionLedger } from '@mpgd/target-config';
 
 import { recordNativeReleaseBuild, reserveNativeRelease } from './release-state.js';
+import { inspectAndroidBundleSigner } from './android-bundle-signer.js';
+import { createSignedAabFixture } from '../test/signed-aab-fixture.js';
 
 const fixture = mkdtempSync(path.join(tmpdir(), 'mpgd-release-state-test-'));
 const bare = path.join(fixture, 'remote.git');
@@ -310,7 +312,9 @@ process.exit(result.status ?? 1);
 
   const artifactFile = path.join(fixture, 'game.aab');
   const releaseManifestFile = path.join(fixture, 'release-manifest.json');
-  writeFileSync(artifactFile, 'signed candidate');
+  createSignedAabFixture(artifactFile);
+  const signedArtifactBytes = readFileSync(artifactFile);
+  const signerSha256 = await inspectAndroidBundleSigner(artifactFile);
   writeFileSync(releaseManifestFile, `${JSON.stringify({
     releaseId: formatMpgdReleaseId(first.plan.releaseLabel, first.plan.buildId),
     gitSha: first.plan.sourceGitSha,
@@ -360,7 +364,7 @@ process.exit(result.status ?? 1);
     releaseManifestFile,
     expectedReleaseManifestSha256: sha256(releaseManifestFile),
     inspectedAppId: 'dev.mpgd.alpha',
-    inspectedSignerSha256: 'E'.repeat(64),
+    inspectedSignerSha256: signerSha256.toUpperCase(),
   };
   await assert.rejects(
     recordNativeReleaseBuild({ ...buildInput, kitPackageVersion: '  ' }),
@@ -380,9 +384,13 @@ process.exit(result.status ?? 1);
     /iconManifest|expected|property|target android is malformed/u,
   );
   writeFileSync(releaseManifestFile, validManifestBytes);
+  await assert.rejects(
+    recordNativeReleaseBuild({ ...buildInput, inspectedSignerSha256: 'f'.repeat(64) }),
+    /signer does not match/u,
+  );
   const built = await recordNativeReleaseBuild(buildInput);
   assert.match(built.record.artifactSha256, /^[a-f0-9]{64}$/u);
-  assert.equal(built.record.inspectedSignerSha256, 'e'.repeat(64));
+  assert.equal(built.record.inspectedSignerSha256, signerSha256);
   assert.equal(built.record.gameVersion, '1.0.0');
   assert.equal(built.record.platformVersion.versionCode, 41);
   const repeated = await recordNativeReleaseBuild(buildInput);
@@ -443,9 +451,9 @@ process.exit(result.status ?? 1);
   await assert.rejects(recordNativeReleaseBuild(buildInput), /differs from the verified build/u);
   await assert.rejects(
     recordNativeReleaseBuild({ ...buildInput, expectedArtifactSha256: sha256(artifactFile) }),
-    /cannot be replaced/u,
+    /signature|signer/u,
   );
-  writeFileSync(artifactFile, 'signed candidate');
+  writeFileSync(artifactFile, signedArtifactBytes);
   await assert.rejects(
     recordNativeReleaseBuild({ ...buildInput, buildRunId: 'different-build' }),
     /cannot be replaced/u,

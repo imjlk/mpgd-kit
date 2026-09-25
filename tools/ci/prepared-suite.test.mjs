@@ -7,9 +7,9 @@ import { preparedGroups, requiresTtsx, resolvePreparedScript } from './prepared-
 
 const packageJson = JSON.parse(readFileSync(resolve('package.json'), 'utf8'));
 
-test('prepared groups retain all 49 commands exactly once', () => {
+test('prepared groups retain all 50 commands exactly once', () => {
   const scripts = Object.values(preparedGroups).flat();
-  assert.equal(scripts.length, 49);
+  assert.equal(scripts.length, 50);
   assert.equal(new Set(scripts).size, scripts.length);
   assert.deepEqual(Object.keys(preparedGroups), ['contracts', 'cli', 'services']);
   for (const script of scripts) {

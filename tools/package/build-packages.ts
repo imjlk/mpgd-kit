@@ -87,9 +87,26 @@ for (const workspacePackage of sortByWorkspaceDependencies(packages)) {
       join(srcDir, 'ios-keychain-import.swift'),
       join(distDir, 'ios-keychain-import.swift'),
     );
+    buildPlayPublisherAdapter(distDir);
     buildPackagedNativeTarget(workspacePackage, distDir);
   }
   console.log(`Built ${workspacePackage.name}`);
+}
+
+function buildPlayPublisherAdapter(distDir: string): void {
+  const output = join(distDir, 'play-sdk-adapter.js');
+  const result = buildSync({
+    entryPoints: [join('adapters', 'play-publisher', 'src', 'index.ts')],
+    outfile: output,
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    packages: 'external',
+    metafile: true,
+  });
+  if (result.metafile.outputs[output] === undefined) {
+    throw new Error('Packaged Google Play adapter is missing.');
+  }
 }
 
 function buildPackagedNativeTarget(workspacePackage: WorkspacePackage, distDir: string): void {
