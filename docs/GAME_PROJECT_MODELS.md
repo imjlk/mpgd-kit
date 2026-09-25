@@ -149,11 +149,11 @@ Existing workspace-root package dependencies are not rewritten on behalf of
 other games. The command does not install packages, commit, allocate versions,
 change platform SDKs, or deploy.
 
-After applying, install with the updated frozen lockfiles, select a clean
-released Kit checkout whose CLI version matches the game's new exact pin, and
-run the relevant game checks, target build/smoke, and release dry-run. A peer
-range warning still requires inspection of the resolved version; the command
-does not claim that registry metadata alone certifies a native target.
+After applying, install with the updated frozen lockfiles and select a clean
+released Kit checkout matching the CLI version resolved in the refreshed
+lockfile. Then run the relevant game checks, target build/smoke, and release
+dry-run. A peer range warning still requires inspection of the resolved version;
+the command does not claim that registry metadata alone certifies a native target.
 
 ## Kit Contributor Checkout
 

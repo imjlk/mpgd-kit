@@ -112,6 +112,7 @@ export async function planKitUpgrade(
   }
 
   const updates: KitUpgradeUpdate[] = [];
+  const peerSubjects: KitUpgradeUpdate[] = [];
   for (const manifest of manifests) {
     const parsed = parsedManifests.get(manifest);
     if (parsed === undefined) {
@@ -131,20 +132,27 @@ export async function planKitUpgrade(
           notes.push(
             'Kept ' + name + ' in ' + manifest + ': current version is newer than npm latest.',
           );
-        } else if (compare(published.version, current.version) > 0) {
-          updates.push({
+        } else {
+          const next = compare(published.version, current.version) > 0
+            ? current.prefix + published.version
+            : value;
+          const subject: KitUpgradeUpdate = {
             manifest,
             section,
             packageName: name,
             current: value,
-            next: current.prefix + published.version,
+            next,
             latestVersion: published.version,
-          });
+          };
+          peerSubjects.push(subject);
+          if (next !== value) {
+            updates.push(subject);
+          }
         }
       }
     }
   }
-  validatePeers(updates, packages, parsedManifests, gameManifest, blockers, notes);
+  validatePeers(peerSubjects, updates, packages, parsedManifests, gameManifest, blockers, notes);
   const { lockfileDigests, workspaceRoots } = discoverLockfiles(
     gameRoot,
     manifests,
@@ -425,6 +433,7 @@ function discoverLockfiles(
 }
 
 function validatePeers(
+  subjects: readonly KitUpgradeUpdate[],
   updates: readonly KitUpgradeUpdate[],
   packages: ReadonlyMap<string, PublishedKitPackage>,
   manifests: ReadonlyMap<string, JsonObject>,
@@ -435,20 +444,20 @@ function validatePeers(
   const replacements = new Map(
     updates.map((update) => [update.manifest + '\0' + update.packageName, update.next]),
   );
-  for (const update of updates) {
-    const published = packages.get(update.packageName);
+  for (const subject of subjects) {
+    const published = packages.get(subject.packageName);
     const peers = published?.peerDependencies ?? {};
     const optionalPeers = new Set(published?.optionalPeerDependencies ?? []);
     for (const [peerName, range] of Object.entries(peers)) {
       if (validRange(range) === null) {
-        blockers.push('Invalid published peer range for ' + update.packageName + ': '
+        blockers.push('Invalid published peer range for ' + subject.packageName + ': '
           + peerName + ' ' + range);
         continue;
       }
-      const owner = findPeerOwner(manifests, update.manifest, gameManifest, peerName);
+      const owner = findPeerOwner(manifests, subject.manifest, gameManifest, peerName);
       if (owner === undefined) {
         if (!optionalPeers.has(peerName)) {
-          notes.push(update.packageName + ' requires peer ' + peerName + ' ' + range
+          notes.push(subject.packageName + ' requires peer ' + peerName + ' ' + range
             + '; no direct version was declared. Check the resolved lockfile.');
         }
         continue;
@@ -457,23 +466,23 @@ function validatePeers(
       const parsed = parseVersionSpecifier(specifier);
       if (parsed !== undefined) {
         if (!intersects(specifier, range)) {
-          blockers.push(update.packageName + '@' + update.latestVersion + ' requires '
+          blockers.push(subject.packageName + '@' + subject.latestVersion + ' requires '
             + peerName + ' ' + range + ', incompatible with ' + specifier + '.');
         } else if (!satisfies(parsed.version, range)) {
-          notes.push(update.packageName + ' peer ' + peerName + ' requires ' + range
+          notes.push(subject.packageName + ' peer ' + peerName + ' requires ' + range
             + '; confirm the installed version selected by ' + specifier + '.');
         }
       } else if (validRange(specifier) !== null && !intersects(specifier, range)) {
-        blockers.push(update.packageName + '@' + update.latestVersion + ' requires '
+        blockers.push(subject.packageName + '@' + subject.latestVersion + ' requires '
           + peerName + ' ' + range + ', incompatible with ' + specifier + '.');
       } else if (validRange(specifier) !== null) {
         const minimum = minVersion(specifier);
         if (minimum !== null && !satisfies(minimum, range)) {
-          notes.push(update.packageName + ' peer ' + peerName + ' requires ' + range
+          notes.push(subject.packageName + ' peer ' + peerName + ' requires ' + range
             + '; verify the resolved version inside ' + specifier + '.');
         }
       } else {
-        notes.push('Could not verify peer ' + peerName + ' for ' + update.packageName
+        notes.push('Could not verify peer ' + peerName + ' for ' + subject.packageName
           + ' from specifier ' + specifier + '.');
       }
     }

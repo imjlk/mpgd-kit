@@ -190,6 +190,21 @@ try {
     dependencies: { '@capacitor/core': '8.5.1' },
   });
 
+  const unchangedPeerLookup: LatestKitPackageLookup = async (name, directory) => {
+    const published = await lookup(name, directory);
+    return name === '@mpgd/target-config'
+      ? {
+          version: '0.15.2',
+          peerDependencies: { '@mpgd/adapter-browser': '^0.7.0' },
+        }
+      : published;
+  };
+  const unchangedPeerConflict = await planKitUpgrade(game, unchangedPeerLookup);
+  assert.ok(
+    unchangedPeerConflict.blockers.some((issue) => issue.includes('@mpgd/adapter-browser')),
+  );
+  assert.throws(() => applyKitUpgrade(unchangedPeerConflict), /blocked/);
+
   const failed = await planKitUpgrade(game, lookup);
   assert.throws(
     () =>
