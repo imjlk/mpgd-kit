@@ -13,9 +13,20 @@ const fixture = mkdtempSync(path.join(tmpdir(), 'mpgd-release-state-test-'));
 const bare = path.join(fixture, 'remote.git');
 const game = path.join(fixture, 'game');
 const stateObject = 'refs/heads/release-state:mpgd-release-state.json';
+const gitEnvironment = { ...process.env };
+for (const name of [
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_INDEX_FILE',
+  'GIT_COMMON_DIR',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+]) {
+  delete gitEnvironment[name];
+}
 
 function git(args: readonly string[], cwd: string): string {
-  const result = spawnSync('git', [...args], { cwd, encoding: 'utf8' });
+  const result = spawnSync('git', [...args], { cwd, encoding: 'utf8', env: gitEnvironment });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim();
 }
@@ -222,7 +233,10 @@ process.exit(result.status ?? 1);
     sourceGitSha: nextGameSha,
     initialLedger: undefined,
   });
-  assert.equal(secondPush.plan.targets.android?.versionCode, 46);
+  assert.equal(
+    secondPush.plan.targets.android?.versionCode,
+    Number(pushedSeparately.plan.targets.android?.versionCode) + 1,
+  );
   assert.equal(git(['rev-parse', 'refs/heads/release-state'], pushOrigin), secondPush.stateCommit);
   git(['config', 'remote.origin.url', bare], game);
   git(['config', '--unset', 'remote.origin.pushurl'], game);
