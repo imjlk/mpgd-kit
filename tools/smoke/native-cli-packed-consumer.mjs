@@ -161,6 +161,7 @@ try {
     gameRoot, 'node_modules/@mpgd/cli/dist/native-build-info.json',
   ), 'utf8'));
   assert.match(installedInfo.kitGitSha, /^[0-9a-f]{40}$/u);
+  assert.equal(installedInfo.kitDirty, false, 'packed native builds require a clean Kit commit');
   assert.equal(existsSync(join(gameRoot, '.mpgd.targets.generated.json')), true);
 
   const invalidTargets = JSON.parse(readFileSync(join(gameRoot, 'mpgd.targets.json'), 'utf8'));

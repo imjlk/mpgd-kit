@@ -134,12 +134,17 @@ function buildPackagedNativeTarget(workspacePackage: WorkspacePackage, distDir: 
   if (!/^[0-9a-f]{40}$/u.test(kitGitSha)) {
     throw new Error('Package build requires a full Kit Git SHA.');
   }
+  const worktreeStatus = execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim();
   const packageVersion = workspacePackage.packageJson.version;
   if (packageVersion === undefined) {
     throw new Error('@mpgd/cli package version is missing.');
   }
   writeFileSync(join(distDir, 'native-build-info.json'), `${JSON.stringify({
     kitGitSha,
+    kitDirty: worktreeStatus.length > 0,
     packageVersion,
   }, null, 2)}\n`);
 }

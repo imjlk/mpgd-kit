@@ -45,6 +45,8 @@ Capacitor shell, runs an unsigned iOS `sync` build, and checks its manifest
 and artifact. These are local release-acceptance commands, not part of every
 PR's prepared suite because tarball installation and Capacitor setup use the
 registry and take longer than contract tests. The packed CLI still requires
+the Kit package to have been built from a clean commit; a dirty package is
+marked in its build metadata and refused for native target builds. It also requires
 the game to own its native shell, target config, catalog, placements, and
 platform toolchain; `mpgd target init capacitor` creates the shell. To use
 the installed builder, omit `--kit-path` and `MPGD_KIT_PATH`, then run

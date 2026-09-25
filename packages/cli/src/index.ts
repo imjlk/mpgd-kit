@@ -3458,8 +3458,14 @@ function resolveStandaloneNativeBuild(
   assertJsonObject(info, 'native builder package metadata');
   if (info.packageVersion !== cliVersion
     || typeof info.kitGitSha !== 'string'
-    || !/^[0-9a-f]{40}$/u.test(info.kitGitSha)) {
+    || !/^[0-9a-f]{40}$/u.test(info.kitGitSha)
+    || typeof info.kitDirty !== 'boolean') {
     throw new Error('The installed native builder metadata does not match @mpgd/cli.');
+  }
+  if (info.kitDirty) {
+    throw new Error(
+      'The installed native builder was packaged from a dirty Kit worktree and cannot provide reliable kitGitSha provenance.',
+    );
   }
   return {
     kitGitSha: info.kitGitSha,

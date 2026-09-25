@@ -1,4 +1,5 @@
 import './native-build-mode.test';
+import './native-command-launcher.test';
 import './native-build-attempt.test';
 import './native-build-stage.test';
 import './native-android-inspection.test';

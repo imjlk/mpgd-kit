@@ -40,6 +40,7 @@ import { wechatStagingAppId, writeWechatMiniGameProjectFiles } from './minigame-
 import { normalizeMonetizationCatalogEnv } from './monetization-catalog-env';
 import { beginNativeBuildAttempt } from './native-build-attempt';
 import { executeNativeTargetBuild } from './native-build-execution';
+import { resolveNativeCommandLaunch } from './native-command-launcher';
 import { resolveNativeBuildPlan } from './native-build-mode';
 import {
   appTargetForPlatformTarget,
@@ -843,10 +844,12 @@ function run(
   commandEnv: NodeJS.ProcessEnv,
   cwd = process.cwd(),
 ): void {
-  const result = spawnSync(command, [...args], {
+  const launch = resolveNativeCommandLaunch({ command, args, environment: commandEnv });
+  const result = spawnSync(launch.command, [...launch.args], {
     cwd,
     stdio: 'inherit',
     env: commandEnv,
+    shell: launch.shell ?? false,
   });
 
   if (result.error !== undefined) {
