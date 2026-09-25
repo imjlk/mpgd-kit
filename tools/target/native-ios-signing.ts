@@ -37,6 +37,10 @@ export function resolveIosSigningPlan(
     ...(identity === undefined || identity === '' ? [] : [`CODE_SIGN_IDENTITY=${identity}`]),
     ...(profile === undefined || profile === ''
       ? [] : [`PROVISIONING_PROFILE_SPECIFIER=${profile}`]),
+    ...(environment.MPGD_IOS_SIGNING_KEYCHAIN === undefined
+      ? [] : [`OTHER_CODE_SIGN_FLAGS=--keychain ${JSON.stringify(
+        environment.MPGD_IOS_SIGNING_KEYCHAIN,
+      )}`]),
   ];
 
   if (mode !== 'store-export') {

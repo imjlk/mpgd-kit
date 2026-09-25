@@ -1,0 +1,112 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+const fixture = mkdtempSync(path.join(tmpdir(), 'mpgd-ios-keychain-test-'));
+const swiftFile = path.resolve('packages/cli/src/ios-keychain-import.swift');
+const keychain = path.join(fixture, 'upload-signing.keychain-db');
+const certificate = path.join(fixture, 'certificate.pem');
+const privateKey = path.join(fixture, 'private-key.pem');
+const pkcs12 = path.join(fixture, 'signing.p12');
+const pkcs12Password = randomBytes(24).toString('hex');
+const keychainPassword = randomBytes(24).toString('hex');
+
+function run(command: string, args: readonly string[], environment = process.env): string {
+  const result = spawnSync(command, [...args], {
+    cwd: fixture,
+    env: environment,
+    encoding: 'utf8',
+    timeout: 120_000,
+    maxBuffer: 1024 * 1024,
+  });
+  assert.equal(result.status, 0, `${command} failed: ${result.stderr}`);
+  return result.stdout;
+}
+
+try {
+  run('openssl', [
+    'req',
+    '-x509',
+    '-newkey',
+    'rsa:2048',
+    '-nodes',
+    '-days',
+    '2',
+    '-subj',
+    '/CN=mpgd-throwaway-signing',
+    '-keyout',
+    privateKey,
+    '-out',
+    certificate,
+  ]);
+  run(
+    'openssl',
+    [
+      'pkcs12',
+      '-export',
+      '-in',
+      certificate,
+      '-inkey',
+      privateKey,
+      '-out',
+      pkcs12,
+      '-passout',
+      'env:MPGD_TEST_P12_PASSWORD',
+    ],
+    { ...process.env, MPGD_TEST_P12_PASSWORD: pkcs12Password },
+  );
+  const searchListBefore = run('security', ['list-keychains', '-d', 'user']);
+  const defaultCertificateBefore = spawnSync(
+    'security',
+    ['find-certificate', '-a', '-c', 'mpgd-throwaway-signing', '-p'],
+    { encoding: 'utf8' },
+  ).stdout;
+  const environment = {
+    ...process.env,
+    MPGD_IOS_SESSION_KEYCHAIN: keychain,
+    MPGD_IOS_SESSION_KEYCHAIN_PASSWORD: keychainPassword,
+    MPGD_IOS_SIGNING_P12: pkcs12,
+    MPGD_IOS_SIGNING_P12_PASSWORD: pkcs12Password,
+  };
+  const response = JSON.parse(run('swift', [swiftFile], environment)) as {
+    readonly certificateSha256: string;
+    readonly certificateSha1: string;
+  };
+  assert.match(response.certificateSha256, /^[0-9A-F]{64}$/u);
+  assert.match(response.certificateSha1, /^[0-9A-F]{40}$/u);
+  assert.equal(existsSync(keychain), true);
+  assert.match(
+    run('security', ['find-certificate', '-a', '-c', 'mpgd-throwaway-signing', '-p', keychain]),
+    /BEGIN CERTIFICATE/u,
+  );
+  assert.equal(
+    run('security', ['find-identity', keychain]).toUpperCase()
+      .includes(response.certificateSha1),
+    true,
+    'Imported SHA-1 identity was not listed in its keychain.',
+  );
+  const partition = spawnSync(
+    'security',
+    ['set-key-partition-list', '-S', 'apple:', '-s', keychain],
+    { encoding: 'utf8', input: `${keychainPassword}\n`, timeout: 10_000 },
+  );
+  assert.equal(partition.status, 0, partition.stderr);
+  const isolatedHome = { ...process.env, HOME: fixture };
+  mkdirSync(path.join(fixture, 'Library', 'Preferences'), { recursive: true });
+  run('security', ['list-keychains', '-d', 'user', '-s', keychain], isolatedHome);
+  const isolatedList = run('security', ['list-keychains', '-d', 'user'], isolatedHome);
+  assert.equal(isolatedList.includes(keychain), true, `Isolated list: ${isolatedList}`);
+  assert.equal(run('security', ['list-keychains', '-d', 'user']), searchListBefore);
+  const defaultCertificateAfter = spawnSync(
+    'security',
+    ['find-certificate', '-a', '-c', 'mpgd-throwaway-signing', '-p'],
+    { encoding: 'utf8' },
+  ).stdout;
+  assert.equal(defaultCertificateAfter, defaultCertificateBefore);
+  console.info('Isolated iOS keychain import passed with a throwaway P12.');
+} finally {
+  rmSync(fixture, { recursive: true, force: true });
+}
