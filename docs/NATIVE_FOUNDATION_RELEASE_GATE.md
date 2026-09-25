@@ -50,8 +50,12 @@ platform toolchain; `mpgd target init capacitor` creates the shell. To use
 the installed builder, omit `--kit-path` and `MPGD_KIT_PATH`, then run
 `mpgd target build ios staging --targets-file mpgd.targets.json` (or
 `android`). Production native builds require an explicit build mode and
-release identity/signing configuration. A CLI tarball alone does not provide
-credentials or prove that a store submission or device run succeeded.
+release identity/signing configuration. The installed builder cannot run the
+Kit checkout's `validate:*` scripts or rebuild Kit workspace packages, so its
+target, icon, readiness, identity, and artifact checks must not be mistaken
+for a complete deployment doctor; standalone diagnostics are a separate
+deployment step. A CLI tarball alone does not provide credentials or prove
+that a store submission or device run succeeded.
 
 ## Native target and release checks
 
