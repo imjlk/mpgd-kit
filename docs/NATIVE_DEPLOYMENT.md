@@ -97,3 +97,26 @@ The install explicitly includes development dependencies because game build
 tools are normally declared there. The pinned child clears the parent CLI's
 argument override, and the installed target-config matrix must resolve inside
 the checkout along with the CLI itself.
+
+## Android upload signing session
+
+The CLI package now provides `withAndroidUploadSigningSession()` for the
+later deployment runner. The game supplies its upload keystore file, alias,
+store/key passwords, and expected upload certificate SHA-256; the Kit copies
+the key to a mode-0600 temporary file, verifies the certificate and private
+key with `keytool`, and removes the temporary key on success, failure, or
+cancellation. The source key is not changed. A temporary Gradle init script
+configures only the generated `:app` release build and reads passwords from
+the child environment, not from command arguments or committed build files.
+The existing `bundleRelease` builder and post-build AAB signer, app-ID, and
+version inspections remain the release gates; missing or mismatched signing
+inputs do not fall back to a debug key.
+
+The session is a programmatic foundation, not yet a `deploy run` command.
+The throwaway-key CI test validates key restoration, wrong passwords and
+certificate, cleanup, and Gradle configuration. After preparing the reference
+Android shell with `cap sync android`,
+`MPGD_TEST_ANDROID_GRADLE_SIGNING=bundle pnpm smoke:cli-android-signing`
+also builds an AAB and verifies its JAR signature and upload-certificate
+fingerprint with the throwaway key. Neither test is evidence that a game-owned
+key has signed a store-ready bundle or that Google Play accepted it.

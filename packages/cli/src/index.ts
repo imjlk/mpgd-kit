@@ -120,6 +120,11 @@ export {
 } from './release-workspace.js';
 
 export {
+  withAndroidUploadSigningSession,
+  type AndroidUploadSigningInput,
+} from './android-signing-session.js';
+
+export {
   createBrowserGameplayE2EDriver,
   type BrowserGameplayE2EInspectInput,
   type BrowserGameplayE2EPage,

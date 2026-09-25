@@ -748,6 +748,10 @@ jobs:
           mkdir -p apps/mobile-capacitor/www
           cp examples/phaser-starter/index.html apps/mobile-capacitor/www/index.html
           pnpm --dir apps/mobile-capacitor sync:android
+      - name: Verify throwaway upload signing against Gradle
+        run: pnpm smoke:cli-android-signing
+        env:
+          MPGD_TEST_ANDROID_GRADLE_SIGNING: '1'
       - name: Test Android native storage conformance
         working-directory: apps/mobile-capacitor/android
         run: ./gradlew :mpgd-capacitor-game-services:testDebugUnitTest
