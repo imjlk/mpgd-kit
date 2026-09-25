@@ -58,6 +58,7 @@ const androidManifestOpen = [
 const completeAndroidManifest = [
   androidManifestOpen,
   '<application android:label="@string/app_name" android:theme="@style/AppTheme">',
+  '<activity android:name="com.vendor.SdkActivity"/>',
   '<activity android:name=".MainActivity"><intent-filter>',
   '<action android:name="android.intent.action.MAIN"/>',
   '<category android:name="android.intent.category.LAUNCHER"/>',
@@ -117,6 +118,10 @@ try {
   );
   assert.throws(
     () => planCapacitorShellStarter({ ...options, displayName: 'Bad\ud800Name' }),
+    /invalid in native XML/u,
+  );
+  assert.throws(
+    () => planCapacitorShellStarter({ ...options, displayName: 'Bad\rName' }),
     /invalid in native XML/u,
   );
 
@@ -295,6 +300,15 @@ try {
   );
   assert.throws(() => planCapacitorShellStarter(options), /simulator Info.plist is malformed/u);
   writeFileSync(smokeInfo, originalSmoke);
+  writeFileSync(
+    smokeInfo,
+    originalSmoke.replace('<key>CFBundleIdentifier</key>', '<key> CFBundleIdentifier </key>'),
+  );
+  assert.throws(
+    () => planCapacitorShellStarter(options),
+    /simulator Info.plist CFBundleIdentifier/u,
+  );
+  writeFileSync(smokeInfo, originalSmoke);
   const invalidSmoke = originalSmoke.replace(
     '</dict></plist>',
     '<key>Extra</key><bogus/></dict></plist>',
@@ -378,6 +392,13 @@ try {
     () => planCapacitorShellStarter(options),
     /simulator Info.plist references SceneDelegate/u,
   );
+  const smokeWithoutScene = originalSmoke.replace(
+    '<key>UISceneDelegateClassName</key><string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>',
+    '',
+  );
+  writeFileSync(smokeInfo, smokeWithoutScene);
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(smokeInfo, originalSmoke);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
   renameSync(`${sceneDelegate}.saved`, sceneDelegate);
   const androidWrapper = path.join(root, 'apps/mobile-capacitor/android/gradlew');
@@ -419,6 +440,18 @@ try {
     () => planCapacitorShellStarter(options),
     /applied Gradle script changes identity/u,
   );
+  for (const mutation of [
+    'applicationId rootProject.ext.gameAppId',
+    'applicationId(project.findProperty("id"))',
+    'setApplicationId("dev.other.game")',
+    'versionCode(computeCode())',
+  ]) {
+    writeFileSync(capacitorGradle, mutation);
+    assert.throws(
+      () => planCapacitorShellStarter(options),
+      /applied Gradle script changes identity/u,
+    );
+  }
   const readOnlyGradle = 'println(android.defaultConfig.versionName)\nprintln("versionName")';
   writeFileSync(capacitorGradle, readOnlyGradle);
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
@@ -509,6 +542,22 @@ try {
     () => planCapacitorShellStarter(options),
     /manifest resource @style\/ReleaseTheme is missing/u,
   );
+  writeFileSync(releaseManifest, [
+    androidManifestOpen,
+    '<application><activity android:name=".MissingActivity"><intent-filter>',
+    '<action android:name="android.intent.action.MAIN"/>',
+    '<category android:name="android.intent.category.LAUNCHER"/>',
+    '</intent-filter></activity></application></manifest>',
+  ].join(''));
+  assert.throws(() => planCapacitorShellStarter(options), /launcher class.*missing/u);
+  const releaseActivity = path.join(
+    root,
+    'apps/mobile-capacitor/android/app/src/release/java/dev/example/puzzle/MissingActivity.java',
+  );
+  mkdirSync(path.dirname(releaseActivity), { recursive: true });
+  writeFileSync(releaseActivity, 'package dev.example.puzzle; public class MissingActivity {}');
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  unlinkSync(releaseActivity);
   unlinkSync(releaseManifest);
   const mainActivity = path.join(
     root,
@@ -529,12 +578,39 @@ try {
     /manifest resource @style\/AppTheme is missing/u,
   );
   renameSync(`${androidStyles}.saved`, androidStyles);
+  const nightValues = path.join(
+    root,
+    'apps/mobile-capacitor/android/app/src/main/res/values-night',
+  );
+  mkdirSync(nightValues, { recursive: true });
+  renameSync(androidStyles, path.join(nightValues, 'styles.xml'));
+  assert.throws(
+    () => planCapacitorShellStarter(options),
+    /manifest resource @style\/AppTheme is missing/u,
+  );
+  renameSync(path.join(nightValues, 'styles.xml'), androidStyles);
   writeFileSync(androidStyles, '<resources><!-- <style name="AppTheme" /> --></resources>');
   assert.throws(
     () => planCapacitorShellStarter(options),
     /manifest resource @style\/AppTheme is missing/u,
   );
   writeFileSync(androidStyles, '<resources><style name="AppTheme" /></resources>');
+  const mainStrings = path.join(
+    root,
+    'apps/mobile-capacitor/android/app/src/main/res/values/strings.xml',
+  );
+  const alternateStrings = path.join(
+    root,
+    'apps/mobile-capacitor/android/app/src/main/res/values/app.xml',
+  );
+  writeFileSync(mainStrings, '<resources/>');
+  writeFileSync(
+    alternateStrings,
+    '<resources><string name="app_name">Puzzle Game</string></resources>',
+  );
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  unlinkSync(alternateStrings);
+  writeFileSync(mainStrings, '<resources><string name="app_name">Puzzle Game</string></resources>');
   const iosInfo = path.join(root, 'apps/mobile-capacitor/ios/App/App/Info.plist');
   writeFileSync(
     iosInfo,
@@ -676,6 +752,9 @@ try {
   ].join('\n'));
   assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
   writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');
+  writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle" + ".beta"');
+  assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
+  writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');
   writeFileSync(androidProjectFile, [
     'applicationId "dev.example.puzzle"',
     'productFlavors { demo {} }',
@@ -715,6 +794,9 @@ try {
   renameSync(kotlinGradle, androidProjectFile);
   renameSync(kotlinSettings, groovySettings);
   renameSync(kotlinRootBuild, androidRootBuild);
+  writeFileSync(groovySettings, 'gradle.beforeProject { project -> project.version = 9 }');
+  assert.throws(() => planCapacitorShellStarter(options), /settings Gradle callbacks/u);
+  writeFileSync(groovySettings, "apply from: 'capacitor.settings.gradle'");
   writeFileSync(androidRootBuild, 'apply from: "variables.gradle"');
   writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');
   applyCapacitorShellStarter(withNativeProjects);
@@ -877,6 +959,9 @@ try {
     () => planCapacitorShellStarter({ ...options, backendUrl: 'https://localhost' }),
     /public HTTPS hostname/u,
   );
+  const expandedBackend = 'https://api.example.com/$API_VERSION';
+  const expandedBackendInput = { ...options, backendUrl: expandedBackend };
+  assert.throws(() => planCapacitorShellStarter(expandedBackendInput), /dotenv expansion/u);
   assert.throws(
     () => planCapacitorShellStarter({ ...options, appId: 'dev.example.my_game' }),
     /app ID/u,

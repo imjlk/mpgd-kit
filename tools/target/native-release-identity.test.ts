@@ -106,6 +106,18 @@ try {
     () => assertNativeReleaseIdentity(appliedIdentityInput),
     /identity override in applied Gradle script/u,
   );
+  for (const mutation of [
+    'applicationId rootProject.ext.gameAppId',
+    'applicationId(project.findProperty("id"))',
+    'setApplicationId("dev.other.game")',
+    'versionCode(computeCode())',
+  ]) {
+    writeFileSync(appliedIdentity, mutation);
+    assert.throws(
+      () => assertNativeReleaseIdentity(appliedIdentityInput),
+      /identity override in applied Gradle script/u,
+    );
+  }
   writeFileSync(appliedIdentity, 'versionCode 99');
   assert.throws(
     () => assertNativeReleaseIdentity(appliedIdentityInput),
@@ -127,12 +139,12 @@ try {
       'applicationId "dev.example.game" + ".beta"',
     ),
   );
-  assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /could not find/u);
+  assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /cannot read every/u);
   writeShellFiles(shellRoot);
   const originalGradle = readFileSync(groovy, 'utf8');
   const incrementedCode = originalGradle.replace('versionCode 42', 'versionCode 42 + 1');
   writeFileSync(groovy, incrementedCode);
-  assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /could not find/u);
+  assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /cannot read every/u);
   writeShellFiles(shellRoot);
   const androidRootBuild = join(shellRoot, 'android/build.gradle');
   const rootCallback = 'project(":app") { afterEvaluate { android.defaultConfig.versionName = "9.0.0" } }';
@@ -140,6 +152,24 @@ try {
   assert.throws(
     () => assertNativeReleaseIdentity(appliedIdentityInput),
     /root Gradle app callbacks/u,
+  );
+  writeShellFiles(shellRoot);
+  const androidSettings = join(shellRoot, 'android/settings.gradle');
+  writeFileSync(androidSettings, [
+    'include ":app"',
+    'gradle.beforeProject { project ->',
+    '  if (project.path == ":app") project.android.defaultConfig.versionName = "9.0.0"',
+    '}',
+  ].join('\n'));
+  assert.throws(
+    () => assertNativeReleaseIdentity(appliedIdentityInput),
+    /settings Gradle project callbacks/u,
+  );
+  writeShellFiles(shellRoot);
+  writeFileSync(groovy, `${readFileSync(groovy, 'utf8')}\nversionCode releaseCode\n`);
+  assert.throws(
+    () => assertNativeReleaseIdentity(appliedIdentityInput),
+    /cannot read every versionCode assignment/u,
   );
   writeShellFiles(shellRoot);
 
@@ -216,6 +246,21 @@ try {
     required: false,
     shellApp: shellRoot,
   };
+  const iosPlist = join(shellRoot, 'ios/App/App/Info.plist');
+  const originalPlist = readFileSync(iosPlist, 'utf8');
+  const invalidPlistIdentities: readonly [string, string, string][] = [
+    ['$(PRODUCT_BUNDLE_IDENTIFIER)', 'dev.other.game', 'CFBundleIdentifier'],
+    ['$(MARKETING_VERSION)', '9.0.0', 'CFBundleShortVersionString'],
+    ['$(CURRENT_PROJECT_VERSION)', '99', 'CFBundleVersion'],
+  ];
+  for (const [macro, literal, key] of invalidPlistIdentities) {
+    writeFileSync(iosPlist, originalPlist.replace(macro, literal));
+    assert.throws(
+      () => assertNativeReleaseIdentity(iosInput),
+      new RegExp(`Release Info.plist ${key}`, 'u'),
+    );
+  }
+  writeFileSync(iosPlist, originalPlist);
   for (const [key, invalid] of [
     ['PRODUCT_BUNDLE_IDENTIFIER', 'dev.other.game'],
     ['MARKETING_VERSION', '2.0.0'],
@@ -504,24 +549,35 @@ try {
 function writeShellFiles(root: string): void {
   const android = join(root, 'android/app/build.gradle');
   const androidRoot = join(root, 'android/build.gradle');
+  const androidSettings = join(root, 'android/settings.gradle');
   const ios = join(root, 'ios/App/App.xcodeproj/project.pbxproj');
+  const iosPlist = join(root, 'ios/App/App/Info.plist');
   mkdirSync(join(root, 'android/app'), { recursive: true });
   mkdirSync(join(root, 'ios/App/App.xcodeproj'), { recursive: true });
+  mkdirSync(join(root, 'ios/App/App'), { recursive: true });
   writeFileSync(
     android,
     `defaultConfig {\n  applicationId "dev.example.game"\n  versionCode 42\n  versionName "1.4.0"\n}\n`,
   );
   writeFileSync(androidRoot, '// Standard root Gradle build.\n');
+  writeFileSync(androidSettings, 'include ":app"\n');
+  writeFileSync(iosPlist, [
+    '<plist><dict>',
+    '<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>',
+    '<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>',
+    '<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>',
+    '</dict></plist>',
+  ].join(''));
   writeFileSync(
     ios,
-    `001 /* App */ = {\n  isa = PBXNativeTarget;\n  buildConfigurationList = 002 /* Build configuration list for PBXNativeTarget \"App\" */;\n  name = \"App\";\n};\n\n002 /* Build configuration list for PBXNativeTarget \"App\" */ = {\n  isa = XCConfigurationList;\n  buildConfigurations = (\n    003 /* Debug */,\n    004 /* Release */,\n  );\n};\n\n003 /* Debug */ = {\n  isa = XCBuildConfiguration;\n  buildSettings = {\n    PRODUCT_BUNDLE_IDENTIFIER = dev.example.game.debug;\n    MARKETING_VERSION = 1.4.0-debug;\n    CURRENT_PROJECT_VERSION = 7;\n  };\n};\n\n004 /* Release */ = {\n  isa = XCBuildConfiguration;\n  buildSettings = {\n    PRODUCT_BUNDLE_IDENTIFIER = dev.example.game;\n    MARKETING_VERSION = 1.4.0;\n    CURRENT_PROJECT_VERSION = 42;\n  };\n};\n\n005 /* ShareExtension */ = {\n  isa = PBXNativeTarget;\n  buildConfigurationList = 006 /* Build configuration list for PBXNativeTarget \"ShareExtension\" */;\n  name = ShareExtension;\n};\n\n006 /* Build configuration list for PBXNativeTarget \"ShareExtension\" */ = {\n  isa = XCConfigurationList;\n  buildConfigurations = (\n    007 /* Release */,\n  );\n};\n\n007 /* Release */ = {\n  isa = XCBuildConfiguration;\n  buildSettings = {\n    PRODUCT_BUNDLE_IDENTIFIER = dev.example.game.share;\n    MARKETING_VERSION = 9.9.9;\n    CURRENT_PROJECT_VERSION = 99;\n  };\n};\n`,
+    `001 /* App */ = {\n  isa = PBXNativeTarget;\n  buildConfigurationList = 002 /* Build configuration list for PBXNativeTarget \"App\" */;\n  name = \"App\";\n};\n\n002 /* Build configuration list for PBXNativeTarget \"App\" */ = {\n  isa = XCConfigurationList;\n  buildConfigurations = (\n    003 /* Debug */,\n    004 /* Release */,\n  );\n};\n\n003 /* Debug */ = {\n  isa = XCBuildConfiguration;\n  buildSettings = {\n    PRODUCT_BUNDLE_IDENTIFIER = dev.example.game.debug;\n    MARKETING_VERSION = 1.4.0-debug;\n    CURRENT_PROJECT_VERSION = 7;\n  };\n};\n\n004 /* Release */ = {\n  isa = XCBuildConfiguration;\n  buildSettings = {\n    PRODUCT_BUNDLE_IDENTIFIER = dev.example.game;\n    MARKETING_VERSION = 1.4.0;\n    CURRENT_PROJECT_VERSION = 42;\n    INFOPLIST_FILE = App/Info.plist;\n  };\n};\n\n005 /* ShareExtension */ = {\n  isa = PBXNativeTarget;\n  buildConfigurationList = 006 /* Build configuration list for PBXNativeTarget \"ShareExtension\" */;\n  name = ShareExtension;\n};\n\n006 /* Build configuration list for PBXNativeTarget \"ShareExtension\" */ = {\n  isa = XCBuildConfiguration;\n  buildSettings = {\n    PRODUCT_BUNDLE_IDENTIFIER = dev.example.game.share;\n    MARKETING_VERSION = 9.9.9;\n    CURRENT_PROJECT_VERSION = 99;\n  };\n};\n`,
   );
 }
 
 function writeIosInheritedReleaseSettings(root: string): void {
   writeFileSync(
     join(root, 'ios/App/App.xcodeproj/project.pbxproj'),
-    `001 /* App */ = {\n  isa = PBXNativeTarget;\n  buildConfigurationList = 002 /* Build configuration list for PBXNativeTarget \"App\" */;\n  name = \"App\";\n};\n\n002 /* Build configuration list for PBXNativeTarget \"App\" */ = {\n  isa = XCConfigurationList;\n  buildConfigurations = (\n    003 /* Release */,\n  );\n};\n\n003 /* Release */ = {\n  isa = XCBuildConfiguration;\n  buildSettings = {\n    PRODUCT_BUNDLE_IDENTIFIER = \"$(inherited)\";\n    MARKETING_VERSION = \"$(inherited)\";\n    CURRENT_PROJECT_VERSION = \"$(inherited)\";\n  };\n};\n\n004 /* Project object */ = {\n  isa = PBXProject;\n  buildConfigurationList = 005 /* Build configuration list for PBXProject \"App\" */;\n};\n\n005 /* Build configuration list for PBXProject \"App\" */ = {\n  isa = XCConfigurationList;\n  buildConfigurations = (\n    006 /* Release */,\n  );\n};\n\n006 /* Release */ = {\n  isa = XCBuildConfiguration;\n  buildSettings = {\n    PRODUCT_BUNDLE_IDENTIFIER = dev.example.game;\n    MARKETING_VERSION = 1.4.0;\n    CURRENT_PROJECT_VERSION = 42;\n  };\n};\n`,
+    `001 /* App */ = {\n  isa = PBXNativeTarget;\n  buildConfigurationList = 002 /* Build configuration list for PBXNativeTarget \"App\" */;\n  name = \"App\";\n};\n\n002 /* Build configuration list for PBXNativeTarget \"App\" */ = {\n  isa = XCConfigurationList;\n  buildConfigurations = (\n    003 /* Release */,\n  );\n};\n\n003 /* Release */ = {\n  isa = XCBuildConfiguration;\n  buildSettings = {\n    PRODUCT_BUNDLE_IDENTIFIER = \"$(inherited)\";\n    MARKETING_VERSION = \"$(inherited)\";\n    CURRENT_PROJECT_VERSION = \"$(inherited)\";\n    INFOPLIST_FILE = App/Info.plist;\n  };\n};\n\n004 /* Project object */ = {\n  isa = PBXProject;\n  buildConfigurationList = 005 /* Build configuration list for PBXProject \"App\" */;\n};\n\n005 /* Build configuration list for PBXProject \"App\" */ = {\n  isa = XCConfigurationList;\n  buildConfigurations = (\n    006 /* Release */,\n  );\n};\n\n006 /* Release */ = {\n  isa = XCBuildConfiguration;\n  buildSettings = {\n    PRODUCT_BUNDLE_IDENTIFIER = dev.example.game;\n    MARKETING_VERSION = 1.4.0;\n    CURRENT_PROJECT_VERSION = 42;\n  };\n};\n`,
   );
 }
 

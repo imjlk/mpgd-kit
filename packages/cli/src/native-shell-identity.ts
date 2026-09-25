@@ -13,7 +13,7 @@ export function assertNativeShellIdentity(
 
 function assertAndroidIdentity(source: string, expectedAppId: string): void {
   const clean = stripGradleComments(source);
-  const assignments = [...clean.matchAll(/\bapplicationId\s*(?:=\s*)?["']([^"']+)["']/gu)]
+  const assignments = [...clean.matchAll(/\bapplicationId\s*(?:=\s*)?["']([^"']+)["'](?=\s*(?:;|\r?\n|\}|$))/gu)]
     .map((match) => match[1]);
   const mentions = [...clean.matchAll(/\bapplicationId\b/gu)].length;
   if (assignments.length === 0 || assignments.length !== mentions
@@ -111,8 +111,13 @@ export function hasGradleIdentityMutation(source: string): boolean {
       masked += character;
     }
   }
-  return /\b(?:applicationId|applicationIdSuffix|versionCode|versionName|versionNameSuffix)\s*(?:\+?=|["'\d]|\.set\s*\()/u
-    .test(masked);
+  const setter = /\bset(?:ApplicationId|ApplicationIdSuffix|VersionCode|VersionName|VersionNameSuffix)\s*\(/u;
+  const field = '(?:applicationId|applicationIdSuffix|versionCode|versionName|versionNameSuffix)';
+  const assignment = new RegExp(
+    `\\b${field}(?:\\s*(?:\\+?=|\\(|["'\\d]|\\.set\\s*\\()|[ \\t]+[A-Za-z_$])`,
+    'u',
+  );
+  return setter.test(masked) || assignment.test(masked);
 }
 
 function assertIosAppIdentity(source: string, expectedAppId: string): void {

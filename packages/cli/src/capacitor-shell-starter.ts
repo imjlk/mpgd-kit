@@ -74,7 +74,7 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
   }
   for (const scalar of input.displayName) {
     const point = scalar.codePointAt(0) ?? 0;
-    if (point !== 0x9 && point !== 0xa && point !== 0xd
+    if (point !== 0x9 && point !== 0xa
       && !(point >= 0x20 && point <= 0xd7ff)
       && !(point >= 0xe000 && point <= 0xfffd)
       && !(point >= 0x10000 && point <= 0x10ffff)) {
@@ -555,9 +555,16 @@ function assertNativePlatformComplete(
     const rootSource = stripGradleComments(
       readFileSync(path.join(nativeDirectory, rootBuild), 'utf8'),
     );
+    const settingsSource = stripGradleComments(
+      readFileSync(path.join(nativeDirectory, settings), 'utf8'),
+    );
     if (/\b(?:afterEvaluate|projectsEvaluated)\b/u.test(rootSource)
       && /\b(?:project|subprojects|allprojects|android)\b/u.test(rootSource)) {
       throw new Error('Existing android project has unsupported root Gradle app callbacks.');
+    }
+    if (/\b(?:beforeProject|afterProject|beforeEvaluate|afterEvaluate|projectsEvaluated)\b/u
+      .test(settingsSource)) {
+      throw new Error('Existing android project has unsupported settings Gradle callbacks.');
     }
     const visited = new Set<string>();
     for (const script of [rootBuild, settings, required]) {
@@ -606,19 +613,22 @@ function assertNativePlatformComplete(
       throw new Error('Existing ios project Release Info.plist is missing or unsafe.');
     }
     assertReferencedIosFiles(nativeDirectory, content, infoRelative);
-    if (!isNativeFile(nativeDirectory, 'App/App/SceneDelegate.swift')) {
-      throw new Error('Existing ios project simulator Info.plist references SceneDelegate.swift.');
-    }
     assertNativeDisplayName(nativeDirectory, platform, expectedDisplayName, infoRelative);
     const smokeRelative = 'App/App/Info-Smoke.plist';
     if (existsSync(path.join(nativeDirectory, smokeRelative))) {
       if (!isNativeFile(nativeDirectory, smokeRelative)) {
         throw new Error('Existing ios project simulator Info.plist is unsafe.');
       }
-      assertSmokeInfoPlist(
-        readFileSync(path.join(nativeDirectory, smokeRelative), 'utf8'),
-        expectedDisplayName,
-      );
+      const smoke = readFileSync(path.join(nativeDirectory, smokeRelative), 'utf8');
+      assertSmokeInfoPlist(smoke, expectedDisplayName);
+      if (referencesSceneDelegate(smoke)
+        && !isNativeFile(nativeDirectory, 'App/App/SceneDelegate.swift')) {
+        throw new Error(
+          'Existing ios project simulator Info.plist references SceneDelegate.swift.',
+        );
+      }
+    } else if (!isNativeFile(nativeDirectory, 'App/App/SceneDelegate.swift')) {
+      throw new Error('Generated ios simulator Info.plist references SceneDelegate.swift.');
     }
   } else {
     if (/\bproductFlavors\b/u.test(stripGradleComments(content))) {
@@ -631,24 +641,31 @@ function assertNativePlatformComplete(
 }
 
 function assertAndroidLauncherClasses(nativeDirectory: string, gradle: string): void {
-  const manifest = readFileSync(
+  const application = readAndroidApplication(
     path.join(nativeDirectory, 'app/src/main/AndroidManifest.xml'),
-    'utf8',
-  ).replace(/<!--[\s\S]*?-->/gu, '');
+  );
+  if (application === undefined) {
+    throw new Error('Existing android project launcher activity is missing.');
+  }
+  const manifestRoot = application.parentNode as Element | null;
+  const manifestPackage = manifestRoot?.getAttribute('package');
   const namespace = /\bnamespace\s*(?:=\s*)?["']([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)+)["']/u
     .exec(stripGradleComments(gradle))?.[1]
-    ?? /<manifest\b[^>]*\bpackage\s*=\s*["']([^"']+)["']/u.exec(manifest)?.[1];
-  const launchers = [...manifest.matchAll(/<(activity|activity-alias)\b([^>]*)>([\s\S]*?)<\/\1>/gu)]
-    .filter((match) => /android\.intent\.action\.MAIN/u.test(match[3] ?? '')
-      && /android\.intent\.category\.LAUNCHER/u.test(match[3] ?? ''));
+    ?? (manifestPackage === null || manifestPackage === '' ? undefined : manifestPackage);
+  const releaseFile = path.join(nativeDirectory, 'app/src/release/AndroidManifest.xml');
+  const release = existsSync(releaseFile) ? readAndroidApplication(releaseFile, false) : undefined;
+  const launchers = [
+    ...readAndroidLaunchers(application).map((element) => ({ element, release: false })),
+    ...(release === undefined ? [] : readAndroidLaunchers(release)
+      .map((element) => ({ element, release: true }))),
+  ];
   if (launchers.length === 0) {
     throw new Error('Existing android project launcher activity is missing.');
   }
-  for (const launcher of launchers) {
-    const attributes = launcher[2] ?? '';
-    const attribute = launcher[1] === 'activity-alias' ? 'targetActivity' : 'name';
-    const name = new RegExp(`\\bandroid:${attribute}\\s*=\\s*["']([^"']+)["']`, 'u')
-      .exec(attributes)?.[1];
+  for (const { element: launcher, release: releaseLauncher } of launchers) {
+    const isAlias = launcher.tagName === 'activity-alias';
+    const attribute = isAlias ? 'android:targetActivity' : 'android:name';
+    const name = launcher.getAttribute(attribute) ?? undefined;
     if (name === undefined || (name.startsWith('.') || !name.includes('.'))
       && namespace === undefined) {
       throw new Error('Existing android project launcher class cannot be resolved.');
@@ -665,9 +682,11 @@ function assertAndroidLauncherClasses(nativeDirectory: string, gradle: string): 
     const className = qualified.slice(qualified.lastIndexOf('.') + 1);
     const packageName = qualified.slice(0, qualified.lastIndexOf('.'));
     const sourcePath = qualified.replaceAll('.', '/');
-    const candidates = ['java', 'kotlin'].flatMap((language) =>
-      ['java', 'kt'].map((extension) =>
-        `app/src/main/${language}/${sourcePath}.${extension}`));
+    const sourceSets = releaseLauncher ? ['main', 'release'] : ['main'];
+    const candidates = sourceSets.flatMap((sourceSet) =>
+      ['java', 'kotlin'].flatMap((language) =>
+        ['java', 'kt'].map((extension) =>
+          `app/src/${sourceSet}/${language}/${sourcePath}.${extension}`)));
     const found = candidates.some((relative) => {
       if (!isNativeFile(nativeDirectory, relative)) {
         return false;
@@ -806,6 +825,22 @@ function parsePlistDictionary(source: string, label: string): Map<string, Elemen
   return parsePlistEntries(dictionary, label);
 }
 
+/** Fail closed when a Release plist hardcodes values independently of Xcode build settings. */
+export function assertIosReleasePlistIdentity(source: string): void {
+  const values = parsePlistDictionary(source, 'Release');
+  const required: readonly [string, string][] = [
+    ['CFBundleIdentifier', '$(PRODUCT_BUNDLE_IDENTIFIER)'],
+    ['CFBundleShortVersionString', '$(MARKETING_VERSION)'],
+    ['CFBundleVersion', '$(CURRENT_PROJECT_VERSION)'],
+  ];
+  for (const [key, expected] of required) {
+    const value = values.get(key);
+    if (value?.tagName !== 'string' || value.textContent !== expected) {
+      throw new Error(`Existing ios project Release Info.plist ${key} differs or is missing.`);
+    }
+  }
+}
+
 function parsePlistEntries(dictionary: Element, label: string): Map<string, Element> {
   const children = childElements(dictionary);
   if (children.length % 2 !== 0 || hasNonWhitespaceText(dictionary)) {
@@ -815,7 +850,7 @@ function parsePlistEntries(dictionary: Element, label: string): Map<string, Elem
   for (let index = 0; index < children.length; index += 2) {
     const key = children[index];
     const value = children[index + 1];
-    const name = key?.textContent?.trim() ?? '';
+    const name = key?.textContent ?? '';
     if (key?.tagName !== 'key' || childElements(key).length > 0
       || value === undefined || name.length === 0
       || entries.has(name)) {
@@ -895,12 +930,17 @@ function assertReferencedIosFiles(nativeDirectory: string, project: string, info
     }
   }
   const info = readFileSync(path.join(nativeDirectory, infoRelative), 'utf8');
-  if (/UISceneDelegateClassName<\/key>\s*<string>[^<]*\.SceneDelegate<\/string>/u.test(info)
+  if (referencesSceneDelegate(info)
     && !isNativeFile(nativeDirectory, 'App/App/SceneDelegate.swift')) {
     throw new Error(
       'Existing ios project is incomplete; referenced SceneDelegate.swift is missing.',
     );
   }
+}
+
+function referencesSceneDelegate(source: string): boolean {
+  return /UISceneDelegateClassName<\/key>\s*<string>[^<]*\.SceneDelegate<\/string>/u
+    .test(source);
 }
 
 function assertAndroidManifestResources(nativeDirectory: string): void {
@@ -927,7 +967,7 @@ function assertAndroidManifestResources(nativeDirectory: string): void {
           return readdirSync(path.join(resourceRoot, folder)).some((file) =>
             file === `${name}.xml` || file.startsWith(`${name}.`));
         }
-        if (folder !== 'values' && !folder.startsWith('values-')) {
+        if (folder !== 'values') {
           return false;
         }
         return readdirSync(path.join(resourceRoot, folder)).some((file) =>
@@ -1019,15 +1059,15 @@ function assertNativeDisplayName(
   expectedDisplayName: string,
   iosInfoRelative?: string,
 ): void {
-  const relative = platform === 'android'
-    ? 'app/src/main/res/values/strings.xml'
-    : (iosInfoRelative ?? 'App/App/Info.plist');
-  if (!isNativeFile(nativeDirectory, relative)) {
+  const relative = iosInfoRelative ?? 'App/App/Info.plist';
+  if (platform === 'ios' && !isNativeFile(nativeDirectory, relative)) {
     throw new Error(
       `Existing ${platform} project is incomplete; native display name resource is missing.`,
     );
   }
-  const source = readFileSync(path.join(nativeDirectory, relative), 'utf8');
+  const source = platform === 'ios'
+    ? readFileSync(path.join(nativeDirectory, relative), 'utf8')
+    : '';
   const labels = platform === 'android'
     ? [readAndroidString(nativeDirectory, 'app_name')]
     : [parsePlistDictionary(source, 'Release').get('CFBundleDisplayName')]
@@ -1147,10 +1187,12 @@ function readAndroidString(nativeDirectory: string, key: string): string {
     ? readdirSync(overlay).filter((file) => file.endsWith('.xml'))
       .flatMap((file) => readAndroidValueResource(path.join(overlay, file), 'string', key))
     : [];
-  const mainFile = path.join(nativeDirectory, 'app/src/main/res/values/strings.xml');
-  const values = overlayValues.length > 0
-    ? overlayValues
-    : readAndroidValueResource(mainFile, 'string', key);
+  const main = path.join(nativeDirectory, 'app/src/main/res/values');
+  const mainValues = existsSync(main) && lstatSync(main).isDirectory()
+    ? readdirSync(main).filter((file) => file.endsWith('.xml'))
+      .flatMap((file) => readAndroidValueResource(path.join(main, file), 'string', key))
+    : [];
+  const values = overlayValues.length > 0 ? overlayValues : mainValues;
   if (values.length !== 1) {
     throw new Error('Existing android project application label resource is missing or ambiguous.');
   }
@@ -1280,6 +1322,9 @@ function assertCompatibleExistingPackage(
 }
 
 function normalizeBackendUrl(value: string): string {
+  if (value.includes('$')) {
+    throw new Error('Backend URL cannot contain dotenv expansion syntax.');
+  }
   let parsed: URL;
   try {
     parsed = new URL(value);

@@ -2,7 +2,11 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { isMpgdFinalSemVer } from '@mpgd/target-config';
-import { hasGradleIdentityMutation } from '../../packages/cli/src/native-shell-identity.js';
+import { assertIosReleasePlistIdentity } from '../../packages/cli/src/capacitor-shell-starter.js';
+import {
+  hasGradleIdentityMutation,
+  readIosReleaseInfoPlist,
+} from '../../packages/cli/src/native-shell-identity.js';
 
 import type { TargetReleaseMetadata } from './schemas';
 
@@ -123,9 +127,24 @@ function assertAndroidIdentity(file: string, expected: AndroidIdentity): void {
   const appIdPattern = new RegExp(`\\bapplicationId\\s*(?:=\\s*)?["']([^"']+)["']${end}`, 'u');
   const codePattern = new RegExp(`\\bversionCode\\s*(?:=\\s*)?(\\d+)${end}`, 'u');
   const namePattern = new RegExp(`\\bversionName\\s*(?:=\\s*)?["']([^"']+)["']${end}`, 'u');
-  assertSetting(source, appIdPattern, expected.packageId, file);
-  assertSetting(source, codePattern, expected.versionCode, file);
-  assertSetting(source, namePattern, expected.versionName, file);
+  assertAndroidSetting(source, 'applicationId', appIdPattern, expected.packageId, file);
+  assertAndroidSetting(source, 'versionCode', codePattern, expected.versionCode, file);
+  assertAndroidSetting(source, 'versionName', namePattern, expected.versionName, file);
+}
+
+function assertAndroidSetting(
+  source: string,
+  key: string,
+  expression: RegExp,
+  expected: string,
+  file: string,
+): void {
+  const mentions = [...source.matchAll(new RegExp(`\\b${key}\\b`, 'gu'))].length;
+  const values = readSettingValues(source, expression);
+  if (values.length !== mentions) {
+    throw new Error(`Native release preflight cannot read every ${key} assignment in ${file}.`);
+  }
+  assertSettingValues(values, expression, expected, file);
 }
 
 function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): void {
@@ -182,6 +201,20 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
     throw new Error('Native release preflight cannot resolve root Gradle app callbacks.');
   }
   inspect(rootFile);
+  const settingsFiles = ['settings.gradle', 'settings.gradle.kts']
+    .map((name) => join(androidRoot, name)).filter((file) => existsSync(file));
+  if (settingsFiles.length !== 1) {
+    throw new Error('Native release preflight requires one Android settings Gradle file.');
+  }
+  const settingsFile = settingsFiles[0] ?? '';
+  const settingsSource = stripComments(
+    readRequiredFile(settingsFile, 'Android settings Gradle file'),
+  );
+  if (/\b(?:beforeProject|afterProject|beforeEvaluate|afterEvaluate|projectsEvaluated)\b/u
+    .test(settingsSource)) {
+    throw new Error('Native release preflight cannot resolve settings Gradle project callbacks.');
+  }
+  inspect(settingsFile);
 }
 
 function assertIosIdentity(file: string, expected: IosIdentity): void {
@@ -190,10 +223,9 @@ function assertIosIdentity(file: string, expected: IosIdentity): void {
   assertIosSetting(releaseSettings, 'PRODUCT_BUNDLE_IDENTIFIER', expected.bundleId, file);
   assertIosSetting(releaseSettings, 'MARKETING_VERSION', expected.marketingVersion, file);
   assertIosSetting(releaseSettings, 'CURRENT_PROJECT_VERSION', expected.buildNumber, file);
-}
-
-function assertSetting(source: string, expression: RegExp, expected: string, file: string): void {
-  assertSettingValues(readSettingValues(source, expression), expression, expected, file);
+  const plistRelative = readIosReleaseInfoPlist(source);
+  const plist = join(dirname(dirname(file)), plistRelative);
+  assertIosReleasePlistIdentity(readRequiredFile(plist, 'iOS Release Info.plist'));
 }
 
 function assertIosSetting(
