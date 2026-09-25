@@ -224,6 +224,10 @@ fs.writeFileSync(manifest, JSON.stringify({
     'MPGD_PRODUCT_CATALOG_FILE',
     'MPGD_AD_PLACEMENTS_FILE',
     'MPGD_TARGET_CONFIG_EXTENSIONS_FILE',
+    'MPGD_RELEASE_MANIFEST_FILE',
+    'MPGD_EFFECTIVE_TARGET_CONFIG_OUTPUT_DIR',
+    'MPGD_ICON_MANIFEST_PATH',
+    'MPGD_ICON_MANIFEST_ARTIFACT_PATH',
   ]) {
     await assert.rejects(
       runPinnedNativeBuild(first, {

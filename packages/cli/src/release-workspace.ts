@@ -37,6 +37,15 @@ const sha256Pattern = /^[0-9a-f]{64}$/u;
 const defaultCloneTimeoutMs = 5 * 60_000;
 const defaultInstallTimeoutMs = 15 * 60_000;
 const defaultBuildTimeoutMs = 45 * 60_000;
+const pinnedNativeConfigOverrides = [
+  'MPGD_PRODUCT_CATALOG_FILE',
+  'MPGD_AD_PLACEMENTS_FILE',
+  'MPGD_TARGET_CONFIG_EXTENSIONS_FILE',
+  'MPGD_RELEASE_MANIFEST_FILE',
+  'MPGD_EFFECTIVE_TARGET_CONFIG_OUTPUT_DIR',
+  'MPGD_ICON_MANIFEST_PATH',
+  'MPGD_ICON_MANIFEST_ARTIFACT_PATH',
+] as const;
 
 /** Freeze a read-only deployment plan into the exact inputs used by a release run. */
 export async function pinNativeDeploymentPlan(
@@ -230,11 +239,7 @@ export async function runPinnedNativeBuild(
     MPGD_NATIVE_BUILD_MODE: input.mode,
     MPGD_SOURCE_GIT_SHA: workspace.input.gameGitSha,
   };
-  for (const name of [
-    'MPGD_PRODUCT_CATALOG_FILE',
-    'MPGD_AD_PLACEMENTS_FILE',
-    'MPGD_TARGET_CONFIG_EXTENSIONS_FILE',
-  ]) {
+  for (const name of pinnedNativeConfigOverrides) {
     if (environment[name] !== undefined && environment[name] !== '') {
       throw new Error(
         `Pinned native builds cannot use ${name}; use files committed inside the game checkout.`,

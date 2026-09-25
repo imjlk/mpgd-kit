@@ -66,7 +66,8 @@ and removes its temporary checkout when disposed. It is input/output
 isolation, not a sandbox for hostile build scripts. Signed store submissions
 and actual device evidence remain separate acceptance gates.
 
-Pinned builds reject inherited product catalog, ad placement, or target-config
-extension file overrides. Place these files in the committed game checkout so
-the build cannot read mutable files from the original working directory. A
+Pinned builds reject inherited catalog, ad placement, target-config extension,
+release-manifest, effective-config output, and icon-manifest path overrides.
+Place configuration files in the committed game checkout so the build cannot
+read or write through mutable paths in the original working directory. A
 build target and build profile must also match the pinned deployment plan.
