@@ -1,6 +1,14 @@
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 
 import typia from 'typia';
@@ -16,6 +24,7 @@ import {
 import {
   assertReleaseManifest,
   type ReleaseManifest,
+  type ReleaseNativeDelivery,
 } from '../../packages/release-manifest/src/index';
 import { adPlacementsFilePath, productCatalogFilePath } from '../catalog-paths';
 import { isCliEntrypoint, readJsonFile } from '../io';
@@ -26,6 +35,7 @@ import {
   type LoadedPlatformTargetsConfig,
 } from './platform-targets';
 import { loadTargetConfigMatrix } from './target-config-matrix';
+import { withReleaseManifestLock } from './release-manifest-lock';
 
 const assertProductCatalog = typia.createAssert<ProductCatalog>();
 const assertAdPlacements = typia.createAssert<AdPlacements>();
@@ -35,6 +45,7 @@ export interface GenerateReleaseManifestInput {
   readonly profile: string;
   readonly artifact: string;
   readonly iconManifestArtifactPath: string;
+  readonly nativeDelivery?: ReleaseNativeDelivery;
   readonly outputPath?: string;
 }
 
@@ -116,6 +127,7 @@ function generateReleaseManifestWithProvenance(
           digest: effectiveConfig.digest,
         },
         iconManifest,
+        ...(input.nativeDelivery === undefined ? {} : { nativeDelivery: input.nativeDelivery }),
         ...(input.target === 'ait'
           ? {
               appName: readOptionalString(process.env.MPGD_AIT_APP_NAME)
@@ -268,15 +280,20 @@ function writeReleaseManifestWithProvenance(
   const outputPath = input.outputPath ?? 'release-output/release-manifest.json';
   const platformTargets = loadPlatformTargetsConfig();
   const nextManifest = generateReleaseManifestWithProvenance(input, provenance, platformTargets);
-  const manifest = makeEffectiveConfigPathsPortable(
-    mergeManifest(outputPath, nextManifest),
-    platformTargets.baseDir,
-  );
-
-  mkdirSync(dirname(outputPath), { recursive: true });
-  writeFileSync(`${outputPath}`, `${JSON.stringify(manifest, null, 2)}\n`);
-
-  return manifest;
+  return withReleaseManifestLock(outputPath, () => {
+    const manifest = makeEffectiveConfigPathsPortable(
+      mergeManifest(outputPath, nextManifest),
+      platformTargets.baseDir,
+    );
+    const temporary = `${outputPath}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temporary, `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx' });
+      renameSync(temporary, outputPath);
+    } finally {
+      rmSync(temporary, { force: true });
+    }
+    return manifest;
+  });
 }
 
 function mergeManifest(outputPath: string, nextManifest: ReleaseManifest): ReleaseManifest {

@@ -51,6 +51,9 @@ jobs:
       - run: pnpm smoke:effective-config
       - run: pnpm smoke:adapter-effective-config
       - run: pnpm build:target android ${{ inputs.profile }}
+        env:
+          MPGD_NATIVE_BUILD_MODE: ${{ inputs.profile == 'production' && 'signed-archive' || 'unsigned-archive' }}
+          MPGD_ANDROID_UPLOAD_CERT_SHA256: ${{ secrets.MPGD_ANDROID_UPLOAD_CERT_SHA256 }}
       - run: pnpm smoke:target android
 
       - uses: actions/upload-artifact@v6

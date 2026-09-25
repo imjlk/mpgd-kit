@@ -111,6 +111,52 @@ The values are also captured in the release manifest. A mismatch fails before
 an artifact is produced; the target tool never silently rewrites a store
 identity.
 
+### Native build modes and submission evidence
+
+Set `MPGD_NATIVE_BUILD_MODE` explicitly for a production native build. Staging
+defaults to an unsigned Android AAB or an iOS Capacitor sync. Available modes
+are `sync` (iOS only), `debug` (Android APK), `simulator` (iOS app),
+`unsigned-archive`, `signed-archive`, and `store-export` (iOS IPA). A signed
+iOS archive is not yet an App Store export. Production rejects sync, debug,
+simulator, and unsigned modes. The older iOS smoke flags remain for staging
+only and cannot be combined with the new mode variable. Android sync packaging
+is rejected until its generated Gradle dependencies can be made portable.
+
+For a production Android AAB, configure the game-owned Gradle project's
+release signing from the build host, select `signed-archive`, and provide
+`bundletool` on `PATH` or set `MPGD_BUNDLETOOL_JAR`. Set
+`MPGD_ANDROID_UPLOAD_CERT_SHA256` to the expected upload certificate's SHA-256
+fingerprint (64 hex digits, optional colons). The tool verifies the emitted AAB
+signature and signer, then reads its package ID, version code, and version name
+from the bundle manifest. An unsigned or staging AAB is not a submission candidate.
+Keep the keystore and passwords out of the repository and build logs.
+
+For iOS, select `signed-archive` or `store-export` and set
+`MPGD_IOS_TEAM_ID`. Automatic signing is the default; manual signing also
+requires `MPGD_IOS_SIGNING_STYLE=Manual`, `MPGD_IOS_SIGNING_IDENTITY`, and
+`MPGD_IOS_PROVISIONING_PROFILE_SPECIFIER`. Store export requires a host-owned
+`MPGD_IOS_EXPORT_OPTIONS_PLIST` whose method is App Store distribution. The
+tool verifies the archived app and, for export, the IPA signature, team,
+bundle ID, marketing/build versions, release icons, and absence of smoke or
+live-reload configuration. Signing certificates and profiles stay in the host
+keychain; no credentials are copied into the game shell.
+
+The manual Android workflow selects `signed-archive` for production and reads
+the expected fingerprint from the `MPGD_ANDROID_UPLOAD_CERT_SHA256` repository
+secret. The manual iOS workflow exposes an explicit mode choice and reads
+`MPGD_IOS_TEAM_ID` from a repository secret. Neither workflow provisions a
+keystore, keychain identity, profile, or export-options file: configure those
+on the build host before attempting a signed release. Missing signing inputs
+fail the build rather than producing submission evidence.
+
+Each native build stages the web bundle and native shell independently, then
+writes a unique artifact path under `release-output/native/<target>/<profile>/`
+and a `nativeDelivery` record in the release manifest. The record distinguishes
+signed artifacts from store submission candidates; it does **not** mean a
+physical-device test or store acceptance. A new attempt marks the previous
+artifact stale for smoke verification, even if that attempt fails. Keep the
+game's release ledger and store submission/acceptance evidence separately.
+
 For Microsoft Store packages, keep the fourth component at `0` for
 Windows 10/11 compatibility and advance a permitted earlier component, for
 example `1.1.6.0` → `1.1.7.0`. This counter is linked to, but does not need to

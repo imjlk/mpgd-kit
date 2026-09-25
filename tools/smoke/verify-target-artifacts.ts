@@ -4,9 +4,14 @@ import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path
 import { isDeepStrictEqual } from 'node:util';
 import { Script } from 'node:vm';
 
-import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
+import {
+  assertReleaseManifest,
+  type ReleaseManifest,
+  type ReleaseNativeDelivery,
+} from '@mpgd/release-manifest';
 
 import { readJsonFile } from '../io';
+import { assertFreshNativeBuildArtifact } from '../target/native-build-attempt';
 import {
   createMicrosoftStorePwaRevision,
   readMicrosoftStorePwaReleaseEvidence,
@@ -62,6 +67,7 @@ interface SmokePlatformTargetsConfig {
 
 const releaseManifestFileEnv = 'MPGD_RELEASE_MANIFEST_FILE';
 const devvitIconMaximumBytes = 500 * 1024;
+const storeExportArtifactSuffix = '.ipa';
 
 const loadedPlatformTargets = loadSmokePlatformTargetsConfig();
 const configuredTargets = Object.keys(loadedPlatformTargets.config.targets);
@@ -87,6 +93,21 @@ export function verifyTargetArtifacts(
 
     if (entry.artifact.length === 0) {
       throw new Error(`Release manifest target ${target} has an empty artifact path.`);
+    }
+
+    if (targetConfig.kind === 'capacitor-android' || targetConfig.kind === 'capacitor-ios') {
+      const attempt = assertFreshNativeBuildArtifact(
+        loadedPlatformTargets.baseDir,
+        target,
+        entry.artifact,
+      );
+      if ((attempt !== undefined || entry.profile === 'production')
+        && entry.nativeDelivery === undefined) {
+        throw new Error(`Native target ${target} is missing build-mode evidence.`);
+      }
+      if (entry.nativeDelivery !== undefined) {
+        assertNativeDeliveryArtifact(target, targetConfig, entry);
+      }
     }
 
     const artifactPath = resolveArtifactPath(entry.artifact);
@@ -181,6 +202,44 @@ export function assertWebArtifactInstallability(
     assertNonInstallableWebArtifact(artifactPath);
   } else {
     assertInstallableWebArtifact(artifactPath);
+  }
+}
+
+function assertNativeDeliveryArtifact(
+  target: string,
+  config: SmokePlatformTargetConfig,
+  entry: ReleaseManifest['targets'][string],
+): void {
+  const delivery = entry.nativeDelivery;
+  if (delivery === undefined) {
+    return;
+  }
+  const platform = config.kind === 'capacitor-android' ? 'android' : 'ios';
+  if (delivery.platform !== platform) {
+    throw new Error(`Native target ${target} build platform does not match its configuration.`);
+  }
+  const expectedSuffix = nativeArtifactSuffixFor(delivery);
+  const matchesShape = delivery.mode === 'sync'
+    ? isCapacitorSyncArtifact(entry.artifact)
+    : entry.artifact.endsWith(expectedSuffix);
+  if (!matchesShape) {
+    throw new Error(`Native target ${target} artifact does not match its build mode.`);
+  }
+}
+
+function nativeArtifactSuffixFor(delivery: ReleaseNativeDelivery): string {
+  switch (delivery.mode) {
+    case 'sync':
+      return 'capacitor-sync';
+    case 'debug':
+      return '.apk';
+    case 'simulator':
+      return '.app';
+    case 'store-export':
+      return storeExportArtifactSuffix;
+    case 'unsigned-archive':
+    case 'signed-archive':
+      return delivery.platform === 'android' ? '.aab' : '.xcarchive';
   }
 }
 
@@ -358,13 +417,21 @@ function readReleaseIconManifest(
         `${target} web artifact`,
       );
     case 'capacitor-android':
-      return readArtifactTextFromZip(artifactPath, iconManifestPath, `${target} release AAB`);
+      return isCapacitorSyncArtifact(artifactPath)
+        ? readArtifactTextFromDirectory(
+            artifactPath,
+            iconManifestPath,
+            `${target} native sync artifact`,
+          )
+        : readArtifactTextFromZip(artifactPath, iconManifestPath, `${target} native archive`);
     case 'capacitor-ios':
-      return readArtifactTextFromDirectory(
-        artifactPath,
-        iconManifestPath,
-        `${target} native artifact`,
-      );
+      return isIosStoreExportArtifact(artifactPath)
+        ? readArtifactTextFromZip(artifactPath, iconManifestPath, `${target} store IPA`)
+        : readArtifactTextFromDirectory(
+            artifactPath,
+            iconManifestPath,
+            `${target} native artifact`,
+          );
     case 'apps-in-toss':
       return artifactPath.endsWith('.ait')
         ? readArtifactTextFromZip(artifactPath, iconManifestPath, `${target} release artifact`)
@@ -431,9 +498,13 @@ function readReleaseEmbeddedTargetConfig(
         'web-preview artifact',
       );
     case 'capacitor-android':
-      return readEmbeddedTargetConfigFromZip(artifactPath, `${target} release AAB`);
+      return isCapacitorSyncArtifact(artifactPath)
+        ? readEmbeddedTargetConfigFromDirectory(artifactPath, `${target} native sync artifact`)
+        : readEmbeddedTargetConfigFromZip(artifactPath, `${target} native archive`);
     case 'capacitor-ios':
-      return readEmbeddedTargetConfigFromDirectory(artifactPath, `${target} native artifact`);
+      return isIosStoreExportArtifact(artifactPath)
+        ? readEmbeddedTargetConfigFromZip(artifactPath, `${target} store IPA`)
+        : readEmbeddedTargetConfigFromDirectory(artifactPath, `${target} native artifact`);
     case 'apps-in-toss':
       if (artifactPath.endsWith('.ait')) {
         return readEmbeddedTargetConfigFromZip(artifactPath, `${target} release artifact`);
@@ -483,7 +554,7 @@ function localSwiftPackagePathsForIosArtifact(artifactPath: string): readonly st
   const packageFile = `${artifactPath}/App/CapApp-SPM/Package.swift`;
 
   if (!existsSync(packageFile)) {
-    if (isIosSyncArtifact(artifactPath) || existsSync(`${artifactPath}/App/App.xcodeproj`)) {
+    if (isCapacitorSyncArtifact(artifactPath) || existsSync(`${artifactPath}/App/App.xcodeproj`)) {
       throw new Error(`Missing iOS Swift package manifest: ${packageFile}`);
     }
 
@@ -498,7 +569,7 @@ function localSwiftPackagePathsForIosArtifact(artifactPath: string): readonly st
     resolve(packageFileDir, requireStringMatch(match[1], packageFile)),
   );
 
-  if (isIosSyncArtifact(artifactPath)) {
+  if (isCapacitorSyncArtifact(artifactPath)) {
     for (const packagePath of packagePaths) {
       assertPathInside(packagePath, artifactPath, 'iOS sync Swift package');
     }
@@ -507,8 +578,12 @@ function localSwiftPackagePathsForIosArtifact(artifactPath: string): readonly st
   return packagePaths;
 }
 
-function isIosSyncArtifact(artifactPath: string): boolean {
+function isCapacitorSyncArtifact(artifactPath: string): boolean {
   return basename(artifactPath) === 'capacitor-sync';
+}
+
+function isIosStoreExportArtifact(artifactPath: string): boolean {
+  return artifactPath.endsWith(storeExportArtifactSuffix);
 }
 
 function requiredFilesForTarget(

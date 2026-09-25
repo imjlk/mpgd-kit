@@ -6,6 +6,15 @@ import {
   type MpgdReleaseIdentity,
 } from '@mpgd/target-config';
 
+export interface ReleaseNativeDelivery {
+  readonly platform: 'android' | 'ios';
+  readonly mode: 'sync' | 'debug' | 'simulator' | 'unsigned-archive'
+    | 'signed-archive' | 'store-export';
+  readonly signed: boolean;
+  /** Candidate for store submission; not proof of store acceptance. */
+  readonly submissionCandidate: boolean;
+}
+
 export interface ReleaseTargetManifest {
   readonly artifact: string;
   readonly profile?: string;
@@ -28,6 +37,7 @@ export interface ReleaseTargetManifest {
   readonly versionCode?: number;
   readonly marketingVersion?: string;
   readonly buildNumber?: string;
+  readonly nativeDelivery?: ReleaseNativeDelivery;
   readonly appName?: string;
   readonly sdkMajor?: number;
 }
@@ -56,6 +66,29 @@ const fullGitShaPattern = /^[0-9a-f]{40}$/u;
 
 export function assertReleaseManifest(input: unknown): ReleaseManifest {
   const manifest = assertReleaseManifestStructure(input);
+
+  for (const [target, entry] of Object.entries(manifest.targets)) {
+    const delivery = entry.nativeDelivery;
+    if (delivery === undefined) {
+      continue;
+    }
+    const validPlatformMode = delivery.platform === 'android'
+      ? ['debug', 'unsigned-archive', 'signed-archive'].includes(delivery.mode)
+      : ['sync', 'simulator', 'unsigned-archive', 'signed-archive', 'store-export']
+        .includes(delivery.mode);
+    const expectedSigned = delivery.mode === 'signed-archive'
+      || delivery.mode === 'store-export';
+    const expectedCandidate = entry.profile === 'production' && (delivery.platform === 'android'
+      ? delivery.mode === 'signed-archive'
+      : delivery.mode === 'store-export');
+    if (!validPlatformMode || delivery.signed !== expectedSigned
+      || delivery.submissionCandidate !== expectedCandidate) {
+      throw new TypeError(`Release manifest native delivery state is inconsistent: ${target}.`);
+    }
+    if (entry.profile === 'production' && !delivery.signed) {
+      throw new TypeError(`Release manifest production native delivery is unsigned: ${target}.`);
+    }
+  }
 
   if (!fullGitShaPattern.test(manifest.kitGitSha)) {
     throw new TypeError('Release manifest kitGitSha must be a lowercase 40-character SHA.');
