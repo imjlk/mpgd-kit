@@ -404,10 +404,13 @@ try {
         replaceDirectory(nativeWebBundle, stage.webDir);
         ensureCapacitorPlatform(stage.shellApp, 'android', env);
         await stageNativeIconResources(generatedIcons, stage.shellApp);
-        runNativeSyncWithIdentityCheck({
+        const stagedIdentityInput = {
           ...identityInput,
           shellApp: stage.shellApp,
-        }, () => run('pnpm', ['--dir', stage.shellApp, 'cap', 'sync', 'android'], env));
+        };
+        runNativeSyncWithIdentityCheck(stagedIdentityInput, () => {
+          run('pnpm', ['--dir', stage.shellApp, 'cap', 'sync', 'android'], env);
+        });
 
         const androidProject = `${stage.shellApp}/android`;
         let releaseArtifact: string;
@@ -478,10 +481,13 @@ try {
         replaceDirectory(nativeWebBundle, stage.webDir);
         ensureCapacitorPlatform(stage.shellApp, 'ios', env);
         await stageNativeIconResources(generatedIcons, stage.shellApp);
-        runNativeSyncWithIdentityCheck({
+        const stagedIdentityInput = {
           ...identityInput,
           shellApp: stage.shellApp,
-        }, () => run('pnpm', ['--dir', stage.shellApp, 'cap', 'sync', 'ios'], env));
+        };
+        runNativeSyncWithIdentityCheck(stagedIdentityInput, () => {
+          run('pnpm', ['--dir', stage.shellApp, 'cap', 'sync', 'ios'], env);
+        });
 
         let releaseArtifact: string;
         if (nativePlan.mode === 'unsigned-archive') {
