@@ -7,6 +7,7 @@ import type {
   PlayTrack,
   PlayTrackRelease,
 } from './play-publisher-port.js';
+import { inspectAndroidBundleSigner } from './android-bundle-signer.js';
 import type { ImmutableNativeBuildRecord } from './release-state.js';
 
 const sha256Pattern = /^[a-f0-9]{64}$/u;
@@ -146,17 +147,8 @@ export async function submitVerifiedAndroidBundleWithPublisher(
     await publisher.commitEdit(packageName, editId);
     return result(input, editId, versionCode, false);
   } catch {
-    try {
-      const checkEdit = await publisher.insertEdit(packageName);
-      const checkTrack = await getInternalTrack(publisher, packageName, checkEdit);
-      const checkBundles = await publisher.listBundles(packageName, checkEdit);
-      if (hasCompletedVersion(checkTrack.releases, versionCode)
-        && findVersionBundle(checkBundles, versionCode, expectedSha256) !== undefined) {
-        return result(input, editId, versionCode, false);
-      }
-    } catch {
-      // A failed read cannot prove that the commit did not happen.
-    }
+    // Inserting a new edit invalidates the first edit for this API user. A
+    // failed commit response cannot safely be reconciled by creating one.
     throw new PlaySubmissionUncertainError('commit', editId);
   }
 }
@@ -178,6 +170,10 @@ async function preflight(input: PlayInternalSubmissionInput): Promise<number> {
   }
   if (hash.digest('hex') !== record.artifactSha256) {
     throw new Error('Google Play AAB bytes differ from the immutable build record.');
+  }
+  if (await inspectAndroidBundleSigner(input.aabFile)
+    !== record.inspectedSignerSha256?.replaceAll(':', '').toLowerCase()) {
+    throw new Error('Google Play AAB signer differs from the immutable build record.');
   }
   return Number(versionCode);
 }

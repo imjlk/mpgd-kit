@@ -25,6 +25,7 @@ import {
 } from '@mpgd/target-config';
 
 import { runReleaseProcess, type ReleaseProcessInput } from './deploy-process.js';
+import { inspectAndroidBundleSigner } from './android-bundle-signer.js';
 
 // Build-time mirror of the private @mpgd/release-manifest schema. The packaged CLI
 // must not import that workspace-only package; fixture tests cross-check both.
@@ -385,6 +386,13 @@ export async function recordNativeReleaseBuild(
     || releaseManifestSha256 !== input.expectedReleaseManifestSha256) {
     throw new Error('Copied native artifact or release manifest differs from the verified build.');
   }
+  const signer = input.target === 'android'
+    ? await inspectAndroidBundleSigner(input.artifactFile)
+    : undefined;
+  if (signer !== undefined
+    && signer !== normalizeAndroidFingerprint(input.inspectedSignerSha256 ?? '')) {
+    throw new Error('Recorded Android signer does not match the signed AAB bytes.');
+  }
   return withStateSession(input, async (session) => {
     const game = ownValue(session.state.games, input.gameId);
     const plan = game === undefined ? undefined : ownValue(game.reservations, input.releaseKey);
@@ -454,7 +462,7 @@ export async function recordNativeReleaseBuild(
       releaseManifestSha256,
       inspectedAppId: input.inspectedAppId,
       ...(input.target === 'android'
-        ? { inspectedSignerSha256: normalizeAndroidFingerprint(input.inspectedSignerSha256 ?? '') }
+        ? { inspectedSignerSha256: signer }
         : { inspectedTeamId: input.inspectedTeamId ?? '' }),
     };
     const key = `${input.releaseKey}/${input.target}`;

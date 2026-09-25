@@ -5,13 +5,17 @@ Android build record from `recordNativeReleaseBuild()`, the same AAB file, the
 verified package ID, and a game-owned service-account JSON file. It does not
 build or re-sign the bundle. The AAB SHA-256, package ID, inspected signer,
 and reserved version code must match the record before a network request.
+`recordNativeReleaseBuild()` now compares the caller's signer fingerprint with
+the signer inspected from those AAB bytes before storing the record; submission
+independently repeats the signer check on the file it sends.
 
 The submission creates a Play edit, checks for a conflicting version code,
 uploads a missing bundle, preserves existing internal-track releases, validates
 the edit, and commits it. The commit explicitly uses
 `ERROR_IF_IN_REVIEW` so unrelated changes already in review are not cancelled.
-The result says `committed` only when the edit is accepted or a lost response
-is reconciled by reading a fresh edit. It does **not** assert that the build is
+The result says `committed` only when the edit is accepted. A lost commit
+response remains uncertain: creating a fresh edit to check it would invalidate
+the original edit for the same API user. It does **not** assert that the build is
 processed, installable, or available to testers.
 
 Persist the edit ID supplied to `onEditCreated` before uploading. If an upload,

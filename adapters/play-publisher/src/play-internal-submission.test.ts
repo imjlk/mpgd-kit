@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -18,13 +18,16 @@ import type {
   PlayTrackRelease,
 } from '../../../packages/cli/src/play-publisher-port.js';
 import type { ImmutableNativeBuildRecord } from '../../../packages/cli/src/release-state.js';
+import { inspectAndroidBundleSigner } from '../../../packages/cli/src/android-bundle-signer.js';
+import { createSignedAabFixture } from '../../../packages/cli/test/signed-aab-fixture.js';
 import { createMockPublisher } from './index.js';
 
 const fixture = mkdtempSync(path.join(tmpdir(), 'mpgd-play-submission-'));
 const aabFile = path.join(fixture, 'game.aab');
-const bytes = Buffer.from('throwaway signed Android App Bundle');
-writeFileSync(aabFile, bytes);
+createSignedAabFixture(aabFile);
+const bytes = readFileSync(aabFile);
 const sha256 = createHash('sha256').update(bytes).digest('hex');
+const signerSha256 = await inspectAndroidBundleSigner(aabFile);
 const packageName = 'dev.mpgd.playtest';
 const record: ImmutableNativeBuildRecord = {
   releaseKey: 'beta-01',
@@ -41,7 +44,7 @@ const record: ImmutableNativeBuildRecord = {
   artifactSha256: sha256,
   releaseManifestSha256: 'e'.repeat(64),
   inspectedAppId: packageName,
-  inspectedSignerSha256: 'f'.repeat(64),
+  inspectedSignerSha256: signerSha256,
 };
 const input = { record, aabFile, packageName, serviceAccountFile: 'not-used-in-mock' };
 
@@ -267,8 +270,12 @@ try {
     assert.equal(observed.operations.some((item) => item.includes(':commit')), false);
   });
   await withPublisher('commit-response-lost', async (publisher, observed) => {
-    const result = await submitVerifiedAndroidBundleWithPublisher(input, publisher, observed.rootUrl);
-    assert.equal(result.status, 'committed');
+    await assert.rejects(
+      submitVerifiedAndroidBundleWithPublisher(input, publisher, observed.rootUrl),
+      (error: unknown) => error instanceof PlaySubmissionUncertainError
+        && error.stage === 'commit' && error.editId === 'edit-1',
+    );
+    assert.equal(observed.operations.filter((item) => item.endsWith('/edits')).length, 1);
   });
   await withPublisher('commit-conflict', async (publisher, observed) => {
     await assert.rejects(
@@ -286,6 +293,12 @@ try {
   });
   await withPublisher('auth-failure', async (publisher, observed) => {
     await assert.rejects(submitVerifiedAndroidBundleWithPublisher(input, publisher, observed.rootUrl));
+  });
+  await withPublisher('ok', async (publisher, observed) => {
+    await assert.rejects(submitVerifiedAndroidBundleWithPublisher({
+      ...input, record: { ...record, inspectedSignerSha256: 'f'.repeat(64) },
+    }, publisher, observed.rootUrl), /AAB signer differs/u);
+    assert.equal(observed.operations.length, 0);
   });
   await withPublisher('ok', async (publisher, observed) => {
     await assert.rejects(submitVerifiedAndroidBundleWithPublisher({
