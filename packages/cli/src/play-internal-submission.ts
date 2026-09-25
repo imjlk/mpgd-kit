@@ -35,11 +35,9 @@ export class PlaySubmissionUncertainError extends Error {
   constructor(
     readonly stage: 'upload' | 'track-update' | 'commit',
     readonly editId: string,
-    options?: ErrorOptions,
   ) {
     super(
       `Google Play ${stage} result is uncertain for edit ${editId}; inspect remote state before retry.`,
-      options,
     );
     this.name = 'PlaySubmissionUncertainError';
   }
@@ -106,15 +104,15 @@ export async function submitVerifiedAndroidBundleWithPublisher(
         },
       );
       assertBundle(uploaded.data, versionCode, expectedSha256);
-    } catch (error) {
+    } catch {
       try {
         bundles = (await publisher.edits.bundles.list({ packageName, editId })).data.bundles ?? [];
         existing = findVersionBundle(bundles, versionCode, expectedSha256);
       } catch {
-        throw new PlaySubmissionUncertainError('upload', editId, { cause: error });
+        throw new PlaySubmissionUncertainError('upload', editId);
       }
       if (existing === undefined) {
-        throw new PlaySubmissionUncertainError('upload', editId, { cause: error });
+        throw new PlaySubmissionUncertainError('upload', editId);
       }
     }
   }
@@ -144,7 +142,7 @@ export async function submitVerifiedAndroidBundleWithPublisher(
       const observed = await getInternalTrack(publisher, packageName, editId);
       applied = hasCompletedVersion(observed.releases, versionCode);
     } catch {
-      throw new PlaySubmissionUncertainError('track-update', editId, { cause: error });
+      throw new PlaySubmissionUncertainError('track-update', editId);
     }
     if (!applied) {
       throw error;
@@ -159,7 +157,7 @@ export async function submitVerifiedAndroidBundleWithPublisher(
       changesInReviewBehavior: 'ERROR_IF_IN_REVIEW',
     }, { retry: false });
     return result(input, editId, versionCode, false);
-  } catch (error) {
+  } catch {
     try {
       const checkEdit = (await publisher.edits.insert({ packageName }, { retry: false })).data.id;
       if (typeof checkEdit === 'string') {
@@ -175,7 +173,7 @@ export async function submitVerifiedAndroidBundleWithPublisher(
     } catch {
       // A failed read cannot prove that the commit did not happen.
     }
-    throw new PlaySubmissionUncertainError('commit', editId, { cause: error });
+    throw new PlaySubmissionUncertainError('commit', editId);
   }
 }
 
