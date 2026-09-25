@@ -81,6 +81,7 @@ try {
 <key>Name</key><string>MPGD Throwaway App Store</string>
 <key>ExpirationDate</key><date>2030-01-01T00:00:00Z</date>
 <key>TeamIdentifier</key><array><string>${teamId}</string></array>
+<key>ApplicationIdentifierPrefix</key><array><string>${teamId}</string></array>
 <key>Entitlements</key><dict>
 <key>application-identifier</key><string>${teamId}.${bundleId}</string>
 <key>com.apple.developer.team-identifier</key><string>${teamId}</string>
@@ -117,7 +118,9 @@ try {
   const sessionProfile = path.join(
     session.environment.HOME ?? '',
     'Library',
-    'MobileDevice',
+    'Developer',
+    'Xcode',
+    'UserData',
     'Provisioning Profiles',
     `${uuid}.mobileprovision`,
   );
@@ -128,7 +131,9 @@ try {
   const secondProfile = path.join(
     second.environment.HOME ?? '',
     'Library',
-    'MobileDevice',
+    'Developer',
+    'Xcode',
+    'UserData',
     'Provisioning Profiles',
     `${uuid}.mobileprovision`,
   );

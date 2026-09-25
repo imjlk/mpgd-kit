@@ -38,8 +38,15 @@ export function inspectIosDistributionProfile(
     || !value.TeamIdentifier.includes(input.teamId)) {
     throw new Error('iOS provisioning profile does not match the signing team.');
   }
+  const appIdPrefixes = value.ApplicationIdentifierPrefix;
+  if (!Array.isArray(appIdPrefixes)
+    || appIdPrefixes.length !== 1
+    || typeof appIdPrefixes[0] !== 'string'
+    || !/^[A-Z0-9]{10}$/u.test(appIdPrefixes[0])) {
+    throw new Error('iOS provisioning profile has an invalid App ID prefix.');
+  }
   if (!isRecord(value.Entitlements)
-    || value.Entitlements['application-identifier'] !== `${input.teamId}.${input.bundleId}`
+    || value.Entitlements['application-identifier'] !== `${appIdPrefixes[0]}.${input.bundleId}`
     || value.Entitlements['get-task-allow'] === true
     || (value.Entitlements['com.apple.developer.team-identifier'] !== undefined
       && value.Entitlements['com.apple.developer.team-identifier'] !== input.teamId)) {

@@ -18,6 +18,7 @@ const profile = {
   Name: 'MPGD App Store',
   ExpirationDate: '2027-01-01T00:00:00Z',
   TeamIdentifier: [teamId],
+  ApplicationIdentifierPrefix: [teamId],
   Entitlements: {
     'application-identifier': `${teamId}.${bundleId}`,
     'com.apple.developer.team-identifier': teamId,
@@ -31,6 +32,19 @@ assert.deepEqual(inspectIosDistributionProfile(profile, input), {
   name: profile.Name,
   expiresAt: profile.ExpirationDate,
 });
+const legacyPrefix = 'Z9Y8X7W6V5';
+assert.deepEqual(inspectIosDistributionProfile({
+  ...profile,
+  ApplicationIdentifierPrefix: [legacyPrefix],
+  Entitlements: {
+    ...profile.Entitlements,
+    'application-identifier': `${legacyPrefix}.${bundleId}`,
+  },
+}, input).uuid, profile.UUID);
+assert.throws(
+  () => inspectIosDistributionProfile({ ...profile, ApplicationIdentifierPrefix: [] }, input),
+  /App ID prefix/u,
+);
 assert.throws(
   () => inspectIosDistributionProfile(profile, { ...input, teamId: 'BBBBBBBBBB' }),
   /signing team/u,

@@ -168,7 +168,9 @@ export async function prepareIosSigningSession(
     const profileDirectory = path.join(
       ownedRoot,
       'Library',
-      'MobileDevice',
+      'Developer',
+      'Xcode',
+      'UserData',
       'Provisioning Profiles',
     );
     mkdirSync(profileDirectory, { recursive: true, mode: 0o700 });
