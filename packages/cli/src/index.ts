@@ -125,6 +125,15 @@ export {
 } from './android-signing-session.js';
 
 export {
+  recordNativeReleaseBuild,
+  reserveNativeRelease,
+  type ImmutableNativeBuildRecord,
+  type NativeReleaseReservation,
+  type NativeReleaseReservationInput,
+  type RecordNativeBuildInput,
+} from './release-state.js';
+
+export {
   createBrowserGameplayE2EDriver,
   type BrowserGameplayE2EInspectInput,
   type BrowserGameplayE2EPage,

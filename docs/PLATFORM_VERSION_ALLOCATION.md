@@ -78,24 +78,57 @@ silently read as the default.
 
 ## Preview is not reservation
 
-- The pure functions and the CLI produce **candidate** numbers. They are not
+- The pure functions and `mpgd target preview-versions` produce **candidate** numbers. They are not
   reserved, and calling them repeatedly with the same inputs returns the same
   candidates — determinism, not a lock.
 - Two processes reading the same ledger can compute the same candidate
   numbers concurrently. Operational reservation needs external
   serialization: a lock, a queue, or a single-writer store.
-- A consumer implementing persistence must separately solve duplicate
-  reservation, crash recovery, and storing the ledger and plan atomically.
-  None of that is provided here, and writing two files in a row is not a
-  transaction.
+- The pure package and preview command do not provide persistence. The CLI
+  now provides a separate Git-backed native reservation API described below;
+  writing two ordinary files in sequence is still not a transaction.
+
+## Git-backed native release reservations
+
+`@mpgd/cli` exposes `reserveNativeRelease()` for deployment orchestration.
+It stores one JSON document containing each game's ledger, release plans,
+and build records on the game repository's `release-state` branch. An
+explicit initial ledger is required for the first reservation of each game;
+existing store version histories must be entered deliberately, not guessed
+as zero. The initial ledger is retained as an adoption baseline, so missing
+early reservations or platform numbers are rejected on later reads. A
+successful reservation commits the new ledger and plan together
+and pushes with a lease on the previously observed branch revision. If
+another writer updates the branch first, reservation fails and must be
+retried with the same release key after reading remote state. A lost push
+response is likewise reported as uncertain unless the new commit can be
+observed. Reusing the same key and provenance returns the stored plan without
+consuming another number; changing its target set or provenance fails.
+
+`recordNativeReleaseBuild()` appends a content-hashed record for one reserved
+Android or iOS build, including game/Kit versions, source/Kit/config provenance,
+the build-configuration digest and reserved platform numbers, artifact
+location and SHA-256, manifest SHA-256, build run ID, and identity/signing
+inspection supplied by the verified builder: a normalized certificate SHA-256
+for Android or the inspected team ID for iOS. It checks the copied artifact
+and complete release manifest against the current schema and expected hashes,
+then compares the signed manifest with
+reserved platform numbers. A record cannot be replaced with different
+content, including a rebuild with a different run ID. A replacement binary
+requires a new release key and number. The release-state branch is game-owned
+audit state, not an artifact store: binary retention and store submission are
+separate steps.
+
+These are programmatic CLI-package APIs used by the later `mpgd deploy run`
+flow. They do not themselves sign, upload, or verify acceptance in either
+store. The original game working tree is not modified by a reservation.
 
 ## Adoption notes
 
-A game repository adopting these policies needs at minimum: a ledger file in
-schema 2 or 3, the provenance inputs (source SHA, kit SHA, config digest)
-supplied by its own tooling, and — when it wants persistence — the
-serialization and atomic-write layer described above. The plan's target
-entries (Store package numbers, `versionCode`, `buildNumber`) map onto the
+A game repository adopting these policies needs at minimum: an initial
+ledger in schema 2 or 3, the provenance inputs (source SHA, kit SHA, config
+digest), and write access to its origin `release-state` branch when reserving.
+The plan's target entries (Store package numbers, `versionCode`, `buildNumber`) map onto the
 `MPGD_*` environment inputs the kit's build tooling already reads.
 
 ## Verification status
@@ -105,5 +138,8 @@ The policies are covered by
 allocation, reuse, provenance, policies, boundaries, validation, determinism)
 and `tools/smoke/cli-platform-version-allocation.ts` (CLI read-only behavior,
 input-hash stability across runs, deterministic output, candidate wording,
-manifest cross-checks). The commands above are the ones that exist; nothing
-here submits to a store or deploys anything.
+manifest cross-checks), and `packages/cli/src/release-state.test.ts` (local
+Git remote, idempotent reservations, multi-target numbers, immutable build
+records, concurrent-writer lease rejection, and lost push response recovery).
+The commands above are the ones that exist; nothing here submits
+to a store or deploys anything.
