@@ -48,6 +48,7 @@ export const preparedGroups = Object.freeze({
     'smoke:cli-microsoft-store-package-acceptance',
     'smoke:cli-microsoft-store-starter-onboarding',
     'smoke:cli-capacitor-shell-starter',
+    'smoke:cli-deploy-planning',
     // The real CLI tarball + registry install + cap add smoke remains a local
     // release acceptance command; it deliberately does not run on every PR.
   ],

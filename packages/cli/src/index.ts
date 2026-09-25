@@ -24,6 +24,13 @@ import {
   planCapacitorShellStarter,
 } from './capacitor-shell-starter.js';
 import {
+  doctorNativeDeployment,
+  initializeDeployConfig,
+  parseDeployTargets,
+  planNativeDeployment,
+  writeNativeDeploymentPlan,
+} from './deploy-planning.js';
+import {
   normalizeConfiguredBuildTargets,
   normalizeBuildTarget as normalizeConfiguredTargetName,
   supportedBuildTargets,
@@ -344,6 +351,7 @@ export async function runMpgdCli(args: readonly string[]): Promise<void> {
     subCommands: {
       assets: assetsCommand,
       game: gameCommand,
+      deploy: deployCommand,
       legal: legalCommand,
       target: targetCommand,
       kit: kitCommand,
@@ -403,8 +411,118 @@ const entryCommand = defineI18n({
     ko: 'mpgd-kit 스타터와 타깃 워크플로우를 관리합니다.',
   }),
   run: () => {
-    console.info('Use a sub-command: assets, game, legal, target, kit.');
+    console.info('Use a sub-command: assets, game, deploy, legal, target, kit.');
     console.info('Run "pnpm mpgd --help" for available commands.');
+  },
+});
+
+const deployCommand = defineI18n({
+  name: 'deploy',
+  description: 'Configure and inspect game-owned native test deployments.',
+  resource: commandResource({
+    en: 'Configure and inspect game-owned native test deployments.',
+    ko: '게임 소유 네이티브 테스트 배포를 설정하고 점검합니다.',
+  }),
+  subCommands: {
+    init: defineI18n({
+      name: 'init',
+      description: 'Create game-owned deployment profile references.',
+      resource: commandResource({
+        en: 'Create game-owned deployment profile references.',
+        ko: '게임 소유 배포 프로필 참조를 생성합니다.',
+      }),
+      args: {
+        game: {
+          type: 'string',
+          required: false,
+          description: 'Game project directory containing mpgd.targets.json.',
+        },
+      },
+      run: (ctx) => {
+        const game = readOptionalString(ctx.values.game) ?? '.';
+        console.info(`Created deployment config: ${initializeDeployConfig(game)}`);
+      },
+    }),
+    doctor: defineI18n({
+      name: 'doctor',
+      description: 'Check local native deployment configuration and toolchains.',
+      resource: commandResource({
+        en: 'Check local native deployment configuration and toolchains.',
+        ko: '로컬 네이티브 배포 설정과 도구 체인을 점검합니다.',
+      }),
+      args: {
+        game: {
+          type: 'string',
+          required: false,
+          description: 'Game project directory.',
+        },
+        profile: {
+          type: 'string',
+          required: false,
+          description: 'Deployment profile name; defaults to beta.',
+        },
+        targets: {
+          type: 'string',
+          required: false,
+          description: 'Comma-separated android,ios target selection.',
+        },
+      },
+      run: (ctx) => {
+        const targets = parseDeployTargets(readOptionalString(ctx.values.targets));
+        const result = doctorNativeDeployment({
+          game: readOptionalString(ctx.values.game) ?? '.',
+          profile: readOptionalString(ctx.values.profile) ?? 'beta',
+          ...(targets === undefined ? {} : { targets }),
+        });
+        for (const check of result.checks) {
+          console.info(`${check.status}: ${check.name} — ${check.detail}`);
+        }
+        if (!result.healthy) {
+          throw new Error('Native deployment doctor found missing requirements.');
+        }
+      },
+    }),
+    plan: defineI18n({
+      name: 'plan',
+      description: 'Write a read-only native deployment plan without reserving versions.',
+      resource: commandResource({
+        en: 'Write a read-only native deployment plan without reserving versions.',
+        ko: '버전 예약 없이 읽기 전용 네이티브 배포 계획을 작성합니다.',
+      }),
+      args: {
+        game: {
+          type: 'string',
+          required: false,
+          description: 'Game project directory.',
+        },
+        profile: {
+          type: 'string',
+          required: false,
+          description: 'Deployment profile name; defaults to beta.',
+        },
+        targets: {
+          type: 'string',
+          required: false,
+          description: 'Comma-separated android,ios target selection.',
+        },
+        out: {
+          type: 'string',
+          required: true,
+          description: 'New plan JSON path; existing files are not overwritten.',
+        },
+      },
+      run: (ctx) => {
+        const targets = parseDeployTargets(readOptionalString(ctx.values.targets));
+        const plan = planNativeDeployment({
+          game: readOptionalString(ctx.values.game) ?? '.',
+          profile: readOptionalString(ctx.values.profile) ?? 'beta',
+          ...(targets === undefined ? {} : { targets }),
+        });
+        const out = readRequiredCliOption(ctx.values.out, '--out');
+        writeNativeDeploymentPlan(out, plan);
+        console.info(`Wrote read-only deployment plan: ${path.resolve(out)}`);
+      },
+    }),
   },
 });
 
