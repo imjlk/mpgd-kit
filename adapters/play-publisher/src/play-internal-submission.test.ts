@@ -6,14 +6,19 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { androidpublisher, auth, type androidpublisher_v3 } from '@googleapis/androidpublisher';
-
 import {
   PlaySubmissionUncertainError,
   submitVerifiedAndroidBundle,
   submitVerifiedAndroidBundleWithPublisher,
-} from './play-internal-submission.js';
-import type { ImmutableNativeBuildRecord } from './release-state.js';
+} from '../../../packages/cli/src/play-internal-submission.js';
+import type {
+  PlayBundle,
+  PlayPublisher,
+  PlayTrack,
+  PlayTrackRelease,
+} from '../../../packages/cli/src/play-publisher-port.js';
+import type { ImmutableNativeBuildRecord } from '../../../packages/cli/src/release-state.js';
+import { createMockPublisher } from './index.js';
 
 const fixture = mkdtempSync(path.join(tmpdir(), 'mpgd-play-submission-'));
 const aabFile = path.join(fixture, 'game.aab');
@@ -41,27 +46,28 @@ const record: ImmutableNativeBuildRecord = {
 const input = { record, aabFile, packageName, serviceAccountFile: 'not-used-in-mock' };
 
 interface EditState {
-  bundles: androidpublisher_v3.Schema$Bundle[];
-  track: androidpublisher_v3.Schema$Track;
+  bundles: PlayBundle[];
+  track: { track: string; releases: PlayTrackRelease[] };
 }
 
 type MockMode = 'ok' | 'already-committed' | 'draft-existing' | 'empty-track'
   | 'track-update-rejected' | 'auth-failure' | 'version-conflict'
-  | 'upload-response-lost' | 'commit-response-lost' | 'commit-conflict';
+  | 'upload-response-lost' | 'upload-rejected' | 'validate-response-lost'
+  | 'commit-response-lost' | 'commit-conflict';
 
 async function withPublisher(
   mode: MockMode,
   action: (
-    publisher: androidpublisher_v3.Androidpublisher,
+    publisher: PlayPublisher,
     observations: {
       readonly operations: string[];
-      readonly updates: androidpublisher_v3.Schema$Track[];
+      readonly updates: PlayTrack[];
       readonly rootUrl: string;
     },
   ) => Promise<void>,
 ): Promise<void> {
   const operations: string[] = [];
-  const updates: androidpublisher_v3.Schema$Track[] = [];
+  const updates: PlayTrack[] = [];
   let live: EditState = {
     bundles: mode === 'version-conflict' ? [{ versionCode: 45, sha256: '0'.repeat(64) }]
       : mode === 'already-committed' || mode === 'draft-existing'
@@ -106,6 +112,10 @@ async function withPublisher(
       if (method === 'GET' && pathname.endsWith('/bundles')) {
         reply(response, 200, { bundles: edit.bundles });
       } else if (method === 'POST' && pathname.endsWith('/bundles')) {
+        if (mode === 'upload-rejected') {
+          reply(response, 400, { error: { message: 'invalid AAB' } });
+          return;
+        }
         const body = await readBody(request);
         assert.deepEqual(body, bytes);
         edit.bundles.push({ versionCode: 45, sha256 });
@@ -129,7 +139,11 @@ async function withPublisher(
         updates.push(edit.track);
         reply(response, 200, edit.track);
       } else if (method === 'POST' && pathname.endsWith(':validate')) {
-        reply(response, 200, { id: editId });
+        if (mode === 'validate-response-lost') {
+          reply(response, 500, { error: { message: 'response lost' } });
+        } else {
+          reply(response, 200, { id: editId });
+        }
       } else if (method === 'POST' && pathname.endsWith(':commit')) {
         assert.equal(url.searchParams.get('changesInReviewBehavior'), 'ERROR_IF_IN_REVIEW');
         if (mode !== 'commit-conflict') {
@@ -157,13 +171,7 @@ async function withPublisher(
   try {
     const address = server.address();
     assert.ok(address !== null && typeof address !== 'string');
-    const oauth = new auth.OAuth2();
-    oauth.setCredentials({ access_token: 'mock-play-token' });
-    const publisher = androidpublisher({
-      version: 'v3',
-      auth: oauth,
-      rootUrl: `http://127.0.0.1:${address.port}`,
-    });
+    const publisher = createMockPublisher('mock-play-token', `http://127.0.0.1:${address.port}`);
     await action(publisher, { operations, updates, rootUrl: `http://127.0.0.1:${address.port}` });
   } finally {
     server.close();
@@ -208,6 +216,21 @@ try {
   await withPublisher('upload-response-lost', async (publisher, observed) => {
     const result = await submitVerifiedAndroidBundleWithPublisher(input, publisher, observed.rootUrl);
     assert.equal(result.status, 'committed');
+  });
+  await withPublisher('upload-rejected', async (publisher, observed) => {
+    await assert.rejects(
+      submitVerifiedAndroidBundleWithPublisher(input, publisher, observed.rootUrl),
+      (error: unknown) => !(error instanceof PlaySubmissionUncertainError),
+    );
+    assert.equal(observed.operations.some((item) => item.includes(':commit')), false);
+  });
+  await withPublisher('validate-response-lost', async (publisher, observed) => {
+    await assert.rejects(
+      submitVerifiedAndroidBundleWithPublisher(input, publisher, observed.rootUrl),
+      (error: unknown) => error instanceof PlaySubmissionUncertainError
+        && error.stage === 'validate' && error.editId === 'edit-1',
+    );
+    assert.equal(observed.operations.some((item) => item.includes(':commit')), false);
   });
   await withPublisher('already-committed', async (publisher, observed) => {
     const result = await submitVerifiedAndroidBundleWithPublisher(input, publisher, observed.rootUrl);

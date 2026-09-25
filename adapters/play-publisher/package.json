@@ -1,0 +1,9 @@
+{
+  "name": "@mpgd/play-publisher-adapter-internal",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@googleapis/androidpublisher": "42.0.0"
+  }
+}

@@ -190,6 +190,12 @@ importers:
         specifier: ^4.0.0
         version: 4.1.9(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(jsdom@24.1.0)(vite@8.1.3(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
+  adapters/play-publisher:
+    dependencies:
+      '@googleapis/androidpublisher':
+        specifier: 42.0.0
+        version: 42.0.0
+
   adapters/verse8:
     dependencies:
       '@mpgd/catalog':

@@ -1,15 +1,17 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, statSync } from 'node:fs';
 
-import { androidpublisher, auth, type androidpublisher_v3 } from '@googleapis/androidpublisher';
-
+import type {
+  PlayBundle,
+  PlayPublisher,
+  PlayTrack,
+  PlayTrackRelease,
+} from './play-publisher-port.js';
 import type { ImmutableNativeBuildRecord } from './release-state.js';
 
 const sha256Pattern = /^[a-f0-9]{64}$/u;
-const scope = 'https://www.googleapis.com/auth/androidpublisher';
 const trackName = 'internal';
 const bundleUploadTimeoutMs = 120_000;
-const aabMimeType = 'application/octet-stream';
 
 export interface PlayInternalSubmissionInput {
   readonly record: ImmutableNativeBuildRecord;
@@ -33,7 +35,7 @@ export interface PlayInternalSubmissionResult {
 
 export class PlaySubmissionUncertainError extends Error {
   constructor(
-    readonly stage: 'upload' | 'track-update' | 'commit',
+    readonly stage: 'upload' | 'track-update' | 'validate' | 'commit',
     readonly editId: string,
   ) {
     super(
@@ -50,31 +52,26 @@ export async function submitVerifiedAndroidBundle(
   if (!existsSync(input.serviceAccountFile) || !statSync(input.serviceAccountFile).isFile()) {
     throw new Error('Google Play service account file is missing.');
   }
-  const googleAuth = new auth.GoogleAuth({
-    keyFile: input.serviceAccountFile,
-    scopes: [scope],
-  });
-  const publisher = androidpublisher({ version: 'v3', auth: googleAuth });
+  const { createServiceAccountPublisher } = await import(
+    new URL('./play-sdk-adapter.js', import.meta.url).href
+  ) as { createServiceAccountPublisher: (file: string) => PlayPublisher };
+  const publisher = createServiceAccountPublisher(input.serviceAccountFile);
   return submitVerifiedAndroidBundleWithPublisher(input, publisher);
 }
 
 /** Internal injection point for credential-free SDK contract tests. */
 export async function submitVerifiedAndroidBundleWithPublisher(
   input: PlayInternalSubmissionInput,
-  publisher: androidpublisher_v3.Androidpublisher,
+  publisher: PlayPublisher,
   requestRootUrl?: string,
 ): Promise<PlayInternalSubmissionResult> {
   const versionCode = await preflight(input);
   const expectedSha256 = input.record.artifactSha256;
   const packageName = input.packageName;
-  const inserted = await publisher.edits.insert({ packageName }, { retry: false });
-  const editId = inserted.data.id;
-  if (typeof editId !== 'string' || editId.trim() === '') {
-    throw new Error('Google Play did not return an edit ID.');
-  }
+  const editId = await publisher.insertEdit(packageName);
   await input.onEditCreated?.(editId);
 
-  let bundles = (await publisher.edits.bundles.list({ packageName, editId })).data.bundles ?? [];
+  let bundles = await publisher.listBundles(packageName, editId);
   let existing = findVersionBundle(bundles, versionCode, expectedSha256);
   const currentTrack = await getInternalTrack(publisher, packageName, editId);
   if (hasVersion(currentTrack.releases, versionCode)) {
@@ -90,23 +87,20 @@ export async function submitVerifiedAndroidBundleWithPublisher(
   }
   if (existing === undefined) {
     try {
-      const uploaded = await publisher.edits.bundles.upload(
-        {
-          packageName,
-          editId,
-          media: { mimeType: aabMimeType, body: createReadStream(input.aabFile) },
-        },
-        {
-          timeout: bundleUploadTimeoutMs,
-          retry: false,
-          // The generated SDK's media endpoint ignores the client's rootUrl.
-          ...(requestRootUrl === undefined ? {} : { rootUrl: requestRootUrl }),
-        },
-      );
-      assertBundle(uploaded.data, versionCode, expectedSha256);
-    } catch {
+      const uploaded = await publisher.uploadBundle({
+        packageName,
+        editId,
+        aabFile: input.aabFile,
+        timeoutMs: bundleUploadTimeoutMs,
+        ...(requestRootUrl === undefined ? {} : { requestRootUrl }),
+      });
+      assertBundle(uploaded, versionCode, expectedSha256);
+    } catch (error) {
+      if (isDefinitiveHttpError(error)) {
+        throw error;
+      }
       try {
-        bundles = (await publisher.edits.bundles.list({ packageName, editId })).data.bundles ?? [];
+        bundles = await publisher.listBundles(packageName, editId);
         existing = findVersionBundle(bundles, versionCode, expectedSha256);
       } catch {
         throw new PlaySubmissionUncertainError('upload', editId);
@@ -117,25 +111,17 @@ export async function submitVerifiedAndroidBundleWithPublisher(
     }
   }
 
-  const release: androidpublisher_v3.Schema$TrackRelease = {
+  const release: PlayTrackRelease = {
     name: input.record.releaseKey,
     status: 'completed',
     versionCodes: [String(versionCode)],
   };
-  const desired: androidpublisher_v3.Schema$Track = {
+  const desired: PlayTrack = {
     track: trackName,
     releases: [...(currentTrack.releases ?? []), release],
   };
   try {
-    await publisher.edits.tracks.update(
-      {
-        packageName,
-        editId,
-        track: trackName,
-        requestBody: desired,
-      },
-      { retry: false },
-    );
+    await publisher.updateTrack(packageName, editId, desired);
   } catch (error) {
     let applied: boolean;
     try {
@@ -148,27 +134,25 @@ export async function submitVerifiedAndroidBundleWithPublisher(
       throw error;
     }
   }
-  await publisher.edits.validate({ packageName, editId });
   try {
-    await publisher.edits.commit({
-      packageName,
-      editId,
-      // The API default cancels changes currently in review. Never do that implicitly.
-      changesInReviewBehavior: 'ERROR_IF_IN_REVIEW',
-    }, { retry: false });
+    await publisher.validateEdit(packageName, editId);
+  } catch (error) {
+    if (isDefinitiveHttpError(error)) {
+      throw error;
+    }
+    throw new PlaySubmissionUncertainError('validate', editId);
+  }
+  try {
+    await publisher.commitEdit(packageName, editId);
     return result(input, editId, versionCode, false);
   } catch {
     try {
-      const checkEdit = (await publisher.edits.insert({ packageName }, { retry: false })).data.id;
-      if (typeof checkEdit === 'string') {
-        const checkTrack = await getInternalTrack(publisher, packageName, checkEdit);
-        const checkBundles = (await publisher.edits.bundles.list({
-          packageName, editId: checkEdit,
-        })).data.bundles ?? [];
-        if (hasCompletedVersion(checkTrack.releases, versionCode)
-          && findVersionBundle(checkBundles, versionCode, expectedSha256) !== undefined) {
-          return result(input, editId, versionCode, false);
-        }
+      const checkEdit = await publisher.insertEdit(packageName);
+      const checkTrack = await getInternalTrack(publisher, packageName, checkEdit);
+      const checkBundles = await publisher.listBundles(packageName, checkEdit);
+      if (hasCompletedVersion(checkTrack.releases, versionCode)
+        && findVersionBundle(checkBundles, versionCode, expectedSha256) !== undefined) {
+        return result(input, editId, versionCode, false);
       }
     } catch {
       // A failed read cannot prove that the commit did not happen.
@@ -199,7 +183,7 @@ async function preflight(input: PlayInternalSubmissionInput): Promise<number> {
 }
 
 function assertBundle(
-  bundle: androidpublisher_v3.Schema$Bundle,
+  bundle: PlayBundle,
   versionCode: number,
   sha256: string,
 ): void {
@@ -209,10 +193,10 @@ function assertBundle(
 }
 
 function findVersionBundle(
-  bundles: readonly androidpublisher_v3.Schema$Bundle[],
+  bundles: readonly PlayBundle[],
   versionCode: number,
   sha256: string,
-): androidpublisher_v3.Schema$Bundle | undefined {
+): PlayBundle | undefined {
   const sameVersion = bundles.find((bundle) => bundle.versionCode === versionCode);
   if (sameVersion !== undefined) {
     assertBundle(sameVersion, versionCode, sha256);
@@ -221,16 +205,12 @@ function findVersionBundle(
 }
 
 async function getInternalTrack(
-  publisher: androidpublisher_v3.Androidpublisher,
+  publisher: PlayPublisher,
   packageName: string,
   editId: string,
-): Promise<androidpublisher_v3.Schema$Track> {
+): Promise<PlayTrack> {
   try {
-    return (await publisher.edits.tracks.get({
-      packageName,
-      editId,
-      track: trackName,
-    })).data;
+    return await publisher.getTrack(packageName, editId);
   } catch (error) {
     if (isHttpStatus(error, 404)) {
       return { track: trackName, releases: [] };
@@ -247,15 +227,30 @@ function isHttpStatus(error: unknown, status: number): boolean {
   return value.code === status || value.response?.status === status;
 }
 
+function isDefinitiveHttpError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  const value = error as { code?: unknown; response?: { status?: unknown } };
+  const raw = value.response?.status ?? value.code;
+  const status = typeof raw === 'number'
+    ? raw
+    : typeof raw === 'string' && /^\d{3}$/u.test(raw)
+      ? Number(raw)
+      : undefined;
+  return status !== undefined && status >= 400 && status < 500
+    && status !== 408 && status !== 429;
+}
+
 function hasVersion(
-  releases: readonly androidpublisher_v3.Schema$TrackRelease[] | undefined,
+  releases: readonly PlayTrackRelease[] | null | undefined,
   versionCode: number,
 ): boolean {
   return releases?.some((release) => release.versionCodes?.includes(String(versionCode))) ?? false;
 }
 
 function hasCompletedVersion(
-  releases: readonly androidpublisher_v3.Schema$TrackRelease[] | undefined,
+  releases: readonly PlayTrackRelease[] | null | undefined,
   versionCode: number,
 ): boolean {
   return releases?.some((release) => release.status === 'completed'

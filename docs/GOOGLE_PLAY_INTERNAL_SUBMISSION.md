@@ -15,10 +15,11 @@ is reconciled by reading a fresh edit. It does **not** assert that the build is
 processed, installable, or available to testers.
 
 Persist the edit ID supplied to `onEditCreated` before uploading. If an upload,
-track update, or commit cannot be reconciled, the API raises
+track update, validation, or commit cannot be reconciled, the API raises
 `PlaySubmissionUncertainError` with the stage and edit ID. Do not start a new
 upload merely because an HTTP response was lost; inspect that edit and the
-remote track first. SDK retries are disabled for mutating edit operations.
+remote track first. Definitive upload rejections retain the original Play error.
+SDK retries are disabled for mutating edit operations.
 The first implementation is restricted to the `internal` track. Production
 promotion, staged rollout, and release approvals remain out of scope.
 
@@ -35,6 +36,8 @@ The SDK's generated media-upload method takes its endpoint root from the
 individual request options, rather than the publisher client's root URL.
 The local mock explicitly overrides that request root so fixture traffic
 cannot reach Google; production calls retain the official default endpoint.
+The SDK import and network implementation live under `adapters/play-publisher`;
+the CLI calls a small command port and includes the adapter in its tarball.
 
 No Play Console account or live AAB submission was used for this test. D-12
 requires a game-owned account and signed external-consumer bundle to verify
