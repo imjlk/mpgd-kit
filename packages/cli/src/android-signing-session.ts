@@ -54,12 +54,18 @@ export async function prepareAndroidUploadSigningSession(
   input: AndroidUploadSigningInput,
 ): Promise<AndroidUploadSigningSession> {
   const expectedCertSha256 = input.expectedCertSha256.replace(/:/gu, '').toUpperCase();
-  if (!fingerprintPattern.test(expectedCertSha256) || input.keyAlias.trim() === ''
+  const keyAlias = input.keyAlias.trim();
+  if (!fingerprintPattern.test(expectedCertSha256) || keyAlias === ''
     || input.storePassword === '' || input.keyPassword === '') {
     throw new Error('Android upload signing requires an alias, passwords and SHA-256 certificate.');
   }
   const source = path.resolve(input.keystoreFile);
-  const sourceStat = statSync(source);
+  let sourceStat: ReturnType<typeof statSync>;
+  try {
+    sourceStat = statSync(source);
+  } catch {
+    throw new Error(`Android upload keystore is missing or unreadable: ${source}`);
+  }
   if (!sourceStat.isFile() || sourceStat.size < 1 || sourceStat.size > maximumKeystoreBytes) {
     throw new Error('Android upload keystore must be a nonempty regular file under 64 MiB.');
   }
@@ -71,7 +77,7 @@ export async function prepareAndroidUploadSigningSession(
     ...(input.environment ?? process.env),
     MPGD_ANDROID_SIGNING_KEYSTORE: temporaryKeystore,
     MPGD_ANDROID_SIGNING_STORE_PASSWORD: input.storePassword,
-    MPGD_ANDROID_SIGNING_KEY_ALIAS: input.keyAlias,
+    MPGD_ANDROID_SIGNING_KEY_ALIAS: keyAlias,
     MPGD_ANDROID_SIGNING_KEY_PASSWORD: input.keyPassword,
     MPGD_ANDROID_SIGNING_INIT_SCRIPT: gradleInitScript,
     MPGD_ANDROID_UPLOAD_CERT_SHA256: expectedCertSha256,
@@ -84,13 +90,11 @@ export async function prepareAndroidUploadSigningSession(
     }
     copyFileSync(source, temporaryKeystore);
     chmodSync(temporaryKeystore, 0o600);
-    const keytool = environment.JAVA_HOME === undefined
-      ? 'keytool'
-      : path.join(
-          environment.JAVA_HOME,
-          'bin',
-          process.platform === 'win32' ? 'keytool.exe' : 'keytool',
-        );
+    const javaHome = environment.JAVA_HOME?.trim();
+    const keytoolExecutable = process.platform === 'win32' ? 'keytool.exe' : 'keytool';
+    const keytool = javaHome === undefined || javaHome === ''
+      ? keytoolExecutable
+      : path.join(javaHome, 'bin', keytoolExecutable);
     const listed = await runReleaseProcess({
       command: keytool,
       args: [
@@ -100,7 +104,7 @@ export async function prepareAndroidUploadSigningSession(
         '-keystore',
         temporaryKeystore,
         '-alias',
-        input.keyAlias,
+        keyAlias,
         '-storepass:env',
         'MPGD_ANDROID_SIGNING_STORE_PASSWORD',
       ],
@@ -123,7 +127,7 @@ export async function prepareAndroidUploadSigningSession(
         '-keystore',
         temporaryKeystore,
         '-alias',
-        input.keyAlias,
+        keyAlias,
         '-file',
         path.join(ownedRoot, 'upload.csr'),
         '-storepass:env',
@@ -145,11 +149,18 @@ export async function prepareAndroidUploadSigningSession(
       gradleInitScript,
       secretValues,
       dispose() {
-        rmSync(ownedRoot, { recursive: true, force: true });
+        removeOwnedSigningRoot(ownedRoot);
       },
     };
   } catch (error) {
-    rmSync(ownedRoot, { recursive: true, force: true });
+    try {
+      removeOwnedSigningRoot(ownedRoot);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        'Android upload signing preparation and cleanup both failed.',
+      );
+    }
     throw error;
   }
 }
@@ -160,9 +171,32 @@ export async function withAndroidUploadSigningSession<T>(
   action: (session: AndroidUploadSigningSession) => Promise<T>,
 ): Promise<T> {
   const session = await prepareAndroidUploadSigningSession(input);
+  let outcome: { readonly ok: true; readonly value: T } | {
+    readonly ok: false;
+    readonly error: unknown;
+  };
   try {
-    return await action(session);
-  } finally {
-    session.dispose();
+    outcome = { ok: true, value: await action(session) };
+  } catch (error) {
+    outcome = { ok: false, error };
   }
+  try {
+    session.dispose();
+  } catch (cleanupError) {
+    if (!outcome.ok) {
+      throw new AggregateError(
+        [outcome.error, cleanupError],
+        'Android upload signing action and cleanup both failed.',
+      );
+    }
+    throw cleanupError;
+  }
+  if (!outcome.ok) {
+    throw outcome.error;
+  }
+  return outcome.value;
+}
+
+function removeOwnedSigningRoot(root: string): void {
+  rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 }

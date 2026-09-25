@@ -143,12 +143,43 @@ try {
   assert.deepEqual(readdirSync(sessions), []);
   await assert.rejects(prepareAndroidUploadSigningSession({ ...input, keyAlias: 'wrong-alias' }));
   assert.deepEqual(readdirSync(sessions), []);
+  const normalized = await prepareAndroidUploadSigningSession({
+    ...input,
+    keyAlias: ` ${keyAlias} `,
+    environment: { ...process.env, JAVA_HOME: ' ' },
+  });
+  assert.equal(normalized.environment.MPGD_ANDROID_SIGNING_KEY_ALIAS, keyAlias);
+  normalized.dispose();
+  assert.deepEqual(readdirSync(sessions), []);
+  await assert.rejects(
+    prepareAndroidUploadSigningSession({
+      ...input,
+      keystoreFile: path.join(fixture, 'missing.jks'),
+    }),
+    /keystore is missing or unreadable/u,
+  );
+  assert.deepEqual(readdirSync(sessions), []);
   await assert.rejects(
     withAndroidUploadSigningSession(input, async (session) => {
       assert.equal(existsSync(session.temporaryKeystore), true);
       throw new Error('cancelled build');
     }),
     /cancelled build/u,
+  );
+  assert.deepEqual(readdirSync(sessions), []);
+  await assert.rejects(
+    withAndroidUploadSigningSession(input, async (session) => {
+      const dispose = session.dispose.bind(session);
+      session.dispose = () => {
+        dispose();
+        throw new Error('simulated cleanup failure');
+      };
+      throw new Error('simulated build failure');
+    }),
+    (error: unknown) => error instanceof AggregateError
+      && error.errors.length === 2
+      && String(error.errors[0]).includes('simulated build failure')
+      && String(error.errors[1]).includes('simulated cleanup failure'),
   );
   assert.deepEqual(readdirSync(sessions), []);
   const controller = new AbortController();

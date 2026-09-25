@@ -120,10 +120,8 @@ export {
 } from './release-workspace.js';
 
 export {
-  prepareAndroidUploadSigningSession,
   withAndroidUploadSigningSession,
   type AndroidUploadSigningInput,
-  type AndroidUploadSigningSession,
 } from './android-signing-session.js';
 
 export {
