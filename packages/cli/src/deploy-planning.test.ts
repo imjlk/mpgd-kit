@@ -101,12 +101,23 @@ try {
     environment: {},
   });
   assert.equal(doctor.healthy, false);
+  assert.ok(doctor.checks.some((check) => check.name === 'JDK'));
+  assert.ok(doctor.checks.some((check) => check.name === 'Android SDK'
+    && check.status === 'missing'));
   assert.ok(doctor.checks.some((check) => check.name === 'android signing credential'
     && check.status === 'missing'));
   assert.equal(
     doctor.checks.some((check) => check.detail.includes('secret-value')),
     false,
   );
+  const conflictingSdk = doctorNativeDeployment({
+    game,
+    profile: 'beta',
+    targets: ['android'],
+    environment: { ANDROID_HOME: '/tmp/android-a', ANDROID_SDK_ROOT: '/tmp/android-b' },
+  });
+  assert.ok(conflictingSdk.checks.some((check) => check.name === 'Android SDK'
+    && check.detail.includes('different directories')));
 
   assert.deepEqual(parseDeployTargets('android,ios'), ['android', 'ios']);
   assert.throws(() => parseDeployTargets('android,android'), /duplicates/u);

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 export type NativeDeployTarget = 'android' | 'ios';
@@ -211,12 +211,22 @@ export function doctorNativeDeployment(input: {
       throw new Error(`Missing deployment profile target: ${target.target}`);
     }
     if (target.target === 'android') {
-      checks.push(commandCheck('Java', 'java', ['-version']));
+      checks.push(commandCheck('JDK', 'javac', ['-version']));
       const sdk = environment.ANDROID_HOME ?? environment.ANDROID_SDK_ROOT;
+      const conflictingSdkRoots = environment.ANDROID_HOME !== undefined
+        && environment.ANDROID_SDK_ROOT !== undefined
+        && resolve(environment.ANDROID_HOME) !== resolve(environment.ANDROID_SDK_ROOT);
       checks.push({
         name: 'Android SDK',
-        status: sdk !== undefined && existsSync(join(sdk, 'platform-tools')) ? 'ok' : 'missing',
-        detail: sdk === undefined ? 'Set ANDROID_HOME or ANDROID_SDK_ROOT.' : `SDK path: ${sdk}`,
+        status: !conflictingSdkRoots && sdk !== undefined
+          && existsSync(join(sdk, 'platform-tools'))
+          && hasDirectoryEntries(join(sdk, 'platforms'))
+          && hasDirectoryEntries(join(sdk, 'build-tools')) ? 'ok' : 'missing',
+        detail: conflictingSdkRoots
+          ? 'ANDROID_HOME and ANDROID_SDK_ROOT point to different directories.'
+          : sdk === undefined
+            ? 'Set ANDROID_HOME or ANDROID_SDK_ROOT.'
+            : `SDK path: ${sdk}; platform-tools, platforms and build-tools are required.`,
       });
     } else {
       checks.push(
@@ -400,6 +410,14 @@ function isCredentialReference(value: unknown): value is CredentialReference {
 
 function hasOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
   return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function hasDirectoryEntries(directory: string): boolean {
+  try {
+    return readdirSync(directory).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 function commandCheck(name: string, command: string, args: readonly string[]): DeployDoctorCheck {
