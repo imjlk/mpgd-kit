@@ -59,6 +59,11 @@ try {
     { ...process.env, MPGD_TEST_P12_PASSWORD: pkcs12Password },
   );
   const searchListBefore = run('security', ['list-keychains', '-d', 'user']);
+  const defaultCertificateBefore = spawnSync(
+    'security',
+    ['find-certificate', '-a', '-c', 'mpgd-throwaway-signing', '-p'],
+    { encoding: 'utf8' },
+  ).stdout;
   const environment = {
     ...process.env,
     MPGD_IOS_SESSION_KEYCHAIN: keychain,
@@ -71,7 +76,17 @@ try {
   };
   assert.match(response.certificateSha256, /^[0-9A-F]{64}$/u);
   assert.equal(existsSync(keychain), true);
+  assert.match(
+    run('security', ['find-certificate', '-a', '-c', 'mpgd-throwaway-signing', '-p', keychain]),
+    /BEGIN CERTIFICATE/u,
+  );
   assert.equal(run('security', ['list-keychains', '-d', 'user']), searchListBefore);
+  const defaultCertificateAfter = spawnSync(
+    'security',
+    ['find-certificate', '-a', '-c', 'mpgd-throwaway-signing', '-p'],
+    { encoding: 'utf8' },
+  ).stdout;
+  assert.equal(defaultCertificateAfter, defaultCertificateBefore);
   console.info('Isolated iOS keychain import passed with a throwaway P12.');
 } finally {
   rmSync(fixture, { recursive: true, force: true });
