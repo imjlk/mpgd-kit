@@ -1,8 +1,17 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  createReadStream,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import {
   allocatePlatformVersions,
@@ -174,11 +183,13 @@ export async function recordNativeReleaseBuild(
     || !sha256Pattern.test(input.buildConfigDigest)) {
     throw new Error('Native build record is missing a run ID, artifact location, or inspection.');
   }
-  if (!statSync(input.artifactFile).isFile() || !statSync(input.releaseManifestFile).isFile()) {
+  if (!existsSync(input.artifactFile) || !existsSync(input.releaseManifestFile)
+    || !statSync(input.artifactFile).isFile()
+    || !statSync(input.releaseManifestFile).isFile()) {
     throw new Error('Native build record requires file artifacts.');
   }
-  const artifactSha256 = sha256(input.artifactFile);
-  const releaseManifestSha256 = sha256(input.releaseManifestFile);
+  const artifactSha256 = await sha256(input.artifactFile);
+  const releaseManifestSha256 = await sha256(input.releaseManifestFile);
   if (artifactSha256 !== input.expectedArtifactSha256
     || releaseManifestSha256 !== input.expectedReleaseManifestSha256) {
     throw new Error('Copied native artifact or release manifest differs from the verified build.');
@@ -189,7 +200,12 @@ export async function recordNativeReleaseBuild(
     if (game === undefined || plan === undefined || plan.targets[input.target] === undefined) {
       throw new Error('Native build record has no matching reserved target.');
     }
-    const manifest: unknown = JSON.parse(readFileSync(input.releaseManifestFile, 'utf8'));
+    let manifest: unknown;
+    try {
+      manifest = JSON.parse(readFileSync(input.releaseManifestFile, 'utf8'));
+    } catch {
+      throw new Error('Native release manifest is not valid JSON.');
+    }
     if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)
       || (manifest as Record<string, unknown>).gitSha !== plan.sourceGitSha
       || (manifest as Record<string, unknown>).kitGitSha !== plan.kitGitSha
@@ -251,7 +267,7 @@ export async function recordNativeReleaseBuild(
     const key = `${input.releaseKey}/${input.target}`;
     const previous = ownValue(game.builds, key);
     if (previous !== undefined) {
-      if (JSON.stringify(previous) !== JSON.stringify(record)) {
+      if (!isDeepStrictEqual(previous, record)) {
         throw new Error('An immutable native build record cannot be replaced.');
       }
       if (session.previousCommit === undefined) {
@@ -370,16 +386,26 @@ async function commitState(session: StateSession, state: ReleaseState, subject: 
       `HEAD:refs/heads/${stateBranch}`,
     ]);
   } catch (error) {
-    const remoteHead = await git(session, [
-      'ls-remote',
-      '--heads',
-      'origin',
-      `refs/heads/${stateBranch}`,
-    ]);
-    if (remoteHead.output.trim().split(/\s+/u)[0] !== commit) {
+    let remoteCommit: string | undefined;
+    let verificationFailure: unknown;
+    try {
+      const remoteHead = await git(session, [
+        'ls-remote',
+        '--heads',
+        'origin',
+        `refs/heads/${stateBranch}`,
+      ]);
+      remoteCommit = remoteHead.output.trim().split(/\s+/u)[0];
+    } catch (verificationError) {
+      verificationFailure = verificationError;
+    }
+    if (remoteCommit !== commit) {
+      const cause = verificationFailure === undefined
+        ? error
+        : new AggregateError([error, verificationFailure], 'Push and verification both failed.');
       throw new Error(
         'Release-state update conflicted or has an uncertain result; retry with the same release key.',
-        { cause: error },
+        { cause },
       );
     }
   }
@@ -387,7 +413,12 @@ async function commitState(session: StateSession, state: ReleaseState, subject: 
 }
 
 function parseReleaseState(json: string): ReleaseState {
-  const value: unknown = JSON.parse(json);
+  let value: unknown;
+  try {
+    value = JSON.parse(json);
+  } catch {
+    throw new Error('Release-state file on the remote branch is not valid JSON.');
+  }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error('Release state must be a JSON object.');
   }
@@ -410,8 +441,40 @@ function parseReleaseState(json: string): ReleaseState {
       throw new Error(`Release state game ${gameId} has invalid entries.`);
     }
     assertPlatformVersionLedger(game.ledger);
+    for (const [releaseKey, rawPlan] of Object.entries(game.reservations)) {
+      if (!releaseKeyPattern.test(releaseKey) || !isRecord(rawPlan)
+        || rawPlan.schemaVersion !== 2 || !isRecord(rawPlan.targets)
+        || typeof rawPlan.gameId !== 'string' || rawPlan.gameId !== gameId
+        || typeof rawPlan.gameVersion !== 'string'
+        || !Number.isSafeInteger(rawPlan.releaseRevision)
+        || Number(rawPlan.releaseRevision) < 1
+        || typeof rawPlan.releaseLabel !== 'string'
+        || typeof rawPlan.buildId !== 'string'
+        || !gitShaPattern.test(String(rawPlan.sourceGitSha))
+        || !gitShaPattern.test(String(rawPlan.kitGitSha))
+        || !sha256Pattern.test(String(rawPlan.targetConfigDigest))
+        || Object.values(rawPlan.targets).some((target) => !isRecord(target))) {
+        throw new Error(`Release state game ${gameId} has an invalid reservation ${releaseKey}.`);
+      }
+    }
+    for (const [buildKey, rawBuild] of Object.entries(game.builds)) {
+      if (!isRecord(rawBuild) || typeof rawBuild.releaseKey !== 'string'
+        || (rawBuild.target !== 'android' && rawBuild.target !== 'ios')
+        || buildKey !== `${rawBuild.releaseKey}/${rawBuild.target}`
+        || !gitShaPattern.test(String(rawBuild.sourceGitSha))
+        || !gitShaPattern.test(String(rawBuild.kitGitSha))
+        || !sha256Pattern.test(String(rawBuild.artifactSha256))
+        || !sha256Pattern.test(String(rawBuild.releaseManifestSha256))
+        || !isRecord(rawBuild.platformVersion)) {
+        throw new Error(`Release state game ${gameId} has an invalid build record ${buildKey}.`);
+      }
+    }
   }
   return value as ReleaseState;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function ownValue<T>(items: Record<string, T>, key: string): T | undefined {
@@ -424,8 +487,12 @@ function assertReleaseKey(key: string): void {
   }
 }
 
-function sha256(file: string): string {
-  return createHash('sha256').update(readFileSync(file)).digest('hex');
+async function sha256(file: string): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(file)) {
+    hash.update(chunk);
+  }
+  return hash.digest('hex');
 }
 
 function isolatedGitEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -450,8 +517,15 @@ async function git(
   const secrets = [session.remoteUrl];
   try {
     const url = new URL(session.remoteUrl);
-    if (url.password !== '') {
-      secrets.push(url.password, decodeURIComponent(url.password));
+    for (const component of [url.username, url.password]) {
+      if (component !== '') {
+        secrets.push(component);
+        try {
+          secrets.push(decodeURIComponent(component));
+        } catch {
+          // Retain the raw component if it is not valid percent encoding.
+        }
+      }
     }
   } catch {
     // Local paths and scp-style Git remotes are not URL instances.

@@ -268,6 +268,51 @@ process.exit(result.status ?? 1);
     readFileSync(path.join(game, 'package.json'), 'utf8'),
     '{"name":"state-test","revision":2}\n',
   );
+  const stateEdit = path.join(fixture, 'state-edit');
+  git(['clone', '-q', '--branch', 'release-state', bare, stateEdit], fixture);
+  const stateFile = path.join(stateEdit, 'mpgd-release-state.json');
+  const reordered = JSON.parse(readFileSync(stateFile, 'utf8'));
+  const buildRecord = reordered.games.alpha.builds['beta-01/android'];
+  reordered.games.alpha.builds['beta-01/android'] = Object.fromEntries(
+    Object.entries(buildRecord).reverse(),
+  );
+  writeFileSync(stateFile, `${JSON.stringify(reordered)}\n`);
+  git(['add', '.'], stateEdit);
+  git(
+    [
+      '-c',
+      'user.name=mpgd-test',
+      '-c',
+      'user.email=mpgd-test@example.invalid',
+      'commit',
+      '-qm',
+      'reorder build record fields',
+    ],
+    stateEdit,
+  );
+  git(['push', 'origin', 'HEAD:release-state'], stateEdit);
+  const reorderedRetry = await recordNativeReleaseBuild(buildInput);
+  assert.deepEqual(reorderedRetry.record, built.record);
+  reordered.games.alpha.reservations['beta-01'].targets = null;
+  writeFileSync(stateFile, `${JSON.stringify(reordered)}\n`);
+  git(['add', '.'], stateEdit);
+  git(
+    [
+      '-c',
+      'user.name=mpgd-test',
+      '-c',
+      'user.email=mpgd-test@example.invalid',
+      'commit',
+      '-qm',
+      'corrupt reservation shape',
+    ],
+    stateEdit,
+  );
+  git(['push', 'origin', 'HEAD:release-state'], stateEdit);
+  await assert.rejects(
+    reserveNativeRelease({ ...firstInput, initialLedger: undefined }),
+    /invalid reservation beta-01/u,
+  );
   console.info('Git-backed release reservation and immutable build record passed.');
 } finally {
   rmSync(fixture, { recursive: true, force: true });
