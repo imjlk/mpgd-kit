@@ -65,3 +65,8 @@ size, redacts configured secrets, kills child process groups on cancellation,
 and removes its temporary checkout when disposed. It is input/output
 isolation, not a sandbox for hostile build scripts. Signed store submissions
 and actual device evidence remain separate acceptance gates.
+
+Pinned builds reject inherited product catalog, ad placement, or target-config
+extension file overrides. Place these files in the committed game checkout so
+the build cannot read mutable files from the original working directory. A
+build target and build profile must also match the pinned deployment plan.

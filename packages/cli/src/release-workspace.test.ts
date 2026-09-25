@@ -205,6 +205,39 @@ fs.writeFileSync(manifest, JSON.stringify({
   await assert.rejects(
     runPinnedNativeBuild(first, {
       target: 'android',
+      profile: 'beta',
+      mode: 'signed-archive',
+      environment: buildEnvironment,
+    }),
+    /match the pinned deployment plan/u,
+  );
+  await assert.rejects(
+    runPinnedNativeBuild(first, {
+      target: 'ios',
+      profile: 'production',
+      mode: 'store-export',
+      environment: buildEnvironment,
+    }),
+    /match the pinned deployment plan/u,
+  );
+  for (const override of [
+    'MPGD_PRODUCT_CATALOG_FILE',
+    'MPGD_AD_PLACEMENTS_FILE',
+    'MPGD_TARGET_CONFIG_EXTENSIONS_FILE',
+  ]) {
+    await assert.rejects(
+      runPinnedNativeBuild(first, {
+        target: 'android',
+        profile: 'production',
+        mode: 'signed-archive',
+        environment: { ...buildEnvironment, [override]: path.join(game, 'external.json') },
+      }),
+      /cannot use MPGD_/u,
+    );
+  }
+  await assert.rejects(
+    runPinnedNativeBuild(first, {
+      target: 'android',
       profile: 'production',
       mode: 'signed-archive',
       environment: { ...buildEnvironment, MPGD_FAKE_NO_WRITE: '1' },

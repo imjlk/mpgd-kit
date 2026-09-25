@@ -9,6 +9,8 @@ import { runReleaseProcess, type ReleaseProcessInput } from './deploy-process.js
 
 export interface PinnedReleaseInput {
   readonly gameRoot: string;
+  readonly buildProfile: NativeDeploymentPlan['buildProfile'];
+  readonly targets: readonly ('android' | 'ios')[];
   readonly gameGitSha: string;
   readonly lockfileSha256: string;
   readonly targetConfigSha256: string;
@@ -69,6 +71,8 @@ export async function pinNativeDeploymentPlan(
   });
   const input: PinnedReleaseInput = {
     gameRoot,
+    buildProfile: plan.buildProfile,
+    targets: plan.targets.map((target) => target.target),
     gameGitSha: revision.output.trim(),
     lockfileSha256: sha256(path.join(sourceRepository.output.trim(), 'pnpm-lock.yaml')),
     targetConfigSha256: plan.targetConfigSha256,
@@ -215,6 +219,10 @@ export async function runPinnedNativeBuild(
   },
 ): Promise<PinnedNativeBuildResult> {
   assertPinnedFiles(workspace.workspaceRoot, workspace.gameRoot, workspace.input);
+  if (!workspace.input.targets.includes(input.target)
+    || input.profile !== workspace.input.buildProfile) {
+    throw new Error('Native build target and profile must match the pinned deployment plan.');
+  }
   assertInstalledKitIdentity(workspace);
   const targetsFile = path.join(workspace.gameRoot, 'mpgd.targets.json');
   const environment: NodeJS.ProcessEnv = {
@@ -222,6 +230,17 @@ export async function runPinnedNativeBuild(
     MPGD_NATIVE_BUILD_MODE: input.mode,
     MPGD_SOURCE_GIT_SHA: workspace.input.gameGitSha,
   };
+  for (const name of [
+    'MPGD_PRODUCT_CATALOG_FILE',
+    'MPGD_AD_PLACEMENTS_FILE',
+    'MPGD_TARGET_CONFIG_EXTENSIONS_FILE',
+  ]) {
+    if (environment[name] !== undefined && environment[name] !== '') {
+      throw new Error(
+        `Pinned native builds cannot use ${name}; use files committed inside the game checkout.`,
+      );
+    }
+  }
   delete environment.MPGD_KIT_PATH;
   delete environment.MPGD_RUN_IOS_ARCHIVE;
   delete environment.MPGD_RUN_IOS_SIMULATOR_BUILD;
@@ -291,6 +310,10 @@ export async function runPinnedNativeBuild(
 
 function assertPinnedInput(input: PinnedReleaseInput): void {
   if (!gitShaPattern.test(input.gameGitSha) || !gitShaPattern.test(input.kitGitSha)
+    || input.buildProfile !== 'production'
+    || input.targets.length === 0
+    || new Set(input.targets).size !== input.targets.length
+    || input.targets.some((target) => target !== 'android' && target !== 'ios')
     || !sha256Pattern.test(input.lockfileSha256)
     || !sha256Pattern.test(input.targetConfigSha256)
     || !sha256Pattern.test(input.deployConfigSha256)
