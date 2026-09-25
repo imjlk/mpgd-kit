@@ -69,7 +69,7 @@ try {
   writeJson(path.join(game, 'package.json'), {
     name: 'alpha',
     version: '1.0.0',
-    dependencies: { '@fixture/shared': 'workspace:*' },
+    devDependencies: { '@fixture/shared': 'workspace:*' },
   });
   writeJson(path.join(game, 'apps/mobile/package.json'), {
     name: 'alpha-mobile',
@@ -161,7 +161,9 @@ try {
     'export const value = 1;\n',
   );
   assert.equal(sha256(path.join(first.gameRoot, 'mpgd.targets.json')), input.targetConfigSha256);
-  await installPinnedReleaseDependencies(first);
+  await installPinnedReleaseDependencies(first, {
+    environment: { ...process.env, npm_config_production: 'true' },
+  });
   const cliRoot = path.join(first.gameRoot, 'node_modules/@mpgd/cli');
   mkdirSync(path.join(cliRoot, 'dist'), { recursive: true });
   writeJson(path.join(cliRoot, 'package.json'), {
@@ -176,10 +178,18 @@ try {
     kitGitSha: input.kitGitSha,
     kitDirty: false,
   });
+  const targetConfigRoot = path.join(first.gameRoot, 'node_modules/@mpgd/target-config');
+  mkdirSync(targetConfigRoot, { recursive: true });
+  writeJson(path.join(targetConfigRoot, 'package.json'), {
+    name: '@mpgd/target-config',
+    exports: { './targets.json': './targets.json' },
+  });
+  writeJson(path.join(targetConfigRoot, 'targets.json'), { targets: {} });
   writeFileSync(path.join(cliRoot, 'dist/bin.js'), `#!/usr/bin/env node
 const fs = require('node:fs');
 const path = require('node:path');
-if (process.env.MPGD_KIT_PATH || process.env.MPGD_NATIVE_BUILD_MODE !== 'signed-archive'
+if (process.env.MPGD_KIT_PATH || process.env.MPGD_CLI_ARGV
+  || process.env.MPGD_NATIVE_BUILD_MODE !== 'signed-archive'
   || process.env.MPGD_SOURCE_GIT_SHA !== process.env.MPGD_FAKE_GAME_SHA) process.exit(4);
 if (!process.env.TMPDIR.startsWith(process.env.MPGD_FAKE_WORKSPACE_ROOT)) process.exit(5);
 fs.writeFileSync(path.join(process.env.TMPDIR, 'owned-temporary-file'), 'temporary');
@@ -207,6 +217,7 @@ fs.writeFileSync(manifest, JSON.stringify({
     TMP: externalTemporary,
     TEMP: externalTemporary,
     MPGD_KIT_PATH: '/invalid/checkout',
+    MPGD_CLI_ARGV: '["deploy","run"]',
     MPGD_FAKE_GAME_SHA: input.gameGitSha,
     MPGD_FAKE_KIT_SHA: input.kitGitSha,
     MPGD_FAKE_WORKSPACE_ROOT: first.workspaceRoot,
@@ -281,6 +292,21 @@ fs.writeFileSync(manifest, JSON.stringify({
   assert.equal(sha256(path.join(first.workspaceRoot, 'pnpm-lock.yaml')), input.lockfileSha256);
   writeFileSync(path.join(first.gameRoot, 'output.txt'), 'isolated output\n');
   assert.equal(existsSync(path.join(game, 'output.txt')), false);
+  const externalMatrix = path.join(fixture, 'external-target-config');
+  cpSync(targetConfigRoot, externalMatrix, { recursive: true });
+  rmSync(targetConfigRoot, { recursive: true });
+  symlinkSync(externalMatrix, targetConfigRoot, 'dir');
+  await assert.rejects(
+    runPinnedNativeBuild(first, {
+      target: 'android',
+      profile: 'production',
+      mode: 'signed-archive',
+      environment: buildEnvironment,
+    }),
+    /target-config matrix resolves outside the pinned checkout/u,
+  );
+  unlinkSync(targetConfigRoot);
+  cpSync(externalMatrix, targetConfigRoot, { recursive: true });
   const externalCli = path.join(fixture, 'external-cli');
   cpSync(cliRoot, externalCli, { recursive: true });
   rmSync(cliRoot, { recursive: true });

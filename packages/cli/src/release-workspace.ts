@@ -269,7 +269,7 @@ export async function installPinnedReleaseDependencies(
   assertPinnedTargetPaths(workspace.gameRoot, workspace.input);
   await runReleaseProcess({
     command: 'pnpm',
-    args: ['install', '--frozen-lockfile'],
+    args: ['install', '--frozen-lockfile', '--prod=false'],
     cwd: workspace.workspaceRoot,
     environment: options.environment ?? process.env,
     timeoutMs: options.timeoutMs ?? defaultInstallTimeoutMs,
@@ -315,6 +315,7 @@ export async function runPinnedNativeBuild(
     }
   }
   delete environment.MPGD_KIT_PATH;
+  delete environment.MPGD_CLI_ARGV;
   delete environment.MPGD_RUN_IOS_ARCHIVE;
   delete environment.MPGD_RUN_IOS_SIMULATOR_BUILD;
   const statusFile = path.join(
@@ -565,6 +566,9 @@ function assertInstalledKitIdentity(workspace: PinnedReleaseWorkspace): string {
   }
   const cliExecutable = path.join(packageRoot, 'dist/bin.js');
   assertInsideCheckout(workspace.workspaceRoot, cliExecutable, 'CLI executable');
+  const requireCli = createRequire(cliEntry);
+  const targetMatrix = requireCli.resolve('@mpgd/target-config/targets.json');
+  assertInsideCheckout(workspace.workspaceRoot, targetMatrix, 'target-config matrix');
   if (packageJson.version !== workspace.input.kitPackageVersion
     || buildInfo.packageVersion !== workspace.input.kitPackageVersion
     || buildInfo.kitGitSha !== workspace.input.kitGitSha

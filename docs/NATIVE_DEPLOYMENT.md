@@ -89,3 +89,7 @@ cannot be a symlink to another location. Before dependency installation,
 tracked symlinks anywhere in the game repository are checked so they cannot
 point outside the cloned checkout; this also covers optional target-config
 extensions and workspace package sources.
+The install explicitly includes development dependencies because game build
+tools are normally declared there. The pinned child clears the parent CLI's
+argument override, and the installed target-config matrix must resolve inside
+the checkout along with the CLI itself.
