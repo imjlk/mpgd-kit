@@ -12,16 +12,62 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
+import typia from 'typia';
 
 import {
   allocatePlatformVersions,
   assertPlatformVersionLedger,
+  createMpgdReleaseIdentity,
+  formatMpgdReleaseId,
+  type MpgdReleaseIdentity,
   type PlatformVersionLedger,
   type PlatformVersionReleasePlan,
   type PlatformVersionTargetRequest,
 } from '@mpgd/target-config';
 
 import { runReleaseProcess, type ReleaseProcessInput } from './deploy-process.js';
+
+// Build-time mirror of the private @mpgd/release-manifest schema. The packaged CLI
+// must not import that workspace-only package; fixture tests cross-check both.
+interface ReleaseManifest {
+  readonly releaseId: string;
+  readonly gitSha: string;
+  readonly kitGitSha: string;
+  readonly gameVersion: string;
+  readonly releaseIdentity?: MpgdReleaseIdentity;
+  readonly buildId: string;
+  readonly targetConfigVersion: string;
+  readonly catalogVersion: string;
+  readonly adPlacementVersion: string;
+  readonly targets: Record<string, {
+    readonly artifact: string;
+    readonly profile?: string;
+    readonly effectiveConfig: { readonly path: string; readonly version: string; readonly digest: string };
+    readonly iconManifest: {
+      readonly path: string;
+      readonly digest: string;
+      readonly sourceSha256: string;
+      readonly sharedConfigSha256: string;
+      readonly renderConfigSha256: string;
+      readonly generatorVersion: string;
+      readonly targetProfile: string;
+      readonly targetProfileVersion: string;
+    };
+    readonly versionName?: string;
+    readonly versionCode?: number;
+    readonly marketingVersion?: string;
+    readonly buildNumber?: string;
+    readonly nativeDelivery?: {
+      readonly platform: 'android' | 'ios';
+      readonly mode: 'sync' | 'debug' | 'simulator' | 'unsigned-archive'
+        | 'signed-archive' | 'store-export';
+      readonly signed: boolean;
+      readonly submissionCandidate: boolean;
+    };
+    readonly appName?: string;
+    readonly sdkMajor?: number;
+  }>;
+}
 
 export interface NativeReleaseReservationInput {
   readonly gameRoot: string;
@@ -59,7 +105,8 @@ export interface ImmutableNativeBuildRecord {
   readonly artifactSha256: string;
   readonly releaseManifestSha256: string;
   readonly inspectedAppId: string;
-  readonly inspectedSignerSha256: string;
+  readonly inspectedSignerSha256?: string | undefined;
+  readonly inspectedTeamId?: string | undefined;
 }
 
 export interface RecordNativeBuildInput {
@@ -76,12 +123,14 @@ export interface RecordNativeBuildInput {
   readonly releaseManifestFile: string;
   readonly expectedReleaseManifestSha256: string;
   readonly inspectedAppId: string;
-  readonly inspectedSignerSha256: string;
+  readonly inspectedSignerSha256?: string | undefined;
+  readonly inspectedTeamId?: string | undefined;
   readonly environment?: NodeJS.ProcessEnv;
   readonly signal?: AbortSignal;
 }
 
 interface GameReleaseState {
+  readonly initialLedger: PlatformVersionLedger;
   readonly ledger: PlatformVersionLedger;
   readonly reservations: Record<string, PlatformVersionReleasePlan>;
   readonly builds: Record<string, ImmutableNativeBuildRecord>;
@@ -106,6 +155,54 @@ const stateFileName = 'mpgd-release-state.json';
 const releaseKeyPattern = /^[a-z0-9][a-z0-9._-]{0,127}$/u;
 const gitShaPattern = /^[0-9a-f]{40}$/u;
 const sha256Pattern = /^[0-9a-f]{64}$/u;
+const androidFingerprintPattern = /^(?:[0-9a-fA-F]{2}:){31}[0-9a-fA-F]{2}$|^[0-9a-fA-F]{64}$/u;
+const teamIdPattern = /^[A-Z0-9]{10}$/u;
+const assertReleaseManifestStructure = typia.createAssert<ReleaseManifest>();
+
+function normalizeAndroidFingerprint(value: string): string {
+  return value.replaceAll(':', '').toLowerCase();
+}
+
+/** Match the private manifest package's complete schema without a runtime workspace dependency. */
+function assertCompleteReleaseManifest(value: unknown): ReleaseManifest {
+  const manifest = assertReleaseManifestStructure(value);
+  if (!gitShaPattern.test(manifest.kitGitSha)) {
+    throw new Error('Native release manifest Kit revision is invalid.');
+  }
+  for (const [target, entry] of Object.entries(manifest.targets)) {
+    const delivery = entry.nativeDelivery;
+    if (delivery === undefined) {
+      continue;
+    }
+    const expectedSigned = delivery.mode === 'signed-archive' || delivery.mode === 'store-export';
+    const validMode = delivery.platform === 'android'
+      ? ['debug', 'unsigned-archive', 'signed-archive'].includes(delivery.mode)
+      : ['sync', 'simulator', 'unsigned-archive', 'signed-archive', 'store-export']
+        .includes(delivery.mode);
+    const expectedCandidate = entry.profile === 'production' && (delivery.platform === 'android'
+      ? delivery.mode === 'signed-archive' : delivery.mode === 'store-export');
+    if (!validMode || delivery.signed !== expectedSigned
+      || delivery.submissionCandidate !== expectedCandidate
+      || (entry.profile === 'production' && !delivery.signed)) {
+      throw new Error(`Native release manifest delivery is invalid: ${target}.`);
+    }
+  }
+  if (manifest.releaseIdentity !== undefined) {
+    const identity = createMpgdReleaseIdentity({
+      gameVersion: manifest.releaseIdentity.gameVersion,
+      ...(manifest.releaseIdentity.releaseRevision === undefined
+        ? {} : { releaseRevision: manifest.releaseIdentity.releaseRevision }),
+      expectedLabel: manifest.releaseIdentity.label,
+    });
+    if (manifest.releaseIdentity.label !== identity.label
+      || manifest.releaseIdentity.gameVersion !== identity.gameVersion
+      || manifest.gameVersion !== identity.gameVersion
+      || manifest.releaseId !== formatMpgdReleaseId(identity.label, manifest.buildId)) {
+      throw new Error('Native release manifest identity is invalid.');
+    }
+  }
+  return manifest;
+}
 
 /** Reserve version numbers by committing the ledger and plan atomically. */
 export async function reserveNativeRelease(
@@ -164,6 +261,7 @@ export async function reserveNativeRelease(
       return { plan: existingPlan, stateCommit: session.previousCommit, reused: true };
     }
     const nextGame: GameReleaseState = {
+      initialLedger: game?.initialLedger ?? ledger,
       ledger: allocation.ledger,
       reservations: { ...(game?.reservations ?? {}), [input.releaseKey]: allocation.plan },
       builds: game?.builds ?? {},
@@ -184,7 +282,11 @@ export async function recordNativeReleaseBuild(
   assertReleaseKey(input.releaseKey);
   if (input.buildRunId.trim() === '' || input.artifactLocation.trim() === ''
     || input.kitPackageVersion.trim() === ''
-    || input.inspectedAppId.trim() === '' || !sha256Pattern.test(input.inspectedSignerSha256)
+    || input.inspectedAppId.trim() === ''
+    || (input.target === 'android' && (input.inspectedTeamId !== undefined
+      || !androidFingerprintPattern.test(input.inspectedSignerSha256 ?? '')))
+    || (input.target === 'ios' && (input.inspectedSignerSha256 !== undefined
+      || !teamIdPattern.test(input.inspectedTeamId ?? '')))
     || !sha256Pattern.test(input.buildConfigDigest)) {
     throw new Error('Native build record is missing a run ID, artifact location, or inspection.');
   }
@@ -212,14 +314,14 @@ export async function recordNativeReleaseBuild(
     } catch {
       throw new Error('Native release manifest is not valid JSON.');
     }
-    if (typeof manifest !== 'object' || manifest === null || Array.isArray(manifest)
-      || (manifest as Record<string, unknown>).gitSha !== plan.sourceGitSha
-      || (manifest as Record<string, unknown>).kitGitSha !== plan.kitGitSha
-      || (manifest as Record<string, unknown>).buildId !== plan.buildId
-      || (manifest as Record<string, unknown>).gameVersion !== plan.gameVersion) {
+    const validatedManifest = assertCompleteReleaseManifest(manifest);
+    if (validatedManifest.gitSha !== plan.sourceGitSha
+      || validatedManifest.kitGitSha !== plan.kitGitSha
+      || validatedManifest.buildId !== plan.buildId
+      || validatedManifest.gameVersion !== plan.gameVersion) {
       throw new Error('Native build manifest does not match its reserved provenance.');
     }
-    const manifestRecord = manifest as Record<string, unknown>;
+    const manifestRecord = validatedManifest as unknown as Record<string, unknown>;
     const releaseIdentity = manifestRecord.releaseIdentity;
     if (typeof releaseIdentity !== 'object' || releaseIdentity === null
       || Array.isArray(releaseIdentity)
@@ -268,7 +370,9 @@ export async function recordNativeReleaseBuild(
       artifactSha256,
       releaseManifestSha256,
       inspectedAppId: input.inspectedAppId,
-      inspectedSignerSha256: input.inspectedSignerSha256,
+      ...(input.target === 'android'
+        ? { inspectedSignerSha256: normalizeAndroidFingerprint(input.inspectedSignerSha256 ?? '') }
+        : { inspectedTeamId: input.inspectedTeamId ?? '' }),
     };
     const key = `${input.releaseKey}/${input.target}`;
     const previous = ownValue(game.builds, key);
@@ -374,7 +478,7 @@ async function withStateSession<T>(
 
 function resolveRemoteUrl(repositoryRoot: string, remoteUrl: string): string {
   if (!path.isAbsolute(remoteUrl)
-    && !/^(?:[a-z][a-z0-9+.-]*:\/\/|[^/]+@[^:]+:)/iu.test(remoteUrl)) {
+    && !/^(?:[a-z][a-z0-9+.-]*:\/\/|[^/\s:]+:[^/])/iu.test(remoteUrl)) {
     return path.resolve(repositoryRoot, remoteUrl);
   }
   return remoteUrl;
@@ -389,6 +493,8 @@ async function commitState(session: StateSession, state: ReleaseState, subject: 
     'user.name=mpgd-release',
     '-c',
     'user.email=mpgd-release@example.invalid',
+    '-c',
+    `core.hooksPath=${path.join(session.directory, '.mpgd-no-hooks')}`,
     'commit',
     '--no-gpg-sign',
     '-qm',
@@ -454,13 +560,14 @@ function parseReleaseState(json: string): ReleaseState {
       throw new Error(`Release state game ${gameId} is malformed.`);
     }
     const game = rawGame as Record<string, unknown>;
-    if (Object.keys(game).some((key) => !['ledger', 'reservations', 'builds'].includes(key))
+    if (Object.keys(game).some((key) => !['initialLedger', 'ledger', 'reservations', 'builds'].includes(key))
       || typeof game.reservations !== 'object' || game.reservations === null
       || Array.isArray(game.reservations)
       || typeof game.builds !== 'object' || game.builds === null
       || Array.isArray(game.builds)) {
       throw new Error(`Release state game ${gameId} has invalid entries.`);
     }
+    const initialLedger = assertPlatformVersionLedger(game.initialLedger);
     const ledger = assertPlatformVersionLedger(game.ledger);
     const plans: PlatformVersionReleasePlan[] = [];
     for (const [releaseKey, rawPlan] of Object.entries(game.reservations)) {
@@ -506,7 +613,7 @@ function parseReleaseState(json: string): ReleaseState {
       }
       plans.push(plan);
     }
-    assertReservationHistory(gameId, ledger, plans);
+    assertReservationHistory(gameId, initialLedger, ledger, plans);
     for (const [buildKey, rawBuild] of Object.entries(game.builds)) {
       assertStoredBuildRecord(
         gameId,
@@ -535,6 +642,7 @@ const buildRecordFields = [
   'releaseManifestSha256',
   'inspectedAppId',
   'inspectedSignerSha256',
+  'inspectedTeamId',
 ] as const;
 
 function assertStoredBuildRecord(
@@ -564,7 +672,10 @@ function assertStoredBuildRecord(
     || !sha256Pattern.test(String(record.buildConfigDigest))
     || !sha256Pattern.test(String(record.artifactSha256))
     || !sha256Pattern.test(String(record.releaseManifestSha256))
-    || !sha256Pattern.test(String(record.inspectedSignerSha256))
+    || (record.target === 'android' && (record.inspectedTeamId !== undefined
+      || !sha256Pattern.test(String(record.inspectedSignerSha256))))
+    || (record.target === 'ios' && (record.inspectedSignerSha256 !== undefined
+      || !teamIdPattern.test(String(record.inspectedTeamId))))
     || !isRecord(record.platformVersion)) {
     malformed();
   }
@@ -581,6 +692,7 @@ function assertStoredBuildRecord(
 
 function assertReservationHistory(
   gameId: string,
+  initialLedger: PlatformVersionLedger,
   ledger: PlatformVersionLedger,
   plans: readonly PlatformVersionReleasePlan[],
 ): void {
@@ -588,6 +700,9 @@ function assertReservationHistory(
     throw new Error(`Release state game ${gameId} has no reservation history.`);
   }
   const ordered = [...plans].sort((left, right) => left.releaseRevision - right.releaseRevision);
+  if (ordered[0]?.releaseRevision !== initialLedger.releaseRevision.lastAllocated + 1) {
+    throw new Error(`Release state game ${gameId} has a truncated reservation history.`);
+  }
   for (let index = 1; index < ordered.length; index += 1) {
     if (ordered[index]?.releaseRevision !== Number(ordered[index - 1]?.releaseRevision) + 1) {
       throw new Error(`Release state game ${gameId} has nonconsecutive release revisions.`);
@@ -602,6 +717,12 @@ function assertReservationHistory(
       const entry = plan.targets[target];
       return entry === undefined ? [] : [Number(entry[key])];
     });
+    const initialVersion = target === 'android'
+      ? initialLedger.platforms.android?.versionCode
+      : initialLedger.platforms.ios?.buildNumber;
+    if (versions.length > 0 && versions[0] !== Number(initialVersion ?? 0) + 1) {
+      throw new Error(`Release state game ${gameId} has a truncated ${target} history.`);
+    }
     for (let index = 1; index < versions.length; index += 1) {
       if (versions[index] !== Number(versions[index - 1]) + 1) {
         throw new Error(`Release state game ${gameId} has nonconsecutive ${target} numbers.`);
@@ -650,6 +771,7 @@ function isolatedGitEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     'GIT_COMMON_DIR',
     'GIT_OBJECT_DIRECTORY',
     'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+    'GIT_NAMESPACE',
   ]) {
     delete environment[name];
   }

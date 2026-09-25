@@ -5,7 +5,8 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import type { PlatformVersionLedger } from '@mpgd/target-config';
+import { assertReleaseManifest } from '@mpgd/release-manifest';
+import { formatMpgdReleaseId, type PlatformVersionLedger } from '@mpgd/target-config';
 
 import { recordNativeReleaseBuild, reserveNativeRelease } from './release-state.js';
 
@@ -21,6 +22,7 @@ for (const name of [
   'GIT_COMMON_DIR',
   'GIT_OBJECT_DIRECTORY',
   'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  'GIT_NAMESPACE',
 ]) {
   delete gitEnvironment[name];
 }
@@ -259,13 +261,17 @@ process.exit(result.status ?? 1);
     initialLedger: undefined,
     environment: {
       ...process.env,
-      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_COUNT: '2',
       GIT_CONFIG_KEY_0: 'commit.gpgSign',
       GIT_CONFIG_VALUE_0: 'true',
+      GIT_CONFIG_KEY_1: 'core.hooksPath',
+      GIT_CONFIG_VALUE_1: path.join(fixture, 'unavailable-hook-directory'),
       GIT_DEFAULT_HASH: 'sha256',
+      GIT_NAMESPACE: 'unrelated-test-namespace',
     },
   });
   assert.match(unsignedState.stateCommit, /^[a-f0-9]{40}$/u);
+  assert.equal(git(['rev-parse', 'refs/heads/release-state'], bare), unsignedState.stateCommit);
   await assert.rejects(
     reserveNativeRelease({ ...firstInput, gameVersion: '1.0.1', initialLedger: undefined }),
     /immutable|match|identity/u,
@@ -275,10 +281,14 @@ process.exit(result.status ?? 1);
   const releaseManifestFile = path.join(fixture, 'release-manifest.json');
   writeFileSync(artifactFile, 'signed candidate');
   writeFileSync(releaseManifestFile, `${JSON.stringify({
+    releaseId: formatMpgdReleaseId(first.plan.releaseLabel, first.plan.buildId),
     gitSha: first.plan.sourceGitSha,
     kitGitSha: first.plan.kitGitSha,
     buildId: first.plan.buildId,
     gameVersion: first.plan.gameVersion,
+    targetConfigVersion: '1',
+    catalogVersion: '1',
+    adPlacementVersion: '1',
     releaseIdentity: {
       gameVersion: first.plan.gameVersion,
       releaseRevision: first.plan.releaseRevision,
@@ -287,6 +297,12 @@ process.exit(result.status ?? 1);
     targets: {
       android: {
         artifact: 'game.aab',
+        effectiveConfig: { path: 'effective.json', version: '1', digest },
+        iconManifest: {
+          path: 'icons.json', digest, sourceSha256: digest,
+          sharedConfigSha256: digest, renderConfigSha256: digest,
+          generatorVersion: '1', targetProfile: 'android', targetProfileVersion: '1',
+        },
         profile: 'production',
         versionCode: first.plan.targets.android?.versionCode,
         versionName: first.plan.targets.android?.versionName,
@@ -313,14 +329,29 @@ process.exit(result.status ?? 1);
     releaseManifestFile,
     expectedReleaseManifestSha256: sha256(releaseManifestFile),
     inspectedAppId: 'dev.mpgd.alpha',
-    inspectedSignerSha256: 'e'.repeat(64),
+    inspectedSignerSha256: 'E'.repeat(64),
   };
   await assert.rejects(
     recordNativeReleaseBuild({ ...buildInput, kitPackageVersion: '  ' }),
     /missing a run ID/u,
   );
+  const validManifestBytes = readFileSync(releaseManifestFile);
+  assert.doesNotThrow(() => assertReleaseManifest(JSON.parse(validManifestBytes.toString('utf8'))));
+  const incompleteManifest = JSON.parse(validManifestBytes.toString('utf8'));
+  delete incompleteManifest.targets.android.iconManifest;
+  assert.throws(() => assertReleaseManifest(incompleteManifest));
+  writeFileSync(releaseManifestFile, `${JSON.stringify(incompleteManifest)}\n`);
+  await assert.rejects(
+    recordNativeReleaseBuild({
+      ...buildInput,
+      expectedReleaseManifestSha256: sha256(releaseManifestFile),
+    }),
+    /iconManifest|expected|property/u,
+  );
+  writeFileSync(releaseManifestFile, validManifestBytes);
   const built = await recordNativeReleaseBuild(buildInput);
   assert.match(built.record.artifactSha256, /^[a-f0-9]{64}$/u);
+  assert.equal(built.record.inspectedSignerSha256, 'e'.repeat(64));
   assert.equal(built.record.gameVersion, '1.0.0');
   assert.equal(built.record.platformVersion.versionCode, 41);
   const repeated = await recordNativeReleaseBuild(buildInput);
@@ -329,10 +360,14 @@ process.exit(result.status ?? 1);
   const iosManifestFile = path.join(fixture, 'ios-release-manifest.json');
   writeFileSync(iosArtifactFile, 'signed iOS candidate');
   writeFileSync(iosManifestFile, `${JSON.stringify({
+    releaseId: formatMpgdReleaseId(first.plan.releaseLabel, first.plan.buildId),
     gitSha: first.plan.sourceGitSha,
     kitGitSha: first.plan.kitGitSha,
     buildId: first.plan.buildId,
     gameVersion: first.plan.gameVersion,
+    targetConfigVersion: '1',
+    catalogVersion: '1',
+    adPlacementVersion: '1',
     releaseIdentity: {
       gameVersion: first.plan.gameVersion,
       releaseRevision: first.plan.releaseRevision,
@@ -341,6 +376,12 @@ process.exit(result.status ?? 1);
     targets: {
       ios: {
         artifact: 'game.ipa',
+        effectiveConfig: { path: 'effective.json', version: '1', digest },
+        iconManifest: {
+          path: 'icons.json', digest, sourceSha256: digest,
+          sharedConfigSha256: digest, renderConfigSha256: digest,
+          generatorVersion: '1', targetProfile: 'ios', targetProfileVersion: '1',
+        },
         profile: 'production',
         buildNumber: String(first.plan.targets.ios?.buildNumber),
         marketingVersion: first.plan.targets.ios?.marketingVersion,
@@ -362,8 +403,11 @@ process.exit(result.status ?? 1);
     releaseManifestFile: iosManifestFile,
     expectedReleaseManifestSha256: sha256(iosManifestFile),
     inspectedAppId: 'dev.mpgd.alpha.ios',
+    inspectedSignerSha256: undefined,
+    inspectedTeamId: 'ABCDEFGHIJ',
   });
   assert.equal(iosBuilt.record.platformVersion.buildNumber, 51);
+  assert.equal(iosBuilt.record.inspectedTeamId, 'ABCDEFGHIJ');
   writeFileSync(artifactFile, 'different bytes');
   await assert.rejects(recordNativeReleaseBuild(buildInput), /differs from the verified build/u);
   await assert.rejects(
@@ -459,7 +503,7 @@ process.exit(result.status ?? 1);
     stateEdit,
   );
   git(['push', 'origin', 'HEAD:release-state'], stateEdit);
-  await assert.rejects(recordNativeReleaseBuild(buildInput), /nonconsecutive ios numbers/u);
+  await assert.rejects(recordNativeReleaseBuild(buildInput), /truncated ios history/u);
   reordered.games.alpha.reservations['beta-01'].targets.ios.buildNumber = 51;
   writeFileSync(stateFile, `${JSON.stringify(reordered)}\n`);
   git(['add', '.'], stateEdit);
@@ -515,6 +559,29 @@ process.exit(result.status ?? 1);
   await assert.rejects(
     reserveNativeRelease({ ...firstInput, initialLedger: undefined }),
     /no reservation history/u,
+  );
+  reordered.games.alpha.reservations = {
+    'beta-02': recordState.games.alpha.reservations['beta-02'],
+  };
+  reordered.games.alpha.builds = {};
+  writeFileSync(stateFile, `${JSON.stringify(reordered)}\n`);
+  git(['add', '.'], stateEdit);
+  git(
+    [
+      '-c',
+      'user.name=mpgd-test',
+      '-c',
+      'user.email=mpgd-test@example.invalid',
+      'commit',
+      '-qm',
+      'drop first reservation',
+    ],
+    stateEdit,
+  );
+  git(['push', 'origin', 'HEAD:release-state'], stateEdit);
+  await assert.rejects(
+    reserveNativeRelease({ ...firstInput, initialLedger: undefined }),
+    /truncated reservation history/u,
   );
   console.info('Git-backed release reservation and immutable build record passed.');
 } finally {

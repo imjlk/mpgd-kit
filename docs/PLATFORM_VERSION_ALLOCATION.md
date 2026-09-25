@@ -95,7 +95,9 @@ It stores one JSON document containing each game's ledger, release plans,
 and build records on the game repository's `release-state` branch. An
 explicit initial ledger is required for the first reservation of each game;
 existing store version histories must be entered deliberately, not guessed
-as zero. A successful reservation commits the new ledger and plan together
+as zero. The initial ledger is retained as an adoption baseline, so missing
+early reservations or platform numbers are rejected on later reads. A
+successful reservation commits the new ledger and plan together
 and pushes with a lease on the previously observed branch revision. If
 another writer updates the branch first, reservation fails and must be
 retried with the same release key after reading remote state. A lost push
@@ -107,8 +109,10 @@ consuming another number; changing its target set or provenance fails.
 Android or iOS build, including game/Kit versions, source/Kit/config provenance,
 the build-configuration digest and reserved platform numbers, artifact
 location and SHA-256, manifest SHA-256, build run ID, and identity/signing
-inspection supplied by the verified builder. It checks the copied artifact
-and manifest against expected hashes and compares the signed manifest with
+inspection supplied by the verified builder: a normalized certificate SHA-256
+for Android or the inspected team ID for iOS. It checks the copied artifact
+and complete release manifest against the current schema and expected hashes,
+then compares the signed manifest with
 reserved platform numbers. A record cannot be replaced with different
 content, including a rebuild with a different run ID. A replacement binary
 requires a new release key and number. The release-state branch is game-owned
