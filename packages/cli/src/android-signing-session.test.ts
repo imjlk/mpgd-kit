@@ -20,6 +20,7 @@ import {
 const fixture = mkdtempSync(path.join(tmpdir(), 'mpgd-android-signing-test-'));
 const sessions = path.join(fixture, 'sessions');
 const keystore = path.join(fixture, 'upload.jks');
+const pkcs12Keystore = path.join(fixture, 'upload.p12');
 const storePassword = 'throwaway-store-password';
 const keyPassword = 'throwaway-key-password';
 const keyAlias = 'mpgd-upload';
@@ -132,6 +133,55 @@ try {
   assert.deepEqual(readdirSync(sessions), []);
   await assert.rejects(
     prepareAndroidUploadSigningSession({ ...input, keyPassword: 'wrong-key-password' }),
+  );
+  assert.deepEqual(readdirSync(sessions), []);
+  keytool([
+    '-genkeypair',
+    '-noprompt',
+    '-alias',
+    keyAlias,
+    '-keyalg',
+    'RSA',
+    '-keysize',
+    '2048',
+    '-validity',
+    '30',
+    '-dname',
+    'CN=mpgd-pkcs12-test,O=mpgd,C=US',
+    '-keystore',
+    pkcs12Keystore,
+    '-storetype',
+    'PKCS12',
+    '-storepass',
+    storePassword,
+    '-keypass',
+    storePassword,
+  ]);
+  const pkcs12Description = keytool([
+    '-J-Duser.language=en',
+    '-list',
+    '-v',
+    '-keystore',
+    pkcs12Keystore,
+    '-alias',
+    keyAlias,
+    '-storepass',
+    storePassword,
+  ]);
+  const pkcs12Fingerprint = /\bSHA256:\s*((?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2})/u
+    .exec(pkcs12Description)?.[1]?.replace(/:/gu, '').toUpperCase();
+  assert.match(pkcs12Fingerprint ?? '', /^[0-9A-F]{64}$/u);
+  const pkcs12Input = {
+    ...input,
+    keystoreFile: pkcs12Keystore,
+    keyPassword: storePassword,
+    expectedCertSha256: pkcs12Fingerprint ?? '',
+  };
+  const pkcs12Session = await prepareAndroidUploadSigningSession(pkcs12Input);
+  pkcs12Session.dispose();
+  await assert.rejects(
+    prepareAndroidUploadSigningSession({ ...pkcs12Input, keyPassword: 'wrong-key-password' }),
+    /PKCS12 upload signing requires/u,
   );
   assert.deepEqual(readdirSync(sessions), []);
   await assert.rejects(

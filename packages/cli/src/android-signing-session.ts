@@ -123,6 +123,34 @@ export async function prepareAndroidUploadSigningSession(
     if (observed !== expectedCertSha256) {
       throw new Error('Android upload keystore certificate does not match the expected SHA-256.');
     }
+    const typeListing = await runReleaseProcess({
+      command: keytool,
+      args: [
+        '-J-Duser.language=en',
+        '-list',
+        '-keystore',
+        temporaryKeystore,
+        '-storepass:env',
+        'MPGD_ANDROID_SIGNING_STORE_PASSWORD',
+      ],
+      cwd: ownedRoot,
+      environment,
+      timeoutMs: 30_000,
+      signal: input.signal,
+      secretValues,
+      captureMachineStdout: true,
+    });
+    if (typeListing.truncated || typeListing.machineStdout === undefined) {
+      throw new Error('Android upload keystore type inspection output was truncated.');
+    }
+    // -list -v with -alias omits the keystore type. PKCS12 ignores a distinct
+    // key password during -certreq, so Gradle must receive the store password.
+    if (/^Keystore type:\s*PKCS12\s*$/imu.test(typeListing.machineStdout)
+      && input.keyPassword !== input.storePassword) {
+      throw new Error(
+        'PKCS12 upload signing requires the key password to equal the store password.',
+      );
+    }
     await runReleaseProcess({
       command: keytool,
       args: [
