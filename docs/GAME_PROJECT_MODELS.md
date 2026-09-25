@@ -135,7 +135,8 @@ one common version number from the CLI:
 
 If the target config has another game-owned filename, pass
 --targets-file <filename> relative to that game directory. The plan does
-not read or rewrite target files outside the owning game directory.
+not read or rewrite game-owned target files outside the owning game directory;
+readiness hints also consult the CLI's published built-in target policy.
 
 The plan covers the game manifest and wrappers or shells referenced by
 mpgd.targets.json. It skips Kit-owned external shells and non-SemVer local
@@ -143,6 +144,15 @@ dependencies, reports unsupported SemVer ranges and incompatible declared peers,
 and lists every pnpm lockfile that the apply step will refresh. Apply refuses a
 blocked or stale plan and restores the original manifests and lockfiles if a
 lockfile update fails.
+
+The plan also reports non-blocking target advisories for missing product or ad
+placement platform IDs when a configured built-in target enables those features.
+These read-only hints use the current CLI policy and default game-owned catalog
+and placement files. Custom target policies and custom catalog paths are marked
+not assessed; use target validation after applying the upgrade. An unassessed
+target is not claimed ready. Advisories never edit IDs or prevent dependency
+updates.
+
 Without a Git boundary, lockfile discovery stays inside the game directory
 instead of adopting an unrelated ancestor's lockfile.
 Existing workspace-root package dependencies are not rewritten on behalf of

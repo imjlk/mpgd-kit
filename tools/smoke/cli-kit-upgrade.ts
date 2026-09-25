@@ -125,9 +125,36 @@ try {
     targets: {
       web: { kind: 'web', gameApp: '.' },
       ait: { kind: 'apps-in-toss', wrapperApp: '${MPGD_GAME_ROOT}/apps/target-a' },
-      android: { kind: 'capacitor-android', shellApp: 'apps/target-mobile' },
+      android: {
+        kind: 'capacitor-android',
+        shellApp: 'apps/target-mobile',
+        authoritativeGameServices: false,
+      },
       ios: { kind: 'capacitor-ios', shellApp: '$' + '{MPGD_KIT_PATH}/apps/mobile-capacitor' },
     },
+  });
+  writeJson(path.join(game, 'mpgd.catalog.json'), {
+    version: 'test',
+    products: [
+      {
+        id: 'COIN_PACK',
+        type: 'consumable',
+        grant: { type: 'currency', currency: 'coin', amount: 10 },
+        platformProductIds: { ait: 'coins-ait' },
+      },
+    ],
+  });
+  writeJson(path.join(game, 'mpgd.ad-placements.json'), {
+    version: 'test',
+    placements: [
+      {
+        id: 'REVIVE',
+        type: 'rewarded',
+        reward: { type: 'continue', amount: 1 },
+        frequencyCap: { cooldownSeconds: 30 },
+        platformPlacementIds: { ait: 'revive-ait' },
+      },
+    ],
   });
 
   const before = readFileSync(gamePackage, 'utf8');
@@ -145,7 +172,100 @@ try {
   assert.ok(plan.notes.some((note) => note.includes('external target')));
   assert.ok(plan.notes.some((note) => note.includes('workspace:*')));
   assert.ok(!plan.notes.some((note) => note.includes('requires peer @capacitor/core')));
+  assert.ok(plan.targetAdvisories.some((advisory) =>
+    advisory.target === 'ios'
+      && advisory.kind === 'missing-product-id'
+      && advisory.logicalId === 'COIN_PACK'));
+  assert.ok(plan.targetAdvisories.some((advisory) =>
+    advisory.target === 'ios'
+      && advisory.kind === 'missing-placement-id'
+      && advisory.logicalId === 'REVIVE'));
+  assert.ok(!plan.targetAdvisories.some((advisory) => advisory.target === 'android'));
+  assert.ok(!plan.targetAdvisories.some((advisory) => advisory.target === 'ait'));
+  assert.ok(plan.targetAdvisories.some((advisory) =>
+    advisory.target === 'web' && advisory.kind === 'not-assessed'));
   assert.deepEqual(plan.workspaceRoots, [workspace, game]);
+  const previousCatalogOverride = process.env.MPGD_PRODUCT_CATALOG_FILE;
+  process.env.MPGD_PRODUCT_CATALOG_FILE = 'custom-catalog.json';
+  try {
+    const customCatalogReadiness = await planKitUpgrade(game, lookup);
+    assert.equal(customCatalogReadiness.blockers.length, 0);
+    assert.ok(customCatalogReadiness.targetAdvisories.some((advisory) =>
+      advisory.kind === 'not-assessed' && advisory.message.includes('Custom catalog')));
+  } finally {
+    if (previousCatalogOverride === undefined) {
+      delete process.env.MPGD_PRODUCT_CATALOG_FILE;
+    } else {
+      process.env.MPGD_PRODUCT_CATALOG_FILE = previousCatalogOverride;
+    }
+  }
+
+  const configuredTargetsFile = path.join(game, 'mpgd.targets.json');
+  const configuredTargetsBefore = readFileSync(configuredTargetsFile, 'utf8');
+  const malformedTargets = readJson(configuredTargetsFile);
+  (malformedTargets.targets as Record<string, unknown>).android = 'malformed';
+  writeJson(configuredTargetsFile, malformedTargets);
+  try {
+    const partialReadiness = await planKitUpgrade(game, lookup);
+    assert.ok(partialReadiness.targetAdvisories.some((advisory) =>
+      advisory.target === 'android' && advisory.kind === 'not-assessed'));
+    assert.ok(partialReadiness.targetAdvisories.some((advisory) =>
+      advisory.target === 'ios' && advisory.kind === 'missing-product-id'));
+  } finally {
+    writeFileSync(configuredTargetsFile, configuredTargetsBefore);
+  }
+
+  const catalogFile = path.join(game, 'mpgd.catalog.json');
+  const placementsFile = path.join(game, 'mpgd.ad-placements.json');
+  const catalogBefore = readFileSync(catalogFile, 'utf8');
+  const placementsBefore = readFileSync(placementsFile, 'utf8');
+  unlinkSync(catalogFile);
+  try {
+    const incompleteReadiness = await planKitUpgrade(game, lookup);
+    assert.equal(incompleteReadiness.blockers.length, 0);
+    assert.ok(incompleteReadiness.targetAdvisories.some((advisory) =>
+      advisory.kind === 'not-assessed' && advisory.message.includes('mpgd.catalog.json')));
+    unlinkSync(placementsFile);
+    const nonMonetizedReadiness = await planKitUpgrade(game, lookup);
+    assert.equal(nonMonetizedReadiness.blockers.length, 0);
+    assert.ok(nonMonetizedReadiness.targetAdvisories.some((advisory) =>
+      advisory.target === 'web' && advisory.kind === 'not-assessed'));
+    assert.ok(!nonMonetizedReadiness.targetAdvisories.some((advisory) =>
+      advisory.target === '*'));
+    assert.ok(!nonMonetizedReadiness.targetAdvisories.some((advisory) =>
+      advisory.kind === 'missing-product-id' || advisory.kind === 'missing-placement-id'));
+  } finally {
+    writeFileSync(catalogFile, catalogBefore);
+    writeFileSync(placementsFile, placementsBefore);
+  }
+
+  const basePolicies = readJson(path.join('packages', 'target-config', 'targets.json'));
+  const baseTargets = basePolicies.targets as Record<string, Record<string, unknown>>;
+  const webPreview = baseTargets['web-preview'];
+  assert.ok(webPreview);
+  const extensionFile = path.join(game, 'mpgd.target-config.json');
+  writeJson(extensionFile, {
+    schemaVersion: 1,
+    targets: {
+      web: {
+        ...webPreview,
+        runtime: 'web',
+        release: { profile: 'web' },
+        features: { ...webPreview.features as Record<string, unknown>, rewardedAds: true },
+        monetization: { ...webPreview.monetization as Record<string, unknown>, rewardedAds: true },
+      },
+    },
+  });
+  try {
+    const extendedReadiness = await planKitUpgrade(game, lookup);
+    assert.ok(extendedReadiness.targetAdvisories.some((advisory) =>
+      advisory.target === 'web' && advisory.kind === 'not-assessed'));
+    assert.ok(!extendedReadiness.targetAdvisories.some((advisory) =>
+      advisory.target === 'web' && advisory.kind === 'missing-placement-id'));
+  } finally {
+    unlinkSync(extensionFile);
+  }
+
   const alternateTargets = path.join(game, 'config', 'alternate.targets.json');
   mkdirSync(path.dirname(alternateTargets), { recursive: true });
   writeJson(alternateTargets, {
@@ -342,11 +462,28 @@ try {
   assert.equal(command.status, 0, command.stderr);
   assert.doesNotMatch(command.stdout, /^mpgd /m, 'JSON output must not include a banner');
   const output = JSON.parse(command.stdout) as {
-    plan: { updates: unknown[] };
+    plan: { updates: unknown[]; targetAdvisories: unknown[] };
     result: unknown;
   };
   assert.equal(output.plan.updates.length, 0);
+  assert.ok(Array.isArray(output.plan.targetAdvisories));
   assert.equal(output.result, null);
+  const textCommand = spawnSync(
+    process.execPath,
+    [
+      'tools/run-ttsx.mjs',
+      '--mpgd-cli',
+      'packages/cli/src/bin.ts',
+      'kit',
+      'upgrade',
+      '--game',
+      game,
+    ],
+    { cwd: process.cwd(), encoding: 'utf8', timeout: 120_000 },
+  );
+  assert.ifError(textCommand.error);
+  assert.equal(textCommand.status, 0, textCommand.stderr);
+  assert.match(textCommand.stdout, /Target advisory \[ios\]: Product COIN_PACK/u);
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
