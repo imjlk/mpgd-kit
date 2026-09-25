@@ -96,6 +96,7 @@ interface StateSession {
   readonly directory: string;
   readonly previousCommit: string | undefined;
   readonly remoteUrl: string;
+  readonly pushUrl: string;
   readonly environment: NodeJS.ProcessEnv;
   readonly signal: AbortSignal | undefined;
   readonly state: ReleaseState;
@@ -112,6 +113,10 @@ export async function reserveNativeRelease(
   input: NativeReleaseReservationInput,
 ): Promise<NativeReleaseReservation> {
   assertReleaseKey(input.releaseKey);
+  if (input.targets.length === 0
+    || input.targets.some((request) => request.target !== 'android' && request.target !== 'ios')) {
+    throw new Error('Native release reservations require Android or iOS targets.');
+  }
   if (!gitShaPattern.test(input.sourceGitSha)) {
     throw new Error('Native release source revision must be a full Git SHA.');
   }
@@ -179,6 +184,7 @@ export async function recordNativeReleaseBuild(
 ): Promise<{ readonly record: ImmutableNativeBuildRecord; readonly stateCommit: string }> {
   assertReleaseKey(input.releaseKey);
   if (input.buildRunId.trim() === '' || input.artifactLocation.trim() === ''
+    || input.kitPackageVersion.trim() === ''
     || input.inspectedAppId.trim() === '' || !sha256Pattern.test(input.inspectedSignerSha256)
     || !sha256Pattern.test(input.buildConfigDigest)) {
     throw new Error('Native build record is missing a run ID, artifact location, or inspection.');
@@ -189,7 +195,8 @@ export async function recordNativeReleaseBuild(
     throw new Error('Native build record requires file artifacts.');
   }
   const artifactSha256 = await sha256(input.artifactFile);
-  const releaseManifestSha256 = await sha256(input.releaseManifestFile);
+  const manifestBytes = readFileSync(input.releaseManifestFile);
+  const releaseManifestSha256 = createHash('sha256').update(manifestBytes).digest('hex');
   if (artifactSha256 !== input.expectedArtifactSha256
     || releaseManifestSha256 !== input.expectedReleaseManifestSha256) {
     throw new Error('Copied native artifact or release manifest differs from the verified build.');
@@ -202,7 +209,7 @@ export async function recordNativeReleaseBuild(
     }
     let manifest: unknown;
     try {
-      manifest = JSON.parse(readFileSync(input.releaseManifestFile, 'utf8'));
+      manifest = JSON.parse(manifestBytes.toString('utf8'));
     } catch {
       throw new Error('Native release manifest is not valid JSON.');
     }
@@ -243,7 +250,7 @@ export async function recordNativeReleaseBuild(
       || target.profile !== 'production'
       || (input.target === 'android' && target.versionCode !== plannedTarget.versionCode)
       || (input.target === 'android' && target.versionName !== plannedTarget.versionName)
-      || (input.target === 'ios' && target.buildNumber !== plannedTarget.buildNumber)
+      || (input.target === 'ios' && target.buildNumber !== String(plannedTarget.buildNumber))
       || (input.target === 'ios' && target.marketingVersion !== plannedTarget.marketingVersion)) {
       throw new Error('Native build manifest does not match reserved signed delivery.');
     }
@@ -295,8 +302,17 @@ async function withStateSession<T>(
   // Keep the origin URL in memory: the redacted process runner must never
   // return a modified URL when its embedded auth matches an environment secret.
   let remoteUrl: string;
+  let pushUrl: string;
   try {
     remoteUrl = execFileSync('git', ['remote', 'get-url', 'origin'], {
+      cwd: input.gameRoot,
+      env: environment,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 10_000,
+      maxBuffer: 64 * 1024,
+    }).trim();
+    pushUrl = execFileSync('git', ['remote', 'get-url', '--push', 'origin'], {
       cwd: input.gameRoot,
       env: environment,
       encoding: 'utf8',
@@ -307,25 +323,25 @@ async function withStateSession<T>(
   } catch {
     throw new Error('Could not read the game repository origin remote.');
   }
-  if (remoteUrl === '') {
+  if (remoteUrl === '' || pushUrl === '') {
     throw new Error('Game repository origin remote is missing.');
   }
-  if (!path.isAbsolute(remoteUrl)
-    && !/^(?:[a-z][a-z0-9+.-]*:\/\/|[^/]+@[^:]+:)/iu.test(remoteUrl)) {
-    remoteUrl = path.resolve(input.gameRoot, remoteUrl);
-  }
+  remoteUrl = resolveRemoteUrl(input.gameRoot, remoteUrl);
+  pushUrl = resolveRemoteUrl(input.gameRoot, pushUrl);
   const directory = mkdtempSync(path.join(tmpdir(), 'mpgd-release-state-'));
   try {
     const session: StateSession = {
       directory,
       previousCommit: undefined,
       remoteUrl,
+      pushUrl,
       environment,
       signal: input.signal,
       state: { schemaVersion: 1, games: {} },
     };
     await git(session, ['init', '-q', directory]);
     await git(session, ['remote', 'add', 'origin', remoteUrl]);
+    await git(session, ['remote', 'set-url', '--push', 'origin', pushUrl]);
     const remoteHead = await git(session, [
       'ls-remote',
       '--heads',
@@ -360,6 +376,14 @@ async function withStateSession<T>(
   }
 }
 
+function resolveRemoteUrl(gameRoot: string, remoteUrl: string): string {
+  if (!path.isAbsolute(remoteUrl)
+    && !/^(?:[a-z][a-z0-9+.-]*:\/\/|[^/]+@[^:]+:)/iu.test(remoteUrl)) {
+    return path.resolve(gameRoot, remoteUrl);
+  }
+  return remoteUrl;
+}
+
 async function commitState(session: StateSession, state: ReleaseState, subject: string): Promise<string> {
   const statePath = path.join(session.directory, stateFileName);
   writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
@@ -370,6 +394,7 @@ async function commitState(session: StateSession, state: ReleaseState, subject: 
     '-c',
     'user.email=mpgd-release@example.invalid',
     'commit',
+    '--no-gpg-sign',
     '-qm',
     subject,
   ]);
@@ -440,8 +465,13 @@ function parseReleaseState(json: string): ReleaseState {
       || Array.isArray(game.builds)) {
       throw new Error(`Release state game ${gameId} has invalid entries.`);
     }
-    assertPlatformVersionLedger(game.ledger);
+    const ledger = assertPlatformVersionLedger(game.ledger);
+    const plans: PlatformVersionReleasePlan[] = [];
     for (const [releaseKey, rawPlan] of Object.entries(game.reservations)) {
+      let targetNames: string[] = [];
+      if (isRecord(rawPlan) && isRecord(rawPlan.targets)) {
+        targetNames = Object.keys(rawPlan.targets);
+      }
       if (!releaseKeyPattern.test(releaseKey) || !isRecord(rawPlan)
         || rawPlan.schemaVersion !== 2 || !isRecord(rawPlan.targets)
         || typeof rawPlan.gameId !== 'string' || rawPlan.gameId !== gameId
@@ -453,10 +483,34 @@ function parseReleaseState(json: string): ReleaseState {
         || !gitShaPattern.test(String(rawPlan.sourceGitSha))
         || !gitShaPattern.test(String(rawPlan.kitGitSha))
         || !sha256Pattern.test(String(rawPlan.targetConfigDigest))
+        || targetNames.length === 0
+        || targetNames.some((target) => target !== 'android' && target !== 'ios')
         || Object.values(rawPlan.targets).some((target) => !isRecord(target))) {
         throw new Error(`Release state game ${gameId} has an invalid reservation ${releaseKey}.`);
       }
+      const plan = rawPlan as unknown as PlatformVersionReleasePlan;
+      try {
+        const checked = allocatePlatformVersions({
+          gameId,
+          gameVersion: plan.gameVersion,
+          sourceGitSha: plan.sourceGitSha,
+          kitGitSha: plan.kitGitSha,
+          targetConfigDigest: plan.targetConfigDigest,
+          targets: targetNames.map((target) => ({
+            target: target as PlatformVersionTargetRequest['target'],
+          })),
+          ledger,
+          existingPlan: plan,
+        });
+        if (!isDeepStrictEqual(checked.plan, plan)) {
+          throw new Error('Stored release plan differs from its validated allocation.');
+        }
+      } catch {
+        throw new Error(`Release state game ${gameId} has an invalid reservation ${releaseKey}.`);
+      }
+      plans.push(plan);
     }
+    assertReservationHistory(gameId, ledger, plans);
     for (const [buildKey, rawBuild] of Object.entries(game.builds)) {
       if (!isRecord(rawBuild) || typeof rawBuild.releaseKey !== 'string'
         || (rawBuild.target !== 'android' && rawBuild.target !== 'ios')
@@ -471,6 +525,46 @@ function parseReleaseState(json: string): ReleaseState {
     }
   }
   return value as ReleaseState;
+}
+
+function assertReservationHistory(
+  gameId: string,
+  ledger: PlatformVersionLedger,
+  plans: readonly PlatformVersionReleasePlan[],
+): void {
+  if (plans.length === 0) {
+    return;
+  }
+  const ordered = [...plans].sort((left, right) => left.releaseRevision - right.releaseRevision);
+  for (let index = 1; index < ordered.length; index += 1) {
+    if (ordered[index]?.releaseRevision !== Number(ordered[index - 1]?.releaseRevision) + 1) {
+      throw new Error(`Release state game ${gameId} has nonconsecutive release revisions.`);
+    }
+  }
+  if (ordered.at(-1)?.releaseRevision !== ledger.releaseRevision.lastAllocated) {
+    throw new Error(`Release state game ${gameId} ledger revision differs from reservations.`);
+  }
+  for (const target of ['android', 'ios'] as const) {
+    const key = target === 'android' ? 'versionCode' : 'buildNumber';
+    const versions = ordered.flatMap((plan) => {
+      const entry = plan.targets[target];
+      return entry === undefined ? [] : [Number(entry[key])];
+    });
+    for (let index = 1; index < versions.length; index += 1) {
+      if (versions[index] !== Number(versions[index - 1]) + 1) {
+        throw new Error(`Release state game ${gameId} has nonconsecutive ${target} numbers.`);
+      }
+    }
+    let ledgerVersion: number | undefined;
+    if (target === 'android') {
+      ledgerVersion = ledger.platforms.android?.versionCode;
+    } else {
+      ledgerVersion = ledger.platforms.ios?.buildNumber;
+    }
+    if (versions.length > 0 && versions.at(-1) !== ledgerVersion) {
+      throw new Error(`Release state game ${gameId} ${target} ledger differs from reservations.`);
+    }
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -514,21 +608,23 @@ async function git(
   session: StateSession,
   args: readonly string[],
 ): Promise<{ readonly output: string }> {
-  const secrets = [session.remoteUrl];
-  try {
-    const url = new URL(session.remoteUrl);
-    for (const component of [url.username, url.password]) {
-      if (component !== '') {
-        secrets.push(component);
-        try {
-          secrets.push(decodeURIComponent(component));
-        } catch {
-          // Retain the raw component if it is not valid percent encoding.
+  const secrets = [session.remoteUrl, session.pushUrl];
+  for (const remote of [session.remoteUrl, session.pushUrl]) {
+    try {
+      const url = new URL(remote);
+      for (const component of [url.username, url.password]) {
+        if (component !== '') {
+          secrets.push(component);
+          try {
+            secrets.push(decodeURIComponent(component));
+          } catch {
+            // Retain the raw component if it is not valid percent encoding.
+          }
         }
       }
+    } catch {
+      // Local paths and scp-style Git remotes are not URL instances.
     }
-  } catch {
-    // Local paths and scp-style Git remotes are not URL instances.
   }
   const input: ReleaseProcessInput = {
     command: 'git',

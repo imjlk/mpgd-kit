@@ -63,6 +63,10 @@ try {
     environment: { ...process.env, MPGD_API_TOKEN: gameSha[0] },
   };
   await assert.rejects(
+    reserveNativeRelease({ ...firstInput, targets: [{ target: 'web-preview' }] }),
+    /require Android or iOS/u,
+  );
+  await assert.rejects(
     reserveNativeRelease({ ...firstInput, initialLedger: undefined }),
     /explicit initial platform version ledger/u,
   );
@@ -192,6 +196,41 @@ process.exit(result.status ?? 1);
     assert.equal(retriedLost.reused, true);
     assert.equal(retriedLost.plan.targets.android?.versionCode, 44);
   }
+  const fetchMirror = path.join(fixture, 'read-only-fetch.git');
+  const pushOrigin = path.join(fixture, 'writable-push.git');
+  git(['clone', '--bare', '-q', bare, fetchMirror], fixture);
+  git(['clone', '--bare', '-q', bare, pushOrigin], fixture);
+  git(['config', 'remote.origin.url', fetchMirror], game);
+  git(['config', 'remote.origin.pushurl', pushOrigin], game);
+  const pushedSeparately = await reserveNativeRelease({
+    ...firstInput,
+    releaseKey: 'push-url-test',
+    sourceGitSha: nextGameSha,
+    initialLedger: undefined,
+  });
+  assert.equal(
+    git(['rev-parse', 'refs/heads/release-state'], pushOrigin),
+    pushedSeparately.stateCommit,
+  );
+  assert.notEqual(
+    git(['rev-parse', 'refs/heads/release-state'], fetchMirror),
+    pushedSeparately.stateCommit,
+  );
+  git(['config', 'remote.origin.url', bare], game);
+  git(['config', '--unset', 'remote.origin.pushurl'], game);
+  const unsignedState = await reserveNativeRelease({
+    ...firstInput,
+    releaseKey: 'unsigned-state-commit',
+    sourceGitSha: nextGameSha,
+    initialLedger: undefined,
+    environment: {
+      ...process.env,
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'commit.gpgSign',
+      GIT_CONFIG_VALUE_0: 'true',
+    },
+  });
+  assert.match(unsignedState.stateCommit, /^[a-f0-9]{40}$/u);
   await assert.rejects(
     reserveNativeRelease({ ...firstInput, gameVersion: '1.0.1', initialLedger: undefined }),
     /immutable|match|identity/u,
@@ -241,12 +280,55 @@ process.exit(result.status ?? 1);
     inspectedAppId: 'dev.mpgd.alpha',
     inspectedSignerSha256: 'e'.repeat(64),
   };
+  await assert.rejects(
+    recordNativeReleaseBuild({ ...buildInput, kitPackageVersion: '  ' }),
+    /missing a run ID/u,
+  );
   const built = await recordNativeReleaseBuild(buildInput);
   assert.match(built.record.artifactSha256, /^[a-f0-9]{64}$/u);
   assert.equal(built.record.gameVersion, '1.0.0');
   assert.equal(built.record.platformVersion.versionCode, 41);
   const repeated = await recordNativeReleaseBuild(buildInput);
   assert.deepEqual(repeated, built);
+  const iosArtifactFile = path.join(fixture, 'game.ipa');
+  const iosManifestFile = path.join(fixture, 'ios-release-manifest.json');
+  writeFileSync(iosArtifactFile, 'signed iOS candidate');
+  writeFileSync(iosManifestFile, `${JSON.stringify({
+    gitSha: first.plan.sourceGitSha,
+    kitGitSha: first.plan.kitGitSha,
+    buildId: first.plan.buildId,
+    gameVersion: first.plan.gameVersion,
+    releaseIdentity: {
+      gameVersion: first.plan.gameVersion,
+      releaseRevision: first.plan.releaseRevision,
+      label: first.plan.releaseLabel,
+    },
+    targets: {
+      ios: {
+        artifact: 'game.ipa',
+        profile: 'production',
+        buildNumber: String(first.plan.targets.ios?.buildNumber),
+        marketingVersion: first.plan.targets.ios?.marketingVersion,
+        nativeDelivery: {
+          platform: 'ios',
+          mode: 'store-export',
+          signed: true,
+          submissionCandidate: true,
+        },
+      },
+    },
+  })}\n`);
+  const iosBuilt = await recordNativeReleaseBuild({
+    ...buildInput,
+    target: 'ios',
+    artifactFile: iosArtifactFile,
+    expectedArtifactSha256: sha256(iosArtifactFile),
+    artifactLocation: 'release-output/ios/game.ipa',
+    releaseManifestFile: iosManifestFile,
+    expectedReleaseManifestSha256: sha256(iosManifestFile),
+    inspectedAppId: 'dev.mpgd.alpha.ios',
+  });
+  assert.equal(iosBuilt.record.platformVersion.buildNumber, 51);
   writeFileSync(artifactFile, 'different bytes');
   await assert.rejects(recordNativeReleaseBuild(buildInput), /differs from the verified build/u);
   await assert.rejects(
@@ -259,7 +341,7 @@ process.exit(result.status ?? 1);
     /cannot be replaced/u,
   );
   const recordState = JSON.parse(git(['show', stateObject], bare));
-  assert.equal(Object.keys(recordState.games.alpha.builds).length, 1);
+  assert.equal(Object.keys(recordState.games.alpha.builds).length, 2);
   assert.equal(
     recordState.games.alpha.builds['beta-01/android'].artifactSha256,
     built.record.artifactSha256,
@@ -293,6 +375,39 @@ process.exit(result.status ?? 1);
   git(['push', 'origin', 'HEAD:release-state'], stateEdit);
   const reorderedRetry = await recordNativeReleaseBuild(buildInput);
   assert.deepEqual(reorderedRetry.record, built.record);
+  reordered.games.alpha.reservations['beta-01'].targets.ios.buildNumber = 50;
+  writeFileSync(stateFile, `${JSON.stringify(reordered)}\n`);
+  git(['add', '.'], stateEdit);
+  git(
+    [
+      '-c',
+      'user.name=mpgd-test',
+      '-c',
+      'user.email=mpgd-test@example.invalid',
+      'commit',
+      '-qm',
+      'corrupt reserved iOS build number',
+    ],
+    stateEdit,
+  );
+  git(['push', 'origin', 'HEAD:release-state'], stateEdit);
+  await assert.rejects(recordNativeReleaseBuild(buildInput), /nonconsecutive ios numbers/u);
+  reordered.games.alpha.reservations['beta-01'].targets.ios.buildNumber = 51;
+  writeFileSync(stateFile, `${JSON.stringify(reordered)}\n`);
+  git(['add', '.'], stateEdit);
+  git(
+    [
+      '-c',
+      'user.name=mpgd-test',
+      '-c',
+      'user.email=mpgd-test@example.invalid',
+      'commit',
+      '-qm',
+      'restore reserved iOS build number',
+    ],
+    stateEdit,
+  );
+  git(['push', 'origin', 'HEAD:release-state'], stateEdit);
   reordered.games.alpha.reservations['beta-01'].targets = null;
   writeFileSync(stateFile, `${JSON.stringify(reordered)}\n`);
   git(['add', '.'], stateEdit);
