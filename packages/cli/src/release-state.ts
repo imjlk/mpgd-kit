@@ -12,7 +12,6 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import typia from 'typia';
 
 import {
   allocatePlatformVersions,
@@ -157,7 +156,6 @@ const gitShaPattern = /^[0-9a-f]{40}$/u;
 const sha256Pattern = /^[0-9a-f]{64}$/u;
 const androidFingerprintPattern = /^(?:[0-9a-fA-F]{2}:){31}[0-9a-fA-F]{2}$|^[0-9a-fA-F]{64}$/u;
 const teamIdPattern = /^[A-Z0-9]{10}$/u;
-const assertReleaseManifestStructure = typia.createAssert<ReleaseManifest>();
 
 function normalizeAndroidFingerprint(value: string): string {
   return value.replaceAll(':', '').toLowerCase();
@@ -165,7 +163,80 @@ function normalizeAndroidFingerprint(value: string): string {
 
 /** Match the private manifest package's complete schema without a runtime workspace dependency. */
 function assertCompleteReleaseManifest(value: unknown): ReleaseManifest {
-  const manifest = assertReleaseManifestStructure(value);
+  if (!isRecord(value) || !isRecord(value.targets)) {
+    throw new Error('Native release manifest must include target records.');
+  }
+  assertStringFields(
+    value,
+    [
+      'releaseId',
+      'gitSha',
+      'kitGitSha',
+      'gameVersion',
+      'buildId',
+      'targetConfigVersion',
+      'catalogVersion',
+      'adPlacementVersion',
+    ],
+    'release manifest',
+  );
+  if (value.releaseIdentity !== undefined) {
+    if (!isRecord(value.releaseIdentity)) {
+      throw new Error('Native release manifest identity is malformed.');
+    }
+    assertStringFields(value.releaseIdentity, ['gameVersion', 'label'], 'release identity');
+    if (value.releaseIdentity.releaseRevision !== undefined
+      && typeof value.releaseIdentity.releaseRevision !== 'number') {
+      throw new Error('Native release manifest revision is malformed.');
+    }
+  }
+  for (const [name, rawEntry] of Object.entries(value.targets)) {
+    if (!isRecord(rawEntry) || !isRecord(rawEntry.effectiveConfig)
+      || !isRecord(rawEntry.iconManifest)) {
+      throw new Error(`Native release manifest target ${name} is malformed.`);
+    }
+    assertStringFields(rawEntry, ['artifact'], `target ${name}`);
+    assertStringFields(
+      rawEntry.effectiveConfig,
+      ['path', 'version', 'digest'],
+      `effective config ${name}`,
+    );
+    assertStringFields(
+      rawEntry.iconManifest,
+      [
+        'path',
+        'digest',
+        'sourceSha256',
+        'sharedConfigSha256',
+        'renderConfigSha256',
+        'generatorVersion',
+        'targetProfile',
+        'targetProfileVersion',
+      ],
+      `icon manifest ${name}`,
+    );
+    for (const field of ['profile', 'versionName', 'marketingVersion', 'buildNumber', 'appName']) {
+      if (rawEntry[field] !== undefined && typeof rawEntry[field] !== 'string') {
+        throw new Error(`Native release manifest target ${name}.${field} is malformed.`);
+      }
+    }
+    for (const field of ['versionCode', 'sdkMajor']) {
+      if (rawEntry[field] !== undefined && typeof rawEntry[field] !== 'number') {
+        throw new Error(`Native release manifest target ${name}.${field} is malformed.`);
+      }
+    }
+    if (rawEntry.nativeDelivery !== undefined) {
+      if (!isRecord(rawEntry.nativeDelivery)
+        || !['android', 'ios'].includes(String(rawEntry.nativeDelivery.platform))
+        || !['sync', 'debug', 'simulator', 'unsigned-archive', 'signed-archive', 'store-export']
+          .includes(String(rawEntry.nativeDelivery.mode))
+        || typeof rawEntry.nativeDelivery.signed !== 'boolean'
+        || typeof rawEntry.nativeDelivery.submissionCandidate !== 'boolean') {
+        throw new Error(`Native release manifest target ${name} delivery is malformed.`);
+      }
+    }
+  }
+  const manifest = value as unknown as ReleaseManifest;
   if (!gitShaPattern.test(manifest.kitGitSha)) {
     throw new Error('Native release manifest Kit revision is invalid.');
   }
@@ -202,6 +273,18 @@ function assertCompleteReleaseManifest(value: unknown): ReleaseManifest {
     }
   }
   return manifest;
+}
+
+function assertStringFields(
+  value: Record<string, unknown>,
+  fields: readonly string[],
+  label: string,
+): void {
+  for (const field of fields) {
+    if (typeof value[field] !== 'string') {
+      throw new Error(`Native ${label} is missing ${field}.`);
+    }
+  }
 }
 
 /** Reserve version numbers by committing the ledger and plan atomically. */
@@ -478,7 +561,7 @@ async function withStateSession<T>(
 
 function resolveRemoteUrl(repositoryRoot: string, remoteUrl: string): string {
   if (!path.isAbsolute(remoteUrl)
-    && !/^(?:[a-z][a-z0-9+.-]*:\/\/|[^/\s:]+:[^/])/iu.test(remoteUrl)) {
+    && !/^(?:[a-z][a-z0-9+.-]*:\/\/|(?:[^/@:\s]+@)?[^/@:\s]+:)/iu.test(remoteUrl)) {
     return path.resolve(repositoryRoot, remoteUrl);
   }
   return remoteUrl;
@@ -494,7 +577,7 @@ async function commitState(session: StateSession, state: ReleaseState, subject: 
     '-c',
     'user.email=mpgd-release@example.invalid',
     '-c',
-    `core.hooksPath=${path.join(session.directory, '.mpgd-no-hooks')}`,
+    `core.hooksPath=${path.join(session.directory, '.git', '.mpgd-no-hooks')}`,
     'commit',
     '--no-gpg-sign',
     '-qm',
@@ -736,6 +819,9 @@ function assertReservationHistory(
     }
     if (versions.length > 0 && versions.at(-1) !== ledgerVersion) {
       throw new Error(`Release state game ${gameId} ${target} ledger differs from reservations.`);
+    }
+    if (versions.length === 0 && ledgerVersion !== initialVersion) {
+      throw new Error(`Release state game ${gameId} ${target} ledger differs from its baseline.`);
     }
   }
 }

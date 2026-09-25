@@ -105,6 +105,27 @@ try {
     }),
     /cannot change its target set/u,
   );
+  const hookCheckout = path.join(fixture, 'hook-state');
+  git(['clone', '-q', '--branch', 'release-state', bare, hookCheckout], fixture);
+  const branchHookDirectory = path.join(hookCheckout, '.mpgd-no-hooks');
+  mkdirSync(branchHookDirectory);
+  const branchHook = path.join(branchHookDirectory, 'pre-commit');
+  writeFileSync(branchHook, '#!/bin/sh\nexit 77\n');
+  chmodSync(branchHook, 0o755);
+  git(['add', '.mpgd-no-hooks/pre-commit'], hookCheckout);
+  git(
+    [
+      '-c',
+      'user.name=mpgd-test',
+      '-c',
+      'user.email=mpgd-test@example.invalid',
+      'commit',
+      '-qm',
+      'branch-controlled hook must not run',
+    ],
+    hookCheckout,
+  );
+  git(['push', 'origin', 'HEAD:release-state'], hookCheckout);
   writeFileSync(path.join(game, 'package.json'), '{"name":"state-test","revision":2}\n');
   git(['add', '.'], game);
   git(
@@ -346,7 +367,7 @@ process.exit(result.status ?? 1);
       ...buildInput,
       expectedReleaseManifestSha256: sha256(releaseManifestFile),
     }),
-    /iconManifest|expected|property/u,
+    /iconManifest|expected|property|target android is malformed/u,
   );
   writeFileSync(releaseManifestFile, validManifestBytes);
   const built = await recordNativeReleaseBuild(buildInput);
