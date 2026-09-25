@@ -198,6 +198,15 @@ async function submitVerifiedIosBuildResolved(
         detail: 'A build already uses this app version and build number; do not reupload.',
       };
     }
+    const existingUploads = await lookupUploadIds(input, marketingVersion, buildNumber, run);
+    if (existingUploads.length > 0) {
+      return {
+        ...base,
+        status: 'unknown',
+        ...(existingUploads.length === 1 ? { uploadId: existingUploads[0] } : {}),
+        detail: 'An upload already exists for this app version and build number; reconcile it before retry.',
+      };
+    }
     let upload: unknown;
     try {
       upload = await run([
@@ -236,29 +245,8 @@ async function submitVerifiedIosBuildResolved(
       throw new IosSubmissionUncertainError(uploadId);
     }
   } else {
-    const uploads = await run(
-      [
-        'builds',
-        'uploads',
-        'list',
-        '--app',
-        input.appStoreAppId,
-        '--cf-bundle-short-version',
-        marketingVersion,
-        '--cf-bundle-version',
-        buildNumber,
-        '--platform',
-        'IOS',
-        '--paginate',
-      ],
-      lookupTimeoutMs,
-    );
-    const matches = readDataArray(uploads, 'builds uploads list').filter((value) => isRecord(value)
-      && value.id === uploadId && value.type === 'buildUploads'
-      && isRecord(value.attributes)
-      && value.attributes.cfBundleShortVersionString === marketingVersion
-      && value.attributes.cfBundleVersion === buildNumber
-      && value.attributes.platform === 'IOS');
+    const matches = (await lookupUploadIds(input, marketingVersion, buildNumber, run))
+      .filter((id) => id === uploadId);
     if (matches.length !== 1) {
       return {
         ...base,
@@ -355,6 +343,45 @@ async function submitVerifiedIosBuildResolved(
 interface ObservedBuild {
   readonly id: string;
   readonly processingState: string;
+}
+
+async function lookupUploadIds(
+  input: IosTestFlightSubmissionInput,
+  marketingVersion: string,
+  buildNumber: string,
+  run: AscJsonRunner,
+): Promise<readonly string[]> {
+  const response = await run(
+    [
+      'builds',
+      'uploads',
+      'list',
+      '--app',
+      input.appStoreAppId,
+      '--cf-bundle-short-version',
+      marketingVersion,
+      '--cf-bundle-version',
+      buildNumber,
+      '--platform',
+      'IOS',
+      '--paginate',
+    ],
+    lookupTimeoutMs,
+  );
+  const items = readDataArray(response, 'builds uploads list');
+  if (items.some((item) => !isRecord(item) || item.type !== 'buildUploads'
+    || typeof item.id !== 'string' || !ascIdPattern.test(item.id)
+    || !isRecord(item.attributes)
+    || typeof item.attributes.cfBundleShortVersionString !== 'string'
+    || typeof item.attributes.cfBundleVersion !== 'string'
+    || typeof item.attributes.platform !== 'string')) {
+    throw new Error('asc builds uploads list returned a malformed upload.');
+  }
+  return items.filter((item) => isRecord(item) && isRecord(item.attributes)
+    && item.attributes.cfBundleShortVersionString === marketingVersion
+    && item.attributes.cfBundleVersion === buildNumber
+    && item.attributes.platform === 'IOS')
+    .map((item) => (item as { id: string }).id);
 }
 
 async function lookupBuild(

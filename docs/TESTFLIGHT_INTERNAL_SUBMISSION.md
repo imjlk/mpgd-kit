@@ -25,6 +25,9 @@ existing version/build number before uploading, then uses separate `asc builds
 upload`, build lookup, and group-assignment commands. It never uses `asc
 publish` or an all-in-one public-release command. An upload result is not
 treated as a processed or tester-ready build.
+The pre-upload check also reads upload records for the reserved version, so a
+transfer with a lost response is not blindly repeated before the build is
+discoverable.
 The upload requests checksum verification when Apple provides a source-file
 checksum; its absence is not represented as a successful checksum proof.
 

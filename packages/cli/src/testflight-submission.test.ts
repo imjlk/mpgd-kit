@@ -58,6 +58,7 @@ interface MockState {
   existingBuild?: boolean;
   membership?: boolean;
   throwUpload?: boolean;
+  uploadCommittedOnError?: boolean;
   uploadFailureReason?: ReleaseProcessError['reason'];
   malformedUpload?: boolean;
   groupAction?: string;
@@ -72,7 +73,7 @@ function mock(overrides: Partial<MockState> = {}): { state: MockState; run: AscJ
     commands: [],
     processingState: 'PROCESSING',
     membership: true,
-    uploadVisible: true,
+    uploadVisible: false,
     ...overrides,
   };
   const run: AscJsonRunner = async (args) => {
@@ -132,12 +133,17 @@ function mock(overrides: Partial<MockState> = {}): { state: MockState; run: AscJ
         throw new ReleaseProcessError(state.uploadFailureReason, '', 1);
       }
       if (state.throwUpload) {
+        if (state.uploadCommittedOnError) {
+          state.uploadVisible = true;
+        }
         throw new Error('upload response lost');
       }
       if (state.malformedUpload) {
+        state.uploadVisible = true;
         return { uploadId: 'upload-1', uploaded: true };
       }
       state.existingBuild = true;
+      state.uploadVisible = true;
       return {
         uploadId: 'upload-1',
         fileId: 'file-1',
@@ -227,7 +233,16 @@ try {
     false,
   );
 
-  const resumed = mock({ existingBuild: true });
+  const pendingUpload = mock({ uploadVisible: true });
+  const pending = await submitVerifiedIosBuildWithRunner(input, pendingUpload.run);
+  assert.equal(pending.status, 'unknown');
+  assert.equal(pending.uploadId, 'upload-1');
+  assert.equal(
+    pendingUpload.state.commands.some((command) => command.startsWith('builds upload ')),
+    false,
+  );
+
+  const resumed = mock({ existingBuild: true, uploadVisible: true });
   const resume = await submitVerifiedIosBuildWithRunner(
     { ...input, resumeUploadId: 'upload-1', resumeArtifactSha256: digest },
     resumed.run,
@@ -249,8 +264,15 @@ try {
     /matching verified iOS IPA/u,
   );
 
-  const lost = mock({ throwUpload: true });
+  const lost = mock({ throwUpload: true, uploadCommittedOnError: true });
   assert.equal((await submitVerifiedIosBuildWithRunner(input, lost.run)).status, 'unknown');
+  const lostRetry = await submitVerifiedIosBuildWithRunner(input, lost.run);
+  assert.equal(lostRetry.status, 'unknown');
+  assert.equal(lostRetry.uploadId, 'upload-1');
+  assert.equal(
+    lost.state.commands.filter((command) => command.startsWith('builds upload ')).length,
+    1,
+  );
   const timedOut = mock({ uploadFailureReason: 'timeout' });
   assert.match(
     (await submitVerifiedIosBuildWithRunner(input, timedOut.run)).detail ?? '',
