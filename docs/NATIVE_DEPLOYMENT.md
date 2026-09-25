@@ -120,3 +120,29 @@ Android shell with `cap sync android`,
 also builds an AAB and verifies its JAR signature and upload-certificate
 fingerprint with the throwaway key. Neither test is evidence that a game-owned
 key has signed a store-ready bundle or that Google Play accepted it.
+
+## Isolated iOS signing session
+
+For a signed iOS archive or App Store IPA export, the native builder can use a
+game-owned P12 identity and provisioning profile instead of relying on an
+identity already installed in the host's default keychain. Set
+`MPGD_IOS_SIGNING_P12`, `MPGD_IOS_SIGNING_P12_PASSWORD`,
+`MPGD_IOS_PROVISIONING_PROFILE_FILE`, and `MPGD_IOS_TEAM_ID` in the build
+environment. Keep the P12 and password out of the game repository. The
+configured target's bundle ID remains the source of truth.
+
+The session imports the identity into a temporary keychain without changing
+the user's default keychain or search list. It checks the decoded profile's
+team, bundle ID, expiration, distribution entitlements, and embedded signing
+certificate, then installs the profile only if its UUID does not conflict
+with another file. Xcode receives explicit manual signing settings, a
+temporary keychain path, and a generated App Store export options plist.
+The session removes only its own keychain and profile copy after success,
+failure, or cancellation; it leaves pre-existing profiles untouched. The
+existing signed archive and exported IPA inspections still run afterward.
+
+This local preflight does not establish Apple trust in an arbitrary CMS profile
+or prove that Xcode can sign with a real Apple Distribution identity. The
+throwaway test validates import, profile matching, and cleanup only. A signed
+external game build, App Store Connect processing, and device install remain
+separate release gates.

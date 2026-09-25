@@ -54,9 +54,12 @@ do {
       NSLocalizedDescriptionKey: "Imported iOS signing identity has no certificate.",
     ])
   }
-  let digest = SHA256.hash(data: SecCertificateCopyData(certificate) as Data)
-  let fingerprint = digest.map { String(format: "%02X", $0) }.joined()
-  let response = ["certificateSha256": fingerprint]
+  let certificateBytes = SecCertificateCopyData(certificate) as Data
+  let sha256 = SHA256.hash(data: certificateBytes)
+    .map { String(format: "%02X", $0) }.joined()
+  let sha1 = Insecure.SHA1.hash(data: certificateBytes)
+    .map { String(format: "%02X", $0) }.joined()
+  let response = ["certificateSha256": sha256, "certificateSha1": sha1]
   let json = try JSONSerialization.data(withJSONObject: response, options: [.sortedKeys])
   FileHandle.standardOutput.write(json)
   FileHandle.standardOutput.write(Data([0x0A]))

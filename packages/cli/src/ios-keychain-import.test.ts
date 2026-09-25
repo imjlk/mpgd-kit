@@ -73,8 +73,10 @@ try {
   };
   const response = JSON.parse(run('swift', [swiftFile], environment)) as {
     readonly certificateSha256: string;
+    readonly certificateSha1: string;
   };
   assert.match(response.certificateSha256, /^[0-9A-F]{64}$/u);
+  assert.match(response.certificateSha1, /^[0-9A-F]{40}$/u);
   assert.equal(existsSync(keychain), true);
   assert.match(
     run('security', ['find-certificate', '-a', '-c', 'mpgd-throwaway-signing', '-p', keychain]),

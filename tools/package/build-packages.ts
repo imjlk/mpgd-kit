@@ -83,6 +83,10 @@ for (const workspacePackage of sortByWorkspaceDependencies(packages)) {
   assertFile(join(distDir, 'index.js'));
   assertFile(join(distDir, 'index.d.ts'));
   if (workspacePackage.name === '@mpgd/cli') {
+    copyFileSync(
+      join(srcDir, 'ios-keychain-import.swift'),
+      join(distDir, 'ios-keychain-import.swift'),
+    );
     buildPackagedNativeTarget(workspacePackage, distDir);
   }
   console.log(`Built ${workspacePackage.name}`);

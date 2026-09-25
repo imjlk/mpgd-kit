@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } fro
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
 
+import { withIosSigningSession } from '../../packages/cli/src/ios-signing-session';
 import { stageNativeIconResources } from '../icons/staging';
 import type { GeneratedTargetIcons } from '../icons/types';
 import { inspectSignedAndroidBundle } from './native-android-inspection';
@@ -148,8 +149,38 @@ export function androidSignedReleaseGradleArgs(environment: NodeJS.ProcessEnv): 
   return ['bundleRelease', '--no-daemon', '--init-script', initScript];
 }
 
-function executeIosBuild(input: NativeBuildExecutionInput, stagedShell: string): string {
-  const { plan, artifactRoot, environment, target } = input;
+async function executeIosBuild(input: NativeBuildExecutionInput, stagedShell: string): Promise<string> {
+  const { plan, artifactRoot, target } = input;
+  const p12File = input.environment.MPGD_IOS_SIGNING_P12;
+  if ((plan.mode === 'signed-archive' || plan.mode === 'store-export')
+    && p12File !== undefined && p12File !== '') {
+    return withIosSigningSession(
+      {
+        p12File,
+        p12Password: requireString(
+          input.environment.MPGD_IOS_SIGNING_P12_PASSWORD,
+          'MPGD_IOS_SIGNING_P12_PASSWORD',
+        ),
+        provisioningProfileFile: requireString(
+          input.environment.MPGD_IOS_PROVISIONING_PROFILE_FILE,
+          'MPGD_IOS_PROVISIONING_PROFILE_FILE',
+        ),
+        teamId: requireString(input.environment.MPGD_IOS_TEAM_ID, 'MPGD_IOS_TEAM_ID'),
+        bundleId: requireString(target.metadata?.bundleId, 'iOS bundle ID'),
+        environment: input.environment,
+      },
+      async (session) => executeIosBuildWithEnvironment(input, stagedShell, session.environment),
+    );
+  }
+  return executeIosBuildWithEnvironment(input, stagedShell, input.environment);
+}
+
+function executeIosBuildWithEnvironment(
+  input: NativeBuildExecutionInput,
+  stagedShell: string,
+  environment: NodeJS.ProcessEnv,
+): string {
+  const { plan, artifactRoot, target } = input;
   let releaseArtifact: string;
   if (plan.mode === 'unsigned-archive') {
     releaseArtifact = `${artifactRoot}/App.xcarchive`;
