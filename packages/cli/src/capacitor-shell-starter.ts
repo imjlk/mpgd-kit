@@ -22,6 +22,7 @@ import {
   assertAndroidSettingsNoAppRemap,
   assertIosReleaseProductName,
   assertNativeShellIdentity,
+  hasAndroidDisplayNameResourceOverride,
   hasGradleIdentityMutation,
   maskGradleStrings,
   readIosAppTargetId,
@@ -628,10 +629,13 @@ function assertNativePlatformComplete(
       assertAppliedGradleScripts(nativeDirectory, script, visited, script === settings);
     }
     for (const script of visited) {
+      const source = stripGradleComments(readFileSync(path.join(nativeDirectory, script), 'utf8'));
+      if (hasAndroidDisplayNameResourceOverride(source)) {
+        throw new Error('Existing android project generates an unsupported app_name resource.');
+      }
       if (script === required) {
         continue;
       }
-      const source = stripGradleComments(readFileSync(path.join(nativeDirectory, script), 'utf8'));
       if (/\bproductFlavors\b/u.test(maskGradleStrings(source))) {
         throw new Error('Existing android project product flavors are unsupported by the builder.');
       }
@@ -743,6 +747,19 @@ function assertAndroidLauncherClasses(nativeDirectory: string, gradle: string): 
     if (!/^[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)+$/u.test(qualified)) {
       throw new Error('Existing android project launcher class cannot be resolved.');
     }
+    const launcherName = qualifyAndroidActivityName(
+      launcher.getAttribute('android:name'),
+      namespace,
+    );
+    const inheritedExported = releaseLauncher
+      ? readAndroidLaunchers(application).find((item) => qualifyAndroidActivityName(
+        item.getAttribute('android:name'),
+        namespace,
+      ) === launcherName)?.getAttribute('android:exported')
+      : null;
+    if ((launcher.getAttribute('android:exported') ?? inheritedExported) !== 'true') {
+      throw new Error('Existing android project launcher must declare android:exported="true".');
+    }
     if (isAlias) {
       const targetInRelease = release === undefined ? [] : childElements(release)
         .filter((activity) => activity.tagName === 'activity');
@@ -769,34 +786,88 @@ function assertAndroidLauncherClasses(nativeDirectory: string, gradle: string): 
         throw new Error(`Existing android launcher alias target ${qualified} is undeclared.`);
       }
     }
-    const className = qualified.slice(qualified.lastIndexOf('.') + 1);
-    const packageName = qualified.slice(0, qualified.lastIndexOf('.'));
-    const sourcePath = qualified.replaceAll('.', '/');
     const sourceSets = releaseLauncher ? ['main', 'release'] : ['main'];
-    const candidates = sourceSets.flatMap((sourceSet) =>
+    const sources = [...new Set(sourceSets.flatMap((sourceSet) =>
       ['java', 'kotlin'].flatMap((language) =>
-        ['java', 'kt'].map((extension) =>
-          `app/src/${sourceSet}/${language}/${sourcePath}.${extension}`)));
-    const declaredIn = (relative: string): boolean => {
-      if (!isNativeFile(nativeDirectory, relative)) {
-        return false;
-      }
-      const source = stripSourceCommentsAndStrings(
-        readFileSync(path.join(nativeDirectory, relative), 'utf8'),
+        ['.java', '.kt'].flatMap((extension) => listNativeFiles(
+          nativeDirectory,
+          `app/src/${sourceSet}/${language}`,
+          extension,
+        )))))];
+    if (!resolvesAndroidActivityClass(nativeDirectory, qualified, sources, new Set())) {
+      throw new Error(
+        `Existing android project launcher class ${qualified} is missing or not an Android Activity.`,
       );
-      const declaredPackage = /\bpackage\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)+)\s*;?/u
-        .exec(source)?.[1];
-      return declaredPackage === packageName
-        && new RegExp(`\\bclass\\s+${className}\\b`, 'u').test(source);
-    };
-    const found = candidates.some(declaredIn) || sourceSets.some((sourceSet) =>
-      ['java', 'kotlin'].some((language) =>
-        listNativeFiles(nativeDirectory, `app/src/${sourceSet}/${language}`, '.kt')
-          .some(declaredIn)));
-    if (!found) {
-      throw new Error(`Existing android project launcher class ${qualified} is missing.`);
     }
   }
+}
+
+const androidActivityBases = new Set([
+  'android.app.Activity',
+  'com.getcapacitor.BridgeActivity',
+  'androidx.activity.ComponentActivity',
+  'androidx.appcompat.app.AppCompatActivity',
+  'androidx.fragment.app.FragmentActivity',
+]);
+
+function resolvesAndroidActivityClass(
+  nativeDirectory: string,
+  qualified: string,
+  sourceFiles: readonly string[],
+  visited: Set<string>,
+): boolean {
+  if (androidActivityBases.has(qualified)) {
+    return true;
+  }
+  if (visited.has(qualified)) {
+    return false;
+  }
+  visited.add(qualified);
+  const separator = qualified.lastIndexOf('.');
+  const packageName = qualified.slice(0, separator);
+  const className = qualified.slice(separator + 1);
+  for (const relative of sourceFiles) {
+    if (!isNativeFile(nativeDirectory, relative)) {
+      continue;
+    }
+    const source = stripSourceCommentsAndStrings(
+      readFileSync(path.join(nativeDirectory, relative), 'utf8'),
+    );
+    const declaredPackage = /\bpackage\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)+)\s*;?/u
+      .exec(source)?.[1];
+    if (declaredPackage !== packageName) {
+      continue;
+    }
+    const base = readTopLevelAndroidSuperclass(source, className);
+    if (base === undefined) {
+      continue;
+    }
+    const imported = [...source.matchAll(/\bimport\s+([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)+)\s*;?/gu)]
+      .map((match) => match[1] ?? '')
+      .find((name) => name.endsWith(`.${base}`));
+    const resolved = base.includes('.') ? base : (imported ?? `${packageName}.${base}`);
+    if (resolvesAndroidActivityClass(nativeDirectory, resolved, sourceFiles, visited)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function readTopLevelAndroidSuperclass(source: string, className: string): string | undefined {
+  const expression = new RegExp(`\\bclass\\s+${className}\\b([^{};\\r\\n]*)(?:\\{|$)`, 'gmu');
+  for (const match of source.matchAll(expression)) {
+    let depth = 0;
+    for (const character of source.slice(0, match.index)) {
+      depth += character === '{' ? 1 : character === '}' ? -1 : 0;
+    }
+    if (depth !== 0) {
+      continue;
+    }
+    const header = match[1] ?? '';
+    return /\bextends\s+([A-Za-z_][\w.]*)/u.exec(header)?.[1]
+      ?? /:\s*([A-Za-z_][\w.]*)\s*\(/u.exec(header)?.[1];
+  }
+  return undefined;
 }
 
 function qualifyAndroidActivityName(
@@ -1369,6 +1440,9 @@ function assertAppliedGradleScripts(
   }
   const source = stripGradleComments(readFileSync(path.join(nativeDirectory, script), 'utf8'));
   const code = maskGradleStrings(source);
+  if (/(?:^|[\s;{])apply\s*\{/u.test(code)) {
+    throw new Error('Existing android project has an unsupported Gradle apply expression.');
+  }
   if (isSettingsScript) {
     assertAndroidSettingsNoAppRemap(source);
   }
@@ -1419,12 +1493,12 @@ function assertNativeDisplayName(
   const source = platform === 'ios'
     ? readFileSync(path.join(nativeDirectory, relative), 'utf8')
     : '';
-  const labels = platform === 'android'
-    ? [readAndroidString(nativeDirectory, 'app_name')]
-    : [parsePlistDictionary(source, 'Release').get('CFBundleDisplayName')]
+  const labels = platform === 'ios'
+    ? [parsePlistDictionary(source, 'Release').get('CFBundleDisplayName')]
       .filter((value) => value?.tagName === 'string')
-      .map((value) => value?.textContent ?? '');
-  if (labels.length !== 1 || labels[0] !== expectedDisplayName) {
+      .map((value) => value?.textContent ?? '')
+    : [];
+  if (platform === 'ios' && (labels.length !== 1 || labels[0] !== expectedDisplayName)) {
     throw new Error(`Existing ${platform} project display name differs or cannot be read safely.`);
   }
   if (platform === 'android') {

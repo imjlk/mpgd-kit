@@ -3,7 +3,10 @@ import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync
 import os from 'node:os';
 import { join } from 'node:path';
 
-import { assertNativeReleaseIdentity } from './native-release-identity';
+import {
+  assertNativeReleaseIdentity,
+  runNativeSyncWithIdentityCheck,
+} from './native-release-identity';
 
 const shellRoot = mkdtempSync(join(os.tmpdir(), 'mpgd-native-release-'));
 
@@ -110,6 +113,7 @@ try {
     'applicationId rootProject.ext.gameAppId',
     'applicationId(project.findProperty("id"))',
     'setApplicationId("dev.other.game")',
+    "android.defaultConfig['versionName'] = '9.9.9'",
     'versionCode(computeCode())',
     "android.defaultConfig.setProperty('versionCode', 99)",
     "def key = 'versionName'; android.defaultConfig.setProperty(key, '9.9.9')",
@@ -141,8 +145,21 @@ try {
   };
   assert.doesNotThrow(() => assertNativeReleaseIdentity(productionInput));
   const appNameFile = join(shellRoot, 'android/app/src/main/res/values/strings.xml');
+  let androidSynced = false;
+  const mismatchedAppName = '<resources><string name="app_name">Other Game</string></resources>';
+  const mutateNameOnSync = (): void => {
+    androidSynced = true;
+    writeFileSync(appNameFile, mismatchedAppName);
+  };
+  const recheckAfterSync = (): void => runNativeSyncWithIdentityCheck(
+    productionInput,
+    mutateNameOnSync,
+  );
+  assert.throws(recheckAfterSync, /application label differs/u);
+  assert.equal(androidSynced, true);
+  writeShellFiles(shellRoot);
   writeFileSync(appNameFile, '<resources><string name="app_name">Other Game</string></resources>');
-  assert.throws(() => assertNativeReleaseIdentity(productionInput), /display name differs/u);
+  assert.throws(() => assertNativeReleaseIdentity(productionInput), /application label differs/u);
   writeShellFiles(shellRoot);
   const releaseManifest = join(shellRoot, 'android/app/src/release/AndroidManifest.xml');
   mkdirSync(join(shellRoot, 'android/app/src/release'), { recursive: true });
@@ -159,6 +176,21 @@ try {
   const flavoredGradle = `${readFileSync(groovy, 'utf8')}\nproductFlavors { demo {} }\n`;
   writeFileSync(groovy, flavoredGradle);
   assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /product flavors/u);
+  writeShellFiles(shellRoot);
+  writeFileSync(groovy, [
+    readFileSync(groovy, 'utf8'),
+    "android.defaultConfig['versionName'] = '9.9.9'",
+  ].join('\n'));
+  assert.throws(
+    () => assertNativeReleaseIdentity(appliedIdentityInput),
+    /bracket identity writes/u,
+  );
+  writeShellFiles(shellRoot);
+  writeFileSync(groovy, [
+    readFileSync(groovy, 'utf8'),
+    'buildTypes { release { resValue "string", "app_name", "Other Game" } }',
+  ].join('\n'));
+  assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /generated app_name/u);
   writeShellFiles(shellRoot);
   for (const suffixSetter of [
     'setApplicationIdSuffix(".store")',
@@ -237,6 +269,9 @@ try {
     'project(":app").projectDir = file("elsewhere")',
   ].join('\n'));
   assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /without remapping/u);
+  writeShellFiles(shellRoot);
+  writeFileSync(androidSettings, 'include ":app"\napply { from "settings-extra.gradle" }');
+  assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /applied Gradle script/u);
   writeShellFiles(shellRoot);
   const appliedSettings = join(shellRoot, 'android/settings-extra.gradle');
   writeFileSync(appliedSettings, 'project(":app").projectDir = file("elsewhere")');
@@ -347,6 +382,13 @@ try {
   assert.doesNotThrow(() => assertNativeReleaseIdentity(productionIosInput));
   const releaseIosPlist = join(shellRoot, 'ios/App/App/Info.plist');
   const originalReleaseIosPlist = readFileSync(releaseIosPlist, 'utf8');
+  let iosSynced = false;
+  assert.throws(() => runNativeSyncWithIdentityCheck(productionIosInput, () => {
+    iosSynced = true;
+    writeFileSync(releaseIosPlist, originalReleaseIosPlist.replace('Puzzle Game', 'Other Game'));
+  }), /display name differs/u);
+  assert.equal(iosSynced, true);
+  writeFileSync(releaseIosPlist, originalReleaseIosPlist);
   writeFileSync(releaseIosPlist, originalReleaseIosPlist.replace('Puzzle Game', 'Other Game'));
   assert.throws(() => assertNativeReleaseIdentity(productionIosInput), /display name differs/u);
   writeFileSync(releaseIosPlist, originalReleaseIosPlist);

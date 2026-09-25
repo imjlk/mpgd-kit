@@ -13,6 +13,8 @@ import {
   assertAndroidSettingsNoAppRemap,
   assertIosReleaseProductName,
   countGradleIdentityWrites,
+  hasAndroidDisplayNameResourceOverride,
+  hasGradleBracketIdentityWrite,
   hasGradleIdentityMutation,
   hasGradlePropertySetter,
   maskGradleStrings,
@@ -71,6 +73,14 @@ export function assertNativeReleaseIdentity(input: NativeReleaseIdentityInput): 
     assertIosReleaseDisplayName(input.shellApp, name);
     assertIosArchiveScheme(input.shellApp);
   }
+}
+
+export function runNativeSyncWithIdentityCheck(
+  input: NativeReleaseIdentityInput,
+  synchronize: () => void,
+): void {
+  synchronize();
+  assertNativeReleaseIdentity(input);
 }
 
 interface AndroidIdentity {
@@ -140,6 +150,12 @@ function assertAndroidIdentity(file: string, expected: AndroidIdentity): void {
   const source = stripComments(readRequiredFile(file, 'Android Gradle configuration'));
 
   const code = maskGradleStrings(source);
+  if (hasGradleBracketIdentityWrite(source)) {
+    throw new Error(`Native release preflight cannot resolve bracket identity writes in ${file}.`);
+  }
+  if (hasAndroidDisplayNameResourceOverride(source)) {
+    throw new Error(`Native release preflight cannot resolve generated app_name in ${file}.`);
+  }
   if (/\bproductFlavors\b/u.test(code)) {
     throw new Error('Native release preflight does not support Android product flavors.');
   }
@@ -181,6 +197,12 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
     visited.add(file);
     const source = stripComments(readRequiredFile(file, 'applied Android Gradle script'));
     const code = maskGradleStrings(source);
+    if (/(?:^|[\s;{])apply\s*\{/u.test(code)) {
+      throw new Error('Native release preflight cannot resolve an applied Gradle script.');
+    }
+    if (hasAndroidDisplayNameResourceOverride(source)) {
+      throw new Error('Native release preflight cannot resolve generated app_name resources.');
+    }
     if (isSettingsScript) {
       assertAndroidSettingsNoAppRemap(source);
     }

@@ -65,7 +65,7 @@ const completeAndroidManifest = [
   androidManifestOpen,
   '<application android:label="@string/app_name" android:theme="@style/AppTheme">',
   '<activity android:name="com.vendor.SdkActivity"/>',
-  '<activity android:name=".MainActivity"><intent-filter>',
+  '<activity android:name=".MainActivity" android:exported="true"><intent-filter>',
   '<action android:name="android.intent.action.MAIN"/>',
   '<category android:name="android.intent.category.LAUNCHER"/>',
   '</intent-filter></activity></application></manifest>',
@@ -293,7 +293,7 @@ try {
             'android/app/src/main/AndroidManifest.xml':
               completeAndroidManifest,
             'android/app/src/main/java/dev/example/puzzle/MainActivity.java':
-              'package dev.example.puzzle; public class MainActivity {}',
+              'package dev.example.puzzle; import com.getcapacitor.BridgeActivity; public class MainActivity extends BridgeActivity {}',
             'ios/App/App/Info.plist':
               '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string><key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string><key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string><key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string></dict></plist>',
             'ios/App/App/SceneDelegate.swift': 'class SceneDelegate {}',
@@ -571,6 +571,9 @@ try {
   writeFileSync(appliedSettingsFile, 'project(":app").projectDir = file("elsewhere")');
   assert.throws(() => planCapacitorShellStarter(options), /without remapping/u);
   writeFileSync(appliedSettingsFile, originalAppliedSettings);
+  writeFileSync(androidSettingsFile, 'include ":app"\napply { from "settings-extra.gradle" }');
+  assert.throws(() => planCapacitorShellStarter(options), /unsupported Gradle apply expression/u);
+  writeFileSync(androidSettingsFile, originalSettings);
   const capacitorGradle = path.join(
     root,
     'apps/mobile-capacitor/android/app/capacitor.build.gradle',
@@ -591,6 +594,7 @@ try {
     'applicationId rootProject.ext.gameAppId',
     'applicationId(project.findProperty("id"))',
     'setApplicationId("dev.other.game")',
+    "android.defaultConfig['applicationId'] = 'dev.other.game'",
     'versionCode(computeCode())',
     "android.defaultConfig.setProperty('versionCode', 99)",
     "def key = 'versionName'; android.defaultConfig.setProperty(key, '9.9.9')",
@@ -625,7 +629,7 @@ try {
     androidStrings,
     '<resources><string name="app_name">Other Game</string></resources>',
   );
-  assert.throws(() => planCapacitorShellStarter(options), /android project display name differs/u);
+  assert.throws(() => planCapacitorShellStarter(options), /application label differs/u);
   writeFileSync(
     androidStrings,
     '<resources><string name="app_name">Puzzle Game</string></resources>',
@@ -639,12 +643,18 @@ try {
     releaseValues,
     '<resources><string name="app_name">Other Game</string></resources>',
   );
-  assert.throws(() => planCapacitorShellStarter(options), /android project display name differs/u);
+  assert.throws(() => planCapacitorShellStarter(options), /application label differs/u);
   unlinkSync(releaseValues);
   const androidManifest = path.join(
     root,
     'apps/mobile-capacitor/android/app/src/main/AndroidManifest.xml',
   );
+  writeFileSync(androidManifest, completeAndroidManifest.replace(' android:exported="true"', ''));
+  assert.throws(
+    () => planCapacitorShellStarter(options),
+    /launcher must declare android:exported/u,
+  );
+  writeFileSync(androidManifest, completeAndroidManifest);
   const wrongLabelManifest = `${androidManifestOpen}<application android:label="Other Game" /></manifest>`;
   writeFileSync(androidManifest, wrongLabelManifest);
   assert.throws(() => planCapacitorShellStarter(options), /application label differs/u);
@@ -660,7 +670,7 @@ try {
   writeFileSync(androidManifest, [
     androidManifestOpen,
     '<application android:label="@string/app_name" android:theme="@style/AppTheme">',
-    '<activity-alias android:name=".Alias" android:targetActivity=".MainActivity">',
+    '<activity-alias android:name=".Alias" android:targetActivity=".MainActivity" android:exported="true">',
     '<intent-filter><action android:name="android.intent.action.MAIN"/>',
     '<category android:name="android.intent.category.LAUNCHER"/>',
     '</intent-filter></activity-alias></application></manifest>',
@@ -675,7 +685,7 @@ try {
     androidManifestOpen,
     '<application android:label="@string/app_name" android:theme="@style/AppTheme">',
     '<activity android:name=".MainActivity"/>',
-    '<activity-alias android:name=".Alias" android:targetActivity=".MainActivity">',
+    '<activity-alias android:name=".Alias" android:targetActivity=".MainActivity" android:exported="true">',
     '<intent-filter><action android:name="android.intent.action.MAIN"/>',
     '<category android:name="android.intent.category.LAUNCHER"/>',
     '</intent-filter></activity-alias></application></manifest>',
@@ -765,7 +775,7 @@ try {
   unlinkSync(path.join(nightDrawable, 'only_night.xml'));
   writeFileSync(releaseManifest, [
     androidManifestOpen,
-    '<application><activity android:name=".MissingActivity"><intent-filter>',
+    '<application><activity android:name=".MissingActivity" android:exported="true"><intent-filter>',
     '<action android:name="android.intent.action.MAIN"/>',
     '<category android:name="android.intent.category.LAUNCHER"/>',
     '</intent-filter></activity></application></manifest>',
@@ -776,7 +786,10 @@ try {
     'apps/mobile-capacitor/android/app/src/release/java/dev/example/puzzle/MissingActivity.java',
   );
   mkdirSync(path.dirname(releaseActivity), { recursive: true });
-  writeFileSync(releaseActivity, 'package dev.example.puzzle; public class MissingActivity {}');
+  writeFileSync(
+    releaseActivity,
+    'package dev.example.puzzle; import com.getcapacitor.BridgeActivity; public class MissingActivity extends BridgeActivity {}',
+  );
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   unlinkSync(releaseActivity);
   unlinkSync(releaseManifest);
@@ -788,15 +801,46 @@ try {
   assert.throws(() => planCapacitorShellStarter(options), /launcher class.*missing/u);
   writeFileSync(mainActivity, 'package dev.example.puzzle; // class MainActivity {}');
   assert.throws(() => planCapacitorShellStarter(options), /launcher class.*missing/u);
+  writeFileSync(mainActivity, 'package dev.example.puzzle; public class MainActivity {}');
+  assert.throws(() => planCapacitorShellStarter(options), /not an Android Activity/u);
+  writeFileSync(mainActivity, [
+    'package dev.example.puzzle;',
+    'import com.getcapacitor.BridgeActivity;',
+    'class Outer { class MainActivity extends BridgeActivity {} }',
+  ].join('\n'));
+  assert.throws(() => planCapacitorShellStarter(options), /not an Android Activity/u);
   const kotlinLauncher = path.join(
     root,
     'apps/mobile-capacitor/android/app/src/main/kotlin/dev/example/puzzle/Launcher.kt',
   );
   mkdirSync(path.dirname(kotlinLauncher), { recursive: true });
-  writeFileSync(kotlinLauncher, 'package dev.example.puzzle\nclass MainActivity {}');
+  writeFileSync(kotlinLauncher, [
+    'package dev.example.puzzle',
+    'import com.getcapacitor.BridgeActivity',
+    'class MainActivity : BridgeActivity() {}',
+  ].join('\n'));
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   unlinkSync(kotlinLauncher);
-  writeFileSync(mainActivity, 'package dev.example.puzzle; public class MainActivity {}');
+  writeFileSync(
+    mainActivity,
+    'package dev.example.puzzle; import com.getcapacitor.BridgeActivity; public class MainActivity extends BridgeActivity {}',
+  );
+  const baseActivity = path.join(path.dirname(mainActivity), 'BaseActivity.java');
+  writeFileSync(baseActivity, [
+    'package dev.example.puzzle;',
+    'import com.getcapacitor.BridgeActivity;',
+    'public class BaseActivity extends BridgeActivity {}',
+  ].join('\n'));
+  writeFileSync(
+    mainActivity,
+    'package dev.example.puzzle; public class MainActivity extends BaseActivity {}',
+  );
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  unlinkSync(baseActivity);
+  writeFileSync(
+    mainActivity,
+    'package dev.example.puzzle; import com.getcapacitor.BridgeActivity; public class MainActivity extends BridgeActivity {}',
+  );
   const androidStyles = path.join(
     root,
     'apps/mobile-capacitor/android/app/src/main/res/values/styles.xml',
@@ -844,6 +888,15 @@ try {
   );
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   unlinkSync(alternateStrings);
+  writeFileSync(mainStrings, '<resources><string name="app_name">Puzzle Game</string></resources>');
+  writeFileSync(mainStrings, '<resources/>');
+  const literalNameManifest = completeAndroidManifest.replace(
+    'android:label="@string/app_name"',
+    'android:label="Puzzle Game"',
+  );
+  writeFileSync(androidManifest, literalNameManifest);
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(androidManifest, completeAndroidManifest);
   writeFileSync(mainStrings, '<resources><string name="app_name">Puzzle Game</string></resources>');
   const iosInfo = path.join(root, 'apps/mobile-capacitor/ios/App/App/Info.plist');
   const originalIosInfo = readFileSync(iosInfo, 'utf8');
@@ -998,6 +1051,16 @@ try {
     'android.defaultConfig.applicationId = dynamicAppId',
   ].join('\n'));
   assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
+    "android.defaultConfig['applicationId'] = 'dev.other.game'",
+  ].join('\n'));
+  assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
+    'buildTypes { release { resValue "string", "app_name", "Other Game" } }',
+  ].join('\n'));
+  assert.throws(() => planCapacitorShellStarter(options), /app_name resource/u);
   writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');
   writeFileSync(androidProjectFile, [
     'applicationId "dev.example.puzzle"',

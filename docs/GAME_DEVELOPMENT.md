@@ -293,6 +293,10 @@ For a newly added iOS project, the initializer also writes a shared App archive
 scheme tied to the generated App target. Preserved iOS projects must already
 have a matching shared scheme and Release plist identity placeholders; the
 initializer checks these but does not replace them.
+Preserved Android launchers must be exported and inherit from a recognized
+Android Activity class (directly or through game-owned source). The initializer
+rejects unresolved Gradle-generated `app_name` overrides; keep the release
+display name in checked manifest and resource files.
 
 Use the kit CLI for generated target builds because it resolves
 `${MPGD_KIT_PATH}` tokens in the game's `mpgd.targets.json` before invoking the

@@ -18,7 +18,7 @@ function assertAndroidIdentity(source: string, expectedAppId: string): void {
   const mentions = countGradleIdentityWrites(clean, 'applicationId');
   if (assignments.length === 0 || assignments.length !== mentions
     || assignments.some((value) => value !== expectedAppId)
-    || hasAndroidReleaseIdSuffix(clean)) {
+    || hasAndroidReleaseIdSuffix(clean) || hasGradleBracketIdentityWrite(clean)) {
     throw new Error('Existing android project app ID differs or cannot be read safely.');
   }
 }
@@ -129,7 +129,7 @@ export function stripGradleComments(source: string): string {
 export function hasGradleIdentityMutation(source: string): boolean {
   const clean = stripGradleComments(source);
   const masked = maskGradleStrings(clean);
-  if (hasGradlePropertySetter(clean)) {
+  if (hasGradlePropertySetter(clean) || hasGradleBracketIdentityWrite(clean)) {
     return true;
   }
   const setter = /\bset(?:ApplicationId|ApplicationIdSuffix|VersionCode|VersionName|VersionNameSuffix)\s*\(/u;
@@ -139,6 +139,28 @@ export function hasGradleIdentityMutation(source: string): boolean {
     'u',
   );
   return setter.test(masked) || assignment.test(masked);
+}
+
+export function hasGradleBracketIdentityWrite(source: string): boolean {
+  const clean = stripGradleComments(source);
+  const code = maskGradleStrings(clean);
+  const key = '(?:applicationId|applicationIdSuffix|versionCode|versionName|versionNameSuffix)';
+  const bracketWrite = `\\[\\s*["']${key}["']\\s*\\]\\s*(?:\\+?=|\\.\\s*set\\s*\\(|\\()`;
+  const expression = new RegExp(bracketWrite, 'gu');
+  return [...clean.matchAll(expression)].some((match) => code[match.index] === '[');
+}
+
+export function hasAndroidDisplayNameResourceOverride(source: string): boolean {
+  const clean = stripGradleComments(source);
+  const code = maskGradleStrings(clean);
+  return [...clean.matchAll(/\bresValue\b/gu)].some((match) => {
+    if (code.slice(match.index, match.index + 8) !== 'resValue') {
+      return false;
+    }
+    const tail = clean.slice(match.index);
+    const literal = /^resValue\s*(?:\(\s*)?["'][^"']+["']\s*,\s*["']([^"']+)["']/u.exec(tail);
+    return literal === null || literal[1] === 'app_name';
+  });
 }
 
 export function hasGradlePropertySetter(source: string): boolean {
