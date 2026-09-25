@@ -216,6 +216,16 @@ try {
     assert.equal(manifest.kitGitSha, installedInfo.kitGitSha);
     assert.ok(manifest.targets?.ios);
     assert.ok(existsSync(join(gameRoot, manifest.targets.ios.artifact)));
+    mustRun('pnpm', ['exec', 'mpgd', 'deploy', 'init', '--game', gameRoot], gameRoot);
+    const deployPlanFile = join(gameRoot, 'release-plan.json');
+    mustRun('pnpm', [
+      'exec', 'mpgd', 'deploy', 'plan', '--game', gameRoot,
+      '--profile', 'beta', '--targets', 'android', '--out', deployPlanFile,
+    ], gameRoot);
+    const deployPlan = JSON.parse(readFileSync(deployPlanFile, 'utf8'));
+    assert.equal(deployPlan.targets[0]?.target, 'android');
+    assert.equal(deployPlan.targets[0]?.appId, 'dev.mpgd.externalgame');
+    assert.equal(JSON.stringify(deployPlan).includes('MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT'), false);
   }
   console.info(`External @mpgd/cli native ${syncIos ? 'iOS sync' : 'validation'} passed.`);
 } finally {
