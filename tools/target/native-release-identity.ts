@@ -2,12 +2,15 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { isMpgdFinalSemVer } from '@mpgd/target-config';
-import { assertIosReleasePlistIdentity } from '../../packages/cli/src/capacitor-shell-starter.js';
+import {
+  assertAndroidReleaseDisplayName,
+  assertIosReleasePlistIdentity,
+} from '../../packages/cli/src/capacitor-shell-starter.js';
 import {
   assertIosReleaseProductName,
   countGradleIdentityWrites,
   hasGradleIdentityMutation,
-  hasGradleQuotedIdentitySetter,
+  hasGradlePropertySetter,
   maskGradleStrings,
   readIosReleaseInfoPlist,
 } from '../../packages/cli/src/native-shell-identity.js';
@@ -51,6 +54,10 @@ export function assertNativeReleaseIdentity(input: NativeReleaseIdentityInput): 
     }
     assertAndroidIdentity(candidates[0] ?? '', expected);
     assertAndroidAppliedScripts(candidates[0] ?? '', join(input.shellApp, 'android'));
+    if (input.required) {
+      const name = requireValue(input.metadata?.displayName, 'Android target metadata displayName');
+      assertAndroidReleaseDisplayName(input.shellApp, name);
+    }
     return;
   }
 
@@ -129,7 +136,7 @@ function assertAndroidIdentity(file: string, expected: AndroidIdentity): void {
   }
   assertNoAndroidReleaseIdentitySuffix(source, file);
   if (/\bset(?:ApplicationId|VersionCode|VersionName)\s*\(/u.test(code)
-    || hasGradleQuotedIdentitySetter(source)) {
+    || hasGradlePropertySetter(source)) {
     throw new Error(`Native release preflight cannot resolve Android identity setters in ${file}.`);
   }
   const end = '(?=\\s*(?:;|\\r?\\n|\\}|$))';
@@ -340,19 +347,24 @@ function assertNativeVersionMatchesGameVersion(
 function assertNoAndroidReleaseIdentitySuffix(source: string, file: string): void {
   const releaseBlocks = readAndroidReleaseBlocks(source, file);
   const code = maskGradleStrings(source);
-  const qualifiedReleaseSuffixes = [
-    /\bbuildTypes\s*\.\s*release\s*\.\s*(?:applicationIdSuffix|versionNameSuffix)\b/u,
-    /\bbuildTypes\s*\.\s*(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*(?:applicationIdSuffix|versionNameSuffix)\b/u,
-    /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*(?:applicationIdSuffix|versionNameSuffix)\b/u,
-    /\brelease\s*\.\s*(?:applicationIdSuffix|versionNameSuffix)\b/u,
+  const suffix = '(?:applicationIdSuffix|versionNameSuffix|setApplicationIdSuffix|setVersionNameSuffix)';
+  const qualifiedReleasePrefixes = [
+    '\\bbuildTypes\\s*\\.\\s*release',
+    '\\bbuildTypes\\s*\\.\\s*(?:getByName|named)\\s*\\(\\s*["\']release["\']\\s*\\)',
+    '\\b(?:getByName|named)\\s*\\(\\s*["\']release["\']\\s*\\)',
+    '\\brelease',
   ];
+  const qualifiedReleaseSuffixes = qualifiedReleasePrefixes.map(
+    (prefix) => new RegExp(`${prefix}\\s*\\.\\s*${suffix}\\b`, 'u'),
+  );
 
   const qualifiedSuffix = qualifiedReleaseSuffixes.some((expression) => {
     const global = new RegExp(expression.source, `${expression.flags}g`);
     return [...source.matchAll(global)].some((match) => {
-      const suffix = /(?:applicationIdSuffix|versionNameSuffix)$/u.exec(match[0])?.[0] ?? '';
-      const offset = (match.index ?? 0) + match[0].lastIndexOf(suffix);
-      return suffix !== '' && code.slice(offset, offset + suffix.length) === suffix;
+      const matchedSuffix = new RegExp(`${suffix}$`, 'u').exec(match[0])?.[0] ?? '';
+      const offset = (match.index ?? 0) + match[0].lastIndexOf(matchedSuffix);
+      return matchedSuffix !== ''
+        && code.slice(offset, offset + matchedSuffix.length) === matchedSuffix;
     });
   });
   if (qualifiedSuffix) {
@@ -362,7 +374,7 @@ function assertNoAndroidReleaseIdentitySuffix(source: string, file: string): voi
   }
 
   for (const releaseBlock of releaseBlocks) {
-    if (/\b(?:applicationIdSuffix|versionNameSuffix)\b/u
+    if (/\b(?:applicationIdSuffix|versionNameSuffix|setApplicationIdSuffix|setVersionNameSuffix)\b/u
       .test(maskGradleStrings(releaseBlock))) {
       throw new Error(
         `Native release preflight does not support applicationIdSuffix or versionNameSuffix in Android release builds: ${file}.`,

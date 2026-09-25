@@ -112,6 +112,7 @@ try {
     'setApplicationId("dev.other.game")',
     'versionCode(computeCode())',
     "android.defaultConfig.setProperty('versionCode', 99)",
+    "def key = 'versionName'; android.defaultConfig.setProperty(key, '9.9.9')",
   ]) {
     writeFileSync(appliedIdentity, mutation);
     assert.throws(
@@ -131,9 +132,43 @@ try {
   assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /product flavors/u);
   rmSync(appliedIdentity);
   writeShellFiles(shellRoot);
+  const productionInput = {
+    ...appliedIdentityInput,
+    metadata: { packageId: 'dev.example.game', displayName: 'Puzzle Game' },
+    required: true,
+  };
+  assert.doesNotThrow(() => assertNativeReleaseIdentity(productionInput));
+  const appNameFile = join(shellRoot, 'android/app/src/main/res/values/strings.xml');
+  writeFileSync(appNameFile, '<resources><string name="app_name">Other Game</string></resources>');
+  assert.throws(() => assertNativeReleaseIdentity(productionInput), /display name differs/u);
+  writeShellFiles(shellRoot);
+  const releaseManifest = join(shellRoot, 'android/app/src/release/AndroidManifest.xml');
+  mkdirSync(join(shellRoot, 'android/app/src/release'), { recursive: true });
+  writeFileSync(releaseManifest, [
+    '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+    '<application android:label="Other Game"/></manifest>',
+  ].join(''));
+  assert.throws(
+    () => assertNativeReleaseIdentity(productionInput),
+    /Release application label differs/u,
+  );
+  rmSync(releaseManifest);
+  writeShellFiles(shellRoot);
   const flavoredGradle = `${readFileSync(groovy, 'utf8')}\nproductFlavors { demo {} }\n`;
   writeFileSync(groovy, flavoredGradle);
   assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /product flavors/u);
+  writeShellFiles(shellRoot);
+  for (const suffixSetter of [
+    'setApplicationIdSuffix(".store")',
+    'setVersionNameSuffix("-store")',
+  ]) {
+    writeFileSync(groovy, [
+      readFileSync(groovy, 'utf8'),
+      `buildTypes { release { ${suffixSetter} } }`,
+    ].join('\n'));
+    assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /Suffix/u);
+    writeShellFiles(shellRoot);
+  }
   writeShellFiles(shellRoot);
   writeFileSync(groovy, `${readFileSync(groovy, 'utf8')}\nprintln("productFlavors")\n`);
   assert.doesNotThrow(() => assertNativeReleaseIdentity(appliedIdentityInput));
@@ -600,6 +635,7 @@ function writeShellFiles(root: string): void {
   const ios = join(root, 'ios/App/App.xcodeproj/project.pbxproj');
   const iosPlist = join(root, 'ios/App/App/Info.plist');
   mkdirSync(join(root, 'android/app'), { recursive: true });
+  mkdirSync(join(root, 'android/app/src/main/res/values'), { recursive: true });
   mkdirSync(join(root, 'ios/App/App.xcodeproj'), { recursive: true });
   mkdirSync(join(root, 'ios/App/App'), { recursive: true });
   writeFileSync(
@@ -608,6 +644,14 @@ function writeShellFiles(root: string): void {
   );
   writeFileSync(androidRoot, '// Standard root Gradle build.\n');
   writeFileSync(androidSettings, 'include ":app"\n');
+  writeFileSync(
+    join(root, 'android/app/src/main/AndroidManifest.xml'),
+    '<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:label="@string/app_name"/></manifest>',
+  );
+  writeFileSync(
+    join(root, 'android/app/src/main/res/values/strings.xml'),
+    '<resources><string name="app_name">Puzzle Game</string></resources>',
+  );
   writeFileSync(iosPlist, [
     '<plist><dict>',
     '<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>',

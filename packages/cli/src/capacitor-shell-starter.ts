@@ -1080,7 +1080,8 @@ function readPbxObjectBody(project: string, id: string): string {
 
 function readPbxIds(object: string, key: string): string[] {
   const list = new RegExp(`\\b${key}\\s*=\\s*\\(([^)]*)\\)\\s*;`, 'u').exec(object)?.[1];
-  return list === undefined ? [] : [...list.matchAll(/\b([A-F0-9]+)\b/gu)]
+  const uncommented = list?.replace(/\/\*[\s\S]*?\*\//gu, '') ?? '';
+  return [...uncommented.matchAll(/\b([A-F0-9]{8,24})\b/gu)]
     .map((match) => match[1] ?? '');
 }
 
@@ -1445,6 +1446,15 @@ function assertNativeDisplayName(
   }
 }
 
+export function assertAndroidReleaseDisplayName(
+  shellApp: string,
+  expectedDisplayName: string,
+): void {
+  const nativeDirectory = path.join(shellApp, 'android');
+  assertAndroidManifestResources(nativeDirectory);
+  assertNativeDisplayName(nativeDirectory, 'android', expectedDisplayName);
+}
+
 function hasAndroidMergerDirective(element: Element): boolean {
   return ['tools:node', 'tools:remove', 'tools:replace']
     .some((attribute) => element.hasAttribute(attribute));
@@ -1529,12 +1539,22 @@ export function decodeAndroidStringResource(value: string): string {
   const quoted = trimmed.startsWith('"') && trimmed.endsWith('"');
   const source = quoted ? trimmed.slice(1, -1) : trimmed;
   let decoded = '';
+  let unquotedWhitespace = false;
   for (let index = 0; index < source.length; index += 1) {
     const character = source[index] ?? '';
     if (character !== '\\') {
-      decoded += character;
+      if (!quoted && /\s/u.test(character)) {
+        if (!unquotedWhitespace) {
+          decoded += ' ';
+        }
+        unquotedWhitespace = true;
+      } else {
+        decoded += character;
+        unquotedWhitespace = false;
+      }
       continue;
     }
+    unquotedWhitespace = false;
     const next = source[index + 1];
     if (next === 'u' && /^[0-9a-fA-F]{4}$/u.test(source.slice(index + 2, index + 6))) {
       decoded += String.fromCharCode(Number.parseInt(source.slice(index + 2, index + 6), 16));
@@ -1816,7 +1836,7 @@ function requireStaticCapacitorConfig(source: string): string {
     codeOnly += character;
     index += 1;
   }
-  const configReferences = [...codeOnly.matchAll(/\bconfig\b/gu)].length;
+  const configUses = [...codeOnly.matchAll(/\bconfig\b(?!\s*:)/gu)].length;
   const declaration = /\bconst\s+config\s*:\s*CapacitorConfig\s*=\s*\{/u.exec(codeOnly);
   if (declaration?.index === undefined) {
     throw new Error('Existing Capacitor config has ambiguous dynamic syntax.');
@@ -1828,7 +1848,7 @@ function requireStaticCapacitorConfig(source: string): string {
     [...topLevelCode.matchAll(new RegExp(`\\b${key}\\b`, 'gu'))].length === 1,
   );
   const hasComputedKey = /(?:\{|,)[ \t\n]*\[[^\]]*\][ \t\n]*:/u.test(topLevelCode);
-  if (configReferences !== 2 || topLevelCode.includes('...') || hasComputedKey
+  if (configUses !== 1 || topLevelCode.includes('...') || hasComputedKey
     || /\\u(?:[0-9a-fA-F]{4}|\{[0-9a-fA-F]+\})/u.test(topLevelCode)
     || !identityKeysAreUnique
     || /^[ \t]*["'](?:appId|appName|webDir)["'][ \t]*:/mu.test(topLevelSource)
@@ -1842,6 +1862,10 @@ function requireStaticCapacitorConfig(source: string): string {
 function assertNoCapacitorServerUrl(source: string, code: string, topLevel: string): void {
   if (/^[ \t]*["']server["']\s*:/mu.test(source)) {
     throw new Error('Existing Capacitor config server field is ambiguous.');
+  }
+  if (/(?:\{|,)\s*["'][^"']*\\u(?:[0-9a-fA-F]{4}|\{[0-9a-fA-F]+\})[^"']*["']\s*:/u
+    .test(source)) {
+    throw new Error('Existing Capacitor config quoted property key is ambiguous.');
   }
   if (/\b(?:get|set)\s+server\s*\(/u.test(topLevel)
     || /(?:^|[,\s{])server\s*(?:,|\})/u.test(topLevel)) {

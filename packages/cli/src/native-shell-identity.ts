@@ -24,12 +24,12 @@ function assertAndroidIdentity(source: string, expectedAppId: string): void {
 }
 
 function hasAndroidReleaseIdSuffix(source: string): boolean {
-  if (/\bbuildTypes\s*\.\s*release\s*\.\s*applicationIdSuffix\b/u.test(source)
-    || /\bbuildTypes\s*\.\s*(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*applicationIdSuffix\b/u
+  if (/\bbuildTypes\s*\.\s*release\s*\.\s*(?:applicationIdSuffix|setApplicationIdSuffix)\b/u.test(source)
+    || /\bbuildTypes\s*\.\s*(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*(?:applicationIdSuffix|setApplicationIdSuffix)\b/u
       .test(source)
-    || /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*applicationIdSuffix\b/u
+    || /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*(?:applicationIdSuffix|setApplicationIdSuffix)\b/u
       .test(source)
-    || /\brelease\s*\.\s*applicationIdSuffix\b/u.test(source)) {
+    || /\brelease\s*\.\s*(?:applicationIdSuffix|setApplicationIdSuffix)\b/u.test(source)) {
     return true;
   }
   const releaseBlocks = [
@@ -39,7 +39,7 @@ function hasAndroidReleaseIdSuffix(source: string): boolean {
   ];
   return releaseBlocks.some((expression) => [...source.matchAll(expression)]
     .some((match) => match.index !== undefined
-      && /\bapplicationIdSuffix\b/u.test(readBracedText(
+      && /\b(?:applicationIdSuffix|setApplicationIdSuffix)\b/u.test(readBracedText(
         source,
         source.indexOf('{', match.index),
       ))));
@@ -91,7 +91,7 @@ export function stripGradleComments(source: string): string {
 export function hasGradleIdentityMutation(source: string): boolean {
   const clean = stripGradleComments(source);
   const masked = maskGradleStrings(clean);
-  if (hasGradleQuotedIdentitySetter(clean)) {
+  if (hasGradlePropertySetter(clean)) {
     return true;
   }
   const setter = /\bset(?:ApplicationId|ApplicationIdSuffix|VersionCode|VersionName|VersionNameSuffix)\s*\(/u;
@@ -103,14 +103,11 @@ export function hasGradleIdentityMutation(source: string): boolean {
   return setter.test(masked) || assignment.test(masked);
 }
 
-export function hasGradleQuotedIdentitySetter(source: string): boolean {
+export function hasGradlePropertySetter(source: string): boolean {
   const clean = stripGradleComments(source);
   const masked = maskGradleStrings(clean);
-  return [...masked.matchAll(/\bsetProperty\s*\(/gu)].some((match) => {
-    const tail = clean.slice(match.index ?? 0);
-    return /^setProperty\s*\(\s*["'](?:applicationId|applicationIdSuffix|versionCode|versionName|versionNameSuffix)["']\s*,/u
-      .test(tail);
-  });
+  // A computed key can target any release identity; do not try to evaluate Groovy here.
+  return /\bsetProperty\s*\(/u.test(masked);
 }
 
 export function countGradleIdentityWrites(source: string, key: string): number {

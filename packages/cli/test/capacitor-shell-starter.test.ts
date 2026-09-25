@@ -27,6 +27,8 @@ const root = mkdtempSync(path.join(tmpdir(), 'mpgd-capacitor-shell-'));
 
 assert.equal(decodeAndroidStringResource("King\\'s Quest"), "King's Quest");
 assert.equal(decodeAndroidStringResource('"King\\\'s Quest"'), "King's Quest");
+assert.equal(decodeAndroidStringResource('Puzzle   Game'), 'Puzzle Game');
+assert.equal(decodeAndroidStringResource('"Puzzle   Game"'), 'Puzzle   Game');
 
 function writeJson(relative: string, value: unknown): void {
   const file = path.join(root, relative);
@@ -433,6 +435,13 @@ try {
   ].join('\n');
   writeFileSync(iosProjectFile, customProject);
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  const hexCommentProject = customProject.replace(
+    'CustomView.swift in Sources',
+    'ABC.swift in Sources',
+  );
+  writeFileSync(iosProjectFile, hexCommentProject);
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(iosProjectFile, customProject);
   unlinkSync(customBuildFile);
   assert.throws(() => planCapacitorShellStarter(options), /App build input.*missing/u);
   const groupedProject = customProject + '\n' + [
@@ -541,6 +550,7 @@ try {
     'setApplicationId("dev.other.game")',
     'versionCode(computeCode())',
     "android.defaultConfig.setProperty('versionCode', 99)",
+    "def key = 'versionName'; android.defaultConfig.setProperty(key, '9.9.9')",
   ]) {
     writeFileSync(capacitorGradle, mutation);
     assert.throws(
@@ -954,6 +964,11 @@ try {
     'buildTypes { val release by getting { applicationIdSuffix = ".store" } }',
   ].join('\n'));
   assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
+    'buildTypes { release { setApplicationIdSuffix(".store") } }',
+  ].join('\n'));
+  assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
   writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');
   const kotlinGradle = `${androidProjectFile}.kts`;
   const groovySettings = path.join(root, 'apps/mobile-capacitor/android/settings.gradle');
@@ -1018,6 +1033,12 @@ try {
   );
   writeFileSync(configFile, escapedServer);
   assert.throws(() => planCapacitorShellStarter(options), /ambiguous dynamic syntax/u);
+  const escapedQuotedServer = originalConfig.replace(
+    "server: { androidScheme: 'https' }",
+    '"ser\\u0076er": { url: "https://stale.example" }',
+  );
+  writeFileSync(configFile, escapedQuotedServer);
+  assert.throws(() => planCapacitorShellStarter(options), /quoted property key is ambiguous/u);
   const topLevelGetter = originalConfig.replace(
     "server: { androidScheme: 'https' }",
     "get server() { return { url: 'https://stale.example' }; }",
@@ -1037,6 +1058,12 @@ try {
       '  plugins: { FacebookLogin: { appId: "social-provider", scopes: ["profile"] } },\n  server:',
     ),
   );
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  const nestedConfigKey = originalConfig.replace(
+    '  server:',
+    '  plugins: { SomePlugin: { config: { mode: "release" } } },\n  server:',
+  );
+  writeFileSync(configFile, nestedConfigKey);
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   writeFileSync(
     configFile,
