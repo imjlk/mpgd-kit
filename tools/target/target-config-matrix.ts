@@ -11,7 +11,10 @@ import {
   type TargetRuntimeKind,
 } from '@mpgd/target-config';
 
-import { targetConfigExtensionsFileEnv } from '../../packages/cli/src/target-config-env';
+import {
+  targetConfigExtensionsFileEnv,
+  targetConfigMatrixFileEnv,
+} from '../../packages/cli/src/target-config-env';
 import { assertDeploymentTargetName } from '../../packages/cli/src/target-name';
 import { readJsonFile } from '../io';
 
@@ -45,7 +48,7 @@ const releaseProfileByRuntime = {
 } as const satisfies Record<TargetRuntimeKind, ReleaseProfile>;
 
 export function loadTargetConfigMatrix(
-  baseFile = defaultTargetConfigMatrixFile,
+  baseFile = process.env[targetConfigMatrixFileEnv] ?? defaultTargetConfigMatrixFile,
   extensionsFile = process.env[targetConfigExtensionsFileEnv],
 ): TargetConfigMatrix {
   const base = assertTargetConfigMatrix(readJsonFile(baseFile));
