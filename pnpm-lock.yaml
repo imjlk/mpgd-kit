@@ -618,6 +618,9 @@ importers:
       gunshi:
         specifier: ^0.35.1
         version: 0.35.1
+      semver:
+        specifier: ^7.8.5
+        version: 7.8.5
       undici:
         specifier: ^7.28.0
         version: 7.28.0
@@ -661,6 +664,9 @@ importers:
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.2
+      '@types/semver':
+        specifier: ^7.8.0
+        version: 7.8.0
       ttsc:
         specifier: 0.30.4
         version: 0.30.4
@@ -3316,6 +3322,9 @@ packages:
 
   '@types/react@19.3.0':
     resolution: {integrity: sha512-N0rFCuH9YoxG9/m61l9MfpJKfmLOVU0em7ipIz6TRgSSkvReLB9vL85GB+yr8Bs5leqpvg96JSwF4ZS1s4viQg==}
+
+  '@types/semver@7.8.0':
+    resolution: {integrity: sha512-1mAINjtQCXXeLkJ9ehXkwOcBpqtLxiVtKhpUf83DdRNdQKV0iXZpaHYqRr7nj+wvxuJzoAmAwXI+sCNMv1CzLQ==}
 
   '@types/slice-ansi@4.0.0':
     resolution: {integrity: sha512-+OpjSaq85gvlZAYINyzKpLeiFkSC4EsC6IIiT6v6TLSU5k5U83fHGj9Lel8oKEXM0HqgrMVCjXPDPVICtxF7EQ==}
@@ -9297,6 +9306,8 @@ snapshots:
   '@types/react@19.3.0':
     dependencies:
       csstype: 3.2.3
+
+  '@types/semver@7.8.0': {}
 
   '@types/slice-ansi@4.0.0': {}
 

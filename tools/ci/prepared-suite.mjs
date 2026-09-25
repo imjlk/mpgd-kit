@@ -33,6 +33,7 @@ export const preparedGroups = Object.freeze({
     'smoke:platform-version-allocation',
     'smoke:microsoft-store-pwa-release',
     'smoke:cli-hosted-pwa-deployment',
+    'smoke:cli-kit-upgrade',
     'smoke:cli-asset-pack-build',
     'smoke:cli-asset-pack-verify',
     'smoke:cli-configured-web-targets',
