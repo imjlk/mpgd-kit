@@ -128,6 +128,8 @@ try {
   const readOnlyGradle = 'println(android.defaultConfig.versionName)\nprintln("versionName")';
   writeFileSync(appliedIdentity, readOnlyGradle);
   assert.doesNotThrow(() => assertNativeReleaseIdentity(appliedIdentityInput));
+  writeFileSync(appliedIdentity, 'println("apply from: \'legacy.gradle\'")');
+  assert.doesNotThrow(() => assertNativeReleaseIdentity(appliedIdentityInput));
   writeFileSync(appliedIdentity, 'android { productFlavors { demo {} } }');
   assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /product flavors/u);
   rmSync(appliedIdentity);
@@ -172,6 +174,12 @@ try {
   writeFileSync(groovy, [
     readFileSync(groovy, 'utf8'),
     'buildTypes["release"].applicationIdSuffix = ".store"',
+  ].join('\n'));
+  assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /applicationIdSuffix/u);
+  writeShellFiles(shellRoot);
+  writeFileSync(groovy, [
+    readFileSync(groovy, 'utf8'),
+    'buildTypes["release"].apply { applicationIdSuffix = ".store" }',
   ].join('\n'));
   assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /applicationIdSuffix/u);
   writeShellFiles(shellRoot);
@@ -228,6 +236,11 @@ try {
     'include(":app")',
     'project(":app").projectDir = file("elsewhere")',
   ].join('\n'));
+  assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /without remapping/u);
+  writeShellFiles(shellRoot);
+  const appliedSettings = join(shellRoot, 'android/settings-extra.gradle');
+  writeFileSync(appliedSettings, 'project(":app").projectDir = file("elsewhere")');
+  writeFileSync(androidSettings, 'include ":app"\napply from: "settings-extra.gradle"\n');
   assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /without remapping/u);
   writeShellFiles(shellRoot);
   writeFileSync(groovy, [
@@ -326,6 +339,28 @@ try {
     required: false,
     shellApp: shellRoot,
   };
+  const productionIosInput = {
+    ...iosInput,
+    metadata: { bundleId: 'dev.example.game', displayName: 'Puzzle Game' },
+    required: true,
+  };
+  assert.doesNotThrow(() => assertNativeReleaseIdentity(productionIosInput));
+  const releaseIosPlist = join(shellRoot, 'ios/App/App/Info.plist');
+  const originalReleaseIosPlist = readFileSync(releaseIosPlist, 'utf8');
+  writeFileSync(releaseIosPlist, originalReleaseIosPlist.replace('Puzzle Game', 'Other Game'));
+  assert.throws(() => assertNativeReleaseIdentity(productionIosInput), /display name differs/u);
+  writeFileSync(releaseIosPlist, originalReleaseIosPlist);
+  const schemeDir = join(shellRoot, 'ios/App/App.xcodeproj/xcshareddata/xcschemes');
+  const schemeFile = join(schemeDir, 'App.xcscheme');
+  const originalScheme = readFileSync(schemeFile, 'utf8');
+  const validBlueprint = 'BlueprintIdentifier="001"';
+  const invalidScheme = originalScheme.replace(validBlueprint, 'BlueprintIdentifier="999"');
+  writeFileSync(schemeFile, invalidScheme);
+  assert.throws(
+    () => assertNativeReleaseIdentity(productionIosInput),
+    /archive scheme.*App target/u,
+  );
+  writeFileSync(schemeFile, originalScheme);
   const customProductName = inheritedIosSource.replace(
     'CURRENT_PROJECT_VERSION = "$(inherited)";',
     'CURRENT_PROJECT_VERSION = "$(inherited)"; PRODUCT_NAME = CustomGame;',
@@ -651,6 +686,7 @@ function writeShellFiles(root: string): void {
   mkdirSync(join(root, 'android/app'), { recursive: true });
   mkdirSync(join(root, 'android/app/src/main/res/values'), { recursive: true });
   mkdirSync(join(root, 'ios/App/App.xcodeproj'), { recursive: true });
+  mkdirSync(join(root, 'ios/App/App.xcodeproj/xcshareddata/xcschemes'), { recursive: true });
   mkdirSync(join(root, 'ios/App/App'), { recursive: true });
   writeFileSync(
     android,
@@ -668,11 +704,16 @@ function writeShellFiles(root: string): void {
   );
   writeFileSync(iosPlist, [
     '<plist><dict>',
+    '<key>CFBundleDisplayName</key><string>Puzzle Game</string>',
     '<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>',
     '<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>',
     '<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>',
     '</dict></plist>',
   ].join(''));
+  writeFileSync(
+    join(root, 'ios/App/App.xcodeproj/xcshareddata/xcschemes/App.xcscheme'),
+    '<Scheme><BuildAction><BuildActionEntries><BuildActionEntry buildForArchiving="YES"><BuildableReference BlueprintIdentifier="001" BlueprintName="App" BuildableName="App.app" ReferencedContainer="container:App.xcodeproj"/></BuildActionEntry></BuildActionEntries></BuildAction><ArchiveAction buildConfiguration="Release"/></Scheme>',
+  );
   writeFileSync(
     ios,
     `001 /* App */ = {\n  isa = PBXNativeTarget;\n  buildConfigurationList = 002 /* Build configuration list for PBXNativeTarget \"App\" */;\n  name = \"App\";\n};\n\n002 /* Build configuration list for PBXNativeTarget \"App\" */ = {\n  isa = XCConfigurationList;\n  buildConfigurations = (\n    003 /* Debug */,\n    004 /* Release */,\n  );\n};\n\n003 /* Debug */ = {\n  isa = XCBuildConfiguration;\n  buildSettings = {\n    PRODUCT_BUNDLE_IDENTIFIER = dev.example.game.debug;\n    MARKETING_VERSION = 1.4.0-debug;\n    CURRENT_PROJECT_VERSION = 7;\n  };\n};\n\n004 /* Release */ = {\n  isa = XCBuildConfiguration;\n  buildSettings = {\n    PRODUCT_BUNDLE_IDENTIFIER = dev.example.game;\n    MARKETING_VERSION = 1.4.0;\n    CURRENT_PROJECT_VERSION = 42;\n    INFOPLIST_FILE = App/Info.plist;\n  };\n};\n\n005 /* ShareExtension */ = {\n  isa = PBXNativeTarget;\n  buildConfigurationList = 006 /* Build configuration list for PBXNativeTarget \"ShareExtension\" */;\n  name = ShareExtension;\n};\n\n006 /* Build configuration list for PBXNativeTarget \"ShareExtension\" */ = {\n  isa = XCBuildConfiguration;\n  buildSettings = {\n    PRODUCT_BUNDLE_IDENTIFIER = dev.example.game.share;\n    MARKETING_VERSION = 9.9.9;\n    CURRENT_PROJECT_VERSION = 99;\n  };\n};\n`,

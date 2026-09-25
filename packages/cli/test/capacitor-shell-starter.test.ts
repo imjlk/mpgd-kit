@@ -295,7 +295,7 @@ try {
             'android/app/src/main/java/dev/example/puzzle/MainActivity.java':
               'package dev.example.puzzle; public class MainActivity {}',
             'ios/App/App/Info.plist':
-              '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string></dict></plist>',
+              '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string><key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string><key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string><key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string></dict></plist>',
             'ios/App/App/SceneDelegate.swift': 'class SceneDelegate {}',
           };
           writeFileSync(requiredFile, contents[relative] ?? 'generated-native-project');
@@ -418,6 +418,16 @@ try {
   const withNativeProjects = planCapacitorShellStarter(options);
   assert.deepEqual(withNativeProjects.changedFiles, []);
   assert.deepEqual(withNativeProjects.nativePlatformsToAdd, []);
+  const iosSchemeFile = path.join(
+    root,
+    'apps/mobile-capacitor/ios/App/App.xcodeproj/xcshareddata/xcschemes/App.xcscheme',
+  );
+  const originalIosScheme = readFileSync(iosSchemeFile, 'utf8');
+  writeFileSync(iosSchemeFile, originalIosScheme.replace('AAAAAAAA', 'FFFFFFFF'));
+  assert.throws(() => planCapacitorShellStarter(options), /archive scheme.*App target/u);
+  unlinkSync(iosSchemeFile);
+  assert.throws(() => planCapacitorShellStarter(options), /archive scheme is missing/u);
+  writeFileSync(iosSchemeFile, originalIosScheme);
   const iosProjectFile = path.join(
     root,
     'apps/mobile-capacitor/ios/App/App.xcodeproj/project.pbxproj',
@@ -553,6 +563,14 @@ try {
   );
   assert.throws(() => planCapacitorShellStarter(options), /without remapping/u);
   writeFileSync(androidSettingsFile, originalSettings);
+  const appliedSettingsFile = path.join(
+    root,
+    'apps/mobile-capacitor/android/capacitor.settings.gradle',
+  );
+  const originalAppliedSettings = readFileSync(appliedSettingsFile, 'utf8');
+  writeFileSync(appliedSettingsFile, 'project(":app").projectDir = file("elsewhere")');
+  assert.throws(() => planCapacitorShellStarter(options), /without remapping/u);
+  writeFileSync(appliedSettingsFile, originalAppliedSettings);
   const capacitorGradle = path.join(
     root,
     'apps/mobile-capacitor/android/app/capacitor.build.gradle',
@@ -560,6 +578,10 @@ try {
   renameSync(capacitorGradle, `${capacitorGradle}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /applied Gradle script/u);
   renameSync(`${capacitorGradle}.saved`, capacitorGradle);
+  const originalCapacitorGradle = readFileSync(capacitorGradle, 'utf8');
+  writeFileSync(capacitorGradle, 'println("apply from: \'legacy.gradle\'")');
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(capacitorGradle, originalCapacitorGradle);
   writeFileSync(capacitorGradle, 'applicationId "dev.other.game"');
   assert.throws(
     () => planCapacitorShellStarter(options),
@@ -824,40 +846,30 @@ try {
   unlinkSync(alternateStrings);
   writeFileSync(mainStrings, '<resources><string name="app_name">Puzzle Game</string></resources>');
   const iosInfo = path.join(root, 'apps/mobile-capacitor/ios/App/App/Info.plist');
-  writeFileSync(
-    iosInfo,
-    '<plist><dict><key>CFBundleDisplayName</key><string>Other Game</string></dict></plist>',
-  );
+  const originalIosInfo = readFileSync(iosInfo, 'utf8');
+  writeFileSync(iosInfo, originalIosInfo.replace('Puzzle Game', 'Other Game'));
   assert.throws(() => planCapacitorShellStarter(options), /ios project display name differs/u);
-  writeFileSync(
-    iosInfo,
-    '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string></dict></plist>',
-  );
+  const bundlePlaceholder = '$(PRODUCT_BUNDLE_IDENTIFIER)';
+  const invalidIosInfo = originalIosInfo.replace(bundlePlaceholder, 'dev.other.game');
+  writeFileSync(iosInfo, invalidIosInfo);
+  assert.throws(() => planCapacitorShellStarter(options), /Release Info.plist CFBundleIdentifier/u);
+  writeFileSync(iosInfo, originalIosInfo);
   const iosReleaseInfo = path.join(root, 'apps/mobile-capacitor/ios/App/App/Info-Release.plist');
-  writeFileSync(
-    iosReleaseInfo,
-    '<plist><dict><key>CFBundleDisplayName</key><string>Other Game</string></dict></plist>',
-  );
+  writeFileSync(iosReleaseInfo, originalIosInfo.replace('Puzzle Game', 'Other Game'));
   const releaseProject = iosProjectWithAppId('dev.example.puzzle').replace(
     'INFOPLIST_FILE = App/Info.plist;',
     'INFOPLIST_FILE = App/Info-Release.plist;',
   );
   writeFileSync(iosProjectFile, releaseProject);
   assert.throws(() => planCapacitorShellStarter(options), /ios project display name differs/u);
-  writeFileSync(
-    iosReleaseInfo,
-    '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string></dict></plist>',
-  );
+  writeFileSync(iosReleaseInfo, originalIosInfo);
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   writeFileSync(
     iosReleaseInfo,
     '<plist><dict><!-- <key>CFBundleDisplayName</key><string>Puzzle Game</string> --></dict></plist>',
   );
   assert.throws(() => planCapacitorShellStarter(options), /ios project display name differs/u);
-  writeFileSync(
-    iosReleaseInfo,
-    '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string></dict></plist>',
-  );
+  writeFileSync(iosReleaseInfo, originalIosInfo);
   writeFileSync(
     iosProjectFile,
     releaseProject.replace(
@@ -966,6 +978,11 @@ try {
   writeFileSync(androidProjectFile, [
     'applicationId "dev.example.puzzle"',
     'buildTypes["release"].applicationIdSuffix = ".store"',
+  ].join('\n'));
+  assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
+    'buildTypes["release"].apply { applicationIdSuffix = ".store" }',
   ].join('\n'));
   assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
   writeFileSync(androidProjectFile, [
@@ -1146,10 +1163,7 @@ try {
     androidStrings,
     `<resources><string name="app_name">${androidQuotedName}</string></resources>`,
   );
-  writeFileSync(
-    iosInfo,
-    `<plist><dict><key>CFBundleDisplayName</key><string>${xmlQuotedName}</string></dict></plist>`,
-  );
+  writeFileSync(iosInfo, originalIosInfo.replace('Puzzle Game', xmlQuotedName));
   writeFileSync(smokeInfo, originalSmoke.replace('Puzzle Game', xmlQuotedName));
   const quotedTargets = readJson('mpgd.targets.json');
   const quotedTargetMap = quotedTargets.targets as Record<string, Record<string, unknown>>;
@@ -1192,10 +1206,7 @@ try {
     androidStrings,
     '<resources><string name="app_name">Puzzle Game</string></resources>',
   );
-  writeFileSync(
-    iosInfo,
-    '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string></dict></plist>',
-  );
+  writeFileSync(iosInfo, originalIosInfo);
   writeFileSync(smokeInfo, originalSmoke);
   for (const target of Object.values(quotedTargetMap)) {
     const metadata = target.metadata as Record<string, unknown>;

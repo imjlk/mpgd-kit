@@ -34,7 +34,7 @@ function run(command: string, args: string[], cwd: string): string {
 }
 
 function assertNoKitReferences(directory: string): void {
-  const textFile = /\.(?:gradle|groovy|java|kt|m|h|swift|pbxproj|plist|xml|json|ts|md|properties|sh|txt)$/u;
+  const textFile = /\.(?:gradle|groovy|java|kt|m|h|swift|pbxproj|plist|xcscheme|xml|json|ts|md|properties|sh|txt)$/u;
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     if (entry.name === 'node_modules' || entry.name === '.gradle'
       || entry.name === 'build' || entry.name === 'Pods') {
@@ -114,7 +114,17 @@ try {
   assert.match(first, /Updated game-owned Capacitor shell/u);
   assert.match(first, /pnpm may also update root or shell lockfiles/u);
   assert.ok(existsSync(path.join(shell, 'android/app/build.gradle')));
-  assert.ok(existsSync(path.join(shell, 'ios/App/App.xcodeproj/project.pbxproj')));
+  const projectFile = path.join(shell, 'ios/App/App.xcodeproj/project.pbxproj');
+  assert.ok(existsSync(projectFile));
+  const project = readFileSync(projectFile, 'utf8');
+  const appTargetId = /\b([A-F0-9]+)\s*\/\*\s*App\s*\*\/\s*=\s*\{\s*isa\s*=\s*PBXNativeTarget;/u
+    .exec(project)?.[1];
+  assert.ok(appTargetId);
+  const schemeDir = path.join(shell, 'ios/App/App.xcodeproj/xcshareddata/xcschemes');
+  const schemeFile = path.join(schemeDir, 'App.xcscheme');
+  const scheme = readFileSync(schemeFile, 'utf8');
+  const blueprint = new RegExp(`BlueprintIdentifier="${appTargetId}"`, 'u');
+  assert.match(scheme, blueprint);
   const smokeInfo = readFileSync(path.join(shell, 'ios/App/App/Info-Smoke.plist'), 'utf8');
   assert.match(smokeInfo, /<key>CFBundleDisplayName<\/key>\s*<string>External Game<\/string>/u);
   assert.doesNotMatch(smokeInfo, /UIMainStoryboardFile|UILaunchStoryboardName/u);

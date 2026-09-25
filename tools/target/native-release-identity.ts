@@ -4,10 +4,13 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { isMpgdFinalSemVer } from '@mpgd/target-config';
 import {
   assertAndroidReleaseDisplayName,
+  assertIosArchiveScheme,
+  assertIosReleaseDisplayName,
   assertIosReleasePlistIdentity,
 } from '../../packages/cli/src/capacitor-shell-starter.js';
 import {
   assertAndroidSettingsAppProject,
+  assertAndroidSettingsNoAppRemap,
   assertIosReleaseProductName,
   countGradleIdentityWrites,
   hasGradleIdentityMutation,
@@ -63,6 +66,11 @@ export function assertNativeReleaseIdentity(input: NativeReleaseIdentityInput): 
   }
 
   assertIosIdentity(join(input.shellApp, 'ios/App/App.xcodeproj/project.pbxproj'), expected);
+  if (input.required) {
+    const name = requireValue(input.metadata?.displayName, 'iOS target metadata displayName');
+    assertIosReleaseDisplayName(input.shellApp, name);
+    assertIosArchiveScheme(input.shellApp);
+  }
 }
 
 interface AndroidIdentity {
@@ -166,13 +174,17 @@ function assertAndroidSetting(
 
 function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): void {
   const visited = new Set<string>();
-  const inspect = (file: string): void => {
+  const inspect = (file: string, isSettingsScript = false): void => {
     if (visited.has(file)) {
       return;
     }
     visited.add(file);
     const source = stripComments(readRequiredFile(file, 'applied Android Gradle script'));
-    if (/\bproductFlavors\b/u.test(maskGradleStrings(source))) {
+    const code = maskGradleStrings(source);
+    if (isSettingsScript) {
+      assertAndroidSettingsNoAppRemap(source);
+    }
+    if (/\bproductFlavors\b/u.test(code)) {
       throw new Error('Native release preflight does not support Android product flavors.');
     }
     if (file !== appBuild && hasGradleIdentityMutation(source)) {
@@ -189,9 +201,10 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
     const matched = new Set<number>();
     for (const expression of expressions) {
       for (const match of source.matchAll(expression)) {
-        if (match.index !== undefined) {
-          matched.add(match.index);
+        if (match.index === undefined || code.slice(match.index, match.index + 5) !== 'apply') {
+          continue;
         }
+        matched.add(match.index);
         const requested = match[1] ?? '';
         const resolved = resolve(dirname(file), requested);
         const within = relative(androidRoot, resolved);
@@ -199,16 +212,17 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
           || isAbsolute(within)) {
           throw new Error('Native release preflight cannot resolve an applied Gradle script.');
         }
-        inspect(resolved);
+        inspect(resolved, isSettingsScript);
       }
     }
     const applies = [ /\bapply\s+from\s*:/gu, /\bapply\s*\(\s*from\s*=/gu ];
     if (applies.some((expression) => [...source.matchAll(expression)]
-      .some((match) => match.index !== undefined && !matched.has(match.index)))) {
+      .some((match) => match.index !== undefined
+        && code.slice(match.index, match.index + 5) === 'apply'
+        && !matched.has(match.index)))) {
       throw new Error('Native release preflight cannot resolve an applied Gradle script.');
     }
   };
-  inspect(appBuild);
   const rootFiles = ['build.gradle', 'build.gradle.kts']
     .map((name) => join(androidRoot, name)).filter((file) => existsSync(file));
   if (rootFiles.length !== 1) {
@@ -221,7 +235,6 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
     && /\b(?:project|subprojects|allprojects|android)\b/u.test(rootCode)) {
     throw new Error('Native release preflight cannot resolve root Gradle app callbacks.');
   }
-  inspect(rootFile);
   const settingsFiles = ['settings.gradle', 'settings.gradle.kts']
     .map((name) => join(androidRoot, name)).filter((file) => existsSync(file));
   if (settingsFiles.length !== 1) {
@@ -236,7 +249,9 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
     .test(maskGradleStrings(settingsSource))) {
     throw new Error('Native release preflight cannot resolve settings Gradle project callbacks.');
   }
-  inspect(settingsFile);
+  inspect(settingsFile, true);
+  inspect(rootFile);
+  inspect(appBuild);
 }
 
 function assertIosIdentity(file: string, expected: IosIdentity): void {
@@ -498,12 +513,18 @@ function readAndroidReleaseBlocks(source: string, file: string): readonly string
   const nestedReleaseBlockExpressions = [
     /\brelease\s*\{/gu,
     /\brelease\s+by\s+getting\s*\{/gu,
+    /\brelease\s*\.\s*apply\s*\{/gu,
     /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\{/gu,
+    /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*apply\s*\{/gu,
     /\bbuildTypes\s*\[\s*["']release["']\s*\]\s*\{/gu,
+    /\bbuildTypes\s*\[\s*["']release["']\s*\]\s*\.\s*apply\s*\{/gu,
   ];
   const qualifiedReleaseBlockExpressions = [
     /\bbuildTypes\s*\.\s*release\s*\{/gu,
+    /\bbuildTypes\s*\.\s*release\s*\.\s*apply\s*\{/gu,
+    /\bbuildTypes\s*\[\s*["']release["']\s*\]\s*\.\s*apply\s*\{/gu,
     /\bbuildTypes\s*\.\s*(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\{/gu,
+    /\bbuildTypes\s*\.\s*(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*apply\s*\{/gu,
   ];
 
   return [

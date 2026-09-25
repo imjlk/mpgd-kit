@@ -289,6 +289,10 @@ incomplete `android` or `ios` directory, repair or remove only that game-owned
 directory before retrying; the initializer refuses to replace it. `--providers` records selection
 metadata only; it neither installs provider SDKs nor declares a capability
 available. Backend and provider implementations still belong to the game.
+For a newly added iOS project, the initializer also writes a shared App archive
+scheme tied to the generated App target. Preserved iOS projects must already
+have a matching shared scheme and Release plist identity placeholders; the
+initializer checks these but does not replace them.
 
 Use the kit CLI for generated target builds because it resolves
 `${MPGD_KIT_PATH}` tokens in the game's `mpgd.targets.json` before invoking the

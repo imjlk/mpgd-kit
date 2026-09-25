@@ -47,8 +47,11 @@ function hasAndroidReleaseIdSuffix(source: string): boolean {
   const releaseBlocks = [
     /\brelease\s*\{/gu,
     /\brelease\s+by\s+getting\s*\{/gu,
+    /\brelease\s*\.\s*apply\s*\{/gu,
     /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\{/gu,
+    /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*apply\s*\{/gu,
     /\bbuildTypes\s*\[\s*["']release["']\s*\]\s*\{/gu,
+    /\bbuildTypes\s*\[\s*["']release["']\s*\]\s*\.\s*apply\s*\{/gu,
   ];
   return releaseBlocks.some((expression) => [...source.matchAll(expression)]
     .some((match) => match.index !== undefined
@@ -64,9 +67,18 @@ export function assertAndroidSettingsAppProject(source: string): void {
   const includes = [...clean.matchAll(/\binclude\s*(?:\(([^)]*)\)|([^\r\n;]+))/gu)];
   const includesApp = includes.some((match) => code.slice(match.index, match.index + 7)
     === 'include' && /(?:^|,)\s*["']:app["']\s*(?:,|$)/u.test(match[1] ?? match[2] ?? ''));
+  if (!includesApp) {
+    throw new Error('Android settings must include :app at android/app without remapping it.');
+  }
+  assertAndroidSettingsNoAppRemap(clean);
+}
+
+export function assertAndroidSettingsNoAppRemap(source: string): void {
+  const clean = stripGradleComments(source);
+  const code = maskGradleStrings(clean);
   const appRemap = [...clean.matchAll(/\bproject\s*\(\s*["']:app["']\s*\)/gu)]
     .some((match) => code.slice(match.index, match.index + 7) === 'project');
-  if (!includesApp || appRemap) {
+  if (appRemap) {
     throw new Error('Android settings must include :app at android/app without remapping it.');
   }
 }
@@ -273,18 +285,26 @@ function pathIsUnsafe(value: string): boolean {
 }
 
 function readIosAppConfigurationList(source: string): string {
-  const appTargets = [...source.matchAll(/\b([A-F0-9]+)\s*\/\*\s*App\s*\*\/\s*=\s*\{/gu)]
-    .map((match) => readPbxObject(source, match[1] ?? ''))
-    .filter((block) => /\bisa\s*=\s*PBXNativeTarget;/u.test(block)
-      && /\bname\s*=\s*"?App"?\s*;/u.test(block));
-  if (appTargets.length !== 1) {
-    throw new Error('Existing ios project App target could not be read safely.');
-  }
-  const listId = /\bbuildConfigurationList\s*=\s*([A-F0-9]+)\b/u.exec(appTargets[0] ?? '')?.[1];
+  const target = readPbxObject(source, readIosAppTargetId(source));
+  const listId = /\bbuildConfigurationList\s*=\s*([A-F0-9]+)\b/u.exec(target)?.[1];
   if (listId === undefined) {
     throw new Error('Existing ios project App target configuration is missing.');
   }
   return listId;
+}
+
+export function readIosAppTargetId(source: string): string {
+  const appTargets = [...source.matchAll(/\b([A-F0-9]+)\s*\/\*\s*App\s*\*\/\s*=\s*\{/gu)]
+    .map((match) => match[1] ?? '')
+    .filter((id) => {
+      const block = readPbxObject(source, id);
+      return /\bisa\s*=\s*PBXNativeTarget;/u.test(block)
+        && /\bname\s*=\s*"?App"?\s*;/u.test(block);
+    });
+  if (appTargets.length !== 1) {
+    throw new Error('Existing ios project App target could not be read safely.');
+  }
+  return appTargets[0] ?? '';
 }
 
 function readIosProjectConfigurationList(source: string): string | undefined {

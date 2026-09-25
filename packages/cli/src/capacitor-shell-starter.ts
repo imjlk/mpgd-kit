@@ -19,10 +19,12 @@ import { DOMParser, type Document, type Element } from '@xmldom/xmldom';
 import { isNonPublicServiceHostname } from './production-target-readiness.js';
 import {
   assertAndroidSettingsAppProject,
+  assertAndroidSettingsNoAppRemap,
   assertIosReleaseProductName,
   assertNativeShellIdentity,
   hasGradleIdentityMutation,
   maskGradleStrings,
+  readIosAppTargetId,
   readIosReleaseInfoPlist,
   stripGradleComments,
 } from './native-shell-identity.js';
@@ -529,6 +531,7 @@ export function materializeCapacitorShellStarter(
     }
     const manifest = readJsonObject(path.join(plan.gameRoot, shellPath, 'mpgd.native-shell.json'));
     if (platform === 'ios') {
+      materializeIosArchiveScheme(plan.gameRoot);
       const relative = `${shellPath}/ios/App/App/Info-Smoke.plist`;
       const destination = safeDestination(plan.gameRoot, relative);
       if (!existsSync(destination)) {
@@ -546,6 +549,35 @@ export function materializeCapacitorShellStarter(
       requireString(manifest.displayName, 'shell display name'),
     );
   }
+}
+
+function materializeIosArchiveScheme(gameRoot: string): void {
+  const schemeRelative = `${shellPath}/ios/App/App.xcodeproj/xcshareddata/xcschemes/App.xcscheme`;
+  const schemeFile = safeDestination(gameRoot, schemeRelative);
+  if (existsSync(schemeFile)) {
+    return;
+  }
+  const projectRelative = `${shellPath}/ios/App/App.xcodeproj/project.pbxproj`;
+  const projectFile = safeDestination(gameRoot, projectRelative);
+  const appTargetId = readIosAppTargetId(readFileSync(projectFile, 'utf8'));
+  const scheme = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<Scheme LastUpgradeVersion="2600" version="1.7">',
+    '<BuildAction parallelizeBuildables="YES" buildImplicitDependencies="YES">',
+    '<BuildActionEntries>',
+    '<BuildActionEntry buildForTesting="YES" buildForRunning="YES"',
+    ' buildForProfiling="YES" buildForArchiving="YES" buildForAnalyzing="YES">',
+    `<BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="${appTargetId}"`,
+    ' BuildableName="App.app" BlueprintName="App"',
+    ' ReferencedContainer="container:App.xcodeproj"/>',
+    '</BuildActionEntry>',
+    '</BuildActionEntries>',
+    '</BuildAction>',
+    '<ArchiveAction buildConfiguration="Release" revealArchiveInOrganizer="YES"/>',
+    '</Scheme>',
+  ].join('\n');
+  mkdirSync(path.dirname(schemeFile), { recursive: true });
+  writeFileSync(schemeFile, `${scheme}\n`, { flag: 'wx' });
 }
 
 function assertNativePlatformComplete(
@@ -592,8 +624,8 @@ function assertNativePlatformComplete(
       throw new Error('Existing android project has unsupported settings Gradle callbacks.');
     }
     const visited = new Set<string>();
-    for (const script of [rootBuild, settings, required]) {
-      assertAppliedGradleScripts(nativeDirectory, script, visited);
+    for (const script of [settings, rootBuild, required]) {
+      assertAppliedGradleScripts(nativeDirectory, script, visited, script === settings);
     }
     for (const script of visited) {
       if (script === required) {
@@ -643,6 +675,8 @@ function assertNativePlatformComplete(
     }
     assertReferencedIosFiles(nativeDirectory, content, infoRelative);
     assertNativeDisplayName(nativeDirectory, platform, expectedDisplayName, infoRelative);
+    assertIosReleasePlistIdentity(readFileSync(path.join(nativeDirectory, infoRelative), 'utf8'));
+    assertIosArchiveScheme(path.join(gameRoot, shellPath));
     const smokeRelative = 'App/App/Info-Smoke.plist';
     if (existsSync(path.join(nativeDirectory, smokeRelative))) {
       if (!isNativeFile(nativeDirectory, smokeRelative)) {
@@ -1322,6 +1356,7 @@ function assertAppliedGradleScripts(
   nativeDirectory: string,
   script: string,
   visited: Set<string>,
+  isSettingsScript: boolean,
 ): void {
   if (visited.has(script)) {
     return;
@@ -1333,6 +1368,10 @@ function assertAppliedGradleScripts(
     );
   }
   const source = stripGradleComments(readFileSync(path.join(nativeDirectory, script), 'utf8'));
+  const code = maskGradleStrings(source);
+  if (isSettingsScript) {
+    assertAndroidSettingsNoAppRemap(source);
+  }
   const expressions = [
     /\bapply\s+from\s*:\s*["']([^"']+)["']/gu,
     /\bapply\s*\(\s*from\s*=\s*["']([^"']+)["']\s*\)/gu,
@@ -1342,9 +1381,10 @@ function assertAppliedGradleScripts(
   const matched = new Set<number>();
   for (const expression of expressions) {
     for (const match of source.matchAll(expression)) {
-      if (match.index !== undefined) {
-        matched.add(match.index);
+      if (match.index === undefined || code.slice(match.index, match.index + 5) !== 'apply') {
+        continue;
       }
+      matched.add(match.index);
       const requested = match[1] ?? '';
       const resolved = path.resolve(nativeDirectory, path.dirname(script), requested);
       const relative = path.relative(nativeDirectory, resolved);
@@ -1352,12 +1392,14 @@ function assertAppliedGradleScripts(
         || path.isAbsolute(relative)) {
         throw new Error('Existing android project has an unsupported applied Gradle script path.');
       }
-      assertAppliedGradleScripts(nativeDirectory, relative, visited);
+      assertAppliedGradleScripts(nativeDirectory, relative, visited, isSettingsScript);
     }
   }
   const applyExpressions = [/\bapply\s+from\s*:/gu, /\bapply\s*\(\s*from\s*=/gu];
   if (applyExpressions.some((expression) => [...source.matchAll(expression)]
-    .some((match) => match.index !== undefined && !matched.has(match.index)))) {
+    .some((match) => match.index !== undefined
+      && code.slice(match.index, match.index + 5) === 'apply'
+      && !matched.has(match.index)))) {
     throw new Error('Existing android project has an unsupported Gradle apply expression.');
   }
 }
@@ -1479,6 +1521,59 @@ export function assertAndroidReleaseDisplayName(
   const nativeDirectory = path.join(shellApp, 'android');
   assertAndroidManifestResources(nativeDirectory);
   assertNativeDisplayName(nativeDirectory, 'android', expectedDisplayName);
+}
+
+export function assertIosReleaseDisplayName(
+  shellApp: string,
+  expectedDisplayName: string,
+): void {
+  const nativeDirectory = path.join(shellApp, 'ios');
+  const projectFile = path.join(nativeDirectory, 'App/App.xcodeproj/project.pbxproj');
+  const project = readFileSync(projectFile, 'utf8');
+  const infoRelative = path.join('App', readIosReleaseInfoPlist(project));
+  if (!isNativeFile(nativeDirectory, infoRelative)) {
+    throw new Error('Existing ios project Release Info.plist is missing or unsafe.');
+  }
+  assertNativeDisplayName(nativeDirectory, 'ios', expectedDisplayName, infoRelative);
+}
+
+export function assertIosArchiveScheme(shellApp: string): void {
+  const nativeDirectory = path.join(shellApp, 'ios');
+  const projectRelative = 'App/App.xcodeproj/project.pbxproj';
+  const schemeRelative = 'App/App.xcodeproj/xcshareddata/xcschemes/App.xcscheme';
+  if (!isNativeFile(nativeDirectory, projectRelative)
+    || !isNativeFile(nativeDirectory, schemeRelative)) {
+    throw new Error('Existing ios project shared App archive scheme is missing or unsafe.');
+  }
+  const project = readFileSync(path.join(nativeDirectory, projectRelative), 'utf8');
+  const appTargetId = readIosAppTargetId(project);
+  const schemeSource = readFileSync(path.join(nativeDirectory, schemeRelative), 'utf8');
+  const scheme = parseXml(schemeSource, 'ios project App archive scheme').documentElement;
+  if (scheme?.tagName !== 'Scheme') {
+    throw new Error('Existing ios project App archive scheme is malformed.');
+  }
+  const actions = childElements(scheme);
+  const build = actions.filter((item) => item.tagName === 'BuildAction');
+  const archive = actions.filter((item) => item.tagName === 'ArchiveAction');
+  const entryGroups = build.length === 1
+    ? childElements(build[0] as Element)
+      .filter((item) => item.tagName === 'BuildActionEntries')
+    : [];
+  const entries = entryGroups.length === 1
+    ? childElements(entryGroups[0] as Element)
+      .filter((item) => item.tagName === 'BuildActionEntry'
+        && item.getAttribute('buildForArchiving') === 'YES')
+    : [];
+  const references = entries.length === 1 ? childElements(entries[0] as Element) : [];
+  const reference = references.length === 1 ? references[0] : undefined;
+  if (archive.length !== 1 || archive[0]?.getAttribute('buildConfiguration') !== 'Release'
+    || reference?.tagName !== 'BuildableReference'
+    || reference.getAttribute('BlueprintIdentifier') !== appTargetId
+    || reference.getAttribute('BlueprintName') !== 'App'
+    || reference.getAttribute('BuildableName') !== 'App.app'
+    || reference.getAttribute('ReferencedContainer') !== 'container:App.xcodeproj') {
+    throw new Error('Existing ios App archive scheme does not select the App target.');
+  }
 }
 
 function hasAndroidMergerDirective(element: Element): boolean {
