@@ -311,13 +311,17 @@ async function withStateSession<T>(
     if (previousCommit !== undefined && gitShaPattern.test(previousCommit)) {
       await git(session, ['fetch', 'origin', `refs/heads/${stateBranch}`]);
       await git(session, ['checkout', '-q', '-B', stateBranch, 'FETCH_HEAD']);
+      const fetchedCommit = (await git(session, ['rev-parse', 'HEAD'])).output.trim();
+      if (!gitShaPattern.test(fetchedCommit)) {
+        throw new Error('Fetched release-state revision is invalid.');
+      }
       const statePath = path.join(directory, stateFileName);
       if (!existsSync(statePath)) {
         throw new Error('Existing release-state branch has no state file.');
       }
       return await action({
         ...session,
-        previousCommit,
+        previousCommit: fetchedCommit,
         state: parseReleaseState(readFileSync(statePath, 'utf8')),
       });
     }
@@ -416,6 +420,15 @@ function sha256(file: string): string {
 }
 
 function git(session: StateSession, args: readonly string[]): Promise<{ readonly output: string }> {
+  const secrets = [session.remoteUrl];
+  try {
+    const url = new URL(session.remoteUrl);
+    if (url.password !== '') {
+      secrets.push(url.password, decodeURIComponent(url.password));
+    }
+  } catch {
+    // Local paths and scp-style Git remotes are not URL instances.
+  }
   const input: ReleaseProcessInput = {
     command: 'git',
     args,
@@ -423,7 +436,7 @@ function git(session: StateSession, args: readonly string[]): Promise<{ readonly
     environment: session.environment,
     timeoutMs: 60_000,
     signal: session.signal,
-    secretValues: [session.remoteUrl],
+    secretValues: secrets,
   };
   return runReleaseProcess(input);
 }
