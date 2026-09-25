@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -98,6 +99,20 @@ export async function reserveNativeRelease(
   input: NativeReleaseReservationInput,
 ): Promise<NativeReleaseReservation> {
   assertReleaseKey(input.releaseKey);
+  if (!gitShaPattern.test(input.sourceGitSha)) {
+    throw new Error('Native release source revision must be a full Git SHA.');
+  }
+  const source = await runReleaseProcess({
+    command: 'git',
+    args: ['-C', input.gameRoot, 'cat-file', '-t', input.sourceGitSha],
+    cwd: input.gameRoot,
+    environment: input.environment,
+    timeoutMs: 10_000,
+    signal: input.signal,
+  });
+  if (source.output.trim() !== 'commit') {
+    throw new Error('Native release source revision is not a game Git commit.');
+  }
   return withStateSession(input, async (session) => {
     const game = ownValue(session.state.games, input.gameId);
     if (game === undefined && input.initialLedger === undefined) {
@@ -252,17 +267,27 @@ async function withStateSession<T>(
   action: (session: StateSession) => Promise<T>,
 ): Promise<T> {
   const environment = input.environment ?? process.env;
-  const remote = await runReleaseProcess({
-    command: 'git',
-    args: ['-C', input.gameRoot, 'remote', 'get-url', 'origin'],
-    cwd: input.gameRoot,
-    environment,
-    timeoutMs: 10_000,
-    signal: input.signal,
-  });
-  const remoteUrl = remote.output.trim();
+  // Keep the origin URL in memory: the redacted process runner must never
+  // return a modified URL when its embedded auth matches an environment secret.
+  let remoteUrl: string;
+  try {
+    remoteUrl = execFileSync('git', ['remote', 'get-url', 'origin'], {
+      cwd: input.gameRoot,
+      env: environment,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 10_000,
+      maxBuffer: 64 * 1024,
+    }).trim();
+  } catch {
+    throw new Error('Could not read the game repository origin remote.');
+  }
   if (remoteUrl === '') {
     throw new Error('Game repository origin remote is missing.');
+  }
+  if (!path.isAbsolute(remoteUrl)
+    && !/^(?:[a-z][a-z0-9+.-]*:\/\/|[^/]+@[^:]+:)/iu.test(remoteUrl)) {
+    remoteUrl = path.resolve(input.gameRoot, remoteUrl);
   }
   const directory = mkdtempSync(path.join(tmpdir(), 'mpgd-release-state-'));
   try {

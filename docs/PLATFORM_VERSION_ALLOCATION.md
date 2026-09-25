@@ -135,5 +135,6 @@ and `tools/smoke/cli-platform-version-allocation.ts` (CLI read-only behavior,
 input-hash stability across runs, deterministic output, candidate wording,
 manifest cross-checks), and `packages/cli/src/release-state.test.ts` (local
 Git remote, idempotent reservations, multi-target numbers, immutable build
-records). The commands above are the ones that exist; nothing here submits
+records, concurrent-writer lease rejection, and lost push response recovery).
+The commands above are the ones that exist; nothing here submits
 to a store or deploys anything.
