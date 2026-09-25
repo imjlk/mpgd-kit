@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmodSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir, platform, arch } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 const pin = JSON.parse(readFileSync(new URL('./asc-pin.json', import.meta.url), 'utf8'));
 const host = `${platform()}-${arch()}`;
@@ -12,7 +12,7 @@ assert.ok(asset, `asc ${pin.version} is not pinned for ${host}`);
 const download = process.argv.includes('--download');
 assert.ok(download || process.argv.length === 3, 'usage: node validate-asc.mjs --download | /path/to/asc');
 const scratch = download ? mkdtempSync(join(tmpdir(), 'mpgd-asc-compat-')) : undefined;
-const binary = scratch ? join(scratch, asset.name) : process.argv[2];
+const binary = scratch ? join(scratch, asset.name) : resolve(process.argv[2]);
 
 function run(command, args, env = process.env) {
   const result = spawnSync(command, args, {

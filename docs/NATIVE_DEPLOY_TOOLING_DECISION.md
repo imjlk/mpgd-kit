@@ -28,13 +28,13 @@ read-only `mpgd deploy plan`.
 
 ## Repeatable compatibility evidence
 
-The private `@mpgd/deploy-tooling-compat` fixture pins both Node SDK candidates.
+The private platform-owned `@mpgd/deploy-tooling-compat` fixture pins both Node SDK candidates.
 Run from the repository with its `mise` toolchain:
 
 ```sh
 mise exec -- pnpm install --frozen-lockfile
-mise exec -- pnpm --dir packages/deploy-tooling-compat check
-mise exec -- pnpm --dir packages/deploy-tooling-compat test
+mise exec -- pnpm --dir apps/target-deploy-tooling-compat check
+mise exec -- pnpm --dir apps/target-deploy-tooling-compat test
 mise exec -- node tools/deploy/validate-asc.mjs --download
 ```
 

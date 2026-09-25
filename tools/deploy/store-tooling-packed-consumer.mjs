@@ -6,12 +6,20 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
-const fixturePackage = join(repoRoot, 'packages/deploy-tooling-compat');
+const fixturePackage = join(repoRoot, 'apps/target-deploy-tooling-compat');
 const consumerRoot = mkdtempSync(join(tmpdir(), 'mpgd-deploy-tooling-consumer-'));
 
 function run(command, args, cwd) {
-  const executable = command === 'pnpm' && process.platform === 'win32' ? 'pnpm.cmd' : command;
-  const result = spawnSync(executable, args, {
+  const pnpmScript = command === 'pnpm' && process.platform === 'win32'
+    ? process.env.npm_execpath
+    : undefined;
+  if (command === 'pnpm' && process.platform === 'win32') {
+    assert.match(pnpmScript ?? '', /\.[cm]?js$/u,
+      'On Windows, run this smoke through pnpm so its JavaScript entry point is available.');
+  }
+  const executable = pnpmScript === undefined ? command : process.execPath;
+  const commandArgs = pnpmScript === undefined ? args : [pnpmScript, ...args];
+  const result = spawnSync(executable, commandArgs, {
     cwd,
     env: process.env,
     encoding: 'utf8',
