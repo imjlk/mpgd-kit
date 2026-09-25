@@ -113,8 +113,9 @@ export async function reserveNativeRelease(
     environment: isolatedGitEnvironment(input.environment ?? process.env),
     timeoutMs: 10_000,
     signal: input.signal,
+    captureMachineStdout: true,
   });
-  if (source.output.trim() !== 'commit') {
+  if (source.truncated || source.machineStdout?.trim() !== 'commit') {
     throw new Error('Native release source revision is not a game Git commit.');
   }
   return withStateSession(input, async (session) => {
@@ -442,7 +443,10 @@ function isolatedGitEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return environment;
 }
 
-function git(session: StateSession, args: readonly string[]): Promise<{ readonly output: string }> {
+async function git(
+  session: StateSession,
+  args: readonly string[],
+): Promise<{ readonly output: string }> {
   const secrets = [session.remoteUrl];
   try {
     const url = new URL(session.remoteUrl);
@@ -460,6 +464,11 @@ function git(session: StateSession, args: readonly string[]): Promise<{ readonly
     timeoutMs: 60_000,
     signal: session.signal,
     secretValues: secrets,
+    captureMachineStdout: true,
   };
-  return runReleaseProcess(input);
+  const result = await runReleaseProcess(input);
+  if (result.truncated || result.machineStdout === undefined) {
+    throw new Error('Release-state Git machine output was truncated or unavailable.');
+  }
+  return { output: result.machineStdout };
 }

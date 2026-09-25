@@ -60,6 +60,7 @@ try {
     targetConfigDigest: digest,
     targets: [{ target: 'android' as const }, { target: 'ios' as const }],
     initialLedger,
+    environment: { ...process.env, MPGD_API_TOKEN: gameSha[0] },
   };
   await assert.rejects(
     reserveNativeRelease({ ...firstInput, initialLedger: undefined }),
