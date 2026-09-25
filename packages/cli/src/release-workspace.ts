@@ -14,10 +14,15 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 
 import { planNativeDeployment, type NativeDeploymentPlan } from './deploy-planning.js';
-import { runReleaseProcess, type ReleaseProcessInput } from './deploy-process.js';
+import {
+  runReleaseProcess,
+  type ReleaseProcessInput,
+  type ReleaseProcessResult,
+} from './deploy-process.js';
 
 export interface PinnedReleaseInput {
   readonly gameRoot: string;
+  readonly deploymentProfile: string;
   readonly buildProfile: NativeDeploymentPlan['buildProfile'];
   readonly targets: readonly ('android' | 'ios')[];
   readonly gameGitSha: string;
@@ -78,6 +83,7 @@ export async function pinNativeDeploymentPlan(
     environment: options.environment,
     timeoutMs: 10_000,
     signal: options.signal,
+    captureMachineStdout: true,
   });
   const sourceRepository = await runReleaseProcess({
     command: 'git',
@@ -86,13 +92,47 @@ export async function pinNativeDeploymentPlan(
     environment: options.environment,
     timeoutMs: 10_000,
     signal: options.signal,
+    captureMachineStdout: true,
   });
+  const repositoryRoot = realpathSync(machineOutput(sourceRepository).trim());
+  const relativeGame = path.relative(repositoryRoot, gameRoot);
+  if (relativeGame === '..' || relativeGame.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relativeGame)) {
+    throw new Error('Game path is outside its Git repository.');
+  }
+  const inputPaths = ['pnpm-lock.yaml', 'mpgd.targets.json', 'mpgd.deploy.json']
+    .map((name, index) => index === 0
+      ? name
+      : path.posix.join(relativeGame.split(path.sep).join('/'), name));
+  const dirtyInputs = await runReleaseProcess({
+    command: 'git',
+    args: [
+      '-C',
+      repositoryRoot,
+      'status',
+      '--porcelain=v1',
+      '--untracked-files=all',
+      '--',
+      ...inputPaths,
+    ],
+    cwd: repositoryRoot,
+    environment: options.environment,
+    timeoutMs: 10_000,
+    signal: options.signal,
+    captureMachineStdout: true,
+  });
+  if (machineOutput(dirtyInputs) !== '') {
+    throw new Error(
+      'Pinned release inputs have uncommitted changes. Commit the lockfile and deployment configuration first.',
+    );
+  }
   const input: PinnedReleaseInput = {
     gameRoot,
+    deploymentProfile: plan.profile,
     buildProfile: plan.buildProfile,
     targets: plan.targets.map((target) => target.target),
-    gameGitSha: revision.output.trim(),
-    lockfileSha256: sha256(path.join(sourceRepository.output.trim(), 'pnpm-lock.yaml')),
+    gameGitSha: machineOutput(revision).trim(),
+    lockfileSha256: sha256(path.join(repositoryRoot, 'pnpm-lock.yaml')),
     targetConfigSha256: plan.targetConfigSha256,
     deployConfigSha256: plan.deployConfigSha256,
     kitPackageVersion: kit.packageVersion,
@@ -121,8 +161,9 @@ export async function preparePinnedReleaseWorkspace(
     environment,
     timeoutMs: 10_000,
     signal: options.signal,
+    captureMachineStdout: true,
   });
-  const sourceRepository = realpathSync(gitTopLevel.output.trim());
+  const sourceRepository = realpathSync(machineOutput(gitTopLevel).trim());
   const relativeGame = path.relative(sourceRepository, sourceGame);
   if (relativeGame === '..' || relativeGame.startsWith(`..${path.sep}`)
     || path.isAbsolute(relativeGame)) {
@@ -164,13 +205,15 @@ export async function preparePinnedReleaseWorkspace(
       environment,
       timeoutMs: 10_000,
       signal: options.signal,
+      captureMachineStdout: true,
     });
-    if (actualRevision.output.trim() !== input.gameGitSha) {
+    if (machineOutput(actualRevision).trim() !== input.gameGitSha) {
       throw new Error('Pinned game Git revision changed during workspace preparation.');
     }
     const gameRoot = path.join(workspaceRoot, relativeGame);
     assertWorkspaceOutputRoots(workspaceRoot, gameRoot);
     assertPinnedFiles(workspaceRoot, gameRoot, input);
+    assertPinnedTargetPaths(gameRoot, input);
     return {
       workspaceRoot,
       gameRoot,
@@ -214,6 +257,7 @@ export async function installPinnedReleaseDependencies(
 ): Promise<void> {
   assertWorkspaceOutputRoots(workspace.workspaceRoot, workspace.gameRoot);
   assertPinnedFiles(workspace.workspaceRoot, workspace.gameRoot, workspace.input);
+  assertPinnedTargetPaths(workspace.gameRoot, workspace.input);
   await runReleaseProcess({
     command: 'pnpm',
     args: ['install', '--frozen-lockfile'],
@@ -224,6 +268,7 @@ export async function installPinnedReleaseDependencies(
   });
   assertWorkspaceOutputRoots(workspace.workspaceRoot, workspace.gameRoot);
   assertPinnedFiles(workspace.workspaceRoot, workspace.gameRoot, workspace.input);
+  assertPinnedTargetPaths(workspace.gameRoot, workspace.input);
 }
 
 /** Run the existing packed CLI native builder against the pinned checkout. */
@@ -241,6 +286,7 @@ export async function runPinnedNativeBuild(
 ): Promise<PinnedNativeBuildResult> {
   assertWorkspaceOutputRoots(workspace.workspaceRoot, workspace.gameRoot);
   assertPinnedFiles(workspace.workspaceRoot, workspace.gameRoot, workspace.input);
+  assertPinnedTargetPaths(workspace.gameRoot, workspace.input);
   if (!workspace.input.targets.includes(input.target)
     || input.profile !== workspace.input.buildProfile) {
     throw new Error('Native build target and profile must match the pinned deployment plan.');
@@ -328,6 +374,7 @@ export async function runPinnedNativeBuild(
 
 function assertPinnedInput(input: PinnedReleaseInput): void {
   if (!gitShaPattern.test(input.gameGitSha) || !gitShaPattern.test(input.kitGitSha)
+    || input.deploymentProfile.trim() === ''
     || input.buildProfile !== 'production'
     || input.targets.length === 0
     || new Set(input.targets).size !== input.targets.length
@@ -337,6 +384,26 @@ function assertPinnedInput(input: PinnedReleaseInput): void {
     || !sha256Pattern.test(input.deployConfigSha256)
     || input.kitPackageVersion.trim() === '') {
     throw new Error('Pinned release input contains an invalid revision, digest, or Kit version.');
+  }
+}
+
+function machineOutput(result: ReleaseProcessResult): string {
+  if (result.truncated || result.machineStdout === undefined) {
+    throw new Error('Release process machine output was truncated or unavailable.');
+  }
+  return result.machineStdout;
+}
+
+function assertPinnedTargetPaths(gameRoot: string, input: PinnedReleaseInput): void {
+  const plan = planNativeDeployment({
+    game: gameRoot,
+    profile: input.deploymentProfile,
+    targets: input.targets,
+  });
+  if (plan.buildProfile !== input.buildProfile
+    || plan.targets.length !== input.targets.length
+    || plan.targets.some((target, index) => target.target !== input.targets[index])) {
+    throw new Error('Pinned native target paths no longer match the deployment plan.');
   }
 }
 

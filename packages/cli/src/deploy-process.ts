@@ -7,6 +7,8 @@ export interface ReleaseProcessInput {
   readonly environment?: NodeJS.ProcessEnv | undefined;
   readonly timeoutMs: number;
   readonly maxOutputBytes?: number | undefined;
+  /** Opt in only for machine parsing; never write this unredacted stdout to logs. */
+  readonly captureMachineStdout?: boolean | undefined;
   readonly secretValues?: readonly string[] | undefined;
   readonly signal?: AbortSignal | undefined;
 }
@@ -14,6 +16,8 @@ export interface ReleaseProcessInput {
 export interface ReleaseProcessResult {
   readonly output: string;
   readonly truncated: boolean;
+  /** Present only when requested and successful; may contain secrets. */
+  readonly machineStdout?: string;
 }
 
 const reasonLabels = {
@@ -40,7 +44,7 @@ export class ReleaseProcessError extends Error {
 }
 
 const defaultMaxOutputBytes = 256 * 1024;
-const sensitiveEnvironmentKey = /(?:PASSWORD|TOKEN|SECRET|KEY|CREDENTIAL|PRIVATE)/iu;
+const sensitiveEnvironmentKey = /(?:^|_)(?:PASSWORD|TOKEN|SECRET|CREDENTIAL|PRIVATE_KEY|API_KEY)(?:_|$)/iu;
 
 /** Execute a release step without streaming unredacted child output to logs. */
 export async function runReleaseProcess(input: ReleaseProcessInput): Promise<ReleaseProcessResult> {
@@ -175,7 +179,13 @@ export async function runReleaseProcess(input: ReleaseProcessInput): Promise<Rel
       } else if (code !== 0) {
         reject(new ReleaseProcessError('exit', output, code ?? undefined));
       } else {
-        resolve({ output, truncated });
+        resolve({
+          output,
+          truncated,
+          ...(input.captureMachineStdout === true
+            ? { machineStdout: Buffer.concat(stdoutChunks).toString('utf8') }
+            : {}),
+        });
       }
     });
   });

@@ -16,6 +16,16 @@ const redacted = await runReleaseProcess({
 });
 assert.equal(redacted.output, '[REDACTED]');
 assert.equal(redacted.truncated, false);
+const machineResult = await runReleaseProcess({
+  command: process.execPath,
+  args: ['-e', 'process.stdout.write("abc123")'],
+  cwd,
+  environment: { ...process.env, MPGD_API_TOKEN: '1', DISABLE_KEYRING: 'a' },
+  timeoutMs: 5_000,
+  captureMachineStdout: true,
+});
+assert.equal(machineResult.machineStdout, 'abc123');
+assert.equal(machineResult.output, 'abc[REDACTED]23');
 const interleaved = runReleaseProcess({
   command: process.execPath,
   args: ['-e', [

@@ -139,6 +139,16 @@ try {
     'export const value = 1;\n',
   );
   assert.equal(existsSync(path.join(first.workspaceRoot, 'games/beta/package.json')), true);
+  const committedLockfile = readFileSync(path.join(repository, 'pnpm-lock.yaml'));
+  writeFileSync(
+    path.join(repository, 'pnpm-lock.yaml'),
+    `${committedLockfile.toString('utf8')}# dirty\n`,
+  );
+  await assert.rejects(
+    pinNativeDeploymentPlan(plan, { packageVersion: '0.35.0', gitSha: 'a'.repeat(40) }),
+    /Pinned release inputs have uncommitted changes/u,
+  );
+  writeFileSync(path.join(repository, 'pnpm-lock.yaml'), committedLockfile);
   writeFileSync(path.join(repository, 'packages/shared/index.js'), 'export const value = 2;\n');
   writeFileSync(path.join(game, 'mpgd.targets.json'), '{"changed":true}\n');
   await assert.rejects(
@@ -309,6 +319,44 @@ fs.writeFileSync(manifest, JSON.stringify({
       { temporaryParent: workspaces },
     ),
     /pnpm-lock.yaml/u,
+  );
+  assert.deepEqual(readdirSync(workspaces), []);
+  symlinkSync(game, path.join(game, 'linked-app'), 'dir');
+  writeJson(path.join(game, 'mpgd.targets.json'), {
+    targets: {
+      android: {
+        kind: 'capacitor-android',
+        adapter: 'capacitor',
+        artifact: 'aab',
+        gameApp: 'linked-app',
+        shellApp: 'apps/mobile',
+        webDir: 'apps/mobile/www',
+        metadata: { packageId: 'dev.mpgd.alpha' },
+      },
+    },
+  });
+  run('git', ['add', '.'], repository);
+  run(
+    'git',
+    [
+      '-c',
+      'user.name=mpgd-test',
+      '-c',
+      'user.email=mpgd-test@example.invalid',
+      'commit',
+      '-qm',
+      'absolute gameApp symlink',
+    ],
+    repository,
+  );
+  const symlinkPlan = planNativeDeployment({ game, profile: 'beta', targets: ['android'] });
+  const symlinkInput = await pinNativeDeploymentPlan(symlinkPlan, {
+    packageVersion: '0.35.0',
+    gitSha: 'a'.repeat(40),
+  });
+  await assert.rejects(
+    preparePinnedReleaseWorkspace(symlinkInput, { temporaryParent: workspaces }),
+    /gameApp must stay inside the game project/u,
   );
   assert.deepEqual(readdirSync(workspaces), []);
   console.info('Pinned multi-game release workspace passed.');

@@ -47,7 +47,8 @@ as a version reservation.
 
 The deployment runner now has a separate preparation layer. Immediately before
 building, it rechecks a plan against the current target/deployment configs,
-records the game's full Git SHA, the root `pnpm-lock.yaml` digest, and the
+rejects uncommitted changes in those configs or the root lockfile, then records
+the game's full Git SHA, the root `pnpm-lock.yaml` digest, and the
 selected Kit package version/revision. It clones that exact commit into a
 temporary worktree-like checkout, preserving sibling workspace packages for
 `games/*` repositories. A frozen-lockfile install and the existing
@@ -73,3 +74,5 @@ read or write through mutable paths in the original working directory. A
 build target and build profile must also match the pinned deployment plan.
 Existing symlinks under the standard `artifacts`, `release-output`, or `dist`
 output roots are rejected before installation or build rather than followed.
+Target paths are resolved again inside the cloned checkout so an absolute
+`gameApp` symlink that points back to the source game cannot escape the pin.
