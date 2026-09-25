@@ -1,6 +1,6 @@
-import { mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 
 import { stageNativeIconResources } from '../icons/staging';
 import type { GeneratedTargetIcons } from '../icons/types';
@@ -98,7 +98,14 @@ function executeAndroidBuild(input: NativeBuildExecutionInput, stagedShell: stri
       input.targetPath(releaseArtifact),
     );
   } else if (plan.mode === 'unsigned-archive' || plan.mode === 'signed-archive') {
-    input.run('./gradlew', ['bundleRelease', '--no-daemon'], environment, androidProject);
+    input.run(
+      './gradlew',
+      plan.mode === 'signed-archive'
+        ? androidSignedReleaseGradleArgs(environment)
+        : ['bundleRelease', '--no-daemon'],
+      environment,
+      androidProject,
+    );
     releaseArtifact = `${artifactRoot}/app-release.aab`;
     input.copyFile(
       `${androidProject}/app/build/outputs/bundle/release/app-release.aab`,
@@ -128,6 +135,17 @@ function executeAndroidBuild(input: NativeBuildExecutionInput, stagedShell: stri
     throw new Error(`Unsupported Android build mode: ${plan.mode}.`);
   }
   return releaseArtifact;
+}
+
+export function androidSignedReleaseGradleArgs(environment: NodeJS.ProcessEnv): readonly string[] {
+  const initScript = environment.MPGD_ANDROID_SIGNING_INIT_SCRIPT;
+  if (initScript === undefined || initScript === '') {
+    return ['bundleRelease', '--no-daemon'];
+  }
+  if (!isAbsolute(initScript) || !existsSync(initScript) || !statSync(initScript).isFile()) {
+    throw new Error('Android upload signing init script must be an existing absolute file.');
+  }
+  return ['bundleRelease', '--no-daemon', '--init-script', initScript];
 }
 
 function executeIosBuild(input: NativeBuildExecutionInput, stagedShell: string): string {

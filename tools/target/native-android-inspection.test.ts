@@ -85,6 +85,15 @@ try {
     () =>
       inspectSignedAndroidBundle({
         ...expected,
+        expectedPackageId: 'dev.example.wrong',
+        runner,
+      }),
+    /packageId does not match/u,
+  );
+  assert.throws(
+    () =>
+      inspectSignedAndroidBundle({
+        ...expected,
         runner: { run: () => ({ status: 0, stdout: 'jar is unsigned.', stderr: '' }) },
       }),
     /not verifiably signed/u,
