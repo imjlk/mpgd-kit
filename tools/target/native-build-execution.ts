@@ -76,9 +76,10 @@ export async function executeNativeTargetBuild(input: NativeBuildExecutionInput)
     runNativeSyncWithIdentityCheck({ ...identityInput, shellApp: stage.shellApp }, () => {
       input.run('pnpm', ['--dir', stage.shellApp, 'cap', 'sync', platform], environment);
     });
-    return platform === 'android'
-      ? executeAndroidBuild(input, stage.shellApp)
-      : executeIosBuild(input, stage.shellApp);
+    if (platform === 'android') {
+      return executeAndroidBuild(input, stage.shellApp);
+    }
+    return await executeIosBuild(input, stage.shellApp);
   } finally {
     stage.dispose();
   }
