@@ -741,6 +741,11 @@ jobs:
       - run: pnpm build:target android staging
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
+      - name: Prepare reference Android shell for plugin unit tests
+        run: |
+          mkdir -p apps/mobile-capacitor/www
+          cp examples/phaser-starter/index.html apps/mobile-capacitor/www/index.html
+          pnpm --dir apps/mobile-capacitor sync:android
       - name: Test Android native storage conformance
         working-directory: apps/mobile-capacitor/android
         run: ./gradlew :mpgd-capacitor-game-services:testDebugUnitTest
