@@ -11,6 +11,9 @@ access, iOS migrates legacy `UserDefaults` values and removes each legacy entry
 only after its atomic file write succeeds. Missing values return `null`, while
 serialization, quota, and provider failures reject through bridge errors
 without replacing a previously committed value.
+The Swift Package bundles `PrivacyInfo.xcprivacy` for that legacy
+`UserDefaults` access, declaring the CA92.1 storage-wrapper reason. Game apps
+must still review their own privacy disclosures and any additional SDKs.
 
 Native CI exercises the shipped storage helpers with JUnit on Android and a
 small Swift conformance executable on iOS. The TypeScript storage smoke covers

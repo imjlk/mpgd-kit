@@ -23,6 +23,9 @@ test('shared contracts, lockfiles, workflow, other adapters, and docs require br
   for (const file of [
     'packages/platform/src/index.ts',
     'packages/bridge/src/index.ts',
+    'packages/game-services/src/runtime.ts',
+    'packages/release-manifest/src/index.ts',
+    'tools/target/native-build-stage.ts',
     'pnpm-lock.yaml',
     'package.json',
     '.github/workflows/ci.yml',
@@ -52,5 +55,10 @@ test('CI wires native classification to both platform jobs and the required gate
   const nativeStep = workflow.split(/\r?\n      - name: Verify native adapter contracts\r?\n/)[1]
     ?.split(/\r?\n(?:      - |  [a-z0-9][a-z0-9_-]*:\r?\n)/)[0];
   assert.match(nativeStep ?? '', /pnpm pack:packages:prepared/);
+  assert.match(nativeStep ?? '', /pnpm smoke:native-packed-consumer/);
+  assert.match(workflow, /- run: pnpm smoke:native-packed-consumer/);
+  const iosJob = workflow.split(/\r?\n  build-ios:\r?\n/)[1]
+    ?.split(/\r?\n  [a-z0-9][a-z0-9_-]*:\r?\n/)[0];
+  assert.match(iosJob ?? '', /pnpm smoke:native-packed-swift/);
   assert.match(workflow, /run: node tools\/ci\/verify-coverage\.mjs/);
 });
