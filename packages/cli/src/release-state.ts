@@ -576,8 +576,6 @@ async function commitState(session: StateSession, state: ReleaseState, subject: 
     'user.name=mpgd-release',
     '-c',
     'user.email=mpgd-release@example.invalid',
-    '-c',
-    `core.hooksPath=${path.join(session.directory, '.git', '.mpgd-no-hooks')}`,
     'commit',
     '--no-gpg-sign',
     '-qm',
@@ -803,7 +801,8 @@ function assertReservationHistory(
     const initialVersion = target === 'android'
       ? initialLedger.platforms.android?.versionCode
       : initialLedger.platforms.ios?.buildNumber;
-    if (versions.length > 0 && versions[0] !== Number(initialVersion ?? 0) + 1) {
+    if (versions.length > 0 && (initialVersion === undefined
+      || versions[0] !== initialVersion + 1)) {
       throw new Error(`Release state game ${gameId} has a truncated ${target} history.`);
     }
     for (let index = 1; index < versions.length; index += 1) {
@@ -823,6 +822,14 @@ function assertReservationHistory(
     if (versions.length === 0 && ledgerVersion !== initialVersion) {
       throw new Error(`Release state game ${gameId} ${target} ledger differs from its baseline.`);
     }
+  }
+  if (!isDeepStrictEqual(
+    ledger.platforms['microsoft-store'],
+    initialLedger.platforms['microsoft-store'],
+  )) {
+    throw new Error(
+      `Release state game ${gameId} Microsoft Store ledger differs from its baseline.`,
+    );
   }
 }
 
@@ -888,7 +895,9 @@ async function git(
   }
   const input: ReleaseProcessInput = {
     command: 'git',
-    args,
+    // Apply before checkout too: a relative inherited hooksPath could execute
+    // post-checkout from the fetched, untrusted release-state branch.
+    args: ['-c', `core.hooksPath=${path.join(session.directory, '.git', '.mpgd-no-hooks')}`, ...args],
     cwd: session.directory,
     environment: session.environment,
     timeoutMs: 60_000,

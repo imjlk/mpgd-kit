@@ -112,7 +112,10 @@ try {
   const branchHook = path.join(branchHookDirectory, 'pre-commit');
   writeFileSync(branchHook, '#!/bin/sh\nexit 77\n');
   chmodSync(branchHook, 0o755);
-  git(['add', '.mpgd-no-hooks/pre-commit'], hookCheckout);
+  const checkoutHook = path.join(branchHookDirectory, 'post-checkout');
+  writeFileSync(checkoutHook, '#!/bin/sh\nexit 79\n');
+  chmodSync(checkoutHook, 0o755);
+  git(['add', '.mpgd-no-hooks/pre-commit', '.mpgd-no-hooks/post-checkout'], hookCheckout);
   git(
     [
       '-c',
@@ -146,6 +149,12 @@ try {
     releaseKey: 'beta-02',
     sourceGitSha: nextGameSha,
     initialLedger: undefined,
+    environment: {
+      ...firstInput.environment,
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'core.hooksPath',
+      GIT_CONFIG_VALUE_0: '.mpgd-no-hooks',
+    },
   });
   assert.equal(second.plan.targets.android?.versionCode, 42);
   assert.equal(second.plan.targets.ios?.buildNumber, 52);
@@ -161,8 +170,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const args = process.argv.slice(2);
+const command = args[0] === '-c' ? args[2] : args[0];
 const real = process.env.MPGD_REAL_GIT;
-if (args[0] === 'push' && process.env.MPGD_FAKE_PUSH_MODE === 'conflict') {
+if (command === 'push' && process.env.MPGD_FAKE_PUSH_MODE === 'conflict') {
   const rival = fs.mkdtempSync(path.join(os.tmpdir(), 'mpgd-rival-'));
   try {
     const run = (a) => {
@@ -178,7 +188,7 @@ if (args[0] === 'push' && process.env.MPGD_FAKE_PUSH_MODE === 'conflict') {
   } finally { fs.rmSync(rival, { recursive: true, force: true }); }
 }
 const result = cp.spawnSync(real, args, { stdio: 'inherit' });
-if (args[0] === 'push' && process.env.MPGD_FAKE_PUSH_MODE === 'lost') process.exit(1);
+if (command === 'push' && process.env.MPGD_FAKE_PUSH_MODE === 'lost') process.exit(1);
 process.exit(result.status ?? 1);
 `);
     chmodSync(fakeGit, 0o755);
