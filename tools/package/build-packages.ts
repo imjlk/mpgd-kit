@@ -88,6 +88,7 @@ for (const workspacePackage of sortByWorkspaceDependencies(packages)) {
       join(distDir, 'ios-keychain-import.swift'),
     );
     buildPlayPublisherAdapter(distDir);
+    copyFileSync(join('tools', 'deploy', 'asc-pin.json'), join(distDir, 'asc-pin.json'));
     buildPackagedNativeTarget(workspacePackage, distDir);
   }
   console.log(`Built ${workspacePackage.name}`);
