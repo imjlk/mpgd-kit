@@ -36,6 +36,23 @@ smoke:cli-capacitor-shell-materialize`. This installs the public CLI in an
 external game, creates both native projects, rejects kit checkout references,
 and checks repeat initialization is a no-op.
 
+For a Kit-checkout-free native target build, build `@mpgd/cli` and run
+`pnpm smoke:native-cli-packed-consumer`. This installs its tarball in an
+external game and checks native target selection, the packaged builder, and
+the package-stamped Kit Git SHA without running a signed build. On macOS,
+`pnpm smoke:native-cli-packed-sync-ios` additionally creates a game-owned
+Capacitor shell, runs an unsigned iOS `sync` build, and checks its manifest
+and artifact. These are local release-acceptance commands, not part of every
+PR's prepared suite because tarball installation and Capacitor setup use the
+registry and take longer than contract tests. The packed CLI still requires
+the game to own its native shell, target config, catalog, placements, and
+platform toolchain; `mpgd target init capacitor` creates the shell. To use
+the installed builder, omit `--kit-path` and `MPGD_KIT_PATH`, then run
+`mpgd target build ios staging --targets-file mpgd.targets.json` (or
+`android`). Production native builds require an explicit build mode and
+release identity/signing configuration. A CLI tarball alone does not provide
+credentials or prove that a store submission or device run succeeded.
+
 ## Native target and release checks
 
 - `pnpm test:target-artifacts` and `pnpm test:native-ios-signing` verify build

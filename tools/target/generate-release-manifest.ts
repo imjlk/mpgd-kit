@@ -616,7 +616,7 @@ function assertCleanKitWorktree(kitRoot: string): void {
   }
 }
 
-if (isCliEntrypoint(import.meta.url)) {
+if (process.env.MPGD_NATIVE_PACKAGED_BUILD !== '1' && isCliEntrypoint(import.meta.url)) {
   const [
     target = 'web-preview',
     profile = 'production',

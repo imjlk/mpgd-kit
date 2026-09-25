@@ -3414,10 +3414,27 @@ function resolveStandaloneNativeBuild(
     if (typeof configuredPath !== 'string') {
       return undefined;
     }
-    const candidate = path.resolve(gameRoot, configuredPath);
-    const relativeToGame = existsSync(candidate)
-      ? path.relative(gameRootReal, realpathSync(candidate))
-      : path.relative(gameRoot, candidate);
+    const candidate = path.resolve(
+      gameRoot,
+      configuredPath
+        .replaceAll('${MPGD_GAME_ROOT}', gameRoot)
+        .replaceAll('${MPGD_GAME_APP_ROOT}', gameRoot),
+    );
+    let existingAncestor = candidate;
+    while (!existsSync(existingAncestor)) {
+      const parent = path.dirname(existingAncestor);
+      if (parent === existingAncestor) {
+        throw new Error(
+          `Cannot resolve native target ${requestedTarget} ${field}: ${configuredPath}`,
+        );
+      }
+      existingAncestor = parent;
+    }
+    const canonicalCandidate = path.resolve(
+      realpathSync(existingAncestor),
+      path.relative(existingAncestor, candidate),
+    );
+    const relativeToGame = path.relative(gameRootReal, canonicalCandidate);
     if (relativeToGame === '' || relativeToGame === '..'
       || relativeToGame.startsWith(`..${path.sep}`)
       || path.isAbsolute(relativeToGame)) {
