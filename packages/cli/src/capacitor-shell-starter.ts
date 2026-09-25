@@ -20,12 +20,14 @@ import { isNonPublicServiceHostname } from './production-target-readiness.js';
 import {
   assertAndroidSettingsAppProject,
   assertAndroidSettingsNoAppRemap,
+  assertIosReleaseInfoPlistExpansion,
   assertIosReleaseProductName,
   assertNativeShellIdentity,
   hasAndroidDisplayNameResourceOverride,
   hasAndroidManifestSourceSetOverride,
   hasAndroidResourceSourceSetOverride,
   hasGradleIdentityMutation,
+  hasGradleTaskAction,
   maskGradleStrings,
   readIosAppTargetId,
   readIosReleaseInfoPlist,
@@ -654,6 +656,9 @@ function assertNativePlatformComplete(
       if (hasAndroidManifestSourceSetOverride(source)) {
         throw new Error('Existing android project custom manifest sourceSets are unsupported.');
       }
+      if (hasGradleTaskAction(source)) {
+        throw new Error('Existing android project Gradle task actions are unsupported.');
+      }
       if (script === required) {
         continue;
       }
@@ -693,6 +698,7 @@ function assertNativePlatformComplete(
   assertNativeShellIdentity(platform, content, expectedAppId);
   if (platform === 'ios') {
     assertIosReleaseProductName(content);
+    assertIosReleaseInfoPlistExpansion(content);
     const infoPlist = readIosReleaseInfoPlist(content);
     const infoRelative = path.join('App', infoPlist);
     if (!isNativeFile(nativeDirectory, infoRelative)) {
@@ -1186,14 +1192,10 @@ function assertReferencedIosFiles(
 function assertAppBuildPhaseInputs(nativeDirectory: string, project: string): Set<string> {
   const parentGroups = readPbxParentGroups(project);
   const compiledSources = new Set<string>();
-  const targets = [...project.matchAll(/\b([A-F0-9]+)\s*\/\*\s*App\s*\*\/\s*=\s*\{/gu)]
-    .map((match) => readPbxObjectBody(project, match[1] ?? ''))
-    .filter((body) => /\bisa\s*=\s*PBXNativeTarget\s*;/u.test(body)
-      && /\bname\s*=\s*"?App"?\s*;/u.test(body));
-  if (targets.length !== 1) {
-    throw new Error('Existing ios project App target is missing or ambiguous.');
-  }
-  const phaseIds = readPbxIds(targets[0] ?? '', 'buildPhases');
+  const targetId = readIosAppTargetId(project);
+  assertNoIosTargetScriptPhases(project, targetId, new Set());
+  const target = readPbxObjectBody(project, targetId);
+  const phaseIds = readPbxIds(target, 'buildPhases');
   for (const phaseId of phaseIds) {
     const phase = readPbxObjectBody(project, phaseId);
     if (/\bisa\s*=\s*PBXShellScriptBuildPhase\s*;/u.test(phase)) {
@@ -1216,6 +1218,36 @@ function assertAppBuildPhaseInputs(nativeDirectory: string, project: string): Se
     }
   }
   return compiledSources;
+}
+
+function assertNoIosTargetScriptPhases(
+  project: string,
+  targetId: string,
+  visited: Set<string>,
+): void {
+  if (visited.has(targetId)) {
+    return;
+  }
+  visited.add(targetId);
+  const target = readPbxObjectBody(project, targetId);
+  if (!/\bisa\s*=\s*PBX(?:Native|Aggregate)Target\s*;/u.test(target)) {
+    throw new Error('Existing ios project App target dependency is unsupported.');
+  }
+  for (const phaseId of readPbxIds(target, 'buildPhases')) {
+    const phase = readPbxObjectBody(project, phaseId);
+    if (/\bisa\s*=\s*PBXShellScriptBuildPhase\s*;/u.test(phase)) {
+      throw new Error('Existing ios project App shell script build phases are unsupported.');
+    }
+  }
+  for (const dependencyId of readPbxIds(target, 'dependencies')) {
+    const dependency = readPbxObjectBody(project, dependencyId);
+    const childId = /\btarget\s*=\s*([A-F0-9]+)\b/u.exec(dependency)?.[1];
+    if (!/\bisa\s*=\s*PBXTargetDependency\s*;/u.test(dependency)
+      || childId === undefined) {
+      throw new Error('Existing ios project App target dependency is unsupported.');
+    }
+    assertNoIosTargetScriptPhases(project, childId, visited);
+  }
 }
 
 function readPbxObjectBody(project: string, id: string): string {
@@ -1393,13 +1425,29 @@ function assertSceneDelegateFiles(
       const text = stripSourceCommentsAndStrings(
         readFileSync(path.join(nativeDirectory, relative), 'utf8'),
       );
-      return new RegExp(`\\bclass\\s+${className}\\b`, 'u').test(text);
+      return hasTopLevelSwiftClass(text, className);
     })) {
       throw new Error(
         `Existing ios project ${label} scene delegate ${delegate} is missing from App Sources.`,
       );
     }
   }
+}
+
+function hasTopLevelSwiftClass(source: string, className: string): boolean {
+  const declaration = new RegExp(`\\bclass\\s+${className}\\b`, 'gu');
+  let cursor = 0;
+  let depth = 0;
+  for (const match of source.matchAll(declaration)) {
+    const index = match.index ?? 0;
+    for (; cursor < index; cursor += 1) {
+      depth += source[cursor] === '{' ? 1 : source[cursor] === '}' ? -1 : 0;
+    }
+    if (depth === 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function assertAndroidManifestResources(nativeDirectory: string): void {
@@ -1617,6 +1665,12 @@ function assertNativeDisplayName(
           );
           const sameLauncher = releaseName !== undefined && launcherNames.has(releaseName);
           const activityLabel = activity.getAttribute('android:label');
+          if (sameLauncher && activity.tagName === 'activity-alias'
+            && activity.hasAttribute('android:targetActivity')) {
+            throw new Error(
+              'Existing android Release launcher alias target override is unsupported.',
+            );
+          }
           if ((sameLauncher || releaseLaunchers.includes(activity))
             && hasAndroidMergerDirectiveDeep(activity)) {
             throw new Error('Existing android Release manifest changes a launcher node.');

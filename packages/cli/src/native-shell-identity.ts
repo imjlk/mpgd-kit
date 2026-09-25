@@ -174,6 +174,13 @@ export function hasAndroidManifestSourceSetOverride(source: string): boolean {
   return /\bsourceSets\b/u.test(code) && /\bmanifest\b/u.test(code);
 }
 
+export function hasGradleTaskAction(source: string): boolean {
+  const code = maskGradleStrings(stripGradleComments(source));
+  return /\b(?:doFirst|doLast|whenTaskAdded|whenReady)\s*(?:\(|\{)/u.test(code)
+    || /\btasks\s*\.\s*(?:register|create|named|getByName|withType|configureEach|all)\s*\(/u
+      .test(code);
+}
+
 export function hasGradlePropertySetter(source: string): boolean {
   const clean = stripGradleComments(source);
   const masked = maskGradleStrings(clean);
@@ -277,6 +284,34 @@ export function assertIosReleaseProductName(source: string): void {
   if (name !== undefined && name !== '$(inherited)'
     && name !== 'App' && name !== '$(TARGET_NAME)') {
     throw new Error('Existing ios project Release PRODUCT_NAME must build App.app.');
+  }
+}
+
+export function assertIosReleaseInfoPlistExpansion(source: string): void {
+  const target = readIosReleaseConfiguration(source, readIosAppConfigurationList(source));
+  assertIosInfoPlistExpansionSetting(target);
+  const projectList = readIosProjectConfigurationList(source);
+  if (projectList !== undefined) {
+    assertIosInfoPlistExpansionSetting(readIosReleaseConfiguration(source, projectList));
+  }
+}
+
+function assertIosInfoPlistExpansionSetting(configuration: string): void {
+  const key = 'INFOPLIST_EXPAND_BUILD_SETTINGS';
+  const conditional = /(?:^|[\s{;])["']?INFOPLIST_EXPAND_BUILD_SETTINGS(?:\[[^\]\r\n]+\])+["']?\s*=/u;
+  if (conditional.test(configuration)) {
+    throw new Error(
+      'Existing ios project conditional Release Info.plist expansion is unsupported.',
+    );
+  }
+  const values = [...configuration.matchAll(
+    /(?:^|[\s{;])["']?INFOPLIST_EXPAND_BUILD_SETTINGS["']?\s*=\s*([^;]+);/gu,
+  )].map((match) => match[1]?.trim().replace(/^["']|["']$/gu, ''));
+  if (values.length === 0 && /\bbaseConfigurationReference\s*=/u.test(configuration)) {
+    throw new Error('Existing ios project Release Info.plist expansion xcconfig is unsupported.');
+  }
+  if (values.length > 1 || values.some((value) => value !== 'YES')) {
+    throw new Error(`Existing ios project Release ${key} must be enabled.`);
   }
 }
 

@@ -491,6 +491,19 @@ try {
   writeFileSync(iosProjectFile, scriptedProject);
   assert.throws(() => planCapacitorShellStarter(options), /shell script build phases/u);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
+  const dependentScriptProject = iosProjectWithAppId('dev.example.puzzle').replace(
+    'buildPhases = (11111111 /* Sources */);',
+    'buildPhases = (11111111 /* Sources */); dependencies = (88888888 /* Helper */);',
+  ) + '\n' + [
+    '88888888 /* Helper */ = { isa = PBXTargetDependency; target = 99999999 /* Helper */; };',
+    '99999999 /* Helper */ = { isa = PBXNativeTarget;',
+    'name = Helper; buildPhases = (ABABABAB /* Script */); };',
+    'ABABABAB /* Script */ = { isa = PBXShellScriptBuildPhase;',
+    'shellScript = "echo hi"; };',
+  ].join('\n');
+  writeFileSync(iosProjectFile, dependentScriptProject);
+  assert.throws(() => planCapacitorShellStarter(options), /shell script build phases/u);
+  writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
   writeFileSync(
     iosProjectFile,
     iosProjectWithAppId('dev.example.puzzle').replace(
@@ -499,6 +512,28 @@ try {
     ),
   );
   assert.throws(() => planCapacitorShellStarter(options), /PRODUCT_NAME must build App.app/u);
+  writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
+  const disabledPlistExpansion = iosProjectWithAppId('dev.example.puzzle').replace(
+    'INFOPLIST_FILE = App/Info.plist;',
+    'INFOPLIST_EXPAND_BUILD_SETTINGS = NO; INFOPLIST_FILE = App/Info.plist;',
+  );
+  writeFileSync(iosProjectFile, disabledPlistExpansion);
+  assert.throws(() => planCapacitorShellStarter(options), /INFOPLIST_EXPAND_BUILD_SETTINGS/u);
+  const conditionalPlistExpansion = iosProjectWithAppId('dev.example.puzzle').replace(
+    'INFOPLIST_FILE = App/Info.plist;',
+    '"INFOPLIST_EXPAND_BUILD_SETTINGS[sdk=iphoneos*]" = NO; INFOPLIST_FILE = App/Info.plist;',
+  );
+  writeFileSync(iosProjectFile, conditionalPlistExpansion);
+  assert.throws(
+    () => planCapacitorShellStarter(options),
+    /conditional Release Info.plist expansion/u,
+  );
+  const inheritedPlistExpansion = iosProjectWithAppId('dev.example.puzzle').replace(
+    'DDDDDDDD /* Release */ = { isa = XCBuildConfiguration; buildSettings = {',
+    'DDDDDDDD /* Release */ = { isa = XCBuildConfiguration; baseConfigurationReference = 12345678; buildSettings = { PRODUCT_NAME = App;',
+  );
+  writeFileSync(iosProjectFile, inheritedPlistExpansion);
+  assert.throws(() => planCapacitorShellStarter(options), /Info.plist expansion xcconfig/u);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
   const customBuildFile = path.join(root, 'apps/mobile-capacitor/ios/App/App/CustomView.swift');
   writeFileSync(customBuildFile, 'class CustomView {}');
@@ -555,6 +590,10 @@ try {
   renameSync(sceneDelegate, `${sceneDelegate}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /App build input.*missing/u);
   renameSync(`${sceneDelegate}.saved`, sceneDelegate);
+  const originalSceneSource = readFileSync(sceneDelegate, 'utf8');
+  writeFileSync(sceneDelegate, 'class Holder { class SceneDelegate {} }');
+  assert.throws(() => planCapacitorShellStarter(options), /simulator scene delegate.*App Sources/u);
+  writeFileSync(sceneDelegate, originalSceneSource);
   const appOnlyProject = readFileSync(iosProjectFile, 'utf8').replace(
     'files = (22222222 /* SceneDelegate.swift in Sources */);',
     'files = ();',
@@ -788,6 +827,13 @@ try {
   ].join('');
   writeFileSync(androidManifest, aliasManifest);
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(releaseManifest, [
+    androidManifestOpen,
+    '<application><activity-alias android:name=".Alias"',
+    ' android:targetActivity=".MissingActivity"/></application></manifest>',
+  ].join(''));
+  assert.throws(() => planCapacitorShellStarter(options), /alias target override/u);
+  unlinkSync(releaseManifest);
   writeFileSync(releaseManifest, [
     androidManifestOpen.replace(' package=',
       ' xmlns:tools="http://schemas.android.com/tools" package='),
@@ -1186,6 +1232,11 @@ try {
     'sourceSets.main.manifest.srcFile("src/store/AndroidManifest.xml")',
   ].join('\n'));
   assert.throws(() => planCapacitorShellStarter(options), /custom manifest sourceSets/u);
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
+    'preBuild.doLast { file("src/main/res/values/strings.xml").text = "Other Game" }',
+  ].join('\n'));
+  assert.throws(() => planCapacitorShellStarter(options), /Gradle task actions/u);
   writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');
   writeFileSync(androidProjectFile, [
     'applicationId "dev.example.puzzle"',

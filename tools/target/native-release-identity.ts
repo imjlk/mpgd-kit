@@ -12,6 +12,7 @@ import {
 import {
   assertAndroidSettingsAppProject,
   assertAndroidSettingsNoAppRemap,
+  assertIosReleaseInfoPlistExpansion,
   assertIosReleaseProductName,
   countGradleIdentityWrites,
   hasAndroidDisplayNameResourceOverride,
@@ -20,6 +21,7 @@ import {
   hasGradleBracketIdentityWrite,
   hasGradleIdentityMutation,
   hasGradlePropertySetter,
+  hasGradleTaskAction,
   maskGradleStrings,
   readIosReleaseInfoPlist,
 } from '../../packages/cli/src/native-shell-identity.js';
@@ -170,6 +172,9 @@ function assertAndroidIdentity(file: string, expected: AndroidIdentity): void {
       `Native release preflight cannot resolve custom manifest sourceSets in ${file}.`,
     );
   }
+  if (hasGradleTaskAction(source)) {
+    throw new Error(`Native release preflight cannot resolve Gradle task actions in ${file}.`);
+  }
   if (/\bproductFlavors\b/u.test(code)) {
     throw new Error('Native release preflight does not support Android product flavors.');
   }
@@ -222,6 +227,9 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
     }
     if (hasAndroidManifestSourceSetOverride(source)) {
       throw new Error('Native release preflight cannot resolve custom manifest sourceSets.');
+    }
+    if (hasGradleTaskAction(source)) {
+      throw new Error('Native release preflight cannot resolve Gradle task actions.');
     }
     if (isSettingsScript) {
       assertAndroidSettingsNoAppRemap(source);
@@ -299,6 +307,7 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
 function assertIosIdentity(file: string, expected: IosIdentity): void {
   const source = readRequiredFile(file, 'iOS Xcode project configuration');
   assertIosReleaseProductName(source);
+  assertIosReleaseInfoPlistExpansion(source);
   const releaseSettings = readIosAppReleaseSettings(source, file);
   assertIosSetting(releaseSettings, 'PRODUCT_BUNDLE_IDENTIFIER', expected.bundleId, file);
   assertIosSetting(releaseSettings, 'MARKETING_VERSION', expected.marketingVersion, file);

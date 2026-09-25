@@ -192,6 +192,22 @@ try {
     () => assertNativeReleaseIdentity(productionInput),
     /Release application label differs/u,
   );
+  writeFileSync(launcherManifest, [
+    '<manifest xmlns:android="http://schemas.android.com/apk/res/android"',
+    ' package="dev.example.game"><application android:label="@string/app_name">',
+    '<activity android:name=".MainActivity"/>',
+    '<activity-alias android:name=".Alias" android:targetActivity=".MainActivity"',
+    ' android:exported="true"><intent-filter>',
+    '<action android:name="android.intent.action.MAIN"/>',
+    '<category android:name="android.intent.category.LAUNCHER"/>',
+    '</intent-filter></activity-alias></application></manifest>',
+  ].join(''));
+  writeFileSync(releaseManifest, [
+    '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+    '<application><activity-alias android:name=".Alias"',
+    ' android:targetActivity=".MissingActivity"/></application></manifest>',
+  ].join(''));
+  assert.throws(() => assertNativeReleaseIdentity(productionInput), /alias target override/u);
   rmSync(releaseManifest);
   writeShellFiles(shellRoot);
   const flavoredGradle = `${readFileSync(groovy, 'utf8')}\nproductFlavors { demo {} }\n`;
@@ -264,6 +280,12 @@ try {
     () => assertNativeReleaseIdentity(appliedIdentityInput),
     /custom manifest sourceSets/u,
   );
+  writeShellFiles(shellRoot);
+  writeFileSync(groovy, [
+    readFileSync(groovy, 'utf8'),
+    'preBuild.doLast { file("src/main/res/values/strings.xml").text = "Other Game" }',
+  ].join('\n'));
+  assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /task actions/u);
   writeShellFiles(shellRoot);
   const androidRootGradle = join(shellRoot, 'android/build.gradle');
   writeFileSync(androidRootGradle, 'apply(mapOf("from" to "missing.gradle"))');
@@ -449,12 +471,45 @@ try {
     required: true,
   };
   assert.doesNotThrow(() => assertNativeReleaseIdentity(productionIosInput));
+  const disabledExpansionProject = readFileSync(iosProject, 'utf8').replace(
+    'INFOPLIST_FILE = App/Info.plist;',
+    'INFOPLIST_EXPAND_BUILD_SETTINGS = NO; INFOPLIST_FILE = App/Info.plist;',
+  );
+  writeFileSync(iosProject, disabledExpansionProject);
+  assert.throws(
+    () => assertNativeReleaseIdentity(productionIosInput),
+    /INFOPLIST_EXPAND_BUILD_SETTINGS/u,
+  );
+  writeFileSync(iosProject, inheritedIosSource);
+  const sceneDelegateSource = join(shellRoot, 'ios/App/App/SceneDelegate.swift');
+  writeFileSync(sceneDelegateSource, 'class Holder { class SceneDelegate {} }');
+  assert.throws(
+    () => assertNativeReleaseIdentity(productionIosInput),
+    /Release scene delegate.*App Sources/u,
+  );
+  writeFileSync(sceneDelegateSource, 'class SceneDelegate {}');
   const compiledIosProject = readFileSync(iosProject, 'utf8');
   const scriptedIosProject = compiledIosProject.replace(
     'buildPhases = (00000009 /* Sources */);',
     'buildPhases = (00000009 /* Sources */, 00000011 /* Script */);',
   ) + '\n00000011 /* Script */ = { isa = PBXShellScriptBuildPhase; shellScript = "echo hi"; };';
   writeFileSync(iosProject, scriptedIosProject);
+  assert.throws(
+    () => assertNativeReleaseIdentity(productionIosInput),
+    /shell script build phases/u,
+  );
+  writeFileSync(iosProject, compiledIosProject);
+  const dependentScriptProject = compiledIosProject.replace(
+    'buildPhases = (00000009 /* Sources */);',
+    'buildPhases = (00000009 /* Sources */); dependencies = (00000012 /* Helper */);',
+  ) + '\n' + [
+    '00000012 /* Helper */ = { isa = PBXTargetDependency; target = 00000013 /* Helper */; };',
+    '00000013 /* Helper */ = { isa = PBXNativeTarget;',
+    'name = Helper; buildPhases = (00000014 /* Script */); };',
+    '00000014 /* Script */ = { isa = PBXShellScriptBuildPhase;',
+    'shellScript = "echo hi"; };',
+  ].join('\n');
+  writeFileSync(iosProject, dependentScriptProject);
   assert.throws(
     () => assertNativeReleaseIdentity(productionIosInput),
     /shell script build phases/u,
