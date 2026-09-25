@@ -91,8 +91,7 @@ export function stripGradleComments(source: string): string {
 export function hasGradleIdentityMutation(source: string): boolean {
   const clean = stripGradleComments(source);
   const masked = maskGradleStrings(clean);
-  const quotedSetter = /\bsetProperty\s*\(\s*["'](?:applicationId|applicationIdSuffix|versionCode|versionName|versionNameSuffix)["']\s*,/u;
-  if (quotedSetter.test(clean)) {
+  if (hasGradleQuotedIdentitySetter(clean)) {
     return true;
   }
   const setter = /\bset(?:ApplicationId|ApplicationIdSuffix|VersionCode|VersionName|VersionNameSuffix)\s*\(/u;
@@ -102,6 +101,16 @@ export function hasGradleIdentityMutation(source: string): boolean {
     'u',
   );
   return setter.test(masked) || assignment.test(masked);
+}
+
+export function hasGradleQuotedIdentitySetter(source: string): boolean {
+  const clean = stripGradleComments(source);
+  const masked = maskGradleStrings(clean);
+  return [...masked.matchAll(/\bsetProperty\s*\(/gu)].some((match) => {
+    const tail = clean.slice(match.index ?? 0);
+    return /^setProperty\s*\(\s*["'](?:applicationId|applicationIdSuffix|versionCode|versionName|versionNameSuffix)["']\s*,/u
+      .test(tail);
+  });
 }
 
 export function countGradleIdentityWrites(source: string, key: string): number {
@@ -178,6 +187,43 @@ export function readIosReleaseInfoPlist(source: string): string {
     throw new Error('Existing ios project Release Info.plist cannot be read safely.');
   }
   return value;
+}
+
+export function assertIosReleaseProductName(source: string): void {
+  const target = readIosReleaseConfiguration(source, readIosAppConfigurationList(source));
+  let name = readIosProductName(target);
+  if (name === undefined || name === '$(inherited)') {
+    if (/\bbaseConfigurationReference\s*=/u.test(target)) {
+      throw new Error('Existing ios project Release product name xcconfig is unsupported.');
+    }
+    const projectList = readIosProjectConfigurationList(source);
+    if (projectList !== undefined) {
+      const project = readIosReleaseConfiguration(source, projectList);
+      name = readIosProductName(project);
+      if ((name === undefined || name === '$(inherited)')
+        && /\bbaseConfigurationReference\s*=/u.test(project)) {
+        throw new Error('Existing ios project Release product name xcconfig is unsupported.');
+      }
+    }
+  }
+  if (name !== undefined && name !== '$(inherited)'
+    && name !== 'App' && name !== '$(TARGET_NAME)') {
+    throw new Error('Existing ios project Release PRODUCT_NAME must build App.app.');
+  }
+}
+
+function readIosProductName(configuration: string): string | undefined {
+  if (/(?:^|[\s{;])["']?PRODUCT_NAME(?:\[[^\]\r\n]+\])+["']?\s*=/u
+    .test(configuration)) {
+    throw new Error('Existing ios project conditional Release PRODUCT_NAME is unsupported.');
+  }
+  const values = [...configuration.matchAll(
+    /(?:^|[\s{;])["']?PRODUCT_NAME["']?\s*=\s*([^;]+);/gu,
+  )].map((match) => match[1]?.trim().replace(/^["']|["']$/gu, ''));
+  if (values.length > 1) {
+    throw new Error('Existing ios project Release PRODUCT_NAME is ambiguous.');
+  }
+  return values[0];
 }
 
 function readIosInfoPlistSetting(configuration: string): string | undefined {

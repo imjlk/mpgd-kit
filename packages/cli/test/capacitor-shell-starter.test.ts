@@ -18,11 +18,15 @@ import path from 'node:path';
 
 import {
   applyCapacitorShellStarter,
+  decodeAndroidStringResource,
   materializeCapacitorShellStarter,
   planCapacitorShellStarter,
 } from '../src/capacitor-shell-starter.js';
 
 const root = mkdtempSync(path.join(tmpdir(), 'mpgd-capacitor-shell-'));
+
+assert.equal(decodeAndroidStringResource("King\\'s Quest"), "King's Quest");
+assert.equal(decodeAndroidStringResource('"King\\\'s Quest"'), "King's Quest");
 
 function writeJson(relative: string, value: unknown): void {
   const file = path.join(root, relative);
@@ -405,6 +409,15 @@ try {
     root,
     'apps/mobile-capacitor/ios/App/App.xcodeproj/project.pbxproj',
   );
+  writeFileSync(
+    iosProjectFile,
+    iosProjectWithAppId('dev.example.puzzle').replace(
+      'INFOPLIST_FILE = App/Info.plist;',
+      'PRODUCT_NAME = CustomGame; INFOPLIST_FILE = App/Info.plist;',
+    ),
+  );
+  assert.throws(() => planCapacitorShellStarter(options), /PRODUCT_NAME must build App.app/u);
+  writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
   const customBuildFile = path.join(root, 'apps/mobile-capacitor/ios/App/App/CustomView.swift');
   writeFileSync(customBuildFile, 'class CustomView {}');
   const customProject = iosProjectWithAppId('dev.example.puzzle').replace(
@@ -605,6 +618,25 @@ try {
     root,
     'apps/mobile-capacitor/android/app/src/release/AndroidManifest.xml',
   );
+  const aliasManifest = [
+    androidManifestOpen,
+    '<application android:label="@string/app_name" android:theme="@style/AppTheme">',
+    '<activity android:name=".MainActivity"/>',
+    '<activity-alias android:name=".Alias" android:targetActivity=".MainActivity">',
+    '<intent-filter><action android:name="android.intent.action.MAIN"/>',
+    '<category android:name="android.intent.category.LAUNCHER"/>',
+    '</intent-filter></activity-alias></application></manifest>',
+  ].join('');
+  writeFileSync(androidManifest, aliasManifest);
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(releaseManifest, [
+    androidManifestOpen.replace(' package=',
+      ' xmlns:tools="http://schemas.android.com/tools" package='),
+    '<application><activity android:name=".MainActivity" tools:node="remove"/>',
+    '</application></manifest>',
+  ].join(''));
+  assert.throws(() => planCapacitorShellStarter(options), /alias target.*changed by Release/u);
+  writeFileSync(androidManifest, completeAndroidManifest);
   writeFileSync(
     releaseManifest,
     `${androidManifestOpen}<application android:label="Other Game" /></manifest>`,
@@ -980,6 +1012,12 @@ try {
   );
   writeFileSync(configFile, getterServer);
   assert.throws(() => planCapacitorShellStarter(options), /dynamic properties/u);
+  const escapedServer = originalConfig.replace(
+    "server: { androidScheme: 'https' }",
+    "s\\u0065rver: { url: 'https://stale.example' }",
+  );
+  writeFileSync(configFile, escapedServer);
+  assert.throws(() => planCapacitorShellStarter(options), /ambiguous dynamic syntax/u);
   const topLevelGetter = originalConfig.replace(
     "server: { androidScheme: 'https' }",
     "get server() { return { url: 'https://stale.example' }; }",
@@ -1023,6 +1061,7 @@ try {
   writeFileSync(configFile, originalConfig);
   const quotedName = 'King\'s "Quest" & \\ Game';
   const xmlQuotedName = quotedName.replace(/&/gu, '&amp;').replace(/"/gu, '&quot;');
+  const androidQuotedName = xmlQuotedName.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
   const quotedConfig = originalConfig.replace(
     JSON.stringify(options.displayName),
     JSON.stringify(quotedName),
@@ -1030,7 +1069,7 @@ try {
   writeFileSync(configFile, quotedConfig);
   writeFileSync(
     androidStrings,
-    `<resources><string name="app_name">${xmlQuotedName}</string></resources>`,
+    `<resources><string name="app_name">${androidQuotedName}</string></resources>`,
   );
   writeFileSync(
     iosInfo,

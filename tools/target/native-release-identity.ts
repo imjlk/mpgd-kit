@@ -4,8 +4,10 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { isMpgdFinalSemVer } from '@mpgd/target-config';
 import { assertIosReleasePlistIdentity } from '../../packages/cli/src/capacitor-shell-starter.js';
 import {
+  assertIosReleaseProductName,
   countGradleIdentityWrites,
   hasGradleIdentityMutation,
+  hasGradleQuotedIdentitySetter,
   maskGradleStrings,
   readIosReleaseInfoPlist,
 } from '../../packages/cli/src/native-shell-identity.js';
@@ -121,13 +123,13 @@ function resolveExpectedNativeIdentity(
 function assertAndroidIdentity(file: string, expected: AndroidIdentity): void {
   const source = stripComments(readRequiredFile(file, 'Android Gradle configuration'));
 
-  if (/\bproductFlavors\b/u.test(source)) {
+  const code = maskGradleStrings(source);
+  if (/\bproductFlavors\b/u.test(code)) {
     throw new Error('Native release preflight does not support Android product flavors.');
   }
   assertNoAndroidReleaseIdentitySuffix(source, file);
-  if (/\bset(?:ApplicationId|VersionCode|VersionName)\s*\(/u.test(source)
-    || /\bsetProperty\s*\(\s*["'](?:applicationId|versionCode|versionName)["']\s*,/u
-      .test(source)) {
+  if (/\bset(?:ApplicationId|VersionCode|VersionName)\s*\(/u.test(code)
+    || hasGradleQuotedIdentitySetter(source)) {
     throw new Error(`Native release preflight cannot resolve Android identity setters in ${file}.`);
   }
   const end = '(?=\\s*(?:;|\\r?\\n|\\}|$))';
@@ -230,6 +232,7 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
 
 function assertIosIdentity(file: string, expected: IosIdentity): void {
   const source = readRequiredFile(file, 'iOS Xcode project configuration');
+  assertIosReleaseProductName(source);
   const releaseSettings = readIosAppReleaseSettings(source, file);
   assertIosSetting(releaseSettings, 'PRODUCT_BUNDLE_IDENTIFIER', expected.bundleId, file);
   assertIosSetting(releaseSettings, 'MARKETING_VERSION', expected.marketingVersion, file);
@@ -250,7 +253,11 @@ function assertIosSetting(
   const conditional = new RegExp(conditionalPattern, 'u');
   const target = stripComments(settings.target.values);
   const project = stripComments(settings.project.values);
-  const targetValues = readSettingValues(target, expression)
+  const targetRaw = readSettingValues(target, expression);
+  if (targetRaw.length > 1) {
+    throw new Error(`Native release preflight has ambiguous App Release ${key} in ${file}.`);
+  }
+  const targetValues = targetRaw
     .filter((value) => value !== '$(inherited)');
   if (conditional.test(target) || (targetValues.length === 0 && conditional.test(project))) {
     throw new Error(`Native release preflight does not support conditional ${key} in ${file}.`);
@@ -258,7 +265,11 @@ function assertIosSetting(
   if (targetValues.length === 0 && settings.target.hasBaseConfiguration) {
     throw new Error(`Native release preflight cannot resolve Release xcconfig ${key} in ${file}.`);
   }
-  const projectValues = readSettingValues(project, expression)
+  const projectRaw = readSettingValues(project, expression);
+  if (targetValues.length === 0 && projectRaw.length > 1) {
+    throw new Error(`Native release preflight has ambiguous project Release ${key} in ${file}.`);
+  }
+  const projectValues = projectRaw
     .filter((value) => value !== '$(inherited)');
   if (targetValues.length === 0 && projectValues.length === 0
     && settings.project.hasBaseConfiguration) {
@@ -328,6 +339,7 @@ function assertNativeVersionMatchesGameVersion(
 
 function assertNoAndroidReleaseIdentitySuffix(source: string, file: string): void {
   const releaseBlocks = readAndroidReleaseBlocks(source, file);
+  const code = maskGradleStrings(source);
   const qualifiedReleaseSuffixes = [
     /\bbuildTypes\s*\.\s*release\s*\.\s*(?:applicationIdSuffix|versionNameSuffix)\b/u,
     /\bbuildTypes\s*\.\s*(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*(?:applicationIdSuffix|versionNameSuffix)\b/u,
@@ -335,14 +347,23 @@ function assertNoAndroidReleaseIdentitySuffix(source: string, file: string): voi
     /\brelease\s*\.\s*(?:applicationIdSuffix|versionNameSuffix)\b/u,
   ];
 
-  if (qualifiedReleaseSuffixes.some((expression) => expression.test(source))) {
+  const qualifiedSuffix = qualifiedReleaseSuffixes.some((expression) => {
+    const global = new RegExp(expression.source, `${expression.flags}g`);
+    return [...source.matchAll(global)].some((match) => {
+      const suffix = /(?:applicationIdSuffix|versionNameSuffix)$/u.exec(match[0])?.[0] ?? '';
+      const offset = (match.index ?? 0) + match[0].lastIndexOf(suffix);
+      return suffix !== '' && code.slice(offset, offset + suffix.length) === suffix;
+    });
+  });
+  if (qualifiedSuffix) {
     throw new Error(
       `Native release preflight does not support applicationIdSuffix or versionNameSuffix in Android release builds: ${file}.`,
     );
   }
 
   for (const releaseBlock of releaseBlocks) {
-    if (/\b(?:applicationIdSuffix|versionNameSuffix)\b/u.test(releaseBlock)) {
+    if (/\b(?:applicationIdSuffix|versionNameSuffix)\b/u
+      .test(maskGradleStrings(releaseBlock))) {
       throw new Error(
         `Native release preflight does not support applicationIdSuffix or versionNameSuffix in Android release builds: ${file}.`,
       );

@@ -18,6 +18,7 @@ import { DOMParser, type Document, type Element } from '@xmldom/xmldom';
 
 import { isNonPublicServiceHostname } from './production-target-readiness.js';
 import {
+  assertIosReleaseProductName,
   assertNativeShellIdentity,
   hasGradleIdentityMutation,
   maskGradleStrings,
@@ -629,6 +630,7 @@ function assertNativePlatformComplete(
   const content = readFileSync(path.join(nativeDirectory, required), 'utf8');
   assertNativeShellIdentity(platform, content, expectedAppId);
   if (platform === 'ios') {
+    assertIosReleaseProductName(content);
     const infoPlist = readIosReleaseInfoPlist(content);
     const infoRelative = path.join('App', infoPlist);
     if (!isNativeFile(nativeDirectory, infoRelative)) {
@@ -703,6 +705,16 @@ function assertAndroidLauncherClasses(nativeDirectory: string, gradle: string): 
       throw new Error('Existing android project launcher class cannot be resolved.');
     }
     if (isAlias) {
+      const targetInRelease = release === undefined ? [] : childElements(release)
+        .filter((activity) => activity.tagName === 'activity');
+      const changedTarget = targetInRelease.some((activity) =>
+        qualifyAndroidActivityName(activity.getAttribute('android:name'), namespace) === qualified
+        && hasAndroidMergerDirectiveDeep(activity));
+      if (changedTarget) {
+        throw new Error(
+          `Existing android launcher alias target ${qualified} is changed by Release.`,
+        );
+      }
       const activities = childElements(application)
         .concat(release === undefined ? [] : childElements(release));
       const declared = activities.some((activity) => {
@@ -711,9 +723,7 @@ function assertAndroidLauncherClasses(nativeDirectory: string, gradle: string): 
           || hasAndroidMergerDirective(activity)) {
           return false;
         }
-        const resolved = activityName.startsWith('.')
-          ? `${namespace}${activityName}`
-          : activityName.includes('.') ? activityName : `${namespace}.${activityName}`;
+        const resolved = qualifyAndroidActivityName(activityName, namespace);
         return resolved === qualified;
       });
       if (!declared) {
@@ -748,6 +758,19 @@ function assertAndroidLauncherClasses(nativeDirectory: string, gradle: string): 
       throw new Error(`Existing android project launcher class ${qualified} is missing.`);
     }
   }
+}
+
+function qualifyAndroidActivityName(
+  name: string | null,
+  namespace: string | undefined,
+): string | undefined {
+  if (name === null) {
+    return undefined;
+  }
+  if (name.startsWith('.')) {
+    return namespace === undefined ? undefined : `${namespace}${name}`;
+  }
+  return name.includes('.') ? name : namespace === undefined ? undefined : `${namespace}.${name}`;
 }
 
 function listNativeFiles(
@@ -1496,7 +1519,46 @@ function readAndroidValueResource(file: string, type: string, name: string): str
     .filter((element) => (element.tagName === type
       || element.tagName === 'item' && element.getAttribute('type') === type)
       && element.getAttribute('name') === name)
-    .map((element) => element.textContent ?? '');
+    .map((element) => type === 'string'
+      ? decodeAndroidStringResource(element.textContent ?? '')
+      : (element.textContent ?? ''));
+}
+
+export function decodeAndroidStringResource(value: string): string {
+  const trimmed = value.trim();
+  const quoted = trimmed.startsWith('"') && trimmed.endsWith('"');
+  const source = quoted ? trimmed.slice(1, -1) : trimmed;
+  let decoded = '';
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index] ?? '';
+    if (character !== '\\') {
+      decoded += character;
+      continue;
+    }
+    const next = source[index + 1];
+    if (next === 'u' && /^[0-9a-fA-F]{4}$/u.test(source.slice(index + 2, index + 6))) {
+      decoded += String.fromCharCode(Number.parseInt(source.slice(index + 2, index + 6), 16));
+      index += 5;
+      continue;
+    }
+    const escapes: Record<string, string> = {
+      n: '\n',
+      r: '\r',
+      t: '\t',
+      '\\': '\\',
+      "'": "'",
+      '"': '"',
+      '@': '@',
+      '?': '?',
+      ' ': ' ',
+    };
+    if (next === undefined || !Object.hasOwn(escapes, next)) {
+      throw new Error('Existing android string resource has an unsupported escape.');
+    }
+    decoded += escapes[next] ?? '';
+    index += 1;
+  }
+  return decoded;
 }
 
 function decodeXmlLabel(value: string): string {
@@ -1767,6 +1829,7 @@ function requireStaticCapacitorConfig(source: string): string {
   );
   const hasComputedKey = /(?:\{|,)[ \t\n]*\[[^\]]*\][ \t\n]*:/u.test(topLevelCode);
   if (configReferences !== 2 || topLevelCode.includes('...') || hasComputedKey
+    || /\\u(?:[0-9a-fA-F]{4}|\{[0-9a-fA-F]+\})/u.test(topLevelCode)
     || !identityKeysAreUnique
     || /^[ \t]*["'](?:appId|appName|webDir)["'][ \t]*:/mu.test(topLevelSource)
     || !/\bexport\s+default\s+config\s*;/u.test(codeOnly)) {
@@ -1801,7 +1864,9 @@ function assertNoCapacitorServerUrl(source: string, code: string, topLevel: stri
       depth -= 1;
       if (depth === 0) {
         const body = source.slice(opening, index + 1);
-        if (body.includes('...') || /(?:^|[,\s{])(?:get|set)\s+\w+\s*\(/u.test(body)
+        if (body.includes('...')
+          || /\\u(?:[0-9a-fA-F]{4}|\{[0-9a-fA-F]+\})/u.test(body)
+          || /(?:^|[,\s{])(?:get|set)\s+\w+\s*\(/u.test(body)
           || /(?:^|[,\s{])\[[^\]]+\]\s*:/u.test(body)) {
           throw new Error('Existing Capacitor config server field has dynamic properties.');
         }

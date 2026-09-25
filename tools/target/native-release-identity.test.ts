@@ -135,6 +135,16 @@ try {
   writeFileSync(groovy, flavoredGradle);
   assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /product flavors/u);
   writeShellFiles(shellRoot);
+  writeFileSync(groovy, `${readFileSync(groovy, 'utf8')}\nprintln("productFlavors")\n`);
+  assert.doesNotThrow(() => assertNativeReleaseIdentity(appliedIdentityInput));
+  writeShellFiles(shellRoot);
+  writeFileSync(groovy, [
+    readFileSync(groovy, 'utf8'),
+    'buildTypes { release { println("applicationIdSuffix") } }',
+    'println("setProperty(\'versionCode\', 99)")',
+  ].join('\n'));
+  assert.doesNotThrow(() => assertNativeReleaseIdentity(appliedIdentityInput));
+  writeShellFiles(shellRoot);
   writeFileSync(
     groovy,
     readFileSync(groovy, 'utf8').replace(
@@ -267,6 +277,22 @@ try {
     required: false,
     shellApp: shellRoot,
   };
+  const customProductName = inheritedIosSource.replace(
+    'CURRENT_PROJECT_VERSION = "$(inherited)";',
+    'CURRENT_PROJECT_VERSION = "$(inherited)"; PRODUCT_NAME = CustomGame;',
+  );
+  writeFileSync(iosProject, customProductName);
+  assert.throws(() => assertNativeReleaseIdentity(iosInput), /PRODUCT_NAME must build App.app/u);
+  const duplicatedBundleId = inheritedIosSource.replace(
+    'PRODUCT_BUNDLE_IDENTIFIER = "$(inherited)";',
+    'PRODUCT_BUNDLE_IDENTIFIER = dev.example.game; PRODUCT_BUNDLE_IDENTIFIER = "$(inherited)";',
+  );
+  writeFileSync(iosProject, duplicatedBundleId);
+  assert.throws(
+    () => assertNativeReleaseIdentity(iosInput),
+    /ambiguous App Release PRODUCT_BUNDLE_IDENTIFIER/u,
+  );
+  writeFileSync(iosProject, inheritedIosSource);
   const iosPlist = join(shellRoot, 'ios/App/App/Info.plist');
   const originalPlist = readFileSync(iosPlist, 'utf8');
   const invalidPlistIdentities: readonly [string, string, string][] = [
@@ -389,7 +415,7 @@ try {
         required: false,
         shellApp: shellRoot,
       }),
-    /cannot resolve Release xcconfig PRODUCT_BUNDLE_IDENTIFIER/u,
+    /Release.*xcconfig/u,
   );
   writeShellFiles(shellRoot);
   const inlineIosSource = readFileSync(iosProject, 'utf8');
