@@ -616,6 +616,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@googleapis/androidpublisher':
+        specifier: 42.0.0
+        version: 42.0.0
       '@gunshi/plugin-completion':
         specifier: ^0.35.1
         version: 0.35.1(@gunshi/plugin-i18n@0.35.1)(cac@6.7.14)
