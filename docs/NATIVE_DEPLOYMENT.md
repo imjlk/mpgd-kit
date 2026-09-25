@@ -42,3 +42,26 @@ values. Existing output files are never overwritten. Planning works without
 local platform toolchains or store access. Later deployment execution must
 recheck the recorded digests against its inputs and must not treat the plan
 as a version reservation.
+
+## Pinned release workspace (builder foundation)
+
+The deployment runner now has a separate preparation layer. Immediately before
+building, it rechecks a plan against the current target/deployment configs,
+records the game's full Git SHA, the root `pnpm-lock.yaml` digest, and the
+selected Kit package version/revision. It clones that exact commit into a
+temporary worktree-like checkout, preserving sibling workspace packages for
+`games/*` repositories. A frozen-lockfile install and the existing
+`mpgd target build` run inside that checkout; the original game and another
+release's output are not touched. Configuration digests are checked before
+and after installation/build, and a build is accepted only when a new
+successful attempt, artifact, and matching release manifest are present.
+
+This is an internal preparation API for the later `deploy run` command, not
+yet a store deployment command. The read-only `deploy plan` file itself does
+not pin a source revision; the revision is captured when execution starts.
+The installed `@mpgd/cli` must contain a clean packaged native builder with
+the recorded Kit revision. Process execution bounds runtime and captured log
+size, redacts configured secrets, kills child process groups on cancellation,
+and removes its temporary checkout when disposed. It is input/output
+isolation, not a sandbox for hostile build scripts. Signed store submissions
+and actual device evidence remain separate acceptance gates.

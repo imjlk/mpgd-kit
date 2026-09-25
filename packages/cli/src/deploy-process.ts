@@ -149,6 +149,10 @@ export async function runReleaseProcess(input: ReleaseProcessInput): Promise<Rel
       if (settled) {
         return;
       }
+      if (stopReason !== undefined) {
+        // The direct child may exit while a build tool it spawned is still alive.
+        killReleaseProcess(child.pid, 'SIGKILL');
+      }
       cleanup();
       const output = renderOutput();
       if (stopReason !== undefined) {

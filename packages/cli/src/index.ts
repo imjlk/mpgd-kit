@@ -102,6 +102,24 @@ export {
 } from './capacitor-shell-starter.js';
 
 export {
+  ReleaseProcessError,
+  runReleaseProcess,
+  type ReleaseProcessInput,
+  type ReleaseProcessResult,
+} from './deploy-process.js';
+
+export {
+  installPinnedReleaseDependencies,
+  pinNativeDeploymentPlan,
+  preparePinnedReleaseWorkspace,
+  runPinnedNativeBuild,
+  withPinnedReleaseWorkspace,
+  type PinnedNativeBuildResult,
+  type PinnedReleaseInput,
+  type PinnedReleaseWorkspace,
+} from './release-workspace.js';
+
+export {
   createBrowserGameplayE2EDriver,
   type BrowserGameplayE2EInspectInput,
   type BrowserGameplayE2EPage,

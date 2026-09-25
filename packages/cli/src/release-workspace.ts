@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
+import { planNativeDeployment, type NativeDeploymentPlan } from './deploy-planning.js';
 import { runReleaseProcess, type ReleaseProcessInput } from './deploy-process.js';
 
 export interface PinnedReleaseInput {
@@ -34,6 +35,50 @@ const sha256Pattern = /^[0-9a-f]{64}$/u;
 const defaultCloneTimeoutMs = 5 * 60_000;
 const defaultInstallTimeoutMs = 15 * 60_000;
 const defaultBuildTimeoutMs = 45 * 60_000;
+
+/** Freeze a read-only deployment plan into the exact inputs used by a release run. */
+export async function pinNativeDeploymentPlan(
+  plan: NativeDeploymentPlan,
+  kit: { readonly packageVersion: string; readonly gitSha: string },
+  options: { readonly environment?: NodeJS.ProcessEnv; readonly signal?: AbortSignal } = {},
+): Promise<PinnedReleaseInput> {
+  const current = planNativeDeployment({
+    game: plan.gameRoot,
+    profile: plan.profile,
+    targets: plan.targets.map((target) => target.target),
+  });
+  if (!sameDeploymentPlan(current, plan)) {
+    throw new Error('Deployment plan differs from the current game configuration.');
+  }
+  const gameRoot = realpathSync(plan.gameRoot);
+  const revision = await runReleaseProcess({
+    command: 'git',
+    args: ['-C', gameRoot, 'rev-parse', 'HEAD'],
+    cwd: gameRoot,
+    environment: options.environment,
+    timeoutMs: 10_000,
+    signal: options.signal,
+  });
+  const sourceRepository = await runReleaseProcess({
+    command: 'git',
+    args: ['-C', gameRoot, 'rev-parse', '--show-toplevel'],
+    cwd: gameRoot,
+    environment: options.environment,
+    timeoutMs: 10_000,
+    signal: options.signal,
+  });
+  const input: PinnedReleaseInput = {
+    gameRoot,
+    gameGitSha: revision.output.trim(),
+    lockfileSha256: sha256(path.join(sourceRepository.output.trim(), 'pnpm-lock.yaml')),
+    targetConfigSha256: plan.targetConfigSha256,
+    deployConfigSha256: plan.deployConfigSha256,
+    kitPackageVersion: kit.packageVersion,
+    kitGitSha: kit.gitSha,
+  };
+  assertPinnedInput(input);
+  return input;
+}
 
 /** Clone the selected game commit, including its monorepo workspace packages. */
 export async function preparePinnedReleaseWorkspace(
@@ -117,6 +162,24 @@ export async function preparePinnedReleaseWorkspace(
   }
 }
 
+/** Ensure failed, cancelled, and successful release runs all remove their checkout. */
+export async function withPinnedReleaseWorkspace<T>(
+  input: PinnedReleaseInput,
+  action: (workspace: PinnedReleaseWorkspace) => Promise<T>,
+  options: {
+    readonly temporaryParent?: string;
+    readonly environment?: NodeJS.ProcessEnv;
+    readonly signal?: AbortSignal;
+  } = {},
+): Promise<T> {
+  const workspace = await preparePinnedReleaseWorkspace(input, options);
+  try {
+    return await action(workspace);
+  } finally {
+    workspace.dispose();
+  }
+}
+
 /** Install only inside the pinned checkout; the package store may be shared. */
 export async function installPinnedReleaseDependencies(
   workspace: PinnedReleaseWorkspace,
@@ -157,7 +220,17 @@ export async function runPinnedNativeBuild(
   const environment: NodeJS.ProcessEnv = {
     ...(input.environment ?? process.env),
     MPGD_NATIVE_BUILD_MODE: input.mode,
+    MPGD_SOURCE_GIT_SHA: workspace.input.gameGitSha,
   };
+  delete environment.MPGD_KIT_PATH;
+  delete environment.MPGD_RUN_IOS_ARCHIVE;
+  delete environment.MPGD_RUN_IOS_SIMULATOR_BUILD;
+  const statusFile = path.join(
+    workspace.gameRoot,
+    'artifacts/native-build-status',
+    `${input.target}.json`,
+  );
+  const previousRunId = existsSync(statusFile) ? readJsonObject(statusFile).runId : undefined;
   const processInput: ReleaseProcessInput = {
     command: 'pnpm',
     args: [
@@ -178,13 +251,9 @@ export async function runPinnedNativeBuild(
   };
   await runReleaseProcess(processInput);
   assertPinnedFiles(workspace.workspaceRoot, workspace.gameRoot, workspace.input);
-  const statusFile = path.join(
-    workspace.gameRoot,
-    'artifacts/native-build-status',
-    `${input.target}.json`,
-  );
   const status = readJsonObject(statusFile);
-  if (status.status !== 'success' || typeof status.runId !== 'string'
+  if (status.target !== input.target || status.status !== 'success'
+    || typeof status.runId !== 'string' || status.runId === previousRunId
     || typeof status.artifact !== 'string') {
     throw new Error('Pinned native build did not record a successful current attempt.');
   }
@@ -192,8 +261,27 @@ export async function runPinnedNativeBuild(
   if (!existsSync(artifact)) {
     throw new Error('Pinned native build artifact is missing.');
   }
+  const canonicalGameRoot = realpathSync(workspace.gameRoot);
+  const canonicalArtifact = realpathSync(artifact);
+  const relativeArtifact = path.relative(canonicalGameRoot, canonicalArtifact);
+  if (relativeArtifact === '..' || relativeArtifact.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relativeArtifact)) {
+    throw new Error('Pinned native build artifact resolves outside its workspace.');
+  }
   const releaseManifest = path.join(workspace.gameRoot, 'artifacts/release-manifest.json');
   const manifest = readJsonObject(releaseManifest);
+  const manifestTargets = manifest.targets;
+  if (typeof manifestTargets !== 'object' || manifestTargets === null
+    || Array.isArray(manifestTargets)) {
+    throw new Error('Pinned native build manifest has no target records.');
+  }
+  const targetManifest = (manifestTargets as Record<string, unknown>)[input.target];
+  if (typeof targetManifest !== 'object' || targetManifest === null
+    || Array.isArray(targetManifest)
+    || (targetManifest as Record<string, unknown>).artifact !== status.artifact
+    || (targetManifest as Record<string, unknown>).profile !== input.profile) {
+    throw new Error('Pinned native build manifest target does not match the current artifact.');
+  }
   if (manifest.gitSha !== workspace.input.gameGitSha
     || manifest.kitGitSha !== workspace.input.kitGitSha) {
     throw new Error('Pinned native build manifest provenance does not match its inputs.');
@@ -211,6 +299,24 @@ function assertPinnedInput(input: PinnedReleaseInput): void {
   }
 }
 
+function sameDeploymentPlan(left: NativeDeploymentPlan, right: NativeDeploymentPlan): boolean {
+  return left.schemaVersion === right.schemaVersion
+    && left.gameRoot === right.gameRoot
+    && left.profile === right.profile
+    && left.buildProfile === right.buildProfile
+    && left.approval === right.approval
+    && left.targetConfigSha256 === right.targetConfigSha256
+    && left.deployConfigSha256 === right.deployConfigSha256
+    && left.targets.length === right.targets.length
+    && left.targets.every((target, index) => {
+      const other = right.targets[index];
+      return other !== undefined && target.target === other.target
+        && target.destination === other.destination
+        && target.appId === other.appId
+        && target.testGroup === other.testGroup;
+    });
+}
+
 function assertPinnedFiles(
   workspaceRoot: string,
   gameRoot: string,
@@ -221,11 +327,15 @@ function assertPinnedFiles(
     [path.join(gameRoot, 'mpgd.targets.json'), input.targetConfigSha256],
     [path.join(gameRoot, 'mpgd.deploy.json'), input.deployConfigSha256],
   ] as const) {
-    const actual = createHash('sha256').update(readFileSync(file)).digest('hex');
+    const actual = sha256(file);
     if (actual !== expected) {
       throw new Error(`Pinned release input differs from its plan: ${path.basename(file)}`);
     }
   }
+}
+
+function sha256(file: string): string {
+  return createHash('sha256').update(readFileSync(file)).digest('hex');
 }
 
 function assertInstalledKitIdentity(workspace: PinnedReleaseWorkspace): void {
@@ -235,6 +345,7 @@ function assertInstalledKitIdentity(workspace: PinnedReleaseWorkspace): void {
   const packageJson = readJsonObject(path.join(packageRoot, 'package.json'));
   const buildInfo = readJsonObject(path.join(packageRoot, 'dist/native-build-info.json'));
   if (packageJson.version !== workspace.input.kitPackageVersion
+    || buildInfo.packageVersion !== workspace.input.kitPackageVersion
     || buildInfo.kitGitSha !== workspace.input.kitGitSha
     || buildInfo.kitDirty !== false) {
     throw new Error('Installed Kit package does not match pinned release identity.');

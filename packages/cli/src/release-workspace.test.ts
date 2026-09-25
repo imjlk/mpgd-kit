@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -14,10 +15,14 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import { planNativeDeployment } from './deploy-planning.js';
 import {
   installPinnedReleaseDependencies,
+  pinNativeDeploymentPlan,
   preparePinnedReleaseWorkspace,
-  type PinnedReleaseInput,
+  runPinnedNativeBuild,
+  withPinnedReleaseWorkspace,
+  type PinnedReleaseWorkspace,
 } from './release-workspace.js';
 
 const fixture = mkdtempSync(path.join(tmpdir(), 'mpgd-release-workspace-test-'));
@@ -43,6 +48,7 @@ try {
   mkdirSync(game, { recursive: true });
   mkdirSync(path.join(repository, 'games/beta'), { recursive: true });
   mkdirSync(path.join(repository, 'packages/shared'), { recursive: true });
+  mkdirSync(path.join(game, 'apps/mobile'), { recursive: true });
   mkdirSync(workspaces);
   writeJson(path.join(repository, 'package.json'), {
     name: 'game-workspace',
@@ -63,14 +69,43 @@ try {
     version: '1.0.0',
     dependencies: { '@fixture/shared': 'workspace:*' },
   });
+  writeJson(path.join(game, 'apps/mobile/package.json'), {
+    name: 'alpha-mobile',
+    private: true,
+  });
   writeJson(path.join(repository, 'games/beta/package.json'), {
     name: 'beta',
     version: '1.0.0',
   });
   writeJson(path.join(game, 'mpgd.targets.json'), {
-    targets: { android: { kind: 'capacitor-android' } },
+    targets: {
+      android: {
+        kind: 'capacitor-android',
+        adapter: 'capacitor',
+        artifact: 'aab',
+        gameApp: '.',
+        shellApp: 'apps/mobile',
+        webDir: 'apps/mobile/www',
+        metadata: { packageId: 'dev.mpgd.alpha' },
+      },
+    },
   });
-  writeJson(path.join(game, 'mpgd.deploy.json'), { schemaVersion: 1 });
+  writeJson(path.join(game, 'mpgd.deploy.json'), {
+    schemaVersion: 1,
+    profiles: {
+      beta: {
+        buildProfile: 'production',
+        approval: 'manual',
+        targets: {
+          android: {
+            destination: 'play-internal',
+            signingCredential: { env: 'MPGD_ANDROID_UPLOAD_KEYSTORE' },
+            submissionCredential: { env: 'MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT' },
+          },
+        },
+      },
+    },
+  });
   run('pnpm', ['install', '--lockfile-only'], repository);
   run('git', ['init', '-q'], repository);
   run('git', ['add', '.'], repository);
@@ -87,15 +122,13 @@ try {
     ],
     repository,
   );
-  const input: PinnedReleaseInput = {
-    gameRoot: game,
-    gameGitSha: run('git', ['rev-parse', 'HEAD'], repository),
-    lockfileSha256: sha256(path.join(repository, 'pnpm-lock.yaml')),
-    targetConfigSha256: sha256(path.join(game, 'mpgd.targets.json')),
-    deployConfigSha256: sha256(path.join(game, 'mpgd.deploy.json')),
-    kitPackageVersion: '0.35.0',
-    kitGitSha: 'a'.repeat(40),
-  };
+  const plan = planNativeDeployment({ game, profile: 'beta' });
+  const input = await pinNativeDeploymentPlan(plan, {
+    packageVersion: '0.35.0',
+    gitSha: 'a'.repeat(40),
+  });
+  assert.equal(input.gameGitSha, run('git', ['rev-parse', 'HEAD'], repository));
+  assert.equal(input.lockfileSha256, sha256(path.join(repository, 'pnpm-lock.yaml')));
   const first = await preparePinnedReleaseWorkspace(input, { temporaryParent: workspaces });
   const second = await preparePinnedReleaseWorkspace(input, { temporaryParent: workspaces });
   assert.notEqual(first.workspaceRoot, second.workspaceRoot);
@@ -106,12 +139,78 @@ try {
   assert.equal(existsSync(path.join(first.workspaceRoot, 'games/beta/package.json')), true);
   writeFileSync(path.join(repository, 'packages/shared/index.js'), 'export const value = 2;\n');
   writeFileSync(path.join(game, 'mpgd.targets.json'), '{"changed":true}\n');
+  await assert.rejects(
+    pinNativeDeploymentPlan(plan, { packageVersion: '0.35.0', gitSha: 'a'.repeat(40) }),
+    /mpgd\.targets\.json|differs from the current/u,
+  );
   assert.equal(
     readFileSync(path.join(first.workspaceRoot, 'packages/shared/index.js'), 'utf8'),
     'export const value = 1;\n',
   );
   assert.equal(sha256(path.join(first.gameRoot, 'mpgd.targets.json')), input.targetConfigSha256);
   await installPinnedReleaseDependencies(first);
+  const cliRoot = path.join(first.gameRoot, 'node_modules/@mpgd/cli');
+  mkdirSync(path.join(cliRoot, 'dist'), { recursive: true });
+  writeJson(path.join(cliRoot, 'package.json'), {
+    name: '@mpgd/cli',
+    version: input.kitPackageVersion,
+    exports: { '.': './dist/index.js' },
+  });
+  writeFileSync(path.join(cliRoot, 'dist/index.js'), 'module.exports = {};\n');
+  writeJson(path.join(cliRoot, 'dist/native-build-info.json'), {
+    packageVersion: input.kitPackageVersion,
+    kitGitSha: input.kitGitSha,
+    kitDirty: false,
+  });
+  const fakeBin = path.join(fixture, 'fake-bin');
+  mkdirSync(fakeBin);
+  const fakePnpm = path.join(fakeBin, 'pnpm');
+  writeFileSync(fakePnpm, `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+if (process.env.MPGD_KIT_PATH || process.env.MPGD_NATIVE_BUILD_MODE !== 'signed-archive'
+  || process.env.MPGD_SOURCE_GIT_SHA !== process.env.MPGD_FAKE_GAME_SHA) process.exit(4);
+if (process.env.MPGD_FAKE_NO_WRITE === '1') process.exit(0);
+const target = process.argv[6];
+const gameRoot = process.cwd();
+const artifact = 'release-output/native/' + target + '/game.aab';
+fs.mkdirSync(path.join(gameRoot, path.dirname(artifact)), { recursive: true });
+fs.writeFileSync(path.join(gameRoot, artifact), 'signed test fixture');
+const status = path.join(gameRoot, 'artifacts/native-build-status', target + '.json');
+fs.mkdirSync(path.dirname(status), { recursive: true });
+fs.writeFileSync(status, JSON.stringify({ target, status: 'success', runId: 'current-run', artifact }));
+const manifest = path.join(gameRoot, 'artifacts/release-manifest.json');
+fs.writeFileSync(manifest, JSON.stringify({
+  gitSha: process.env.MPGD_FAKE_GAME_SHA,
+  kitGitSha: process.env.MPGD_FAKE_KIT_SHA,
+  targets: { [target]: { artifact, profile: 'production' } },
+}));
+`);
+  chmodSync(fakePnpm, 0o755);
+  const buildEnvironment = {
+    ...process.env,
+    PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}`,
+    MPGD_KIT_PATH: '/invalid/checkout',
+    MPGD_FAKE_GAME_SHA: input.gameGitSha,
+    MPGD_FAKE_KIT_SHA: input.kitGitSha,
+  };
+  const built = await runPinnedNativeBuild(first, {
+    target: 'android',
+    profile: 'production',
+    mode: 'signed-archive',
+    environment: buildEnvironment,
+  });
+  assert.equal(built.runId, 'current-run');
+  assert.equal(existsSync(built.artifact), true);
+  await assert.rejects(
+    runPinnedNativeBuild(first, {
+      target: 'android',
+      profile: 'production',
+      mode: 'signed-archive',
+      environment: { ...buildEnvironment, MPGD_FAKE_NO_WRITE: '1' },
+    }),
+    /current attempt/u,
+  );
   assert.equal(
     realpathSync(path.join(first.gameRoot, 'node_modules/@fixture/shared')),
     realpathSync(path.join(first.workspaceRoot, 'packages/shared')),
@@ -123,6 +222,16 @@ try {
   assert.equal(existsSync(first.workspaceRoot), false);
   assert.equal(existsSync(second.workspaceRoot), true);
   second.dispose();
+  assert.deepEqual(readdirSync(workspaces), []);
+
+  const failBuild = async (workspace: PinnedReleaseWorkspace): Promise<void> => {
+    assert.equal(existsSync(workspace.gameRoot), true);
+    throw new Error('simulated build failure');
+  };
+  const failedWorkspace = withPinnedReleaseWorkspace(input, failBuild, {
+    temporaryParent: workspaces,
+  });
+  await assert.rejects(failedWorkspace, /simulated build failure/u);
   assert.deepEqual(readdirSync(workspaces), []);
 
   await assert.rejects(
