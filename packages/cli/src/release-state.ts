@@ -110,7 +110,7 @@ export async function reserveNativeRelease(
     command: 'git',
     args: ['-C', input.gameRoot, 'cat-file', '-t', input.sourceGitSha],
     cwd: input.gameRoot,
-    environment: input.environment,
+    environment: isolatedGitEnvironment(input.environment ?? process.env),
     timeoutMs: 10_000,
     signal: input.signal,
   });
@@ -274,7 +274,7 @@ async function withStateSession<T>(
   input: { readonly gameRoot: string; readonly environment?: NodeJS.ProcessEnv; readonly signal?: AbortSignal },
   action: (session: StateSession) => Promise<T>,
 ): Promise<T> {
-  const environment = input.environment ?? process.env;
+  const environment = isolatedGitEnvironment(input.environment ?? process.env);
   // Keep the origin URL in memory: the redacted process runner must never
   // return a modified URL when its embedded auth matches an environment secret.
   let remoteUrl: string;
@@ -425,6 +425,21 @@ function assertReleaseKey(key: string): void {
 
 function sha256(file: string): string {
   return createHash('sha256').update(readFileSync(file)).digest('hex');
+}
+
+function isolatedGitEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const environment = { ...source };
+  for (const name of [
+    'GIT_DIR',
+    'GIT_WORK_TREE',
+    'GIT_INDEX_FILE',
+    'GIT_COMMON_DIR',
+    'GIT_OBJECT_DIRECTORY',
+    'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+  ]) {
+    delete environment[name];
+  }
+  return environment;
 }
 
 function git(session: StateSession, args: readonly string[]): Promise<{ readonly output: string }> {

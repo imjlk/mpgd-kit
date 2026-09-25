@@ -175,7 +175,11 @@ process.exit(result.status ?? 1);
       releaseKey: 'beta-04',
       sourceGitSha: nextGameSha,
       initialLedger: undefined,
-      environment: { ...fakeEnvironment, MPGD_FAKE_PUSH_MODE: 'lost' },
+      environment: {
+        ...fakeEnvironment,
+        MPGD_FAKE_PUSH_MODE: 'lost',
+        GIT_DIR: path.join(fixture, 'not-a-git-repository'),
+      },
     });
     assert.equal(lostResponse.plan.targets.android?.versionCode, 44);
     const retriedLost = await reserveNativeRelease({
