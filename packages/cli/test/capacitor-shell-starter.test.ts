@@ -176,6 +176,10 @@ try {
     readFileSync(path.join(root, '.env.production'), 'utf8'),
     'VITE_MPGD_GAME_SERVICES_URL=https://api.example.com\n',
   );
+  const localProductionEnv = path.join(root, '.env.production.local');
+  writeFileSync(localProductionEnv, 'VITE_MPGD_GAME_SERVICES_URL=https://other.example.com\n');
+  assert.throws(() => planCapacitorShellStarter(options), /Production-local Game Services URL/u);
+  rmSync(localProductionEnv);
 
   const repeat = planCapacitorShellStarter(options);
   assert.deepEqual(repeat.changedFiles, [smokePath]);
@@ -304,6 +308,18 @@ try {
   );
   writeFileSync(smokeInfo, invalidInteger);
   assert.throws(() => planCapacitorShellStarter(options), /unsupported value node/u);
+  const paddedInteger = originalSmoke.replace(
+    '</dict></plist>',
+    '<key>Extra</key><integer> 1 </integer></dict></plist>',
+  );
+  writeFileSync(smokeInfo, paddedInteger);
+  assert.throws(() => planCapacitorShellStarter(options), /unsupported value node/u);
+  const paddedBoolean = originalSmoke.replace(
+    '</dict></plist>',
+    '<key>Extra</key><true> </true></dict></plist>',
+  );
+  writeFileSync(smokeInfo, paddedBoolean);
+  assert.throws(() => planCapacitorShellStarter(options), /unsupported value node/u);
   writeFileSync(smokeInfo, originalSmoke);
   renameSync(smokeInfo, `${smokeInfo}.saved`);
   const smokeRepair = planCapacitorShellStarter(options);
@@ -353,6 +369,16 @@ try {
   const sceneDelegate = path.join(root, 'apps/mobile-capacitor/ios/App/App/SceneDelegate.swift');
   renameSync(sceneDelegate, `${sceneDelegate}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /referenced app file/u);
+  const appOnlyProject = readFileSync(iosProjectFile, 'utf8').replace(
+    '/* SceneDelegate.swift in Sources */',
+    '',
+  );
+  writeFileSync(iosProjectFile, appOnlyProject);
+  assert.throws(
+    () => planCapacitorShellStarter(options),
+    /simulator Info.plist references SceneDelegate/u,
+  );
+  writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
   renameSync(`${sceneDelegate}.saved`, sceneDelegate);
   const androidWrapper = path.join(root, 'apps/mobile-capacitor/android/gradlew');
   renameSync(androidWrapper, `${androidWrapper}.saved`);
@@ -377,6 +403,9 @@ try {
   assert.throws(() => planCapacitorShellStarter(options), /applied Gradle script/u);
   writeFileSync(androidRootBuild, 'apply from: dynamicScript()');
   assert.throws(() => planCapacitorShellStarter(options), /unsupported Gradle apply expression/u);
+  const rootCallback = 'project(":app") { afterEvaluate { android.defaultConfig.versionName = "9.0.0" } }';
+  writeFileSync(androidRootBuild, rootCallback);
+  assert.throws(() => planCapacitorShellStarter(options), /root Gradle app callbacks/u);
   writeFileSync(androidRootBuild, 'apply from: "variables.gradle"');
   const capacitorGradle = path.join(
     root,
@@ -390,6 +419,9 @@ try {
     () => planCapacitorShellStarter(options),
     /applied Gradle script changes identity/u,
   );
+  const readOnlyGradle = 'println(android.defaultConfig.versionName)\nprintln("versionName")';
+  writeFileSync(capacitorGradle, readOnlyGradle);
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   writeFileSync(
     capacitorGradle,
     'apply from: "../capacitor-cordova-android-plugins/cordova.variables.gradle"',
@@ -456,6 +488,13 @@ try {
     '</application></manifest>',
   ].join(''));
   assert.throws(() => planCapacitorShellStarter(options), /Release launcher label differs/u);
+  writeFileSync(releaseManifest, [
+    androidManifestOpen.replace(' package=',
+      ' xmlns:tools="http://schemas.android.com/tools" package='),
+    '<application><activity android:name=".MainActivity" tools:node="remove"/>',
+    '</application></manifest>',
+  ].join(''));
+  assert.throws(() => planCapacitorShellStarter(options), /changes a launcher node/u);
   writeFileSync(releaseManifest, [
     androidManifestOpen,
     '<uses-permission android:name="android.permission.CAMERA"/>',
@@ -639,6 +678,11 @@ try {
   writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');
   writeFileSync(androidProjectFile, [
     'applicationId "dev.example.puzzle"',
+    'productFlavors { demo {} }',
+  ].join('\n'));
+  assert.throws(() => planCapacitorShellStarter(options), /product flavors are unsupported/u);
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
     'buildTypes { debug { applicationIdSuffix ".debug" } }',
   ].join('\n'));
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
@@ -693,6 +737,13 @@ try {
   writeFileSync(configFile, originalConfig);
   writeFileSync(configFile, originalConfig.replace("webDir: 'www'", "webDir: 'other-www'"));
   assert.throws(() => planCapacitorShellStarter(options), /webDir differs/u);
+  writeFileSync(configFile, originalConfig);
+  const remoteConfig = originalConfig.replace(
+    "server: { androidScheme: 'https' }",
+    "server: { url: 'https://stale.example', androidScheme: 'https' }",
+  );
+  writeFileSync(configFile, remoteConfig);
+  assert.throws(() => planCapacitorShellStarter(options), /server.url is unsupported/u);
   writeFileSync(configFile, originalConfig);
   writeFileSync(
     configFile,

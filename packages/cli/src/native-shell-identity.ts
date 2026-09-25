@@ -88,6 +88,33 @@ export function stripGradleComments(source: string): string {
   return output;
 }
 
+export function hasGradleIdentityMutation(source: string): boolean {
+  const clean = stripGradleComments(source);
+  let masked = '';
+  let quote: '"' | "'" | undefined;
+  for (let index = 0; index < clean.length; index += 1) {
+    const character = clean[index] ?? '';
+    if (quote !== undefined) {
+      if (character === '\\' && index + 1 < clean.length) {
+        masked += '  ';
+        index += 1;
+      } else if (character === quote) {
+        masked += character;
+        quote = undefined;
+      } else {
+        masked += character === '\n' ? '\n' : ' ';
+      }
+    } else if (character === '"' || character === "'") {
+      quote = character;
+      masked += character;
+    } else {
+      masked += character;
+    }
+  }
+  return /\b(?:applicationId|applicationIdSuffix|versionCode|versionName|versionNameSuffix)\s*(?:\+?=|["'\d]|\.set\s*\()/u
+    .test(masked);
+}
+
 function assertIosAppIdentity(source: string, expectedAppId: string): void {
   const listId = readIosAppConfigurationList(source);
   let actual = readIosReleaseBundleId(source, listId);

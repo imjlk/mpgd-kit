@@ -111,7 +111,36 @@ try {
     () => assertNativeReleaseIdentity(appliedIdentityInput),
     /identity override in applied Gradle script/u,
   );
+  const readOnlyGradle = 'println(android.defaultConfig.versionName)\nprintln("versionName")';
+  writeFileSync(appliedIdentity, readOnlyGradle);
+  assert.doesNotThrow(() => assertNativeReleaseIdentity(appliedIdentityInput));
   rmSync(appliedIdentity);
+  writeShellFiles(shellRoot);
+  const flavoredGradle = `${readFileSync(groovy, 'utf8')}\nproductFlavors { demo {} }\n`;
+  writeFileSync(groovy, flavoredGradle);
+  assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /product flavors/u);
+  writeShellFiles(shellRoot);
+  writeFileSync(
+    groovy,
+    readFileSync(groovy, 'utf8').replace(
+      'applicationId "dev.example.game"',
+      'applicationId "dev.example.game" + ".beta"',
+    ),
+  );
+  assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /could not find/u);
+  writeShellFiles(shellRoot);
+  const originalGradle = readFileSync(groovy, 'utf8');
+  const incrementedCode = originalGradle.replace('versionCode 42', 'versionCode 42 + 1');
+  writeFileSync(groovy, incrementedCode);
+  assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /could not find/u);
+  writeShellFiles(shellRoot);
+  const androidRootBuild = join(shellRoot, 'android/build.gradle');
+  const rootCallback = 'project(":app") { afterEvaluate { android.defaultConfig.versionName = "9.0.0" } }';
+  writeFileSync(androidRootBuild, rootCallback);
+  assert.throws(
+    () => assertNativeReleaseIdentity(appliedIdentityInput),
+    /root Gradle app callbacks/u,
+  );
   writeShellFiles(shellRoot);
 
   writeAndroidWithCommentedIdentity(shellRoot);
@@ -474,6 +503,7 @@ try {
 
 function writeShellFiles(root: string): void {
   const android = join(root, 'android/app/build.gradle');
+  const androidRoot = join(root, 'android/build.gradle');
   const ios = join(root, 'ios/App/App.xcodeproj/project.pbxproj');
   mkdirSync(join(root, 'android/app'), { recursive: true });
   mkdirSync(join(root, 'ios/App/App.xcodeproj'), { recursive: true });
@@ -481,6 +511,7 @@ function writeShellFiles(root: string): void {
     android,
     `defaultConfig {\n  applicationId "dev.example.game"\n  versionCode 42\n  versionName "1.4.0"\n}\n`,
   );
+  writeFileSync(androidRoot, '// Standard root Gradle build.\n');
   writeFileSync(
     ios,
     `001 /* App */ = {\n  isa = PBXNativeTarget;\n  buildConfigurationList = 002 /* Build configuration list for PBXNativeTarget \"App\" */;\n  name = \"App\";\n};\n\n002 /* Build configuration list for PBXNativeTarget \"App\" */ = {\n  isa = XCConfigurationList;\n  buildConfigurations = (\n    003 /* Debug */,\n    004 /* Release */,\n  );\n};\n\n003 /* Debug */ = {\n  isa = XCBuildConfiguration;\n  buildSettings = {\n    PRODUCT_BUNDLE_IDENTIFIER = dev.example.game.debug;\n    MARKETING_VERSION = 1.4.0-debug;\n    CURRENT_PROJECT_VERSION = 7;\n  };\n};\n\n004 /* Release */ = {\n  isa = XCBuildConfiguration;\n  buildSettings = {\n    PRODUCT_BUNDLE_IDENTIFIER = dev.example.game;\n    MARKETING_VERSION = 1.4.0;\n    CURRENT_PROJECT_VERSION = 42;\n  };\n};\n\n005 /* ShareExtension */ = {\n  isa = PBXNativeTarget;\n  buildConfigurationList = 006 /* Build configuration list for PBXNativeTarget \"ShareExtension\" */;\n  name = ShareExtension;\n};\n\n006 /* Build configuration list for PBXNativeTarget \"ShareExtension\" */ = {\n  isa = XCConfigurationList;\n  buildConfigurations = (\n    007 /* Release */,\n  );\n};\n\n007 /* Release */ = {\n  isa = XCBuildConfiguration;\n  buildSettings = {\n    PRODUCT_BUNDLE_IDENTIFIER = dev.example.game.share;\n    MARKETING_VERSION = 9.9.9;\n    CURRENT_PROJECT_VERSION = 99;\n  };\n};\n`,

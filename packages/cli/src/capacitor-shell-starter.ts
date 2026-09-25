@@ -19,6 +19,7 @@ import { DOMParser, type Document, type Element } from '@xmldom/xmldom';
 import { isNonPublicServiceHostname } from './production-target-readiness.js';
 import {
   assertNativeShellIdentity,
+  hasGradleIdentityMutation,
   readIosReleaseInfoPlist,
   stripGradleComments,
 } from './native-shell-identity.js';
@@ -330,7 +331,20 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
   ];
   if (requestedBackendUrl !== undefined) {
     safeDestination(gameRoot, '.env.production');
+    safeDestination(gameRoot, '.env.production.local');
     const validatedBackendUrl = normalizeBackendUrl(requestedBackendUrl);
+    const localEnv = readExisting(path.join(gameRoot, '.env.production.local')) ?? '';
+    const localDefinitions = [...localEnv.matchAll(
+      /^[ \t]*(?:export[ \t]+)?VITE_MPGD_GAME_SERVICES_URL[ \t]*=[ \t]*(.*)$/gmu,
+    )];
+    if (localDefinitions.length > 1) {
+      throw new Error('Duplicate production-local Game Services URLs are not allowed.');
+    }
+    if (localDefinitions[0]?.[1] !== undefined
+      && normalizeBackendUrl(readDotenvValue(localDefinitions[0][1] ?? ''))
+        !== validatedBackendUrl) {
+      throw new Error('Production-local Game Services URL conflicts with the requested shell.');
+    }
     const envFile = path.join(gameRoot, '.env.production');
     const current = readExisting(envFile) ?? '';
     const definitions = [...current.matchAll(
@@ -538,6 +552,13 @@ function assertNativePlatformComplete(
       ['settings.gradle', 'settings.gradle.kts'],
       platform,
     );
+    const rootSource = stripGradleComments(
+      readFileSync(path.join(nativeDirectory, rootBuild), 'utf8'),
+    );
+    if (/\b(?:afterEvaluate|projectsEvaluated)\b/u.test(rootSource)
+      && /\b(?:project|subprojects|allprojects|android)\b/u.test(rootSource)) {
+      throw new Error('Existing android project has unsupported root Gradle app callbacks.');
+    }
     const visited = new Set<string>();
     for (const script of [rootBuild, settings, required]) {
       assertAppliedGradleScripts(nativeDirectory, script, visited);
@@ -547,8 +568,7 @@ function assertNativePlatformComplete(
         continue;
       }
       const source = stripGradleComments(readFileSync(path.join(nativeDirectory, script), 'utf8'));
-      if (/\b(?:applicationId|applicationIdSuffix|versionCode|versionName|versionNameSuffix)\b/u
-        .test(source)) {
+      if (hasGradleIdentityMutation(source)) {
         throw new Error(
           `Existing android project applied Gradle script changes identity: ${script}`,
         );
@@ -586,6 +606,9 @@ function assertNativePlatformComplete(
       throw new Error('Existing ios project Release Info.plist is missing or unsafe.');
     }
     assertReferencedIosFiles(nativeDirectory, content, infoRelative);
+    if (!isNativeFile(nativeDirectory, 'App/App/SceneDelegate.swift')) {
+      throw new Error('Existing ios project simulator Info.plist references SceneDelegate.swift.');
+    }
     assertNativeDisplayName(nativeDirectory, platform, expectedDisplayName, infoRelative);
     const smokeRelative = 'App/App/Info-Smoke.plist';
     if (existsSync(path.join(nativeDirectory, smokeRelative))) {
@@ -598,6 +621,9 @@ function assertNativePlatformComplete(
       );
     }
   } else {
+    if (/\bproductFlavors\b/u.test(stripGradleComments(content))) {
+      throw new Error('Existing android project product flavors are unsupported by the builder.');
+    }
     assertAndroidManifestResources(nativeDirectory);
     assertNativeDisplayName(nativeDirectory, platform, expectedDisplayName);
     assertAndroidLauncherClasses(nativeDirectory, content);
@@ -816,7 +842,7 @@ function assertPlistValue(value: Element, label: string): void {
     return;
   }
   if (childElements(value).length === 0) {
-    const text = value.textContent?.trim() ?? '';
+    const text = value.textContent ?? '';
     if (value.tagName === 'string') {
       return;
     }
@@ -1039,6 +1065,9 @@ function assertNativeDisplayName(
     if (existsSync(overlayFile)) {
       const release = readAndroidApplication(overlayFile, false);
       if (release !== undefined) {
+        if (hasAndroidMergerDirective(release)) {
+          throw new Error('Existing android Release manifest changes the application node.');
+        }
         const releaseLabel = release.getAttribute('android:label');
         if (releaseLabel !== null
           && resolveAndroidLabel(nativeDirectory, releaseLabel) !== expectedDisplayName) {
@@ -1054,6 +1083,10 @@ function assertNativeDisplayName(
           }
           const sameLauncher = launcherNames.has(activity.getAttribute('android:name'));
           const activityLabel = activity.getAttribute('android:label');
+          if ((sameLauncher || releaseLaunchers.includes(activity))
+            && hasAndroidMergerDirective(activity)) {
+            throw new Error('Existing android Release manifest changes a launcher node.');
+          }
           if ((sameLauncher || releaseLaunchers.includes(activity)) && activityLabel !== null
             && resolveAndroidLabel(nativeDirectory, activityLabel) !== expectedDisplayName) {
             throw new Error(
@@ -1064,6 +1097,11 @@ function assertNativeDisplayName(
       }
     }
   }
+}
+
+function hasAndroidMergerDirective(element: Element): boolean {
+  return ['tools:node', 'tools:remove', 'tools:replace']
+    .some((attribute) => element.hasAttribute(attribute));
 }
 
 function readAndroidApplication(file: string, required = true): Element | undefined {
@@ -1399,7 +1437,39 @@ function requireStaticCapacitorConfig(source: string): string {
     || !/\bexport\s+default\s+config\s*;/u.test(codeOnly)) {
     throw new Error('Existing Capacitor config has ambiguous dynamic syntax.');
   }
+  assertNoCapacitorServerUrl(withoutComments, codeOnly, topLevelCode);
   return topLevelSource;
+}
+
+function assertNoCapacitorServerUrl(source: string, code: string, topLevel: string): void {
+  if (/^[ \t]*["']server["']\s*:/mu.test(source)) {
+    throw new Error('Existing Capacitor config server field is ambiguous.');
+  }
+  const server = /\bserver\s*:/u.exec(topLevel);
+  if (server?.index === undefined) {
+    return;
+  }
+  const afterColon = server.index + server[0].length;
+  const opening = code.indexOf('{', afterColon);
+  if (opening < 0 || code.slice(afterColon, opening).trim() !== '') {
+    throw new Error('Existing Capacitor config server field is not a static object.');
+  }
+  let depth = 0;
+  for (let index = opening; index < code.length; index += 1) {
+    if (code[index] === '{') {
+      depth += 1;
+    } else if (code[index] === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        const body = source.slice(opening, index + 1);
+        if (/(?:^|[,\s{])["']?url["']?\s*:/u.test(body)) {
+          throw new Error('Existing Capacitor config server.url is unsupported.');
+        }
+        return;
+      }
+    }
+  }
+  throw new Error('Existing Capacitor config server field is incomplete.');
 }
 
 function maskNestedConfig(source: string, code: string, opening: number): string {

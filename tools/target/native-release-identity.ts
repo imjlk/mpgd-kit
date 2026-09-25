@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { isMpgdFinalSemVer } from '@mpgd/target-config';
+import { hasGradleIdentityMutation } from '../../packages/cli/src/native-shell-identity.js';
 
 import type { TargetReleaseMetadata } from './schemas';
 
@@ -114,10 +115,17 @@ function resolveExpectedNativeIdentity(
 function assertAndroidIdentity(file: string, expected: AndroidIdentity): void {
   const source = stripComments(readRequiredFile(file, 'Android Gradle configuration'));
 
+  if (/\bproductFlavors\b/u.test(source)) {
+    throw new Error('Native release preflight does not support Android product flavors.');
+  }
   assertNoAndroidReleaseIdentitySuffix(source, file);
-  assertSetting(source, /\bapplicationId\s*(?:=\s*)?["']([^"']+)["']/u, expected.packageId, file);
-  assertSetting(source, /\bversionCode\s*(?:=\s*)?(\d+)/u, expected.versionCode, file);
-  assertSetting(source, /\bversionName\s*(?:=\s*)?["']([^"']+)["']/u, expected.versionName, file);
+  const end = '(?=\\s*(?:;|\\r?\\n|\\}|$))';
+  const appIdPattern = new RegExp(`\\bapplicationId\\s*(?:=\\s*)?["']([^"']+)["']${end}`, 'u');
+  const codePattern = new RegExp(`\\bversionCode\\s*(?:=\\s*)?(\\d+)${end}`, 'u');
+  const namePattern = new RegExp(`\\bversionName\\s*(?:=\\s*)?["']([^"']+)["']${end}`, 'u');
+  assertSetting(source, appIdPattern, expected.packageId, file);
+  assertSetting(source, codePattern, expected.versionCode, file);
+  assertSetting(source, namePattern, expected.versionName, file);
 }
 
 function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): void {
@@ -128,9 +136,7 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
     }
     visited.add(file);
     const source = stripComments(readRequiredFile(file, 'applied Android Gradle script'));
-    if (file !== appBuild
-      && /\b(?:applicationId|applicationIdSuffix|versionCode|versionName|versionNameSuffix)\b/u
-        .test(source)) {
+    if (file !== appBuild && hasGradleIdentityMutation(source)) {
       throw new Error(
         `Native release preflight found identity override in applied Gradle script: ${file}.`,
       );
@@ -164,6 +170,18 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
     }
   };
   inspect(appBuild);
+  const rootFiles = ['build.gradle', 'build.gradle.kts']
+    .map((name) => join(androidRoot, name)).filter((file) => existsSync(file));
+  if (rootFiles.length !== 1) {
+    throw new Error('Native release preflight requires one Android root Gradle build file.');
+  }
+  const rootFile = rootFiles[0] ?? '';
+  const rootSource = stripComments(readRequiredFile(rootFile, 'Android root Gradle build file'));
+  if (/\b(?:afterEvaluate|projectsEvaluated)\b/u.test(rootSource)
+    && /\b(?:project|subprojects|allprojects|android)\b/u.test(rootSource)) {
+    throw new Error('Native release preflight cannot resolve root Gradle app callbacks.');
+  }
+  inspect(rootFile);
 }
 
 function assertIosIdentity(file: string, expected: IosIdentity): void {
