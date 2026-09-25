@@ -44,7 +44,13 @@ try {
     readNativeBuildAttempt(root, 'android')?.artifact,
     'release-output/native/android/three.aab',
   );
-  assert.throws(() => beginNativeBuildAttempt(root, '../android'), /name is invalid/u);
+  assert.equal(readNativeBuildAttempt(root, '3d-android'), undefined);
+  const numeric = beginNativeBuildAttempt(root, '3d-android');
+  numeric.complete('release-output/native/3d-android/one.aab');
+  assert.throws(
+    () => beginNativeBuildAttempt(root, '../android'),
+    /Invalid deployment target name/u,
+  );
   console.info('Native build attempt invalidation passed.');
 } finally {
   rmSync(root, { recursive: true, force: true });

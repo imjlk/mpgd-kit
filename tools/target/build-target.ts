@@ -444,6 +444,10 @@ try {
                 env.MPGD_TARGET_VERSION_NAME,
                 'MPGD_TARGET_VERSION_NAME',
               ),
+              expectedSignerSha256: requireString(
+                env.MPGD_ANDROID_UPLOAD_CERT_SHA256,
+                'MPGD_ANDROID_UPLOAD_CERT_SHA256',
+              ),
               ...(env.MPGD_BUNDLETOOL_JAR === undefined
                 ? {} : { bundletoolJar: env.MPGD_BUNDLETOOL_JAR }),
             });

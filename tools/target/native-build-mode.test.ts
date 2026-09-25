@@ -43,13 +43,19 @@ assert.deepEqual(
 assert.equal(select('ios', 'production', {
   MPGD_NATIVE_BUILD_MODE: 'signed-archive',
 }).submissionCandidate, false);
+assert.equal(select('android', 'staging', {
+  MPGD_NATIVE_BUILD_MODE: 'signed-archive',
+}).submissionCandidate, false);
+assert.equal(select('ios', 'staging', {
+  MPGD_NATIVE_BUILD_MODE: 'store-export',
+}).submissionCandidate, false);
 assert.throws(() => select('ios', 'production'), /explicit MPGD_NATIVE_BUILD_MODE/u);
 assert.throws(
   () =>
     select('android', 'production', {
       MPGD_NATIVE_BUILD_MODE: 'sync',
     }),
-  /signed archive/u,
+  /not portable/u,
 );
 assert.throws(
   () =>
@@ -57,6 +63,13 @@ assert.throws(
       MPGD_NATIVE_BUILD_MODE: 'unsigned-archive',
     }),
   /signed archive/u,
+);
+assert.throws(
+  () =>
+    select('android', 'staging', {
+      MPGD_NATIVE_BUILD_MODE: 'sync',
+    }),
+  /not portable/u,
 );
 assert.throws(
   () =>

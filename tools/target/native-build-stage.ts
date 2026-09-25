@@ -56,10 +56,15 @@ export function createNativeShellStage(input: {
       filter(source) {
         const relative = path.relative(sourceShell, source);
         const segments = relative.split(path.sep);
-        return !segments.includes('.gradle')
-          && !segments.includes('DerivedData')
-          && !segments.includes('Pods')
-          && !segments.includes('build');
+        if (segments.some((segment) =>
+          ['.gradle', 'DerivedData', 'Pods', 'build'].includes(segment))) {
+          return false;
+        }
+        if (relative !== '' && lstatSync(source).isSymbolicLink()
+          && segments[0] !== 'node_modules') {
+          throw new Error(`Native shell symlink is unsupported in mutable project inputs: ${relative}.`);
+        }
+        return true;
       },
     });
     return {

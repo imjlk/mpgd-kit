@@ -24,6 +24,7 @@ export function inspectSignedAndroidBundle(input: {
   readonly expectedPackageId: string;
   readonly expectedVersionCode: string;
   readonly expectedVersionName: string;
+  readonly expectedSignerSha256: string;
   readonly bundletoolJar?: string;
   readonly runner?: NativeInspectionCommandRunner;
 }): AndroidBundleIdentity {
@@ -39,6 +40,25 @@ export function inspectSignedAndroidBundle(input: {
   if (verification.status !== 0 || !/\bjar verified\./u.test(signingOutput)
     || /jar is unsigned|contains unsigned entries|has expired/iu.test(signingOutput)) {
     throw new Error('Android app bundle is not verifiably signed for upload.');
+  }
+  const expectedSigner = input.expectedSignerSha256.replace(/:/gu, '').toUpperCase();
+  if (!/^[A-F0-9]{64}$/u.test(expectedSigner)) {
+    throw new Error(
+      'Expected Android upload certificate SHA-256 fingerprint is missing or invalid.',
+    );
+  }
+  const certificate = runner.run('keytool', [
+    '-J-Duser.language=en',
+    '-printcert',
+    '-jarfile',
+    input.bundle,
+  ]);
+  const signer = /\bSigner #1:/u.test(certificate.stdout)
+    ? /\bSHA256:\s*((?:[A-Fa-f0-9]{2}:){31}[A-Fa-f0-9]{2})/u.exec(certificate.stdout)?.[1]
+    : undefined;
+  if (certificate.status !== 0 || /\bSigner #2:/u.test(certificate.stdout)
+    || signer?.replace(/:/gu, '').toUpperCase() !== expectedSigner) {
+    throw new Error('Android app bundle signer does not match the expected upload certificate.');
   }
 
   const attributes = [
@@ -83,6 +103,15 @@ export function inspectSignedAndroidBundle(input: {
   const server = (parsed as Record<string, unknown>).server;
   if (typeof server === 'object' && server !== null && 'url' in server) {
     throw new Error('Android bundle retains a live-reload bridge configuration.');
+  }
+  const android = (parsed as Record<string, unknown>).android;
+  if (android !== undefined && (typeof android !== 'object' || android === null
+    || Array.isArray(android))) {
+    throw new Error('Android bundle Capacitor android configuration is malformed.');
+  }
+  if (android !== undefined && 'webContentsDebuggingEnabled' in android
+    && android.webContentsDebuggingEnabled !== false) {
+    throw new Error('Android bundle enables WebView debugging.');
   }
 
   return { ...observed, signed: true };

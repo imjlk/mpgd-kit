@@ -10,10 +10,16 @@ on:
         options:
           - staging
           - production
-      archive:
-        type: boolean
+      mode:
+        type: choice
         required: true
-        default: false
+        default: signed-archive
+        options:
+          - sync
+          - simulator
+          - unsigned-archive
+          - signed-archive
+          - store-export
 
 permissions:
   contents: read
@@ -43,7 +49,8 @@ jobs:
       - run: pnpm smoke:adapter-effective-config
       - run: pnpm build:target ios ${{ inputs.profile }}
         env:
-          MPGD_RUN_IOS_ARCHIVE: ${{ inputs.archive && '1' || '0' }}
+          MPGD_NATIVE_BUILD_MODE: ${{ inputs.mode }}
+          MPGD_IOS_TEAM_ID: ${{ secrets.MPGD_IOS_TEAM_ID }}
       - run: pnpm smoke:target ios
 
       - uses: actions/upload-artifact@v6

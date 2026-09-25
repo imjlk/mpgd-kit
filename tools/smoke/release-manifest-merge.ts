@@ -83,11 +83,11 @@ try {
 
   const nativeTarget = matchingManifest.targets['web-preview'];
   assert.ok(nativeTarget);
-  const withNativeDelivery = (delivery: ReleaseNativeDelivery) =>
+  const withNativeDelivery = (delivery: ReleaseNativeDelivery, profile = 'production') =>
     assertReleaseManifest({
       ...matchingManifest,
       targets: {
-        [delivery.platform]: { ...nativeTarget, nativeDelivery: delivery },
+        [delivery.platform]: { ...nativeTarget, profile, nativeDelivery: delivery },
       },
     });
   assert.equal(withNativeDelivery({
@@ -102,6 +102,25 @@ try {
     signed: true,
     submissionCandidate: true,
   }).targets.ios?.nativeDelivery?.submissionCandidate, true);
+  assert.equal(withNativeDelivery({
+    platform: 'android',
+    mode: 'signed-archive',
+    signed: true,
+    submissionCandidate: false,
+  }, 'staging').targets.android?.nativeDelivery?.submissionCandidate, false);
+  assert.throws(
+    () =>
+      withNativeDelivery(
+        {
+          platform: 'ios',
+          mode: 'store-export',
+          signed: true,
+          submissionCandidate: true,
+        },
+        'staging',
+      ),
+    /native delivery state is inconsistent/u,
+  );
   assert.throws(
     () =>
       withNativeDelivery({
@@ -121,6 +140,19 @@ try {
         submissionCandidate: false,
       }),
     /production native delivery is unsigned/u,
+  );
+  assert.throws(
+    () =>
+      withNativeDelivery(
+        {
+          platform: 'android',
+          mode: 'sync',
+          signed: false,
+          submissionCandidate: false,
+        },
+        'staging',
+      ),
+    /native delivery state is inconsistent/u,
   );
   assert.throws(
     () =>

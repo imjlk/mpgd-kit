@@ -73,14 +73,14 @@ export function assertReleaseManifest(input: unknown): ReleaseManifest {
       continue;
     }
     const validPlatformMode = delivery.platform === 'android'
-      ? ['sync', 'debug', 'unsigned-archive', 'signed-archive'].includes(delivery.mode)
+      ? ['debug', 'unsigned-archive', 'signed-archive'].includes(delivery.mode)
       : ['sync', 'simulator', 'unsigned-archive', 'signed-archive', 'store-export']
         .includes(delivery.mode);
     const expectedSigned = delivery.mode === 'signed-archive'
       || delivery.mode === 'store-export';
-    const expectedCandidate = delivery.platform === 'android'
+    const expectedCandidate = entry.profile === 'production' && (delivery.platform === 'android'
       ? delivery.mode === 'signed-archive'
-      : delivery.mode === 'store-export';
+      : delivery.mode === 'store-export');
     if (!validPlatformMode || delivery.signed !== expectedSigned
       || delivery.submissionCandidate !== expectedCandidate) {
       throw new TypeError(`Release manifest native delivery state is inconsistent: ${target}.`);

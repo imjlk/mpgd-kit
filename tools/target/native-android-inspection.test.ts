@@ -11,6 +11,7 @@ import {
 const root = mkdtempSync(path.join(tmpdir(), 'mpgd-aab-inspection-'));
 const bundle = path.join(root, 'game.aab');
 const calls: string[] = [];
+const signerFingerprint = 'A1'.repeat(32);
 
 try {
   writeFileSync(bundle, 'fixture');
@@ -19,6 +20,13 @@ try {
       calls.push(`${command} ${args.join(' ')}`);
       if (command === 'jarsigner') {
         return { status: 0, stdout: 'jar verified.\n', stderr: '' };
+      }
+      if (command === 'keytool') {
+        return {
+          status: 0,
+          stdout: `Signer #1:\nSHA256: ${signerFingerprint.match(/../gu)?.join(':')}\n`,
+          stderr: '',
+        };
       }
       if (command === 'unzip') {
         return { status: 0, stdout: '{"server":{"androidScheme":"https"}}', stderr: '' };
@@ -37,6 +45,7 @@ try {
     expectedPackageId: 'dev.example.game',
     expectedVersionCode: '42',
     expectedVersionName: '1.4.0',
+    expectedSignerSha256: signerFingerprint,
   };
   assert.deepEqual(inspectSignedAndroidBundle({ ...expected, runner }), {
     packageId: 'dev.example.game',
@@ -44,7 +53,25 @@ try {
     versionName: '1.4.0',
     signed: true,
   });
-  assert.equal(calls.length, 5);
+  assert.equal(calls.length, 6);
+  assert.throws(
+    () =>
+      inspectSignedAndroidBundle({
+        ...expected,
+        expectedSignerSha256: 'B2'.repeat(32),
+        runner,
+      }),
+    /signer does not match/u,
+  );
+  assert.throws(
+    () =>
+      inspectSignedAndroidBundle({
+        ...expected,
+        expectedSignerSha256: '',
+        runner,
+      }),
+    /fingerprint is missing or invalid/u,
+  );
   assert.throws(
     () =>
       inspectSignedAndroidBundle({
@@ -75,6 +102,25 @@ try {
       },
     }),
     /live-reload bridge/u,
+  );
+  assert.throws(
+    () =>
+      inspectSignedAndroidBundle({
+        ...expected,
+        runner: {
+          run(command, args) {
+            if (command === 'unzip') {
+              return {
+                status: 0,
+                stdout: '{"android":{"webContentsDebuggingEnabled":true}}',
+                stderr: '',
+              };
+            }
+            return runner.run(command, args);
+          },
+        },
+      }),
+    /enables WebView debugging/u,
   );
   console.info('Signed Android app bundle inspection passed.');
 } finally {

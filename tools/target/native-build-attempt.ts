@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
+import { assertDeploymentTargetName } from '../../packages/cli/src/target-name';
 import { withReleaseManifestLock } from './release-manifest-lock';
 
 export interface NativeBuildAttemptRecord {
@@ -18,12 +19,8 @@ export interface NativeBuildAttempt {
   fail(): void;
 }
 
-const targetPattern = /^[a-z][a-z0-9-]*$/u;
-
 export function nativeBuildAttemptPath(gameRoot: string, target: string): string {
-  if (!targetPattern.test(target)) {
-    throw new Error('Native build target name is invalid.');
-  }
+  assertDeploymentTargetName(target);
   return path.join(gameRoot, 'artifacts/native-build-status', `${target}.json`);
 }
 

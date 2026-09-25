@@ -15,12 +15,7 @@ export interface NativeBuildPlan {
   readonly submissionCandidate: boolean;
 }
 
-const androidModes = new Set<NativeBuildMode>([
-  'sync',
-  'debug',
-  'unsigned-archive',
-  'signed-archive',
-]);
+const androidModes = new Set<NativeBuildMode>(['debug', 'unsigned-archive', 'signed-archive']);
 const iosModes = new Set<NativeBuildMode>([
   'sync',
   'simulator',
@@ -65,6 +60,9 @@ export function resolveNativeBuildPlan(input: {
   }
   const allowed = platform === 'android' ? androidModes : iosModes;
   if (!allowed.has(selected as NativeBuildMode)) {
+    if (platform === 'android' && selected === 'sync') {
+      throw new Error('Android sync artifacts are not portable; use debug or an archive mode.');
+    }
     throw new Error(`Unsupported ${platform} native build mode: ${selected}.`);
   }
   const mode = selected as NativeBuildMode;
@@ -76,8 +74,8 @@ export function resolveNativeBuildPlan(input: {
   return {
     platform,
     mode,
-    submissionCandidate: platform === 'android'
+    submissionCandidate: profile === 'production' && (platform === 'android'
       ? mode === 'signed-archive'
-      : mode === 'store-export',
+      : mode === 'store-export'),
   };
 }

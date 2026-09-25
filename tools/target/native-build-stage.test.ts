@@ -70,6 +70,12 @@ try {
       }),
     /inside/u,
   );
+  mkdirSync(path.join(shell, 'android/app/src/main'), { recursive: true });
+  symlinkSync(path.join(shell, 'android/app'), path.join(shell, 'android/app/src/main/res'), 'dir');
+  assert.throws(
+    () => createNativeShellStage({ shellApp: shell, webDir: web }),
+    /symlink is unsupported/u,
+  );
   console.info('Native shell staging isolation passed.');
 } finally {
   rmSync(root, { recursive: true, force: true });
