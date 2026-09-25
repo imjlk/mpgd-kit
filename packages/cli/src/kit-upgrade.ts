@@ -14,6 +14,7 @@ type DependencySection = (typeof dependencySections)[number];
 export interface PublishedKitPackage {
   readonly version: string;
   readonly peerDependencies?: Readonly<Record<string, string>>;
+  readonly optionalPeerDependencies?: readonly string[];
 }
 export type LatestKitPackageLookup = (name: string, gameRoot: string) => Promise<PublishedKitPackage>;
 export interface KitUpgradeUpdate {
@@ -30,6 +31,7 @@ export interface KitUpgradePlan {
   readonly blockers: readonly string[];
   readonly notes: readonly string[];
   readonly manifestDigests: Readonly<Record<string, string>>;
+  readonly targetConfigDigest: { readonly file: string; readonly sha256: string | null };
   readonly lockfileDigests: Readonly<Record<string, string>>;
   readonly workspaceRoots: readonly string[];
 }
@@ -54,7 +56,12 @@ export async function planKitUpgrade(
   }
   const notes: string[] = [];
   const blockers: string[] = [];
-  const manifests = discoverGameManifests(gameRoot, notes, blockers, targetsFileName);
+  const { manifests, targetConfigDigest } = discoverGameManifests(
+    gameRoot,
+    notes,
+    blockers,
+    targetsFileName,
+  );
   const manifestDigests: Record<string, string> = {};
   const requested = new Set<string>();
   const parsedManifests = new Map<string, JsonObject>();
@@ -73,7 +80,12 @@ export async function planKitUpgrade(
           continue;
         }
         if (parseVersionSpecifier(value) === undefined) {
-          notes.push('Skipped non-SemVer dependency ' + name + ' in ' + manifest + ': ' + value);
+          if (validRange(value) !== null) {
+            blockers.push('Unsupported Kit version range for ' + name + ' in ' + manifest
+              + ': ' + value + '. Pin an exact version, ^version, or ~version before upgrading.');
+          } else {
+            notes.push('Skipped non-SemVer dependency ' + name + ' in ' + manifest + ': ' + value);
+          }
         } else {
           requested.add(name);
         }
@@ -156,6 +168,7 @@ export async function planKitUpgrade(
     blockers,
     notes: [...new Set(notes)],
     manifestDigests,
+    targetConfigDigest,
     lockfileDigests,
     workspaceRoots,
   };
@@ -170,6 +183,14 @@ export function applyKitUpgrade(
   }
   if (plan.updates.length === 0) {
     return { manifests: [], lockfiles: [] };
+  }
+  const { file: targetsFile, sha256: targetsDigest } = plan.targetConfigDigest;
+  if (targetsDigest === null) {
+    if (existsSync(targetsFile)) {
+      throw new Error('File changed after upgrade planning: ' + targetsFile);
+    }
+  } else if (!existsSync(targetsFile) || digest(readFileSync(targetsFile, 'utf8')) !== targetsDigest) {
+    throw new Error('File changed after upgrade planning: ' + targetsFile);
   }
   const snapshots = new Map<string, string>();
   for (const [file, expected] of Object.entries({
@@ -266,14 +287,16 @@ export function parsePublishedKitPackageResponse(
   }
   const peers = asObject(response.peerDependencies);
   const peerMetadata = asObject(response.peerDependenciesMeta);
+  const declaredPeers = Object.entries(peers).filter(
+    (entry): entry is [string, string] => typeof entry[1] === 'string',
+  );
+  const optionalPeerDependencies = declaredPeers
+    .filter(([name]) => asObject(peerMetadata[name]).optional === true)
+    .map(([name]) => name);
   return {
     version: response.version,
-    peerDependencies: Object.fromEntries(
-      Object.entries(peers).filter(
-        (entry): entry is [string, string] =>
-          typeof entry[1] === 'string' && asObject(peerMetadata[entry[0]]).optional !== true,
-      ),
-    ),
+    peerDependencies: Object.fromEntries(declaredPeers),
+    ...(optionalPeerDependencies.length > 0 ? { optionalPeerDependencies } : {}),
   };
 }
 
@@ -282,7 +305,10 @@ function discoverGameManifests(
   notes: string[],
   blockers: string[],
   targetsFileName?: string,
-): string[] {
+): {
+  readonly manifests: readonly string[];
+  readonly targetConfigDigest: { readonly file: string; readonly sha256: string | null };
+} {
   const manifests = new Set([path.join(gameRoot, 'package.json')]);
   const targetsFile = path.resolve(gameRoot, targetsFileName ?? 'mpgd.targets.json');
   if (!inside(gameRoot, targetsFile)) {
@@ -294,12 +320,14 @@ function discoverGameManifests(
     } else {
       blockers.push('Requested targets file is missing: ' + targetsFile);
     }
-    return [...manifests];
+    return { manifests: [...manifests], targetConfigDigest: { file: targetsFile, sha256: null } };
   }
   if (lstatSync(targetsFile).isSymbolicLink() || !inside(gameRoot, realpathSync(targetsFile))) {
     throw new Error('Refusing to read a linked targets file: ' + targetsFile);
   }
-  const config = parseJsonObject(readFileSync(targetsFile, 'utf8'), targetsFile);
+  const targetsSource = readFileSync(targetsFile, 'utf8');
+  const config = parseJsonObject(targetsSource, targetsFile);
+  const targetsDirectory = path.dirname(targetsFile);
   for (const value of Object.values(asObject(config.targets))) {
     const target = asObject(value);
     for (const key of ['wrapperApp', 'shellApp'] as const) {
@@ -307,11 +335,18 @@ function discoverGameManifests(
       if (typeof location !== 'string') {
         continue;
       }
-      if (location.includes('$' + '{')) {
+      if (location.includes('${MPGD_KIT_PATH}')) {
         notes.push('Skipped external target ' + key + ': ' + location);
         continue;
       }
-      const directory = path.resolve(gameRoot, location);
+      const resolvedLocation = location
+        .replaceAll('${MPGD_GAME_ROOT}', targetsDirectory)
+        .replaceAll('${MPGD_GAME_APP_ROOT}', targetsDirectory);
+      if (resolvedLocation.includes('$' + '{')) {
+        notes.push('Skipped target with unresolved path token: ' + location);
+        continue;
+      }
+      const directory = path.resolve(targetsDirectory, resolvedLocation);
       if (!inside(gameRoot, directory)) {
         notes.push('Skipped target outside the game directory: ' + location);
         continue;
@@ -328,7 +363,10 @@ function discoverGameManifests(
       manifests.add(manifest);
     }
   }
-  return [...manifests].sort();
+  return {
+    manifests: [...manifests].sort(),
+    targetConfigDigest: { file: targetsFile, sha256: digest(targetsSource) },
+  };
 }
 
 function discoverLockfiles(
@@ -398,7 +436,9 @@ function validatePeers(
     updates.map((update) => [update.manifest + '\0' + update.packageName, update.next]),
   );
   for (const update of updates) {
-    const peers = packages.get(update.packageName)?.peerDependencies ?? {};
+    const published = packages.get(update.packageName);
+    const peers = published?.peerDependencies ?? {};
+    const optionalPeers = new Set(published?.optionalPeerDependencies ?? []);
     for (const [peerName, range] of Object.entries(peers)) {
       if (validRange(range) === null) {
         blockers.push('Invalid published peer range for ' + update.packageName + ': '
@@ -407,8 +447,10 @@ function validatePeers(
       }
       const owner = findPeerOwner(manifests, update.manifest, gameManifest, peerName);
       if (owner === undefined) {
-        notes.push(update.packageName + ' requires peer ' + peerName + ' ' + range
-          + '; no direct version was declared. Check the resolved lockfile.');
+        if (!optionalPeers.has(peerName)) {
+          notes.push(update.packageName + ' requires peer ' + peerName + ' ' + range
+            + '; no direct version was declared. Check the resolved lockfile.');
+        }
         continue;
       }
       const specifier = replacements.get(owner.manifest + '\0' + peerName) ?? owner.specifier;

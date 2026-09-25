@@ -80,7 +80,11 @@ try {
         + '"peerDependenciesMeta":{"@capacitor/core":{"optional":true}}}',
       '@mpgd/adapter-capacitor',
     ),
-    { version: '0.4.12', peerDependencies: {} },
+    {
+      version: '0.4.12',
+      peerDependencies: { '@capacitor/core': '^8.5.1' },
+      optionalPeerDependencies: ['@capacitor/core'],
+    },
   );
   assert.deepEqual(
     parsePublishedKitPackageResponse(
@@ -120,7 +124,7 @@ try {
   writeJson(path.join(game, 'mpgd.targets.json'), {
     targets: {
       web: { kind: 'web', gameApp: '.' },
-      ait: { kind: 'apps-in-toss', wrapperApp: 'apps/target-a' },
+      ait: { kind: 'apps-in-toss', wrapperApp: '${MPGD_GAME_ROOT}/apps/target-a' },
       android: { kind: 'capacitor-android', shellApp: 'apps/target-mobile' },
       ios: { kind: 'capacitor-ios', shellApp: '$' + '{MPGD_KIT_PATH}/apps/mobile-capacitor' },
     },
@@ -142,10 +146,20 @@ try {
   assert.ok(plan.notes.some((note) => note.includes('workspace:*')));
   assert.ok(!plan.notes.some((note) => note.includes('requires peer @capacitor/core')));
   assert.deepEqual(plan.workspaceRoots, [workspace, game]);
-  const alternateTargets = path.join(game, 'alternate.targets.json');
-  writeJson(alternateTargets, { targets: { ait: { wrapperApp: 'apps/target-a' } } });
-  const alternatePlan = await planKitUpgrade(game, lookup, 'alternate.targets.json');
+  const alternateTargets = path.join(game, 'config', 'alternate.targets.json');
+  mkdirSync(path.dirname(alternateTargets), { recursive: true });
+  writeJson(alternateTargets, {
+    targets: {
+      ait: { wrapperApp: '../apps/target-a' },
+      android: { shellApp: '${MPGD_GAME_APP_ROOT}/../apps/target-mobile' },
+    },
+  });
+  const alternatePlan = await planKitUpgrade(game, lookup, 'config/alternate.targets.json');
   assert.ok(alternatePlan.updates.some((update) => update.manifest === wrapperPackage));
+  assert.ok(
+    alternatePlan.manifestDigests[path.join(mobile, 'package.json')],
+    alternatePlan.notes.join('\n'),
+  );
   assert.ok(!alternatePlan.notes.some((note) => note.includes('external target')));
   assert.equal(
     (readJson(path.join(workspace, 'package.json')).devDependencies as Record<string, string>)['@mpgd/cli'],
@@ -157,6 +171,13 @@ try {
   writeFileSync(gamePackage, before + '\n');
   assert.throws(() => applyKitUpgrade(refreshed), /File changed after upgrade planning/);
   writeFileSync(gamePackage, before);
+
+  const staleTargets = await planKitUpgrade(game, lookup);
+  const targetsFile = path.join(game, 'mpgd.targets.json');
+  const targetsBefore = readFileSync(targetsFile, 'utf8');
+  writeFileSync(targetsFile, targetsBefore + '\n');
+  assert.throws(() => applyKitUpgrade(staleTargets), /File changed after upgrade planning/);
+  writeFileSync(targetsFile, targetsBefore);
 
   writeJson(path.join(mobile, 'package.json'), {
     name: 'sample-mobile-shell',
@@ -228,6 +249,29 @@ try {
   assert.ok(blocked.blockers.some((issue) => issue.includes('web-framework')));
   assert.throws(() => applyKitUpgrade(blocked), /blocked/);
 
+  const optionalPeerLookup: LatestKitPackageLookup = async (name, directory) => {
+    const published = await lookup(name, directory);
+    return name === '@mpgd/adapter-capacitor'
+      ? {
+          version: '0.4.13',
+          peerDependencies: { '@capacitor/core': '^9.0.0' },
+          optionalPeerDependencies: ['@capacitor/core'],
+        }
+      : published;
+  };
+  const optionalPeerConflict = await planKitUpgrade(game, optionalPeerLookup);
+  assert.ok(optionalPeerConflict.blockers.some((issue) => issue.includes('@capacitor/core')));
+  writeJson(path.join(mobile, 'package.json'), { name: 'sample-mobile-shell' });
+  const absentOptionalPeer = await planKitUpgrade(game, optionalPeerLookup);
+  assert.ok(!absentOptionalPeer.blockers.some((issue) => issue.includes('@capacitor/core')));
+  assert.ok(
+    !absentOptionalPeer.notes.some((note) => note.includes('requires peer @capacitor/core')),
+  );
+  writeJson(path.join(mobile, 'package.json'), {
+    name: 'sample-mobile-shell',
+    dependencies: { '@capacitor/core': '8.5.1' },
+  });
+
   const standalone = path.join(root, 'standalone');
   const standaloneGame = path.join(standalone, 'game');
   mkdirSync(standaloneGame, { recursive: true });
@@ -240,6 +284,10 @@ try {
   const noGitPlan = await planKitUpgrade(standaloneGame, lookup);
   assert.deepEqual(noGitPlan.workspaceRoots, [standaloneGame]);
   assert.ok(noGitPlan.notes.some((note) => note.includes('No git boundary')));
+  const createdTargets = path.join(standaloneGame, 'mpgd.targets.json');
+  writeJson(createdTargets, { targets: {} });
+  assert.throws(() => applyKitUpgrade(noGitPlan), /File changed after upgrade planning/);
+  unlinkSync(createdTargets);
 
   writeJson(gamePackage, {
     name: 'sample-game',
@@ -247,6 +295,15 @@ try {
   });
   const invalidName = await planKitUpgrade(game, lookup);
   assert.ok(invalidName.blockers.some((issue) => issue.includes('Invalid Kit package name')));
+
+  writeJson(gamePackage, {
+    name: 'sample-game',
+    dependencies: { '@mpgd/adapter-browser': '>=0.7.0' },
+  });
+  const unsupportedRange = await planKitUpgrade(game, lookup);
+  assert.ok(
+    unsupportedRange.blockers.some((issue) => issue.includes('Unsupported Kit version range')),
+  );
 
   writeJson(gamePackage, { name: 'sample-game', dependencies: { phaser: '4.2.1' } });
   writeJson(wrapperPackage, { name: 'sample-wrapper', dependencies: {} });
@@ -261,7 +318,7 @@ try {
       '--game',
       game,
       '--targets-file',
-      'alternate.targets.json',
+      'config/alternate.targets.json',
       '--json',
     ],
     { cwd: process.cwd(), encoding: 'utf8', timeout: 120_000 },

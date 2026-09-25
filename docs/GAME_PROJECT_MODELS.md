@@ -139,9 +139,10 @@ not read or rewrite target files outside the owning game directory.
 
 The plan covers the game manifest and wrappers or shells referenced by
 mpgd.targets.json. It skips Kit-owned external shells and non-SemVer local
-dependencies, reports incompatible pinned peers, and lists every pnpm lockfile
-that the apply step will refresh. An apply refuses a blocked or stale plan and
-restores the original manifests and lockfiles if a lockfile update fails.
+dependencies, reports unsupported SemVer ranges and incompatible declared peers,
+and lists every pnpm lockfile that the apply step will refresh. Apply refuses a
+blocked or stale plan and restores the original manifests and lockfiles if a
+lockfile update fails.
 Without a Git boundary, lockfile discovery stays inside the game directory
 instead of adopting an unrelated ancestor's lockfile.
 Existing workspace-root package dependencies are not rewritten on behalf of

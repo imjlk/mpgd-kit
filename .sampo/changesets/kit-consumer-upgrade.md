@@ -1,5 +1,5 @@
 ---
-npm/@mpgd/cli: minor (Added)
+npm/@mpgd/cli: minor
 ---
 
 Add a game-owned Kit dependency upgrade planner that resolves each public Kit
