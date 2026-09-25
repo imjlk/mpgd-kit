@@ -138,6 +138,17 @@ try {
     () => planCapacitorShellStarter({ ...options, appId: 'dev.example.class' }),
     /Java keyword/u,
   );
+  const gamePackage = readJson('package.json');
+  const gameDependencies = gamePackage.dependencies as Record<string, string>;
+  gameDependencies['@capacitor/core'] = '7.0.0';
+  writeJson('package.json', gamePackage);
+  assert.throws(() => planCapacitorShellStarter(options), /Capacitor 8.x/u);
+  gameDependencies['@capacitor/core'] = '8.5.2';
+  gameDependencies['@capacitor/app'] = '7.0.0';
+  writeJson('package.json', gamePackage);
+  assert.throws(() => planCapacitorShellStarter(options), /Capacitor 8.x/u);
+  gameDependencies['@capacitor/app'] = '8.1.1';
+  writeJson('package.json', gamePackage);
 
   const dryRun = planCapacitorShellStarter(options);
   const baseTargets = readJson('mpgd.targets.json');
@@ -272,7 +283,7 @@ try {
           mkdirSync(path.dirname(requiredFile), { recursive: true });
           const contents: Record<string, string> = {
             'android/build.gradle': 'apply from: "variables.gradle"',
-            'android/settings.gradle': "apply from: 'capacitor.settings.gradle'",
+            'android/settings.gradle': "include ':app'\napply from: 'capacitor.settings.gradle'",
             'android/app/capacitor.build.gradle':
               'apply from: "../capacitor-cordova-android-plugins/cordova.variables.gradle"',
             'android/app/src/main/res/values/strings.xml':
@@ -532,6 +543,16 @@ try {
   ].join('\n'));
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   writeFileSync(androidRootBuild, 'apply from: "variables.gradle"');
+  const androidSettingsFile = path.join(root, 'apps/mobile-capacitor/android/settings.gradle');
+  const originalSettings = readFileSync(androidSettingsFile, 'utf8');
+  writeFileSync(androidSettingsFile, 'include ":other"\n');
+  assert.throws(() => planCapacitorShellStarter(options), /include :app/u);
+  writeFileSync(
+    androidSettingsFile,
+    `${originalSettings}\nproject(":app").projectDir = file("elsewhere")\n`,
+  );
+  assert.throws(() => planCapacitorShellStarter(options), /without remapping/u);
+  writeFileSync(androidSettingsFile, originalSettings);
   const capacitorGradle = path.join(
     root,
     'apps/mobile-capacitor/android/app/capacitor.build.gradle',
@@ -658,6 +679,18 @@ try {
     '</application></manifest>',
   ].join(''));
   assert.throws(() => planCapacitorShellStarter(options), /Release launcher label differs/u);
+  writeFileSync(releaseManifest, [
+    androidManifestOpen,
+    '<application><activity android:name="dev.example.puzzle.MainActivity"',
+    ' android:label="Other Game"/></application></manifest>',
+  ].join(''));
+  assert.throws(() => planCapacitorShellStarter(options), /Release launcher label differs/u);
+  writeFileSync(releaseManifest, [
+    androidManifestOpen,
+    '<application><activity android:name="dev.example.puzzle.MainActivity"',
+    ' android:enabled="false"/></application></manifest>',
+  ].join(''));
+  assert.throws(() => planCapacitorShellStarter(options), /android:enabled/u);
   writeFileSync(releaseManifest, [
     androidManifestOpen,
     '<application><activity android:name=".MainActivity" android:enabled="false"/>',
@@ -930,6 +963,16 @@ try {
     '// applicationId "dev.example.puzzle"',
   ].join('\n'));
   assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
+    'buildTypes["release"].applicationIdSuffix = ".store"',
+  ].join('\n'));
+  assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
+    'println("buildTypes.release.applicationIdSuffix")',
+  ].join('\n'));
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');
   writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle" + ".beta"');
   assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
@@ -983,9 +1026,12 @@ try {
   renameSync(kotlinGradle, androidProjectFile);
   renameSync(kotlinSettings, groovySettings);
   renameSync(kotlinRootBuild, androidRootBuild);
-  writeFileSync(groovySettings, 'gradle.beforeProject { project -> project.version = 9 }');
+  writeFileSync(
+    groovySettings,
+    `${originalSettings}\ngradle.beforeProject { project -> project.version = 9 }`,
+  );
   assert.throws(() => planCapacitorShellStarter(options), /settings Gradle callbacks/u);
-  writeFileSync(groovySettings, "apply from: 'capacitor.settings.gradle'");
+  writeFileSync(groovySettings, originalSettings);
   writeFileSync(androidRootBuild, 'apply from: "variables.gradle"');
   writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');
   applyCapacitorShellStarter(withNativeProjects);
@@ -1038,6 +1084,8 @@ try {
     '"ser\\u0076er": { url: "https://stale.example" }',
   );
   writeFileSync(configFile, escapedQuotedServer);
+  assert.throws(() => planCapacitorShellStarter(options), /quoted property key is ambiguous/u);
+  writeFileSync(configFile, escapedQuotedServer.replace('\\u0076', '\\x76'));
   assert.throws(() => planCapacitorShellStarter(options), /quoted property key is ambiguous/u);
   const topLevelGetter = originalConfig.replace(
     "server: { androidScheme: 'https' }",

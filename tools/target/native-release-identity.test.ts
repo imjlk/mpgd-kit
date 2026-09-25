@@ -169,6 +169,11 @@ try {
     assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /Suffix/u);
     writeShellFiles(shellRoot);
   }
+  writeFileSync(groovy, [
+    readFileSync(groovy, 'utf8'),
+    'buildTypes["release"].applicationIdSuffix = ".store"',
+  ].join('\n'));
+  assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /applicationIdSuffix/u);
   writeShellFiles(shellRoot);
   writeFileSync(groovy, `${readFileSync(groovy, 'utf8')}\nprintln("productFlavors")\n`);
   assert.doesNotThrow(() => assertNativeReleaseIdentity(appliedIdentityInput));
@@ -215,6 +220,15 @@ try {
     () => assertNativeReleaseIdentity(appliedIdentityInput),
     /settings Gradle project callbacks/u,
   );
+  writeShellFiles(shellRoot);
+  writeFileSync(androidSettings, 'include ":other"\n');
+  assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /include :app/u);
+  writeShellFiles(shellRoot);
+  writeFileSync(androidSettings, [
+    'include(":app")',
+    'project(":app").projectDir = file("elsewhere")',
+  ].join('\n'));
+  assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /without remapping/u);
   writeShellFiles(shellRoot);
   writeFileSync(groovy, [
     readFileSync(groovy, 'utf8'),

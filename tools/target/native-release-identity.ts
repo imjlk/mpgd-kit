@@ -7,6 +7,7 @@ import {
   assertIosReleasePlistIdentity,
 } from '../../packages/cli/src/capacitor-shell-starter.js';
 import {
+  assertAndroidSettingsAppProject,
   assertIosReleaseProductName,
   countGradleIdentityWrites,
   hasGradleIdentityMutation,
@@ -230,6 +231,7 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
   const settingsSource = stripComments(
     readRequiredFile(settingsFile, 'Android settings Gradle file'),
   );
+  assertAndroidSettingsAppProject(settingsSource);
   if (/\b(?:beforeProject|afterProject|beforeEvaluate|afterEvaluate|projectsEvaluated)\b/u
     .test(maskGradleStrings(settingsSource))) {
     throw new Error('Native release preflight cannot resolve settings Gradle project callbacks.');
@@ -350,6 +352,7 @@ function assertNoAndroidReleaseIdentitySuffix(source: string, file: string): voi
   const suffix = '(?:applicationIdSuffix|versionNameSuffix|setApplicationIdSuffix|setVersionNameSuffix)';
   const qualifiedReleasePrefixes = [
     '\\bbuildTypes\\s*\\.\\s*release',
+    '\\bbuildTypes\\s*\\[\\s*["\']release["\']\\s*\\]',
     '\\bbuildTypes\\s*\\.\\s*(?:getByName|named)\\s*\\(\\s*["\']release["\']\\s*\\)',
     '\\b(?:getByName|named)\\s*\\(\\s*["\']release["\']\\s*\\)',
     '\\brelease',
@@ -496,6 +499,7 @@ function readAndroidReleaseBlocks(source: string, file: string): readonly string
     /\brelease\s*\{/gu,
     /\brelease\s+by\s+getting\s*\{/gu,
     /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\{/gu,
+    /\bbuildTypes\s*\[\s*["']release["']\s*\]\s*\{/gu,
   ];
   const qualifiedReleaseBlockExpressions = [
     /\bbuildTypes\s*\.\s*release\s*\{/gu,

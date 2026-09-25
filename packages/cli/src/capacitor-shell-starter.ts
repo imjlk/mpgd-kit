@@ -18,6 +18,7 @@ import { DOMParser, type Document, type Element } from '@xmldom/xmldom';
 
 import { isNonPublicServiceHostname } from './production-target-readiness.js';
 import {
+  assertAndroidSettingsAppProject,
   assertIosReleaseProductName,
   assertNativeShellIdentity,
   hasGradleIdentityMutation,
@@ -131,6 +132,9 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
   if (!/^\d+\.\d+\.\d+$/u.test(capacitorVersion)
     || !/^\d+\.\d+\.\d+$/u.test(appVersion)) {
     throw new Error('Capacitor shell requires exact @capacitor/core and @capacitor/app versions.');
+  }
+  if (!capacitorVersion.startsWith('8.') || !appVersion.startsWith('8.')) {
+    throw new Error('Capacitor shell requires Capacitor 8.x for core and app.');
   }
   const adapterFile = path.join(gameRoot, 'node_modules/@mpgd/adapter-capacitor/package.json');
   if (!existsSync(adapterFile)) {
@@ -576,6 +580,7 @@ function assertNativePlatformComplete(
     const settingsSource = stripGradleComments(
       readFileSync(path.join(nativeDirectory, settings), 'utf8'),
     );
+    assertAndroidSettingsAppProject(settingsSource);
     const rootCode = maskGradleStrings(rootSource);
     const settingsCode = maskGradleStrings(settingsSource);
     if (/\b(?:afterEvaluate|projectsEvaluated)\b/u.test(rootCode)
@@ -1419,13 +1424,34 @@ function assertNativeDisplayName(
             'Existing android Release application label differs from the requested name.',
           );
         }
-        const launcherNames = new Set(launchers.map((item) => item.getAttribute('android:name')));
+        const appBuildFile = ['app/build.gradle', 'app/build.gradle.kts']
+          .map((relative) => path.join(nativeDirectory, relative))
+          .find((file) => existsSync(file));
+        const appGradle = appBuildFile === undefined ? '' : readFileSync(appBuildFile, 'utf8');
+        const manifestPackage = (main.parentNode as Element | null)?.getAttribute('package');
+        const namespace = /\bnamespace\s*(?:=\s*)?["']([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)+)["']/u
+          .exec(stripGradleComments(appGradle))?.[1]
+          ?? (manifestPackage === null || manifestPackage === '' ? undefined : manifestPackage);
+        const launcherNames = new Set<string>();
+        for (const launcher of launchers) {
+          const qualified = qualifyAndroidActivityName(
+            launcher.getAttribute('android:name'),
+            namespace,
+          );
+          if (qualified !== undefined) {
+            launcherNames.add(qualified);
+          }
+        }
         const releaseLaunchers = readAndroidLaunchers(release);
         for (const activity of childElements(release)) {
           if (activity.tagName !== 'activity' && activity.tagName !== 'activity-alias') {
             continue;
           }
-          const sameLauncher = launcherNames.has(activity.getAttribute('android:name'));
+          const releaseName = qualifyAndroidActivityName(
+            activity.getAttribute('android:name'),
+            namespace,
+          );
+          const sameLauncher = releaseName !== undefined && launcherNames.has(releaseName);
           const activityLabel = activity.getAttribute('android:label');
           if ((sameLauncher || releaseLaunchers.includes(activity))
             && hasAndroidMergerDirectiveDeep(activity)) {
@@ -1863,8 +1889,8 @@ function assertNoCapacitorServerUrl(source: string, code: string, topLevel: stri
   if (/^[ \t]*["']server["']\s*:/mu.test(source)) {
     throw new Error('Existing Capacitor config server field is ambiguous.');
   }
-  if (/(?:\{|,)\s*["'][^"']*\\u(?:[0-9a-fA-F]{4}|\{[0-9a-fA-F]+\})[^"']*["']\s*:/u
-    .test(source)) {
+  const quotedKeys = [...source.matchAll(/(?:\{|,)\s*(["'])((?:\\.|(?!\1)[^\\])*)\1\s*:/gu)];
+  if (quotedKeys.some((match) => (match[2] ?? '').includes('\\'))) {
     throw new Error('Existing Capacitor config quoted property key is ambiguous.');
   }
   if (/\b(?:get|set)\s+server\s*\(/u.test(topLevel)

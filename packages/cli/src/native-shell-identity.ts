@@ -24,25 +24,51 @@ function assertAndroidIdentity(source: string, expectedAppId: string): void {
 }
 
 function hasAndroidReleaseIdSuffix(source: string): boolean {
-  if (/\bbuildTypes\s*\.\s*release\s*\.\s*(?:applicationIdSuffix|setApplicationIdSuffix)\b/u.test(source)
-    || /\bbuildTypes\s*\.\s*(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*(?:applicationIdSuffix|setApplicationIdSuffix)\b/u
-      .test(source)
-    || /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*(?:applicationIdSuffix|setApplicationIdSuffix)\b/u
-      .test(source)
-    || /\brelease\s*\.\s*(?:applicationIdSuffix|setApplicationIdSuffix)\b/u.test(source)) {
+  const code = maskGradleStrings(source);
+  const suffix = '(?:applicationIdSuffix|setApplicationIdSuffix)';
+  const prefixes = [
+    '\\bbuildTypes\\s*\\.\\s*release',
+    '\\bbuildTypes\\s*\\[\\s*["\']release["\']\\s*\\]',
+    '\\bbuildTypes\\s*\\.\\s*(?:getByName|named)\\s*\\(\\s*["\']release["\']\\s*\\)',
+    '\\b(?:getByName|named)\\s*\\(\\s*["\']release["\']\\s*\\)',
+    '\\brelease',
+  ];
+  const qualifiedSuffix = prefixes.some((prefix) => {
+    const expression = new RegExp(`${prefix}\\s*\\.\\s*${suffix}\\b`, 'gu');
+    return [...source.matchAll(expression)].some((match) => {
+      const field = new RegExp(`${suffix}$`, 'u').exec(match[0])?.[0] ?? '';
+      const offset = (match.index ?? 0) + match[0].lastIndexOf(field);
+      return field !== '' && code.slice(offset, offset + field.length) === field;
+    });
+  });
+  if (qualifiedSuffix) {
     return true;
   }
   const releaseBlocks = [
     /\brelease\s*\{/gu,
     /\brelease\s+by\s+getting\s*\{/gu,
     /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\{/gu,
+    /\bbuildTypes\s*\[\s*["']release["']\s*\]\s*\{/gu,
   ];
   return releaseBlocks.some((expression) => [...source.matchAll(expression)]
     .some((match) => match.index !== undefined
-      && /\b(?:applicationIdSuffix|setApplicationIdSuffix)\b/u.test(readBracedText(
-        source,
-        source.indexOf('{', match.index),
+      && code[(match.index ?? 0) + match[0].length - 1] === '{'
+      && /\b(?:applicationIdSuffix|setApplicationIdSuffix)\b/u.test(maskGradleStrings(
+        readBracedText(source, source.indexOf('{', match.index)),
       ))));
+}
+
+export function assertAndroidSettingsAppProject(source: string): void {
+  const clean = stripGradleComments(source);
+  const code = maskGradleStrings(clean);
+  const includes = [...clean.matchAll(/\binclude\s*(?:\(([^)]*)\)|([^\r\n;]+))/gu)];
+  const includesApp = includes.some((match) => code.slice(match.index, match.index + 7)
+    === 'include' && /(?:^|,)\s*["']:app["']\s*(?:,|$)/u.test(match[1] ?? match[2] ?? ''));
+  const appRemap = [...clean.matchAll(/\bproject\s*\(\s*["']:app["']\s*\)/gu)]
+    .some((match) => code.slice(match.index, match.index + 7) === 'project');
+  if (!includesApp || appRemap) {
+    throw new Error('Android settings must include :app at android/app without remapping it.');
+  }
 }
 
 export function stripGradleComments(source: string): string {
