@@ -123,6 +123,38 @@ Shared code does not imply shared product identity. Each game continues to own:
 - release artifacts, target smoke evidence, and deployment history;
 - game-specific server verification and authoritative grant policy.
 
+## Upgrade Published Kit Dependencies
+
+Run the public CLI from the owning game or workspace. Planning is read-only;
+it uses each declared public Kit package's npm latest tag and does not infer
+one common version number from the CLI:
+
+    pnpm exec mpgd kit upgrade --game ./games/puzzle-one
+    pnpm exec mpgd kit upgrade --game ./games/puzzle-one --json
+    pnpm exec mpgd kit upgrade --game ./games/puzzle-one --apply
+
+If the target config has another game-owned filename, pass
+--targets-file <filename> relative to that game directory. The plan does
+not read or rewrite target files outside the owning game directory.
+
+The plan covers the game manifest and wrappers or shells referenced by
+mpgd.targets.json. It skips Kit-owned external shells and non-SemVer local
+dependencies, reports unsupported SemVer ranges and incompatible declared peers,
+and lists every pnpm lockfile that the apply step will refresh. Apply refuses a
+blocked or stale plan and restores the original manifests and lockfiles if a
+lockfile update fails.
+Without a Git boundary, lockfile discovery stays inside the game directory
+instead of adopting an unrelated ancestor's lockfile.
+Existing workspace-root package dependencies are not rewritten on behalf of
+other games. The command does not install packages, commit, allocate versions,
+change platform SDKs, or deploy.
+
+After applying, install with the updated frozen lockfiles and select a clean
+released Kit checkout matching the CLI version resolved in the refreshed
+lockfile. Then run the relevant game checks, target build/smoke, and release
+dry-run. A peer range warning still requires inspection of the resolved version;
+the command does not claim that registry metadata alone certifies a native target.
+
 ## Kit Contributor Checkout
 
 The kit repository has two internal representations that downstream users

@@ -54,6 +54,7 @@
     "entities": "^8.0.0",
     "esbuild": "^0.28.1",
     "gunshi": "^0.35.1",
+    "semver": "^7.8.5",
     "undici": "^7.28.0"
   },
   "devDependencies": {
@@ -70,6 +71,7 @@
     "@mpgd/platform": "workspace:*",
     "@mpgd/target-config": "workspace:*",
     "@types/node": "^24.0.0",
+    "@types/semver": "^7.8.0",
     "ttsc": "0.30.4",
     "typescript": "7.0.2"
   },

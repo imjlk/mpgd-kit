@@ -102,6 +102,7 @@
     "smoke:platform-version-allocation": "node tools/run-ttsx.mjs tools/smoke/cli-platform-version-allocation.ts",
     "smoke:game-config": "MPGD_PLATFORM_TARGETS_FILE=${MPGD_PLATFORM_TARGETS_FILE:-examples/phaser-starter/mpgd.targets.json} node tools/run-ttsx.mjs tools/smoke/game-owned-catalog.ts",
     "smoke:cli-hosted-pwa-deployment": "node tools/run-ttsx.mjs tools/smoke/cli-hosted-pwa-deployment.ts",
+    "smoke:cli-kit-upgrade": "node tools/run-ttsx.mjs tools/smoke/cli-kit-upgrade.ts",
     "smoke:cli-asset-pack-build": "node tools/run-ttsx.mjs tools/smoke/cli-asset-pack-build.ts",
     "smoke:phaser-assets-archive-decode": "node tools/run-ttsx.mjs tools/smoke/phaser-assets-archive-decode.ts",
     "smoke:cli-configured-web-targets": "node tools/run-ttsx.mjs tools/smoke/cli-configured-web-targets.ts",

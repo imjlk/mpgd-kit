@@ -58,6 +58,7 @@ import {
   prepareBaseGameTemplateFile,
   resolveMicrosoftStoreAdapterDependencyVersion,
 } from './microsoft-store-starter.js';
+import { applyKitUpgrade, planKitUpgrade } from './kit-upgrade.js';
 import { runMicrosoftStoreSubmissionPreflight } from './microsoft-store-submission.js';
 import {
   defaultOfflinePlaytestArtifactDir,
@@ -323,7 +324,7 @@ export async function runMpgdCli(args: readonly string[]): Promise<void> {
     // partial document. Every other command keeps the default rendering.
     renderHeader: async (ctx) => {
       const values = ctx.values as Record<string, unknown>;
-      if (ctx.name === 'verify-delivery' && values.json === true) {
+      if ((ctx.name === 'verify-delivery' || ctx.name === 'upgrade') && values.json === true) {
         return '';
       }
       const title = ctx.env.description || ctx.env.name || '';
@@ -334,7 +335,7 @@ export async function runMpgdCli(args: readonly string[]): Promise<void> {
     renderValidationErrors: async (ctx, error) => {
       const messages = error.errors.map((entry) => String((entry as Error).message)).join('\n');
       const values = ctx.values as Record<string, unknown>;
-      if (ctx.name === 'verify-delivery' && values.json === true) {
+      if ((ctx.name === 'verify-delivery' || ctx.name === 'upgrade') && values.json === true) {
         process.stderr.write(`${messages}\n`);
         return '';
       }
@@ -2528,6 +2529,78 @@ const kitCommand = defineI18n({
     ko: '현재 mpgd-kit 체크아웃을 점검합니다.',
   }),
   subCommands: {
+    upgrade: defineI18n({
+      name: 'upgrade',
+      description: 'Plan or apply the latest published Kit package versions for a game.',
+      resource: commandResource({
+        base: {
+          en: 'Plan or apply the latest published Kit package versions for a game.',
+          ko: '게임에 배포된 최신 Kit 패키지 버전 적용을 계획하거나 실행합니다.',
+        },
+        args: {
+          game: {
+            en: 'Game directory containing package.json and optional mpgd.targets.json.',
+            ko: 'package.json과 선택적 mpgd.targets.json이 있는 게임 디렉터리.',
+          },
+          'targets-file': {
+            en: 'Optional game-owned target configuration file.',
+            ko: '선택적 게임 소유 타깃 구성 파일.',
+          },
+          apply: {
+            en: 'Write the planned manifests and pnpm lockfiles.',
+            ko: '계획된 의존성 선언과 pnpm 락파일을 갱신합니다.',
+          },
+          json: {
+            en: 'Write one machine-readable JSON document to stdout.',
+            ko: '표준 출력에 기계 판독용 JSON 문서 하나를 출력합니다.',
+          },
+        },
+      }),
+      args: {
+        game: { type: 'string', required: false, default: '.', description: 'Game directory.' },
+        'targets-file': { type: 'string', required: false, description: 'Target config file.' },
+        apply: { type: 'boolean', required: false, description: 'Apply the upgrade plan.' },
+        json: { type: 'boolean', required: false, description: 'Print JSON.' },
+      },
+      run: async (ctx) => {
+        const game = readOptionalString(ctx.values.game) ?? '.';
+        const plan = await planKitUpgrade(
+          game,
+          undefined,
+          readOptionalString(ctx.values['targets-file']),
+        );
+        const result = ctx.values.apply === true && plan.blockers.length === 0
+          ? applyKitUpgrade(plan)
+          : undefined;
+        if (ctx.values.json === true) {
+          process.stdout.write(JSON.stringify({ plan, result: result ?? null }, null, 2) + '\n');
+        } else {
+          console.info('Kit upgrade plan for ' + plan.gameRoot);
+          for (const update of plan.updates) {
+            console.info('  ' + path.relative(plan.gameRoot, update.manifest)
+              + ': ' + update.packageName + ' ' + update.current + ' -> ' + update.next);
+          }
+          if (plan.updates.length === 0) {
+            console.info('  Already current for published npm latest tags.');
+          }
+          for (const note of plan.notes) {
+            console.info('Note: ' + note);
+          }
+          for (const blocker of plan.blockers) {
+            console.error('Blocked: ' + blocker);
+          }
+          if (result !== undefined) {
+            console.info('Updated ' + result.manifests.length + ' manifest(s) and '
+              + result.lockfiles.length + ' lockfile(s). Run target checks before release.');
+          } else if (plan.updates.length > 0 && plan.blockers.length === 0) {
+            console.info('Run again with --apply to update manifests and pnpm lockfiles.');
+          }
+        }
+        if (plan.blockers.length > 0) {
+          process.exitCode = 1;
+        }
+      },
+    }),
     doctor: defineI18n({
       name: 'doctor',
       description: 'Print CLI, kit, template, and target-wrapper status.',
@@ -2546,7 +2619,7 @@ const kitCommand = defineI18n({
     }),
   },
   run: () => {
-    console.info('Use "mpgd kit doctor".');
+    console.info('Use "mpgd kit doctor" or "mpgd kit upgrade --game <directory> [--apply]".');
   },
 });
 
