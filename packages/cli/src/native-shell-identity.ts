@@ -169,6 +169,11 @@ export function hasAndroidResourceSourceSetOverride(source: string): boolean {
   return /\bsourceSets\b/u.test(code) && /\bres\b/u.test(code);
 }
 
+export function hasAndroidManifestSourceSetOverride(source: string): boolean {
+  const code = maskGradleStrings(stripGradleComments(source));
+  return /\bsourceSets\b/u.test(code) && /\bmanifest\b/u.test(code);
+}
+
 export function hasGradlePropertySetter(source: string): boolean {
   const clean = stripGradleComments(source);
   const masked = maskGradleStrings(clean);

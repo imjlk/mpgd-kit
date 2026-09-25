@@ -23,6 +23,7 @@ import {
   assertIosReleaseProductName,
   assertNativeShellIdentity,
   hasAndroidDisplayNameResourceOverride,
+  hasAndroidManifestSourceSetOverride,
   hasAndroidResourceSourceSetOverride,
   hasGradleIdentityMutation,
   maskGradleStrings,
@@ -92,6 +93,9 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
   }
   if (/\$\(|\$\{/u.test(input.displayName)) {
     throw new Error('Capacitor display name cannot contain Xcode build-setting expansions.');
+  }
+  if (/[\t\n]/u.test(input.displayName)) {
+    throw new Error('Capacitor display name cannot contain native whitespace controls.');
   }
   for (const scalar of input.displayName) {
     const point = scalar.codePointAt(0) ?? 0;
@@ -647,6 +651,9 @@ function assertNativePlatformComplete(
       if (hasAndroidResourceSourceSetOverride(source)) {
         throw new Error('Existing android project custom resource sourceSets are unsupported.');
       }
+      if (hasAndroidManifestSourceSetOverride(source)) {
+        throw new Error('Existing android project custom manifest sourceSets are unsupported.');
+      }
       if (script === required) {
         continue;
       }
@@ -1063,7 +1070,10 @@ function parsePlistDictionary(source: string, label: string): Map<string, Elemen
 export function assertIosReleasePlistIdentity(source: string): void {
   const values = parsePlistDictionary(source, 'Release');
   const required: readonly [string, string][] = [
+    ['CFBundleExecutable', '$(EXECUTABLE_NAME)'],
     ['CFBundleIdentifier', '$(PRODUCT_BUNDLE_IDENTIFIER)'],
+    ['CFBundleName', '$(PRODUCT_NAME)'],
+    ['CFBundlePackageType', 'APPL'],
     ['CFBundleShortVersionString', '$(MARKETING_VERSION)'],
     ['CFBundleVersion', '$(CURRENT_PROJECT_VERSION)'],
   ];
@@ -1186,6 +1196,9 @@ function assertAppBuildPhaseInputs(nativeDirectory: string, project: string): Se
   const phaseIds = readPbxIds(targets[0] ?? '', 'buildPhases');
   for (const phaseId of phaseIds) {
     const phase = readPbxObjectBody(project, phaseId);
+    if (/\bisa\s*=\s*PBXShellScriptBuildPhase\s*;/u.test(phase)) {
+      throw new Error('Existing ios project App shell script build phases are unsupported.');
+    }
     const isSources = /\bisa\s*=\s*PBXSourcesBuildPhase\s*;/u.test(phase);
     if (!isSources && !/\bisa\s*=\s*PBXResourcesBuildPhase\s*;/u.test(phase)) {
       continue;
@@ -1778,6 +1791,17 @@ function readAndroidString(nativeDirectory: string, key: string): string {
   if (values.length !== 1) {
     throw new Error('Existing android project application label resource is missing or ambiguous.');
   }
+  const qualified = ['main', 'release'].flatMap((sourceSet) =>
+    listNativeFiles(nativeDirectory, `app/src/${sourceSet}/res`, '.xml')
+      .filter((relative) => /^values-[^/]+$/u.test(path.basename(path.dirname(relative))))
+      .flatMap((relative) => readAndroidValueResource(
+        path.join(nativeDirectory, relative),
+        'string',
+        key,
+      )));
+  if (qualified.some((value) => value !== values[0])) {
+    throw new Error('Existing android project configuration-qualified application label differs.');
+  }
   return values[0] ?? '';
 }
 
@@ -2155,7 +2179,9 @@ function assertNoCapacitorServerUrl(source: string, code: string, topLevel: stri
           || /(?:^|[,\s{])\[[^\]]+\]\s*:/u.test(body)) {
           throw new Error('Existing Capacitor config server field has dynamic properties.');
         }
-        if (/(?:^|[,\s{])["']?url["']?\s*:/u.test(body)) {
+        const bodyCode = code.slice(opening, index + 1);
+        if (/(?:^|[,\s{])["']?url["']?\s*:/u.test(body)
+          || /(?:^|[,\s{])url\s*(?:,|\})/u.test(bodyCode)) {
           throw new Error('Existing Capacitor config server.url is unsupported.');
         }
         return;

@@ -134,6 +134,12 @@ try {
     () => planCapacitorShellStarter({ ...options, displayName: 'Bad\rName' }),
     /invalid in native XML/u,
   );
+  for (const displayName of ['Puzzle\tGame', 'Puzzle\nGame']) {
+    assert.throws(
+      () => planCapacitorShellStarter({ ...options, displayName }),
+      /native whitespace controls/u,
+    );
+  }
   assert.throws(
     () => planCapacitorShellStarter({ ...options, displayName: 'Puzzle $(PRODUCT_NAME)' }),
     /Xcode build-setting expansions/u,
@@ -298,8 +304,17 @@ try {
               completeAndroidManifest,
             'android/app/src/main/java/dev/example/puzzle/MainActivity.java':
               'package dev.example.puzzle; import com.getcapacitor.BridgeActivity; public class MainActivity extends BridgeActivity {}',
-            'ios/App/App/Info.plist':
-              '<plist><dict><key>CFBundleDisplayName</key><string>Puzzle Game</string><key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string><key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string><key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string></dict></plist>',
+            'ios/App/App/Info.plist': [
+              '<plist><dict>',
+              '<key>CFBundleDisplayName</key><string>Puzzle Game</string>',
+              '<key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>',
+              '<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>',
+              '<key>CFBundleName</key><string>$(PRODUCT_NAME)</string>',
+              '<key>CFBundlePackageType</key><string>APPL</string>',
+              '<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>',
+              '<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>',
+              '</dict></plist>',
+            ].join(''),
             'ios/App/App/SceneDelegate.swift': 'class SceneDelegate {}',
           };
           writeFileSync(requiredFile, contents[relative] ?? 'generated-native-project');
@@ -464,6 +479,17 @@ try {
     () => planCapacitorShellStarter(options),
     /App target must produce an application/u,
   );
+  writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
+  const scriptPhase = [
+    '88888888 /* Run Script */ = { isa = PBXShellScriptBuildPhase;',
+    'shellScript = "echo hi"; };',
+  ].join(' ');
+  const scriptedProject = iosProjectWithAppId('dev.example.puzzle').replace(
+    'buildPhases = (11111111 /* Sources */);',
+    'buildPhases = (11111111 /* Sources */, 88888888 /* Run Script */);',
+  ) + `\n${scriptPhase}`;
+  writeFileSync(iosProjectFile, scriptedProject);
+  assert.throws(() => planCapacitorShellStarter(options), /shell script build phases/u);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
   writeFileSync(
     iosProjectFile,
@@ -698,6 +724,23 @@ try {
   );
   assert.throws(() => planCapacitorShellStarter(options), /application label differs/u);
   unlinkSync(releaseValues);
+  const wrongQualifiedName = '<resources><string name="app_name">Other Game</string></resources>';
+  const mainQualified = path.join(
+    root,
+    'apps/mobile-capacitor/android/app/src/main/res/values-en/strings.xml',
+  );
+  mkdirSync(path.dirname(mainQualified), { recursive: true });
+  writeFileSync(mainQualified, wrongQualifiedName);
+  assert.throws(() => planCapacitorShellStarter(options), /configuration-qualified/u);
+  unlinkSync(mainQualified);
+  const releaseQualified = path.join(
+    root,
+    'apps/mobile-capacitor/android/app/src/release/res/values-night/strings.xml',
+  );
+  mkdirSync(path.dirname(releaseQualified), { recursive: true });
+  writeFileSync(releaseQualified, wrongQualifiedName);
+  assert.throws(() => planCapacitorShellStarter(options), /configuration-qualified/u);
+  unlinkSync(releaseQualified);
   const androidManifest = path.join(
     root,
     'apps/mobile-capacitor/android/app/src/main/AndroidManifest.xml',
@@ -963,6 +1006,17 @@ try {
   const originalIosInfo = readFileSync(iosInfo, 'utf8');
   writeFileSync(iosInfo, originalIosInfo.replace('Puzzle Game', 'Other Game'));
   assert.throws(() => planCapacitorShellStarter(options), /ios project display name differs/u);
+  for (const [expected, actual, key] of [
+    ['$(EXECUTABLE_NAME)', 'MissingExecutable', 'CFBundleExecutable'],
+    ['$(PRODUCT_NAME)', 'Other Game', 'CFBundleName'],
+    ['<string>APPL</string>', '<string>FMWK</string>', 'CFBundlePackageType'],
+  ] as const) {
+    writeFileSync(iosInfo, originalIosInfo.replace(expected, actual));
+    assert.throws(
+      () => planCapacitorShellStarter(options),
+      new RegExp(`Release Info.plist ${key}`, 'u'),
+    );
+  }
   const bundlePlaceholder = '$(PRODUCT_BUNDLE_IDENTIFIER)';
   const invalidIosInfo = originalIosInfo.replace(bundlePlaceholder, 'dev.other.game');
   writeFileSync(iosInfo, invalidIosInfo);
@@ -1127,6 +1181,11 @@ try {
     'sourceSets.release.res.srcDirs = ["src/store/res"]',
   ].join('\n'));
   assert.throws(() => planCapacitorShellStarter(options), /custom resource sourceSets/u);
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
+    'sourceSets.main.manifest.srcFile("src/store/AndroidManifest.xml")',
+  ].join('\n'));
+  assert.throws(() => planCapacitorShellStarter(options), /custom manifest sourceSets/u);
   writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');
   writeFileSync(androidProjectFile, [
     'applicationId "dev.example.puzzle"',
@@ -1211,6 +1270,12 @@ try {
     "server: { url: 'https://stale.example', androidScheme: 'https' }",
   );
   writeFileSync(configFile, remoteConfig);
+  assert.throws(() => planCapacitorShellStarter(options), /server.url is unsupported/u);
+  const shorthandServer = originalConfig.replace(
+    "server: { androidScheme: 'https' }",
+    "server: { url, androidScheme: 'https' }",
+  ).replace('const config =', "const url = 'https://stale.example';\nconst config =");
+  writeFileSync(configFile, shorthandServer);
   assert.throws(() => planCapacitorShellStarter(options), /server.url is unsupported/u);
   const spreadServer = originalConfig.replace(
     "server: { androidScheme: 'https' }",

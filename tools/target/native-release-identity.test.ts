@@ -161,6 +161,12 @@ try {
   writeFileSync(appNameFile, '<resources><string name="app_name">Other Game</string></resources>');
   assert.throws(() => assertNativeReleaseIdentity(productionInput), /application label differs/u);
   writeShellFiles(shellRoot);
+  const qualifiedValues = join(shellRoot, 'android/app/src/main/res/values-en/strings.xml');
+  mkdirSync(join(shellRoot, 'android/app/src/main/res/values-en'), { recursive: true });
+  writeFileSync(qualifiedValues, mismatchedAppName);
+  assert.throws(() => assertNativeReleaseIdentity(productionInput), /configuration-qualified/u);
+  rmSync(qualifiedValues);
+  writeShellFiles(shellRoot);
   const launcherManifest = join(shellRoot, 'android/app/src/main/AndroidManifest.xml');
   const validLauncherManifest = readFileSync(launcherManifest, 'utf8');
   writeFileSync(
@@ -248,6 +254,15 @@ try {
     () => assertNativeReleaseIdentity(appliedIdentityInput),
     /custom resource sourceSets/u,
     'release resource sourceSets must fail',
+  );
+  writeShellFiles(shellRoot);
+  writeFileSync(groovy, [
+    readFileSync(groovy, 'utf8'),
+    'sourceSets.main.manifest.srcFile("src/store/AndroidManifest.xml")',
+  ].join('\n'));
+  assert.throws(
+    () => assertNativeReleaseIdentity(appliedIdentityInput),
+    /custom manifest sourceSets/u,
   );
   writeShellFiles(shellRoot);
   const androidRootGradle = join(shellRoot, 'android/build.gradle');
@@ -435,6 +450,16 @@ try {
   };
   assert.doesNotThrow(() => assertNativeReleaseIdentity(productionIosInput));
   const compiledIosProject = readFileSync(iosProject, 'utf8');
+  const scriptedIosProject = compiledIosProject.replace(
+    'buildPhases = (00000009 /* Sources */);',
+    'buildPhases = (00000009 /* Sources */, 00000011 /* Script */);',
+  ) + '\n00000011 /* Script */ = { isa = PBXShellScriptBuildPhase; shellScript = "echo hi"; };';
+  writeFileSync(iosProject, scriptedIosProject);
+  assert.throws(
+    () => assertNativeReleaseIdentity(productionIosInput),
+    /shell script build phases/u,
+  );
+  writeFileSync(iosProject, compiledIosProject);
   const uncompiledIosProject = compiledIosProject.replace(
     'files = (00000008 /* SceneDelegate.swift in Sources */);',
     'files = ();',
@@ -496,7 +521,10 @@ try {
   const iosPlist = join(shellRoot, 'ios/App/App/Info.plist');
   const originalPlist = readFileSync(iosPlist, 'utf8');
   const invalidPlistIdentities: readonly [string, string, string][] = [
+    ['$(EXECUTABLE_NAME)', 'MissingExecutable', 'CFBundleExecutable'],
     ['$(PRODUCT_BUNDLE_IDENTIFIER)', 'dev.other.game', 'CFBundleIdentifier'],
+    ['$(PRODUCT_NAME)', 'Other Game', 'CFBundleName'],
+    ['<string>APPL</string>', '<string>FMWK</string>', 'CFBundlePackageType'],
     ['$(MARKETING_VERSION)', '9.0.0', 'CFBundleShortVersionString'],
     ['$(CURRENT_PROJECT_VERSION)', '99', 'CFBundleVersion'],
   ];
@@ -826,7 +854,10 @@ function writeShellFiles(root: string): void {
   writeFileSync(iosPlist, [
     '<plist><dict>',
     '<key>CFBundleDisplayName</key><string>Puzzle Game</string>',
+    '<key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>',
     '<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>',
+    '<key>CFBundleName</key><string>$(PRODUCT_NAME)</string>',
+    '<key>CFBundlePackageType</key><string>APPL</string>',
     '<key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>',
     '<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>',
     '<key>UIApplicationSceneManifest</key><dict>',

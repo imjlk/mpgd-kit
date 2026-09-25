@@ -15,6 +15,7 @@ import {
   assertIosReleaseProductName,
   countGradleIdentityWrites,
   hasAndroidDisplayNameResourceOverride,
+  hasAndroidManifestSourceSetOverride,
   hasAndroidResourceSourceSetOverride,
   hasGradleBracketIdentityWrite,
   hasGradleIdentityMutation,
@@ -164,6 +165,11 @@ function assertAndroidIdentity(file: string, expected: AndroidIdentity): void {
       `Native release preflight cannot resolve custom resource sourceSets in ${file}.`,
     );
   }
+  if (hasAndroidManifestSourceSetOverride(source)) {
+    throw new Error(
+      `Native release preflight cannot resolve custom manifest sourceSets in ${file}.`,
+    );
+  }
   if (/\bproductFlavors\b/u.test(code)) {
     throw new Error('Native release preflight does not support Android product flavors.');
   }
@@ -213,6 +219,9 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
     }
     if (hasAndroidResourceSourceSetOverride(source)) {
       throw new Error('Native release preflight cannot resolve custom resource sourceSets.');
+    }
+    if (hasAndroidManifestSourceSetOverride(source)) {
+      throw new Error('Native release preflight cannot resolve custom manifest sourceSets.');
     }
     if (isSettingsScript) {
       assertAndroidSettingsNoAppRemap(source);
