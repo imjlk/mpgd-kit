@@ -89,6 +89,10 @@ cannot be a symlink to another location. Before dependency installation,
 tracked symlinks anywhere in the game repository are checked so they cannot
 point outside the cloned checkout; this also covers optional target-config
 extensions and workspace package sources.
+On Windows checkouts where Git materializes a symlink as a plain file, its
+recorded target is still checked. Git submodules are not yet supported as
+release inputs; pinning rejects them explicitly instead of cloning an empty
+gitlink directory and failing later in the build.
 The install explicitly includes development dependencies because game build
 tools are normally declared there. The pinned child clears the parent CLI's
 argument override, and the installed target-config matrix must resolve inside

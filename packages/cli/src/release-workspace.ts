@@ -127,6 +127,11 @@ export async function pinNativeDeploymentPlan(
       'Pinned release inputs have uncommitted changes. Commit the lockfile and deployment configuration first.',
     );
   }
+  assertNoGitSubmodules(await listTrackedIndex(
+    repositoryRoot,
+    options.environment,
+    options.signal,
+  ));
   for (const file of [
     path.join(repositoryRoot, 'pnpm-lock.yaml'),
     path.join(gameRoot, 'mpgd.targets.json'),
@@ -473,27 +478,56 @@ async function assertNoEscapingTrackedSymlinks(
   environment: NodeJS.ProcessEnv,
   signal: AbortSignal | undefined,
 ): Promise<void> {
+  const entries = await listTrackedIndex(workspaceRoot, environment, signal);
+  assertNoGitSubmodules(entries);
+  for (const record of entries) {
+    const separator = record.indexOf('\t');
+    if (separator === -1 || !record.startsWith('120000 ')) {
+      continue;
+    }
+    const file = path.join(workspaceRoot, record.slice(separator + 1));
+    const entry = lstatSync(file);
+    const linkTarget = entry.isSymbolicLink()
+      ? readlinkSync(file)
+      : entry.isFile()
+        ? readFileSync(file, 'utf8')
+        : undefined;
+    if (linkTarget === undefined) {
+      throw new Error(`Pinned release Git symlink has an unsupported checkout type: ${file}`);
+    }
+    const target = path.resolve(path.dirname(file), linkTarget);
+    const relative = path.relative(workspaceRoot, target);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`)
+      || path.isAbsolute(relative)) {
+      throw new Error(`Pinned release source symlink escapes its checkout: ${file}`);
+    }
+  }
+}
+
+async function listTrackedIndex(
+  repositoryRoot: string,
+  environment: NodeJS.ProcessEnv | undefined,
+  signal: AbortSignal | undefined,
+): Promise<readonly string[]> {
   const tracked = await runReleaseProcess({
     command: 'git',
-    args: ['-C', workspaceRoot, 'ls-files', '--stage', '-z'],
-    cwd: workspaceRoot,
+    args: ['-C', repositoryRoot, 'ls-files', '--stage', '-z'],
+    cwd: repositoryRoot,
     environment,
     timeoutMs: 30_000,
     maxOutputBytes: 16 * 1024 * 1024,
     signal,
     captureMachineStdout: true,
   });
-  for (const record of machineOutput(tracked).split('\0')) {
-    const separator = record.indexOf('\t');
-    if (separator === -1 || !record.startsWith('120000 ')) {
-      continue;
-    }
-    const file = path.join(workspaceRoot, record.slice(separator + 1));
-    const target = path.resolve(path.dirname(file), readlinkSync(file));
-    const relative = path.relative(workspaceRoot, target);
-    if (relative === '..' || relative.startsWith(`..${path.sep}`)
-      || path.isAbsolute(relative)) {
-      throw new Error(`Pinned release source symlink escapes its checkout: ${file}`);
+  return machineOutput(tracked).split('\0').filter((record) => record !== '');
+}
+
+function assertNoGitSubmodules(entries: readonly string[]): void {
+  for (const record of entries) {
+    if (record.startsWith('160000 ')) {
+      throw new Error(
+        'Pinned native releases do not support Git submodules; include required game inputs directly in the repository.',
+      );
     }
   }
 }

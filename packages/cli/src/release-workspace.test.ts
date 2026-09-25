@@ -518,6 +518,45 @@ fs.writeFileSync(manifest, JSON.stringify({
     /source symlink escapes its checkout/u,
   );
   assert.deepEqual(readdirSync(workspaces), []);
+  await assert.rejects(
+    preparePinnedReleaseWorkspace(externalInput, {
+      temporaryParent: workspaces,
+      environment: {
+        ...process.env,
+        GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: 'core.symlinks',
+        GIT_CONFIG_VALUE_0: 'false',
+      },
+    }),
+    /source symlink escapes its checkout/u,
+  );
+  assert.deepEqual(readdirSync(workspaces), []);
+  run(
+    'git',
+    ['update-index', '--add', '--cacheinfo', `160000,${input.gameGitSha},packages/linked-module`],
+    repository,
+  );
+  run(
+    'git',
+    [
+      '-c',
+      'user.name=mpgd-test',
+      '-c',
+      'user.email=mpgd-test@example.invalid',
+      'commit',
+      '-qm',
+      'unsupported submodule',
+    ],
+    repository,
+  );
+  const submodulePlan = planNativeDeployment({ game, profile: 'beta', targets: ['android'] });
+  await assert.rejects(
+    pinNativeDeploymentPlan(submodulePlan, {
+      packageVersion: '0.35.0',
+      gitSha: 'a'.repeat(40),
+    }),
+    /do not support Git submodules/u,
+  );
   console.info('Pinned multi-game release workspace passed.');
 } finally {
   rmSync(fixture, { recursive: true, force: true });
