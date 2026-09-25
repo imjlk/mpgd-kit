@@ -9,12 +9,12 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const pluginRoot = join(repoRoot, 'native-plugins/capacitor-game-services');
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'mpgd-packed-swift-'));
 
-function run(command, args, cwd) {
+function run(command, args, cwd, timeout = 180_000) {
   const result = spawnSync(command, args, {
     cwd,
     env: process.env,
     encoding: 'utf8',
-    timeout: 180_000,
+    timeout,
     maxBuffer: 8 * 1024 * 1024,
   });
   assert.equal(result.error, undefined, `${command} could not start: ${result.error?.message}`);
@@ -41,6 +41,14 @@ try {
     const rule = resource.rule;
     return rule === 'process' || rule?.process !== undefined || rule?.kind === 'process';
   }), 'Packed Swift target does not process the privacy resource.');
+  const simulatorSdk = run('xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-path'], extracted).trim();
+  run('swift', [
+    'build',
+    '--package-path', extracted,
+    '--target', 'MpgdCapacitorGameServices',
+    '--triple', 'arm64-apple-ios15.0-simulator',
+    '--sdk', simulatorSdk,
+  ], extracted, 600_000);
   console.log('Packed Swift Package and privacy resource passed.');
 } finally {
   rmSync(fixtureRoot, { recursive: true, force: true });

@@ -9,22 +9,26 @@ forms of evidence. None substitutes for another.
 
 Run `pnpm build:packages` before `pnpm smoke:native-packed-consumer`. The smoke
 packs the public dependency closure into npm tarballs, installs only those
-tarballs in a temporary project outside the workspace, type-checks its imports,
+tarballs in a temporary project outside the workspace, verifies that the
+installed dependency graph resolves to those exact tarballs, type-checks its
+imports,
 and exercises the installed JavaScript adapter, storage bridge, lifecycle, and
 scoped native HTTP transport. It also builds a minimal external Vite app from
 the installed package exports. It verifies that a missing optional provider is
 reported as unsupported and an installed but unconfigured provider is reported
 as configuration-required and cannot perform an operation.
 
-The same smoke checks that the published plugin tarball contains its Java and
-Swift implementation, Capacitor registration metadata, Swift Package manifest,
-and `PrivacyInfo.xcprivacy`. The privacy manifest declares the legacy
-`UserDefaults` migration reason; an app must still review its own privacy
+The same smoke checks that the published plugin tarball contains its Gradle,
+Java and Swift implementation, Capacitor registration metadata, Swift Package
+manifest, and `PrivacyInfo.xcprivacy`. It parses the plist hierarchy to require
+the UserDefaults `CA92.1` reason in one accessed-API entry. That reason covers
+legacy `UserDefaults` migration; an app must still review its own privacy
 disclosures and other SDKs. The macOS CI job also runs
-`pnpm smoke:native-packed-swift` to parse the Swift Package and privacy resource
-from the extracted npm tarball. The CI native jobs separately compile and exercise
-the Android and iOS source helpers, then build unsigned staging targets. The
-tarball check is not a substitute for compiling a signed external app.
+`pnpm smoke:native-packed-swift` to compile the extracted npm tarball's Swift
+target for the iOS simulator SDK and process its privacy resource. The CI native
+jobs separately compile and exercise the Android and iOS source helpers, then
+build unsigned staging targets. The tarball check is not a substitute for
+compiling a signed external app.
 
 For game-owned shell creation, also pack `@mpgd/cli` and run
 `MPGD_PACKED_CLI_TARBALL=/absolute/path/to/mpgd-cli.tgz pnpm

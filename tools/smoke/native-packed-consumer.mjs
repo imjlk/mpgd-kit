@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -87,6 +87,7 @@ function verifyNativeTarball(tarball) {
     'package/dist/index.js',
     'package/dist/index.d.ts',
     'package/Package.swift',
+    'package/android/build.gradle',
     'package/android/src/main/AndroidManifest.xml',
     'package/android/src/main/java/dev/mpgd/capacitor/CapacitorGameServicesPlugin.java',
     'package/android/src/main/java/dev/mpgd/capacitor/LocalJsonStorage.java',
@@ -102,8 +103,19 @@ function verifyNativeTarball(tarball) {
   assert.match(packageSwift, /\.process\("PrivacyInfo\.xcprivacy"\)/u);
   const privacy = run('tar', ['-xOf', tarball,
     'package/ios/Sources/CapacitorGameServices/PrivacyInfo.xcprivacy'], repoRoot);
-  assert.match(privacy, /NSPrivacyAccessedAPICategoryUserDefaults/u);
-  assert.match(privacy, /CA92\.1/u);
+  const privacyFile = join(fixtureRoot, 'packed-privacy.xcprivacy');
+  writeFileSync(privacyFile, privacy);
+  const privacyManifest = JSON.parse(run('python3', [
+    '-c',
+    'import json,plistlib,sys; print(json.dumps(plistlib.load(open(sys.argv[1], "rb"))))',
+    privacyFile,
+  ], repoRoot));
+  const accessed = privacyManifest.NSPrivacyAccessedAPITypes;
+  assert.ok(Array.isArray(accessed) && accessed.some((item) =>
+    item?.NSPrivacyAccessedAPIType === 'NSPrivacyAccessedAPICategoryUserDefaults'
+      && Array.isArray(item.NSPrivacyAccessedAPITypeReasons)
+      && item.NSPrivacyAccessedAPITypeReasons.includes('CA92.1')),
+  'Packed privacy manifest must declare the UserDefaults CA92.1 reason together.');
   const java = run('tar', ['-xOf', tarball,
     'package/android/src/main/java/dev/mpgd/capacitor/CapacitorGameServicesPlugin.java'], repoRoot);
   assert.match(java, /@CapacitorPlugin\(name = "CapacitorGameServices"\)/u);
@@ -302,9 +314,35 @@ try {
   verifyNativeTarball(packed.get('@mpgd/capacitor-game-services'));
   writeConsumer(packed);
   run('pnpm', ['install', '--no-frozen-lockfile'], consumerRoot);
-  const lockfile = readFileSync(join(consumerRoot, 'pnpm-lock.yaml'), 'utf8');
+  const listed = JSON.parse(run('pnpm', ['list', '--json', '--depth', 'Infinity'], consumerRoot));
+  const installed = new Map();
+  function collectDependencies(dependencies) {
+    for (const [name, entry] of Object.entries(dependencies ?? {})) {
+      if (!installed.has(name)) installed.set(name, []);
+      installed.get(name).push(entry);
+      collectDependencies(entry.dependencies);
+    }
+  }
+  for (const project of listed) {
+    collectDependencies(project.dependencies);
+  }
+  const realConsumerRoot = realpathSync(consumerRoot);
   for (const [name, tarball] of packed) {
-    assert.ok(lockfile.includes(basename(tarball)), `${name} resolved outside the local tarball set`);
+    const expectedManifest = run('tar', ['-xOf', tarball, 'package/package.json'], repoRoot);
+    const expectedEntry = run('tar', ['-xOf', tarball, 'package/dist/index.js'], repoRoot);
+    const matches = (installed.get(name) ?? []).some((entry) => {
+      if (typeof entry.path !== 'string' || typeof entry.resolved !== 'string'
+        || !entry.resolved.startsWith('file:')) return false;
+      const location = realpathSync(entry.path);
+      const insideConsumer = relative(realConsumerRoot, location);
+      if (insideConsumer.startsWith('..') || insideConsumer === '') return false;
+      if (realpathSync(resolve(consumerRoot, entry.resolved.slice(5))) !== realpathSync(tarball)) {
+        return false;
+      }
+      return readFileSync(join(location, 'package.json'), 'utf8') === expectedManifest
+        && readFileSync(join(location, 'dist/index.js'), 'utf8') === expectedEntry;
+    });
+    assert.ok(matches, `${name} was not installed from its local tarball contents`);
   }
   run('pnpm', ['exec', 'ttsc', '--noEmit', '-p', 'tsconfig.json'], consumerRoot);
   run('node', ['consumer.mjs'], consumerRoot);
