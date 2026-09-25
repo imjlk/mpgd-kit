@@ -20,6 +20,7 @@ import type { ImmutableNativeBuildRecord } from './release-state.js';
 const pinnedAscVersion = '5.5.0';
 const sha256Pattern = /^[0-9a-f]{64}$/u;
 const teamIdPattern = /^[A-Z0-9]{10}$/u;
+const apiKeyIdPattern = /^[A-Z0-9]{10}$/u;
 const ascIdPattern = /^[A-Za-z0-9][A-Za-z0-9-]*$/u;
 const marketingVersionPattern = /^\d+(?:\.\d+){0,2}$/u;
 const uploadTimeoutMs = 12 * 60 * 1000;
@@ -74,26 +75,31 @@ export class IosSubmissionUncertainError extends Error {
 /** A narrow, testable command boundary; no arbitrary public submitter choice. */
 export type AscJsonRunner = (args: readonly string[], timeoutMs: number) => Promise<unknown>;
 
+interface ResolvedPreflight {
+  readonly marketingVersion: string;
+  readonly buildNumber: string;
+}
+
 /** Verify and use exactly the pinned asc release, with isolated environment auth. */
 export async function submitVerifiedIosBuild(
   input: IosTestFlightSubmissionInput,
 ): Promise<IosTestFlightSubmissionResult> {
+  if (process.platform !== 'darwin') {
+    throw new Error('Signed iOS IPA verification requires macOS.');
+  }
   const tempRoot = mkdtempSync(path.join(tmpdir(), 'mpgd-asc-session-'));
   try {
     if (!path.isAbsolute(input.ascBinary)) {
       throw new Error('asc binary must be an absolute file path.');
     }
-    const binary = path.join(tempRoot, process.platform === 'win32' ? 'asc.exe' : 'asc');
+    const binary = path.join(tempRoot, 'asc');
     copyFileSync(input.ascBinary, binary);
     chmodSync(binary, 0o700);
     await verifyPinnedAscBinary(binary);
     const stagedIpa = path.join(tempRoot, 'release.ipa');
     copyFileSync(input.ipaFile, stagedIpa);
     const stagedInput = { ...input, ipaFile: stagedIpa };
-    const { marketingVersion, buildNumber } = await preflight(stagedInput);
-    if (process.platform !== 'darwin') {
-      throw new Error('Signed iOS IPA verification requires macOS.');
-    }
+    const resolvedPreflight = await preflight(stagedInput);
     const { inspectSignedIosIpa } = await import(
       new URL('./ios-ipa-inspection.js', import.meta.url).href
     ) as { inspectSignedIosIpa: (file: string, expected: {
@@ -105,8 +111,8 @@ export async function submitVerifiedIosBuild(
     };
     inspectSignedIosIpa(stagedIpa, {
       expectedBundleId: input.bundleId,
-      expectedMarketingVersion: marketingVersion,
-      expectedBuildNumber: buildNumber,
+      expectedMarketingVersion: resolvedPreflight.marketingVersion,
+      expectedBuildNumber: resolvedPreflight.buildNumber,
       expectedTeamId: input.record.inspectedTeamId ?? '',
     });
     const environment = isolatedAscEnvironment(input, tempRoot);
@@ -131,7 +137,7 @@ export async function submitVerifiedIosBuild(
         throw new Error('asc returned invalid JSON.');
       }
     };
-    return await submitVerifiedIosBuildWithRunner(stagedInput, runner);
+    return await submitVerifiedIosBuildResolved(stagedInput, runner, resolvedPreflight);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -142,7 +148,14 @@ export async function submitVerifiedIosBuildWithRunner(
   input: IosTestFlightSubmissionInput,
   run: AscJsonRunner,
 ): Promise<IosTestFlightSubmissionResult> {
-  const { marketingVersion, buildNumber } = await preflight(input);
+  return submitVerifiedIosBuildResolved(input, run, await preflight(input));
+}
+
+async function submitVerifiedIosBuildResolved(
+  input: IosTestFlightSubmissionInput,
+  run: AscJsonRunner,
+  { marketingVersion, buildNumber }: ResolvedPreflight,
+): Promise<IosTestFlightSubmissionResult> {
   const base = {
     appStoreAppId: input.appStoreAppId,
     bundleId: input.bundleId,
@@ -156,7 +169,7 @@ export async function submitVerifiedIosBuildWithRunner(
     || app.data.attributes.bundleId !== input.bundleId) {
     throw new Error('App Store Connect app ID does not match the verified IPA bundle ID.');
   }
-  const expectedGroup = await run(
+  const groupsResponse = await run(
     [
       'testflight',
       'groups',
@@ -170,7 +183,7 @@ export async function submitVerifiedIosBuildWithRunner(
     ],
     lookupTimeoutMs,
   );
-  if (!findInternalGroup(expectedGroup, input.internalGroupId)) {
+  if (!findInternalGroup(groupsResponse, input.internalGroupId)) {
     throw new Error('Configured TestFlight group is not an internal group of this app.');
   }
 
@@ -193,7 +206,7 @@ export async function submitVerifiedIosBuildWithRunner(
         '--version', marketingVersion, '--build-number', buildNumber,
         '--checksum',
       ], uploadTimeoutMs);
-    } catch {
+    } catch (error) {
       const observed = await lookupBuild(input, marketingVersion, buildNumber, run).catch(
         () => undefined,
       );
@@ -201,7 +214,7 @@ export async function submitVerifiedIosBuildWithRunner(
         ...base,
         status: 'unknown',
         ...(observed === undefined ? {} : { buildId: observed.id }),
-        detail: 'Upload result was not confirmed; inspect App Store Connect before retry.',
+        detail: `Upload result was not confirmed${failureReason(error)}; inspect App Store Connect before retry.`,
       };
     }
     try {
@@ -259,12 +272,12 @@ export async function submitVerifiedIosBuildWithRunner(
   let build: ObservedBuild | undefined;
   try {
     build = await lookupBuild(input, marketingVersion, buildNumber, run);
-  } catch {
+  } catch (error) {
     return {
       ...base,
       status: 'uploaded',
       uploadId,
-      detail: 'Upload committed; build processing lookup is temporarily unavailable.',
+      detail: `Upload committed; build processing lookup is temporarily unavailable${failureReason(error)}.`,
     };
   }
   if (build === undefined) {
@@ -314,9 +327,10 @@ export async function submitVerifiedIosBuildWithRunner(
       status,
       uploadId,
       buildId: build.id,
-      detail: 'Build is processed, but internal group assignment needs inspection.',
+      detail: `Build is processed, but internal group assignment needs inspection${failureReason(error)}.`,
     };
   }
+  let membershipFailure: unknown;
   try {
     const memberships = await run(
       ['testflight', 'groups', 'list', '--build-id', build.id, '--internal'],
@@ -325,7 +339,8 @@ export async function submitVerifiedIosBuildWithRunner(
     if (findInternalGroup(memberships, input.internalGroupId)) {
       return { ...base, status: 'testflight-ready', uploadId, buildId: build.id };
     }
-  } catch {
+  } catch (error) {
+    membershipFailure = error;
     // Membership can be queried again by explicit build ID.
   }
   return {
@@ -333,7 +348,7 @@ export async function submitVerifiedIosBuildWithRunner(
     status: 'unknown',
     uploadId,
     buildId: build.id,
-    detail: 'Group assignment response was not confirmed by a membership read.',
+    detail: `Group assignment response was not confirmed by a membership read${failureReason(membershipFailure)}.`,
   };
 }
 
@@ -419,10 +434,11 @@ function assertGroupAssignment(value: unknown, buildId: string, groupId: string)
   }
 }
 
-async function preflight(input: IosTestFlightSubmissionInput): Promise<{
-  readonly marketingVersion: string;
-  readonly buildNumber: string;
-}> {
+function failureReason(error: unknown): string {
+  return error instanceof ReleaseProcessError ? ` (${error.reason})` : '';
+}
+
+async function preflight(input: IosTestFlightSubmissionInput): Promise<ResolvedPreflight> {
   const version = input.record.platformVersion;
   const buildNumber = version.buildNumber;
   const marketingVersion = version.marketingVersion;
@@ -453,7 +469,7 @@ async function preflight(input: IosTestFlightSubmissionInput): Promise<{
 }
 
 function isolatedAscEnvironment(input: IosTestFlightSubmissionInput, directory: string): NodeJS.ProcessEnv {
-  if (!/^[A-Z0-9]{10}$/u.test(input.apiKeyId)
+  if (!apiKeyIdPattern.test(input.apiKeyId)
     || input.apiIssuerId.trim() === '' || input.apiPrivateKeyBase64.trim() === '') {
     throw new Error('App Store Connect API credentials are incomplete.');
   }

@@ -58,8 +58,10 @@ interface MockState {
   existingBuild?: boolean;
   membership?: boolean;
   throwUpload?: boolean;
+  uploadFailureReason?: ReleaseProcessError['reason'];
   malformedUpload?: boolean;
   groupAction?: string;
+  groupIds?: string[];
   groupFailure?: 'network' | 'compliance';
   appBundleId?: string;
   uploadVisible?: boolean;
@@ -126,6 +128,9 @@ function mock(overrides: Partial<MockState> = {}): { state: MockState; run: AscJ
       };
     }
     if (command.startsWith('builds upload')) {
+      if (state.uploadFailureReason !== undefined) {
+        throw new ReleaseProcessError(state.uploadFailureReason, '', 1);
+      }
       if (state.throwUpload) {
         throw new Error('upload response lost');
       }
@@ -152,7 +157,11 @@ function mock(overrides: Partial<MockState> = {}): { state: MockState; run: AscJ
           1,
         );
       }
-      return { action: state.groupAction ?? 'added', buildId: 'build-1', groupIds: [groupId] };
+      return {
+        action: state.groupAction ?? 'added',
+        buildId: 'build-1',
+        groupIds: state.groupIds ?? [groupId],
+      };
     }
     throw new Error(`Unexpected asc command: ${command}`);
   };
@@ -189,6 +198,16 @@ try {
 
   const noMembership = mock({ processingState: 'VALID', membership: false });
   assert.equal((await submitVerifiedIosBuildWithRunner(input, noMembership.run)).status, 'unknown');
+  const alreadyGrouped = mock({ processingState: 'VALID', groupIds: [] });
+  assert.equal(
+    (await submitVerifiedIosBuildWithRunner(input, alreadyGrouped.run)).status,
+    'testflight-ready',
+  );
+  const unrelatedGroup = mock({ processingState: 'VALID', groupIds: ['other-group'] });
+  assert.equal(
+    (await submitVerifiedIosBuildWithRunner(input, unrelatedGroup.run)).status,
+    'unknown',
+  );
   const transientGroup = mock({ processingState: 'VALID', groupFailure: 'network' });
   assert.equal(
     (await submitVerifiedIosBuildWithRunner(input, transientGroup.run)).status,
@@ -232,6 +251,16 @@ try {
 
   const lost = mock({ throwUpload: true });
   assert.equal((await submitVerifiedIosBuildWithRunner(input, lost.run)).status, 'unknown');
+  const timedOut = mock({ uploadFailureReason: 'timeout' });
+  assert.match(
+    (await submitVerifiedIosBuildWithRunner(input, timedOut.run)).detail ?? '',
+    /\(timeout\)/u,
+  );
+  const aborted = mock({ uploadFailureReason: 'abort' });
+  assert.match(
+    (await submitVerifiedIosBuildWithRunner(input, aborted.run)).detail ?? '',
+    /\(abort\)/u,
+  );
   const malformed = mock({ malformedUpload: true });
   assert.equal((await submitVerifiedIosBuildWithRunner(input, malformed.run)).status, 'unknown');
   await assert.rejects(
