@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.tools.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": false,
+    "outDir": "node_modules/.cache/mpgd-native-build",
+    "rootDir": "."
+  },
+  "include": ["tools/target/build-target.ts"]
+}

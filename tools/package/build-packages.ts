@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   copyFileSync,
   existsSync,
@@ -10,6 +10,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { basename, dirname, join, relative } from 'node:path';
+
+import { buildSync } from 'esbuild';
 
 import {
   discoverBuildablePackages,
@@ -80,7 +82,71 @@ for (const workspacePackage of sortByWorkspaceDependencies(packages)) {
 
   assertFile(join(distDir, 'index.js'));
   assertFile(join(distDir, 'index.d.ts'));
+  if (workspacePackage.name === '@mpgd/cli') {
+    buildPackagedNativeTarget(workspacePackage, distDir);
+  }
   console.log(`Built ${workspacePackage.name}`);
+}
+
+function buildPackagedNativeTarget(workspacePackage: WorkspacePackage, distDir: string): void {
+  run('pnpm', ['exec', 'ttsc', '-p', 'tsconfig.native-build-package.json']);
+  const entry = join(
+    'node_modules',
+    '.cache',
+    'mpgd-native-build',
+    'tools',
+    'target',
+    'build-target.js',
+  );
+  const output = join(distDir, 'native-build-target.js');
+  assertFile(entry);
+  const result = buildSync({
+    entryPoints: [entry],
+    outfile: output,
+    bundle: true,
+    platform: 'node',
+    format: 'esm',
+    packages: 'external',
+    metafile: true,
+  });
+  const emitted = result.metafile.outputs[output];
+  if (emitted === undefined) {
+    throw new Error('Native build bundle output is missing from esbuild metadata.');
+  }
+  for (const imported of emitted.imports) {
+    if (!imported.external || imported.path.startsWith('node:')) {
+      continue;
+    }
+    const segments = imported.path.split('/');
+    let dependency = segments[0];
+    if (imported.path.startsWith('@')) {
+      dependency = segments.slice(0, 2).join('/');
+    }
+    if (dependency === undefined || workspacePackage.packageJson.dependencies?.[dependency] === undefined) {
+      throw new Error(`Packaged native builder is missing CLI runtime dependency ${dependency}.`);
+    }
+  }
+
+  const kitGitSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim();
+  if (!/^[0-9a-f]{40}$/u.test(kitGitSha)) {
+    throw new Error('Package build requires a full Kit Git SHA.');
+  }
+  const worktreeStatus = execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim();
+  const packageVersion = workspacePackage.packageJson.version;
+  if (packageVersion === undefined) {
+    throw new Error('@mpgd/cli package version is missing.');
+  }
+  writeFileSync(join(distDir, 'native-build-info.json'), `${JSON.stringify({
+    kitGitSha,
+    kitDirty: worktreeStatus.length > 0,
+    packageVersion,
+  }, null, 2)}\n`);
 }
 
 function selectBuildablePackages(

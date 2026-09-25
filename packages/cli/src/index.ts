@@ -66,7 +66,7 @@ import {
   defaultOfflinePlaytestOutputDir,
   runOfflinePlaytestPackaging,
 } from './offline-playtest.js';
-import { targetConfigExtensionsFileEnv } from './target-config-env.js';
+import { targetConfigExtensionsFileEnv, targetConfigMatrixFileEnv } from './target-config-env.js';
 
 export {
   renderGameAcceptanceMarkdown,
@@ -1687,7 +1687,7 @@ const targetCommand = defineI18n({
           action: 'build',
           target,
           profile,
-          env: createTargetCommandEnv(ctx.values),
+          env: createTargetCommandEnv(ctx.values, { nativeBuildTarget: target }),
           ...(variant === undefined ? {} : { variant }),
         });
       },
@@ -3331,12 +3331,20 @@ interface PackageJson {
   readonly devDependencies?: Record<string, string>;
 }
 
-function createTargetCommandEnv(values: TargetCommandEnvInput): NodeJS.ProcessEnv {
+function createTargetCommandEnv(
+  values: TargetCommandEnvInput,
+  options: { readonly nativeBuildTarget?: string } = {},
+): NodeJS.ProcessEnv {
   const targetsFile = path.resolve(
     readOptionalString(values['targets-file']) ?? 'mpgd.targets.json',
   );
   const gameRoot = path.dirname(targetsFile);
-  const kitPath = resolveKitPathForTarget(values);
+  const standaloneNative = resolveStandaloneNativeBuild(
+    targetsFile,
+    options.nativeBuildTarget,
+    values,
+  );
+  const kitPath = standaloneNative === undefined ? resolveKitPathForTarget(values) : gameRoot;
   const resolvedTargetsFile = readOptionalString(values['resolved-targets-file']);
   const targetConfigExtensionsFile = resolveTargetConfigExtensionsFile(
     gameRoot,
@@ -3350,14 +3358,118 @@ function createTargetCommandEnv(values: TargetCommandEnvInput): NodeJS.ProcessEn
       : { outputFile: path.resolve(resolvedTargetsFile) }),
   });
 
-  return {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     ...createGameOwnedReleaseEnv(gameRoot, process.env),
-    MPGD_KIT_PATH: kitPath,
     MPGD_PLATFORM_TARGETS_FILE: preparedTargetsFile,
     ...(targetConfigExtensionsFile === undefined
       ? {}
       : { [targetConfigExtensionsFileEnv]: targetConfigExtensionsFile }),
+  };
+  if (standaloneNative === undefined) {
+    env.MPGD_KIT_PATH = kitPath;
+    delete env.MPGD_NATIVE_PACKAGED_BUILD;
+    delete env.MPGD_PACKAGED_KIT_GIT_SHA;
+  } else {
+    delete env.MPGD_KIT_PATH;
+    env.MPGD_NATIVE_PACKAGED_BUILD = '1';
+    env.MPGD_PACKAGED_KIT_GIT_SHA = standaloneNative.kitGitSha;
+    env.MPGD_SKIP_BUILD_TARGET_PREFLIGHT = '1';
+    env[targetConfigMatrixFileEnv] = standaloneNative.targetMatrixFile;
+  }
+  return env;
+}
+
+function resolveStandaloneNativeBuild(
+  targetsFile: string,
+  requestedTarget: string | undefined,
+  values: TargetCommandEnvInput,
+): { readonly kitGitSha: string; readonly targetMatrixFile: string } | undefined {
+  if ((requestedTarget !== 'android' && requestedTarget !== 'ios')
+    || readOptionalString(values['kit-path']) !== undefined
+    || readOptionalString(process.env.MPGD_KIT_PATH) !== undefined) {
+    return undefined;
+  }
+  const raw = readJsonForCli(targetsFile);
+  assertJsonObject(raw, `targets file ${targetsFile}`);
+  assertJsonObject(raw.targets, `targets in ${targetsFile}`);
+  const selected = raw.targets[requestedTarget];
+  const expectedKind = requestedTarget === 'android' ? 'capacitor-android' : 'capacitor-ios';
+  if (typeof selected !== 'object' || selected === null || Array.isArray(selected)
+    || (selected as { readonly kind?: unknown }).kind !== expectedKind) {
+    return undefined;
+  }
+  if (JSON.stringify(selected).includes('${MPGD_KIT_PATH}')) {
+    if (detectedKitRoot !== undefined) {
+      return undefined;
+    }
+    throw new Error(
+      `Native target ${requestedTarget} still references the Kit checkout. Run mpgd target init capacitor to create a game-owned shell.`,
+    );
+  }
+  const gameRoot = path.dirname(targetsFile);
+  const gameRootReal = realpathSync(gameRoot);
+  for (const field of ['shellApp', 'webDir'] as const) {
+    const configuredPath = (selected as Record<string, unknown>)[field];
+    if (typeof configuredPath !== 'string') {
+      return undefined;
+    }
+    const candidate = path.resolve(
+      gameRoot,
+      configuredPath
+        .replaceAll('${MPGD_GAME_ROOT}', gameRoot)
+        .replaceAll('${MPGD_GAME_APP_ROOT}', gameRoot),
+    );
+    let existingAncestor = candidate;
+    while (!existsSync(existingAncestor)) {
+      const parent = path.dirname(existingAncestor);
+      if (parent === existingAncestor) {
+        throw new Error(
+          `Cannot resolve native target ${requestedTarget} ${field}: ${configuredPath}`,
+        );
+      }
+      existingAncestor = parent;
+    }
+    const canonicalCandidate = path.resolve(
+      realpathSync(existingAncestor),
+      path.relative(existingAncestor, candidate),
+    );
+    const relativeToGame = path.relative(gameRootReal, canonicalCandidate);
+    if (relativeToGame === '' || relativeToGame === '..'
+      || relativeToGame.startsWith(`..${path.sep}`)
+      || path.isAbsolute(relativeToGame)) {
+      if (detectedKitRoot !== undefined) {
+        return undefined;
+      }
+      throw new Error(
+        `Native target ${requestedTarget} ${field} must stay inside its game project. Run mpgd target init capacitor to create a game-owned shell.`,
+      );
+    }
+  }
+  const script = path.join(packageRoot, 'dist/native-build-target.js');
+  const infoFile = path.join(packageRoot, 'dist/native-build-info.json');
+  if (!existsSync(script) || !existsSync(infoFile)) {
+    if (detectedKitRoot !== undefined) {
+      return undefined;
+    }
+    throw new Error('The installed @mpgd/cli package is missing its native builder artifacts.');
+  }
+  const info = readJsonForCli(infoFile);
+  assertJsonObject(info, 'native builder package metadata');
+  if (info.packageVersion !== cliVersion
+    || typeof info.kitGitSha !== 'string'
+    || !/^[0-9a-f]{40}$/u.test(info.kitGitSha)
+    || typeof info.kitDirty !== 'boolean') {
+    throw new Error('The installed native builder metadata does not match @mpgd/cli.');
+  }
+  if (info.kitDirty) {
+    throw new Error(
+      'The installed native builder was packaged from a dirty Kit worktree and cannot provide reliable kitGitSha provenance.',
+    );
+  }
+  return {
+    kitGitSha: info.kitGitSha,
+    targetMatrixFile: fileURLToPath(import.meta.resolve('@mpgd/target-config/targets.json')),
   };
 }
 
@@ -3562,12 +3674,44 @@ function runTargetCommand(input: {
   const env = withTargetVariantEnv(target, input.variant, input.env);
   const profile = input.profile ?? 'production';
 
+  if (input.action === 'build' && env.MPGD_NATIVE_PACKAGED_BUILD === '1') {
+    if (target !== 'android' && target !== 'ios') {
+      throw new Error(`Packaged native builder cannot build target ${target}.`);
+    }
+    console.info(`[mpgd] build ${target} from installed CLI`);
+    runPackagedNativeBuild(target, profile, env);
+    return;
+  }
+
   const args = input.action === 'build'
     ? ['build:target', target, profile]
     : ['smoke:target', target];
 
   console.info(`[mpgd] ${input.action} ${target}`);
   runPnpm(args, env);
+}
+
+function runPackagedNativeBuild(
+  target: 'android' | 'ios',
+  profile: string,
+  env: NodeJS.ProcessEnv,
+): void {
+  const targetsFile = env.MPGD_PLATFORM_TARGETS_FILE;
+  if (targetsFile === undefined) {
+    throw new Error('Packaged native build is missing its target config file.');
+  }
+  const script = path.join(packageRoot, 'dist/native-build-target.js');
+  const result = spawnSync(process.execPath, [script, target, profile], {
+    cwd: path.dirname(targetsFile),
+    env,
+    stdio: 'inherit',
+  });
+  if (result.error !== undefined) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`Packaged ${target} build failed with exit code ${result.status}.`);
+  }
 }
 
 function runTargetMatrix(input: {

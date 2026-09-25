@@ -29,6 +29,9 @@ for (const workspacePackage of discoverPublishablePackages()) {
     'dist/index.js',
     'dist/index.d.ts',
     ...expectedBinFiles(workspacePackage.packageJson),
+    ...(workspacePackage.name === '@mpgd/cli'
+      ? ['dist/native-build-target.js', 'dist/native-build-info.json']
+      : []),
     ...expectedTemplateFiles(workspacePackage.dir, workspacePackage.packageJson),
     ...expectedExportFiles(workspacePackage.packageJson),
   ];

@@ -25,7 +25,6 @@ import {
 import { generateTargetIcons, verifyGeneratedTargetIcons } from '../icons/generator';
 import {
   assertStagedWebIconEvidence,
-  stageNativeIconResources,
   stageWebIconEvidence,
   stageWrapperIcon,
 } from '../icons/staging';
@@ -39,16 +38,10 @@ import {
 import { assembleMiniGameArtifact, assertDisjointMiniGameTargetOutputs } from './minigame-artifact';
 import { wechatStagingAppId, writeWechatMiniGameProjectFiles } from './minigame-project-files';
 import { normalizeMonetizationCatalogEnv } from './monetization-catalog-env';
-import { inspectSignedAndroidBundle } from './native-android-inspection';
 import { beginNativeBuildAttempt } from './native-build-attempt';
+import { executeNativeTargetBuild } from './native-build-execution';
+import { resolveNativeCommandLaunch } from './native-command-launcher';
 import { resolveNativeBuildPlan } from './native-build-mode';
-import { createNativeShellStage } from './native-build-stage';
-import { inspectSignedIosArchive, inspectSignedIosIpa } from './native-ios-inspection';
-import { resolveIosSigningPlan } from './native-ios-signing';
-import {
-  assertNativeReleaseIdentity,
-  runNativeSyncWithIdentityCheck,
-} from './native-release-identity';
 import {
   appTargetForPlatformTarget,
   assertPlatformTargetBuildEmitterAvailable,
@@ -383,267 +376,31 @@ try {
       break;
     }
 
-    case 'capacitor-android': {
-      const webDir = targetPath(requireString(target.webDir, `${targetName}.webDir`));
-      const shellApp = targetPath(requireString(target.shellApp, `${targetName}.shellApp`));
-      if (nativePlan === undefined || nativeArtifactRoot === undefined
-        || nativeAttempt === undefined || nativeWebBundle === undefined) {
-        throw new Error('Android native build plan is missing.');
-      }
-      const identityInput = {
-        environment: env,
-        metadata: target.metadata,
-        platform: 'android' as const,
-        required: profile === 'production',
-        shellApp,
-      };
-      assertNativeReleaseIdentity(identityInput);
-      const stage = createNativeShellStage({ shellApp, webDir });
-
-      try {
-        replaceDirectory(nativeWebBundle, stage.webDir);
-        ensureCapacitorPlatform(stage.shellApp, 'android', env);
-        await stageNativeIconResources(generatedIcons, stage.shellApp);
-        const stagedIdentityInput = {
-          ...identityInput,
-          shellApp: stage.shellApp,
-        };
-        runNativeSyncWithIdentityCheck(stagedIdentityInput, () => {
-          run('pnpm', ['--dir', stage.shellApp, 'cap', 'sync', 'android'], env);
-        });
-
-        const androidProject = `${stage.shellApp}/android`;
-        let releaseArtifact: string;
-        if (nativePlan.mode === 'sync') {
-          releaseArtifact = `${nativeArtifactRoot}/capacitor-sync`;
-          replaceDirectory(androidProject, targetPath(releaseArtifact));
-        } else if (nativePlan.mode === 'debug') {
-          run('./gradlew', ['assembleDebug', '--no-daemon'], env, androidProject);
-          releaseArtifact = `${nativeArtifactRoot}/app-debug.apk`;
-          copyFile(
-            `${androidProject}/app/build/outputs/apk/debug/app-debug.apk`,
-            targetPath(releaseArtifact),
-          );
-        } else if (nativePlan.mode === 'unsigned-archive'
-          || nativePlan.mode === 'signed-archive') {
-          run('./gradlew', ['bundleRelease', '--no-daemon'], env, androidProject);
-          releaseArtifact = `${nativeArtifactRoot}/app-release.aab`;
-          copyFile(
-            `${androidProject}/app/build/outputs/bundle/release/app-release.aab`,
-            targetPath(releaseArtifact),
-          );
-          if (nativePlan.mode === 'signed-archive') {
-            inspectSignedAndroidBundle({
-              bundle: targetPath(releaseArtifact),
-              expectedPackageId: requireString(target.metadata?.packageId, 'Android package ID'),
-              expectedVersionCode: requireString(
-                env.MPGD_TARGET_VERSION_CODE,
-                'MPGD_TARGET_VERSION_CODE',
-              ),
-              expectedVersionName: requireString(
-                env.MPGD_TARGET_VERSION_NAME,
-                'MPGD_TARGET_VERSION_NAME',
-              ),
-              expectedSignerSha256: requireString(
-                env.MPGD_ANDROID_UPLOAD_CERT_SHA256,
-                'MPGD_ANDROID_UPLOAD_CERT_SHA256',
-              ),
-              ...(env.MPGD_BUNDLETOOL_JAR === undefined
-                ? {} : { bundletoolJar: env.MPGD_BUNDLETOOL_JAR }),
-            });
-          }
-        } else {
-          throw new Error(`Unsupported Android build mode: ${nativePlan.mode}.`);
-        }
-        writeManifest(targetName, profile, releaseArtifact, env);
-        nativeAttempt.complete(releaseArtifact);
-        nativeCompleted = true;
-      } finally {
-        stage.dispose();
-      }
-      break;
-    }
-
+    case 'capacitor-android':
     case 'capacitor-ios': {
-      const webDir = targetPath(requireString(target.webDir, `${targetName}.webDir`));
-      const shellApp = targetPath(requireString(target.shellApp, `${targetName}.shellApp`));
       if (nativePlan === undefined || nativeArtifactRoot === undefined
         || nativeAttempt === undefined || nativeWebBundle === undefined) {
-        throw new Error('iOS native build plan is missing.');
+        throw new Error('Native build plan is missing.');
       }
-      const identityInput = {
+      const releaseArtifact = await executeNativeTargetBuild({
+        targetName,
+        target,
+        profile,
         environment: env,
-        metadata: target.metadata,
-        platform: 'ios' as const,
-        required: profile === 'production',
-        shellApp,
-      };
-      assertNativeReleaseIdentity(identityInput);
-      const stage = createNativeShellStage({ shellApp, webDir });
-
-      try {
-        replaceDirectory(nativeWebBundle, stage.webDir);
-        ensureCapacitorPlatform(stage.shellApp, 'ios', env);
-        await stageNativeIconResources(generatedIcons, stage.shellApp);
-        const stagedIdentityInput = {
-          ...identityInput,
-          shellApp: stage.shellApp,
-        };
-        runNativeSyncWithIdentityCheck(stagedIdentityInput, () => {
-          run('pnpm', ['--dir', stage.shellApp, 'cap', 'sync', 'ios'], env);
-        });
-
-        let releaseArtifact: string;
-        if (nativePlan.mode === 'unsigned-archive') {
-          releaseArtifact = `${nativeArtifactRoot}/App.xcarchive`;
-          mkdirSync(dirname(targetPath(releaseArtifact)), { recursive: true });
-          run(
-            'xcodebuild',
-            [
-              'archive',
-              '-project',
-              'App/App.xcodeproj',
-              '-scheme',
-              'App',
-              '-configuration',
-              'Release',
-              '-destination',
-              'generic/platform=iOS',
-              '-archivePath',
-              targetPath(releaseArtifact),
-              'CODE_SIGNING_ALLOWED=NO',
-            ],
-            env,
-            `${stage.shellApp}/ios`,
-          );
-        } else if (nativePlan.mode === 'simulator') {
-          const buildRoot = mkdtempSync(join(tmpdir(), 'mpgd-ios-simulator-'));
-          releaseArtifact = `${nativeArtifactRoot}/App.app`;
-          try {
-            run(
-              'xcodebuild',
-              [
-                'build',
-                '-project',
-                'App/App.xcodeproj',
-                '-target',
-                'App',
-                '-configuration',
-                'Release',
-                '-sdk',
-                'iphonesimulator',
-                `SYMROOT=${buildRoot}`,
-                `OBJROOT=${join(buildRoot, 'Intermediates.noindex')}`,
-                'INFOPLIST_FILE=App/Info-Smoke.plist',
-                'EXCLUDED_SOURCE_FILE_NAMES=Main.storyboard LaunchScreen.storyboard Assets.xcassets',
-                'ASSETCATALOG_COMPILER_APPICON_NAME=',
-                'SWIFT_ACTIVE_COMPILATION_CONDITIONS=MPGD_SMOKE_NO_STORYBOARD',
-                'CODE_SIGNING_ALLOWED=NO',
-              ],
-              env,
-              `${stage.shellApp}/ios`,
-            );
-            replaceDirectory(
-              `${buildRoot}/Release-iphonesimulator/App.app`,
-              targetPath(releaseArtifact),
-            );
-          } finally {
-            rmSync(buildRoot, { recursive: true, force: true });
-          }
-        } else if (nativePlan.mode === 'sync') {
-          console.warn(
-            'ios: cap sync completed; set MPGD_RUN_IOS_SIMULATOR_BUILD=1 for a simulator .app or MPGD_RUN_IOS_ARCHIVE=1 for an xcarchive.',
-          );
-          releaseArtifact = `${nativeArtifactRoot}/capacitor-sync`;
-          replaceDirectory(`${stage.shellApp}/ios`, targetPath(releaseArtifact));
-          copyIosSyncSwiftPackage(
-            stage.shellApp,
-            releaseArtifact,
-            '@mpgd/capacitor-game-services',
-            'MpgdCapacitorGameServices',
-          );
-          copyIosSyncSwiftPackage(
-            stage.shellApp,
-            releaseArtifact,
-            '@capacitor/app',
-            'CapacitorApp',
-          );
-        } else if (nativePlan.mode === 'signed-archive'
-          || nativePlan.mode === 'store-export') {
-          const signing = resolveIosSigningPlan(env, nativePlan.mode);
-          const archiveArtifact = `${nativeArtifactRoot}/App.xcarchive`;
-          mkdirSync(dirname(targetPath(archiveArtifact)), { recursive: true });
-          run(
-            'xcodebuild',
-            [
-              'archive',
-              '-project',
-              'App/App.xcodeproj',
-              '-scheme',
-              'App',
-              '-configuration',
-              'Release',
-              '-destination',
-              'generic/platform=iOS',
-              '-archivePath',
-              targetPath(archiveArtifact),
-              ...signing.archiveBuildSettings,
-            ],
-            env,
-            `${stage.shellApp}/ios`,
-          );
-          const expectedIosIdentity = {
-            expectedBundleId: requireString(target.metadata?.bundleId, 'iOS bundle ID'),
-            expectedMarketingVersion: requireString(
-              env.MPGD_TARGET_MARKETING_VERSION,
-              'MPGD_TARGET_MARKETING_VERSION',
-            ),
-            expectedBuildNumber: requireString(
-              env.MPGD_TARGET_BUILD_NUMBER,
-              'MPGD_TARGET_BUILD_NUMBER',
-            ),
-            expectedTeamId: signing.teamId,
-          };
-          inspectSignedIosArchive(targetPath(archiveArtifact), expectedIosIdentity);
-          releaseArtifact = archiveArtifact;
-          if (nativePlan.mode === 'store-export') {
-            const exportRoot = mkdtempSync(join(tmpdir(), 'mpgd-ios-export-'));
-            try {
-              run(
-                'xcodebuild',
-                [
-                  '-exportArchive',
-                  '-archivePath',
-                  targetPath(archiveArtifact),
-                  '-exportPath',
-                  exportRoot,
-                  '-exportOptionsPlist',
-                  requireString(signing.exportOptionsPlist, 'iOS export options plist'),
-                ],
-                env,
-                `${stage.shellApp}/ios`,
-              );
-              const exportedIpas = readdirSync(exportRoot).filter((name) => name.endsWith('.ipa'));
-              if (exportedIpas.length !== 1) {
-                throw new Error('iOS store export must produce exactly one IPA.');
-              }
-              releaseArtifact = `${nativeArtifactRoot}/App.ipa`;
-              copyFile(join(exportRoot, exportedIpas[0] ?? ''), targetPath(releaseArtifact));
-              inspectSignedIosIpa(targetPath(releaseArtifact), expectedIosIdentity);
-            } finally {
-              rmSync(exportRoot, { recursive: true, force: true });
-            }
-          }
-        } else {
-          throw new Error(`Unsupported iOS build mode: ${nativePlan.mode}.`);
-        }
-
-        writeManifest(targetName, profile, releaseArtifact, env);
-        nativeAttempt.complete(releaseArtifact);
-        nativeCompleted = true;
-      } finally {
-        stage.dispose();
-      }
+        plan: nativePlan,
+        artifactRoot: nativeArtifactRoot,
+        webBundle: nativeWebBundle,
+        generatedIcons,
+        targetPath,
+        replaceDirectory,
+        copyFile,
+        ensureCapacitorPlatform,
+        copyIosSyncSwiftPackage,
+        run,
+      });
+      writeManifest(targetName, profile, releaseArtifact, env);
+      nativeAttempt.complete(releaseArtifact);
+      nativeCompleted = true;
       break;
     }
   }
@@ -1087,10 +844,12 @@ function run(
   commandEnv: NodeJS.ProcessEnv,
   cwd = process.cwd(),
 ): void {
-  const result = spawnSync(command, [...args], {
+  const launch = resolveNativeCommandLaunch({ command, args, environment: commandEnv });
+  const result = spawnSync(launch.command, [...launch.args], {
     cwd,
     stdio: 'inherit',
     env: commandEnv,
+    shell: launch.shell ?? false,
   });
 
   if (result.error !== undefined) {
