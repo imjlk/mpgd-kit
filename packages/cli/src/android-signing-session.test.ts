@@ -75,6 +75,7 @@ try {
     keyAlias,
     expectedCertSha256: fingerprint ?? '',
     temporaryParent: sessions,
+    environment: { ...process.env, MPGD_API_TOKEN: 'A' },
   };
   const prepared = await prepareAndroidUploadSigningSession(input);
   assert.equal(existsSync(prepared.temporaryKeystore), true);

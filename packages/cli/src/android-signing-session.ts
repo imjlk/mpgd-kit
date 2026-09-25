@@ -113,9 +113,13 @@ export async function prepareAndroidUploadSigningSession(
       timeoutMs: 30_000,
       signal: input.signal,
       secretValues,
+      captureMachineStdout: true,
     });
+    if (listed.truncated || listed.machineStdout === undefined) {
+      throw new Error('Android upload certificate inspection output was truncated.');
+    }
     const observed = /\bSHA256:\s*((?:[0-9A-Fa-f]{2}:){31}[0-9A-Fa-f]{2})/u
-      .exec(listed.output)?.[1]?.replace(/:/gu, '').toUpperCase();
+      .exec(listed.machineStdout)?.[1]?.replace(/:/gu, '').toUpperCase();
     if (observed !== expectedCertSha256) {
       throw new Error('Android upload keystore certificate does not match the expected SHA-256.');
     }
