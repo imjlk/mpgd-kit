@@ -20,6 +20,7 @@ import { isNonPublicServiceHostname } from './production-target-readiness.js';
 import {
   assertNativeShellIdentity,
   hasGradleIdentityMutation,
+  maskGradleStrings,
   readIosReleaseInfoPlist,
   stripGradleComments,
 } from './native-shell-identity.js';
@@ -29,6 +30,13 @@ const webPath = `${shellPath}/www`;
 const referenceShellPath = '${MPGD_KIT_PATH}/apps/mobile-capacitor';
 const providerIdPattern = /^[a-z][a-z0-9-]*$/u;
 const appIdPattern = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/u;
+const javaKeywords = new Set(`
+  abstract assert boolean break byte case catch char class const continue default do double
+  else enum extends final finally float for goto if implements import instanceof int interface
+  long native new package private protected public return short static strictfp super switch
+  synchronized this throw throws transient try void volatile while true false null record sealed
+  permits var yield
+`.trim().split(/\s+/u));
 
 interface PlannedFile {
   readonly path: string;
@@ -67,6 +75,9 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
   }
   if (!appIdPattern.test(input.appId)) {
     throw new Error('Capacitor app ID must be a lowercase reverse-domain identifier.');
+  }
+  if (input.appId.split('.').some((segment) => javaKeywords.has(segment))) {
+    throw new Error('Capacitor app ID cannot contain Java keyword segments.');
   }
   if (input.displayName.trim() !== input.displayName
     || input.displayName.length === 0 || input.displayName.length > 80) {
@@ -160,7 +171,10 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     if (target.kind !== kind) {
       throw new Error(`${targetName} must be a ${kind} target.`);
     }
-    requireString(target.gameApp, `${targetName}.gameApp`);
+    const configuredGame = requireString(target.gameApp, `${targetName}.gameApp`);
+    if (path.resolve(gameRoot, configuredGame) !== gameRoot) {
+      throw new Error(`${targetName}.gameApp must select this game root.`);
+    }
     if (requireString(target.adapter, `${targetName}.adapter`) !== 'capacitor') {
       throw new Error(`${targetName}.adapter must be capacitor.`);
     }
@@ -337,7 +351,7 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     safeDestination(gameRoot, '.env.production.local');
     const validatedBackendUrl = normalizeBackendUrl(requestedBackendUrl);
     const localEnv = readExisting(path.join(gameRoot, '.env.production.local')) ?? '';
-    const localDefinitions = [...localEnv.matchAll(
+    const localDefinitions = [...localEnv.replace(/^\uFEFF/u, '').matchAll(
       /^[ \t]*(?:export[ \t]+)?VITE_MPGD_GAME_SERVICES_URL[ \t]*=[ \t]*(.*)$/gmu,
     )];
     if (localDefinitions.length > 1) {
@@ -350,7 +364,7 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     }
     const envFile = path.join(gameRoot, '.env.production');
     const current = readExisting(envFile) ?? '';
-    const definitions = [...current.matchAll(
+    const definitions = [...current.replace(/^\uFEFF/u, '').matchAll(
       /^[ \t]*(?:export[ \t]+)?VITE_MPGD_GAME_SERVICES_URL[ \t]*=[ \t]*(.*)$/gmu,
     )];
     if (definitions.length > 1) {
@@ -561,12 +575,14 @@ function assertNativePlatformComplete(
     const settingsSource = stripGradleComments(
       readFileSync(path.join(nativeDirectory, settings), 'utf8'),
     );
-    if (/\b(?:afterEvaluate|projectsEvaluated)\b/u.test(rootSource)
-      && /\b(?:project|subprojects|allprojects|android)\b/u.test(rootSource)) {
+    const rootCode = maskGradleStrings(rootSource);
+    const settingsCode = maskGradleStrings(settingsSource);
+    if (/\b(?:afterEvaluate|projectsEvaluated)\b/u.test(rootCode)
+      && /\b(?:project|subprojects|allprojects|android)\b/u.test(rootCode)) {
       throw new Error('Existing android project has unsupported root Gradle app callbacks.');
     }
     if (/\b(?:beforeProject|afterProject|beforeEvaluate|afterEvaluate|projectsEvaluated)\b/u
-      .test(settingsSource)) {
+      .test(settingsCode)) {
       throw new Error('Existing android project has unsupported settings Gradle callbacks.');
     }
     const visited = new Set<string>();
@@ -578,6 +594,9 @@ function assertNativePlatformComplete(
         continue;
       }
       const source = stripGradleComments(readFileSync(path.join(nativeDirectory, script), 'utf8'));
+      if (/\bproductFlavors\b/u.test(maskGradleStrings(source))) {
+        throw new Error('Existing android project product flavors are unsupported by the builder.');
+      }
       if (hasGradleIdentityMutation(source)) {
         throw new Error(
           `Existing android project applied Gradle script changes identity: ${script}`,
@@ -630,7 +649,7 @@ function assertNativePlatformComplete(
       assertSceneDelegateFiles(nativeDirectory, generatedSmoke, 'simulator');
     }
   } else {
-    if (/\bproductFlavors\b/u.test(stripGradleComments(content))) {
+    if (/\bproductFlavors\b/u.test(maskGradleStrings(stripGradleComments(content)))) {
       throw new Error('Existing android project product flavors are unsupported by the builder.');
     }
     assertAndroidManifestResources(nativeDirectory);
@@ -682,6 +701,24 @@ function assertAndroidLauncherClasses(nativeDirectory: string, gradle: string): 
     }
     if (!/^[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)+$/u.test(qualified)) {
       throw new Error('Existing android project launcher class cannot be resolved.');
+    }
+    if (isAlias) {
+      const activities = childElements(application)
+        .concat(release === undefined ? [] : childElements(release));
+      const declared = activities.some((activity) => {
+        const activityName = activity.getAttribute('android:name');
+        if (activity.tagName !== 'activity' || activityName === null
+          || hasAndroidMergerDirective(activity)) {
+          return false;
+        }
+        const resolved = activityName.startsWith('.')
+          ? `${namespace}${activityName}`
+          : activityName.includes('.') ? activityName : `${namespace}.${activityName}`;
+        return resolved === qualified;
+      });
+      if (!declared) {
+        throw new Error(`Existing android launcher alias target ${qualified} is undeclared.`);
+      }
     }
     const className = qualified.slice(qualified.lastIndexOf('.') + 1);
     const packageName = qualified.slice(0, qualified.lastIndexOf('.'));
@@ -984,6 +1021,7 @@ function assertReferencedIosFiles(nativeDirectory: string, project: string, info
 }
 
 function assertAppBuildPhaseInputs(nativeDirectory: string, project: string): void {
+  const parentGroups = readPbxParentGroups(project);
   const targets = [...project.matchAll(/\b([A-F0-9]+)\s*\/\*\s*App\s*\*\/\s*=\s*\{/gu)]
     .map((match) => readPbxObjectBody(project, match[1] ?? ''))
     .filter((body) => /\bisa\s*=\s*PBXNativeTarget\s*;/u.test(body)
@@ -1003,7 +1041,7 @@ function assertAppBuildPhaseInputs(nativeDirectory: string, project: string): vo
       if (referenceId === undefined) {
         throw new Error('Existing ios project App build input has no file reference.');
       }
-      assertPbxFileReference(nativeDirectory, project, referenceId);
+      assertPbxFileReference(nativeDirectory, project, referenceId, parentGroups);
     }
   }
 }
@@ -1023,15 +1061,77 @@ function readPbxIds(object: string, key: string): string[] {
     .map((match) => match[1] ?? '');
 }
 
+function readPbxParentGroups(project: string): Map<string, string> {
+  const parents = new Map<string, string>();
+  const groupObjectPattern = /\b([A-F0-9]+)\s*(?:\/\*[^*]*\*\/)?\s*=\s*\{([\s\S]*?)\};/gu;
+  const objects = project.matchAll(groupObjectPattern);
+  for (const match of objects) {
+    const id = match[1] ?? '';
+    const body = match[2] ?? '';
+    if (!/\bisa\s*=\s*PBX(?:Variant)?Group\s*;/u.test(body)) {
+      continue;
+    }
+    for (const child of readPbxIds(body, 'children')) {
+      if (parents.has(child)) {
+        throw new Error(`Existing ios project build input ${child} has ambiguous groups.`);
+      }
+      parents.set(child, id);
+    }
+  }
+  return parents;
+}
+
+function readPbxGroupPath(
+  project: string,
+  parents: Map<string, string>,
+  referenceId: string,
+): string | undefined {
+  const chain: string[] = [];
+  const seen = new Set<string>();
+  let parent = parents.get(referenceId);
+  if (parent === undefined) {
+    return undefined;
+  }
+  while (parent !== undefined) {
+    if (seen.has(parent)) {
+      throw new Error('Existing ios project build input group cycle is unsupported.');
+    }
+    seen.add(parent);
+    chain.unshift(parent);
+    parent = parents.get(parent);
+  }
+  const parts: string[] = [];
+  for (const groupId of chain) {
+    const group = readPbxObjectBody(project, groupId);
+    const sourceTree = /\bsourceTree\s*=\s*(?:"([^"]+)"|([^;]+))\s*;/u.exec(group);
+    const tree = (sourceTree?.[1] ?? sourceTree?.[2])?.trim();
+    if (tree === 'SOURCE_ROOT') {
+      parts.length = 0;
+    } else if (tree !== undefined && tree !== '<group>') {
+      throw new Error('Existing ios project build input group sourceTree is unsupported.');
+    }
+    const groupPath = /\bpath\s*=\s*(?:"([^"]+)"|([^;]+))\s*;/u.exec(group);
+    const value = (groupPath?.[1] ?? groupPath?.[2])?.trim();
+    if (value !== undefined) {
+      if (value.includes('$') || path.isAbsolute(value)) {
+        throw new Error('Existing ios project build input group path is unsupported.');
+      }
+      parts.push(value);
+    }
+  }
+  return parts.join('/');
+}
+
 function assertPbxFileReference(
   nativeDirectory: string,
   project: string,
   referenceId: string,
+  parentGroups: Map<string, string>,
 ): void {
   const reference = readPbxObjectBody(project, referenceId);
   if (/\bisa\s*=\s*PBXVariantGroup\s*;/u.test(reference)) {
     for (const child of readPbxIds(reference, 'children')) {
-      assertPbxFileReference(nativeDirectory, project, child);
+      assertPbxFileReference(nativeDirectory, project, child, parentGroups);
     }
     return;
   }
@@ -1046,7 +1146,20 @@ function assertPbxFileReference(
   if (filePath === 'public' || filePath === 'capacitor.config.json') {
     return; // cap sync creates these inputs in the staged shell.
   }
-  const candidates = [`App/App/${filePath}`, `App/${filePath}`];
+  const sourceTree = /\bsourceTree\s*=\s*(?:"([^"]+)"|([^;]+))\s*;/u.exec(reference);
+  const tree = (sourceTree?.[1] ?? sourceTree?.[2])?.trim();
+  if (tree !== undefined && tree !== '<group>' && tree !== 'SOURCE_ROOT') {
+    throw new Error('Existing ios project App build input sourceTree is unsupported.');
+  }
+  const groupPath = readPbxGroupPath(project, parentGroups, referenceId);
+  let candidates: string[];
+  if (tree === 'SOURCE_ROOT') {
+    candidates = [`App/${filePath}`];
+  } else if (groupPath === undefined) {
+    candidates = [`App/App/${filePath}`, `App/${filePath}`];
+  } else {
+    candidates = [`App/${groupPath}/${filePath}`];
+  }
   if (!candidates.some((candidate) => isNativeEntry(nativeDirectory, candidate))) {
     throw new Error(`Existing ios project App build input ${filePath} is missing.`);
   }
@@ -1291,7 +1404,7 @@ function assertNativeDisplayName(
           const sameLauncher = launcherNames.has(activity.getAttribute('android:name'));
           const activityLabel = activity.getAttribute('android:label');
           if ((sameLauncher || releaseLaunchers.includes(activity))
-            && hasAndroidMergerDirective(activity)) {
+            && hasAndroidMergerDirectiveDeep(activity)) {
             throw new Error('Existing android Release manifest changes a launcher node.');
           }
           if (sameLauncher || releaseLaunchers.includes(activity)) {
@@ -1312,6 +1425,11 @@ function assertNativeDisplayName(
 function hasAndroidMergerDirective(element: Element): boolean {
   return ['tools:node', 'tools:remove', 'tools:replace']
     .some((attribute) => element.hasAttribute(attribute));
+}
+
+function hasAndroidMergerDirectiveDeep(element: Element): boolean {
+  return hasAndroidMergerDirective(element)
+    || childElements(element).some(hasAndroidMergerDirectiveDeep);
 }
 
 function readAndroidApplication(file: string, required = true): Element | undefined {
@@ -1661,6 +1779,10 @@ function requireStaticCapacitorConfig(source: string): string {
 function assertNoCapacitorServerUrl(source: string, code: string, topLevel: string): void {
   if (/^[ \t]*["']server["']\s*:/mu.test(source)) {
     throw new Error('Existing Capacitor config server field is ambiguous.');
+  }
+  if (/\b(?:get|set)\s+server\s*\(/u.test(topLevel)
+    || /(?:^|[,\s{])server\s*(?:,|\})/u.test(topLevel)) {
+    throw new Error('Existing Capacitor config server field is dynamic.');
   }
   const server = /\bserver\s*:/u.exec(topLevel);
   if (server?.index === undefined) {

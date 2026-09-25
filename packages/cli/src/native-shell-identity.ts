@@ -109,15 +109,15 @@ export function countGradleIdentityWrites(source: string, key: string): number {
   const expression = new RegExp(`\\b${key}\\b`, 'gu');
   return [...masked.matchAll(expression)].filter((match) => {
     const index = match.index ?? 0;
-    if (masked[index - 1] === '.') {
-      return false;
-    }
     const rest = masked.slice(index + key.length);
-    return /^\s*(?:=|\(|["'\d]|[A-Za-z_$])/u.test(rest);
+    if (masked[index - 1] === '.') {
+      return /^\s*(?:\+?=|\(|\.set\s*\()/u.test(rest);
+    }
+    return /^\s*(?:\+?=|\(|["'\d]|[A-Za-z_$])/u.test(rest);
   }).length;
 }
 
-function maskGradleStrings(clean: string): string {
+export function maskGradleStrings(clean: string): string {
   let masked = '';
   let quote: '"' | "'" | undefined;
   for (let index = 0; index < clean.length; index += 1) {

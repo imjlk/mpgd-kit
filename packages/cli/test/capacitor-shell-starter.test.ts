@@ -128,6 +128,10 @@ try {
     () => planCapacitorShellStarter({ ...options, displayName: 'Puzzle $(PRODUCT_NAME)' }),
     /Xcode build-setting expansions/u,
   );
+  assert.throws(
+    () => planCapacitorShellStarter({ ...options, appId: 'dev.example.class' }),
+    /Java keyword/u,
+  );
 
   const dryRun = planCapacitorShellStarter(options);
   const baseTargets = readJson('mpgd.targets.json');
@@ -138,6 +142,11 @@ try {
   writeJson('mpgd.targets.json', baseTargets);
   assert.throws(() => planCapacitorShellStarter(options), /android.gameApp/u);
   initialAndroidTarget.gameApp = '.';
+  initialAndroidTarget.gameApp = '../other-game';
+  writeJson('mpgd.targets.json', baseTargets);
+  assert.throws(() => planCapacitorShellStarter(options), /gameApp must select this game root/u);
+  initialAndroidTarget.gameApp = '.';
+  writeJson('mpgd.targets.json', baseTargets);
   delete initialAndroidTarget.adapter;
   writeJson('mpgd.targets.json', baseTargets);
   assert.throws(() => planCapacitorShellStarter(options), /android.adapter/u);
@@ -187,6 +196,11 @@ try {
   );
   const localProductionEnv = path.join(root, '.env.production.local');
   writeFileSync(localProductionEnv, 'VITE_MPGD_GAME_SERVICES_URL=https://other.example.com\n');
+  assert.throws(() => planCapacitorShellStarter(options), /Production-local Game Services URL/u);
+  writeFileSync(
+    localProductionEnv,
+    '\uFEFFVITE_MPGD_GAME_SERVICES_URL=https://other.example.com\n',
+  );
   assert.throws(() => planCapacitorShellStarter(options), /Production-local Game Services URL/u);
   rmSync(localProductionEnv);
 
@@ -408,6 +422,29 @@ try {
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   unlinkSync(customBuildFile);
   assert.throws(() => planCapacitorShellStarter(options), /App build input.*missing/u);
+  const groupedProject = customProject + '\n' + [
+    '44444444 /* App */ = { isa = PBXGroup; children = (55555555);',
+    'path = App; sourceTree = "<group>"; };',
+    '55555555 /* Controllers */ = { isa = PBXGroup; children = (33333333);',
+    'path = Controllers; sourceTree = "<group>"; };',
+  ].join('\n');
+  const groupedView = path.join(
+    root,
+    'apps/mobile-capacitor/ios/App/App/Controllers/CustomView.swift',
+  );
+  mkdirSync(path.dirname(groupedView), { recursive: true });
+  writeFileSync(groupedView, 'class CustomView {}');
+  writeFileSync(iosProjectFile, groupedProject);
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  const sourceRootProject = groupedProject.replace(
+    'path = CustomView.swift; sourceTree = "<group>";',
+    'path = App/Controllers/CustomView.swift; sourceTree = SOURCE_ROOT;',
+  );
+  writeFileSync(iosProjectFile, sourceRootProject);
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(iosProjectFile, groupedProject);
+  unlinkSync(groupedView);
+  assert.throws(() => planCapacitorShellStarter(options), /App build input.*missing/u);
   writeFileSync(iosProjectFile, iosProjectWithAppId('dev.example.puzzle'));
   renameSync(iosProjectFile, `${iosProjectFile}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /ios project is incomplete/u);
@@ -467,6 +504,11 @@ try {
   const rootCallback = 'project(":app") { afterEvaluate { android.defaultConfig.versionName = "9.0.0" } }';
   writeFileSync(androidRootBuild, rootCallback);
   assert.throws(() => planCapacitorShellStarter(options), /root Gradle app callbacks/u);
+  writeFileSync(androidRootBuild, [
+    'println("afterEvaluate android")',
+    'apply from: "variables.gradle"',
+  ].join('\n'));
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
   writeFileSync(androidRootBuild, 'apply from: "variables.gradle"');
   const capacitorGradle = path.join(
     root,
@@ -496,6 +538,8 @@ try {
   const readOnlyGradle = 'println(android.defaultConfig.versionName)\nprintln("versionName")';
   writeFileSync(capacitorGradle, readOnlyGradle);
   assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+  writeFileSync(capacitorGradle, 'android { productFlavors { demo {} } }');
+  assert.throws(() => planCapacitorShellStarter(options), /product flavors are unsupported/u);
   writeFileSync(
     capacitorGradle,
     'apply from: "../capacitor-cordova-android-plugins/cordova.variables.gradle"',
@@ -547,6 +591,16 @@ try {
   ].join(''));
   assert.throws(() => planCapacitorShellStarter(options), /launcher label differs/u);
   writeFileSync(androidManifest, completeAndroidManifest);
+  writeFileSync(androidManifest, [
+    androidManifestOpen,
+    '<application android:label="@string/app_name" android:theme="@style/AppTheme">',
+    '<activity-alias android:name=".Alias" android:targetActivity=".MainActivity">',
+    '<intent-filter><action android:name="android.intent.action.MAIN"/>',
+    '<category android:name="android.intent.category.LAUNCHER"/>',
+    '</intent-filter></activity-alias></application></manifest>',
+  ].join(''));
+  assert.throws(() => planCapacitorShellStarter(options), /alias target.*undeclared/u);
+  writeFileSync(androidManifest, completeAndroidManifest);
   const releaseManifest = path.join(
     root,
     'apps/mobile-capacitor/android/app/src/release/AndroidManifest.xml',
@@ -573,6 +627,14 @@ try {
       ' xmlns:tools="http://schemas.android.com/tools" package='),
     '<application><activity android:name=".MainActivity" tools:node="remove"/>',
     '</application></manifest>',
+  ].join(''));
+  assert.throws(() => planCapacitorShellStarter(options), /changes a launcher node/u);
+  writeFileSync(releaseManifest, [
+    androidManifestOpen.replace(' package=',
+      ' xmlns:tools="http://schemas.android.com/tools" package='),
+    '<application><activity android:name=".MainActivity">',
+    '<intent-filter tools:node="removeAll"/>',
+    '</activity></application></manifest>',
   ].join(''));
   assert.throws(() => planCapacitorShellStarter(options), /changes a launcher node/u);
   writeFileSync(releaseManifest, [
@@ -829,6 +891,11 @@ try {
   writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');
   writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle" + ".beta"');
   assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
+  writeFileSync(androidProjectFile, [
+    'applicationId "dev.example.puzzle"',
+    'android.defaultConfig.applicationId = dynamicAppId',
+  ].join('\n'));
+  assert.throws(() => planCapacitorShellStarter(options), /android project app ID differs/u);
   writeFileSync(androidProjectFile, 'applicationId "dev.example.puzzle"');
   writeFileSync(androidProjectFile, [
     'applicationId "dev.example.puzzle"',
@@ -913,6 +980,12 @@ try {
   );
   writeFileSync(configFile, getterServer);
   assert.throws(() => planCapacitorShellStarter(options), /dynamic properties/u);
+  const topLevelGetter = originalConfig.replace(
+    "server: { androidScheme: 'https' }",
+    "get server() { return { url: 'https://stale.example' }; }",
+  );
+  writeFileSync(configFile, topLevelGetter);
+  assert.throws(() => planCapacitorShellStarter(options), /server field is dynamic/u);
   writeFileSync(configFile, originalConfig);
   writeFileSync(
     configFile,

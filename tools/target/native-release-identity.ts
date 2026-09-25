@@ -6,6 +6,7 @@ import { assertIosReleasePlistIdentity } from '../../packages/cli/src/capacitor-
 import {
   countGradleIdentityWrites,
   hasGradleIdentityMutation,
+  maskGradleStrings,
   readIosReleaseInfoPlist,
 } from '../../packages/cli/src/native-shell-identity.js';
 
@@ -161,6 +162,9 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
     }
     visited.add(file);
     const source = stripComments(readRequiredFile(file, 'applied Android Gradle script'));
+    if (/\bproductFlavors\b/u.test(maskGradleStrings(source))) {
+      throw new Error('Native release preflight does not support Android product flavors.');
+    }
     if (file !== appBuild && hasGradleIdentityMutation(source)) {
       throw new Error(
         `Native release preflight found identity override in applied Gradle script: ${file}.`,
@@ -202,8 +206,9 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
   }
   const rootFile = rootFiles[0] ?? '';
   const rootSource = stripComments(readRequiredFile(rootFile, 'Android root Gradle build file'));
-  if (/\b(?:afterEvaluate|projectsEvaluated)\b/u.test(rootSource)
-    && /\b(?:project|subprojects|allprojects|android)\b/u.test(rootSource)) {
+  const rootCode = maskGradleStrings(rootSource);
+  if (/\b(?:afterEvaluate|projectsEvaluated)\b/u.test(rootCode)
+    && /\b(?:project|subprojects|allprojects|android)\b/u.test(rootCode)) {
     throw new Error('Native release preflight cannot resolve root Gradle app callbacks.');
   }
   inspect(rootFile);
@@ -217,7 +222,7 @@ function assertAndroidAppliedScripts(appBuild: string, androidRoot: string): voi
     readRequiredFile(settingsFile, 'Android settings Gradle file'),
   );
   if (/\b(?:beforeProject|afterProject|beforeEvaluate|afterEvaluate|projectsEvaluated)\b/u
-    .test(settingsSource)) {
+    .test(maskGradleStrings(settingsSource))) {
     throw new Error('Native release preflight cannot resolve settings Gradle project callbacks.');
   }
   inspect(settingsFile);

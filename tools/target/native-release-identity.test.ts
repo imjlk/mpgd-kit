@@ -127,6 +127,8 @@ try {
   const readOnlyGradle = 'println(android.defaultConfig.versionName)\nprintln("versionName")';
   writeFileSync(appliedIdentity, readOnlyGradle);
   assert.doesNotThrow(() => assertNativeReleaseIdentity(appliedIdentityInput));
+  writeFileSync(appliedIdentity, 'android { productFlavors { demo {} } }');
+  assert.throws(() => assertNativeReleaseIdentity(appliedIdentityInput), /product flavors/u);
   rmSync(appliedIdentity);
   writeShellFiles(shellRoot);
   const flavoredGradle = `${readFileSync(groovy, 'utf8')}\nproductFlavors { demo {} }\n`;
@@ -154,6 +156,8 @@ try {
     () => assertNativeReleaseIdentity(appliedIdentityInput),
     /root Gradle app callbacks/u,
   );
+  writeFileSync(androidRootBuild, 'println("afterEvaluate android")');
+  assert.doesNotThrow(() => assertNativeReleaseIdentity(appliedIdentityInput));
   writeShellFiles(shellRoot);
   const androidSettings = join(shellRoot, 'android/settings.gradle');
   writeFileSync(androidSettings, [
@@ -173,6 +177,15 @@ try {
     'println("versionCode")',
   ].join('\n'));
   assert.doesNotThrow(() => assertNativeReleaseIdentity(appliedIdentityInput));
+  writeShellFiles(shellRoot);
+  writeFileSync(groovy, [
+    readFileSync(groovy, 'utf8'),
+    'android.defaultConfig.versionName = releaseName',
+  ].join('\n'));
+  assert.throws(
+    () => assertNativeReleaseIdentity(appliedIdentityInput),
+    /cannot read every versionName assignment/u,
+  );
   writeShellFiles(shellRoot);
   writeFileSync(groovy, `${readFileSync(groovy, 'utf8')}\nversionCode releaseCode\n`);
   assert.throws(
