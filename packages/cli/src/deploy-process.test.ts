@@ -16,6 +16,14 @@ const redacted = await runReleaseProcess({
 });
 assert.equal(redacted.output, '[REDACTED]');
 assert.equal(redacted.truncated, false);
+const piped = await runReleaseProcess({
+  command: process.execPath,
+  args: ['-e', 'process.stdin.on("data", (chunk) => process.stdout.write(chunk))'],
+  cwd,
+  stdin: 'private-stdin-secret',
+  timeoutMs: 5_000,
+});
+assert.equal(piped.output, '[REDACTED]');
 const machineResult = await runReleaseProcess({
   command: process.execPath,
   args: ['-e', 'process.stdout.write("abc123")'],

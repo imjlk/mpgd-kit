@@ -9,6 +9,8 @@ export interface ReleaseProcessInput {
   readonly maxOutputBytes?: number | undefined;
   /** Opt in only for machine parsing; never write this unredacted stdout to logs. */
   readonly captureMachineStdout?: boolean | undefined;
+  /** Secret input is piped to stdin, never included in child arguments. */
+  readonly stdin?: string | undefined;
   readonly secretValues?: readonly string[] | undefined;
   readonly signal?: AbortSignal | undefined;
 }
@@ -60,6 +62,7 @@ export async function runReleaseProcess(input: ReleaseProcessInput): Promise<Rel
   }
   const environment = input.environment ?? process.env;
   const secrets = [
+    input.stdin ?? '',
     ...(input.secretValues ?? []),
     ...Object.entries(environment)
       .filter(([key]) => sensitiveEnvironmentKey.test(key))
@@ -73,7 +76,7 @@ export async function runReleaseProcess(input: ReleaseProcessInput): Promise<Rel
       child = spawn(launch.command, [...launch.args], {
         cwd: input.cwd,
         env: environment,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: [input.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
         detached: process.platform !== 'win32',
         shell: false,
       });
@@ -90,6 +93,12 @@ export async function runReleaseProcess(input: ReleaseProcessInput): Promise<Rel
     let stopReason: 'abort' | 'timeout' | undefined;
     let settled = false;
     let escalation: NodeJS.Timeout | undefined;
+    if (input.stdin !== undefined) {
+      child.stdin?.on('error', () => {
+        // The child may exit before consuming a short secret input.
+      });
+      child.stdin?.end(input.stdin);
+    }
 
     const capture = (stream: 'stdout' | 'stderr', chunk: Buffer): void => {
       const available = Math.max(0, outputLimit - capturedBytes);
