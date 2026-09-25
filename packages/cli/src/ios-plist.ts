@@ -52,7 +52,11 @@ function parseValue(element: Element): unknown {
     case 'false':
       return false;
     case 'integer': {
-      const value = Number((element.textContent ?? '').trim());
+      const text = (element.textContent ?? '').trim();
+      if (!/^-?\d+$/u.test(text)) {
+        throw new Error('iOS provisioning profile plist integer is invalid.');
+      }
+      const value = Number(text);
       if (!Number.isSafeInteger(value)) {
         throw new Error('iOS provisioning profile plist integer is invalid.');
       }

@@ -11,7 +11,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -28,7 +28,6 @@ export interface IosSigningSessionInput {
   readonly environment?: NodeJS.ProcessEnv;
   readonly signal?: AbortSignal;
   readonly temporaryParent?: string;
-  readonly provisioningProfilesDirectory?: string;
 }
 
 export interface IosSigningSession {
@@ -65,6 +64,8 @@ export async function prepareIosSigningSession(
   const keychainPassword = randomBytes(32).toString('hex');
   const environment: NodeJS.ProcessEnv = {
     ...(input.environment ?? process.env),
+    HOME: ownedRoot,
+    CFFIXED_USER_HOME: ownedRoot,
     MPGD_IOS_SESSION_KEYCHAIN: keychainFile,
     MPGD_IOS_SESSION_KEYCHAIN_PASSWORD: keychainPassword,
     MPGD_IOS_SIGNING_P12: p12File,
@@ -76,6 +77,10 @@ export async function prepareIosSigningSession(
   let installedProfile: { readonly path: string; readonly sha256: string } | undefined;
   try {
     chmodSync(ownedRoot, 0o700);
+    mkdirSync(path.join(ownedRoot, 'Library', 'Preferences'), {
+      recursive: true,
+      mode: 0o700,
+    });
     const helper = path.join(
       path.dirname(fileURLToPath(import.meta.url)),
       'ios-keychain-import.swift',
@@ -106,9 +111,45 @@ export async function prepareIosSigningSession(
     }
     await runReleaseProcess({
       command: 'security',
-      args: ['cms', '-D', '-i', profileFile, '-o', decodedProfile],
+      args: ['set-key-partition-list', '-S', 'apple:', '-s', keychainFile],
       cwd: ownedRoot,
       environment,
+      stdin: `${keychainPassword}\n`,
+      timeoutMs: 30_000,
+      signal: input.signal,
+    });
+    await runReleaseProcess({
+      command: 'security',
+      args: ['list-keychains', '-d', 'user', '-s', keychainFile],
+      cwd: ownedRoot,
+      environment,
+      timeoutMs: 10_000,
+      signal: input.signal,
+    });
+    const searchList = await runReleaseProcess({
+      command: 'security',
+      args: ['list-keychains', '-d', 'user'],
+      cwd: ownedRoot,
+      environment,
+      timeoutMs: 10_000,
+      captureMachineStdout: true,
+      signal: input.signal,
+    });
+    if (searchList.truncated || !searchList.machineStdout?.includes(keychainFile)) {
+      throw new Error('Isolated iOS signing keychain is not in its session search list.');
+    }
+    delete environment.MPGD_IOS_SIGNING_P12;
+    delete environment.MPGD_IOS_SIGNING_P12_PASSWORD;
+    delete environment.MPGD_IOS_SESSION_KEYCHAIN_PASSWORD;
+    const decodeEnvironment: NodeJS.ProcessEnv = { ...(input.environment ?? process.env) };
+    delete decodeEnvironment.MPGD_IOS_SIGNING_P12;
+    delete decodeEnvironment.MPGD_IOS_SIGNING_P12_PASSWORD;
+    delete decodeEnvironment.MPGD_IOS_SESSION_KEYCHAIN_PASSWORD;
+    await runReleaseProcess({
+      command: 'security',
+      args: ['cms', '-D', '-i', profileFile, '-o', decodedProfile],
+      cwd: ownedRoot,
+      environment: decodeEnvironment,
       timeoutMs: 30_000,
       signal: input.signal,
     });
@@ -116,7 +157,7 @@ export async function prepareIosSigningSession(
       command: 'plutil',
       args: ['-convert', 'xml1', '-o', decodedXml, decodedProfile],
       cwd: ownedRoot,
-      environment,
+      environment: decodeEnvironment,
       timeoutMs: 30_000,
       signal: input.signal,
     });
@@ -124,8 +165,12 @@ export async function prepareIosSigningSession(
       parseIosProfilePlist(readFileSync(decodedXml, 'utf8')),
       { bundleId: input.bundleId, teamId: input.teamId, certificateSha256 },
     );
-    const profileDirectory = input.provisioningProfilesDirectory
-      ?? path.join(homedir(), 'Library', 'MobileDevice', 'Provisioning Profiles');
+    const profileDirectory = path.join(
+      ownedRoot,
+      'Library',
+      'MobileDevice',
+      'Provisioning Profiles',
+    );
     mkdirSync(profileDirectory, { recursive: true, mode: 0o700 });
     const destination = path.join(profileDirectory, `${profile.uuid}.mobileprovision`);
     if (isSymlink(destination)) {
@@ -143,16 +188,14 @@ export async function prepareIosSigningSession(
       installedProfile = { path: destination, sha256: profileSha256 };
       chmodSync(destination, 0o600);
     }
-    writeFileSync(exportOptionsPlist, exportPlist(input.teamId, input.bundleId, profile.uuid), {
-      mode: 0o600,
-      flag: 'wx',
-    });
+    writeFileSync(
+      exportOptionsPlist,
+      exportPlist(input.teamId, input.bundleId, profile.uuid, certificateSha1),
+      { mode: 0o600, flag: 'wx' },
+    );
     environment.MPGD_IOS_PROVISIONING_PROFILE_SPECIFIER = profile.uuid;
     environment.MPGD_IOS_SIGNING_IDENTITY = certificateSha1;
     environment.MPGD_IOS_SIGNING_KEYCHAIN = keychainFile;
-    delete environment.MPGD_IOS_SIGNING_P12;
-    delete environment.MPGD_IOS_SIGNING_P12_PASSWORD;
-    delete environment.MPGD_IOS_SESSION_KEYCHAIN_PASSWORD;
     let disposed = false;
     return {
       environment,
@@ -266,12 +309,18 @@ function isSymlink(file: string): boolean {
   }
 }
 
-function exportPlist(teamId: string, bundleId: string, profileUuid: string): string {
+function exportPlist(
+  teamId: string,
+  bundleId: string,
+  profileUuid: string,
+  certificateSha1: string,
+): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
 <key>method</key><string>app-store-connect</string>
 <key>signingStyle</key><string>manual</string>
 <key>teamID</key><string>${teamId}</string>
+<key>signingCertificate</key><string>${certificateSha1}</string>
 <key>provisioningProfiles</key><dict><key>${bundleId}</key><string>${profileUuid}</string></dict>
 </dict></plist>\n`;
 }

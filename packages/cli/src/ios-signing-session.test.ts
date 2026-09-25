@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -19,7 +19,6 @@ const privateKey = path.join(fixture, 'private-key.pem');
 const p12File = path.join(fixture, 'signing.p12');
 const profilePlist = path.join(fixture, 'profile.plist');
 const profileFile = path.join(fixture, 'profile.mobileprovision');
-const profiles = path.join(fixture, 'profiles');
 const password = randomBytes(24).toString('hex');
 const uuid = '12345678-ABCD-4ABC-ABCD-123456789ABC';
 const teamId = 'A1B2C3D4E5';
@@ -35,6 +34,11 @@ function run(command: string, args: readonly string[], environment = process.env
   });
   assert.equal(result.status, 0, `${command} failed: ${result.stderr}`);
   return result.stdout;
+}
+
+function assertNoSigningSessions(): void {
+  const remaining = readdirSync(fixture).filter((name) => name.startsWith('mpgd-ios-signing-'));
+  assert.deepEqual(remaining, []);
 }
 
 try {
@@ -108,27 +112,52 @@ try {
     bundleId,
     teamId,
     temporaryParent: fixture,
-    provisioningProfilesDirectory: profiles,
   };
   const session = await prepareIosSigningSession(input);
+  const sessionProfile = path.join(
+    session.environment.HOME ?? '',
+    'Library',
+    'MobileDevice',
+    'Provisioning Profiles',
+    `${uuid}.mobileprovision`,
+  );
   assert.equal(session.profileUuid, uuid);
   assert.equal(existsSync(session.keychainFile), true);
-  assert.equal(existsSync(path.join(profiles, `${uuid}.mobileprovision`)), true);
+  assert.equal(existsSync(sessionProfile), true);
+  const second = await prepareIosSigningSession(input);
+  const secondProfile = path.join(
+    second.environment.HOME ?? '',
+    'Library',
+    'MobileDevice',
+    'Provisioning Profiles',
+    `${uuid}.mobileprovision`,
+  );
+  assert.notEqual(second.environment.HOME, session.environment.HOME);
+  assert.equal(existsSync(secondProfile), true);
   assert.match(readFileSync(session.exportOptionsPlist, 'utf8'), /app-store-connect/u);
+  assert.match(readFileSync(session.exportOptionsPlist, 'utf8'), /signingCertificate/u);
   assert.equal(session.environment.MPGD_IOS_SIGNING_P12_PASSWORD, undefined);
   assert.match(session.environment.MPGD_IOS_SIGNING_IDENTITY ?? '', /^[0-9A-F]{40}$/u);
+  assert.equal(
+    run('security', ['list-keychains', '-d', 'user'], session.environment)
+      .includes(session.keychainFile),
+    true,
+  );
   assert.equal(run('security', ['list-keychains', '-d', 'user']), originalSearchList);
   session.dispose();
   session.dispose();
   assert.equal(existsSync(session.keychainFile), false);
-  assert.equal(existsSync(path.join(profiles, `${uuid}.mobileprovision`)), false);
+  assert.equal(existsSync(sessionProfile), false);
+  assert.equal(existsSync(secondProfile), true);
+  second.dispose();
+  assert.equal(existsSync(secondProfile), false);
   await assert.rejects(
     withIosSigningSession(input, async () => {
       throw new Error('cancelled build');
     }),
     /cancelled build/u,
   );
-  assert.equal(existsSync(path.join(profiles, `${uuid}.mobileprovision`)), false);
+  assertNoSigningSessions();
   await assert.rejects(
     withIosSigningSession(input, async (active) => {
       const dispose = active.dispose.bind(active);
@@ -143,17 +172,12 @@ try {
       && String(error.errors[0]).includes('simulated build failure')
       && String(error.errors[1]).includes('simulated cleanup failure'),
   );
-  assert.equal(existsSync(path.join(profiles, `${uuid}.mobileprovision`)), false);
-  const conflictingProfile = path.join(profiles, `${uuid}.mobileprovision`);
-  writeFileSync(conflictingProfile, 'existing profile belongs to the game');
-  await assert.rejects(prepareIosSigningSession(input), /same UUID but different bytes/u);
-  assert.equal(readFileSync(conflictingProfile, 'utf8'), 'existing profile belongs to the game');
-  rmSync(conflictingProfile);
+  assertNoSigningSessions();
   await assert.rejects(
     prepareIosSigningSession({ ...input, p12Password: 'wrong' }),
     /identity import failed/u,
   );
-  assert.equal(existsSync(path.join(profiles, `${uuid}.mobileprovision`)), false);
+  assertNoSigningSessions();
   console.info('Isolated iOS signing session and cleanup passed with throwaway material.');
 } finally {
   rmSync(fixture, { recursive: true, force: true });

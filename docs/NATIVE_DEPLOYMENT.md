@@ -131,14 +131,16 @@ identity already installed in the host's default keychain. Set
 environment. Keep the P12 and password out of the game repository. The
 configured target's bundle ID remains the source of truth.
 
-The session imports the identity into a temporary keychain without changing
-the user's default keychain or search list. It checks the decoded profile's
-team, bundle ID, expiration, distribution entitlements, and embedded signing
-certificate, then installs the profile only if its UUID does not conflict
-with another file. Xcode receives explicit manual signing settings, a
-temporary keychain path, and a generated App Store export options plist.
-The session removes only its own keychain and profile copy after success,
-failure, or cancellation; it leaves pre-existing profiles untouched. The
+The session imports the identity into a temporary keychain and registers that
+keychain only within an isolated per-build home, leaving the user's default
+keychain and search list unchanged. It gives code signing tools access to the
+imported private key without placing credential passwords in command arguments.
+It checks the decoded profile's team, bundle ID, expiration, distribution
+entitlements, and embedded signing certificate, then places the profile in
+the same isolated home. Xcode receives explicit manual signing settings and
+an App Store export options plist pinned to the imported certificate SHA-1.
+Each concurrent build gets its own home and profile copy. Normal completion,
+failure, or handled cancellation removes only that session's files. The
 existing signed archive and exported IPA inspections still run afterward.
 
 This local preflight does not establish Apple trust in an arbitrary CMS profile

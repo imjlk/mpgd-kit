@@ -34,11 +34,15 @@ try {
       MPGD_IOS_SIGNING_IDENTITY: 'Apple Distribution',
       MPGD_IOS_PROVISIONING_PROFILE_SPECIFIER: 'Game App Store',
       MPGD_IOS_EXPORT_OPTIONS_PLIST: exportFile,
+      MPGD_IOS_SIGNING_KEYCHAIN: path.join(root, 'temporary signing.keychain-db'),
     },
     'store-export',
   );
   assert.equal(manual.exportOptionsPlist, exportFile);
   assert.equal(manual.archiveBuildSettings.includes('CODE_SIGNING_ALLOWED=YES'), true);
+  const expectedKeychain = path.join(root, 'temporary signing.keychain-db');
+  const expectedFlag = `OTHER_CODE_SIGN_FLAGS=--keychain ${JSON.stringify(expectedKeychain)}`;
+  assert.equal(manual.archiveBuildSettings.includes(expectedFlag), true);
   assert.throws(() => resolveIosSigningPlan({}, 'signed-archive'), /TEAM_ID/u);
   assert.throws(
     () =>

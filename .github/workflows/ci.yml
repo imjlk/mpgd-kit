@@ -800,6 +800,7 @@ jobs:
           path: ${{ runner.temp }}
       - run: tar -xzf "$RUNNER_TEMP/package-dist.tgz"
       - run: pnpm test:native-ios-signing
+      - run: pnpm smoke:cli-ios-signing
       - run: pnpm smoke:native-packed-swift
       - run: pnpm build:target ios staging
         env:

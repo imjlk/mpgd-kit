@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -82,6 +82,23 @@ try {
     run('security', ['find-certificate', '-a', '-c', 'mpgd-throwaway-signing', '-p', keychain]),
     /BEGIN CERTIFICATE/u,
   );
+  assert.equal(
+    run('security', ['find-identity', keychain]).toUpperCase()
+      .includes(response.certificateSha1),
+    true,
+    'Imported SHA-1 identity was not listed in its keychain.',
+  );
+  const partition = spawnSync(
+    'security',
+    ['set-key-partition-list', '-S', 'apple:', '-s', keychain],
+    { encoding: 'utf8', input: `${keychainPassword}\n`, timeout: 10_000 },
+  );
+  assert.equal(partition.status, 0, partition.stderr);
+  const isolatedHome = { ...process.env, HOME: fixture };
+  mkdirSync(path.join(fixture, 'Library', 'Preferences'), { recursive: true });
+  run('security', ['list-keychains', '-d', 'user', '-s', keychain], isolatedHome);
+  const isolatedList = run('security', ['list-keychains', '-d', 'user'], isolatedHome);
+  assert.equal(isolatedList.includes(keychain), true, `Isolated list: ${isolatedList}`);
   assert.equal(run('security', ['list-keychains', '-d', 'user']), searchListBefore);
   const defaultCertificateAfter = spawnSync(
     'security',

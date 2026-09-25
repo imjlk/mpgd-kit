@@ -30,9 +30,29 @@ do {
     ])
   }
 
+  var trustedCodesign: SecTrustedApplication?
+  let trustedStatus = SecTrustedApplicationCreateFromPath(
+    "/usr/bin/codesign", &trustedCodesign)
+  guard trustedStatus == errSecSuccess, let trustedCodesign else {
+    throw NSError(domain: "mpgd.ios.signing", code: Int(trustedStatus), userInfo: [
+      NSLocalizedDescriptionKey: "Could not grant code signing access to the isolated identity.",
+    ])
+  }
+  var access: SecAccess?
+  let accessStatus = SecAccessCreate(
+    "mpgd isolated code signing" as CFString,
+    [trustedCodesign] as CFArray,
+    &access)
+  guard accessStatus == errSecSuccess, let access else {
+    throw NSError(domain: "mpgd.ios.signing", code: Int(accessStatus), userInfo: [
+      NSLocalizedDescriptionKey: "Could not create isolated code signing access controls.",
+    ])
+  }
+
   let options: [String: Any] = [
     kSecImportExportPassphrase as String: certificatePassword,
     kSecImportExportKeychain as String: keychain,
+    kSecImportExportAccess as String: access,
   ]
   var imported: CFArray?
   let importStatus = SecPKCS12Import(certificateData as CFData, options as CFDictionary, &imported)
@@ -64,6 +84,9 @@ do {
   FileHandle.standardOutput.write(json)
   FileHandle.standardOutput.write(Data([0x0A]))
 } catch {
-  FileHandle.standardError.write(Data("iOS signing identity import failed.\n".utf8))
+  let failure = error as NSError
+  let detail = failure.domain == "mpgd.ios.signing"
+    ? failure.localizedDescription : "Could not load the signing input."
+  FileHandle.standardError.write(Data("iOS signing identity import failed: \(detail)\n".utf8))
   exit(1)
 }
