@@ -504,6 +504,13 @@ function getSourceGitSha(kitGitSha: string): string {
 }
 
 function resolveKitGitSha(): string {
+  if (process.env.MPGD_NATIVE_PACKAGED_BUILD === '1') {
+    const packagedKitGitSha = readOptionalString(process.env.MPGD_PACKAGED_KIT_GIT_SHA);
+    if (packagedKitGitSha === undefined || !/^[0-9a-f]{40}$/u.test(packagedKitGitSha)) {
+      throw new Error('Packaged native build is missing its Kit build revision.');
+    }
+    return packagedKitGitSha;
+  }
   const kitRoot = resolveKitRoot();
 
   assertKitGitTopLevel(kitRoot);
