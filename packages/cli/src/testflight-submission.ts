@@ -87,6 +87,9 @@ export async function submitVerifiedIosBuild(
     copyFileSync(input.ascBinary, binary);
     chmodSync(binary, 0o700);
     await verifyPinnedAscBinary(binary);
+    const stagedIpa = path.join(tempRoot, 'release.ipa');
+    copyFileSync(input.ipaFile, stagedIpa);
+    const stagedInput = { ...input, ipaFile: stagedIpa };
     const environment = isolatedAscEnvironment(input, tempRoot);
     const runner: AscJsonRunner = async (args, timeoutMs) => {
       const result = await runReleaseProcess({
@@ -109,7 +112,7 @@ export async function submitVerifiedIosBuild(
         throw new Error('asc returned invalid JSON.');
       }
     };
-    return await submitVerifiedIosBuildWithRunner(input, runner);
+    return await submitVerifiedIosBuildWithRunner(stagedInput, runner);
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }

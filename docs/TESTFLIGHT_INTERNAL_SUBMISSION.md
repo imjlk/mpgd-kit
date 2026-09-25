@@ -13,6 +13,8 @@ material. The CLI verifies the binary checksum, disables telemetry and
 keychain access, isolates the temporary home, limits process time and output,
 redacts credentials, and removes the temporary session afterward. The `.p8`
 API key is not the iOS signing private key.
+It stages and hashes a private copy of the IPA so the upload reads the same
+bytes that passed preflight even if the caller's original file changes.
 
 The submission confirms the numeric App Store Connect app ID has the expected
 bundle ID and the configured TestFlight group is internal. It checks for an
