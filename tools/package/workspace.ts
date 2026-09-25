@@ -33,6 +33,10 @@ export function discoverPublishablePackages(): WorkspacePackage[] {
 export function discoverBuildablePackages(): WorkspacePackage[] {
   return packageRoots
     .flatMap((root) => discoverPackagesInRoot(root))
+    // A private adapter source can be bundled into another published package
+    // without itself having a standalone TypeScript package build.
+    .filter((workspacePackage) => workspacePackage.packageJson.private !== true
+      || existsSync(join(workspacePackage.dir, 'tsconfig.json')))
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
