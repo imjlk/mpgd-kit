@@ -43,7 +43,7 @@ client/auth objects, handles mocked Google edit and Apple build API responses,
 then packs itself into a tarball and repeats type and runtime consumption in a
 temporary project with no workspace link. The selected `asc` release is fetched
 from its versioned GitHub release, SHA-256 checked against
-[`asc-pin.json`](../tools/deploy/asc-pin.json), and checked for its version,
+`tools/deploy/asc-pin.json`, and checked for its version,
 JSON capabilities, upload/list/group help, and usage-error exit code. The
 published checksum set covers pinned macOS/Linux/Windows architectures; the
 local D-01 execution verified the macOS arm64 binary only. Other host checks
