@@ -76,3 +76,8 @@ Existing symlinks under the standard `artifacts`, `release-output`, or `dist`
 output roots are rejected before installation or build rather than followed.
 Target paths are resolved again inside the cloned checkout so an absolute
 `gameApp` symlink that points back to the source game cannot escape the pin.
+The lockfile and deployment configuration input paths cannot be symlinks,
+including through a parent directory. Each native build receives a disposable
+checkout-owned `TMPDIR`/`TMP`/`TEMP`, removed even if the build fails or is
+cancelled, so interrupted native staging does not leave signed output under
+the host's shared temporary directory.

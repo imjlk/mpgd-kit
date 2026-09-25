@@ -126,6 +126,13 @@ export async function pinNativeDeploymentPlan(
       'Pinned release inputs have uncommitted changes. Commit the lockfile and deployment configuration first.',
     );
   }
+  for (const file of [
+    path.join(repositoryRoot, 'pnpm-lock.yaml'),
+    path.join(gameRoot, 'mpgd.targets.json'),
+    path.join(gameRoot, 'mpgd.deploy.json'),
+  ]) {
+    assertPinnedInputPath(repositoryRoot, file);
+  }
   const input: PinnedReleaseInput = {
     gameRoot,
     deploymentProfile: plan.profile,
@@ -314,25 +321,35 @@ export async function runPinnedNativeBuild(
     `${input.target}.json`,
   );
   const previousRunId = existsSync(statusFile) ? readJsonObject(statusFile).runId : undefined;
-  const processInput: ReleaseProcessInput = {
-    command: 'pnpm',
-    args: [
-      'exec',
-      'mpgd',
-      'target',
-      'build',
-      input.target,
-      input.profile,
-      '--targets-file',
-      targetsFile,
-    ],
-    cwd: workspace.gameRoot,
-    environment,
-    timeoutMs: input.timeoutMs ?? defaultBuildTimeoutMs,
-    signal: input.signal,
-    secretValues: input.secretValues,
-  };
-  await runReleaseProcess(processInput);
+  const buildTemporaryDirectory = mkdtempSync(
+    path.join(workspace.workspaceRoot, 'mpgd-native-tmp-'),
+  );
+  environment.TMPDIR = buildTemporaryDirectory;
+  environment.TMP = buildTemporaryDirectory;
+  environment.TEMP = buildTemporaryDirectory;
+  try {
+    const processInput: ReleaseProcessInput = {
+      command: 'pnpm',
+      args: [
+        'exec',
+        'mpgd',
+        'target',
+        'build',
+        input.target,
+        input.profile,
+        '--targets-file',
+        targetsFile,
+      ],
+      cwd: workspace.gameRoot,
+      environment,
+      timeoutMs: input.timeoutMs ?? defaultBuildTimeoutMs,
+      signal: input.signal,
+      secretValues: input.secretValues,
+    };
+    await runReleaseProcess(processInput);
+  } finally {
+    rmSync(buildTemporaryDirectory, { recursive: true, force: true });
+  }
   assertPinnedFiles(workspace.workspaceRoot, workspace.gameRoot, workspace.input);
   const status = readJsonObject(statusFile);
   if (status.target !== input.target || status.status !== 'success'
@@ -435,9 +452,25 @@ function assertPinnedFiles(
     [path.join(gameRoot, 'mpgd.targets.json'), input.targetConfigSha256],
     [path.join(gameRoot, 'mpgd.deploy.json'), input.deployConfigSha256],
   ] as const) {
+    assertPinnedInputPath(workspaceRoot, file);
     const actual = sha256(file);
     if (actual !== expected) {
       throw new Error(`Pinned release input differs from its plan: ${path.basename(file)}`);
+    }
+  }
+}
+
+function assertPinnedInputPath(repositoryRoot: string, file: string): void {
+  const relativeFile = path.relative(repositoryRoot, file);
+  if (relativeFile === '..' || relativeFile.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relativeFile)) {
+    throw new Error(`Pinned release input resolves outside its checkout: ${file}`);
+  }
+  let current = repositoryRoot;
+  for (const segment of relativeFile.split(path.sep)) {
+    current = path.join(current, segment);
+    if (lstatSync(current).isSymbolicLink()) {
+      throw new Error(`Pinned release input path is symlinked: ${file}`);
     }
   }
 }

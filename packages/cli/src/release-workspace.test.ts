@@ -125,6 +125,7 @@ try {
     repository,
   );
   const plan = planNativeDeployment({ game, profile: 'beta' });
+  const committedTargets = readFileSync(path.join(game, 'mpgd.targets.json'));
   const input = await pinNativeDeploymentPlan(plan, {
     packageVersion: '0.35.0',
     gitSha: 'a'.repeat(40),
@@ -182,6 +183,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 if (process.env.MPGD_KIT_PATH || process.env.MPGD_NATIVE_BUILD_MODE !== 'signed-archive'
   || process.env.MPGD_SOURCE_GIT_SHA !== process.env.MPGD_FAKE_GAME_SHA) process.exit(4);
+if (!process.env.TMPDIR.startsWith(process.env.MPGD_FAKE_WORKSPACE_ROOT)) process.exit(5);
+fs.writeFileSync(path.join(process.env.TMPDIR, 'owned-temporary-file'), 'temporary');
 if (process.env.MPGD_FAKE_NO_WRITE === '1') process.exit(0);
 const target = process.argv[6];
 const gameRoot = process.cwd();
@@ -199,12 +202,18 @@ fs.writeFileSync(manifest, JSON.stringify({
 }));
 `);
   chmodSync(fakePnpm, 0o755);
+  const externalTemporary = path.join(fixture, 'external-temporary');
+  mkdirSync(externalTemporary);
   const buildEnvironment = {
     ...process.env,
     PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}`,
+    TMPDIR: externalTemporary,
+    TMP: externalTemporary,
+    TEMP: externalTemporary,
     MPGD_KIT_PATH: '/invalid/checkout',
     MPGD_FAKE_GAME_SHA: input.gameGitSha,
     MPGD_FAKE_KIT_SHA: input.kitGitSha,
+    MPGD_FAKE_WORKSPACE_ROOT: first.workspaceRoot,
   };
   const built = await runPinnedNativeBuild(first, {
     target: 'android',
@@ -214,6 +223,11 @@ fs.writeFileSync(manifest, JSON.stringify({
   });
   assert.equal(built.runId, 'current-run');
   assert.equal(existsSync(built.artifact), true);
+  assert.deepEqual(readdirSync(externalTemporary), []);
+  assert.deepEqual(
+    readdirSync(first.workspaceRoot).filter((entry) => entry.startsWith('mpgd-native-tmp-')),
+    [],
+  );
   await assert.rejects(
     runPinnedNativeBuild(first, {
       target: 'android',
@@ -259,6 +273,10 @@ fs.writeFileSync(manifest, JSON.stringify({
       environment: { ...buildEnvironment, MPGD_FAKE_NO_WRITE: '1' },
     }),
     /current attempt/u,
+  );
+  assert.deepEqual(
+    readdirSync(first.workspaceRoot).filter((entry) => entry.startsWith('mpgd-native-tmp-')),
+    [],
   );
   assert.equal(
     realpathSync(path.join(first.gameRoot, 'node_modules/@fixture/shared')),
@@ -321,6 +339,56 @@ fs.writeFileSync(manifest, JSON.stringify({
     /pnpm-lock.yaml/u,
   );
   assert.deepEqual(readdirSync(workspaces), []);
+  writeFileSync(path.join(game, 'mpgd.targets.json'), committedTargets);
+  const linkedLockfile = path.join(fixture, 'linked-lockfile.yaml');
+  writeFileSync(linkedLockfile, committedLockfile);
+  unlinkSync(path.join(repository, 'pnpm-lock.yaml'));
+  symlinkSync(linkedLockfile, path.join(repository, 'pnpm-lock.yaml'));
+  run('git', ['add', '.'], repository);
+  run(
+    'git',
+    [
+      '-c',
+      'user.name=mpgd-test',
+      '-c',
+      'user.email=mpgd-test@example.invalid',
+      'commit',
+      '-qm',
+      'symlinked release lockfile',
+    ],
+    repository,
+  );
+  const linkedPlan = planNativeDeployment({ game, profile: 'beta', targets: ['android'] });
+  await assert.rejects(
+    pinNativeDeploymentPlan(linkedPlan, {
+      packageVersion: '0.35.0',
+      gitSha: 'a'.repeat(40),
+    }),
+    /input path is symlinked/u,
+  );
+  await assert.rejects(
+    preparePinnedReleaseWorkspace(
+      { ...input, gameGitSha: run('git', ['rev-parse', 'HEAD'], repository) },
+      { temporaryParent: workspaces },
+    ),
+    /input path is symlinked/u,
+  );
+  unlinkSync(path.join(repository, 'pnpm-lock.yaml'));
+  writeFileSync(path.join(repository, 'pnpm-lock.yaml'), committedLockfile);
+  run('git', ['add', '.'], repository);
+  run(
+    'git',
+    [
+      '-c',
+      'user.name=mpgd-test',
+      '-c',
+      'user.email=mpgd-test@example.invalid',
+      'commit',
+      '-qm',
+      'restore lockfile',
+    ],
+    repository,
+  );
   symlinkSync(game, path.join(game, 'linked-app'), 'dir');
   writeJson(path.join(game, 'mpgd.targets.json'), {
     targets: {
