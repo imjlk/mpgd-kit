@@ -1,5 +1,11 @@
 # @mpgd/adapter-ait
 
+## 0.12.5 — 2026-09-25
+
+### Patch changes
+
+- Updated dependencies: bridge@0.10.0, platform@0.13.0
+
 ## 0.12.4 — 2026-09-24
 
 ### Patch changes

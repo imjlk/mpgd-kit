@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/tutorial",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Headless tutorial progression, optional Driver.js presentation, and local reproduction helpers for mpgd games.",
   "license": "MIT",
   "repository": {

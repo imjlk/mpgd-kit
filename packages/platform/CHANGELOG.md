@@ -1,5 +1,33 @@
 # @mpgd/platform
 
+## 0.13.0 — 2026-09-25
+
+### Minor changes
+
+- [bd7d0125](https://github.com/imjlk/mpgd-kit/commit/bd7d0125fc8201e17f92988c4ad177563e004175) Connect Capacitor app state, Android back navigation, and classified cold/warm
+  URL entry to the platform lifecycle contract. Keep OAuth redirects separate
+  from game links, own and dispose only registered listeners, and hold game
+  execution while optional external provider UI is still active. Include the
+  App plugin in generated native projects. — Thanks @imjlk!
+- [f6e47baa](https://github.com/imjlk/mpgd-kit/commit/f6e47baa9c84aee3b3ea67bdba192bbeae2ba4af) Add optional Capacitor provider composition with per-method bridge validation and
+  fail-closed readiness reporting. Distinguish uninstalled, unconfigured,
+  action-required, transient, and available features without changing existing
+  purchase result states. Expose subscription and native/remote leaderboard
+  availability separately while preserving legacy target configuration defaults.
+  Fix the base plugin's ESM-relative export so the published tarball can be
+  imported by Node-based consumers and native build tooling.
+  Keep generated starter target-availability checks aligned with the new readiness states. — Thanks @imjlk!
+- [7a27b7f8](https://github.com/imjlk/mpgd-kit/commit/7a27b7f8b033ca987eefe859a702d0c08eba0800) Expose an optional Capacitor viewport state and change subscription with
+  separate safe-area, system-bar, keyboard, and named occupied-surface geometry.
+  Resolve one usable CSS-pixel rectangle without double-counting overlapping
+  native or CSS insets, and convert provider-owned physical-pixel surfaces at
+  the adapter boundary.
+  Align newly scaffolded games with the SystemBars CSS safe-area fallback. — Thanks @imjlk!
+- [b7ffbf9d](https://github.com/imjlk/mpgd-kit/commit/b7ffbf9d8baedbae894063e89a07509fc96dfd46) Add a separate fail-closed credential storage contract to the Capacitor base
+  bridge. Android uses a Keystore-held AES-GCM key with no-backup ciphertext
+  files, and iOS uses device-only
+  Keychain items; neither falls back to ordinary game JSON storage. — Thanks @imjlk!
+
 ## 0.12.2 — 2026-09-24
 
 ### Added
