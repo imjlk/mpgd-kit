@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
 } from 'node:fs';
@@ -221,6 +222,7 @@ export async function preparePinnedReleaseWorkspace(
     assertWorkspaceOutputRoots(workspaceRoot, gameRoot);
     assertPinnedFiles(workspaceRoot, gameRoot, input);
     assertPinnedTargetPaths(gameRoot, input);
+    await assertNoEscapingTrackedSymlinks(workspaceRoot, environment, options.signal);
     return {
       workspaceRoot,
       gameRoot,
@@ -457,10 +459,40 @@ function assertPinnedFiles(
       throw new Error(`Pinned release input differs from its plan: ${path.basename(file)}`);
     }
   }
-  for (const name of ['mpgd.catalog.json', 'mpgd.ad-placements.json']) {
+  for (const name of ['mpgd.catalog.json', 'mpgd.ad-placements.json', 'mpgd.target-config.json']) {
     const file = path.join(gameRoot, name);
     if (existsSync(file)) {
       assertPinnedInputPath(workspaceRoot, file);
+    }
+  }
+}
+
+async function assertNoEscapingTrackedSymlinks(
+  workspaceRoot: string,
+  environment: NodeJS.ProcessEnv,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  const tracked = await runReleaseProcess({
+    command: 'git',
+    args: ['-C', workspaceRoot, 'ls-files', '--stage', '-z'],
+    cwd: workspaceRoot,
+    environment,
+    timeoutMs: 30_000,
+    maxOutputBytes: 16 * 1024 * 1024,
+    signal,
+    captureMachineStdout: true,
+  });
+  for (const record of machineOutput(tracked).split('\0')) {
+    const separator = record.indexOf('\t');
+    if (separator === -1 || !record.startsWith('120000 ')) {
+      continue;
+    }
+    const file = path.join(workspaceRoot, record.slice(separator + 1));
+    const target = path.resolve(path.dirname(file), readlinkSync(file));
+    const relative = path.relative(workspaceRoot, target);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`)
+      || path.isAbsolute(relative)) {
+      throw new Error(`Pinned release source symlink escapes its checkout: ${file}`);
     }
   }
 }

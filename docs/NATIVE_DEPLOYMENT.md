@@ -85,4 +85,7 @@ Auto-discovered catalog and ad-placement inputs are also checked for escaping
 symlinks. The installed CLI entrypoint and executable must resolve inside the
 checkout, and the build runs that checked executable directly rather than an
 unrelated `mpgd` binary from `PATH`. A pre-existing generated targets file
-cannot be a symlink to another location.
+cannot be a symlink to another location. Before dependency installation,
+tracked symlinks anywhere in the game repository are checked so they cannot
+point outside the cloned checkout; this also covers optional target-config
+extensions and workspace package sources.

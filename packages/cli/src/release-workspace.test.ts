@@ -465,6 +465,33 @@ fs.writeFileSync(manifest, JSON.stringify({
     /gameApp must stay inside the game project/u,
   );
   assert.deepEqual(readdirSync(workspaces), []);
+  unlinkSync(path.join(game, 'linked-app'));
+  writeFileSync(path.join(game, 'mpgd.targets.json'), committedTargets);
+  symlinkSync(externalCatalog, path.join(repository, 'packages/shared/outside-linked.js'));
+  run('git', ['add', '.'], repository);
+  run(
+    'git',
+    [
+      '-c',
+      'user.name=mpgd-test',
+      '-c',
+      'user.email=mpgd-test@example.invalid',
+      'commit',
+      '-qm',
+      'external source symlink',
+    ],
+    repository,
+  );
+  const externalPlan = planNativeDeployment({ game, profile: 'beta', targets: ['android'] });
+  const externalInput = await pinNativeDeploymentPlan(externalPlan, {
+    packageVersion: '0.35.0',
+    gitSha: 'a'.repeat(40),
+  });
+  await assert.rejects(
+    preparePinnedReleaseWorkspace(externalInput, { temporaryParent: workspaces }),
+    /source symlink escapes its checkout/u,
+  );
+  assert.deepEqual(readdirSync(workspaces), []);
   console.info('Pinned multi-game release workspace passed.');
 } finally {
   rmSync(fixture, { recursive: true, force: true });
