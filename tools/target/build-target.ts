@@ -39,7 +39,10 @@ import {
 import { assembleMiniGameArtifact, assertDisjointMiniGameTargetOutputs } from './minigame-artifact';
 import { wechatStagingAppId, writeWechatMiniGameProjectFiles } from './minigame-project-files';
 import { normalizeMonetizationCatalogEnv } from './monetization-catalog-env';
-import { assertNativeReleaseIdentity } from './native-release-identity';
+import {
+  assertNativeReleaseIdentity,
+  runNativeSyncWithIdentityCheck,
+} from './native-release-identity';
 import {
   appTargetForPlatformTarget,
   assertPlatformTargetBuildEmitterAvailable,
@@ -340,17 +343,20 @@ try {
       const shellApp = targetPath(requireString(target.shellApp, `${targetName}.shellApp`));
       replaceDirectory(`${gameApp}/dist`, webDir);
       ensureCapacitorPlatform(shellApp, 'android', env);
-      assertNativeReleaseIdentity({
+      const identityInput = {
         environment: env,
         metadata: target.metadata,
-        platform: 'android',
+        platform: 'android' as const,
         required: profile === 'production',
         shellApp,
-      });
+      };
+      assertNativeReleaseIdentity(identityInput);
       const restoreIcons = await stageNativeIconResources(generatedIcons, shellApp);
 
       try {
-        run('pnpm', ['--dir', shellApp, 'cap', 'sync', 'android'], env);
+        runNativeSyncWithIdentityCheck(identityInput, () => {
+          run('pnpm', ['--dir', shellApp, 'cap', 'sync', 'android'], env);
+        });
 
         const androidProject = `${shellApp}/android`;
         run('./gradlew', ['bundleRelease', '--no-daemon'], env, androidProject);
@@ -370,17 +376,20 @@ try {
       const shellApp = targetPath(requireString(target.shellApp, `${targetName}.shellApp`));
       replaceDirectory(`${gameApp}/dist`, webDir);
       ensureCapacitorPlatform(shellApp, 'ios', env);
-      assertNativeReleaseIdentity({
+      const identityInput = {
         environment: env,
         metadata: target.metadata,
-        platform: 'ios',
+        platform: 'ios' as const,
         required: profile === 'production',
         shellApp,
-      });
+      };
+      assertNativeReleaseIdentity(identityInput);
       const restoreIcons = await stageNativeIconResources(generatedIcons, shellApp);
 
       try {
-        run('pnpm', ['--dir', shellApp, 'cap', 'sync', 'ios'], env);
+        runNativeSyncWithIdentityCheck(identityInput, () => {
+          run('pnpm', ['--dir', shellApp, 'cap', 'sync', 'ios'], env);
+        });
 
         let releaseArtifact = requireString(target.shellApp, `${targetName}.shellApp`) + '/ios';
 

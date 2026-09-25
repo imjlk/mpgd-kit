@@ -301,7 +301,7 @@ function assertAuthoritativeGameServicesUrl(
   }
 }
 
-function isNonPublicServiceHostname(hostname: string): boolean {
+export function isNonPublicServiceHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/u, '');
 
   if (
