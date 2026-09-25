@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
-  chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -168,6 +168,7 @@ try {
     name: '@mpgd/cli',
     version: input.kitPackageVersion,
     exports: { '.': './dist/index.js' },
+    bin: { mpgd: './dist/bin.js' },
   });
   writeFileSync(path.join(cliRoot, 'dist/index.js'), 'module.exports = {};\n');
   writeJson(path.join(cliRoot, 'dist/native-build-info.json'), {
@@ -175,10 +176,7 @@ try {
     kitGitSha: input.kitGitSha,
     kitDirty: false,
   });
-  const fakeBin = path.join(fixture, 'fake-bin');
-  mkdirSync(fakeBin);
-  const fakePnpm = path.join(fakeBin, 'pnpm');
-  writeFileSync(fakePnpm, `#!/usr/bin/env node
+  writeFileSync(path.join(cliRoot, 'dist/bin.js'), `#!/usr/bin/env node
 const fs = require('node:fs');
 const path = require('node:path');
 if (process.env.MPGD_KIT_PATH || process.env.MPGD_NATIVE_BUILD_MODE !== 'signed-archive'
@@ -186,7 +184,7 @@ if (process.env.MPGD_KIT_PATH || process.env.MPGD_NATIVE_BUILD_MODE !== 'signed-
 if (!process.env.TMPDIR.startsWith(process.env.MPGD_FAKE_WORKSPACE_ROOT)) process.exit(5);
 fs.writeFileSync(path.join(process.env.TMPDIR, 'owned-temporary-file'), 'temporary');
 if (process.env.MPGD_FAKE_NO_WRITE === '1') process.exit(0);
-const target = process.argv[6];
+const target = process.argv[4];
 const gameRoot = process.cwd();
 const artifact = 'release-output/native/' + target + '/game.aab';
 fs.mkdirSync(path.join(gameRoot, path.dirname(artifact)), { recursive: true });
@@ -201,12 +199,10 @@ fs.writeFileSync(manifest, JSON.stringify({
   targets: { [target]: { artifact, profile: 'production' } },
 }));
 `);
-  chmodSync(fakePnpm, 0o755);
   const externalTemporary = path.join(fixture, 'external-temporary');
   mkdirSync(externalTemporary);
   const buildEnvironment = {
     ...process.env,
-    PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}`,
     TMPDIR: externalTemporary,
     TMP: externalTemporary,
     TEMP: externalTemporary,
@@ -285,6 +281,19 @@ fs.writeFileSync(manifest, JSON.stringify({
   assert.equal(sha256(path.join(first.workspaceRoot, 'pnpm-lock.yaml')), input.lockfileSha256);
   writeFileSync(path.join(first.gameRoot, 'output.txt'), 'isolated output\n');
   assert.equal(existsSync(path.join(game, 'output.txt')), false);
+  const externalCli = path.join(fixture, 'external-cli');
+  cpSync(cliRoot, externalCli, { recursive: true });
+  rmSync(cliRoot, { recursive: true });
+  symlinkSync(externalCli, cliRoot, 'dir');
+  await assert.rejects(
+    runPinnedNativeBuild(first, {
+      target: 'android',
+      profile: 'production',
+      mode: 'signed-archive',
+      environment: buildEnvironment,
+    }),
+    /CLI package resolves outside the pinned checkout/u,
+  );
   first.dispose();
   assert.equal(existsSync(first.workspaceRoot), false);
   assert.equal(existsSync(second.workspaceRoot), true);
@@ -303,6 +312,35 @@ fs.writeFileSync(manifest, JSON.stringify({
     );
     unlinkSync(link);
   }
+  const externalCatalog = path.join(fixture, 'external-catalog.json');
+  writeFileSync(externalCatalog, '{}\n');
+  for (const name of ['mpgd.catalog.json', 'mpgd.ad-placements.json']) {
+    const link = path.join(second.gameRoot, name);
+    symlinkSync(externalCatalog, link);
+    await assert.rejects(
+      runPinnedNativeBuild(second, {
+        target: 'android',
+        profile: 'production',
+        mode: 'signed-archive',
+      }),
+      /input path is symlinked/u,
+    );
+    unlinkSync(link);
+  }
+  const externalGenerated = path.join(fixture, 'external-generated.json');
+  writeFileSync(externalGenerated, 'untouched\n');
+  const generatedLink = path.join(second.gameRoot, '.mpgd.targets.generated.json');
+  symlinkSync(externalGenerated, generatedLink);
+  await assert.rejects(
+    runPinnedNativeBuild(second, {
+      target: 'android',
+      profile: 'production',
+      mode: 'signed-archive',
+    }),
+    /output path is symlinked/u,
+  );
+  assert.equal(readFileSync(externalGenerated, 'utf8'), 'untouched\n');
+  unlinkSync(generatedLink);
   mkdirSync(path.join(second.gameRoot, 'artifacts'));
   const nestedLink = path.join(second.gameRoot, 'artifacts', 'native-build-status');
   symlinkSync(outsideOutput, nestedLink, 'dir');

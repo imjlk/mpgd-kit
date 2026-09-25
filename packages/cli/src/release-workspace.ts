@@ -298,7 +298,7 @@ export async function runPinnedNativeBuild(
     || input.profile !== workspace.input.buildProfile) {
     throw new Error('Native build target and profile must match the pinned deployment plan.');
   }
-  assertInstalledKitIdentity(workspace);
+  const cliExecutable = assertInstalledKitIdentity(workspace);
   const targetsFile = path.join(workspace.gameRoot, 'mpgd.targets.json');
   const environment: NodeJS.ProcessEnv = {
     ...(input.environment ?? process.env),
@@ -329,10 +329,9 @@ export async function runPinnedNativeBuild(
   environment.TEMP = buildTemporaryDirectory;
   try {
     const processInput: ReleaseProcessInput = {
-      command: 'pnpm',
+      command: process.execPath,
       args: [
-        'exec',
-        'mpgd',
+        cliExecutable,
         'target',
         'build',
         input.target,
@@ -458,6 +457,12 @@ function assertPinnedFiles(
       throw new Error(`Pinned release input differs from its plan: ${path.basename(file)}`);
     }
   }
+  for (const name of ['mpgd.catalog.json', 'mpgd.ad-placements.json']) {
+    const file = path.join(gameRoot, name);
+    if (existsSync(file)) {
+      assertPinnedInputPath(workspaceRoot, file);
+    }
+  }
 }
 
 function assertPinnedInputPath(repositoryRoot: string, file: string): void {
@@ -486,6 +491,7 @@ function assertWorkspaceOutputRoots(workspaceRoot: string, gameRoot: string): vo
   for (const name of ['artifacts', 'release-output', 'dist']) {
     assertNoOutputSymlinks(path.join(gameRoot, name));
   }
+  assertNoOutputSymlinks(path.join(gameRoot, '.mpgd.targets.generated.json'));
 }
 
 function assertNoOutputSymlinks(candidate: string): void {
@@ -512,17 +518,35 @@ function sha256(file: string): string {
   return createHash('sha256').update(readFileSync(file)).digest('hex');
 }
 
-function assertInstalledKitIdentity(workspace: PinnedReleaseWorkspace): void {
+function assertInstalledKitIdentity(workspace: PinnedReleaseWorkspace): string {
   const requireGame = createRequire(path.join(workspace.gameRoot, 'package.json'));
   const cliEntry = requireGame.resolve('@mpgd/cli');
   const packageRoot = path.dirname(path.dirname(cliEntry));
+  assertInsideCheckout(workspace.workspaceRoot, packageRoot, 'CLI package');
+  assertInsideCheckout(workspace.workspaceRoot, cliEntry, 'CLI entrypoint');
   const packageJson = readJsonObject(path.join(packageRoot, 'package.json'));
   const buildInfo = readJsonObject(path.join(packageRoot, 'dist/native-build-info.json'));
+  const bin = packageJson.bin;
+  if (typeof bin !== 'object' || bin === null || Array.isArray(bin)
+    || (bin as Record<string, unknown>).mpgd !== './dist/bin.js') {
+    throw new Error('Installed Kit package has no expected mpgd executable.');
+  }
+  const cliExecutable = path.join(packageRoot, 'dist/bin.js');
+  assertInsideCheckout(workspace.workspaceRoot, cliExecutable, 'CLI executable');
   if (packageJson.version !== workspace.input.kitPackageVersion
     || buildInfo.packageVersion !== workspace.input.kitPackageVersion
     || buildInfo.kitGitSha !== workspace.input.kitGitSha
     || buildInfo.kitDirty !== false) {
     throw new Error('Installed Kit package does not match pinned release identity.');
+  }
+  return cliExecutable;
+}
+
+function assertInsideCheckout(workspaceRoot: string, candidate: string, label: string): void {
+  const relative = path.relative(realpathSync(workspaceRoot), realpathSync(candidate));
+  if (relative === '..' || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative)) {
+    throw new Error(`Installed ${label} resolves outside the pinned checkout.`);
   }
 }
 

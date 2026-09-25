@@ -81,3 +81,8 @@ including through a parent directory. Each native build receives a disposable
 checkout-owned `TMPDIR`/`TMP`/`TEMP`, removed even if the build fails or is
 cancelled, so interrupted native staging does not leave signed output under
 the host's shared temporary directory.
+Auto-discovered catalog and ad-placement inputs are also checked for escaping
+symlinks. The installed CLI entrypoint and executable must resolve inside the
+checkout, and the build runs that checked executable directly rather than an
+unrelated `mpgd` binary from `PATH`. A pre-existing generated targets file
+cannot be a symlink to another location.
