@@ -530,7 +530,13 @@ const verifierErrorReward = await nonGrantingBackend.adRewards.claimAdReward({
 
 assertEqual(pendingPurchase.verified, false, 'pending provider evidence must not grant');
 assertEqual(pendingPurchase.reason, 'PROVIDER_PENDING', 'pending reasons should be preserved');
+assertEqual(
+  pendingPurchase.disposition,
+  'pending',
+  'provider-pending purchases remain recoverable',
+);
 assertEqual(verifierErrorReward.granted, false, 'verifier errors must not grant');
+assertEqual(verifierErrorReward.disposition, 'pending', 'verifier errors must remain retryable');
 assertEqual(
   verifierErrorReward.reason,
   'EVIDENCE_VERIFIER_ERROR',
@@ -570,6 +576,11 @@ const invalidTimestampPurchase = await invalidTimestampBackend.purchases.verifyP
 });
 
 assertEqual(invalidTimestampPurchase.verified, false, 'invalid verifier timestamps must reject');
+assertEqual(
+  invalidTimestampPurchase.disposition,
+  'rejected',
+  'invalid verifier data must not retry',
+);
 assertEqual(
   invalidTimestampPurchase.reason,
   'EVIDENCE_VERIFIER_ERROR',
@@ -1366,6 +1377,7 @@ assertEqual(
   false,
   'non-finite verifier payloads must fail closed',
 );
+assertEqual(invalidPayloadPurchase.disposition, 'rejected', 'invalid payloads must not retry');
 assertEqual(
   invalidPayloadPurchase.reason,
   'EVIDENCE_VERIFIER_ERROR',
@@ -1406,6 +1418,7 @@ const nonRecordPayloadPurchase = await nonRecordPayloadBackend.purchases.verifyP
 });
 
 assertEqual(nonRecordPayloadPurchase.verified, false, 'non-record payloads must fail closed');
+assertEqual(nonRecordPayloadPurchase.disposition, 'rejected', 'non-record payloads must not retry');
 assertEqual(
   nonRecordPayloadPurchase.reason,
   'EVIDENCE_VERIFIER_ERROR',
@@ -1835,6 +1848,45 @@ assertEqual(
   analyticsEvents.map((event) => event.sessionId).join(','),
   'server-session,server-session,server-session,server-session,server-session',
   'backend analytics should use the configured session id',
+);
+const pendingAnalyticsEvents: AnalyticsEvent[] = [];
+const pendingAnalyticsBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      return { status: 'pending', reason: 'PROVIDER_PENDING' } as const;
+    },
+    async verifyAdReward() {
+      return { status: 'pending', reason: 'PROVIDER_PENDING' } as const;
+    },
+  },
+  analytics: {
+    track(event) {
+      pendingAnalyticsEvents.push(event);
+    },
+  },
+});
+await pendingAnalyticsBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'analytics-pending-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-analytics-pending',
+  idempotencyKey: 'analytics-purchase-pending',
+  purchasedAt: '2026-07-04T00:00:03.000Z',
+});
+await pendingAnalyticsBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'analytics-pending-player',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-analytics-pending',
+  idempotencyKey: 'analytics-reward-pending',
+  completedAt: '2026-07-04T00:00:04.000Z',
+});
+assertEqual(
+  pendingAnalyticsEvents.map((event) => event.name).join(','),
+  'purchase_pending,rewarded_ad_pending',
+  'retryable server decisions must not be counted as rejections',
 );
 assertEqual(
   analyticsEvents[0]?.properties.reason,

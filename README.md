@@ -268,6 +268,7 @@ remains separate from the platform-native leaderboard capability. See
 Read:
 
 - [Game Services Backend](docs/GAME_SERVICES_BACKEND.md)
+- [Purchase and Reward Recovery](docs/MONETIZATION_RECOVERY.md)
 - [Verse8 VXShop and Agent8 Commerce](docs/VERSE8_COMMERCE.md)
 - [Verse8 Agent8 Storage and Verified Leaderboards](docs/VERSE8_AGENT8_SERVICES.md)
 - [Apps in Toss Production Evidence](docs/APPS_IN_TOSS_PRODUCTION_EVIDENCE.md)

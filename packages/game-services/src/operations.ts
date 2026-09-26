@@ -51,7 +51,7 @@ export interface GameServicesRewardedAdInput {
 }
 
 export interface GameServicesRewardedAdResult {
-  readonly status: 'granted' | 'skipped' | 'unavailable' | 'failed' | 'rejected';
+  readonly status: 'granted' | 'pending' | 'skipped' | 'unavailable' | 'failed' | 'rejected';
   readonly reward: RewardedAdResult;
   readonly claim?: ClaimAdRewardResponse;
   readonly ledgerEntryId?: string;

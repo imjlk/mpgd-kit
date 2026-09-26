@@ -352,7 +352,8 @@ export function createGameServicesBackend(
         });
 
         await analytics.track({
-          name: verification.verified ? 'purchase_granted' : 'purchase_rejected',
+          name: verification.verified ? 'purchase_granted'
+            : verification.disposition === 'pending' ? 'purchase_pending' : 'purchase_rejected',
           properties: {
             target: request.target,
             playerId: request.playerId,
@@ -382,7 +383,8 @@ export function createGameServicesBackend(
         });
 
         await analytics.track({
-          name: claim.granted ? 'rewarded_ad_granted' : 'rewarded_ad_rejected',
+          name: claim.granted ? 'rewarded_ad_granted'
+            : claim.disposition === 'pending' ? 'rewarded_ad_pending' : 'rewarded_ad_rejected',
           properties: {
             target: request.target,
             playerId: request.playerId,
@@ -709,6 +711,7 @@ async function verifyPurchaseWithStore(
     return assertVerifyPurchaseResponse({
       verified: false,
       alreadyProcessed: false,
+      disposition: verification.status === 'pending' ? 'pending' : 'rejected',
       reason: verification.status === 'pending'
         ? (verification.reason ?? 'EVIDENCE_PENDING')
         : verification.reason,
@@ -1056,6 +1059,7 @@ async function claimAdRewardWithStore(
     return assertClaimAdRewardResponse({
       granted: false,
       alreadyProcessed: false,
+      disposition: verification.status === 'pending' ? 'pending' : 'rejected',
       reason: verification.status === 'pending'
         ? (verification.reason ?? 'EVIDENCE_PENDING')
         : verification.reason,
@@ -1126,26 +1130,16 @@ async function verifyEvidence(
 ): Promise<EvidenceVerificationDecision> {
   const controller = new AbortController();
   const timeoutDecision = {
-    status: 'rejected',
+    status: 'pending',
     reason: 'EVIDENCE_VERIFIER_TIMEOUT',
   } as const satisfies EvidenceVerificationDecision;
-  let timedOut = false;
   let timeout: ReturnType<typeof setTimeout> | undefined;
-
+  let decision: EvidenceVerificationDecision;
   try {
-    return await Promise.race([
-      verify(controller.signal)
-        .then(assertEvidenceVerificationDecision)
-        .catch((error: unknown) => {
-          if (timedOut) {
-            return timeoutDecision;
-          }
-
-          throw error;
-        }),
+    decision = await Promise.race([
+      verify(controller.signal),
       new Promise<EvidenceVerificationDecision>((resolve) => {
         timeout = setTimeout(() => {
-          timedOut = true;
           resolve(timeoutDecision);
           controller.abort();
         }, timeoutMs);
@@ -1153,13 +1147,18 @@ async function verifyEvidence(
     ]);
   } catch {
     return {
-      status: 'rejected',
+      status: 'pending',
       reason: 'EVIDENCE_VERIFIER_ERROR',
     };
   } finally {
     if (timeout !== undefined) {
       clearTimeout(timeout);
     }
+  }
+  try {
+    return assertEvidenceVerificationDecision(decision);
+  } catch {
+    return { status: 'rejected', reason: 'EVIDENCE_VERIFIER_ERROR' };
   }
 }
 

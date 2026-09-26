@@ -331,7 +331,7 @@ function isValidProviderData(method: BridgeMethod, value: unknown): boolean {
       return isVoidData(value);
     case 'ads.showRewarded':
       return isRecord(value)
-        && ['completed', 'skipped', 'unavailable', 'failed'].includes(value.status as string)
+        && ['completed', 'pending', 'skipped', 'unavailable', 'failed'].includes(value.status as string)
         && typeof value.rewardGranted === 'boolean'
         && (!value.rewardGranted || (
           value.status === 'completed'
