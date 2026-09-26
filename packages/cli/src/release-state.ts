@@ -571,17 +571,18 @@ export async function checkpointNativeSubmission(input: {
     }
     const previous = ownValue(game.submissions ?? {}, key);
     if (previous !== undefined) {
+      if (previous.attemptId !== input.checkpoint.attemptId) {
+        throw new Error('Store submission has another active or unreconciled attempt owner.');
+      }
+      if (Date.parse(previous.leaseExpiresAt) <= Date.now()
+        && previous.status !== 'committed' && previous.status !== 'testflight-ready') {
+        throw new Error('Store submission lease expired; reconcile remote state before takeover.');
+      }
       if (isDeepStrictEqual(previous, input.checkpoint)) {
         if (session.previousCommit === undefined) {
           throw new Error('Existing store checkpoint has no state commit.');
         }
         return { checkpoint: previous, stateCommit: session.previousCommit };
-      }
-      if (previous.attemptId !== input.checkpoint.attemptId) {
-        throw new Error('Store submission has another active or unreconciled attempt owner.');
-      }
-      if (Date.parse(previous.leaseExpiresAt) <= Date.now()) {
-        throw new Error('Store submission lease expired; reconcile remote state before takeover.');
       }
       if (previous.status === 'committed' || previous.status === 'testflight-ready'
         || previous.status === 'failed'
@@ -670,6 +671,44 @@ export async function reclaimNativeSubmission(input: {
     };
     const stateCommit = await commitState(session, next, `Reclaim ${input.gameId}/${key}`);
     return { checkpoint, stateCommit };
+  });
+}
+
+/** Relinquish a completed command's lease so an immediate status poll can resume. */
+export async function releaseNativeSubmissionLease(input: {
+  readonly gameRoot: string;
+  readonly gameId: string;
+  readonly releaseKey: string;
+  readonly target: 'android' | 'ios';
+  readonly attemptId: string;
+  readonly environment?: NodeJS.ProcessEnv;
+  readonly signal?: AbortSignal;
+}): Promise<NativeSubmissionCheckpoint> {
+  assertReleaseKey(input.releaseKey);
+  return withStateSession(input, async (session) => {
+    const game = ownValue(session.state.games, input.gameId);
+    const key = `${input.releaseKey}/${input.target}`;
+    const previous = game === undefined ? undefined : ownValue(game.submissions ?? {}, key);
+    if (game === undefined || previous === undefined
+      || previous.attemptId !== input.attemptId) {
+      throw new Error('Cannot release another submission attempt lease.');
+    }
+    if (Date.parse(previous.leaseExpiresAt) <= Date.now()) {
+      return previous;
+    }
+    const checkpoint = { ...previous, leaseExpiresAt: new Date(0).toISOString() };
+    const next: ReleaseState = {
+      schemaVersion: 1,
+      games: {
+        ...session.state.games,
+        [input.gameId]: {
+          ...game,
+          submissions: { ...(game.submissions ?? {}), [key]: checkpoint },
+        },
+      },
+    };
+    await commitState(session, next, `Release ${input.gameId}/${key} submission lease`);
+    return checkpoint;
   });
 }
 

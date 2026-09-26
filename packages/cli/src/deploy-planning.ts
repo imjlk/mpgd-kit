@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import { assertCapacitorAppId } from './capacitor-shell-starter.js';
 
@@ -74,6 +75,7 @@ export interface DeployDoctorResult {
 const deploymentConfigName = 'mpgd.deploy.json';
 const targetsConfigName = 'mpgd.targets.json';
 const environmentName = /^[A-Z_][A-Z0-9_]*$/u;
+const ascGroupIdPattern = /^[A-Za-z0-9][A-Za-z0-9-]*$/u;
 
 export function initializeDeployConfig(game: string): string {
   const gameRoot = resolve(game);
@@ -154,6 +156,9 @@ export function planNativeDeployment(input: {
     if (target === 'ios' && targetProfile.testGroup === undefined) {
       throw new Error('TestFlight deployment requires a testGroup in mpgd.deploy.json.');
     }
+    if (target === 'ios' && !ascGroupIdPattern.test(targetProfile.testGroup ?? '')) {
+      throw new Error('TestFlight testGroup must be an internal group ID, not a name.');
+    }
     return {
       target,
       destination: targetProfile.destination,
@@ -178,6 +183,51 @@ export function writeNativeDeploymentPlan(file: string, plan: NativeDeploymentPl
     flag: 'wx',
     mode: 0o600,
   });
+}
+
+/** Load a saved plan only if it still equals the game-owned current configuration. */
+export function readNativeDeploymentPlan(file: string): NativeDeploymentPlan {
+  const raw = parseObject(readFileSync(resolve(file), 'utf8'), file);
+  if (raw.schemaVersion !== 1 || typeof raw.gameRoot !== 'string'
+    || !isAbsolute(raw.gameRoot) || typeof raw.profile !== 'string'
+    || !Array.isArray(raw.targets) || raw.targets.some((entry) => !isObject(entry)
+      || (entry.target !== 'android' && entry.target !== 'ios'))
+    || !hasOnlyKeys(raw, [
+      'schemaVersion', 'gameRoot', 'profile', 'buildProfile', 'approval',
+      'targetConfigSha256', 'deployConfigSha256', 'targets',
+    ])) {
+    throw new Error('Saved native deployment plan is malformed.');
+  }
+  const plan = planNativeDeployment({
+    game: raw.gameRoot,
+    profile: raw.profile,
+    targets: raw.targets.map((entry) => (entry as { target: NativeDeployTarget }).target),
+  });
+  if (!isDeepStrictEqual(raw, plan)) {
+    throw new Error('Saved native deployment plan differs from current game configuration.');
+  }
+  return plan;
+}
+
+/** Resolve credential references from the one authoritative game-owned profile. */
+export function readNativeDeployTargetProfile(
+  plan: NativeDeploymentPlan,
+  target: NativeDeployTarget,
+): DeployTargetProfile {
+  const current = planNativeDeployment({
+    game: plan.gameRoot,
+    profile: plan.profile,
+    targets: plan.targets.map((entry) => entry.target),
+  });
+  if (!isDeepStrictEqual(current, plan)) {
+    throw new Error('Native deployment configuration changed after the plan was written.');
+  }
+  const config = readDeployConfig(join(plan.gameRoot, deploymentConfigName));
+  const profile = config.profiles[plan.profile]?.targets[target];
+  if (profile === undefined || !plan.targets.some((entry) => entry.target === target)) {
+    throw new Error(`Native deployment plan has no ${target} target profile.`);
+  }
+  return profile;
 }
 
 export function doctorNativeDeployment(input: {

@@ -122,6 +122,7 @@
     "smoke:cli-release-workspace": "node tools/run-ttsx.mjs packages/cli/src/release-workspace.test.ts",
     "smoke:cli-android-signing": "node tools/run-ttsx.mjs packages/cli/src/android-signing-session.test.ts",
     "smoke:cli-release-state": "node tools/run-ttsx.mjs packages/cli/src/release-state.test.ts",
+    "smoke:cli-native-deploy": "node tools/run-ttsx.mjs packages/cli/src/native-deploy-run.test.ts && node tools/run-ttsx.mjs packages/cli/src/native-deploy-submission.test.ts",
     "smoke:cli-testflight-submission": "node tools/run-ttsx.mjs tools/target/native-ios-inspection.test.ts && node tools/run-ttsx.mjs packages/cli/src/testflight-submission.test.ts",
     "smoke:cli-ios-signing": "node tools/run-ttsx.mjs packages/cli/src/ios-keychain-import.test.ts && node tools/run-ttsx.mjs packages/cli/src/ios-signing-session.test.ts",
     "smoke:cli-play-internal-submission": "node tools/run-ttsx.mjs adapters/play-publisher/src/play-internal-submission.test.ts",

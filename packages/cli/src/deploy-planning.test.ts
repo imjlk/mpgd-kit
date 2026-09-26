@@ -18,6 +18,8 @@ import {
   initializeDeployConfig,
   parseDeployTargets,
   planNativeDeployment,
+  readNativeDeploymentPlan,
+  readNativeDeployTargetProfile,
   writeNativeDeploymentPlan,
 } from './deploy-planning.js';
 import { runMpgdCli } from './index.js';
@@ -73,17 +75,31 @@ try {
   assert.throws(() => planNativeDeployment({ game, profile: 'beta' }), /testGroup/u);
   config.profiles.beta.targets.ios.testGroup = 'Internal QA';
   writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
+  assert.throws(() => planNativeDeployment({ game, profile: 'beta' }), /group ID/u);
+  config.profiles.beta.targets.ios.testGroup = 'group-1';
+  writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
   const plan = planNativeDeployment({ game, profile: 'beta' });
   assert.deepEqual(
     plan.targets.map((target) => target.target),
     ['android', 'ios'],
   );
-  assert.equal(plan.targets[1]?.testGroup, 'Internal QA');
+  assert.equal(plan.targets[1]?.testGroup, 'group-1');
   assert.equal(JSON.stringify(plan).includes('MPGD_ASC_API_KEY'), false);
   const output = join(game, 'release-plan.json');
   writeNativeDeploymentPlan(output, plan);
   assert.throws(() => writeNativeDeploymentPlan(output, plan), /EEXIST/u);
   assert.deepEqual(JSON.parse(readFileSync(output, 'utf8')), plan);
+  assert.deepEqual(readNativeDeploymentPlan(output), plan);
+  assert.equal(
+    readNativeDeployTargetProfile(plan, 'ios').submissionCredential.env,
+    'MPGD_ASC_API_KEY',
+  );
+  const tamperedPlan = join(game, 'tampered-release-plan.json');
+  writeFileSync(
+    tamperedPlan,
+    `${JSON.stringify({ ...plan, approval: 'preapproved-internal-test' })}\n`,
+  );
+  assert.throws(() => readNativeDeploymentPlan(tamperedPlan), /differs from current/u);
   const cliOutput = join(game, 'cli-release-plan.json');
   await runMpgdCli([
     'deploy',

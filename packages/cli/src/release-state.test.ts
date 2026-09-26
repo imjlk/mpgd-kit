@@ -13,6 +13,7 @@ import {
   readNativeReleaseStatus,
   reclaimNativeSubmission,
   recordNativeReleaseBuild,
+  releaseNativeSubmissionLease,
   reserveNativeRelease,
 } from './release-state.js';
 import { inspectAndroidBundleSigner } from './android-bundle-signer.js';
@@ -522,10 +523,36 @@ process.exit(result.status ?? 1);
     }),
     /another active or unreconciled attempt owner/u,
   );
-  const committed = { ...editOpen, status: 'committed' as const };
+  const releasedAndroid = await releaseNativeSubmissionLease({
+    gameRoot: game,
+    gameId: 'alpha',
+    releaseKey: 'beta-01',
+    target: 'android',
+    attemptId: androidCheckpoint.attemptId,
+  });
+  assert.equal(Date.parse(releasedAndroid.leaseExpiresAt), 0);
+  const afterRelease = await readNativeReleaseStatus({
+    gameRoot: game,
+    gameId: 'alpha',
+    releaseKey: 'beta-01',
+  });
+  const reclaimedAndroid = await reclaimNativeSubmission({
+    gameRoot: game,
+    gameId: 'alpha',
+    releaseKey: 'beta-01',
+    target: 'android',
+    expectedStateCommit: afterRelease.stateCommit,
+    attemptId: 'e'.repeat(32),
+  });
+  assert.equal(reclaimedAndroid.checkpoint.remoteEditId, 'edit-1');
+  const committed = { ...reclaimedAndroid.checkpoint, status: 'committed' as const };
   await checkpointNativeSubmission({ gameRoot: game, gameId: 'alpha', checkpoint: committed });
   await assert.rejects(
-    checkpointNativeSubmission({ gameRoot: game, gameId: 'alpha', checkpoint: editOpen }),
+    checkpointNativeSubmission({
+      gameRoot: game,
+      gameId: 'alpha',
+      checkpoint: { ...committed, status: 'edit-open' },
+    }),
     /cannot be replaced/u,
   );
   const iosCheckpoint = {

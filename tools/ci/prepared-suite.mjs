@@ -52,6 +52,7 @@ export const preparedGroups = Object.freeze({
     'smoke:cli-deploy-process',
     'smoke:cli-release-workspace',
     'smoke:cli-release-state',
+    'smoke:cli-native-deploy',
     'smoke:cli-play-internal-submission',
     'smoke:cli-testflight-submission',
     // The real CLI tarball + registry install + cap add smoke remains a local

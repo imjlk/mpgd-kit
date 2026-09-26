@@ -19,8 +19,8 @@ This creates `mpgd.deploy.json` once, without overwriting an existing file.
 The `beta` profile uses a production build configuration targeting Play
 internal testing and/or TestFlight. Its default approval policy is `manual`.
 Credential fields contain environment variable **names**, never secret
-values. Set `testGroup` in the iOS target profile to the exact internal
-TestFlight group before planning iOS. The generated values are references,
+values. Set `testGroup` in the iOS target profile to the existing internal
+TestFlight group **ID** (not its display name) before planning iOS. The generated values are references,
 not an indication that signing or store credentials have been verified.
 
 ```sh
