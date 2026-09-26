@@ -1849,6 +1849,45 @@ assertEqual(
   'server-session,server-session,server-session,server-session,server-session',
   'backend analytics should use the configured session id',
 );
+const pendingAnalyticsEvents: AnalyticsEvent[] = [];
+const pendingAnalyticsBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      return { status: 'pending', reason: 'PROVIDER_PENDING' } as const;
+    },
+    async verifyAdReward() {
+      return { status: 'pending', reason: 'PROVIDER_PENDING' } as const;
+    },
+  },
+  analytics: {
+    track(event) {
+      pendingAnalyticsEvents.push(event);
+    },
+  },
+});
+await pendingAnalyticsBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'analytics-pending-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-analytics-pending',
+  idempotencyKey: 'analytics-purchase-pending',
+  purchasedAt: '2026-07-04T00:00:03.000Z',
+});
+await pendingAnalyticsBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'analytics-pending-player',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-analytics-pending',
+  idempotencyKey: 'analytics-reward-pending',
+  completedAt: '2026-07-04T00:00:04.000Z',
+});
+assertEqual(
+  pendingAnalyticsEvents.map((event) => event.name).join(','),
+  'purchase_pending,rewarded_ad_pending',
+  'retryable server decisions must not be counted as rejections',
+);
 assertEqual(
   analyticsEvents[0]?.properties.reason,
   'UNKNOWN_PRODUCT',

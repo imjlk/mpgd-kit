@@ -352,7 +352,8 @@ export function createGameServicesBackend(
         });
 
         await analytics.track({
-          name: verification.verified ? 'purchase_granted' : 'purchase_rejected',
+          name: verification.verified ? 'purchase_granted'
+            : verification.disposition === 'pending' ? 'purchase_pending' : 'purchase_rejected',
           properties: {
             target: request.target,
             playerId: request.playerId,
@@ -382,7 +383,8 @@ export function createGameServicesBackend(
         });
 
         await analytics.track({
-          name: claim.granted ? 'rewarded_ad_granted' : 'rewarded_ad_rejected',
+          name: claim.granted ? 'rewarded_ad_granted'
+            : claim.disposition === 'pending' ? 'rewarded_ad_pending' : 'rewarded_ad_rejected',
           properties: {
             target: request.target,
             playerId: request.playerId,
