@@ -8,11 +8,13 @@ import {
   type GuestSessionBackend,
 } from '@mpgd/game-services/guest-session';
 import type { PlatformGateway, SecureCredentialStore } from '@mpgd/platform';
+import type { MonetizationOperationStore } from '@mpgd/game-services';
 
 declare const gateway: PlatformGateway;
 declare const transport: GameServicesBackendTransport;
 declare const secureCredentials: SecureCredentialStore;
 declare const guestBackend: GuestSessionBackend;
+declare const operationStore: MonetizationOperationStore;
 
 const guest = createGuestSessionCoordinator({
   installationId: 'packed-installation',
@@ -32,6 +34,9 @@ const http: CreateGameServicesRuntimeInput = {
   getHeaders: async () => ({ authorization: 'Bearer refreshed' }),
 };
 createGameServicesRuntime(http);
+const recoverable: CreateGameServicesRuntimeInput = { ...http, operationStore };
+const recoveryRuntime = createGameServicesRuntime(recoverable);
+void recoveryRuntime.monetizationRecovery;
 
 // A fixed JSON endpoint transport is not a general oRPC Fetch implementation.
 // @ts-expect-error oRPC does not accept an HTTP JSON transport.

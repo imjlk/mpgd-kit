@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { createGameServicesRuntime } from '@mpgd/game-services/runtime';
 import { GameServicesBackendError } from '@mpgd/game-services/client';
 import { createGuestSessionCoordinator } from '@mpgd/game-services/guest-session';
+import { createRecoverableMonetizationClient } from '@mpgd/game-services';
+
+assert.equal(typeof createRecoverableMonetizationClient, 'function');
 
 let defaultFetchCalls = 0;
 globalThis.fetch = async () => {
