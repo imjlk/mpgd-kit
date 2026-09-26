@@ -25,11 +25,12 @@ try {
     dependencyInstallEnvironment({
       PATH: '/bin',
       HOME: '/safe-home',
+      npm_execpath: '/pnpm/bin/pnpm.cjs',
       MPGD_IOS_SIGNING_P12_PASSWORD: 'private-password',
       MPGD_ASC_API_KEY: 'private-key',
       GOOGLE_APPLICATION_CREDENTIALS: '/private/account.json',
     }),
-    { PATH: '/bin', HOME: '/safe-home' },
+    { PATH: '/bin', HOME: '/safe-home', npm_execpath: '/pnpm/bin/pnpm.cjs' },
     'dependency install hooks cannot read deployment credentials',
   );
   const game = path.join(fixture, 'game');

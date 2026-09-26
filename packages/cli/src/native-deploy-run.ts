@@ -17,6 +17,7 @@ import type { PlatformVersionLedger } from '@mpgd/target-config';
 
 import {
   doctorNativeDeployment,
+  readNativeDeployCredentialNames,
   readNativeDeployTargetProfile,
   type NativeDeploymentPlan,
   type NativeDeployTarget,
@@ -346,6 +347,7 @@ function requiredEnvironment(environment: NodeJS.ProcessEnv, name: string): stri
 export function dependencyInstallEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const allowed = [
     'PATH',
+    'Path',
     'HOME',
     'TMPDIR',
     'TMP',
@@ -355,10 +357,18 @@ export function dependencyInstallEnvironment(environment: NodeJS.ProcessEnv): No
     'CI',
     'COREPACK_HOME',
     'PNPM_HOME',
+    'npm_execpath',
     'npm_config_store_dir',
     'JAVA_HOME',
     'ANDROID_HOME',
     'ANDROID_SDK_ROOT',
+    'SystemRoot',
+    'windir',
+    'ComSpec',
+    'PATHEXT',
+    'USERPROFILE',
+    'APPDATA',
+    'LOCALAPPDATA',
   ];
   const entries = allowed.flatMap((name) => {
     const value = environment[name];
@@ -373,8 +383,8 @@ export function withoutStoreSubmissionCredentials(
   plan: NativeDeploymentPlan,
 ): NodeJS.ProcessEnv {
   const result = { ...environment };
-  for (const entry of plan.targets) {
-    delete result[readNativeDeployTargetProfile(plan, entry.target).submissionCredential.env];
+  for (const name of readNativeDeployCredentialNames(plan)) {
+    delete result[name];
   }
   for (const name of [
     'MPGD_ASC_KEY_ID',

@@ -568,7 +568,7 @@ export async function checkpointNativeSubmission(input: {
   readonly environment?: NodeJS.ProcessEnv;
   readonly signal?: AbortSignal;
 }): Promise<{ readonly checkpoint: NativeSubmissionCheckpoint; readonly stateCommit: string }> {
-  assertSubmissionCheckpoint(input.checkpoint);
+  assertNativeSubmissionCheckpoint(input.checkpoint);
   return withStateSession(input, async (session) => {
     const game = ownValue(session.state.games, input.gameId);
     const key = `${input.checkpoint.releaseKey}/${input.checkpoint.target}`;
@@ -598,7 +598,7 @@ export async function checkpointNativeSubmission(input: {
         || previous.remoteEditId !== undefined
           && previous.remoteEditId !== input.checkpoint.remoteEditId
           && !(previous.target === 'android'
-            && previous.status === 'unknown'
+            && (previous.status === 'unknown' || previous.status === 'edit-open')
             && input.checkpoint.status === 'edit-open'
             && input.checkpoint.remoteEditId !== undefined)
         || previous.remoteUploadId !== undefined
@@ -989,7 +989,7 @@ function parseReleaseState(json: string): ReleaseState {
       );
     }
     for (const [key, rawCheckpoint] of Object.entries(game.submissions ?? {})) {
-      assertSubmissionCheckpoint(rawCheckpoint);
+      assertNativeSubmissionCheckpoint(rawCheckpoint);
       const checkpoint = rawCheckpoint as NativeSubmissionCheckpoint;
       const build = (game.builds as Record<string, ImmutableNativeBuildRecord>)[key];
       if (key !== `${checkpoint.releaseKey}/${checkpoint.target}` || build === undefined
@@ -1079,7 +1079,10 @@ const checkpointFields = [
   'remoteBuildId',
 ] as const;
 
-function assertSubmissionCheckpoint(value: unknown): asserts value is NativeSubmissionCheckpoint {
+/** Validate persisted checkpoint shape before any remote mutation or recovery. */
+export function assertNativeSubmissionCheckpoint(
+  value: unknown,
+): asserts value is NativeSubmissionCheckpoint {
   if (!isRecord(value)) {
     throw new Error('Native submission checkpoint is not an object.');
   }
@@ -1122,7 +1125,8 @@ function assertSubmissionCheckpoint(value: unknown): asserts value is NativeSubm
     || (value.target === 'ios' && (!iosStatuses.includes(value.status as NativeSubmissionStatus)
       || value.remoteEditId !== undefined
       || (['upload-committed', 'uploaded', 'processing', 'testflight-ready']
-        .includes(String(value.status)) && value.remoteUploadId === undefined)))
+        .includes(String(value.status)) && value.remoteUploadId === undefined
+        && (value.status === 'upload-committed' || value.remoteBuildId === undefined))))
     || (value.status === 'started'
       && (value.remoteEditId !== undefined || value.remoteUploadId !== undefined
         || value.remoteBuildId !== undefined))) {

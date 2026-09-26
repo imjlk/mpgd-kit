@@ -238,6 +238,25 @@ export function readNativeDeployTargetProfile(
   return profile;
 }
 
+/** Credential names across every configured profile, including unselected targets. */
+export function readNativeDeployCredentialNames(plan: NativeDeploymentPlan): readonly string[] {
+  const deployFile = join(plan.gameRoot, deploymentConfigName);
+  const deployBytes = readFileSync(deployFile);
+  if (createHash('sha256').update(deployBytes).digest('hex') !== plan.deployConfigSha256) {
+    throw new Error('Native deployment configuration changed after the plan was written.');
+  }
+  const config = readDeployConfig(deployFile, deployBytes.toString('utf8'));
+  const names: string[] = [];
+  for (const profile of Object.values(config.profiles)) {
+    for (const entry of Object.values(profile.targets)) {
+      if (entry !== undefined) {
+        names.push(entry.signingCredential.env, entry.submissionCredential.env);
+      }
+    }
+  }
+  return names;
+}
+
 export function doctorNativeDeployment(input: {
   readonly game: string;
   readonly profile: string;

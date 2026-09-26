@@ -80,6 +80,16 @@ try {
   writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
   assert.throws(() => planNativeDeployment({ game, profile: 'beta' }), /group ID/u);
   config.profiles.beta.targets.ios.testGroup = 'group-1';
+  config.profiles.alternate = {
+    buildProfile: 'production',
+    approval: 'manual',
+    targets: {
+      ios: {
+        ...config.profiles.beta.targets.ios,
+        submissionCredential: { env: 'CUSTOM_ALT_STORE_KEY' },
+      },
+    },
+  };
   writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
   const plan = planNativeDeployment({ game, profile: 'beta' });
   const buildEnvironment = withoutStoreSubmissionCredentials(
@@ -99,6 +109,18 @@ try {
   assert.equal(buildEnvironment.MPGD_ANDROID_UPLOAD_STORE_PASSWORD, undefined);
   assert.equal(buildEnvironment.MPGD_IOS_SIGNING_P12_PASSWORD, undefined);
   assert.equal(buildEnvironment.APP_VERSION, '1.0.0');
+  const androidOnlyPlan = planNativeDeployment({ game, profile: 'beta', targets: ['android'] });
+  const unselectedCredential = withoutStoreSubmissionCredentials(
+    {
+      MPGD_ASC_API_KEY: 'unselected-ios-secret',
+      MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT: 'selected-android-secret',
+      CUSTOM_ALT_STORE_KEY: 'unselected-profile-secret',
+    },
+    androidOnlyPlan,
+  );
+  assert.equal(unselectedCredential.MPGD_ASC_API_KEY, undefined);
+  assert.equal(unselectedCredential.MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT, undefined);
+  assert.equal(unselectedCredential.CUSTOM_ALT_STORE_KEY, undefined);
   assert.deepEqual(
     plan.targets.map((target) => target.target),
     ['android', 'ios'],

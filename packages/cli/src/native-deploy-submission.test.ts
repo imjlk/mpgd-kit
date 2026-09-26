@@ -231,6 +231,34 @@ try {
   });
   assert.equal(buildOnly.status, 'testflight-ready');
   checkpoints = {};
+  await assert.rejects(
+    submitRecordedNativeTargetWithPorts(iosInput, {
+      ...ports,
+      async submitIos() {
+        throw new Error('temporary app lookup outage');
+      },
+    }),
+    /temporary app lookup outage/u,
+  );
+  assert.equal(checkpoints.ios?.status, 'started');
+  assert.equal(checkpoints.ios?.remoteUploadId, undefined);
+  const retriedPreUpload = await submitRecordedNativeTargetWithPorts(iosInput, {
+    ...ports,
+    async submitIos() {
+      return {
+        status: 'testflight-ready',
+        appStoreAppId: '123456',
+        bundleId: 'dev.mpgd.test',
+        marketingVersion: '1.0.0',
+        buildNumber: '42',
+        internalGroupId: 'group-1',
+        uploadId: 'upload-retry',
+        buildId: 'build-retry',
+      };
+    },
+  });
+  assert.equal(retriedPreUpload.status, 'testflight-ready');
+  checkpoints = {};
   iosCalls = 0;
   failIosCheckpoint = true;
   await assert.rejects(

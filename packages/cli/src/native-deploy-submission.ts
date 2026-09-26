@@ -232,7 +232,8 @@ export async function submitRecordedNativeTargetWithPorts(
           await save({ status: 'unknown', remoteUploadId: error.uploadId });
         } else {
           await save({
-            status: activeCheckpoint.remoteUploadId === undefined ? 'failed' : 'unknown',
+            status: activeCheckpoint.remoteUploadId === undefined
+              && activeCheckpoint.remoteBuildId === undefined ? 'started' : 'unknown',
           });
         }
         await releaseLease();

@@ -9,6 +9,7 @@ import { assertReleaseManifest } from '@mpgd/release-manifest';
 import { formatMpgdReleaseId, type PlatformVersionLedger } from '@mpgd/target-config';
 
 import {
+  assertNativeSubmissionCheckpoint,
   checkpointNativeSubmission,
   readNativeReleaseStatus,
   reclaimNativeSubmission,
@@ -555,7 +556,13 @@ process.exit(result.status ?? 1);
     },
   });
   assert.equal(replacementEdit.checkpoint.remoteEditId, 'edit-2');
-  const committed = { ...replacementEdit.checkpoint, status: 'committed' as const };
+  const secondReplacement = await checkpointNativeSubmission({
+    gameRoot: game,
+    gameId: 'alpha',
+    checkpoint: { ...replacementEdit.checkpoint, remoteEditId: 'edit-3' },
+  });
+  assert.equal(secondReplacement.checkpoint.remoteEditId, 'edit-3');
+  const committed = { ...secondReplacement.checkpoint, status: 'committed' as const };
   await checkpointNativeSubmission({ gameRoot: game, gameId: 'alpha', checkpoint: committed });
   await assert.rejects(
     checkpointNativeSubmission({
@@ -574,6 +581,17 @@ process.exit(result.status ?? 1);
     leaseExpiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
     status: 'started' as const,
   };
+  const buildOnlyCheckpoint = {
+    ...iosCheckpoint,
+    status: 'testflight-ready',
+    remoteBuildId: 'build-without-upload',
+  };
+  assert.doesNotThrow(() => assertNativeSubmissionCheckpoint(buildOnlyCheckpoint));
+  const missingRemoteIdentity = {
+    ...iosCheckpoint,
+    status: 'testflight-ready',
+  };
+  assert.throws(() => assertNativeSubmissionCheckpoint(missingRemoteIdentity), /malformed/u);
   await checkpointNativeSubmission({ gameRoot: game, gameId: 'alpha', checkpoint: iosCheckpoint });
   const uploaded = {
     ...iosCheckpoint,
