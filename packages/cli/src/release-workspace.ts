@@ -101,21 +101,14 @@ export async function pinNativeDeploymentPlan(
     || path.isAbsolute(relativeGame)) {
     throw new Error('Game path is outside its Git repository.');
   }
-  const inputPaths = ['pnpm-lock.yaml', 'mpgd.targets.json', 'mpgd.deploy.json']
-    .map((name, index) => index === 0
-      ? name
-      : path.posix.join(relativeGame.split(path.sep).join('/'), name));
+  assertNoGitSubmodules(await listTrackedIndex(
+    repositoryRoot,
+    options.environment,
+    options.signal,
+  ));
   const dirtyInputs = await runReleaseProcess({
     command: 'git',
-    args: [
-      '-C',
-      repositoryRoot,
-      'status',
-      '--porcelain=v1',
-      '--untracked-files=all',
-      '--',
-      ...inputPaths,
-    ],
+    args: ['-C', repositoryRoot, 'status', '--porcelain=v1', '--untracked-files=all'],
     cwd: repositoryRoot,
     environment: options.environment,
     timeoutMs: 10_000,
@@ -124,14 +117,9 @@ export async function pinNativeDeploymentPlan(
   });
   if (machineOutput(dirtyInputs) !== '') {
     throw new Error(
-      'Pinned release inputs have uncommitted changes. Commit the lockfile and deployment configuration first.',
+      'Pinned release inputs have uncommitted changes. Commit or remove all repository changes before deploying HEAD.',
     );
   }
-  assertNoGitSubmodules(await listTrackedIndex(
-    repositoryRoot,
-    options.environment,
-    options.signal,
-  ));
   for (const file of [
     path.join(repositoryRoot, 'pnpm-lock.yaml'),
     path.join(gameRoot, 'mpgd.targets.json'),
@@ -267,6 +255,7 @@ export async function installPinnedReleaseDependencies(
     readonly environment?: NodeJS.ProcessEnv;
     readonly signal?: AbortSignal;
     readonly timeoutMs?: number;
+    readonly secretValues?: readonly string[];
   } = {},
 ): Promise<void> {
   assertWorkspaceOutputRoots(workspace.workspaceRoot, workspace.gameRoot);
@@ -279,6 +268,7 @@ export async function installPinnedReleaseDependencies(
     environment: options.environment ?? process.env,
     timeoutMs: options.timeoutMs ?? defaultInstallTimeoutMs,
     signal: options.signal,
+    secretValues: options.secretValues,
   });
   assertWorkspaceOutputRoots(workspace.workspaceRoot, workspace.gameRoot);
   assertPinnedFiles(workspace.workspaceRoot, workspace.gameRoot, workspace.input);

@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -18,9 +20,12 @@ import {
   initializeDeployConfig,
   parseDeployTargets,
   planNativeDeployment,
+  readNativeDeploymentPlan,
+  readNativeDeployTargetProfile,
   writeNativeDeploymentPlan,
 } from './deploy-planning.js';
 import { runMpgdCli } from './index.js';
+import { runNativeDeployment, withoutStoreSubmissionCredentials } from './native-deploy-run.js';
 
 const fixture = mkdtempSync(join(tmpdir(), 'mpgd-deploy-planning-'));
 const game = join(fixture, 'game');
@@ -73,17 +78,77 @@ try {
   assert.throws(() => planNativeDeployment({ game, profile: 'beta' }), /testGroup/u);
   config.profiles.beta.targets.ios.testGroup = 'Internal QA';
   writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
+  assert.throws(() => planNativeDeployment({ game, profile: 'beta' }), /group ID/u);
+  config.profiles.beta.targets.ios.testGroup = 'group-1';
+  config.profiles.alternate = {
+    buildProfile: 'production',
+    approval: 'manual',
+    targets: {
+      ios: {
+        ...config.profiles.beta.targets.ios,
+        submissionCredential: { env: 'CUSTOM_ALT_STORE_KEY' },
+      },
+    },
+  };
+  writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
   const plan = planNativeDeployment({ game, profile: 'beta' });
+  const buildEnvironment = withoutStoreSubmissionCredentials(
+    {
+      MPGD_ASC_API_KEY: 'secret-asc-key',
+      MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT: '/private/service-account.json',
+      MPGD_ASC_KEY_ID: 'secret-key-id',
+      MPGD_ANDROID_UPLOAD_STORE_PASSWORD: 'secret-signing-password',
+      MPGD_IOS_SIGNING_P12_PASSWORD: 'secret-p12-password',
+      APP_VERSION: '1.0.0',
+    },
+    plan,
+  );
+  assert.equal(buildEnvironment.MPGD_ASC_API_KEY, undefined);
+  assert.equal(buildEnvironment.MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT, undefined);
+  assert.equal(buildEnvironment.MPGD_ASC_KEY_ID, undefined);
+  assert.equal(buildEnvironment.MPGD_ANDROID_UPLOAD_STORE_PASSWORD, undefined);
+  assert.equal(buildEnvironment.MPGD_IOS_SIGNING_P12_PASSWORD, undefined);
+  assert.equal(buildEnvironment.APP_VERSION, '1.0.0');
+  const androidOnlyPlan = planNativeDeployment({ game, profile: 'beta', targets: ['android'] });
+  const unselectedCredential = withoutStoreSubmissionCredentials(
+    {
+      MPGD_ASC_API_KEY: 'unselected-ios-secret',
+      MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT: 'selected-android-secret',
+      CUSTOM_ALT_STORE_KEY: 'unselected-profile-secret',
+    },
+    androidOnlyPlan,
+  );
+  assert.equal(unselectedCredential.MPGD_ASC_API_KEY, undefined);
+  assert.equal(unselectedCredential.MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT, undefined);
+  assert.equal(unselectedCredential.CUSTOM_ALT_STORE_KEY, undefined);
   assert.deepEqual(
     plan.targets.map((target) => target.target),
     ['android', 'ios'],
   );
-  assert.equal(plan.targets[1]?.testGroup, 'Internal QA');
+  assert.equal(plan.targets[1]?.testGroup, 'group-1');
   assert.equal(JSON.stringify(plan).includes('MPGD_ASC_API_KEY'), false);
   const output = join(game, 'release-plan.json');
   writeNativeDeploymentPlan(output, plan);
   assert.throws(() => writeNativeDeploymentPlan(output, plan), /EEXIST/u);
   assert.deepEqual(JSON.parse(readFileSync(output, 'utf8')), plan);
+  assert.deepEqual(readNativeDeploymentPlan(output), plan);
+  const movedGame = join(fixture, 'moved-game');
+  cpSync(game, movedGame, { recursive: true });
+  assert.deepEqual(
+    readNativeDeploymentPlan(output, movedGame),
+    { ...plan, gameRoot: realpathSync(movedGame) },
+    'an unchanged saved plan can move with a game checkout',
+  );
+  assert.equal(
+    readNativeDeployTargetProfile(plan, 'ios').submissionCredential.env,
+    'MPGD_ASC_API_KEY',
+  );
+  const tamperedPlan = join(game, 'tampered-release-plan.json');
+  writeFileSync(
+    tamperedPlan,
+    `${JSON.stringify({ ...plan, approval: 'preapproved-internal-test' })}\n`,
+  );
+  assert.throws(() => readNativeDeploymentPlan(tamperedPlan), /differs from current/u);
   const cliOutput = join(game, 'cli-release-plan.json');
   await runMpgdCli([
     'deploy',
@@ -106,6 +171,18 @@ try {
     environment: {},
   });
   assert.equal(doctor.healthy, false);
+  await assert.rejects(
+    runNativeDeployment({
+      plan,
+      gameId: 'test',
+      gameVersion: '1.0.0',
+      releaseKey: 'beta-001',
+      kit: { packageVersion: '0.35.0', gitSha: 'a'.repeat(40) },
+      approved: true,
+      environment: {},
+    }),
+    /not a git repository/u,
+  );
   assert.ok(doctor.checks.some((check) => check.name === 'JDK'));
   assert.ok(doctor.checks.some((check) => check.name === 'Android SDK'
     && check.status === 'missing'));

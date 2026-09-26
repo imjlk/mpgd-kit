@@ -151,6 +151,9 @@ async function withPublisher(
         assert.equal(url.searchParams.get('changesInReviewBehavior'), 'ERROR_IF_IN_REVIEW');
         if (mode !== 'commit-conflict') {
           live = structuredClone(edit);
+          if (editId !== undefined) {
+            edits.delete(editId);
+          }
         }
         if (mode === 'commit-response-lost') {
           reply(response, 500, { error: { message: 'response lost' } });
@@ -220,6 +223,42 @@ try {
     const result = await submitVerifiedAndroidBundleWithPublisher(input, publisher, observed.rootUrl);
     assert.equal(result.status, 'committed');
   });
+  await withPublisher('ok', async (publisher, observed) => {
+    const editId = await publisher.insertEdit(packageName);
+    const result = await submitVerifiedAndroidBundleWithPublisher({
+      ...input,
+      resumeEditId: editId,
+      onEditCreated: async () => { throw new Error('Existing edit must not be recreated.'); },
+    }, publisher, observed.rootUrl);
+    assert.equal(result.editId, editId);
+    assert.equal(observed.operations.filter((item) => item.endsWith('/edits')).length, 1);
+  });
+  await withPublisher('ok', async (publisher, observed) => {
+    const editId = await publisher.insertEdit(packageName);
+    await publisher.uploadBundle({
+      packageName, editId, aabFile: input.aabFile, timeoutMs: 120_000,
+      requestRootUrl: observed.rootUrl,
+    });
+    await publisher.updateTrack(packageName, editId, {
+      track: 'internal',
+      releases: [{ name: 'beta-01', status: 'completed', versionCodes: ['45'] }],
+    });
+    const resumed = await submitVerifiedAndroidBundleWithPublisher({
+      ...input, resumeEditId: editId,
+    }, publisher, observed.rootUrl);
+    assert.equal(resumed.alreadyCommitted, false);
+    assert.equal(observed.operations.filter((item) => item.includes(':commit')).length, 1);
+  });
+  await withPublisher('ok', async (publisher, observed) => {
+    await assert.rejects(
+      submitVerifiedAndroidBundleWithPublisher({
+        ...input,
+        onEditCreated: async () => { throw new Error('checkpoint unavailable'); },
+      }, publisher, observed.rootUrl),
+      (error: unknown) => error instanceof PlaySubmissionUncertainError
+        && error.stage === 'checkpoint' && error.editId === 'edit-1',
+    );
+  });
   await withPublisher('upload-rejected', async (publisher, observed) => {
     await assert.rejects(
       submitVerifiedAndroidBundleWithPublisher(input, publisher, observed.rootUrl),
@@ -246,6 +285,17 @@ try {
       observed.operations.some((item) => item.includes(':commit')),
       false,
     );
+  });
+  await withPublisher('already-committed', async (publisher, observed) => {
+    const replaced: string[] = [];
+    const result = await submitVerifiedAndroidBundleWithPublisher({
+      ...input,
+      resumeEditId: 'expired-edit',
+      onEditCreated: async (id) => { replaced.push(id); },
+    }, publisher, observed.rootUrl);
+    assert.equal(result.alreadyCommitted, true);
+    assert.deepEqual(replaced, ['edit-1']);
+    assert.equal(observed.operations.some((item) => item.includes(':commit')), false);
   });
   await withPublisher('draft-existing', async (publisher, observed) => {
     await assert.rejects(
@@ -276,6 +326,15 @@ try {
         && error.stage === 'commit' && error.editId === 'edit-1',
     );
     assert.equal(observed.operations.filter((item) => item.endsWith('/edits')).length, 1);
+    const replacements: string[] = [];
+    const reconciled = await submitVerifiedAndroidBundleWithPublisher({
+      ...input,
+      resumeEditId: 'edit-1',
+      onEditCreated: async (id) => { replacements.push(id); },
+    }, publisher, observed.rootUrl);
+    assert.equal(reconciled.alreadyCommitted, true);
+    assert.deepEqual(replacements, ['edit-2']);
+    assert.equal(observed.operations.filter((item) => item.includes(':commit')).length, 1);
   });
   await withPublisher('commit-conflict', async (publisher, observed) => {
     await assert.rejects(

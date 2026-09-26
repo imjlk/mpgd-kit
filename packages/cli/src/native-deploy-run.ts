@@ -1,0 +1,535 @@
+import { createHash } from 'node:crypto';
+import {
+  closeSync,
+  constants,
+  copyFileSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  realpathSync,
+  statSync,
+} from 'node:fs';
+import path from 'node:path';
+
+import type { PlatformVersionLedger } from '@mpgd/target-config';
+
+import {
+  doctorNativeDeployment,
+  readNativeDeployCredentialNames,
+  readNativeDeployTargetProfile,
+  type NativeDeploymentPlan,
+  type NativeDeployTarget,
+} from './deploy-planning.js';
+import { withAndroidUploadSigningSession } from './android-signing-session.js';
+import { withIosSigningSession } from './ios-signing-session.js';
+import {
+  submitRecordedNativeTarget,
+  type NativeStoreCredential,
+} from './native-deploy-submission.js';
+import {
+  isNativeSubmissionSettled,
+  readNativeReleaseStatus,
+  recordNativeReleaseBuild,
+  reserveNativeRelease,
+  type NativeReleaseStatus,
+} from './release-state.js';
+import {
+  installPinnedReleaseDependencies,
+  pinNativeDeploymentPlan,
+  runPinnedNativeBuild,
+  withPinnedReleaseWorkspace,
+  type PinnedReleaseWorkspace,
+} from './release-workspace.js';
+import { inspectAndroidBundleSigner } from './android-bundle-signer.js';
+
+export interface RunNativeDeploymentInput {
+  readonly plan: NativeDeploymentPlan;
+  readonly releaseKey: string;
+  readonly gameId: string;
+  readonly gameVersion: string;
+  readonly kit: { readonly packageVersion: string; readonly gitSha: string };
+  /** Required only when no game ledger exists on release-state. */
+  readonly initialLedger?: PlatformVersionLedger;
+  readonly approved: boolean;
+  readonly environment?: NodeJS.ProcessEnv;
+  readonly signal?: AbortSignal;
+}
+
+/** Reserve once, build only missing targets, then submit the recorded binaries. */
+export async function runNativeDeployment(input: RunNativeDeploymentInput): Promise<NativeReleaseStatus> {
+  if (!input.approved) {
+    throw new Error('Native deployment requires explicit internal-test approval.');
+  }
+  const environment = input.environment ?? process.env;
+  const pinned = await pinNativeDeploymentPlan(input.plan, input.kit, {
+    environment,
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
+  });
+  const statusInput = {
+    gameRoot: input.plan.gameRoot,
+    gameId: input.gameId,
+    releaseKey: input.releaseKey,
+    environment,
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
+  };
+  let existing: NativeReleaseStatus | undefined;
+  try {
+    existing = await readNativeReleaseStatus(statusInput);
+  } catch (error) {
+    if (!(error instanceof Error)
+      || error.message !== 'The requested native release has not been reserved.') {
+      throw error;
+    }
+  }
+  const pendingSteps = existing === undefined
+    ? {
+        buildTargets: input.plan.targets.map((entry) => entry.target),
+        submitTargets: input.plan.targets.map((entry) => entry.target),
+      }
+    : planNativeDeploymentSteps(input.plan, existing);
+  if (pendingSteps.buildTargets.length > 0) {
+    const doctor = doctorNativeDeployment({
+      game: input.plan.gameRoot,
+      profile: input.plan.profile,
+      targets: pendingSteps.buildTargets,
+      environment,
+    });
+    if (!doctor.healthy) {
+      throw new Error(`Native deployment environment is incomplete: ${doctor.checks
+        .filter((check) => check.status === 'missing')
+        .map((check) => check.name)
+        .join(', ')}.`);
+    }
+  }
+  for (const target of pendingSteps.buildTargets) {
+    const profile = readNativeDeployTargetProfile(input.plan, target);
+    requiredExistingFile(environment, profile.signingCredential.env);
+    if (target === 'ios') {
+      requiredExistingFile(environment, 'MPGD_IOS_PROVISIONING_PROFILE');
+    }
+  }
+  for (const target of pendingSteps.submitTargets) {
+    const profile = readNativeDeployTargetProfile(input.plan, target);
+    if (target === 'android') {
+      requiredExistingFile(environment, profile.submissionCredential.env);
+    } else {
+      requiredExistingFile(environment, 'MPGD_ASC_BINARY');
+    }
+    readStoreCredential(input.plan, target, environment);
+  }
+  const reserved = await reserveNativeRelease({
+    gameRoot: input.plan.gameRoot,
+    gameId: input.gameId,
+    releaseKey: input.releaseKey,
+    gameVersion: input.gameVersion,
+    sourceGitSha: pinned.gameGitSha,
+    kitGitSha: pinned.kitGitSha,
+    targetConfigDigest: pinned.targetConfigSha256,
+    targets: input.plan.targets.map((entry) => ({ target: entry.target })),
+    ...(input.initialLedger === undefined ? {} : { initialLedger: input.initialLedger }),
+    environment,
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
+  });
+  let status = await readNativeReleaseStatus({
+    gameRoot: input.plan.gameRoot,
+    gameId: input.gameId,
+    releaseKey: input.releaseKey,
+    environment,
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
+  });
+  const missing = planNativeDeploymentSteps(input.plan, status).buildTargets;
+  if (missing.length > 0) {
+    await withPinnedReleaseWorkspace(pinned, async (workspace) => {
+      const installEnvironment = dependencyInstallEnvironment(environment, input.plan);
+      const registrySecretValues = environment.MPGD_DEPENDENCY_INSTALL_ENV_NAMES?.split(',')
+        .map((name) => installEnvironment[name.trim()])
+        .filter((value): value is string => value !== undefined) ?? [];
+      await installPinnedReleaseDependencies(workspace, {
+        environment: installEnvironment,
+        secretValues: registrySecretValues,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      });
+      for (const target of missing) {
+        await buildAndRecordTarget(input, workspace, target, reserved.plan, environment);
+      }
+    }, {
+      environment,
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    });
+  }
+  for (const entry of input.plan.targets) {
+    status = await readNativeReleaseStatus({
+      gameRoot: input.plan.gameRoot,
+      gameId: input.gameId,
+      releaseKey: input.releaseKey,
+      environment,
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    });
+    if (status.builds[entry.target] === undefined) {
+      throw new Error(`${entry.target} has no verified build after the native build stage.`);
+    }
+    const submission = status.submissions[entry.target];
+    if (submission !== undefined && isNativeSubmissionSettled(submission.status)) {
+      continue;
+    }
+    await submitRecordedNativeTarget({
+      plan: input.plan,
+      gameId: input.gameId,
+      releaseKey: input.releaseKey,
+      credential: readStoreCredential(input.plan, entry.target, environment),
+      approved: input.approved,
+      environment,
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    });
+  }
+  return readNativeReleaseStatus({
+    gameRoot: input.plan.gameRoot,
+    gameId: input.gameId,
+    releaseKey: input.releaseKey,
+    environment,
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
+  });
+}
+
+/** Explain the next safe work without treating a missing or unknown store status as success. */
+export function planNativeDeploymentSteps(
+  plan: NativeDeploymentPlan,
+  status: NativeReleaseStatus,
+): {
+  readonly buildTargets: readonly NativeDeployTarget[];
+  readonly submitTargets: readonly NativeDeployTarget[];
+} {
+  const expected = plan.targets.map((entry) => entry.target);
+  const reserved = Object.keys(status.plan.targets).sort();
+  if (JSON.stringify([...expected].sort()) !== JSON.stringify(reserved)
+    || status.plan.targetConfigDigest !== plan.targetConfigSha256) {
+    throw new Error('Native release reservation differs from the saved deployment plan.');
+  }
+  const buildTargets: NativeDeployTarget[] = [];
+  const submitTargets: NativeDeployTarget[] = [];
+  for (const entry of plan.targets) {
+    const build = status.builds[entry.target];
+    if (build === undefined) {
+      buildTargets.push(entry.target);
+    } else if (build.inspectedAppId !== entry.appId) {
+      throw new Error(`${entry.target} build record app ID differs from the deployment plan.`);
+    }
+    const submission = status.submissions[entry.target];
+    if (submission !== undefined && build === undefined) {
+      throw new Error(`${entry.target} store checkpoint has no immutable build.`);
+    }
+    if (submission === undefined || !isNativeSubmissionSettled(submission.status)) {
+      submitTargets.push(entry.target);
+    }
+  }
+  return { buildTargets, submitTargets };
+}
+
+async function buildAndRecordTarget(
+  input: RunNativeDeploymentInput,
+  workspace: PinnedReleaseWorkspace,
+  target: NativeDeployTarget,
+  reserved: Awaited<ReturnType<typeof reserveNativeRelease>>['plan'],
+  environment: NodeJS.ProcessEnv,
+): Promise<void> {
+  const planned = input.plan.targets.find((entry) => entry.target === target);
+  const version = reserved.targets[target];
+  if (planned === undefined || version === undefined) {
+    throw new Error('Native build target lacks its reserved version.');
+  }
+  const profile = readNativeDeployTargetProfile(input.plan, target);
+  const buildEnvironment: NodeJS.ProcessEnv = {
+    ...withoutStoreSubmissionCredentials(environment, input.plan),
+    APP_VERSION: input.gameVersion,
+    BUILD_ID: reserved.buildId,
+    MPGD_RELEASE_REVISION: String(reserved.releaseRevision),
+    MPGD_RELEASE_LABEL: reserved.releaseLabel,
+    ...(target === 'android' ? {
+      MPGD_TARGET_VERSION_CODE: String(version.versionCode),
+      MPGD_TARGET_VERSION_NAME: String(version.versionName),
+    } : {
+      MPGD_TARGET_BUILD_NUMBER: String(version.buildNumber),
+      MPGD_TARGET_MARKETING_VERSION: String(version.marketingVersion),
+    }),
+  };
+  const run = async (
+    signedEnvironment: NodeJS.ProcessEnv,
+    secretValues: readonly string[],
+    signerOrTeam: string,
+  ): Promise<void> => {
+    const built = await runPinnedNativeBuild(workspace, {
+      target,
+      profile: 'production',
+      mode: target === 'android' ? 'signed-archive' : 'store-export',
+      environment: signedEnvironment,
+      secretValues,
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    });
+    // Content-addressed candidates never block a rebuild after a crash before
+    // the immutable build record is committed. Unreferenced copies stay inert.
+    const artifactLocation = `.mpgd/releases/${input.releaseKey}/${target}-${sha256(built.artifact)}.${target === 'android' ? 'aab' : 'ipa'}`;
+    const manifestLocation = `.mpgd/releases/${input.releaseKey}/${target}-manifest-${sha256(built.releaseManifest)}.json`;
+    const artifactFile = persistImmutableFile(
+      input.plan.gameRoot,
+      artifactLocation,
+      built.artifact,
+    );
+    const manifestFile = persistImmutableFile(
+      input.plan.gameRoot,
+      manifestLocation,
+      built.releaseManifest,
+    );
+    const configDigest = createHash('sha256').update(JSON.stringify({
+      gameGitSha: workspace.input.gameGitSha,
+      lockfileSha256: workspace.input.lockfileSha256,
+      targetConfigSha256: workspace.input.targetConfigSha256,
+      deployConfigSha256: workspace.input.deployConfigSha256,
+      kitPackageVersion: workspace.input.kitPackageVersion,
+      kitGitSha: workspace.input.kitGitSha,
+      releaseKey: input.releaseKey,
+      target,
+      version,
+    })).digest('hex');
+    const inspectedSignerSha256 = target === 'android'
+      ? await inspectAndroidBundleSigner(artifactFile)
+      : undefined;
+    if (target === 'android' && inspectedSignerSha256 !== signerOrTeam.toLowerCase()) {
+      throw new Error('Native Android artifact signer differs from the prepared upload key.');
+    }
+    await recordNativeReleaseBuild({
+      gameRoot: input.plan.gameRoot,
+      gameId: input.gameId,
+      releaseKey: input.releaseKey,
+      target,
+      buildRunId: built.runId,
+      kitPackageVersion: workspace.input.kitPackageVersion,
+      buildConfigDigest: configDigest,
+      deployConfigSha256: input.plan.deployConfigSha256,
+      deploymentProfile: input.plan.profile,
+      deploymentDestination: planned.destination,
+      ...(planned.testGroup === undefined ? {} : { internalTestGroupId: planned.testGroup }),
+      artifactFile,
+      expectedArtifactSha256: sha256(artifactFile),
+      artifactLocation,
+      releaseManifestFile: manifestFile,
+      expectedReleaseManifestSha256: sha256(manifestFile),
+      inspectedAppId: planned.appId,
+      ...(target === 'android' ? { inspectedSignerSha256 } : { inspectedTeamId: signerOrTeam }),
+      environment,
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    });
+  };
+  if (target === 'android') {
+    await withAndroidUploadSigningSession(
+      {
+        keystoreFile: requiredEnvironment(environment, profile.signingCredential.env),
+        storePassword: requiredEnvironment(environment, 'MPGD_ANDROID_UPLOAD_STORE_PASSWORD'),
+        keyAlias: requiredEnvironment(environment, 'MPGD_ANDROID_UPLOAD_KEY_ALIAS'),
+        keyPassword: requiredEnvironment(environment, 'MPGD_ANDROID_UPLOAD_KEY_PASSWORD'),
+        expectedCertSha256: requiredEnvironment(environment, 'MPGD_ANDROID_UPLOAD_CERT_SHA256'),
+        environment: buildEnvironment,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      },
+      async (session) => {
+        await run(session.environment, session.secretValues, session.expectedCertSha256);
+      },
+    );
+  } else {
+    await withIosSigningSession({
+      p12File: requiredEnvironment(environment, profile.signingCredential.env),
+      p12Password: requiredEnvironment(environment, 'MPGD_IOS_SIGNING_P12_PASSWORD'),
+      provisioningProfileFile: requiredEnvironment(environment, 'MPGD_IOS_PROVISIONING_PROFILE'),
+      bundleId: planned.appId,
+      teamId: requiredEnvironment(environment, 'MPGD_IOS_TEAM_ID'),
+      environment: buildEnvironment,
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    }, async (session) => {
+      await run(session.environment, [
+        requiredEnvironment(environment, 'MPGD_IOS_SIGNING_P12_PASSWORD'),
+      ], requiredEnvironment(environment, 'MPGD_IOS_TEAM_ID'));
+    });
+  }
+}
+
+export function readStoreCredential(
+  plan: NativeDeploymentPlan,
+  target: NativeDeployTarget,
+  environment: NodeJS.ProcessEnv,
+): NativeStoreCredential {
+  const profile = readNativeDeployTargetProfile(plan, target);
+  return target === 'android'
+    ? {
+        target,
+        serviceAccountFile: requiredEnvironment(environment, profile.submissionCredential.env),
+      }
+    : {
+        target,
+        ascBinary: requiredEnvironment(environment, 'MPGD_ASC_BINARY'),
+        appStoreAppId: requiredEnvironment(environment, 'MPGD_ASC_APP_ID'),
+        apiKeyId: requiredEnvironment(environment, 'MPGD_ASC_KEY_ID'),
+        apiIssuerId: requiredEnvironment(environment, 'MPGD_ASC_ISSUER_ID'),
+        apiPrivateKeyBase64: requiredEnvironment(environment, profile.submissionCredential.env),
+      };
+}
+
+function requiredEnvironment(environment: NodeJS.ProcessEnv, name: string): string {
+  const value = environment[name];
+  if (value === undefined || value.trim() === '') {
+    throw new Error(`Native deployment requires ${name}.`);
+  }
+  return value;
+}
+
+/** Install hooks must never inherit signing or store credentials. */
+export function dependencyInstallEnvironment(
+  environment: NodeJS.ProcessEnv,
+  plan?: NativeDeploymentPlan,
+): NodeJS.ProcessEnv {
+  const allowed = [
+    'PATH',
+    'Path',
+    'HOME',
+    'TMPDIR',
+    'TMP',
+    'TEMP',
+    'USER',
+    'SHELL',
+    'CI',
+    'COREPACK_HOME',
+    'PNPM_HOME',
+    'npm_execpath',
+    'npm_config_store_dir',
+    'JAVA_HOME',
+    'ANDROID_HOME',
+    'ANDROID_SDK_ROOT',
+    'SystemRoot',
+    'windir',
+    'ComSpec',
+    'PATHEXT',
+    'USERPROFILE',
+    'APPDATA',
+    'LOCALAPPDATA',
+  ];
+  const entries = allowed.flatMap((name) => {
+    const value = environment[name];
+    return value === undefined ? [] : [[name, value] as const];
+  });
+  const forbidden = new Set([
+    ...(plan === undefined ? [] : readNativeDeployCredentialNames(plan)),
+    'GOOGLE_APPLICATION_CREDENTIALS',
+  ]);
+  for (const name of environment.MPGD_DEPENDENCY_INSTALL_ENV_NAMES?.split(',') ?? []) {
+    const normalized = name.trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(normalized)
+      || normalized.startsWith('MPGD_') || forbidden.has(normalized)) {
+      throw new Error(`Dependency installation environment name ${normalized} is not allowed.`);
+    }
+    const value = environment[normalized];
+    if (value === undefined || value === '') {
+      throw new Error(`Dependency installation requires ${normalized}.`);
+    }
+    entries.push([normalized, value]);
+  }
+  return Object.fromEntries(entries);
+}
+
+/** Signing needs build keys, but neither web nor native build needs store API keys. */
+export function withoutStoreSubmissionCredentials(
+  environment: NodeJS.ProcessEnv,
+  plan: NativeDeploymentPlan,
+): NodeJS.ProcessEnv {
+  const result = { ...environment };
+  for (const name of readNativeDeployCredentialNames(plan)) {
+    delete result[name];
+  }
+  for (const name of [
+    'MPGD_ASC_KEY_ID',
+    'MPGD_ASC_ISSUER_ID',
+    'MPGD_ASC_APP_ID',
+    'MPGD_ASC_BINARY',
+    'GOOGLE_APPLICATION_CREDENTIALS',
+    'MPGD_ANDROID_UPLOAD_KEYSTORE',
+    'MPGD_ANDROID_UPLOAD_STORE_PASSWORD',
+    'MPGD_ANDROID_UPLOAD_KEY_ALIAS',
+    'MPGD_ANDROID_UPLOAD_KEY_PASSWORD',
+    'MPGD_IOS_SIGNING_P12',
+    'MPGD_IOS_SIGNING_P12_PASSWORD',
+    'MPGD_IOS_PROVISIONING_PROFILE',
+  ]) {
+    delete result[name];
+  }
+  for (const name of Object.keys(result)) {
+    if (name.startsWith('MPGD_ANDROID_SIGNING_')
+      || name.startsWith('MPGD_IOS_SESSION_')) {
+      delete result[name];
+    }
+  }
+  return result;
+}
+
+function requiredExistingFile(environment: NodeJS.ProcessEnv, name: string): string {
+  const file = requiredEnvironment(environment, name);
+  if (!existsSync(file) || !statSync(file).isFile()) {
+    throw new Error(`Native deployment ${name} must name an existing regular file.`);
+  }
+  return file;
+}
+
+/** Internal artifact copy primitive; exported for boundary tests, not from the package root. */
+export function persistImmutableFile(gameRoot: string, location: string, source: string): string {
+  const root = realpathSync(gameRoot);
+  const destination = path.resolve(root, location);
+  const relative = path.relative(root, destination);
+  if (relative === '' || relative === '..' || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative)) {
+    throw new Error('Native release output escapes the game directory.');
+  }
+  const directory = path.dirname(destination);
+  let current = root;
+  for (const segment of path.relative(root, directory).split(path.sep)) {
+    current = path.join(current, segment);
+    if (!existsSync(current)) {
+      mkdirSync(current, { mode: 0o700 });
+    }
+    const entry = lstatSync(current);
+    if (entry.isSymbolicLink() || !entry.isDirectory()) {
+      throw new Error('Native release output path contains a symlink or non-directory.');
+    }
+  }
+  if (existsSync(destination) && !lstatSync(destination).isFile()) {
+    throw new Error('Native release output must be a regular file.');
+  }
+  if (!existsSync(destination)) {
+    try {
+      copyFileSync(source, destination, constants.COPYFILE_EXCL);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+        throw error;
+      }
+    }
+  }
+  if (!lstatSync(destination).isFile() || sha256(destination) !== sha256(source)) {
+    throw new Error('Existing native release output has different bytes.');
+  }
+  return destination;
+}
+
+function sha256(file: string): string {
+  const hash = createHash('sha256');
+  const descriptor = openSync(file, 'r');
+  const chunk = Buffer.allocUnsafe(1024 * 1024);
+  try {
+    for (;;) {
+      const bytes = readSync(descriptor, chunk, 0, chunk.byteLength, null);
+      if (bytes === 0) {
+        break;
+      }
+      hash.update(chunk.subarray(0, bytes));
+    }
+  } finally {
+    closeSync(descriptor);
+  }
+  return hash.digest('hex');
+}

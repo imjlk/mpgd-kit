@@ -16,6 +16,7 @@ import completion from '@gunshi/plugin-completion';
 import i18n, { defineI18n } from '@gunshi/plugin-i18n';
 import resources from '@gunshi/resources';
 import { cli } from 'gunshi';
+import { assertPlatformVersionLedger } from '@mpgd/target-config';
 
 import { buildAssetPacks } from './asset-pack-build.js';
 import { verifyAssetPackDelivery } from './asset-pack-verify.js';
@@ -28,7 +29,10 @@ import {
   initializeDeployConfig,
   parseDeployTargets,
   planNativeDeployment,
+  readNativeDeploymentPlan,
+  readNativeDeployTargetProfile,
   writeNativeDeploymentPlan,
+  type NativeDeploymentPlan,
 } from './deploy-planning.js';
 import {
   normalizeConfiguredBuildTargets,
@@ -74,6 +78,9 @@ import {
   runOfflinePlaytestPackaging,
 } from './offline-playtest.js';
 import { targetConfigExtensionsFileEnv, targetConfigMatrixFileEnv } from './target-config-env.js';
+import { readStoreCredential, runNativeDeployment } from './native-deploy-run.js';
+import { submitRecordedNativeTarget } from './native-deploy-submission.js';
+import { readNativeReleaseStatus as readNativeReleaseStatusForCli } from './release-state.js';
 
 export {
   renderGameAcceptanceMarkdown,
@@ -125,13 +132,32 @@ export {
 } from './android-signing-session.js';
 
 export {
+  checkpointNativeSubmission,
+  readNativeReleaseStatus,
+  reclaimNativeSubmission,
+  releaseNativeSubmissionLease,
   recordNativeReleaseBuild,
   reserveNativeRelease,
   type ImmutableNativeBuildRecord,
+  type NativeReleaseStatus,
   type NativeReleaseReservation,
   type NativeReleaseReservationInput,
+  type NativeSubmissionCheckpoint,
+  type NativeSubmissionStatus,
   type RecordNativeBuildInput,
 } from './release-state.js';
+
+export {
+  runNativeDeployment,
+  readStoreCredential,
+  type RunNativeDeploymentInput,
+} from './native-deploy-run.js';
+
+export {
+  submitRecordedNativeTarget,
+  type NativeStoreCredential,
+  type SubmitRecordedNativeTargetInput,
+} from './native-deploy-submission.js';
 
 export {
   PlaySubmissionUncertainError,
@@ -568,6 +594,111 @@ const deployCommand = defineI18n({
         const out = readRequiredCliOption(ctx.values.out, '--out');
         writeNativeDeploymentPlan(out, plan);
         console.info(`Wrote read-only deployment plan: ${path.resolve(out)}`);
+      },
+    }),
+    status: defineI18n({
+      name: 'status',
+      description: 'Read one game-owned native release and its store checkpoints.',
+      resource: commandResource({
+        en: 'Read one game-owned native release and its store checkpoints.',
+        ko: '게임 소유 네이티브 릴리스와 스토어 체크포인트를 조회합니다.',
+      }),
+      args: {
+        game: { type: 'string', required: false, description: 'Game project directory.' },
+        'game-id': { type: 'string', required: true, description: 'Explicit release ledger game ID.' },
+        release: { type: 'string', required: true, description: 'Explicit release ID.' },
+      },
+      run: async (ctx) => {
+        const status = await readNativeReleaseStatusForCli({
+          gameRoot: path.resolve(readOptionalString(ctx.values.game) ?? '.'),
+          gameId: readRequiredCliOption(ctx.values['game-id'], '--game-id'),
+          releaseKey: readRequiredCliOption(ctx.values.release, '--release'),
+        });
+        console.info(JSON.stringify(status, null, 2));
+      },
+    }),
+    submit: defineI18n({
+      name: 'submit',
+      description: 'Resume store submission of one already verified native build.',
+      resource: commandResource({
+        en: 'Resume store submission of one already verified native build.',
+        ko: '이미 검증한 네이티브 빌드의 스토어 제출을 재개합니다.',
+      }),
+      args: {
+        plan: { type: 'string', required: true, description: 'Saved deployment plan JSON.' },
+        game: { type: 'string', required: false, description: 'Current game directory if the plan moved.' },
+        'game-id': { type: 'string', required: true, description: 'Explicit release ledger game ID.' },
+        release: { type: 'string', required: true, description: 'Explicit release ID.' },
+        target: { type: 'string', required: true, description: 'android or ios.' },
+        approve: { type: 'boolean', required: false, description: 'Approve internal test submission.' },
+      },
+      run: async (ctx) => {
+        const game = readOptionalString(ctx.values.game);
+        const plan = readNativeDeploymentPlan(
+          readRequiredCliOption(ctx.values.plan, '--plan'),
+          game === undefined ? undefined : path.resolve(game),
+        );
+        const target = readRequiredCliOption(ctx.values.target, '--target');
+        if (target !== 'android' && target !== 'ios') {
+          throw new Error('--target must be android or ios.');
+        }
+        const result = await submitRecordedNativeTarget({
+          plan,
+          gameId: readRequiredCliOption(ctx.values['game-id'], '--game-id'),
+          releaseKey: readRequiredCliOption(ctx.values.release, '--release'),
+          credential: readStoreCredential(plan, target, process.env),
+          approved: isDeployApproved(plan, ctx.values.approve === true),
+        });
+        console.info(JSON.stringify(result, null, 2));
+      },
+    }),
+    run: defineI18n({
+      name: 'run',
+      description: 'Reserve, build, verify and submit native internal-test releases.',
+      resource: commandResource({
+        en: 'Reserve, build, verify and submit native internal-test releases.',
+        ko: '네이티브 내부 테스트 릴리스를 예약·빌드·검증·제출합니다.',
+      }),
+      args: {
+        plan: { type: 'string', required: true, description: 'Saved deployment plan JSON.' },
+        game: { type: 'string', required: false, description: 'Current game directory if the plan moved.' },
+        'game-id': { type: 'string', required: true, description: 'Explicit release ledger game ID.' },
+        'game-version': { type: 'string', required: true, description: 'Game SemVer version.' },
+        release: { type: 'string', required: true, description: 'Explicit release ID.' },
+        'initial-ledger': {
+          type: 'string', required: false,
+          description: 'Initial version ledger JSON; only for the first release.',
+        },
+        approve: { type: 'boolean', required: false, description: 'Approve internal test submission.' },
+      },
+      run: async (ctx) => {
+        const game = readOptionalString(ctx.values.game);
+        const plan = readNativeDeploymentPlan(
+          readRequiredCliOption(ctx.values.plan, '--plan'),
+          game === undefined ? undefined : path.resolve(game),
+        );
+        const infoFile = path.join(packageRoot, 'dist/native-build-info.json');
+        const info = readJsonForCli(infoFile, 'native builder metadata');
+        assertJsonObject(info, 'native builder package metadata');
+        if (info.packageVersion !== cliVersion || typeof info.kitGitSha !== 'string'
+          || !/^[0-9a-f]{40}$/u.test(info.kitGitSha) || info.kitDirty !== false) {
+          throw new Error('Installed CLI has no clean, matching native Kit build identity.');
+        }
+        const initialLedgerFile = readOptionalString(ctx.values['initial-ledger']);
+        const status = await runNativeDeployment({
+          plan,
+          gameId: readRequiredCliOption(ctx.values['game-id'], '--game-id'),
+          gameVersion: readRequiredCliOption(ctx.values['game-version'], '--game-version'),
+          releaseKey: readRequiredCliOption(ctx.values.release, '--release'),
+          kit: { packageVersion: cliVersion, gitSha: info.kitGitSha },
+          ...(initialLedgerFile === undefined ? {} : {
+            initialLedger: assertPlatformVersionLedger(
+              readJsonForCli(path.resolve(initialLedgerFile), 'initial version ledger'),
+            ),
+          }),
+          approved: isDeployApproved(plan, ctx.values.approve === true),
+        });
+        console.info(JSON.stringify(status, null, 2));
       },
     }),
   },
@@ -3773,19 +3904,19 @@ function preparePlatformTargetsFile(input: {
   return outputFile;
 }
 
-function readJsonForCli(file: string): unknown {
+function readJsonForCli(file: string, label = 'targets file'): unknown {
   let raw: string;
 
   try {
     raw = readFileSync(file, 'utf8');
   } catch (error) {
-    throw new Error(`Failed to read targets file ${file}: ${formatError(error)}`);
+    throw new Error(`Failed to read ${label} ${file}: ${formatError(error)}`);
   }
 
   try {
     return JSON.parse(raw);
   } catch (error) {
-    throw new Error(`Failed to parse targets file ${file}: ${formatError(error)}`);
+    throw new Error(`Failed to parse ${label} ${file}: ${formatError(error)}`);
   }
 }
 
@@ -4275,6 +4406,10 @@ function renderHostedPwaVerificationMarkdown(
     '- CDN or account-level cache settings outside the deployment directory.',
     '',
   ].join('\n');
+}
+
+function isDeployApproved(plan: NativeDeploymentPlan, approveFlag: boolean): boolean {
+  return plan.approval === 'preapproved-internal-test' || approveFlag;
 }
 
 function readRequiredCliOption(value: unknown, label: string): string {

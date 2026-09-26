@@ -145,6 +145,9 @@ try {
   assert.equal(existsSync(join(cliDist, 'ios-ipa-inspection.js')), true);
   const installedCli = await import(pathToFileURL(join(cliDist, 'index.js')).href);
   assert.equal(typeof installedCli.submitVerifiedIosBuild, 'function');
+  assert.equal(typeof installedCli.runNativeDeployment, 'function');
+  assert.equal(typeof installedCli.submitRecordedNativeTarget, 'function');
+  assert.equal(typeof installedCli.readNativeReleaseStatus, 'function');
   mustRun('git', ['init', '-q'], gameRoot);
   mustRun('git', ['add', '.'], gameRoot);
   mustRun('git', [

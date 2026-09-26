@@ -1,11 +1,12 @@
-# Native test deployment planning
+# Native test deployment planning and execution
 
 The installed `@mpgd/cli` can build game-owned Capacitor targets without a
-Kit checkout. `mpgd deploy init`, `doctor`, and `plan` are the next layer: they
-record test destinations and credential **references** in the game project,
-check local prerequisites, and write a plan. They do not reserve version
-numbers, build, sign, upload, or call either store. Store submission and
-resumable state are later steps; a successful plan is not deployment evidence.
+Kit checkout. `mpgd deploy init`, `doctor`, and `plan` record test destinations
+and credential **references**, check local prerequisites, and write a plan.
+These three commands do not reserve numbers, build, sign, upload, or call
+either store. `deploy run`, `status`, and `submit` connect the later execution
+stages; see [Resumable native test deployment](NATIVE_DEPLOY_RUN.md).
+A successful plan is not deployment evidence.
 
 Start with `mpgd.targets.json` and a game-owned shell created by
 `mpgd target init capacitor`. Keep the app ID and shell paths there, not in
@@ -19,9 +20,10 @@ This creates `mpgd.deploy.json` once, without overwriting an existing file.
 The `beta` profile uses a production build configuration targeting Play
 internal testing and/or TestFlight. Its default approval policy is `manual`.
 Credential fields contain environment variable **names**, never secret
-values. Set `testGroup` in the iOS target profile to the exact internal
-TestFlight group before planning iOS. The generated values are references,
-not an indication that signing or store credentials have been verified.
+values. Set `testGroup` in the iOS target profile to the existing internal
+TestFlight group **ID** (not its display name) before planning iOS. The
+generated values are references, not an indication that signing or store
+credentials have been verified.
 
 ```sh
 pnpm exec mpgd deploy doctor --game ./games/my-game --profile beta
@@ -30,8 +32,8 @@ pnpm exec mpgd deploy plan --game ./games/my-game --profile beta \
 ```
 
 `doctor` checks the selected target config, game-owned shell, Node.js,
-Java/Android SDK or Xcode, and whether signing and submission environment
-references are present. It reports presence only; it does not inspect key
+Java/Android SDK or Xcode, and whether signing, submission, and their required
+companion environment variables are present. It reports presence only; it does not inspect key
 contents, authenticate to a store, or run a remote account check. On an
 incomplete profile it exits nonzero with the configuration reason.
 
@@ -57,8 +59,7 @@ release's output are not touched. Configuration digests are checked before
 and after installation/build, and a build is accepted only when a new
 successful attempt, artifact, and matching release manifest are present.
 
-This is an internal preparation API for the later `deploy run` command, not
-yet a store deployment command. The read-only `deploy plan` file itself does
+`deploy run` now uses this preparation API. The read-only `deploy plan` file itself does
 not pin a source revision; the revision is captured when execution starts.
 The installed `@mpgd/cli` must contain a clean packaged native builder with
 the recorded Kit revision. Process execution bounds runtime and captured log
@@ -100,8 +101,8 @@ the checkout along with the CLI itself.
 
 ## Android upload signing session
 
-The CLI package now provides `withAndroidUploadSigningSession()` for the
-later deployment runner. The game supplies its upload keystore file, alias,
+The CLI package provides `withAndroidUploadSigningSession()` for the
+deployment runner. The game supplies its upload keystore file, alias,
 store/key passwords, and expected upload certificate SHA-256; the Kit copies
 the key to a mode-0600 temporary file, verifies the certificate and private
 key with `keytool`, and removes the temporary key on success, failure, or
@@ -112,7 +113,7 @@ The existing `bundleRelease` builder and post-build AAB signer, app-ID, and
 version inspections remain the release gates; missing or mismatched signing
 inputs do not fall back to a debug key.
 
-The session is a programmatic foundation, not yet a `deploy run` command.
+`deploy run` invokes this session for Android signed builds.
 The throwaway-key CI test validates key restoration, wrong passwords and
 certificate, cleanup, and Gradle configuration. After preparing the reference
 Android shell with `cap sync android`,

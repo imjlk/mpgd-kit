@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 import { assertCapacitorAppId } from './capacitor-shell-starter.js';
 
@@ -74,6 +75,7 @@ export interface DeployDoctorResult {
 const deploymentConfigName = 'mpgd.deploy.json';
 const targetsConfigName = 'mpgd.targets.json';
 const environmentName = /^[A-Z_][A-Z0-9_]*$/u;
+const ascGroupIdPattern = /^[A-Za-z0-9][A-Za-z0-9-]*$/u;
 
 export function initializeDeployConfig(game: string): string {
   const gameRoot = resolve(game);
@@ -154,6 +156,9 @@ export function planNativeDeployment(input: {
     if (target === 'ios' && targetProfile.testGroup === undefined) {
       throw new Error('TestFlight deployment requires a testGroup in mpgd.deploy.json.');
     }
+    if (target === 'ios' && !ascGroupIdPattern.test(targetProfile.testGroup ?? '')) {
+      throw new Error('TestFlight testGroup must be an internal group ID, not a name.');
+    }
     return {
       target,
       destination: targetProfile.destination,
@@ -178,6 +183,78 @@ export function writeNativeDeploymentPlan(file: string, plan: NativeDeploymentPl
     flag: 'wx',
     mode: 0o600,
   });
+}
+
+/** Load a saved plan only if it still equals the game-owned current configuration. */
+export function readNativeDeploymentPlan(
+  file: string,
+  gameRootOverride?: string,
+): NativeDeploymentPlan {
+  const raw = parseObject(readFileSync(resolve(file), 'utf8'), file);
+  if (raw.schemaVersion !== 1 || typeof raw.gameRoot !== 'string'
+    || !isAbsolute(raw.gameRoot) || typeof raw.profile !== 'string'
+    || !Array.isArray(raw.targets) || raw.targets.some((entry) => !isObject(entry)
+      || (entry.target !== 'android' && entry.target !== 'ios'))
+    || !hasOnlyKeys(raw, [
+      'schemaVersion', 'gameRoot', 'profile', 'buildProfile', 'approval',
+      'targetConfigSha256', 'deployConfigSha256', 'targets',
+    ])) {
+    throw new Error('Saved native deployment plan is malformed.');
+  }
+  const plan = planNativeDeployment({
+    game: gameRootOverride ?? raw.gameRoot,
+    profile: raw.profile,
+    targets: raw.targets.map((entry) => (entry as { target: NativeDeployTarget }).target),
+  });
+  if (!isDeepStrictEqual({ ...raw, gameRoot: plan.gameRoot }, plan)) {
+    throw new Error('Saved native deployment plan differs from current game configuration.');
+  }
+  return plan;
+}
+
+/** Resolve credential references from the one authoritative game-owned profile. */
+export function readNativeDeployTargetProfile(
+  plan: NativeDeploymentPlan,
+  target: NativeDeployTarget,
+): DeployTargetProfile {
+  const current = planNativeDeployment({
+    game: plan.gameRoot,
+    profile: plan.profile,
+    targets: plan.targets.map((entry) => entry.target),
+  });
+  if (!isDeepStrictEqual(current, plan)) {
+    throw new Error('Native deployment configuration changed after the plan was written.');
+  }
+  const deployFile = join(plan.gameRoot, deploymentConfigName);
+  const deployBytes = readFileSync(deployFile);
+  if (createHash('sha256').update(deployBytes).digest('hex') !== plan.deployConfigSha256) {
+    throw new Error('Native deployment configuration changed after the plan was written.');
+  }
+  const config = readDeployConfig(deployFile, deployBytes.toString('utf8'));
+  const profile = config.profiles[plan.profile]?.targets[target];
+  if (profile === undefined || !plan.targets.some((entry) => entry.target === target)) {
+    throw new Error(`Native deployment plan has no ${target} target profile.`);
+  }
+  return profile;
+}
+
+/** Credential names across every configured profile, including unselected targets. */
+export function readNativeDeployCredentialNames(plan: NativeDeploymentPlan): readonly string[] {
+  const deployFile = join(plan.gameRoot, deploymentConfigName);
+  const deployBytes = readFileSync(deployFile);
+  if (createHash('sha256').update(deployBytes).digest('hex') !== plan.deployConfigSha256) {
+    throw new Error('Native deployment configuration changed after the plan was written.');
+  }
+  const config = readDeployConfig(deployFile, deployBytes.toString('utf8'));
+  const names: string[] = [];
+  for (const profile of Object.values(config.profiles)) {
+    for (const entry of Object.values(profile.targets)) {
+      if (entry !== undefined) {
+        names.push(entry.signingCredential.env, entry.submissionCredential.env);
+      }
+    }
+  }
+  return names;
 }
 
 export function doctorNativeDeployment(input: {
@@ -251,6 +328,31 @@ export function doctorNativeDeployment(input: {
         detail: environment[credential.env]
           ? `Environment reference ${credential.env} is present; content is not validated.`
           : `Set the ${credential.env} environment reference.`,
+      });
+    }
+    const additional = target.target === 'android'
+      ? [
+          'MPGD_ANDROID_UPLOAD_STORE_PASSWORD',
+          'MPGD_ANDROID_UPLOAD_KEY_ALIAS',
+          'MPGD_ANDROID_UPLOAD_KEY_PASSWORD',
+          'MPGD_ANDROID_UPLOAD_CERT_SHA256',
+        ]
+      : [
+          'MPGD_IOS_SIGNING_P12_PASSWORD',
+          'MPGD_IOS_PROVISIONING_PROFILE',
+          'MPGD_IOS_TEAM_ID',
+          'MPGD_ASC_BINARY',
+          'MPGD_ASC_APP_ID',
+          'MPGD_ASC_KEY_ID',
+          'MPGD_ASC_ISSUER_ID',
+        ];
+    for (const name of additional) {
+      checks.push({
+        name: `${target.target} ${name}`,
+        status: environment[name]?.trim() ? 'ok' : 'missing',
+        detail: environment[name]?.trim()
+          ? `${name} is present; content is not validated.`
+          : `Set ${name} for native test deployment.`,
       });
     }
   }

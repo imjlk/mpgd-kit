@@ -11,6 +11,7 @@ import { inspectAndroidBundleSigner } from './android-bundle-signer.js';
 import type { ImmutableNativeBuildRecord } from './release-state.js';
 
 const sha256Pattern = /^[a-f0-9]{64}$/u;
+const editIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const trackName = 'internal';
 const bundleUploadTimeoutMs = 120_000;
 
@@ -20,8 +21,11 @@ export interface PlayInternalSubmissionInput {
   readonly packageName: string;
   /** Absolute path to a game-owned Google service account JSON file. */
   readonly serviceAccountFile: string;
+  /** Reuse the checkpointed edit; never create a replacement after an uncertain response. */
+  readonly resumeEditId?: string;
   /** Persist this edit ID before any upload begins, for later reconciliation. */
   readonly onEditCreated?: (editId: string) => Promise<void>;
+  readonly signal?: AbortSignal;
 }
 
 export interface PlayInternalSubmissionResult {
@@ -36,7 +40,7 @@ export interface PlayInternalSubmissionResult {
 
 export class PlaySubmissionUncertainError extends Error {
   constructor(
-    readonly stage: 'upload' | 'track-update' | 'validate' | 'commit',
+    readonly stage: 'checkpoint' | 'upload' | 'track-update' | 'validate' | 'commit',
     readonly editId: string,
   ) {
     super(
@@ -69,12 +73,40 @@ export async function submitVerifiedAndroidBundleWithPublisher(
   const versionCode = await preflight(input);
   const expectedSha256 = input.record.artifactSha256;
   const packageName = input.packageName;
-  const editId = await publisher.insertEdit(packageName);
-  await input.onEditCreated?.(editId);
+  if (input.resumeEditId !== undefined && !editIdPattern.test(input.resumeEditId)) {
+    throw new Error('Google Play resume edit ID is malformed.');
+  }
+  input.signal?.throwIfAborted();
+  let editId = input.resumeEditId ?? await publisher.insertEdit(packageName, input.signal);
+  let freshEdit = input.resumeEditId === undefined;
+  if (input.resumeEditId === undefined) {
+    try {
+      await input.onEditCreated?.(editId);
+    } catch {
+      throw new PlaySubmissionUncertainError('checkpoint', editId);
+    }
+  }
 
-  let bundles = await publisher.listBundles(packageName, editId);
+  let bundles: PlayBundle[];
+  try {
+    bundles = await publisher.listBundles(packageName, editId, input.signal);
+  } catch (error) {
+    if (input.resumeEditId === undefined || !isHttpStatus(error, 404)) {
+      throw error;
+    }
+    // A successful commit may have invalidated the old edit while its response
+    // was lost. Open a new snapshot solely to inspect the live internal track.
+    editId = await publisher.insertEdit(packageName, input.signal);
+    freshEdit = true;
+    try {
+      await input.onEditCreated?.(editId);
+    } catch {
+      throw new PlaySubmissionUncertainError('checkpoint', editId);
+    }
+    bundles = await publisher.listBundles(packageName, editId, input.signal);
+  }
   let existing = findVersionBundle(bundles, versionCode, expectedSha256);
-  const currentTrack = await getInternalTrack(publisher, packageName, editId);
+  const currentTrack = await getInternalTrack(publisher, packageName, editId, input.signal);
   if (hasVersion(currentTrack.releases, versionCode)) {
     if (existing === undefined) {
       throw new Error('Google Play internal track has this version without matching bundle bytes.');
@@ -84,7 +116,17 @@ export async function submitVerifiedAndroidBundleWithPublisher(
         'Google Play internal track version is not completed; inspect it before resubmitting.',
       );
     }
-    return result(input, editId, versionCode, true);
+    if (freshEdit) {
+      return result(input, editId, versionCode, true);
+    }
+    // A resumed edit sees its own uncommitted track. Publish it before success.
+    await publisher.validateEdit(packageName, editId, input.signal);
+    try {
+      await publisher.commitEdit(packageName, editId, input.signal);
+    } catch {
+      throw new PlaySubmissionUncertainError('commit', editId);
+    }
+    return result(input, editId, versionCode, false);
   }
   if (existing === undefined) {
     try {
@@ -93,6 +135,7 @@ export async function submitVerifiedAndroidBundleWithPublisher(
         editId,
         aabFile: input.aabFile,
         timeoutMs: bundleUploadTimeoutMs,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
         ...(requestRootUrl === undefined ? {} : { requestRootUrl }),
       });
       assertBundle(uploaded, versionCode, expectedSha256);
@@ -101,7 +144,7 @@ export async function submitVerifiedAndroidBundleWithPublisher(
         throw error;
       }
       try {
-        bundles = await publisher.listBundles(packageName, editId);
+        bundles = await publisher.listBundles(packageName, editId, input.signal);
         existing = findVersionBundle(bundles, versionCode, expectedSha256);
       } catch {
         throw new PlaySubmissionUncertainError('upload', editId);
@@ -122,11 +165,11 @@ export async function submitVerifiedAndroidBundleWithPublisher(
     releases: [...(currentTrack.releases ?? []), release],
   };
   try {
-    await publisher.updateTrack(packageName, editId, desired);
+    await publisher.updateTrack(packageName, editId, desired, input.signal);
   } catch (error) {
     let applied: boolean;
     try {
-      const observed = await getInternalTrack(publisher, packageName, editId);
+      const observed = await getInternalTrack(publisher, packageName, editId, input.signal);
       applied = hasCompletedVersion(observed.releases, versionCode);
     } catch {
       throw new PlaySubmissionUncertainError('track-update', editId);
@@ -136,7 +179,7 @@ export async function submitVerifiedAndroidBundleWithPublisher(
     }
   }
   try {
-    await publisher.validateEdit(packageName, editId);
+    await publisher.validateEdit(packageName, editId, input.signal);
   } catch (error) {
     if (isDefinitiveHttpError(error)) {
       throw error;
@@ -144,7 +187,7 @@ export async function submitVerifiedAndroidBundleWithPublisher(
     throw new PlaySubmissionUncertainError('validate', editId);
   }
   try {
-    await publisher.commitEdit(packageName, editId);
+    await publisher.commitEdit(packageName, editId, input.signal);
     return result(input, editId, versionCode, false);
   } catch {
     // Inserting a new edit invalidates the first edit for this API user. A
@@ -154,6 +197,7 @@ export async function submitVerifiedAndroidBundleWithPublisher(
 }
 
 async function preflight(input: PlayInternalSubmissionInput): Promise<number> {
+  input.signal?.throwIfAborted();
   const record = input.record;
   const versionCode = record.platformVersion.versionCode;
   if (record.target !== 'android' || input.packageName !== record.inspectedAppId
@@ -168,6 +212,7 @@ async function preflight(input: PlayInternalSubmissionInput): Promise<number> {
   for await (const chunk of createReadStream(input.aabFile)) {
     hash.update(chunk);
   }
+  input.signal?.throwIfAborted();
   if (hash.digest('hex') !== record.artifactSha256) {
     throw new Error('Google Play AAB bytes differ from the immutable build record.');
   }
@@ -204,9 +249,10 @@ async function getInternalTrack(
   publisher: PlayPublisher,
   packageName: string,
   editId: string,
+  signal?: AbortSignal,
 ): Promise<PlayTrack> {
   try {
-    return await publisher.getTrack(packageName, editId);
+    return await publisher.getTrack(packageName, editId, signal);
   } catch (error) {
     if (isHttpStatus(error, 404)) {
       return { track: trackName, releases: [] };

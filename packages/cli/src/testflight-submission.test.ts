@@ -56,6 +56,7 @@ interface MockState {
   readonly commands: string[];
   processingState?: string;
   existingBuild?: boolean;
+  buildLookupError?: boolean;
   membership?: boolean;
   throwUpload?: boolean;
   uploadCommittedOnError?: boolean;
@@ -116,6 +117,9 @@ function mock(overrides: Partial<MockState> = {}): { state: MockState; run: AscJ
       };
     }
     if (command.startsWith('builds list')) {
+      if (state.buildLookupError) {
+        throw new Error('temporary build lookup failure');
+      }
       return {
         data: state.existingBuild
           ? [
@@ -252,6 +256,29 @@ try {
     resumed.state.commands.some((command) => command.startsWith('builds upload ')),
     false,
   );
+  const buildOnly = mock({ existingBuild: true, processingState: 'VALID' });
+  const buildOnlyResult = await submitVerifiedIosBuildWithRunner(
+    { ...input, resumeBuildId: 'build-1' },
+    buildOnly.run,
+  );
+  assert.equal(buildOnlyResult.status, 'testflight-ready');
+  assert.equal(buildOnlyResult.uploadId, undefined);
+  assert.equal(
+    buildOnly.state.commands.some((command) => command.startsWith('builds upload ')),
+    false,
+  );
+  const wrongBuild = mock({ existingBuild: true });
+  assert.equal((await submitVerifiedIosBuildWithRunner(
+    { ...input, resumeBuildId: 'another-build' }, wrongBuild.run,
+  )).status, 'unknown');
+  const unavailableBuild = mock({ existingBuild: true, buildLookupError: true });
+  const resumedBuildInput = { ...input, resumeBuildId: 'build-1' };
+  const unknownBuild = await submitVerifiedIosBuildWithRunner(
+    resumedBuildInput,
+    unavailableBuild.run,
+  );
+  assert.equal(unknownBuild.status, 'unknown');
+  assert.equal(unknownBuild.buildId, 'build-1');
   const missingUpload = mock({ uploadVisible: false });
   assert.equal((await submitVerifiedIosBuildWithRunner({ ...input, resumeUploadId: 'upload-1',
     resumeArtifactSha256: digest },
