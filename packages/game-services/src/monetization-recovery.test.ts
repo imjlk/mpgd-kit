@@ -434,6 +434,7 @@ const malformed: MonetizationOperationRecord = {
   kind: 'rewarded-ad',
   playerId: 'player-1',
   target: 'android',
+  deploymentTarget: 'android',
   revision: 0,
   input: { placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'malformed' },
 };
@@ -448,6 +449,7 @@ const unreadable = {
   playerId: 'player-1',
   target: 'android',
   key: 'bad-record',
+  deploymentTarget: 'android',
   revision: 0,
 } as unknown as MonetizationOperationRecord;
 const diagnosticStore: MonetizationOperationStore = {
@@ -663,5 +665,155 @@ const retriedAdResponseWrite = await adResponseWriteClient.claimRewardedAd(
 assert.equal(retriedAdResponseWrite.status, 'granted');
 assert.equal(rewardUiCalls, afterAdResponseWriteUi);
 assert.equal(rewardGrants, rewardsBeforeResponseWrite + 1);
+
+// A known server grant must survive a persistent journal outage within this runtime.
+let responseStorageDown = true;
+const outageStore: MonetizationOperationStore = {
+  ...operationStore,
+  async replace(expectedRevision, record) {
+    if (responseStorageDown && record.kind === 'purchase'
+      && record.input.idempotencyKey === 'persistent-response-outage'
+      && record.response?.verified === true) {
+      throw new Error('response storage unavailable');
+    }
+    await operationStore.replace(expectedRevision, record);
+  },
+};
+const outageClient = createRecoverableMonetizationClient({
+  ...recoveryBase,
+  operationStore: outageStore,
+});
+const outageOperation = {
+  productId: 'COINS_100',
+  source: 'shop' as const,
+  idempotencyKey: 'persistent-response-outage',
+};
+assert.equal((await outageClient.purchase(outageOperation)).status, 'granted');
+assert.equal((await outageClient.purchase(outageOperation)).status, 'granted');
+responseStorageDown = false;
+assert.equal((await outageClient.purchase(outageOperation)).status, 'granted');
+
+let resultStorageDown = true;
+const microsoftStore = createStore();
+const microsoftJournal: MonetizationOperationStore = {
+  ...microsoftStore,
+  async replace(expectedRevision, record) {
+    if (resultStorageDown && record.kind === 'purchase'
+      && record.result?.status === 'granted') {
+      throw new Error('result storage unavailable');
+    }
+    await microsoftStore.replace(expectedRevision, record);
+  },
+};
+const microsoftClient = createRecoverableMonetizationClient({
+  ...recoveryBase,
+  target: 'microsoft-store',
+  gateway: {
+    ...gateway,
+    target: 'microsoft-store',
+    commerce: {
+      ...gateway.commerce,
+      async purchase() {
+        return {
+          status: 'completed',
+          transactionId: 'microsoft-ledger-1',
+          entitlementIds: ['COINS_100'],
+          authoritativeGrant: { ledgerEntryId: 'microsoft-ledger-1' },
+        };
+      },
+    },
+  },
+  operationStore: microsoftJournal,
+});
+const microsoftOperation = {
+  productId: 'COINS_100',
+  source: 'shop' as const,
+  idempotencyKey: 'microsoft-result-outage',
+};
+assert.equal((await microsoftClient.purchase(microsoftOperation)).status, 'granted');
+assert.equal((await microsoftClient.purchase(microsoftOperation)).status, 'granted');
+resultStorageDown = false;
+assert.equal((await microsoftClient.purchase(microsoftOperation)).status, 'granted');
+
+const otherDeployment = createRecoverableMonetizationClient({
+  ...recoveryBase,
+  deploymentTarget: 'android-production',
+  operationStore,
+});
+await assert.rejects(otherDeployment.purchase(purchaseOperation), /another player or subject/);
+
+const readFailureStore: MonetizationOperationStore = {
+  ...operationStore,
+  async read() {
+    throw new Error('temporary journal read outage');
+  },
+};
+await operationStore.reserve({
+  key: JSON.stringify(['android', 'purchase', 'read-outage']),
+  kind: 'purchase',
+  playerId: 'player-1',
+  target: 'android',
+  deploymentTarget: 'android',
+  revision: 0,
+  input: { productId: 'COINS_100', source: 'shop', idempotencyKey: 'read-outage' },
+});
+const readFailureClient = createRecoverableMonetizationClient({
+  ...recoveryBase,
+  operationStore: readFailureStore,
+});
+const readFailureSummary = await readFailureClient.reconcile();
+assert.equal(
+  readFailureSummary.some((entry) => entry.status === 'pending'),
+  true,
+);
+
+const racedStore = createStore();
+let loseCallbackRace = true;
+const racingJournal: MonetizationOperationStore = {
+  ...racedStore,
+  async replace(expectedRevision, record) {
+    if (loseCallbackRace && record.kind === 'purchase'
+      && record.platform?.transactionId === 'losing-callback') {
+      loseCallbackRace = false;
+      await racedStore.replace(expectedRevision, {
+        ...record,
+        platform: {
+          status: 'completed',
+          transactionId: 'winning-callback',
+          entitlementIds: [],
+        },
+      });
+      throw new Error('lost journal compare-and-swap');
+    }
+    await racedStore.replace(expectedRevision, record);
+  },
+};
+const racingClient = createRecoverableMonetizationClient({
+  ...recoveryBase,
+  operationStore: racingJournal,
+});
+const raceKey = 'conflicting-cross-process-callback';
+await racedStore.reserve({
+  key: JSON.stringify(['android', 'purchase', raceKey]),
+  kind: 'purchase',
+  playerId: 'player-1',
+  target: 'android',
+  deploymentTarget: 'android',
+  revision: 0,
+  input: { productId: 'COINS_100', source: 'shop', idempotencyKey: raceKey },
+});
+assert.equal((await racingClient.recoverPurchaseResult(raceKey, {
+  status: 'completed',
+  transactionId: 'losing-callback',
+  entitlementIds: [],
+})).status, 'pending');
+await assert.rejects(
+  racingClient.purchase({
+    productId: 'COINS_100',
+    source: 'shop',
+    idempotencyKey: raceKey,
+  }),
+  /conflicts with the recorded operation/,
+);
 
 console.log('Durable monetization operation recovery passed.');

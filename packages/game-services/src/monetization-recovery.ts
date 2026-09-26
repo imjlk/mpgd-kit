@@ -26,6 +26,7 @@ interface OperationIdentity {
   readonly key: string;
   readonly playerId: string;
   readonly target: string;
+  readonly deploymentTarget: string;
   readonly revision: number;
   /** Fixed when a platform result is first journaled, before backend dispatch. */
   readonly platformCompletedAt?: string;
@@ -109,6 +110,10 @@ export function createRecoverableMonetizationClient(
     readonly platform: RewardedAdResult;
     readonly completedAt: string;
   }>();
+  const unjournaledPurchaseResponses = new Map<string, VerifyPurchaseResponse>();
+  const unjournaledRewardResponses = new Map<string, ClaimAdRewardResponse>();
+  const unjournaledPurchaseResults = new Map<string, GameServicesPurchaseResult>();
+  const unjournaledRewardResults = new Map<string, GameServicesRewardedAdResult>();
 
   async function serializeOperation<T>(key: string, task: () => Promise<T>): Promise<T> {
     const previous = inFlight.get(key) ?? Promise.resolve();
@@ -140,7 +145,9 @@ export function createRecoverableMonetizationClient(
   ): void {
     if (record.key !== operationKey(input.target, kind, idempotencyKey)
       || record.kind !== kind || record.playerId !== input.playerId
-      || record.target !== input.target || record.input.idempotencyKey !== idempotencyKey
+      || record.target !== input.target
+      || record.deploymentTarget !== (input.deploymentTarget ?? input.target)
+      || record.input.idempotencyKey !== idempotencyKey
       || (record.kind === 'purchase' ? record.input.productId : record.input.placementId)
         !== subjectId) {
       throw new Error('Monetization operation key is bound to another player or subject.');
@@ -158,6 +165,7 @@ export function createRecoverableMonetizationClient(
         kind: 'purchase',
         playerId: input.playerId,
         target: input.target,
+        deploymentTarget: input.deploymentTarget ?? input.target,
         revision: 0,
         input: operation,
       });
@@ -183,6 +191,7 @@ export function createRecoverableMonetizationClient(
         kind: 'rewarded-ad',
         playerId: input.playerId,
         target: input.target,
+        deploymentTarget: input.deploymentTarget ?? input.target,
         revision: 0,
         input: operation,
       });
@@ -200,6 +209,29 @@ export function createRecoverableMonetizationClient(
     options?: GameServicesOperationOptions<GameServicesPurchaseProgress>,
   ): Promise<GameServicesPurchaseResult> {
     let record = initial;
+    const unsavedResponse = unjournaledPurchaseResponses.get(record.key);
+    if (unsavedResponse !== undefined && record.response?.verified !== true) {
+      try {
+        record = await save(record, { response: unsavedResponse });
+        unjournaledPurchaseResponses.delete(record.key);
+      } catch {
+        return recordedPurchaseGrant({ ...record, response: unsavedResponse })
+          ?? pendingPurchase(record.platform);
+      }
+    } else if (record.response?.verified === true) {
+      unjournaledPurchaseResponses.delete(record.key);
+    }
+    const unsavedResult = unjournaledPurchaseResults.get(record.key);
+    if (unsavedResult !== undefined && record.result?.status !== 'granted') {
+      try {
+        record = await save(record, { result: unsavedResult });
+        unjournaledPurchaseResults.delete(record.key);
+      } catch {
+        return unsavedResult;
+      }
+    } else if (record.result?.status === 'granted') {
+      unjournaledPurchaseResults.delete(record.key);
+    }
     const unjournaled = unjournaledPurchases.get(record.key);
     if (unjournaled !== undefined && (record.platform === undefined
       || record.platform.status === 'pending' && unjournaled.platform.status !== 'pending')) {
@@ -213,6 +245,9 @@ export function createRecoverableMonetizationClient(
         return pendingPurchase(unjournaled.platform);
       }
     } else if (record.platform !== undefined) {
+      if (unjournaled !== undefined && !samePlatformResult(record.platform, unjournaled.platform)) {
+        throw new Error('A platform purchase callback conflicts with the recorded operation.');
+      }
       unjournaledPurchases.delete(record.key);
     }
     const completed = record.result;
@@ -280,7 +315,15 @@ export function createRecoverableMonetizationClient(
             }
             const prior = record;
             record = { ...record, response };
-            record = await save(prior, { response });
+            try {
+              record = await save(prior, { response });
+              unjournaledPurchaseResponses.delete(record.key);
+            } catch (error) {
+              if (response.verified) {
+                unjournaledPurchaseResponses.set(record.key, response);
+              }
+              throw error;
+            }
             return response;
           },
         },
@@ -288,11 +331,17 @@ export function createRecoverableMonetizationClient(
     });
     try {
       const result = await client.purchase(record.input, options);
+      if (result.status === 'granted') {
+        unjournaledPurchaseResults.set(record.key, result);
+      }
       record = await save(record, { result });
+      unjournaledPurchaseResults.delete(record.key);
       return result;
     } catch {
       // No UI retry is safe after a possibly completed platform callback.
-      return recordedPurchaseGrant(record) ?? pendingPurchase(record.platform);
+      return recordedPurchaseGrant(record)
+        ?? unjournaledPurchaseResults.get(record.key)
+        ?? pendingPurchase(record.platform);
     }
   }
 
@@ -302,6 +351,29 @@ export function createRecoverableMonetizationClient(
     options?: GameServicesOperationOptions<GameServicesRewardedAdProgress>,
   ): Promise<GameServicesRewardedAdResult> {
     let record = initial;
+    const unsavedResponse = unjournaledRewardResponses.get(record.key);
+    if (unsavedResponse !== undefined && record.response?.granted !== true) {
+      try {
+        record = await save(record, { response: unsavedResponse });
+        unjournaledRewardResponses.delete(record.key);
+      } catch {
+        return recordedRewardGrant({ ...record, response: unsavedResponse })
+          ?? pendingReward(record.platform);
+      }
+    } else if (record.response?.granted === true) {
+      unjournaledRewardResponses.delete(record.key);
+    }
+    const unsavedResult = unjournaledRewardResults.get(record.key);
+    if (unsavedResult !== undefined && record.result?.status !== 'granted') {
+      try {
+        record = await save(record, { result: unsavedResult });
+        unjournaledRewardResults.delete(record.key);
+      } catch {
+        return unsavedResult;
+      }
+    } else if (record.result?.status === 'granted') {
+      unjournaledRewardResults.delete(record.key);
+    }
     const unjournaled = unjournaledRewards.get(record.key);
     if (unjournaled !== undefined && (record.platform === undefined
       || record.platform.status === 'pending' && unjournaled.platform.status !== 'pending')) {
@@ -315,6 +387,9 @@ export function createRecoverableMonetizationClient(
         return pendingReward(unjournaled.platform);
       }
     } else if (record.platform !== undefined) {
+      if (unjournaled !== undefined && !samePlatformResult(record.platform, unjournaled.platform)) {
+        throw new Error('A platform ad callback conflicts with the recorded operation.');
+      }
       unjournaledRewards.delete(record.key);
     }
     const completed = record.result;
@@ -382,7 +457,15 @@ export function createRecoverableMonetizationClient(
             }
             const prior = record;
             record = { ...record, response };
-            record = await save(prior, { response });
+            try {
+              record = await save(prior, { response });
+              unjournaledRewardResponses.delete(record.key);
+            } catch (error) {
+              if (response.granted) {
+                unjournaledRewardResponses.set(record.key, response);
+              }
+              throw error;
+            }
             return response;
           },
         },
@@ -390,10 +473,16 @@ export function createRecoverableMonetizationClient(
     });
     try {
       const result = await client.claimRewardedAd(record.input, options);
+      if (result.status === 'granted') {
+        unjournaledRewardResults.set(record.key, result);
+      }
       record = await save(record, { result });
+      unjournaledRewardResults.delete(record.key);
       return result;
     } catch {
-      return recordedRewardGrant(record) ?? pendingReward(record.platform);
+      return recordedRewardGrant(record)
+        ?? unjournaledRewardResults.get(record.key)
+        ?? pendingReward(record.platform);
     }
   }
 
@@ -475,7 +564,8 @@ export function createRecoverableMonetizationClient(
     const pending = await store.listRecoverable(input.playerId);
     const summaries: MonetizationOperationSummary[] = [];
     for (const record of pending) {
-      if (record?.playerId !== input.playerId || record.target !== input.target) {
+      if (record?.playerId !== input.playerId || record.target !== input.target
+        || record.deploymentTarget !== (input.deploymentTarget ?? input.target)) {
         continue;
       }
       if (record.kind !== 'purchase' && record.kind !== 'rewarded-ad') {
@@ -489,7 +579,12 @@ export function createRecoverableMonetizationClient(
       }
       try {
         const summary = await serializeOperation(record.key, async () => {
-          const latest = await store.read(record.key) ?? record;
+          let latest: MonetizationOperationRecord;
+          try {
+            latest = await store.read(record.key) ?? record;
+          } catch {
+            throw new OperationReadError();
+          }
           assertOwner(
             latest,
             latest.kind,
@@ -514,11 +609,11 @@ export function createRecoverableMonetizationClient(
           } satisfies MonetizationOperationSummary;
         });
         summaries.push(summary);
-      } catch {
+      } catch (error) {
         summaries.push({
           kind: record.kind,
           idempotencyKey,
-          status: 'action-required',
+          status: error instanceof OperationReadError ? 'pending' : 'action-required',
           finalizationPending: false,
         });
       }
@@ -528,6 +623,8 @@ export function createRecoverableMonetizationClient(
 
   return { purchase, claimRewardedAd, recoverPurchaseResult, recoverRewardResult, reconcile };
 }
+
+class OperationReadError extends Error {}
 
 function operationKey(target: string, kind: string, idempotencyKey: string): string {
   if (idempotencyKey.trim() === '') {
