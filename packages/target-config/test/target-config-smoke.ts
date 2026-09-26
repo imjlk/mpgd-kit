@@ -28,6 +28,8 @@ import {
   type TargetIntegrationConfig,
 } from '../src/runtime';
 import {
+  isMeasurableTargetViewport,
+  measureTargetViewport,
   readTargetViewportSafeAreaInsets,
   resolveTargetViewportComposition,
   resolveTargetViewportOrientationPlan,
@@ -37,6 +39,8 @@ import {
   resolveTargetViewportSnapshot,
   resolveTargetViewportUsableArea,
   targetViewportShellForConfig,
+  waitForTargetViewportMeasurement,
+  type TargetViewportMeasurement,
 } from '../src/viewport';
 
 const targetConfigMatrix = {
@@ -223,6 +227,7 @@ assertThrows(
   /cannot configure identityUpgrade as available/u,
 );
 assertViewportPlans();
+await assertViewportMeasurementWait();
 
 const webConfig = getTargetConfig(targetConfigMatrix, targetConfigKeyForPlatform('browser'));
 assertThrows(
@@ -1122,6 +1127,151 @@ function resolveAdPlacementType(placementId: string): 'rewarded' | 'interstitial
   }
 
   return undefined;
+}
+
+async function assertViewportMeasurementWait(): Promise<void> {
+  const zero = { width: 0, height: 0 };
+  const box = (size: { width: number; height: number }) => ({ getBoundingClientRect: () => size });
+
+  assertEqual(isMeasurableTargetViewport({ width: 390, height: 844 }), true);
+  assertEqual(isMeasurableTargetViewport({ width: 0.5, height: 1 }), true);
+  assertEqual(isMeasurableTargetViewport({ width: 0.4, height: 844 }), false);
+  assertEqual(isMeasurableTargetViewport({ width: Number.NaN, height: 844 }), false);
+  assertDeepEqual(
+    measureTargetViewport({
+      container: box({ width: 640, height: 480 }),
+      visualViewport: { width: 390, height: 844 },
+      window: { innerWidth: 390, innerHeight: 844 },
+    }),
+    { width: 640, height: 480, source: 'container' },
+  );
+  assertDeepEqual(
+    measureTargetViewport({
+      container: box(zero),
+      visualViewport: { width: 390, height: 844 },
+      window: { innerWidth: 1, innerHeight: 1 },
+    }),
+    { width: 390, height: 844, source: 'visual-viewport' },
+  );
+  assertDeepEqual(
+    measureTargetViewport({
+      container: null,
+      visualViewport: zero,
+      window: { innerWidth: 1280, innerHeight: 720 },
+    }),
+    { width: 1280, height: 720, source: 'window' },
+  );
+  // A hidden iframe or background tab reports zero everywhere: no plan can be resolved yet.
+  assertEqual(
+    measureTargetViewport({
+      container: box(zero),
+      visualViewport: zero,
+      window: { innerWidth: 0, innerHeight: 0 },
+    }),
+    null,
+  );
+  assertEqual(measureTargetViewport({}), null);
+
+  let size = zero;
+  let listener: (() => void) | undefined;
+  let subscriptions = 0;
+  let unsubscriptions = 0;
+  const measure = (): TargetViewportMeasurement | null =>
+    measureTargetViewport({ window: { innerWidth: size.width, innerHeight: size.height } });
+  const subscribe = (next: () => void): (() => void) => {
+    subscriptions += 1;
+    listener = next;
+    return () => {
+      unsubscriptions += 1;
+      listener = undefined;
+    };
+  };
+
+  size = { width: 390, height: 844 };
+  assertDeepEqual(await waitForTargetViewportMeasurement({ measure, subscribe }), {
+    width: 390,
+    height: 844,
+    source: 'window',
+  });
+  assertEqual(subscriptions, 0);
+
+  size = zero;
+  const waiting = waitForTargetViewportMeasurement({ measure, subscribe });
+  assertEqual(subscriptions, 1);
+  listener?.();
+  size = { width: 1280, height: 720 };
+  listener?.();
+  assertDeepEqual(await waiting, { width: 1280, height: 720, source: 'window' });
+  assertEqual(unsubscriptions, 1);
+  assertEqual(listener, undefined);
+
+  // A size that arrives between the first measurement and the subscription is not missed.
+  let calls = 0;
+  const raced = await waitForTargetViewportMeasurement({
+    measure: () => (calls++ === 0 ? null : { width: 800, height: 600, source: 'container' }),
+    subscribe,
+  });
+  assertDeepEqual(raced, { width: 800, height: 600, source: 'container' });
+  assertEqual(unsubscriptions, 2);
+
+  // A listener fired synchronously during subscription still releases the subscription.
+  size = zero;
+  const synchronous = await waitForTargetViewportMeasurement({
+    measure,
+    subscribe: (next) => {
+      size = { width: 360, height: 640 };
+      next();
+      return subscribe(next);
+    },
+  });
+  assertDeepEqual(synchronous, { width: 360, height: 640, source: 'window' });
+  assertEqual(unsubscriptions, 3);
+
+  size = zero;
+  const controller = new AbortController();
+  const aborted = waitForTargetViewportMeasurement({
+    measure,
+    subscribe,
+    signal: controller.signal,
+  });
+  controller.abort(new Error('viewport wait cancelled'));
+  await assertRejects(aborted, /viewport wait cancelled/u);
+  assertEqual(unsubscriptions, 4);
+  await assertRejects(
+    waitForTargetViewportMeasurement({ measure, subscribe, signal: controller.signal }),
+    /viewport wait cancelled/u,
+  );
+  // An already aborted signal rejects before subscribing.
+  assertEqual(subscriptions, 4);
+
+  let failing = false;
+  const failed = waitForTargetViewportMeasurement({
+    measure: () => {
+      if (failing) {
+        throw new Error('measurement failed');
+      }
+      return null;
+    },
+    subscribe,
+  });
+  failing = true;
+  listener?.();
+  await assertRejects(failed, /measurement failed/u);
+  assertEqual(unsubscriptions, 5);
+}
+
+async function assertRejects(promise: Promise<unknown>, expectedMessage: RegExp): Promise<void> {
+  try {
+    await promise;
+  } catch (error) {
+    if (!(error instanceof Error) || !expectedMessage.test(error.message)) {
+      throw new Error(
+        `Expected rejection matching ${String(expectedMessage)}, got ${String(error)}.`,
+      );
+    }
+    return;
+  }
+  throw new Error(`Expected rejection matching ${String(expectedMessage)}.`);
 }
 
 function assertViewportPlans(): void {

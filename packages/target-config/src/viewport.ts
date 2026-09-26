@@ -430,6 +430,162 @@ export function resolveTargetViewportSnapshot(
   };
 }
 
+/** A raw viewport size reported by a host surface, before a plan validates it. */
+export interface TargetViewportMeasurement {
+  readonly width: number;
+  readonly height: number;
+  readonly source: TargetViewportMeasurementSource;
+}
+
+/** A surface that reports its layout box, such as the element that mounts the game. */
+export interface TargetViewportMeasurableElement {
+  getBoundingClientRect(): { readonly width: number; readonly height: number };
+}
+
+/**
+ * Host surfaces for {@link measureTargetViewport}. Structural types keep the helper usable in
+ * tests and non-DOM hosts; a browser passes the game container, `window.visualViewport` and
+ * `window`.
+ */
+export interface TargetViewportMeasurementSources {
+  readonly container?: TargetViewportMeasurableElement | null;
+  readonly visualViewport?: { readonly width: number; readonly height: number } | null;
+  readonly window?: { readonly innerWidth: number; readonly innerHeight: number } | null;
+}
+
+/** Inputs for {@link waitForTargetViewportMeasurement}. */
+export interface TargetViewportMeasurementWait {
+  /** Returns a measurement, or `null` while the surface has no usable size. */
+  readonly measure: () => TargetViewportMeasurement | null;
+  /**
+   * Calls the listener whenever the surface may have resized or become visible and returns an
+   * unsubscribe function. Browsers typically combine window and `visualViewport` `resize`,
+   * document `visibilitychange` and a `ResizeObserver` on the game container.
+   */
+  readonly subscribe: (listener: () => void) => () => void;
+  /** Stops waiting; the promise then rejects with the signal's reason. */
+  readonly signal?: AbortSignal;
+}
+
+/** Whether a size can produce a viewport plan: both sides finite and at least one CSS pixel. */
+export function isMeasurableTargetViewport(size: {
+  readonly width: number;
+  readonly height: number;
+}): boolean {
+  return isMeasurableViewportDimension(size.width) && isMeasurableViewportDimension(size.height);
+}
+
+/**
+ * Measure the first host surface with a usable area: the game container, then the visual
+ * viewport, then the window. Returns `null` while every surface is still zero-sized, as in a
+ * hidden iframe, a collapsed embed or a background tab before layout. Resolve a viewport plan
+ * only from a measurement; {@link waitForTargetViewportMeasurement} waits for the first one.
+ */
+export function measureTargetViewport(
+  sources: TargetViewportMeasurementSources,
+): TargetViewportMeasurement | null {
+  const rect = sources.container?.getBoundingClientRect();
+
+  if (rect !== undefined && isMeasurableTargetViewport(rect)) {
+    return { width: rect.width, height: rect.height, source: 'container' };
+  }
+
+  const visualViewport = sources.visualViewport;
+
+  if (
+    visualViewport !== undefined &&
+    visualViewport !== null &&
+    isMeasurableTargetViewport(visualViewport)
+  ) {
+    return {
+      width: visualViewport.width,
+      height: visualViewport.height,
+      source: 'visual-viewport',
+    };
+  }
+
+  const host = sources.window;
+
+  if (host !== undefined && host !== null) {
+    const size = { width: host.innerWidth, height: host.innerHeight };
+
+    if (isMeasurableTargetViewport(size)) {
+      return { ...size, source: 'window' };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Resolve with the first usable measurement, so a game that boots inside a zero-sized surface
+ * starts once the host lays it out instead of failing viewport validation. Resolves immediately
+ * when the surface is already measurable and unsubscribes as soon as it settles.
+ */
+export function waitForTargetViewportMeasurement(
+  input: TargetViewportMeasurementWait,
+): Promise<TargetViewportMeasurement> {
+  const initial = input.measure();
+
+  if (initial !== null) {
+    return Promise.resolve(initial);
+  }
+
+  if (input.signal?.aborted === true) {
+    return Promise.reject(input.signal.reason);
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    // The listener may settle synchronously inside `subscribe`, before its cleanup is returned.
+    const subscription: { unsubscribe?: () => void } = {};
+    const settle = (): void => {
+      settled = true;
+      subscription.unsubscribe?.();
+      input.signal?.removeEventListener('abort', abort);
+    };
+    const check = (): void => {
+      if (settled) {
+        return;
+      }
+
+      let measurement: TargetViewportMeasurement | null;
+
+      try {
+        measurement = input.measure();
+      } catch (error) {
+        settle();
+        reject(error);
+        return;
+      }
+
+      if (measurement !== null) {
+        settle();
+        resolve(measurement);
+      }
+    };
+    const abort = (): void => {
+      if (!settled) {
+        settle();
+        reject(input.signal?.reason);
+      }
+    };
+
+    input.signal?.addEventListener('abort', abort, { once: true });
+    const unsubscribe = input.subscribe(check);
+
+    if (settled) {
+      unsubscribe();
+      return;
+    }
+
+    subscription.unsubscribe = unsubscribe;
+
+    // A resize may land between the first measurement and the subscription.
+    check();
+  });
+}
+
 /**
  * Resolve an adaptive game shell inside the snapshot's safe content bounds.
  *
@@ -763,6 +919,11 @@ function readTargetViewportCssPixels(
   const match = /^(\d+(?:\.\d+)?)px$/u.exec(value);
 
   return match === null ? 0 : Math.round(Number(match[1]));
+}
+
+/** Whether a dimension would pass {@link normalizeViewportDimension}. */
+function isMeasurableViewportDimension(value: number): boolean {
+  return Number.isFinite(value) && value > 0 && Math.round(value) > 0;
 }
 
 /** Normalize a positive viewport dimension to at least one CSS pixel. */

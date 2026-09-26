@@ -6,7 +6,10 @@ import type {
   PlatformTarget,
 } from '@mpgd/platform';
 import {
+  measureTargetViewport,
   resolveTargetViewportSnapshot,
+  waitForTargetViewportMeasurement,
+  type TargetViewportMeasurement,
   type TargetViewportOrientationPolicy,
 } from '@mpgd/target-config';
 
@@ -31,8 +34,13 @@ export async function bootstrapStarter(): Promise<void> {
     const orientationPolicy = {
       mode: 'responsive',
     } as const satisfies TargetViewportOrientationPolicy;
+    // A hidden iframe or background tab can boot at 0x0; wait for layout instead of failing.
+    const measurement = await waitForTargetViewportMeasurement({
+      measure: measureGameViewport,
+      subscribe: subscribeToGameViewportChanges,
+    });
     const viewport = resolveTargetViewportSnapshot({
-      ...measureGameViewport(),
+      ...measurement,
       runtime: runtime.config.runtime,
       orientationPolicy,
     });
@@ -124,40 +132,33 @@ function createGuestSession(playerId: string): IdentitySession {
 }
 
 /** Measure the game surface before falling back to browser viewport geometry. */
-function measureGameViewport(): {
-  readonly width: number;
-  readonly height: number;
-  readonly source: 'container' | 'visual-viewport' | 'window';
-} {
+function measureGameViewport(): TargetViewportMeasurement | null {
+  return measureTargetViewport({
+    container: document.querySelector<HTMLElement>('#game'),
+    visualViewport: window.visualViewport,
+    window,
+  });
+}
+
+/** Notify when the game surface may have gained a size or become visible. */
+function subscribeToGameViewportChanges(listener: () => void): () => void {
   const container = document.querySelector<HTMLElement>('#game');
-  const rect = container?.getBoundingClientRect();
+  const observer =
+    container === null || typeof ResizeObserver !== 'function'
+      ? undefined
+      : new ResizeObserver(listener);
 
-  if (rect !== undefined && rect.width > 0 && rect.height > 0) {
-    return {
-      width: rect.width,
-      height: rect.height,
-      source: 'container',
-    };
+  if (container !== null) {
+    observer?.observe(container);
   }
+  window.addEventListener('resize', listener);
+  window.visualViewport?.addEventListener('resize', listener);
+  document.addEventListener('visibilitychange', listener);
 
-  const visualViewport = window.visualViewport;
-
-  if (
-    visualViewport !== undefined
-    && visualViewport !== null
-    && visualViewport.width > 0
-    && visualViewport.height > 0
-  ) {
-    return {
-      width: visualViewport.width,
-      height: visualViewport.height,
-      source: 'visual-viewport',
-    };
-  }
-
-  return {
-    width: window.innerWidth,
-    height: window.innerHeight,
-    source: 'window',
+  return () => {
+    observer?.disconnect();
+    window.removeEventListener('resize', listener);
+    window.visualViewport?.removeEventListener('resize', listener);
+    document.removeEventListener('visibilitychange', listener);
   };
 }

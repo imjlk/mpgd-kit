@@ -149,17 +149,32 @@ preview, Apps in Toss, Devvit, Android, and iOS bundles.
 ## Viewport And Controls
 
 The starter computes an initial viewport snapshot with `@mpgd/target-config`.
-Measure the game container first, then fall back to `visualViewport` or
-`window.innerWidth`:
+`measureTargetViewport` measures the game container first, then falls back to
+`visualViewport` or the window. It returns `null` while every surface is still
+zero-sized (a hidden iframe, a collapsed embed or a background tab before
+layout), so the starter waits for the first usable size instead of failing
+viewport validation:
 
 ```ts
-import { resolveTargetViewportSnapshot } from '@mpgd/target-config';
+import {
+  measureTargetViewport,
+  resolveTargetViewportSnapshot,
+  waitForTargetViewportMeasurement,
+} from '@mpgd/target-config';
 
-const measured = measureGameViewport();
+const measured = await waitForTargetViewportMeasurement({
+  measure: () =>
+    measureTargetViewport({
+      container: document.querySelector<HTMLElement>('#game'),
+      visualViewport: window.visualViewport,
+      window,
+    }),
+  // Call the listener on resize, visualViewport resize, visibilitychange and a
+  // ResizeObserver on #game; return a function that removes those listeners.
+  subscribe: subscribeToGameViewportChanges,
+});
 const viewport = resolveTargetViewportSnapshot({
-  width: measured.width,
-  height: measured.height,
-  source: measured.source,
+  ...measured,
   runtime: runtime.config.runtime,
   orientationPolicy: {
     mode: 'prefer-landscape',

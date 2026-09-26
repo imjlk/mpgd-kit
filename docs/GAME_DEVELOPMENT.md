@@ -92,45 +92,61 @@ and then choose layout from measured space.
 `@mpgd/target-config` exports target viewport helpers for this first pass:
 
 ```ts
-import { resolveTargetViewportSnapshot } from '@mpgd/target-config';
+import {
+  measureTargetViewport,
+  resolveTargetViewportSnapshot,
+  waitForTargetViewportMeasurement,
+} from '@mpgd/target-config';
 
-const measured = measureGameViewport();
+const measured = await waitForTargetViewportMeasurement({
+  measure: measureGameViewport,
+  subscribe: subscribeToGameViewportChanges,
+});
 const viewport = resolveTargetViewportSnapshot({
-  width: measured.width,
-  height: measured.height,
-  source: measured.source,
+  ...measured,
   runtime: runtime.config.runtime,
 });
 ```
 
-For browser-hosted games, measure the mount element first:
+For browser-hosted games, measure the mount element first.
+`measureTargetViewport` falls back to `visualViewport` and then the window, and
+returns `null` while every surface is still zero-sized. A hidden iframe, a
+collapsed embed or a background tab can boot before layout; waiting for the
+first usable size keeps it from failing viewport validation:
 
 ```ts
 function measureGameViewport() {
-  const rect = document.querySelector<HTMLElement>('#game')?.getBoundingClientRect();
+  return measureTargetViewport({
+    container: document.querySelector<HTMLElement>('#game'),
+    visualViewport: window.visualViewport,
+    window,
+  });
+}
 
-  if (rect !== undefined && rect.width > 0 && rect.height > 0) {
-    return { width: rect.width, height: rect.height, source: 'container' as const };
+function subscribeToGameViewportChanges(listener: () => void): () => void {
+  const container = document.querySelector<HTMLElement>('#game');
+  const observer = container === null ? undefined : new ResizeObserver(listener);
+
+  if (container !== null) {
+    observer?.observe(container);
   }
+  window.addEventListener('resize', listener);
+  window.visualViewport?.addEventListener('resize', listener);
+  document.addEventListener('visibilitychange', listener);
 
-  const visualViewport = window.visualViewport;
-
-  if (
-    visualViewport !== undefined &&
-    visualViewport !== null &&
-    visualViewport.width > 0 &&
-    visualViewport.height > 0
-  ) {
-    return {
-      width: visualViewport.width,
-      height: visualViewport.height,
-      source: 'visual-viewport' as const,
-    };
-  }
-
-  return { width: window.innerWidth, height: window.innerHeight, source: 'window' as const };
+  return () => {
+    observer?.disconnect();
+    window.removeEventListener('resize', listener);
+    window.visualViewport?.removeEventListener('resize', listener);
+    document.removeEventListener('visibilitychange', listener);
+  };
 }
 ```
+
+`waitForTargetViewportMeasurement` resolves immediately when the surface is
+already measurable, unsubscribes once it settles and accepts an optional
+`AbortSignal`. Later resize handlers can call `measureTargetViewport` and skip
+an update while it returns `null`.
 
 `resolveTargetViewportSnapshot` is intentionally a pure helper. It classifies
 measured dimensions and target shell family, returns starter recommendations
