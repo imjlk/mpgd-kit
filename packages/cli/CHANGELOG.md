@@ -1,5 +1,23 @@
 # @mpgd/cli
 
+## 0.36.0 — 2026-09-26
+
+### Minor changes
+
+- [631776aa](https://github.com/imjlk/mpgd-kit/commit/631776aace5a04e698605598f7f8a03f0683d84c) Add verified Android App Bundle submission to the Google Play internal test track, bind immutable build records to the artifact's actual signing certificate, and fail closed on uncertain uploads and commits. — Thanks @imjlk!
+- [2822dedb](https://github.com/imjlk/mpgd-kit/commit/2822dedbe0e789517b69c2fb18c94340275b78dd) Prepare isolated iOS signing sessions for existing Capacitor archive and App Store export builds, including temporary P12 keychain import, provisioning profile preflight and cleanup, and generated export options. — Thanks @imjlk!
+- [581a62f5](https://github.com/imjlk/mpgd-kit/commit/581a62f57d3f4cdfe4ca5b1c798322d582a0edd2) Add game-owned native deployment profiles, local environment diagnostics, and read-only deployment planning commands. — Thanks @imjlk!
+- [48ac0949](https://github.com/imjlk/mpgd-kit/commit/48ac0949fcb7779e39b882cc706ed1b7dcf7b9ae) Add explicit native test deployment run, status and submit commands that reserve platform versions, build signed game-owned shells in pinned workspaces, persist immutable build records and resume Google Play or TestFlight submissions from leased remote checkpoints. — Thanks @imjlk!
+- [1aff27ad](https://github.com/imjlk/mpgd-kit/commit/1aff27ad3dea6feccf5916cfcfd0e19323438585) Prepare Git-revision-pinned native release workspaces, verify installed Kit provenance and build outputs, and execute bounded build steps with redacted logs and cancellation cleanup. — Thanks @imjlk!
+- [0f8c4f2c](https://github.com/imjlk/mpgd-kit/commit/0f8c4f2c7b3c545825c8e368d18737ee0e31af5d) Submit previously verified iOS IPA builds to App Store Connect and link processed builds to an internal TestFlight group using the pinned asc binary. Reinspect the staged IPA signature and release identity before any store mutation. — Thanks @imjlk!
+- [e62c4ac8](https://github.com/imjlk/mpgd-kit/commit/e62c4ac836009814053da8d5d3bcedf15b4329c1) Build game-owned Android and iOS Capacitor targets from an installed CLI without requiring an mpgd-kit checkout. Preserve Kit package provenance in native release manifests. — Thanks @imjlk!
+- [22f539e2](https://github.com/imjlk/mpgd-kit/commit/22f539e22dddf46b2adf4b984b905e75e1e4191c) Prepare isolated Android upload-signing sessions with temporary keystore restoration, certificate and private-key preflight, and an opt-in Gradle signing init script for existing native builds. — Thanks @imjlk!
+- [12acab76](https://github.com/imjlk/mpgd-kit/commit/12acab763fdd1fbd8320a109bf2988a34fb25059) Reserve native platform versions in a game-owned Git release-state branch and persist immutable, content-hashed native build records for deployment orchestration. — Thanks @imjlk!
+
+### Patch changes
+
+- [2eab696f](https://github.com/imjlk/mpgd-kit/commit/2eab696f01af86e5ded41439ffd988e7c82a812d) Show non-blocking target configuration advisories alongside Kit dependency upgrade plans, including missing platform product and ad placement identifiers. — Thanks @imjlk!
+
 ## 0.35.0 — 2026-09-25
 
 ### Minor changes
