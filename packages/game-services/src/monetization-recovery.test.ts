@@ -72,6 +72,8 @@ let losePurchaseResponse = true;
 let ssvAvailable = false;
 let finalizationComplete = false;
 let finalizationOutage = false;
+let uiEntered: (() => void) | undefined;
+let uiRelease: (() => void) | undefined;
 const purchaseKeys = new Set<string>();
 const rewardKeys = new Set<string>();
 const purchaseRequestTimes: string[] = [];
@@ -105,6 +107,10 @@ const gateway: PlatformGateway = {
     },
     async purchase(operation) {
       purchaseUiCalls += 1;
+      if (operation.idempotencyKey === 'inflight-purchase') {
+        uiEntered?.();
+        await new Promise<void>((resolve) => { uiRelease = resolve; });
+      }
       if (operation.idempotencyKey === 'delayed-purchase') {
         return { status: 'pending', entitlementIds: [] };
       }
@@ -317,6 +323,22 @@ assert.equal(outageSummary.some((entry) => entry.idempotencyKey === 'finish-late
 assert.equal((await restarted.purchase(finishLater)).status, 'granted');
 finalizationOutage = false;
 finalizationComplete = true;
+const casStore: MonetizationOperationStore = {
+  ...operationStore,
+  async replace(expectedRevision, record) {
+    if (record.kind === 'purchase' && record.input.idempotencyKey === 'finish-later'
+      && record.response?.finalization?.status === 'completed') {
+      throw new Error('stale finalization CAS');
+    }
+    await operationStore.replace(expectedRevision, record);
+  },
+};
+const recoveryBase = { gateway, backend, playerId: 'player-1', target: 'android' as const };
+const casInput = { ...recoveryBase, operationStore: casStore };
+const casClient = createRecoverableMonetizationClient(casInput);
+const afterCasFailure = await casClient.purchase(finishLater);
+assert.equal(afterCasFailure.status, 'granted');
+assert.equal(afterCasFailure.verification?.finalization?.status, 'pending');
 await restarted.reconcile();
 const finished = await restarted.purchase(finishLater);
 assert.equal(finished.verification?.finalization?.status, 'completed');
@@ -472,5 +494,81 @@ assert.equal((await restarted.recoverRewardResult('delayed-reward', {
   status: 'completed', rewardGranted: true, ledgerEntryId: 'impression-delayed-reward',
 })).status, 'granted');
 assert.equal(rewardUiCalls, rewardUiBeforeCallback);
+
+ssvAvailable = true;
+const grantBeforeResult = {
+  placementId: 'CONTINUE_AFTER_FAIL',
+  idempotencyKey: 'grant-before-result',
+};
+let failGrantedResultWrite = true;
+const interruptedRewardStore: MonetizationOperationStore = {
+  ...operationStore,
+  async replace(expectedRevision, record) {
+    if (failGrantedResultWrite && record.kind === 'rewarded-ad'
+      && record.input.idempotencyKey.startsWith('grant-before-')
+      && record.result?.status === 'granted') {
+      failGrantedResultWrite = false;
+      throw new Error('result journal write lost');
+    }
+    await operationStore.replace(expectedRevision, record);
+  },
+};
+const interruptedRewardInput = { ...recoveryBase, operationStore: interruptedRewardStore };
+const interruptedReward = createRecoverableMonetizationClient(interruptedRewardInput);
+assert.equal((await interruptedReward.claimRewardedAd(grantBeforeResult)).status, 'granted');
+const offlineBackend: GameServicesBackendApi = {
+  ...backend,
+  adRewards: {
+    async claimAdReward() {
+      throw new Error('backend offline');
+    },
+  },
+};
+const offlineInput = { ...recoveryBase, backend: offlineBackend, operationStore };
+const offlineReward = createRecoverableMonetizationClient(offlineInput);
+const offlineResult = await offlineReward.claimRewardedAd(grantBeforeResult);
+assert.equal(offlineResult.status, 'granted');
+assert.equal(offlineResult.ledgerEntryId, 'reward-grant-before-result');
+const contradictoryBackend: GameServicesBackendApi = {
+  ...backend,
+  adRewards: {
+    async claimAdReward() {
+      return { granted: false, alreadyProcessed: false, disposition: 'rejected' };
+    },
+  },
+};
+const contradictoryInput = { ...recoveryBase, backend: contradictoryBackend, operationStore };
+const contradictoryReward = createRecoverableMonetizationClient(contradictoryInput);
+const grantBeforeContradiction = {
+  placementId: 'CONTINUE_AFTER_FAIL',
+  idempotencyKey: 'grant-before-contradiction',
+};
+failGrantedResultWrite = true;
+const interruptedGrant = await interruptedReward.claimRewardedAd(grantBeforeContradiction);
+assert.equal(interruptedGrant.status, 'granted');
+const contradictoryGrant = await contradictoryReward.claimRewardedAd(grantBeforeContradiction);
+assert.equal(contradictoryGrant.status, 'granted');
+
+const inflightOperation = {
+  productId: 'COINS_100',
+  source: 'shop' as const,
+  idempotencyKey: 'inflight-purchase',
+};
+const entered = new Promise<void>((resolve) => {
+  uiEntered = resolve;
+});
+const beforeInflightUi = purchaseUiCalls;
+const runningPurchase = client.purchase(inflightOperation);
+await entered;
+const duringInflight = await client.reconcile();
+const retriedDuringInflight = duringInflight.some(
+  (entry) => entry.idempotencyKey === 'inflight-purchase',
+);
+assert.equal(retriedDuringInflight, false);
+const queuedPurchase = client.purchase(inflightOperation);
+uiRelease?.();
+assert.equal((await runningPurchase).status, 'granted');
+assert.equal((await queuedPurchase).status, 'granted');
+assert.equal(purchaseUiCalls, beforeInflightUi + 1);
 
 console.log('Durable monetization operation recovery passed.');
