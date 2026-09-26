@@ -141,6 +141,14 @@ export {
 } from './play-internal-submission.js';
 
 export {
+  IosSubmissionUncertainError,
+  submitVerifiedIosBuild,
+  type IosTestFlightStatus,
+  type IosTestFlightSubmissionInput,
+  type IosTestFlightSubmissionResult,
+} from './testflight-submission.js';
+
+export {
   createBrowserGameplayE2EDriver,
   type BrowserGameplayE2EInspectInput,
   type BrowserGameplayE2EPage,

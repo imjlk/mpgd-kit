@@ -14,7 +14,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'mpgd-native-cli-consumer-'));
@@ -139,6 +139,12 @@ try {
     },
   }, null, 2)}\n`);
   mustRun('pnpm', ['install', '--no-frozen-lockfile'], gameRoot);
+  const cliDist = join(gameRoot, 'node_modules/@mpgd/cli/dist');
+  const ascPin = JSON.parse(readFileSync(join(cliDist, 'asc-pin.json'), 'utf8'));
+  assert.equal(ascPin.version, '5.5.0');
+  assert.equal(existsSync(join(cliDist, 'ios-ipa-inspection.js')), true);
+  const installedCli = await import(pathToFileURL(join(cliDist, 'index.js')).href);
+  assert.equal(typeof installedCli.submitVerifiedIosBuild, 'function');
   mustRun('git', ['init', '-q'], gameRoot);
   mustRun('git', ['add', '.'], gameRoot);
   mustRun('git', [
