@@ -23,6 +23,7 @@ import {
   writeNativeDeploymentPlan,
 } from './deploy-planning.js';
 import { runMpgdCli } from './index.js';
+import { runNativeDeployment } from './native-deploy-run.js';
 
 const fixture = mkdtempSync(join(tmpdir(), 'mpgd-deploy-planning-'));
 const game = join(fixture, 'game');
@@ -122,6 +123,18 @@ try {
     environment: {},
   });
   assert.equal(doctor.healthy, false);
+  await assert.rejects(
+    runNativeDeployment({
+      plan,
+      gameId: 'test',
+      gameVersion: '1.0.0',
+      releaseKey: 'beta-001',
+      kit: { packageVersion: '0.35.0', gitSha: 'a'.repeat(40) },
+      approved: true,
+      environment: {},
+    }),
+    /environment is incomplete/u,
+  );
   assert.ok(doctor.checks.some((check) => check.name === 'JDK'));
   assert.ok(doctor.checks.some((check) => check.name === 'Android SDK'
     && check.status === 'missing'));

@@ -9,6 +9,7 @@ import {
   type NativeSubmissionPorts,
 } from './native-deploy-submission.js';
 import { PlaySubmissionUncertainError } from './play-internal-submission.js';
+import { IosSubmissionUncertainError } from './testflight-submission.js';
 import type {
   ImmutableNativeBuildRecord,
   NativeReleaseStatus,
@@ -52,6 +53,8 @@ try {
   let checkpoints: NativeReleaseStatus['submissions'] = {};
   let androidCalls = 0;
   let iosCalls = 0;
+  let ordinaryAndroidFailure = false;
+  let failIosCheckpoint = false;
   const ports: NativeSubmissionPorts = {
     async readStatus() {
       return {
@@ -66,6 +69,10 @@ try {
       };
     },
     async checkpoint({ checkpoint }) {
+      if (failIosCheckpoint && checkpoint.target === 'ios'
+        && checkpoint.status !== 'started') {
+        throw new Error('release-state push response lost');
+      }
       checkpoints = { ...checkpoints, [checkpoint.target]: checkpoint };
       return { checkpoint, stateCommit: 'c'.repeat(40) };
     },
@@ -75,7 +82,7 @@ try {
       const reclaimed = {
         ...current,
         attemptId: 'd'.repeat(32),
-        leaseExpiresAt: new Date(Date.now() + 19 * 60_000).toISOString(),
+        leaseExpiresAt: new Date(Date.now() + 24 * 60_000).toISOString(),
       };
       checkpoints = { ...checkpoints, [current.target]: reclaimed };
       return { checkpoint: reclaimed, stateCommit: 'c'.repeat(40) };
@@ -92,6 +99,9 @@ try {
       if (androidCalls === 1) {
         assert.equal(input.resumeEditId, undefined);
         await input.onEditCreated?.('edit-1');
+        if (ordinaryAndroidFailure) {
+          throw new Error('bundle listing temporarily failed');
+        }
         throw new PlaySubmissionUncertainError('validate', 'edit-1');
       }
       assert.equal(input.resumeEditId, 'edit-1');
@@ -109,7 +119,11 @@ try {
       iosCalls += 1;
       if (iosCalls === 1) {
         assert.equal(input.resumeUploadId, undefined);
-        await input.onUploadCommitted?.('upload-1');
+        try {
+          await input.onUploadCommitted?.('upload-1');
+        } catch {
+          throw new IosSubmissionUncertainError('upload-1');
+        }
       } else {
         assert.equal(input.resumeUploadId, 'upload-1');
         assert.equal(input.resumeArtifactSha256, ios.artifactSha256);
@@ -148,6 +162,17 @@ try {
   assert.equal(androidCalls, 2);
   await submitRecordedNativeTargetWithPorts(androidInput, ports);
   assert.equal(androidCalls, 2);
+  checkpoints = {};
+  androidCalls = 0;
+  ordinaryAndroidFailure = true;
+  await assert.rejects(
+    submitRecordedNativeTargetWithPorts(androidInput, ports),
+    /bundle listing temporarily failed/u,
+  );
+  assert.equal(checkpoints.android?.status, 'unknown');
+  assert.equal(checkpoints.android?.remoteEditId, 'edit-1');
+  await submitRecordedNativeTargetWithPorts(androidInput, ports);
+  assert.equal(androidCalls, 2);
 
   const iosInput = {
     plan,
@@ -169,6 +194,15 @@ try {
   assert.equal(ready.status, 'testflight-ready');
   await submitRecordedNativeTargetWithPorts(iosInput, ports);
   assert.equal(iosCalls, 2);
+  checkpoints = {};
+  iosCalls = 0;
+  failIosCheckpoint = true;
+  await assert.rejects(
+    submitRecordedNativeTargetWithPorts(iosInput, ports),
+    (error: unknown) => error instanceof AggregateError
+      && error.message.includes('upload upload-1')
+      && error.errors[0] instanceof IosSubmissionUncertainError,
+  );
   console.info('Resumable recorded native submissions passed.');
 } finally {
   rmSync(gameRoot, { recursive: true, force: true });

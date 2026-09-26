@@ -222,7 +222,12 @@ export function readNativeDeployTargetProfile(
   if (!isDeepStrictEqual(current, plan)) {
     throw new Error('Native deployment configuration changed after the plan was written.');
   }
-  const config = readDeployConfig(join(plan.gameRoot, deploymentConfigName));
+  const deployFile = join(plan.gameRoot, deploymentConfigName);
+  const deployBytes = readFileSync(deployFile);
+  if (createHash('sha256').update(deployBytes).digest('hex') !== plan.deployConfigSha256) {
+    throw new Error('Native deployment configuration changed after the plan was written.');
+  }
+  const config = readDeployConfig(deployFile, deployBytes.toString('utf8'));
   const profile = config.profiles[plan.profile]?.targets[target];
   if (profile === undefined || !plan.targets.some((entry) => entry.target === target)) {
     throw new Error(`Native deployment plan has no ${target} target profile.`);
@@ -301,6 +306,31 @@ export function doctorNativeDeployment(input: {
         detail: environment[credential.env]
           ? `Environment reference ${credential.env} is present; content is not validated.`
           : `Set the ${credential.env} environment reference.`,
+      });
+    }
+    const additional = target.target === 'android'
+      ? [
+          'MPGD_ANDROID_UPLOAD_STORE_PASSWORD',
+          'MPGD_ANDROID_UPLOAD_KEY_ALIAS',
+          'MPGD_ANDROID_UPLOAD_KEY_PASSWORD',
+          'MPGD_ANDROID_UPLOAD_CERT_SHA256',
+        ]
+      : [
+          'MPGD_IOS_SIGNING_P12_PASSWORD',
+          'MPGD_IOS_PROVISIONING_PROFILE',
+          'MPGD_IOS_TEAM_ID',
+          'MPGD_ASC_BINARY',
+          'MPGD_ASC_APP_ID',
+          'MPGD_ASC_KEY_ID',
+          'MPGD_ASC_ISSUER_ID',
+        ];
+    for (const name of additional) {
+      checks.push({
+        name: `${target.target} ${name}`,
+        status: environment[name]?.trim() ? 'ok' : 'missing',
+        detail: environment[name]?.trim()
+          ? `${name} is present; content is not validated.`
+          : `Set ${name} for native test deployment.`,
       });
     }
   }

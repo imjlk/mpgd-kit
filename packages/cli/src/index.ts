@@ -32,6 +32,7 @@ import {
   readNativeDeploymentPlan,
   readNativeDeployTargetProfile,
   writeNativeDeploymentPlan,
+  type NativeDeploymentPlan,
 } from './deploy-planning.js';
 import {
   normalizeConfiguredBuildTargets,
@@ -641,7 +642,7 @@ const deployCommand = defineI18n({
           gameId: readRequiredCliOption(ctx.values['game-id'], '--game-id'),
           releaseKey: readRequiredCliOption(ctx.values.release, '--release'),
           credential: readStoreCredential(plan, target, process.env),
-          approved: plan.approval === 'preapproved-internal-test' || ctx.values.approve === true,
+          approved: isDeployApproved(plan, ctx.values.approve === true),
         });
         console.info(JSON.stringify(result, null, 2));
       },
@@ -667,7 +668,7 @@ const deployCommand = defineI18n({
       run: async (ctx) => {
         const plan = readNativeDeploymentPlan(readRequiredCliOption(ctx.values.plan, '--plan'));
         const infoFile = path.join(packageRoot, 'dist/native-build-info.json');
-        const info = readJsonForCli(infoFile);
+        const info = readJsonForCli(infoFile, 'native builder metadata');
         assertJsonObject(info, 'native builder package metadata');
         if (info.packageVersion !== cliVersion || typeof info.kitGitSha !== 'string'
           || !/^[0-9a-f]{40}$/u.test(info.kitGitSha) || info.kitDirty !== false) {
@@ -682,10 +683,10 @@ const deployCommand = defineI18n({
           kit: { packageVersion: cliVersion, gitSha: info.kitGitSha },
           ...(initialLedgerFile === undefined ? {} : {
             initialLedger: assertPlatformVersionLedger(
-              readJsonForCli(path.resolve(initialLedgerFile)),
+              readJsonForCli(path.resolve(initialLedgerFile), 'initial version ledger'),
             ),
           }),
-          approved: plan.approval === 'preapproved-internal-test' || ctx.values.approve === true,
+          approved: isDeployApproved(plan, ctx.values.approve === true),
         });
         console.info(JSON.stringify(status, null, 2));
       },
@@ -3893,19 +3894,19 @@ function preparePlatformTargetsFile(input: {
   return outputFile;
 }
 
-function readJsonForCli(file: string): unknown {
+function readJsonForCli(file: string, label = 'targets file'): unknown {
   let raw: string;
 
   try {
     raw = readFileSync(file, 'utf8');
   } catch (error) {
-    throw new Error(`Failed to read targets file ${file}: ${formatError(error)}`);
+    throw new Error(`Failed to read ${label} ${file}: ${formatError(error)}`);
   }
 
   try {
     return JSON.parse(raw);
   } catch (error) {
-    throw new Error(`Failed to parse targets file ${file}: ${formatError(error)}`);
+    throw new Error(`Failed to parse ${label} ${file}: ${formatError(error)}`);
   }
 }
 
@@ -4395,6 +4396,10 @@ function renderHostedPwaVerificationMarkdown(
     '- CDN or account-level cache settings outside the deployment directory.',
     '',
   ].join('\n');
+}
+
+function isDeployApproved(plan: NativeDeploymentPlan, approveFlag: boolean): boolean {
+  return plan.approval === 'preapproved-internal-test' || approveFlag;
 }
 
 function readRequiredCliOption(value: unknown, label: string): string {

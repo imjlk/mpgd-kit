@@ -5,6 +5,8 @@ import path from 'node:path';
 import type { NativeDeploymentPlan } from './deploy-planning.js';
 import {
   checkpointNativeSubmission,
+  freshSubmissionLeaseExpiresAt,
+  isNativeSubmissionSettled,
   readNativeReleaseStatus,
   reclaimNativeSubmission,
   releaseNativeSubmissionLease,
@@ -99,7 +101,7 @@ export async function submitRecordedNativeTargetWithPorts(
   }
   const artifactFile = resolveRecordedArtifact(input.plan.gameRoot, record.artifactLocation);
   let checkpoint = status.submissions[target];
-  if (checkpoint?.status === 'committed' || checkpoint?.status === 'testflight-ready') {
+  if (checkpoint !== undefined && isNativeSubmissionSettled(checkpoint.status)) {
     return checkpoint;
   }
   if (checkpoint?.status === 'failed' || checkpoint?.status === 'action-required'
@@ -116,7 +118,7 @@ export async function submitRecordedNativeTargetWithPorts(
         buildRunId: record.buildRunId,
         artifactSha256: record.artifactSha256,
         attemptId: randomBytes(16).toString('hex'),
-        leaseExpiresAt: new Date(Date.now() + 19 * 60_000).toISOString(),
+        leaseExpiresAt: freshSubmissionLeaseExpiresAt(),
         status: 'started',
       },
     })).checkpoint;
@@ -167,14 +169,23 @@ export async function submitRecordedNativeTargetWithPorts(
         },
       });
     } catch (error) {
-      if (error instanceof PlaySubmissionUncertainError) {
-        await save({ status: 'unknown', remoteEditId: error.editId });
-      } else {
-        await save({
-          status: activeCheckpoint.remoteEditId === undefined ? 'failed' : 'action-required',
-        });
+      try {
+        if (error instanceof PlaySubmissionUncertainError) {
+          await save({ status: 'unknown', remoteEditId: error.editId });
+        } else {
+          await save({
+            status: activeCheckpoint.remoteEditId === undefined ? 'failed' : 'unknown',
+          });
+        }
+        await releaseLease();
+      } catch (persistenceError) {
+        throw new AggregateError(
+          [error, persistenceError],
+          `Google Play submission failed and its checkpoint could not be persisted${
+            error instanceof PlaySubmissionUncertainError ? ` for edit ${error.editId}` : ''
+          }.`,
+        );
       }
-      await releaseLease();
       throw error;
     }
     await save({ status: 'committed', remoteEditId: result.editId });
@@ -204,14 +215,23 @@ export async function submitRecordedNativeTargetWithPorts(
         ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
     } catch (error) {
-      if (error instanceof IosSubmissionUncertainError) {
-        await save({ status: 'unknown', remoteUploadId: error.uploadId });
-      } else {
-        await save({
-          status: activeCheckpoint.remoteUploadId === undefined ? 'failed' : 'unknown',
-        });
+      try {
+        if (error instanceof IosSubmissionUncertainError) {
+          await save({ status: 'unknown', remoteUploadId: error.uploadId });
+        } else {
+          await save({
+            status: activeCheckpoint.remoteUploadId === undefined ? 'failed' : 'unknown',
+          });
+        }
+        await releaseLease();
+      } catch (persistenceError) {
+        throw new AggregateError(
+          [error, persistenceError],
+          `TestFlight submission failed and its checkpoint could not be persisted${
+            error instanceof IosSubmissionUncertainError ? ` for upload ${error.uploadId}` : ''
+          }.`,
+        );
       }
-      await releaseLease();
       throw error;
     }
     await save({

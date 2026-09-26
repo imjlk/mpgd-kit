@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
 import {
+  closeSync,
   constants,
   copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
-  readFileSync,
+  openSync,
+  readSync,
   realpathSync,
   statSync,
 } from 'node:fs';
@@ -14,6 +16,7 @@ import path from 'node:path';
 import type { PlatformVersionLedger } from '@mpgd/target-config';
 
 import {
+  doctorNativeDeployment,
   readNativeDeployTargetProfile,
   type NativeDeploymentPlan,
   type NativeDeployTarget,
@@ -25,6 +28,7 @@ import {
   type NativeStoreCredential,
 } from './native-deploy-submission.js';
 import {
+  isNativeSubmissionSettled,
   readNativeReleaseStatus,
   recordNativeReleaseBuild,
   reserveNativeRelease,
@@ -58,6 +62,28 @@ export async function runNativeDeployment(input: RunNativeDeploymentInput): Prom
     throw new Error('Native deployment requires explicit internal-test approval.');
   }
   const environment = input.environment ?? process.env;
+  const doctor = doctorNativeDeployment({
+    game: input.plan.gameRoot,
+    profile: input.plan.profile,
+    targets: input.plan.targets.map((entry) => entry.target),
+    environment,
+  });
+  if (!doctor.healthy) {
+    throw new Error(`Native deployment environment is incomplete: ${doctor.checks
+      .filter((check) => check.status === 'missing')
+      .map((check) => check.name)
+      .join(', ')}.`);
+  }
+  for (const entry of input.plan.targets) {
+    const profile = readNativeDeployTargetProfile(input.plan, entry.target);
+    requiredExistingFile(environment, profile.signingCredential.env);
+    if (entry.target === 'android') {
+      requiredExistingFile(environment, profile.submissionCredential.env);
+    } else {
+      requiredExistingFile(environment, 'MPGD_IOS_PROVISIONING_PROFILE');
+      requiredExistingFile(environment, 'MPGD_ASC_BINARY');
+    }
+  }
   const pinned = await pinNativeDeploymentPlan(input.plan, input.kit, {
     environment,
     ...(input.signal === undefined ? {} : { signal: input.signal }),
@@ -108,8 +134,8 @@ export async function runNativeDeployment(input: RunNativeDeploymentInput): Prom
     if (status.builds[entry.target] === undefined) {
       throw new Error(`${entry.target} has no verified build after the native build stage.`);
     }
-    if (status.submissions[entry.target]?.status === 'committed'
-      || status.submissions[entry.target]?.status === 'testflight-ready') {
+    const submission = status.submissions[entry.target];
+    if (submission !== undefined && isNativeSubmissionSettled(submission.status)) {
       continue;
     }
     await submitRecordedNativeTarget({
@@ -158,7 +184,7 @@ export function planNativeDeploymentSteps(
     if (submission !== undefined && build === undefined) {
       throw new Error(`${entry.target} store checkpoint has no immutable build.`);
     }
-    if (submission?.status !== 'committed' && submission?.status !== 'testflight-ready') {
+    if (submission === undefined || !isNativeSubmissionSettled(submission.status)) {
       submitTargets.push(entry.target);
     }
   }
@@ -314,6 +340,14 @@ function requiredEnvironment(environment: NodeJS.ProcessEnv, name: string): stri
   return value;
 }
 
+function requiredExistingFile(environment: NodeJS.ProcessEnv, name: string): string {
+  const file = requiredEnvironment(environment, name);
+  if (!existsSync(file) || !statSync(file).isFile()) {
+    throw new Error(`Native deployment ${name} must name an existing regular file.`);
+  }
+  return file;
+}
+
 /** Internal artifact copy primitive; exported for boundary tests, not from the package root. */
 export function persistImmutableFile(gameRoot: string, location: string, source: string): string {
   const root = realpathSync(gameRoot);
@@ -339,14 +373,34 @@ export function persistImmutableFile(gameRoot: string, location: string, source:
     throw new Error('Native release output must be a regular file.');
   }
   if (!existsSync(destination)) {
-    copyFileSync(source, destination, constants.COPYFILE_EXCL);
+    try {
+      copyFileSync(source, destination, constants.COPYFILE_EXCL);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+        throw error;
+      }
+    }
   }
-  if (!statSync(destination).isFile() || sha256(destination) !== sha256(source)) {
+  if (!lstatSync(destination).isFile() || sha256(destination) !== sha256(source)) {
     throw new Error('Existing native release output has different bytes.');
   }
   return destination;
 }
 
 function sha256(file: string): string {
-  return createHash('sha256').update(readFileSync(file)).digest('hex');
+  const hash = createHash('sha256');
+  const descriptor = openSync(file, 'r');
+  const chunk = Buffer.allocUnsafe(1024 * 1024);
+  try {
+    for (;;) {
+      const bytes = readSync(descriptor, chunk, 0, chunk.byteLength, null);
+      if (bytes === 0) {
+        break;
+      }
+      hash.update(chunk.subarray(0, bytes));
+    }
+  } finally {
+    closeSync(descriptor);
+  }
+  return hash.digest('hex');
 }

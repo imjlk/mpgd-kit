@@ -21,6 +21,22 @@ pnpm exec mpgd deploy submit --plan ./release-plan.json \
 
 Only use `--initial-ledger` on the first release for that game ID. Later runs reuse the existing ledger. `run` reuses recorded builds and does not allocate a second version for the same release ID. `submit` never builds: it reads an immutable build record and verifies the stored artifact before calling the store. An Android committed edit or TestFlight-ready build is not submitted again. An unresolved remote result is preserved as `unknown`, not treated as success. If an artifact is missing, restore its original bytes from the release artifact archive; do not silently rebuild under the same immutable record.
 
+The first-release ledger schema and version rules are described in [Platform Version Allocation Policies](PLATFORM_VERSION_ALLOCATION.md).
+For a game whose latest known Play `versionCode` is 40 and App Store build number is 50, an illustrative `initial-ledger.json` is:
+
+```json
+{
+  "schemaVersion": 2,
+  "platforms": {
+    "android": { "versionCode": 40 },
+    "ios": { "buildNumber": 50 }
+  },
+  "releaseRevision": { "lastAllocated": 0 }
+}
+```
+
+Replace those example counters with the game's verified store history before reserving a real release.
+
 ## Credential references
 
 `mpgd.deploy.json` names environment variables for each target's signing and submission credential. It does not contain keys. Additional required variables are:
@@ -32,7 +48,9 @@ Only use `--initial-ledger` on the first release for that game ID. Later runs re
 
 The Android profile's signing credential points to its upload keystore file. The iOS profile's signing credential points to its P12 file. The ASC `.p8` API key is **not** the iOS app-signing key. Use `mise` or the game's CI secret store to supply variables at runtime; do not commit them to Git or put them in `release-plan.json`. `MPGD_ASC_BINARY` must refer to the pinned asc 5.5.0 binary, whose hash the CLI checks before executing it.
 
-The CLI keeps only release IDs, hashes, artifact locations and remote edit/upload/build IDs in `release-state`; passwords and private keys are not stored there. A store call obtains a 20-minute submission lease so two CI jobs cannot start the same target submission concurrently. A command that returns `processing` or another nonterminal state relinquishes that lease for immediate status polling. If a process disappears mid-call, a later attempt waits for the lease to expire, then reuses the recorded remote ID. An `unknown` state without a remote ID requires operator reconciliation before another upload. The Git state branch records metadata, **not** AAB or IPA bytes; game CI must retain those artifacts for retry on a different runner.
+The CLI keeps only release IDs, hashes, artifact locations and remote edit/upload/build IDs in `release-state`; passwords and private keys are not stored there. A store call obtains a 25-minute maximum submission lease so two CI jobs cannot start the same target submission concurrently. A command that returns `processing` or another nonterminal state relinquishes that lease for immediate status polling. If a process disappears mid-call, a later attempt waits for the lease to expire, then reuses the recorded remote ID. An `unknown` state without a remote ID requires operator reconciliation before another upload. The Git state branch records metadata, **not** AAB or IPA bytes; game CI must retain those artifacts for retry on a different runner.
+
+`run` checks local toolchains, required environment names and referenced credential files before reserving a version. These checks catch missing inputs early; they do not authenticate to either store or establish that a key is valid.
 
 ## Evidence boundary
 

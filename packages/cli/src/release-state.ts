@@ -113,6 +113,10 @@ export type NativeSubmissionStatus = 'started' | 'edit-open' | 'upload-committed
   | 'uploaded' | 'processing' | 'testflight-ready' | 'action-required'
   | 'failed' | 'unknown' | 'committed';
 
+export function isNativeSubmissionSettled(status: NativeSubmissionStatus): boolean {
+  return status === 'committed' || status === 'testflight-ready';
+}
+
 export interface NativeSubmissionCheckpoint {
   readonly releaseKey: string;
   readonly target: 'android' | 'ios';
@@ -184,7 +188,12 @@ const androidFingerprintPattern = /^(?:[0-9a-fA-F]{2}:){31}[0-9a-fA-F]{2}$|^[0-9
 const teamIdPattern = /^[A-Z0-9]{10}$/u;
 const remoteIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const attemptIdPattern = /^[0-9a-f]{32}$/u;
-const submissionLeaseMs = 20 * 60_000;
+const submissionLeaseMs = 25 * 60_000;
+
+/** Leave one minute of clock-skew headroom below the checkpoint lease cap. */
+export function freshSubmissionLeaseExpiresAt(): string {
+  return new Date(Date.now() + submissionLeaseMs - 60_000).toISOString();
+}
 
 function normalizeAndroidFingerprint(value: string): string {
   return value.replaceAll(':', '').toLowerCase();
@@ -575,7 +584,7 @@ export async function checkpointNativeSubmission(input: {
         throw new Error('Store submission has another active or unreconciled attempt owner.');
       }
       if (Date.parse(previous.leaseExpiresAt) <= Date.now()
-        && previous.status !== 'committed' && previous.status !== 'testflight-ready') {
+        && !isNativeSubmissionSettled(previous.status)) {
         throw new Error('Store submission lease expired; reconcile remote state before takeover.');
       }
       if (isDeepStrictEqual(previous, input.checkpoint)) {
@@ -584,7 +593,7 @@ export async function checkpointNativeSubmission(input: {
         }
         return { checkpoint: previous, stateCommit: session.previousCommit };
       }
-      if (previous.status === 'committed' || previous.status === 'testflight-ready'
+      if (isNativeSubmissionSettled(previous.status)
         || previous.status === 'failed'
         || previous.remoteEditId !== undefined
           && previous.remoteEditId !== input.checkpoint.remoteEditId
@@ -602,7 +611,7 @@ export async function checkpointNativeSubmission(input: {
     }
     if (Date.parse(input.checkpoint.leaseExpiresAt) <= Date.now()
       || Date.parse(input.checkpoint.leaseExpiresAt) > Date.now() + submissionLeaseMs) {
-      throw new Error('Store submission lease must be active and no longer than 20 minutes.');
+      throw new Error('Store submission lease must be active and no longer than 25 minutes.');
     }
     const next: ReleaseState = {
       schemaVersion: 1,
@@ -648,7 +657,7 @@ export async function reclaimNativeSubmission(input: {
     if (Date.parse(previous.leaseExpiresAt) > Date.now()) {
       throw new Error('Store submission lease is still active.');
     }
-    if (previous.status === 'committed' || previous.status === 'testflight-ready'
+    if (isNativeSubmissionSettled(previous.status)
       || previous.status === 'failed' || previous.status === 'action-required'
       || (previous.status === 'unknown'
         && previous.remoteEditId === undefined && previous.remoteUploadId === undefined)) {
