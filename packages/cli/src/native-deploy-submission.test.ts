@@ -41,6 +41,9 @@ try {
     inspectedAppId: 'dev.mpgd.test',
     artifactLocation: 'android.aab',
     artifactSha256: 'a'.repeat(64),
+    deployConfigSha256: plan.deployConfigSha256,
+    deploymentProfile: plan.profile,
+    deploymentDestination: 'play-internal',
   } as ImmutableNativeBuildRecord;
   const ios = {
     releaseKey: 'beta-01',
@@ -49,6 +52,10 @@ try {
     inspectedAppId: 'dev.mpgd.test',
     artifactLocation: 'ios.ipa',
     artifactSha256: 'b'.repeat(64),
+    deployConfigSha256: plan.deployConfigSha256,
+    deploymentProfile: plan.profile,
+    deploymentDestination: 'testflight',
+    internalTestGroupId: 'group-1',
   } as ImmutableNativeBuildRecord;
   let checkpoints: NativeReleaseStatus['submissions'] = {};
   let androidCalls = 0;
@@ -151,6 +158,18 @@ try {
     submitRecordedNativeTargetWithPorts({ ...androidInput, approved: false }, ports),
     /explicit approval/u,
   );
+  const changedConfigInput = {
+    ...androidInput,
+    plan: { ...plan, deployConfigSha256: '0'.repeat(64) },
+  };
+  const changedConfig = submitRecordedNativeTargetWithPorts(changedConfigInput, ports);
+  await assert.rejects(changedConfig, /matching immutable native build record/u);
+  const changedProfileInput = {
+    ...androidInput,
+    plan: { ...plan, profile: 'another-profile' },
+  };
+  const changedProfile = submitRecordedNativeTargetWithPorts(changedProfileInput, ports);
+  await assert.rejects(changedProfile, /matching immutable native build record/u);
   await assert.rejects(
     submitRecordedNativeTargetWithPorts(androidInput, ports),
     (error: unknown) => error instanceof PlaySubmissionUncertainError,
@@ -162,6 +181,18 @@ try {
   assert.equal(androidCalls, 2);
   await submitRecordedNativeTargetWithPorts(androidInput, ports);
   assert.equal(androidCalls, 2);
+  checkpoints = {};
+  await assert.rejects(
+    submitRecordedNativeTargetWithPorts(androidInput, {
+      ...ports,
+      async submitAndroid() {
+        throw new Error('temporary edit creation failure');
+      },
+    }),
+    /temporary edit creation failure/u,
+  );
+  assert.equal(checkpoints.android?.status, 'started');
+  assert.equal(checkpoints.android?.remoteEditId, undefined);
   checkpoints = {};
   androidCalls = 0;
   ordinaryAndroidFailure = true;
@@ -188,6 +219,15 @@ try {
     },
     approved: true,
   };
+  const changedGroupPlan = {
+    ...plan,
+    targets: plan.targets.map((entry) => {
+      return entry.target === 'ios' ? { ...entry, testGroup: 'different-group' } : entry;
+    }),
+  };
+  const changedGroupInput = { ...iosInput, plan: changedGroupPlan };
+  const changedGroup = submitRecordedNativeTargetWithPorts(changedGroupInput, ports);
+  await assert.rejects(changedGroup, /matching immutable native build record/u);
   const processing = await submitRecordedNativeTargetWithPorts(iosInput, ports);
   assert.equal(processing.status, 'processing');
   const ready = await submitRecordedNativeTargetWithPorts(iosInput, ports);

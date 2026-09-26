@@ -266,8 +266,9 @@ async function submitVerifiedIosBuildResolved(
   } catch (error) {
     return {
       ...base,
-      status: 'uploaded',
+      status: input.resumeBuildId === undefined ? 'uploaded' : 'unknown',
       ...uploadReference,
+      ...(input.resumeBuildId === undefined ? {} : { buildId: input.resumeBuildId }),
       detail: `Upload committed; build processing lookup is temporarily unavailable${failureReason(error)}.`,
     };
   }

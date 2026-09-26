@@ -100,6 +100,11 @@ export interface ImmutableNativeBuildRecord {
   readonly kitPackageVersion: string;
   readonly buildConfigDigest: string;
   readonly targetConfigDigest: string;
+  /** Absent only on historical build records predating deployment-profile binding. */
+  readonly deployConfigSha256?: string;
+  readonly deploymentProfile?: string;
+  readonly deploymentDestination?: 'play-internal' | 'testflight';
+  readonly internalTestGroupId?: string;
   readonly platformVersion: Readonly<Record<string, unknown>>;
   readonly artifactLocation: string;
   readonly artifactSha256: string;
@@ -145,6 +150,10 @@ export interface RecordNativeBuildInput {
   readonly buildRunId: string;
   readonly kitPackageVersion: string;
   readonly buildConfigDigest: string;
+  readonly deployConfigSha256?: string;
+  readonly deploymentProfile?: string;
+  readonly deploymentDestination?: 'play-internal' | 'testflight';
+  readonly internalTestGroupId?: string;
   readonly artifactFile: string;
   readonly expectedArtifactSha256: string;
   readonly artifactLocation: string;
@@ -402,6 +411,22 @@ export async function recordNativeReleaseBuild(
   input: RecordNativeBuildInput,
 ): Promise<{ readonly record: ImmutableNativeBuildRecord; readonly stateCommit: string }> {
   assertReleaseKey(input.releaseKey);
+  if ((input.deployConfigSha256 === undefined) !== (input.deploymentProfile === undefined)
+    || (input.deployConfigSha256 === undefined) !== (input.deploymentDestination === undefined)
+    || (input.deployConfigSha256 !== undefined
+      && !sha256Pattern.test(input.deployConfigSha256))
+    || (input.deploymentProfile !== undefined
+      && !/^[a-z][a-z0-9-]*$/u.test(input.deploymentProfile))
+    || (input.deploymentDestination !== undefined
+      && input.deploymentDestination !== (input.target === 'android'
+        ? 'play-internal' : 'testflight'))
+    || (input.internalTestGroupId !== undefined && input.deployConfigSha256 === undefined)
+    || (input.target === 'android' && input.internalTestGroupId !== undefined)
+    || (input.target === 'ios' && input.deployConfigSha256 !== undefined
+      && (input.internalTestGroupId === undefined
+        || !/^[A-Za-z0-9][A-Za-z0-9-]*$/u.test(input.internalTestGroupId)))) {
+    throw new Error('Native build deployment profile identity is malformed.');
+  }
   if (input.buildRunId.trim() === '' || input.artifactLocation.trim() === ''
     || input.kitPackageVersion.trim() === ''
     || input.inspectedAppId.trim() === ''
@@ -494,6 +519,13 @@ export async function recordNativeReleaseBuild(
       kitPackageVersion: input.kitPackageVersion,
       buildConfigDigest: input.buildConfigDigest,
       targetConfigDigest: plan.targetConfigDigest,
+      ...(input.deployConfigSha256 === undefined ? {} : {
+        deployConfigSha256: input.deployConfigSha256,
+        deploymentProfile: input.deploymentProfile,
+        deploymentDestination: input.deploymentDestination,
+        ...(input.internalTestGroupId === undefined
+          ? {} : { internalTestGroupId: input.internalTestGroupId }),
+      }),
       platformVersion: plannedTarget,
       artifactLocation: input.artifactLocation,
       artifactSha256,
@@ -1012,6 +1044,10 @@ const buildRecordFields = [
   'kitPackageVersion',
   'buildConfigDigest',
   'targetConfigDigest',
+  'deployConfigSha256',
+  'deploymentProfile',
+  'deploymentDestination',
+  'internalTestGroupId',
   'platformVersion',
   'artifactLocation',
   'artifactSha256',
@@ -1046,6 +1082,21 @@ function assertStoredBuildRecord(
     || typeof record.artifactLocation !== 'string' || record.artifactLocation.trim() === ''
     || typeof record.inspectedAppId !== 'string' || record.inspectedAppId.trim() === ''
     || !sha256Pattern.test(String(record.buildConfigDigest))
+    || (record.deployConfigSha256 !== undefined
+      && !sha256Pattern.test(String(record.deployConfigSha256)))
+    || (record.deploymentProfile !== undefined
+      && (typeof record.deploymentProfile !== 'string'
+        || !/^[a-z][a-z0-9-]*$/u.test(record.deploymentProfile)))
+    || (record.deployConfigSha256 === undefined) !== (record.deploymentProfile === undefined)
+    || (record.deployConfigSha256 === undefined) !== (record.deploymentDestination === undefined)
+    || (record.deploymentDestination !== undefined
+      && record.deploymentDestination !== (record.target === 'android'
+        ? 'play-internal' : 'testflight'))
+    || (record.internalTestGroupId !== undefined && record.deployConfigSha256 === undefined)
+    || (record.target === 'android' && record.internalTestGroupId !== undefined)
+    || (record.target === 'ios' && record.deployConfigSha256 !== undefined
+      && (typeof record.internalTestGroupId !== 'string'
+        || !/^[A-Za-z0-9][A-Za-z0-9-]*$/u.test(record.internalTestGroupId)))
     || !sha256Pattern.test(String(record.artifactSha256))
     || !sha256Pattern.test(String(record.releaseManifestSha256))
     || (record.target === 'android' && (record.inspectedTeamId !== undefined

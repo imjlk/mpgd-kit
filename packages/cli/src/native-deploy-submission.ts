@@ -96,7 +96,11 @@ export async function submitRecordedNativeTargetWithPorts(
   }
   const record = status.builds[target];
   if (record === undefined || record.releaseKey !== input.releaseKey
-    || record.target !== target || record.inspectedAppId !== planned.appId) {
+    || record.target !== target || record.inspectedAppId !== planned.appId
+    || record.deployConfigSha256 !== input.plan.deployConfigSha256
+    || record.deploymentProfile !== input.plan.profile
+    || record.deploymentDestination !== planned.destination
+    || record.internalTestGroupId !== planned.testGroup) {
     throw new Error('Store submission requires a matching immutable native build record.');
   }
   const artifactFile = resolveRecordedArtifact(input.plan.gameRoot, record.artifactLocation);
@@ -183,7 +187,7 @@ export async function submitRecordedNativeTargetWithPorts(
           await save({ status: 'unknown', remoteEditId: error.editId });
         } else {
           await save({
-            status: activeCheckpoint.remoteEditId === undefined ? 'failed' : 'unknown',
+            status: activeCheckpoint.remoteEditId === undefined ? 'started' : 'unknown',
           });
         }
         await releaseLease();

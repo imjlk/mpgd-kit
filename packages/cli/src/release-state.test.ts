@@ -366,6 +366,9 @@ process.exit(result.status ?? 1);
     buildRunId: 'run-123',
     kitPackageVersion: '0.35.0',
     buildConfigDigest: 'f'.repeat(64),
+    deployConfigSha256: 'e'.repeat(64),
+    deploymentProfile: 'beta',
+    deploymentDestination: 'play-internal' as const,
     artifactFile,
     expectedArtifactSha256: sha256(artifactFile),
     artifactLocation: 'release-output/android/game.aab',
@@ -399,6 +402,8 @@ process.exit(result.status ?? 1);
   const built = await recordNativeReleaseBuild(buildInput);
   assert.match(built.record.artifactSha256, /^[a-f0-9]{64}$/u);
   assert.equal(built.record.inspectedSignerSha256, signerSha256);
+  assert.equal(built.record.deployConfigSha256, 'e'.repeat(64));
+  assert.equal(built.record.deploymentProfile, 'beta');
   assert.equal(built.record.gameVersion, '1.0.0');
   assert.equal(built.record.platformVersion.versionCode, 41);
   const repeated = await recordNativeReleaseBuild(buildInput);
@@ -441,9 +446,24 @@ process.exit(result.status ?? 1);
       },
     },
   })}\n`);
+  const {
+    deployConfigSha256: _deployConfigSha256,
+    deploymentProfile: _deploymentProfile,
+    deploymentDestination: _deploymentDestination,
+    ...unboundBuildInput
+  } = buildInput;
+  await assert.rejects(
+    recordNativeReleaseBuild({
+      ...unboundBuildInput,
+      internalTestGroupId: 'group-1',
+    }),
+    /deployment profile identity is malformed/u,
+  );
   const iosBuilt = await recordNativeReleaseBuild({
     ...buildInput,
     target: 'ios',
+    deploymentDestination: 'testflight',
+    internalTestGroupId: 'group-1',
     artifactFile: iosArtifactFile,
     expectedArtifactSha256: sha256(iosArtifactFile),
     artifactLocation: 'release-output/ios/game.ipa',
