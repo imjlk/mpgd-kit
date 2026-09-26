@@ -577,6 +577,11 @@ const invalidTimestampPurchase = await invalidTimestampBackend.purchases.verifyP
 
 assertEqual(invalidTimestampPurchase.verified, false, 'invalid verifier timestamps must reject');
 assertEqual(
+  invalidTimestampPurchase.disposition,
+  'rejected',
+  'invalid verifier data must not retry',
+);
+assertEqual(
   invalidTimestampPurchase.reason,
   'EVIDENCE_VERIFIER_ERROR',
   'invalid verifier timestamps should use the stable verifier error reason',
@@ -1372,6 +1377,7 @@ assertEqual(
   false,
   'non-finite verifier payloads must fail closed',
 );
+assertEqual(invalidPayloadPurchase.disposition, 'rejected', 'invalid payloads must not retry');
 assertEqual(
   invalidPayloadPurchase.reason,
   'EVIDENCE_VERIFIER_ERROR',
@@ -1412,6 +1418,7 @@ const nonRecordPayloadPurchase = await nonRecordPayloadBackend.purchases.verifyP
 });
 
 assertEqual(nonRecordPayloadPurchase.verified, false, 'non-record payloads must fail closed');
+assertEqual(nonRecordPayloadPurchase.disposition, 'rejected', 'non-record payloads must not retry');
 assertEqual(
   nonRecordPayloadPurchase.reason,
   'EVIDENCE_VERIFIER_ERROR',
