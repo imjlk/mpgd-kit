@@ -100,6 +100,20 @@ export function createRecoverableMonetizationClient(
 ): RecoverableMonetizationClient {
   const store = input.operationStore;
   const observedAt = (): string => input.now?.() ?? new Date().toISOString();
+  const inFlight = new Map<string, Promise<unknown>>();
+
+  async function serializeOperation<T>(key: string, task: () => Promise<T>): Promise<T> {
+    const previous = inFlight.get(key) ?? Promise.resolve();
+    const running = previous.catch(() => undefined).then(task);
+    inFlight.set(key, running);
+    try {
+      return await running;
+    } finally {
+      if (inFlight.get(key) === running) {
+        inFlight.delete(key);
+      }
+    }
+  }
 
   async function save<T extends MonetizationOperationRecord>(
     record: T,
@@ -130,22 +144,24 @@ export function createRecoverableMonetizationClient(
     options?: GameServicesOperationOptions<GameServicesPurchaseProgress>,
   ): Promise<GameServicesPurchaseResult> {
     const key = operationKey(input.target, 'purchase', operation.idempotencyKey);
-    const reserved = await store.reserve({
-      key,
-      kind: 'purchase',
-      playerId: input.playerId,
-      target: input.target,
-      revision: 0,
-      input: operation,
+    return serializeOperation(key, async () => {
+      const reserved = await store.reserve({
+        key,
+        kind: 'purchase',
+        playerId: input.playerId,
+        target: input.target,
+        revision: 0,
+        input: operation,
+      });
+      if (reserved.record.kind !== 'purchase') {
+        throw new Error('Monetization operation kind conflicts with its journal key.');
+      }
+      assertOwner(reserved.record, 'purchase', operation.idempotencyKey, operation.productId);
+      if (reserved.record.input.source !== operation.source) {
+        throw new Error('Purchase idempotency key was reused for another source.');
+      }
+      return resumePurchase(reserved.record, reserved.created, options);
     });
-    if (reserved.record.kind !== 'purchase') {
-      throw new Error('Monetization operation kind conflicts with its journal key.');
-    }
-    assertOwner(reserved.record, 'purchase', operation.idempotencyKey, operation.productId);
-    if (reserved.record.input.source !== operation.source) {
-      throw new Error('Purchase idempotency key was reused for another source.');
-    }
-    return resumePurchase(reserved.record, reserved.created, options);
   }
 
   async function claimRewardedAd(
@@ -153,19 +169,21 @@ export function createRecoverableMonetizationClient(
     options?: GameServicesOperationOptions<GameServicesRewardedAdProgress>,
   ): Promise<GameServicesRewardedAdResult> {
     const key = operationKey(input.target, 'rewarded-ad', operation.idempotencyKey);
-    const reserved = await store.reserve({
-      key,
-      kind: 'rewarded-ad',
-      playerId: input.playerId,
-      target: input.target,
-      revision: 0,
-      input: operation,
+    return serializeOperation(key, async () => {
+      const reserved = await store.reserve({
+        key,
+        kind: 'rewarded-ad',
+        playerId: input.playerId,
+        target: input.target,
+        revision: 0,
+        input: operation,
+      });
+      if (reserved.record.kind !== 'rewarded-ad') {
+        throw new Error('Monetization operation kind conflicts with its journal key.');
+      }
+      assertOwner(reserved.record, 'rewarded-ad', operation.idempotencyKey, operation.placementId);
+      return resumeReward(reserved.record, reserved.created, options);
     });
-    if (reserved.record.kind !== 'rewarded-ad') {
-      throw new Error('Monetization operation kind conflicts with its journal key.');
-    }
-    assertOwner(reserved.record, 'rewarded-ad', operation.idempotencyKey, operation.placementId);
-    return resumeReward(reserved.record, reserved.created, options);
   }
 
   async function resumePurchase(
@@ -241,7 +259,7 @@ export function createRecoverableMonetizationClient(
       return result;
     } catch {
       // No UI retry is safe after a possibly completed platform callback.
-      return pendingPurchase(record.platform);
+      return recordedPurchaseGrant(record) ?? pendingPurchase(record.platform);
     }
   }
 
@@ -293,12 +311,18 @@ export function createRecoverableMonetizationClient(
             try {
               response = await input.backend.adRewards.claimAdReward(recordedRequest);
             } catch {
+              if (record.response?.granted === true) {
+                return record.response;
+              }
               return {
                 granted: false,
                 alreadyProcessed: false,
                 disposition: 'pending',
                 reason: 'BACKEND_UNAVAILABLE',
               };
+            }
+            if (record.response?.granted === true && !response.granted) {
+              return record.response;
             }
             record = await save(record, { response });
             return response;
@@ -311,7 +335,7 @@ export function createRecoverableMonetizationClient(
       record = await save(record, { result });
       return result;
     } catch {
-      return pendingReward(record.platform);
+      return recordedRewardGrant(record) ?? pendingReward(record.platform);
     }
   }
 
@@ -320,22 +344,24 @@ export function createRecoverableMonetizationClient(
     platform: PurchaseResult,
   ): Promise<GameServicesPurchaseResult> {
     const key = operationKey(input.target, 'purchase', idempotencyKey);
-    const found = await store.read(key);
-    if (found?.kind !== 'purchase') {
-      throw new Error('No reserved purchase operation matches this platform callback.');
-    }
-    assertOwner(found, 'purchase', idempotencyKey, found.input.productId);
-    const canAdvance = found.platform?.status === 'pending'
-      && platform.status !== 'pending' && found.request === undefined;
-    if (found.platform !== undefined && !samePlatformResult(found.platform, platform)
-      && !canAdvance) {
-      throw new Error('A platform purchase callback conflicts with the recorded operation.');
-    }
-    let record = found;
-    if (found.platform === undefined || canAdvance) {
-      record = await save(found, { platform, platformCompletedAt: observedAt() });
-    }
-    return resumePurchase(record);
+    return serializeOperation(key, async () => {
+      const found = await store.read(key);
+      if (found?.kind !== 'purchase') {
+        throw new Error('No reserved purchase operation matches this platform callback.');
+      }
+      assertOwner(found, 'purchase', idempotencyKey, found.input.productId);
+      const canAdvance = found.platform?.status === 'pending'
+        && platform.status !== 'pending' && found.request === undefined;
+      if (found.platform !== undefined && !samePlatformResult(found.platform, platform)
+        && !canAdvance) {
+        throw new Error('A platform purchase callback conflicts with the recorded operation.');
+      }
+      let record = found;
+      if (found.platform === undefined || canAdvance) {
+        record = await save(found, { platform, platformCompletedAt: observedAt() });
+      }
+      return resumePurchase(record);
+    });
   }
 
   async function recoverRewardResult(
@@ -343,22 +369,24 @@ export function createRecoverableMonetizationClient(
     platform: RewardedAdResult,
   ): Promise<GameServicesRewardedAdResult> {
     const key = operationKey(input.target, 'rewarded-ad', idempotencyKey);
-    const found = await store.read(key);
-    if (found?.kind !== 'rewarded-ad') {
-      throw new Error('No reserved rewarded-ad operation matches this platform callback.');
-    }
-    assertOwner(found, 'rewarded-ad', idempotencyKey, found.input.placementId);
-    const canAdvance = found.platform?.status === 'pending'
-      && platform.status !== 'pending' && found.request === undefined;
-    if (found.platform !== undefined && !samePlatformResult(found.platform, platform)
-      && !canAdvance) {
-      throw new Error('A platform ad callback conflicts with the recorded operation.');
-    }
-    let record = found;
-    if (found.platform === undefined || canAdvance) {
-      record = await save(found, { platform, platformCompletedAt: observedAt() });
-    }
-    return resumeReward(record);
+    return serializeOperation(key, async () => {
+      const found = await store.read(key);
+      if (found?.kind !== 'rewarded-ad') {
+        throw new Error('No reserved rewarded-ad operation matches this platform callback.');
+      }
+      assertOwner(found, 'rewarded-ad', idempotencyKey, found.input.placementId);
+      const canAdvance = found.platform?.status === 'pending'
+        && platform.status !== 'pending' && found.request === undefined;
+      if (found.platform !== undefined && !samePlatformResult(found.platform, platform)
+        && !canAdvance) {
+        throw new Error('A platform ad callback conflicts with the recorded operation.');
+      }
+      let record = found;
+      if (found.platform === undefined || canAdvance) {
+        record = await save(found, { platform, platformCompletedAt: observedAt() });
+      }
+      return resumeReward(record);
+    });
   }
 
   async function reconcile(): Promise<readonly MonetizationOperationSummary[]> {
@@ -374,30 +402,36 @@ export function createRecoverableMonetizationClient(
       const idempotencyKey = typeof record.input?.idempotencyKey === 'string'
         ? record.input.idempotencyKey
         : 'unreadable-operation';
+      if (inFlight.has(record.key)) {
+        continue;
+      }
       try {
-        assertOwner(
-          record,
-          record.kind,
-          record.input.idempotencyKey,
-          record.kind === 'purchase' ? record.input.productId : record.input.placementId,
-        );
-        if (record.kind === 'purchase') {
-          const result = await resumePurchase(record);
-          summaries.push({
-            kind: record.kind,
-            idempotencyKey: record.input.idempotencyKey,
-            status: result.status,
-            finalizationPending: result.verification?.finalization?.status === 'pending',
-          });
-        } else {
-          const result = await resumeReward(record);
-          summaries.push({
-            kind: record.kind,
-            idempotencyKey: record.input.idempotencyKey,
+        const summary = await serializeOperation(record.key, async () => {
+          const latest = await store.read(record.key) ?? record;
+          assertOwner(
+            latest,
+            latest.kind,
+            latest.input.idempotencyKey,
+            latest.kind === 'purchase' ? latest.input.productId : latest.input.placementId,
+          );
+          if (latest.kind === 'purchase') {
+            const result = await resumePurchase(latest);
+            return {
+              kind: latest.kind,
+              idempotencyKey: latest.input.idempotencyKey,
+              status: result.status,
+              finalizationPending: result.verification?.finalization?.status === 'pending',
+            } satisfies MonetizationOperationSummary;
+          }
+          const result = await resumeReward(latest);
+          return {
+            kind: latest.kind,
+            idempotencyKey: latest.input.idempotencyKey,
             status: result.status,
             finalizationPending: false,
-          });
-        }
+          } satisfies MonetizationOperationSummary;
+        });
+        summaries.push(summary);
       } catch {
         summaries.push({
           kind: record.kind,
@@ -449,6 +483,42 @@ function pendingReward(platform?: RewardedAdResult): GameServicesRewardedAdResul
   return {
     status: 'pending',
     reward: platform ?? { status: 'pending', rewardGranted: false },
+  };
+}
+
+function recordedPurchaseGrant(
+  record: Extract<MonetizationOperationRecord, { kind: 'purchase' }>,
+): GameServicesPurchaseResult | undefined {
+  if (record.result?.status === 'granted') {
+    return record.result;
+  }
+  if (record.response?.verified !== true || record.platform === undefined) {
+    return undefined;
+  }
+  return {
+    status: 'granted',
+    purchase: record.platform,
+    verification: record.response,
+    ...(record.response.ledgerEntryId === undefined
+      ? {} : { ledgerEntryId: record.response.ledgerEntryId }),
+  };
+}
+
+function recordedRewardGrant(
+  record: Extract<MonetizationOperationRecord, { kind: 'rewarded-ad' }>,
+): GameServicesRewardedAdResult | undefined {
+  if (record.result?.status === 'granted') {
+    return record.result;
+  }
+  if (record.response?.granted !== true || record.platform === undefined) {
+    return undefined;
+  }
+  return {
+    status: 'granted',
+    reward: record.platform,
+    claim: record.response,
+    ...(record.response.ledgerEntryId === undefined
+      ? {} : { ledgerEntryId: record.response.ledgerEntryId }),
   };
 }
 
