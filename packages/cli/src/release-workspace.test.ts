@@ -151,6 +151,19 @@ try {
   );
   writeFileSync(path.join(repository, 'pnpm-lock.yaml'), committedLockfile);
   writeFileSync(path.join(repository, 'packages/shared/index.js'), 'export const value = 2;\n');
+  await assert.rejects(
+    pinNativeDeploymentPlan(plan, { packageVersion: '0.35.0', gitSha: 'a'.repeat(40) }),
+    /Pinned release inputs have uncommitted changes/u,
+  );
+  writeFileSync(path.join(repository, 'packages/shared/index.js'), 'export const value = 1;\n');
+  const untrackedSource = path.join(game, 'new-game-source.ts');
+  writeFileSync(untrackedSource, 'export const newGameSource = true;\n');
+  await assert.rejects(
+    pinNativeDeploymentPlan(plan, { packageVersion: '0.35.0', gitSha: 'a'.repeat(40) }),
+    /Pinned release inputs have uncommitted changes/u,
+  );
+  rmSync(untrackedSource);
+  writeFileSync(path.join(repository, 'packages/shared/index.js'), 'export const value = 2;\n');
   writeFileSync(path.join(game, 'mpgd.targets.json'), '{"changed":true}\n');
   await assert.rejects(
     pinNativeDeploymentPlan(plan, { packageVersion: '0.35.0', gitSha: 'a'.repeat(40) }),

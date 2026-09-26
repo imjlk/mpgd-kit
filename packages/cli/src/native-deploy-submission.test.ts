@@ -62,6 +62,7 @@ try {
   let iosCalls = 0;
   let ordinaryAndroidFailure = false;
   let failIosCheckpoint = false;
+  let shortenIosInitialLease = false;
   const ports: NativeSubmissionPorts = {
     async readStatus() {
       return {
@@ -80,8 +81,12 @@ try {
         && checkpoint.status !== 'started') {
         throw new Error('release-state push response lost');
       }
-      checkpoints = { ...checkpoints, [checkpoint.target]: checkpoint };
-      return { checkpoint, stateCommit: 'c'.repeat(40) };
+      const saved = shortenIosInitialLease && checkpoint.target === 'ios'
+        && checkpoint.status === 'started' && checkpoints.ios === undefined
+        ? { ...checkpoint, leaseExpiresAt: new Date(Date.now() + 60_000).toISOString() }
+        : checkpoint;
+      checkpoints = { ...checkpoints, [checkpoint.target]: saved };
+      return { checkpoint: saved, stateCommit: 'c'.repeat(40) };
     },
     async reclaim() {
       const current = checkpoints.ios ?? checkpoints.android;
@@ -128,6 +133,7 @@ try {
         assert.equal(input.resumeUploadId, undefined);
         try {
           await input.onUploadCommitted?.('upload-1');
+          assert.ok(Date.parse(checkpoints.ios?.leaseExpiresAt ?? '') > Date.now() + 20 * 60_000);
         } catch {
           throw new IosSubmissionUncertainError('upload-1');
         }
@@ -228,7 +234,9 @@ try {
   const changedGroupInput = { ...iosInput, plan: changedGroupPlan };
   const changedGroup = submitRecordedNativeTargetWithPorts(changedGroupInput, ports);
   await assert.rejects(changedGroup, /matching immutable native build record/u);
+  shortenIosInitialLease = true;
   const processing = await submitRecordedNativeTargetWithPorts(iosInput, ports);
+  shortenIosInitialLease = false;
   assert.equal(processing.status, 'processing');
   const ready = await submitRecordedNativeTargetWithPorts(iosInput, ports);
   assert.equal(ready.status, 'testflight-ready');

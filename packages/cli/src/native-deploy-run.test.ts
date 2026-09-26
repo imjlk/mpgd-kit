@@ -33,6 +33,24 @@ try {
     { PATH: '/bin', HOME: '/safe-home', npm_execpath: '/pnpm/bin/pnpm.cjs' },
     'dependency install hooks cannot read deployment credentials',
   );
+  assert.deepEqual(
+    dependencyInstallEnvironment({
+      PATH: '/bin',
+      NPM_TOKEN: 'registry-token',
+      MPGD_DEPENDENCY_INSTALL_ENV_NAMES: 'NPM_TOKEN',
+    }),
+    { PATH: '/bin', NPM_TOKEN: 'registry-token' },
+  );
+  const googleCredential = {
+    MPGD_DEPENDENCY_INSTALL_ENV_NAMES: 'GOOGLE_APPLICATION_CREDENTIALS',
+    GOOGLE_APPLICATION_CREDENTIALS: '/private/account.json',
+  };
+  assert.throws(() => dependencyInstallEnvironment(googleCredential), /not allowed/u);
+  const signingCredential = {
+    MPGD_DEPENDENCY_INSTALL_ENV_NAMES: 'MPGD_IOS_SIGNING_P12_PASSWORD',
+    MPGD_IOS_SIGNING_P12_PASSWORD: 'secret',
+  };
+  assert.throws(() => dependencyInstallEnvironment(signingCredential), /not allowed/u);
   const game = path.join(fixture, 'game');
   const outside = path.join(fixture, 'outside');
   const source = path.join(fixture, 'source.aab');

@@ -148,7 +148,11 @@ export async function submitRecordedNativeTargetWithPorts(
   const save = async (patch: Partial<NativeSubmissionCheckpoint>): Promise<void> => {
     activeCheckpoint = (await ports.checkpoint({
       ...stateInput,
-      checkpoint: { ...activeCheckpoint, ...patch },
+      checkpoint: {
+        ...activeCheckpoint,
+        ...patch,
+        leaseExpiresAt: freshSubmissionLeaseExpiresAt(),
+      },
     })).checkpoint;
   };
   const releaseLease = async (): Promise<void> => {

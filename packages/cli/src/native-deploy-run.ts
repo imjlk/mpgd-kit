@@ -63,32 +63,62 @@ export async function runNativeDeployment(input: RunNativeDeploymentInput): Prom
     throw new Error('Native deployment requires explicit internal-test approval.');
   }
   const environment = input.environment ?? process.env;
-  const doctor = doctorNativeDeployment({
-    game: input.plan.gameRoot,
-    profile: input.plan.profile,
-    targets: input.plan.targets.map((entry) => entry.target),
-    environment,
-  });
-  if (!doctor.healthy) {
-    throw new Error(`Native deployment environment is incomplete: ${doctor.checks
-      .filter((check) => check.status === 'missing')
-      .map((check) => check.name)
-      .join(', ')}.`);
-  }
-  for (const entry of input.plan.targets) {
-    const profile = readNativeDeployTargetProfile(input.plan, entry.target);
-    requiredExistingFile(environment, profile.signingCredential.env);
-    if (entry.target === 'android') {
-      requiredExistingFile(environment, profile.submissionCredential.env);
-    } else {
-      requiredExistingFile(environment, 'MPGD_IOS_PROVISIONING_PROFILE');
-      requiredExistingFile(environment, 'MPGD_ASC_BINARY');
-    }
-  }
   const pinned = await pinNativeDeploymentPlan(input.plan, input.kit, {
     environment,
     ...(input.signal === undefined ? {} : { signal: input.signal }),
   });
+  const statusInput = {
+    gameRoot: input.plan.gameRoot,
+    gameId: input.gameId,
+    releaseKey: input.releaseKey,
+    environment,
+    ...(input.signal === undefined ? {} : { signal: input.signal }),
+  };
+  let existing: NativeReleaseStatus | undefined;
+  try {
+    existing = await readNativeReleaseStatus(statusInput);
+  } catch (error) {
+    if (!(error instanceof Error)
+      || error.message !== 'The requested native release has not been reserved.') {
+      throw error;
+    }
+  }
+  const pendingSteps = existing === undefined
+    ? {
+        buildTargets: input.plan.targets.map((entry) => entry.target),
+        submitTargets: input.plan.targets.map((entry) => entry.target),
+      }
+    : planNativeDeploymentSteps(input.plan, existing);
+  if (pendingSteps.buildTargets.length > 0) {
+    const doctor = doctorNativeDeployment({
+      game: input.plan.gameRoot,
+      profile: input.plan.profile,
+      targets: pendingSteps.buildTargets,
+      environment,
+    });
+    if (!doctor.healthy) {
+      throw new Error(`Native deployment environment is incomplete: ${doctor.checks
+        .filter((check) => check.status === 'missing')
+        .map((check) => check.name)
+        .join(', ')}.`);
+    }
+  }
+  for (const target of pendingSteps.buildTargets) {
+    const profile = readNativeDeployTargetProfile(input.plan, target);
+    requiredExistingFile(environment, profile.signingCredential.env);
+    if (target === 'ios') {
+      requiredExistingFile(environment, 'MPGD_IOS_PROVISIONING_PROFILE');
+    }
+  }
+  for (const target of pendingSteps.submitTargets) {
+    const profile = readNativeDeployTargetProfile(input.plan, target);
+    if (target === 'android') {
+      requiredExistingFile(environment, profile.submissionCredential.env);
+    } else {
+      requiredExistingFile(environment, 'MPGD_ASC_BINARY');
+    }
+    readStoreCredential(input.plan, target, environment);
+  }
   const reserved = await reserveNativeRelease({
     gameRoot: input.plan.gameRoot,
     gameId: input.gameId,
@@ -112,8 +142,13 @@ export async function runNativeDeployment(input: RunNativeDeploymentInput): Prom
   const missing = planNativeDeploymentSteps(input.plan, status).buildTargets;
   if (missing.length > 0) {
     await withPinnedReleaseWorkspace(pinned, async (workspace) => {
+      const installEnvironment = dependencyInstallEnvironment(environment, input.plan);
+      const registrySecretValues = environment.MPGD_DEPENDENCY_INSTALL_ENV_NAMES?.split(',')
+        .map((name) => installEnvironment[name.trim()])
+        .filter((value): value is string => value !== undefined) ?? [];
       await installPinnedReleaseDependencies(workspace, {
-        environment: dependencyInstallEnvironment(environment),
+        environment: installEnvironment,
+        secretValues: registrySecretValues,
         ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
       for (const target of missing) {
@@ -348,7 +383,10 @@ function requiredEnvironment(environment: NodeJS.ProcessEnv, name: string): stri
 }
 
 /** Install hooks must never inherit signing or store credentials. */
-export function dependencyInstallEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function dependencyInstallEnvironment(
+  environment: NodeJS.ProcessEnv,
+  plan?: NativeDeploymentPlan,
+): NodeJS.ProcessEnv {
   const allowed = [
     'PATH',
     'Path',
@@ -378,6 +416,22 @@ export function dependencyInstallEnvironment(environment: NodeJS.ProcessEnv): No
     const value = environment[name];
     return value === undefined ? [] : [[name, value] as const];
   });
+  const forbidden = new Set([
+    ...(plan === undefined ? [] : readNativeDeployCredentialNames(plan)),
+    'GOOGLE_APPLICATION_CREDENTIALS',
+  ]);
+  for (const name of environment.MPGD_DEPENDENCY_INSTALL_ENV_NAMES?.split(',') ?? []) {
+    const normalized = name.trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(normalized)
+      || normalized.startsWith('MPGD_') || forbidden.has(normalized)) {
+      throw new Error(`Dependency installation environment name ${normalized} is not allowed.`);
+    }
+    const value = environment[normalized];
+    if (value === undefined || value === '') {
+      throw new Error(`Dependency installation requires ${normalized}.`);
+    }
+    entries.push([normalized, value]);
+  }
   return Object.fromEntries(entries);
 }
 
