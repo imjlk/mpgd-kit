@@ -520,12 +520,19 @@ export function measureTargetViewport(
 /**
  * Resolve with the first usable measurement, so a game that boots inside a zero-sized surface
  * starts once the host lays it out instead of failing viewport validation. Resolves immediately
- * when the surface is already measurable and unsubscribes as soon as it settles.
+ * when the surface is already measurable and unsubscribes as soon as it settles. A measurement
+ * that throws, including the first one, rejects the returned promise.
  */
 export function waitForTargetViewportMeasurement(
   input: TargetViewportMeasurementWait,
 ): Promise<TargetViewportMeasurement> {
-  const initial = input.measure();
+  let initial: TargetViewportMeasurement | null;
+
+  try {
+    initial = input.measure();
+  } catch (error) {
+    return Promise.reject(error);
+  }
 
   if (initial !== null) {
     return Promise.resolve(initial);

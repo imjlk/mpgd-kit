@@ -1244,6 +1244,22 @@ async function assertViewportMeasurementWait(): Promise<void> {
   // An already aborted signal rejects before subscribing.
   assertEqual(subscriptions, 4);
 
+  // A first measurement that throws rejects the promise instead of escaping synchronously.
+  const subscriptionsBeforeInitialFailure = subscriptions;
+  let initialFailure: Promise<TargetViewportMeasurement> | undefined;
+  try {
+    initialFailure = waitForTargetViewportMeasurement({
+      measure: () => {
+        throw new Error('initial measurement failed');
+      },
+      subscribe,
+    });
+  } catch (error) {
+    throw new Error(`Initial measurement failure escaped synchronously: ${String(error)}`);
+  }
+  await assertRejects(initialFailure, /initial measurement failed/u);
+  assertEqual(subscriptions, subscriptionsBeforeInitialFailure);
+
   let failing = false;
   const failed = waitForTargetViewportMeasurement({
     measure: () => {
