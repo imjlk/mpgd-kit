@@ -181,7 +181,7 @@ try {
       approved: true,
       environment: {},
     }),
-    /environment is incomplete/u,
+    /not a git repository/u,
   );
   assert.ok(doctor.checks.some((check) => check.name === 'JDK'));
   assert.ok(doctor.checks.some((check) => check.name === 'Android SDK'
