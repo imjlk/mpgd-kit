@@ -9,6 +9,7 @@ import {
   resolveGameServicesTransport,
   type GameServicesBackendApi,
   type GameServicesBackendTransportRequest,
+  type MonetizationOperationRecord,
 } from './index';
 
 const playerId = 'runtime-player';
@@ -238,6 +239,76 @@ assertEqual(purchase.status, 'granted', 'local purchase should work only after e
 assertEqual(reward.status, 'granted', 'local reward should work only after explicit opt-in');
 assertEqual(leaderboard.submitted, true, 'local leaderboard should work after explicit opt-in');
 assertLocalCalls(1, 'explicit non-production local client');
+
+const recoveryRecords = new Map<string, MonetizationOperationRecord>();
+let recoveryBackendCalls = 0;
+const recoveryRuntime = createGameServicesRuntime({
+  gateway: createGateway(),
+  playerId,
+  authorityMode: 'non-production',
+  allowLocalBackend: true,
+  localBackend: {
+    ...localBackend,
+    purchases: {
+      async verifyPurchase(request) {
+        recoveryBackendCalls += 1;
+        return {
+          verified: true,
+          ledgerEntryId: `recovery-${request.idempotencyKey}`,
+          alreadyProcessed: recoveryBackendCalls > 1,
+        };
+      },
+    },
+  },
+  operationStore: {
+    async reserve(record) {
+      const existing = recoveryRecords.get(record.key);
+      if (existing !== undefined) {
+        return { created: false, record: existing };
+      }
+      recoveryRecords.set(record.key, record);
+      return { created: true, record };
+    },
+    async read(key) {
+      return recoveryRecords.get(key);
+    },
+    async replace(expectedRevision, record) {
+      const existing = recoveryRecords.get(record.key);
+      if (existing?.revision !== expectedRevision) {
+        throw new Error('stale monetization operation');
+      }
+      recoveryRecords.set(record.key, record);
+    },
+    async listRecoverable(owner) {
+      return [...recoveryRecords.values()].filter((record) => record.playerId === owner
+        && (record.result === undefined || record.result.status === 'pending'
+          || record.kind === 'purchase'
+            && record.response?.finalization?.status === 'pending'));
+    },
+  },
+});
+const recoveryClient = requireValue(recoveryRuntime.client, 'recoverable runtime client');
+const recoveryOperation = {
+  productId: 'COINS_100',
+  source: 'shop' as const,
+  idempotencyKey: 'runtime-recovery',
+};
+assertEqual(
+  (await recoveryClient.purchase(recoveryOperation)).status,
+  'granted',
+  'first purchase should use the journal',
+);
+assertEqual(
+  (await recoveryClient.purchase(recoveryOperation)).status,
+  'granted',
+  'repeat purchase should return the journaled result',
+);
+assertEqual(recoveryBackendCalls, 1, 'the runtime must route repeat purchases through its journal');
+assertEqual(
+  (await requireValue(recoveryRuntime.monetizationRecovery, 'recovery port').reconcile()).length,
+  0,
+  'runtime recovery should not scan terminal journal history',
+);
 
 const remoteRuntime = createGameServicesRuntime({
   gateway: createGateway(),

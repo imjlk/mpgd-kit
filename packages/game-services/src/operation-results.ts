@@ -1,6 +1,8 @@
 /** Shared response shapes with no schema, DOM or transport dependencies. */
 export interface VerifyPurchaseResponse {
   readonly verified: boolean;
+  /** Explicit non-grant decision; older servers may omit this field. */
+  readonly disposition?: 'pending' | 'rejected';
   readonly ledgerEntryId?: string;
   readonly alreadyProcessed: boolean;
   readonly reason?: string;
@@ -22,6 +24,8 @@ export interface PurchaseGrantFinalization {
 
 export interface ClaimAdRewardResponse {
   readonly granted: boolean;
+  /** Explicit non-grant decision; older servers may omit this field. */
+  readonly disposition?: 'pending' | 'rejected';
   readonly ledgerEntryId?: string;
   readonly alreadyProcessed: boolean;
   readonly reason?: string;

@@ -8,9 +8,11 @@ export type AnalyticsEventName =
   | 'purchase_started'
   | 'purchase_completed'
   | 'purchase_granted'
+  | 'purchase_pending'
   | 'purchase_rejected'
   | 'rewarded_ad_completed'
   | 'rewarded_ad_granted'
+  | 'rewarded_ad_pending'
   | 'rewarded_ad_rejected'
   | 'leaderboard_submitted'
   | 'leaderboard_recorded';

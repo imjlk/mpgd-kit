@@ -14,6 +14,11 @@ import {
   type GameServicesHeaderResolver,
 } from './client.js';
 import type { GameServicesLedgerTarget } from './types.js';
+import {
+  createRecoverableMonetizationClient,
+  type MonetizationOperationStore,
+  type RecoverableMonetizationClient,
+} from './monetization-recovery.js';
 
 export type GameServicesAuthorityMode = 'production' | 'non-production';
 export type GameServicesRuntimeMode = 'disabled' | 'local' | 'http' | 'orpc';
@@ -30,6 +35,7 @@ export interface GameServicesRuntime {
   readonly baseUrl?: string;
   readonly target?: GameServicesLedgerTarget;
   readonly client?: GameServicesClient;
+  readonly monetizationRecovery?: RecoverableMonetizationClient;
 }
 
 interface CreateGameServicesRuntimeCommonInput {
@@ -48,6 +54,8 @@ interface CreateGameServicesRuntimeCommonInput {
   readonly analytics?: AnalyticsSink;
   readonly analyticsSessionId?: string;
   readonly now?: () => string;
+  /** Durable, compare-and-swap journal for purchase and rewarded-ad recovery. */
+  readonly operationStore?: MonetizationOperationStore;
 }
 
 export type CreateGameServicesRuntimeInput = CreateGameServicesRuntimeCommonInput & (
@@ -125,24 +133,38 @@ export function createGameServicesRuntime(
     backend = input.localBackend;
   }
 
+  const clientInput = {
+    gateway: input.gateway,
+    backend,
+    playerId: input.playerId,
+    target,
+    ...(input.deploymentTarget === undefined
+      ? {}
+      : { deploymentTarget: input.deploymentTarget }),
+    ...(input.analytics === undefined ? {} : { analytics: input.analytics }),
+    ...(input.analyticsSessionId === undefined
+      ? {}
+      : { analyticsSessionId: input.analyticsSessionId }),
+    ...(input.now === undefined ? {} : { now: input.now }),
+  };
+  const client = createGameServicesClient(clientInput);
+  const monetizationRecovery = input.operationStore === undefined
+    ? undefined
+    : createRecoverableMonetizationClient({ ...clientInput, operationStore: input.operationStore });
+  let routedClient = client;
+  if (monetizationRecovery !== undefined) {
+    routedClient = {
+      ...client,
+      purchase: monetizationRecovery.purchase,
+      claimRewardedAd: monetizationRecovery.claimRewardedAd,
+    };
+  }
   return {
     mode,
     ...(baseUrl === undefined ? {} : { baseUrl }),
     target,
-    client: createGameServicesClient({
-      gateway: input.gateway,
-      backend,
-      playerId: input.playerId,
-      target,
-      ...(input.deploymentTarget === undefined
-        ? {}
-        : { deploymentTarget: input.deploymentTarget }),
-      ...(input.analytics === undefined ? {} : { analytics: input.analytics }),
-      ...(input.analyticsSessionId === undefined
-        ? {}
-        : { analyticsSessionId: input.analyticsSessionId }),
-      ...(input.now === undefined ? {} : { now: input.now }),
-    }),
+    client: routedClient,
+    ...(monetizationRecovery === undefined ? {} : { monetizationRecovery }),
   };
 }
 

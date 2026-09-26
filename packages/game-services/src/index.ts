@@ -9,6 +9,7 @@ export * from './guest-session.js';
 export * from './google-play-purchase.js';
 export * from './microsoft-store-identity.js';
 export * from './microsoft-store-purchase.js';
+export * from './monetization-recovery.js';
 export * from './notification-delivery.js';
 export * from './platform-order.js';
 export * from './progress-link.js';

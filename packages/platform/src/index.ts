@@ -177,7 +177,7 @@ export function findAuthoritativePurchaseSettlement(input: {
 }
 
 export interface RewardedAdResult {
-  readonly status: 'completed' | 'skipped' | 'unavailable' | 'failed';
+  readonly status: 'completed' | 'pending' | 'skipped' | 'unavailable' | 'failed';
   readonly rewardGranted: boolean;
   readonly ledgerEntryId?: string;
   readonly evidence?: PlatformEvidenceEnvelope;

@@ -295,6 +295,64 @@ assertEqual(
   'pending purchases should not call purchase verification',
 );
 
+const pendingServerEvents: string[] = [];
+const pendingServerClient = createGameServicesClient({
+  gateway,
+  playerId,
+  target: 'android',
+  now: () => '2026-07-03T00:00:00.000Z',
+  backend: {
+    ...backend,
+    purchases: {
+      async verifyPurchase() {
+        return {
+          verified: false,
+          alreadyProcessed: false,
+          disposition: 'pending',
+          reason: 'SSV_DELAYED',
+        };
+      },
+    },
+    adRewards: {
+      async claimAdReward() {
+        return {
+          granted: false,
+          alreadyProcessed: false,
+          disposition: 'pending',
+          reason: 'SSV_DELAYED',
+        };
+      },
+    },
+  },
+  analytics: {
+    track(event) {
+      pendingServerEvents.push(event.name);
+    },
+  },
+});
+assertEqual(
+  (await pendingServerClient.purchase({
+    productId: 'COINS_100',
+    source: 'shop',
+    idempotencyKey: 'server-pending-purchase',
+  })).status,
+  'pending',
+  'server-side purchase verification pending must not be a rejection',
+);
+assertEqual(
+  (await pendingServerClient.claimRewardedAd({
+    placementId: 'CONTINUE_AFTER_FAIL',
+    idempotencyKey: 'server-pending-reward',
+  })).status,
+  'pending',
+  'delayed SSV must not be a reward rejection',
+);
+assertEqual(
+  pendingServerEvents.join(','),
+  'purchase_pending,rewarded_ad_pending',
+  'pending outcomes should be reported as pending analytics',
+);
+
 let unsupportedPurchaseCalls = 0;
 let unsupportedRewardCalls = 0;
 const purchaseClaimsBeforeUnsupported = purchaseClaims;
