@@ -220,6 +220,16 @@ try {
     const result = await submitVerifiedAndroidBundleWithPublisher(input, publisher, observed.rootUrl);
     assert.equal(result.status, 'committed');
   });
+  await withPublisher('ok', async (publisher, observed) => {
+    const editId = await publisher.insertEdit(packageName);
+    const result = await submitVerifiedAndroidBundleWithPublisher({
+      ...input,
+      resumeEditId: editId,
+      onEditCreated: async () => { throw new Error('Existing edit must not be recreated.'); },
+    }, publisher, observed.rootUrl);
+    assert.equal(result.editId, editId);
+    assert.equal(observed.operations.filter((item) => item.endsWith('/edits')).length, 1);
+  });
   await withPublisher('upload-rejected', async (publisher, observed) => {
     await assert.rejects(
       submitVerifiedAndroidBundleWithPublisher(input, publisher, observed.rootUrl),

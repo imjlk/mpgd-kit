@@ -8,7 +8,13 @@ import path from 'node:path';
 import { assertReleaseManifest } from '@mpgd/release-manifest';
 import { formatMpgdReleaseId, type PlatformVersionLedger } from '@mpgd/target-config';
 
-import { recordNativeReleaseBuild, reserveNativeRelease } from './release-state.js';
+import {
+  checkpointNativeSubmission,
+  readNativeReleaseStatus,
+  reclaimNativeSubmission,
+  recordNativeReleaseBuild,
+  reserveNativeRelease,
+} from './release-state.js';
 import { inspectAndroidBundleSigner } from './android-bundle-signer.js';
 import { createSignedAabFixture } from '../test/signed-aab-fixture.js';
 
@@ -447,6 +453,173 @@ process.exit(result.status ?? 1);
   });
   assert.equal(iosBuilt.record.platformVersion.buildNumber, 51);
   assert.equal(iosBuilt.record.inspectedTeamId, 'ABCDEFGHIJ');
+  const releaseStatus = await readNativeReleaseStatus({
+    gameRoot: game,
+    gameId: 'alpha',
+    releaseKey: 'beta-01',
+  });
+  assert.equal(releaseStatus.builds.android?.artifactSha256, built.record.artifactSha256);
+  assert.equal(releaseStatus.builds.ios?.artifactSha256, iosBuilt.record.artifactSha256);
+  assert.deepEqual(releaseStatus.submissions, {});
+  await assert.rejects(
+    readNativeReleaseStatus({ gameRoot: game, gameId: 'alpha', releaseKey: 'missing' }),
+    /has not been reserved/u,
+  );
+  const androidCheckpoint = {
+    releaseKey: 'beta-01',
+    target: 'android' as const,
+    buildRunId: built.record.buildRunId,
+    artifactSha256: built.record.artifactSha256,
+    attemptId: 'a'.repeat(32),
+    leaseExpiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+    status: 'started' as const,
+  };
+  await assert.rejects(
+    checkpointNativeSubmission({
+      gameRoot: game,
+      gameId: 'alpha',
+      checkpoint: { ...androidCheckpoint, artifactSha256: '0'.repeat(64) },
+    }),
+    /immutable native build record/u,
+  );
+  await assert.rejects(
+    checkpointNativeSubmission({
+      gameRoot: game,
+      gameId: 'alpha',
+      checkpoint: { ...androidCheckpoint, status: 'edit-open', remoteEditId: 'edit-1' },
+    }),
+    /checkpoint started/u,
+  );
+  const firstCheckpoint = await checkpointNativeSubmission({
+    gameRoot: game,
+    gameId: 'alpha',
+    checkpoint: androidCheckpoint,
+  });
+  assert.equal(firstCheckpoint.checkpoint.status, 'started');
+  assert.deepEqual(await checkpointNativeSubmission({
+    gameRoot: game, gameId: 'alpha', checkpoint: androidCheckpoint,
+  }), firstCheckpoint);
+  const editOpen = { ...androidCheckpoint, status: 'edit-open' as const, remoteEditId: 'edit-1' };
+  await checkpointNativeSubmission({ gameRoot: game, gameId: 'alpha', checkpoint: editOpen });
+  await checkpointNativeSubmission({
+    gameRoot: game,
+    gameId: 'alpha',
+    checkpoint: { ...editOpen, status: 'unknown' },
+  });
+  await assert.rejects(
+    checkpointNativeSubmission({
+      gameRoot: game,
+      gameId: 'alpha',
+      checkpoint: { ...editOpen, remoteEditId: 'edit-2' },
+    }),
+    /cannot be replaced/u,
+  );
+  await assert.rejects(
+    checkpointNativeSubmission({
+      gameRoot: game,
+      gameId: 'alpha',
+      checkpoint: { ...editOpen, attemptId: 'b'.repeat(32) },
+    }),
+    /another active or unreconciled attempt owner/u,
+  );
+  const committed = { ...editOpen, status: 'committed' as const };
+  await checkpointNativeSubmission({ gameRoot: game, gameId: 'alpha', checkpoint: committed });
+  await assert.rejects(
+    checkpointNativeSubmission({ gameRoot: game, gameId: 'alpha', checkpoint: editOpen }),
+    /cannot be replaced/u,
+  );
+  const iosCheckpoint = {
+    releaseKey: 'beta-01',
+    target: 'ios' as const,
+    buildRunId: iosBuilt.record.buildRunId,
+    artifactSha256: iosBuilt.record.artifactSha256,
+    attemptId: 'c'.repeat(32),
+    leaseExpiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+    status: 'started' as const,
+  };
+  await checkpointNativeSubmission({ gameRoot: game, gameId: 'alpha', checkpoint: iosCheckpoint });
+  const uploaded = {
+    ...iosCheckpoint,
+    status: 'upload-committed' as const,
+    remoteUploadId: 'upload-1',
+  };
+  await checkpointNativeSubmission({ gameRoot: game, gameId: 'alpha', checkpoint: uploaded });
+  await assert.rejects(
+    reclaimNativeSubmission({
+      gameRoot: game,
+      gameId: 'alpha',
+      releaseKey: 'beta-01',
+      target: 'ios',
+      expectedStateCommit: git(['rev-parse', 'refs/heads/release-state'], bare),
+      attemptId: 'd'.repeat(32),
+    }),
+    /lease is still active/u,
+  );
+  const expiryEdit = path.join(fixture, 'expiry-edit');
+  git(['clone', '-q', '--branch', 'release-state', bare, expiryEdit], fixture);
+  const expiryFile = path.join(expiryEdit, 'mpgd-release-state.json');
+  const expiryState = JSON.parse(readFileSync(expiryFile, 'utf8'));
+  expiryState.games.alpha.submissions['beta-01/ios'].leaseExpiresAt =
+    new Date(Date.now() - 60_000).toISOString();
+  writeFileSync(expiryFile, `${JSON.stringify(expiryState)}\n`);
+  git(['add', '.'], expiryEdit);
+  git(
+    [
+      '-c',
+      'user.name=mpgd-test',
+      '-c',
+      'user.email=mpgd-test@example.invalid',
+      'commit',
+      '-qm',
+      'expire abandoned submission lease',
+    ],
+    expiryEdit,
+  );
+  git(['push', 'origin', 'HEAD:release-state'], expiryEdit);
+  const beforeReclaim = await readNativeReleaseStatus({
+    gameRoot: game,
+    gameId: 'alpha',
+    releaseKey: 'beta-01',
+  });
+  await assert.rejects(
+    reclaimNativeSubmission({
+      gameRoot: game,
+      gameId: 'alpha',
+      releaseKey: 'beta-01',
+      target: 'ios',
+      expectedStateCommit: firstCheckpoint.stateCommit,
+      attemptId: 'd'.repeat(32),
+    }),
+    /state changed/u,
+  );
+  const reclaimed = await reclaimNativeSubmission({
+    gameRoot: game,
+    gameId: 'alpha',
+    releaseKey: 'beta-01',
+    target: 'ios',
+    expectedStateCommit: beforeReclaim.stateCommit,
+    attemptId: 'd'.repeat(32),
+  });
+  assert.equal(reclaimed.checkpoint.remoteUploadId, 'upload-1');
+  assert.equal(reclaimed.checkpoint.status, 'upload-committed');
+  const resumedUpload = reclaimed.checkpoint;
+  await checkpointNativeSubmission({
+    gameRoot: game,
+    gameId: 'alpha',
+    checkpoint: { ...resumedUpload, status: 'processing', remoteBuildId: 'build-1' },
+  });
+  await checkpointNativeSubmission({
+    gameRoot: game,
+    gameId: 'alpha',
+    checkpoint: { ...resumedUpload, status: 'testflight-ready', remoteBuildId: 'build-1' },
+  });
+  const submitted = await readNativeReleaseStatus({
+    gameRoot: game,
+    gameId: 'alpha',
+    releaseKey: 'beta-01',
+  });
+  assert.equal(submitted.submissions.android?.status, 'committed');
+  assert.equal(submitted.submissions.ios?.status, 'testflight-ready');
   writeFileSync(artifactFile, 'different bytes');
   await assert.rejects(recordNativeReleaseBuild(buildInput), /differs from the verified build/u);
   await assert.rejects(
@@ -603,6 +776,7 @@ process.exit(result.status ?? 1);
     'beta-02': recordState.games.alpha.reservations['beta-02'],
   };
   reordered.games.alpha.builds = {};
+  reordered.games.alpha.submissions = {};
   writeFileSync(stateFile, `${JSON.stringify(reordered)}\n`);
   git(['add', '.'], stateEdit);
   git(

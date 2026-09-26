@@ -109,6 +109,30 @@ export interface ImmutableNativeBuildRecord {
   readonly inspectedTeamId?: string | undefined;
 }
 
+export type NativeSubmissionStatus = 'started' | 'edit-open' | 'upload-committed'
+  | 'uploaded' | 'processing' | 'testflight-ready' | 'action-required'
+  | 'failed' | 'unknown' | 'committed';
+
+export interface NativeSubmissionCheckpoint {
+  readonly releaseKey: string;
+  readonly target: 'android' | 'ios';
+  readonly buildRunId: string;
+  readonly artifactSha256: string;
+  readonly attemptId: string;
+  readonly leaseExpiresAt: string;
+  readonly status: NativeSubmissionStatus;
+  readonly remoteEditId?: string;
+  readonly remoteUploadId?: string;
+  readonly remoteBuildId?: string;
+}
+
+export interface NativeReleaseStatus {
+  readonly plan: PlatformVersionReleasePlan;
+  readonly builds: Partial<Record<'android' | 'ios', ImmutableNativeBuildRecord>>;
+  readonly submissions: Partial<Record<'android' | 'ios', NativeSubmissionCheckpoint>>;
+  readonly stateCommit: string;
+}
+
 export interface RecordNativeBuildInput {
   readonly gameRoot: string;
   readonly gameId: string;
@@ -134,6 +158,7 @@ interface GameReleaseState {
   readonly ledger: PlatformVersionLedger;
   readonly reservations: Record<string, PlatformVersionReleasePlan>;
   readonly builds: Record<string, ImmutableNativeBuildRecord>;
+  readonly submissions?: Record<string, NativeSubmissionCheckpoint>;
 }
 
 interface ReleaseState {
@@ -157,6 +182,9 @@ const gitShaPattern = /^[0-9a-f]{40}$/u;
 const sha256Pattern = /^[0-9a-f]{64}$/u;
 const androidFingerprintPattern = /^(?:[0-9a-fA-F]{2}:){31}[0-9a-fA-F]{2}$|^[0-9a-fA-F]{64}$/u;
 const teamIdPattern = /^[A-Z0-9]{10}$/u;
+const remoteIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
+const attemptIdPattern = /^[0-9a-f]{32}$/u;
+const submissionLeaseMs = 20 * 60_000;
 
 function normalizeAndroidFingerprint(value: string): string {
   return value.replaceAll(':', '').toLowerCase();
@@ -349,6 +377,7 @@ export async function reserveNativeRelease(
       ledger: allocation.ledger,
       reservations: { ...(game?.reservations ?? {}), [input.releaseKey]: allocation.plan },
       builds: game?.builds ?? {},
+      ...(game?.submissions === undefined ? {} : { submissions: game.submissions }),
     };
     const next: ReleaseState = {
       schemaVersion: 1,
@@ -486,6 +515,195 @@ export async function recordNativeReleaseBuild(
     const stateCommit = await commitState(session, next, `Record ${input.gameId}/${key}`);
     return { record, stateCommit };
   });
+}
+
+/** Read one explicitly named release from the authoritative game-owned state branch. */
+export async function readNativeReleaseStatus(input: {
+  readonly gameRoot: string;
+  readonly gameId: string;
+  readonly releaseKey: string;
+  readonly environment?: NodeJS.ProcessEnv;
+  readonly signal?: AbortSignal;
+}): Promise<NativeReleaseStatus> {
+  assertReleaseKey(input.releaseKey);
+  return withStateSession(input, async (session) => {
+    const game = ownValue(session.state.games, input.gameId);
+    const plan = game === undefined ? undefined : ownValue(game.reservations, input.releaseKey);
+    if (game === undefined || plan === undefined || session.previousCommit === undefined) {
+      throw new Error('The requested native release has not been reserved.');
+    }
+    const androidKey = `${input.releaseKey}/android`;
+    const iosKey = `${input.releaseKey}/ios`;
+    return {
+      plan,
+      builds: {
+        ...(game.builds[androidKey] === undefined ? {} : { android: game.builds[androidKey] }),
+        ...(game.builds[iosKey] === undefined ? {} : { ios: game.builds[iosKey] }),
+      },
+      submissions: {
+        ...(game.submissions?.[androidKey] === undefined
+          ? {} : { android: game.submissions[androidKey] }),
+        ...(game.submissions?.[iosKey] === undefined
+          ? {} : { ios: game.submissions[iosKey] }),
+      },
+      stateCommit: session.previousCommit,
+    };
+  });
+}
+
+/** Persist a resumable store checkpoint with the build record in one Git state. */
+export async function checkpointNativeSubmission(input: {
+  readonly gameRoot: string;
+  readonly gameId: string;
+  readonly checkpoint: NativeSubmissionCheckpoint;
+  readonly environment?: NodeJS.ProcessEnv;
+  readonly signal?: AbortSignal;
+}): Promise<{ readonly checkpoint: NativeSubmissionCheckpoint; readonly stateCommit: string }> {
+  assertSubmissionCheckpoint(input.checkpoint);
+  return withStateSession(input, async (session) => {
+    const game = ownValue(session.state.games, input.gameId);
+    const key = `${input.checkpoint.releaseKey}/${input.checkpoint.target}`;
+    const build = game === undefined ? undefined : ownValue(game.builds, key);
+    if (game === undefined || build === undefined
+      || build.buildRunId !== input.checkpoint.buildRunId
+      || build.artifactSha256 !== input.checkpoint.artifactSha256) {
+      throw new Error('Store checkpoint must reference the immutable native build record.');
+    }
+    const previous = ownValue(game.submissions ?? {}, key);
+    if (previous !== undefined) {
+      if (isDeepStrictEqual(previous, input.checkpoint)) {
+        if (session.previousCommit === undefined) {
+          throw new Error('Existing store checkpoint has no state commit.');
+        }
+        return { checkpoint: previous, stateCommit: session.previousCommit };
+      }
+      if (previous.attemptId !== input.checkpoint.attemptId) {
+        throw new Error('Store submission has another active or unreconciled attempt owner.');
+      }
+      if (Date.parse(previous.leaseExpiresAt) <= Date.now()) {
+        throw new Error('Store submission lease expired; reconcile remote state before takeover.');
+      }
+      if (previous.status === 'committed' || previous.status === 'testflight-ready'
+        || previous.status === 'failed'
+        || previous.remoteEditId !== undefined
+          && previous.remoteEditId !== input.checkpoint.remoteEditId
+        || previous.remoteUploadId !== undefined
+          && previous.remoteUploadId !== input.checkpoint.remoteUploadId
+        || previous.remoteBuildId !== undefined
+          && previous.remoteBuildId !== input.checkpoint.remoteBuildId) {
+        throw new Error('A completed submission or remote checkpoint ID cannot be replaced.');
+      }
+      if (!allowedSubmissionTransition(previous.status, input.checkpoint.status)) {
+        throw new Error('Store submission status cannot move backward.');
+      }
+    } else if (input.checkpoint.status !== 'started') {
+      throw new Error('A new store submission must checkpoint started before remote mutation.');
+    }
+    if (Date.parse(input.checkpoint.leaseExpiresAt) <= Date.now()
+      || Date.parse(input.checkpoint.leaseExpiresAt) > Date.now() + submissionLeaseMs) {
+      throw new Error('Store submission lease must be active and no longer than 20 minutes.');
+    }
+    const next: ReleaseState = {
+      schemaVersion: 1,
+      games: {
+        ...session.state.games,
+        [input.gameId]: {
+          ...game,
+          submissions: { ...(game.submissions ?? {}), [key]: input.checkpoint },
+        },
+      },
+    };
+    const stateCommit = await commitState(session, next, `Submit ${input.gameId}/${key}`);
+    return { checkpoint: input.checkpoint, stateCommit };
+  });
+}
+
+/** Claim an expired attempt without discarding its remote IDs or changing its status. */
+export async function reclaimNativeSubmission(input: {
+  readonly gameRoot: string;
+  readonly gameId: string;
+  readonly releaseKey: string;
+  readonly target: 'android' | 'ios';
+  readonly expectedStateCommit: string;
+  readonly attemptId: string;
+  readonly environment?: NodeJS.ProcessEnv;
+  readonly signal?: AbortSignal;
+}): Promise<{ readonly checkpoint: NativeSubmissionCheckpoint; readonly stateCommit: string }> {
+  assertReleaseKey(input.releaseKey);
+  if (!gitShaPattern.test(input.expectedStateCommit)
+    || !attemptIdPattern.test(input.attemptId)) {
+    throw new Error('Submission reclaim needs an explicit state commit and new attempt ID.');
+  }
+  return withStateSession(input, async (session) => {
+    if (session.previousCommit !== input.expectedStateCommit) {
+      throw new Error('Submission state changed; read its latest remote checkpoint first.');
+    }
+    const game = ownValue(session.state.games, input.gameId);
+    const key = `${input.releaseKey}/${input.target}`;
+    const previous = game === undefined ? undefined : ownValue(game.submissions ?? {}, key);
+    if (game === undefined || previous === undefined) {
+      throw new Error('No store submission exists to reclaim.');
+    }
+    if (Date.parse(previous.leaseExpiresAt) > Date.now()) {
+      throw new Error('Store submission lease is still active.');
+    }
+    if (previous.status === 'committed' || previous.status === 'testflight-ready'
+      || previous.status === 'failed' || previous.status === 'action-required'
+      || (previous.status === 'unknown'
+        && previous.remoteEditId === undefined && previous.remoteUploadId === undefined)) {
+      throw new Error('Store submission needs operator reconciliation before reclaim.');
+    }
+    const checkpoint = {
+      ...previous,
+      attemptId: input.attemptId,
+      leaseExpiresAt: new Date(Date.now() + submissionLeaseMs).toISOString(),
+    };
+    const next: ReleaseState = {
+      schemaVersion: 1,
+      games: {
+        ...session.state.games,
+        [input.gameId]: {
+          ...game,
+          submissions: { ...(game.submissions ?? {}), [key]: checkpoint },
+        },
+      },
+    };
+    const stateCommit = await commitState(session, next, `Reclaim ${input.gameId}/${key}`);
+    return { checkpoint, stateCommit };
+  });
+}
+
+function allowedSubmissionTransition(
+  from: NativeSubmissionStatus,
+  to: NativeSubmissionStatus,
+): boolean {
+  if (from === to) {
+    return true;
+  }
+  const allowed: Partial<Record<NativeSubmissionStatus, readonly NativeSubmissionStatus[]>> = {
+    started: ['edit-open', 'upload-committed', 'unknown', 'failed', 'action-required'],
+    'edit-open': ['committed', 'unknown', 'failed', 'action-required'],
+    'upload-committed': [
+      'uploaded',
+      'processing',
+      'testflight-ready',
+      'unknown',
+      'failed',
+      'action-required',
+    ],
+    uploaded: ['processing', 'testflight-ready', 'unknown', 'failed', 'action-required'],
+    processing: ['testflight-ready', 'unknown', 'failed', 'action-required'],
+    unknown: [
+      'uploaded',
+      'processing',
+      'testflight-ready',
+      'committed',
+      'failed',
+      'action-required',
+    ],
+    'action-required': ['processing', 'testflight-ready', 'unknown'],
+  };
+  return allowed[from]?.includes(to) ?? false;
 }
 
 async function withStateSession<T>(
@@ -649,11 +867,14 @@ function parseReleaseState(json: string): ReleaseState {
       throw new Error(`Release state game ${gameId} is malformed.`);
     }
     const game = rawGame as Record<string, unknown>;
-    if (Object.keys(game).some((key) => !['initialLedger', 'ledger', 'reservations', 'builds'].includes(key))
+    if (Object.keys(game).some((key) => ![
+      'initialLedger', 'ledger', 'reservations', 'builds', 'submissions',
+    ].includes(key))
       || typeof game.reservations !== 'object' || game.reservations === null
       || Array.isArray(game.reservations)
       || typeof game.builds !== 'object' || game.builds === null
-      || Array.isArray(game.builds)) {
+      || Array.isArray(game.builds)
+      || (game.submissions !== undefined && !isRecord(game.submissions))) {
       throw new Error(`Release state game ${gameId} has invalid entries.`);
     }
     const initialLedger = assertPlatformVersionLedger(game.initialLedger);
@@ -710,6 +931,16 @@ function parseReleaseState(json: string): ReleaseState {
         rawBuild,
         game.reservations as Record<string, unknown>,
       );
+    }
+    for (const [key, rawCheckpoint] of Object.entries(game.submissions ?? {})) {
+      assertSubmissionCheckpoint(rawCheckpoint);
+      const checkpoint = rawCheckpoint as NativeSubmissionCheckpoint;
+      const build = (game.builds as Record<string, ImmutableNativeBuildRecord>)[key];
+      if (key !== `${checkpoint.releaseKey}/${checkpoint.target}` || build === undefined
+        || checkpoint.buildRunId !== build.buildRunId
+        || checkpoint.artifactSha256 !== build.artifactSha256) {
+        throw new Error(`Release state game ${gameId} has an invalid submission ${key}.`);
+      }
     }
   }
   return value as ReleaseState;
@@ -776,6 +1007,70 @@ function assertStoredBuildRecord(
     || record.kitGitSha !== plan.kitGitSha
     || record.targetConfigDigest !== plan.targetConfigDigest) {
     malformed();
+  }
+}
+
+const checkpointFields = [
+  'releaseKey',
+  'target',
+  'buildRunId',
+  'artifactSha256',
+  'attemptId',
+  'leaseExpiresAt',
+  'status',
+  'remoteEditId',
+  'remoteUploadId',
+  'remoteBuildId',
+] as const;
+
+function assertSubmissionCheckpoint(value: unknown): asserts value is NativeSubmissionCheckpoint {
+  if (!isRecord(value)) {
+    throw new Error('Native submission checkpoint is not an object.');
+  }
+  const id = (name: 'remoteEditId' | 'remoteUploadId' | 'remoteBuildId'): boolean =>
+    value[name] === undefined || typeof value[name] === 'string'
+      && remoteIdPattern.test(value[name]);
+  const androidStatuses: readonly NativeSubmissionStatus[] = [
+    'started',
+    'edit-open',
+    'committed',
+    'failed',
+    'action-required',
+    'unknown',
+  ];
+  const iosStatuses: readonly NativeSubmissionStatus[] = [
+    'started',
+    'upload-committed',
+    'uploaded',
+    'processing',
+    'testflight-ready',
+    'failed',
+    'action-required',
+    'unknown',
+  ];
+  if (typeof value.releaseKey !== 'string' || !releaseKeyPattern.test(value.releaseKey)
+    || (value.target !== 'android' && value.target !== 'ios')
+    || typeof value.buildRunId !== 'string' || value.buildRunId.trim() === ''
+    || !sha256Pattern.test(String(value.artifactSha256))
+    || typeof value.attemptId !== 'string' || !attemptIdPattern.test(value.attemptId)
+    || typeof value.leaseExpiresAt !== 'string'
+    || !Number.isFinite(Date.parse(value.leaseExpiresAt))
+    || Object.keys(value).some((key) => !checkpointFields.includes(
+      key as typeof checkpointFields[number],
+    ))
+    || !id('remoteEditId') || !id('remoteUploadId') || !id('remoteBuildId')
+    || (value.target === 'android' && (!androidStatuses.includes(value.status as NativeSubmissionStatus)
+      || value.remoteUploadId !== undefined || value.remoteBuildId !== undefined
+      || (['edit-open', 'committed'].includes(String(value.status))
+        && value.remoteEditId === undefined)))
+    || (value.target === 'ios' && (!iosStatuses.includes(value.status as NativeSubmissionStatus)
+      || value.remoteEditId !== undefined
+      || (['upload-committed', 'uploaded', 'processing', 'testflight-ready']
+        .includes(String(value.status)) && value.remoteUploadId === undefined)))
+    || (value.status === 'started'
+      && (value.remoteEditId !== undefined || value.remoteUploadId !== undefined
+        || value.remoteBuildId !== undefined))) {
+    throw new Error('Native submission checkpoint is malformed.');
   }
 }
 

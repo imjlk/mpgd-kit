@@ -11,6 +11,7 @@ import { inspectAndroidBundleSigner } from './android-bundle-signer.js';
 import type { ImmutableNativeBuildRecord } from './release-state.js';
 
 const sha256Pattern = /^[a-f0-9]{64}$/u;
+const editIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const trackName = 'internal';
 const bundleUploadTimeoutMs = 120_000;
 
@@ -20,6 +21,8 @@ export interface PlayInternalSubmissionInput {
   readonly packageName: string;
   /** Absolute path to a game-owned Google service account JSON file. */
   readonly serviceAccountFile: string;
+  /** Reuse the checkpointed edit; never create a replacement after an uncertain response. */
+  readonly resumeEditId?: string;
   /** Persist this edit ID before any upload begins, for later reconciliation. */
   readonly onEditCreated?: (editId: string) => Promise<void>;
 }
@@ -69,8 +72,13 @@ export async function submitVerifiedAndroidBundleWithPublisher(
   const versionCode = await preflight(input);
   const expectedSha256 = input.record.artifactSha256;
   const packageName = input.packageName;
-  const editId = await publisher.insertEdit(packageName);
-  await input.onEditCreated?.(editId);
+  if (input.resumeEditId !== undefined && !editIdPattern.test(input.resumeEditId)) {
+    throw new Error('Google Play resume edit ID is malformed.');
+  }
+  const editId = input.resumeEditId ?? await publisher.insertEdit(packageName);
+  if (input.resumeEditId === undefined) {
+    await input.onEditCreated?.(editId);
+  }
 
   let bundles = await publisher.listBundles(packageName, editId);
   let existing = findVersionBundle(bundles, versionCode, expectedSha256);

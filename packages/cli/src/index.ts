@@ -125,11 +125,17 @@ export {
 } from './android-signing-session.js';
 
 export {
+  checkpointNativeSubmission,
+  readNativeReleaseStatus,
+  reclaimNativeSubmission,
   recordNativeReleaseBuild,
   reserveNativeRelease,
   type ImmutableNativeBuildRecord,
+  type NativeReleaseStatus,
   type NativeReleaseReservation,
   type NativeReleaseReservationInput,
+  type NativeSubmissionCheckpoint,
+  type NativeSubmissionStatus,
   type RecordNativeBuildInput,
 } from './release-state.js';
 
