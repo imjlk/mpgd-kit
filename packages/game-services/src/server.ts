@@ -709,6 +709,7 @@ async function verifyPurchaseWithStore(
     return assertVerifyPurchaseResponse({
       verified: false,
       alreadyProcessed: false,
+      disposition: verification.status === 'pending' ? 'pending' : 'rejected',
       reason: verification.status === 'pending'
         ? (verification.reason ?? 'EVIDENCE_PENDING')
         : verification.reason,
@@ -1056,6 +1057,7 @@ async function claimAdRewardWithStore(
     return assertClaimAdRewardResponse({
       granted: false,
       alreadyProcessed: false,
+      disposition: verification.status === 'pending' ? 'pending' : 'rejected',
       reason: verification.status === 'pending'
         ? (verification.reason ?? 'EVIDENCE_PENDING')
         : verification.reason,
@@ -1126,7 +1128,7 @@ async function verifyEvidence(
 ): Promise<EvidenceVerificationDecision> {
   const controller = new AbortController();
   const timeoutDecision = {
-    status: 'rejected',
+    status: 'pending',
     reason: 'EVIDENCE_VERIFIER_TIMEOUT',
   } as const satisfies EvidenceVerificationDecision;
   let timedOut = false;
@@ -1153,7 +1155,7 @@ async function verifyEvidence(
     ]);
   } catch {
     return {
-      status: 'rejected',
+      status: 'pending',
       reason: 'EVIDENCE_VERIFIER_ERROR',
     };
   } finally {

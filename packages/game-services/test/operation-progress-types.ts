@@ -22,7 +22,7 @@ const rewardOptions: GameServicesOperationOptions<GameServicesRewardedAdProgress
   onProgress: async (progress) => {
     const kind: 'rewarded-ad' = progress.kind;
     if (progress.phase === 'platform-result') {
-      const status: 'completed' | 'skipped' | 'unavailable' | 'failed' = progress.status;
+      const status: 'completed' | 'pending' | 'skipped' | 'unavailable' | 'failed' = progress.status;
       void status;
     }
     void kind;

@@ -198,6 +198,8 @@ export interface CreateGameServicesClientInput {
   readonly analytics?: AnalyticsSink;
   readonly analyticsSessionId?: string;
   readonly now?: () => string;
+  /** Override backend evidence timestamps without backdating analytics events. */
+  readonly requestNow?: () => string;
 }
 
 export interface GameServicesLeaderboardInput extends LeaderboardScoreInput {}
@@ -212,6 +214,7 @@ export interface GameServicesLeaderboardResult {
 
 export function createGameServicesClient(input: CreateGameServicesClientInput): GameServicesClient {
   const now = input.now ?? (() => new Date().toISOString());
+  const requestNow = input.requestNow ?? now;
   const analytics = createAnalyticsReporter({
     target: input.target,
     sessionId: input.analyticsSessionId ?? input.playerId,
@@ -253,7 +256,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
           const status = purchase.status === 'completed' ? 'rejected' : purchase.status;
 
           await analytics.track({
-            name: 'purchase_rejected',
+            name: purchase.status === 'pending' ? 'purchase_pending' : 'purchase_rejected',
             properties: {
               productId: purchaseInput.productId,
               status,
@@ -293,7 +296,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
 
         if (purchase.status !== 'completed' || purchase.transactionId === undefined) {
           await analytics.track({
-            name: 'purchase_rejected',
+            name: purchase.status === 'pending' ? 'purchase_pending' : 'purchase_rejected',
             properties: {
               productId: purchaseInput.productId,
               status: purchase.status,
@@ -316,7 +319,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
           productId: purchaseInput.productId,
           platformTransactionId: purchase.transactionId,
           idempotencyKey: purchaseInput.idempotencyKey,
-          purchasedAt: now(),
+          purchasedAt: requestNow(),
           ...(purchase.evidence === undefined ? {} : { evidence: purchase.evidence }),
         };
         progress.serverRequested();
@@ -324,7 +327,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
         progress.serverResult(verification.verified);
 
         const result = {
-          status: verification.verified ? 'granted' : 'rejected',
+          status: verification.verified ? 'granted' : (verification.disposition ?? 'rejected'),
           purchase,
           verification,
           ...(verification.ledgerEntryId === undefined
@@ -333,7 +336,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
         } satisfies GameServicesPurchaseResult;
 
         await analytics.track({
-          name: verification.verified ? 'purchase_granted' : 'purchase_rejected',
+          name: verification.verified ? 'purchase_granted' : verification.disposition === 'pending' ? 'purchase_pending' : 'purchase_rejected',
           properties: {
             productId: purchaseInput.productId,
             status: result.status,
@@ -379,7 +382,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
 
         if (reward.status !== 'completed' || !reward.rewardGranted) {
           await analytics.track({
-            name: 'rewarded_ad_rejected',
+            name: reward.status === 'pending' ? 'rewarded_ad_pending' : 'rewarded_ad_rejected',
             properties: {
               placementId: rewardInput.placementId,
               status: reward.status,
@@ -404,7 +407,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
             ? {}
             : { platformImpressionId: reward.ledgerEntryId }),
           idempotencyKey: rewardInput.idempotencyKey,
-          completedAt: now(),
+          completedAt: requestNow(),
           ...(reward.evidence === undefined ? {} : { evidence: reward.evidence }),
         };
         progress.serverRequested();
@@ -412,14 +415,14 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
         progress.serverResult(claim.granted);
 
         const result = {
-          status: claim.granted ? 'granted' : 'rejected',
+          status: claim.granted ? 'granted' : (claim.disposition ?? 'rejected'),
           reward,
           claim,
           ...(claim.ledgerEntryId === undefined ? {} : { ledgerEntryId: claim.ledgerEntryId }),
         } satisfies GameServicesRewardedAdResult;
 
         await analytics.track({
-          name: claim.granted ? 'rewarded_ad_granted' : 'rewarded_ad_rejected',
+          name: claim.granted ? 'rewarded_ad_granted' : claim.disposition === 'pending' ? 'rewarded_ad_pending' : 'rewarded_ad_rejected',
           properties: {
             placementId: rewardInput.placementId,
             status: result.status,

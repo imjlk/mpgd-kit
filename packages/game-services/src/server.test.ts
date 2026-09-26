@@ -530,7 +530,13 @@ const verifierErrorReward = await nonGrantingBackend.adRewards.claimAdReward({
 
 assertEqual(pendingPurchase.verified, false, 'pending provider evidence must not grant');
 assertEqual(pendingPurchase.reason, 'PROVIDER_PENDING', 'pending reasons should be preserved');
+assertEqual(
+  pendingPurchase.disposition,
+  'pending',
+  'provider-pending purchases remain recoverable',
+);
 assertEqual(verifierErrorReward.granted, false, 'verifier errors must not grant');
+assertEqual(verifierErrorReward.disposition, 'pending', 'verifier errors must remain retryable');
 assertEqual(
   verifierErrorReward.reason,
   'EVIDENCE_VERIFIER_ERROR',

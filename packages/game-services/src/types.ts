@@ -137,6 +137,7 @@ export function assertVerifyPurchaseResponse(
 ): VerifyPurchaseResponse {
   assertRecord(input, 'VerifyPurchaseResponse');
   assertBoolean(input.verified, 'verified');
+  assertOptionalNonGrantDisposition(input.disposition, input.verified);
   assertOptionalNonEmptyString(input.ledgerEntryId, 'ledgerEntryId');
   assertBoolean(input.alreadyProcessed, 'alreadyProcessed');
   assertOptionalNonEmptyString(input.reason, 'reason');
@@ -194,6 +195,7 @@ export function assertClaimAdRewardResponse(
 ): ClaimAdRewardResponse {
   assertRecord(input, 'ClaimAdRewardResponse');
   assertBoolean(input.granted, 'granted');
+  assertOptionalNonGrantDisposition(input.disposition, input.granted);
   assertOptionalNonEmptyString(input.ledgerEntryId, 'ledgerEntryId');
   assertBoolean(input.alreadyProcessed, 'alreadyProcessed');
   assertOptionalNonEmptyString(input.reason, 'reason');
@@ -381,6 +383,18 @@ function assertFiniteNumber(input: unknown, label: string): asserts input is num
 function assertBoolean(input: unknown, label: string): asserts input is boolean {
   if (typeof input !== 'boolean') {
     throw new Error(`${label} must be a boolean.`);
+  }
+}
+
+function assertOptionalNonGrantDisposition(input: unknown, granted: boolean): void {
+  if (input === undefined) {
+    return;
+  }
+  if (input !== 'pending' && input !== 'rejected') {
+    throw new Error('disposition must be pending or rejected.');
+  }
+  if (granted) {
+    throw new Error('A granted result cannot have a non-grant disposition.');
   }
 }
 
