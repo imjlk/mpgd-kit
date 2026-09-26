@@ -705,24 +705,27 @@ const microsoftJournal: MonetizationOperationStore = {
     await microsoftStore.replace(expectedRevision, record);
   },
 };
+let microsoftCheckouts = 0;
+const microsoftGateway: PlatformGateway = {
+  ...gateway,
+  target: 'microsoft-store',
+  commerce: {
+    ...gateway.commerce,
+    async purchase() {
+      microsoftCheckouts += 1;
+      return {
+        status: 'completed',
+        transactionId: 'microsoft-ledger-1',
+        entitlementIds: ['COINS_100'],
+        authoritativeGrant: { ledgerEntryId: 'microsoft-ledger-1' },
+      };
+    },
+  },
+};
 const microsoftClient = createRecoverableMonetizationClient({
   ...recoveryBase,
   target: 'microsoft-store',
-  gateway: {
-    ...gateway,
-    target: 'microsoft-store',
-    commerce: {
-      ...gateway.commerce,
-      async purchase() {
-        return {
-          status: 'completed',
-          transactionId: 'microsoft-ledger-1',
-          entitlementIds: ['COINS_100'],
-          authoritativeGrant: { ledgerEntryId: 'microsoft-ledger-1' },
-        };
-      },
-    },
-  },
+  gateway: microsoftGateway,
   operationStore: microsoftJournal,
 });
 const microsoftOperation = {
@@ -734,6 +737,62 @@ assert.equal((await microsoftClient.purchase(microsoftOperation)).status, 'grant
 assert.equal((await microsoftClient.purchase(microsoftOperation)).status, 'granted');
 resultStorageDown = false;
 assert.equal((await microsoftClient.purchase(microsoftOperation)).status, 'granted');
+
+// The adapter completed this Microsoft Store grant before the platform result was journaled.
+let platformStorageDown = true;
+const microsoftPlatformStore = createStore();
+const microsoftPlatformJournal: MonetizationOperationStore = {
+  ...microsoftPlatformStore,
+  async replace(expectedRevision, record) {
+    if (platformStorageDown && record.kind === 'purchase' && record.platform !== undefined) {
+      throw new Error('platform storage unavailable');
+    }
+    await microsoftPlatformStore.replace(expectedRevision, record);
+  },
+};
+const microsoftPlatformClient = createRecoverableMonetizationClient({
+  ...recoveryBase,
+  target: 'microsoft-store',
+  gateway: microsoftGateway,
+  operationStore: microsoftPlatformJournal,
+});
+const microsoftPlatformOperation = {
+  productId: 'COINS_100',
+  source: 'shop' as const,
+  idempotencyKey: 'microsoft-platform-outage',
+};
+const checkoutsBeforePlatformOutage = microsoftCheckouts;
+const microsoftPlatformFirst = await microsoftPlatformClient.purchase(microsoftPlatformOperation);
+assert.equal(microsoftPlatformFirst.status, 'granted');
+assert.equal(microsoftPlatformFirst.ledgerEntryId, 'microsoft-ledger-1');
+const microsoftPlatformRetry = await microsoftPlatformClient.purchase(microsoftPlatformOperation);
+assert.equal(microsoftPlatformRetry.status, 'granted');
+platformStorageDown = false;
+const microsoftRestored = await microsoftPlatformClient.purchase(microsoftPlatformOperation);
+assert.equal(microsoftRestored.status, 'granted');
+assert.equal(microsoftCheckouts, checkoutsBeforePlatformOutage + 1);
+platformStorageDown = true;
+await microsoftPlatformStore.reserve({
+  key: JSON.stringify(['microsoft-store', 'purchase', 'microsoft-callback-outage']),
+  kind: 'purchase',
+  playerId: 'player-1',
+  target: 'microsoft-store',
+  deploymentTarget: 'microsoft-store',
+  revision: 0,
+  input: { productId: 'COINS_100', source: 'shop', idempotencyKey: 'microsoft-callback-outage' },
+});
+const replayedMicrosoftGrant = await microsoftPlatformClient.recoverPurchaseResult(
+  'microsoft-callback-outage',
+  {
+    status: 'completed',
+    transactionId: 'microsoft-ledger-2',
+    entitlementIds: ['COINS_100'],
+    authoritativeGrant: { ledgerEntryId: 'microsoft-ledger-2' },
+  },
+);
+assert.equal(replayedMicrosoftGrant.status, 'granted');
+assert.equal(replayedMicrosoftGrant.ledgerEntryId, 'microsoft-ledger-2');
+platformStorageDown = false;
 
 const otherDeployment = createRecoverableMonetizationClient({
   ...recoveryBase,
@@ -815,5 +874,109 @@ await assert.rejects(
   }),
   /conflicts with the recorded operation/,
 );
+
+const purchaseRejection = {
+  verified: false,
+  alreadyProcessed: false,
+  disposition: 'rejected' as const,
+  reason: 'STORE_REJECTED',
+};
+const rewardRejection = {
+  granted: false,
+  alreadyProcessed: false,
+  disposition: 'rejected' as const,
+};
+
+/** Another runtime commits a terminal rejection just before this runtime's grant response. */
+function rejectBeforeGrantLands(journal: MonetizationOperationStore): MonetizationOperationStore {
+  const raced = new Set<string>();
+  return {
+    ...journal,
+    async replace(expectedRevision, record) {
+      if (raced.has(record.key) || record.platform === undefined) {
+        await journal.replace(expectedRevision, record);
+        return;
+      }
+      if (record.kind === 'purchase' && record.response?.verified === true) {
+        raced.add(record.key);
+        await journal.replace(expectedRevision, {
+          ...record,
+          response: purchaseRejection,
+          result: {
+            status: 'rejected',
+            purchase: record.platform,
+            verification: purchaseRejection,
+          },
+        });
+        throw new Error('another runtime recorded a rejection first');
+      }
+      if (record.kind === 'rewarded-ad' && record.response?.granted === true) {
+        raced.add(record.key);
+        await journal.replace(expectedRevision, {
+          ...record,
+          response: rewardRejection,
+          result: { status: 'rejected', reward: record.platform, claim: rewardRejection },
+        });
+        throw new Error('another runtime recorded a rejection first');
+      }
+      await journal.replace(expectedRevision, record);
+    },
+  };
+}
+
+let contestedVerifications = 0;
+let contestedClaims = 0;
+const contestedBackend: GameServicesBackendApi = {
+  ...backend,
+  purchases: {
+    async verifyPurchase() {
+      contestedVerifications += 1;
+      return contestedVerifications === 1
+        ? { verified: true, alreadyProcessed: false, ledgerEntryId: 'purchase-contested' }
+        : purchaseRejection;
+    },
+  },
+  adRewards: {
+    async claimAdReward() {
+      contestedClaims += 1;
+      return contestedClaims === 1
+        ? { granted: true, alreadyProcessed: false, ledgerEntryId: 'reward-contested' }
+        : rewardRejection;
+    },
+  },
+};
+const contestedStore = createStore();
+const contestedClient = createRecoverableMonetizationClient({
+  ...recoveryBase,
+  backend: contestedBackend,
+  operationStore: rejectBeforeGrantLands(contestedStore),
+});
+const contestedPurchase = {
+  productId: 'COINS_100',
+  source: 'shop' as const,
+  idempotencyKey: 'contested-purchase',
+};
+assert.equal((await contestedClient.purchase(contestedPurchase)).status, 'granted');
+const uiBeforeContestedRetry = purchaseUiCalls;
+const contestedRetry = await contestedClient.purchase(contestedPurchase);
+assert.equal(contestedRetry.status, 'granted', 'a cached grant replaces a stale rejection');
+assert.equal(contestedRetry.ledgerEntryId, 'purchase-contested');
+assert.equal(purchaseUiCalls, uiBeforeContestedRetry);
+const contestedRecord = await contestedStore.read(
+  JSON.stringify(['android', 'purchase', 'contested-purchase']),
+);
+assert.equal(contestedRecord?.result?.status, 'granted');
+
+const contestedReward = { placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'contested-reward' };
+assert.equal((await contestedClient.claimRewardedAd(contestedReward)).status, 'granted');
+const rewardUiBeforeContestedRetry = rewardUiCalls;
+const contestedRewardRetry = await contestedClient.claimRewardedAd(contestedReward);
+assert.equal(contestedRewardRetry.status, 'granted', 'a cached claim replaces a stale rejection');
+assert.equal(contestedRewardRetry.ledgerEntryId, 'reward-contested');
+assert.equal(rewardUiCalls, rewardUiBeforeContestedRetry);
+const contestedRewardRecord = await contestedStore.read(
+  JSON.stringify(['android', 'rewarded-ad', 'contested-reward']),
+);
+assert.equal(contestedRewardRecord?.result?.status, 'granted');
 
 console.log('Durable monetization operation recovery passed.');

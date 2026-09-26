@@ -1,5 +1,6 @@
 import type { PurchaseResult, RewardedAdResult } from '@mpgd/platform';
 
+import { isAuthoritativeMicrosoftStoreCompletion } from './authoritative-purchase.js';
 import { createGameServicesClient, type CreateGameServicesClientInput } from './client.js';
 import type {
   GameServicesOperationClient,
@@ -211,11 +212,14 @@ export function createRecoverableMonetizationClient(
     let record = initial;
     const unsavedResponse = unjournaledPurchaseResponses.get(record.key);
     if (unsavedResponse !== undefined && record.response?.verified !== true) {
+      // A result beside the non-grant response is stale, such as another runtime's rejection.
+      // Drop it in the same write so the client path derives this grant again.
+      const { result: staleResult, ...current } = record;
       try {
-        record = await save(record, { response: unsavedResponse });
+        record = await save(current, { response: unsavedResponse });
         unjournaledPurchaseResponses.delete(record.key);
       } catch {
-        return recordedPurchaseGrant({ ...record, response: unsavedResponse })
+        return recordedPurchaseGrant({ ...current, response: unsavedResponse })
           ?? pendingPurchase(record.platform);
       }
     } else if (record.response?.verified === true) {
@@ -242,7 +246,8 @@ export function createRecoverableMonetizationClient(
         });
         unjournaledPurchases.delete(record.key);
       } catch {
-        return pendingPurchase(unjournaled.platform);
+        return recordedPurchaseGrant({ ...record, platform: unjournaled.platform })
+          ?? pendingPurchase(unjournaled.platform);
       }
     } else if (record.platform !== undefined) {
       if (unjournaled !== undefined && !samePlatformResult(record.platform, unjournaled.platform)) {
@@ -353,11 +358,14 @@ export function createRecoverableMonetizationClient(
     let record = initial;
     const unsavedResponse = unjournaledRewardResponses.get(record.key);
     if (unsavedResponse !== undefined && record.response?.granted !== true) {
+      // A result beside the non-grant claim is stale, such as another runtime's rejection.
+      // Drop it in the same write so the client path derives this grant again.
+      const { result: staleResult, ...current } = record;
       try {
-        record = await save(record, { response: unsavedResponse });
+        record = await save(current, { response: unsavedResponse });
         unjournaledRewardResponses.delete(record.key);
       } catch {
-        return recordedRewardGrant({ ...record, response: unsavedResponse })
+        return recordedRewardGrant({ ...current, response: unsavedResponse })
           ?? pendingReward(record.platform);
       }
     } else if (record.response?.granted === true) {
@@ -515,7 +523,7 @@ export function createRecoverableMonetizationClient(
           record = await save(found, { platform, platformCompletedAt: completedAt });
         } catch {
           unjournaledPurchases.set(key, { platform, completedAt });
-          return pendingPurchase(platform);
+          return recordedPurchaseGrant({ ...found, platform }) ?? pendingPurchase(platform);
         }
       }
       unjournaledPurchases.delete(key);
@@ -670,6 +678,15 @@ function recordedPurchaseGrant(
 ): GameServicesPurchaseResult | undefined {
   if (record.result?.status === 'granted') {
     return record.result;
+  }
+  if (record.platform !== undefined
+    && isAuthoritativeMicrosoftStoreCompletion(record.target, record.platform)) {
+    // The adapter completed this ledger grant before returning, as the client path reports it.
+    return {
+      status: 'granted',
+      purchase: record.platform,
+      ledgerEntryId: record.platform.transactionId,
+    };
   }
   if (record.response?.verified !== true || record.platform === undefined) {
     return undefined;

@@ -10,6 +10,7 @@ import type {
   RewardedAdResult,
 } from '@mpgd/platform';
 
+import { isAuthoritativeMicrosoftStoreCompletion } from './authoritative-purchase.js';
 import type {
   GameServicesOperationClient,
   GameServicesPurchaseResult,
@@ -635,16 +636,6 @@ function purchaseRejectionReason(purchase: PurchaseResult): string | undefined {
     return 'purchase_pending';
   }
   return undefined;
-}
-
-function isAuthoritativeMicrosoftStoreCompletion(
-  target: GameServicesLedgerTarget,
-  purchase: PurchaseResult,
-): purchase is PurchaseResult & { readonly status: 'completed'; readonly transactionId: string } {
-  return target === 'microsoft-store'
-    && purchase.status === 'completed'
-    && purchase.transactionId !== undefined
-    && purchase.authoritativeGrant?.ledgerEntryId === purchase.transactionId;
 }
 
 function isGameServicesCommerceTarget(
