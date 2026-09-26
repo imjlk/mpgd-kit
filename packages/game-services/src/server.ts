@@ -1131,23 +1131,13 @@ async function verifyEvidence(
     status: 'pending',
     reason: 'EVIDENCE_VERIFIER_TIMEOUT',
   } as const satisfies EvidenceVerificationDecision;
-  let timedOut = false;
   let timeout: ReturnType<typeof setTimeout> | undefined;
-
+  let decision: EvidenceVerificationDecision;
   try {
-    return await Promise.race([
-      verify(controller.signal)
-        .then(assertEvidenceVerificationDecision)
-        .catch((error: unknown) => {
-          if (timedOut) {
-            return timeoutDecision;
-          }
-
-          throw error;
-        }),
+    decision = await Promise.race([
+      verify(controller.signal),
       new Promise<EvidenceVerificationDecision>((resolve) => {
         timeout = setTimeout(() => {
-          timedOut = true;
           resolve(timeoutDecision);
           controller.abort();
         }, timeoutMs);
@@ -1162,6 +1152,11 @@ async function verifyEvidence(
     if (timeout !== undefined) {
       clearTimeout(timeout);
     }
+  }
+  try {
+    return assertEvidenceVerificationDecision(decision);
+  } catch {
+    return { status: 'rejected', reason: 'EVIDENCE_VERIFIER_ERROR' };
   }
 }
 

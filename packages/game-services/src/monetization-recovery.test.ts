@@ -71,6 +71,7 @@ let rewardGrants = 0;
 let losePurchaseResponse = true;
 let ssvAvailable = false;
 let finalizationComplete = false;
+let finalizationOutage = false;
 const purchaseKeys = new Set<string>();
 const rewardKeys = new Set<string>();
 const purchaseRequestTimes: string[] = [];
@@ -104,6 +105,9 @@ const gateway: PlatformGateway = {
     },
     async purchase(operation) {
       purchaseUiCalls += 1;
+      if (operation.idempotencyKey === 'delayed-purchase') {
+        return { status: 'pending', entitlementIds: [] };
+      }
       if (operation.idempotencyKey === 'sdk-crash') {
         throw new Error('SDK callback was lost after checkout');
       }
@@ -122,6 +126,9 @@ const gateway: PlatformGateway = {
     async preload() {},
     async showRewarded(operation) {
       rewardUiCalls += 1;
+      if (operation.idempotencyKey === 'delayed-reward') {
+        return { status: 'pending', rewardGranted: false };
+      }
       if (operation.idempotencyKey === 'reward-sdk-crash') {
         throw new Error('SDK ad callback was lost');
       }
@@ -157,6 +164,9 @@ const gateway: PlatformGateway = {
 const backend: GameServicesBackendApi = {
   purchases: {
     async verifyPurchase(request) {
+      if (request.idempotencyKey === 'finish-later' && finalizationOutage) {
+        throw new Error('finalization backend unavailable');
+      }
       if (request.idempotencyKey === 'response-lost') {
         purchaseRequestTimes.push(request.purchasedAt);
       }
@@ -300,6 +310,12 @@ const finishLater = {
 const pendingFinish = await client.purchase(finishLater);
 assert.equal(pendingFinish.status, 'granted');
 assert.equal(pendingFinish.verification?.finalization?.status, 'pending');
+finalizationOutage = true;
+const outageSummary = await restarted.reconcile();
+assert.equal(outageSummary.some((entry) => entry.idempotencyKey === 'finish-later'
+  && entry.status === 'granted' && entry.finalizationPending), true);
+assert.equal((await restarted.purchase(finishLater)).status, 'granted');
+finalizationOutage = false;
 finalizationComplete = true;
 await restarted.reconcile();
 const finished = await restarted.purchase(finishLater);
@@ -436,5 +452,25 @@ assert.equal(hasForeign, false);
 const hasUnreadable = isolatedSummary.some((entry) => entry.idempotencyKey === 'unreadable-operation'
   && entry.status === 'action-required');
 assert.equal(hasUnreadable, true);
+
+const delayedPurchase = {
+  productId: 'COINS_100',
+  source: 'shop' as const,
+  idempotencyKey: 'delayed-purchase',
+};
+assert.equal((await client.purchase(delayedPurchase)).status, 'pending');
+const purchaseUiBeforeCallback = purchaseUiCalls;
+assert.equal((await restarted.recoverPurchaseResult('delayed-purchase', {
+  status: 'completed', transactionId: 'transaction-delayed-purchase', entitlementIds: [],
+})).status, 'granted');
+assert.equal(purchaseUiCalls, purchaseUiBeforeCallback);
+ssvAvailable = true;
+const delayedReward = { placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'delayed-reward' };
+assert.equal((await client.claimRewardedAd(delayedReward)).status, 'pending');
+const rewardUiBeforeCallback = rewardUiCalls;
+assert.equal((await restarted.recoverRewardResult('delayed-reward', {
+  status: 'completed', rewardGranted: true, ledgerEntryId: 'impression-delayed-reward',
+})).status, 'granted');
+assert.equal(rewardUiCalls, rewardUiBeforeCallback);
 
 console.log('Durable monetization operation recovery passed.');

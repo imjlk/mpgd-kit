@@ -216,12 +216,18 @@ export function createRecoverableMonetizationClient(
             try {
               response = await input.backend.purchases.verifyPurchase(recordedRequest);
             } catch {
+              if (record.response?.verified === true) {
+                return record.response;
+              }
               return {
                 verified: false,
                 alreadyProcessed: false,
                 disposition: 'pending',
                 reason: 'BACKEND_UNAVAILABLE',
               };
+            }
+            if (record.response?.verified === true && !response.verified) {
+              return record.response;
             }
             record = await save(record, { response });
             return response;
@@ -319,11 +325,14 @@ export function createRecoverableMonetizationClient(
       throw new Error('No reserved purchase operation matches this platform callback.');
     }
     assertOwner(found, 'purchase', idempotencyKey, found.input.productId);
-    if (found.platform !== undefined && !samePlatformResult(found.platform, platform)) {
+    const canAdvance = found.platform?.status === 'pending'
+      && platform.status !== 'pending' && found.request === undefined;
+    if (found.platform !== undefined && !samePlatformResult(found.platform, platform)
+      && !canAdvance) {
       throw new Error('A platform purchase callback conflicts with the recorded operation.');
     }
     let record = found;
-    if (found.platform === undefined) {
+    if (found.platform === undefined || canAdvance) {
       record = await save(found, { platform, platformCompletedAt: observedAt() });
     }
     return resumePurchase(record);
@@ -339,11 +348,14 @@ export function createRecoverableMonetizationClient(
       throw new Error('No reserved rewarded-ad operation matches this platform callback.');
     }
     assertOwner(found, 'rewarded-ad', idempotencyKey, found.input.placementId);
-    if (found.platform !== undefined && !samePlatformResult(found.platform, platform)) {
+    const canAdvance = found.platform?.status === 'pending'
+      && platform.status !== 'pending' && found.request === undefined;
+    if (found.platform !== undefined && !samePlatformResult(found.platform, platform)
+      && !canAdvance) {
       throw new Error('A platform ad callback conflicts with the recorded operation.');
     }
     let record = found;
-    if (found.platform === undefined) {
+    if (found.platform === undefined || canAdvance) {
       record = await save(found, { platform, platformCompletedAt: observedAt() });
     }
     return resumeReward(record);
