@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -23,7 +25,7 @@ import {
   writeNativeDeploymentPlan,
 } from './deploy-planning.js';
 import { runMpgdCli } from './index.js';
-import { runNativeDeployment } from './native-deploy-run.js';
+import { runNativeDeployment, withoutStoreSubmissionCredentials } from './native-deploy-run.js';
 
 const fixture = mkdtempSync(join(tmpdir(), 'mpgd-deploy-planning-'));
 const game = join(fixture, 'game');
@@ -80,6 +82,23 @@ try {
   config.profiles.beta.targets.ios.testGroup = 'group-1';
   writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
   const plan = planNativeDeployment({ game, profile: 'beta' });
+  const buildEnvironment = withoutStoreSubmissionCredentials(
+    {
+      MPGD_ASC_API_KEY: 'secret-asc-key',
+      MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT: '/private/service-account.json',
+      MPGD_ASC_KEY_ID: 'secret-key-id',
+      MPGD_ANDROID_UPLOAD_STORE_PASSWORD: 'secret-signing-password',
+      MPGD_IOS_SIGNING_P12_PASSWORD: 'secret-p12-password',
+      APP_VERSION: '1.0.0',
+    },
+    plan,
+  );
+  assert.equal(buildEnvironment.MPGD_ASC_API_KEY, undefined);
+  assert.equal(buildEnvironment.MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT, undefined);
+  assert.equal(buildEnvironment.MPGD_ASC_KEY_ID, undefined);
+  assert.equal(buildEnvironment.MPGD_ANDROID_UPLOAD_STORE_PASSWORD, undefined);
+  assert.equal(buildEnvironment.MPGD_IOS_SIGNING_P12_PASSWORD, undefined);
+  assert.equal(buildEnvironment.APP_VERSION, '1.0.0');
   assert.deepEqual(
     plan.targets.map((target) => target.target),
     ['android', 'ios'],
@@ -91,6 +110,13 @@ try {
   assert.throws(() => writeNativeDeploymentPlan(output, plan), /EEXIST/u);
   assert.deepEqual(JSON.parse(readFileSync(output, 'utf8')), plan);
   assert.deepEqual(readNativeDeploymentPlan(output), plan);
+  const movedGame = join(fixture, 'moved-game');
+  cpSync(game, movedGame, { recursive: true });
+  assert.deepEqual(
+    readNativeDeploymentPlan(output, movedGame),
+    { ...plan, gameRoot: realpathSync(movedGame) },
+    'an unchanged saved plan can move with a game checkout',
+  );
   assert.equal(
     readNativeDeployTargetProfile(plan, 'ios').submissionCredential.env,
     'MPGD_ASC_API_KEY',

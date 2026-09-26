@@ -511,7 +511,7 @@ process.exit(result.status ?? 1);
     checkpointNativeSubmission({
       gameRoot: game,
       gameId: 'alpha',
-      checkpoint: { ...editOpen, remoteEditId: 'edit-2' },
+      checkpoint: { ...editOpen, status: 'unknown', remoteEditId: 'edit-2' },
     }),
     /cannot be replaced/u,
   );
@@ -545,7 +545,17 @@ process.exit(result.status ?? 1);
     attemptId: 'e'.repeat(32),
   });
   assert.equal(reclaimedAndroid.checkpoint.remoteEditId, 'edit-1');
-  const committed = { ...reclaimedAndroid.checkpoint, status: 'committed' as const };
+  const replacementEdit = await checkpointNativeSubmission({
+    gameRoot: game,
+    gameId: 'alpha',
+    checkpoint: {
+      ...reclaimedAndroid.checkpoint,
+      status: 'edit-open',
+      remoteEditId: 'edit-2',
+    },
+  });
+  assert.equal(replacementEdit.checkpoint.remoteEditId, 'edit-2');
+  const committed = { ...replacementEdit.checkpoint, status: 'committed' as const };
   await checkpointNativeSubmission({ gameRoot: game, gameId: 'alpha', checkpoint: committed });
   await assert.rejects(
     checkpointNativeSubmission({

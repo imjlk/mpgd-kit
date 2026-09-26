@@ -104,9 +104,12 @@ export async function submitRecordedNativeTargetWithPorts(
   if (checkpoint !== undefined && isNativeSubmissionSettled(checkpoint.status)) {
     return checkpoint;
   }
-  if (checkpoint?.status === 'failed' || checkpoint?.status === 'action-required'
+  if (checkpoint?.status === 'failed'
+    || (checkpoint?.status === 'action-required'
+      && checkpoint.remoteUploadId === undefined && checkpoint.remoteBuildId === undefined)
     || (checkpoint?.status === 'unknown'
-      && checkpoint.remoteEditId === undefined && checkpoint.remoteUploadId === undefined)) {
+      && checkpoint.remoteEditId === undefined && checkpoint.remoteUploadId === undefined
+      && checkpoint.remoteBuildId === undefined)) {
     throw new Error('Submission requires operator reconciliation before another store call.');
   }
   if (checkpoint === undefined) {
@@ -167,10 +170,16 @@ export async function submitRecordedNativeTargetWithPorts(
         onEditCreated: async (editId) => {
           await save({ status: 'edit-open', remoteEditId: editId });
         },
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
     } catch (error) {
       try {
         if (error instanceof PlaySubmissionUncertainError) {
+          if (error.stage === 'checkpoint'
+            && activeCheckpoint.remoteEditId !== undefined
+            && activeCheckpoint.remoteEditId !== error.editId) {
+            await save({ status: 'edit-open', remoteEditId: error.editId });
+          }
           await save({ status: 'unknown', remoteEditId: error.editId });
         } else {
           await save({
@@ -208,6 +217,9 @@ export async function submitRecordedNativeTargetWithPorts(
         ...(activeCheckpoint.remoteUploadId === undefined ? {} : {
           resumeUploadId: activeCheckpoint.remoteUploadId,
           resumeArtifactSha256: activeCheckpoint.artifactSha256,
+        }),
+        ...(activeCheckpoint.remoteBuildId === undefined ? {} : {
+          resumeBuildId: activeCheckpoint.remoteBuildId,
         }),
         onUploadCommitted: async (uploadId) => {
           await save({ status: 'upload-committed', remoteUploadId: uploadId });

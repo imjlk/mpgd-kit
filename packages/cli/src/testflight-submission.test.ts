@@ -252,6 +252,21 @@ try {
     resumed.state.commands.some((command) => command.startsWith('builds upload ')),
     false,
   );
+  const buildOnly = mock({ existingBuild: true, processingState: 'VALID' });
+  const buildOnlyResult = await submitVerifiedIosBuildWithRunner(
+    { ...input, resumeBuildId: 'build-1' },
+    buildOnly.run,
+  );
+  assert.equal(buildOnlyResult.status, 'testflight-ready');
+  assert.equal(buildOnlyResult.uploadId, undefined);
+  assert.equal(
+    buildOnly.state.commands.some((command) => command.startsWith('builds upload ')),
+    false,
+  );
+  const wrongBuild = mock({ existingBuild: true });
+  assert.equal((await submitVerifiedIosBuildWithRunner(
+    { ...input, resumeBuildId: 'another-build' }, wrongBuild.run,
+  )).status, 'unknown');
   const missingUpload = mock({ uploadVisible: false });
   assert.equal((await submitVerifiedIosBuildWithRunner({ ...input, resumeUploadId: 'upload-1',
     resumeArtifactSha256: digest },

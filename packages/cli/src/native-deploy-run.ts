@@ -112,7 +112,7 @@ export async function runNativeDeployment(input: RunNativeDeploymentInput): Prom
   if (missing.length > 0) {
     await withPinnedReleaseWorkspace(pinned, async (workspace) => {
       await installPinnedReleaseDependencies(workspace, {
-        environment,
+        environment: dependencyInstallEnvironment(environment),
         ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
       for (const target of missing) {
@@ -205,7 +205,7 @@ async function buildAndRecordTarget(
   }
   const profile = readNativeDeployTargetProfile(input.plan, target);
   const buildEnvironment: NodeJS.ProcessEnv = {
-    ...environment,
+    ...withoutStoreSubmissionCredentials(environment, input.plan),
     APP_VERSION: input.gameVersion,
     BUILD_ID: reserved.buildId,
     MPGD_RELEASE_REVISION: String(reserved.releaseRevision),
@@ -231,8 +231,10 @@ async function buildAndRecordTarget(
       secretValues,
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     });
-    const artifactLocation = `.mpgd/releases/${input.releaseKey}/${target}.${target === 'android' ? 'aab' : 'ipa'}`;
-    const manifestLocation = `.mpgd/releases/${input.releaseKey}/${target}-manifest.json`;
+    // Content-addressed candidates never block a rebuild after a crash before
+    // the immutable build record is committed. Unreferenced copies stay inert.
+    const artifactLocation = `.mpgd/releases/${input.releaseKey}/${target}-${sha256(built.artifact)}.${target === 'android' ? 'aab' : 'ipa'}`;
+    const manifestLocation = `.mpgd/releases/${input.releaseKey}/${target}-manifest-${sha256(built.releaseManifest)}.json`;
     const artifactFile = persistImmutableFile(
       input.plan.gameRoot,
       artifactLocation,
@@ -338,6 +340,65 @@ function requiredEnvironment(environment: NodeJS.ProcessEnv, name: string): stri
     throw new Error(`Native deployment requires ${name}.`);
   }
   return value;
+}
+
+/** Install hooks must never inherit signing or store credentials. */
+export function dependencyInstallEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const allowed = [
+    'PATH',
+    'HOME',
+    'TMPDIR',
+    'TMP',
+    'TEMP',
+    'USER',
+    'SHELL',
+    'CI',
+    'COREPACK_HOME',
+    'PNPM_HOME',
+    'npm_config_store_dir',
+    'JAVA_HOME',
+    'ANDROID_HOME',
+    'ANDROID_SDK_ROOT',
+  ];
+  const entries = allowed.flatMap((name) => {
+    const value = environment[name];
+    return value === undefined ? [] : [[name, value] as const];
+  });
+  return Object.fromEntries(entries);
+}
+
+/** Signing needs build keys, but neither web nor native build needs store API keys. */
+export function withoutStoreSubmissionCredentials(
+  environment: NodeJS.ProcessEnv,
+  plan: NativeDeploymentPlan,
+): NodeJS.ProcessEnv {
+  const result = { ...environment };
+  for (const entry of plan.targets) {
+    delete result[readNativeDeployTargetProfile(plan, entry.target).submissionCredential.env];
+  }
+  for (const name of [
+    'MPGD_ASC_KEY_ID',
+    'MPGD_ASC_ISSUER_ID',
+    'MPGD_ASC_APP_ID',
+    'MPGD_ASC_BINARY',
+    'GOOGLE_APPLICATION_CREDENTIALS',
+    'MPGD_ANDROID_UPLOAD_KEYSTORE',
+    'MPGD_ANDROID_UPLOAD_STORE_PASSWORD',
+    'MPGD_ANDROID_UPLOAD_KEY_ALIAS',
+    'MPGD_ANDROID_UPLOAD_KEY_PASSWORD',
+    'MPGD_IOS_SIGNING_P12',
+    'MPGD_IOS_SIGNING_P12_PASSWORD',
+    'MPGD_IOS_PROVISIONING_PROFILE',
+  ]) {
+    delete result[name];
+  }
+  for (const name of Object.keys(result)) {
+    if (name.startsWith('MPGD_ANDROID_SIGNING_')
+      || name.startsWith('MPGD_IOS_SESSION_')) {
+      delete result[name];
+    }
+  }
+  return result;
 }
 
 function requiredExistingFile(environment: NodeJS.ProcessEnv, name: string): string {

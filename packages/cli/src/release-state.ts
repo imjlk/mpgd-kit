@@ -597,6 +597,10 @@ export async function checkpointNativeSubmission(input: {
         || previous.status === 'failed'
         || previous.remoteEditId !== undefined
           && previous.remoteEditId !== input.checkpoint.remoteEditId
+          && !(previous.target === 'android'
+            && previous.status === 'unknown'
+            && input.checkpoint.status === 'edit-open'
+            && input.checkpoint.remoteEditId !== undefined)
         || previous.remoteUploadId !== undefined
           && previous.remoteUploadId !== input.checkpoint.remoteUploadId
         || previous.remoteBuildId !== undefined
@@ -658,9 +662,12 @@ export async function reclaimNativeSubmission(input: {
       throw new Error('Store submission lease is still active.');
     }
     if (isNativeSubmissionSettled(previous.status)
-      || previous.status === 'failed' || previous.status === 'action-required'
+      || previous.status === 'failed'
+      || (previous.status === 'action-required'
+        && previous.remoteUploadId === undefined && previous.remoteBuildId === undefined)
       || (previous.status === 'unknown'
-        && previous.remoteEditId === undefined && previous.remoteUploadId === undefined)) {
+        && previous.remoteEditId === undefined && previous.remoteUploadId === undefined
+        && previous.remoteBuildId === undefined)) {
       throw new Error('Store submission needs operator reconciliation before reclaim.');
     }
     const checkpoint = {
@@ -742,6 +749,7 @@ function allowedSubmissionTransition(
     uploaded: ['processing', 'testflight-ready', 'unknown', 'failed', 'action-required'],
     processing: ['testflight-ready', 'unknown', 'failed', 'action-required'],
     unknown: [
+      'edit-open',
       'uploaded',
       'processing',
       'testflight-ready',

@@ -194,6 +194,42 @@ try {
   assert.equal(ready.status, 'testflight-ready');
   await submitRecordedNativeTargetWithPorts(iosInput, ports);
   assert.equal(iosCalls, 2);
+  checkpoints = {
+    ios: {
+      ...processing,
+      status: 'action-required',
+      leaseExpiresAt: new Date(0).toISOString(),
+    },
+  };
+  const clearedAction = await submitRecordedNativeTargetWithPorts(iosInput, ports);
+  assert.equal(clearedAction.status, 'testflight-ready');
+  const { remoteUploadId: unusedUploadId, ...withoutUpload } = processing;
+  void unusedUploadId;
+  checkpoints = {
+    ios: {
+      ...withoutUpload,
+      status: 'unknown',
+      remoteBuildId: 'build-1',
+      leaseExpiresAt: new Date(0).toISOString(),
+    },
+  };
+  const buildOnly = await submitRecordedNativeTargetWithPorts(iosInput, {
+    ...ports,
+    async submitIos(input) {
+      assert.equal(input.resumeBuildId, 'build-1');
+      assert.equal(input.resumeUploadId, undefined);
+      return {
+        status: 'testflight-ready',
+        appStoreAppId: '123456',
+        bundleId: 'dev.mpgd.test',
+        marketingVersion: '1.0.0',
+        buildNumber: '42',
+        internalGroupId: 'group-1',
+        buildId: 'build-1',
+      };
+    },
+  });
+  assert.equal(buildOnly.status, 'testflight-ready');
   checkpoints = {};
   iosCalls = 0;
   failIosCheckpoint = true;

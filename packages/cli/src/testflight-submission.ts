@@ -45,6 +45,8 @@ export interface IosTestFlightSubmissionInput {
   readonly apiPrivateKeyBase64: string;
   /** Persist this ID before continuing; supplying it on retry skips uploading. */
   readonly resumeUploadId?: string;
+  /** Reconcile an already-discovered build without starting another upload. */
+  readonly resumeBuildId?: string;
   /** SHA-256 persisted with resumeUploadId by the same release checkpoint. */
   readonly resumeArtifactSha256?: string;
   readonly onUploadCommitted?: (uploadId: string) => Promise<void>;
@@ -188,7 +190,7 @@ async function submitVerifiedIosBuildResolved(
   }
 
   let uploadId = input.resumeUploadId;
-  if (uploadId === undefined) {
+  if (uploadId === undefined && input.resumeBuildId === undefined) {
     const before = await lookupBuild(input, marketingVersion, buildNumber, run);
     if (before !== undefined) {
       return {
@@ -244,7 +246,7 @@ async function submitVerifiedIosBuildResolved(
     } catch {
       throw new IosSubmissionUncertainError(uploadId);
     }
-  } else {
+  } else if (uploadId !== undefined) {
     const matches = (await lookupUploadIds(input, marketingVersion, buildNumber, run))
       .filter((id) => id === uploadId);
     if (matches.length !== 1) {
@@ -257,6 +259,7 @@ async function submitVerifiedIosBuildResolved(
     }
   }
 
+  const uploadReference = uploadId === undefined ? {} : { uploadId };
   let build: ObservedBuild | undefined;
   try {
     build = await lookupBuild(input, marketingVersion, buildNumber, run);
@@ -264,26 +267,35 @@ async function submitVerifiedIosBuildResolved(
     return {
       ...base,
       status: 'uploaded',
-      uploadId,
+      ...uploadReference,
       detail: `Upload committed; build processing lookup is temporarily unavailable${failureReason(error)}.`,
+    };
+  }
+  if (input.resumeBuildId !== undefined && build?.id !== input.resumeBuildId) {
+    return {
+      ...base,
+      status: 'unknown',
+      ...uploadReference,
+      buildId: input.resumeBuildId,
+      detail: 'Checkpointed build ID does not match the reserved App Store build.',
     };
   }
   if (build === undefined) {
     return {
       ...base,
       status: 'uploaded',
-      uploadId,
+      ...uploadReference,
       detail: 'Upload committed; build is not yet discoverable.',
     };
   }
   if (build.processingState === 'PROCESSING') {
-    return { ...base, status: 'processing', uploadId, buildId: build.id };
+    return { ...base, status: 'processing', ...uploadReference, buildId: build.id };
   }
   if (build.processingState === 'FAILED' || build.processingState === 'INVALID') {
     return {
       ...base,
       status: 'failed',
-      uploadId,
+      ...uploadReference,
       buildId: build.id,
       detail: `App Store Connect reported ${build.processingState}.`,
     };
@@ -292,7 +304,7 @@ async function submitVerifiedIosBuildResolved(
     return {
       ...base,
       status: 'unknown',
-      uploadId,
+      ...uploadReference,
       buildId: build.id,
       detail: 'App Store Connect returned an unknown processing state.',
     };
@@ -313,7 +325,7 @@ async function submitVerifiedIosBuildResolved(
     return {
       ...base,
       status,
-      uploadId,
+      ...uploadReference,
       buildId: build.id,
       detail: `Build is processed, but internal group assignment needs inspection${failureReason(error)}.`,
     };
@@ -325,7 +337,7 @@ async function submitVerifiedIosBuildResolved(
       lookupTimeoutMs,
     );
     if (findInternalGroup(memberships, input.internalGroupId)) {
-      return { ...base, status: 'testflight-ready', uploadId, buildId: build.id };
+      return { ...base, status: 'testflight-ready', ...uploadReference, buildId: build.id };
     }
   } catch (error) {
     membershipFailure = error;
@@ -334,7 +346,7 @@ async function submitVerifiedIosBuildResolved(
   return {
     ...base,
     status: 'unknown',
-    uploadId,
+    ...uploadReference,
     buildId: build.id,
     detail: `Group assignment response was not confirmed by a membership read${failureReason(membershipFailure)}.`,
   };

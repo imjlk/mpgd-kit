@@ -186,7 +186,10 @@ export function writeNativeDeploymentPlan(file: string, plan: NativeDeploymentPl
 }
 
 /** Load a saved plan only if it still equals the game-owned current configuration. */
-export function readNativeDeploymentPlan(file: string): NativeDeploymentPlan {
+export function readNativeDeploymentPlan(
+  file: string,
+  gameRootOverride?: string,
+): NativeDeploymentPlan {
   const raw = parseObject(readFileSync(resolve(file), 'utf8'), file);
   if (raw.schemaVersion !== 1 || typeof raw.gameRoot !== 'string'
     || !isAbsolute(raw.gameRoot) || typeof raw.profile !== 'string'
@@ -199,11 +202,11 @@ export function readNativeDeploymentPlan(file: string): NativeDeploymentPlan {
     throw new Error('Saved native deployment plan is malformed.');
   }
   const plan = planNativeDeployment({
-    game: raw.gameRoot,
+    game: gameRootOverride ?? raw.gameRoot,
     profile: raw.profile,
     targets: raw.targets.map((entry) => (entry as { target: NativeDeployTarget }).target),
   });
-  if (!isDeepStrictEqual(raw, plan)) {
+  if (!isDeepStrictEqual({ ...raw, gameRoot: plan.gameRoot }, plan)) {
     throw new Error('Saved native deployment plan differs from current game configuration.');
   }
   return plan;

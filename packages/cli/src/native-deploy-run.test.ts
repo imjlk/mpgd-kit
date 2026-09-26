@@ -11,12 +11,27 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { persistImmutableFile, planNativeDeploymentSteps } from './native-deploy-run.js';
+import {
+  dependencyInstallEnvironment,
+  persistImmutableFile,
+  planNativeDeploymentSteps,
+} from './native-deploy-run.js';
 import type { NativeDeploymentPlan } from './deploy-planning.js';
 import type { NativeReleaseStatus } from './release-state.js';
 
 const fixture = mkdtempSync(path.join(tmpdir(), 'mpgd-deploy-output-test-'));
 try {
+  assert.deepEqual(
+    dependencyInstallEnvironment({
+      PATH: '/bin',
+      HOME: '/safe-home',
+      MPGD_IOS_SIGNING_P12_PASSWORD: 'private-password',
+      MPGD_ASC_API_KEY: 'private-key',
+      GOOGLE_APPLICATION_CREDENTIALS: '/private/account.json',
+    }),
+    { PATH: '/bin', HOME: '/safe-home' },
+    'dependency install hooks cannot read deployment credentials',
+  );
   const game = path.join(fixture, 'game');
   const outside = path.join(fixture, 'outside');
   const source = path.join(fixture, 'source.aab');
@@ -30,6 +45,11 @@ try {
   assert.equal(readFileSync(output, 'utf8'), 'signed artifact bytes');
   assert.equal(persistImmutableFile(game, location, source), output);
   assert.throws(() => persistImmutableFile(game, location, other), /different bytes/u);
+  const retryLocation = '.mpgd/releases/beta-001/android-different.aab';
+  assert.equal(
+    readFileSync(persistImmutableFile(game, retryLocation, other), 'utf8'),
+    'different artifact bytes',
+  );
   assert.throws(() => persistImmutableFile(game, '../outside/bad.aab', source), /escapes/u);
   const linkedGame = path.join(fixture, 'linked-game');
   mkdirSync(linkedGame);

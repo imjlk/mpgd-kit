@@ -626,13 +626,18 @@ const deployCommand = defineI18n({
       }),
       args: {
         plan: { type: 'string', required: true, description: 'Saved deployment plan JSON.' },
+        game: { type: 'string', required: false, description: 'Current game directory if the plan moved.' },
         'game-id': { type: 'string', required: true, description: 'Explicit release ledger game ID.' },
         release: { type: 'string', required: true, description: 'Explicit release ID.' },
         target: { type: 'string', required: true, description: 'android or ios.' },
         approve: { type: 'boolean', required: false, description: 'Approve internal test submission.' },
       },
       run: async (ctx) => {
-        const plan = readNativeDeploymentPlan(readRequiredCliOption(ctx.values.plan, '--plan'));
+        const game = readOptionalString(ctx.values.game);
+        const plan = readNativeDeploymentPlan(
+          readRequiredCliOption(ctx.values.plan, '--plan'),
+          game === undefined ? undefined : path.resolve(game),
+        );
         const target = readRequiredCliOption(ctx.values.target, '--target');
         if (target !== 'android' && target !== 'ios') {
           throw new Error('--target must be android or ios.');
@@ -656,6 +661,7 @@ const deployCommand = defineI18n({
       }),
       args: {
         plan: { type: 'string', required: true, description: 'Saved deployment plan JSON.' },
+        game: { type: 'string', required: false, description: 'Current game directory if the plan moved.' },
         'game-id': { type: 'string', required: true, description: 'Explicit release ledger game ID.' },
         'game-version': { type: 'string', required: true, description: 'Game SemVer version.' },
         release: { type: 'string', required: true, description: 'Explicit release ID.' },
@@ -666,7 +672,11 @@ const deployCommand = defineI18n({
         approve: { type: 'boolean', required: false, description: 'Approve internal test submission.' },
       },
       run: async (ctx) => {
-        const plan = readNativeDeploymentPlan(readRequiredCliOption(ctx.values.plan, '--plan'));
+        const game = readOptionalString(ctx.values.game);
+        const plan = readNativeDeploymentPlan(
+          readRequiredCliOption(ctx.values.plan, '--plan'),
+          game === undefined ? undefined : path.resolve(game),
+        );
         const infoFile = path.join(packageRoot, 'dist/native-build-info.json');
         const info = readJsonForCli(infoFile, 'native builder metadata');
         assertJsonObject(info, 'native builder package metadata');
