@@ -571,4 +571,97 @@ assert.equal((await runningPurchase).status, 'granted');
 assert.equal((await queuedPurchase).status, 'granted');
 assert.equal(purchaseUiCalls, beforeInflightUi + 1);
 
+function failOneJournalWrite(
+  shouldFail: (record: MonetizationOperationRecord) => boolean,
+): MonetizationOperationStore {
+  let failed = false;
+  return {
+    ...operationStore,
+    async replace(expectedRevision, record) {
+      if (!failed && shouldFail(record)) {
+        failed = true;
+        throw new Error('simulated journal CAS failure');
+      }
+      await operationStore.replace(expectedRevision, record);
+    },
+  };
+}
+
+const platformWriteKey = 'platform-write-failure';
+const platformWriteStore = failOneJournalWrite((record) => record.kind === 'purchase'
+  && record.input.idempotencyKey === platformWriteKey && record.platform?.status === 'completed');
+const platformWriteInput = { ...recoveryBase, operationStore: platformWriteStore };
+const platformWriteClient = createRecoverableMonetizationClient(platformWriteInput);
+const platformWriteOperation = {
+  productId: 'COINS_100',
+  source: 'shop' as const,
+  idempotencyKey: platformWriteKey,
+};
+const platformWriteFirst = await platformWriteClient.purchase(platformWriteOperation);
+assert.equal(platformWriteFirst.status, 'pending');
+assert.equal(platformWriteFirst.purchase.status, 'completed');
+const afterPlatformWriteUi = purchaseUiCalls;
+assert.equal((await platformWriteClient.purchase(platformWriteOperation)).status, 'granted');
+assert.equal(purchaseUiCalls, afterPlatformWriteUi);
+
+const adPlatformWriteKey = 'ad-platform-write-failure';
+const adPlatformWriteStore = failOneJournalWrite((record) => record.kind === 'rewarded-ad'
+  && record.input.idempotencyKey === adPlatformWriteKey
+  && record.platform?.status === 'completed');
+const adPlatformWriteInput = { ...recoveryBase, operationStore: adPlatformWriteStore };
+const adPlatformWriteClient = createRecoverableMonetizationClient(adPlatformWriteInput);
+const adPlatformWriteOperation = {
+  placementId: 'CONTINUE_AFTER_FAIL',
+  idempotencyKey: adPlatformWriteKey,
+};
+const adPlatformWriteFirst = await adPlatformWriteClient.claimRewardedAd(adPlatformWriteOperation);
+assert.equal(adPlatformWriteFirst.status, 'pending');
+assert.equal(adPlatformWriteFirst.reward.status, 'completed');
+const afterAdPlatformWriteUi = rewardUiCalls;
+const recoveredAdPlatformWrite = await adPlatformWriteClient.claimRewardedAd(
+  adPlatformWriteOperation,
+);
+assert.equal(recoveredAdPlatformWrite.status, 'granted');
+assert.equal(rewardUiCalls, afterAdPlatformWriteUi);
+
+const responseWriteKey = 'response-write-failure';
+const responseWriteStore = failOneJournalWrite((record) => record.kind === 'purchase'
+  && record.input.idempotencyKey === responseWriteKey && record.response?.verified === true);
+const responseWriteInput = { ...recoveryBase, operationStore: responseWriteStore };
+const responseWriteClient = createRecoverableMonetizationClient(responseWriteInput);
+const responseWriteOperation = {
+  productId: 'COINS_100',
+  source: 'shop' as const,
+  idempotencyKey: responseWriteKey,
+};
+const grantsBeforeResponseWrite = purchaseGrants;
+const responseWriteFirst = await responseWriteClient.purchase(responseWriteOperation);
+assert.equal(responseWriteFirst.status, 'granted');
+assert.equal(purchaseGrants, grantsBeforeResponseWrite + 1);
+const afterResponseWriteUi = purchaseUiCalls;
+assert.equal((await responseWriteClient.purchase(responseWriteOperation)).status, 'granted');
+assert.equal(purchaseUiCalls, afterResponseWriteUi);
+assert.equal(purchaseGrants, grantsBeforeResponseWrite + 1);
+
+const adResponseWriteKey = 'ad-response-write-failure';
+const adResponseWriteStore = failOneJournalWrite((record) => record.kind === 'rewarded-ad'
+  && record.input.idempotencyKey === adResponseWriteKey && record.response?.granted === true);
+const adResponseWriteInput = { ...recoveryBase, operationStore: adResponseWriteStore };
+const adResponseWriteClient = createRecoverableMonetizationClient(adResponseWriteInput);
+const adResponseWriteOperation = {
+  placementId: 'CONTINUE_AFTER_FAIL',
+  idempotencyKey: adResponseWriteKey,
+};
+const rewardsBeforeResponseWrite = rewardGrants;
+const firstAdResponseWrite = await adResponseWriteClient.claimRewardedAd(adResponseWriteOperation);
+assert.equal(firstAdResponseWrite.status, 'granted');
+assert.equal(rewardGrants, rewardsBeforeResponseWrite + 1);
+const afterAdResponseWriteUi = rewardUiCalls;
+const retriedAdResponseWrite = await adResponseWriteClient.claimRewardedAd(
+  adResponseWriteOperation,
+);
+assert.equal(retriedAdResponseWrite.status, 'granted');
+assert.equal(rewardUiCalls, afterAdResponseWriteUi);
+assert.equal(rewardGrants, rewardsBeforeResponseWrite + 1);
+
 console.log('Durable monetization operation recovery passed.');

@@ -101,6 +101,14 @@ export function createRecoverableMonetizationClient(
   const store = input.operationStore;
   const observedAt = (): string => input.now?.() ?? new Date().toISOString();
   const inFlight = new Map<string, Promise<unknown>>();
+  const unjournaledPurchases = new Map<string, {
+    readonly platform: PurchaseResult;
+    readonly completedAt: string;
+  }>();
+  const unjournaledRewards = new Map<string, {
+    readonly platform: RewardedAdResult;
+    readonly completedAt: string;
+  }>();
 
   async function serializeOperation<T>(key: string, task: () => Promise<T>): Promise<T> {
     const previous = inFlight.get(key) ?? Promise.resolve();
@@ -192,6 +200,21 @@ export function createRecoverableMonetizationClient(
     options?: GameServicesOperationOptions<GameServicesPurchaseProgress>,
   ): Promise<GameServicesPurchaseResult> {
     let record = initial;
+    const unjournaled = unjournaledPurchases.get(record.key);
+    if (unjournaled !== undefined && (record.platform === undefined
+      || record.platform.status === 'pending' && unjournaled.platform.status !== 'pending')) {
+      try {
+        record = await save(record, {
+          platform: unjournaled.platform,
+          platformCompletedAt: unjournaled.completedAt,
+        });
+        unjournaledPurchases.delete(record.key);
+      } catch {
+        return pendingPurchase(unjournaled.platform);
+      }
+    } else if (record.platform !== undefined) {
+      unjournaledPurchases.delete(record.key);
+    }
     const completed = record.result;
     if (completed !== undefined && !purchaseNeedsRetry(record)) {
       return observeGameServicesOperation('purchase', options, async () => completed);
@@ -214,7 +237,15 @@ export function createRecoverableMonetizationClient(
               return record.platform;
             }
             const platform = await input.gateway.commerce.purchase(request);
-            record = await save(record, { platform, platformCompletedAt: observedAt() });
+            const completedAt = observedAt();
+            const prior = record;
+            record = { ...record, platform, platformCompletedAt: completedAt };
+            try {
+              record = await save(prior, { platform, platformCompletedAt: completedAt });
+            } catch (error) {
+              unjournaledPurchases.set(record.key, { platform, completedAt });
+              throw error;
+            }
             return platform;
           },
         },
@@ -247,7 +278,9 @@ export function createRecoverableMonetizationClient(
             if (record.response?.verified === true && !response.verified) {
               return record.response;
             }
-            record = await save(record, { response });
+            const prior = record;
+            record = { ...record, response };
+            record = await save(prior, { response });
             return response;
           },
         },
@@ -269,6 +302,21 @@ export function createRecoverableMonetizationClient(
     options?: GameServicesOperationOptions<GameServicesRewardedAdProgress>,
   ): Promise<GameServicesRewardedAdResult> {
     let record = initial;
+    const unjournaled = unjournaledRewards.get(record.key);
+    if (unjournaled !== undefined && (record.platform === undefined
+      || record.platform.status === 'pending' && unjournaled.platform.status !== 'pending')) {
+      try {
+        record = await save(record, {
+          platform: unjournaled.platform,
+          platformCompletedAt: unjournaled.completedAt,
+        });
+        unjournaledRewards.delete(record.key);
+      } catch {
+        return pendingReward(unjournaled.platform);
+      }
+    } else if (record.platform !== undefined) {
+      unjournaledRewards.delete(record.key);
+    }
     const completed = record.result;
     if (completed !== undefined && completed.status !== 'pending') {
       return observeGameServicesOperation('rewarded-ad', options, async () => completed);
@@ -291,7 +339,15 @@ export function createRecoverableMonetizationClient(
               return record.platform;
             }
             const platform = await input.gateway.ads.showRewarded(request);
-            record = await save(record, { platform, platformCompletedAt: observedAt() });
+            const completedAt = observedAt();
+            const prior = record;
+            record = { ...record, platform, platformCompletedAt: completedAt };
+            try {
+              record = await save(prior, { platform, platformCompletedAt: completedAt });
+            } catch (error) {
+              unjournaledRewards.set(record.key, { platform, completedAt });
+              throw error;
+            }
             return platform;
           },
         },
@@ -324,7 +380,9 @@ export function createRecoverableMonetizationClient(
             if (record.response?.granted === true && !response.granted) {
               return record.response;
             }
-            record = await save(record, { response });
+            const prior = record;
+            record = { ...record, response };
+            record = await save(prior, { response });
             return response;
           },
         },
@@ -350,6 +408,11 @@ export function createRecoverableMonetizationClient(
         throw new Error('No reserved purchase operation matches this platform callback.');
       }
       assertOwner(found, 'purchase', idempotencyKey, found.input.productId);
+      const transient = unjournaledPurchases.get(key);
+      if (transient !== undefined && !samePlatformResult(transient.platform, platform)
+        && !(transient.platform.status === 'pending' && platform.status !== 'pending')) {
+        throw new Error('A platform purchase callback conflicts with the unjournaled result.');
+      }
       const canAdvance = found.platform?.status === 'pending'
         && platform.status !== 'pending' && found.request === undefined;
       if (found.platform !== undefined && !samePlatformResult(found.platform, platform)
@@ -358,8 +421,15 @@ export function createRecoverableMonetizationClient(
       }
       let record = found;
       if (found.platform === undefined || canAdvance) {
-        record = await save(found, { platform, platformCompletedAt: observedAt() });
+        const completedAt = observedAt();
+        try {
+          record = await save(found, { platform, platformCompletedAt: completedAt });
+        } catch {
+          unjournaledPurchases.set(key, { platform, completedAt });
+          return pendingPurchase(platform);
+        }
       }
+      unjournaledPurchases.delete(key);
       return resumePurchase(record);
     });
   }
@@ -375,6 +445,11 @@ export function createRecoverableMonetizationClient(
         throw new Error('No reserved rewarded-ad operation matches this platform callback.');
       }
       assertOwner(found, 'rewarded-ad', idempotencyKey, found.input.placementId);
+      const transient = unjournaledRewards.get(key);
+      if (transient !== undefined && !samePlatformResult(transient.platform, platform)
+        && !(transient.platform.status === 'pending' && platform.status !== 'pending')) {
+        throw new Error('A platform ad callback conflicts with the unjournaled result.');
+      }
       const canAdvance = found.platform?.status === 'pending'
         && platform.status !== 'pending' && found.request === undefined;
       if (found.platform !== undefined && !samePlatformResult(found.platform, platform)
@@ -383,8 +458,15 @@ export function createRecoverableMonetizationClient(
       }
       let record = found;
       if (found.platform === undefined || canAdvance) {
-        record = await save(found, { platform, platformCompletedAt: observedAt() });
+        const completedAt = observedAt();
+        try {
+          record = await save(found, { platform, platformCompletedAt: completedAt });
+        } catch {
+          unjournaledRewards.set(key, { platform, completedAt });
+          return pendingReward(platform);
+        }
       }
+      unjournaledRewards.delete(key);
       return resumeReward(record);
     });
   }

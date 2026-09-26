@@ -289,6 +289,37 @@ describe('Capacitor optional provider composition', () => {
     })).rejects.toMatchObject({ code: 'NATIVE_PROVIDER_INVALID_RESPONSE' });
   });
 
+  it('passes a deferred rewarded result through without granting a reward', async () => {
+    let invalidGrant = false;
+    const provider: CapacitorServiceProvider = {
+      id: 'pending-reward-provider',
+      features: ['rewardedAds'],
+      methods: ['ads.preload', 'ads.showRewarded'],
+      async getAvailability() { return { rewardedAds: 'available' }; },
+      bridge: {
+        async request(input) {
+          if (input.method === 'ads.preload') {
+            return { id: input.id, ok: true, data: undefined };
+          }
+          return { id: input.id, ok: true, data: {
+            status: 'pending', rewardGranted: invalidGrant,
+          } };
+        },
+      },
+    };
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android', appVersion: '1', buildId: 'base', bridge: baseBridge([]),
+      providers: [provider],
+    });
+    await expect(gateway.ads.showRewarded({
+      placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'pending-ad',
+    })).resolves.toEqual({ status: 'pending', rewardGranted: false });
+    invalidGrant = true;
+    await expect(gateway.ads.showRewarded({
+      placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'invalid-pending-ad',
+    })).rejects.toMatchObject({ code: 'NATIVE_PROVIDER_INVALID_RESPONSE' });
+  });
+
   it('routes banner mount and unmount through a ready banner provider', async () => {
     const providerRequests: BridgeRequest[] = [];
     const provider: CapacitorServiceProvider = {
