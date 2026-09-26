@@ -235,6 +235,16 @@ try {
     assert.equal(deployPlan.targets[0]?.target, 'android');
     assert.equal(deployPlan.targets[0]?.appId, 'dev.mpgd.externalgame');
     assert.equal(JSON.stringify(deployPlan).includes('MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT'), false);
+    mustRun('pnpm', [
+      'exec', 'mpgd', 'deploy', 'workflow', 'init', '--game', gameRoot,
+      '--profile', 'beta', '--targets', 'android', '--release-branch', 'main',
+    ], gameRoot);
+    const workflows = readdirSync(join(gameRoot, '.github/workflows'));
+    assert.equal(workflows.length, 1);
+    const workflow = readFileSync(join(gameRoot, '.github/workflows', workflows[0]), 'utf8');
+    assert.match(workflow, /deploy_android:/u);
+    assert.doesNotMatch(workflow, /deploy_ios:/u);
+    assert.match(workflow, /github\.ref == 'refs\/heads\/main'/u);
   }
   console.info(`External @mpgd/cli native ${syncIos ? 'iOS sync' : 'validation'} passed.`);
 } finally {

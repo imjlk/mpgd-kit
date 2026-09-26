@@ -419,11 +419,15 @@ export function dependencyInstallEnvironment(
   const forbidden = new Set([
     ...(plan === undefined ? [] : readNativeDeployCredentialNames(plan)),
     'GOOGLE_APPLICATION_CREDENTIALS',
+    'GITHUB_TOKEN',
+    'GH_TOKEN',
+    'GIT_ASKPASS',
   ]);
   for (const name of environment.MPGD_DEPENDENCY_INSTALL_ENV_NAMES?.split(',') ?? []) {
     const normalized = name.trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(normalized)
-      || normalized.startsWith('MPGD_') || forbidden.has(normalized)) {
+      || normalized.startsWith('MPGD_') || normalized.startsWith('GIT_CONFIG_')
+      || forbidden.has(normalized)) {
       throw new Error(`Dependency installation environment name ${normalized} is not allowed.`);
     }
     const value = environment[normalized];
@@ -457,12 +461,16 @@ export function withoutStoreSubmissionCredentials(
     'MPGD_IOS_SIGNING_P12',
     'MPGD_IOS_SIGNING_P12_PASSWORD',
     'MPGD_IOS_PROVISIONING_PROFILE',
+    'GITHUB_TOKEN',
+    'GH_TOKEN',
+    'GIT_ASKPASS',
   ]) {
     delete result[name];
   }
   for (const name of Object.keys(result)) {
     if (name.startsWith('MPGD_ANDROID_SIGNING_')
-      || name.startsWith('MPGD_IOS_SESSION_')) {
+      || name.startsWith('MPGD_IOS_SESSION_')
+      || name.startsWith('GIT_CONFIG_')) {
       delete result[name];
     }
   }

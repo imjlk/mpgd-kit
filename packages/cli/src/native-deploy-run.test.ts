@@ -51,6 +51,11 @@ try {
     MPGD_IOS_SIGNING_P12_PASSWORD: 'secret',
   };
   assert.throws(() => dependencyInstallEnvironment(signingCredential), /not allowed/u);
+  const gitCredential = {
+    MPGD_DEPENDENCY_INSTALL_ENV_NAMES: 'GITHUB_TOKEN',
+    GITHUB_TOKEN: 'release-state-token',
+  };
+  assert.throws(() => dependencyInstallEnvironment(gitCredential), /not allowed/u);
   const game = path.join(fixture, 'game');
   const outside = path.join(fixture, 'outside');
   const source = path.join(fixture, 'source.aab');

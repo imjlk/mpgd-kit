@@ -115,12 +115,16 @@ try {
       MPGD_ASC_API_KEY: 'unselected-ios-secret',
       MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT: 'selected-android-secret',
       CUSTOM_ALT_STORE_KEY: 'unselected-profile-secret',
+      GITHUB_TOKEN: 'release-state-token',
+      GIT_CONFIG_VALUE_0: 'AUTHORIZATION: basic private',
     },
     androidOnlyPlan,
   );
   assert.equal(unselectedCredential.MPGD_ASC_API_KEY, undefined);
   assert.equal(unselectedCredential.MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT, undefined);
   assert.equal(unselectedCredential.CUSTOM_ALT_STORE_KEY, undefined);
+  assert.equal(unselectedCredential.GITHUB_TOKEN, undefined);
+  assert.equal(unselectedCredential.GIT_CONFIG_VALUE_0, undefined);
   assert.deepEqual(
     plan.targets.map((target) => target.target),
     ['android', 'ios'],

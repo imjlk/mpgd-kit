@@ -118,6 +118,7 @@
     "smoke:cli-microsoft-store-starter-onboarding": "node tools/run-ttsx.mjs tools/smoke/cli-microsoft-store-starter-onboarding.ts",
     "smoke:cli-capacitor-shell-starter": "node tools/run-ttsx.mjs packages/cli/test/capacitor-shell-starter.test.ts",
     "smoke:cli-deploy-planning": "node tools/run-ttsx.mjs packages/cli/src/deploy-planning.test.ts",
+    "smoke:cli-native-deploy-workflow": "node tools/run-ttsx.mjs packages/cli/src/native-deploy-workflow.test.ts",
     "smoke:cli-deploy-process": "node tools/run-ttsx.mjs packages/cli/src/deploy-process.test.ts",
     "smoke:cli-release-workspace": "node tools/run-ttsx.mjs packages/cli/src/release-workspace.test.ts",
     "smoke:cli-android-signing": "node tools/run-ttsx.mjs packages/cli/src/android-signing-session.test.ts",
