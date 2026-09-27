@@ -1,5 +1,19 @@
 # @mpgd/game-services
 
+## 0.17.0 — 2026-09-28
+
+### Minor changes
+
+- [3f36bc6b](https://github.com/imjlk/mpgd-kit/commit/3f36bc6b5269908681405de6567d63fadadd9653) Add an opt-in AdMob rewarded-ad provider with explicit UMP consent and per-operation server-side verification binding. Route provisional SDK reward evidence to the authoritative game-services claim without setting the platform grant flag. — Thanks @imjlk!
+- [c2a14a1c](https://github.com/imjlk/mpgd-kit/commit/c2a14a1ccfde885fc0fb34b8e52e2a8070f63a3d) Add an OAuth-backed Google Play Publisher transport for ProductPurchaseV2 verification and post-ledger acknowledge or consume operations. Keep purchase tokens and response bodies out of transport error messages. — Thanks @imjlk!
+- [9c3b6cc0](https://github.com/imjlk/mpgd-kit/commit/9c3b6cc0656ac7b2722cc658b585e6775e9b20b6) Add an opt-in durable monetization operation journal and explicit pending purchase and rewarded-ad outcomes, so games can reconcile server grants and provider finalization without replaying purchase or ad UI. — Thanks @imjlk!
+- [81420942](https://github.com/imjlk/mpgd-kit/commit/814209428240ee0206e62325992a52dd00211996) Add a server-side StoreKit recovery adapter that reuses the original durable checkout key or a matching App Store ledger grant, and leaves unrecognized transactions pending without minting a new idempotency key. — Thanks @imjlk!
+- [46172f4b](https://github.com/imjlk/mpgd-kit/commit/46172f4b43c4426e5fdc53c64820e1d92671fc48) Accept a server-recomputed SHA-256 token transaction identifier for Google Play one-time purchases when the client has not yet observed an order ID. Keep token matching authoritative and preserve the existing mismatch rejection for unrelated order IDs. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: analytics@0.4.0, catalog@0.7.6, platform@0.14.0
+
 ## 0.16.0 — 2026-09-25
 
 ### Minor changes

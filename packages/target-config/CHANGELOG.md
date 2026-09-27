@@ -1,5 +1,15 @@
 # @mpgd/target-config
 
+## 0.17.0 — 2026-09-28
+
+### Minor changes
+
+- [721f6f9c](https://github.com/imjlk/mpgd-kit/commit/721f6f9cde3901e727ba2f7f7d11e344739a02e8) Add `measureTargetViewport` and `waitForTargetViewportMeasurement` so a game that boots inside a zero-sized surface (a hidden iframe, a collapsed embed or a background tab) starts once the host lays it out instead of failing viewport validation, and use them in the generated game template. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: catalog@0.7.6, i18n@0.6.5, platform@0.14.0
+
 ## 0.16.0 — 2026-09-25
 
 ### Minor changes

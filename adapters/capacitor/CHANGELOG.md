@@ -1,5 +1,17 @@
 # @mpgd/adapter-capacitor
 
+## 0.6.0 — 2026-09-28
+
+### Minor changes
+
+- [3f36bc6b](https://github.com/imjlk/mpgd-kit/commit/3f36bc6b5269908681405de6567d63fadadd9653) Add an opt-in AdMob rewarded-ad provider with explicit UMP consent and per-operation server-side verification binding. Route provisional SDK reward evidence to the authoritative game-services claim without setting the platform grant flag. — Thanks @imjlk!
+- [bdc67369](https://github.com/imjlk/mpgd-kit/commit/bdc6736975133c809585c31f2578f24bb0a6cba3) Add an opt-in server-only App Store signed transaction verifier backed by Apple's official library. Keep one-time purchase signatures and certificate checks outside the client gateway. — Thanks @imjlk!
+- [9c3b6cc0](https://github.com/imjlk/mpgd-kit/commit/9c3b6cc0656ac7b2722cc658b585e6775e9b20b6) Add an opt-in durable monetization operation journal and explicit pending purchase and rewarded-ad outcomes, so games can reconcile server grants and provider finalization without replaying purchase or ad UI. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: game-services@0.17.0, platform@0.14.0, target-config@0.17.0
+
 ## 0.5.0 — 2026-09-25
 
 ### Minor changes
