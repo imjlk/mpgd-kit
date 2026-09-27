@@ -64,6 +64,25 @@ The source tests and installed-tarball consumer validate composition, types,
 error paths, and fallback behavior. They do not establish that any optional
 SDK works on a physical device or that a store/ad setup is release-ready.
 
+## App Store server-side transaction signatures
+
+For an iOS game backend, install the optional
+`@apple/app-store-server-library@3.1.0` peer and import
+`createAppleSignedTransactionVerifier` from
+`@mpgd/adapter-capacitor/app-store-server`. Supply DER-encoded Apple root
+certificates from the [Apple PKI](https://www.apple.com/certificateauthority/),
+the game's bundle ID, environment, and production App Apple ID. Use the
+result as `signedTransactionVerifier` in
+`createAppStoreGameServicesEvidenceVerifier`. Keep App Store API credentials,
+trust roots, and this verifier on the backend, not in the Capacitor game.
+
+The server fetches the transaction from Apple's API, verifies its JWS, checks
+the product, bundle, environment, account token and transaction ID, then
+writes the game-services grant. A StoreKit device callback is only provisional
+evidence; it never grants a product. Retryable certificate-status failures
+remain pending, while invalid signatures are rejected. Mock verification does
+not prove a real App Store purchase or device delivery.
+
 ## Opt-in AdMob rewarded ads
 
 Install `@capacitor-community/admob@8.1.0` in the game-owned Capacitor project,

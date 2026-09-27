@@ -6,6 +6,7 @@ import {
   createCapacitorViewport,
 } from '@mpgd/adapter-capacitor';
 import { createCapacitorAdMobRewardedProvider } from '@mpgd/adapter-capacitor/admob';
+import { createAppleSignedTransactionVerifier } from '@mpgd/adapter-capacitor/app-store-server';
 import { createUnsupportedCapabilities } from '@mpgd/platform';
 import { getFeatureAvailability, resolveTargetViewportUsableArea } from '@mpgd/target-config';
 
@@ -24,6 +25,7 @@ assert.equal(capabilities.nativeIap, false);
 assert.equal(capabilities.providerAvailability.nativeIap, 'unsupported');
 assert.equal(typeof getFeatureAvailability, 'function');
 assert.equal(typeof createCapacitorAdMobRewardedProvider, 'function');
+assert.equal(typeof createAppleSignedTransactionVerifier, 'function');
 
 const composed = createCapacitorPlatformGateway({
   target: 'android', appVersion: '1', buildId: 'packed-provider',

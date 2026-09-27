@@ -26,6 +26,13 @@ try {
     '@capacitor-community/admob');
   assert.ok(admobDirectory, 'Expected the optional AdMob peer in the development installation.');
   const admob = packInstalledPackage(admobDirectory);
+  const appleDirectory = findInstalledDependency(join(repoRoot, 'adapters/capacitor'),
+    '@apple/app-store-server-library');
+  assert.ok(appleDirectory, 'Expected the optional Apple server peer in the development installation.');
+  const appleServer = packInstalledPackage(appleDirectory);
+  const appleNodeTypesDirectory = findInstalledDependency(appleDirectory, '@types/node');
+  assert.ok(appleNodeTypesDirectory, 'Expected the Apple server library Node types.');
+  const appleNodeTypes = packInstalledPackage(appleNodeTypesDirectory);
   const capacitorCore = [...packages.values()].find((entry) => entry.name === '@capacitor/core');
   assert.ok(capacitorCore, 'Expected the installed Capacitor peer in the packed dependency closure.');
   mkdirSync(consumer);
@@ -40,12 +47,15 @@ try {
       '@mpgd/platform': platform.tarball,
       '@capacitor/core': capacitorCore.tarball,
       '@capacitor-community/admob': admob.tarball,
+      '@apple/app-store-server-library': appleServer.tarball,
+      '@types/node': appleNodeTypes.tarball,
     },
   });
   const byName = Map.groupBy(packages.values(), (entry) => entry.name);
   const overrides = new Map([...byName].filter(([, entries]) => entries.length === 1)
     .map(([name, entries]) => [name, entries[0].tarball]));
   for (const edge of edges) overrides.set(...edge);
+  overrides.set('@types/node', appleNodeTypes.tarball);
   writeFileSync(join(consumer, 'pnpm-workspace.yaml'), [
     'packages: []', 'overrides:',
     ...[...overrides].map(([selector, tarball]) => `  '${selector}': ${JSON.stringify(tarball)}`), '',
@@ -64,6 +74,11 @@ try {
       assert.equal(readFileSync(join(adapterDist, file), 'utf8')
         .includes('@capacitor-community/admob'), false,
       `Base adapter artifact ${file} must not import the optional AdMob peer.`);
+    }
+    if (file.endsWith('.js') && file !== 'app-store-server.js') {
+      assert.equal(readFileSync(join(adapterDist, file), 'utf8')
+        .includes('@apple/app-store-server-library'), false,
+      `Base adapter artifact ${file} must not import the optional Apple server peer.`);
     }
   }
   copyFileSync(join(repoRoot, 'adapters/capacitor/test/packed-runtime.mjs'), join(consumer, 'runtime.mjs'));

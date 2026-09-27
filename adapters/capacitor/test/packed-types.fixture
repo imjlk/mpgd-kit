@@ -10,6 +10,10 @@ import {
   createCapacitorAdMobRewardedProvider,
   type CapacitorAdMobRewardedProvider,
 } from '@mpgd/adapter-capacitor/admob';
+import {
+  createAppleSignedTransactionVerifier,
+  type CreateAppleSignedTransactionVerifierOptions,
+} from '@mpgd/adapter-capacitor/app-store-server';
 import type {
   PlatformProviderAvailability,
   PlatformProviderFeature,
@@ -52,6 +56,9 @@ const admob: CapacitorAdMobRewardedProvider = createCapacitorAdMobRewardedProvid
   getPlayerId: () => 'player-1',
 });
 void admob;
+declare const appStoreOptions: CreateAppleSignedTransactionVerifierOptions;
+const appStoreVerifier = createAppleSignedTransactionVerifier(appStoreOptions);
+void appStoreVerifier;
 
 const nativeJson: CapacitorNativeJsonTransport = createCapacitorNativeJsonTransport({
   target: 'ios',
