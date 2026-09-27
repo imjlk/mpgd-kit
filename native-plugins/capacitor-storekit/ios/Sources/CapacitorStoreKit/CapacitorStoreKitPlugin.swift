@@ -15,7 +15,7 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private var updatesTask: Task<Void, Never>?
 
-    override public func load() {
+    @objc override public func load() {
         super.load()
         updatesTask = Task { @MainActor [weak self] in
             for await result in Transaction.updates {
@@ -67,13 +67,20 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
         Task { @MainActor in
+            let product: Product
             do {
-                guard let product = try await Product.products(for: [productId]).first,
-                      product.id == productId,
-                      Self.oneTimeType(product.type) != nil else {
+                guard let found = try await Product.products(for: [productId]).first,
+                      found.id == productId,
+                      Self.oneTimeType(found.type) != nil else {
                     call.reject("The one-time product is unavailable.", "STOREKIT_PRODUCT_UNAVAILABLE")
                     return
                 }
+                product = found
+            } catch {
+                call.reject("StoreKit product lookup failed.", "STOREKIT_PRODUCT_LOOKUP_FAILED", error)
+                return
+            }
+            do {
                 let result = try await product.purchase(options: [.appAccountToken(accountToken)])
                 switch result {
                 case .success(let verification):
@@ -95,13 +102,15 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
                     call.reject("StoreKit returned an unknown purchase result.", "STOREKIT_UNKNOWN_RESULT")
                 }
             } catch {
-                call.reject("StoreKit purchase failed.", "STOREKIT_UNAVAILABLE", error)
+                // The purchase sheet may have completed before an error reached us.
+                call.reject("StoreKit purchase result is uncertain; requery transactions.",
+                            "STOREKIT_PURCHASE_UNCERTAIN", error)
             }
         }
     }
 
     @objc func getTransactions(_ call: CAPPluginCall) {
-        Task { @MainActor in
+        Task {
             var byId: [String: [String: Any]] = [:]
             for await result in Transaction.unfinished {
                 if let payload = Self.verifiedPayload(result),
@@ -128,10 +137,11 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
                         "STOREKIT_FINISH_REQUIRES_GRANT")
             return
         }
-        Task { @MainActor in
+        Task {
             for await result in Transaction.all {
                 guard case .verified(let transaction) = result,
-                      transaction.id == id else { continue }
+                      transaction.id == id,
+                      Self.oneTimeType(transaction.productType) != nil else { continue }
                 await transaction.finish()
                 call.resolve(["finished": true])
                 return
@@ -155,6 +165,9 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
         ]
         if let accountToken = transaction.appAccountToken {
             payload["appAccountToken"] = accountToken.uuidString.lowercased()
+        }
+        if let revocationDate = transaction.revocationDate {
+            payload["revokedAt"] = ISO8601DateFormatter().string(from: revocationDate)
         }
         return payload
     }

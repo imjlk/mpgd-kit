@@ -16,6 +16,7 @@ export interface StoreKitTransaction {
   readonly type: 'consumable' | 'non_consumable';
   readonly appAccountToken?: string;
   readonly purchasedAt: string;
+  readonly revokedAt?: string;
   /** StoreKit-verified JWS; the game backend independently verifies Apple data. */
   readonly signedTransaction: string;
 }

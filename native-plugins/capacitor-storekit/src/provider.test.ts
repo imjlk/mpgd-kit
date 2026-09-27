@@ -6,7 +6,11 @@ import type {
   StoreKitPurchaseOutcome,
   StoreKitTransaction,
 } from './definitions.js';
-import { createCapacitorStoreKitProvider, recoverStoreKitPurchases } from './provider.js';
+import {
+  createCapacitorStoreKitProvider,
+  recoverStoreKitPurchases,
+  type StoreKitPurchaseVerification,
+} from './provider.js';
 
 const accountToken = 'f15f2ed7-f92a-4c5a-90e1-15d26cd729f2';
 const transaction: StoreKitTransaction = {
@@ -21,7 +25,7 @@ const transaction: StoreKitTransaction = {
 const calls: string[] = [];
 let outcome: StoreKitPurchaseOutcome = { status: 'purchased', transaction };
 let finishFails = false;
-let purchaseFails = false;
+let purchaseErrorCode: string | undefined;
 let transactions: readonly StoreKitTransaction[] = [transaction];
 type TestSdk = Pick<
   CapacitorStoreKitPlugin,
@@ -40,8 +44,8 @@ async function getProducts() {
 }
 async function purchase(input: { productId: string; appAccountToken: string }) {
   calls.push(`purchase:${input.productId}:${input.appAccountToken}`);
-  if (purchaseFails) {
-    throw Object.assign(new Error('uncertain native result'), { code: 'STOREKIT_UNAVAILABLE' });
+  if (purchaseErrorCode !== undefined) {
+    throw Object.assign(new Error('native failure'), { code: purchaseErrorCode });
   }
   return outcome;
 }
@@ -126,13 +130,22 @@ equal(
   'mismatched account binding is rejected',
 );
 outcome = { status: 'purchased', transaction };
-purchaseFails = true;
+purchaseErrorCode = 'STOREKIT_PURCHASE_UNCERTAIN';
 equal(
   await provider.bridge.request(request('commerce.purchase', { productId: 'COINS_100' })),
   { id: 'request-1', ok: true, data: { status: 'pending', entitlementIds: [] } },
   'uncertain purchase requires requery',
 );
-purchaseFails = false;
+purchaseErrorCode = 'STOREKIT_PRODUCT_LOOKUP_FAILED';
+const lookupFailure = await provider.bridge.request(purchaseRequest);
+const lookupError = {
+  code: 'STOREKIT_PRODUCT_LOOKUP_FAILED',
+  message: 'STOREKIT_PRODUCT_LOOKUP_FAILED',
+  retryable: true,
+};
+const expectedLookupFailure = { id: 'request-1', ok: false, error: lookupError };
+equal(lookupFailure, expectedLookupFailure, 'pre-sheet lookup failure is not pending');
+purchaseErrorCode = undefined;
 
 equal(
   await provider.bridge.request(request('commerce.restore')),
@@ -141,6 +154,12 @@ equal(
 );
 
 const verificationCalls: string[] = [];
+let verificationFails = false;
+let nextVerification: StoreKitPurchaseVerification = {
+  verified: true,
+  alreadyProcessed: false,
+  ledgerEntryId: 'ledger-1',
+};
 const backend = {
   async verifyPurchase(input: {
     readonly platformTransactionId: string;
@@ -148,7 +167,10 @@ const backend = {
     readonly playerId: string;
   }) {
     verificationCalls.push(`${input.playerId}:${input.platformTransactionId}:${input.idempotencyKey}`);
-    return { verified: true, alreadyProcessed: false, ledgerEntryId: 'ledger-1' };
+    if (verificationFails) {
+      throw new Error('backend unavailable');
+    }
+    return nextVerification;
   },
 };
 const recovered = await recoverStoreKitPurchases({ provider, backend, playerId: 'player-1' });
@@ -174,19 +196,45 @@ equal(
   'failed finish remains recoverable',
 );
 finishFails = false;
+nextVerification = { verified: false, disposition: 'rejected', alreadyProcessed: false };
+const finishCount = calls.filter((call) => call.startsWith('finish:')).length;
+const rejected = await recoverStoreKitPurchases({ provider, backend, playerId: 'player-1' });
+equal(rejected[0]?.status, 'rejected', 'permanent backend rejection is distinct');
+const rejectedFinishCount = calls.filter((call) => call.startsWith('finish:')).length;
+equal(rejectedFinishCount, finishCount, 'rejected purchase is not finished without a grant');
+verificationFails = true;
+const uncertain = await recoverStoreKitPurchases({ provider, backend, playerId: 'player-1' });
+equal(uncertain[0]?.status, 'pending', 'network uncertainty stays pending');
+verificationFails = false;
+nextVerification = { verified: true, alreadyProcessed: false, ledgerEntryId: 'ledger-1' };
+const beforeMismatch = verificationCalls.length;
 transactions = [{ ...transaction, appAccountToken: crypto.randomUUID() }];
 equal(
   (await recoverStoreKitPurchases({ provider, backend, playerId: 'player-1' }))[0]?.status,
   'rejected',
   'another game account is never credited',
 );
-equal(verificationCalls.length, 2, 'other account never reaches backend');
+equal(
+  (await recoverStoreKitPurchases({ provider, backend, playerId: 'player-1' }))[0]?.reason,
+  'account-mismatch',
+  'other account remains distinguishable',
+);
+equal(verificationCalls.length, beforeMismatch, 'other account never reaches backend');
 
-transactions = [{ ...transaction, signedTransaction: '' }];
-let malformedRejected = false;
-try {
-  await provider.getRecoverableTransactions();
-} catch {
-  malformedRejected = true;
-}
-equal(malformedRejected, true, 'malformed native evidence is not silently discarded');
+transactions = [{ ...transaction, transactionId: '2000000123456790', signedTransaction: '' },
+  transaction];
+const mixed = await provider.getRecoverableTransactions();
+equal(mixed.transactions.length, 1, 'valid purchase survives malformed sibling');
+const expectedInvalid = {
+  productId: 'COINS_100',
+  transactionId: '2000000123456790',
+  reason: 'invalid-evidence',
+};
+equal(mixed.invalid, [expectedInvalid], 'malformed evidence is reported separately');
+const mixedRecovered = await recoverStoreKitPurchases({ provider, backend, playerId: 'player-1' });
+const mixedStatuses = mixedRecovered.map((item) => item.status);
+equal(mixedStatuses, ['granted', 'rejected'], 'malformed sibling does not block valid purchase');
+
+transactions = [{ ...transaction, revokedAt: '2026-07-17T12:00:00.000Z' }];
+const revoked = await recoverStoreKitPurchases({ provider, backend, playerId: 'player-1' });
+equal(revoked[0]?.reason, 'revoked', 'revoked transaction is never sent to backend');

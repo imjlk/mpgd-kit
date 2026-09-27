@@ -805,11 +805,17 @@ jobs:
       - run: pnpm test:native-ios-signing
       - run: pnpm smoke:cli-ios-signing
       - run: pnpm smoke:native-packed-swift
+      - name: Cache StoreKit Swift package checkout
+        uses: actions/cache@v5
+        with:
+          path: native-plugins/capacitor-storekit/.build/spm-packages
+          key: ${{ runner.os }}-${{ runner.arch }}-storekit-spm-${{ hashFiles('native-plugins/capacitor-storekit/Package.swift') }}
       - name: Compile opt-in StoreKit collector
         working-directory: native-plugins/capacitor-storekit
         run: >-
           xcodebuild -scheme MpgdCapacitorStoreKit
           -destination 'generic/platform=iOS Simulator'
+          -clonedSourcePackagesDirPath .build/spm-packages
           -configuration Debug CODE_SIGNING_ALLOWED=NO -quiet build
       - run: pnpm build:target ios staging
         env:

@@ -8,7 +8,7 @@ let package = Package(
         .library(name: "MpgdCapacitorStoreKit", targets: ["MpgdCapacitorStoreKit"])
     ],
     dependencies: [
-        .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", from: "8.5.1")
+        .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", exact: "8.5.2")
     ],
     targets: [
         .target(

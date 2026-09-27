@@ -23,6 +23,12 @@ verified response with a ledger entry ID. If finish fails, it reports
 `finishPending: true`; repeat recovery using the same transaction ID and
 idempotency key. An unknown backend result stays pending and never triggers a
 new purchase sheet automatically.
+Permanently rejected and account-mismatched transactions are reported as
+`rejected` and are **not** finished: the helper cannot prove content delivery
+for them. Persist that terminal result in the game-owned operation journal and
+do not run an automatic retry loop for it. A support flow may recheck a
+corrected account or backend decision later. One malformed transaction is
+reported separately and cannot block valid sibling transactions.
 
 The iOS native plugin also emits `transactionUpdated` for delayed StoreKit
 transactions. Call recovery after this event and on app launch because events

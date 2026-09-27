@@ -37,6 +37,17 @@ export interface RecoverableStoreKitTransaction {
   readonly result: PurchaseResult;
 }
 
+export interface InvalidStoreKitTransaction {
+  readonly productId: string;
+  readonly transactionId?: string;
+  readonly reason: 'invalid-evidence' | 'revoked';
+}
+
+export interface StoreKitRecoverySnapshot {
+  readonly transactions: readonly RecoverableStoreKitTransaction[];
+  readonly invalid: readonly InvalidStoreKitTransaction[];
+}
+
 export interface CapacitorStoreKitProvider {
   readonly id: 'apple-storekit';
   readonly features: readonly ['nativeIap'];
@@ -51,7 +62,7 @@ export interface CapacitorStoreKitProvider {
     nativeIap: 'available' | 'configuration-required' | 'temporarily-unavailable' | 'unsupported';
   }>>;
   getAppAccountToken(): Promise<string>;
-  getRecoverableTransactions(): Promise<readonly RecoverableStoreKitTransaction[]>;
+  getRecoverableTransactions(): Promise<StoreKitRecoverySnapshot>;
   finishGrantedTransaction(input: {
     readonly transactionId: string;
     readonly ledgerEntryId: string;
@@ -80,8 +91,9 @@ export interface StoreKitRecoveryBackend {
 
 export interface RecoveredStoreKitPurchase {
   readonly productId: string;
-  readonly transactionId: string;
+  readonly transactionId?: string;
   readonly status: 'granted' | 'pending' | 'rejected';
+  readonly reason?: 'invalid-evidence' | 'revoked' | 'account-mismatch';
   readonly finishPending?: boolean;
   readonly verification?: StoreKitPurchaseVerification;
 }
@@ -97,15 +109,17 @@ export async function recoverStoreKitPurchases(input: {
     throw new TypeError('StoreKit recovery requires an authenticated player ID.');
   }
   const token = await input.provider.getAppAccountToken();
-  const transactions = await input.provider.getRecoverableTransactions();
-  return Promise.all(transactions.map(async (item) => {
+  const snapshot = await input.provider.getRecoverableTransactions();
+  const recovered = await Promise.all(snapshot.transactions.map(async (item) => {
     const transactionId = item.result.transactionId;
     if (transactionId === undefined) {
       throw new TypeError('StoreKit recovery transaction is missing its ID.');
     }
     if (item.appAccountToken?.toLowerCase() !== token) {
       // Shared Apple IDs can expose a transaction owned by another game user.
-      return { productId: item.productId, transactionId, status: 'rejected' } as const;
+      return {
+        productId: item.productId, transactionId, status: 'rejected', reason: 'account-mismatch',
+      } as const;
     }
     try {
       const verification = await input.backend.verifyPurchase({
@@ -153,6 +167,10 @@ export async function recoverStoreKitPurchases(input: {
       return { productId: item.productId, transactionId, status: 'pending' } as const;
     }
   }));
+  return [
+    ...recovered,
+    ...snapshot.invalid.map((item) => ({ ...item, status: 'rejected' as const })),
+  ];
 }
 
 export function createCapacitorStoreKitProvider(
@@ -184,12 +202,13 @@ export function createCapacitorStoreKitProvider(
     return token;
   }
 
-  async function getRecoverableTransactions(): Promise<readonly RecoverableStoreKitTransaction[]> {
+  async function getRecoverableTransactions(): Promise<StoreKitRecoverySnapshot> {
     if (!isIos()) {
       throw new Error('StoreKit is only available on iOS.');
     }
     const response = await sdk.getTransactions();
     const owned: RecoverableStoreKitTransaction[] = [];
+    const invalid: InvalidStoreKitTransaction[] = [];
     const seen = new Set<string>();
     for (const transaction of response.transactions) {
       const mapping = byStoreId.get(transaction.productId);
@@ -197,7 +216,20 @@ export function createCapacitorStoreKitProvider(
         continue;
       }
       if (mapping.type !== transaction.type || !validTransaction(transaction)) {
-        throw new Error('StoreKit returned invalid one-time purchase evidence.');
+        invalid.push({
+          productId: mapping.id,
+          transactionId: transaction.transactionId,
+          reason: 'invalid-evidence',
+        });
+        continue;
+      }
+      if (transaction.revokedAt !== undefined) {
+        invalid.push({
+          productId: mapping.id,
+          transactionId: transaction.transactionId,
+          reason: 'revoked',
+        });
+        continue;
       }
       if (seen.has(transaction.transactionId)) {
         continue;
@@ -211,7 +243,7 @@ export function createCapacitorStoreKitProvider(
         result: toPurchaseResult(transaction),
       });
     }
-    return owned;
+    return { transactions: owned, invalid };
   }
 
   async function request(input: BridgeRequest): Promise<BridgeResponse> {
@@ -261,11 +293,13 @@ export function createCapacitorStoreKitProvider(
       }
     } catch (error) {
       const code = isRecord(error) ? error.code : undefined;
-      if (input.method === 'commerce.purchase' && code === 'STOREKIT_UNAVAILABLE') {
+      if (input.method === 'commerce.purchase' && code === 'STOREKIT_PURCHASE_UNCERTAIN') {
         return success(input.id, { status: 'pending', entitlementIds: [] });
       }
       if (typeof code === 'string' && /^STOREKIT_[A-Z_]+$/u.test(code)) {
-        return failure(input.id, code, code === 'STOREKIT_UNAVAILABLE');
+        const retryable = code === 'STOREKIT_UNAVAILABLE'
+          || code === 'STOREKIT_PRODUCT_LOOKUP_FAILED';
+        return failure(input.id, code, retryable);
       }
       if (error instanceof TypeError) {
         return failure(input.id, 'STOREKIT_CONFIGURATION_ERROR');
@@ -346,7 +380,7 @@ function toPurchaseResult(transaction: StoreKitTransaction): PurchaseResult {
 
 function validTransaction(value: StoreKitTransaction): boolean {
   return transactionPattern.test(value.transactionId)
-    && transactionPattern.test(value.originalTransactionId)
+    && /^[0-9]{1,20}$/u.test(value.originalTransactionId)
     && productPattern.test(value.productId)
     && (value.type === 'consumable' || value.type === 'non_consumable')
     && Number.isFinite(Date.parse(value.purchasedAt))
@@ -354,6 +388,7 @@ function validTransaction(value: StoreKitTransaction): boolean {
     && value.signedTransaction.length > 0
     && value.signedTransaction.length <= 128 * 1024
     && value.signedTransaction.split('.').length === 3
+    && (value.revokedAt === undefined || Number.isFinite(Date.parse(value.revokedAt)))
     && (value.appAccountToken === undefined || uuidPattern.test(value.appAccountToken));
 }
 

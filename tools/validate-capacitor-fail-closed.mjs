@@ -81,8 +81,16 @@ const storeKit = read(
 );
 assert.match(storeKit, /Transaction\.unfinished/u, 'StoreKit must requery unfinished purchases');
 assert.match(storeKit, /Transaction\.updates/u, 'StoreKit must listen for delayed transactions');
-assert.match(storeKit, /case \.success[\s\S]*?call\.resolve/u, 'StoreKit purchase must return evidence');
+const storeKitPurchase = storeKit.split('@objc func purchase')[1]
+  ?.split('@objc func getTransactions')[0] ?? '';
+assert.match(storeKitPurchase, /case \.success/u, 'StoreKit must handle successful purchases');
+assert.match(storeKitPurchase, /call\.resolve\(\["status": "purchased", "transaction": payload\]\)/u,
+  'StoreKit purchase must return provisional transaction evidence');
+assert.doesNotMatch(storeKit.split('@objc func finishTransaction')[0], /transaction\.finish\(/u,
+  'StoreKit must not finish a transaction during checkout or event delivery');
 assert.match(storeKit, /@objc func finishTransaction[\s\S]*?transaction\.finish\(\)/u,
   'StoreKit finish must be a separate post-grant operation');
+assert.equal((storeKit.match(/transaction\.finish\(\)/gu) ?? []).length, 1,
+  'Only the explicit post-grant method may finish StoreKit transactions');
 
 console.log('Capacitor reference native services fail closed without providers.');
