@@ -24,6 +24,9 @@ const existingGrant = await store.recordEntitlementGrant({
   evidenceVerificationId: '9:app-store:10:Production:16:com.example.game:16:2000000123456789',
   payload: {
     target: 'ios',
+    productType: 'consumable',
+    appStoreEnvironment: 'Production',
+    appStoreBundleId: 'com.example.game',
     productId: request.productId,
     platformTransactionId: request.platformTransactionId,
   },
@@ -49,6 +52,9 @@ const purchases = {
       evidenceVerificationId: '9:app-store:10:Production:16:com.example.game:16:2000000123456790',
       payload: {
         target: 'ios',
+        productType: 'consumable',
+        appStoreEnvironment: 'Production',
+        appStoreBundleId: 'com.example.game',
         productId: input.productId,
         platformTransactionId: input.platformTransactionId,
       },
@@ -83,6 +89,39 @@ assert(
   'a different logical product must not recover another grant',
 );
 assert(calls.length === 1, 'mismatched identities must never reach the backend');
+
+const wrongEvidenceStore = createInMemoryGameServicesStore();
+await wrongEvidenceStore.recordEntitlementGrant({
+  source: 'purchase',
+  playerId: request.playerId,
+  grantId: request.productId,
+  idempotencyKey: 'other-transaction-checkout',
+  grantedAt: request.purchasedAt,
+  evidenceVerificationId: createAppStoreVerificationId({
+    environment: 'Production',
+    bundleId: 'com.example.game',
+    transactionId: '2000000123456799',
+  }),
+  payload: {
+    target: 'ios',
+    productId: request.productId,
+    productType: 'consumable',
+    platformTransactionId: request.platformTransactionId,
+    appStoreEnvironment: 'Production',
+    appStoreBundleId: 'com.example.game',
+  },
+});
+const wrongEvidenceBackend = createAppStoreRecoveryBackend({
+  playerId: request.playerId,
+  purchases,
+  store: wrongEvidenceStore,
+});
+const wrongEvidence = await wrongEvidenceBackend.recoverPurchase(request);
+assert(
+  !wrongEvidence.verified && wrongEvidence.disposition === 'rejected',
+  'a well-formed App Store ID for another transaction must not recover this grant',
+);
+assert(calls.length === 1, 'mismatched verification IDs must not reach backend retry');
 
 const newRequest = { ...request, platformTransactionId: '2000000123456790' };
 const unknown = await backend.recoverPurchase(newRequest);
@@ -192,6 +231,9 @@ const boundGrant = await boundStore.recordEntitlementGrant({
   payload: {
     target: 'ios',
     deploymentTarget: 'ios-production',
+    productType: 'consumable',
+    appStoreEnvironment: 'Production',
+    appStoreBundleId: 'com.example.game',
     productId: request.productId,
     platformTransactionId: request.platformTransactionId,
   },
@@ -234,6 +276,8 @@ const restoredGrant = await restoredStore.recordEntitlementGrant({
   payload: {
     target: 'ios',
     deploymentTarget: 'ios-production',
+    appStoreEnvironment: 'Production',
+    appStoreBundleId: 'com.example.game',
     productId: 'REMOVE_ADS',
     productType: 'non_consumable',
     platformTransactionId: '2000000123457001',

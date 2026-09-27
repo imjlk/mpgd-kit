@@ -316,6 +316,12 @@ function matchesRecovery(
 ): boolean {
   const verificationId = transaction.evidenceVerificationId
     ?? transaction.payload.evidenceVerificationId;
+  const environment = transaction.payload.appStoreEnvironment;
+  const bundleId = transaction.payload.appStoreBundleId;
+  const originalTransactionId = transaction.payload.appStoreOriginalTransactionId;
+  const grantTransactionId = restoredVerificationId === ''
+    ? request.platformTransactionId
+    : originalTransactionId;
   return transaction.source === 'purchase'
     && transaction.playerId === request.playerId
     && transaction.grantId === request.productId
@@ -329,7 +335,15 @@ function matchesRecovery(
           === request.originalTransactionId
         && verificationId === restoredVerificationId)
     && typeof verificationId === 'string'
-    && isAppStoreVerificationId(verificationId);
+    && isAppStoreVerificationId(verificationId)
+    && (environment === 'Production' || environment === 'Sandbox')
+    && typeof bundleId === 'string'
+    && typeof grantTransactionId === 'string'
+    && verificationId === createAppStoreVerificationId({
+      environment,
+      bundleId,
+      transactionId: grantTransactionId,
+    });
 }
 
 function pending(reason: string): VerifyPurchaseResponse {
