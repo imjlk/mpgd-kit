@@ -41,6 +41,13 @@ neither a matching grant nor an original journal key exists, it returns
 `pending` without attempting a new grant. Do not use the in-memory store for
 production recovery. The game's HTTP/RPC endpoint must authenticate the
 request; this helper does not expose one or authenticate clients.
+For restored non-consumables whose new transaction ID differs from the
+original, configure `restoredNonConsumables` with the same catalog and official
+App Store evidence verifier used by the game backend. The helper re-verifies
+the **current** Apple transaction and looks up the prior grant by its canonical
+original-transaction verification ID before reusing the original key. Without
+that verifier, this restore remains pending rather than trusting a client-
+reported original ID. The native provider forwards both IDs and product type.
 For production-scale ledgers, implement the store's indexed
 `findEntitlementTransactionByPlatformEvidence` and
 `findEntitlementTransactionByIdempotency` methods. Without them, the helper

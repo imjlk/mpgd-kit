@@ -182,9 +182,13 @@ let nextVerification: StoreKitPurchaseVerification = {
 const backend = {
   async recoverPurchase(input: {
     readonly platformTransactionId: string;
+    readonly originalTransactionId: string;
+    readonly productType: 'consumable' | 'non_consumable';
     readonly playerId: string;
   }) {
-    verificationCalls.push(`${input.playerId}:${input.platformTransactionId}`);
+    verificationCalls.push(
+      `${input.playerId}:${input.platformTransactionId}:${input.originalTransactionId}:${input.productType}`,
+    );
     if (verificationFails) {
       throw new Error('backend unavailable');
     }
@@ -202,7 +206,7 @@ const expectedRecovered = {
 equal(recovered, [expectedRecovered], 'verified backend grant precedes native finish');
 equal(
   verificationCalls,
-  [`player-1:${transaction.transactionId}`],
+  [`player-1:${transaction.transactionId}:${transaction.originalTransactionId}:${transaction.type}`],
   'backend resolves the original journal key or existing grant',
 );
 equal(calls.at(-1), `finish:${transaction.transactionId}:ledger-1`, 'finish after ledger grant');

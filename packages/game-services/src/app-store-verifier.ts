@@ -420,17 +420,55 @@ function createVerificationId(transaction: AppStoreTransactionPayload): string {
   const grantTransactionId = transaction.type === 'Non-Consumable'
     ? transaction.originalTransactionId
     : transaction.transactionId;
+  return createAppStoreVerificationId({
+    environment: transaction.environment,
+    bundleId: transaction.bundleId,
+    transactionId: grantTransactionId,
+  });
+}
+
+export function createAppStoreVerificationId(input: {
+  readonly environment: AppStoreEnvironment;
+  readonly bundleId: string;
+  readonly transactionId: string;
+}): string {
   return [
     'app-store',
-    transaction.environment,
-    transaction.bundleId,
-    grantTransactionId,
+    input.environment,
+    input.bundleId,
+    input.transactionId,
   ].map(encodeVerificationIdSegment).join(':');
 }
 
 /** Identify IDs emitted by this verifier without duplicating its encoding format. */
 export function isAppStoreVerificationId(verificationId: string): boolean {
-  return verificationId.startsWith(`${encodeVerificationIdSegment('app-store')}:`);
+  const parts = verificationId.split(':');
+  if (parts.length !== 8) {
+    return false;
+  }
+  const values: string[] = [];
+  for (let index = 0; index < parts.length; index += 2) {
+    const rawLength = parts[index];
+    const encoded = parts[index + 1];
+    if (rawLength === undefined || encoded === undefined
+      || !/^(0|[1-9][0-9]*)$/u.test(rawLength)) {
+      return false;
+    }
+    try {
+      const value = decodeURIComponent(encoded);
+      if (value.length !== Number(rawLength)
+        || encodeVerificationIdSegment(value) !== `${rawLength}:${encoded}`) {
+        return false;
+      }
+      values.push(value);
+    } catch {
+      return false;
+    }
+  }
+  return values[0] === 'app-store'
+    && (values[1] === 'Production' || values[1] === 'Sandbox')
+    && typeof values[2] === 'string' && values[2].length > 0
+    && typeof values[3] === 'string' && /^[1-9][0-9]{0,19}$/u.test(values[3]);
 }
 
 function encodeVerificationIdSegment(value: string): string {

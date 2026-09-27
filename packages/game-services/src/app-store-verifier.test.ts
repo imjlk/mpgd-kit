@@ -114,6 +114,18 @@ assertEqual(
   false,
   'recovery must not accept the legacy unencoded identity fixture',
 );
+for (const invalidId of [
+  '9:app-store:invalid',
+  '9:app-store:10:Production:16:com.example.game:16:2000000123456789:extra',
+  '8:app-store:10:Production:16:com.example.game:16:2000000123456789',
+  '9:app-store:10:Production:16:com.example.game:3:abc',
+]) {
+  assertEqual(
+    isAppStoreVerificationId(invalidId),
+    false,
+    'recovery must reject malformed or incomplete App Store ledger identities',
+  );
+}
 assertEqual(
   verified.payload?.appStoreOriginalTransactionId,
   baseTransaction.originalTransactionId,

@@ -1,5 +1,8 @@
+import { resolveProductPlatformId, type ProductCatalog } from '@mpgd/catalog';
+
+import { createAppStoreVerificationId, isAppStoreVerificationId } from './app-store-verifier.js';
 import type { PurchaseVerificationApi } from './client.js';
-import { isAppStoreVerificationId } from './app-store-verifier.js';
+import type { GameServicesEvidenceVerifier } from './evidence-verification.js';
 import type { GameServicesStore } from './server.js';
 import type {
   ProductGrantTransaction,
@@ -12,20 +15,33 @@ export type AppStoreRecoveryRequest = Omit<
   'target' | 'idempotencyKey' | 'evidence'
 > & { readonly target: 'ios' };
 
+export interface AppStoreRestoredTransactionIdentity {
+  readonly originalTransactionId?: string;
+  readonly productType?: 'consumable' | 'non_consumable';
+}
+
 export interface CreateAppStoreRecoveryBackendOptions {
   /** Bind this instance to a player authenticated by the game server. */
   readonly playerId: string;
   readonly deploymentTarget?: string;
   readonly purchases: PurchaseVerificationApi;
   readonly store: GameServicesStore;
+  /** Required to re-verify restored non-consumables whose current transaction ID changed. */
+  readonly restoredNonConsumables?: {
+    readonly catalog: ProductCatalog;
+    readonly evidenceVerifier: GameServicesEvidenceVerifier;
+    readonly timeoutMs?: number;
+  };
   /** Look up the original, durable checkout key; never derive one from the transaction ID. */
   readonly resolveOriginalIdempotencyKey?: (
-    input: AppStoreRecoveryRequest,
+    input: AppStoreRecoveryRequest & AppStoreRestoredTransactionIdentity,
   ) => Promise<string | undefined>;
 }
 
 export interface AppStoreRecoveryBackend {
-  recoverPurchase(input: AppStoreRecoveryRequest): Promise<VerifyPurchaseResponse>;
+  recoverPurchase(
+    input: AppStoreRecoveryRequest & AppStoreRestoredTransactionIdentity,
+  ): Promise<VerifyPurchaseResponse>;
 }
 
 /**
@@ -52,18 +68,35 @@ export function createAppStoreRecoveryBackend(
         return rejected('APP_STORE_RECOVERY_IDENTITY_MISMATCH');
       }
 
-      let request: AppStoreRecoveryRequest = {
+      let request: AppStoreRecoveryRequest & AppStoreRestoredTransactionIdentity = {
         ...input,
         ...(options.deploymentTarget === undefined
           ? {}
           : { deploymentTarget: options.deploymentTarget }),
       };
       try {
-        const existing = await findByPlatformEvidence(
+        const restoredVerificationId = await verifyRestoredNonConsumable(
+          input,
+          request,
+          options,
+        );
+        if (typeof restoredVerificationId !== 'string') {
+          return restoredVerificationId;
+        }
+        const platformGrant = await findByPlatformEvidence(
           options.store,
           request.platformTransactionId,
         );
-        if (existing !== undefined && !matchesRecovery(existing, request)) {
+        const originalGrant = restoredVerificationId === ''
+          ? undefined
+          : await findByVerificationId(options.store, restoredVerificationId);
+        if (platformGrant !== undefined && originalGrant !== undefined
+          && platformGrant.ledgerEntryId !== originalGrant.ledgerEntryId) {
+          return rejected('APP_STORE_RECOVERY_IDENTITY_MISMATCH');
+        }
+        const existing = platformGrant ?? originalGrant;
+        if (existing !== undefined
+          && !matchesRecovery(existing, request, restoredVerificationId)) {
           return rejected('APP_STORE_RECOVERY_IDENTITY_MISMATCH');
         }
 
@@ -76,7 +109,8 @@ export function createAppStoreRecoveryBackend(
         }
 
         const keyedGrant = await findByIdempotency(options.store, options.playerId, key);
-        if (keyedGrant !== undefined && !matchesRecovery(keyedGrant, request)) {
+        if (keyedGrant !== undefined
+          && !matchesRecovery(keyedGrant, request, restoredVerificationId)) {
           return rejected('APP_STORE_RECOVERY_IDENTITY_MISMATCH');
         }
 
@@ -101,7 +135,7 @@ export function createAppStoreRecoveryBackend(
         if (recorded === undefined) {
           return pending('APP_STORE_RECOVERY_LEDGER_UNAVAILABLE');
         }
-        return matchesRecovery(recorded, request)
+        return matchesRecovery(recorded, request, restoredVerificationId)
           ? response
           : rejected('APP_STORE_RECOVERY_IDENTITY_MISMATCH');
       } catch {
@@ -109,6 +143,67 @@ export function createAppStoreRecoveryBackend(
       }
     },
   };
+}
+
+async function verifyRestoredNonConsumable(
+  input: AppStoreRecoveryRequest & AppStoreRestoredTransactionIdentity,
+  request: AppStoreRecoveryRequest & AppStoreRestoredTransactionIdentity,
+  options: CreateAppStoreRecoveryBackendOptions,
+): Promise<string | VerifyPurchaseResponse> {
+  if (input.productType !== 'non_consumable'
+    || input.originalTransactionId === undefined
+    || input.originalTransactionId === input.platformTransactionId) {
+    return '';
+  }
+  const config = options.restoredNonConsumables;
+  if (config === undefined) {
+    return pending('APP_STORE_RESTORE_VERIFIER_REQUIRED');
+  }
+  const product = config.catalog.products.find((item) => item.id === request.productId);
+  if (product?.type !== 'non_consumable') {
+    return rejected('APP_STORE_RECOVERY_PRODUCT_TYPE_MISMATCH');
+  }
+  const platformProductId = resolveProductPlatformId(
+    product,
+    request.deploymentTarget ?? request.target,
+  );
+  if (platformProductId === undefined) {
+    return rejected('APP_STORE_RECOVERY_PRODUCT_UNAVAILABLE');
+  }
+  const timeoutMs = config.timeoutMs ?? 10_000;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new TypeError('Restored App Store verification timeout must be positive.');
+  }
+  const signal = AbortSignal.timeout(timeoutMs);
+  // This probe calls only the evidence verifier; it never writes a ledger grant.
+  const decision = await config.evidenceVerifier.verifyPurchase({
+    request: { ...request, idempotencyKey: 'app-store-recovery-evidence-probe' },
+    product,
+    platformProductId,
+    signal,
+    timeoutMs,
+  });
+  if (decision.status === 'pending') {
+    return pending(decision.reason ?? 'APP_STORE_RESTORE_VERIFICATION_PENDING');
+  }
+  if (decision.status === 'rejected') {
+    return rejected(decision.reason);
+  }
+  const originalTransactionId = decision.payload?.appStoreOriginalTransactionId;
+  const environment = decision.payload?.appStoreEnvironment;
+  const bundleId = decision.payload?.appStoreBundleId;
+  if (decision.payload?.appStoreTransactionType !== 'Non-Consumable'
+    || originalTransactionId !== input.originalTransactionId
+    || (environment !== 'Production' && environment !== 'Sandbox')
+    || typeof bundleId !== 'string'
+    || decision.verificationId !== createAppStoreVerificationId({
+      environment,
+      bundleId,
+      transactionId: originalTransactionId,
+    })) {
+    return rejected('APP_STORE_RESTORE_EVIDENCE_MISMATCH');
+  }
+  return decision.verificationId;
 }
 
 async function findByPlatformEvidence(
@@ -146,9 +241,25 @@ async function findByIdempotency(
   });
 }
 
+async function findByVerificationId(
+  store: GameServicesStore,
+  evidenceVerificationId: string,
+): Promise<ProductGrantTransaction | undefined> {
+  const identity = { source: 'purchase', evidenceVerificationId } as const;
+  if (store.findEntitlementTransactionByEvidenceVerificationId !== undefined) {
+    return store.findEntitlementTransactionByEvidenceVerificationId(identity);
+  }
+  return (await store.listEntitlementTransactions()).find((transaction) => {
+    return transaction.source === identity.source
+      && (transaction.evidenceVerificationId
+        ?? transaction.payload.evidenceVerificationId) === identity.evidenceVerificationId;
+  });
+}
+
 function matchesRecovery(
   transaction: ProductGrantTransaction,
-  request: AppStoreRecoveryRequest,
+  request: AppStoreRecoveryRequest & AppStoreRestoredTransactionIdentity,
+  restoredVerificationId = '',
 ): boolean {
   const verificationId = transaction.evidenceVerificationId
     ?? transaction.payload.evidenceVerificationId;
@@ -158,7 +269,12 @@ function matchesRecovery(
     && transaction.payload.target === 'ios'
     && (request.deploymentTarget === undefined
       || transaction.payload.deploymentTarget === request.deploymentTarget)
-    && transaction.payload.platformTransactionId === request.platformTransactionId
+    && (restoredVerificationId === ''
+      ? transaction.payload.platformTransactionId === request.platformTransactionId
+      : transaction.payload.productType === 'non_consumable'
+        && transaction.payload.appStoreOriginalTransactionId
+          === request.originalTransactionId
+        && verificationId === restoredVerificationId)
     && typeof verificationId === 'string'
     && isAppStoreVerificationId(verificationId);
 }
