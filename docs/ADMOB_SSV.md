@@ -23,7 +23,33 @@ as the protocol sources of truth.
 
 ## Backend wiring
 
-Provide two backend-owned ports:
+The private `apps/game-services-worker` starter now has an opt-in D1-backed
+receiver at `GET /admob/ssv/android` and `GET /admob/ssv/ios`. Configure
+`MPGD_STORE=d1`, bind `DB`, apply migrations through
+`0005_admob_ssv_callbacks.sql`, and set the matching
+`MPGD_ADMOB_SSV_ANDROID_AD_UNIT` or `MPGD_ADMOB_SSV_IOS_AD_UNIT` to the signed
+callback's ad-unit ID. Configure that HTTPS URL in the corresponding AdMob
+rewarded-ad unit. The receiver fetches Google's current public key, uses the
+existing verifier, and writes only verified callbacks. A repeated identical
+callback returns success; a different transaction for the same pending
+operation or the same transaction for another operation is rejected. A claim
+before the callback remains pending, while later claims read the D1 record and
+the public key captured with it. A temporary key-feed or D1 failure returns a
+non-success response so the callback is not acknowledged as durable.
+The Worker caps callback URLs at 8 KiB and signed identity fields at 256
+characters. It caches the public Google key feed for five minutes per Worker
+isolate; stored callbacks retain the exact key used at intake. The game
+operator must schedule D1 retention cleanup after the claim window, for example
+deleting rows with `received_at` older than 48 hours. This starter does not
+silently purge unresolved callbacks or claim they were granted.
+
+The Worker starter's sample placement and reward are not game production
+configuration. Replace them with the game's reviewed catalog, authenticated
+claim boundary, and real ad-unit values before enabling this route. Automated
+tests use generated signatures and a mock key feed; they do not establish an
+actual AdMob callback, device ad completion, or store-ready monetization.
+
+For a different backend, provide two backend-owned ports:
 
 - `AdMobSsvCallbackSource` returns the original HTTPS callback URL previously
   received from Google. Store the raw URL without parsing, sorting, decoding,

@@ -38,6 +38,11 @@ import {
 } from '@mpgd/adapter-verse8/server';
 
 import { createD1GameServicesStore } from './d1Store.js';
+import {
+  createAdMobSsvCallbackFetchHandler,
+  createD1AdMobSsvEvidenceVerifier,
+  type AdMobSsvWorkerConfig,
+} from './admobSsvHandler.js';
 import { createD1VerifiedLeaderboardService } from './verifiedLeaderboardD1.js';
 
 export interface GameServicesWorkerEnv {
@@ -60,6 +65,8 @@ export interface GameServicesWorkerEnv {
   readonly GAME_SERVICES_VERSE8_DEPLOYMENT_TARGET?: string;
   readonly VERSE8_ADS_VERIFIER_AUTHORIZATION?: string;
   readonly VERSE8_ADS_VERIFIER_BASE_URL?: string;
+  readonly MPGD_ADMOB_SSV_ANDROID_AD_UNIT?: string;
+  readonly MPGD_ADMOB_SSV_IOS_AD_UNIT?: string;
 }
 
 export interface GameServicesEvidenceVerifierBinding {
@@ -150,9 +157,10 @@ const fallbackVerifiedLeaderboardService = createInMemoryVerifiedLeaderboardServ
 export function createWorkerFetchHandler(
   env: GameServicesWorkerEnv,
 ): (request: Request) => Promise<Response> {
-  const backend = createWorkerBackend(env);
+  const admobConfig = resolveWorkerAdMobSsvConfig(env);
+  const evidenceVerifier = resolveWorkerEvidenceVerifier(env, admobConfig);
+  const backend = createWorkerBackend(env, evidenceVerifier);
   const verifiedLeaderboard = createWorkerVerifiedLeaderboardService(env);
-  const evidenceVerifier = resolveWorkerEvidenceVerifier(env);
   const purchaseGrantFinalizer = resolveWorkerPurchaseGrantFinalizer(env);
   const deploymentTargetBindings = resolveWorkerDeploymentTargetBindings(env);
   const corsHeaders = {
@@ -188,8 +196,15 @@ export function createWorkerFetchHandler(
     verifiedLeaderboard,
     corsHeaders,
   );
+  const admobFetch = admobConfig === undefined
+    ? undefined
+    : createAdMobSsvCallbackFetchHandler(admobConfig);
 
   return async (request) => {
+    const admobResponse = await admobFetch?.(request);
+    if (admobResponse !== undefined) {
+      return admobResponse;
+    }
     const snapshotResponse = await snapshotFetch?.(request);
 
     if (snapshotResponse !== undefined) {
@@ -233,7 +248,8 @@ function createWorkerVerifiedLeaderboardSnapshotFetchHandler(
 }
 
 export function createWorkerService(env: GameServicesWorkerEnv): GameServicesWorkerService {
-  const backend = createWorkerBackend(env);
+  const admobConfig = resolveWorkerAdMobSsvConfig(env);
+  const backend = createWorkerBackend(env, resolveWorkerEvidenceVerifier(env, admobConfig));
   const verifiedLeaderboard = createWorkerVerifiedLeaderboardService(env);
 
   return {
@@ -255,9 +271,11 @@ export function createWorkerService(env: GameServicesWorkerEnv): GameServicesWor
   };
 }
 
-function createWorkerBackend(env: GameServicesWorkerEnv): GameServicesBackendApi {
+function createWorkerBackend(
+  env: GameServicesWorkerEnv,
+  evidenceVerifier: GameServicesEvidenceVerifier | undefined,
+): GameServicesBackendApi {
   assertMicrosoftStorePurchaseBindings(env);
-  const evidenceVerifier = resolveWorkerEvidenceVerifier(env);
   const purchaseGrantFinalizer = resolveWorkerPurchaseGrantFinalizer(env);
 
   return createGameServicesBackend({
@@ -336,13 +354,20 @@ function resolveWorkerDeploymentTargetBindings(
 
 function resolveWorkerEvidenceVerifier(
   env: GameServicesWorkerEnv,
+  admobConfig: AdMobSsvWorkerConfig | undefined,
 ): GameServicesEvidenceVerifier | undefined {
   const verse8Verifier = resolveVerse8AdsEvidenceVerifier(env);
+  const admobVerifier = admobConfig === undefined
+    ? undefined
+    : createD1AdMobSsvEvidenceVerifier(admobConfig);
 
   if (hasTargetSpecificEvidenceVerifierBinding(env)) {
     return createWorkerEvidenceVerifier(
       (target) => resolveTargetSpecificEvidenceVerifierBinding(env, target),
       verse8Verifier,
+      undefined,
+      admobVerifier,
+      admobConfig?.adUnits,
     );
   }
 
@@ -359,6 +384,9 @@ function resolveWorkerEvidenceVerifier(
         return target === 'verse8' && verse8Verifier !== undefined ? undefined : binding;
       },
       verse8Verifier,
+      undefined,
+      admobVerifier,
+      admobConfig?.adUnits,
     );
   }
 
@@ -366,8 +394,15 @@ function resolveWorkerEvidenceVerifier(
     ? createDevelopmentGameServicesEvidenceVerifier()
     : undefined;
 
-  if (verse8Verifier !== undefined || developmentVerifier !== undefined) {
-    return createWorkerEvidenceVerifier(() => undefined, verse8Verifier, developmentVerifier);
+  if (verse8Verifier !== undefined || developmentVerifier !== undefined
+    || admobVerifier !== undefined) {
+    return createWorkerEvidenceVerifier(
+      () => undefined,
+      verse8Verifier,
+      developmentVerifier,
+      admobVerifier,
+      admobConfig?.adUnits,
+    );
   }
 
   return undefined;
@@ -410,6 +445,8 @@ function createWorkerEvidenceVerifier(
   ) => GameServicesEvidenceVerifierBinding | undefined,
   verse8Verifier?: GameServicesEvidenceVerifier,
   fallbackVerifier?: GameServicesEvidenceVerifier,
+  admobVerifier?: GameServicesEvidenceVerifier,
+  admobAdUnits?: AdMobSsvWorkerConfig['adUnits'],
 ): GameServicesEvidenceVerifier {
   return {
     async verifyPurchase(input) {
@@ -441,6 +478,10 @@ function createWorkerEvidenceVerifier(
     },
     async verifyAdReward(input) {
       const { request, placement, platformPlacementId, timeoutMs } = input;
+      if ((request.target === 'android' || request.target === 'ios')
+        && admobVerifier !== undefined && admobAdUnits?.[request.target] !== undefined) {
+        return admobVerifier.verifyAdReward(input);
+      }
       const binding = resolveBinding(request.target);
 
       if (binding !== undefined) {
@@ -456,6 +497,32 @@ function createWorkerEvidenceVerifier(
         ? verse8Verifier.verifyAdReward(input)
         : (fallbackVerifier?.verifyAdReward(input)
           ?? unavailableEvidenceVerificationDecision());
+    },
+  };
+}
+
+function resolveWorkerAdMobSsvConfig(
+  env: GameServicesWorkerEnv,
+): AdMobSsvWorkerConfig | undefined {
+  const android = env.MPGD_ADMOB_SSV_ANDROID_AD_UNIT?.trim();
+  const ios = env.MPGD_ADMOB_SSV_IOS_AD_UNIT?.trim();
+  if (!android && !ios) {
+    return undefined;
+  }
+  const db = resolveD1Database(env);
+  if (db === undefined) {
+    throw new Error('AdMob SSV callback intake requires MPGD_STORE=d1 and a DB binding.');
+  }
+  if ((android && env.GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER !== undefined)
+    || (ios && env.GAME_SERVICES_IOS_EVIDENCE_VERIFIER !== undefined)) {
+    throw new Error('AdMob SSV and target-specific evidence bindings cannot overlap.');
+  }
+  return {
+    db,
+    placements: adPlacements,
+    adUnits: {
+      ...(android ? { android } : {}),
+      ...(ios ? { ios } : {}),
     },
   };
 }
