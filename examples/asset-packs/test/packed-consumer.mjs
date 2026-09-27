@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -51,6 +51,57 @@ function packageTarball(directory) {
   const added = readdirSync(tarballRoot).filter((name) => !before.has(name) && name.endsWith('.tgz'));
   assert.equal(added.length, 1, `expected exactly one tarball for ${directory}`);
   return join(tarballRoot, added[0]);
+}
+
+function packWorkspaceClosure(names) {
+  const available = new Map();
+  // Keep publishable roots aligned with tools/package/workspace.ts.
+  for (const root of ['packages', 'adapters', 'native-plugins', 'backend']) {
+    if (!existsSync(join(repoRoot, root))) continue;
+    for (const directory of readdirSync(join(repoRoot, root))) {
+      const relativeDirectory = join(root, directory);
+      const manifestPath = join(repoRoot, relativeDirectory, 'package.json');
+      if (!existsSync(manifestPath)) continue;
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+      if (manifest.name?.startsWith('@mpgd/')) {
+        available.set(manifest.name, { directory: relativeDirectory, manifest });
+      }
+    }
+  }
+  const packed = new Map();
+  const visited = new Set();
+  const roots = new Set(names);
+  function differsFromMain(entry) {
+    const base = run('git', [
+      'show', `origin/main:${entry.directory.replaceAll('\\', '/')}/package.json`,
+    ], repoRoot);
+    if (base.status !== 0) return true;
+    try {
+      return JSON.parse(base.stdout).version !== entry.manifest.version;
+    } catch {
+      return true;
+    }
+  }
+  function visit(name) {
+    if (visited.has(name)) return;
+    visited.add(name);
+    const entry = available.get(name);
+    assert.ok(entry, `Publishable workspace dependency is missing: ${name}`);
+    assert.notEqual(entry.manifest.private, true,
+      `Workspace dependency is private and cannot be published: ${name}`);
+    // Ordinary PRs keep using published dependencies; release PRs pin bumped candidates.
+    if (roots.has(name) || differsFromMain(entry)) {
+      packed.set(name, {
+        tarball: packageTarball(entry.directory),
+        version: entry.manifest.version,
+      });
+    }
+    for (const dependency of Object.keys(entry.manifest.dependencies ?? {})) {
+      if (dependency.startsWith('@mpgd/')) visit(dependency);
+    }
+  }
+  for (const name of names) visit(name);
+  return packed;
 }
 
 function packsConfig(delivery) {
@@ -258,8 +309,7 @@ async function runBrowser(serverUrl) {
 
 try {
   mkdirSync(consumerRoot, { recursive: true });
-  const cliTarball = packageTarball('packages/cli');
-  const assetsTarball = packageTarball('packages/phaser-assets');
+  const packed = packWorkspaceClosure(['@mpgd/cli', '@mpgd/phaser-assets']);
   const examplePackage = JSON.parse(readFileSync(join(exampleRoot, 'package.json'), 'utf8'));
   const sourceCliPackage = JSON.parse(readFileSync(join(repoRoot, 'packages/cli/package.json'), 'utf8'));
   const expectedCliDependencyVersions = Object.entries(sourceCliPackage.dependencies)
@@ -286,11 +336,24 @@ try {
     '--no-audit',
     '--no-fund',
     '--legacy-peer-deps',
-    cliTarball,
-    assetsTarball,
+    '--package-lock=true',
+    ...Array.from(packed.values(), (entry) => entry.tarball),
     `phaser@${examplePackage.dependencies.phaser}`,
   ], consumerRoot);
   assert.equal(installed.status, 0, `packed consumer install failed: ${installed.stdout}\n${installed.stderr}`);
+  const lock = JSON.parse(readFileSync(join(consumerRoot, 'package-lock.json'), 'utf8'));
+  for (const [name, { tarball, version }] of packed) {
+    assert.ok(version, `Packed workspace version is missing: ${name}`);
+    const locations = Object.entries(lock.packages).filter(([location]) =>
+      location === `node_modules/${name}` || location.endsWith(`/node_modules/${name}`));
+    assert.ok(locations.length > 0, `Installed candidate is missing: ${name}`);
+    for (const [location, metadata] of locations) {
+      assert.equal(metadata.version, version, `${location} has an unexpected version`);
+      assert.ok(metadata.resolved?.startsWith('file:'), `${location} was fetched from npm`);
+      assert.equal(realpathSync(resolve(consumerRoot, metadata.resolved.slice(5))),
+        realpathSync(tarball), `${location} did not use the candidate tarball`);
+    }
+  }
   const cliPackage = JSON.parse(readFileSync(join(consumerRoot, 'node_modules/@mpgd/cli/package.json'), 'utf8'));
   const assetsPackage = JSON.parse(readFileSync(join(consumerRoot, 'node_modules/@mpgd/phaser-assets/package.json'), 'utf8'));
   assert.equal(cliPackage.dependencies['@mpgd/phaser-assets'], assetsPackage.version);

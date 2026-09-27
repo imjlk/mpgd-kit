@@ -7,6 +7,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -16,6 +17,7 @@ import { join, resolve } from 'node:path';
 import { crc32, inflateRawSync } from 'node:zlib';
 
 import { buildAssetPacks } from '../../packages/cli/src/asset-pack-build';
+import { discoverPublishablePackages } from '../package/workspace';
 
 const repoRoot = resolve('.');
 const fixtureRoot = join('node_modules', '.cache', 'mpgd-cli-asset-pack-build');
@@ -880,8 +882,44 @@ try {
     assert.equal(added.length, 1, `expected exactly one new tarball for ${directory}`);
     return join(packDestination, added[0]!);
   };
-  const cliTarball = packWorkspace('packages/cli');
-  const assetsTarball = packWorkspace('packages/phaser-assets');
+  const publishable = new Map(discoverPublishablePackages().map((entry) => [entry.name, entry]));
+  const packed = new Map<string, string>();
+  const visited = new Set<string>();
+  const roots = new Set(['@mpgd/cli', '@mpgd/phaser-assets']);
+  const differsFromMain = (directory: string, version: string | undefined): boolean => {
+    const manifestPath = join(directory, 'package.json').replaceAll('\\', '/');
+    const base = spawnSync('git', ['show', `origin/main:${manifestPath}`], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+    if (base.status !== 0) {
+      return true;
+    }
+    try {
+      return JSON.parse(base.stdout).version !== version;
+    } catch {
+      return true;
+    }
+  };
+  const packDependency = (name: string): void => {
+    if (visited.has(name)) {
+      return;
+    }
+    visited.add(name);
+    const entry = publishable.get(name);
+    assert.ok(entry, `Publishable workspace dependency is missing: ${name}`);
+    // Ordinary PRs keep using published dependencies; release PRs pin bumped candidates.
+    if (roots.has(name) || differsFromMain(entry.dir, entry.packageJson.version)) {
+      packed.set(name, packWorkspace(entry.dir));
+    }
+    for (const dependency of Object.keys(entry.packageJson.dependencies ?? {})) {
+      if (dependency.startsWith('@mpgd/')) {
+        packDependency(dependency);
+      }
+    }
+  };
+  packDependency('@mpgd/cli');
+  packDependency('@mpgd/phaser-assets');
   const consumerRoot = resolve(fixtureRoot, 'packed-consumer');
   mkdirSync(join(consumerRoot, 'src'), { recursive: true });
   writeFileSync(
@@ -912,10 +950,40 @@ try {
   });
   const installed = spawnSync(
     'npm',
-    ['install', '--no-audit', '--no-fund', '--legacy-peer-deps', cliTarball, assetsTarball],
+    [
+      'install',
+      '--no-audit',
+      '--no-fund',
+      '--legacy-peer-deps',
+      '--package-lock=true',
+      ...packed.values(),
+    ],
     { cwd: consumerRoot, encoding: 'utf8', timeout: 180_000 },
   );
   assert.equal(installed.status, 0, `packed install failed: ${installed.stderr}`);
+  const lock = JSON.parse(readFileSync(join(consumerRoot, 'package-lock.json'), 'utf8')) as {
+    packages: Record<string, { version?: string; resolved?: string }>;
+  };
+  for (const [name, tarball] of packed) {
+    const expectedVersion = publishable.get(name)?.packageJson.version;
+    assert.ok(expectedVersion, `Packed workspace version is missing: ${name}`);
+    const locations = Object.entries(lock.packages).filter(([location]) => {
+      return location === `node_modules/${name}` || location.endsWith(`/node_modules/${name}`);
+    });
+    assert.ok(locations.length > 0, `Installed candidate is missing: ${name}`);
+    for (const [location, metadata] of locations) {
+      assert.equal(metadata.version, expectedVersion, `${location} has an unexpected version`);
+      const resolved = metadata.resolved;
+      if (typeof resolved !== 'string' || !resolved.startsWith('file:')) {
+        throw new Error(`${location} was fetched from npm`);
+      }
+      assert.equal(
+        realpathSync(resolve(consumerRoot, resolved.slice(5))),
+        realpathSync(tarball),
+        `${location} did not use the candidate tarball`,
+      );
+    }
+  }
   const packedRun = spawnSync(
     process.execPath,
     [
