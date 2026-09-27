@@ -1900,15 +1900,21 @@ function validatePhaserTemplateOrientationPolicy(): void {
       'orientationPolicy,',
       `${mainPath}: resolveTargetViewportPlan input must include orientationPolicy.`,
     );
+    // measureTargetViewport owns the container → visualViewport → window order.
     assertIncludesText(
       mainContent,
-      "source: 'container'",
+      "container: document.querySelector<HTMLElement>('#game')",
       `${mainPath}: viewport measurement must prefer the game container before fallbacks.`,
     );
     assertIncludesText(
       mainContent,
-      "source: 'visual-viewport'",
+      'visualViewport: window.visualViewport',
       `${mainPath}: viewport measurement must keep visualViewport fallback.`,
+    );
+    assertIncludesText(
+      mainContent,
+      'await waitForTargetViewportMeasurement({',
+      `${mainPath}: boot must wait for a measurable viewport instead of failing at 0x0.`,
     );
   }
 
