@@ -7,6 +7,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -928,10 +929,40 @@ try {
   });
   const installed = spawnSync(
     'npm',
-    ['install', '--no-audit', '--no-fund', '--legacy-peer-deps', ...packed.values()],
+    [
+      'install',
+      '--no-audit',
+      '--no-fund',
+      '--legacy-peer-deps',
+      '--package-lock=true',
+      ...packed.values(),
+    ],
     { cwd: consumerRoot, encoding: 'utf8', timeout: 180_000 },
   );
   assert.equal(installed.status, 0, `packed install failed: ${installed.stderr}`);
+  const lock = JSON.parse(readFileSync(join(consumerRoot, 'package-lock.json'), 'utf8')) as {
+    packages: Record<string, { version?: string; resolved?: string }>;
+  };
+  for (const [name, tarball] of packed) {
+    const expectedVersion = publishable.get(name)?.packageJson.version;
+    assert.ok(expectedVersion, `Packed workspace version is missing: ${name}`);
+    const locations = Object.entries(lock.packages).filter(([location]) => {
+      return location === `node_modules/${name}` || location.endsWith(`/node_modules/${name}`);
+    });
+    assert.ok(locations.length > 0, `Installed candidate is missing: ${name}`);
+    for (const [location, metadata] of locations) {
+      assert.equal(metadata.version, expectedVersion, `${location} has an unexpected version`);
+      const resolved = metadata.resolved;
+      if (typeof resolved !== 'string' || !resolved.startsWith('file:')) {
+        throw new Error(`${location} was fetched from npm`);
+      }
+      assert.equal(
+        realpathSync(resolve(consumerRoot, resolved.slice(5))),
+        realpathSync(tarball),
+        `${location} did not use the candidate tarball`,
+      );
+    }
+  }
   const packedRun = spawnSync(
     process.execPath,
     [
