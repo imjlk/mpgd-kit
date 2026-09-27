@@ -10,6 +10,7 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "getProducts", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "purchase", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "getTransactions", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "sync", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "finishTransaction", returnType: CAPPluginReturnPromise)
     ]
 
@@ -129,6 +130,17 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
         }
     }
 
+    @objc func sync(_ call: CAPPluginCall) {
+        Task { @MainActor in
+            do {
+                try await AppStore.sync()
+                call.resolve(["synced": true])
+            } catch {
+                call.reject("StoreKit account synchronization failed.", "STOREKIT_SYNC_FAILED", error)
+            }
+        }
+    }
+
     @objc func finishTransaction(_ call: CAPPluginCall) {
         guard let rawId = call.getString("transactionId"), let id = UInt64(rawId),
               let ledgerEntryId = call.getString("ledgerEntryId"),
@@ -141,6 +153,7 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
             for await result in Transaction.all {
                 guard case .verified(let transaction) = result,
                       transaction.id == id,
+                      transaction.revocationDate == nil,
                       Self.oneTimeType(transaction.productType) != nil else { continue }
                 await transaction.finish()
                 call.resolve(["finished": true])

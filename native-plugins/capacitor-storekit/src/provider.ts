@@ -25,7 +25,7 @@ export interface StoreKitProviderOptions {
   readonly getAppAccountToken: () => string | Promise<string>;
   readonly sdk?: Pick<
     CapacitorStoreKitPlugin,
-    'getProducts' | 'purchase' | 'getTransactions' | 'finishTransaction'
+    'getProducts' | 'purchase' | 'getTransactions' | 'sync' | 'finishTransaction'
   >;
   readonly isIos?: () => boolean;
 }
@@ -78,13 +78,17 @@ export interface StoreKitPurchaseVerification {
 }
 
 export interface StoreKitRecoveryBackend {
-  verifyPurchase(input: {
+  /**
+   * Resolve a journaled checkout with its ORIGINAL idempotency key, or return
+   * the already-recorded grant for matching App Store evidence and owner.
+   * The backend must verify Apple data before returning verified=true.
+   */
+  recoverPurchase(input: {
     readonly target: 'ios';
     readonly deploymentTarget?: string;
     readonly playerId: string;
     readonly productId: string;
     readonly platformTransactionId: string;
-    readonly idempotencyKey: string;
     readonly purchasedAt: string;
   }): Promise<StoreKitPurchaseVerification>;
 }
@@ -113,7 +117,7 @@ export async function recoverStoreKitPurchases(input: {
   const recovered = await Promise.all(snapshot.transactions.map(async (item) => {
     const transactionId = item.result.transactionId;
     if (transactionId === undefined) {
-      throw new TypeError('StoreKit recovery transaction is missing its ID.');
+      return { productId: item.productId, status: 'rejected', reason: 'invalid-evidence' } as const;
     }
     if (item.appAccountToken?.toLowerCase() !== token) {
       // Shared Apple IDs can expose a transaction owned by another game user.
@@ -122,13 +126,12 @@ export async function recoverStoreKitPurchases(input: {
       } as const;
     }
     try {
-      const verification = await input.backend.verifyPurchase({
+      const verification = await input.backend.recoverPurchase({
         target: 'ios',
         ...(input.deploymentTarget === undefined ? {} : { deploymentTarget: input.deploymentTarget }),
         playerId: input.playerId,
         productId: item.productId,
         platformTransactionId: transactionId,
-        idempotencyKey: `app-store:${transactionId}`,
         purchasedAt: item.purchasedAt,
       });
       if (!verification.verified) {
@@ -285,6 +288,7 @@ export function createCapacitorStoreKitProvider(
           return success(input.id, convertOutcome(outcome, mapping, appAccountToken));
         }
         case 'commerce.restore':
+          await sdk.sync();
           return success(input.id, { restoredEntitlements: [] });
         case 'commerce.getEntitlements':
           return success(input.id, []);
@@ -298,7 +302,8 @@ export function createCapacitorStoreKitProvider(
       }
       if (typeof code === 'string' && /^STOREKIT_[A-Z_]+$/u.test(code)) {
         const retryable = code === 'STOREKIT_UNAVAILABLE'
-          || code === 'STOREKIT_PRODUCT_LOOKUP_FAILED';
+          || code === 'STOREKIT_PRODUCT_LOOKUP_FAILED'
+          || code === 'STOREKIT_SYNC_FAILED';
         return failure(input.id, code, retryable);
       }
       if (error instanceof TypeError) {

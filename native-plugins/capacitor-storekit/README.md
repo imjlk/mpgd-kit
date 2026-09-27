@@ -15,13 +15,17 @@ grant. A completed native purchase returns no `authoritativeGrant`.
 On startup, account restoration, and after a pending or uncertain checkout,
 call `recoverStoreKitPurchases({ provider, backend, playerId })`. It sends only
 transactions whose `appAccountToken` matches the current authenticated game
-account to the existing game-services App Store verifier. That verifier fetches
-the transaction from Apple's Server API, verifies its signed JWS, validates
-bundle/product/environment/account binding, and commits the backend ledger
-grant. The recovery helper calls native `finishTransaction` only after a
+account to the game-owned `backend.recoverPurchase` contract. That backend
+must reuse the original idempotency key from the durable purchase journal, or
+return the existing ledger grant for the same Apple evidence, product and
+player. It must not invent a new key for an already-granted transaction: the
+generic game-services verifier rejects such evidence replay. For new evidence,
+the backend uses the existing App Store Server API/JWS verifier to validate
+bundle, product, environment and account binding before the ledger grant.
+The recovery helper calls native `finishTransaction` only after a
 verified response with a ledger entry ID. If finish fails, it reports
-`finishPending: true`; repeat recovery using the same transaction ID and
-idempotency key. An unknown backend result stays pending and never triggers a
+`finishPending: true`; repeat recovery with the original purchase identity.
+An unknown backend result stays pending and never triggers a
 new purchase sheet automatically.
 Permanently rejected and account-mismatched transactions are reported as
 `rejected` and are **not** finished: the helper cannot prove content delivery
@@ -33,7 +37,8 @@ reported separately and cannot block valid sibling transactions.
 The iOS native plugin also emits `transactionUpdated` for delayed StoreKit
 transactions. Call recovery after this event and on app launch because events
 can be missed while the game is closed. `commerce.restore` intentionally
-returns no local entitlements. Subscriptions are not supported by this package;
+invokes user-initiated `AppStore.sync()` before returning no local entitlements;
+call recovery afterward. Subscriptions are not supported by this package;
 they require a separate subscription status and renewal flow.
 
 The Kit tests use mocked StoreKit responses and a syntax-only local Swift

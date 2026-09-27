@@ -46,3 +46,5 @@ apps/mobile-capacitor/ios/App/App/capacitor.config.json
 apps/mobile-capacitor/ios/App/App/public/
 native-plugins/*/android/build/
 native-plugins/*/ios/.build/
+native-plugins/*/.build/
+native-plugins/*/Package.resolved

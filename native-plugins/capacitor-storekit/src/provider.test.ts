@@ -26,10 +26,11 @@ const calls: string[] = [];
 let outcome: StoreKitPurchaseOutcome = { status: 'purchased', transaction };
 let finishFails = false;
 let purchaseErrorCode: string | undefined;
+let syncFails = false;
 let transactions: readonly StoreKitTransaction[] = [transaction];
 type TestSdk = Pick<
   CapacitorStoreKitPlugin,
-  'getProducts' | 'purchase' | 'getTransactions' | 'finishTransaction'
+  'getProducts' | 'purchase' | 'getTransactions' | 'sync' | 'finishTransaction'
 >;
 async function getProducts() {
   const product = {
@@ -52,6 +53,13 @@ async function purchase(input: { productId: string; appAccountToken: string }) {
 async function getTransactions() {
   return { transactions };
 }
+async function sync() {
+  calls.push('sync');
+  if (syncFails) {
+    throw Object.assign(new Error('sync failed'), { code: 'STOREKIT_SYNC_FAILED' });
+  }
+  return { synced: true };
+}
 async function finishTransaction(input: { transactionId: string; ledgerEntryId: string }) {
   calls.push(`finish:${input.transactionId}:${input.ledgerEntryId}`);
   if (finishFails) {
@@ -59,7 +67,7 @@ async function finishTransaction(input: { transactionId: string; ledgerEntryId: 
   }
   return { finished: true };
 }
-const sdk: TestSdk = { getProducts, purchase, getTransactions, finishTransaction };
+const sdk: TestSdk = { getProducts, purchase, getTransactions, sync, finishTransaction };
 
 const provider = createCapacitorStoreKitProvider({
   products: [{ id: 'COINS_100', storeId: transaction.productId, type: 'consumable' }],
@@ -152,6 +160,17 @@ equal(
   { id: 'request-1', ok: true, data: { restoredEntitlements: [] } },
   'native restore is not an entitlement grant',
 );
+equal(calls.at(-1), 'sync', 'explicit restore refreshes the App Store account');
+syncFails = true;
+const failedRestore = await provider.bridge.request(request('commerce.restore'));
+const syncError = {
+  code: 'STOREKIT_SYNC_FAILED',
+  message: 'STOREKIT_SYNC_FAILED',
+  retryable: true,
+};
+const expectedRestoreFailure = { id: 'request-1', ok: false, error: syncError };
+equal(failedRestore, expectedRestoreFailure, 'failed sync cannot report restore success');
+syncFails = false;
 
 const verificationCalls: string[] = [];
 let verificationFails = false;
@@ -161,12 +180,11 @@ let nextVerification: StoreKitPurchaseVerification = {
   ledgerEntryId: 'ledger-1',
 };
 const backend = {
-  async verifyPurchase(input: {
+  async recoverPurchase(input: {
     readonly platformTransactionId: string;
-    readonly idempotencyKey: string;
     readonly playerId: string;
   }) {
-    verificationCalls.push(`${input.playerId}:${input.platformTransactionId}:${input.idempotencyKey}`);
+    verificationCalls.push(`${input.playerId}:${input.platformTransactionId}`);
     if (verificationFails) {
       throw new Error('backend unavailable');
     }
@@ -184,8 +202,8 @@ const expectedRecovered = {
 equal(recovered, [expectedRecovered], 'verified backend grant precedes native finish');
 equal(
   verificationCalls,
-  [`player-1:${transaction.transactionId}:app-store:${transaction.transactionId}`],
-  'stable server idempotency',
+  [`player-1:${transaction.transactionId}`],
+  'backend resolves the original journal key or existing grant',
 );
 equal(calls.at(-1), `finish:${transaction.transactionId}:ledger-1`, 'finish after ledger grant');
 

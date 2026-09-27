@@ -35,6 +35,8 @@ export interface CapacitorStoreKitPlugin {
   }): Promise<StoreKitPurchaseOutcome>;
   /** Includes unfinished consumables and current non-consumable entitlements. */
   getTransactions(): Promise<{ readonly transactions: readonly StoreKitTransaction[] }>;
+  /** User-initiated App Store account synchronization before restore. */
+  sync(): Promise<{ readonly synced: boolean }>;
   /** Call only after the authenticated backend confirms the ledger grant. */
   finishTransaction(input: {
     readonly transactionId: string;
