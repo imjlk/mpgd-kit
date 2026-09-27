@@ -16,6 +16,7 @@ import { join, resolve } from 'node:path';
 import { crc32, inflateRawSync } from 'node:zlib';
 
 import { buildAssetPacks } from '../../packages/cli/src/asset-pack-build';
+import { discoverPublishablePackages } from '../package/workspace';
 
 const repoRoot = resolve('.');
 const fixtureRoot = join('node_modules', '.cache', 'mpgd-cli-asset-pack-build');
@@ -880,8 +881,23 @@ try {
     assert.equal(added.length, 1, `expected exactly one new tarball for ${directory}`);
     return join(packDestination, added[0]!);
   };
-  const cliTarball = packWorkspace('packages/cli');
-  const assetsTarball = packWorkspace('packages/phaser-assets');
+  const publishable = new Map(discoverPublishablePackages().map((entry) => [entry.name, entry]));
+  const packed = new Map<string, string>();
+  const packDependency = (name: string): void => {
+    if (packed.has(name)) {
+      return;
+    }
+    const entry = publishable.get(name);
+    assert.ok(entry, `Publishable workspace dependency is missing: ${name}`);
+    packed.set(name, packWorkspace(entry.dir));
+    for (const dependency of Object.keys(entry.packageJson.dependencies ?? {})) {
+      if (dependency.startsWith('@mpgd/')) {
+        packDependency(dependency);
+      }
+    }
+  };
+  packDependency('@mpgd/cli');
+  packDependency('@mpgd/phaser-assets');
   const consumerRoot = resolve(fixtureRoot, 'packed-consumer');
   mkdirSync(join(consumerRoot, 'src'), { recursive: true });
   writeFileSync(
@@ -912,7 +928,7 @@ try {
   });
   const installed = spawnSync(
     'npm',
-    ['install', '--no-audit', '--no-fund', '--legacy-peer-deps', cliTarball, assetsTarball],
+    ['install', '--no-audit', '--no-fund', '--legacy-peer-deps', ...packed.values()],
     { cwd: consumerRoot, encoding: 'utf8', timeout: 180_000 },
   );
   assert.equal(installed.status, 0, `packed install failed: ${installed.stderr}`);

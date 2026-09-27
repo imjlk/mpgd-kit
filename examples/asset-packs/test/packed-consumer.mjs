@@ -53,6 +53,34 @@ function packageTarball(directory) {
   return join(tarballRoot, added[0]);
 }
 
+function packWorkspaceClosure(names) {
+  const available = new Map();
+  for (const root of ['packages', 'adapters', 'native-plugins', 'backend']) {
+    for (const directory of readdirSync(join(repoRoot, root))) {
+      const relativeDirectory = join(root, directory);
+      const manifestPath = join(repoRoot, relativeDirectory, 'package.json');
+      if (!existsSync(manifestPath)) continue;
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+      if (manifest.name?.startsWith('@mpgd/')) {
+        available.set(manifest.name, { directory: relativeDirectory, manifest });
+      }
+    }
+  }
+  const packed = new Map();
+  function visit(name) {
+    if (packed.has(name)) return;
+    const entry = available.get(name);
+    assert.ok(entry && entry.manifest.private !== true,
+      `Publishable workspace dependency is missing: ${name}`);
+    packed.set(name, packageTarball(entry.directory));
+    for (const dependency of Object.keys(entry.manifest.dependencies ?? {})) {
+      if (dependency.startsWith('@mpgd/')) visit(dependency);
+    }
+  }
+  for (const name of names) visit(name);
+  return packed;
+}
+
 function packsConfig(delivery) {
   const config = JSON.parse(readFileSync(join(exampleRoot, 'delivery-configs', `${delivery}.json`), 'utf8'));
   return { ...config, root: 'src' };
@@ -258,8 +286,7 @@ async function runBrowser(serverUrl) {
 
 try {
   mkdirSync(consumerRoot, { recursive: true });
-  const cliTarball = packageTarball('packages/cli');
-  const assetsTarball = packageTarball('packages/phaser-assets');
+  const packed = packWorkspaceClosure(['@mpgd/cli', '@mpgd/phaser-assets']);
   const examplePackage = JSON.parse(readFileSync(join(exampleRoot, 'package.json'), 'utf8'));
   const sourceCliPackage = JSON.parse(readFileSync(join(repoRoot, 'packages/cli/package.json'), 'utf8'));
   const expectedCliDependencyVersions = Object.entries(sourceCliPackage.dependencies)
@@ -286,8 +313,7 @@ try {
     '--no-audit',
     '--no-fund',
     '--legacy-peer-deps',
-    cliTarball,
-    assetsTarball,
+    ...packed.values(),
     `phaser@${examplePackage.dependencies.phaser}`,
   ], consumerRoot);
   assert.equal(installed.status, 0, `packed consumer install failed: ${installed.stdout}\n${installed.stderr}`);
