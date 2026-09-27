@@ -428,6 +428,11 @@ function createVerificationId(transaction: AppStoreTransactionPayload): string {
   ].map(encodeVerificationIdSegment).join(':');
 }
 
+/** Identify IDs emitted by this verifier without duplicating its encoding format. */
+export function isAppStoreVerificationId(verificationId: string): boolean {
+  return verificationId.startsWith(`${encodeVerificationIdSegment('app-store')}:`);
+}
+
 function encodeVerificationIdSegment(value: string): string {
   return `${value.length}:${encodeURIComponent(value)}`;
 }

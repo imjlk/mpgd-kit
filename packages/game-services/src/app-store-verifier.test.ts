@@ -2,6 +2,7 @@ import {
   AppStoreDependencyUnavailableError,
   createAppStoreGameServicesEvidenceVerifier,
   createAppStoreServerApiClient,
+  isAppStoreVerificationId,
   type AppStoreServerApiClient,
   type AppStoreSignedTransactionVerifier,
   type AppStoreTransactionPayload,
@@ -102,6 +103,16 @@ assertEqual(
   verified.verificationId,
   '9:app-store:10:Production:16:com.example.game:16:2000000123456789',
   'the verification identity should be stable and transaction-scoped',
+);
+assertEqual(
+  isAppStoreVerificationId(verified.verificationId),
+  true,
+  'recovery should recognize the canonical length-prefixed App Store identity',
+);
+assertEqual(
+  isAppStoreVerificationId('app-store:Production:com.example.game:2000000123456789'),
+  false,
+  'recovery must not accept the legacy unencoded identity fixture',
 );
 assertEqual(
   verified.payload?.appStoreOriginalTransactionId,

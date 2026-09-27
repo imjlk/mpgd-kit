@@ -27,6 +27,28 @@ verified response with a ledger entry ID. If finish fails, it reports
 `finishPending: true`; repeat recovery with the original purchase identity.
 An unknown backend result stays pending and never triggers a
 new purchase sheet automatically.
+
+On the game server, `@mpgd/game-services/app-store-recovery` provides
+`createAppStoreRecoveryBackend(...)` for this contract. Construct it only after
+authenticating the game player, and bind `playerId` to that authenticated
+identity. Pass the same durable `GameServicesStore` instance and
+`createGameServicesBackend(...).purchases` used for checkout. Its optional
+`resolveOriginalIdempotencyKey` callback must query the game's durable
+checkout journal for the **original** key associated with this player and
+transaction. The adapter first checks existing App Store ledger evidence and
+rejects cross-player, cross-product, cross-deployment and key collisions. If
+neither a matching grant nor an original journal key exists, it returns
+`pending` without attempting a new grant. Do not use the in-memory store for
+production recovery. The game's HTTP/RPC endpoint must authenticate the
+request; this helper does not expose one or authenticate clients.
+For production-scale ledgers, implement the store's indexed
+`findEntitlementTransactionByPlatformEvidence` and
+`findEntitlementTransactionByIdempotency` methods. Without them, the helper
+uses the same full-ledger scan fallback as the generic game-services server.
+
+An existing grant is returned by the normal backend idempotent-retry path;
+that path relies on the prior verified ledger record rather than fetching
+fresh Apple status. Continue to process App Store revocations separately.
 Permanently rejected and account-mismatched transactions are reported as
 `rejected` and are **not** finished: the helper cannot prove content delivery
 for them. Persist that terminal result in the game-owned operation journal and
