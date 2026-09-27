@@ -508,7 +508,7 @@ async function verifyPackedReleaseSimulation(cli, cliDist, game, fixture, env) {
   writeFileSync(androidArtifact, 'changed bundle bytes');
   await assert.rejects(
     submit.submitRecordedNativeTargetWithPorts(androidInput, ports),
-    /artifact|hash|signed|bundle/u,
+    /Google Play AAB bytes differ from the immutable build record/u,
   );
   assert.equal(playApiCalls, 0, 'invalid artifact must fail before a Play API call');
   copyFileSync(androidSource, androidArtifact);
