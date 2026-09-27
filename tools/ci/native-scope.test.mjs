@@ -9,6 +9,7 @@ test('native source, package metadata, and its Sampo changeset stay native-only'
     'adapters/capacitor/src/index.ts',
     'native-plugins/capacitor-game-services/ios/Plugin.swift',
     'native-plugins/capacitor-play-billing/android/build.gradle',
+    'native-plugins/capacitor-storekit/ios/Sources/CapacitorStoreKit/CapacitorStoreKitPlugin.swift',
     'apps/mobile-capacitor/android/build.gradle',
     'adapters/capacitor/package.json',
     '.sampo/changesets/native-fix.md',

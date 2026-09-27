@@ -4,6 +4,7 @@ const nativeRoots = [
   'adapters/capacitor/',
   'native-plugins/capacitor-game-services/',
   'native-plugins/capacitor-play-billing/',
+  'native-plugins/capacitor-storekit/',
   'apps/mobile-capacitor/',
 ];
 

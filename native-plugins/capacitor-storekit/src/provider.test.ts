@@ -1,3 +1,4 @@
+import type { CapacitorServiceProvider } from '@mpgd/adapter-capacitor';
 import type { BridgeMethod, BridgeRequest } from '@mpgd/bridge';
 
 import type {
@@ -62,6 +63,8 @@ const provider = createCapacitorStoreKitProvider({
   isIos: () => true,
   sdk,
 });
+const registryCompatible: CapacitorServiceProvider = provider;
+void registryCompatible;
 
 function request(method: BridgeMethod, payload: unknown = {}): BridgeRequest {
   return {

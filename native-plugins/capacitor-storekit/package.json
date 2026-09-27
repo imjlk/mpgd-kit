@@ -35,6 +35,7 @@
   },
   "devDependencies": {
     "@capacitor/core": "8.5.2",
+    "@mpgd/adapter-capacitor": "workspace:*",
     "@mpgd/bridge": "workspace:*",
     "@mpgd/game-services": "workspace:*",
     "@mpgd/platform": "workspace:*",

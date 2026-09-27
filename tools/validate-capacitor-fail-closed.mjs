@@ -76,4 +76,13 @@ assert.doesNotMatch(
   'Client-side Billing must never finalize before the backend ledger grant',
 );
 
+const storeKit = read(
+  'native-plugins/capacitor-storekit/ios/Sources/CapacitorStoreKit/CapacitorStoreKitPlugin.swift',
+);
+assert.match(storeKit, /Transaction\.unfinished/u, 'StoreKit must requery unfinished purchases');
+assert.match(storeKit, /Transaction\.updates/u, 'StoreKit must listen for delayed transactions');
+assert.match(storeKit, /case \.success[\s\S]*?call\.resolve/u, 'StoreKit purchase must return evidence');
+assert.match(storeKit, /@objc func finishTransaction[\s\S]*?transaction\.finish\(\)/u,
+  'StoreKit finish must be a separate post-grant operation');
+
 console.log('Capacitor reference native services fail closed without providers.');

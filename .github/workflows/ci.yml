@@ -805,6 +805,12 @@ jobs:
       - run: pnpm test:native-ios-signing
       - run: pnpm smoke:cli-ios-signing
       - run: pnpm smoke:native-packed-swift
+      - name: Compile opt-in StoreKit collector
+        working-directory: native-plugins/capacitor-storekit
+        run: >-
+          xcodebuild -scheme MpgdCapacitorStoreKit
+          -destination 'generic/platform=iOS Simulator'
+          -configuration Debug CODE_SIGNING_ALLOWED=NO -quiet build
       - run: pnpm build:target ios staging
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
