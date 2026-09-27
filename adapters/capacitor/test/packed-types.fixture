@@ -1,3 +1,4 @@
+// Copied as types.ts into a tarball-installed consumer after packages are built.
 import {
   createCapacitorNativeJsonTransport,
   type CapacitorNativeJsonTransport,

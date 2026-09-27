@@ -298,7 +298,7 @@ describe('Capacitor optional provider composition', () => {
       bridge: {
         async request(input) {
           return { id: input.id, ok: true, data: {
-            status: 'completed', rewardGranted: true,
+            status: 'completed', rewardGranted: false,
             evidence: { schema: 'mpgd.admob.client-reward.v1', payload: {
               adUnitId: 'ca-app-pub-1234567890123456/1234567890',
             } },
@@ -312,7 +312,7 @@ describe('Capacitor optional provider composition', () => {
     });
     await expect(gateway.ads.showRewarded({
       placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'admob-ad-1',
-    })).resolves.toMatchObject({ status: 'completed', rewardGranted: true });
+    })).resolves.toMatchObject({ status: 'completed', rewardGranted: false });
   });
 
   it('passes a deferred rewarded result through without granting a reward', async () => {

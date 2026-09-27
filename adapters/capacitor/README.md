@@ -52,11 +52,12 @@ provider never silently falls back for purchase, ad, or native leaderboard
 operations; an explicit remote leaderboard route is a separate path. Errors
 retain a stable code and retry hint. The
 provider bridge must return a method-shaped response. In particular, an ad
-`rewardGranted: true` result requires either a backend ledger entry or the
-explicitly non-authoritative AdMob client-reward envelope. The latter only
-lets the game-services client request a grant; the server must independently
-verify a signed SSV callback before writing its ledger. A native callback
-alone is never a grant. Game-specific product, consent, entitlement, and
+`rewardGranted: true` result requires a backend ledger entry. The AdMob SDK
+provider always returns `rewardGranted: false`, even after the SDK fires a
+reward callback. Its explicitly non-authoritative evidence envelope only lets
+the game-services client request a grant; the server must independently verify
+a signed SSV callback before writing its ledger. A native callback alone is
+never a grant. Game-specific product, consent, entitlement, and
 identity policy belongs to the consuming game and its backend.
 
 The source tests and installed-tarball consumer validate composition, types,
@@ -115,7 +116,14 @@ operation ID exists only at show time. `gateway.ads.showRewarded()` therefore
 loads a fresh ad with SSV `userId` and encoded player/placement/operation
 binding, waits for native dismissal, then returns SDK reward evidence. Call
 `GameServicesClient.claimRewardedAd()` rather than award currency from that
-result. The receiver and ledger described in [AdMob SSV](../../docs/ADMOB_SSV.md)
+result; `rewardGranted` remains `false` in that provisional platform result.
+If dismissal arrives without an observed reward, the provider returns
+`pending` with the same non-authoritative binding. The backend can then look
+for a later signed SSV callback without replaying the ad UI; a genuinely
+skipped ad may remain pending until game-owned support or expiry policy
+settles it. Mediation and asynchronous bridge delivery have no safe universal
+250 ms reward-event cutoff.
+The receiver and ledger described in [AdMob SSV](../../docs/ADMOB_SSV.md)
 remain mandatory. A late SSV callback can leave the claim pending for
 reconciliation. `isTesting: true` is for SDK test ads only; [the plugin notes
 that test ads do not invoke the SSV endpoint](https://github.com/capacitor-community/admob/blob/main/docs/rewarded.md#server-side-verification),

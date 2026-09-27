@@ -67,7 +67,7 @@ try {
     }
   }
   copyFileSync(join(repoRoot, 'adapters/capacitor/test/packed-runtime.mjs'), join(consumer, 'runtime.mjs'));
-  copyFileSync(join(repoRoot, 'adapters/capacitor/test/packed-types.ts'), join(consumer, 'types.ts'));
+  copyFileSync(join(repoRoot, 'adapters/capacitor/test/packed-types.fixture'), join(consumer, 'types.ts'));
   run(process.execPath, ['runtime.mjs'], consumer);
   writeJson(join(consumer, 'tsconfig.json'), {
     compilerOptions: {

@@ -29,6 +29,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./admob-client-reward": {
+      "types": "./dist/admob-client-reward.d.ts",
+      "default": "./dist/admob-client-reward.js"
+    },
     "./admob-ssv": {
       "types": "./dist/admob-ssv.d.ts",
       "default": "./dist/admob-ssv.js"

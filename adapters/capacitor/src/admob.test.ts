@@ -12,6 +12,7 @@ function createSdk() {
   let canRequestAds = true;
   let required = false;
   let privacyRequired = false;
+  let removeStuck = false;
   const emit = (event: RewardAdPluginEvents, payload?: unknown) => {
     for (const listener of listeners.get(event) ?? []) {
       (listener as (value?: unknown) => void)(payload ?? { type: 'coin', amount: 1 });
@@ -42,7 +43,12 @@ function createSdk() {
       const callbacks = listeners.get(event) ?? new Set();
       callbacks.add(listener);
       listeners.set(event, callbacks);
-      return { remove: async () => { callbacks.delete(listener); } };
+      return { remove: async () => {
+        if (removeStuck) {
+          await new Promise<void>(() => {});
+        }
+        callbacks.delete(listener);
+      } };
     }),
   };
   return {
@@ -56,6 +62,9 @@ function createSdk() {
     },
     setPrivacyRequired(value: boolean) {
       privacyRequired = value;
+    },
+    setRemoveStuck(value: boolean) {
+      removeStuck = value;
     },
     listenerCount() {
       return [...listeners.values()].reduce((count, callbacks) => count + callbacks.size, 0);
@@ -110,7 +119,7 @@ describe('Capacitor AdMob rewarded provider', () => {
     }));
     await settleShow(fake.emit);
     expect(await result).toMatchObject({
-      ok: true, data: { status: 'completed', rewardGranted: true },
+      ok: true, data: { status: 'completed', rewardGranted: false },
     });
     expect(fake.prepare).toHaveBeenCalledOnce();
     const options = fake.prepare.mock.calls[0]?.[0] as {
@@ -146,7 +155,7 @@ describe('Capacitor AdMob rewarded provider', () => {
     }
     fake.emit(RewardAdPluginEvents.Dismissed);
     expect(await result).toMatchObject({
-      ok: true, data: { status: 'skipped', rewardGranted: false },
+      ok: true, data: { status: 'pending', rewardGranted: false },
     });
 
     const anonymous = createCapacitorAdMobRewardedProvider({
@@ -218,11 +227,11 @@ describe('Capacitor AdMob rewarded provider', () => {
     fake.emit(RewardAdPluginEvents.Rewarded, { type: '', amount: 0 });
     fake.emit(RewardAdPluginEvents.Dismissed);
     expect(await result).toMatchObject({
-      ok: true, data: { status: 'skipped', rewardGranted: false },
+      ok: true, data: { status: 'pending', rewardGranted: false },
     });
   });
 
-  it('accepts a valid reward event arriving shortly after dismissal', async () => {
+  it('keeps an unconfirmed dismissal pending for later SSV reconciliation', async () => {
     const fake = createSdk();
     fake.show.mockImplementation(() => new Promise(() => {}));
     const provider = createCapacitorAdMobRewardedProvider({
@@ -236,9 +245,9 @@ describe('Capacitor AdMob rewarded provider', () => {
       await Promise.resolve();
     }
     fake.emit(RewardAdPluginEvents.Dismissed);
-    setTimeout(() => fake.emit(RewardAdPluginEvents.Rewarded), 20);
     expect(await result).toMatchObject({
-      ok: true, data: { status: 'completed', rewardGranted: true },
+      ok: true, data: { status: 'pending', rewardGranted: false,
+        evidence: { schema: 'mpgd.admob.client-reward.v1' } },
     });
   });
 
@@ -275,6 +284,46 @@ describe('Capacitor AdMob rewarded provider', () => {
       });
       expect(fake.prepare).not.toHaveBeenCalled();
       expect((await provider.getAvailability()).rewardedAds).toBe('available');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects SSV fields that the receiver cannot accept before loading an ad', async () => {
+    const fake = createSdk();
+    const provider = createCapacitorAdMobRewardedProvider({
+      sdk: fake.sdk, adUnits: { CONTINUE: unit }, getPlayerId: () => 'player-1',
+    });
+    await provider.requestConsent();
+    expect(await provider.bridge.request(bridgeRequest('ads.showRewarded', {
+      placementId: 'CONTINUE', idempotencyKey: 'x'.repeat(257),
+    }))).toMatchObject({ ok: true, data: { status: 'failed' } });
+    const badPlayer = createCapacitorAdMobRewardedProvider({
+      sdk: fake.sdk, adUnits: { CONTINUE: unit }, getPlayerId: () => 'x'.repeat(257),
+    });
+    await badPlayer.requestConsent();
+    expect(await badPlayer.bridge.request(bridgeRequest('ads.showRewarded', {
+      placementId: 'CONTINUE', idempotencyKey: 'valid',
+    }))).toMatchObject({ ok: true, data: { status: 'failed' } });
+    expect(fake.prepare).not.toHaveBeenCalled();
+  });
+
+  it('bounds listener cleanup and quarantines an uncertain native SDK', async () => {
+    const fake = createSdk();
+    fake.setRemoveStuck(true);
+    const provider = createCapacitorAdMobRewardedProvider({
+      sdk: fake.sdk, adUnits: { CONTINUE: unit }, getPlayerId: () => 'player-1',
+    });
+    await provider.requestConsent();
+    vi.useFakeTimers();
+    try {
+      const result = provider.bridge.request(bridgeRequest('ads.showRewarded', {
+        placementId: 'CONTINUE', idempotencyKey: 'cleanup-stuck',
+      }));
+      await settleShow(fake.emit);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await result).toMatchObject({ ok: true, data: { status: 'completed' } });
+      expect((await provider.getAvailability()).rewardedAds).toBe('action-required');
     } finally {
       vi.useRealTimers();
     }

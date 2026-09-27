@@ -1,11 +1,11 @@
 import type { BridgeMethod, BridgeRequest, BridgeResponse } from '@mpgd/bridge';
+import { isAdMobClientRewardEvidence } from '@mpgd/game-services/admob-client-reward';
 import {
   PlatformOperationError,
   type PlatformProviderAvailability,
   type PlatformProviderFeature,
   type ProductType,
 } from '@mpgd/platform';
-import { admobClientRewardEvidenceSchema } from './admob-contract.js';
 
 export interface NativeBridge {
   request(input: BridgeRequest): Promise<BridgeResponse>;
@@ -336,13 +336,11 @@ function isValidProviderData(method: BridgeMethod, value: unknown): boolean {
         && typeof value.rewardGranted === 'boolean'
         && (!value.rewardGranted || (
           value.status === 'completed'
-          && ((isString(value.ledgerEntryId) && value.ledgerEntryId.length > 0)
-            || (isRecord(value.evidence)
-              && value.evidence.schema === admobClientRewardEvidenceSchema
-              && isRecord(value.evidence.payload)
-              && isString(value.evidence.payload.adUnitId)
-              && value.evidence.payload.adUnitId.length > 0))
+          && isString(value.ledgerEntryId)
+          && value.ledgerEntryId.length > 0
         ))
+        && (value.status !== 'completed' || value.rewardGranted
+          || value.evidence === undefined || isAdMobClientRewardEvidence(value))
         && (value.evidence === undefined || isEvidence(value.evidence));
     case 'ads.showInterstitial':
       return isRecord(value)

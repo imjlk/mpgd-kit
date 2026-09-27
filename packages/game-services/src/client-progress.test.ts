@@ -1,4 +1,9 @@
-import type { PlatformGateway, PurchaseResult, RewardedAdResult } from '@mpgd/platform';
+import type {
+  PlatformEvidenceEnvelope,
+  PlatformGateway,
+  PurchaseResult,
+  RewardedAdResult,
+} from '@mpgd/platform';
 
 import {
   createGameServicesClient,
@@ -208,6 +213,35 @@ equal(
   'No-options ad result unchanged',
 );
 equal(noOptionsAd.calls, ad.calls, 'No-options ad side effects unchanged');
+
+const provisionalEvidence: PlatformEvidenceEnvelope = {
+  schema: 'mpgd.admob.client-reward.v1',
+  payload: { adUnitId: 'ca-app-pub-1234567890123456/1234567890' },
+};
+const provisionalReward: RewardedAdResult = {
+  status: 'completed',
+  rewardGranted: false,
+  evidence: provisionalEvidence,
+};
+const provisionalAd = harness({ reward: provisionalReward });
+const provisionalResult = await provisionalAd.client.claimRewardedAd(rewardInput);
+equal(provisionalAd.calls.claim, 1, 'Provisional AdMob evidence reaches backend verification');
+equal(provisionalResult.status, 'granted', 'Only the mocked backend decision grants the reward');
+equal(provisionalResult.reward.rewardGranted, false, 'SDK callback never sets the grant flag');
+const uncertainReward: RewardedAdResult = { ...provisionalReward, status: 'pending' };
+const uncertainAd = harness({ reward: uncertainReward, claimed: false });
+const uncertainResult = await uncertainAd.client.claimRewardedAd(rewardInput);
+equal(uncertainAd.calls.claim, 1, 'Uncertain dismissal still reaches SSV verification');
+equal(uncertainResult.status, 'rejected', 'Only a backend decision can settle an uncertain ad');
+const malformedEvidence: PlatformEvidenceEnvelope = {
+  schema: 'mpgd.admob.client-reward.v1',
+  payload: { adUnitId: '' },
+};
+const malformedReward: RewardedAdResult = { ...provisionalReward, evidence: malformedEvidence };
+const malformedProvisional = harness({ reward: malformedReward });
+const malformedResult = await malformedProvisional.client.claimRewardedAd(rewardInput);
+equal(malformedResult.status, 'rejected', 'Malformed SDK evidence must not dispatch a claim');
+equal(malformedProvisional.calls.claim, 0, 'Invalid SDK evidence never reaches backend');
 
 for (const status of ['cancelled', 'pending', 'failed'] as const) {
   const current = harness({ purchase: { status, entitlementIds: [] } });

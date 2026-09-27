@@ -5,10 +5,13 @@ import {
   type AdMobPlugin,
 } from '@capacitor-community/admob';
 import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge';
-import { encodeAdMobSsvCustomData } from '@mpgd/game-services/admob-ssv';
+import { admobClientRewardEvidenceSchema } from '@mpgd/game-services/admob-client-reward';
+import {
+  admobSsvMaximumBindingFieldLength,
+  encodeAdMobSsvCustomData,
+} from '@mpgd/game-services/admob-ssv';
 import type { RewardedAdResult } from '@mpgd/platform';
 
-import { admobClientRewardEvidenceSchema } from './admob-contract.js';
 import type { CapacitorServiceProvider } from './providers.js';
 
 /** Only the AdMob subpath imports the optional native SDK. */
@@ -44,6 +47,7 @@ const unitPattern = /^ca-app-pub-\d+\/\d+$/u;
 const defaultShowTimeoutMs = 180_000;
 const loadTimeoutMs = 30_000;
 const preflightTimeoutMs = 10_000;
+const listenerCleanupTimeoutMs = 1_000;
 const maximumCustomDataBytes = 1_024;
 // The native plugin's rewarded event stream and prepared-ad table are global.
 // Coordinate Kit providers sharing one SDK instance, even across gateways.
@@ -170,7 +174,9 @@ export function createCapacitorAdMobRewardedProvider(
     if (adId === undefined || !canRequestAds || activeSdk.has(sdk) || uncertainSdk.has(sdk)) {
       return { status: 'unavailable', rewardGranted: false };
     }
-    if (idempotencyKey.trim() === '') {
+    if (idempotencyKey.trim() === ''
+      || idempotencyKey.length > admobSsvMaximumBindingFieldLength
+      || placementId.length > admobSsvMaximumBindingFieldLength) {
       return { status: 'failed', rewardGranted: false };
     }
 
@@ -186,7 +192,8 @@ export function createCapacitorAdMobRewardedProvider(
         Promise.resolve().then(() => input.getPlayerId()),
         preflightTimeoutMs,
       );
-      if (typeof playerId !== 'string' || playerId.trim() === '') {
+      if (typeof playerId !== 'string' || playerId.trim() === ''
+        || playerId.length > admobSsvMaximumBindingFieldLength) {
         return { status: 'failed', rewardGranted: false };
       }
       const customData = encodeAdMobSsvCustomData({ playerId, placementId, idempotencyKey });
@@ -244,10 +251,6 @@ export function createCapacitorAdMobRewardedProvider(
       const onShowError = () => finish('failed');
       void showResult.then(onReward, onShowError);
       const outcome = await terminal;
-      if (outcome === 'dismissed' && !rewardEarned) {
-        // Native reward and dismiss callbacks may cross the JS event queue.
-        await new Promise<void>((resolve) => setTimeout(resolve, 250));
-      }
       if (outcome === 'timeout') {
         // Native presentation state is unknown: do not allow another show.
         uncertainSdk.add(sdk);
@@ -256,14 +259,16 @@ export function createCapacitorAdMobRewardedProvider(
       if (rewardEarned) {
         status = 'completed';
       } else if (outcome === 'dismissed') {
-        status = 'skipped';
+        // Mediation may deliver reward after dismissal. Only signed SSV can
+        // later distinguish a true skip from an earned reward.
+        status = 'pending';
       } else if (outcome === 'timeout') {
         status = 'pending';
       }
       return {
         status,
-        rewardGranted: rewardEarned,
-        ...(rewardEarned ? { evidence: {
+        rewardGranted: false,
+        ...(status === 'completed' || status === 'pending' ? { evidence: {
           schema: admobClientRewardEvidenceSchema,
           payload: { adUnitId: adId },
         } } : {}),
@@ -282,8 +287,18 @@ export function createCapacitorAdMobRewardedProvider(
       if (timer !== undefined) {
         clearTimeout(timer);
       }
-      await Promise.allSettled(handles.map((handle) => handle.remove()));
-      activeSdk.delete(sdk);
+      try {
+        const removals = handles.map((handle) => {
+          const removal = Promise.resolve().then(() => handle.remove());
+          return withTimeout(removal, listenerCleanupTimeoutMs);
+        });
+        const settled = await Promise.allSettled(removals);
+        if (settled.some((result) => result.status === 'rejected')) {
+          uncertainSdk.add(sdk);
+        }
+      } finally {
+        activeSdk.delete(sdk);
+      }
     }
   };
 

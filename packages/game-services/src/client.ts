@@ -10,6 +10,7 @@ import type {
   RewardedAdResult,
 } from '@mpgd/platform';
 
+import { isAdMobClientRewardEvidence } from './admob-client-reward.js';
 import { isAuthoritativeMicrosoftStoreCompletion } from './authoritative-purchase.js';
 import type {
   GameServicesOperationClient,
@@ -381,7 +382,8 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
         const reward = await input.gateway.ads.showRewarded(rewardInput);
         progress.platformResult(reward.status);
 
-        if (reward.status !== 'completed' || !reward.rewardGranted) {
+        if ((reward.status !== 'completed' || !reward.rewardGranted)
+          && !isAdMobClientRewardEvidence(reward)) {
           await analytics.track({
             name: reward.status === 'pending' ? 'rewarded_ad_pending' : 'rewarded_ad_rejected',
             properties: {
