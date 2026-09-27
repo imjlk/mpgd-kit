@@ -32,6 +32,8 @@ export interface StoreKitProviderOptions {
 
 export interface RecoverableStoreKitTransaction {
   readonly productId: string;
+  readonly originalTransactionId: string;
+  readonly type: 'consumable' | 'non_consumable';
   readonly appAccountToken?: string;
   readonly purchasedAt: string;
   readonly result: PurchaseResult;
@@ -89,6 +91,8 @@ export interface StoreKitRecoveryBackend {
     readonly playerId: string;
     readonly productId: string;
     readonly platformTransactionId: string;
+    readonly originalTransactionId: string;
+    readonly productType: 'consumable' | 'non_consumable';
     readonly purchasedAt: string;
   }): Promise<StoreKitPurchaseVerification>;
 }
@@ -132,6 +136,8 @@ export async function recoverStoreKitPurchases(input: {
         playerId: input.playerId,
         productId: item.productId,
         platformTransactionId: transactionId,
+        originalTransactionId: item.originalTransactionId,
+        productType: item.type,
         purchasedAt: item.purchasedAt,
       });
       if (!verification.verified) {
@@ -240,6 +246,8 @@ export function createCapacitorStoreKitProvider(
       seen.add(transaction.transactionId);
       owned.push({
         productId: mapping.id,
+        originalTransactionId: transaction.originalTransactionId,
+        type: transaction.type,
         ...(transaction.appAccountToken === undefined
           ? {} : { appAccountToken: transaction.appAccountToken }),
         purchasedAt: transaction.purchasedAt,
