@@ -57,6 +57,8 @@ export interface RunNativeDeploymentInput {
   readonly approved: boolean;
   readonly environment?: NodeJS.ProcessEnv;
   readonly signal?: AbortSignal;
+  /** Called only after a newly built target has an immutable, committed build record. */
+  readonly onBuildRecorded?: (target: NativeDeployTarget) => void;
 }
 
 /** Reserve once, build only missing targets, then submit the recorded binaries. */
@@ -322,6 +324,7 @@ async function buildAndRecordTarget(
       environment,
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     });
+    input.onBuildRecorded?.(target);
   };
   if (target === 'android') {
     await withAndroidUploadSigningSession(
@@ -449,6 +452,7 @@ export function withoutStoreSubmissionCredentials(
     delete result[name.trim()];
   }
   delete result.MPGD_DEPENDENCY_INSTALL_ENV_NAMES;
+  delete result.MPGD_RECORDED_BUILD_MARKER;
   delete result.NPM_TOKEN;
   delete result.NODE_AUTH_TOKEN;
   for (const name of readNativeDeployCredentialNames(plan)) {

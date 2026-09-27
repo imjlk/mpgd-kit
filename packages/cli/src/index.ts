@@ -732,6 +732,14 @@ const deployCommand = defineI18n({
           throw new Error('Installed CLI has no clean, matching native Kit build identity.');
         }
         const initialLedgerFile = readOptionalString(ctx.values['initial-ledger']);
+        const recordedBuildMarker = process.env.MPGD_RECORDED_BUILD_MARKER;
+        if (recordedBuildMarker !== undefined
+          && (process.env.RUNNER_TEMP === undefined
+            || !path.isAbsolute(process.env.RUNNER_TEMP)
+            || !path.isAbsolute(recordedBuildMarker)
+            || path.dirname(recordedBuildMarker) !== path.resolve(process.env.RUNNER_TEMP))) {
+          throw new Error('The recorded-build marker must be directly inside RUNNER_TEMP.');
+        }
         const status = await runNativeDeployment({
           plan,
           gameId: readRequiredCliOption(ctx.values['game-id'], '--game-id'),
@@ -744,6 +752,11 @@ const deployCommand = defineI18n({
             ),
           }),
           approved: isDeployApproved(plan, ctx.values.approve === true),
+          ...(recordedBuildMarker === undefined ? {} : {
+            onBuildRecorded: (target) => {
+              writeFileSync(recordedBuildMarker, target, { flag: 'wx', mode: 0o600 });
+            },
+          }),
         });
         console.info(JSON.stringify(status, null, 2));
       },

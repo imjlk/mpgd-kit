@@ -122,6 +122,7 @@ try {
       NODE_AUTH_TOKEN: 'other-registry-token',
       CUSTOM_PACKAGE_TOKEN: 'custom-registry-token',
       MPGD_DEPENDENCY_INSTALL_ENV_NAMES: 'NPM_TOKEN,CUSTOM_PACKAGE_TOKEN',
+      MPGD_RECORDED_BUILD_MARKER: '/tmp/build-recorded',
       MPGD_ANDROID_UPLOAD_KEYSTORE: '/private/upload.keystore',
       GITHUB_TOKEN: 'release-state-token',
     },
@@ -133,6 +134,7 @@ try {
     'NODE_AUTH_TOKEN',
     'CUSTOM_PACKAGE_TOKEN',
     'MPGD_DEPENDENCY_INSTALL_ENV_NAMES',
+    'MPGD_RECORDED_BUILD_MARKER',
     'MPGD_ANDROID_UPLOAD_KEYSTORE',
     'GITHUB_TOKEN',
   ]) {

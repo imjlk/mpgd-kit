@@ -22,11 +22,20 @@ export interface InitializeNativeDeployWorkflowInput {
 const reservedWorkflowEnvironmentNames = new Set([
   'PATH',
   'HOME',
+  'JAVA_HOME',
+  'ANDROID_HOME',
+  'ANDROID_SDK_ROOT',
+  'NODE_OPTIONS',
+  'PNPM_HOME',
+  'COREPACK_HOME',
+  'CI',
   'NPM_TOKEN',
   'GITHUB_TOKEN',
   'GH_TOKEN',
   'RUNNER_TEMP',
   'GITHUB_ENV',
+  'GITHUB_SERVER_URL',
+  'GITHUB_WORKSPACE',
   'SIGNING_B64',
   'SUBMISSION_B64',
   'PROFILE_B64',
@@ -52,6 +61,8 @@ const reservedWorkflowEnvironmentNames = new Set([
   'MPGD_ASC_ISSUER_ID',
   'MPGD_DEPENDENCY_INSTALL_ENV_NAMES',
   'MPGD_VERIFY_RELEASE_MANIFEST',
+  'MPGD_RECORDED_BUILD_MARKER',
+  'MPGD_NEW_BUILD',
   'ASC_TELEMETRY_DISABLED',
 ]);
 
@@ -62,6 +73,13 @@ export function initializeNativeDeployWorkflow(
   if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(input.releaseBranch)
     || input.releaseBranch.includes('..') || input.releaseBranch.includes('//')
     || input.releaseBranch.endsWith('/')) {
+    throw new Error('The native deployment release branch is invalid.');
+  }
+  try {
+    execFileSync('git', ['check-ref-format', '--branch', input.releaseBranch], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+  } catch {
     throw new Error('The native deployment release branch is invalid.');
   }
   const plan = planNativeDeployment({
@@ -116,7 +134,8 @@ export function initializeNativeDeployWorkflow(
   for (const entry of plan.targets) {
     const profile = readNativeDeployTargetProfile(plan, entry.target);
     for (const name of [profile.signingCredential.env, profile.submissionCredential.env]) {
-      if (name.startsWith('GIT_') || reservedWorkflowEnvironmentNames.has(name)) {
+      if (/^(?:GIT|GITHUB|RUNNER|ACTIONS)_/u.test(name)
+        || reservedWorkflowEnvironmentNames.has(name)) {
         throw new Error(`Deployment credential environment name ${name} is reserved by CI.`);
       }
     }
@@ -362,6 +381,7 @@ function renderDeployJob(
     '          if [[ -n "$NPM_TOKEN" ]]; then',
     '            export MPGD_DEPENDENCY_INSTALL_ENV_NAMES=NPM_TOKEN',
     '          fi',
+    '          export MPGD_RECORDED_BUILD_MARKER="$RUNNER_TEMP/mpgd-$TARGET-recorded-build"',
     '          args=(deploy run --plan "$RUNNER_TEMP/mpgd-$TARGET-plan.json"',
     '            --game . --game-id "$GAME_ID" --game-version "$GAME_VERSION"',
     '            --release "$RELEASE_KEY" --approve)',
@@ -372,8 +392,17 @@ function renderDeployJob(
     '            args+=(--initial-ledger "$GITHUB_WORKSPACE/$INITIAL_LEDGER")',
     '          fi',
     '          pnpm --dir "$GAME_PATH" exec mpgd "${args[@]}"',
+    '      - name: Detect a newly recorded binary',
+    "        if: always() && env.RELEASE_KEY != ''",
+    '        shell: bash',
+    '        run: |',
+    '          set -euo pipefail',
+    '          if [[ -f "$RUNNER_TEMP/mpgd-$TARGET-recorded-build" ]] &&',
+    '            grep -Fxq -- "$TARGET" "$RUNNER_TEMP/mpgd-$TARGET-recorded-build"; then',
+    '            echo "MPGD_NEW_BUILD=1" >> "$GITHUB_ENV"',
+    '          fi',
     '      - name: Retain verified native binary',
-    "        if: always() && env.RELEASE_KEY != '' && inputs.artifact_run_id == ''",
+    "        if: always() && env.RELEASE_KEY != '' && env.MPGD_NEW_BUILD == '1'",
     '        uses: actions/upload-artifact@v6',
     '        with:',
     `          name: ${input.gameId}-${target}-${expression('env.RELEASE_KEY')}-binary`,
@@ -383,7 +412,7 @@ function renderDeployJob(
     '          include-hidden-files: true',
     '          retention-days: 30',
     '      - name: Retain release manifest',
-    "        if: always() && env.RELEASE_KEY != '' && inputs.artifact_run_id == ''",
+    "        if: always() && env.RELEASE_KEY != '' && env.MPGD_NEW_BUILD == '1'",
     '        uses: actions/upload-artifact@v6',
     '        with:',
     `          name: ${input.gameId}-${target}-${expression('env.RELEASE_KEY')}-evidence`,

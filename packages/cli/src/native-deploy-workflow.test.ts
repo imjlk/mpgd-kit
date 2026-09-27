@@ -49,7 +49,11 @@ try {
   assert.equal(workflow.match(/persist-credentials: false/gu)?.length, 3);
   assert.match(workflow, /retention-days: 30/u);
   assert.match(workflow, /retention-days: 90/u);
-  assert.equal(workflow.match(/inputs\.artifact_run_id == ''/gu)?.length, 4);
+  assert.equal(workflow.match(/inputs\.artifact_run_id != ''/gu)?.length, 4);
+  assert.match(workflow, /MPGD_RECORDED_BUILD_MARKER=/u);
+  assert.match(workflow, /mpgd-\$TARGET-recorded-build/u);
+  assert.match(workflow, /env\.MPGD_NEW_BUILD == '1'/u);
+  assert.match(workflow, /grep -Fxq -- "\$TARGET"/u);
   assert.match(workflow, /include-hidden-files: true/u);
   assert.equal(workflow.split('  deploy_android:')[0]?.includes('secrets.'), false);
   assert.equal(workflow.includes('pull_request_target'), false);
@@ -70,6 +74,13 @@ try {
   };
   const unsafeBranch = (): string => initializeNativeDeployWorkflow(unsafeBranchInput);
   assert.throws(unsafeBranch, /release branch is invalid/u);
+  for (const branch of ['HEAD', 'release.', 'foo.lock']) {
+    const invalidBranch = () => initializeNativeDeployWorkflow({
+      ...unsafeBranchInput,
+      releaseBranch: branch,
+    });
+    assert.throws(invalidBranch, /release branch is invalid/u);
+  }
 
   const singleRepo = join(fixture, 'single-game');
   mkdirSync(singleRepo);
@@ -120,6 +131,11 @@ try {
   config.profiles.beta.targets.android.signingCredential.env = 'MPGD_VERIFY_RELEASE_MANIFEST';
   writeFileSync(deployFile, `${JSON.stringify(config)}\n`);
   assert.throws(() => initializeNativeDeployWorkflow(reservedInput), /reserved by CI/u);
+  for (const name of ['JAVA_HOME', 'ANDROID_SDK_ROOT', 'GITHUB_WORKSPACE']) {
+    config.profiles.beta.targets.android.signingCredential.env = name;
+    writeFileSync(deployFile, `${JSON.stringify(config)}\n`);
+    assert.throws(() => initializeNativeDeployWorkflow(reservedInput), /reserved by CI/u);
+  }
   console.info('Game-owned native deployment workflow scaffolding passed.');
 } finally {
   rmSync(fixture, { recursive: true, force: true });
