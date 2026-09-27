@@ -755,6 +755,9 @@ jobs:
       - name: Test Android native storage conformance
         working-directory: apps/mobile-capacitor/android
         run: ./gradlew :mpgd-capacitor-game-services:testDebugUnitTest
+      - name: Compile optional Google Play Billing provider
+        working-directory: apps/mobile-capacitor/android
+        run: ./gradlew -PmpgdPlayBillingPluginTest=true :mpgd-capacitor-play-billing:compileDebugJavaWithJavac
       - run: pnpm smoke:target android
 
       - uses: actions/upload-artifact@v6

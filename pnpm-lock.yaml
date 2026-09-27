@@ -550,6 +550,27 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
 
+  native-plugins/capacitor-play-billing:
+    devDependencies:
+      '@capacitor/core':
+        specifier: 8.5.2
+        version: 8.5.2
+      '@mpgd/bridge':
+        specifier: workspace:*
+        version: link:../../packages/bridge
+      '@mpgd/game-services':
+        specifier: workspace:*
+        version: link:../../packages/game-services
+      '@mpgd/platform':
+        specifier: workspace:*
+        version: link:../../packages/platform
+      ttsc:
+        specifier: 0.30.4
+        version: 0.30.4
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+
   packages/ad-placements:
     dependencies:
       '@mpgd/platform':

@@ -8,6 +8,7 @@ test('native source, package metadata, and its Sampo changeset stay native-only'
   assert.equal(isNativeOnlyChange([
     'adapters/capacitor/src/index.ts',
     'native-plugins/capacitor-game-services/ios/Plugin.swift',
+    'native-plugins/capacitor-play-billing/android/build.gradle',
     'apps/mobile-capacitor/android/build.gradle',
     'adapters/capacitor/package.json',
     '.sampo/changesets/native-fix.md',
@@ -40,6 +41,8 @@ test('shared contracts, lockfiles, workflow, other adapters, and docs require br
 test('lookalike paths cannot qualify', () => {
   assert.equal(isNativeOnlyChange(['adapters/capacitor-extra/src/index.ts']), false);
   assert.equal(isNativeOnlyChange(['apps/mobile-capacitor-extra/src/index.ts']), false);
+  assert.equal(isNativeOnlyChange(['native-plugins/capacitor-game-services-extra/src/index.ts']), false);
+  assert.equal(isNativeOnlyChange(['native-plugins/capacitor-play-billing-extra/src/index.ts']), false);
 });
 
 test('CI wires native classification to both platform jobs and the required gate', () => {

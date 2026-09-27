@@ -1,0 +1,53 @@
+{
+  "name": "@mpgd/capacitor-play-billing",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Opt-in Android Google Play Billing purchase collector for mpgd Capacitor games.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imjlk/mpgd-kit.git",
+    "directory": "native-plugins/capacitor-play-billing"
+  },
+  "bugs": {
+    "url": "https://github.com/imjlk/mpgd-kit/issues"
+  },
+  "homepage": "https://github.com/imjlk/mpgd-kit#readme",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "capacitor": {
+    "android": {
+      "src": "android"
+    }
+  },
+  "files": ["dist", "android/build.gradle", "android/src"],
+  "scripts": {
+    "check": "ttsc --noEmit",
+    "lint": "ttsc --noEmit",
+    "test": "cd ../.. && node tools/run-ttsx.mjs native-plugins/capacitor-play-billing/src/provider.test.ts"
+  },
+  "peerDependencies": {
+    "@capacitor/core": "^8.5.1",
+    "@mpgd/bridge": "^0.10.0",
+    "@mpgd/platform": "^0.13.0 || ^0.14.0"
+  },
+  "devDependencies": {
+    "@capacitor/core": "8.5.2",
+    "@mpgd/bridge": "workspace:*",
+    "@mpgd/game-services": "workspace:*",
+    "@mpgd/platform": "workspace:*",
+    "ttsc": "0.30.4",
+    "typescript": "7.0.2"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  }
+}

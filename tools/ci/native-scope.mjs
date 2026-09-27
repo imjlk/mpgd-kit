@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 const nativeRoots = [
   'adapters/capacitor/',
   'native-plugins/capacitor-game-services/',
+  'native-plugins/capacitor-play-billing/',
   'apps/mobile-capacitor/',
 ];
 
