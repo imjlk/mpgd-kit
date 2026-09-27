@@ -9,9 +9,9 @@ purchase via Google Play Publisher, commit the mpgd ledger grant, and perform
 acknowledge/consume after the grant. A device callback alone never grants a
 purchase.
 
-This package is currently private while the native/provider/recovery contract
-and external consumer validation are completed. Do not rely on it from a
-published game yet.
+This package is published for opt-in integration, but Kit's mock and compile
+checks do not establish live Play purchase behavior. Validate it in a
+game-owned Play Console project before relying on it in a published game.
 
 The provider maps game logical product IDs to Play product IDs and requires a
 stable obfuscated account ID that agrees with the backend account resolver.

@@ -1,6 +1,6 @@
 # @mpgd/capacitor-storekit
 
-Private, opt-in StoreKit 2 one-time purchase collector for Capacitor 8 on iOS.
+Opt-in StoreKit 2 one-time purchase collector for Capacitor 8 on iOS.
 It does not enable native IAP in the base Capacitor shell. Install it only in a
 game-owned iOS project and register `createCapacitorStoreKitProvider(...)` in
 that game's provider list.

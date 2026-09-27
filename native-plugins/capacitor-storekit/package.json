@@ -1,7 +1,6 @@
 {
   "name": "@mpgd/capacitor-storekit",
   "version": "0.1.0",
-  "private": true,
   "description": "Opt-in StoreKit 2 one-time purchase collector for mpgd Capacitor games.",
   "license": "MIT",
   "repository": {
@@ -9,6 +8,11 @@
     "url": "git+https://github.com/imjlk/mpgd-kit.git",
     "directory": "native-plugins/capacitor-storekit"
   },
+  "bugs": {
+    "url": "https://github.com/imjlk/mpgd-kit/issues"
+  },
+  "homepage": "https://github.com/imjlk/mpgd-kit#readme",
+  "keywords": ["mpgd", "capacitor", "storekit", "game-development"],
   "type": "module",
   "sideEffects": false,
   "exports": {
@@ -43,5 +47,8 @@
     "typescript": "7.0.2"
   },
   "main": "./dist/index.js",
-  "types": "./dist/index.d.ts"
+  "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  }
 }
