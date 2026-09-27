@@ -151,7 +151,7 @@ try {
   assert.equal(typeof installedCli.runNativeDeployment, 'function');
   assert.equal(typeof installedCli.submitRecordedNativeTarget, 'function');
   assert.equal(typeof installedCli.readNativeReleaseStatus, 'function');
-  mustRun('git', ['init', '-q'], gameRoot);
+  mustRun('git', ['init', '--object-format=sha1', '-q'], gameRoot);
   mustRun('git', ['add', '.'], gameRoot);
   mustRun('git', [
     '-c', 'user.name=mpgd-test', '-c', 'user.email=mpgd-test@example.invalid',
@@ -292,7 +292,7 @@ try {
 
 async function verifyPackedReleaseSimulation(cli, cliDist, game, fixture, env) {
   const remote = join(fixture, 'release-state.git');
-  mustRun('git', ['init', '--bare', '-q', remote], fixture);
+  mustRun('git', ['init', '--bare', '--object-format=sha1', '-q', remote], fixture);
   mustRun('git', ['remote', 'add', 'origin', remote], game);
   const configFile = join(game, 'mpgd.deploy.json');
   const config = JSON.parse(readFileSync(configFile, 'utf8'));
@@ -334,6 +334,7 @@ async function verifyPackedReleaseSimulation(cli, cliDist, game, fixture, env) {
   assert.equal(reserved.plan.targets.ios.buildNumber, 51);
   assert.equal((await cli.reserveNativeRelease(reservationInput)).reused, true);
   const signer = await import(pathToFileURL(join(cliDist, 'android-bundle-signer.js')).href);
+  const play = await import(pathToFileURL(join(cliDist, 'play-internal-submission.js')).href);
   const submit = await import(pathToFileURL(join(cliDist, 'native-deploy-submission.js')).href);
   const signing = join(fixture, 'fixture-signing');
   mkdirSync(signing);
@@ -430,6 +431,28 @@ async function verifyPackedReleaseSimulation(cli, cliDist, game, fixture, env) {
   const beforeSubmission = await cli.readNativeReleaseStatus(stateInput);
   assert.ok(beforeSubmission.builds.android && beforeSubmission.builds.ios);
   assert.deepEqual(beforeSubmission.submissions, {});
+  let playApiCalls = 0;
+  const fakePublisher = {
+    async insertEdit() {
+      playApiCalls += 1;
+      return 'mock-play-edit';
+    },
+    async listBundles() {
+      return [];
+    },
+    async uploadBundle() {
+      return {
+        versionCode: reserved.plan.targets.android.versionCode,
+        sha256: records.android.artifactSha256,
+      };
+    },
+    async getTrack() {
+      return { track: 'internal', releases: [] };
+    },
+    async updateTrack() {},
+    async validateEdit() {},
+    async commitEdit() {},
+  };
   let iosCalls = 0;
   const ports = {
     readStatus: cli.readNativeReleaseStatus,
@@ -437,16 +460,7 @@ async function verifyPackedReleaseSimulation(cli, cliDist, game, fixture, env) {
     reclaim: cli.reclaimNativeSubmission,
     releaseLease: cli.releaseNativeSubmissionLease,
     async submitAndroid(input) {
-      if (hashFile(input.aabFile) !== input.record.artifactSha256) {
-        throw new Error('mock bundle artifact hash mismatch');
-      }
-      await input.onEditCreated('mock-play-edit');
-      return {
-        status: 'committed', packageName: input.packageName,
-        editId: 'mock-play-edit', track: 'internal',
-        versionCode: reserved.plan.targets.android.versionCode,
-        bundleSha256: input.record.artifactSha256, alreadyCommitted: false,
-      };
+      return play.submitVerifiedAndroidBundleWithPublisher(input, fakePublisher);
     },
     async submitIos(input) {
       assert.equal(hashFile(input.ipaFile), input.record.artifactSha256);
@@ -496,6 +510,7 @@ async function verifyPackedReleaseSimulation(cli, cliDist, game, fixture, env) {
     submit.submitRecordedNativeTargetWithPorts(androidInput, ports),
     /artifact|hash|signed|bundle/u,
   );
+  assert.equal(playApiCalls, 0, 'invalid artifact must fail before a Play API call');
   copyFileSync(androidSource, androidArtifact);
   assert.equal((await submit.submitRecordedNativeTargetWithPorts(androidInput, ports)).status,
     'committed');
