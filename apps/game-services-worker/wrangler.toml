@@ -7,6 +7,13 @@ workers_dev = true
 
 [vars]
 MPGD_STORE = "memory"
+# Optional AdMob SSV intake: set MPGD_STORE = "d1", bind DB below, apply
+# migration 0005_admob_ssv_callbacks.sql, then configure actual signed ad_unit
+# IDs (not full SDK ca-app-pub-... load identifiers). Callback URLs are
+# /admob/ssv/android and /admob/ssv/ios over HTTPS. Review the game-owned
+# placement/catalog and authenticated claim boundary before enabling.
+# MPGD_ADMOB_SSV_ANDROID_AD_UNIT = "<actual-android-ad-unit>"
+# MPGD_ADMOB_SSV_IOS_AD_UNIT = "<actual-ios-ad-unit>"
 
 [observability]
 enabled = true

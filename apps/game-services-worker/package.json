@@ -11,7 +11,8 @@
     "preview": "pnpm build && vite preview",
     "deploy": "pnpm build && wrangler deploy",
     "types": "wrangler types",
-    "test": "cd ../.. && node tools/run-ttsx.mjs --project apps/game-services-worker/tsconfig.json apps/game-services-worker/src/index.test.ts && node tools/run-ttsx.mjs --project apps/game-services-worker/tsconfig.json apps/game-services-worker/src/d1Store.test.ts && node tools/run-ttsx.mjs --project apps/game-services-worker/tsconfig.json apps/game-services-worker/src/verifiedLeaderboardD1.test.ts"
+    "test": "cd ../.. && node tools/run-ttsx.mjs --project apps/game-services-worker/tsconfig.json apps/game-services-worker/src/index.test.ts && node tools/run-ttsx.mjs --project apps/game-services-worker/tsconfig.json apps/game-services-worker/src/d1Store.test.ts && node tools/run-ttsx.mjs --project apps/game-services-worker/tsconfig.json apps/game-services-worker/src/verifiedLeaderboardD1.test.ts && pnpm --dir apps/game-services-worker test:ssv",
+    "test:ssv": "cd ../.. && node tools/run-ttsx.mjs --project apps/game-services-worker/tsconfig.json apps/game-services-worker/src/admobSsvD1.test.ts && node tools/run-ttsx.mjs --project apps/game-services-worker/tsconfig.json apps/game-services-worker/src/admobSsvKeys.test.ts && node tools/run-ttsx.mjs --project apps/game-services-worker/tsconfig.json apps/game-services-worker/src/admobSsvHandler.test.ts"
   },
   "dependencies": {
     "@mpgd/adapter-verse8": "workspace:*",
