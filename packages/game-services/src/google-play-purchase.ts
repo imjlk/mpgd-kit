@@ -145,10 +145,10 @@ export function createGooglePlayProductPurchaseBoundary(
         purchaseToken,
         expectedProductId: verificationInput.platformProductId,
         expectedProductType: verificationInput.product.type,
-        orderMatch: {
-          mode: 'if-present',
-          orderId: verificationInput.request.platformTransactionId,
-        },
+        orderMatch: createGooglePlayObservedOrderMatch(
+          verificationInput.request.platformTransactionId,
+          await createGooglePlayTokenTransactionId(purchaseToken),
+        ),
         accountBinding,
         allowConsumed: false,
         signal: verificationInput.signal,
@@ -289,6 +289,7 @@ async function finalizeGooglePlayPurchase(
       orderMatch: createGooglePlayFinalizationOrderMatch(
         verifiedContext,
         finalizationInput.request.platformTransactionId,
+        await createGooglePlayTokenTransactionId(purchaseToken),
       ),
       accountBinding,
       allowConsumed: true,
@@ -605,14 +606,39 @@ type GooglePlayOrderMatch =
 function createGooglePlayFinalizationOrderMatch(
   verifiedContext: GooglePlayVerifiedContext | undefined,
   clientOrderId: string,
+  tokenTransactionId: string,
 ): GooglePlayOrderMatch {
   if (verifiedContext === undefined) {
-    return { mode: 'if-present', orderId: clientOrderId };
+    return createGooglePlayObservedOrderMatch(clientOrderId, tokenTransactionId);
   }
   if (verifiedContext.orderId === undefined) {
     return { mode: 'token-only' };
   }
   return { mode: 'exact', orderId: verifiedContext.orderId };
+}
+
+function createGooglePlayObservedOrderMatch(
+  observedTransactionId: string,
+  tokenTransactionId: string,
+): GooglePlayOrderMatch {
+  return observedTransactionId === tokenTransactionId
+    ? { mode: 'token-only' }
+    : { mode: 'if-present', orderId: observedTransactionId };
+}
+
+/** A non-secret transaction ID for purchases whose Google order ID is absent or delayed. */
+export async function createGooglePlayTokenTransactionId(purchaseToken: string): Promise<string> {
+  if (readOptionalIdentifier(purchaseToken, 4096) === undefined) {
+    throw new TypeError('Google Play purchase token is invalid.');
+  }
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle === undefined) {
+    throw new Error('Web Crypto is required to hash Google Play purchase tokens.');
+  }
+  const digest = new Uint8Array(await subtle.digest(
+    'SHA-256', new TextEncoder().encode(purchaseToken),
+  ));
+  return `play-token-sha256:${[...digest].map((value) => value.toString(16).padStart(2, '0')).join('')}`;
 }
 
 function readGooglePlayVerifiedContext(

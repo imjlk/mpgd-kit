@@ -66,4 +66,14 @@ for (const implementation of implementations) {
   assert.doesNotMatch(source, /(?:android|ios)-mock-|rewardGranted|COINS_100|100 demo coins/u);
 }
 
+const playBilling = read(
+  'native-plugins/capacitor-play-billing/android/src/main/java/dev/mpgd/capacitor/playbilling/CapacitorPlayBillingPlugin.java',
+);
+assert.match(playBilling, /queryPurchasesAsync\(/u, 'Play Billing must support owned-purchase requery');
+assert.doesNotMatch(
+  playBilling,
+  /\b(?:acknowledgePurchase|consumeAsync)\s*\(/u,
+  'Client-side Billing must never finalize before the backend ledger grant',
+);
+
 console.log('Capacitor reference native services fail closed without providers.');

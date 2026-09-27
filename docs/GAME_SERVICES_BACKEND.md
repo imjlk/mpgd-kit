@@ -389,7 +389,12 @@ verified evidence. Rental purchase options fail closed because the catalog grant
 contract does not carry rental expiry semantics. `refundableQuantity` must equal the purchased quantity;
 missing, malformed, fully refunded, and partially refunded values do not grant.
 Google may omit `orderId`, so a missing provider order is accepted while a
-present order must match the request. The client-reported `purchasedAt` is not
+present order must match the request. The optional Capacitor Play Billing
+provider uses `createGooglePlayTokenTransactionId(purchaseToken)` when the
+device has not yet received an order ID. The server recomputes that digest
+from the evidence token before allowing token-only order matching; an
+unrelated client-supplied ID still fails when Google reports an order. The
+client-reported `purchasedAt` is not
 compared with provider time; the authoritative time is persisted as
 `googlePlayPurchaseCompletionTime`. The ledger stores only a SHA-256 token
 identity in its evidence fields, never the raw purchase token. Callers must

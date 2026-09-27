@@ -2,6 +2,7 @@ import type { ProductCatalog } from '@mpgd/catalog';
 
 import {
   createGooglePlayProductPurchaseBoundary,
+  createGooglePlayTokenTransactionId,
   type GooglePlayProductPurchaseClient,
 } from './google-play-purchase';
 import {
@@ -639,6 +640,27 @@ const orderMismatchResult = await orderMismatch.backend.purchases.verifyPurchase
 );
 assertEqual(orderMismatchResult.reason, 'GOOGLE_PLAY_ORDER_MISMATCH');
 assertEqual((await orderMismatch.store.listEntitlementTransactions()).length, 0);
+
+const tokenTransaction = createHarness({
+  token: 'token-with-late-order',
+  response: createGooglePlayProductPurchaseConformanceFixture({ orderId: 'GPA.late' }),
+});
+const tokenTransactionId = await createGooglePlayTokenTransactionId('token-with-late-order');
+const tokenTransactionResult = await tokenTransaction.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-with-late-order', orderId: tokenTransactionId }),
+);
+assertEqual(tokenTransactionResult.verified, true, 'matching token digest is accepted');
+assertEqual(tokenTransactionResult.finalization?.status, 'completed');
+
+const wrongTokenTransaction = createHarness({
+  token: 'token-digest-mismatch',
+  response: createGooglePlayProductPurchaseConformanceFixture({ orderId: 'GPA.provider' }),
+});
+const wrongTokenTransactionResult = await wrongTokenTransaction.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-digest-mismatch', orderId: tokenTransactionId }),
+);
+assertEqual(wrongTokenTransactionResult.reason, 'GOOGLE_PLAY_ORDER_MISMATCH');
+assertEqual((await wrongTokenTransaction.store.listEntitlementTransactions()).length, 0);
 
 const missingOrderResponse = cloneRecord(createGooglePlayProductPurchaseConformanceFixture());
 delete missingOrderResponse.orderId;
