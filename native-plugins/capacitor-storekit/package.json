@@ -8,6 +8,11 @@
     "url": "git+https://github.com/imjlk/mpgd-kit.git",
     "directory": "native-plugins/capacitor-storekit"
   },
+  "bugs": {
+    "url": "https://github.com/imjlk/mpgd-kit/issues"
+  },
+  "homepage": "https://github.com/imjlk/mpgd-kit#readme",
+  "keywords": ["mpgd", "capacitor", "storekit", "game-development"],
   "type": "module",
   "sideEffects": false,
   "exports": {

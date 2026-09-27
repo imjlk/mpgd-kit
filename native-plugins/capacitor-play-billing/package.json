@@ -12,6 +12,7 @@
     "url": "https://github.com/imjlk/mpgd-kit/issues"
   },
   "homepage": "https://github.com/imjlk/mpgd-kit#readme",
+  "keywords": ["mpgd", "capacitor", "google-play-billing", "game-development"],
   "type": "module",
   "sideEffects": false,
   "exports": {
