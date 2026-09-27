@@ -9,11 +9,22 @@ import {
   inspectSignedIosIpa,
   type IosInspectionInput,
 } from './native-ios-inspection';
+import { nativeInspectionEnvironment } from './native-inspection-environment';
 
 const root = mkdtempSync(path.join(tmpdir(), 'mpgd-ios-inspection-test-'));
 const app = path.join(root, 'App.app');
 
 try {
+  const inspectionEnvironment = nativeInspectionEnvironment({
+    PATH: '/usr/bin',
+    DEVELOPER_DIR: '/Applications/Xcode.app',
+    GITHUB_TOKEN: 'private-git-token',
+    MPGD_IOS_SIGNING_P12_PASSWORD: 'private-password',
+  });
+  assert.deepEqual(inspectionEnvironment, {
+    PATH: '/usr/bin',
+    DEVELOPER_DIR: '/Applications/Xcode.app',
+  });
   mkdirSync(app);
   writeFileSync(path.join(app, 'Info.plist'), 'fixture');
   writeFileSync(path.join(app, 'Assets.car'), 'release icons');

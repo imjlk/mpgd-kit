@@ -199,22 +199,22 @@ try {
     unlinkSync(linkedShell);
   }
 
+  mustRun('pnpm', [
+    'exec', 'mpgd', 'target', 'init', 'capacitor',
+    '--game', gameRoot,
+    '--app-id', 'dev.mpgd.externalgame',
+    '--display-name', 'External Game',
+  ], gameRoot);
+  mustRun('pnpm', ['install', '--no-frozen-lockfile'], gameRoot);
+  mustRun('git', ['add', '.'], gameRoot);
+  mustRun('git', [
+    '-c', 'user.name=mpgd-test', '-c', 'user.email=mpgd-test@example.invalid',
+    'commit', '-qm', 'game-owned shell',
+  ], gameRoot);
   if (syncIos) {
     if (process.platform !== 'darwin') {
       throw new Error('--sync-ios requires a macOS host.');
     }
-    mustRun('pnpm', [
-      'exec', 'mpgd', 'target', 'init', 'capacitor',
-      '--game', gameRoot,
-      '--app-id', 'dev.mpgd.externalgame',
-      '--display-name', 'External Game',
-    ], gameRoot);
-    mustRun('pnpm', ['install', '--no-frozen-lockfile'], gameRoot);
-    mustRun('git', ['add', '.'], gameRoot);
-    mustRun('git', [
-      '-c', 'user.name=mpgd-test', '-c', 'user.email=mpgd-test@example.invalid',
-      'commit', '-qm', 'game-owned shell',
-    ], gameRoot);
     mustRun('pnpm', [
       'exec', 'mpgd', 'target', 'build', 'ios', 'staging',
       '--targets-file', join(gameRoot, 'mpgd.targets.json'),
@@ -225,17 +225,49 @@ try {
     assert.equal(manifest.kitGitSha, installedInfo.kitGitSha);
     assert.ok(manifest.targets?.ios);
     assert.ok(existsSync(join(gameRoot, manifest.targets.ios.artifact)));
-    mustRun('pnpm', ['exec', 'mpgd', 'deploy', 'init', '--game', gameRoot], gameRoot);
-    const deployPlanFile = join(gameRoot, 'release-plan.json');
-    mustRun('pnpm', [
-      'exec', 'mpgd', 'deploy', 'plan', '--game', gameRoot,
-      '--profile', 'beta', '--targets', 'android', '--out', deployPlanFile,
-    ], gameRoot);
-    const deployPlan = JSON.parse(readFileSync(deployPlanFile, 'utf8'));
-    assert.equal(deployPlan.targets[0]?.target, 'android');
-    assert.equal(deployPlan.targets[0]?.appId, 'dev.mpgd.externalgame');
-    assert.equal(JSON.stringify(deployPlan).includes('MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT'), false);
   }
+  mustRun('pnpm', ['exec', 'mpgd', 'deploy', 'init', '--game', gameRoot], gameRoot);
+  const deployPlanFile = join(gameRoot, 'release-plan.json');
+  mustRun('pnpm', [
+    'exec', 'mpgd', 'deploy', 'plan', '--game', gameRoot,
+    '--profile', 'beta', '--targets', 'android', '--out', deployPlanFile,
+  ], gameRoot);
+  const deployPlan = JSON.parse(readFileSync(deployPlanFile, 'utf8'));
+  assert.equal(deployPlan.targets[0]?.target, 'android');
+  assert.equal(deployPlan.targets[0]?.appId, 'dev.mpgd.externalgame');
+  assert.equal(JSON.stringify(deployPlan).includes('MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT'), false);
+  mustRun('pnpm', [
+    'exec', 'mpgd', 'deploy', 'workflow', 'init', '--game', gameRoot,
+    '--profile', 'beta', '--targets', 'android', '--release-branch', 'main',
+  ], gameRoot);
+  const workflows = readdirSync(join(gameRoot, '.github/workflows'));
+  assert.equal(workflows.length, 1);
+  const workflow = readFileSync(join(gameRoot, '.github/workflows', workflows[0]), 'utf8');
+  assert.match(workflow, /deploy_android:/u);
+  assert.doesNotMatch(workflow, /deploy_ios:/u);
+  assert.match(workflow, /github\.ref == 'refs\/heads\/main'/u);
+  assert.match(workflow, /environment: 'native-beta'/u);
+  assert.doesNotMatch(workflow, /pull_request_target/u);
+  const nestedRoot = join(fixtureRoot, 'nested-workspace');
+  const nestedGame = join(nestedRoot, 'games', 'alpha');
+  mkdirSync(nestedGame, { recursive: true });
+  writeFileSync(join(nestedRoot, 'package.json'), JSON.stringify({
+    name: 'game-monorepo', private: true, packageManager: 'pnpm@11.7.0',
+  }));
+  writeFileSync(join(nestedRoot, 'pnpm-workspace.yaml'), [
+    'packages:',
+    "  - 'games/*'",
+    'allowBuilds:',
+    '  esbuild: true',
+    '',
+  ].join('\n'));
+  writeFileSync(join(nestedGame, 'package.json'), JSON.stringify({
+    name: 'nested-game',
+    private: true,
+    devDependencies: { '@mpgd/cli': `file:${tarball}` },
+  }));
+  mustRun('pnpm', ['install', '--no-frozen-lockfile'], nestedRoot);
+  mustRun('pnpm', ['--dir', nestedGame, 'exec', 'mpgd', '--help'], nestedRoot);
   console.info(`External @mpgd/cli native ${syncIos ? 'iOS sync' : 'validation'} passed.`);
 } finally {
   if (process.env.MPGD_KEEP_NATIVE_CONSUMER !== '1') {

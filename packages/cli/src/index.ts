@@ -34,6 +34,7 @@ import {
   writeNativeDeploymentPlan,
   type NativeDeploymentPlan,
 } from './deploy-planning.js';
+import { initializeNativeDeployWorkflow } from './native-deploy-workflow.js';
 import {
   normalizeConfiguredBuildTargets,
   normalizeBuildTarget as normalizeConfiguredTargetName,
@@ -516,6 +517,52 @@ const deployCommand = defineI18n({
         console.info(`Created deployment config: ${initializeDeployConfig(game)}`);
       },
     }),
+    workflow: defineI18n({
+      name: 'workflow',
+      description: 'Scaffold game-owned native deployment CI.',
+      resource: commandResource({
+        en: 'Scaffold game-owned native deployment CI.',
+        ko: '게임 소유 네이티브 배포 CI를 생성합니다.',
+      }),
+      subCommands: {
+        init: defineI18n({
+          name: 'init',
+          description: 'Create a protected-branch native deployment workflow.',
+          resource: commandResource({
+            en: 'Create a protected-branch native deployment workflow.',
+            ko: '보호 브랜치용 네이티브 배포 워크플로우를 생성합니다.',
+          }),
+          args: {
+            game: { type: 'string', required: false, description: 'Game project directory.' },
+            profile: { type: 'string', required: false, description: 'Deployment profile name.' },
+            targets: { type: 'string', required: false, description: 'android,ios selection.' },
+            'release-branch': {
+              type: 'string', required: true,
+              description: 'Protected branch allowed to dispatch signed deployments.',
+            },
+            'game-id': { type: 'string', required: false, description: 'Release ledger game ID.' },
+            'approval-environment': {
+              type: 'string', required: false,
+              description: 'Protected GitHub Environment name.',
+            },
+          },
+          run: (ctx) => {
+            const targets = parseDeployTargets(readOptionalString(ctx.values.targets));
+            const gameId = readOptionalString(ctx.values['game-id']);
+            const approvalEnvironment = readOptionalString(ctx.values['approval-environment']);
+            const file = initializeNativeDeployWorkflow({
+              game: readOptionalString(ctx.values.game) ?? '.',
+              profile: readOptionalString(ctx.values.profile) ?? 'beta',
+              releaseBranch: readRequiredCliOption(ctx.values['release-branch'], '--release-branch'),
+              ...(targets === undefined ? {} : { targets }),
+              ...(gameId === undefined ? {} : { gameId }),
+              ...(approvalEnvironment === undefined ? {} : { approvalEnvironment }),
+            });
+            console.info(`Created native deployment workflow: ${file}`);
+          },
+        }),
+      },
+    }),
     doctor: defineI18n({
       name: 'doctor',
       description: 'Check local native deployment configuration and toolchains.',
@@ -685,6 +732,14 @@ const deployCommand = defineI18n({
           throw new Error('Installed CLI has no clean, matching native Kit build identity.');
         }
         const initialLedgerFile = readOptionalString(ctx.values['initial-ledger']);
+        const recordedBuildMarker = process.env.MPGD_RECORDED_BUILD_MARKER;
+        if (recordedBuildMarker !== undefined
+          && (process.env.RUNNER_TEMP === undefined
+            || !path.isAbsolute(process.env.RUNNER_TEMP)
+            || !path.isAbsolute(recordedBuildMarker)
+            || path.dirname(recordedBuildMarker) !== path.resolve(process.env.RUNNER_TEMP))) {
+          throw new Error('The recorded-build marker must be directly inside RUNNER_TEMP.');
+        }
         const status = await runNativeDeployment({
           plan,
           gameId: readRequiredCliOption(ctx.values['game-id'], '--game-id'),
@@ -697,6 +752,11 @@ const deployCommand = defineI18n({
             ),
           }),
           approved: isDeployApproved(plan, ctx.values.approve === true),
+          ...(recordedBuildMarker === undefined ? {} : {
+            onBuildRecorded: (target) => {
+              writeFileSync(recordedBuildMarker, target, { flag: 'wx', mode: 0o600 });
+            },
+          }),
         });
         console.info(JSON.stringify(status, null, 2));
       },

@@ -31,6 +31,9 @@ distribution target gets the right adapter and validation path.
   router skill, target-specific release skills, repository skills, and Apps in
   Toss MCP adapter guidance.
 - Target artifact smoke tests, package pack smoke tests, public-readiness checks, and ttsc graph presets.
+- Game-owned [native test deployment](docs/NATIVE_DEPLOY_RUN.md) and
+  [CI workflow scaffolding](docs/GAME_NATIVE_DEPLOY_CI.md); live store/device
+  evidence remains a separate release gate.
 
 ## Quick Start
 

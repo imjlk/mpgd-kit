@@ -16,6 +16,15 @@ const redacted = await runReleaseProcess({
 });
 assert.equal(redacted.output, '[REDACTED]');
 assert.equal(redacted.truncated, false);
+const gitHeader = 'AUTHORIZATION: basic private-git-auth';
+const redactedGitHeader = await runReleaseProcess({
+  command: process.execPath,
+  args: ['-e', 'process.stdout.write(process.env.GIT_CONFIG_VALUE_0)'],
+  cwd,
+  environment: { ...process.env, GIT_CONFIG_VALUE_0: gitHeader },
+  timeoutMs: 5_000,
+});
+assert.equal(redactedGitHeader.output, '[REDACTED]');
 const piped = await runReleaseProcess({
   command: process.execPath,
   args: ['-e', 'process.stdin.on("data", (chunk) => process.stdout.write(chunk))'],

@@ -42,6 +42,7 @@ import { beginNativeBuildAttempt } from './native-build-attempt';
 import { executeNativeTargetBuild } from './native-build-execution';
 import { resolveNativeCommandLaunch } from './native-command-launcher';
 import { resolveNativeBuildPlan } from './native-build-mode';
+import { nativeInspectionEnvironment } from './native-inspection-environment';
 import {
   appTargetForPlatformTarget,
   assertPlatformTargetBuildEmitterAvailable,
@@ -707,7 +708,7 @@ function findNamedArtifactFiles(root: string, fileName: string): readonly string
 function listZipEntries(path: string): readonly string[] {
   const result = spawnSync('unzip', ['-Z1', path], {
     cwd: process.cwd(),
-    env: process.env,
+    env: nativeInspectionEnvironment(),
     encoding: 'utf8',
   });
 

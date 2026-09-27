@@ -44,6 +44,8 @@ import {
 } from './release-workspace.js';
 import { inspectAndroidBundleSigner } from './android-bundle-signer.js';
 
+const gitAuthEnvironmentNames = ['GITHUB_TOKEN', 'GH_TOKEN', 'GIT_ASKPASS'] as const;
+
 export interface RunNativeDeploymentInput {
   readonly plan: NativeDeploymentPlan;
   readonly releaseKey: string;
@@ -55,6 +57,8 @@ export interface RunNativeDeploymentInput {
   readonly approved: boolean;
   readonly environment?: NodeJS.ProcessEnv;
   readonly signal?: AbortSignal;
+  /** Called only after a newly built target has an immutable, committed build record. */
+  readonly onBuildRecorded?: (target: NativeDeployTarget) => void;
 }
 
 /** Reserve once, build only missing targets, then submit the recorded binaries. */
@@ -320,6 +324,7 @@ async function buildAndRecordTarget(
       environment,
       ...(input.signal === undefined ? {} : { signal: input.signal }),
     });
+    input.onBuildRecorded?.(target);
   };
   if (target === 'android') {
     await withAndroidUploadSigningSession(
@@ -419,11 +424,13 @@ export function dependencyInstallEnvironment(
   const forbidden = new Set([
     ...(plan === undefined ? [] : readNativeDeployCredentialNames(plan)),
     'GOOGLE_APPLICATION_CREDENTIALS',
+    ...gitAuthEnvironmentNames,
   ]);
   for (const name of environment.MPGD_DEPENDENCY_INSTALL_ENV_NAMES?.split(',') ?? []) {
     const normalized = name.trim();
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(normalized)
-      || normalized.startsWith('MPGD_') || forbidden.has(normalized)) {
+      || normalized.startsWith('MPGD_') || normalized.startsWith('GIT_CONFIG_')
+      || forbidden.has(normalized)) {
       throw new Error(`Dependency installation environment name ${normalized} is not allowed.`);
     }
     const value = environment[normalized];
@@ -441,6 +448,16 @@ export function withoutStoreSubmissionCredentials(
   plan: NativeDeploymentPlan,
 ): NodeJS.ProcessEnv {
   const result = { ...environment };
+  for (const name of environment.MPGD_DEPENDENCY_INSTALL_ENV_NAMES?.split(',') ?? []) {
+    delete result[name.trim()];
+  }
+  delete result.MPGD_DEPENDENCY_INSTALL_ENV_NAMES;
+  delete result.MPGD_RECORDED_BUILD_MARKER;
+  delete result.NPM_TOKEN;
+  delete result.NODE_AUTH_TOKEN;
+  delete result.SIGNING_B64;
+  delete result.SUBMISSION_B64;
+  delete result.PROFILE_B64;
   for (const name of readNativeDeployCredentialNames(plan)) {
     delete result[name];
   }
@@ -457,12 +474,14 @@ export function withoutStoreSubmissionCredentials(
     'MPGD_IOS_SIGNING_P12',
     'MPGD_IOS_SIGNING_P12_PASSWORD',
     'MPGD_IOS_PROVISIONING_PROFILE',
+    ...gitAuthEnvironmentNames,
   ]) {
     delete result[name];
   }
   for (const name of Object.keys(result)) {
     if (name.startsWith('MPGD_ANDROID_SIGNING_')
-      || name.startsWith('MPGD_IOS_SESSION_')) {
+      || name.startsWith('MPGD_IOS_SESSION_')
+      || name.startsWith('GIT_CONFIG_')) {
       delete result[name];
     }
   }

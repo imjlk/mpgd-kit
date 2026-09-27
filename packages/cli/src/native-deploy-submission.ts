@@ -1,5 +1,5 @@
-import { randomBytes } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import type { NativeDeploymentPlan } from './deploy-planning.js';
@@ -10,6 +10,7 @@ import {
   readNativeReleaseStatus,
   reclaimNativeSubmission,
   releaseNativeSubmissionLease,
+  type ImmutableNativeBuildRecord,
   type NativeSubmissionCheckpoint,
 } from './release-state.js';
 import {
@@ -107,6 +108,9 @@ export async function submitRecordedNativeTargetWithPorts(
   let checkpoint = status.submissions[target];
   if (checkpoint !== undefined && isNativeSubmissionSettled(checkpoint.status)) {
     return checkpoint;
+  }
+  if (input.environment?.MPGD_VERIFY_RELEASE_MANIFEST === '1') {
+    verifyRecordedReleaseManifest(input.plan.gameRoot, record);
   }
   if (checkpoint?.status === 'failed'
     || (checkpoint?.status === 'action-required'
@@ -265,6 +269,35 @@ export async function submitRecordedNativeTargetWithPorts(
     }
   }
   return activeCheckpoint;
+}
+
+/** Validate the workflow-restored manifest against the immutable release-state hash. */
+export function verifyRecordedReleaseManifest(
+  gameRoot: string,
+  record: Pick<ImmutableNativeBuildRecord,
+    'artifactLocation' | 'releaseManifestSha256' | 'target'>,
+): void {
+  if (!/^[0-9a-f]{64}$/u.test(record.releaseManifestSha256)) {
+    throw new Error('Recorded release manifest hash is invalid.');
+  }
+  const location = path.posix.join(
+    path.posix.dirname(record.artifactLocation),
+    `${record.target}-manifest-${record.releaseManifestSha256}.json`,
+  );
+  let manifestFile: string;
+  try {
+    manifestFile = resolveRecordedArtifact(gameRoot, location);
+  } catch {
+    throw new Error('Recorded release manifest is missing or outside the game directory.');
+  }
+  const metadata = statSync(manifestFile);
+  if (!metadata.isFile() || metadata.size > 2 * 1024 * 1024) {
+    throw new Error('Recorded release manifest is not a bounded file.');
+  }
+  const digest = createHash('sha256').update(readFileSync(manifestFile)).digest('hex');
+  if (digest !== record.releaseManifestSha256) {
+    throw new Error('Restored release manifest differs from the immutable build record.');
+  }
 }
 
 function resolveRecordedArtifact(gameRoot: string, recordedLocation: string): string {

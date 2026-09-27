@@ -1,6 +1,7 @@
 import path from 'node:path';
 
 import { runReleaseProcess } from './deploy-process.js';
+import { artifactInspectionEnvironment } from './artifact-inspection-environment.js';
 
 const signerPattern = /\bSHA256:\s*((?:[A-Fa-f0-9]{2}:){31}[A-Fa-f0-9]{2})/u;
 const timeoutMs = 60_000;
@@ -13,6 +14,7 @@ export async function inspectAndroidBundleSigner(aabFile: string): Promise<strin
     cwd: path.dirname(bundle),
     timeoutMs,
     maxOutputBytes,
+    environment: artifactInspectionEnvironment(),
   };
   const verified = await runReleaseProcess({
     ...options,

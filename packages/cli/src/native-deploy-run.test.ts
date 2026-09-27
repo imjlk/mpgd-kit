@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import {
   mkdirSync,
   mkdtempSync,
@@ -15,12 +16,23 @@ import {
   dependencyInstallEnvironment,
   persistImmutableFile,
   planNativeDeploymentSteps,
+  withoutStoreSubmissionCredentials,
 } from './native-deploy-run.js';
+import { artifactInspectionEnvironment } from './artifact-inspection-environment.js';
 import type { NativeDeploymentPlan } from './deploy-planning.js';
 import type { NativeReleaseStatus } from './release-state.js';
 
 const fixture = mkdtempSync(path.join(tmpdir(), 'mpgd-deploy-output-test-'));
 try {
+  const inspectionEnvironment = artifactInspectionEnvironment({
+    PATH: '/bin',
+    JAVA_HOME: '/jdk',
+    GITHUB_TOKEN: 'private-git-token',
+    GIT_CONFIG_VALUE_0: 'private-git-header',
+    MPGD_ANDROID_UPLOAD_STORE_PASSWORD: 'private-signing-password',
+    SUBMISSION_B64: 'private-store-key',
+  });
+  assert.deepEqual(inspectionEnvironment, { PATH: '/bin', JAVA_HOME: '/jdk' });
   assert.deepEqual(
     dependencyInstallEnvironment({
       PATH: '/bin',
@@ -51,6 +63,11 @@ try {
     MPGD_IOS_SIGNING_P12_PASSWORD: 'secret',
   };
   assert.throws(() => dependencyInstallEnvironment(signingCredential), /not allowed/u);
+  const gitCredential = {
+    MPGD_DEPENDENCY_INSTALL_ENV_NAMES: 'GITHUB_TOKEN',
+    GITHUB_TOKEN: 'release-state-token',
+  };
+  assert.throws(() => dependencyInstallEnvironment(gitCredential), /not allowed/u);
   const game = path.join(fixture, 'game');
   const outside = path.join(fixture, 'outside');
   const source = path.join(fixture, 'source.aab');
@@ -81,13 +98,64 @@ try {
     () => persistImmutableFile(game, '.mpgd/releases/beta-001/ios.ipa', source),
     /regular file/u,
   );
+  const deployConfig = JSON.stringify({
+    schemaVersion: 1,
+    profiles: {
+      beta: {
+        buildProfile: 'production',
+        approval: 'manual',
+        targets: {
+          android: {
+            destination: 'play-internal',
+            signingCredential: { env: 'MPGD_ANDROID_UPLOAD_KEYSTORE' },
+            submissionCredential: { env: 'MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT' },
+          },
+        },
+      },
+    },
+  });
+  writeFileSync(path.join(game, 'mpgd.deploy.json'), deployConfig);
   const plan = {
+    gameRoot: game,
+    profile: 'beta',
+    deployConfigSha256: createHash('sha256').update(deployConfig).digest('hex'),
     targetConfigSha256: 'd'.repeat(64),
     targets: [
       { target: 'android', appId: 'dev.mpgd.test' },
       { target: 'ios', appId: 'dev.mpgd.test' },
     ],
   } as unknown as NativeDeploymentPlan;
+  const buildEnvironment = withoutStoreSubmissionCredentials(
+    {
+      PATH: '/bin',
+      NPM_TOKEN: 'registry-token',
+      NODE_AUTH_TOKEN: 'other-registry-token',
+      CUSTOM_PACKAGE_TOKEN: 'custom-registry-token',
+      MPGD_DEPENDENCY_INSTALL_ENV_NAMES: 'NPM_TOKEN,CUSTOM_PACKAGE_TOKEN',
+      MPGD_RECORDED_BUILD_MARKER: '/tmp/build-recorded',
+      SIGNING_B64: 'encoded-signing-key',
+      SUBMISSION_B64: 'encoded-store-credential',
+      PROFILE_B64: 'encoded-profile',
+      MPGD_ANDROID_UPLOAD_KEYSTORE: '/private/upload.keystore',
+      GITHUB_TOKEN: 'release-state-token',
+    },
+    plan,
+  );
+  assert.equal(buildEnvironment.PATH, '/bin');
+  for (const name of [
+    'NPM_TOKEN',
+    'NODE_AUTH_TOKEN',
+    'CUSTOM_PACKAGE_TOKEN',
+    'MPGD_DEPENDENCY_INSTALL_ENV_NAMES',
+    'MPGD_RECORDED_BUILD_MARKER',
+    'SIGNING_B64',
+    'SUBMISSION_B64',
+    'PROFILE_B64',
+    'MPGD_ANDROID_UPLOAD_KEYSTORE',
+    'GITHUB_TOKEN',
+  ]) {
+    assert.equal(buildEnvironment[name], undefined, `${name} must not reach native build`);
+  }
   const status = {
     plan: { targetConfigDigest: plan.targetConfigSha256, targets: { android: {}, ios: {} } },
     builds: {

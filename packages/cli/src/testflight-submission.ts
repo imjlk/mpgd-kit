@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { ReleaseProcessError, runReleaseProcess } from './deploy-process.js';
 import type { ImmutableNativeBuildRecord } from './release-state.js';
 
-const pinnedAscVersion = '5.5.0';
+export const pinnedAscVersion = '5.5.0';
 const sha256Pattern = /^[0-9a-f]{64}$/u;
 const teamIdPattern = /^[A-Z0-9]{10}$/u;
 const apiKeyIdPattern = /^[A-Z0-9]{10}$/u;
@@ -508,17 +508,37 @@ async function preflight(input: IosTestFlightSubmissionInput): Promise<ResolvedP
   return { marketingVersion, buildNumber: String(buildNumber) };
 }
 
-function isolatedAscEnvironment(input: IosTestFlightSubmissionInput, directory: string): NodeJS.ProcessEnv {
+export function isolatedAscEnvironment(
+  input: IosTestFlightSubmissionInput,
+  directory: string,
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
   if (!apiKeyIdPattern.test(input.apiKeyId)
     || input.apiIssuerId.trim() === '' || input.apiPrivateKeyBase64.trim() === '') {
     throw new Error('App Store Connect API credentials are incomplete.');
   }
-  const environment = { ...process.env };
-  for (const key of Object.keys(environment)) {
-    if (key.startsWith('ASC_')) {
-      delete environment[key];
-    }
-  }
+  // asc only needs network/locale process settings, never Git, registry, or signing secrets.
+  const inheritedNames = [
+    'PATH',
+    'LANG',
+    'LC_ALL',
+    'LC_CTYPE',
+    'TZ',
+    'HTTPS_PROXY',
+    'HTTP_PROXY',
+    'NO_PROXY',
+    'https_proxy',
+    'http_proxy',
+    'no_proxy',
+    'SSL_CERT_FILE',
+    'CURL_CA_BUNDLE',
+  ];
+  const environment = Object.fromEntries(
+    inheritedNames.flatMap((name) => {
+      const value = source[name];
+      return value === undefined ? [] : [[name, value]];
+    }),
+  );
   return {
     ...environment,
     HOME: directory,

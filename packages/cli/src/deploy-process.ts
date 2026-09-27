@@ -46,7 +46,7 @@ export class ReleaseProcessError extends Error {
 }
 
 const defaultMaxOutputBytes = 256 * 1024;
-const sensitiveEnvironmentKey = /(?:^|_)(?:PASSWORD|TOKEN|SECRET|CREDENTIAL|PRIVATE_KEY|API_KEY)(?:_|$)/iu;
+const sensitiveEnvironmentKey = /(?:^|_)(?:PASSWORD|TOKEN|SECRET|CREDENTIAL|PRIVATE_KEY|API_KEY)(?:_|$)|^GIT_CONFIG_VALUE_\d+$/iu;
 
 /** Execute a release step without streaming unredacted child output to logs. */
 export async function runReleaseProcess(input: ReleaseProcessInput): Promise<ReleaseProcessResult> {

@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import type { NativeDeploymentPlan } from './deploy-planning.js';
 import {
   submitRecordedNativeTargetWithPorts,
+  verifyRecordedReleaseManifest,
   type NativeSubmissionPorts,
 } from './native-deploy-submission.js';
 import { PlaySubmissionUncertainError } from './play-internal-submission.js';
@@ -57,6 +59,24 @@ try {
     deploymentDestination: 'testflight',
     internalTestGroupId: 'group-1',
   } as ImmutableNativeBuildRecord;
+  const manifestBytes = Buffer.from('{"release":"beta-01"}');
+  const manifestHash = createHash('sha256').update(manifestBytes).digest('hex');
+  const manifestDirectory = path.join(gameRoot, '.mpgd', 'releases', 'beta-01');
+  mkdirSync(manifestDirectory, { recursive: true });
+  const manifestFile = path.join(manifestDirectory, `android-manifest-${manifestHash}.json`);
+  writeFileSync(manifestFile, manifestBytes);
+  const manifestRecord = {
+    artifactLocation: '.mpgd/releases/beta-01/android-bundle.aab',
+    releaseManifestSha256: manifestHash,
+    target: 'android' as const,
+  };
+  verifyRecordedReleaseManifest(gameRoot, manifestRecord);
+  writeFileSync(manifestFile, 'substituted manifest');
+  assert.throws(
+    () => verifyRecordedReleaseManifest(gameRoot, manifestRecord),
+    /manifest differs from the immutable build record/u,
+  );
+  writeFileSync(manifestFile, manifestBytes);
   let checkpoints: NativeReleaseStatus['submissions'] = {};
   let androidCalls = 0;
   let iosCalls = 0;
@@ -160,6 +180,43 @@ try {
     credential: { target: 'android' as const, serviceAccountFile: '/unused/service-account.json' },
     approved: true,
   };
+  writeFileSync(path.join(manifestDirectory, 'android-bundle.aab'), 'restored bundle');
+  const guardedPorts: NativeSubmissionPorts = {
+    ...ports,
+    async readStatus(input) {
+      const status = await ports.readStatus(input);
+      return {
+        ...status,
+        builds: { ...status.builds, android: { ...android, ...manifestRecord } },
+      };
+    },
+    async submitAndroid() {
+      return {
+        status: 'committed',
+        packageName: 'dev.mpgd.test',
+        editId: 'edit-restored',
+        track: 'internal',
+        versionCode: 42,
+        bundleSha256: android.artifactSha256,
+        alreadyCommitted: false,
+      };
+    },
+  };
+  const guardedInput = {
+    ...androidInput,
+    environment: { MPGD_VERIFY_RELEASE_MANIFEST: '1' },
+  };
+  writeFileSync(manifestFile, 'substituted manifest');
+  await assert.rejects(
+    submitRecordedNativeTargetWithPorts(guardedInput, guardedPorts),
+    /manifest differs from the immutable build record/u,
+  );
+  writeFileSync(manifestFile, manifestBytes);
+  assert.equal(
+    (await submitRecordedNativeTargetWithPorts(guardedInput, guardedPorts)).status,
+    'committed',
+  );
+  checkpoints = {};
   await assert.rejects(
     submitRecordedNativeTargetWithPorts({ ...androidInput, approved: false }, ports),
     /explicit approval/u,
