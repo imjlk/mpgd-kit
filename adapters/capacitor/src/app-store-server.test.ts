@@ -158,4 +158,19 @@ describe('Apple signed transaction adapter', () => {
     mocks.verify.mockRejectedValueOnce(new TypeError('unexpected verifier defect'));
     await expect(verifier.verifyAndDecode(input)).rejects.toThrow('unexpected verifier defect');
   });
+
+  it('settles an in-flight certificate check immediately when cancelled', async () => {
+    const verifier = createAppleSignedTransactionVerifier(options);
+    const controller = new AbortController();
+    const removeListener = vi.spyOn(controller.signal, 'removeEventListener');
+    let resolveCheck: ((value: unknown) => void) | undefined;
+    mocks.verify.mockImplementationOnce(() => new Promise<unknown>((resolve) => {
+      resolveCheck = resolve;
+    }));
+    const result = verifier.verifyAndDecode({ ...input, signal: controller.signal });
+    controller.abort(new Error('request timed out'));
+    await expect(result).rejects.toThrow('request timed out');
+    expect(removeListener).toHaveBeenCalledWith('abort', expect.any(Function));
+    resolveCheck?.(signedPurchase);
+  });
 });

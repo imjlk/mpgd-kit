@@ -67,7 +67,10 @@ export function createAppleSignedTransactionVerifier(
       input.signal.throwIfAborted();
       let decoded: JWSTransactionDecodedPayload;
       try {
-        decoded = await verifier.verifyAndDecodeTransaction(input.signedTransaction);
+        decoded = await waitForVerification(
+          verifier.verifyAndDecodeTransaction(input.signedTransaction),
+          input.signal,
+        );
         input.signal.throwIfAborted();
       } catch (error) {
         if (input.signal.aborted) {
@@ -92,6 +95,25 @@ export function createAppleSignedTransactionVerifier(
         : { status: 'verified', payload };
     },
   };
+}
+
+async function waitForVerification<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(signal.reason ?? new Error('Verification was aborted.'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+    }
+  });
+  try {
+    return await Promise.race([operation, aborted]);
+  } finally {
+    if (onAbort !== undefined) {
+      signal.removeEventListener('abort', onAbort);
+    }
+  }
 }
 
 function decodeOneTimeTransaction(
