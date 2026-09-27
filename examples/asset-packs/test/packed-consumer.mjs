@@ -56,6 +56,7 @@ function packageTarball(directory) {
 function packWorkspaceClosure(names) {
   const available = new Map();
   for (const root of ['packages', 'adapters', 'native-plugins', 'backend']) {
+    if (!existsSync(join(repoRoot, root))) continue;
     for (const directory of readdirSync(join(repoRoot, root))) {
       const relativeDirectory = join(root, directory);
       const manifestPath = join(repoRoot, relativeDirectory, 'package.json');
