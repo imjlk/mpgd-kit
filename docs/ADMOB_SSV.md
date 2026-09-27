@@ -110,8 +110,7 @@ with `encodeAdMobSsvCustomData()` using the same `playerId`, logical
 `placementId`, and backend claim `idempotencyKey`. The callback is rejected if
 any signed binding differs from the claim.
 
-For a Capacitor 8 game, the opt-in
-[`@mpgd/adapter-capacitor/admob` provider](../adapters/capacitor/README.md#opt-in-admob-rewarded-ads)
+For a Capacitor 8 game, the opt-in `@mpgd/adapter-capacitor/admob` provider
 performs this binding during a fresh per-operation ad load. SDK reward and
 dismissal callbacks do not grant currency locally; they only let the
 game-services client request server verification. AdMob test ads do not send
