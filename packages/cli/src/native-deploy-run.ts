@@ -445,6 +445,12 @@ export function withoutStoreSubmissionCredentials(
   plan: NativeDeploymentPlan,
 ): NodeJS.ProcessEnv {
   const result = { ...environment };
+  for (const name of environment.MPGD_DEPENDENCY_INSTALL_ENV_NAMES?.split(',') ?? []) {
+    delete result[name.trim()];
+  }
+  delete result.MPGD_DEPENDENCY_INSTALL_ENV_NAMES;
+  delete result.NPM_TOKEN;
+  delete result.NODE_AUTH_TOKEN;
   for (const name of readNativeDeployCredentialNames(plan)) {
     delete result[name];
   }

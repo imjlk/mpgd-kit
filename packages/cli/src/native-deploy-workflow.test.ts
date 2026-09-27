@@ -22,7 +22,10 @@ try {
   });
   const workflow = readFileSync(file, 'utf8');
   assert.match(file, /\.github\/workflows\/mpgd-native-games-alpha-[a-f0-9]{8}\.yml$/u);
-  assert.match(workflow, /'games\/alpha\/\*\*'/u);
+  assert.match(workflow, /  pull_request:/u);
+  assert.doesNotMatch(workflow, /    paths:/u);
+  assert.match(workflow, /pnpm --dir "\$GAME_PATH" exec mpgd deploy plan --game \./u);
+  assert.match(workflow, /pnpm --dir "\$GAME_PATH" exec mpgd "\$\{args\[@\]\}"/u);
   assert.match(workflow, /github\.ref == 'refs\/heads\/main'/u);
   assert.match(workflow, /environment: 'protected-beta'/u);
   assert.match(workflow, /cancel-in-progress: false/u);
@@ -46,6 +49,7 @@ try {
   assert.equal(workflow.match(/persist-credentials: false/gu)?.length, 3);
   assert.match(workflow, /retention-days: 30/u);
   assert.match(workflow, /retention-days: 90/u);
+  assert.equal(workflow.match(/inputs\.artifact_run_id == ''/gu)?.length, 4);
   assert.match(workflow, /include-hidden-files: true/u);
   assert.equal(workflow.split('  deploy_android:')[0]?.includes('secrets.'), false);
   assert.equal(workflow.includes('pull_request_target'), false);

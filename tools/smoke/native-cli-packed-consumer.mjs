@@ -248,6 +248,26 @@ try {
   assert.match(workflow, /github\.ref == 'refs\/heads\/main'/u);
   assert.match(workflow, /environment: 'native-beta'/u);
   assert.doesNotMatch(workflow, /pull_request_target/u);
+  const nestedRoot = join(fixtureRoot, 'nested-workspace');
+  const nestedGame = join(nestedRoot, 'games', 'alpha');
+  mkdirSync(nestedGame, { recursive: true });
+  writeFileSync(join(nestedRoot, 'package.json'), JSON.stringify({
+    name: 'game-monorepo', private: true, packageManager: 'pnpm@11.7.0',
+  }));
+  writeFileSync(join(nestedRoot, 'pnpm-workspace.yaml'), [
+    'packages:',
+    "  - 'games/*'",
+    'allowBuilds:',
+    '  esbuild: true',
+    '',
+  ].join('\n'));
+  writeFileSync(join(nestedGame, 'package.json'), JSON.stringify({
+    name: 'nested-game',
+    private: true,
+    devDependencies: { '@mpgd/cli': `file:${tarball}` },
+  }));
+  mustRun('pnpm', ['install', '--no-frozen-lockfile'], nestedRoot);
+  mustRun('pnpm', ['--dir', nestedGame, 'exec', 'mpgd', '--help'], nestedRoot);
   console.info(`External @mpgd/cli native ${syncIos ? 'iOS sync' : 'validation'} passed.`);
 } finally {
   if (process.env.MPGD_KEEP_NATIVE_CONSUMER !== '1') {
