@@ -117,6 +117,26 @@ class HiddenIdempotencyLookupStore extends InMemoryGameServicesStore {
   }
 }
 
+function createRequestScopedStore(ledger: InMemoryGameServicesStore): GameServicesStore {
+  return {
+    recordEntitlementGrant: (input) => ledger.recordEntitlementGrant(input),
+    findEntitlementTransactionByIdempotency: (input) => {
+      return ledger.findEntitlementTransactionByIdempotency(input);
+    },
+    findEntitlementTransactionByEvidenceVerificationId: (input) => {
+      return ledger.findEntitlementTransactionByEvidenceVerificationId(input);
+    },
+    findEntitlementTransactionByPlatformEvidence: (input) => {
+      return ledger.findEntitlementTransactionByPlatformEvidence(input);
+    },
+    getEntitlementTransaction: (ledgerEntryId) => ledger.getEntitlementTransaction(ledgerEntryId),
+    listEntitlementTransactions: () => ledger.listEntitlementTransactions(),
+    recordLeaderboardScore: (input, options) => ledger.recordLeaderboardScore(input, options),
+    getLeaderboardTransaction: (ledgerEntryId) => ledger.getLeaderboardTransaction(ledgerEntryId),
+    listLeaderboardTransactions: () => ledger.listLeaderboardTransactions(),
+  };
+}
+
 function createLegacyCompatibleStore(base: InMemoryGameServicesStore): GameServicesStore {
   return {
     recordEntitlementGrant: (input) => base.recordEntitlementGrant(input),
@@ -1353,6 +1373,84 @@ for (const decision of [
     'the raced reward grant should be reported as already processed',
   );
 }
+
+/**
+ * The first same-key request is still verifying when a retry arrives. The retry's own
+ * verifier would see the evidence as already redeemed, so it must wait for the grant.
+ */
+async function assertSameKeyRetryWaitsForGrant(kind: 'purchase' | 'reward'): Promise<void> {
+  let verifications = 0;
+  let enterFirst = (): void => {};
+  let releaseFirst = (): void => {};
+  const firstEntered = new Promise<void>((resolve) => {
+    enterFirst = resolve;
+  });
+  const firstReleased = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  async function decide(): Promise<EvidenceVerificationDecision> {
+    verifications += 1;
+    if (verifications > 1) {
+      return { status: 'rejected', reason: 'EVIDENCE_ALREADY_REDEEMED' };
+    }
+    enterFirst();
+    await firstReleased;
+    return {
+      status: 'verified',
+      verificationId: `provider:${kind}:same-key-retry`,
+      verifiedAt: '2026-07-04T00:00:02.000Z',
+    };
+  }
+  const ledger = createInMemoryGameServicesStore();
+  async function submit(): Promise<{
+    readonly granted: boolean;
+    readonly ledgerEntryId: string | undefined;
+  }> {
+    // Hosts such as the Worker create a store object for each request over shared storage.
+    const sameKeyBackend = createGameServicesBackend({
+      catalog,
+      placements,
+      store: createRequestScopedStore(ledger),
+      evidenceVerifier: { verifyPurchase: decide, verifyAdReward: decide },
+    });
+    if (kind === 'purchase') {
+      const verification = await sameKeyBackend.purchases.verifyPurchase({
+        target: 'android',
+        playerId: 'player-same-key-retry',
+        productId: 'COINS_100',
+        platformTransactionId: 'txn-same-key-retry',
+        idempotencyKey: 'purchase-same-key-retry',
+        purchasedAt: '2026-07-04T00:00:00.000Z',
+      });
+      return { granted: verification.verified, ledgerEntryId: verification.ledgerEntryId };
+    }
+    const claim = await sameKeyBackend.adRewards.claimAdReward({
+      target: 'android',
+      playerId: 'player-same-key-retry',
+      placementId: 'CONTINUE_AFTER_FAIL',
+      idempotencyKey: 'reward-same-key-retry',
+      completedAt: '2026-07-04T00:00:01.000Z',
+    });
+    return { granted: claim.granted, ledgerEntryId: claim.ledgerEntryId };
+  }
+
+  const first = submit();
+  await firstEntered;
+  const retry = submit();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  releaseFirst();
+  const [firstResult, retryResult] = await Promise.all([first, retry]);
+  assertEqual(firstResult.granted, true, `the first ${kind} request should grant`);
+  assertEqual(retryResult.granted, true, `a same-key ${kind} retry must not race the grant`);
+  assertEqual(
+    retryResult.ledgerEntryId,
+    firstResult.ledgerEntryId,
+    `a same-key ${kind} retry should report the recorded ledger entry`,
+  );
+  assertEqual(verifications, 1, `a same-key ${kind} retry should reuse the recorded grant`);
+}
+await assertSameKeyRetryWaitsForGrant('purchase');
+await assertSameKeyRetryWaitsForGrant('reward');
 
 const suppressedPlatformPayloadStore = createInMemoryGameServicesStore();
 let suppressedPlatformVerificationSequence = 0;

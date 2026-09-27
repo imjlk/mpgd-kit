@@ -611,18 +611,20 @@ function bindRequestDeploymentTarget<
     : { ...request, deploymentTarget };
 }
 
+interface PurchaseVerificationContext {
+  readonly catalog: ProductCatalog;
+  readonly store: GameServicesStore;
+  readonly now: () => string;
+  readonly evidenceVerifier: GameServicesEvidenceVerifier;
+  readonly evidenceVerificationTimeoutMs: number;
+  readonly purchaseGrantFinalizationTimeoutMs: number;
+  readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
+  readonly deploymentTargetBindings: GameServicesDeploymentTargetBindings;
+}
+
 async function verifyPurchaseWithStore(
   input: VerifyPurchaseRequest,
-  context: {
-    readonly catalog: ProductCatalog;
-    readonly store: GameServicesStore;
-    readonly now: () => string;
-    readonly evidenceVerifier: GameServicesEvidenceVerifier;
-    readonly evidenceVerificationTimeoutMs: number;
-    readonly purchaseGrantFinalizationTimeoutMs: number;
-    readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
-    readonly deploymentTargetBindings: GameServicesDeploymentTargetBindings;
-  },
+  context: PurchaseVerificationContext,
 ): Promise<VerifyPurchaseResponse> {
   const request = bindRequestDeploymentTarget(
     assertVerifyPurchaseRequest(input),
@@ -638,6 +640,16 @@ async function verifyPurchaseWithStore(
       ? {}
       : { deploymentTarget: request.deploymentTarget }),
   } as const;
+  return withEntitlementRetryLock(retryIdentity, () => {
+    return verifyPurchaseForRetry(request, retryIdentity, context);
+  });
+}
+
+async function verifyPurchaseForRetry(
+  request: VerifyPurchaseRequest,
+  retryIdentity: EntitlementRetryIdentity,
+  context: PurchaseVerificationContext,
+): Promise<VerifyPurchaseResponse> {
   const completeExistingRetry = async (
     transaction: ProductGrantTransaction,
   ): Promise<VerifyPurchaseResponse> => {
@@ -988,16 +1000,18 @@ function createStoredPurchaseRequest(
   };
 }
 
+interface AdRewardClaimContext {
+  readonly placements: AdPlacements;
+  readonly store: GameServicesStore;
+  readonly now: () => string;
+  readonly evidenceVerifier: GameServicesEvidenceVerifier;
+  readonly evidenceVerificationTimeoutMs: number;
+  readonly deploymentTargetBindings: GameServicesDeploymentTargetBindings;
+}
+
 async function claimAdRewardWithStore(
   input: ClaimAdRewardRequest,
-  context: {
-    readonly placements: AdPlacements;
-    readonly store: GameServicesStore;
-    readonly now: () => string;
-    readonly evidenceVerifier: GameServicesEvidenceVerifier;
-    readonly evidenceVerificationTimeoutMs: number;
-    readonly deploymentTargetBindings: GameServicesDeploymentTargetBindings;
-  },
+  context: AdRewardClaimContext,
 ): Promise<ClaimAdRewardResponse> {
   const request = bindRequestDeploymentTarget(
     assertClaimAdRewardRequest(input),
@@ -1013,6 +1027,16 @@ async function claimAdRewardWithStore(
       ? {}
       : { deploymentTarget: request.deploymentTarget }),
   } as const;
+  return withEntitlementRetryLock(retryIdentity, () => {
+    return claimAdRewardForRetry(request, retryIdentity, context);
+  });
+}
+
+async function claimAdRewardForRetry(
+  request: ClaimAdRewardRequest,
+  retryIdentity: EntitlementRetryIdentity,
+  context: AdRewardClaimContext,
+): Promise<ClaimAdRewardResponse> {
   const completeExistingRetry = (transaction: ProductGrantTransaction): ClaimAdRewardResponse => {
     if (!matchesEntitlementRetry(transaction, retryIdentity)) {
       return assertClaimAdRewardResponse({
@@ -1059,8 +1083,8 @@ async function claimAdRewardWithStore(
   }, context.evidenceVerificationTimeoutMs);
 
   if (verification.status !== 'verified') {
-    // A matching grant can land while reward verification is in flight. Recheck before
-    // returning a stale pending or rejected state that a client may persist as final.
+    // Another backend process can record a matching grant while verification is in flight.
+    // Recheck before returning a stale pending or rejected state.
     const racedExisting = await findEntitlementTransactionByIdempotency(
       context.store,
       retryIdentity,
@@ -1317,10 +1341,9 @@ async function recordEntitlementGrantUnchecked(
   }
 }
 
-const entitlementEvidenceLocks = new WeakMap<
-  GameServicesStore,
-  Map<string, Promise<void>>
->();
+const entitlementLocks = new WeakMap<object, Map<string, Promise<void>>>();
+/** Hosts such as the Worker create a store per request, so retries lock per process instead. */
+const entitlementRetryLockScope = {};
 
 async function withEntitlementEvidenceLocks<T>(
   store: GameServicesStore,
@@ -1333,34 +1356,49 @@ async function withEntitlementEvidenceLocks<T>(
     const lockKey = orderedLockKeys[index];
     return lockKey === undefined
       ? task()
-      : withEntitlementEvidenceLockKey(store, lockKey, () => runWithLock(index + 1));
+      : withEntitlementLockKey(store, lockKey, () => runWithLock(index + 1));
   }
 
   return runWithLock(0);
 }
 
-async function withEntitlementEvidenceLockKey<T>(
-  store: GameServicesStore,
+/**
+ * Serialize one retry identity in this backend process, from its ledger lookup to its grant
+ * or non-grant decision, so a verifier decision cannot race a same-key grant here.
+ */
+async function withEntitlementRetryLock<T>(
+  identity: EntitlementRetryIdentity,
+  task: () => Promise<T>,
+): Promise<T> {
+  return withEntitlementLockKey(
+    entitlementRetryLockScope,
+    createEntitlementIdempotencyKey(identity),
+    task,
+  );
+}
+
+async function withEntitlementLockKey<T>(
+  scope: object,
   lockKey: string,
   task: () => Promise<T>,
 ): Promise<T> {
-  const storeLocks = entitlementEvidenceLocks.get(store) ?? new Map<string, Promise<void>>();
-  entitlementEvidenceLocks.set(store, storeLocks);
+  const scopeLocks = entitlementLocks.get(scope) ?? new Map<string, Promise<void>>();
+  entitlementLocks.set(scope, scopeLocks);
 
-  const previous = storeLocks.get(lockKey) ?? Promise.resolve();
+  const previous = scopeLocks.get(lockKey) ?? Promise.resolve();
   const gate = createPromiseGate();
   const current = previous.then(() => gate.promise);
-  storeLocks.set(lockKey, current);
+  scopeLocks.set(lockKey, current);
 
   await previous;
   try {
     return await task();
   } finally {
     gate.release();
-    if (storeLocks.get(lockKey) === current) {
-      storeLocks.delete(lockKey);
-      if (storeLocks.size === 0) {
-        entitlementEvidenceLocks.delete(store);
+    if (scopeLocks.get(lockKey) === current) {
+      scopeLocks.delete(lockKey);
+      if (scopeLocks.size === 0) {
+        entitlementLocks.delete(scope);
       }
     }
   }
