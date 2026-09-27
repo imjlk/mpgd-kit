@@ -233,6 +233,7 @@ const restoredGrant = await restoredStore.recordEntitlementGrant({
   evidenceVerificationId: originalVerificationId,
   payload: {
     target: 'ios',
+    deploymentTarget: 'ios-production',
     productId: 'REMOVE_ADS',
     productType: 'non_consumable',
     platformTransactionId: '2000000123457001',
@@ -248,12 +249,13 @@ const restoredRequest = {
 } as const;
 let restoreEvidenceCalls = 0;
 let restoredRetryKey = '';
+let restoredRetryDeployment = '';
 let signedOriginalTransactionId = originalTransactionId;
 const restoredProduct: ProductCatalog['products'][number] = {
   id: 'REMOVE_ADS',
   type: 'non_consumable',
   grant: { type: 'entitlement', entitlement: 'remove_ads' },
-  platformProductIds: { ios: 'com.example.game.remove_ads' },
+  platformProductIds: { 'ios-production': 'com.example.game.remove_ads' },
 };
 const restoredCatalog: ProductCatalog = { version: '1', products: [restoredProduct] };
 const restoredEvidenceVerifier = {
@@ -262,6 +264,11 @@ const restoredEvidenceVerifier = {
     assert(
       input.request.platformTransactionId === restoredRequest.platformTransactionId,
       'the current restored transaction must be verified by Apple',
+    );
+    assert(
+      input.request.deploymentTarget === 'ios-production'
+        && input.platformProductId === 'com.example.game.remove_ads',
+      'the existing grant deployment must be resolved before product verification',
     );
     return {
       status: 'verified' as const,
@@ -285,6 +292,7 @@ const restoredBackend = createAppStoreRecoveryBackend({
   purchases: {
     async verifyPurchase(input) {
       restoredRetryKey = input.idempotencyKey;
+      restoredRetryDeployment = input.deploymentTarget ?? '';
       return {
         verified: true,
         alreadyProcessed: true,
@@ -295,11 +303,14 @@ const restoredBackend = createAppStoreRecoveryBackend({
   restoredNonConsumables: {
     catalog: restoredCatalog,
     evidenceVerifier: restoredEvidenceVerifier,
+    bundleId: 'com.example.game',
+    environment: 'Production',
   },
 });
 const restored = await restoredBackend.recoverPurchase(restoredRequest);
 assert(
   restored.verified && restoredRetryKey === 'original-non-consumable-checkout'
+    && restoredRetryDeployment === 'ios-production'
     && restoreEvidenceCalls === 1,
   'a signed restored non-consumable must reuse its original grant after Apple verification',
 );
@@ -320,6 +331,31 @@ const unverifiedRestore = await createAppStoreRecoveryBackend({
 assert(
   !unverifiedRestore.verified && unverifiedRestore.disposition === 'pending',
   'restoration without an Apple verifier must not reuse the old grant',
+);
+const timeoutBackend = createAppStoreRecoveryBackend({
+  playerId: request.playerId,
+  store: restoredStore,
+  purchases,
+  restoredNonConsumables: {
+    catalog: restoredCatalog,
+    bundleId: 'com.example.game',
+    environment: 'Production',
+    timeoutMs: 20,
+    evidenceVerifier: {
+      async verifyPurchase() {
+        return new Promise(() => {});
+      },
+      async verifyAdReward() {
+        return { status: 'rejected', reason: 'unsupported' };
+      },
+    },
+  },
+});
+const timedOutRestore = await timeoutBackend.recoverPurchase(restoredRequest);
+assert(
+  !timedOutRestore.verified
+    && timedOutRestore.reason === 'APP_STORE_RESTORE_VERIFICATION_TIMEOUT',
+  'a verifier that ignores abort must not hang StoreKit recovery',
 );
 
 console.log('App Store recovery ledger tests passed.');

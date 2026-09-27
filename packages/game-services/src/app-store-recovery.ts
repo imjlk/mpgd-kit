@@ -1,6 +1,10 @@
 import { resolveProductPlatformId, type ProductCatalog } from '@mpgd/catalog';
 
-import { createAppStoreVerificationId, isAppStoreVerificationId } from './app-store-verifier.js';
+import {
+  createAppStoreVerificationId,
+  isAppStoreVerificationId,
+  type AppStoreEnvironment,
+} from './app-store-verifier.js';
 import type { PurchaseVerificationApi } from './client.js';
 import type { GameServicesEvidenceVerifier } from './evidence-verification.js';
 import type { GameServicesStore } from './server.js';
@@ -30,6 +34,8 @@ export interface CreateAppStoreRecoveryBackendOptions {
   readonly restoredNonConsumables?: {
     readonly catalog: ProductCatalog;
     readonly evidenceVerifier: GameServicesEvidenceVerifier;
+    readonly bundleId: string;
+    readonly environment: AppStoreEnvironment;
     readonly timeoutMs?: number;
   };
   /** Look up the original, durable checkout key; never derive one from the transaction ID. */
@@ -75,6 +81,33 @@ export function createAppStoreRecoveryBackend(
           : { deploymentTarget: options.deploymentTarget }),
       };
       try {
+        const restoreConfig = options.restoredNonConsumables;
+        if (request.deploymentTarget === undefined
+          && input.productType === 'non_consumable'
+          && input.originalTransactionId !== undefined
+          && input.originalTransactionId !== input.platformTransactionId
+          && restoreConfig !== undefined) {
+          const candidateId = createAppStoreVerificationId({
+            environment: restoreConfig.environment,
+            bundleId: restoreConfig.bundleId,
+            transactionId: input.originalTransactionId,
+          });
+          const candidate = await findByVerificationId(options.store, candidateId);
+          if (candidate !== undefined) {
+            if (candidate.source !== 'purchase'
+              || candidate.playerId !== request.playerId
+              || candidate.grantId !== request.productId
+              || candidate.payload.target !== 'ios'
+              || candidate.payload.productType !== 'non_consumable'
+              || candidate.payload.appStoreOriginalTransactionId
+                !== input.originalTransactionId) {
+              return rejected('APP_STORE_RECOVERY_IDENTITY_MISMATCH');
+            }
+            if (typeof candidate.payload.deploymentTarget === 'string') {
+              request = { ...request, deploymentTarget: candidate.payload.deploymentTarget };
+            }
+          }
+        }
         const restoredVerificationId = await verifyRestoredNonConsumable(
           input,
           request,
@@ -174,15 +207,34 @@ async function verifyRestoredNonConsumable(
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
     throw new TypeError('Restored App Store verification timeout must be positive.');
   }
-  const signal = AbortSignal.timeout(timeoutMs);
+  const controller = new AbortController();
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<Awaited<ReturnType<GameServicesEvidenceVerifier['verifyPurchase']>>>(
+    (resolve) => {
+      timeoutHandle = setTimeout(() => {
+        resolve({ status: 'pending', reason: 'APP_STORE_RESTORE_VERIFICATION_TIMEOUT' });
+        controller.abort();
+      }, timeoutMs);
+    },
+  );
   // This probe calls only the evidence verifier; it never writes a ledger grant.
-  const decision = await config.evidenceVerifier.verifyPurchase({
-    request: { ...request, idempotencyKey: 'app-store-recovery-evidence-probe' },
-    product,
-    platformProductId,
-    signal,
-    timeoutMs,
-  });
+  let decision: Awaited<ReturnType<GameServicesEvidenceVerifier['verifyPurchase']>>;
+  try {
+    decision = await Promise.race([
+      config.evidenceVerifier.verifyPurchase({
+        request: { ...request, idempotencyKey: 'app-store-recovery-evidence-probe' },
+        product,
+        platformProductId,
+        signal: controller.signal,
+        timeoutMs,
+      }),
+      timeout,
+    ]);
+  } finally {
+    if (timeoutHandle !== undefined) {
+      clearTimeout(timeoutHandle);
+    }
+  }
   if (decision.status === 'pending') {
     return pending(decision.reason ?? 'APP_STORE_RESTORE_VERIFICATION_PENDING');
   }
