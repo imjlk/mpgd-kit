@@ -32,6 +32,10 @@
     "./admob": {
       "types": "./dist/admob.d.ts",
       "default": "./dist/admob.js"
+    },
+    "./app-store-server": {
+      "types": "./dist/app-store-server.d.ts",
+      "default": "./dist/app-store-server.js"
     }
   },
   "files": [
@@ -54,17 +58,22 @@
     "@mpgd/target-config": "workspace:*"
   },
   "peerDependencies": {
-    "@capacitor/core": "^8.5.1",
-    "@capacitor-community/admob": "^8.1.0"
+    "@apple/app-store-server-library": "^3.1.0",
+    "@capacitor-community/admob": "^8.1.0",
+    "@capacitor/core": "^8.5.1"
   },
   "peerDependenciesMeta": {
+    "@apple/app-store-server-library": {
+      "optional": true
+    },
     "@capacitor-community/admob": {
       "optional": true
     }
   },
   "devDependencies": {
-    "@capacitor/core": "8.5.2",
+    "@apple/app-store-server-library": "3.1.0",
     "@capacitor-community/admob": "8.1.0",
+    "@capacitor/core": "8.5.2",
     "ttsc": "0.30.4",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"
