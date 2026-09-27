@@ -127,15 +127,27 @@ try {
     releaseBranch: 'main',
     targets: ['android'] as const,
   };
-  assert.throws(() => initializeNativeDeployWorkflow(reservedInput), /reserved by CI/u);
+  assert.throws(() => initializeNativeDeployWorkflow(reservedInput), /unreserved MPGD_ prefix/u);
   config.profiles.beta.targets.android.signingCredential.env = 'MPGD_VERIFY_RELEASE_MANIFEST';
   writeFileSync(deployFile, `${JSON.stringify(config)}\n`);
-  assert.throws(() => initializeNativeDeployWorkflow(reservedInput), /reserved by CI/u);
-  for (const name of ['JAVA_HOME', 'ANDROID_SDK_ROOT', 'GITHUB_WORKSPACE']) {
+  assert.throws(() => initializeNativeDeployWorkflow(reservedInput), /unreserved MPGD_ prefix/u);
+  const unsupportedEnvNames = [
+    'JAVA_HOME',
+    'ANDROID_SDK_ROOT',
+    'GITHUB_WORKSPACE',
+    'JAVA_TOOL_OPTIONS',
+    'JDK_JAVA_OPTIONS',
+    '_JAVA_OPTIONS',
+  ];
+  for (const name of unsupportedEnvNames) {
     config.profiles.beta.targets.android.signingCredential.env = name;
     writeFileSync(deployFile, `${JSON.stringify(config)}\n`);
-    assert.throws(() => initializeNativeDeployWorkflow(reservedInput), /reserved by CI/u);
+    assert.throws(() => initializeNativeDeployWorkflow(reservedInput), /unreserved MPGD_ prefix/u);
   }
+  config.profiles.beta.targets.android.signingCredential.env = 'MPGD_SHARED_CREDENTIAL';
+  config.profiles.beta.targets.android.submissionCredential.env = 'MPGD_SHARED_CREDENTIAL';
+  writeFileSync(deployFile, `${JSON.stringify(config)}\n`);
+  assert.throws(() => initializeNativeDeployWorkflow(reservedInput), /distinct environment names/u);
   console.info('Game-owned native deployment workflow scaffolding passed.');
 } finally {
   rmSync(fixture, { recursive: true, force: true });

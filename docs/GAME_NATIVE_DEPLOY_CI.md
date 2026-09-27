@@ -8,7 +8,7 @@ pnpm exec mpgd deploy workflow init \
   --release-branch main --approval-environment protected-beta
 ```
 
-The selected game workspace must declare `@mpgd/cli` in its committed pnpm lockfile. The generated commands execute from that workspace, not the repository root. The generator accepts a single-game repository (`--game .`) or a selected `games/*` path, rejects unsafe Git/workflow paths, and does not overwrite an existing workflow. Review the generated file before committing it. The release branch input must be the branch on which maintainers intentionally dispatch signed builds.
+The selected game workspace must declare `@mpgd/cli` in its committed pnpm lockfile. The generated commands execute from that workspace, not the repository root. The generator accepts a single-game repository (`--game .`) or a selected `games/*` path, rejects unsafe Git/workflow paths, and does not overwrite an existing workflow. For generated CI, profile credential environment names must use distinct, unreserved `MPGD_` names; local CLI profiles can use other names. Review the generated file before committing it. The release branch input must be the branch on which maintainers intentionally dispatch signed builds.
 
 ## Protection and credentials
 

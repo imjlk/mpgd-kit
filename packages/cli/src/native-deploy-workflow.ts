@@ -133,10 +133,12 @@ export function initializeNativeDeployWorkflow(
   const submissionNames: Record<string, string> = {};
   for (const entry of plan.targets) {
     const profile = readNativeDeployTargetProfile(plan, entry.target);
+    if (profile.signingCredential.env === profile.submissionCredential.env) {
+      throw new Error(`${entry.target} credentials need distinct environment names.`);
+    }
     for (const name of [profile.signingCredential.env, profile.submissionCredential.env]) {
-      if (/^(?:GIT|GITHUB|RUNNER|ACTIONS)_/u.test(name)
-        || reservedWorkflowEnvironmentNames.has(name)) {
-        throw new Error(`Deployment credential environment name ${name} is reserved by CI.`);
+      if (!name.startsWith('MPGD_') || reservedWorkflowEnvironmentNames.has(name)) {
+        throw new Error(`Credential ${name} must use an unreserved MPGD_ prefix in CI.`);
       }
     }
     signingNames[entry.target] = profile.signingCredential.env;
