@@ -26,6 +26,7 @@ try {
     placementId: 'CONTINUE_AFTER_FAIL',
     idempotencyKey: 'reward-1',
     callbackUrl: 'https://game.test/admob/ssv/android?transaction_id=aabbccdd',
+    acceptedAdUnit: 'reward_continue',
     keyId: '123',
     publicKeySpki: 'base64-spki',
     receivedAt: '2026-09-27T00:00:00.000Z',

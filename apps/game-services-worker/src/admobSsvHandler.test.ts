@@ -81,6 +81,7 @@ try {
   assert.equal((await intake(new Request(callbackUrl)))?.status, 200);
   const stored = await createD1AdMobSsvCallbackStore(db).find(claimRequest);
   assert.equal(stored?.transactionId, 'aabbccdd');
+  assert.equal(stored?.acceptedAdUnit, 'reward_continue');
   const verified = await claimVerifier.verifyAdReward(claimInput);
   assert.equal(verified.status, 'verified');
   if (verified.status === 'verified') {
@@ -92,19 +93,38 @@ try {
   const workerEnv = {
     DB: db,
     MPGD_STORE: 'd1',
-    MPGD_ADMOB_SSV_ANDROID_AD_UNIT: 'reward_continue',
+    MPGD_ADMOB_SSV_ANDROID_AD_UNIT: 'rotated_ad_unit',
   } as const;
   assert.throws(() => createWorkerFetchHandler({
     MPGD_STORE: 'memory',
     MPGD_ADMOB_SSV_ANDROID_AD_UNIT: 'reward_continue',
   }), /requires MPGD_STORE=d1/u);
-  assert.throws(() => createWorkerService({
+  let purchaseBindingCalls = 0;
+  let rewardBindingCalls = 0;
+  const composedWorker = createWorkerService({
     ...workerEnv,
     GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER: {
-      async verifyPurchase() { return { status: 'rejected', reason: 'UNSUPPORTED' } as const; },
-      async verifyAdReward() { return { status: 'rejected', reason: 'UNSUPPORTED' } as const; },
+      async verifyPurchase() {
+        purchaseBindingCalls += 1;
+        return { status: 'rejected', reason: 'PURCHASE_TEST' } as const;
+      },
+      async verifyAdReward() {
+        rewardBindingCalls += 1;
+        return { status: 'rejected', reason: 'REWARD_BINDING_SHOULD_NOT_RUN' } as const;
+      },
     },
-  }), /cannot overlap/u);
+  });
+  await composedWorker.verifyPurchase({
+    target: 'android',
+    playerId: 'purchase-player',
+    productId: 'COINS_100',
+    platformTransactionId: 'purchase-transaction',
+    idempotencyKey: 'purchase-binding-test',
+    purchasedAt: new Date(timestamp).toISOString(),
+  });
+  assert.equal(purchaseBindingCalls, 1);
+  await composedWorker.claimAdReward({ ...claimRequest, idempotencyKey: 'pending-composed' });
+  assert.equal(rewardBindingCalls, 0);
   const workerService = createWorkerService(workerEnv);
   const firstGrant = await workerService.claimAdReward(claimRequest) as {
     readonly granted: boolean;

@@ -36,6 +36,10 @@ operation or the same transaction for another operation is rejected. A claim
 before the callback remains pending, while later claims read the D1 record and
 the public key captured with it. A temporary key-feed or D1 failure returns a
 non-success response so the callback is not acknowledged as durable.
+The accepted backend-owned ad-unit ID is stored with the verified callback,
+so changing the configured ad unit does not orphan an already pending claim.
+An existing target-specific verifier can still handle purchases; AdMob SSV
+handles only rewarded-ad evidence for a configured target.
 The Worker caps callback URLs at 8 KiB and signed identity fields at 256
 characters. It caches the public Google key feed for five minutes per Worker
 isolate; stored callbacks retain the exact key used at intake. The game

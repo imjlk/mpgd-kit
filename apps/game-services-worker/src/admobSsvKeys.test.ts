@@ -35,10 +35,14 @@ const originalFetch = globalThis.fetch;
 globalThis.fetch = fetcher;
 try {
   const beforeCache = called;
+  const concurrent = await Promise.all([
+    fetchAdMobSsvPublicKeySpki('2'),
+    fetchAdMobSsvPublicKeySpki('2'),
+    fetchAdMobSsvPublicKeySpki('3'),
+  ]);
+  assert.deepEqual(concurrent, ['ZGVm', 'ZGVm', undefined]);
   assert.equal(await fetchAdMobSsvPublicKeySpki('2'), 'ZGVm');
-  assert.equal(await fetchAdMobSsvPublicKeySpki('2'), 'ZGVm');
-  assert.equal(await fetchAdMobSsvPublicKeySpki('3'), undefined);
-  assert.equal(called, beforeCache + 1, 'a cached feed also covers unknown key IDs');
+  assert.equal(called, beforeCache + 1, 'concurrent and cached lookups share one feed');
 } finally {
   globalThis.fetch = originalFetch;
 }

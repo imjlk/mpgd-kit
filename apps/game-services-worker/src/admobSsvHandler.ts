@@ -126,6 +126,7 @@ export function createAdMobSsvCallbackFetchHandler(
       placementId: binding.placementId,
       idempotencyKey: binding.idempotencyKey,
       callbackUrl: request.url,
+      acceptedAdUnit: adUnit,
       keyId,
       publicKeySpki,
       receivedAt: (config.now?.() ?? new Date()).toISOString(),
@@ -177,7 +178,7 @@ export function createD1AdMobSsvEvidenceVerifier(
         },
         resolveAdUnit({ request }) {
           return request.target === 'android' || request.target === 'ios'
-            ? config.adUnits[request.target] ?? ''
+            ? callback?.acceptedAdUnit ?? config.adUnits[request.target] ?? ''
             : '';
         },
         ...(now === undefined ? {} : { now: () => now().getTime() }),

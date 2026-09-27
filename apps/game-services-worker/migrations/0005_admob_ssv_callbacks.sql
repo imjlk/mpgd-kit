@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS admob_ssv_callbacks (
   placement_id TEXT NOT NULL,
   idempotency_key TEXT NOT NULL,
   callback_url TEXT NOT NULL,
+  accepted_ad_unit TEXT NOT NULL,
   key_id TEXT NOT NULL,
   public_key_spki TEXT NOT NULL,
   received_at TEXT NOT NULL,

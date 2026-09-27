@@ -3,6 +3,7 @@ const maximumKeyFeedBytes = 65_536;
 const keyFeedCacheMs = 300_000;
 let cachedKeyFeed: { readonly expiresAt: number; readonly keys: ReadonlyMap<string, string> }
   | undefined;
+let pendingKeyFeed: Promise<ReadonlyMap<string, string>> | undefined;
 
 /** Fetch the current Google key for callback intake; claim replay uses the stored SPKI. */
 export async function fetchAdMobSsvPublicKeySpki(
@@ -14,16 +15,43 @@ export async function fetchAdMobSsvPublicKeySpki(
   }
   // Public Google keys are safe to share between requests. Injected fetchers bypass
   // the isolate cache so conformance tests can model key rotation deterministically.
-  if (options.fetcher === undefined
-    && cachedKeyFeed !== undefined && cachedKeyFeed.expiresAt > Date.now()) {
-    return cachedKeyFeed.keys.get(keyId);
+  const keys = options.fetcher === undefined
+    ? await getDefaultKeyFeed()
+    : await loadKeyFeed(options.fetcher, options.signal);
+  return keys.get(keyId);
+}
+
+function getDefaultKeyFeed(): Promise<ReadonlyMap<string, string>> {
+  if (cachedKeyFeed !== undefined && cachedKeyFeed.expiresAt > Date.now()) {
+    return Promise.resolve(cachedKeyFeed.keys);
   }
-  const response = await (options.fetcher ?? fetch)(googleAdMobSsvKeyFeed, {
+  if (pendingKeyFeed !== undefined) {
+    return pendingKeyFeed;
+  }
+  const refresh = loadKeyFeed(fetch).then((keys) => {
+    cachedKeyFeed = { keys, expiresAt: Date.now() + keyFeedCacheMs };
+    return keys;
+  });
+  pendingKeyFeed = refresh;
+  const clearPending = (): void => {
+    if (pendingKeyFeed === refresh) {
+      pendingKeyFeed = undefined;
+    }
+  };
+  void refresh.then(clearPending, clearPending);
+  return refresh;
+}
+
+async function loadKeyFeed(
+  fetcher: typeof fetch,
+  signal?: AbortSignal,
+): Promise<ReadonlyMap<string, string>> {
+  const response = await fetcher(googleAdMobSsvKeyFeed, {
     method: 'GET',
     redirect: 'error',
-    signal: options.signal === undefined
+    signal: signal === undefined
       ? AbortSignal.timeout(5_000)
-      : AbortSignal.any([options.signal, AbortSignal.timeout(5_000)]),
+      : AbortSignal.any([signal, AbortSignal.timeout(5_000)]),
   });
   if (!response.ok) {
     throw new Error(`AdMob SSV key feed returned HTTP ${response.status}.`);
@@ -53,10 +81,7 @@ export async function fetchAdMobSsvPublicKeySpki(
     }
     keys.set(candidateId, candidate.base64);
   }
-  if (options.fetcher === undefined) {
-    cachedKeyFeed = { keys, expiresAt: Date.now() + keyFeedCacheMs };
-  }
-  return keys.get(keyId);
+  return keys;
 }
 
 async function readBoundedKeyFeed(response: Response): Promise<string> {

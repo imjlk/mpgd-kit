@@ -513,10 +513,6 @@ function resolveWorkerAdMobSsvConfig(
   if (db === undefined) {
     throw new Error('AdMob SSV callback intake requires MPGD_STORE=d1 and a DB binding.');
   }
-  if ((android && env.GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER !== undefined)
-    || (ios && env.GAME_SERVICES_IOS_EVIDENCE_VERIFIER !== undefined)) {
-    throw new Error('AdMob SSV and target-specific evidence bindings cannot overlap.');
-  }
   return {
     db,
     placements: adPlacements,

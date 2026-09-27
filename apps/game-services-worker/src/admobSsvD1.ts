@@ -5,6 +5,7 @@ export interface VerifiedAdMobSsvCallback {
   readonly placementId: string;
   readonly idempotencyKey: string;
   readonly callbackUrl: string;
+  readonly acceptedAdUnit: string;
   readonly keyId: string;
   readonly publicKeySpki: string;
   readonly receivedAt: string;
@@ -26,6 +27,7 @@ interface AdMobSsvCallbackRow {
   readonly placement_id: string;
   readonly idempotency_key: string;
   readonly callback_url: string;
+  readonly accepted_ad_unit: string;
   readonly key_id: string;
   readonly public_key_spki: string;
   readonly received_at: string;
@@ -36,14 +38,15 @@ export function createD1AdMobSsvCallbackStore(db: D1Database) {
     async record(input: VerifiedAdMobSsvCallback): Promise<AdMobSsvCallbackRecordResult> {
       const inserted = await db.prepare(`INSERT OR IGNORE INTO admob_ssv_callbacks (
         transaction_id, target, player_id, placement_id, idempotency_key,
-        callback_url, key_id, public_key_spki, received_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
+        callback_url, accepted_ad_unit, key_id, public_key_spki, received_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
         input.transactionId,
         input.target,
         input.playerId,
         input.placementId,
         input.idempotencyKey,
         input.callbackUrl,
+        input.acceptedAdUnit,
         input.keyId,
         input.publicKeySpki,
         input.receivedAt,
@@ -84,6 +87,7 @@ function fromRow(row: AdMobSsvCallbackRow): VerifiedAdMobSsvCallback {
     placementId: row.placement_id,
     idempotencyKey: row.idempotency_key,
     callbackUrl: row.callback_url,
+    acceptedAdUnit: row.accepted_ad_unit,
     keyId: row.key_id,
     publicKeySpki: row.public_key_spki,
     receivedAt: row.received_at,
@@ -100,6 +104,7 @@ function sameVerifiedCallback(
     && left.placementId === right.placementId
     && left.idempotencyKey === right.idempotencyKey
     && left.callbackUrl === right.callbackUrl
+    && left.acceptedAdUnit === right.acceptedAdUnit
     && left.keyId === right.keyId
     && left.publicKeySpki === right.publicKeySpki;
 }
