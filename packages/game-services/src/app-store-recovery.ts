@@ -247,7 +247,8 @@ async function verifyRestoredNonConsumable(
   if (decision.payload?.appStoreTransactionType !== 'Non-Consumable'
     || originalTransactionId !== input.originalTransactionId
     || (environment !== 'Production' && environment !== 'Sandbox')
-    || typeof bundleId !== 'string'
+    || environment !== config.environment
+    || bundleId !== config.bundleId
     || decision.verificationId !== createAppStoreVerificationId({
       environment,
       bundleId,

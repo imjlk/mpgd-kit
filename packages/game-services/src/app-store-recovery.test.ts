@@ -323,6 +323,27 @@ assert(
   'a client-reported original transaction must match the server-verified Apple original',
 );
 signedOriginalTransactionId = originalTransactionId;
+const beforeIdentityMismatch = calls.length;
+const wrongIdentityBackend = createAppStoreRecoveryBackend({
+  playerId: request.playerId,
+  store: restoredStore,
+  purchases,
+  restoredNonConsumables: {
+    catalog: restoredCatalog,
+    evidenceVerifier: restoredEvidenceVerifier,
+    bundleId: 'com.example.game',
+    environment: 'Sandbox',
+  },
+});
+const wrongStoreIdentity = await wrongIdentityBackend.recoverPurchase({
+  ...restoredRequest,
+  deploymentTarget: 'ios-production',
+});
+assert(
+  !wrongStoreIdentity.verified && wrongStoreIdentity.disposition === 'rejected'
+    && calls.length === beforeIdentityMismatch,
+  'the signed environment must match the configured App Store identity',
+);
 const unverifiedRestore = await createAppStoreRecoveryBackend({
   playerId: request.playerId,
   store: restoredStore,

@@ -53,7 +53,9 @@ reported original ID. A verifier that exceeds its timeout also remains pending.
 The native provider forwards both IDs and product type.
 For production-scale ledgers, implement the store's indexed
 `findEntitlementTransactionByPlatformEvidence` and
-`findEntitlementTransactionByIdempotency` methods. Without them, the helper
+`findEntitlementTransactionByIdempotency` methods, plus
+`findEntitlementTransactionByEvidenceVerificationId` for restored
+non-consumables. Without them, the helper
 uses the same full-ledger scan fallback as the generic game-services server.
 
 An existing grant is returned by the normal backend idempotent-retry path;
