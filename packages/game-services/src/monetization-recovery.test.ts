@@ -2,7 +2,10 @@ import type { PlatformGateway, PurchaseResult } from '@mpgd/platform';
 import type { AnalyticsEvent } from '@mpgd/analytics';
 
 import type { GameServicesBackendApi } from './client.js';
-import type { GameServicesPurchaseProgress } from './operation-progress.js';
+import type {
+  GameServicesOperationProgress,
+  GameServicesPurchaseProgress,
+} from './operation-progress.js';
 import {
   createRecoverableMonetizationClient,
   type MonetizationOperationRecord,
@@ -978,5 +981,72 @@ const contestedRewardRecord = await contestedStore.read(
   JSON.stringify(['android', 'rewarded-ad', 'contested-reward']),
 );
 assert.equal(contestedRewardRecord?.result?.status, 'granted');
+
+/** Records one invocation's progress; journal recovery must finish it with `completed`. */
+function observeProgress(): {
+  readonly events: string[];
+  readonly options: { onProgress(progress: GameServicesOperationProgress): void };
+} {
+  const events: string[] = [];
+  const onProgress = (progress: GameServicesOperationProgress): void => {
+    assert.equal(progress.sequence, events.length + 1, 'progress sequence');
+    events.push(progress.phase === 'completed' ? `completed:${progress.status}` : progress.phase);
+  };
+  return { events, options: { onProgress } };
+}
+
+const settledOperation = {
+  productId: 'COINS_100',
+  source: 'shop' as const,
+  idempotencyKey: 'progress-settled',
+};
+const settledProgress = observeProgress();
+const settledPurchase = await client.purchase(settledOperation, settledProgress.options);
+assert.equal(settledPurchase.status, 'granted');
+assert.equal(
+  settledProgress.events.join(','),
+  'platform-requested,platform-result,server-requested,server-result,completed:granted',
+);
+
+const progressPlatformKey = 'progress-platform-write';
+const progressPlatformClient = createRecoverableMonetizationClient({
+  ...recoveryBase,
+  operationStore: failOneJournalWrite((record) => record.kind === 'purchase'
+    && record.input.idempotencyKey === progressPlatformKey && record.platform !== undefined),
+});
+const progressPlatformOperation = {
+  productId: 'COINS_100',
+  source: 'shop' as const,
+  idempotencyKey: progressPlatformKey,
+};
+const progressPlatformEvents = observeProgress();
+const progressPlatformResult = await progressPlatformClient.purchase(
+  progressPlatformOperation,
+  progressPlatformEvents.options,
+);
+assert.equal(progressPlatformResult.status, 'pending');
+assert.equal(progressPlatformEvents.events.join(','), 'platform-requested,completed:pending');
+
+ssvAvailable = true;
+const progressClaimKey = 'progress-claim-write';
+const progressClaimClient = createRecoverableMonetizationClient({
+  ...recoveryBase,
+  operationStore: failOneJournalWrite((record) => record.kind === 'rewarded-ad'
+    && record.input.idempotencyKey === progressClaimKey && record.response?.granted === true),
+});
+const claimWriteOperation = {
+  placementId: 'CONTINUE_AFTER_FAIL',
+  idempotencyKey: progressClaimKey,
+};
+const claimWriteProgress = observeProgress();
+const claimWriteResult = await progressClaimClient.claimRewardedAd(
+  claimWriteOperation,
+  claimWriteProgress.options,
+);
+assert.equal(claimWriteResult.status, 'granted');
+assert.equal(
+  claimWriteProgress.events.join(','),
+  'platform-requested,platform-result,server-requested,completed:granted',
+);
 
 console.log('Durable monetization operation recovery passed.');

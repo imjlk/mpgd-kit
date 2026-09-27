@@ -1013,10 +1013,8 @@ async function claimAdRewardWithStore(
       ? {}
       : { deploymentTarget: request.deploymentTarget }),
   } as const;
-  const existing = await findEntitlementTransactionByIdempotency(context.store, retryIdentity);
-
-  if (existing !== undefined) {
-    if (!matchesEntitlementRetry(existing, retryIdentity)) {
+  const completeExistingRetry = (transaction: ProductGrantTransaction): ClaimAdRewardResponse => {
+    if (!matchesEntitlementRetry(transaction, retryIdentity)) {
       return assertClaimAdRewardResponse({
         granted: false,
         alreadyProcessed: false,
@@ -1026,9 +1024,14 @@ async function claimAdRewardWithStore(
 
     return assertClaimAdRewardResponse({
       granted: true,
-      ledgerEntryId: existing.ledgerEntryId,
+      ledgerEntryId: transaction.ledgerEntryId,
       alreadyProcessed: true,
     });
+  };
+  const existing = await findEntitlementTransactionByIdempotency(context.store, retryIdentity);
+
+  if (existing !== undefined) {
+    return completeExistingRetry(existing);
   }
 
   const placement = context.placements.placements.find((entry) => entry.id === request.placementId);
@@ -1056,6 +1059,16 @@ async function claimAdRewardWithStore(
   }, context.evidenceVerificationTimeoutMs);
 
   if (verification.status !== 'verified') {
+    // A matching grant can land while reward verification is in flight. Recheck before
+    // returning a stale pending or rejected state that a client may persist as final.
+    const racedExisting = await findEntitlementTransactionByIdempotency(
+      context.store,
+      retryIdentity,
+    );
+    if (racedExisting !== undefined) {
+      return completeExistingRetry(racedExisting);
+    }
+
     return assertClaimAdRewardResponse({
       granted: false,
       alreadyProcessed: false,

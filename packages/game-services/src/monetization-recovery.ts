@@ -10,10 +10,12 @@ import type {
   GameServicesRewardedAdResult,
 } from './operations.js';
 import {
+  forwardGameServicesProgress,
   observeGameServicesOperation,
   type GameServicesOperationOptions,
   type GameServicesPurchaseProgress,
   type GameServicesRewardedAdProgress,
+  type OperationReporter,
 } from './operation-progress.js';
 import type {
   ClaimAdRewardRequest,
@@ -209,6 +211,17 @@ export function createRecoverableMonetizationClient(
     mayOpenPlatform = false,
     options?: GameServicesOperationOptions<GameServicesPurchaseProgress>,
   ): Promise<GameServicesPurchaseResult> {
+    // Observe recovery once, so a journal failure resolved into a result still completes.
+    return observeGameServicesOperation('purchase', options, (progress) => {
+      return settlePurchase(initial, mayOpenPlatform, progress);
+    });
+  }
+
+  async function settlePurchase(
+    initial: Extract<MonetizationOperationRecord, { kind: 'purchase' }>,
+    mayOpenPlatform: boolean,
+    progress: OperationReporter<'purchase'>,
+  ): Promise<GameServicesPurchaseResult> {
     let record = initial;
     const unsavedResponse = unjournaledPurchaseResponses.get(record.key);
     if (unsavedResponse !== undefined && record.response?.verified !== true) {
@@ -257,13 +270,13 @@ export function createRecoverableMonetizationClient(
     }
     const completed = record.result;
     if (completed !== undefined && !purchaseNeedsRetry(record)) {
-      return observeGameServicesOperation('purchase', options, async () => completed);
+      return completed;
     }
     if (record.request !== undefined) {
       assertPurchaseRequest(record, input);
     }
     if (record.platform === undefined && !mayOpenPlatform) {
-      return observeGameServicesOperation('purchase', options, async () => pendingPurchase());
+      return pendingPurchase();
     }
     const client = createGameServicesClient({
       ...input,
@@ -335,7 +348,7 @@ export function createRecoverableMonetizationClient(
       },
     });
     try {
-      const result = await client.purchase(record.input, options);
+      const result = await client.purchase(record.input, forwardGameServicesProgress(progress));
       if (result.status === 'granted') {
         unjournaledPurchaseResults.set(record.key, result);
       }
@@ -354,6 +367,16 @@ export function createRecoverableMonetizationClient(
     initial: Extract<MonetizationOperationRecord, { kind: 'rewarded-ad' }>,
     mayOpenPlatform = false,
     options?: GameServicesOperationOptions<GameServicesRewardedAdProgress>,
+  ): Promise<GameServicesRewardedAdResult> {
+    return observeGameServicesOperation('rewarded-ad', options, (progress) => {
+      return settleReward(initial, mayOpenPlatform, progress);
+    });
+  }
+
+  async function settleReward(
+    initial: Extract<MonetizationOperationRecord, { kind: 'rewarded-ad' }>,
+    mayOpenPlatform: boolean,
+    progress: OperationReporter<'rewarded-ad'>,
   ): Promise<GameServicesRewardedAdResult> {
     let record = initial;
     const unsavedResponse = unjournaledRewardResponses.get(record.key);
@@ -402,13 +425,13 @@ export function createRecoverableMonetizationClient(
     }
     const completed = record.result;
     if (completed !== undefined && completed.status !== 'pending') {
-      return observeGameServicesOperation('rewarded-ad', options, async () => completed);
+      return completed;
     }
     if (record.request !== undefined) {
       assertRewardRequest(record, input);
     }
     if (record.platform === undefined && !mayOpenPlatform) {
-      return observeGameServicesOperation('rewarded-ad', options, async () => pendingReward());
+      return pendingReward();
     }
     const client = createGameServicesClient({
       ...input,
@@ -480,7 +503,10 @@ export function createRecoverableMonetizationClient(
       },
     });
     try {
-      const result = await client.claimRewardedAd(record.input, options);
+      const result = await client.claimRewardedAd(
+        record.input,
+        forwardGameServicesProgress(progress),
+      );
       if (result.status === 'granted') {
         unjournaledRewardResults.set(record.key, result);
       }

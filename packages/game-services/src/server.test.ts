@@ -1291,6 +1291,69 @@ assertEqual(
   'the raced grant should be reported as already processed',
 );
 
+const rewardRetryRaceStore = new HiddenIdempotencyLookupStore();
+const rewardRetryLedger = await rewardRetryRaceStore.recordEntitlementGrant({
+  playerId: 'player-reward-retry-race',
+  grantId: 'CONTINUE_AFTER_FAIL',
+  source: 'ad_reward',
+  idempotencyKey: 'reward-retry-race',
+  grantedAt: '2026-07-04T00:00:00.000Z',
+  payload: {
+    target: 'android',
+    placementId: 'CONTINUE_AFTER_FAIL',
+    evidenceVerificationId: 'provider:reward:retry-race',
+  },
+  evidenceVerificationId: 'provider:reward:retry-race',
+});
+let rewardRetryRaceDecision: EvidenceVerificationDecision = {
+  status: 'rejected',
+  reason: 'SSV_ALREADY_REDEEMED',
+};
+const rewardRetryRaceBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: rewardRetryRaceStore,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      return { status: 'rejected', reason: 'NOT_TESTED' } as const;
+    },
+    async verifyAdReward() {
+      // Another runtime records the grant while this verification is in flight.
+      rewardRetryRaceStore.hideIdempotencyLookups = false;
+      return rewardRetryRaceDecision;
+    },
+  },
+});
+for (const decision of [
+  rewardRetryRaceDecision,
+  { status: 'pending', reason: 'SSV_DELAYED' },
+] satisfies readonly EvidenceVerificationDecision[]) {
+  rewardRetryRaceStore.hideIdempotencyLookups = true;
+  rewardRetryRaceDecision = decision;
+  const rewardRetryRaceResult = await rewardRetryRaceBackend.adRewards.claimAdReward({
+    target: 'android',
+    playerId: 'player-reward-retry-race',
+    placementId: 'CONTINUE_AFTER_FAIL',
+    idempotencyKey: 'reward-retry-race',
+    completedAt: '2026-07-04T00:00:01.000Z',
+  });
+  assertEqual(
+    rewardRetryRaceResult.granted,
+    true,
+    `a reward grant recorded during ${decision.status} verification must win`,
+  );
+  assertEqual(
+    rewardRetryRaceResult.ledgerEntryId,
+    rewardRetryLedger.ledgerEntryId,
+    'the raced reward retry should report the recorded ledger entry',
+  );
+  assertEqual(
+    rewardRetryRaceResult.alreadyProcessed,
+    true,
+    'the raced reward grant should be reported as already processed',
+  );
+}
+
 const suppressedPlatformPayloadStore = createInMemoryGameServicesStore();
 let suppressedPlatformVerificationSequence = 0;
 const suppressedPlatformPayloadBackend = createGameServicesBackend({
