@@ -52,13 +52,79 @@ provider never silently falls back for purchase, ad, or native leaderboard
 operations; an explicit remote leaderboard route is a separate path. Errors
 retain a stable code and retry hint. The
 provider bridge must return a method-shaped response. In particular, an ad
-`rewardGranted: true` result requires a backend ledger entry. A native callback
-alone is evidence, not a grant. Game-specific product, consent, entitlement,
-and identity policy belongs to the consuming game and its backend.
+`rewardGranted: true` result requires either a backend ledger entry or the
+explicitly non-authoritative AdMob client-reward envelope. The latter only
+lets the game-services client request a grant; the server must independently
+verify a signed SSV callback before writing its ledger. A native callback
+alone is never a grant. Game-specific product, consent, entitlement, and
+identity policy belongs to the consuming game and its backend.
 
 The source tests and installed-tarball consumer validate composition, types,
 error paths, and fallback behavior. They do not establish that any optional
 SDK works on a physical device or that a store/ad setup is release-ready.
+
+## Opt-in AdMob rewarded ads
+
+Install `@capacitor-community/admob@8.1.0` in the game-owned Capacitor project,
+configure the distinct AdMob **application ID** in AndroidManifest.xml and
+Info.plist, and run `cap sync`. Use the [plugin installation and native setup
+guide](https://github.com/capacitor-community/admob#installation) for the exact
+Android and iOS keys, SKAdNetwork list, and tracking disclosure. The optional
+`@mpgd/adapter-capacitor/admob` subpath does not load from the base adapter;
+games that do not install AdMob retain their existing SDK-free gateway.
+The community plugin currently targets Google Mobile Ads Android 25.4.x and
+iOS 13.6.0. Its Android default uses a dynamic patch selector; set
+`playServicesAdsVersion = '25.4.0'` in the game-owned `variables.gradle` to
+keep release builds reproducible until the plugin adopts a newer tested SDK.
+
+```ts
+import { createCapacitorPlatformGateway } from '@mpgd/adapter-capacitor';
+import { createCapacitorAdMobRewardedProvider } from '@mpgd/adapter-capacitor/admob';
+
+const admob = createCapacitorAdMobRewardedProvider({
+  adUnits: { CONTINUE_AFTER_FAIL: 'ca-app-pub-1234567890123456/1234567890' },
+  getPlayerId: () => authenticatedPlayerId,
+});
+const gateway = createCapacitorPlatformGateway({
+  target: 'android', appVersion: '1.0.0', buildId: 'game-build',
+  providers: [admob],
+});
+const consentAllowsAds = await admob.requestConsent();
+if (!consentAllowsAds) {
+  // Keep the ad action disabled; never bypass the privacy choice.
+}
+```
+
+Use target-specific ad unit IDs for Android and iOS; the logical placement
+ID must match the game catalog and backend config. `getPlayerId()` must return
+the same authenticated player ID as `GameServicesClient`, not a device ID or
+an unverified local guest label. Re-check consent when the game resumes or
+the privacy choice changes, and expose `admob.showPrivacyOptions()` from game
+settings where required. `getCapabilities()` reports `action-required` until
+consent is ready and `temporarily-unavailable` during a show. A timed-out
+native load or presentation reports non-retryable `action-required` and
+quarantines that SDK instance to avoid overlapping shows
+while its state is unknown. Recreating the Kit provider with the same SDK does
+not clear the quarantine; restart the native app before trying again. Do not
+show rewarded ads through another direct SDK caller concurrently: the plugin's
+reward and dismissal events are global, not tagged with a Kit operation ID.
+
+`gateway.ads.preload()` validates the logical placement but deliberately does
+not load an ad: this SDK attaches SSV data at load time, whereas the Kit's
+operation ID exists only at show time. `gateway.ads.showRewarded()` therefore
+loads a fresh ad with SSV `userId` and encoded player/placement/operation
+binding, waits for native dismissal, then returns SDK reward evidence. Call
+`GameServicesClient.claimRewardedAd()` rather than award currency from that
+result. The receiver and ledger described in [AdMob SSV](../../docs/ADMOB_SSV.md)
+remain mandatory. A late SSV callback can leave the claim pending for
+reconciliation. `isTesting: true` is for SDK test ads only; [the plugin notes
+that test ads do not invoke the SSV endpoint](https://github.com/capacitor-community/admob/blob/main/docs/rewarded.md#server-side-verification),
+so they cannot prove a production grant.
+
+The Kit tests cover consent, per-operation binding, reward versus dismissal,
+and bridge contracts with an injected SDK. They are not evidence of a real
+AdMob account, live callback delivery, native device behavior, or store policy
+approval.
 
 `gateway.secureCredentials` uses dedicated native Keychain/Keystore methods for
 opaque session credentials. Its absence or a native error must not be hidden by

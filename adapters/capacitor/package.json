@@ -28,6 +28,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./admob": {
+      "types": "./dist/admob.d.ts",
+      "default": "./dist/admob.js"
     }
   },
   "files": [
@@ -45,15 +49,22 @@
     "@capacitor/app": "8.1.1",
     "@mpgd/bridge": "workspace:*",
     "@mpgd/capacitor-game-services": "workspace:*",
+    "@mpgd/game-services": "workspace:*",
     "@mpgd/platform": "workspace:*",
     "@mpgd/target-config": "workspace:*"
   },
   "peerDependencies": {
-    "@capacitor/core": "^8.5.1"
+    "@capacitor/core": "^8.5.1",
+    "@capacitor-community/admob": "^8.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@capacitor-community/admob": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@capacitor/core": "8.5.2",
-    "@mpgd/game-services": "workspace:*",
+    "@capacitor-community/admob": "8.1.0",
     "ttsc": "0.30.4",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"

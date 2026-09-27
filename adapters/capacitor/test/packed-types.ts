@@ -5,6 +5,10 @@ import {
   type CapacitorViewportBaseState,
   type CapacitorViewportController,
 } from '@mpgd/adapter-capacitor';
+import {
+  createCapacitorAdMobRewardedProvider,
+  type CapacitorAdMobRewardedProvider,
+} from '@mpgd/adapter-capacitor/admob';
 import type {
   PlatformProviderAvailability,
   PlatformProviderFeature,
@@ -42,6 +46,11 @@ const provider: CapacitorServiceProvider = {
 void provider;
 void targetFeature;
 void reason;
+const admob: CapacitorAdMobRewardedProvider = createCapacitorAdMobRewardedProvider({
+  adUnits: { CONTINUE: 'ca-app-pub-1234567890123456/1234567890' },
+  getPlayerId: () => 'player-1',
+});
+void admob;
 
 const nativeJson: CapacitorNativeJsonTransport = createCapacitorNativeJsonTransport({
   target: 'ios',

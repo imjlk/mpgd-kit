@@ -289,6 +289,32 @@ describe('Capacitor optional provider composition', () => {
     })).rejects.toMatchObject({ code: 'NATIVE_PROVIDER_INVALID_RESPONSE' });
   });
 
+  it('passes an explicitly non-authoritative AdMob callback to backend verification', async () => {
+    const provider: CapacitorServiceProvider = {
+      id: 'admob-provider',
+      features: ['rewardedAds'],
+      methods: ['ads.preload', 'ads.showRewarded'],
+      async getAvailability() { return { rewardedAds: 'available' }; },
+      bridge: {
+        async request(input) {
+          return { id: input.id, ok: true, data: {
+            status: 'completed', rewardGranted: true,
+            evidence: { schema: 'mpgd.admob.client-reward.v1', payload: {
+              adUnitId: 'ca-app-pub-1234567890123456/1234567890',
+            } },
+          } };
+        },
+      },
+    };
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android', appVersion: '1', buildId: 'base', bridge: baseBridge([]),
+      providers: [provider],
+    });
+    await expect(gateway.ads.showRewarded({
+      placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'admob-ad-1',
+    })).resolves.toMatchObject({ status: 'completed', rewardGranted: true });
+  });
+
   it('passes a deferred rewarded result through without granting a reward', async () => {
     let invalidGrant = false;
     const provider: CapacitorServiceProvider = {

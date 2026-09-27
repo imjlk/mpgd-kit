@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
-  copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync,
+  copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync,
   readFileSync, realpathSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -22,6 +22,10 @@ try {
   const adapter = packInstalledPackage(join(repoRoot, 'adapters/capacitor'));
   const targetConfig = packInstalledPackage(join(repoRoot, 'packages/target-config'));
   const platform = packInstalledPackage(join(repoRoot, 'packages/platform'));
+  const admobDirectory = findInstalledDependency(join(repoRoot, 'adapters/capacitor'),
+    '@capacitor-community/admob');
+  assert.ok(admobDirectory, 'Expected the optional AdMob peer in the development installation.');
+  const admob = packInstalledPackage(admobDirectory);
   const capacitorCore = [...packages.values()].find((entry) => entry.name === '@capacitor/core');
   assert.ok(capacitorCore, 'Expected the installed Capacitor peer in the packed dependency closure.');
   mkdirSync(consumer);
@@ -35,6 +39,7 @@ try {
       '@mpgd/target-config': targetConfig.tarball,
       '@mpgd/platform': platform.tarball,
       '@capacitor/core': capacitorCore.tarball,
+      '@capacitor-community/admob': admob.tarball,
     },
   });
   const byName = Map.groupBy(packages.values(), (entry) => entry.name);
@@ -52,6 +57,14 @@ try {
   for (const name of ['adapter-capacitor', 'target-config', 'platform']) {
     const metadata = readJson(join(consumer, `node_modules/@mpgd/${name}/package.json`));
     assert.equal(JSON.stringify(metadata).includes('workspace:'), false);
+  }
+  const adapterDist = join(consumer, 'node_modules/@mpgd/adapter-capacitor/dist');
+  for (const file of readdirSync(adapterDist)) {
+    if (file.endsWith('.js') && file !== 'admob.js') {
+      assert.equal(readFileSync(join(adapterDist, file), 'utf8')
+        .includes('@capacitor-community/admob'), false,
+      `Base adapter artifact ${file} must not import the optional AdMob peer.`);
+    }
   }
   copyFileSync(join(repoRoot, 'adapters/capacitor/test/packed-runtime.mjs'), join(consumer, 'runtime.mjs'));
   copyFileSync(join(repoRoot, 'adapters/capacitor/test/packed-types.ts'), join(consumer, 'types.ts'));

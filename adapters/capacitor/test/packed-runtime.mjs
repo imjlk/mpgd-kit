@@ -5,6 +5,7 @@ import {
   createCapacitorPlatformGateway,
   createCapacitorViewport,
 } from '@mpgd/adapter-capacitor';
+import { createCapacitorAdMobRewardedProvider } from '@mpgd/adapter-capacitor/admob';
 import { createUnsupportedCapabilities } from '@mpgd/platform';
 import { getFeatureAvailability, resolveTargetViewportUsableArea } from '@mpgd/target-config';
 
@@ -22,6 +23,7 @@ const capabilities = await gateway.getCapabilities();
 assert.equal(capabilities.nativeIap, false);
 assert.equal(capabilities.providerAvailability.nativeIap, 'unsupported');
 assert.equal(typeof getFeatureAvailability, 'function');
+assert.equal(typeof createCapacitorAdMobRewardedProvider, 'function');
 
 const composed = createCapacitorPlatformGateway({
   target: 'android', appVersion: '1', buildId: 'packed-provider',
