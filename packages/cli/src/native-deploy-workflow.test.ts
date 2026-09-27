@@ -26,6 +26,7 @@ try {
   assert.match(workflow, /github\.ref == 'refs\/heads\/main'/u);
   assert.match(workflow, /environment: 'protected-beta'/u);
   assert.match(workflow, /cancel-in-progress: false/u);
+  assert.match(workflow, /group: mpgd-dev\.mpgd\.alpha-android-/u);
   assert.match(workflow, /deploy_android:/u);
   assert.match(workflow, /deploy_ios:/u);
   assert.match(workflow, /runs-on: macos-26/u);
@@ -39,6 +40,7 @@ try {
   assert.match(workflow, /export MPGD_IOS_SIGNING_P12=/u);
   assert.match(workflow, /MPGD_DEPENDENCY_INSTALL_ENV_NAMES=NPM_TOKEN/u);
   assert.match(workflow, /GIT_CONFIG_VALUE_0=/u);
+  assert.equal(workflow.match(/persist-credentials: false/gu)?.length, 3);
   assert.match(workflow, /retention-days: 30/u);
   assert.match(workflow, /retention-days: 90/u);
   assert.match(workflow, /include-hidden-files: true/u);
@@ -79,18 +81,20 @@ try {
   assert.equal(singleWorkflow.includes('deploy_android:'), false);
   assertGeneratedShellParses(singleWorkflow);
 
-  const linkedRepo = join(fixture, 'linked-workflow');
-  mkdirSync(linkedRepo);
-  execFileSync('git', ['init', '-q', linkedRepo]);
-  createGame(linkedRepo);
-  symlinkSync(fixture, join(linkedRepo, '.github'), 'dir');
-  const linkedInput = {
-    game: linkedRepo,
-    profile: 'beta',
-    releaseBranch: 'main',
-    targets: ['android'] as const,
-  };
-  assert.throws(() => initializeNativeDeployWorkflow(linkedInput), /must not be symlinks/u);
+  if (process.platform !== 'win32') {
+    const linkedRepo = join(fixture, 'linked-workflow');
+    mkdirSync(linkedRepo);
+    execFileSync('git', ['init', '-q', linkedRepo]);
+    createGame(linkedRepo);
+    symlinkSync(fixture, join(linkedRepo, '.github'), 'dir');
+    const linkedInput = {
+      game: linkedRepo,
+      profile: 'beta',
+      releaseBranch: 'main',
+      targets: ['android'] as const,
+    };
+    assert.throws(() => initializeNativeDeployWorkflow(linkedInput), /must not be symlinks/u);
+  }
   const reservedRepo = join(fixture, 'reserved-env');
   mkdirSync(reservedRepo);
   execFileSync('git', ['init', '-q', reservedRepo]);

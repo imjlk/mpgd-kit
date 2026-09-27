@@ -44,6 +44,8 @@ import {
 } from './release-workspace.js';
 import { inspectAndroidBundleSigner } from './android-bundle-signer.js';
 
+const gitAuthEnvironmentNames = ['GITHUB_TOKEN', 'GH_TOKEN', 'GIT_ASKPASS'] as const;
+
 export interface RunNativeDeploymentInput {
   readonly plan: NativeDeploymentPlan;
   readonly releaseKey: string;
@@ -419,9 +421,7 @@ export function dependencyInstallEnvironment(
   const forbidden = new Set([
     ...(plan === undefined ? [] : readNativeDeployCredentialNames(plan)),
     'GOOGLE_APPLICATION_CREDENTIALS',
-    'GITHUB_TOKEN',
-    'GH_TOKEN',
-    'GIT_ASKPASS',
+    ...gitAuthEnvironmentNames,
   ]);
   for (const name of environment.MPGD_DEPENDENCY_INSTALL_ENV_NAMES?.split(',') ?? []) {
     const normalized = name.trim();
@@ -461,9 +461,7 @@ export function withoutStoreSubmissionCredentials(
     'MPGD_IOS_SIGNING_P12',
     'MPGD_IOS_SIGNING_P12_PASSWORD',
     'MPGD_IOS_PROVISIONING_PROFILE',
-    'GITHUB_TOKEN',
-    'GH_TOKEN',
-    'GIT_ASKPASS',
+    ...gitAuthEnvironmentNames,
   ]) {
     delete result[name];
   }

@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { ReleaseProcessError, runReleaseProcess } from './deploy-process.js';
 import type { ImmutableNativeBuildRecord } from './release-state.js';
 
-const pinnedAscVersion = '5.5.0';
+export const pinnedAscVersion = '5.5.0';
 const sha256Pattern = /^[0-9a-f]{64}$/u;
 const teamIdPattern = /^[A-Z0-9]{10}$/u;
 const apiKeyIdPattern = /^[A-Z0-9]{10}$/u;

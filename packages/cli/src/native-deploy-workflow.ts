@@ -8,6 +8,7 @@ import {
   readNativeDeployTargetProfile,
   type NativeDeployTarget,
 } from './deploy-planning.js';
+import { pinnedAscVersion } from './testflight-submission.js';
 
 export interface InitializeNativeDeployWorkflowInput {
   readonly game: string;
@@ -40,6 +41,17 @@ const reservedWorkflowEnvironmentNames = new Set([
   'ARTIFACT_RUN_ID',
   'MPGD_ASC_BINARY',
   'MPGD_IOS_PROVISIONING_PROFILE',
+  'MPGD_ANDROID_UPLOAD_STORE_PASSWORD',
+  'MPGD_ANDROID_UPLOAD_KEY_ALIAS',
+  'MPGD_ANDROID_UPLOAD_KEY_PASSWORD',
+  'MPGD_ANDROID_UPLOAD_CERT_SHA256',
+  'MPGD_IOS_SIGNING_P12_PASSWORD',
+  'MPGD_IOS_TEAM_ID',
+  'MPGD_ASC_APP_ID',
+  'MPGD_ASC_KEY_ID',
+  'MPGD_ASC_ISSUER_ID',
+  'MPGD_DEPENDENCY_INSTALL_ENV_NAMES',
+  'ASC_TELEMETRY_DISABLED',
 ]);
 
 /** Write a game-owned, non-overwriting workflow that calls the installed CLI. */
@@ -57,9 +69,14 @@ export function initializeNativeDeployWorkflow(
     ...(input.targets === undefined ? {} : { targets: input.targets }),
   });
   const gameRoot = realpathSync(plan.gameRoot);
-  const repositoryRoot = realpathSync(execFileSync('git', [
-    '-C', gameRoot, 'rev-parse', '--show-toplevel',
-  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
+  let repositoryRoot: string;
+  try {
+    repositoryRoot = realpathSync(execFileSync('git', [
+      '-C', gameRoot, 'rev-parse', '--show-toplevel',
+    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim());
+  } catch {
+    throw new Error(`The game must live inside a Git repository: ${gameRoot}`);
+  }
   const relativeGame = relative(repositoryRoot, gameRoot).split(sep).join('/');
   if (relativeGame === '..' || relativeGame.startsWith('../')
     || isAbsolute(relativeGame) || !/^[A-Za-z0-9._/-]*$/u.test(relativeGame)) {
@@ -70,11 +87,17 @@ export function initializeNativeDeployWorkflow(
   const slug = `${readableName.slice(0, 40)}-${digest}`.toLowerCase();
   const gameId = input.gameId ?? slug;
   if (!/^[a-z0-9][a-z0-9._-]{0,127}$/u.test(gameId)) {
-    throw new Error('The native deployment game ID is invalid.');
+    const reason = input.gameId === undefined
+      ? 'The game directory must start with a letter or digit, or pass --game-id.'
+      : 'The native deployment game ID is invalid.';
+    throw new Error(reason);
   }
   const approvalEnvironment = input.approvalEnvironment ?? `native-${input.profile}`;
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u.test(approvalEnvironment)) {
-    throw new Error('The native deployment approval environment is invalid.');
+    const reason = input.approvalEnvironment === undefined
+      ? 'The profile name cannot form a CI environment; pass --approval-environment.'
+      : 'The native deployment approval environment is invalid.';
+    throw new Error(reason);
   }
   const workflowName = `mpgd-native-${slug}.yml`;
   const workflowRelativePath = `.github/workflows/${workflowName}`;
@@ -107,6 +130,7 @@ export function initializeNativeDeployWorkflow(
     releaseBranch: input.releaseBranch,
     approvalEnvironment,
     targets: plan.targets.map((entry) => entry.target),
+    appIds: Object.fromEntries(plan.targets.map((entry) => [entry.target, entry.appId])),
     workflowRelativePath,
     secretPrefix,
     signingNames,
@@ -124,6 +148,7 @@ interface WorkflowRenderInput {
   readonly releaseBranch: string;
   readonly approvalEnvironment: string;
   readonly targets: readonly NativeDeployTarget[];
+  readonly appIds: Readonly<Partial<Record<NativeDeployTarget, string>>>;
   readonly workflowRelativePath: string;
   readonly secretPrefix: string;
   readonly signingNames: Readonly<Record<string, string>>;
@@ -149,7 +174,6 @@ function renderNativeDeployWorkflow(input: WorkflowRenderInput): string {
     '  pull_request:',
     '    paths:',
     `      - ${quoted(affectedPath)}`,
-    "      - 'packages/**'",
     "      - 'pnpm-lock.yaml'",
     "      - 'pnpm-workspace.yaml'",
     `      - ${quoted(input.workflowRelativePath)}`,
@@ -218,6 +242,10 @@ function renderDeployJob(
   input: WorkflowRenderInput,
   target: NativeDeployTarget,
 ): string[] {
+  const appId = input.appIds[target];
+  if (appId === undefined) {
+    throw new Error(`Missing ${target} app ID in the deployment plan.`);
+  }
   const secret = (suffix: string): string => expression(`secrets.${input.secretPrefix}_${suffix}`);
   const lines = [
     `  deploy_${target}:`,
@@ -229,7 +257,7 @@ function renderDeployJob(
     '      contents: write',
     '      actions: read',
     '    concurrency:',
-    `      group: mpgd-${input.gameId}-${target}-${expression('github.repository')}`,
+    `      group: mpgd-${appId}-${target}-${expression('github.repository')}`,
     '      cancel-in-progress: false',
     '    env:',
     `      GAME_PATH: ${quoted(input.gamePath)}`,
@@ -244,6 +272,7 @@ function renderDeployJob(
     '      - uses: actions/checkout@v5',
     '        with:',
     '          fetch-depth: 0',
+    '          persist-credentials: false',
     '      - uses: pnpm/action-setup@v6',
     '        with:',
     '          version: 11.7.0',
@@ -302,7 +331,7 @@ function renderDeployJob(
     `          NPM_TOKEN: ${secret('NPM_READ_TOKEN')}`,
     `          GITHUB_TOKEN: ${expression('github.token')}`,
   );
-  lines.push(...renderCredentialEnvironment(input, target, secret));
+  lines.push(...renderCredentialEnvironment(target, secret));
   lines.push(
     '        run: |',
     '          set -euo pipefail',
@@ -361,7 +390,6 @@ function renderDeployJob(
 }
 
 function renderCredentialEnvironment(
-  input: WorkflowRenderInput,
   target: NativeDeployTarget,
   secret: (suffix: string) => string,
 ): string[] {
@@ -412,12 +440,12 @@ function renderCredentialSetup(
     `          export ${submissionName}="$SUBMISSION_B64"`,
     '          export MPGD_IOS_PROVISIONING_PROFILE="$secret_dir/profile.mobileprovision"',
     '          case "$(uname -m)" in',
-    '            arm64) asc_asset=asc_5.5.0_macOS_arm64 ;;',
-    '            x86_64) asc_asset=asc_5.5.0_macOS_amd64 ;;',
+    `            arm64) asc_asset=asc_${pinnedAscVersion}_macOS_arm64 ;;`,
+    `            x86_64) asc_asset=asc_${pinnedAscVersion}_macOS_amd64 ;;`,
     '            *) echo "Unsupported macOS architecture" >&2; exit 1 ;;',
     '          esac',
     '          curl -fL --retry 3 \\',
-    '            "https://github.com/rorkai/App-Store-Connect-CLI/releases/download/5.5.0/$asc_asset" \\',
+    `            "https://github.com/rorkai/App-Store-Connect-CLI/releases/download/${pinnedAscVersion}/$asc_asset" \\`,
     '            -o "$secret_dir/asc"',
     '          chmod 700 "$secret_dir/asc"',
     '          export MPGD_ASC_BINARY="$secret_dir/asc"',
