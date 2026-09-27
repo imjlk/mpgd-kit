@@ -191,6 +191,16 @@ dimensions:
   serializes both authority and platform evidence keys per store instance. The
   D1 migration backfills authority ids already present in payloads and adds
   unique source/target platform-evidence indexes for historical and new rows.
+- Purchase verification and rewarded-ad claims run one at a time per
+  `(source, playerId, idempotencyKey)` within one backend process, from the
+  idempotency lookup through the grant or non-grant decision. This holds even
+  when the host creates a store per request, as the Worker does. A same-key
+  retry therefore returns the grant it waited for instead of a stale verifier
+  decision, such as an already-redeemed token. Non-grant decisions are not
+  written to the ledger, so no store constraint makes them atomic across
+  processes. The backend rechecks the ledger after a non-grant verification to
+  narrow that window; route a player's purchase and reward requests to one
+  process when exact cross-process outcomes matter.
 - Leaderboard records dedupe by `target`, `leaderboardId`, `playerId`, and
   `runId`. Retries with a different score, submission timestamp, or
   `platformSubmissionId` reuse the original `ledgerEntryId`.

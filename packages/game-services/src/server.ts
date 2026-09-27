@@ -338,7 +338,7 @@ export function createGameServicesBackend(
     version,
     purchases: {
       async verifyPurchase(request) {
-        const verification = await verifyPurchaseWithStore(request, {
+        return verifyPurchaseWithStore(request, {
           catalog: input.catalog,
           store,
           now,
@@ -349,51 +349,49 @@ export function createGameServicesBackend(
           ...(input.purchaseGrantFinalizer === undefined
             ? {}
             : { purchaseGrantFinalizer: input.purchaseGrantFinalizer }),
+        }, async (verification) => {
+          await analytics.track({
+            name: verification.verified ? 'purchase_granted'
+              : verification.disposition === 'pending' ? 'purchase_pending' : 'purchase_rejected',
+            properties: {
+              target: request.target,
+              playerId: request.playerId,
+              productId: request.productId,
+              ledgerEntryId: verification.ledgerEntryId,
+              alreadyProcessed: verification.alreadyProcessed,
+              reason: verification.reason,
+              finalizationStatus: verification.finalization?.status,
+              finalizationAction: verification.finalization?.action,
+              finalizationAlreadyCompleted: verification.finalization?.alreadyCompleted,
+              finalizationReason: verification.finalization?.reason,
+            },
+          });
         });
-
-        await analytics.track({
-          name: verification.verified ? 'purchase_granted' : 'purchase_rejected',
-          properties: {
-            target: request.target,
-            playerId: request.playerId,
-            productId: request.productId,
-            ledgerEntryId: verification.ledgerEntryId,
-            alreadyProcessed: verification.alreadyProcessed,
-            reason: verification.reason,
-            finalizationStatus: verification.finalization?.status,
-            finalizationAction: verification.finalization?.action,
-            finalizationAlreadyCompleted: verification.finalization?.alreadyCompleted,
-            finalizationReason: verification.finalization?.reason,
-          },
-        });
-
-        return verification;
       },
     },
     adRewards: {
       async claimAdReward(request) {
-        const claim = await claimAdRewardWithStore(request, {
+        return claimAdRewardWithStore(request, {
           placements: input.placements,
           store,
           now,
           evidenceVerifier,
           evidenceVerificationTimeoutMs,
           deploymentTargetBindings,
+        }, async (claim) => {
+          await analytics.track({
+            name: claim.granted ? 'rewarded_ad_granted'
+              : claim.disposition === 'pending' ? 'rewarded_ad_pending' : 'rewarded_ad_rejected',
+            properties: {
+              target: request.target,
+              playerId: request.playerId,
+              placementId: request.placementId,
+              ledgerEntryId: claim.ledgerEntryId,
+              alreadyProcessed: claim.alreadyProcessed,
+              reason: claim.reason,
+            },
+          });
         });
-
-        await analytics.track({
-          name: claim.granted ? 'rewarded_ad_granted' : 'rewarded_ad_rejected',
-          properties: {
-            target: request.target,
-            playerId: request.playerId,
-            placementId: request.placementId,
-            ledgerEntryId: claim.ledgerEntryId,
-            alreadyProcessed: claim.alreadyProcessed,
-            reason: claim.reason,
-          },
-        });
-
-        return claim;
       },
     },
     leaderboard: {
@@ -609,18 +607,21 @@ function bindRequestDeploymentTarget<
     : { ...request, deploymentTarget };
 }
 
+interface PurchaseVerificationContext {
+  readonly catalog: ProductCatalog;
+  readonly store: GameServicesStore;
+  readonly now: () => string;
+  readonly evidenceVerifier: GameServicesEvidenceVerifier;
+  readonly evidenceVerificationTimeoutMs: number;
+  readonly purchaseGrantFinalizationTimeoutMs: number;
+  readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
+  readonly deploymentTargetBindings: GameServicesDeploymentTargetBindings;
+}
+
 async function verifyPurchaseWithStore(
   input: VerifyPurchaseRequest,
-  context: {
-    readonly catalog: ProductCatalog;
-    readonly store: GameServicesStore;
-    readonly now: () => string;
-    readonly evidenceVerifier: GameServicesEvidenceVerifier;
-    readonly evidenceVerificationTimeoutMs: number;
-    readonly purchaseGrantFinalizationTimeoutMs: number;
-    readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
-    readonly deploymentTargetBindings: GameServicesDeploymentTargetBindings;
-  },
+  context: PurchaseVerificationContext,
+  onDecision: (verification: VerifyPurchaseResponse) => Promise<void>,
 ): Promise<VerifyPurchaseResponse> {
   const request = bindRequestDeploymentTarget(
     assertVerifyPurchaseRequest(input),
@@ -636,6 +637,18 @@ async function verifyPurchaseWithStore(
       ? {}
       : { deploymentTarget: request.deploymentTarget }),
   } as const;
+  return withEntitlementRetryLock(retryIdentity, async () => {
+    const verification = await verifyPurchaseForRetry(request, retryIdentity, context);
+    await onDecision(verification);
+    return verification;
+  });
+}
+
+async function verifyPurchaseForRetry(
+  request: VerifyPurchaseRequest,
+  retryIdentity: EntitlementRetryIdentity,
+  context: PurchaseVerificationContext,
+): Promise<VerifyPurchaseResponse> {
   const completeExistingRetry = async (
     transaction: ProductGrantTransaction,
   ): Promise<VerifyPurchaseResponse> => {
@@ -709,6 +722,7 @@ async function verifyPurchaseWithStore(
     return assertVerifyPurchaseResponse({
       verified: false,
       alreadyProcessed: false,
+      disposition: verification.status === 'pending' ? 'pending' : 'rejected',
       reason: verification.status === 'pending'
         ? (verification.reason ?? 'EVIDENCE_PENDING')
         : verification.reason,
@@ -985,16 +999,19 @@ function createStoredPurchaseRequest(
   };
 }
 
+interface AdRewardClaimContext {
+  readonly placements: AdPlacements;
+  readonly store: GameServicesStore;
+  readonly now: () => string;
+  readonly evidenceVerifier: GameServicesEvidenceVerifier;
+  readonly evidenceVerificationTimeoutMs: number;
+  readonly deploymentTargetBindings: GameServicesDeploymentTargetBindings;
+}
+
 async function claimAdRewardWithStore(
   input: ClaimAdRewardRequest,
-  context: {
-    readonly placements: AdPlacements;
-    readonly store: GameServicesStore;
-    readonly now: () => string;
-    readonly evidenceVerifier: GameServicesEvidenceVerifier;
-    readonly evidenceVerificationTimeoutMs: number;
-    readonly deploymentTargetBindings: GameServicesDeploymentTargetBindings;
-  },
+  context: AdRewardClaimContext,
+  onDecision: (claim: ClaimAdRewardResponse) => Promise<void>,
 ): Promise<ClaimAdRewardResponse> {
   const request = bindRequestDeploymentTarget(
     assertClaimAdRewardRequest(input),
@@ -1010,10 +1027,20 @@ async function claimAdRewardWithStore(
       ? {}
       : { deploymentTarget: request.deploymentTarget }),
   } as const;
-  const existing = await findEntitlementTransactionByIdempotency(context.store, retryIdentity);
+  return withEntitlementRetryLock(retryIdentity, async () => {
+    const claim = await claimAdRewardForRetry(request, retryIdentity, context);
+    await onDecision(claim);
+    return claim;
+  });
+}
 
-  if (existing !== undefined) {
-    if (!matchesEntitlementRetry(existing, retryIdentity)) {
+async function claimAdRewardForRetry(
+  request: ClaimAdRewardRequest,
+  retryIdentity: EntitlementRetryIdentity,
+  context: AdRewardClaimContext,
+): Promise<ClaimAdRewardResponse> {
+  const completeExistingRetry = (transaction: ProductGrantTransaction): ClaimAdRewardResponse => {
+    if (!matchesEntitlementRetry(transaction, retryIdentity)) {
       return assertClaimAdRewardResponse({
         granted: false,
         alreadyProcessed: false,
@@ -1023,9 +1050,14 @@ async function claimAdRewardWithStore(
 
     return assertClaimAdRewardResponse({
       granted: true,
-      ledgerEntryId: existing.ledgerEntryId,
+      ledgerEntryId: transaction.ledgerEntryId,
       alreadyProcessed: true,
     });
+  };
+  const existing = await findEntitlementTransactionByIdempotency(context.store, retryIdentity);
+
+  if (existing !== undefined) {
+    return completeExistingRetry(existing);
   }
 
   const placement = context.placements.placements.find((entry) => entry.id === request.placementId);
@@ -1053,9 +1085,20 @@ async function claimAdRewardWithStore(
   }, context.evidenceVerificationTimeoutMs);
 
   if (verification.status !== 'verified') {
+    // Another backend process can record a matching grant while verification is in flight.
+    // Recheck before returning a stale pending or rejected state.
+    const racedExisting = await findEntitlementTransactionByIdempotency(
+      context.store,
+      retryIdentity,
+    );
+    if (racedExisting !== undefined) {
+      return completeExistingRetry(racedExisting);
+    }
+
     return assertClaimAdRewardResponse({
       granted: false,
       alreadyProcessed: false,
+      disposition: verification.status === 'pending' ? 'pending' : 'rejected',
       reason: verification.status === 'pending'
         ? (verification.reason ?? 'EVIDENCE_PENDING')
         : verification.reason,
@@ -1126,26 +1169,16 @@ async function verifyEvidence(
 ): Promise<EvidenceVerificationDecision> {
   const controller = new AbortController();
   const timeoutDecision = {
-    status: 'rejected',
+    status: 'pending',
     reason: 'EVIDENCE_VERIFIER_TIMEOUT',
   } as const satisfies EvidenceVerificationDecision;
-  let timedOut = false;
   let timeout: ReturnType<typeof setTimeout> | undefined;
-
+  let decision: EvidenceVerificationDecision;
   try {
-    return await Promise.race([
-      verify(controller.signal)
-        .then(assertEvidenceVerificationDecision)
-        .catch((error: unknown) => {
-          if (timedOut) {
-            return timeoutDecision;
-          }
-
-          throw error;
-        }),
+    decision = await Promise.race([
+      verify(controller.signal),
       new Promise<EvidenceVerificationDecision>((resolve) => {
         timeout = setTimeout(() => {
-          timedOut = true;
           resolve(timeoutDecision);
           controller.abort();
         }, timeoutMs);
@@ -1153,13 +1186,18 @@ async function verifyEvidence(
     ]);
   } catch {
     return {
-      status: 'rejected',
+      status: 'pending',
       reason: 'EVIDENCE_VERIFIER_ERROR',
     };
   } finally {
     if (timeout !== undefined) {
       clearTimeout(timeout);
     }
+  }
+  try {
+    return assertEvidenceVerificationDecision(decision);
+  } catch {
+    return { status: 'rejected', reason: 'EVIDENCE_VERIFIER_ERROR' };
   }
 }
 
@@ -1305,10 +1343,9 @@ async function recordEntitlementGrantUnchecked(
   }
 }
 
-const entitlementEvidenceLocks = new WeakMap<
-  GameServicesStore,
-  Map<string, Promise<void>>
->();
+const entitlementLocks = new WeakMap<object, Map<string, Promise<void>>>();
+/** Hosts such as the Worker create a store per request, so retries lock per process instead. */
+const entitlementRetryLockScope = {};
 
 async function withEntitlementEvidenceLocks<T>(
   store: GameServicesStore,
@@ -1321,34 +1358,49 @@ async function withEntitlementEvidenceLocks<T>(
     const lockKey = orderedLockKeys[index];
     return lockKey === undefined
       ? task()
-      : withEntitlementEvidenceLockKey(store, lockKey, () => runWithLock(index + 1));
+      : withEntitlementLockKey(store, lockKey, () => runWithLock(index + 1));
   }
 
   return runWithLock(0);
 }
 
-async function withEntitlementEvidenceLockKey<T>(
-  store: GameServicesStore,
+/**
+ * Serialize one retry identity in this backend process, from its ledger lookup to its grant
+ * or non-grant decision, so a verifier decision cannot race a same-key grant here.
+ */
+async function withEntitlementRetryLock<T>(
+  identity: EntitlementRetryIdentity,
+  task: () => Promise<T>,
+): Promise<T> {
+  return withEntitlementLockKey(
+    entitlementRetryLockScope,
+    createEntitlementIdempotencyKey(identity),
+    task,
+  );
+}
+
+async function withEntitlementLockKey<T>(
+  scope: object,
   lockKey: string,
   task: () => Promise<T>,
 ): Promise<T> {
-  const storeLocks = entitlementEvidenceLocks.get(store) ?? new Map<string, Promise<void>>();
-  entitlementEvidenceLocks.set(store, storeLocks);
+  const scopeLocks = entitlementLocks.get(scope) ?? new Map<string, Promise<void>>();
+  entitlementLocks.set(scope, scopeLocks);
 
-  const previous = storeLocks.get(lockKey) ?? Promise.resolve();
+  const previous = scopeLocks.get(lockKey) ?? Promise.resolve();
   const gate = createPromiseGate();
   const current = previous.then(() => gate.promise);
-  storeLocks.set(lockKey, current);
+  scopeLocks.set(lockKey, current);
 
   await previous;
   try {
     return await task();
   } finally {
     gate.release();
-    if (storeLocks.get(lockKey) === current) {
-      storeLocks.delete(lockKey);
-      if (storeLocks.size === 0) {
-        entitlementEvidenceLocks.delete(store);
+    if (scopeLocks.get(lockKey) === current) {
+      scopeLocks.delete(lockKey);
+      if (scopeLocks.size === 0) {
+        entitlementLocks.delete(scope);
       }
     }
   }

@@ -117,6 +117,26 @@ class HiddenIdempotencyLookupStore extends InMemoryGameServicesStore {
   }
 }
 
+function createRequestScopedStore(ledger: InMemoryGameServicesStore): GameServicesStore {
+  return {
+    recordEntitlementGrant: (input) => ledger.recordEntitlementGrant(input),
+    findEntitlementTransactionByIdempotency: (input) => {
+      return ledger.findEntitlementTransactionByIdempotency(input);
+    },
+    findEntitlementTransactionByEvidenceVerificationId: (input) => {
+      return ledger.findEntitlementTransactionByEvidenceVerificationId(input);
+    },
+    findEntitlementTransactionByPlatformEvidence: (input) => {
+      return ledger.findEntitlementTransactionByPlatformEvidence(input);
+    },
+    getEntitlementTransaction: (ledgerEntryId) => ledger.getEntitlementTransaction(ledgerEntryId),
+    listEntitlementTransactions: () => ledger.listEntitlementTransactions(),
+    recordLeaderboardScore: (input, options) => ledger.recordLeaderboardScore(input, options),
+    getLeaderboardTransaction: (ledgerEntryId) => ledger.getLeaderboardTransaction(ledgerEntryId),
+    listLeaderboardTransactions: () => ledger.listLeaderboardTransactions(),
+  };
+}
+
 function createLegacyCompatibleStore(base: InMemoryGameServicesStore): GameServicesStore {
   return {
     recordEntitlementGrant: (input) => base.recordEntitlementGrant(input),
@@ -530,7 +550,13 @@ const verifierErrorReward = await nonGrantingBackend.adRewards.claimAdReward({
 
 assertEqual(pendingPurchase.verified, false, 'pending provider evidence must not grant');
 assertEqual(pendingPurchase.reason, 'PROVIDER_PENDING', 'pending reasons should be preserved');
+assertEqual(
+  pendingPurchase.disposition,
+  'pending',
+  'provider-pending purchases remain recoverable',
+);
 assertEqual(verifierErrorReward.granted, false, 'verifier errors must not grant');
+assertEqual(verifierErrorReward.disposition, 'pending', 'verifier errors must remain retryable');
 assertEqual(
   verifierErrorReward.reason,
   'EVIDENCE_VERIFIER_ERROR',
@@ -570,6 +596,11 @@ const invalidTimestampPurchase = await invalidTimestampBackend.purchases.verifyP
 });
 
 assertEqual(invalidTimestampPurchase.verified, false, 'invalid verifier timestamps must reject');
+assertEqual(
+  invalidTimestampPurchase.disposition,
+  'rejected',
+  'invalid verifier data must not retry',
+);
 assertEqual(
   invalidTimestampPurchase.reason,
   'EVIDENCE_VERIFIER_ERROR',
@@ -1280,6 +1311,218 @@ assertEqual(
   'the raced grant should be reported as already processed',
 );
 
+const rewardRetryRaceStore = new HiddenIdempotencyLookupStore();
+const rewardRetryLedger = await rewardRetryRaceStore.recordEntitlementGrant({
+  playerId: 'player-reward-retry-race',
+  grantId: 'CONTINUE_AFTER_FAIL',
+  source: 'ad_reward',
+  idempotencyKey: 'reward-retry-race',
+  grantedAt: '2026-07-04T00:00:00.000Z',
+  payload: {
+    target: 'android',
+    placementId: 'CONTINUE_AFTER_FAIL',
+    evidenceVerificationId: 'provider:reward:retry-race',
+  },
+  evidenceVerificationId: 'provider:reward:retry-race',
+});
+let rewardRetryRaceDecision: EvidenceVerificationDecision = {
+  status: 'rejected',
+  reason: 'SSV_ALREADY_REDEEMED',
+};
+const rewardRetryRaceBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: rewardRetryRaceStore,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      return { status: 'rejected', reason: 'NOT_TESTED' } as const;
+    },
+    async verifyAdReward() {
+      // Another runtime records the grant while this verification is in flight.
+      rewardRetryRaceStore.hideIdempotencyLookups = false;
+      return rewardRetryRaceDecision;
+    },
+  },
+});
+for (const decision of [
+  rewardRetryRaceDecision,
+  { status: 'pending', reason: 'SSV_DELAYED' },
+] satisfies readonly EvidenceVerificationDecision[]) {
+  rewardRetryRaceStore.hideIdempotencyLookups = true;
+  rewardRetryRaceDecision = decision;
+  const rewardRetryRaceResult = await rewardRetryRaceBackend.adRewards.claimAdReward({
+    target: 'android',
+    playerId: 'player-reward-retry-race',
+    placementId: 'CONTINUE_AFTER_FAIL',
+    idempotencyKey: 'reward-retry-race',
+    completedAt: '2026-07-04T00:00:01.000Z',
+  });
+  assertEqual(
+    rewardRetryRaceResult.granted,
+    true,
+    `a reward grant recorded during ${decision.status} verification must win`,
+  );
+  assertEqual(
+    rewardRetryRaceResult.ledgerEntryId,
+    rewardRetryLedger.ledgerEntryId,
+    'the raced reward retry should report the recorded ledger entry',
+  );
+  assertEqual(
+    rewardRetryRaceResult.alreadyProcessed,
+    true,
+    'the raced reward grant should be reported as already processed',
+  );
+}
+
+/**
+ * The first same-key request is still verifying when a retry arrives. The retry's own
+ * verifier would see the evidence as already redeemed, so it must wait for the grant.
+ */
+async function assertSameKeyRetryWaitsForGrant(kind: 'purchase' | 'reward'): Promise<void> {
+  let verifications = 0;
+  let enterFirst = (): void => {};
+  let releaseFirst = (): void => {};
+  const firstEntered = new Promise<void>((resolve) => {
+    enterFirst = resolve;
+  });
+  const firstReleased = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  async function decide(): Promise<EvidenceVerificationDecision> {
+    verifications += 1;
+    if (verifications > 1) {
+      return { status: 'rejected', reason: 'EVIDENCE_ALREADY_REDEEMED' };
+    }
+    enterFirst();
+    await firstReleased;
+    return {
+      status: 'verified',
+      verificationId: `provider:${kind}:same-key-retry`,
+      verifiedAt: '2026-07-04T00:00:02.000Z',
+    };
+  }
+  const ledger = createInMemoryGameServicesStore();
+  async function submit(): Promise<{
+    readonly granted: boolean;
+    readonly ledgerEntryId: string | undefined;
+  }> {
+    // Hosts such as the Worker create a store object for each request over shared storage.
+    const sameKeyBackend = createGameServicesBackend({
+      catalog,
+      placements,
+      store: createRequestScopedStore(ledger),
+      evidenceVerifier: { verifyPurchase: decide, verifyAdReward: decide },
+    });
+    if (kind === 'purchase') {
+      const verification = await sameKeyBackend.purchases.verifyPurchase({
+        target: 'android',
+        playerId: 'player-same-key-retry',
+        productId: 'COINS_100',
+        platformTransactionId: 'txn-same-key-retry',
+        idempotencyKey: 'purchase-same-key-retry',
+        purchasedAt: '2026-07-04T00:00:00.000Z',
+      });
+      return { granted: verification.verified, ledgerEntryId: verification.ledgerEntryId };
+    }
+    const claim = await sameKeyBackend.adRewards.claimAdReward({
+      target: 'android',
+      playerId: 'player-same-key-retry',
+      placementId: 'CONTINUE_AFTER_FAIL',
+      idempotencyKey: 'reward-same-key-retry',
+      completedAt: '2026-07-04T00:00:01.000Z',
+    });
+    return { granted: claim.granted, ledgerEntryId: claim.ledgerEntryId };
+  }
+
+  const first = submit();
+  await firstEntered;
+  const retry = submit();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  releaseFirst();
+  const [firstResult, retryResult] = await Promise.all([first, retry]);
+  assertEqual(firstResult.granted, true, `the first ${kind} request should grant`);
+  assertEqual(retryResult.granted, true, `a same-key ${kind} retry must not race the grant`);
+  assertEqual(
+    retryResult.ledgerEntryId,
+    firstResult.ledgerEntryId,
+    `a same-key ${kind} retry should report the recorded ledger entry`,
+  );
+  assertEqual(verifications, 1, `a same-key ${kind} retry should reuse the recorded grant`);
+}
+await assertSameKeyRetryWaitsForGrant('purchase');
+await assertSameKeyRetryWaitsForGrant('reward');
+
+async function assertAnalyticsRetainsSameKeyLock(kind: 'purchase' | 'reward'): Promise<void> {
+  let decisions = 0;
+  let enterAnalytics = (): void => {};
+  let releaseAnalytics = (): void => {};
+  const analyticsEntered = new Promise<void>((resolve) => {
+    enterAnalytics = resolve;
+  });
+  const analyticsReleased = new Promise<void>((resolve) => {
+    releaseAnalytics = resolve;
+  });
+  const ledger = createInMemoryGameServicesStore();
+  async function decide(): Promise<EvidenceVerificationDecision> {
+    decisions += 1;
+    return decisions === 1
+      ? { status: 'pending', reason: 'PROVIDER_PENDING' }
+      : {
+          status: 'verified',
+          verificationId: `provider:${kind}:analytics-lock`,
+          verifiedAt: '2026-07-04T00:00:02.000Z',
+        };
+  }
+  async function submit(): Promise<boolean> {
+    const backend = createGameServicesBackend({
+      catalog,
+      placements,
+      store: createRequestScopedStore(ledger),
+      evidenceVerifier: { verifyPurchase: decide, verifyAdReward: decide },
+      analytics: {
+        async track(event) {
+          if (event.name === 'purchase_pending' || event.name === 'rewarded_ad_pending') {
+            enterAnalytics();
+            await analyticsReleased;
+          }
+        },
+      },
+    });
+    if (kind === 'purchase') {
+      const result = await backend.purchases.verifyPurchase({
+        target: 'android',
+        playerId: 'player-analytics-lock',
+        productId: 'COINS_100',
+        platformTransactionId: 'txn-analytics-lock',
+        idempotencyKey: 'purchase-analytics-lock',
+        purchasedAt: '2026-07-04T00:00:00.000Z',
+      });
+      return result.verified;
+    }
+    const result = await backend.adRewards.claimAdReward({
+      target: 'android',
+      playerId: 'player-analytics-lock',
+      placementId: 'CONTINUE_AFTER_FAIL',
+      platformImpressionId: 'impression-analytics-lock',
+      idempotencyKey: 'reward-analytics-lock',
+      completedAt: '2026-07-04T00:00:00.000Z',
+    });
+    return result.granted;
+  }
+
+  const first = submit();
+  await analyticsEntered;
+  const second = submit();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assertEqual(decisions, 1, `a same-key ${kind} retry must wait through analytics`);
+  releaseAnalytics();
+  const [firstGranted, secondGranted] = await Promise.all([first, second]);
+  assertEqual(firstGranted, false, `the first ${kind} decision remains pending`);
+  assertEqual(secondGranted, true, `the later ${kind} decision may then grant`);
+}
+await assertAnalyticsRetainsSameKeyLock('purchase');
+await assertAnalyticsRetainsSameKeyLock('reward');
+
 const suppressedPlatformPayloadStore = createInMemoryGameServicesStore();
 let suppressedPlatformVerificationSequence = 0;
 const suppressedPlatformPayloadBackend = createGameServicesBackend({
@@ -1366,6 +1609,7 @@ assertEqual(
   false,
   'non-finite verifier payloads must fail closed',
 );
+assertEqual(invalidPayloadPurchase.disposition, 'rejected', 'invalid payloads must not retry');
 assertEqual(
   invalidPayloadPurchase.reason,
   'EVIDENCE_VERIFIER_ERROR',
@@ -1406,6 +1650,7 @@ const nonRecordPayloadPurchase = await nonRecordPayloadBackend.purchases.verifyP
 });
 
 assertEqual(nonRecordPayloadPurchase.verified, false, 'non-record payloads must fail closed');
+assertEqual(nonRecordPayloadPurchase.disposition, 'rejected', 'non-record payloads must not retry');
 assertEqual(
   nonRecordPayloadPurchase.reason,
   'EVIDENCE_VERIFIER_ERROR',
@@ -1835,6 +2080,45 @@ assertEqual(
   analyticsEvents.map((event) => event.sessionId).join(','),
   'server-session,server-session,server-session,server-session,server-session',
   'backend analytics should use the configured session id',
+);
+const pendingAnalyticsEvents: AnalyticsEvent[] = [];
+const pendingAnalyticsBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      return { status: 'pending', reason: 'PROVIDER_PENDING' } as const;
+    },
+    async verifyAdReward() {
+      return { status: 'pending', reason: 'PROVIDER_PENDING' } as const;
+    },
+  },
+  analytics: {
+    track(event) {
+      pendingAnalyticsEvents.push(event);
+    },
+  },
+});
+await pendingAnalyticsBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'analytics-pending-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-analytics-pending',
+  idempotencyKey: 'analytics-purchase-pending',
+  purchasedAt: '2026-07-04T00:00:03.000Z',
+});
+await pendingAnalyticsBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'analytics-pending-player',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-analytics-pending',
+  idempotencyKey: 'analytics-reward-pending',
+  completedAt: '2026-07-04T00:00:04.000Z',
+});
+assertEqual(
+  pendingAnalyticsEvents.map((event) => event.name).join(','),
+  'purchase_pending,rewarded_ad_pending',
+  'retryable server decisions must not be counted as rejections',
 );
 assertEqual(
   analyticsEvents[0]?.properties.reason,

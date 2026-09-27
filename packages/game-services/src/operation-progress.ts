@@ -40,11 +40,34 @@ export interface GameServicesOperationOptions<TProgress = GameServicesOperationP
   readonly correlationId?: string;
 }
 
-interface OperationReporter<K extends GameServicesOperationKind> {
+export interface OperationReporter<K extends GameServicesOperationKind> {
   platformRequested(): void;
   platformResult(status: PlatformStatus<K>): void;
   serverRequested(): void;
   serverResult(accepted: boolean): void;
+}
+
+/**
+ * Internal: relay a nested operation's platform and server phases to an outer observation.
+ * Its `completed` and `exception` stay internal because the outer observation reports the
+ * outcome it actually returns.
+ */
+export function forwardGameServicesProgress<K extends GameServicesOperationKind>(
+  reporter: OperationReporter<K>,
+): GameServicesOperationOptions<OperationProgress<K>> {
+  return {
+    onProgress(progress) {
+      if (progress.phase === 'platform-requested') {
+        reporter.platformRequested();
+      } else if (progress.phase === 'platform-result') {
+        reporter.platformResult(progress.status);
+      } else if (progress.phase === 'server-requested') {
+        reporter.serverRequested();
+      } else if (progress.phase === 'server-result') {
+        reporter.serverResult(progress.accepted);
+      }
+    },
+  };
 }
 
 /** Internal observation wrapper; it does not retry, cancel, verify, or grant anything. */
