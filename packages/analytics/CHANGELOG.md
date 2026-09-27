@@ -1,5 +1,15 @@
 # @mpgd/analytics
 
+## 0.4.0 — 2026-09-28
+
+### Minor changes
+
+- [9c3b6cc0](https://github.com/imjlk/mpgd-kit/commit/9c3b6cc0656ac7b2722cc658b585e6775e9b20b6) Add an opt-in durable monetization operation journal and explicit pending purchase and rewarded-ad outcomes, so games can reconcile server grants and provider finalization without replaying purchase or ad UI. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: platform@0.14.0
+
 ## 0.3.15 — 2026-09-25
 
 ### Patch changes
