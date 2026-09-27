@@ -132,7 +132,7 @@ export async function recoverOwnedPlayPurchases(input: {
       });
       return {
         productId,
-        status: verification.verified ? 'granted' : (verification.disposition ?? 'rejected'),
+        status: verification.verified ? 'granted' : (verification.disposition ?? 'pending'),
         verification,
       } as const;
     } catch {
@@ -163,6 +163,9 @@ export function createCapacitorPlayBillingProvider(
   }
   if (byLogicalId.size === 0) {
     throw new TypeError('Play Billing requires at least one one-time product.');
+  }
+  if (byLogicalId.size > 100) {
+    throw new TypeError('Play Billing supports at most 100 products per provider.');
   }
 
   async function getOwnedPurchases(): Promise<readonly OwnedPlayPurchase[]> {
@@ -272,7 +275,11 @@ export function createCapacitorPlayBillingProvider(
       }
       const code = isRecord(error) ? error.code : undefined;
       if (typeof code === 'string' && /^PLAY_BILLING_[A-Z_]+$/u.test(code)) {
-        return failure(input.id, code, code === 'PLAY_BILLING_DISCONNECTED');
+        const retryable = code === 'PLAY_BILLING_DISCONNECTED'
+          || code === 'PLAY_BILLING_SERVICE_UNAVAILABLE'
+          || code === 'PLAY_BILLING_NETWORK_ERROR'
+          || code === 'PLAY_BILLING_TRANSIENT_ERROR';
+        return failure(input.id, code, retryable);
       }
       return failure(input.id, 'PLAY_BILLING_UNAVAILABLE', true);
     }

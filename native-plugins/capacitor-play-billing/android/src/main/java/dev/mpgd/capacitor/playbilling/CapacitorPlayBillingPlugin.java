@@ -378,8 +378,36 @@ public class CapacitorPlayBillingPlugin extends Plugin {
     }
 
     private void rejectBilling(PluginCall call, BillingResult result) {
+        int responseCode = result.getResponseCode();
+        String code;
+        switch (responseCode) {
+            case BillingClient.BillingResponseCode.SERVICE_DISCONNECTED:
+                code = "PLAY_BILLING_DISCONNECTED";
+                break;
+            case BillingClient.BillingResponseCode.SERVICE_UNAVAILABLE:
+            case BillingClient.BillingResponseCode.SERVICE_TIMEOUT:
+                code = "PLAY_BILLING_SERVICE_UNAVAILABLE";
+                break;
+            case BillingClient.BillingResponseCode.NETWORK_ERROR:
+                code = "PLAY_BILLING_NETWORK_ERROR";
+                break;
+            case BillingClient.BillingResponseCode.ERROR:
+                code = "PLAY_BILLING_TRANSIENT_ERROR";
+                break;
+            case BillingClient.BillingResponseCode.ITEM_ALREADY_OWNED:
+                code = "PLAY_BILLING_ALREADY_OWNED";
+                break;
+            case BillingClient.BillingResponseCode.ITEM_UNAVAILABLE:
+                code = "PLAY_BILLING_PRODUCT_UNAVAILABLE";
+                break;
+            case BillingClient.BillingResponseCode.DEVELOPER_ERROR:
+                code = "PLAY_BILLING_CONFIGURATION_ERROR";
+                break;
+            default:
+                code = "PLAY_BILLING_ERROR";
+        }
         call.reject("Google Play Billing is unavailable (" + result.getResponseCode() + ").",
-            "PLAY_BILLING_ERROR");
+            code);
     }
 
     private void clearActivePurchase(PluginCall call) {

@@ -78,6 +78,24 @@ const provider = createCapacitorPlayBillingProvider({
 const registryCompatible: CapacitorServiceProvider = provider;
 void registryCompatible;
 
+try {
+  createCapacitorPlayBillingProvider({
+    products: Array.from({ length: 101 }, (_, index) => ({
+      id: `PRODUCT_${index}`,
+      storeId: `product_${index}`,
+      type: 'consumable' as const,
+    })),
+    getObfuscatedAccountId: () => 'player-hash-1',
+    isAndroid: () => true,
+    sdk,
+  });
+  throw new Error('Oversized product config should fail.');
+} catch (error) {
+  if (!(error instanceof TypeError) || !error.message.includes('at most 100')) {
+    throw error;
+  }
+}
+
 function request(method: BridgeMethod, payload: unknown = {}): BridgeRequest {
   return {
     id: 'request-1',
@@ -205,6 +223,16 @@ const expectedBusy = { id: 'request-1', ok: false, error: busyError };
 equal(busy, expectedBusy, 'busy purchase is not retried automatically');
 nativeError = undefined;
 
+nativeError = Object.assign(new Error('service unavailable'), {
+  code: 'PLAY_BILLING_SERVICE_UNAVAILABLE',
+});
+const serviceUnavailable = await provider.bridge.request(orderlessRequest);
+equal(serviceUnavailable.ok, false, 'service failure is reported');
+if (serviceUnavailable.ok || serviceUnavailable.error.retryable !== true) {
+  throw new Error('Transient Billing failure must be retryable.');
+}
+nativeError = undefined;
+
 nextOutcome = {
   status: 'purchased',
   purchase: { productIds: ['different-product'], purchaseToken: 'unsafe', state: 'purchased' },
@@ -225,10 +253,11 @@ equal(owned[0]?.result.status, 'completed', 'owned result state');
 equal(owned[1]?.result.status, 'pending', 'pending purchases are not granted');
 
 const verificationRequests: unknown[] = [];
+let verificationReply = { verified: true, alreadyProcessed: false, ledgerEntryId: 'ledger-1' };
 const recoveryBackend: PurchaseVerificationApi = {
   async verifyPurchase(input) {
     verificationRequests.push(input);
-    return { verified: true, alreadyProcessed: false, ledgerEntryId: 'ledger-1' };
+    return verificationReply;
   },
 };
 const recovered = await recoverOwnedPlayPurchases({
@@ -249,6 +278,14 @@ equal(requestSent.playerId, 'authenticated-player', 'recovery player binding');
 equal(requestSent.purchasedAt, '2030-01-01T00:00:00.000Z', 'recovery purchase time');
 const recoveredTokenId = await createGooglePlayTokenTransactionId('private-play-token');
 equal(requestSent.idempotencyKey, recoveredTokenId, 'stable recovery idempotency');
+
+verificationReply = { verified: false, alreadyProcessed: false, ledgerEntryId: 'ledger-1' };
+const legacyRecovery = await recoverOwnedPlayPurchases({
+  provider,
+  playerId: 'authenticated-player',
+  backend: recoveryBackend,
+});
+equal(legacyRecovery[0]?.status, 'pending', 'legacy non-grant remains retryable');
 
 const uncertainRecovery = await recoverOwnedPlayPurchases({
   provider,
