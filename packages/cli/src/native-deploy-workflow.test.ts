@@ -27,6 +27,8 @@ try {
   assert.match(workflow, /environment: 'protected-beta'/u);
   assert.match(workflow, /cancel-in-progress: false/u);
   assert.match(workflow, /group: mpgd-dev\.mpgd\.alpha-android-/u);
+  assert.match(workflow, /git check-ignore -q -- "\$GAME_PATH\/\.mpgd\/releases\/ignore-probe"/u);
+  assert.match(workflow, /MPGD_VERIFY_RELEASE_MANIFEST: "1"/u);
   assert.match(workflow, /deploy_android:/u);
   assert.match(workflow, /deploy_ios:/u);
   assert.match(workflow, /runs-on: macos-26/u);

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   IosSubmissionUncertainError,
+  isolatedAscEnvironment,
   submitVerifiedIosBuildWithRunner,
   verifyPinnedAscBinary,
   type AscJsonRunner,
@@ -51,6 +52,26 @@ const input: IosTestFlightSubmissionInput = {
   apiIssuerId: 'issuer-id',
   apiPrivateKeyBase64: 'ZmFrZSBrZXk=',
 };
+const isolated = isolatedAscEnvironment(input, fixture, {
+  PATH: '/usr/bin',
+  GITHUB_TOKEN: 'repository-write-token',
+  GH_TOKEN: 'another-token',
+  GIT_ASKPASS: '/tmp/askpass',
+  GIT_CONFIG_COUNT: '1',
+  GIT_CONFIG_VALUE_0: 'AUTHORIZATION: basic secret',
+  NPM_TOKEN: 'registry-secret',
+  MPGD_IOS_SIGNING_P12_PASSWORD: 'signing-secret',
+  ASC_PRIVATE_KEY_B64: 'stale-key',
+});
+assert.equal(isolated.PATH, '/usr/bin');
+assert.equal(isolated.GITHUB_TOKEN, undefined);
+assert.equal(isolated.GH_TOKEN, undefined);
+assert.equal(isolated.GIT_ASKPASS, undefined);
+assert.equal(isolated.GIT_CONFIG_COUNT, undefined);
+assert.equal(isolated.GIT_CONFIG_VALUE_0, undefined);
+assert.equal(isolated.NPM_TOKEN, undefined);
+assert.equal(isolated.MPGD_IOS_SIGNING_P12_PASSWORD, undefined);
+assert.equal(isolated.ASC_PRIVATE_KEY_B64, input.apiPrivateKeyBase64);
 
 interface MockState {
   readonly commands: string[];

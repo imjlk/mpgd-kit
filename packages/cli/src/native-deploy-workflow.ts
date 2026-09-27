@@ -309,6 +309,17 @@ function renderDeployJob(
     '          echo "RELEASE_KEY=$RELEASE_ID-$TARGET" >> "$GITHUB_ENV"',
     '          pnpm exec mpgd deploy plan --game "$GAME_PATH" --profile "$PROFILE" \\',
     '            --targets "$TARGET" --out "$RUNNER_TEMP/mpgd-$TARGET-plan.json"',
+    '      - name: Keep release artifacts out of the Git index',
+    '        shell: bash',
+    '        run: |',
+    '          set -euo pipefail',
+    '          if [[ -n "$(git ls-files -- "$GAME_PATH/.mpgd")" ]]; then',
+    '            echo "Tracked .mpgd files would be overwritten by artifact restore" >&2',
+    '            exit 1',
+    '          fi',
+    '          game_prefix="$(git -C "$GAME_PATH" rev-parse --show-prefix)"',
+    '          printf "/%s.mpgd/\\n" "$game_prefix" >> "$(git rev-parse --git-path info/exclude)"',
+    '          git check-ignore -q -- "$GAME_PATH/.mpgd/releases/ignore-probe"',
     '      - name: Restore the exact recorded binary',
     "        if: inputs.artifact_run_id != ''",
     '        uses: actions/download-artifact@v7',
@@ -330,6 +341,7 @@ function renderDeployJob(
     '        env:',
     `          NPM_TOKEN: ${secret('NPM_READ_TOKEN')}`,
     `          GITHUB_TOKEN: ${expression('github.token')}`,
+    '          MPGD_VERIFY_RELEASE_MANIFEST: "1"',
   );
   lines.push(...renderCredentialEnvironment(target, secret));
   lines.push(
