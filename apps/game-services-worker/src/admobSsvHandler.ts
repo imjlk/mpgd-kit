@@ -3,6 +3,7 @@ import {
   createAdMobSsvEvidenceVerifier,
   decodeAdMobSsvCustomData,
   importAdMobSsvPublicKey,
+  admobSsvMaximumBindingFieldLength,
   type GameServicesEvidenceVerifier,
 } from '@mpgd/game-services';
 
@@ -19,7 +20,6 @@ export interface AdMobSsvWorkerConfig {
 
 const callbackPath = /^\/admob\/ssv\/(android|ios)$/u;
 const maximumCallbackUrlLength = 8_192;
-const maximumBindingFieldLength = 256;
 
 /** Google-facing intake. The existing game-services verifier checks the signed callback. */
 export function createAdMobSsvCallbackFetchHandler(
@@ -51,9 +51,9 @@ export function createAdMobSsvCallbackFetchHandler(
     if (binding === undefined || keyId === undefined || transactionId === undefined) {
       return new Response('Invalid AdMob SSV binding', { status: 400 });
     }
-    if (binding.playerId.length > maximumBindingFieldLength
-      || binding.placementId.length > maximumBindingFieldLength
-      || binding.idempotencyKey.length > maximumBindingFieldLength
+    if (binding.playerId.length > admobSsvMaximumBindingFieldLength
+      || binding.placementId.length > admobSsvMaximumBindingFieldLength
+      || binding.idempotencyKey.length > admobSsvMaximumBindingFieldLength
       || keyId.length > 32 || transactionId.length > 128) {
       return new Response('AdMob SSV binding is too large', { status: 400 });
     }

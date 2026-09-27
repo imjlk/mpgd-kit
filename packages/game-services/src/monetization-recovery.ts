@@ -1,5 +1,6 @@
 import type { PurchaseResult, RewardedAdResult } from '@mpgd/platform';
 
+import { isAdMobClientRewardEvidence } from './admob-client-reward.js';
 import { isAuthoritativeMicrosoftStoreCompletion } from './authoritative-purchase.js';
 import { createGameServicesClient, type CreateGameServicesClientInput } from './client.js';
 import type {
@@ -772,8 +773,9 @@ function assertRewardRequest(
   input: CreateRecoverableMonetizationClientInput,
 ): void {
   const request = record.request;
-  if (request === undefined || record.platform?.status !== 'completed'
-    || !record.platform.rewardGranted
+  if (request === undefined || record.platform === undefined
+    || ((record.platform.status !== 'completed' || !record.platform.rewardGranted)
+      && !isAdMobClientRewardEvidence(record.platform))
     || request.playerId !== record.playerId || request.playerId !== input.playerId
     || request.target !== record.target || request.placementId !== record.input.placementId
     || request.idempotencyKey !== record.input.idempotencyKey

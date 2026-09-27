@@ -10,6 +10,8 @@ import type {
 import type { ClaimAdRewardRequest } from './types.js';
 
 export const admobSsvCustomDataSchema = 'mpgd.admob.ssv.binding.v1';
+/** Maximum field length accepted by the shipped game-services SSV receiver. */
+export const admobSsvMaximumBindingFieldLength = 256;
 export const defaultAdMobSsvMaximumCallbackAgeMs = 86_400_000;
 export const defaultAdMobSsvMaximumFutureSkewMs = 300_000;
 

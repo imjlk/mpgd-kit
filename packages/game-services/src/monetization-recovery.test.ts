@@ -1,4 +1,9 @@
-import type { PlatformGateway, PurchaseResult } from '@mpgd/platform';
+import type {
+  PlatformEvidenceEnvelope,
+  PlatformGateway,
+  PurchaseResult,
+  RewardedAdResult,
+} from '@mpgd/platform';
 import type { AnalyticsEvent } from '@mpgd/analytics';
 
 import type { GameServicesBackendApi } from './client.js';
@@ -79,6 +84,15 @@ let uiEntered: (() => void) | undefined;
 let uiRelease: (() => void) | undefined;
 const purchaseKeys = new Set<string>();
 const rewardKeys = new Set<string>();
+const provisionalAdEvidence: PlatformEvidenceEnvelope = {
+  schema: 'mpgd.admob.client-reward.v1',
+  payload: { adUnitId: 'ca-app-pub-1234567890123456/1234567890' },
+};
+const provisionalAdReward: RewardedAdResult = {
+  status: 'pending',
+  rewardGranted: false,
+  evidence: provisionalAdEvidence,
+};
 const purchaseRequestTimes: string[] = [];
 const analyticsEvents: AnalyticsEvent[] = [];
 let currentTime = '2026-09-26T00:00:00.000Z';
@@ -137,6 +151,9 @@ const gateway: PlatformGateway = {
       rewardUiCalls += 1;
       if (operation.idempotencyKey === 'delayed-reward') {
         return { status: 'pending', rewardGranted: false };
+      }
+      if (operation.idempotencyKey === 'admob-ssv-delayed') {
+        return provisionalAdReward;
       }
       if (operation.idempotencyKey === 'reward-sdk-crash') {
         throw new Error('SDK ad callback was lost');
@@ -1047,6 +1064,21 @@ assert.equal(claimWriteResult.status, 'granted');
 assert.equal(
   claimWriteProgress.events.join(','),
   'platform-requested,platform-result,server-requested,completed:granted',
+);
+
+ssvAvailable = false;
+const provisionalAdKey = 'admob-ssv-delayed';
+const provisionalAd = { placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: provisionalAdKey };
+const provisionalUiBefore = rewardUiCalls;
+assert.equal((await client.claimRewardedAd(provisionalAd)).status, 'pending');
+assert.equal(rewardUiCalls, provisionalUiBefore + 1);
+ssvAvailable = true;
+await restarted.reconcile();
+assert.equal((await restarted.claimRewardedAd(provisionalAd)).status, 'granted');
+assert.equal(
+  rewardUiCalls,
+  provisionalUiBefore + 1,
+  'SSV recovery must not reopen a provisional ad',
 );
 
 console.log('Durable monetization operation recovery passed.');

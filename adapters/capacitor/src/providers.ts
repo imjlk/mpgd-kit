@@ -1,4 +1,5 @@
 import type { BridgeMethod, BridgeRequest, BridgeResponse } from '@mpgd/bridge';
+import { isAdMobClientRewardEvidence } from '@mpgd/game-services/admob-client-reward';
 import {
   PlatformOperationError,
   type PlatformProviderAvailability,
@@ -338,6 +339,8 @@ function isValidProviderData(method: BridgeMethod, value: unknown): boolean {
           && isString(value.ledgerEntryId)
           && value.ledgerEntryId.length > 0
         ))
+        && (value.status !== 'completed' || value.rewardGranted
+          || value.evidence === undefined || isAdMobClientRewardEvidence(value))
         && (value.evidence === undefined || isEvidence(value.evidence));
     case 'ads.showInterstitial':
       return isRecord(value)
