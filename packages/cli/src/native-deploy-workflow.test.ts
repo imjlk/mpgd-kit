@@ -42,6 +42,7 @@ try {
   assert.match(workflow, /export MPGD_IOS_SIGNING_P12=/u);
   assert.match(workflow, /MPGD_DEPENDENCY_INSTALL_ENV_NAMES=NPM_TOKEN/u);
   assert.match(workflow, /GIT_CONFIG_VALUE_0=/u);
+  assert.match(workflow, /GIT_CONFIG_KEY_0="http\.\$\{GITHUB_SERVER_URL%\/\}\/\.extraheader"/u);
   assert.equal(workflow.match(/persist-credentials: false/gu)?.length, 3);
   assert.match(workflow, /retention-days: 30/u);
   assert.match(workflow, /retention-days: 90/u);
@@ -111,6 +112,9 @@ try {
     releaseBranch: 'main',
     targets: ['android'] as const,
   };
+  assert.throws(() => initializeNativeDeployWorkflow(reservedInput), /reserved by CI/u);
+  config.profiles.beta.targets.android.signingCredential.env = 'MPGD_VERIFY_RELEASE_MANIFEST';
+  writeFileSync(deployFile, `${JSON.stringify(config)}\n`);
   assert.throws(() => initializeNativeDeployWorkflow(reservedInput), /reserved by CI/u);
   console.info('Game-owned native deployment workflow scaffolding passed.');
 } finally {

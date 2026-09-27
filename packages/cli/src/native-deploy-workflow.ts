@@ -51,6 +51,7 @@ const reservedWorkflowEnvironmentNames = new Set([
   'MPGD_ASC_KEY_ID',
   'MPGD_ASC_ISSUER_ID',
   'MPGD_DEPENDENCY_INSTALL_ENV_NAMES',
+  'MPGD_VERIFY_RELEASE_MANIFEST',
   'ASC_TELEMETRY_DISABLED',
 ]);
 
@@ -352,8 +353,9 @@ function renderDeployJob(
     '          trap \'rm -rf -- "$secret_dir"\' EXIT',
     '          git_auth="$(node -e \'process.stdout.write(',
     '            Buffer.from("x-access-token:"+process.env.GITHUB_TOKEN).toString("base64"))\')"',
+    '          [[ "$GITHUB_SERVER_URL" == https://* ]]',
     '          export GIT_CONFIG_COUNT=1',
-    '          export GIT_CONFIG_KEY_0=http.https://github.com/.extraheader',
+    '          export GIT_CONFIG_KEY_0="http.${GITHUB_SERVER_URL%/}/.extraheader"',
     '          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $git_auth"',
     '          write_secret() {',
     '            node -e \'const fs=require("node:fs"); const name=process.argv[1];',
