@@ -355,8 +355,15 @@ for read-only pages; the server, not the client, chooses `participantEntry` scop
 `@mpgd/game-services/google-play-purchase` provides a backend-only boundary for
 Google Play one-time products. The game-owned backend supplies a
 `GooglePlayProductPurchaseClient` implementation using its own OAuth/service
-account environment; credentials, access tokens, and API endpoints do not
-belong in the game client, generated artifacts, or this repository.
+account environment. `@mpgd/game-services/google-play-publisher-client` now
+provides that transport: pass a server-side `getAccessToken(signal)` callback
+that returns a token scoped to `https://www.googleapis.com/auth/androidpublisher`.
+The callback must refresh tokens when needed; do not put credentials or access
+tokens in the game client, generated artifacts, or this repository. The
+transport calls the official ProductPurchaseV2 get endpoint and the legacy
+product acknowledge/consume endpoints used for post-ledger finalization. It
+does not grant anything on its own, and an HTTP success is not evidence of a
+working Play Console account until tested with that game's configuration.
 
 The Android callback sends a `google-play.product-purchase.v2` evidence envelope
 whose payload contains only the purchase token. Configure the package name on
@@ -393,7 +400,9 @@ Compose both halves of the boundary with the authoritative backend:
 
 ```ts
 const googlePlay = createGooglePlayProductPurchaseBoundary({
-  client: gameOwnedGooglePlayClient,
+  client: createGooglePlayPublisherClient({
+    getAccessToken: gameOwnedPublisherAccessToken,
+  }),
   packageName: gameOwnedPackageName,
   resolveObfuscatedAccountId: resolvePlayerAccountHash,
   resolveObfuscatedProfileId: resolvePlayerProfileHash,
