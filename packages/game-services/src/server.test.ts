@@ -1452,6 +1452,77 @@ async function assertSameKeyRetryWaitsForGrant(kind: 'purchase' | 'reward'): Pro
 await assertSameKeyRetryWaitsForGrant('purchase');
 await assertSameKeyRetryWaitsForGrant('reward');
 
+async function assertAnalyticsRetainsSameKeyLock(kind: 'purchase' | 'reward'): Promise<void> {
+  let decisions = 0;
+  let enterAnalytics = (): void => {};
+  let releaseAnalytics = (): void => {};
+  const analyticsEntered = new Promise<void>((resolve) => {
+    enterAnalytics = resolve;
+  });
+  const analyticsReleased = new Promise<void>((resolve) => {
+    releaseAnalytics = resolve;
+  });
+  const ledger = createInMemoryGameServicesStore();
+  async function decide(): Promise<EvidenceVerificationDecision> {
+    decisions += 1;
+    return decisions === 1
+      ? { status: 'pending', reason: 'PROVIDER_PENDING' }
+      : {
+          status: 'verified',
+          verificationId: `provider:${kind}:analytics-lock`,
+          verifiedAt: '2026-07-04T00:00:02.000Z',
+        };
+  }
+  async function submit(): Promise<boolean> {
+    const backend = createGameServicesBackend({
+      catalog,
+      placements,
+      store: createRequestScopedStore(ledger),
+      evidenceVerifier: { verifyPurchase: decide, verifyAdReward: decide },
+      analytics: {
+        async track(event) {
+          if (event.name === 'purchase_pending' || event.name === 'rewarded_ad_pending') {
+            enterAnalytics();
+            await analyticsReleased;
+          }
+        },
+      },
+    });
+    if (kind === 'purchase') {
+      const result = await backend.purchases.verifyPurchase({
+        target: 'android',
+        playerId: 'player-analytics-lock',
+        productId: 'COINS_100',
+        platformTransactionId: 'txn-analytics-lock',
+        idempotencyKey: 'purchase-analytics-lock',
+        purchasedAt: '2026-07-04T00:00:00.000Z',
+      });
+      return result.verified;
+    }
+    const result = await backend.adRewards.claimAdReward({
+      target: 'android',
+      playerId: 'player-analytics-lock',
+      placementId: 'CONTINUE_AFTER_FAIL',
+      platformImpressionId: 'impression-analytics-lock',
+      idempotencyKey: 'reward-analytics-lock',
+      completedAt: '2026-07-04T00:00:00.000Z',
+    });
+    return result.granted;
+  }
+
+  const first = submit();
+  await analyticsEntered;
+  const second = submit();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assertEqual(decisions, 1, `a same-key ${kind} retry must wait through analytics`);
+  releaseAnalytics();
+  const [firstGranted, secondGranted] = await Promise.all([first, second]);
+  assertEqual(firstGranted, false, `the first ${kind} decision remains pending`);
+  assertEqual(secondGranted, true, `the later ${kind} decision may then grant`);
+}
+await assertAnalyticsRetainsSameKeyLock('purchase');
+await assertAnalyticsRetainsSameKeyLock('reward');
+
 const suppressedPlatformPayloadStore = createInMemoryGameServicesStore();
 let suppressedPlatformVerificationSequence = 0;
 const suppressedPlatformPayloadBackend = createGameServicesBackend({

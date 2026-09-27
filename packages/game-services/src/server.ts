@@ -338,7 +338,7 @@ export function createGameServicesBackend(
     version,
     purchases: {
       async verifyPurchase(request) {
-        const verification = await verifyPurchaseWithStore(request, {
+        return verifyPurchaseWithStore(request, {
           catalog: input.catalog,
           store,
           now,
@@ -349,53 +349,49 @@ export function createGameServicesBackend(
           ...(input.purchaseGrantFinalizer === undefined
             ? {}
             : { purchaseGrantFinalizer: input.purchaseGrantFinalizer }),
+        }, async (verification) => {
+          await analytics.track({
+            name: verification.verified ? 'purchase_granted'
+              : verification.disposition === 'pending' ? 'purchase_pending' : 'purchase_rejected',
+            properties: {
+              target: request.target,
+              playerId: request.playerId,
+              productId: request.productId,
+              ledgerEntryId: verification.ledgerEntryId,
+              alreadyProcessed: verification.alreadyProcessed,
+              reason: verification.reason,
+              finalizationStatus: verification.finalization?.status,
+              finalizationAction: verification.finalization?.action,
+              finalizationAlreadyCompleted: verification.finalization?.alreadyCompleted,
+              finalizationReason: verification.finalization?.reason,
+            },
+          });
         });
-
-        await analytics.track({
-          name: verification.verified ? 'purchase_granted'
-            : verification.disposition === 'pending' ? 'purchase_pending' : 'purchase_rejected',
-          properties: {
-            target: request.target,
-            playerId: request.playerId,
-            productId: request.productId,
-            ledgerEntryId: verification.ledgerEntryId,
-            alreadyProcessed: verification.alreadyProcessed,
-            reason: verification.reason,
-            finalizationStatus: verification.finalization?.status,
-            finalizationAction: verification.finalization?.action,
-            finalizationAlreadyCompleted: verification.finalization?.alreadyCompleted,
-            finalizationReason: verification.finalization?.reason,
-          },
-        });
-
-        return verification;
       },
     },
     adRewards: {
       async claimAdReward(request) {
-        const claim = await claimAdRewardWithStore(request, {
+        return claimAdRewardWithStore(request, {
           placements: input.placements,
           store,
           now,
           evidenceVerifier,
           evidenceVerificationTimeoutMs,
           deploymentTargetBindings,
+        }, async (claim) => {
+          await analytics.track({
+            name: claim.granted ? 'rewarded_ad_granted'
+              : claim.disposition === 'pending' ? 'rewarded_ad_pending' : 'rewarded_ad_rejected',
+            properties: {
+              target: request.target,
+              playerId: request.playerId,
+              placementId: request.placementId,
+              ledgerEntryId: claim.ledgerEntryId,
+              alreadyProcessed: claim.alreadyProcessed,
+              reason: claim.reason,
+            },
+          });
         });
-
-        await analytics.track({
-          name: claim.granted ? 'rewarded_ad_granted'
-            : claim.disposition === 'pending' ? 'rewarded_ad_pending' : 'rewarded_ad_rejected',
-          properties: {
-            target: request.target,
-            playerId: request.playerId,
-            placementId: request.placementId,
-            ledgerEntryId: claim.ledgerEntryId,
-            alreadyProcessed: claim.alreadyProcessed,
-            reason: claim.reason,
-          },
-        });
-
-        return claim;
       },
     },
     leaderboard: {
@@ -625,6 +621,7 @@ interface PurchaseVerificationContext {
 async function verifyPurchaseWithStore(
   input: VerifyPurchaseRequest,
   context: PurchaseVerificationContext,
+  onDecision: (verification: VerifyPurchaseResponse) => Promise<void>,
 ): Promise<VerifyPurchaseResponse> {
   const request = bindRequestDeploymentTarget(
     assertVerifyPurchaseRequest(input),
@@ -640,8 +637,10 @@ async function verifyPurchaseWithStore(
       ? {}
       : { deploymentTarget: request.deploymentTarget }),
   } as const;
-  return withEntitlementRetryLock(retryIdentity, () => {
-    return verifyPurchaseForRetry(request, retryIdentity, context);
+  return withEntitlementRetryLock(retryIdentity, async () => {
+    const verification = await verifyPurchaseForRetry(request, retryIdentity, context);
+    await onDecision(verification);
+    return verification;
   });
 }
 
@@ -1012,6 +1011,7 @@ interface AdRewardClaimContext {
 async function claimAdRewardWithStore(
   input: ClaimAdRewardRequest,
   context: AdRewardClaimContext,
+  onDecision: (claim: ClaimAdRewardResponse) => Promise<void>,
 ): Promise<ClaimAdRewardResponse> {
   const request = bindRequestDeploymentTarget(
     assertClaimAdRewardRequest(input),
@@ -1027,8 +1027,10 @@ async function claimAdRewardWithStore(
       ? {}
       : { deploymentTarget: request.deploymentTarget }),
   } as const;
-  return withEntitlementRetryLock(retryIdentity, () => {
-    return claimAdRewardForRetry(request, retryIdentity, context);
+  return withEntitlementRetryLock(retryIdentity, async () => {
+    const claim = await claimAdRewardForRetry(request, retryIdentity, context);
+    await onDecision(claim);
+    return claim;
   });
 }
 
