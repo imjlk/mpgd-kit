@@ -885,22 +885,6 @@ try {
   const publishable = new Map(discoverPublishablePackages().map((entry) => [entry.name, entry]));
   const packed = new Map<string, string>();
   const visited = new Set<string>();
-  const roots = new Set(['@mpgd/cli', '@mpgd/phaser-assets']);
-  const differsFromMain = (directory: string, version: string | undefined): boolean => {
-    const manifestPath = join(directory, 'package.json').replaceAll('\\', '/');
-    const base = spawnSync('git', ['show', `origin/main:${manifestPath}`], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-    });
-    if (base.status !== 0) {
-      return true;
-    }
-    try {
-      return JSON.parse(base.stdout).version !== version;
-    } catch {
-      return true;
-    }
-  };
   const packDependency = (name: string): void => {
     if (visited.has(name)) {
       return;
@@ -908,10 +892,9 @@ try {
     visited.add(name);
     const entry = publishable.get(name);
     assert.ok(entry, `Publishable workspace dependency is missing: ${name}`);
-    // Ordinary PRs keep using published dependencies; release PRs pin bumped candidates.
-    if (roots.has(name) || differsFromMain(entry.dir, entry.packageJson.version)) {
-      packed.set(name, packWorkspace(entry.dir));
-    }
+    // The version on main may be unpublished until release automation finishes.
+    // Always install the complete workspace closure from local tarballs.
+    packed.set(name, packWorkspace(entry.dir));
     for (const dependency of Object.keys(entry.packageJson.dependencies ?? {})) {
       if (dependency.startsWith('@mpgd/')) {
         packDependency(dependency);

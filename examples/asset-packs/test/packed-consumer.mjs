@@ -70,18 +70,6 @@ function packWorkspaceClosure(names) {
   }
   const packed = new Map();
   const visited = new Set();
-  const roots = new Set(names);
-  function differsFromMain(entry) {
-    const base = run('git', [
-      'show', `origin/main:${entry.directory.replaceAll('\\', '/')}/package.json`,
-    ], repoRoot);
-    if (base.status !== 0) return true;
-    try {
-      return JSON.parse(base.stdout).version !== entry.manifest.version;
-    } catch {
-      return true;
-    }
-  }
   function visit(name) {
     if (visited.has(name)) return;
     visited.add(name);
@@ -89,13 +77,12 @@ function packWorkspaceClosure(names) {
     assert.ok(entry, `Publishable workspace dependency is missing: ${name}`);
     assert.notEqual(entry.manifest.private, true,
       `Workspace dependency is private and cannot be published: ${name}`);
-    // Ordinary PRs keep using published dependencies; release PRs pin bumped candidates.
-    if (roots.has(name) || differsFromMain(entry)) {
-      packed.set(name, {
-        tarball: packageTarball(entry.directory),
-        version: entry.manifest.version,
-      });
-    }
+    // A version on main may not be published yet. Pack the complete workspace
+    // closure so the external consumer never needs an unpublished npm version.
+    packed.set(name, {
+      tarball: packageTarball(entry.directory),
+      version: entry.manifest.version,
+    });
     for (const dependency of Object.keys(entry.manifest.dependencies ?? {})) {
       if (dependency.startsWith('@mpgd/')) visit(dependency);
     }
