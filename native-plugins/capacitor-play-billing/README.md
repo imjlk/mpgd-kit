@@ -26,6 +26,9 @@ uncertainty stays pending for retry; `commerce.restore` deliberately returns
 no local entitlements. Pending Play purchases remain pending until Google
 reports purchased. The caller must not grant based on a native callback,
 `getOwnedPurchases()` result, or `commerce.restore` alone.
+If a launched purchase times out, is interrupted, or reports an already-owned
+item without a matching callback, the provider returns `pending`. Requery and
+recover owned purchases before offering another billing flow.
 
 The Kit reference app includes an opt-in Gradle compile target, without
 bundling Billing into the base app:

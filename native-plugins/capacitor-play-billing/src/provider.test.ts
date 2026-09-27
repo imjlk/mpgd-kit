@@ -14,6 +14,7 @@ import type { CapacitorPlayBillingPlugin, PlayPurchaseOutcome } from './definiti
 
 const calls: string[] = [];
 let nativeError: Error | undefined;
+let productLookupError: Error | undefined;
 let productOffers = [{ offerToken: 'offer-1', formattedPrice: '$1.00', currencyCode: 'USD' }];
 let nextOutcome: PlayPurchaseOutcome = {
   status: 'purchased',
@@ -25,6 +26,9 @@ let nextOutcome: PlayPurchaseOutcome = {
   },
 };
 async function getProducts() {
+  if (productLookupError !== undefined) {
+    throw productLookupError;
+  }
   const product = {
     productId: 'coins_100',
     title: '100 Coins',
@@ -135,6 +139,18 @@ const ambiguousProducts = await provider.bridge.request(request('commerce.getPro
 equal(ambiguousProducts.ok, false, 'multiple offers require an explicit selection');
 productOffers = productOffers.slice(0, 1);
 
+productLookupError = Object.assign(new Error('bad package config'), {
+  code: 'PLAY_BILLING_CONFIGURATION_ERROR',
+});
+const configurationAvailability = await provider.getAvailability();
+equal(configurationAvailability.nativeIap, 'configuration-required', 'configuration errors');
+productLookupError = Object.assign(new Error('offline'), {
+  code: 'PLAY_BILLING_NETWORK_ERROR',
+});
+const networkAvailability = await provider.getAvailability();
+equal(networkAvailability.nativeIap, 'temporarily-unavailable', 'network errors');
+productLookupError = undefined;
+
 equal(await provider.bridge.request(request('commerce.purchase', {
   productId: 'COINS_100',
 })), {
@@ -221,6 +237,13 @@ const busy = await provider.bridge.request(orderlessRequest);
 const busyError = { code: 'PLAY_BILLING_BUSY', message: 'PLAY_BILLING_BUSY', retryable: false };
 const expectedBusy = { id: 'request-1', ok: false, error: busyError };
 equal(busy, expectedBusy, 'busy purchase is not retried automatically');
+nativeError = undefined;
+
+nativeError = Object.assign(new Error('callback missing'), { code: 'PLAY_BILLING_TIMEOUT' });
+const callbackTimeout = await provider.bridge.request(orderlessRequest);
+const timeoutData = { status: 'pending', entitlementIds: [] };
+const expectedTimeout = { id: 'request-1', ok: true, data: timeoutData };
+equal(callbackTimeout, expectedTimeout, 'callback timeout requires owned-purchase requery');
 nativeError = undefined;
 
 nativeError = Object.assign(new Error('service unavailable'), {

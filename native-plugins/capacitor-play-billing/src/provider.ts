@@ -275,6 +275,19 @@ export function createCapacitorPlayBillingProvider(
       }
       const code = isRecord(error) ? error.code : undefined;
       if (typeof code === 'string' && /^PLAY_BILLING_[A-Z_]+$/u.test(code)) {
+        if (
+          input.method === 'commerce.purchase'
+          && (
+            code === 'PLAY_BILLING_TIMEOUT'
+            || code === 'PLAY_BILLING_INTERRUPTED'
+            || code === 'PLAY_BILLING_EMPTY_PURCHASE'
+            || code === 'PLAY_BILLING_ALREADY_OWNED'
+          )
+        ) {
+          // The purchase may have completed without an observed callback.
+          // Requery owned purchases; never launch another flow blindly.
+          return success(input.id, { status: 'pending', entitlementIds: [] });
+        }
         const retryable = code === 'PLAY_BILLING_DISCONNECTED'
           || code === 'PLAY_BILLING_SERVICE_UNAVAILABLE'
           || code === 'PLAY_BILLING_NETWORK_ERROR'
@@ -306,8 +319,16 @@ export function createCapacitorPlayBillingProvider(
           return mapping !== undefined && selectOffer(mapping, found) !== undefined;
         });
         return { nativeIap: hasPurchasableProduct ? 'available' : 'configuration-required' };
-      } catch {
-        return { nativeIap: 'temporarily-unavailable' };
+      } catch (error) {
+        const code = isRecord(error) ? error.code : undefined;
+        const configurationError = code === 'PLAY_BILLING_CONFIGURATION_ERROR'
+          || code === 'PLAY_BILLING_PRODUCT_UNAVAILABLE'
+          || code === 'PLAY_BILLING_OFFER_REQUIRED'
+          || code === 'PLAY_BILLING_INVALID_PRODUCTS'
+          || code === 'PLAY_BILLING_INVALID_PRODUCT';
+        return { nativeIap: configurationError
+          ? 'configuration-required'
+          : 'temporarily-unavailable' };
       }
     },
     getOwnedPurchases,
