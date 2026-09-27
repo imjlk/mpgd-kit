@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
   copyFileSync,
   existsSync,
@@ -21,6 +22,7 @@ const fixtureRoot = mkdtempSync(join(tmpdir(), 'mpgd-native-cli-consumer-'));
 const packRoot = join(fixtureRoot, 'packs');
 const gameRoot = join(fixtureRoot, 'game');
 const syncIos = process.argv.includes('--sync-ios');
+const releaseSimulation = process.argv.includes('--release-simulation');
 
 function run(command, args, cwd, env = process.env, timeout = 300_000) {
   const pnpmScript = command === 'pnpm' && process.platform === 'win32'
@@ -69,6 +71,7 @@ try {
     name: 'mpgd-external-native-consumer',
     private: true,
     version: '1.2.3',
+    packageManager: 'pnpm@11.7.0',
     type: 'module',
     dependencies: {
       '@capacitor/app': '8.1.1',
@@ -148,7 +151,7 @@ try {
   assert.equal(typeof installedCli.runNativeDeployment, 'function');
   assert.equal(typeof installedCli.submitRecordedNativeTarget, 'function');
   assert.equal(typeof installedCli.readNativeReleaseStatus, 'function');
-  mustRun('git', ['init', '-q'], gameRoot);
+  mustRun('git', ['init', '--object-format=sha1', '-q'], gameRoot);
   mustRun('git', ['add', '.'], gameRoot);
   mustRun('git', [
     '-c', 'user.name=mpgd-test', '-c', 'user.email=mpgd-test@example.invalid',
@@ -248,6 +251,9 @@ try {
   assert.match(workflow, /github\.ref == 'refs\/heads\/main'/u);
   assert.match(workflow, /environment: 'native-beta'/u);
   assert.doesNotMatch(workflow, /pull_request_target/u);
+  if (releaseSimulation) {
+    await verifyPackedReleaseSimulation(installedCli, cliDist, gameRoot, fixtureRoot, env);
+  }
   const nestedRoot = join(fixtureRoot, 'nested-workspace');
   const nestedGame = join(nestedRoot, 'games', 'alpha');
   mkdirSync(nestedGame, { recursive: true });
@@ -268,11 +274,270 @@ try {
   }));
   mustRun('pnpm', ['install', '--no-frozen-lockfile'], nestedRoot);
   mustRun('pnpm', ['--dir', nestedGame, 'exec', 'mpgd', '--help'], nestedRoot);
-  console.info(`External @mpgd/cli native ${syncIos ? 'iOS sync' : 'validation'} passed.`);
+  let modeLabel = 'validation';
+  if (syncIos) {
+    modeLabel = 'iOS sync';
+  }
+  if (releaseSimulation) {
+    modeLabel = 'mock release';
+  }
+  console.info(`External @mpgd/cli native ${modeLabel} passed.`);
 } finally {
   if (process.env.MPGD_KEEP_NATIVE_CONSUMER !== '1') {
     rmSync(fixtureRoot, { recursive: true, force: true });
   } else {
     console.info(`Kept external native consumer at ${fixtureRoot}`);
   }
+}
+
+async function verifyPackedReleaseSimulation(cli, cliDist, game, fixture, env) {
+  const remote = join(fixture, 'release-state.git');
+  mustRun('git', ['init', '--bare', '--object-format=sha1', '-q', remote], fixture);
+  mustRun('git', ['remote', 'add', 'origin', remote], game);
+  const configFile = join(game, 'mpgd.deploy.json');
+  const config = JSON.parse(readFileSync(configFile, 'utf8'));
+  config.profiles.beta.targets.ios.testGroup = 'group-1';
+  writeFileSync(configFile, `${JSON.stringify(config, null, 2)}\n`);
+  mustRun('git', ['add', '.'], game);
+  mustRun('git', [
+    '-c', 'user.name=mpgd-test', '-c', 'user.email=mpgd-test@example.invalid',
+    'commit', '-qm', 'release profile',
+  ], game);
+  const gameSha = mustRun('git', ['rev-parse', 'HEAD'], game).trim();
+  const planFile = join(fixture, 'packed-release-plan.json');
+  mustRun('pnpm', [
+    'exec', 'mpgd', 'deploy', 'plan', '--game', game, '--profile', 'beta',
+    '--targets', 'android,ios', '--out', planFile,
+  ], game, env);
+  const plan = JSON.parse(readFileSync(planFile, 'utf8'));
+  assert.deepEqual(plan.targets.map((entry) => entry.target), ['android', 'ios']);
+  assert.equal(plan.targets[1].testGroup, 'group-1');
+  const kit = JSON.parse(readFileSync(join(cliDist, 'native-build-info.json'), 'utf8'));
+  const releaseKey = 'packed-beta-001';
+  const stateInput = { gameRoot: game, gameId: 'external-game', releaseKey, environment: env };
+  const reservationInput = {
+    ...stateInput,
+    gameVersion: '1.2.3',
+    sourceGitSha: gameSha,
+    kitGitSha: kit.kitGitSha,
+    targetConfigDigest: plan.targetConfigSha256,
+    targets: [{ target: 'android' }, { target: 'ios' }],
+    initialLedger: {
+      schemaVersion: 2,
+      platforms: { android: { versionCode: 40 }, ios: { buildNumber: 50 } },
+      releaseRevision: { lastAllocated: 0 },
+    },
+  };
+  const reserved = await cli.reserveNativeRelease(reservationInput);
+  assert.equal(reserved.reused, false);
+  assert.equal(reserved.plan.targets.android.versionCode, 41);
+  assert.equal(reserved.plan.targets.ios.buildNumber, 51);
+  assert.equal((await cli.reserveNativeRelease(reservationInput)).reused, true);
+  const signer = await import(pathToFileURL(join(cliDist, 'android-bundle-signer.js')).href);
+  const play = await import(pathToFileURL(join(cliDist, 'play-internal-submission.js')).href);
+  const submit = await import(pathToFileURL(join(cliDist, 'native-deploy-submission.js')).href);
+  const signing = join(fixture, 'fixture-signing');
+  mkdirSync(signing);
+  writeFileSync(join(signing, 'payload.txt'), 'mock Android bundle bytes');
+  mustRun('keytool', [
+    '-genkeypair', '-alias', 'fixture', '-keyalg', 'RSA', '-keysize', '2048',
+    '-validity', '2', '-dname', 'CN=mpgd mock fixture', '-storetype', 'PKCS12',
+    '-keystore', join(signing, 'fixture.p12'), '-storepass', 'fixture-only-password',
+    '-keypass', 'fixture-only-password', '-noprompt',
+  ], fixture, env);
+  mustRun('jar', [
+    '--create', '--file', join(signing, 'unsigned.aab'), '-C', signing, 'payload.txt',
+  ], fixture, env);
+  const androidSource = join(signing, 'signed.aab');
+  mustRun('jarsigner', [
+    '-keystore', join(signing, 'fixture.p12'), '-storepass', 'fixture-only-password',
+    '-keypass', 'fixture-only-password', '-signedjar', androidSource,
+    join(signing, 'unsigned.aab'), 'fixture',
+  ], fixture, env);
+  const outputDir = join(game, '.mpgd', 'releases', releaseKey);
+  mkdirSync(outputDir, { recursive: true });
+  copyFileSync(androidSource, join(outputDir, 'android.aab'));
+  writeFileSync(join(outputDir, 'ios.ipa'), 'mock IPA bytes; not an Apple-signed archive');
+  const records = {};
+  for (const target of ['android', 'ios']) {
+    const artifactName = target === 'android' ? 'android.aab' : 'ios.ipa';
+    const artifact = join(outputDir, artifactName);
+    const planned = plan.targets.find((entry) => entry.target === target);
+    const version = reserved.plan.targets[target];
+    const digest = plan.targetConfigSha256;
+    const manifest = {
+      releaseId: `mpgd-${reserved.plan.releaseLabel}+${reserved.plan.buildId}`,
+      gitSha: gameSha,
+      kitGitSha: kit.kitGitSha,
+      gameVersion: '1.2.3',
+      buildId: reserved.plan.buildId,
+      targetConfigVersion: '1',
+      catalogVersion: '1',
+      adPlacementVersion: '1',
+      releaseIdentity: {
+        gameVersion: '1.2.3',
+        releaseRevision: reserved.plan.releaseRevision,
+        label: reserved.plan.releaseLabel,
+      },
+      targets: {
+        [target]: {
+          artifact: artifactName,
+          effectiveConfig: { path: 'effective.json', version: '1', digest },
+          iconManifest: {
+            path: 'icons.json', digest, sourceSha256: digest,
+            sharedConfigSha256: digest, renderConfigSha256: digest,
+            generatorVersion: '1', targetProfile: target, targetProfileVersion: '1',
+          },
+          profile: 'production',
+          ...(target === 'android'
+            ? { versionCode: version.versionCode, versionName: version.versionName }
+            : { buildNumber: String(version.buildNumber),
+                marketingVersion: version.marketingVersion }),
+          nativeDelivery: {
+            platform: target,
+            mode: target === 'android' ? 'signed-archive' : 'store-export',
+            signed: true,
+            submissionCandidate: true,
+          },
+        },
+      },
+    };
+    const manifestBytes = `${JSON.stringify(manifest)}\n`;
+    const manifestHash = createHash('sha256').update(manifestBytes).digest('hex');
+    const manifestFile = join(outputDir, `${target}-manifest-${manifestHash}.json`);
+    writeFileSync(manifestFile, manifestBytes);
+    const recorded = await cli.recordNativeReleaseBuild({
+      ...stateInput,
+      target,
+      buildRunId: `${target}-mock-build`,
+      kitPackageVersion: kit.packageVersion,
+      buildConfigDigest: digest,
+      deployConfigSha256: plan.deployConfigSha256,
+      deploymentProfile: plan.profile,
+      deploymentDestination: planned.destination,
+      ...(target === 'ios' ? { internalTestGroupId: planned.testGroup } : {}),
+      artifactFile: artifact,
+      expectedArtifactSha256: hashFile(artifact),
+      artifactLocation: `.mpgd/releases/${releaseKey}/${artifactName}`,
+      releaseManifestFile: manifestFile,
+      expectedReleaseManifestSha256: manifestHash,
+      inspectedAppId: planned.appId,
+      ...(target === 'android'
+        ? { inspectedSignerSha256: await signer.inspectAndroidBundleSigner(artifact) }
+        : { inspectedTeamId: 'ABCDEFGHIJ' }),
+    });
+    records[target] = recorded.record;
+  }
+  const beforeSubmission = await cli.readNativeReleaseStatus(stateInput);
+  assert.ok(beforeSubmission.builds.android && beforeSubmission.builds.ios);
+  assert.deepEqual(beforeSubmission.submissions, {});
+  let playApiCalls = 0;
+  const fakePublisher = {
+    async insertEdit() {
+      playApiCalls += 1;
+      return 'mock-play-edit';
+    },
+    async listBundles() {
+      return [];
+    },
+    async uploadBundle() {
+      return {
+        versionCode: reserved.plan.targets.android.versionCode,
+        sha256: records.android.artifactSha256,
+      };
+    },
+    async getTrack() {
+      return { track: 'internal', releases: [] };
+    },
+    async updateTrack() {},
+    async validateEdit() {},
+    async commitEdit() {},
+  };
+  let iosCalls = 0;
+  const ports = {
+    readStatus: cli.readNativeReleaseStatus,
+    checkpoint: cli.checkpointNativeSubmission,
+    reclaim: cli.reclaimNativeSubmission,
+    releaseLease: cli.releaseNativeSubmissionLease,
+    async submitAndroid(input) {
+      return play.submitVerifiedAndroidBundleWithPublisher(input, fakePublisher);
+    },
+    async submitIos(input) {
+      assert.equal(hashFile(input.ipaFile), input.record.artifactSha256);
+      iosCalls += 1;
+      if (iosCalls === 1) {
+        await input.onUploadCommitted('mock-upload');
+        throw new cli.IosSubmissionUncertainError('mock-upload');
+      }
+      assert.equal(input.resumeUploadId, 'mock-upload');
+      return {
+        status: iosCalls === 2 ? 'processing' : 'testflight-ready',
+        appStoreAppId: '123456', bundleId: input.bundleId,
+        marketingVersion: '1.2.3', buildNumber: '51',
+        internalGroupId: input.internalGroupId,
+        uploadId: 'mock-upload', buildId: 'mock-build',
+      };
+    },
+  };
+  const androidInput = {
+    plan, gameId: stateInput.gameId, releaseKey,
+    credential: { target: 'android', serviceAccountFile: '/mock-only.json' },
+    approved: true, environment: { ...env, MPGD_VERIFY_RELEASE_MANIFEST: '1' },
+  };
+  const iosInput = {
+    ...androidInput,
+    credential: {
+      target: 'ios', ascBinary: '/mock-only-asc', appStoreAppId: '123456',
+      apiKeyId: 'ABCDEFGHIJ', apiIssuerId: 'mock-issuer',
+      apiPrivateKeyBase64: 'mock-private-key',
+    },
+  };
+  await assert.rejects(
+    submit.submitRecordedNativeTargetWithPorts({ ...androidInput, approved: false }, ports),
+    /explicit approval/u,
+  );
+  await assert.rejects(
+    submit.submitRecordedNativeTargetWithPorts({
+      ...iosInput,
+      plan: { ...plan, targets: plan.targets.map((entry) => entry.target === 'ios'
+        ? { ...entry, testGroup: 'wrong-group' } : entry) },
+    }, ports),
+    /matching immutable native build record/u,
+  );
+  const androidArtifact = join(outputDir, 'android.aab');
+  writeFileSync(androidArtifact, 'changed bundle bytes');
+  await assert.rejects(
+    submit.submitRecordedNativeTargetWithPorts(androidInput, ports),
+    /Google Play AAB bytes differ from the immutable build record/u,
+  );
+  assert.equal(playApiCalls, 0, 'invalid artifact must fail before a Play API call');
+  copyFileSync(androidSource, androidArtifact);
+  assert.equal((await submit.submitRecordedNativeTargetWithPorts(androidInput, ports)).status,
+    'committed');
+  await assert.rejects(
+    submit.submitRecordedNativeTargetWithPorts(iosInput, ports),
+    (error) => error instanceof cli.IosSubmissionUncertainError,
+  );
+  assert.equal((await cli.readNativeReleaseStatus(stateInput)).submissions.ios.status, 'unknown');
+  assert.equal((await submit.submitRecordedNativeTargetWithPorts(iosInput, ports)).status,
+    'processing');
+  assert.equal((await submit.submitRecordedNativeTargetWithPorts(iosInput, ports)).status,
+    'testflight-ready');
+  const status = await cli.readNativeReleaseStatus(stateInput);
+  assert.equal(status.submissions.android.status, 'committed');
+  assert.equal(status.submissions.ios.status, 'testflight-ready');
+  assert.equal((await cli.reserveNativeRelease(reservationInput)).reused, true);
+  const printedStatus = mustRun('pnpm', [
+    'exec', 'mpgd', 'deploy', 'status', '--game', game,
+    '--game-id', stateInput.gameId, '--release', releaseKey,
+  ], game, env);
+  const statusJsonBoundary = printedStatus.lastIndexOf('\n{');
+  assert.ok(statusJsonBoundary >= 0, 'deploy status must print a JSON object after its CLI banner');
+  assert.equal(JSON.parse(printedStatus.slice(statusJsonBoundary + 1).trim())
+    .submissions.ios.status, 'testflight-ready');
+  assert.equal(records.android.artifactSha256, hashFile(androidArtifact));
+}
+
+function hashFile(file) {
+  return createHash('sha256').update(readFileSync(file)).digest('hex');
 }

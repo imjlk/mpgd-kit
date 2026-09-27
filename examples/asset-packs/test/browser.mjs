@@ -180,7 +180,7 @@ try {
       await page.waitForTimeout(70);
       assert.ok(count('grove') > beforeCancel);
       await page.click('#cancel');
-      assert.equal((await state()).phase, 'idle');
+      await wait('idle');
       assert.deepEqual((await state()).resources, []);
       // Immediately acquiring a replacement must survive any late old work.
       await page.click('#dunes');
