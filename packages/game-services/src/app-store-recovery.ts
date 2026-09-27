@@ -60,6 +60,11 @@ export function createAppStoreRecoveryBackend(
   if (options.playerId.trim() === '') {
     throw new TypeError('App Store recovery requires an authenticated player ID.');
   }
+  const restoreTimeoutMs = options.restoredNonConsumables?.timeoutMs;
+  if (restoreTimeoutMs !== undefined
+    && (!Number.isSafeInteger(restoreTimeoutMs) || restoreTimeoutMs <= 0)) {
+    throw new TypeError('Restored App Store verification timeout must be positive.');
+  }
 
   return {
     async recoverPurchase(input) {
@@ -82,8 +87,7 @@ export function createAppStoreRecoveryBackend(
       };
       try {
         const restoreConfig = options.restoredNonConsumables;
-        if (request.deploymentTarget === undefined
-          && input.productType === 'non_consumable'
+        if (input.productType === 'non_consumable'
           && input.originalTransactionId !== undefined
           && input.originalTransactionId !== input.platformTransactionId
           && restoreConfig !== undefined) {
@@ -104,8 +108,15 @@ export function createAppStoreRecoveryBackend(
               return rejected('APP_STORE_RECOVERY_IDENTITY_MISMATCH');
             }
             if (typeof candidate.payload.deploymentTarget === 'string') {
+              if (request.deploymentTarget !== undefined
+                && request.deploymentTarget !== candidate.payload.deploymentTarget) {
+                return rejected('APP_STORE_RECOVERY_IDENTITY_MISMATCH');
+              }
               request = { ...request, deploymentTarget: candidate.payload.deploymentTarget };
             }
+          } else if (options.deploymentTarget === undefined) {
+            // A request-supplied target is not a server-bound deployment identity.
+            return pending('APP_STORE_RECOVERY_DEPLOYMENT_TARGET_REQUIRED');
           }
         }
         const restoredVerificationId = await verifyRestoredNonConsumable(
@@ -204,9 +215,6 @@ async function verifyRestoredNonConsumable(
     return rejected('APP_STORE_RECOVERY_PRODUCT_UNAVAILABLE');
   }
   const timeoutMs = config.timeoutMs ?? 10_000;
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
-    throw new TypeError('Restored App Store verification timeout must be positive.');
-  }
   const controller = new AbortController();
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<Awaited<ReturnType<GameServicesEvidenceVerifier['verifyPurchase']>>>(

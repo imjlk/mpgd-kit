@@ -370,6 +370,7 @@ signedOriginalTransactionId = originalTransactionId;
 const beforeIdentityMismatch = calls.length;
 const wrongIdentityBackend = createAppStoreRecoveryBackend({
   playerId: request.playerId,
+  deploymentTarget: 'ios-production',
   store: restoredStore,
   purchases,
   restoredNonConsumables: {
@@ -397,6 +398,74 @@ assert(
   !unverifiedRestore.verified && unverifiedRestore.disposition === 'pending',
   'restoration without an Apple verifier must not reuse the old grant',
 );
+const journalRestoreStore = createInMemoryGameServicesStore();
+const journalRestoreOptions = {
+  playerId: request.playerId,
+  store: journalRestoreStore,
+  purchases: {
+    async verifyPurchase(input: VerifyPurchaseRequest) {
+      const grant = await journalRestoreStore.recordEntitlementGrant({
+        source: 'purchase',
+        playerId: input.playerId,
+        grantId: input.productId,
+        idempotencyKey: input.idempotencyKey,
+        grantedAt: input.purchasedAt,
+        evidenceVerificationId: originalVerificationId,
+        payload: {
+          target: 'ios',
+          deploymentTarget: input.deploymentTarget ?? '',
+          productId: input.productId,
+          productType: 'non_consumable',
+          platformTransactionId: input.platformTransactionId,
+          appStoreOriginalTransactionId: originalTransactionId,
+          appStoreEnvironment: 'Production',
+          appStoreBundleId: 'com.example.game',
+        },
+      });
+      return { verified: true, alreadyProcessed: false, ledgerEntryId: grant.ledgerEntryId };
+    },
+  },
+  async resolveOriginalIdempotencyKey() {
+    return 'journal-non-consumable-checkout';
+  },
+  restoredNonConsumables: {
+    catalog: restoredCatalog,
+    evidenceVerifier: restoredEvidenceVerifier,
+    bundleId: 'com.example.game',
+    environment: 'Production' as const,
+  },
+};
+const unboundJournalRestore = await createAppStoreRecoveryBackend(
+  journalRestoreOptions,
+).recoverPurchase({ ...restoredRequest, deploymentTarget: 'ios-production' });
+assert(
+  !unboundJournalRestore.verified
+    && unboundJournalRestore.reason === 'APP_STORE_RECOVERY_DEPLOYMENT_TARGET_REQUIRED',
+  'a request-supplied deployment must not authorize a journal-only restored purchase',
+);
+const boundJournalRestore = await createAppStoreRecoveryBackend({
+  ...journalRestoreOptions,
+  deploymentTarget: 'ios-production',
+}).recoverPurchase(restoredRequest);
+assert(
+  boundJournalRestore.verified,
+  'a server-bound deployment must select the custom product before journal-only restore',
+);
+for (const invalidTimeout of [0, -1, 1.5, Number.NaN]) {
+  let rejectedConfiguration = false;
+  try {
+    createAppStoreRecoveryBackend({
+      ...journalRestoreOptions,
+      restoredNonConsumables: {
+        ...journalRestoreOptions.restoredNonConsumables,
+        timeoutMs: invalidTimeout,
+      },
+    });
+  } catch (error) {
+    rejectedConfiguration = error instanceof TypeError;
+  }
+  assert(rejectedConfiguration, 'invalid restore timeout must fail during backend setup');
+}
 const timeoutBackend = createAppStoreRecoveryBackend({
   playerId: request.playerId,
   store: restoredStore,

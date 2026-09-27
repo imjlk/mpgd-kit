@@ -44,6 +44,10 @@ request; this helper does not expose one or authenticate clients.
 For restored non-consumables whose new transaction ID differs from the
 original, configure `restoredNonConsumables` with the same catalog and official
 App Store evidence verifier, bundle ID and environment used by the game backend.
+When no prior grant exists, also bind `deploymentTarget` on the server-side
+recovery backend. The client-supplied target is not trusted to select a product;
+without a bound target this restore stays pending until the game backend is
+configured for its deployment. An existing grant can supply its recorded target.
 The bundle/environment identify an existing grant for its deployment target
 before product lookup; they must match the verifier configuration. The helper re-verifies
 the **current** Apple transaction and looks up the prior grant by its canonical
