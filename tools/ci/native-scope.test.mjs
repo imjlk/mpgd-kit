@@ -9,6 +9,7 @@ test('native source, package metadata, and its Sampo changeset stay native-only'
     'adapters/capacitor/src/index.ts',
     'native-plugins/capacitor-game-services/ios/Plugin.swift',
     'native-plugins/capacitor-play-billing/android/build.gradle',
+    'native-plugins/capacitor-storekit/ios/Sources/CapacitorStoreKit/CapacitorStoreKitPlugin.swift',
     'apps/mobile-capacitor/android/build.gradle',
     'adapters/capacitor/package.json',
     '.sampo/changesets/native-fix.md',
@@ -43,6 +44,7 @@ test('lookalike paths cannot qualify', () => {
   assert.equal(isNativeOnlyChange(['apps/mobile-capacitor-extra/src/index.ts']), false);
   assert.equal(isNativeOnlyChange(['native-plugins/capacitor-game-services-extra/src/index.ts']), false);
   assert.equal(isNativeOnlyChange(['native-plugins/capacitor-play-billing-extra/src/index.ts']), false);
+  assert.equal(isNativeOnlyChange(['native-plugins/capacitor-storekit-extra/src/index.ts']), false);
 });
 
 test('CI wires native classification to both platform jobs and the required gate', () => {
@@ -63,5 +65,6 @@ test('CI wires native classification to both platform jobs and the required gate
   const iosJob = workflow.split(/\r?\n  build-ios:\r?\n/)[1]
     ?.split(/\r?\n  [a-z0-9][a-z0-9_-]*:\r?\n/)[0];
   assert.match(iosJob ?? '', /pnpm smoke:native-packed-swift/);
+  assert.match(iosJob ?? '', /Compile opt-in StoreKit collector/);
   assert.match(workflow, /run: node tools\/ci\/verify-coverage\.mjs/);
 });
