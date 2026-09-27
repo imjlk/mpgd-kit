@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';
+import { nativeInspectionEnvironment } from './native-inspection-environment';
 
 export interface NativeInspectionCommandResult {
   readonly status: number | null;
@@ -120,7 +121,7 @@ export function inspectSignedAndroidBundle(input: {
 function runCommand(command: string, args: readonly string[]): NativeInspectionCommandResult {
   const result = spawnSync(command, [...args], {
     encoding: 'utf8',
-    env: process.env,
+    env: nativeInspectionEnvironment(),
     maxBuffer: 4 * 1024 * 1024,
   });
   if (result.error !== undefined) {

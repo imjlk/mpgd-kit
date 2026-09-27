@@ -50,8 +50,9 @@ try {
   assert.match(workflow, /GIT_CONFIG_KEY_0="http\.\$\{GITHUB_SERVER_URL%\/\}\/\.extraheader"/u);
   assert.equal(workflow.match(/persist-credentials: false/gu)?.length, 3);
   assert.match(workflow, /retention-days: 30/u);
-  assert.match(workflow, /retention-days: 90/u);
-  assert.equal(workflow.match(/inputs\.artifact_run_id != ''/gu)?.length, 4);
+  assert.doesNotMatch(workflow, /retention-days: 90/u);
+  assert.equal(workflow.match(/inputs\.artifact_run_id != ''/gu)?.length, 2);
+  assert.match(workflow, /-release\n/u);
   assert.match(workflow, /MPGD_RECORDED_BUILD_MARKER=/u);
   assert.match(workflow, /mpgd-\$TARGET-recorded-build/u);
   assert.match(workflow, /env\.MPGD_NEW_BUILD == '1'/u);
@@ -153,6 +154,11 @@ try {
   config.profiles.beta.targets.android.submissionCredential.env = 'MPGD_SHARED_CREDENTIAL';
   writeFileSync(deployFile, `${JSON.stringify(config)}\n`);
   assert.throws(() => initializeNativeDeployWorkflow(reservedInput), /distinct environment names/u);
+  config.profiles.beta.targets.android.signingCredential.env = 'MPGD_ANDROID_UPLOAD_KEYSTORE';
+  config.profiles.beta.targets.android.submissionCredential.env = 'MPGD_GOOGLE_PLAY_SERVICE_ACCOUNT';
+  config.profiles.beta.targets.ios.signingCredential.env = 'PATH';
+  writeFileSync(deployFile, `${JSON.stringify(config)}\n`);
+  assert.throws(() => initializeNativeDeployWorkflow(reservedInput), /unreserved MPGD_ prefix/u);
   console.info('Game-owned native deployment workflow scaffolding passed.');
 } finally {
   rmSync(fixture, { recursive: true, force: true });

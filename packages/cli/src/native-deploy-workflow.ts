@@ -5,6 +5,7 @@ import { isAbsolute, join, relative, sep } from 'node:path';
 
 import {
   planNativeDeployment,
+  readNativeDeployCredentialNames,
   readNativeDeployTargetProfile,
   type NativeDeployTarget,
 } from './deploy-planning.js';
@@ -132,15 +133,15 @@ export function initializeNativeDeployWorkflow(
   const secretPrefix = `MPGD_${slug.toUpperCase().replaceAll(/[^A-Z0-9]/gu, '_')}`;
   const signingNames: Record<string, string> = {};
   const submissionNames: Record<string, string> = {};
+  for (const name of readNativeDeployCredentialNames(plan)) {
+    if (!name.startsWith('MPGD_') || reservedWorkflowEnvironmentNames.has(name)) {
+      throw new Error(`Credential ${name} must use an unreserved MPGD_ prefix in CI.`);
+    }
+  }
   for (const entry of plan.targets) {
     const profile = readNativeDeployTargetProfile(plan, entry.target);
     if (profile.signingCredential.env === profile.submissionCredential.env) {
       throw new Error(`${entry.target} credentials need distinct environment names.`);
-    }
-    for (const name of [profile.signingCredential.env, profile.submissionCredential.env]) {
-      if (!name.startsWith('MPGD_') || reservedWorkflowEnvironmentNames.has(name)) {
-        throw new Error(`Credential ${name} must use an unreserved MPGD_ prefix in CI.`);
-      }
     }
     signingNames[entry.target] = profile.signingCredential.env;
     submissionNames[entry.target] = profile.submissionCredential.env;
@@ -334,19 +335,11 @@ function renderDeployJob(
     '          game_prefix="$(git -C "$GAME_PATH" rev-parse --show-prefix)"',
     '          printf "/%s.mpgd/\\n" "$game_prefix" >> "$(git rev-parse --git-path info/exclude)"',
     '          git check-ignore -q -- "$GAME_PATH/.mpgd/releases/ignore-probe"',
-    '      - name: Restore the exact recorded binary',
+    '      - name: Restore the exact recorded release bundle',
     "        if: inputs.artifact_run_id != ''",
     '        uses: actions/download-artifact@v7',
     '        with:',
-    `          name: ${input.gameId}-${target}-${expression('env.RELEASE_KEY')}-binary`,
-    `          run-id: ${expression('inputs.artifact_run_id')}`,
-    `          github-token: ${expression('github.token')}`,
-    `          path: ${input.gamePath}/.mpgd/releases/${expression('env.RELEASE_KEY')}`,
-    '      - name: Restore the recorded manifest',
-    "        if: inputs.artifact_run_id != ''",
-    '        uses: actions/download-artifact@v7',
-    '        with:',
-    `          name: ${input.gameId}-${target}-${expression('env.RELEASE_KEY')}-evidence`,
+    `          name: ${input.gameId}-${target}-${expression('env.RELEASE_KEY')}-release`,
     `          run-id: ${expression('inputs.artifact_run_id')}`,
     `          github-token: ${expression('github.token')}`,
     `          path: ${input.gamePath}/.mpgd/releases/${expression('env.RELEASE_KEY')}`,
@@ -404,25 +397,15 @@ function renderDeployJob(
     '            grep -Fxq -- "$TARGET" "$RUNNER_TEMP/mpgd-$TARGET-recorded-build"; then',
     '            echo "MPGD_NEW_BUILD=1" >> "$GITHUB_ENV"',
     '          fi',
-    '      - name: Retain verified native binary',
+    '      - name: Retain verified release bundle',
     "        if: always() && env.RELEASE_KEY != '' && env.MPGD_NEW_BUILD == '1'",
     '        uses: actions/upload-artifact@v6',
     '        with:',
-    `          name: ${input.gameId}-${target}-${expression('env.RELEASE_KEY')}-binary`,
-    `          path: ${input.gamePath}/.mpgd/releases/${expression('env.RELEASE_KEY')}`
-      + `/*.${target === 'android' ? 'aab' : 'ipa'}`,
-    '          if-no-files-found: warn',
+    `          name: ${input.gameId}-${target}-${expression('env.RELEASE_KEY')}-release`,
+    `          path: ${input.gamePath}/.mpgd/releases/${expression('env.RELEASE_KEY')}`,
+    '          if-no-files-found: error',
     '          include-hidden-files: true',
     '          retention-days: 30',
-    '      - name: Retain release manifest',
-    "        if: always() && env.RELEASE_KEY != '' && env.MPGD_NEW_BUILD == '1'",
-    '        uses: actions/upload-artifact@v6',
-    '        with:',
-    `          name: ${input.gameId}-${target}-${expression('env.RELEASE_KEY')}-evidence`,
-    `          path: ${input.gamePath}/.mpgd/releases/${expression('env.RELEASE_KEY')}/*.json`,
-    '          if-no-files-found: warn',
-    '          include-hidden-files: true',
-    '          retention-days: 90',
   );
   return lines;
 }

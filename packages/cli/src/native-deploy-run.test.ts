@@ -18,11 +18,21 @@ import {
   planNativeDeploymentSteps,
   withoutStoreSubmissionCredentials,
 } from './native-deploy-run.js';
+import { artifactInspectionEnvironment } from './artifact-inspection-environment.js';
 import type { NativeDeploymentPlan } from './deploy-planning.js';
 import type { NativeReleaseStatus } from './release-state.js';
 
 const fixture = mkdtempSync(path.join(tmpdir(), 'mpgd-deploy-output-test-'));
 try {
+  const inspectionEnvironment = artifactInspectionEnvironment({
+    PATH: '/bin',
+    JAVA_HOME: '/jdk',
+    GITHUB_TOKEN: 'private-git-token',
+    GIT_CONFIG_VALUE_0: 'private-git-header',
+    MPGD_ANDROID_UPLOAD_STORE_PASSWORD: 'private-signing-password',
+    SUBMISSION_B64: 'private-store-key',
+  });
+  assert.deepEqual(inspectionEnvironment, { PATH: '/bin', JAVA_HOME: '/jdk' });
   assert.deepEqual(
     dependencyInstallEnvironment({
       PATH: '/bin',

@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { nativeInspectionEnvironment } from './native-inspection-environment';
 
 import type {
   NativeInspectionCommandResult,
@@ -138,7 +139,7 @@ function assertNoDebugServer(file: string): void {
 function runCommand(command: string, args: readonly string[]): NativeInspectionCommandResult {
   const result = spawnSync(command, [...args], {
     encoding: 'utf8',
-    env: process.env,
+    env: nativeInspectionEnvironment(),
     maxBuffer: 4 * 1024 * 1024,
   });
   if (result.error !== undefined) {
