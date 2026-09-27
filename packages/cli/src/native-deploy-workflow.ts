@@ -63,6 +63,7 @@ const reservedWorkflowEnvironmentNames = new Set([
   'MPGD_VERIFY_RELEASE_MANIFEST',
   'MPGD_RECORDED_BUILD_MARKER',
   'MPGD_NEW_BUILD',
+  'MPGD_CLI_ARGV',
   'ASC_TELEMETRY_DISABLED',
 ]);
 
@@ -468,6 +469,7 @@ function renderCredentialSetup(
       '          write_secret SUBMISSION_B64 "$secret_dir/play-service-account.json"',
       `          export ${signingName}="$secret_dir/upload.keystore"`,
       `          export ${submissionName}="$secret_dir/play-service-account.json"`,
+      '          unset SIGNING_B64 SUBMISSION_B64',
     ];
   }
   return [
@@ -476,6 +478,7 @@ function renderCredentialSetup(
     `          export ${signingName}="$secret_dir/signing.p12"`,
     `          export ${submissionName}="$SUBMISSION_B64"`,
     '          export MPGD_IOS_PROVISIONING_PROFILE="$secret_dir/profile.mobileprovision"',
+    '          unset SIGNING_B64 PROFILE_B64 SUBMISSION_B64',
     '          case "$(uname -m)" in',
     `            arm64) asc_asset=asc_${pinnedAscVersion}_macOS_arm64 ;;`,
     `            x86_64) asc_asset=asc_${pinnedAscVersion}_macOS_amd64 ;;`,

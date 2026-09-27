@@ -455,6 +455,9 @@ export function withoutStoreSubmissionCredentials(
   delete result.MPGD_RECORDED_BUILD_MARKER;
   delete result.NPM_TOKEN;
   delete result.NODE_AUTH_TOKEN;
+  delete result.SIGNING_B64;
+  delete result.SUBMISSION_B64;
+  delete result.PROFILE_B64;
   for (const name of readNativeDeployCredentialNames(plan)) {
     delete result[name];
   }

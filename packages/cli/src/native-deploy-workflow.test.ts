@@ -44,6 +44,8 @@ try {
   assert.match(workflow, /export MPGD_ANDROID_UPLOAD_KEYSTORE=/u);
   assert.match(workflow, /export MPGD_IOS_SIGNING_P12=/u);
   assert.match(workflow, /MPGD_DEPENDENCY_INSTALL_ENV_NAMES=NPM_TOKEN/u);
+  assert.match(workflow, /unset SIGNING_B64 SUBMISSION_B64/u);
+  assert.match(workflow, /unset SIGNING_B64 PROFILE_B64 SUBMISSION_B64/u);
   assert.match(workflow, /GIT_CONFIG_VALUE_0=/u);
   assert.match(workflow, /GIT_CONFIG_KEY_0="http\.\$\{GITHUB_SERVER_URL%\/\}\/\.extraheader"/u);
   assert.equal(workflow.match(/persist-credentials: false/gu)?.length, 3);
@@ -127,6 +129,9 @@ try {
     releaseBranch: 'main',
     targets: ['android'] as const,
   };
+  assert.throws(() => initializeNativeDeployWorkflow(reservedInput), /unreserved MPGD_ prefix/u);
+  config.profiles.beta.targets.android.signingCredential.env = 'MPGD_CLI_ARGV';
+  writeFileSync(deployFile, `${JSON.stringify(config)}\n`);
   assert.throws(() => initializeNativeDeployWorkflow(reservedInput), /unreserved MPGD_ prefix/u);
   config.profiles.beta.targets.android.signingCredential.env = 'MPGD_VERIFY_RELEASE_MANIFEST';
   writeFileSync(deployFile, `${JSON.stringify(config)}\n`);
