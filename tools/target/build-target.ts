@@ -137,7 +137,11 @@ if (process.env.MPGD_SKIP_BUILD_TARGET_PREFLIGHT !== '1') {
   run('pnpm', ['validate:target-config'], targetScopedEnv);
   run('pnpm', ['validate:effective-config'], targetScopedEnv);
   run('pnpm', ['validate:targets'], targetScopedEnv);
-  run('node', ['tools/run-ttsx.mjs', 'tools/package/build-packages.ts'], process.env);
+  run(
+    'node',
+    ['tools/run-ttsx.mjs', 'tools/package/build-packages.ts', '--reuse-unchanged'],
+    process.env,
+  );
 }
 
 const gameApp = targetPath(target.gameApp);

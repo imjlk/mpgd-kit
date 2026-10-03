@@ -29,6 +29,32 @@ templates use the same version. `pnpm validate:toolchain` detects drift before
 TypeScript-Go resolution and application arguments consistent; emitted runtime
 files are owned by ttsx. It does not delete authored `.js` or `.d.ts` source siblings.
 
+Each `ttsx` process type-checks and emits the whole tools program again, because
+its execution cache is scoped to one process. Orchestrating commands that spawn
+more tool processes, such as `build:target` and its validators and package build,
+pass `--compile-once`. The runner then emits `tsconfig.ci-tools.json` once into
+`node_modules/.cache/mpgd-tools-emit/<pid>-*` and runs the entry from that emit.
+Nested `run-ttsx.mjs` invocations from the same checkout reuse it through
+`MPGD_CI_EMIT_ROOT` and `MPGD_TOOLS_EMIT_SOURCE_ROOT`. A `--compile-once` command
+never reuses an inherited emit that does not name this checkout. The directory is
+removed when the command exits. If a signal kills the command, the next
+`--compile-once` command prunes the leftover directory. The type-check gate still runs once
+per top-level command. If the emit fails, the runner falls back to `ttsx`, which
+reports the diagnostics. `MPGD_FORCE_TTSX=1` restores per-process `ttsx`.
+
+`build:target` also passes `--reuse-unchanged` to `tools/package/build-packages.ts`.
+A workspace package is not rebuilt when two things hold:
+
+- Its input fingerprint matches the build recorded in
+  `node_modules/.cache/mpgd-package-build/fingerprints/`. The fingerprint covers
+  the package files (without `dist` and `node_modules`), the fingerprints of its
+  workspace dependencies, and the build toolchain files.
+- Its `dist` still hashes to the recorded output.
+
+`@mpgd/cli` records the Kit Git SHA, so it is reused only from a clean checkout at
+the same `HEAD`. `build:packages`, which release builds use, always rebuilds every
+package. `MPGD_REBUILD_PACKAGES=1` forces a full rebuild from `build:target` too.
+
 The shared tsconfig pins `rootDir` to the repository root. Workspace projects
 include/import sibling sources; a narrower inferred root can make TypeScript-Go
 emit those outside-root files beside their sources when ttsx loads a Vite config
