@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -14,25 +15,35 @@ const platformPackageJson = typescriptRequire.resolve(`${platformPackage}/packag
 const platformRoot = dirname(platformPackageJson);
 const tsgoBinary = join(platformRoot, 'lib', process.platform === 'win32' ? 'tsc.exe' : 'tsc');
 const ttscPackageJson = rootRequire.resolve('ttsc/package.json');
+const ttscLauncher = join(dirname(ttscPackageJson), 'lib', 'launcher', 'ttsc.js');
 const ttsxLauncher = join(dirname(ttscPackageJson), 'lib', 'launcher', 'ttsx.js');
 const userArgs = process.argv.slice(2);
-const { project, passthroughArgs, cliArgv } = parseRunnerArgs(userArgs);
+const { project, passthroughArgs, cliArgv, compileOnce } = parseRunnerArgs(userArgs);
 const entry = passthroughArgs[0];
 const sourceEntry = entry === undefined ? undefined : resolve(process.cwd(), entry);
 const relativeEntry = sourceEntry === undefined ? undefined : relative(repoRoot, sourceEntry);
-const emittedRoot = process.env.MPGD_CI_EMIT_ROOT && resolve(process.cwd(), process.env.MPGD_CI_EMIT_ROOT);
-const emittedEntry = emittedRoot && relativeEntry && join(emittedRoot, relativeEntry.replace(/\.ts$/, '.js'));
-const useCompiled = process.env.MPGD_FORCE_TTSX !== '1'
-  && resolve(process.cwd(), project) === join(repoRoot, 'tsconfig.tools.json')
+const toolsEntry = resolve(process.cwd(), project) === join(repoRoot, 'tsconfig.tools.json')
   && relativeEntry !== undefined
   && !relativeEntry.startsWith('..')
   && !isAbsolute(relativeEntry)
-  && relativeEntry.endsWith('.ts')
-  && emittedEntry !== undefined
-  && existsSync(emittedEntry);
+  && relativeEntry.endsWith('.ts');
+const forceTtsx = process.env.MPGD_FORCE_TTSX === '1';
 if (!existsSync(tsgoBinary)) {
   throw new Error(`TypeScript-Go binary not found: ${tsgoBinary}`);
 }
+const inheritedEmitRoot = readInheritedEmitRoot();
+// --compile-once type-checks and emits the tools program a single time for a
+// command tree (for example build:target and the validators it spawns) instead
+// of once per ttsx process. Nested runners inherit the emit through the env.
+const ownedEmitRoot = compileOnce && toolsEntry && !forceTtsx && inheritedEmitRoot === undefined
+  ? emitToolsProgram()
+  : undefined;
+const emittedRoot = ownedEmitRoot ?? inheritedEmitRoot;
+const emittedEntry = emittedRoot && relativeEntry && join(emittedRoot, relativeEntry.replace(/\.ts$/, '.js'));
+const useCompiled = !forceTtsx
+  && toolsEntry
+  && emittedEntry !== undefined
+  && existsSync(emittedEntry);
 
 // ttsx owns its emitted files under its execution cache. Authored .js/.d.ts
 // siblings are valid inputs and must not be deleted by a repository-wide scan.
@@ -44,15 +55,84 @@ const result = spawnSync(process.execPath, useCompiled
   env: {
     ...process.env,
     TTSC_TSGO_BINARY: tsgoBinary,
+    ...(ownedEmitRoot === undefined
+      ? {}
+      : { MPGD_CI_EMIT_ROOT: ownedEmitRoot, MPGD_TOOLS_EMIT_SOURCE_ROOT: repoRoot }),
     ...(cliArgv === undefined ? {} : { MPGD_CLI_ARGV: JSON.stringify(cliArgv) }),
   },
 });
 
-const seconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
+if (ownedEmitRoot !== undefined) {
+  rmSync(ownedEmitRoot, { recursive: true, force: true });
+}
 const exitCode = result.status ?? 1;
-const mode = useCompiled ? 'compiled' : 'ttsx';
-if (process.env.GITHUB_STEP_SUMMARY) {
+recordTiming(useCompiled ? 'compiled' : 'ttsx', passthroughArgs[0] ?? '<none>', startedAt, exitCode);
+if (result.error !== undefined) {
+  throw result.error;
+}
+
+process.exit(exitCode);
+
+function readInheritedEmitRoot() {
+  const emitRoot = process.env.MPGD_CI_EMIT_ROOT;
+
+  if (emitRoot === undefined || emitRoot.length === 0) {
+    return undefined;
+  }
+
+  // A --compile-once emit belongs to the checkout that produced it. A nested
+  // command from another kit checkout must compile its own sources.
+  const sourceRoot = process.env.MPGD_TOOLS_EMIT_SOURCE_ROOT;
+  if (sourceRoot !== undefined && sourceRoot.length !== 0 && !sameRealPath(sourceRoot, repoRoot)) {
+    return undefined;
+  }
+
+  return resolve(process.cwd(), emitRoot);
+}
+
+function emitToolsProgram() {
+  const emitStartedAt = process.hrtime.bigint();
+  const outDir = mkdtempSync(join(tmpdir(), 'mpgd-tools-emit-'));
+  // Same program and plugins as CI's ci:emit-tools:prepared; diagnostics are
+  // reproduced by the ttsx fallback below, so keep the successful emit quiet.
+  const emit = spawnSync(process.execPath, [
+    ttscLauncher,
+    '-p',
+    join(repoRoot, 'tsconfig.ci-tools.json'),
+    '--outDir',
+    outDir,
+  ], {
+    cwd: repoRoot,
+    stdio: 'ignore',
+    env: { ...process.env, TTSC_TSGO_BINARY: tsgoBinary },
+  });
+  const exitCode = emit.status ?? 1;
+  recordTiming('emit', 'tsconfig.ci-tools.json', emitStartedAt, exitCode);
+
+  if (emit.error === undefined && exitCode === 0) {
+    return outDir;
+  }
+
+  rmSync(outDir, { recursive: true, force: true });
+  console.warn('Could not compile the tools program once; falling back to ttsx for this command.');
+  return undefined;
+}
+
+function sameRealPath(left, right) {
   try {
+    return realpathSync(left) === realpathSync(right);
+  } catch {
+    return false;
+  }
+}
+
+function recordTiming(mode, label, since, exitCode) {
+  if (!process.env.GITHUB_STEP_SUMMARY) {
+    return;
+  }
+
+  try {
+    const seconds = Number(process.hrtime.bigint() - since) / 1e9;
     const summaryPath = process.env.GITHUB_STEP_SUMMARY;
     const title = '### TypeScript invocation timings';
     const previous = existsSync(summaryPath) ? readFileSync(summaryPath, 'utf8') : '';
@@ -60,21 +140,17 @@ if (process.env.GITHUB_STEP_SUMMARY) {
       appendFileSync(summaryPath, `${title}\n\n| Mode | Project | Entry | Seconds | Exit |\n| --- | --- | --- | ---: | ---: |\n`);
     }
     const safeProject = project.replaceAll('|', '\\|').replaceAll('`', "'");
-    const safeEntry = (passthroughArgs[0] ?? '<none>').replaceAll('|', '\\|').replaceAll('`', "'");
+    const safeEntry = label.replaceAll('|', '\\|').replaceAll('`', "'");
     appendFileSync(summaryPath, `| ${mode} | \`${safeProject}\` | \`${safeEntry}\` | ${seconds.toFixed(1)} | ${exitCode} |\n`);
   } catch (error) {
     // Reporting must never turn a passing test into a CI failure.
     console.warn(`Could not write ttsx timing summary: ${error.message}`);
   }
 }
-if (result.error !== undefined) {
-  throw result.error;
-}
-
-process.exit(exitCode);
 
 function parseRunnerArgs(args) {
   let project = process.env.TTSC_PROJECT ?? 'tsconfig.tools.json';
+  let compileOnce = false;
   const passthroughArgs = [];
 
   for (let index = 0; index < args.length; index += 1) {
@@ -97,6 +173,12 @@ function parseRunnerArgs(args) {
       continue;
     }
 
+    // Runner options precede the entry; later arguments belong to the program.
+    if (arg === '--compile-once' && passthroughArgs.length === 0) {
+      compileOnce = true;
+      continue;
+    }
+
     if (arg === '--mpgd-cli') {
       const entry = args[index + 1];
 
@@ -108,6 +190,7 @@ function parseRunnerArgs(args) {
         project,
         passthroughArgs: [...passthroughArgs, entry],
         cliArgv: stripPnpmArgumentSeparator(args.slice(index + 2)),
+        compileOnce,
       };
     }
 
@@ -118,6 +201,7 @@ function parseRunnerArgs(args) {
     project,
     passthroughArgs,
     cliArgv: undefined,
+    compileOnce,
   };
 }
 

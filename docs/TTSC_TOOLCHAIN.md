@@ -29,6 +29,16 @@ templates use the same version. `pnpm validate:toolchain` detects drift before
 TypeScript-Go resolution and application arguments consistent; emitted runtime
 files are owned by ttsx. It does not delete authored `.js` or `.d.ts` source siblings.
 
+Each `ttsx` process type-checks and emits the whole tools program again, because
+its execution cache is scoped to one process. Orchestrating commands that spawn
+more tool processes, such as `build:target` and its validators and package build,
+pass `--compile-once`. The runner then emits `tsconfig.ci-tools.json` once into a
+temporary directory and runs the entry from that emit. Nested `run-ttsx.mjs`
+invocations from the same checkout reuse it through `MPGD_CI_EMIT_ROOT`, and the
+directory is removed when the command exits. The type-check gate still runs once
+per top-level command. If the emit fails, the runner falls back to `ttsx`, which
+reports the diagnostics. `MPGD_FORCE_TTSX=1` restores per-process `ttsx`.
+
 The shared tsconfig pins `rootDir` to the repository root. Workspace projects
 include/import sibling sources; a narrower inferred root can make TypeScript-Go
 emit those outside-root files beside their sources when ttsx loads a Vite config
