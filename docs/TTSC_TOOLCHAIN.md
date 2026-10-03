@@ -32,10 +32,13 @@ files are owned by ttsx. It does not delete authored `.js` or `.d.ts` source sib
 Each `ttsx` process type-checks and emits the whole tools program again, because
 its execution cache is scoped to one process. Orchestrating commands that spawn
 more tool processes, such as `build:target` and its validators and package build,
-pass `--compile-once`. The runner then emits `tsconfig.ci-tools.json` once into a
-temporary directory and runs the entry from that emit. Nested `run-ttsx.mjs`
-invocations from the same checkout reuse it through `MPGD_CI_EMIT_ROOT`, and the
-directory is removed when the command exits. The type-check gate still runs once
+pass `--compile-once`. The runner then emits `tsconfig.ci-tools.json` once into
+`node_modules/.cache/mpgd-tools-emit/<pid>-*` and runs the entry from that emit.
+Nested `run-ttsx.mjs` invocations from the same checkout reuse it through
+`MPGD_CI_EMIT_ROOT` and `MPGD_TOOLS_EMIT_SOURCE_ROOT`. A `--compile-once` command
+never reuses an inherited emit that does not name this checkout. The directory is
+removed when the command exits. If a signal kills the command, the next
+`--compile-once` command prunes the leftover directory. The type-check gate still runs once
 per top-level command. If the emit fails, the runner falls back to `ttsx`, which
 reports the diagnostics. `MPGD_FORCE_TTSX=1` restores per-process `ttsx`.
 

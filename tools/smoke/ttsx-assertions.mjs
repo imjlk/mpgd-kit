@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,13 +47,21 @@ assert.deepEqual(
 // emit with nested runners from this checkout, and removes it afterwards.
 const compileOnceRoot = mkdtempSync(join(tmpdir(), 'mpgd-compile-once-smoke-'));
 try {
-  for (const shouldFail of [false, true]) {
-    const summary = join(compileOnceRoot, `${shouldFail ? 'failure' : 'success'}.md`);
+  // The last case inherits an emit root without a source marker (for example a
+  // prepared emit from another checkout); --compile-once must emit its own.
+  const untrustedEmitRoot = join(compileOnceRoot, 'untrusted-emit');
+  mkdirSync(untrustedEmitRoot);
+  for (const [shouldFail, inheritUntrusted] of [[false, false], [true, false], [false, true]]) {
+    const name = `${shouldFail ? 'failure' : 'success'}${inheritUntrusted ? '-untrusted' : ''}`;
+    const summary = join(compileOnceRoot, `${name}.md`);
     const env = { ...process.env, GITHUB_STEP_SUMMARY: summary };
     // The prepared suite forces ttsx and provides the CI emit; this case needs neither.
     delete env.MPGD_FORCE_TTSX;
     delete env.MPGD_CI_EMIT_ROOT;
     delete env.MPGD_TOOLS_EMIT_SOURCE_ROOT;
+    if (inheritUntrusted) {
+      env.MPGD_CI_EMIT_ROOT = untrustedEmitRoot;
+    }
     const result = spawnSync(process.execPath, [
       'tools/run-ttsx.mjs', '--compile-once', 'tools/fixtures/compile-once-canary.ts',
       ...(shouldFail ? ['--expect-failure'] : []),
@@ -70,6 +78,7 @@ try {
     }
     const emitRoot = /^MPGD_COMPILE_ONCE_EMIT_ROOT=(.+)$/m.exec(result.stdout)?.[1];
     assert.ok(emitRoot, 'the compile-once entry must run from the shared emit');
+    assert.notEqual(emitRoot, untrustedEmitRoot, 'an unmarked inherited emit must not be reused');
     assert.equal(existsSync(emitRoot), false, 'the command-scoped emit must be removed');
     const modes = readFileSync(summary, 'utf8').split('\n')
       .filter((line) => line.startsWith('| ') && !line.startsWith('| Mode') && !line.startsWith('| ---'))

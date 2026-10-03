@@ -1,7 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -31,7 +30,7 @@ const forceTtsx = process.env.MPGD_FORCE_TTSX === '1';
 if (!existsSync(tsgoBinary)) {
   throw new Error(`TypeScript-Go binary not found: ${tsgoBinary}`);
 }
-const inheritedEmitRoot = readInheritedEmitRoot();
+const inheritedEmitRoot = readInheritedEmitRoot(compileOnce);
 // --compile-once type-checks and emits the tools program a single time for a
 // command tree (for example build:target and the validators it spawns) instead
 // of once per ttsx process. Nested runners inherit the emit through the env.
@@ -62,9 +61,6 @@ const result = spawnSync(process.execPath, useCompiled
   },
 });
 
-if (ownedEmitRoot !== undefined) {
-  rmSync(ownedEmitRoot, { recursive: true, force: true });
-}
 const exitCode = result.status ?? 1;
 recordTiming(useCompiled ? 'compiled' : 'ttsx', passthroughArgs[0] ?? '<none>', startedAt, exitCode);
 if (result.error !== undefined) {
@@ -73,7 +69,7 @@ if (result.error !== undefined) {
 
 process.exit(exitCode);
 
-function readInheritedEmitRoot() {
+function readInheritedEmitRoot(requireSourceRoot) {
   const emitRoot = process.env.MPGD_CI_EMIT_ROOT;
 
   if (emitRoot === undefined || emitRoot.length === 0) {
@@ -83,16 +79,49 @@ function readInheritedEmitRoot() {
   // A --compile-once emit belongs to the checkout that produced it. A nested
   // command from another kit checkout must compile its own sources.
   const sourceRoot = process.env.MPGD_TOOLS_EMIT_SOURCE_ROOT;
-  if (sourceRoot !== undefined && sourceRoot.length !== 0 && !sameRealPath(sourceRoot, repoRoot)) {
+  const hasSourceRoot = sourceRoot !== undefined && sourceRoot.length !== 0;
+  if (hasSourceRoot && !sameRealPath(sourceRoot, repoRoot)) {
+    return undefined;
+  }
+
+  // CI's prepared emit (no source marker) stays reusable by plain runners, but a
+  // --compile-once command only trusts an emit that names this checkout.
+  if (requireSourceRoot && !hasSourceRoot) {
     return undefined;
   }
 
   return resolve(process.cwd(), emitRoot);
 }
 
+// Command-scoped emits live under this checkout's cache, named by the owning
+// runner's pid. Normal exits remove their own; a runner killed by a signal
+// leaves one behind, which the next --compile-once command prunes.
+function createEmitDirectory() {
+  const parent = join(repoRoot, 'node_modules', '.cache', 'mpgd-tools-emit');
+  mkdirSync(parent, { recursive: true });
+  for (const entry of readdirSync(parent)) {
+    const ownerPid = Number.parseInt(entry, 10);
+    if (Number.isSafeInteger(ownerPid) && ownerPid !== process.pid && !isProcessAlive(ownerPid)) {
+      rmSync(join(parent, entry), { recursive: true, force: true });
+    }
+  }
+  const dir = mkdtempSync(join(parent, `${process.pid}-`));
+  process.on('exit', () => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === 'EPERM';
+  }
+}
+
 function emitToolsProgram() {
   const emitStartedAt = process.hrtime.bigint();
-  const outDir = mkdtempSync(join(tmpdir(), 'mpgd-tools-emit-'));
+  const outDir = createEmitDirectory();
   // Same program and plugins as CI's ci:emit-tools:prepared; diagnostics are
   // reproduced by the ttsx fallback below, so keep the successful emit quiet.
   const emit = spawnSync(process.execPath, [
