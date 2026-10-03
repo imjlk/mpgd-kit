@@ -13,6 +13,7 @@ import { basename, dirname, join, relative } from 'node:path';
 
 import { buildSync } from 'esbuild';
 
+import { createInputFingerprints, isReusableBuild, recordBuild } from './build-fingerprint';
 import {
   discoverBuildablePackages,
   sortByWorkspaceDependencies,
@@ -20,7 +21,15 @@ import {
 } from './workspace';
 
 const cacheDir = join('node_modules', '.cache', 'mpgd-package-build');
-const packages = selectBuildablePackages(discoverBuildablePackages(), process.argv.slice(2));
+const fingerprintDir = join(cacheDir, 'fingerprints');
+// build:target passes --reuse-unchanged: a package whose sources, workspace
+// dependencies and toolchain match its last build, and whose dist is untouched,
+// is not rebuilt. Release builds (build:packages) always rebuild.
+// MPGD_REBUILD_PACKAGES=1 forces a full rebuild.
+const reuseUnchanged = process.argv.includes('--reuse-unchanged')
+  && process.env.MPGD_REBUILD_PACKAGES !== '1';
+const requestedPackageNames = process.argv.slice(2).filter((arg) => arg !== '--reuse-unchanged');
+const packages = selectBuildablePackages(discoverBuildablePackages(), requestedPackageNames);
 const packagePaths = Object.fromEntries(
   packages.map((workspacePackage) => [
     workspacePackage.name,
@@ -32,7 +41,20 @@ const allowedGeneratedSourcePrefixes = [
   'packages/i18n/src/paraglideAdapter.',
 ] as const;
 
-mkdirSync(cacheDir, { recursive: true });
+mkdirSync(fingerprintDir, { recursive: true });
+const inputFingerprints = createInputFingerprints(discoverBuildablePackages(), {
+  toolchainFiles: [
+    'tools/package/build-packages.ts',
+    'tools/package/build-fingerprint.ts',
+    'tools/package/workspace.ts',
+    'pnpm-lock.yaml',
+    'package.json',
+    'tsconfig.base.json',
+    'lint.config.js',
+  ],
+  kitHead: cleanKitHead,
+});
+const reusedPackages: string[] = [];
 
 for (const workspacePackage of sortByWorkspaceDependencies(packages)) {
   const srcDir = join(workspacePackage.dir, 'src');
@@ -42,6 +64,14 @@ for (const workspacePackage of sortByWorkspaceDependencies(packages)) {
   if (!existsSync(srcDir) || !existsSync(tsconfigPath)) {
     throw new Error(`Package is missing src or tsconfig.json: ${workspacePackage.name}`);
   }
+
+  const inputFingerprint = inputFingerprints(workspacePackage.name);
+  if (reuseUnchanged && isReusableBuild(fingerprintFile(workspacePackage.name), inputFingerprint, distDir)) {
+    reusedPackages.push(workspacePackage.name);
+    console.log(`Reused ${workspacePackage.name}`);
+    continue;
+  }
+  rmSync(fingerprintFile(workspacePackage.name), { force: true });
 
   rmSync(distDir, { force: true, recursive: true });
 
@@ -92,7 +122,12 @@ for (const workspacePackage of sortByWorkspaceDependencies(packages)) {
     buildPackagedIosInspection(distDir);
     buildPackagedNativeTarget(workspacePackage, distDir);
   }
+  recordBuild(fingerprintFile(workspacePackage.name), inputFingerprint, distDir);
   console.log(`Built ${workspacePackage.name}`);
+}
+
+if (reuseUnchanged) {
+  console.log(`Reused ${reusedPackages.length} of ${packages.length} unchanged package builds.`);
 }
 
 function buildPlayPublisherAdapter(distDir: string): void {
@@ -359,4 +394,28 @@ function safeFileName(value: string): string {
 
 function toPosix(path: string): string {
   return path.split('\\').join('/');
+}
+
+function fingerprintFile(name: string): string {
+  return join(fingerprintDir, `${safeFileName(name)}.json`);
+}
+
+// @mpgd/cli records the Kit Git SHA and dirty state, so it is only reused from a
+// clean checkout at the same HEAD.
+function cleanKitHead(): string | undefined {
+  try {
+    const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (status.length > 0) {
+      return undefined;
+    }
+    return execFileSync('git', ['rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {
+    return undefined;
+  }
 }
