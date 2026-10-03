@@ -315,12 +315,21 @@ authenticated ingress sits in front of the Worker.
 Bind the optional `GAME_SERVICES_INGRESS_AUTH` service to authenticate the
 public purchases, ad-rewards, and leaderboard routes. Its
 `authenticateGameServicesRequest({ authorization })` RPC receives the complete
-`Authorization` header value and returns the authenticated `{ playerId }` or
-`undefined`. When the binding is configured, a public grant request without a
-resolvable token receives `401 UNAUTHORIZED`, a body `playerId` that differs
-from the authenticated player receives `403 PLAYER_ID_MISMATCH`, and a binding
-failure receives `500 AUTHENTICATION_FAILED`. Without the binding, the public
-grant routes remain unauthenticated.
+`Authorization` header value and returns the authenticated `{ playerId }`, or
+`undefined` / `null` when the token does not resolve. When the binding is
+configured, a public grant request without a resolvable token receives
+`401 UNAUTHORIZED`, a body `playerId` that differs from the authenticated player
+receives `403 PLAYER_ID_MISMATCH`, and a binding failure (a thrown error, or any
+result other than `{ playerId: string }` with a non-empty ID) receives
+`500 AUTHENTICATION_FAILED`. Without the binding, the public grant routes remain
+unauthenticated.
+
+Both gates match the request path after percent-decoding each segment and
+dropping empty segments, because oRPC's `RPCHandler` resolves procedures the
+same way: `/rpc/%63ommerce/verifyPurchase` and `/rpc/commerce/verifyPurchase/`
+are gated exactly like `/rpc/commerce/verifyPurchase`. A path segment that
+cannot be percent-decoded receives `404 UNKNOWN_ENDPOINT` from the Worker
+without reaching the HTTP or oRPC handlers.
 
 The default `wrangler.toml` uses `MPGD_STORE = "memory"` so local smoke tests
 work without provisioning cloud resources. For production persistence, create a

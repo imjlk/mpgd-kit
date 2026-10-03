@@ -1080,6 +1080,108 @@ assertEqual(
   'ingress auth binding should receive the complete Authorization header',
 );
 
+// The grant-route gate must match the same decoded path oRPC's RPCHandler resolves: it retries
+// a non-matching path after percent-decoding each segment and also ignores a trailing slash, so
+// an encoded or slash-suffixed spelling of a gated route must be gated identically.
+const encodedRpcScorePaths = [
+  '/rpc/leaderboard/%72ecordScore',
+  '/rpc/%6Ceaderboard/recordScore',
+  '/rpc/leaderboard/recordScore/',
+  '/rpc//leaderboard/recordScore',
+] as const;
+for (const encodedPath of encodedRpcScorePaths) {
+  const hiddenScore = await defaultMemoryFetch(
+    new Request(`${baseUrl}${encodedPath}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ json: { ...unverifiedScoreRequest, runId: `encoded-${encodedPath}` } }),
+    }),
+  );
+  assertEqual(hiddenScore.status, 404, `${encodedPath} must stay hidden without the opt-in`);
+  assertEqual(await readError(hiddenScore), 'UNKNOWN_ENDPOINT', `${encodedPath} hidden error code`);
+}
+
+const encodedGrantPaths = [
+  '/rpc/%63ommerce/verifyPurchase',
+  '/rpc/commerce/%76erifyPurchase',
+  '/rpc/commerce/verifyPurchase/',
+  '/rpc/%61ds/claimReward',
+  '/rpc/ads/claimReward/',
+  '/game-services/%70urchases/verify',
+  '/game-services/purchases/verify/',
+  '/game-services/ad-rewards/%63laim',
+] as const;
+for (const encodedPath of encodedGrantPaths) {
+  const unauthenticated = await postIngress(encodedPath, { json: ingressPurchaseRequest });
+  assertEqual(unauthenticated.status, 401, `${encodedPath} must require the ingress token`);
+  assertEqual(await readError(unauthenticated), 'UNAUTHORIZED', `${encodedPath} error code`);
+}
+
+const malformedGrantPath = await postIngress('/rpc/commerce/%ZZverifyPurchase', {
+  json: ingressPurchaseRequest,
+});
+assertEqual(malformedGrantPath.status, 404, 'undecodable path segments must not reach oRPC');
+assertEqual(await readError(malformedGrantPath), 'UNKNOWN_ENDPOINT', 'malformed path error code');
+
+const encodedPlainRoute = await ingressAuthFetch(new Request(`${baseUrl}/%68ealth`));
+assertEqual(
+  encodedPlainRoute.status === 401 || encodedPlainRoute.status === 403,
+  false,
+  'encoded non-grant paths must not be gated',
+);
+
+// Binding results that are not { playerId: string } must never throw out of the handler.
+const ingressShapeFetch = createWorkerFetchHandler({
+  MPGD_STORE: 'memory',
+  MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE: 'true',
+  GAME_SERVICES_INGRESS_AUTH: {
+    async authenticateGameServicesRequest(input) {
+      switch (input.authorization) {
+        case 'Bearer null-principal':
+          return null;
+        case 'Bearer string-principal':
+          return 'ingress-player' as never;
+        case 'Bearer empty-principal':
+          return {} as never;
+        case 'Bearer blank-player-id':
+          return { playerId: '' };
+        default:
+          return undefined;
+      }
+    },
+  },
+});
+const postIngressShape = (authorization: string): Promise<Response> => ingressShapeFetch(
+  new Request(`${baseUrl}/game-services/purchases/verify`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', Authorization: authorization },
+    body: JSON.stringify(ingressPurchaseRequest),
+  }),
+);
+
+const nullPrincipal = await postIngressShape('Bearer null-principal');
+assertEqual(nullPrincipal.status, 401, 'a null principal must be treated as unauthenticated');
+assertEqual(await readError(nullPrincipal), 'UNAUTHORIZED', 'null principal error code');
+assertEqual(
+  nullPrincipal.headers.get('Access-Control-Allow-Origin'),
+  '*',
+  'null principal rejection must carry CORS headers',
+);
+
+for (const authorization of [
+  'Bearer string-principal',
+  'Bearer empty-principal',
+  'Bearer blank-player-id',
+]) {
+  const malformedPrincipal = await postIngressShape(authorization);
+  assertEqual(malformedPrincipal.status, 500, `${authorization} must fail closed`);
+  assertEqual(
+    await readError(malformedPrincipal),
+    'AUTHENTICATION_FAILED',
+    `${authorization} error code`,
+  );
+}
+
 console.log('Game services Worker smoke passed: HTTP, oRPC, and private binding surfaces');
 
 function createTargetVerifierBinding(

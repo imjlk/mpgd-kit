@@ -53,11 +53,13 @@ head_sampling_rate = 1
 
 # Optional ingress authentication for the public purchases, ad-rewards, and
 # leaderboard grant routes. The service must implement
-# authenticateGameServicesRequest({ authorization }) and return { playerId } or
-# undefined. When bound, public grant requests without a resolvable
-# Authorization header receive 401 and a body playerId that differs from the
-# authenticated player receives 403. Without it, the public ingress stays
-# unauthenticated and must sit behind game-owned auth and abuse controls.
+# authenticateGameServicesRequest({ authorization }) and return { playerId },
+# or undefined / null when the token does not resolve. When bound, public grant
+# requests without a resolvable Authorization header receive 401, a body
+# playerId that differs from the authenticated player receives 403, and a
+# binding error or malformed result receives 500. Without it, the public
+# ingress stays unauthenticated and must sit behind game-owned auth and abuse
+# controls.
 #
 # [[services]]
 # binding = "GAME_SERVICES_INGRESS_AUTH"

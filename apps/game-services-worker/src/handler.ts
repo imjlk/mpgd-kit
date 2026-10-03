@@ -117,9 +117,14 @@ export interface GameServicesIngressPrincipal {
 }
 
 export interface GameServicesIngressAuthBinding {
+  /**
+   * Resolves the Authorization header to the authenticated player. `undefined` and `null` both
+   * mean "no principal" and produce 401 UNAUTHORIZED; a thrown error or any other result that
+   * is not `{ playerId: string }` produces 500 AUTHENTICATION_FAILED.
+   */
   authenticateGameServicesRequest(
     input: GameServicesIngressAuthBindingRequest,
-  ): Promise<GameServicesIngressPrincipal | undefined>;
+  ): Promise<GameServicesIngressPrincipal | null | undefined>;
 }
 
 export interface GameServicesWorkerService {
@@ -245,6 +250,12 @@ export function createWorkerFetchHandler(
     const pathname = new URL(request.url).pathname;
     const grantRoute = resolvePublicGrantRoute(pathname, rpcPrefix);
 
+    if (grantRoute === 'malformed') {
+      // A segment with an undecodable percent-escape can never name a route we mount. Reject it
+      // here instead of letting a downstream matcher decide how to interpret it.
+      return jsonResponse({ error: 'UNKNOWN_ENDPOINT' }, 404, corsHeaders);
+    }
+
     if (grantRoute !== undefined && request.method !== 'OPTIONS') {
       // Unverified score writes are a trusted-caller operation. Keep them off the public
       // ingress unless the deployment explicitly opts in; the service binding is unaffected.
@@ -284,27 +295,78 @@ interface PublicGrantRoute {
 /**
  * Maps a public pathname to the grant operation it invokes. oRPC RPC paths mirror the
  * contract router keys mounted by createGameServicesRouter, independent of REST route metadata.
+ *
+ * Matching is done on the normalised path, not the raw URL.pathname: segments are
+ * percent-decoded and empty segments are dropped. This is at least as permissive as every
+ * downstream matcher, because oRPC's RPCHandler retries a non-matching path after decoding each
+ * segment and also ignores a trailing slash, so `/rpc/%63ommerce/verifyPurchase` and
+ * `/rpc/commerce/verifyPurchase/` reach `commerce.verifyPurchase` and must be gated the same
+ * way as the canonical spelling. Returns 'malformed' when a segment cannot be decoded.
  */
 function resolvePublicGrantRoute(
   pathname: string,
   rpcPrefix: string,
-): PublicGrantRoute | undefined {
-  switch (pathname) {
+): PublicGrantRoute | 'malformed' | undefined {
+  const segments = normalisePathSegments(pathname);
+
+  if (segments === undefined) {
+    return 'malformed';
+  }
+
+  const normalised = `/${segments.join('/')}`;
+  const rpcSegments = normalisePathSegments(rpcPrefix) ?? [];
+  const rpcRoute = (...procedure: readonly string[]): string =>
+    `/${[...rpcSegments, ...procedure].join('/')}`;
+
+  switch (normalised) {
     case gameServicesBackendEndpoints.verifyPurchase:
       return { transport: 'http', operation: 'verifyPurchase' };
     case gameServicesBackendEndpoints.claimAdReward:
       return { transport: 'http', operation: 'claimAdReward' };
     case gameServicesBackendEndpoints.recordLeaderboardScore:
       return { transport: 'http', operation: 'recordLeaderboardScore' };
-    case `${rpcPrefix}/commerce/verifyPurchase`:
+    case rpcRoute('commerce', 'verifyPurchase'):
       return { transport: 'rpc', operation: 'verifyPurchase' };
-    case `${rpcPrefix}/ads/claimReward`:
+    case rpcRoute('ads', 'claimReward'):
       return { transport: 'rpc', operation: 'claimAdReward' };
-    case `${rpcPrefix}/leaderboard/recordScore`:
+    case rpcRoute('leaderboard', 'recordScore'):
       return { transport: 'rpc', operation: 'recordLeaderboardScore' };
     default:
       return undefined;
   }
+}
+
+/**
+ * Splits a pathname into percent-decoded, non-empty segments. A decoded segment that itself
+ * contains a slash is kept as one segment, so `/rpc/commerce%2FverifyPurchase` does not collapse
+ * into the canonical route. Returns undefined when any segment has an invalid percent-escape.
+ */
+function normalisePathSegments(pathname: string): readonly string[] | undefined {
+  const segments: string[] = [];
+
+  for (const rawSegment of pathname.split('/')) {
+    if (rawSegment.length === 0) {
+      continue;
+    }
+
+    let segment: string;
+
+    try {
+      segment = decodeURIComponent(rawSegment);
+    } catch {
+      return undefined;
+    }
+
+    if (segment.includes('/')) {
+      // Keep this one opaque segment distinct from a real slash-separated route by re-encoding
+      // the slash; the join below must not produce the canonical path.
+      segment = segment.replaceAll('/', '%2F');
+    }
+
+    segments.push(segment);
+  }
+
+  return segments;
 }
 
 /**
@@ -323,7 +385,8 @@ async function authenticateIngressRequest(
     return jsonResponse({ error: 'UNAUTHORIZED' }, 401, corsHeaders);
   }
 
-  let principal: GameServicesIngressPrincipal | undefined;
+  // The binding crosses an RPC boundary, so treat its result as untyped until checked.
+  let principal: unknown;
 
   try {
     principal = await auth.authenticateGameServicesRequest({ authorization });
@@ -331,11 +394,14 @@ async function authenticateIngressRequest(
     return jsonResponse({ error: 'AUTHENTICATION_FAILED' }, 500, corsHeaders);
   }
 
-  if (principal === undefined) {
+  // undefined and null are both "no principal": null is the usual not-found value across RPC.
+  if (principal === undefined || principal === null) {
     return jsonResponse({ error: 'UNAUTHORIZED' }, 401, corsHeaders);
   }
 
-  if (typeof principal.playerId !== 'string' || principal.playerId.length === 0) {
+  const playerId = readRecord(principal)?.playerId;
+
+  if (typeof playerId !== 'string' || playerId.length === 0) {
     return jsonResponse({ error: 'AUTHENTICATION_FAILED' }, 500, corsHeaders);
   }
 
@@ -352,7 +418,7 @@ async function authenticateIngressRequest(
   // oRPC RPC requests wrap the procedure input as { json: input }; HTTP bodies are the input.
   const input = route.transport === 'rpc' ? readRecord(body)?.json : body;
 
-  if (readRecord(input)?.playerId !== principal.playerId) {
+  if (readRecord(input)?.playerId !== playerId) {
     return jsonResponse({ error: 'PLAYER_ID_MISMATCH' }, 403, corsHeaders);
   }
 
