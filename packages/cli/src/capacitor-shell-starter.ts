@@ -545,10 +545,14 @@ export function materializeCapacitorShellStarter(
     plan.gameRoot,
   );
   for (const platform of plan.nativePlatformsToAdd) {
-    if (!existsSync(path.join(plan.gameRoot, shellPath, platform))) {
+    const generatedNow = !existsSync(path.join(plan.gameRoot, shellPath, platform));
+    if (generatedNow) {
       runner.run('pnpm', ['--dir', shellPath, 'cap', 'add', platform], plan.gameRoot);
     }
     const manifest = readJsonObject(path.join(plan.gameRoot, shellPath, 'mpgd.native-shell.json'));
+    if (platform === 'android' && generatedNow) {
+      materializeAndroidBackupPolicy(plan.gameRoot);
+    }
     if (platform === 'ios') {
       materializeIosArchiveScheme(plan.gameRoot);
       const relative = `${shellPath}/ios/App/App/Info-Smoke.plist`;
@@ -572,6 +576,42 @@ export function materializeCapacitorShellStarter(
   if (afterInstall.changedFiles.length > 0 || afterInstall.nativePlatformsToAdd.length > 0) {
     throw new Error('Capacitor shell changed during installation; rerun the initializer.');
   }
+}
+
+/**
+ * Opt a freshly generated Android project out of device backups. The Capacitor
+ * template enables android:allowBackup, which would copy WebView storage and
+ * the game-services SharedPreferences save store into Google backups; only a
+ * project created by this run is touched, never an existing game-owned shell.
+ */
+function materializeAndroidBackupPolicy(gameRoot: string): void {
+  const manifestFile = safeDestination(
+    gameRoot,
+    `${shellPath}/android/app/src/main/AndroidManifest.xml`,
+  );
+  if (!existsSync(manifestFile) || !lstatSync(manifestFile).isFile()) {
+    return;
+  }
+  const source = readFileSync(manifestFile, 'utf8');
+  const hardened = disableAndroidManifestBackup(source);
+  if (hardened !== source) {
+    writeFileSync(manifestFile, hardened);
+  }
+}
+
+/** Set android:allowBackup="false" on the manifest application node. */
+export function disableAndroidManifestBackup(manifest: string): string {
+  const application = /<application\b[^>]*?\/?>/u.exec(manifest);
+  if (application === null) {
+    return manifest;
+  }
+  const tag = application[0];
+  const attribute = /\sandroid:allowBackup\s*=\s*(?:"[^"]*"|'[^']*')/u;
+  const replacement = attribute.test(tag)
+    ? tag.replace(attribute, ' android:allowBackup="false"')
+    : tag.replace(/^<application\b/u, '<application android:allowBackup="false"');
+  return `${manifest.slice(0, application.index)}${replacement}${
+    manifest.slice(application.index + tag.length)}`;
 }
 
 function materializeIosArchiveScheme(gameRoot: string): void {

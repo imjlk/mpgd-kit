@@ -260,3 +260,53 @@ equal(mixedStatuses, ['granted', 'rejected'], 'malformed sibling does not block 
 transactions = [{ ...transaction, revokedAt: '2026-07-17T12:00:00.000Z' }];
 const revoked = await recoverStoreKitPurchases({ provider, backend, playerId: 'player-1' });
 equal(revoked[0]?.reason, 'revoked', 'revoked transaction is never sent to backend');
+
+async function rejectsFinish(
+  input: { transactionId: string; ledgerEntryId: string },
+  message: string,
+): Promise<void> {
+  const finishCalls = calls.filter((call) => call.startsWith('finish:')).length;
+  let rejected = false;
+  try {
+    await provider.finishGrantedTransaction(input);
+  } catch (error) {
+    rejected = error instanceof TypeError;
+  }
+  equal(rejected, true, message);
+  const finishCallsAfter = calls.filter((call) => call.startsWith('finish:')).length;
+  equal(finishCallsAfter, finishCalls, `${message}: never reaches native finish`);
+}
+
+transactions = [transaction];
+nextVerification = { verified: true, alreadyProcessed: false, ledgerEntryId: 'ledger-2' };
+await rejectsFinish(
+  { transactionId: transaction.transactionId, ledgerEntryId: 'forged-ledger' },
+  'a caller-supplied ledger entry cannot finish an unfinished purchase',
+);
+finishFails = true;
+const retained = await recoverStoreKitPurchases({ provider, backend, playerId: 'player-1' });
+equal(retained[0]?.finishPending, true, 'failed native finish keeps the verified grant pending');
+finishFails = false;
+await rejectsFinish(
+  { transactionId: '2000000123456799', ledgerEntryId: 'ledger-2' },
+  'a transaction the backend never verified cannot be finished',
+);
+await rejectsFinish(
+  { transactionId: transaction.transactionId, ledgerEntryId: 'ledger-1' },
+  'a stale ledger entry cannot finish a transaction',
+);
+equal(
+  await provider.finishGrantedTransaction({
+    transactionId: transaction.transactionId,
+    ledgerEntryId: 'ledger-2',
+  }),
+  true,
+  'retrying the backend-verified pair finishes the transaction',
+);
+equal(calls.at(-1), `finish:${transaction.transactionId}:ledger-2`, 'retry uses the verified pair');
+await rejectsFinish(
+  { transactionId: transaction.transactionId, ledgerEntryId: 'ledger-2' },
+  'a consumed grant is not replayed',
+);
+
+console.info('StoreKit provider finish guard passed.');

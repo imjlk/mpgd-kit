@@ -8,6 +8,7 @@ import type { GeneratedTargetIcons } from '../icons/types';
 import { inspectSignedAndroidBundle } from './native-android-inspection';
 import type { NativeBuildPlan } from './native-build-mode';
 import { createNativeShellStage } from './native-build-stage';
+import { applyCapacitorShellCsp } from './native-shell-csp';
 import { inspectSignedIosArchive, inspectSignedIosIpa } from './native-ios-inspection';
 import { resolveIosSigningPlan } from './native-ios-signing';
 import {
@@ -71,6 +72,7 @@ export async function executeNativeTargetBuild(input: NativeBuildExecutionInput)
 
   try {
     input.replaceDirectory(webBundle, stage.webDir);
+    applyCapacitorShellCsp(stage.webDir);
     input.ensureCapacitorPlatform(stage.shellApp, platform, environment);
     await stageNativeIconResources(input.generatedIcons, stage.shellApp);
     runNativeSyncWithIdentityCheck({ ...identityInput, shellApp: stage.shellApp }, () => {

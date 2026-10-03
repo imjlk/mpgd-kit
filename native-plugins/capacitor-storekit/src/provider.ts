@@ -13,6 +13,14 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}
 const productPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const transactionPattern = /^[1-9][0-9]{0,19}$/u;
 
+/**
+ * Backend-verified grants per provider instance: transaction ID to ledger
+ * entry ID. Only recoverStoreKitPurchases records entries, after the game
+ * backend answered verified=true, so finishGrantedTransaction cannot finish
+ * an unfinished purchase on the strength of a caller-supplied string alone.
+ */
+const verifiedGrants = new WeakMap<CapacitorStoreKitProvider, Map<string, string>>();
+
 export interface StoreKitProductMapping {
   readonly id: string;
   readonly storeId: string;
@@ -65,6 +73,12 @@ export interface CapacitorStoreKitProvider {
   }>>;
   getAppAccountToken(): Promise<string>;
   getRecoverableTransactions(): Promise<StoreKitRecoverySnapshot>;
+  /**
+   * Finish a transaction the backend already granted. The provider accepts
+   * only a transaction and ledger entry pair that recoverStoreKitPurchases
+   * recorded from a verified backend answer in this session; any other pair
+   * is rejected so an unfinished purchase keeps its recovery signal.
+   */
   finishGrantedTransaction(input: {
     readonly transactionId: string;
     readonly ledgerEntryId: string;
@@ -151,6 +165,7 @@ export async function recoverStoreKitPurchases(input: {
       if (verification.ledgerEntryId === undefined || verification.ledgerEntryId.trim() === '') {
         return { productId: item.productId, transactionId, status: 'pending', verification } as const;
       }
+      verifiedGrants.get(input.provider)?.set(transactionId, verification.ledgerEntryId);
       try {
         const finished = await input.provider.finishGrantedTransaction({
           transactionId,
@@ -321,7 +336,8 @@ export function createCapacitorStoreKitProvider(
     }
   }
 
-  return {
+  const grants = new Map<string, string>();
+  const provider: CapacitorStoreKitProvider = {
     id: 'apple-storekit',
     features: ['nativeIap'],
     methods: [
@@ -358,10 +374,23 @@ export function createCapacitorStoreKitProvider(
         || input.ledgerEntryId.trim() === '') {
         throw new TypeError('StoreKit finish requires a verified grant and transaction ID.');
       }
-      const response = await sdk.finishTransaction(input);
+      if (grants.get(input.transactionId) !== input.ledgerEntryId) {
+        throw new TypeError(
+          'StoreKit finish requires the ledger entry the backend returned for this transaction via recoverStoreKitPurchases.',
+        );
+      }
+      const response = await sdk.finishTransaction({
+        transactionId: input.transactionId,
+        ledgerEntryId: input.ledgerEntryId,
+      });
+      if (response.finished) {
+        grants.delete(input.transactionId);
+      }
       return response.finished;
     },
   };
+  verifiedGrants.set(provider, grants);
+  return provider;
 }
 
 function convertOutcome(

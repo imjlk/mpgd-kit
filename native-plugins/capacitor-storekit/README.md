@@ -25,6 +25,11 @@ bundle, product, environment and account binding before the ledger grant.
 The recovery helper calls native `finishTransaction` only after a
 verified response with a ledger entry ID. If finish fails, it reports
 `finishPending: true`; repeat recovery with the original purchase identity.
+`provider.finishGrantedTransaction` accepts only a transaction and ledger
+entry pair that `recoverStoreKitPurchases` recorded from a verified backend
+answer in the current session, and each recorded pair finishes at most once.
+Calling it, or the native `finishTransaction` plugin method, with any other
+value is rejected so an unfinished purchase keeps its recovery signal.
 An unknown backend result stays pending and never triggers a
 new purchase sheet automatically.
 

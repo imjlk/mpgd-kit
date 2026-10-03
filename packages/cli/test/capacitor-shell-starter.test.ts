@@ -19,6 +19,7 @@ import path from 'node:path';
 import {
   applyCapacitorShellStarter,
   decodeAndroidStringResource,
+  disableAndroidManifestBackup,
   materializeCapacitorShellStarter,
   planCapacitorShellStarter,
 } from '../src/capacitor-shell-starter.js';
@@ -29,6 +30,26 @@ assert.equal(decodeAndroidStringResource("King\\'s Quest"), "King's Quest");
 assert.equal(decodeAndroidStringResource('"King\\\'s Quest"'), "King's Quest");
 assert.equal(decodeAndroidStringResource('Puzzle   Game'), 'Puzzle Game');
 assert.equal(decodeAndroidStringResource('"Puzzle   Game"'), 'Puzzle   Game');
+
+assert.equal(
+  disableAndroidManifestBackup(
+    '<manifest><application\n        android:allowBackup="true"\n        android:icon="@mipmap/ic_launcher"></application></manifest>',
+  ),
+  '<manifest><application\n        android:allowBackup="false"\n        android:icon="@mipmap/ic_launcher"></application></manifest>',
+);
+assert.equal(
+  disableAndroidManifestBackup('<manifest><application android:label="x"/></manifest>'),
+  '<manifest><application android:allowBackup="false" android:label="x"/></manifest>',
+);
+assert.equal(
+  disableAndroidManifestBackup(
+    "<manifest><application android:allowBackup='true'></application></manifest>",
+  ),
+  '<manifest><application android:allowBackup="false"></application></manifest>',
+);
+const hardenedManifest = '<manifest><application android:allowBackup="false"></application></manifest>';
+assert.equal(disableAndroidManifestBackup(hardenedManifest), hardenedManifest);
+assert.equal(disableAndroidManifestBackup('<manifest></manifest>'), '<manifest></manifest>');
 
 function writeJson(relative: string, value: unknown): void {
   const file = path.join(root, relative);
@@ -339,6 +360,15 @@ try {
   ]);
   const cli = path.join(root, 'apps/mobile-capacitor/node_modules/.bin/cap');
   assert.equal(existsSync(cli), true);
+  const generatedManifest = readFileSync(
+    path.join(root, 'apps/mobile-capacitor/android/app/src/main/AndroidManifest.xml'),
+    'utf8',
+  );
+  assert.match(
+    generatedManifest,
+    /<application android:allowBackup="false" android:label="@string\/app_name"/u,
+    'a freshly generated Android project opts out of device backups',
+  );
   const smokeInfo = path.join(root, 'apps/mobile-capacitor/ios/App/App/Info-Smoke.plist');
   const originalSmoke = readFileSync(smokeInfo, 'utf8');
   assert.match(originalSmoke, /<string>Puzzle Game<\/string>/u);

@@ -37,7 +37,12 @@ export interface CapacitorStoreKitPlugin {
   getTransactions(): Promise<{ readonly transactions: readonly StoreKitTransaction[] }>;
   /** User-initiated App Store account synchronization before restore. */
   sync(): Promise<{ readonly synced: boolean }>;
-  /** Call only after the authenticated backend confirms the ledger grant. */
+  /**
+   * Call only after the authenticated backend confirms the ledger grant.
+   * Native validation is intentionally shallow; the TypeScript provider's
+   * finishGrantedTransaction enforces that the pair came from a backend
+   * answer, so games must not call this plugin method directly.
+   */
   finishTransaction(input: {
     readonly transactionId: string;
     readonly ledgerEntryId: string;

@@ -61,4 +61,11 @@ for (const name of ['Info.plist', 'Info-Smoke.plist']) {
   assert.match(read(`apps/mobile-capacitor/ios/App/App/${name}`), /UISceneDelegateClassName/);
 }
 
-console.log(`Capacitor ${shellVersion} npm, Android, iOS, and scene alignment verified.`);
+const androidManifest = read('apps/mobile-capacitor/android/app/src/main/AndroidManifest.xml');
+assert.match(
+  androidManifest,
+  /<application\b[^>]*\sandroid:allowBackup="false"/u,
+  'The Android shell must opt out of device backups: WebView storage and game-services SharedPreferences hold save data',
+);
+
+console.log(`Capacitor ${shellVersion} npm, Android, iOS, scene, and backup alignment verified.`);
