@@ -65,3 +65,15 @@ minimumReleaseAgeExclude:
   - '@apps-in-toss/web-framework@3.5.0'
 overrides:
   '@xmldom/xmldom': '0.9.12'
+  # Security patches for transitive advisories reported by `pnpm audit --prod`.
+  # Each pin stays inside the range the dependents declare, so no dependent is
+  # forced onto an incompatible major or minor.
+  'nanoid@3': '3.3.19' # postcss declares ^3.3.12
+  'postcss@8': '8.5.28' # vite 8 declares ^8.5.16, vite 7 declares ^8.5.6
+  'brace-expansion@1': '1.1.21' # minimatch 3 declares ^1.1.7
+  'browserslist@4': '4.29.3' # @babel/helper-compilation-targets ^4.24.0, core-js-compat ^4.28.1
+  'baseline-browser-mapping@2': '2.11.27' # browserslist declares ^2.10.38
+  'qs@6': '6.16.0' # googleapis-common ^6.7.0, express ^6.14.0, body-parser ^6.15.2
+  # @devvit/protos pins protobufjs to exactly 7.6.3, so only the Apps in Toss
+  # path (declared ^7.5.4) is patched here.
+  '@apps-in-toss/ait-format-proto>protobufjs': '7.6.6'
