@@ -51,6 +51,18 @@ Games that intentionally support inline gameplay can opt in through
 An opt-in inline surface must remain tap/click based and preserve Reddit-native
 gestures across its complete gameplay flow.
 
+The bridge method handlers live in `src/server/bridge.ts`; `src/server/index.ts`
+only wires the Devvit `context`, `reddit`, and `redis` clients into them. Cloud
+saves are bound to the authenticated Reddit user from the request context and
+stored under `<game-name>:save:<user>:<key>`. Each value is capped at
+`maxStorageValueBytes` and each user may hold at most `maxStorageKeysPerPlayer`
+distinct keys, tracked in the `<game-name>:save-keys:<user>` hash and enforced
+inside a WATCH/MULTI/EXEC transaction so concurrent saves cannot overshoot the
+cap; saves past it fail with `DEVVIT_STORAGE_KEY_LIMIT`. Saves do not expire by
+default; set `storageEntryTtlSeconds` to let idle saves age out. Keep
+`bridge.ts` aligned with the kit's `apps/target-devvit/src/server/bridge.ts`
+when upgrading so generated games inherit storage protections.
+
 The generated bridge does not advertise or accept a generic platform
 leaderboard. Devvit ranking should be owned by a server completion handler that
 validates the game-specific attempt, records it through the verified leaderboard

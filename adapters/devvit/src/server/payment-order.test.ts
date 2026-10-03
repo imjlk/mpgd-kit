@@ -4,6 +4,7 @@ import { normalizeDevvitFulfillmentOrder, normalizeDevvitRefundOrder } from './p
 
 const paidOrder = Object.freeze({
   id: 'order-1',
+  userId: 'player-1',
   postId: 'post-1',
   environment: 'sandbox',
   status: 'PAID',
@@ -63,9 +64,30 @@ describe('Devvit payment order normalization', () => {
       order: { ...paidOrder, userId: 'player-2' },
       playerId: 'player-1',
     })).toThrow('must match the authenticated context playerId');
+    expect(() => normalizeDevvitRefundOrder({
+      order: { ...paidOrder, status: 'REVERTED', userId: 'player-2' },
+      playerId: 'player-1',
+    })).toThrow('must match the authenticated context playerId');
     expect(() => normalizeDevvitFulfillmentOrder({
       order: { ...paidOrder, products: [{ sku: 'first' }, { sku: 'second' }] },
       playerId: 'player-1',
     })).toThrow('exactly one product');
+  });
+
+  it('rejects orders that omit userId instead of trusting the context alone', () => {
+    const { userId: _omitted, ...orderWithoutUser } = paidOrder;
+
+    expect(() => normalizeDevvitFulfillmentOrder({
+      order: orderWithoutUser,
+      playerId: 'player-1',
+    })).toThrow('order.userId must be a string');
+    expect(() => normalizeDevvitRefundOrder({
+      order: { ...orderWithoutUser, status: 'REVERTED' },
+      playerId: 'player-1',
+    })).toThrow('order.userId must be a string');
+    expect(() => normalizeDevvitFulfillmentOrder({
+      order: { ...paidOrder, userId: 42 },
+      playerId: 'player-1',
+    })).toThrow('order.userId must be a string');
   });
 });

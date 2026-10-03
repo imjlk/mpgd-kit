@@ -22,6 +22,16 @@ callbacks remain thin `/internal/...` HTTP routes and should delegate their
 business logic to shared service functions. The generated target exposes only
 the oRPC bridge route; the former JSON compatibility route is not generated.
 
+The bridge method handlers live in `src/server/bridge.ts` so they can be tested
+with an in-memory Redis double (`pnpm test`); `src/server/index.ts` only wires
+the Devvit `context`, `reddit`, and `redis` clients into them. Cloud saves are
+bound to the authenticated Reddit user from the request context and stored
+under `mpgd:save:<user>:<key>`. Each value is capped at `maxStorageValueBytes`
+and each user may hold at most `maxStorageKeysPerPlayer` distinct keys, tracked
+in the `mpgd:save-keys:<user>` hash and enforced inside a WATCH/MULTI/EXEC
+transaction; saves past the cap fail with `DEVVIT_STORAGE_KEY_LIMIT`. Saves do
+not expire by default; set `storageEntryTtlSeconds` to let idle saves age out.
+
 oRPC Publisher helpers are appropriate when a completed task also needs to
 broadcast live updates, but they do not replace Devvit Scheduler. Scheduler
 delivery is still configured in `devvit.json` and received as a `TaskRequest` at

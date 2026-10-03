@@ -185,10 +185,19 @@ async function mutateIfValue(input: {
 
       await transaction.multi();
       multiStarted = true;
-      await input.queueMutation(transaction);
+      const counting = countQueuedCommands(transaction);
+      await input.queueMutation(counting.transaction);
+
+      if (counting.count() === 0) {
+        throw new Error('Devvit Redis transaction queued no commands before EXEC.');
+      }
 
       const results = await transaction.exec();
 
+      // `@devvit/redis` `TxClient.exec()` never resolves `null`: it maps the
+      // server reply to an array, so an aborted WATCH transaction surfaces as
+      // an empty array. Fewer results than queued commands is a conflict; `null`
+      // stays a conflict for clients that follow the classic Redis contract.
       if (results === null) {
         continue;
       }
@@ -197,9 +206,11 @@ async function mutateIfValue(input: {
         throw new Error('Devvit Redis transaction returned an unsupported response.');
       }
 
-      if (results.length > 0) {
-        return true;
+      if (results.length < counting.count()) {
+        continue;
       }
+
+      return true;
     } catch (error) {
       await bestEffortReset(transaction, multiStarted);
       throw error;
@@ -209,6 +220,38 @@ async function mutateIfValue(input: {
   throw new Error(
     `Devvit Redis transaction contention exceeded ${String(input.transactionAttempts)} attempts for key: ${input.key}`,
   );
+}
+
+/**
+ * Wraps a transaction so the number of commands queued after MULTI is known
+ * when EXEC resolves, which is what distinguishes a completed transaction from
+ * an aborted one on the Devvit Redis client.
+ */
+function countQueuedCommands(transaction: DevvitRedisTransactionLike): {
+  readonly transaction: DevvitRedisTransactionLike;
+  readonly count: () => number;
+} {
+  let queued = 0;
+
+  return {
+    count: () => queued,
+    transaction: {
+      multi: () => transaction.multi(),
+      discard: () => transaction.discard(),
+      exec: () => transaction.exec(),
+      unwatch: () => transaction.unwatch(),
+      async set(key, value, options) {
+        const result = await transaction.set(key, value, options);
+        queued += 1;
+        return result;
+      },
+      async del(...keys) {
+        const result = await transaction.del(...keys);
+        queued += 1;
+        return result;
+      },
+    },
+  };
 }
 
 async function bestEffortReset(
