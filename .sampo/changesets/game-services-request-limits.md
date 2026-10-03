@@ -1,5 +1,0 @@
----
-npm/@mpgd/game-services: patch
----
-
-Harden the game-services request boundary. The HTTP and oRPC fetch handlers now cap request bodies (64 KiB by default, configurable through `maxBodyBytes`) and answer oversized payloads with 413 `PAYLOAD_TOO_LARGE`; client identifiers and timestamps are limited to 256 characters and evidence payloads to 64 entries before they reach ledger keys. Error responses use stable codes instead of echoing internal messages: validation failures return 400 `INVALID_REQUEST` with the field-level message (oRPC: `BAD_REQUEST`), malformed JSON returns 400 `INVALID_JSON`, and store or other unexpected failures return 500 `INTERNAL_ERROR` and are reported through the new `onInternalError` hook. Ad reward claims only persist the client-reported `platformImpressionId` as the globally unique platform evidence identity when the verifier vouches for it, mirroring purchases: a verifier-supplied `platformEvidenceId` replaces it and `null` suppresses it, so an attacker can no longer pre-register another player's impression id to deny their legitimate claim. The AdMob SSV verifier now supplies the signed transaction id as `platformEvidenceId`.
