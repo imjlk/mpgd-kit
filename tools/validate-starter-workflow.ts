@@ -284,6 +284,7 @@ validateCheckedInAITWrapper();
 validatePhaserTemplateAITWrapper();
 validatePhaserTemplateAITConsoleCli();
 validatePhaserTemplateDevvitPostOperations();
+validatePhaserTemplateDevvitBridge();
 validatePhaserTemplateDevvitViewModes();
 validatePhaserTemplateDevvitVitePlugin();
 validatePhaserTemplateBuildGateways();
@@ -1385,6 +1386,94 @@ function validatePhaserTemplateAITWrapper(): void {
 
     if (ignoredPaths.has('apps/target-ait/.granite/')) {
       failures.push(`${gitignorePath}: must not retain the SDK 2 .granite cache path.`);
+    }
+  }
+}
+
+/**
+ * The generated Devvit server must carry the same bridge storage protections as
+ * the kit wrapper: per-player save-key caps enforced inside a WATCH/MULTI/EXEC
+ * transaction whose abort detection matches the Devvit Redis client. The
+ * template `bridge.ts` is kept byte-identical to the tested kit module, and the
+ * template entrypoint must wire it instead of writing to Redis directly.
+ */
+function validatePhaserTemplateDevvitBridge(): void {
+  const kitBridgePath = 'apps/target-devvit/src/server/bridge.ts';
+  const templateBridgePath =
+    'packages/cli/templates/phaser-game/apps/target-devvit/src/server/bridge.ts';
+  const templateIndexPath =
+    'packages/cli/templates/phaser-game/apps/target-devvit/src/server/index.ts';
+  const templateReadmePath =
+    'packages/cli/templates/phaser-game/apps/target-devvit/README.md';
+
+  if (!existsSync(kitBridgePath)) {
+    failures.push(`${kitBridgePath}: required for the Devvit bridge storage handlers.`);
+  }
+  if (!existsSync(templateBridgePath)) {
+    failures.push(
+      `${templateBridgePath}: required for the generated Devvit bridge storage handlers.`,
+    );
+  }
+
+  if (existsSync(kitBridgePath) && existsSync(templateBridgePath)) {
+    const kitBridge = readText(kitBridgePath);
+    const templateBridge = readText(templateBridgePath);
+
+    if (kitBridge !== templateBridge) {
+      failures.push(`${templateBridgePath}: must stay in parity with ${kitBridgePath}.`);
+    }
+
+    for (const requiredText of [
+      'export const maxStorageKeysPerPlayer',
+      'export const maxStorageValueBytes',
+      'DEVVIT_STORAGE_KEY_LIMIT',
+      'results.length < queuedCommandCount',
+      'await redis.watch(location.indexKey, location.valueKey)',
+    ]) {
+      assertIncludesText(
+        templateBridge,
+        requiredText,
+        `${templateBridgePath}: bounded per-player storage.`,
+      );
+    }
+  }
+
+  if (!existsSync(templateIndexPath)) {
+    failures.push(`${templateIndexPath}: required for the generated Devvit server entrypoint.`);
+  } else {
+    const templateIndex = readText(templateIndexPath);
+
+    for (const requiredText of [
+      "import { createDevvitBridgeHandler } from './bridge.js';",
+      'storageKeyNamespace: gameName,',
+    ]) {
+      assertIncludesText(
+        templateIndex,
+        requiredText,
+        `${templateIndexPath}: generated bridge wiring.`,
+      );
+    }
+
+    if (templateIndex.includes('redis.set(')) {
+      failures.push(
+        `${templateIndexPath}: must not write storage directly; route saves through bridge.ts.`,
+      );
+    }
+  }
+
+  if (existsSync(templateReadmePath)) {
+    const readme = readText(templateReadmePath);
+
+    for (const requiredText of [
+      'bridge.ts',
+      '`maxStorageKeysPerPlayer`',
+      '`DEVVIT_STORAGE_KEY_LIMIT`',
+    ]) {
+      assertIncludesText(
+        readme,
+        requiredText,
+        `${templateReadmePath}: bounded per-player storage guidance.`,
+      );
     }
   }
 }

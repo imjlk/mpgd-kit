@@ -195,6 +195,59 @@ test('index and value are written atomically and contention is retried', async (
   assert.equal(redis.hashes.get(storageIndexKey(playerId))?.has('contended'), false);
 });
 
+test('a null EXEC result is retried as contention like the empty array', async () => {
+  const redis = new FakeDevvitRedis();
+  redis.abortedExecResult = null;
+  const handler = createHandler(redis, playerId);
+
+  redis.onWatch = () => {
+    redis.onWatch = undefined;
+    redis.touch(storageIndexKey(playerId));
+  };
+
+  assert.equal((await handler(request('storage.save', { key: 'slot', value: 1 }))).ok, true);
+  assert.equal(redis.execCalls, 2);
+  assert.equal(redis.strings.get(storageValueKey(playerId, 'slot')), '1');
+  assert.equal(redis.hashes.get(storageIndexKey(playerId))?.has('slot'), true);
+});
+
+test('a truncated EXEC result is never reported as a completed save', async () => {
+  const redis = new FakeDevvitRedis();
+  redis.truncateExecResults = true;
+  const handler = createHandler(redis, playerId);
+
+  const response = await handler(request('storage.save', { key: 'slot', value: 1 }));
+  assertError(response, 'DEVVIT_STORAGE_SAVE_FAILED');
+  assert.equal(redis.execCalls, 3);
+});
+
+test('the storage key namespace is injectable for generated games', async () => {
+  const redis = new FakeDevvitRedis();
+  const handler = createDevvitBridgeHandler({
+    redis,
+    currentPlayerId: () => playerId,
+    currentDisplayName: async (id) => `u/${id}`,
+    storageKeyNamespace: 'my-game',
+    warn: () => {},
+  });
+
+  assert.equal((await handler(request('storage.save', { key: 'slot', value: 1 }))).ok, true);
+  assert.equal(storageValueKey(playerId, 'slot', 'my-game'), 'my-game:save:t2_player:slot');
+  assert.equal(storageIndexKey(playerId, 'my-game'), 'my-game:save-keys:t2_player');
+  assert.deepEqual([...redis.strings.keys()], ['my-game:save:t2_player:slot']);
+  assert.deepEqual([...redis.hashes.keys()], ['my-game:save-keys:t2_player']);
+  assert.equal(redis.strings.has(storageValueKey(playerId, 'slot')), false);
+  assert.throws(
+    () => createDevvitBridgeHandler({
+      redis,
+      currentPlayerId: () => playerId,
+      currentDisplayName: async (id) => `u/${id}`,
+      storageKeyNamespace: '',
+    }),
+    TypeError,
+  );
+});
+
 test('missing and corrupted values load with the storage protocol envelope', async () => {
   const redis = new FakeDevvitRedis();
   const handler = createHandler(redis, playerId);
@@ -242,7 +295,9 @@ function assertError(response: BridgeResponse, code: string): void {
 /**
  * In-memory Devvit Redis double. WATCH records key versions; EXEC applies the
  * queued commands only when no watched key changed since WATCH, mirroring the
- * optimistic-locking semantics the bridge relies on.
+ * optimistic-locking semantics the bridge relies on. An aborted EXEC resolves
+ * to an empty array by default, which is what `@devvit/redis` `TxClient.exec()`
+ * returns for a WATCH conflict (it never resolves `null`).
  */
 class FakeDevvitRedis implements DevvitBridgeRedisLike {
   readonly strings = new Map<string, string>();
@@ -250,6 +305,8 @@ class FakeDevvitRedis implements DevvitBridgeRedisLike {
   readonly versions = new Map<string, number>();
   execCalls = 0;
   onWatch: (() => void) | undefined;
+  abortedExecResult: readonly unknown[] | null = [];
+  truncateExecResults = false;
 
   async get(key: string): Promise<string | undefined> {
     return this.strings.get(key);
@@ -330,7 +387,12 @@ class FakeTransaction implements DevvitBridgeRedisTransactionLike {
     this.inMulti = false;
 
     if (conflicted) {
-      return null;
+      return this.redis.abortedExecResult;
+    }
+
+    if (this.redis.truncateExecResults) {
+      // Simulate a reply that lost commands without applying anything.
+      return queued.slice(1).map(() => 'OK');
     }
 
     for (const apply of queued) {

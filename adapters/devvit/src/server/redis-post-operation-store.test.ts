@@ -383,6 +383,8 @@ class FakeDevvitRedisTransaction implements DevvitRedisTransactionLike {
       throw outcome;
     }
 
+    // `@devvit/redis` `TxClient.exec()` resolves an empty array, never `null`,
+    // for an aborted WATCH transaction; `null` covers the classic Redis contract.
     if (outcome === 'contention') {
       return [];
     }
