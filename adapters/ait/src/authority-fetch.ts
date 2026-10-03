@@ -12,6 +12,13 @@
  * Authority calls carry grant evidence and idempotency headers, so the
  * resource must resolve to an `https:` origin. Plain `http:` is accepted only
  * for a loopback development authority (`localhost` or `127.0.0.1`).
+ *
+ * The transport receives exactly the representation that passed the policy
+ * check: a string or URL-like resource is forwarded as its validated absolute
+ * `href`, and a Request-like resource is forwarded unchanged after its
+ * immutable `url` validated. Resources are classified by shape rather than by
+ * `instanceof`, so a `URL` or `Request` created in another realm (for example
+ * an iframe) is validated the same way instead of slipping past the policy.
  */
 export function fetchAitAuthority(input: {
   readonly resource: RequestInfo | URL;
@@ -22,22 +29,47 @@ export function fetchAitAuthority(input: {
   if (typeof fetchImplementation !== 'function') {
     return Promise.reject(new TypeError('AIT authority fetch is unavailable.'));
   }
-  const policyError = checkAitAuthorityResource(input.resource);
-  if (policyError !== undefined) {
-    return Promise.reject(policyError);
+  const resolution = resolveAitAuthorityResource(input.resource);
+  if (!resolution.ok) {
+    return Promise.reject(resolution.error);
   }
-  return fetchImplementation(input.resource, input.init);
+  return fetchImplementation(resolution.resource, input.init);
 }
 
 const loopbackHostnames = new Set(['localhost', '127.0.0.1']);
 
-function checkAitAuthorityResource(resource: RequestInfo | URL): TypeError | undefined {
+type AitAuthorityResourceResolution =
+  | { readonly ok: true; readonly resource: RequestInfo }
+  | { readonly ok: false; readonly error: TypeError };
+
+function resolveAitAuthorityResource(resource: RequestInfo | URL): AitAuthorityResourceResolution {
+  const candidate = readAitAuthorityResourceCandidate(resource);
+  if (candidate === undefined) {
+    return {
+      ok: false,
+      error: new TypeError('AIT authority resource must be a string, URL, or Request.'),
+    };
+  }
   let url: URL;
   try {
-    url = new URL(readResourceUrl(resource), globalThis.location?.href);
+    url = new URL(candidate.href, globalThis.location?.href);
   } catch {
-    return new TypeError('AIT authority resource must be an absolute https: URL.');
+    return {
+      ok: false,
+      error: new TypeError('AIT authority resource must be an absolute https: URL.'),
+    };
   }
+  const policyError = checkAitAuthorityUrl(url);
+  if (policyError !== undefined) {
+    return { ok: false, error: policyError };
+  }
+  return {
+    ok: true,
+    resource: candidate.kind === 'request' ? candidate.request : url.href,
+  };
+}
+
+function checkAitAuthorityUrl(url: URL): TypeError | undefined {
   if (url.protocol === 'https:') {
     return undefined;
   }
@@ -49,12 +81,28 @@ function checkAitAuthorityResource(resource: RequestInfo | URL): TypeError | und
   );
 }
 
-function readResourceUrl(resource: RequestInfo | URL): string {
+type AitAuthorityResourceCandidate =
+  | { readonly kind: 'href'; readonly href: string }
+  | { readonly kind: 'request'; readonly href: string; readonly request: Request };
+
+/**
+ * Reads the URL text once, by shape, so the same value is both validated and
+ * forwarded. `instanceof URL` / `instanceof Request` are realm-sensitive and
+ * would misclassify objects created in another realm.
+ */
+function readAitAuthorityResourceCandidate(resource: unknown): AitAuthorityResourceCandidate | undefined {
   if (typeof resource === 'string') {
-    return resource;
+    return { kind: 'href', href: resource };
   }
-  if (resource instanceof URL) {
-    return resource.href;
+  if (typeof resource !== 'object' || resource === null) {
+    return undefined;
   }
-  return resource.url;
+  const { href, url } = resource as { readonly href?: unknown; readonly url?: unknown };
+  if (typeof href === 'string') {
+    return { kind: 'href', href };
+  }
+  if (typeof url === 'string') {
+    return { kind: 'request', href: url, request: resource as Request };
+  }
+  return undefined;
 }

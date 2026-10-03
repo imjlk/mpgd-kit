@@ -11,7 +11,7 @@ describe('AIT authority fetch', () => {
     const dependencies = {
       fetch: vi.fn(function (this: unknown, actualResource: RequestInfo | URL, actualInit?: RequestInit) {
         expect(this).toBeUndefined();
-        expect(actualResource).toBe(resource);
+        expect(actualResource).toBe(resource.href);
         expect(actualInit).toBe(init);
         return Promise.resolve(Response.json({ verified: true }));
       }),
@@ -95,6 +95,65 @@ describe('AIT authority fetch resource policy', () => {
 
     await expect(fetchAitAuthority({ resource: '/api/iap/verify', fetch: fetchImplementation }))
       .resolves.toBeInstanceOf(Response);
-    expect(fetchImplementation).toHaveBeenCalledWith('/api/iap/verify', undefined);
+    expect(fetchImplementation).toHaveBeenCalledWith('https://game.web.tossmini.com/api/iap/verify', undefined);
+  });
+
+  it('forwards the validated representation to the transport', async () => {
+    const fetchImplementation = vi.fn(async () => Response.json({ verified: true }));
+    const request = new Request('https://authority.example/api/iap/verify', { method: 'POST', body: '{}' });
+
+    await fetchAitAuthority({ resource: 'https://authority.example:443/api/iap/verify', fetch: fetchImplementation });
+    await fetchAitAuthority({ resource: new URL('https://authority.example/api/iap/verify'), fetch: fetchImplementation });
+    await fetchAitAuthority({ resource: request, fetch: fetchImplementation });
+
+    expect(fetchImplementation).toHaveBeenNthCalledWith(1, 'https://authority.example/api/iap/verify', undefined);
+    expect(fetchImplementation).toHaveBeenNthCalledWith(2, 'https://authority.example/api/iap/verify', undefined);
+    expect(fetchImplementation).toHaveBeenNthCalledWith(3, request, undefined);
+  });
+
+  it("validates URL-like objects by shape so another realm's URL cannot bypass the scheme policy", async () => {
+    const fetchImplementation = vi.fn(async () => Response.json({ verified: true }));
+    vi.stubGlobal('location', { href: 'https://game.web.tossmini.com/index.html' });
+
+    // Mirrors a URL constructed in an iframe: `instanceof URL` is false, but
+    // `href` still names the cleartext resource that would actually be fetched.
+    const crossRealmUrl = { href: 'http://authority.example/api/iap/verify' } as unknown as URL;
+    expect(crossRealmUrl instanceof URL).toBe(false);
+
+    await expect(fetchAitAuthority({ resource: crossRealmUrl, fetch: fetchImplementation }))
+      .rejects.toThrow(/AIT authority resource must use https:/);
+    await expect(fetchAitAuthority({
+      resource: { href: 'http://authority.example/api/iap/verify', url: 'https://authority.example/api/iap/verify' } as unknown as URL,
+      fetch: fetchImplementation,
+    })).rejects.toThrow(/AIT authority resource must use https:/);
+    await expect(fetchAitAuthority({
+      resource: { url: 'http://authority.example/api/iap/verify' } as unknown as Request,
+      fetch: fetchImplementation,
+    })).rejects.toThrow(/AIT authority resource must use https:/);
+    expect(fetchImplementation).not.toHaveBeenCalled();
+
+    const crossRealmHttpsUrl = { href: 'https://authority.example/api/iap/verify' } as unknown as URL;
+    await expect(fetchAitAuthority({ resource: crossRealmHttpsUrl, fetch: fetchImplementation }))
+      .resolves.toBeInstanceOf(Response);
+    expect(fetchImplementation).toHaveBeenCalledWith('https://authority.example/api/iap/verify', undefined);
+  });
+
+  it('rejects resources that are neither a string, URL-like, nor Request-like', async () => {
+    const fetchImplementation = vi.fn(async () => Response.json({ verified: true }));
+    vi.stubGlobal('location', { href: 'https://game.web.tossmini.com/index.html' });
+
+    for (const resource of [
+      {},
+      { toString: () => 'https://authority.example/api/iap/verify' },
+      { href: new URL('https://authority.example/api/iap/verify') },
+      { url: 42 },
+      null,
+      undefined,
+      42,
+    ]) {
+      await expect(fetchAitAuthority({ resource: resource as unknown as RequestInfo, fetch: fetchImplementation }))
+        .rejects.toThrow('AIT authority resource must be a string, URL, or Request.');
+    }
+    expect(fetchImplementation).not.toHaveBeenCalled();
   });
 });
