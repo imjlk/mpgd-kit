@@ -55,6 +55,13 @@ const invalidBridgeRequestId = 'ait-invalid-request';
 const rewardedAdEvidenceSchema = 'apps-in-toss.rewarded-ad.callback.v1';
 const iapEvidenceSchema = 'apps-in-toss.iap.callback.v1';
 const minimumPromotionTossAppVersion = '5.232.0';
+/**
+ * Every adapter-owned durable marker (purchase attempts, promotion grants,
+ * recovery cursors) lives under this prefix. Game code shares the same native
+ * storage, so `storage.save`/`storage.load` must never touch these keys: a
+ * forged `completed` marker would otherwise short-circuit purchase verification.
+ */
+const reservedStorageKeyPrefix = 'mpgd:ait:';
 const promotionGrantStoragePrefix = 'mpgd:ait:promotion-grant:v1:';
 /**
  * A client idempotency key must survive a bridge reload. The authoritative
@@ -698,6 +705,7 @@ export function createAitHostBridge(
 
       case 'ads.showRewarded': {
         const placementId = readPlacementId(request.payload);
+        const correlationId = readRewardedAdCorrelationId(request.payload, request.id);
         const adGroupId = adGroupIds.get(placementId);
 
         if (
@@ -718,7 +726,6 @@ export function createAitHostBridge(
           adTimeoutMs,
           'rewarded',
           async () => {
-            const correlationId = readIdempotencyKey(request.payload, request.id);
             const result = await showRewardedAd(
               dependencies,
               adGroupId,
@@ -730,8 +737,11 @@ export function createAitHostBridge(
             return result.rewardGranted
               ? {
                   ...result,
-                  // game-services forwards this as platformImpressionId and compares it
-                  // with the native callback correlationId during authority verification.
+                  // The correlationId is client-supplied evidence, not a native receipt:
+                  // the Apps in Toss show call only carries the adGroupId, so nothing
+                  // native echoes it back. game-services forwards it as
+                  // platformImpressionId; the backend rewardAuthority must verify it
+                  // (and the rest of this evidence) before granting any reward.
                   ledgerEntryId: correlationId,
                   evidence: {
                     schema: rewardedAdEvidenceSchema,
@@ -1674,11 +1684,20 @@ function showAd(
   });
 }
 
+/**
+ * Launch and inbound-share parameters arrive from untrusted deep links. Bound
+ * each forwarded value and the nested `queryParams` JSON so a hostile link
+ * cannot push oversized or unbounded data into the game.
+ */
+const maximumLaunchParamLength = 256;
+const maximumNestedQueryParamsJsonLength = 4_096;
+const maximumNestedQueryParamCount = 32;
+
 function getLaunchIntent(): LaunchIntent {
   const params = inboundSearchParams();
-  const challengeToken = nonEmptyParam(params.get('challengeToken'));
-  const puzzleId = nonEmptyParam(params.get('puzzleId'));
-  const requestedEntry = nonEmptyParam(params.get('entry'));
+  const challengeToken = boundedParam(params.get('challengeToken'));
+  const puzzleId = boundedParam(params.get('puzzleId'));
+  const requestedEntry = boundedParam(params.get('entry'));
   let entry: LaunchEntry;
 
   if (requestedEntry !== undefined && launchEntries.has(requestedEntry as LaunchEntry)) {
@@ -1698,8 +1717,8 @@ function getLaunchIntent(): LaunchIntent {
 
 function readInboundShare(): { readonly puzzleId?: string; readonly challengeToken?: string } | null {
   const params = inboundSearchParams();
-  const puzzleId = nonEmptyParam(params.get('puzzleId'));
-  const challengeToken = nonEmptyParam(params.get('challengeToken'));
+  const puzzleId = boundedParam(params.get('puzzleId'));
+  const challengeToken = boundedParam(params.get('challengeToken'));
   return puzzleId === undefined && challengeToken === undefined
     ? null
     : {
@@ -1712,12 +1731,26 @@ function inboundSearchParams(): URLSearchParams {
   const params = new URLSearchParams(globalThis.location?.search ?? '');
   const nested = params.get('queryParams');
 
-  if (nested !== null) {
+  if (nested !== null && nested.length <= maximumNestedQueryParamsJsonLength) {
     try {
       const parsed = JSON.parse(nested) as unknown;
       if (isRecord(parsed)) {
+        let merged = 0;
         for (const [key, value] of Object.entries(parsed)) {
-          if (typeof value === 'string' && !params.has(key)) {
+          if (merged >= maximumNestedQueryParamCount) {
+            break;
+          }
+          // Direct search params win; nested values only fill missing keys and
+          // must be bounded strings. Keys are counted whether or not they merge
+          // so an attacker cannot pad past the cap with ignored entries.
+          merged += 1;
+          if (
+            typeof value === 'string'
+            && key.length > 0
+            && key.length <= maximumLaunchParamLength
+            && value.length <= maximumLaunchParamLength
+            && !params.has(key)
+          ) {
             params.set(key, value);
           }
         }
@@ -3238,6 +3271,11 @@ function readStorageKey(payload: unknown): string {
   if (typeof key !== 'string' || key.length === 0) {
     throw new TypeError('AIT storage key must be a non-empty string.');
   }
+  if (key.startsWith(reservedStorageKeyPrefix)) {
+    throw new TypeError(
+      `AIT storage keys starting with "${reservedStorageKeyPrefix}" are reserved for adapter-owned markers.`,
+    );
+  }
   return key;
 }
 
@@ -3257,9 +3295,26 @@ function readBannerSurfaceId(payload: unknown): string {
   return surfaceId;
 }
 
-function readIdempotencyKey(payload: unknown, fallback: string): string {
+/**
+ * A rewarded-ad idempotencyKey becomes the client-supplied evidence
+ * correlationId. It is optional, but when present it must obey the same
+ * bounded visible-character rule as purchase keys so a game cannot push
+ * arbitrary blobs into reward evidence.
+ */
+function readRewardedAdCorrelationId(payload: unknown, fallback: string): string {
   const value = readPayloadRecord(payload).idempotencyKey;
-  return typeof value === 'string' && value.length > 0 ? value : fallback;
+  if (value === undefined) {
+    return fallback;
+  }
+  if (
+    typeof value !== 'string'
+    || value.length === 0
+    || value.length > 256
+    || /[\p{Cc}\p{Cf}]/u.test(value)
+  ) {
+    throw new TypeError('AIT rewarded ad idempotencyKey must contain 1 to 256 visible characters.');
+  }
+  return value;
 }
 
 function readCommercePurchase(payload: unknown): {
@@ -3350,8 +3405,10 @@ function createBridgeError(
   return { id, ok: false, error: { code, message, retryable } };
 }
 
-function nonEmptyParam(value: string | null): string | undefined {
-  return value === null || value.length === 0 ? undefined : value;
+function boundedParam(value: string | null): string | undefined {
+  return value === null || value.length === 0 || value.length > maximumLaunchParamLength
+    ? undefined
+    : value;
 }
 
 function isAbortError(error: unknown): boolean {

@@ -295,6 +295,13 @@ pnpm ait:wrapper:dev:plain
 pnpm ait:wrapper:dev:sandbox
 ```
 
+`pnpm dev:ait` sets `BUILD_ID=ait-sandbox`, and only a non-production build with
+that exact build id selects the `aitSandbox` gateway, whose in-memory bridge
+self-completes purchases and rewarded ads without any backend verification. Any
+other AIT build, including other debug builds, uses the production `ait` gateway
+so the real Apps in Toss SDK and server authority stay in the loop. The same rule
+gates the Devvit sandbox gateway behind `BUILD_ID=devvit-sandbox`.
+
 `ait:wrapper:dev` loads the last game bundle copied by `pnpm build:ait` from the
 wrapper's `public/game` directory, so run `pnpm build:ait` again after game
 changes before opening it. The local mock deliberately keeps ads, promotions,

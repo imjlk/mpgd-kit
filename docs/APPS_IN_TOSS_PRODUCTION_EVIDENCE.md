@@ -26,6 +26,11 @@ into a test checkout. The host environment selects the behavior:
   sandbox-only authority, isolate it to a staging backend and keep production
   grants fail-closed.
 
+The starter and generated games select the self-completing AIT sandbox gateway
+only for a non-production build whose `BUILD_ID` is exactly `ait-sandbox` (the
+value `pnpm dev:ait` sets). Every other AIT build uses the production gateway, so
+an ordinary debug build cannot grant purchases or rewards without the backend.
+
 Generated wrappers expose `pnpm ait:wrapper:dev:sandbox`. Unlike the ordinary
 browser playtest, this command sets `MPGD_AIT_LOCAL_MOCK=0` and
 `VITE_MPGD_AIT_MOCK_IDENTITY=0`; the Sandbox host must provide the native SDK.

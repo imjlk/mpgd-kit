@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { BridgeRequest } from '@mpgd/bridge';
 import type { Entitlement } from '@mpgd/platform';
@@ -245,6 +245,78 @@ describe('AIT production host bridge', () => {
     expect(verificationInput.timeoutMs).toBeGreaterThan(0);
     expect(verificationInput.timeoutMs).toBeLessThanOrEqual(25_000);
     expect(cleanupCalls).toBe(1);
+  });
+
+  it('rejects game storage access to adapter-reserved marker keys so a forged purchase still verifies', async () => {
+    const values = new Map<string, string>();
+    let callbacks: IapPurchaseCallbacks | undefined;
+    const verifyIapProductGrant = vi.fn(async () => true);
+    const bridge = createAitHostBridge({
+      iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
+      prepareIap: async () => true,
+      verifyIapProductGrant,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        storage: createMemoryStorage(values),
+        iap: createSupportedIap({
+          products: [createIapProduct()],
+          onPurchase: (input) => {
+            callbacks = input;
+          },
+        }),
+      }),
+    });
+    const reservedKeyError = 'AIT storage keys starting with "mpgd:ait:" are reserved for adapter-owned markers.';
+    const forgedAttemptKey = 'mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:forged-attempt';
+
+    await expect(request(bridge, 'storage.save', {
+      key: forgedAttemptKey,
+      value: {
+        status: 'completed',
+        productId: 'HINT_PACK_5',
+        idempotencyKey: 'forged-attempt',
+        orderId: 'order-forged',
+      },
+    })).rejects.toThrow(reservedKeyError);
+    await expect(request(bridge, 'storage.save', {
+      key: 'mpgd:ait:promotion-grant:v1:forged-promotion',
+      value: { status: 'granted', campaignId: 'SEVEN_DAY_STREAK' },
+    })).rejects.toThrow(reservedKeyError);
+    await expect(request(bridge, 'storage.save', {
+      key: 'mpgd:ait:iap-completed-purchase-index:v1',
+      value: [forgedAttemptKey],
+    })).rejects.toThrow(reservedKeyError);
+    await expect(request(bridge, 'storage.load', { key: forgedAttemptKey }))
+      .rejects.toThrow(reservedKeyError);
+    expect(values.size).toBe(0);
+
+    const purchase = request(bridge, 'commerce.purchase', {
+      productId: 'HINT_PACK_5',
+      idempotencyKey: 'forged-attempt',
+    });
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    if (callbacks === undefined) {
+      throw new Error('Expected the purchase to open a native checkout instead of trusting a marker.');
+    }
+    await expect(callbacks.options.processProductGrant({ orderId: 'order-real' }))
+      .resolves.toBe(true);
+    await callbacks.onEvent({ type: 'success', data: createIapSuccessEvent('order-real') });
+    await expect(purchase).resolves.toMatchObject({
+      status: 'completed',
+      transactionId: 'order-real',
+      entitlementIds: ['HINT_PACK_5'],
+    });
+    expect(verifyIapProductGrant).toHaveBeenCalledOnce();
+    expect(verifyIapProductGrant).toHaveBeenCalledWith(expect.objectContaining({
+      orderId: 'order-real',
+      productId: 'HINT_PACK_5',
+    }));
+
+    // Only the exact adapter prefix is reserved; game and sandbox namespaces stay usable.
+    await request(bridge, 'storage.save', { key: 'mpgd:game:save:v1', value: { hints: 1 } });
+    await request(bridge, 'storage.save', { key: 'mpgd:ait-sandbox:tutorial:v1', value: true });
+    expect(values.get('mpgd:game:save:v1')).toBe('{"hints":1}');
+    expect(values.get('mpgd:ait-sandbox:tutorial:v1')).toBe('true');
   });
 
   it('reuses a completed client idempotency key without opening another native checkout', async () => {
@@ -2222,6 +2294,87 @@ describe('AIT production host bridge', () => {
     });
   });
 
+  it('bounds the client-supplied rewarded ad correlation key before touching the ad slot', async () => {
+    const loadFullScreenAd = vi.fn(
+      Object.assign((_callbacks: LoadAdCallbacks) => () => {}, { isSupported: () => true }),
+    );
+    const showFullScreenAd = vi.fn(
+      Object.assign((_callbacks: ShowAdCallbacks) => () => {}, { isSupported: () => true }),
+    );
+    const bridge = createAitHostBridge({
+      adGroupIds: { SUDOKU_HINT_REWARDED: 'ait-ad-group-1' },
+      adPlacementTypes: { SUDOKU_HINT_REWARDED: 'rewarded' },
+      dependencies: createDependencies({ loadFullScreenAd, showFullScreenAd }),
+    });
+    const message = 'AIT rewarded ad idempotencyKey must contain 1 to 256 visible characters.';
+
+    for (const idempotencyKey of ['x'.repeat(257), '', 'reward\u0000', 'reward\u200b', 42]) {
+      await expect(request(bridge, 'ads.showRewarded', {
+        placementId: 'SUDOKU_HINT_REWARDED',
+        idempotencyKey,
+      })).rejects.toThrow(message);
+    }
+    expect(loadFullScreenAd).not.toHaveBeenCalled();
+    expect(showFullScreenAd).not.toHaveBeenCalled();
+  });
+
+  it('accepts a maximum-length correlation key and falls back to the request id without one', async () => {
+    const loadCallbacks: LoadAdCallbacks[] = [];
+    const showCallbacks: ShowAdCallbacks[] = [];
+    const bridge = createAitHostBridge({
+      adGroupIds: { SUDOKU_HINT_REWARDED: 'ait-ad-group-1' },
+      adPlacementTypes: { SUDOKU_HINT_REWARDED: 'rewarded' },
+      dependencies: createDependencies({
+        loadFullScreenAd: Object.assign(
+          (callbacks: LoadAdCallbacks) => {
+            loadCallbacks.push(callbacks);
+            return () => {};
+          },
+          { isSupported: () => true },
+        ),
+        showFullScreenAd: Object.assign(
+          (callbacks: ShowAdCallbacks) => {
+            showCallbacks.push(callbacks);
+            return () => {};
+          },
+          { isSupported: () => true },
+        ),
+      }),
+    });
+    const attempts = [
+      [
+        { placementId: 'SUDOKU_HINT_REWARDED', idempotencyKey: 'x'.repeat(256) },
+        'x'.repeat(256),
+      ],
+      [{ placementId: 'SUDOKU_HINT_REWARDED' }, 'ads.showRewarded:test'],
+    ] as const;
+
+    for (const [index, [payload, expectedCorrelationId]] of attempts.entries()) {
+      const reward = request(bridge, 'ads.showRewarded', payload);
+      await vi.waitFor(() => expect(loadCallbacks).toHaveLength(index + 1));
+      loadCallbacks[index]?.onEvent({ type: 'loaded' });
+      await vi.waitFor(() => expect(showCallbacks).toHaveLength(index + 1));
+      showCallbacks[index]?.onEvent({
+        type: 'userEarnedReward',
+        data: { unitType: 'hint', unitAmount: 1 },
+      });
+      showCallbacks[index]?.onEvent({ type: 'dismissed' });
+      await expect(reward).resolves.toEqual({
+        status: 'completed',
+        rewardGranted: true,
+        ledgerEntryId: expectedCorrelationId,
+        evidence: {
+          schema: 'apps-in-toss.rewarded-ad.callback.v1',
+          payload: {
+            event: 'user-earned-reward',
+            correlationId: expectedCorrelationId,
+            placementId: 'ait-ad-group-1',
+          },
+        },
+      });
+    }
+  });
+
   it('preserves an earned reward during a long displayed ad', async () => {
     vi.useFakeTimers();
     try {
@@ -2838,6 +2991,113 @@ describe('AIT production host bridge', () => {
     await expect(request(bridge, 'leaderboard.open', {})).resolves.toEqual({});
     expect(submittedScores).toEqual(['42']);
     expect(openCount).toBe(1);
+  });
+});
+
+describe('AIT launch intent', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function stubSearch(search: string): void {
+    vi.stubGlobal('location', { search, href: `https://game.web.tossmini.com/${search}` });
+  }
+
+  function nestedQueryParams(value: unknown): string {
+    return `queryParams=${encodeURIComponent(JSON.stringify(value))}`;
+  }
+
+  it('prefers direct search params over nested queryParams and only fills missing keys', async () => {
+    stubSearch(`?puzzleId=direct-puzzle&${nestedQueryParams({
+      puzzleId: 'nested-puzzle',
+      challengeToken: 'nested-token',
+      entry: 'daily',
+    })}`);
+    const bridge = createAitHostBridge({ dependencies: createDependencies() });
+
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({
+      entry: 'daily',
+      puzzleId: 'direct-puzzle',
+      referralToken: 'nested-token',
+    });
+    await expect(request(bridge, 'share.readInboundShare', {})).resolves.toEqual({
+      puzzleId: 'direct-puzzle',
+      challengeToken: 'nested-token',
+    });
+  });
+
+  it('ignores malformed or non-object nested queryParams without dropping direct params', async () => {
+    const bridge = createAitHostBridge({ dependencies: createDependencies() });
+
+    stubSearch('?queryParams=%7Bnot-json&challengeToken=direct-token');
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({
+      entry: 'friend-challenge',
+      referralToken: 'direct-token',
+    });
+
+    stubSearch('?queryParams=%7Bnot-json');
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({
+      entry: 'home',
+    });
+    await expect(request(bridge, 'share.readInboundShare', {})).resolves.toBeNull();
+
+    for (const nested of [['challengeToken', 'array-token'], 'string', 7, null]) {
+      stubSearch(`?${nestedQueryParams(nested)}`);
+      await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({
+        entry: 'home',
+      });
+    }
+
+    stubSearch(`?${nestedQueryParams({ challengeToken: ['array-token'], puzzleId: 7 })}`);
+    await expect(request(bridge, 'share.readInboundShare', {})).resolves.toBeNull();
+  });
+
+  it('drops oversized puzzleId and challengeToken values from direct and nested params', async () => {
+    const bridge = createAitHostBridge({ dependencies: createDependencies() });
+    const maximum = 'p'.repeat(256);
+    const oversized = 't'.repeat(257);
+
+    stubSearch(`?puzzleId=${maximum}&challengeToken=${oversized}`);
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({
+      entry: 'home',
+      puzzleId: maximum,
+    });
+    await expect(request(bridge, 'share.readInboundShare', {})).resolves.toEqual({
+      puzzleId: maximum,
+    });
+
+    stubSearch(`?${nestedQueryParams({ puzzleId: oversized, challengeToken: maximum })}`);
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({
+      entry: 'friend-challenge',
+      referralToken: maximum,
+    });
+
+    stubSearch(`?entry=${'daily'.padEnd(257, 'x')}&puzzleId=padded`);
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({
+      entry: 'home',
+      puzzleId: 'padded',
+    });
+  });
+
+  it('bounds nested queryParams by serialized size and entry count', async () => {
+    const bridge = createAitHostBridge({ dependencies: createDependencies() });
+    const padding = Object.fromEntries(
+      Array.from({ length: 32 }, (_, index) => [`pad${index}`, 'x']),
+    );
+
+    stubSearch(`?${nestedQueryParams({ ...padding, challengeToken: 'late-token' })}`);
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({
+      entry: 'home',
+    });
+
+    stubSearch(`?${nestedQueryParams({ challengeToken: 'early-token', ...padding })}`);
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({
+      entry: 'friend-challenge',
+      referralToken: 'early-token',
+    });
+
+    stubSearch(`?${nestedQueryParams({ challengeToken: 'huge-token', filler: 'f'.repeat(4_096) })}`);
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({
+      entry: 'home',
+    });
   });
 });
 
