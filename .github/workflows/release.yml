@@ -14,35 +14,34 @@ concurrency:
   group: release-main
   cancel-in-progress: false
 
+# Least privilege by default. Each job widens only what its own steps need, so
+# dependency install scripts and the package build never see a write token.
 permissions:
-  actions: write
-  contents: write
-  pull-requests: write
-  id-token: write
+  contents: read
 
 jobs:
-  release:
+  build:
     if: ${{ (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    # `actions: read` only serves the manual-dispatch guard that inspects ci.yml
+    # runs through `gh run list`.
+    permissions:
+      actions: read
+      contents: read
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      # A SHA checkout is detached; pnpm publish keeps its branch and clean-tree
-      # checks enabled, so attach that exact CI-verified commit to local main.
-      - name: Attach verified release commit to main
-        run: git switch -C main
-
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 11.7.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 24
           cache: pnpm
@@ -69,7 +68,102 @@ jobs:
       # Build package dist and smoke npm tarballs only. Target builds run in PR CI.
       - run: pnpm pack:packages
 
-      # Keep credentials out of checkout/install/build. The helper reads the
+      # Every publishable package ships `files: ["dist"]` from the working tree
+      # and dist/ is gitignored, so the publish job cannot rebuild it from the
+      # checkout alone. A tar archive keeps the paths rooted at the workspace
+      # and preserves file modes across the artifact round trip.
+      - name: Archive built package dist directories
+        run: |
+          set -euo pipefail
+          # Same roots as tools/package/workspace.ts; backend/ may not exist yet.
+          roots=()
+          for root in packages adapters native-plugins backend; do
+            if [[ -d "${root}" ]]; then
+              roots+=("${root}")
+            fi
+          done
+          find "${roots[@]}" -mindepth 2 -maxdepth 2 -type d -name dist -print0 \
+            | sort -z \
+            | tar --null --files-from - -cf "${RUNNER_TEMP}/release-package-dist.tar"
+          tar -tf "${RUNNER_TEMP}/release-package-dist.tar" | grep -q '/dist/index\.js$'
+
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: release-package-dist
+          path: ${{ runner.temp }}/release-package-dist.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # Sampo pushes the release branch and tags, opens or updates the release
+    # PR, publishes to npm through Trusted Publishing (OIDC), and the trailing
+    # step dispatches ci.yml for the release PR.
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # A SHA checkout is detached; pnpm publish keeps its branch and clean-tree
+      # checks enabled, so attach that exact CI-verified commit to local main.
+      - name: Attach verified release commit to main
+        run: git switch -C main
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 11.7.0
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # Dependency lifecycle scripts already ran (and were exercised) in the
+      # build job. Publishing needs only the package manager, the workspace
+      # manifests, and the prebuilt dist directories restored below.
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: release-package-dist
+          path: ${{ runner.temp }}/release-package-dist
+
+      - name: Restore built package dist directories
+        run: tar -xf "${RUNNER_TEMP}/release-package-dist/release-package-dist.tar"
+
+      # The tarball smoke already ran on these bytes in the build job. Guard
+      # the restore itself so a missing dist fails here instead of publishing
+      # an empty package (pnpm publish does not treat a missing `files` entry
+      # as an error).
+      - name: Verify restored package dist directories
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for manifest in packages/*/package.json adapters/*/package.json native-plugins/*/package.json backend/*/package.json; do
+            if [[ "$(jq -r '.private // false' "${manifest}")" == "true" ]]; then
+              continue
+            fi
+            package_dir="${manifest%/package.json}"
+            for artifact in dist/index.js dist/index.d.ts; do
+              if [[ ! -f "${package_dir}/${artifact}" ]]; then
+                echo "::error::${package_dir} is missing ${artifact} after the artifact restore."
+                exit 1
+              fi
+            done
+            echo "Restored ${package_dir}/dist"
+          done
+
+      # Keep credentials out of checkout/install/restore. The helper reads the
       # step-scoped token when Sampo subsequently invokes git push.
       - name: Configure git authentication for Sampo
         env:
@@ -94,7 +188,7 @@ jobs:
 
       - name: Run Sampo release automation
         id: sampo
-        uses: bruits/sampo/crates/sampo-github-action@sampo-v0.17.4
+        uses: bruits/sampo/crates/sampo-github-action@f7241754458e1be4073902b2860596340c7d089c # sampo-v0.17.4
         with:
           command: auto
           create-github-release: true
