@@ -14,11 +14,13 @@
  * for a loopback development authority (`localhost` or `127.0.0.1`).
  *
  * The transport receives exactly the representation that passed the policy
- * check: a string or URL-like resource is forwarded as its validated absolute
- * `href`, and a Request-like resource is forwarded unchanged after its
- * immutable `url` validated. Resources are classified by shape rather than by
- * `instanceof`, so a `URL` or `Request` created in another realm (for example
- * an iframe) is validated the same way instead of slipping past the policy.
+ * check. A string, or a URL-like object (a string `href` and no `url`, which
+ * also covers a `URL` created in another realm such as an iframe), is
+ * forwarded as its validated absolute `href`. A same-realm `Request` is
+ * forwarded unchanged after its immutable `url` validated. Anything else is
+ * rejected: a Request-like object that is not a same-realm `Request` would be
+ * stringified by native fetch through `toString`, not `url`, so validating its
+ * `url` would not cover what is actually fetched.
  */
 export function fetchAitAuthority(input: {
   readonly resource: RequestInfo | URL;
@@ -47,7 +49,7 @@ function resolveAitAuthorityResource(resource: RequestInfo | URL): AitAuthorityR
   if (candidate === undefined) {
     return {
       ok: false,
-      error: new TypeError('AIT authority resource must be a string, URL, or Request.'),
+      error: new TypeError('AIT authority resource must be a string, URL, or same-realm Request.'),
     };
   }
   let url: URL;
@@ -86,9 +88,14 @@ type AitAuthorityResourceCandidate =
   | { readonly kind: 'request'; readonly href: string; readonly request: Request };
 
 /**
- * Reads the URL text once, by shape, so the same value is both validated and
- * forwarded. `instanceof URL` / `instanceof Request` are realm-sensitive and
- * would misclassify objects created in another realm.
+ * Reads the URL text once so the same value is both validated and forwarded.
+ *
+ * URL-like objects are recognized by shape (`instanceof URL` is false for a
+ * URL from another realm) and forwarded as their href string, so the object
+ * itself never reaches the transport. Requests are only accepted via a
+ * same-realm `instanceof Request`: the instance must be forwarded as-is, and
+ * native fetch stringifies any non-Request object through `toString` rather
+ * than reading `url`, so a duck-typed `{ url }` cannot be trusted.
  */
 function readAitAuthorityResourceCandidate(resource: unknown): AitAuthorityResourceCandidate | undefined {
   if (typeof resource === 'string') {
@@ -97,12 +104,12 @@ function readAitAuthorityResourceCandidate(resource: unknown): AitAuthorityResou
   if (typeof resource !== 'object' || resource === null) {
     return undefined;
   }
-  const { href, url } = resource as { readonly href?: unknown; readonly url?: unknown };
-  if (typeof href === 'string') {
-    return { kind: 'href', href };
+  if (typeof Request === 'function' && resource instanceof Request) {
+    return { kind: 'request', href: resource.url, request: resource };
   }
-  if (typeof url === 'string') {
-    return { kind: 'request', href: url, request: resource as Request };
+  const { href, url } = resource as { readonly href?: unknown; readonly url?: unknown };
+  if (typeof href === 'string' && url === undefined) {
+    return { kind: 'href', href };
   }
   return undefined;
 }
