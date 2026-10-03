@@ -31,7 +31,7 @@ jobs:
       docs_validation: ${{ steps.release-pr-meta.outputs.docs_validation }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -170,7 +170,7 @@ jobs:
                     break
                   fi
                   classifier_start='      - name: Determine metadata-only validation'
-                  classifier_end='      - uses: pnpm/action-setup@v6'
+                  classifier_end='      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10'
                   if [[ "${ci_before}" != *"${classifier_start}"* || "${ci_after}" != *"${classifier_start}"* || "${ci_before}" != *"${classifier_end}"* || "${ci_after}" != *"${classifier_end}"* ]]; then
                     echo "::warning file=.github/workflows/ci.yml::Classifier step markers changed; running full validation."
                     run_prepared=true
@@ -370,12 +370,12 @@ jobs:
           echo "Documentation checks: ${docs_validation}"
           printf 'Changed files:\n%s\n' "${changed_files[*]:-<none>}"
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         if: ${{ steps.release-pr-meta.outputs.docs_only != 'true' }}
         with:
           version: 11.7.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         if: ${{ steps.release-pr-meta.outputs.docs_only != 'true' }}
         with:
           node-version: 24
@@ -386,7 +386,7 @@ jobs:
 
       - name: Cache compiled ttsc plugins
         if: ${{ steps.release-pr-meta.outputs.docs_only != 'true' }}
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: node_modules/.cache/ttsc/plugins
           key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml') }}
@@ -413,7 +413,7 @@ jobs:
       # Native and test jobs consume this immediately after package build.
       - run: tar -czf "$RUNNER_TEMP/package-dist.tgz" packages/*/dist adapters/*/dist native-plugins/*/dist
         if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.docs_only != 'true' }}
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: ${{ steps.release-pr-meta.outputs.enabled != 'true' && steps.release-pr-meta.outputs.docs_only != 'true' }}
         with:
           name: package-dist-ci
@@ -426,19 +426,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 11.7.0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Cache compiled ttsc plugins
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: node_modules/.cache/ttsc/plugins
           key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml') }}
@@ -447,7 +447,7 @@ jobs:
       - run: pnpm docs:examples:check
       - run: pnpm docs:examples:test
       - run: pnpm docs:site:build
-      - uses: actions/upload-pages-artifact@v5
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         with:
           path: doc_build
@@ -458,19 +458,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 11.7.0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm i18n:build
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: package-dist-ci
           path: ${{ runner.temp }}
@@ -510,25 +510,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 11.7.0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm i18n:build
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: package-dist-ci
           path: ${{ runner.temp }}
       - run: tar -xzf "$RUNNER_TEMP/package-dist.tgz"
       - name: Cache example browsers
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-runtime-playwright-${{ hashFiles('examples/runtime-controls/package.json', 'examples/asset-packs/package.json') }}
@@ -550,7 +550,7 @@ jobs:
         run: pnpm --dir examples/asset-packs test:packed-consumer
       - name: Upload asset pack browser evidence
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: asset-pack-browser-evidence
           path: examples/asset-packs/artifacts/browser/
@@ -563,32 +563,32 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 11.7.0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm i18n:build
       - name: Cache compiled ttsc plugins
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: node_modules/.cache/ttsc/plugins
           key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: package-dist-ci
           path: ${{ runner.temp }}
       - run: tar -xzf "$RUNNER_TEMP/package-dist.tgz"
       - run: pnpm ci:emit-tools:prepared
       - run: tar -czf "$RUNNER_TEMP/compiled-tools.tgz" node_modules/.cache/mpgd-ci-tools
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: compiled-tools-ci
           path: ${{ runner.temp }}/compiled-tools.tgz
@@ -604,30 +604,30 @@ jobs:
       matrix:
         group: [contracts, cli, services]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 11.7.0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm i18n:build
       - name: Cache compiled ttsc plugins
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: node_modules/.cache/ttsc/plugins
           key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: package-dist-ci
           path: ${{ runner.temp }}
       - run: tar -xzf "$RUNNER_TEMP/package-dist.tgz"
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: compiled-tools-ci
           path: ${{ runner.temp }}
@@ -642,25 +642,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 11.7.0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm i18n:build
       - name: Cache compiled ttsc plugins
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: node_modules/.cache/ttsc/plugins
           key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: package-dist-ci
           path: ${{ runner.temp }}
@@ -683,7 +683,7 @@ jobs:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
           VITE_MPGD_GAME_SERVICES_URL: https://services.example.com
       - run: pnpm smoke:target verse8
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: ${{ failure() }}
         with:
           name: web-preview-microsoft-store-and-verse8-ci
@@ -697,29 +697,29 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 11.7.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 24
           cache: pnpm
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: 21
 
-      - uses: gradle/actions/setup-gradle@v6
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
           cache-provider: basic
 
-      - uses: android-actions/setup-android@v4
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         # Google removed the legacy `tools` package from the SDK repository;
         # the action's `tools platform-tools` default now fails. The explicit
         # sdkmanager steps install what each build needs.
@@ -730,12 +730,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Cache compiled ttsc plugins
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: node_modules/.cache/ttsc/plugins
           key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: package-dist-ci
           path: ${{ runner.temp }}
@@ -760,7 +760,7 @@ jobs:
         run: ./gradlew -PmpgdPlayBillingPluginTest=true :mpgd-capacitor-play-billing:compileDebugJavaWithJavac
       - run: pnpm smoke:target android
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: ${{ failure() }}
         with:
           name: android-ci
@@ -776,15 +776,15 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 11.7.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 24
           cache: pnpm
@@ -792,12 +792,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Cache compiled ttsc plugins
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: node_modules/.cache/ttsc/plugins
           key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: package-dist-ci
           path: ${{ runner.temp }}
@@ -806,7 +806,7 @@ jobs:
       - run: pnpm smoke:cli-ios-signing
       - run: pnpm smoke:native-packed-swift
       - name: Cache StoreKit Swift package checkout
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: native-plugins/capacitor-storekit/.build/spm-packages
           key: ${{ runner.os }}-${{ runner.arch }}-storekit-spm-${{ hashFiles('native-plugins/capacitor-storekit/Package.swift') }}
@@ -834,7 +834,7 @@ jobs:
           "$RUNNER_TEMP/native-credential-conformance"
       - run: pnpm smoke:target ios
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: ${{ failure() }}
         with:
           name: ios-ci
@@ -849,15 +849,15 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 11.7.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 24
           cache: pnpm
@@ -865,12 +865,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Cache compiled ttsc plugins
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: node_modules/.cache/ttsc/plugins
           key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: package-dist-ci
           path: ${{ runner.temp }}
@@ -880,7 +880,7 @@ jobs:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
       - run: pnpm smoke:target ait
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: ${{ failure() }}
         with:
           name: ait-ci
@@ -898,15 +898,15 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 11.7.0
 
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 24
           cache: pnpm
@@ -914,12 +914,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Cache compiled ttsc plugins
-        uses: actions/cache@v5
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: node_modules/.cache/ttsc/plugins
           key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: package-dist-ci
           path: ${{ runner.temp }}
@@ -929,7 +929,7 @@ jobs:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
       - run: pnpm smoke:target reddit
 
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: ${{ failure() }}
         with:
           name: devvit-ci
@@ -964,7 +964,7 @@ jobs:
       AIT_RESULT: ${{ needs.build-ait.result }}
       DEVVIT_RESULT: ${{ needs.build-devvit.result }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -976,10 +976,10 @@ jobs:
         if: ${{ !cancelled() && steps.verify-coverage.outcome == 'success' && github.event_name == 'pull_request' }}
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: node tools/ci/attest-pr-merge.mjs
-      - uses: actions/upload-artifact@v6
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         if: ${{ !cancelled() && steps.tested-merge.outcome == 'success' && github.event_name == 'pull_request' }}
         with:
           name: ${{ steps.tested-merge.outputs.artifact_name }}
@@ -1018,6 +1018,6 @@ jobs:
             echo "::notice::Skipping Pages artifact from ${GITHUB_SHA}; main is ${latest_main}."
             echo 'deploy=false' >> "${GITHUB_OUTPUT}"
           fi
-      - uses: actions/deploy-pages@v5
+      - uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
         id: deployment
         if: ${{ steps.current-main.outputs.deploy == 'true' }}
