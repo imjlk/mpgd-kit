@@ -55,6 +55,15 @@ A workspace package is not rebuilt when two things hold:
 the same `HEAD`. `build:packages`, which release builds use, always rebuilds every
 package. `MPGD_REBUILD_PACKAGES=1` forces a full rebuild from `build:target` too.
 
+Packages that are rebuilt compile concurrently: each starts once the workspace
+packages it depends on (including dev and peer dependencies) are built, up to
+`os.availableParallelism()` at a time. `MPGD_PACKAGE_BUILD_CONCURRENCY=1` builds
+one package at a time. The compilers run with Node directly rather than through
+`pnpm exec`, which costs about two seconds per call. Each package runs `ttsc`
+(JavaScript and lint) and then `tsc --emitDeclarationOnly`: published
+declarations come from the stock TypeScript printer, because ttsc's declaration
+emit formats some types differently.
+
 The shared tsconfig pins `rootDir` to the repository root. Workspace projects
 include/import sibling sources; a narrower inferred root can make TypeScript-Go
 emit those outside-root files beside their sources when ttsx loads a Vite config
