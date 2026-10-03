@@ -18,6 +18,10 @@ interface RuntimePlatformTargetMetadata {
   readonly integrations?: Record<string, unknown>;
 }
 
+// Sandbox gateways self-complete purchases and rewards without any backend
+// verification, so a non-production build alone must never select them. Each
+// one additionally requires the explicit BUILD_ID its dev script sets.
+const aitSandboxBuildId = 'ait-sandbox';
 const devvitSandboxBuildId = 'devvit-sandbox';
 
 export interface CreateGameViteSharedConfigInput {
@@ -140,7 +144,7 @@ export function resolveBuildGatewayModule(input: {
     case 'ios':
       return 'src/platform/buildGateways/capacitorIos.ts';
     case 'ait':
-      return input.debug
+      return input.debug && input.buildId === aitSandboxBuildId
         ? 'src/platform/buildGateways/aitSandbox.ts'
         : 'src/platform/buildGateways/ait.ts';
     case 'reddit':
