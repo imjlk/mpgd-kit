@@ -14,10 +14,17 @@ const productPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const transactionPattern = /^[1-9][0-9]{0,19}$/u;
 
 /**
- * Backend-verified grants per provider instance: transaction ID to ledger
- * entry ID. Only recoverStoreKitPurchases records entries, after the game
- * backend answered verified=true, so finishGrantedTransaction cannot finish
- * an unfinished purchase on the strength of a caller-supplied string alone.
+ * Grants recorded by recoverStoreKitPurchases per provider instance:
+ * transaction ID to the ledger entry ID the recovery backend returned. The map
+ * binds finishGrantedTransaction to that recovery flow so a game cannot finish
+ * an unfinished purchase by accident, or with an arbitrary ledger string, and
+ * so each recorded pair reaches the native finish call at most once.
+ *
+ * This is not a trust boundary against a caller who controls the backend
+ * object passed to recoverStoreKitPurchases: such a caller can record any
+ * pair. The real control stays server-side, in the authenticated
+ * recoverPurchase implementation that verifies Apple evidence before it
+ * grants, and in the native plugin never granting anything on finish.
  */
 const verifiedGrants = new WeakMap<CapacitorStoreKitProvider, Map<string, string>>();
 
@@ -76,8 +83,15 @@ export interface CapacitorStoreKitProvider {
   /**
    * Finish a transaction the backend already granted. The provider accepts
    * only a transaction and ledger entry pair that recoverStoreKitPurchases
-   * recorded from a verified backend answer in this session; any other pair
-   * is rejected so an unfinished purchase keeps its recovery signal.
+   * recorded from a backend answer in this session, and consumes the pair
+   * before the native call so overlapping finishes share one native call;
+   * any other pair is rejected so an unfinished purchase keeps its recovery
+   * signal. A failed native finish restores the pair for a retry.
+   *
+   * The guard prevents arbitrary or accidental finish calls with unverified
+   * ledger IDs. It is not a trust boundary against code that controls the
+   * backend object given to recoverStoreKitPurchases; the authenticated
+   * server-side recoverPurchase implementation is the real control.
    */
   finishGrantedTransaction(input: {
     readonly transactionId: string;
@@ -337,6 +351,22 @@ export function createCapacitorStoreKitProvider(
   }
 
   const grants = new Map<string, string>();
+  const inFlight = new Map<string, { readonly ledgerEntryId: string; readonly promise: Promise<boolean> }>();
+
+  async function finishReserved(transactionId: string, ledgerEntryId: string): Promise<boolean> {
+    let finished = false;
+    try {
+      finished = (await sdk.finishTransaction({ transactionId, ledgerEntryId })).finished;
+    } finally {
+      // Restore the pair after a rejected or failed native finish so recovery
+      // can retry it, unless a newer recovery recorded the transaction again.
+      if (!finished && !grants.has(transactionId)) {
+        grants.set(transactionId, ledgerEntryId);
+      }
+    }
+    return finished;
+  }
+
   const provider: CapacitorStoreKitProvider = {
     id: 'apple-storekit',
     features: ['nativeIap'],
@@ -374,19 +404,28 @@ export function createCapacitorStoreKitProvider(
         || input.ledgerEntryId.trim() === '') {
         throw new TypeError('StoreKit finish requires a verified grant and transaction ID.');
       }
-      if (grants.get(input.transactionId) !== input.ledgerEntryId) {
+      const { transactionId, ledgerEntryId } = input;
+      const active = inFlight.get(transactionId);
+      if (active !== undefined && active.ledgerEntryId === ledgerEntryId) {
+        return active.promise;
+      }
+      if (grants.get(transactionId) !== ledgerEntryId) {
         throw new TypeError(
           'StoreKit finish requires the ledger entry the backend returned for this transaction via recoverStoreKitPurchases.',
         );
       }
-      const response = await sdk.finishTransaction({
-        transactionId: input.transactionId,
-        ledgerEntryId: input.ledgerEntryId,
-      });
-      if (response.finished) {
-        grants.delete(input.transactionId);
+      // Consume the pair synchronously, before the first await, so an
+      // overlapping finish for the same transaction cannot reach native twice.
+      grants.delete(transactionId);
+      const promise = finishReserved(transactionId, ledgerEntryId);
+      inFlight.set(transactionId, { ledgerEntryId, promise });
+      try {
+        return await promise;
+      } finally {
+        if (inFlight.get(transactionId)?.promise === promise) {
+          inFlight.delete(transactionId);
+        }
       }
-      return response.finished;
     },
   };
   verifiedGrants.set(provider, grants);

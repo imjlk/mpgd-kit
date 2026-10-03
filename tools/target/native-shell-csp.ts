@@ -25,18 +25,41 @@ export const capacitorShellContentSecurityPolicy = [
   "form-action 'none'",
 ].join('; ');
 
-const cspMetaPattern = /<meta\b[^>]*\bhttp-equiv\s*=\s*["']?content-security-policy["']?[^>]*>/iu;
+const metaTagPattern = /<meta\b[^>]*>/giu;
+const httpEquivPattern = /\bhttp-equiv\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/iu;
 const headOpenPattern = /<head\b[^>]*>/iu;
+
+/**
+ * Whether the page already carries an enforcing CSP meta tag. The http-equiv
+ * value must match exactly (ASCII case-insensitive, quoted or unquoted), the
+ * same way browsers process it: Content-Security-Policy-Report-Only or a value
+ * with stray characters does not enforce anything and must not suppress the
+ * shell policy.
+ */
+export function hasEnforcingCspMeta(html: string): boolean {
+  for (const [tag] of html.matchAll(metaTagPattern)) {
+    const httpEquiv = httpEquivPattern.exec(tag);
+    if (httpEquiv === null) {
+      continue;
+    }
+    const value = httpEquiv[1] ?? httpEquiv[2] ?? httpEquiv[3] ?? '';
+    if (value.toLowerCase() === 'content-security-policy') {
+      return true;
+    }
+  }
+  return false;
+}
 
 export const capacitorShellCspMetaTag =
   `<meta http-equiv="Content-Security-Policy" content="${capacitorShellContentSecurityPolicy}">`;
 
 /**
- * Insert the shell CSP right after <head>. A page that already declares a
- * Content-Security-Policy meta tag keeps its game-owned policy untouched.
+ * Insert the shell CSP right after <head>. A page that already declares an
+ * enforcing Content-Security-Policy meta tag keeps its game-owned policy
+ * untouched; a report-only policy is kept alongside the injected one.
  */
 export function injectCapacitorShellCsp(html: string): string {
-  if (cspMetaPattern.test(html)) {
+  if (hasEnforcingCspMeta(html)) {
     return html;
   }
   const head = headOpenPattern.exec(html);

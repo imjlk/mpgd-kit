@@ -6,6 +6,8 @@ import path from 'node:path';
 import {
   applyCapacitorShellCsp,
   capacitorShellContentSecurityPolicy,
+  capacitorShellCspMetaTag,
+  hasEnforcingCspMeta,
   injectCapacitorShellCsp,
 } from './native-shell-csp';
 
@@ -48,11 +50,49 @@ assert.doesNotMatch(
 );
 assert.equal(injectCapacitorShellCsp(injected), injected, 'injection is idempotent');
 
-const ownPolicy = viteIndex.replace(
-  '<head>',
-  '<head><meta http-equiv=Content-Security-Policy content="default-src \'self\' https://cdn.example">',
-);
-assert.equal(injectCapacitorShellCsp(ownPolicy), ownPolicy, 'a game-owned CSP is preserved');
+function withMeta(meta: string): string {
+  return viteIndex.replace('<head>', `<head>${meta}`);
+}
+
+const enforcingMetas = [
+  '<meta http-equiv="Content-Security-Policy" content="default-src \'self\' https://cdn.example">',
+  "<meta http-equiv='content-security-policy' content=\"default-src 'self'\">",
+  '<meta http-equiv=Content-Security-Policy content="default-src \'self\' https://cdn.example">',
+  '<meta content="default-src \'self\'" HTTP-EQUIV = "CONTENT-SECURITY-POLICY" />',
+];
+for (const meta of enforcingMetas) {
+  const ownPolicy = withMeta(meta);
+  assert.equal(hasEnforcingCspMeta(ownPolicy), true, `enforcing meta detected: ${meta}`);
+  assert.equal(
+    injectCapacitorShellCsp(ownPolicy),
+    ownPolicy,
+    `a game-owned CSP is preserved: ${meta}`,
+  );
+}
+
+const nonEnforcingMetas = [
+  '<meta http-equiv="Content-Security-Policy-Report-Only" content="default-src \'none\'">',
+  '<meta http-equiv=Content-Security-Policy-Report-Only content="default-src \'none\'">',
+  '<meta http-equiv="Content-Security-Policy " content="default-src \'none\'">',
+  '<meta http-equiv="X-Content-Security-Policy" content="default-src \'none\'">',
+  '<meta name="Content-Security-Policy" content="default-src \'none\'">',
+  '<meta http-equiv="refresh" content="0; url=/">',
+];
+for (const meta of nonEnforcingMetas) {
+  const page = withMeta(meta);
+  assert.equal(hasEnforcingCspMeta(page), false, `non-enforcing meta ignored: ${meta}`);
+  const hardened = injectCapacitorShellCsp(page);
+  assert.notEqual(hardened, page, `an enforcing CSP is still injected: ${meta}`);
+  assert.ok(hardened.includes(meta), `the original meta tag is preserved: ${meta}`);
+  assert.equal(
+    hardened.split(capacitorShellCspMetaTag).length - 1,
+    1,
+    `exactly one enforcing CSP is injected: ${meta}`,
+  );
+  assert.equal(injectCapacitorShellCsp(hardened), hardened, `injection stays idempotent: ${meta}`);
+}
+assert.equal(hasEnforcingCspMeta(viteIndex), false);
+assert.equal(hasEnforcingCspMeta(injected), true);
 assert.match(
   injectCapacitorShellCsp('<html><HEAD lang="en"><title>x</title></HEAD></html>'),
   /<HEAD lang="en">\n<meta http-equiv="Content-Security-Policy"/u,

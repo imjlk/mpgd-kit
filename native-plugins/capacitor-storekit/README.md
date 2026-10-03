@@ -26,10 +26,18 @@ The recovery helper calls native `finishTransaction` only after a
 verified response with a ledger entry ID. If finish fails, it reports
 `finishPending: true`; repeat recovery with the original purchase identity.
 `provider.finishGrantedTransaction` accepts only a transaction and ledger
-entry pair that `recoverStoreKitPurchases` recorded from a verified backend
-answer in the current session, and each recorded pair finishes at most once.
-Calling it, or the native `finishTransaction` plugin method, with any other
-value is rejected so an unfinished purchase keeps its recovery signal.
+entry pair that `recoverStoreKitPurchases` recorded from a backend answer in
+the current session. The pair is consumed before the native call, so
+overlapping finishes (for example startup recovery and a `transactionUpdated`
+recovery) share one native call, and a failed native finish restores the pair
+for a retry. Calling it, or the native `finishTransaction` plugin method, with
+any other value is rejected so an unfinished purchase keeps its recovery
+signal. This guard prevents arbitrary or accidental finish calls with
+unverified ledger IDs and binds finishing to the recovery flow; it is **not**
+a trust boundary against code that controls the `backend` object it passes to
+`recoverStoreKitPurchases`. The real control is server-side: the authenticated
+`recoverPurchase` implementation must verify Apple evidence before it grants,
+and finishing a transaction never grants anything by itself.
 An unknown backend result stays pending and never triggers a
 new purchase sheet automatically.
 

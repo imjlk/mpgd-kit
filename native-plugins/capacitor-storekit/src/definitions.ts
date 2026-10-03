@@ -39,9 +39,13 @@ export interface CapacitorStoreKitPlugin {
   sync(): Promise<{ readonly synced: boolean }>;
   /**
    * Call only after the authenticated backend confirms the ledger grant.
-   * Native validation is intentionally shallow; the TypeScript provider's
-   * finishGrantedTransaction enforces that the pair came from a backend
-   * answer, so games must not call this plugin method directly.
+   * Native validation is intentionally shallow and finishing never grants
+   * anything. The TypeScript provider's finishGrantedTransaction binds this
+   * call to the recoverStoreKitPurchases flow so games cannot finish a
+   * purchase accidentally or with an arbitrary ledger ID; games must not call
+   * this plugin method directly. That binding is not a trust boundary against
+   * code that controls the recovery backend object: the authenticated
+   * server-side recoverPurchase verification is the real control.
    */
   finishTransaction(input: {
     readonly transactionId: string;

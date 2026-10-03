@@ -309,4 +309,51 @@ await rejectsFinish(
   'a consumed grant is not replayed',
 );
 
+// Overlapping finishes: the pair is consumed before the native call resolves.
+function nativeFinishCount(): number {
+  return calls.filter((call) => call.startsWith('finish:')).length;
+}
+nextVerification = { verified: true, alreadyProcessed: false, ledgerEntryId: 'ledger-3' };
+finishFails = true;
+const recordedOnly = await recoverStoreKitPurchases({ provider, backend, playerId: 'player-1' });
+equal(recordedOnly[0]?.finishPending, true, 'ledger-3 is recorded but still unfinished');
+const pair = { transactionId: transaction.transactionId, ledgerEntryId: 'ledger-3' };
+let nativeCalls = nativeFinishCount();
+const failedConcurrently = await Promise.allSettled([
+  provider.finishGrantedTransaction(pair),
+  provider.finishGrantedTransaction(pair),
+]);
+equal(
+  failedConcurrently.map((result) => result.status),
+  ['rejected', 'rejected'],
+  'overlapping finishes share one failed native call',
+);
+equal(nativeFinishCount() - nativeCalls, 1, 'a failed overlapping finish reaches native once');
+finishFails = false;
+nativeCalls = nativeFinishCount();
+const concurrentResults = await Promise.all([
+  provider.finishGrantedTransaction(pair),
+  provider.finishGrantedTransaction(pair),
+  rejectsFinish(
+    { transactionId: transaction.transactionId, ledgerEntryId: 'ledger-2' },
+    'a different ledger entry is rejected while a finish is in flight',
+  ),
+]);
+equal(concurrentResults.slice(0, 2), [true, true], 'both overlapping finishes resolve finished');
+equal(nativeFinishCount() - nativeCalls, 1, 'a restored pair finishes natively once');
+equal(calls.at(-1), `finish:${transaction.transactionId}:ledger-3`, 'the restored pair is used');
+await rejectsFinish(pair, 'the shared finish consumed the pair');
+nextVerification = { verified: true, alreadyProcessed: false, ledgerEntryId: 'ledger-4' };
+nativeCalls = nativeFinishCount();
+const overlappingRecoveries = await Promise.all([
+  recoverStoreKitPurchases({ provider, backend, playerId: 'player-1' }),
+  recoverStoreKitPurchases({ provider, backend, playerId: 'player-1' }),
+]);
+equal(
+  overlappingRecoveries.map((results) => results[0]?.finishPending),
+  [false, false],
+  'overlapping recoveries both observe the finished transaction',
+);
+equal(nativeFinishCount() - nativeCalls, 1, 'overlapping recoveries finish natively once');
+
 console.info('StoreKit provider finish guard passed.');
