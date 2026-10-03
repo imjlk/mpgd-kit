@@ -42,6 +42,19 @@ removed when the command exits. If a signal kills the command, the next
 per top-level command. If the emit fails, the runner falls back to `ttsx`, which
 reports the diagnostics. `MPGD_FORCE_TTSX=1` restores per-process `ttsx`.
 
+`build:target` also passes `--reuse-unchanged` to `tools/package/build-packages.ts`.
+A workspace package is not rebuilt when two things hold:
+
+- Its input fingerprint matches the build recorded in
+  `node_modules/.cache/mpgd-package-build/fingerprints/`. The fingerprint covers
+  the package files (without `dist` and `node_modules`), the fingerprints of its
+  workspace dependencies, and the build toolchain files.
+- Its `dist` still hashes to the recorded output.
+
+`@mpgd/cli` records the Kit Git SHA, so it is reused only from a clean checkout at
+the same `HEAD`. `build:packages`, which release builds use, always rebuilds every
+package. `MPGD_REBUILD_PACKAGES=1` forces a full rebuild from `build:target` too.
+
 The shared tsconfig pins `rootDir` to the repository root. Workspace projects
 include/import sibling sources; a narrower inferred root can make TypeScript-Go
 emit those outside-root files beside their sources when ttsx loads a Vite config
