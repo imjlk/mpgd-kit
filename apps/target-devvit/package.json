@@ -12,6 +12,7 @@
     "upload": "pnpm run prepare:icon:production && devvit upload",
     "publish": "pnpm run prepare:icon:production && devvit publish",
     "check": "ttsc --noEmit",
+    "test": "cd ../.. && node tools/run-ttsx.mjs --project apps/target-devvit/tsconfig.json apps/target-devvit/src/server/bridge.test.ts",
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix"
