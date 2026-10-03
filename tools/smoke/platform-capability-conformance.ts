@@ -213,8 +213,8 @@ function createBrowserGateway(): CreatedGateway {
     expectedCapabilities: {
       nativeIap: false,
       nativeAds: false,
-      rewardedAds: true,
-      interstitialAds: true,
+      rewardedAds: false,
+      interstitialAds: false,
       nativeLeaderboard: false,
       remoteLeaderboard: false,
       achievements: false,

@@ -208,10 +208,12 @@ export function createVerse8PlatformGateway(
           });
 
           if (result.status === 'rewarded') {
+            // The SDK callback is a claim candidate only. `requestId` is a Verse8
+            // impression id, not a ledger entry; the backend verifier consumes it
+            // from the evidence payload before any reward is granted.
             return {
               status: 'completed',
-              rewardGranted: true,
-              ledgerEntryId: result.requestId,
+              rewardGranted: false,
               evidence: {
                 schema: verse8AdsRewardEvidenceSchema,
                 payload: {

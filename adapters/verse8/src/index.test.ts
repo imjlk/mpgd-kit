@@ -363,15 +363,14 @@ describe('adapter-verse8', () => {
       },
     });
 
-    await expect(
-      gateway.ads.showRewarded({
-        placementId: 'CONTINUE_AFTER_FAIL',
-        idempotencyKey: 'reward-1',
-      }),
-    ).resolves.toEqual({
+    const reward = await gateway.ads.showRewarded({
+      placementId: 'CONTINUE_AFTER_FAIL',
+      idempotencyKey: 'reward-1',
+    });
+
+    expect(reward).toEqual({
       status: 'completed',
-      rewardGranted: true,
-      ledgerEntryId: 'verse8-request-1',
+      rewardGranted: false,
       evidence: {
         schema: 'verse8.ads.reward.v1',
         payload: {
@@ -381,6 +380,8 @@ describe('adapter-verse8', () => {
         },
       },
     });
+    // A grant-shaped result would let a gateway consumer bypass the ledger.
+    expect(reward).not.toHaveProperty('ledgerEntryId');
     expect(calls).toEqual([
       {
         placementId: 'rewarded_continue',

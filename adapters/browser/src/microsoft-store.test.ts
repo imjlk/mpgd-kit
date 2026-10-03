@@ -1672,6 +1672,82 @@ describe('Microsoft Store Digital Goods commerce', () => {
     expect(() => withMicrosoftStoreCommerceAdapter(createGateway('browser'), adapter))
       .toThrow('only be installed on a microsoft-store gateway');
   });
+
+  it('replaces the base ads surface so Store builds never expose a mock reward', async () => {
+    const adapter = createMicrosoftStoreCommerceAdapter({
+      getRecoveryScope: () => 'player-1',
+      products: [],
+      authority: {
+        async getAvailability() {
+          return 'available';
+        },
+        async claimRecoveryOwnership() {
+          return { status: 'denied' } as const;
+        },
+        async hasRecoveryOwnership() {
+          return { status: 'denied' } as const;
+        },
+        async verifyAndGrant() {
+          return { status: 'failed' };
+        },
+        async getEntitlements() {
+          return [];
+        },
+      },
+      async getDigitalGoodsService() {
+        return {
+          async getDetails() {
+            return [];
+          },
+          async listPurchases() {
+            return [];
+          },
+        };
+      },
+    });
+    const grantShapedBase: PlatformGateway = {
+      ...createGateway('microsoft-store'),
+      async getCapabilities() {
+        return {
+          ...(await createGateway('microsoft-store').getCapabilities()),
+          nativeAds: true,
+          rewardedAds: true,
+          interstitialAds: true,
+        };
+      },
+      ads: {
+        async preload() {},
+        async showRewarded() {
+          return {
+            status: 'completed',
+            rewardGranted: true,
+            ledgerEntryId: 'mock-ledger-entry',
+          };
+        },
+        async showInterstitial() {
+          return { status: 'shown' };
+        },
+      },
+    };
+
+    const gateway = withMicrosoftStoreCommerceAdapter(grantShapedBase, adapter);
+
+    await expect(gateway.getCapabilities()).resolves.toMatchObject({
+      nativeIap: true,
+      nativeAds: false,
+      rewardedAds: false,
+      interstitialAds: false,
+    });
+    const reward = await gateway.ads.showRewarded({
+      placementId: 'CONTINUE_AFTER_FAIL',
+      idempotencyKey: 'store-reward',
+    });
+    expect(reward).toEqual({ status: 'unavailable', rewardGranted: false });
+    expect(reward).not.toHaveProperty('ledgerEntryId');
+    await expect(
+      gateway.ads.showInterstitial?.({ placementId: 'STAGE_END_INTERSTITIAL' }),
+    ).resolves.toEqual({ status: 'unavailable' });
+  });
 });
 
 function createGateway(target: PlatformGateway['target']): PlatformGateway {

@@ -10,8 +10,11 @@ import type {
   RewardedAdResult,
 } from '@mpgd/platform';
 
-import { isAdMobClientRewardEvidence } from './admob-client-reward.js';
 import { isAuthoritativeMicrosoftStoreCompletion } from './authoritative-purchase.js';
+import {
+  isClientRewardEvidence,
+  resolveRewardPlatformImpressionId,
+} from './admob-client-reward.js';
 import type {
   GameServicesOperationClient,
   GameServicesPurchaseResult,
@@ -383,7 +386,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
         progress.platformResult(reward.status);
 
         if ((reward.status !== 'completed' || !reward.rewardGranted)
-          && !isAdMobClientRewardEvidence(reward)) {
+          && !isClientRewardEvidence(reward)) {
           await analytics.track({
             name: reward.status === 'pending' ? 'rewarded_ad_pending' : 'rewarded_ad_rejected',
             properties: {
@@ -399,6 +402,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
           };
         }
 
+        const platformImpressionId = resolveRewardPlatformImpressionId(reward);
         const claimRequest: ClaimAdRewardRequest = {
           target,
           ...(input.deploymentTarget === undefined || input.deploymentTarget === target
@@ -406,9 +410,9 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
             : { deploymentTarget: input.deploymentTarget }),
           playerId: input.playerId,
           placementId: rewardInput.placementId,
-          ...(reward.ledgerEntryId === undefined
+          ...(platformImpressionId === undefined
             ? {}
-            : { platformImpressionId: reward.ledgerEntryId }),
+            : { platformImpressionId }),
           idempotencyKey: rewardInput.idempotencyKey,
           completedAt: requestNow(),
           ...(reward.evidence === undefined ? {} : { evidence: reward.evidence }),

@@ -1,8 +1,11 @@
 import type { PurchaseResult, RewardedAdResult } from '@mpgd/platform';
 
-import { isAdMobClientRewardEvidence } from './admob-client-reward.js';
 import { isAuthoritativeMicrosoftStoreCompletion } from './authoritative-purchase.js';
 import { createGameServicesClient, type CreateGameServicesClientInput } from './client.js';
+import {
+  isClientRewardEvidence,
+  resolveRewardPlatformImpressionId,
+} from './admob-client-reward.js';
 import type {
   GameServicesOperationClient,
   GameServicesPurchaseInput,
@@ -775,11 +778,11 @@ function assertRewardRequest(
   const request = record.request;
   if (request === undefined || record.platform === undefined
     || ((record.platform.status !== 'completed' || !record.platform.rewardGranted)
-      && !isAdMobClientRewardEvidence(record.platform))
+      && !isClientRewardEvidence(record.platform))
     || request.playerId !== record.playerId || request.playerId !== input.playerId
     || request.target !== record.target || request.placementId !== record.input.placementId
     || request.idempotencyKey !== record.input.idempotencyKey
-    || request.platformImpressionId !== record.platform.ledgerEntryId
+    || request.platformImpressionId !== resolveRewardPlatformImpressionId(record.platform)
     || request.deploymentTarget !== (input.deploymentTarget === input.target
       ? undefined : input.deploymentTarget)) {
     throw new Error('Journaled ad claim is not bound to its platform result.');

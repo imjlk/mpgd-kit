@@ -8,6 +8,8 @@ import type {
   PurchaseResult,
 } from '@mpgd/platform';
 
+import { createUnavailableAdAdapter } from './unavailable-ads.js';
+
 export const microsoftStoreBillingMethod = 'https://store.microsoft.com/billing' as const;
 export const microsoftStoreDigitalGoodsEvidenceSchema =
   'mpgd.microsoft-store.digital-goods.v1' as const;
@@ -648,6 +650,9 @@ export function withMicrosoftStoreCommerceAdapter(
     );
   }
 
+  // Microsoft Store builds reuse the browser gateway as a base. That base has
+  // no ad SDK, so its ads surface is replaced wholesale: the Store build must
+  // never expose a mock reward that looks like a ledger grant.
   return {
     ...gateway,
     async getCapabilities() {
@@ -658,11 +663,15 @@ export function withMicrosoftStoreCommerceAdapter(
       return {
         ...capabilities,
         nativeIap: availability === 'available',
+        nativeAds: false,
+        rewardedAds: false,
+        interstitialAds: false,
         remoteLeaderboard:
           capabilities.remoteLeaderboard || options.remoteLeaderboard === true,
       };
     },
     commerce,
+    ads: createUnavailableAdAdapter(),
   };
 }
 

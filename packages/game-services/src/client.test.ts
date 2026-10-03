@@ -27,6 +27,7 @@ let scoreRecords = 0;
 let purchaseEvidenceSchema: string | undefined;
 let rewardEvidenceSchema: string | undefined;
 let rewardDeploymentTarget: string | undefined;
+let rewardPlatformImpressionId: string | undefined;
 const playerId = 'player-game-services';
 const gateway = createMockGateway();
 const backend = {
@@ -47,6 +48,7 @@ const backend = {
       rewardClaims += 1;
       rewardEvidenceSchema = input.evidence?.schema;
       rewardDeploymentTarget = input.deploymentTarget;
+      rewardPlatformImpressionId = input.platformImpressionId;
 
       return {
         granted: true,
@@ -535,10 +537,17 @@ const verse8Gateway = {
     async showRewarded() {
       verse8RewardCalls += 1;
 
+      // Verse8 SDK callbacks are claim candidates: no grant, no ledger entry.
       return {
         status: 'completed',
-        rewardGranted: true,
-        ledgerEntryId: 'verse8-impression',
+        rewardGranted: false,
+        evidence: {
+          schema: 'verse8.ads.reward.v1',
+          payload: {
+            requestId: 'verse8-request-1',
+            placementId: 'rewarded_continue',
+          },
+        },
       };
     },
   },
@@ -590,7 +599,55 @@ assertEqual(
   'verse8-staging',
   'Verse8 rewards should carry the deployment target to the backend claim',
 );
+assertEqual(
+  rewardEvidenceSchema,
+  'verse8.ads.reward.v1',
+  'Verse8 client evidence should be forwarded to the backend claim',
+);
+assertEqual(
+  rewardPlatformImpressionId,
+  'verse8-request-1',
+  'Verse8 claims should carry the evidence requestId as the platform impression id',
+);
 assertEqual(verse8LeaderboardCalls, 0, 'Verse8 should not call the platform leaderboard');
+
+const rewardClaimsBeforeUntrustedVerse8 = rewardClaims;
+const verse8UntrustedRewardGateway = {
+  ...verse8Gateway,
+  ads: {
+    ...verse8Gateway.ads,
+    async showRewarded() {
+      return {
+        status: 'completed',
+        rewardGranted: false,
+        evidence: {
+          schema: 'untrusted.client.schema',
+          payload: { requestId: 'forged' },
+        },
+      } as const;
+    },
+  },
+} satisfies PlatformGateway;
+const verse8UntrustedReward = await createGameServicesClient({
+  gateway: verse8UntrustedRewardGateway,
+  playerId,
+  target: 'verse8',
+  backend,
+}).claimRewardedAd({
+  placementId: 'CONTINUE_AFTER_FAIL',
+  idempotencyKey: 'verse8-untrusted-reward',
+});
+
+assertEqual(
+  verse8UntrustedReward.status,
+  'rejected',
+  'Ungranted rewards with an unknown evidence schema should be rejected client-side',
+);
+assertEqual(
+  rewardClaims,
+  rewardClaimsBeforeUntrustedVerse8,
+  'Unknown evidence schemas should never reach the backend claim',
+);
 
 const verse8CompletedGateway = {
   ...verse8Gateway,
