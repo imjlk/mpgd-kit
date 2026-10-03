@@ -1,5 +1,7 @@
 import {
   createUnsupportedCapabilities,
+  type AdAdapter,
+  type CommerceAdapter,
   type IdentitySession,
   type LaunchEntry,
   type LaunchIntent,
@@ -8,6 +10,10 @@ import {
   type ProductInfo,
   type ShareIntent,
 } from '@mpgd/platform';
+
+import { createUnavailableAdAdapter } from './unavailable-ads.js';
+
+export { createUnavailableAdAdapter } from './unavailable-ads.js';
 
 const mockProducts = [
   {
@@ -28,6 +34,17 @@ export interface BrowserPlatformGatewayOptions {
   readonly writeClipboardText?: (text: string) => Promise<void>;
   /** Override browser storage for embedded runtimes and deterministic tests. */
   readonly storage?: Pick<Storage, 'getItem' | 'setItem'>;
+  /**
+   * Opt in to local-demo mock monetization: a sample product whose purchase
+   * completes immediately and rewarded/interstitial ads that always succeed.
+   *
+   * Off by default. Without it the gateway reports commerce and ads as
+   * unavailable and never returns a completed purchase or a granted reward,
+   * so a gateway built from this adapter (including Microsoft Store builds
+   * that reuse it as a base) cannot be mistaken for a ledger authority.
+   * Never enable it in production builds.
+   */
+  readonly mockCommerce?: boolean;
 }
 
 export function createBrowserPlatformGateway(
@@ -36,6 +53,7 @@ export function createBrowserPlatformGateway(
   const pauseListeners = new Set<() => void>();
   const resumeListeners = new Set<() => void>();
   const shareSupported = canShare(options);
+  const mockCommerce = options.mockCommerce === true;
 
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
@@ -52,8 +70,8 @@ export function createBrowserPlatformGateway(
     async getCapabilities() {
       return {
         ...createUnsupportedCapabilities(),
-        rewardedAds: true,
-        interstitialAds: true,
+        rewardedAds: mockCommerce,
+        interstitialAds: mockCommerce,
         cloudSave: tryResolveBrowserStorage(options.storage) !== undefined,
         socialShare: shareSupported,
         localizedContent: true,
@@ -108,36 +126,8 @@ export function createBrowserPlatformGateway(
         return 'unavailable';
       },
     },
-    commerce: {
-      async getProducts() {
-        return mockProducts;
-      },
-      async purchase() {
-        return {
-          status: 'completed',
-          transactionId: `browser-purchase-${crypto.randomUUID()}`,
-          entitlementIds: ['COINS_100'],
-        };
-      },
-      async getEntitlements() {
-        return [];
-      },
-    },
-    ads: {
-      async preload() {},
-      async showRewarded() {
-        return {
-          status: 'completed',
-          rewardGranted: true,
-          ledgerEntryId: `browser-reward-${crypto.randomUUID()}`,
-        };
-      },
-      async showInterstitial() {
-        return {
-          status: 'unavailable',
-        };
-      },
-    },
+    commerce: mockCommerce ? createMockCommerce() : createUnavailableCommerce(),
+    ads: mockCommerce ? createMockAds() : createUnavailableAdAdapter(),
     leaderboard: {
       async submitScore() {
         return {
@@ -167,6 +157,62 @@ export function createBrowserPlatformGateway(
           serializeBrowserStorageValue(input.value),
         );
       },
+    },
+  };
+}
+
+/** Default: no storefront. Purchases fail closed and never carry entitlements. */
+function createUnavailableCommerce(): CommerceAdapter {
+  return {
+    async getProducts() {
+      return [];
+    },
+    async purchase() {
+      return {
+        status: 'failed',
+        entitlementIds: [],
+      };
+    },
+    async getEntitlements() {
+      return [];
+    },
+  };
+}
+
+/** Local-demo only: completes a sample purchase without any backend. */
+function createMockCommerce(): CommerceAdapter {
+  return {
+    async getProducts() {
+      return mockProducts;
+    },
+    async purchase() {
+      return {
+        status: 'completed',
+        transactionId: `browser-purchase-${crypto.randomUUID()}`,
+        entitlementIds: ['COINS_100'],
+      };
+    },
+    async getEntitlements() {
+      return [];
+    },
+  };
+}
+
+/** Local-demo only: fabricates a reward without any ad SDK or ledger. */
+function createMockAds(): AdAdapter {
+  return {
+    async preload() {},
+    async showRewarded() {
+      return {
+        status: 'completed',
+        rewardGranted: true,
+        ledgerEntryId: `browser-reward-${crypto.randomUUID()}`,
+      };
+    },
+    async showInterstitial() {
+      return {
+        status: 'unavailable',
+      };
     },
   };
 }

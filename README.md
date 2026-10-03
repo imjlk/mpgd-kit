@@ -411,7 +411,10 @@ new starter `@mpgd/*` pins without a separate hard-coded template version edit.
 - `packages/catalog/catalog.json` uses sample product IDs.
 - `packages/catalog/placements.json` uses sample ad placement IDs.
 - Browser, Apps in Toss, and Devvit adapters include mock or bridge-contract
-  behavior suitable for local validation. The reference Capacitor shell preserves
+  behavior suitable for local validation. The browser adapter only fabricates
+  completed purchases and granted rewards behind an explicit
+  `createBrowserPlatformGateway({ mockCommerce: true })` opt-in; by default it
+  reports commerce and ads as unavailable. The reference Capacitor shell preserves
   native storage but reports uninstalled store, ad, and leaderboard providers as
   unavailable; adapter tests use injected bridge fixtures for those flows.
 - Worker `MPGD_STORE = "memory"` is a starter default, not production persistence.
