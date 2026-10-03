@@ -14,7 +14,7 @@ import { isAuthoritativeMicrosoftStoreCompletion } from './authoritative-purchas
 import {
   isClientRewardEvidence,
   resolveRewardPlatformImpressionId,
-} from './client-reward-evidence.js';
+} from './admob-client-reward.js';
 import type {
   GameServicesOperationClient,
   GameServicesPurchaseResult,

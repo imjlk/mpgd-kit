@@ -5,7 +5,7 @@ import { createGameServicesClient, type CreateGameServicesClientInput } from './
 import {
   isClientRewardEvidence,
   resolveRewardPlatformImpressionId,
-} from './client-reward-evidence.js';
+} from './admob-client-reward.js';
 import type {
   GameServicesOperationClient,
   GameServicesPurchaseInput,
