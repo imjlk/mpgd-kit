@@ -1,5 +1,37 @@
 # @mpgd/game-services
 
+## 0.17.1 — 2026-10-04
+
+### Patch changes
+
+- [f4c4e9ad](https://github.com/imjlk/mpgd-kit/commit/f4c4e9ad3325a4497f5f555f1de5f01299d3be87) Harden the game-services request boundary. The HTTP and oRPC fetch handlers now cap request bodies (64 KiB by default, configurable through `maxBodyBytes`) and answer oversized payloads with 413 `PAYLOAD_TOO_LARGE`; client identifiers and timestamps are limited to 256 characters and evidence payloads to 64 entries before they reach ledger keys. Error responses use stable codes instead of echoing internal messages: validation failures return 400 `INVALID_REQUEST` with the field-level message (oRPC: `BAD_REQUEST`), malformed JSON returns 400 `INVALID_JSON`, and store or other unexpected failures return 500 `INTERNAL_ERROR` and are reported through the new `onInternalError` hook. Ad reward claims only persist the client-reported `platformImpressionId` as the globally unique platform evidence identity when the verifier vouches for it, mirroring purchases: a verifier-supplied `platformEvidenceId` replaces it and `null` suppresses it, so an attacker can no longer pre-register another player's impression id to deny their legitimate claim. The AdMob SSV verifier now supplies the signed transaction id as `platformEvidenceId`. — Thanks @imjlk!
+- [c3e9f87c](https://github.com/imjlk/mpgd-kit/commit/c3e9f87cd7dc4f7c4ebcfbe6a1458b4977d363d1) Stop client adapters from returning grant-shaped rewarded-ad results.
+  
+  - `@mpgd/adapter-verse8`: a Verse8 `rewarded` SDK callback now resolves to
+    `status: 'completed', rewardGranted: false` with the `verse8.ads.reward.v1`
+    evidence envelope and no `ledgerEntryId`. The Verse8 `requestId` is an
+    impression id, not a ledger entry; only the backend verifier may grant.
+  - `@mpgd/adapter-browser`: `createBrowserPlatformGateway()` never returns a
+    grant on any code path. By default commerce and ads report unavailable and
+    `purchase()` fails closed. The new `mockCommerce: true` option adds a
+    local-demo sample catalog with evidence-only results: `purchase()` resolves
+    `status: 'completed'` with a mock `transactionId`, empty `entitlementIds`,
+    no `authoritativeGrant`, and `mpgd.browser.mock-purchase.v1` evidence;
+    `showRewarded()` resolves `status: 'completed', rewardGranted: false` with
+    no `ledgerEntryId` and `mpgd.browser.mock-reward.v1` evidence. Neither
+    schema is accepted by backend claim APIs. The schema strings are exported as
+    `browserMockPurchaseEvidenceSchema` and `browserMockRewardEvidenceSchema`.
+    `withMicrosoftStoreCommerceAdapter` now replaces the base `ads` surface with
+    an unavailable adapter and reports ad capabilities as false.
+    `createUnavailableAdAdapter` is exported for custom gateways.
+  - `@mpgd/game-services`: `createGameServicesClient` forwards allow-listed
+    client reward evidence (AdMob and Verse8) to `claimAdReward`, deriving
+    `platformImpressionId` from the Verse8 evidence `requestId`. New exports:
+    `isClientRewardEvidence`, `isVerse8ClientRewardEvidence`,
+    `resolveRewardPlatformImpressionId`, `clientRewardEvidenceSchemas`,
+    `verse8ClientRewardEvidenceSchema`. Recoverable monetization clients bind
+    journaled Verse8 claims to the evidence-derived impression id. — Thanks @imjlk!
+
 ## 0.17.0 — 2026-09-28
 
 ### Minor changes

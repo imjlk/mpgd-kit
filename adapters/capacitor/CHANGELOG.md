@@ -1,5 +1,11 @@
 # @mpgd/adapter-capacitor
 
+## 0.6.1 — 2026-10-04
+
+### Patch changes
+
+- Updated dependencies: game-services@0.17.1
+
 ## 0.6.0 — 2026-09-28
 
 ### Minor changes
