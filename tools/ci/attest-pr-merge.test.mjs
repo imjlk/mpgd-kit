@@ -23,13 +23,19 @@ function createEnvironment() {
   };
 }
 
-function createGit({ parents = [merge, base, head], baseTip = base, ancestors = [base] } = {}) {
+function createGit({ parents = [merge, base, head], baseTip = base, ancestors = [base], baseRef = 'main' } = {}) {
   return (...args) => {
     const command = args.join(' ');
+    if (args[0] === 'check-ref-format' && args[1] === '--branch') {
+      if (args[2] === baseRef) {
+        return args[2];
+      }
+      throw new Error('exit 1');
+    }
     if (command === 'rev-list --parents -n 1 HEAD') {
       return parents.join(' ');
     }
-    if (command === 'rev-parse refs/remotes/origin/main') {
+    if (command === `rev-parse refs/remotes/origin/${baseRef}`) {
       return baseTip;
     }
     if (args[0] === 'merge-base' && args[1] === '--is-ancestor') {
@@ -78,9 +84,17 @@ test('rejects a checkout whose head or shape does not match the event', () => {
   assert.throws(() => attestPrMerge(env, createGit({ parents: [head, base, head] })), /does not match event head/);
 });
 
+test('accepts any base branch name that git itself accepts', () => {
+  const env = createEnvironment();
+  const result = attestPrMerge({ ...env, PR_BASE_REF: 'release@v1' }, createGit({ baseRef: 'release@v1' }));
+  assert.equal(result.base, base);
+});
+
 test('rejects an invalid environment', () => {
   const env = createEnvironment();
-  assert.throws(() => attestPrMerge({ ...env, PR_BASE_REF: '../evil' }, createGit()), /invalid PR CI attestation environment/);
+  assert.throws(() => attestPrMerge({ ...env, PR_BASE_REF: '../evil' }, createGit()), /Invalid PR base branch name/);
+  assert.throws(() => attestPrMerge({ ...env, PR_BASE_REF: '-evil' }, createGit()), /invalid PR CI attestation environment/);
+  assert.throws(() => attestPrMerge({ ...env, PR_BASE_REF: '' }, createGit()), /invalid PR CI attestation environment/);
   assert.throws(() => attestPrMerge({ ...env, PR_HEAD_SHA: 'abc' }, createGit()), /invalid PR CI attestation environment/);
   assert.throws(() => attestPrMerge({ ...env, PR_NUMBER: 'x' }, createGit()), /invalid PR CI attestation environment/);
 });
