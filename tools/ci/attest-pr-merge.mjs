@@ -4,7 +4,6 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const shaPattern = /^[a-f0-9]{40}$/;
-const refPattern = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
 /**
  * Attest the exact merged tree that PR CI tested.
@@ -25,8 +24,15 @@ export function attestPrMerge(env, git) {
   } = env;
   if (![head, checkoutSha].every((value) => shaPattern.test(value ?? '')) ||
       !/^\d+$/.test(number ?? '') || !output || !temp ||
-      !refPattern.test(baseRef ?? '') || baseRef.includes('..')) {
+      typeof baseRef !== 'string' || baseRef.length === 0 || baseRef.startsWith('-')) {
     throw new Error('Missing or invalid PR CI attestation environment.');
+  }
+  // Git decides which branch names are valid (release@v1, release+v1, ...);
+  // only reject what git itself refuses so a legal base branch cannot fail CI.
+  try {
+    git('check-ref-format', '--branch', baseRef);
+  } catch {
+    throw new Error(`Invalid PR base branch name: ${baseRef}`);
   }
 
   const [merge, firstParent, secondParent, ...extraParents] =
