@@ -13,6 +13,11 @@ import type {
   PurchaseGrantFinalizationAction,
   VerifyPurchaseResponse,
 } from './operation-results.js';
+import {
+  assertOwnEnumerablePropertyLimit,
+  gameServicesRequestLimits,
+  toGameServicesRequestValidationError,
+} from './validation.js';
 
 export type {
   ClaimAdRewardResponse,
@@ -118,18 +123,24 @@ export interface LeaderboardScoreTransaction extends RecordLeaderboardScoreReque
   readonly recordedAt: string;
 }
 
+/**
+ * Validates an untrusted purchase verification request. Failures throw
+ * `GameServicesRequestValidationError` so transports can answer with a stable 400.
+ */
 export function assertVerifyPurchaseRequest(input: VerifyPurchaseRequest): VerifyPurchaseRequest {
-  assertRecord(input, 'VerifyPurchaseRequest');
-  assertStoreTarget(input.target);
-  assertOptionalGameServicesDeploymentTarget(input.deploymentTarget);
-  assertNonEmptyString(input.playerId, 'playerId');
-  assertNonEmptyString(input.productId, 'productId');
-  assertNonEmptyString(input.platformTransactionId, 'platformTransactionId');
-  assertNonEmptyString(input.idempotencyKey, 'idempotencyKey');
-  assertNonEmptyString(input.purchasedAt, 'purchasedAt');
-  assertOptionalEvidenceEnvelope(input.evidence);
+  return validateRequest(() => {
+    assertRecord(input, 'VerifyPurchaseRequest');
+    assertStoreTarget(input.target);
+    assertOptionalGameServicesDeploymentTarget(input.deploymentTarget);
+    assertRequestString(input.playerId, 'playerId');
+    assertRequestString(input.productId, 'productId');
+    assertRequestString(input.platformTransactionId, 'platformTransactionId');
+    assertRequestString(input.idempotencyKey, 'idempotencyKey');
+    assertRequestString(input.purchasedAt, 'purchasedAt');
+    assertOptionalEvidenceEnvelope(input.evidence);
 
-  return input;
+    return input;
+  });
 }
 
 export function assertVerifyPurchaseResponse(
@@ -174,20 +185,26 @@ export function assertPurchaseGrantFinalization(
   return input;
 }
 
+/**
+ * Validates an untrusted ad reward claim. Failures throw
+ * `GameServicesRequestValidationError` so transports can answer with a stable 400.
+ */
 export function assertClaimAdRewardRequest(
   input: ClaimAdRewardRequest,
 ): ClaimAdRewardRequest {
-  assertRecord(input, 'ClaimAdRewardRequest');
-  assertAdRewardTarget(input.target);
-  assertOptionalGameServicesDeploymentTarget(input.deploymentTarget);
-  assertNonEmptyString(input.playerId, 'playerId');
-  assertNonEmptyString(input.placementId, 'placementId');
-  assertOptionalNonEmptyString(input.platformImpressionId, 'platformImpressionId');
-  assertNonEmptyString(input.idempotencyKey, 'idempotencyKey');
-  assertNonEmptyString(input.completedAt, 'completedAt');
-  assertOptionalEvidenceEnvelope(input.evidence);
+  return validateRequest(() => {
+    assertRecord(input, 'ClaimAdRewardRequest');
+    assertAdRewardTarget(input.target);
+    assertOptionalGameServicesDeploymentTarget(input.deploymentTarget);
+    assertRequestString(input.playerId, 'playerId');
+    assertRequestString(input.placementId, 'placementId');
+    assertOptionalRequestString(input.platformImpressionId, 'platformImpressionId');
+    assertRequestString(input.idempotencyKey, 'idempotencyKey');
+    assertRequestString(input.completedAt, 'completedAt');
+    assertOptionalEvidenceEnvelope(input.evidence);
 
-  return input;
+    return input;
+  });
 }
 
 export function assertClaimAdRewardResponse(
@@ -203,17 +220,27 @@ export function assertClaimAdRewardResponse(
   return input;
 }
 
+/**
+ * Validates an untrusted leaderboard score submission. Failures throw
+ * `GameServicesRequestValidationError` so transports can answer with a stable 400.
+ */
 export function assertRecordLeaderboardScoreRequest(
+  input: RecordLeaderboardScoreRequest,
+): RecordLeaderboardScoreRequest {
+  return validateRequest(() => validateRecordLeaderboardScoreRequest(input));
+}
+
+function validateRecordLeaderboardScoreRequest(
   input: RecordLeaderboardScoreRequest,
 ): RecordLeaderboardScoreRequest {
   assertRecord(input, 'RecordLeaderboardScoreRequest');
   assertLeaderboardTarget(input.target);
-  assertNonEmptyString(input.playerId, 'playerId');
-  assertNonEmptyString(input.leaderboardId, 'leaderboardId');
+  assertRequestString(input.playerId, 'playerId');
+  assertRequestString(input.leaderboardId, 'leaderboardId');
   assertFiniteNumber(input.score, 'score');
-  assertNonEmptyString(input.runId, 'runId');
-  assertNonEmptyString(input.submittedAt, 'submittedAt');
-  assertOptionalNonEmptyString(input.platformSubmissionId, 'platformSubmissionId');
+  assertRequestString(input.runId, 'runId');
+  assertRequestString(input.submittedAt, 'submittedAt');
+  assertOptionalRequestString(input.platformSubmissionId, 'platformSubmissionId');
 
   return input;
 }
@@ -280,7 +307,7 @@ export function assertProductGrantTransaction(
 export function assertLeaderboardScoreTransaction(
   input: LeaderboardScoreTransaction,
 ): LeaderboardScoreTransaction {
-  assertRecordLeaderboardScoreRequest(input);
+  validateRecordLeaderboardScoreRequest(input);
   assertNonEmptyString(input.ledgerEntryId, 'ledgerEntryId');
   assertNonEmptyString(input.recordedAt, 'recordedAt');
 
@@ -359,9 +386,37 @@ function assertLeaderboardTarget(input: unknown): asserts input is GameServicesL
   }
 }
 
+function validateRequest<T>(validate: () => T): T {
+  try {
+    return validate();
+  } catch (error) {
+    throw toGameServicesRequestValidationError(error);
+  }
+}
+
 function assertNonEmptyString(input: unknown, label: string): asserts input is string {
   if (typeof input !== 'string' || input.length === 0) {
     throw new Error(`${label} must be a non-empty string.`);
+  }
+}
+
+/** Client-supplied identifiers feed ledger keys, so they are bounded as well as non-empty. */
+function assertRequestString(input: unknown, label: string): asserts input is string {
+  assertNonEmptyString(input, label);
+
+  if (input.length > gameServicesRequestLimits.maxStringLength) {
+    throw new Error(
+      `${label} must not exceed ${String(gameServicesRequestLimits.maxStringLength)} characters.`,
+    );
+  }
+}
+
+function assertOptionalRequestString(
+  input: unknown,
+  label: string,
+): asserts input is string | undefined {
+  if (input !== undefined) {
+    assertRequestString(input, label);
   }
 }
 
@@ -466,6 +521,11 @@ function assertOptionalEvidenceEnvelope(
   }
 
   assertRecord(input, 'evidence');
-  assertNonEmptyString(input.schema, 'evidence.schema');
+  assertRequestString(input.schema, 'evidence.schema');
   assertPayload(input.payload);
+  assertOwnEnumerablePropertyLimit(
+    input.payload,
+    gameServicesRequestLimits.maxEvidencePayloadEntries,
+    'evidence.payload',
+  );
 }

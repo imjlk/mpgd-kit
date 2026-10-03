@@ -7,7 +7,7 @@ import {
   decodeAdMobSsvCustomData,
   encodeAdMobSsvCustomData,
 } from './admob-ssv.js';
-import { createGameServicesBackend } from './server.js';
+import { createGameServicesBackend, createInMemoryGameServicesStore } from './server.js';
 
 const binding = {
   playerId: 'player-1',
@@ -121,21 +121,47 @@ assert(report.passed, 'AdMob SSV conformance should pass');
 assertEqual(report.checks.length, 10, 'AdMob SSV conformance should cover every security case');
 
 const ledgerFixture = await createAdMobSsvConformanceFixture();
+const ledgerStore = createInMemoryGameServicesStore();
 const backend = createGameServicesBackend({
   catalog: {
     version: 'admob-ssv-ledger-test',
     products: [],
   },
   placements: ledgerFixture.placements,
+  store: ledgerStore,
   evidenceVerifier: ledgerFixture.verifier,
   now: () => '2026-07-16T00:00:02.000Z',
 });
-const firstGrant = await backend.adRewards.claimAdReward(ledgerFixture.firstRequest);
+// SSV never validates the client-reported impression id, so a client-chosen value must
+// not become the ledger's platform evidence identity.
+const firstGrant = await backend.adRewards.claimAdReward({
+  ...ledgerFixture.firstRequest,
+  platformImpressionId: 'client-chosen-impression',
+});
 const replayedGrant = await backend.adRewards.claimAdReward(ledgerFixture.replayRequest);
+const [ssvPlacement] = ledgerFixture.placements.placements;
+assert(ssvPlacement !== undefined, 'the SSV fixture should expose its placement');
+const ssvDecision = await ledgerFixture.verifier.verifyAdReward({
+  request: ledgerFixture.firstRequest,
+  placement: ssvPlacement,
+  platformPlacementId: 'ca-app-pub-test/reward_continue',
+  signal: new AbortController().signal,
+  timeoutMs: 10_000,
+});
 
 assert(
   firstGrant.granted && !firstGrant.alreadyProcessed,
   'verified SSV evidence should reach one authoritative ledger grant',
+);
+assert(
+  ssvDecision.status === 'verified'
+    && ssvDecision.platformEvidenceId === '18fa792de1bca816048293fc71035638',
+  'verified SSV decisions should supply the signed transaction as the platform evidence id',
+);
+assertEqual(
+  (await ledgerStore.listEntitlementTransactions())[0]?.payload.platformImpressionId,
+  '18fa792de1bca816048293fc71035638',
+  'the ledger should persist the signed SSV transaction instead of the client impression id',
 );
 assertEqual(
   replayedGrant,
