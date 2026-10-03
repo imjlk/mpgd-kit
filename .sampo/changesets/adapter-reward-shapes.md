@@ -10,11 +10,18 @@ Stop client adapters from returning grant-shaped rewarded-ad results.
   `status: 'completed', rewardGranted: false` with the `verse8.ads.reward.v1`
   evidence envelope and no `ledgerEntryId`. The Verse8 `requestId` is an
   impression id, not a ledger entry; only the backend verifier may grant.
-- `@mpgd/adapter-browser`: `createBrowserPlatformGateway()` no longer fabricates
-  completed purchases or granted rewards by default. Commerce and ads report
-  unavailable unless the new `mockCommerce: true` option is passed for local
-  demos. `withMicrosoftStoreCommerceAdapter` now replaces the base `ads`
-  surface with an unavailable adapter and reports ad capabilities as false.
+- `@mpgd/adapter-browser`: `createBrowserPlatformGateway()` never returns a
+  grant on any code path. By default commerce and ads report unavailable and
+  `purchase()` fails closed. The new `mockCommerce: true` option adds a
+  local-demo sample catalog with evidence-only results: `purchase()` resolves
+  `status: 'completed'` with a mock `transactionId`, empty `entitlementIds`,
+  no `authoritativeGrant`, and `mpgd.browser.mock-purchase.v1` evidence;
+  `showRewarded()` resolves `status: 'completed', rewardGranted: false` with
+  no `ledgerEntryId` and `mpgd.browser.mock-reward.v1` evidence. Neither
+  schema is accepted by backend claim APIs. The schema strings are exported as
+  `browserMockPurchaseEvidenceSchema` and `browserMockRewardEvidenceSchema`.
+  `withMicrosoftStoreCommerceAdapter` now replaces the base `ads` surface with
+  an unavailable adapter and reports ad capabilities as false.
   `createUnavailableAdAdapter` is exported for custom gateways.
 - `@mpgd/game-services`: `createGameServicesClient` forwards allow-listed
   client reward evidence (AdMob and Verse8) to `claimAdReward`, deriving

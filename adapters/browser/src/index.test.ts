@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createBrowserPlatformGateway } from './index';
+import {
+  browserMockPurchaseEvidenceSchema,
+  browserMockRewardEvidenceSchema,
+  createBrowserPlatformGateway,
+} from './index';
 
 afterEach(() => {
   Reflect.deleteProperty(globalThis, 'localStorage');
@@ -164,27 +168,52 @@ describe('adapter-browser', () => {
     ).resolves.toEqual({ status: 'unavailable' });
   });
 
-  it('only fabricates purchases and rewards when mockCommerce is opted in', async () => {
+  it('never grants under the mockCommerce opt-in either', async () => {
     const gateway = createBrowserPlatformGateway({ mockCommerce: true });
 
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
+      nativeIap: false,
+      nativeAds: false,
       rewardedAds: true,
       interstitialAds: true,
     });
     await expect(gateway.commerce.getProducts()).resolves.toMatchObject([{ id: 'COINS_100' }]);
+
+    const purchase = await gateway.commerce.purchase({
+      productId: 'COINS_100',
+      source: 'shop',
+      idempotencyKey: 'mock-purchase',
+    });
+    expect(purchase).toEqual({
+      status: 'completed',
+      transactionId: expect.stringMatching(/^browser-purchase-/),
+      entitlementIds: [],
+      evidence: {
+        schema: browserMockPurchaseEvidenceSchema,
+        payload: { productId: 'COINS_100' },
+      },
+    });
+    expect(purchase.entitlementIds).toHaveLength(0);
+    expect(purchase).not.toHaveProperty('authoritativeGrant');
+    await expect(gateway.commerce.getEntitlements()).resolves.toEqual([]);
+
+    const reward = await gateway.ads.showRewarded({
+      placementId: 'CONTINUE_AFTER_FAIL',
+      idempotencyKey: 'mock-reward',
+    });
+    expect(reward).toEqual({
+      status: 'completed',
+      rewardGranted: false,
+      evidence: {
+        schema: browserMockRewardEvidenceSchema,
+        payload: { placementId: 'CONTINUE_AFTER_FAIL' },
+      },
+    });
+    expect(reward.rewardGranted).toBe(false);
+    expect(reward).not.toHaveProperty('ledgerEntryId');
     await expect(
-      gateway.commerce.purchase({
-        productId: 'COINS_100',
-        source: 'shop',
-        idempotencyKey: 'mock-purchase',
-      }),
-    ).resolves.toMatchObject({ status: 'completed', entitlementIds: ['COINS_100'] });
-    await expect(
-      gateway.ads.showRewarded({
-        placementId: 'CONTINUE_AFTER_FAIL',
-        idempotencyKey: 'mock-reward',
-      }),
-    ).resolves.toMatchObject({ status: 'completed', rewardGranted: true });
+      gateway.ads.showInterstitial?.({ placementId: 'STAGE_END_INTERSTITIAL' }),
+    ).resolves.toEqual({ status: 'unavailable' });
   });
 
   it('fails closed when browser storage is unavailable', async () => {

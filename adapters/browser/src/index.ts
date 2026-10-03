@@ -15,6 +15,11 @@ import { createUnavailableAdAdapter } from './unavailable-ads.js';
 
 export { createUnavailableAdAdapter } from './unavailable-ads.js';
 
+/** Evidence schema attached to a `mockCommerce` purchase. Not accepted by any backend claim. */
+export const browserMockPurchaseEvidenceSchema = 'mpgd.browser.mock-purchase.v1';
+/** Evidence schema attached to a `mockCommerce` rewarded-ad result. Not accepted by any backend claim. */
+export const browserMockRewardEvidenceSchema = 'mpgd.browser.mock-reward.v1';
+
 const mockProducts = [
   {
     id: 'COINS_100',
@@ -35,14 +40,19 @@ export interface BrowserPlatformGatewayOptions {
   /** Override browser storage for embedded runtimes and deterministic tests. */
   readonly storage?: Pick<Storage, 'getItem' | 'setItem'>;
   /**
-   * Opt in to local-demo mock monetization: a sample product whose purchase
-   * completes immediately and rewarded/interstitial ads that always succeed.
+   * Opt in to a local-demo mock storefront: a sample catalog and evidence-only
+   * results. `purchase()` resolves `status: 'completed'` with a mock
+   * `transactionId`, empty `entitlementIds`, no `authoritativeGrant`, and a
+   * `mpgd.browser.mock-purchase.v1` evidence envelope; `showRewarded()`
+   * resolves `status: 'completed', rewardGranted: false` with no
+   * `ledgerEntryId` and a `mpgd.browser.mock-reward.v1` envelope. Neither
+   * schema is accepted by backend claim APIs, so no code path in this adapter
+   * can grant: even an accidentally shipped opt-in only exercises the UI flow.
    *
    * Off by default. Without it the gateway reports commerce and ads as
-   * unavailable and never returns a completed purchase or a granted reward,
-   * so a gateway built from this adapter (including Microsoft Store builds
-   * that reuse it as a base) cannot be mistaken for a ledger authority.
-   * Never enable it in production builds.
+   * unavailable and `purchase()` fails closed, so a gateway built from this
+   * adapter (including Microsoft Store builds that reuse it as a base) cannot
+   * be mistaken for a ledger authority.
    */
   readonly mockCommerce?: boolean;
 }
@@ -179,17 +189,25 @@ function createUnavailableCommerce(): CommerceAdapter {
   };
 }
 
-/** Local-demo only: completes a sample purchase without any backend. */
+/**
+ * Local-demo only: a sample catalog whose checkout completes as UI evidence.
+ * The result never carries entitlements or an `authoritativeGrant`; only a
+ * backend ledger may credit a wallet, and no backend accepts this schema.
+ */
 function createMockCommerce(): CommerceAdapter {
   return {
     async getProducts() {
       return mockProducts;
     },
-    async purchase() {
+    async purchase(request) {
       return {
         status: 'completed',
         transactionId: `browser-purchase-${crypto.randomUUID()}`,
-        entitlementIds: ['COINS_100'],
+        entitlementIds: [],
+        evidence: {
+          schema: browserMockPurchaseEvidenceSchema,
+          payload: { productId: request.productId },
+        },
       };
     },
     async getEntitlements() {
@@ -198,15 +216,21 @@ function createMockCommerce(): CommerceAdapter {
   };
 }
 
-/** Local-demo only: fabricates a reward without any ad SDK or ledger. */
+/**
+ * Local-demo only: completes a rewarded-ad flow as UI evidence without any ad
+ * SDK. The result is never granted and never carries a `ledgerEntryId`.
+ */
 function createMockAds(): AdAdapter {
   return {
     async preload() {},
-    async showRewarded() {
+    async showRewarded(request) {
       return {
         status: 'completed',
-        rewardGranted: true,
-        ledgerEntryId: `browser-reward-${crypto.randomUUID()}`,
+        rewardGranted: false,
+        evidence: {
+          schema: browserMockRewardEvidenceSchema,
+          payload: { placementId: request.placementId },
+        },
       };
     },
     async showInterstitial() {
