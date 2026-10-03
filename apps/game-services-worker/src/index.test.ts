@@ -15,6 +15,7 @@ import {
 const workerEnv = {
   MPGD_STORE: 'memory',
   MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE: 'true',
+  MPGD_ALLOW_PUBLIC_LEADERBOARD_RECORD: 'true',
   VERIFIED_LEADERBOARD_AUTH: {
     async authenticateVerifiedLeaderboardSnapshot(
       input: { readonly authorization: string },
@@ -835,6 +836,249 @@ const untrustedWrite = await postJson('/game-services/verified-leaderboard/recor
   },
 });
 assertEqual(untrustedWrite.status, 404, 'verified writes must not be exposed over public HTTP');
+
+// Public unverified leaderboard record is off by default; the opt-in env above enables it.
+const unverifiedScoreRequest = {
+  target: 'android',
+  playerId: 'worker-public-score-player',
+  leaderboardId: 'default',
+  score: 777,
+  runId: 'worker-public-score-run',
+  submittedAt: '2026-07-04T00:00:07.000Z',
+} as const;
+const optInHttpScore = await postJson('/game-services/leaderboard/record', unverifiedScoreRequest);
+assertEqual(optInHttpScore.status, 200, 'opt-in env should mount public HTTP leaderboard record');
+assertEqual(
+  (await optInHttpScore.json() as { readonly submitted: boolean }).submitted,
+  true,
+  'opt-in public HTTP leaderboard record should submit',
+);
+
+const defaultHttpScore = await defaultMemoryFetch(
+  new Request(`${baseUrl}/game-services/leaderboard/record`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(unverifiedScoreRequest),
+  }),
+);
+assertEqual(
+  defaultHttpScore.status,
+  404,
+  'public HTTP leaderboard record must be hidden without MPGD_ALLOW_PUBLIC_LEADERBOARD_RECORD',
+);
+assertEqual(
+  (await defaultHttpScore.json() as { readonly error: string }).error,
+  'UNKNOWN_ENDPOINT',
+  'hidden public leaderboard record should look like an unknown endpoint',
+);
+
+const defaultRpcScore = await defaultMemoryFetch(
+  new Request(`${baseUrl}/rpc/leaderboard/recordScore`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ json: unverifiedScoreRequest }),
+  }),
+);
+assertEqual(
+  defaultRpcScore.status,
+  404,
+  'public oRPC leaderboard record must be hidden without MPGD_ALLOW_PUBLIC_LEADERBOARD_RECORD',
+);
+
+const defaultRpcPurchase = await defaultMemoryFetch(
+  new Request(`${baseUrl}/rpc/commerce/verifyPurchase`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      json: {
+        target: 'android',
+        playerId: 'worker-default-rpc-player',
+        productId: 'COINS_100',
+        platformTransactionId: 'worker-default-rpc-txn',
+        idempotencyKey: 'worker-default-rpc-purchase',
+        purchasedAt: '2026-07-04T00:00:00.000Z',
+      },
+    }),
+  }),
+);
+assertEqual(
+  defaultRpcPurchase.status,
+  200,
+  'hiding the leaderboard record route must not affect other public oRPC routes',
+);
+
+const defaultServiceScore = await createWorkerService({ MPGD_STORE: 'memory' })
+  .recordLeaderboardScore(unverifiedScoreRequest) as { readonly submitted: boolean };
+assertEqual(
+  defaultServiceScore.submitted,
+  true,
+  'service binding leaderboard record must stay available without the public opt-in',
+);
+
+// The development evidence verifier must never be constructed for a durable deployment.
+const d1StubEnv = {
+  MPGD_STORE: 'd1',
+  DB: {} as D1Database,
+} satisfies GameServicesWorkerEnv;
+const developmentEvidenceOnD1 = /refused when MPGD_STORE is d1/;
+assertThrows(
+  () => createWorkerFetchHandler({ ...d1StubEnv, MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE: 'true' }),
+  developmentEvidenceOnD1,
+  'fetch handler must refuse the development evidence verifier with a D1 store',
+);
+assertThrows(
+  () => createWorkerService({ ...d1StubEnv, MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE: 'true' }),
+  developmentEvidenceOnD1,
+  'service must refuse the development evidence verifier with a D1 store',
+);
+createWorkerFetchHandler(d1StubEnv);
+createWorkerFetchHandler({ MPGD_STORE: 'memory', MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE: 'true' });
+
+// Optional ingress auth binding gates every public grant route.
+const ingressAuthCalls: string[] = [];
+const ingressAuthFetch = createWorkerFetchHandler({
+  MPGD_STORE: 'memory',
+  MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE: 'true',
+  MPGD_ALLOW_PUBLIC_LEADERBOARD_RECORD: 'true',
+  GAME_SERVICES_INGRESS_AUTH: {
+    async authenticateGameServicesRequest(input) {
+      ingressAuthCalls.push(input.authorization);
+      if (input.authorization === 'Bearer ingress-player-token') {
+        return { playerId: 'ingress-player' };
+      }
+      if (input.authorization === 'Bearer ingress-broken-token') {
+        throw new Error('identity service unavailable');
+      }
+      return undefined;
+    },
+  },
+});
+const ingressPurchaseRequest = {
+  target: 'android',
+  playerId: 'ingress-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'ingress-txn-1',
+  idempotencyKey: 'ingress-purchase-1',
+  purchasedAt: '2026-07-04T00:00:08.000Z',
+} as const;
+const postIngress = (
+  pathname: string,
+  body: unknown,
+  authorization?: string,
+): Promise<Response> => ingressAuthFetch(
+  new Request(`${baseUrl}${pathname}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(authorization === undefined ? {} : { Authorization: authorization }),
+    },
+    body: JSON.stringify(body),
+  }),
+);
+const readError = async (response: Response): Promise<string> =>
+  (await response.json() as { readonly error: string }).error;
+
+const ingressHappyPurchase = await postIngress(
+  '/game-services/purchases/verify',
+  ingressPurchaseRequest,
+  'Bearer ingress-player-token',
+);
+assertEqual(ingressHappyPurchase.status, 200, 'authenticated ingress purchase should pass through');
+assertEqual(
+  (await ingressHappyPurchase.json() as { readonly verified: boolean }).verified,
+  true,
+  'authenticated ingress purchase should verify',
+);
+
+const ingressMissingToken = await postIngress('/game-services/purchases/verify', {
+  ...ingressPurchaseRequest,
+  idempotencyKey: 'ingress-purchase-missing-token',
+});
+assertEqual(ingressMissingToken.status, 401, 'ingress auth must reject a missing token');
+assertEqual(await readError(ingressMissingToken), 'UNAUTHORIZED', 'missing token error code');
+
+const ingressUnknownToken = await postIngress(
+  '/game-services/ad-rewards/claim',
+  {
+    target: 'android',
+    playerId: 'ingress-player',
+    placementId: 'CONTINUE_AFTER_FAIL',
+    platformImpressionId: 'ingress-impression-1',
+    idempotencyKey: 'ingress-reward-1',
+    completedAt: '2026-07-04T00:00:09.000Z',
+  },
+  'Bearer ingress-unknown-token',
+);
+assertEqual(ingressUnknownToken.status, 401, 'ingress auth must reject an unresolvable token');
+assertEqual(await readError(ingressUnknownToken), 'UNAUTHORIZED', 'unresolvable token error code');
+
+const ingressMismatchedPlayer = await postIngress(
+  '/game-services/purchases/verify',
+  { ...ingressPurchaseRequest, playerId: 'someone-else', idempotencyKey: 'ingress-purchase-forged' },
+  'Bearer ingress-player-token',
+);
+assertEqual(ingressMismatchedPlayer.status, 403, 'ingress auth must reject a forged body playerId');
+assertEqual(
+  await readError(ingressMismatchedPlayer),
+  'PLAYER_ID_MISMATCH',
+  'forged body playerId error code',
+);
+
+const ingressBrokenBinding = await postIngress(
+  '/game-services/purchases/verify',
+  ingressPurchaseRequest,
+  'Bearer ingress-broken-token',
+);
+assertEqual(ingressBrokenBinding.status, 500, 'ingress auth binding failures must fail closed');
+assertEqual(
+  await readError(ingressBrokenBinding),
+  'AUTHENTICATION_FAILED',
+  'binding failure error code',
+);
+
+const ingressRpcScore = await postIngress(
+  '/rpc/leaderboard/recordScore',
+  { json: { ...unverifiedScoreRequest, playerId: 'ingress-player', runId: 'ingress-run-1' } },
+  'Bearer ingress-player-token',
+);
+assertEqual(ingressRpcScore.status, 200, 'authenticated oRPC leaderboard record should pass');
+
+const ingressRpcForgedScore = await postIngress(
+  '/rpc/leaderboard/recordScore',
+  { json: { ...unverifiedScoreRequest, runId: 'ingress-run-forged' } },
+  'Bearer ingress-player-token',
+);
+assertEqual(ingressRpcForgedScore.status, 403, 'oRPC body playerId must match the principal');
+assertEqual(
+  await readError(ingressRpcForgedScore),
+  'PLAYER_ID_MISMATCH',
+  'oRPC forged body playerId error code',
+);
+
+const ingressRpcMissingToken = await postIngress('/rpc/ads/claimReward', {
+  json: {
+    target: 'android',
+    playerId: 'ingress-player',
+    placementId: 'CONTINUE_AFTER_FAIL',
+    platformImpressionId: 'ingress-impression-2',
+    idempotencyKey: 'ingress-reward-2',
+    completedAt: '2026-07-04T00:00:10.000Z',
+  },
+});
+assertEqual(ingressRpcMissingToken.status, 401, 'oRPC grant routes must require the token');
+
+const ingressPreflight = await ingressAuthFetch(
+  new Request(`${baseUrl}/game-services/purchases/verify`, { method: 'OPTIONS' }),
+);
+assertEqual(ingressPreflight.status, 204, 'CORS preflight must not require ingress auth');
+
+const ingressHealth = await ingressAuthFetch(new Request(`${baseUrl}/health`));
+assertEqual(ingressHealth.status, 200, 'non-grant routes must not require ingress auth');
+assertEqual(
+  ingressAuthCalls.includes('Bearer ingress-player-token'),
+  true,
+  'ingress auth binding should receive the complete Authorization header',
+);
 
 console.log('Game services Worker smoke passed: HTTP, oRPC, and private binding surfaces');
 

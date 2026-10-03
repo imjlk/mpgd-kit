@@ -7,6 +7,15 @@ workers_dev = true
 
 [vars]
 MPGD_STORE = "memory"
+# Local-only: accept client-submitted purchase/ad evidence without a provider
+# check. Never set this for a deployment; the Worker refuses to start when it is
+# combined with MPGD_STORE = "d1".
+# MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE = "true"
+# The unverified leaderboard record route (/game-services/leaderboard/record and
+# /rpc/leaderboard/recordScore) is not mounted on the public ingress by default;
+# public requests receive 404 and score writes stay on the service binding RPC.
+# Opt in only behind game-owned authenticated ingress.
+# MPGD_ALLOW_PUBLIC_LEADERBOARD_RECORD = "true"
 # Optional AdMob SSV intake: set MPGD_STORE = "d1", bind DB below, apply
 # migration 0005_admob_ssv_callbacks.sql, then configure actual signed ad_unit
 # IDs (not full SDK ca-app-pub-... load identifiers). Callback URLs are
@@ -41,6 +50,19 @@ head_sampling_rate = 1
 # [[services]]
 # binding = "VERIFIED_LEADERBOARD_AUTH"
 # service = "game-identity"
+
+# Optional ingress authentication for the public purchases, ad-rewards, and
+# leaderboard grant routes. The service must implement
+# authenticateGameServicesRequest({ authorization }) and return { playerId } or
+# undefined. When bound, public grant requests without a resolvable
+# Authorization header receive 401 and a body playerId that differs from the
+# authenticated player receives 403. Without it, the public ingress stays
+# unauthenticated and must sit behind game-owned auth and abuse controls.
+#
+# [[services]]
+# binding = "GAME_SERVICES_INGRESS_AUTH"
+# service = "game-identity"
+# entrypoint = "GameServicesIngressAuth"
 
 # Bind either one aggregate evidence verifier Worker or one verifier per
 # production target. If any target-specific binding is configured, configure
