@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import {
   copyFileSync,
   existsSync,
@@ -9,15 +9,19 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, join, relative } from 'node:path';
+import { createRequire } from 'node:module';
+import { availableParallelism } from 'node:os';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import { buildSync } from 'esbuild';
 
+import { runInDependencyOrder } from './build-scheduler';
 import {
   createInputFingerprints,
   isReusableBuild,
   packageBuildToolchainFiles,
   recordBuild,
+  workspaceDependencyNames,
 } from './build-fingerprint';
 import {
   discoverBuildablePackages,
@@ -45,31 +49,95 @@ const allowedGeneratedSourcePrefixes = [
   'packages/i18n/src/paraglide/',
   'packages/i18n/src/paraglideAdapter.',
 ] as const;
+// Launch the compilers with this Node directly: `pnpm exec` adds about two
+// seconds of startup to each of the ~60 compiler runs.
+const rootRequire = createRequire(resolve('package.json'));
+const ttscLauncher = join(
+  dirname(rootRequire.resolve('ttsc/package.json')),
+  'lib',
+  'launcher',
+  'ttsc.js',
+);
+const tscLauncher = join(dirname(rootRequire.resolve('typescript/package.json')), 'bin', 'tsc');
+// Packages build concurrently once the workspace packages they read are built.
+// MPGD_PACKAGE_BUILD_CONCURRENCY=1 restores one-at-a-time builds.
+const concurrency = packageBuildConcurrency(process.env.MPGD_PACKAGE_BUILD_CONCURRENCY);
+const nativeBuilderEntry = join(
+  'node_modules',
+  '.cache',
+  'mpgd-native-build',
+  'tools',
+  'target',
+  'build-target.js',
+);
 
 mkdirSync(fingerprintDir, { recursive: true });
 const inputFingerprints = createInputFingerprints(discoverBuildablePackages(), {
   toolchainFiles: packageBuildToolchainFiles,
   kitHead: cleanKitHead,
 });
+
+// Reuse is decided before any compiler runs: a package's input fingerprint
+// covers its sources and its dependencies' fingerprints, never their dists.
 const reusedPackages: string[] = [];
-
+const rebuiltPackages: {
+  readonly workspacePackage: WorkspacePackage;
+  readonly inputFingerprint: string | undefined;
+}[] = [];
 for (const workspacePackage of sortByWorkspaceDependencies(packages)) {
-  const srcDir = join(workspacePackage.dir, 'src');
-  const tsconfigPath = join(workspacePackage.dir, 'tsconfig.json');
-  const distDir = join(workspacePackage.dir, 'dist');
-
-  if (!existsSync(srcDir) || !existsSync(tsconfigPath)) {
+  if (
+    !existsSync(join(workspacePackage.dir, 'src'))
+    || !existsSync(join(workspacePackage.dir, 'tsconfig.json'))
+  ) {
     throw new Error(`Package is missing src or tsconfig.json: ${workspacePackage.name}`);
   }
 
   const inputFingerprint = inputFingerprints(workspacePackage.name);
+  const distDir = join(workspacePackage.dir, 'dist');
   if (reuseUnchanged && isReusableBuild(fingerprintFile(workspacePackage.name), inputFingerprint, distDir)) {
     reusedPackages.push(workspacePackage.name);
     console.log(`Reused ${workspacePackage.name}`);
-    continue;
+  } else {
+    rebuiltPackages.push({ workspacePackage, inputFingerprint });
   }
-  rmSync(fingerprintFile(workspacePackage.name), { force: true });
+}
 
+// The packaged native builder compiles tools/target against workspace sources
+// rather than package dists, so it compiles while the packages build.
+const nativeBuilderTask = '@mpgd/cli native builder';
+const rebuildsCli = rebuiltPackages.some(({ workspacePackage }) =>
+  workspacePackage.name === '@mpgd/cli');
+await runInDependencyOrder(
+  [
+    ...(rebuildsCli ? [{ name: nativeBuilderTask, dependencies: [], build: compileNativeBuilder }] : []),
+    ...rebuiltPackages.map(({ workspacePackage, inputFingerprint }) => ({
+      name: workspacePackage.name,
+      // Dev and peer dependencies count too: Capacitor plugins import types
+      // from peer @mpgd packages.
+      dependencies: [
+        ...workspaceDependencyNames(workspacePackage),
+        ...(workspacePackage.name === '@mpgd/cli' ? [nativeBuilderTask] : []),
+      ],
+      build: () => buildPackage(workspacePackage, inputFingerprint),
+    })),
+  ],
+  concurrency,
+  (task) => task.build(),
+);
+
+if (reuseUnchanged) {
+  console.log(`Reused ${reusedPackages.length} of ${packages.length} unchanged package builds.`);
+}
+
+async function buildPackage(
+  workspacePackage: WorkspacePackage,
+  inputFingerprint: string | undefined,
+): Promise<void> {
+  const srcDir = join(workspacePackage.dir, 'src');
+  const tsconfigPath = join(workspacePackage.dir, 'tsconfig.json');
+  const distDir = join(workspacePackage.dir, 'dist');
+
+  rmSync(fingerprintFile(workspacePackage.name), { force: true });
   rmSync(distDir, { force: true, recursive: true });
 
   const tempConfigPath = join(cacheDir, `${safeFileName(workspacePackage.name)}.json`);
@@ -100,8 +168,10 @@ for (const workspacePackage of sortByWorkspaceDependencies(packages)) {
     ),
   );
 
-  run('pnpm', ['exec', 'ttsc', '-p', tempConfigPath]);
-  run('pnpm', ['exec', 'tsc', '-p', tempConfigPath, '--emitDeclarationOnly']);
+  await runNode('ttsc', ttscLauncher, ['-p', tempConfigPath]);
+  // Published declarations come from the stock TypeScript printer: ttsc's own
+  // declaration emit differs in places (for example `(typeof X)[number]`).
+  await runNode('tsc', tscLauncher, ['-p', tempConfigPath, '--emitDeclarationOnly']);
   copySourceRuntimeAssets(srcDir, distDir);
   copyRuntimeAssets(srcDir, distDir);
   formatDeclarationFiles(distDir);
@@ -121,10 +191,6 @@ for (const workspacePackage of sortByWorkspaceDependencies(packages)) {
   }
   recordBuild(fingerprintFile(workspacePackage.name), inputFingerprint, distDir);
   console.log(`Built ${workspacePackage.name}`);
-}
-
-if (reuseUnchanged) {
-  console.log(`Reused ${reusedPackages.length} of ${packages.length} unchanged package builds.`);
 }
 
 function buildPlayPublisherAdapter(distDir: string): void {
@@ -158,20 +224,15 @@ function buildPackagedIosInspection(distDir: string): void {
   }
 }
 
+function compileNativeBuilder(): Promise<void> {
+  return runNode('ttsc', ttscLauncher, ['-p', 'tsconfig.native-build-package.json']);
+}
+
 function buildPackagedNativeTarget(workspacePackage: WorkspacePackage, distDir: string): void {
-  run('pnpm', ['exec', 'ttsc', '-p', 'tsconfig.native-build-package.json']);
-  const entry = join(
-    'node_modules',
-    '.cache',
-    'mpgd-native-build',
-    'tools',
-    'target',
-    'build-target.js',
-  );
   const output = join(distDir, 'native-build-target.js');
-  assertFile(entry);
+  assertFile(nativeBuilderEntry);
   const result = buildSync({
-    entryPoints: [entry],
+    entryPoints: [nativeBuilderEntry],
     outfile: output,
     bundle: true,
     platform: 'node',
@@ -260,20 +321,40 @@ function selectBuildablePackages(
   }
 }
 
-function run(command: string, args: readonly string[]): void {
-  const result = spawnSync(command, [...args], {
-    cwd: process.cwd(),
-    env: process.env,
-    stdio: 'inherit',
+function packageBuildConcurrency(value: string | undefined): number {
+  if (value === undefined || value === '') {
+    return availableParallelism();
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`MPGD_PACKAGE_BUILD_CONCURRENCY must be a positive integer: ${value}`);
+  }
+  return parsed;
+}
+
+// Output is buffered per command so concurrent package builds do not interleave.
+function runNode(name: string, launcher: string, args: readonly string[]): Promise<void> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(process.execPath, [launcher, ...args], {
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
+    child.on('error', reject);
+    child.on('close', (code, signal) => {
+      process.stdout.write(Buffer.concat(stdout));
+      process.stderr.write(Buffer.concat(stderr));
+      if (code === 0) {
+        resolvePromise();
+        return;
+      }
+      reject(new Error(`${name} ${args.join(' ')} failed with exit code ${code ?? signal}.`));
+    });
   });
-
-  if (result.error !== undefined) {
-    throw result.error;
-  }
-
-  if (result.status !== 0) {
-    throw new Error(`${command} ${args.join(' ')} failed with exit code ${result.status}.`);
-  }
 }
 
 function assertFile(path: string): void {

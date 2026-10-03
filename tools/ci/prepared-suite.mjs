@@ -13,7 +13,7 @@ export const preparedGroups = Object.freeze({
     'test:ttsx-assertions',
     'test:cli-output',
     'test:icons',
-    'test:package-build-reuse',
+    'test:package-build',
     'test:target-artifacts',
     'smoke:target-config:dist',
     'smoke:game-services:dist',
