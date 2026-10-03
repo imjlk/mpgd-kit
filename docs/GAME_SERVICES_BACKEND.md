@@ -220,7 +220,9 @@ Local examples and smoke tests can opt into
 evidence without contacting a provider and must not be used for production
 grants. The Worker starter enables it only when
 `MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE = "true"` is explicitly set in a
-local environment. Checked-in deploy configuration remains fail-closed in both
+local environment, and it refuses to construct the handler when that flag is
+combined with `MPGD_STORE = "d1"`, so a leaked flag cannot back a persistent
+deployment. Checked-in deploy configuration remains fail-closed in both
 memory and D1 modes. Production deployments can provide the legacy aggregate
 `GAME_SERVICES_EVIDENCE_VERIFIER` service binding or separate
 `GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER`,
@@ -296,11 +298,38 @@ The Worker entry file is intentionally thin: `src/index.ts` extends
 `cloudflare:workers` runtime module in Node.
 
 The starter's public HTTP/oRPC ingress permits cross-origin calls and does not
-authenticate callers or apply request rate limits. Do not expose its grant
-routes as the sole production trust boundary. Put game-owned authenticated
-ingress and abuse controls in front of them, and derive or bind the player
-identity on the server instead of trusting a client-supplied player ID. Internal
-service bindings remain the preferred production integration boundary.
+apply request rate limits. By default it also does not authenticate callers.
+Do not expose its grant routes as the sole production trust boundary. Put
+game-owned authenticated ingress and abuse controls in front of them, and
+derive or bind the player identity on the server instead of trusting a
+client-supplied player ID. Internal service bindings remain the preferred
+production integration boundary.
+
+The unverified leaderboard record route (`POST /game-services/leaderboard/record`
+and oRPC `leaderboard.recordScore`) is not mounted on the public ingress by
+default: public requests receive `404 UNKNOWN_ENDPOINT`, while the
+`recordLeaderboardScore()` service binding RPC is unchanged. Set
+`MPGD_ALLOW_PUBLIC_LEADERBOARD_RECORD = "true"` only when game-owned
+authenticated ingress sits in front of the Worker.
+
+Bind the optional `GAME_SERVICES_INGRESS_AUTH` service to authenticate the
+public purchases, ad-rewards, and leaderboard routes. Its
+`authenticateGameServicesRequest({ authorization })` RPC receives the complete
+`Authorization` header value and returns the authenticated `{ playerId }`, or
+`undefined` / `null` when the token does not resolve. When the binding is
+configured, a public grant request without a resolvable token receives
+`401 UNAUTHORIZED`, a body `playerId` that differs from the authenticated player
+receives `403 PLAYER_ID_MISMATCH`, and a binding failure (a thrown error, or any
+result other than `{ playerId: string }` with a non-empty ID) receives
+`500 AUTHENTICATION_FAILED`. Without the binding, the public grant routes remain
+unauthenticated.
+
+Both gates match the request path after percent-decoding each segment and
+dropping empty segments, because oRPC's `RPCHandler` resolves procedures the
+same way: `/rpc/%63ommerce/verifyPurchase` and `/rpc/commerce/verifyPurchase/`
+are gated exactly like `/rpc/commerce/verifyPurchase`. A path segment that
+cannot be percent-decoded receives `404 UNKNOWN_ENDPOINT` from the Worker
+without reaching the HTTP or oRPC handlers.
 
 The default `wrangler.toml` uses `MPGD_STORE = "memory"` so local smoke tests
 work without provisioning cloud resources. For production persistence, create a

@@ -42,6 +42,9 @@ export class GameServicesWorker extends WorkerEntrypoint<GameServicesWorkerEnv> 
 export {
   createWorkerFetchHandler,
   createWorkerService,
+  type GameServicesIngressAuthBinding,
+  type GameServicesIngressAuthBindingRequest,
+  type GameServicesIngressPrincipal,
   type GameServicesWorkerEnv,
   type VerifiedLeaderboardAuthBinding,
   type VerifiedLeaderboardAuthBindingRequest,

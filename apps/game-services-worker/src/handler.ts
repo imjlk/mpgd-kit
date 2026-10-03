@@ -9,6 +9,7 @@ import {
   createInMemoryGameServicesStore,
   createInMemoryVerifiedLeaderboardService,
   createVerifiedLeaderboardSnapshotFetchHandler,
+  gameServicesBackendEndpoints,
   microsoftStoreDigitalGoodsEvidenceSchema,
   type ClaimAdRewardRequest,
   type EvidenceVerificationDecision,
@@ -48,8 +49,20 @@ import { createD1VerifiedLeaderboardService } from './verifiedLeaderboardD1.js';
 export interface GameServicesWorkerEnv {
   readonly DB?: D1Database;
   readonly MPGD_STORE?: 'memory' | 'd1';
+  /** Local-only. Refused when MPGD_STORE is d1; see resolveWorkerEvidenceVerifier. */
   readonly MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE?: 'true';
+  /**
+   * Mounts the unverified leaderboard record route on the public HTTP/oRPC ingress. Without it,
+   * public requests to that route receive 404 and score writes stay on the service binding.
+   */
+  readonly MPGD_ALLOW_PUBLIC_LEADERBOARD_RECORD?: 'true';
   readonly VERIFIED_LEADERBOARD_AUTH?: VerifiedLeaderboardAuthBinding;
+  /**
+   * Optional ingress authentication for the public purchases, ad-rewards, and leaderboard
+   * routes. When bound, every public grant request must carry an Authorization header that
+   * the binding resolves to a player ID matching the request body.
+   */
+  readonly GAME_SERVICES_INGRESS_AUTH?: GameServicesIngressAuthBinding;
   readonly GAME_SERVICES_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
   readonly GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
   readonly GAME_SERVICES_IOS_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
@@ -92,6 +105,26 @@ export interface VerifiedLeaderboardAuthBinding {
   authenticateVerifiedLeaderboardSnapshot(
     input: VerifiedLeaderboardAuthBindingRequest,
   ): Promise<VerifiedLeaderboardSnapshotPrincipal | undefined>;
+}
+
+export interface GameServicesIngressAuthBindingRequest {
+  /** The complete Authorization header value received on the public request. */
+  readonly authorization: string;
+}
+
+export interface GameServicesIngressPrincipal {
+  readonly playerId: string;
+}
+
+export interface GameServicesIngressAuthBinding {
+  /**
+   * Resolves the Authorization header to the authenticated player. `undefined` and `null` both
+   * mean "no principal" and produce 401 UNAUTHORIZED; a thrown error or any other result that
+   * is not `{ playerId: string }` produces 500 AUTHENTICATION_FAILED.
+   */
+  authenticateGameServicesRequest(
+    input: GameServicesIngressAuthBindingRequest,
+  ): Promise<GameServicesIngressPrincipal | null | undefined>;
 }
 
 export interface GameServicesWorkerService {
@@ -168,8 +201,11 @@ export function createWorkerFetchHandler(
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   };
+  const rpcPrefix = '/rpc';
+  const allowPublicLeaderboardRecord = env.MPGD_ALLOW_PUBLIC_LEADERBOARD_RECORD === 'true';
+  const ingressAuth = env.GAME_SERVICES_INGRESS_AUTH;
   const rpcFetch = createGameServicesRpcFetchHandler(createGameServicesRouter(backend), {
-    prefix: '/rpc',
+    prefix: rpcPrefix,
     corsHeaders,
     ...(backend.version === undefined ? {} : { version: backend.version }),
   });
@@ -212,13 +248,201 @@ export function createWorkerFetchHandler(
     }
 
     const pathname = new URL(request.url).pathname;
+    const grantRoute = resolvePublicGrantRoute(pathname, rpcPrefix);
 
-    if (pathname.startsWith('/rpc')) {
+    if (grantRoute === 'malformed') {
+      // A segment with an undecodable percent-escape can never name a route we mount. Reject it
+      // here instead of letting a downstream matcher decide how to interpret it.
+      return jsonResponse({ error: 'UNKNOWN_ENDPOINT' }, 404, corsHeaders);
+    }
+
+    if (grantRoute !== undefined && request.method !== 'OPTIONS') {
+      // Unverified score writes are a trusted-caller operation. Keep them off the public
+      // ingress unless the deployment explicitly opts in; the service binding is unaffected.
+      if (grantRoute.operation === 'recordLeaderboardScore' && !allowPublicLeaderboardRecord) {
+        return jsonResponse({ error: 'UNKNOWN_ENDPOINT' }, 404, corsHeaders);
+      }
+
+      if (ingressAuth !== undefined) {
+        const rejection = await authenticateIngressRequest(
+          request,
+          grantRoute,
+          ingressAuth,
+          corsHeaders,
+        );
+
+        if (rejection !== undefined) {
+          return rejection;
+        }
+      }
+    }
+
+    if (pathname.startsWith(rpcPrefix)) {
       return rpcFetch(request);
     }
 
     return httpFetch(request);
   };
+}
+
+type PublicGrantOperation = keyof typeof gameServicesBackendEndpoints;
+
+interface PublicGrantRoute {
+  readonly transport: 'http' | 'rpc';
+  readonly operation: PublicGrantOperation;
+}
+
+/**
+ * Maps a public pathname to the grant operation it invokes. oRPC RPC paths mirror the
+ * contract router keys mounted by createGameServicesRouter, independent of REST route metadata.
+ *
+ * Matching is done on the normalised path, not the raw URL.pathname: segments are
+ * percent-decoded and empty segments are dropped. This is at least as permissive as every
+ * downstream matcher, because oRPC's RPCHandler retries a non-matching path after decoding each
+ * segment and also ignores a trailing slash, so `/rpc/%63ommerce/verifyPurchase` and
+ * `/rpc/commerce/verifyPurchase/` reach `commerce.verifyPurchase` and must be gated the same
+ * way as the canonical spelling. Returns 'malformed' when a segment cannot be decoded.
+ */
+function resolvePublicGrantRoute(
+  pathname: string,
+  rpcPrefix: string,
+): PublicGrantRoute | 'malformed' | undefined {
+  const segments = normalisePathSegments(pathname);
+
+  if (segments === undefined) {
+    return 'malformed';
+  }
+
+  const normalised = `/${segments.join('/')}`;
+  const rpcSegments = normalisePathSegments(rpcPrefix) ?? [];
+  const rpcRoute = (...procedure: readonly string[]): string =>
+    `/${[...rpcSegments, ...procedure].join('/')}`;
+
+  switch (normalised) {
+    case gameServicesBackendEndpoints.verifyPurchase:
+      return { transport: 'http', operation: 'verifyPurchase' };
+    case gameServicesBackendEndpoints.claimAdReward:
+      return { transport: 'http', operation: 'claimAdReward' };
+    case gameServicesBackendEndpoints.recordLeaderboardScore:
+      return { transport: 'http', operation: 'recordLeaderboardScore' };
+    case rpcRoute('commerce', 'verifyPurchase'):
+      return { transport: 'rpc', operation: 'verifyPurchase' };
+    case rpcRoute('ads', 'claimReward'):
+      return { transport: 'rpc', operation: 'claimAdReward' };
+    case rpcRoute('leaderboard', 'recordScore'):
+      return { transport: 'rpc', operation: 'recordLeaderboardScore' };
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Splits a pathname into percent-decoded, non-empty segments. A decoded segment that itself
+ * contains a slash is kept as one segment, so `/rpc/commerce%2FverifyPurchase` does not collapse
+ * into the canonical route. Returns undefined when any segment has an invalid percent-escape.
+ */
+function normalisePathSegments(pathname: string): readonly string[] | undefined {
+  const segments: string[] = [];
+
+  for (const rawSegment of pathname.split('/')) {
+    if (rawSegment.length === 0) {
+      continue;
+    }
+
+    let segment: string;
+
+    try {
+      segment = decodeURIComponent(rawSegment);
+    } catch {
+      return undefined;
+    }
+
+    if (segment.includes('/')) {
+      // Keep this one opaque segment distinct from a real slash-separated route by re-encoding
+      // the slash; the join below must not produce the canonical path.
+      segment = segment.replaceAll('/', '%2F');
+    }
+
+    segments.push(segment);
+  }
+
+  return segments;
+}
+
+/**
+ * Returns a rejection response when the ingress auth binding does not accept the request, or
+ * undefined when the caller is authenticated as the player named in the request body.
+ */
+async function authenticateIngressRequest(
+  request: Request,
+  route: PublicGrantRoute,
+  auth: GameServicesIngressAuthBinding,
+  corsHeaders: Readonly<Record<string, string>>,
+): Promise<Response | undefined> {
+  const authorization = request.headers.get('Authorization');
+
+  if (authorization === null || authorization.length === 0) {
+    return jsonResponse({ error: 'UNAUTHORIZED' }, 401, corsHeaders);
+  }
+
+  // The binding crosses an RPC boundary, so treat its result as untyped until checked.
+  let principal: unknown;
+
+  try {
+    principal = await auth.authenticateGameServicesRequest({ authorization });
+  } catch {
+    return jsonResponse({ error: 'AUTHENTICATION_FAILED' }, 500, corsHeaders);
+  }
+
+  // undefined and null are both "no principal": null is the usual not-found value across RPC.
+  if (principal === undefined || principal === null) {
+    return jsonResponse({ error: 'UNAUTHORIZED' }, 401, corsHeaders);
+  }
+
+  const playerId = readRecord(principal)?.playerId;
+
+  if (typeof playerId !== 'string' || playerId.length === 0) {
+    return jsonResponse({ error: 'AUTHENTICATION_FAILED' }, 500, corsHeaders);
+  }
+
+  let body: unknown;
+
+  try {
+    // Clone so the downstream handler can still consume the original request body.
+    const text = await request.clone().text();
+    body = text.length === 0 ? {} : JSON.parse(text);
+  } catch {
+    return jsonResponse({ error: 'BAD_REQUEST' }, 400, corsHeaders);
+  }
+
+  // oRPC RPC requests wrap the procedure input as { json: input }; HTTP bodies are the input.
+  const input = route.transport === 'rpc' ? readRecord(body)?.json : body;
+
+  if (readRecord(input)?.playerId !== playerId) {
+    return jsonResponse({ error: 'PLAYER_ID_MISMATCH' }, 403, corsHeaders);
+  }
+
+  return undefined;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function jsonResponse(
+  body: unknown,
+  status: number,
+  corsHeaders: Readonly<Record<string, string>>,
+): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      ...corsHeaders,
+    },
+  });
 }
 
 function createWorkerVerifiedLeaderboardSnapshotFetchHandler(
@@ -356,6 +580,18 @@ function resolveWorkerEvidenceVerifier(
   env: GameServicesWorkerEnv,
   admobConfig: AdMobSsvWorkerConfig | undefined,
 ): GameServicesEvidenceVerifier | undefined {
+  const allowDevelopmentEvidence = env.MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE === 'true';
+
+  if (allowDevelopmentEvidence && env.MPGD_STORE === 'd1') {
+    // The development verifier accepts any client-submitted evidence. Combined with a durable
+    // store and a body-supplied playerId, a leaked flag would mean unlimited free grants.
+    throw new Error(
+      'MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE=true is refused when MPGD_STORE is d1. '
+        + 'The development evidence verifier is local-only; remove the flag or configure a '
+        + 'production evidence verifier binding.',
+    );
+  }
+
   const verse8Verifier = resolveVerse8AdsEvidenceVerifier(env);
   const admobVerifier = admobConfig === undefined
     ? undefined
@@ -390,7 +626,7 @@ function resolveWorkerEvidenceVerifier(
     );
   }
 
-  const developmentVerifier = env.MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE === 'true'
+  const developmentVerifier = allowDevelopmentEvidence
     ? createDevelopmentGameServicesEvidenceVerifier()
     : undefined;
 
