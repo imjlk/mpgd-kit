@@ -61,4 +61,39 @@ for (const name of ['Info.plist', 'Info-Smoke.plist']) {
   assert.match(read(`apps/mobile-capacitor/ios/App/App/${name}`), /UISceneDelegateClassName/);
 }
 
-console.log(`Capacitor ${shellVersion} npm, Android, iOS, and scene alignment verified.`);
+const androidManifest = read('apps/mobile-capacitor/android/app/src/main/AndroidManifest.xml');
+const androidApplication = androidManifest.match(/<application\b[^>]*>/u)?.[0] ?? '';
+assert.match(
+  androidManifest,
+  /<manifest\b[^>]*\sxmlns:tools="http:\/\/schemas\.android\.com\/tools"/u,
+  'The Android shell manifest must bind the tools namespace for tools:targetApi',
+);
+for (const attribute of [
+  'android:allowBackup="false"',
+  'android:fullBackupContent="@xml/backup_rules"',
+  'android:dataExtractionRules="@xml/data_extraction_rules"',
+  'tools:targetApi="s"',
+]) {
+  assert.ok(
+    androidApplication.includes(` ${attribute}`),
+    `The Android shell must opt out of backups and Android 12+ device transfers with ${attribute}: WebView storage and game-services SharedPreferences hold save data`,
+  );
+}
+const backupDomains = ['root', 'file', 'database', 'sharedpref', 'external'];
+const backupRules = read('apps/mobile-capacitor/android/app/src/main/res/xml/backup_rules.xml');
+const extractionRules = read('apps/mobile-capacitor/android/app/src/main/res/xml/data_extraction_rules.xml');
+for (const rules of [backupRules, extractionRules]) {
+  assert.doesNotMatch(rules, /<include\b/u, 'Backup rules must not opt any path back in');
+}
+assert.match(backupRules, /<full-backup-content>[\s\S]*<\/full-backup-content>/u);
+for (const section of ['cloud-backup', 'device-transfer']) {
+  const body = extractionRules.match(new RegExp(`<${section}>([\\s\\S]*?)</${section}>`, 'u'))?.[1];
+  assert.ok(body !== undefined, `data_extraction_rules.xml must declare <${section}>`);
+  for (const domain of backupDomains) {
+    const exclude = `<exclude domain="${domain}" path="." />`;
+    assert.ok(body.includes(exclude), `${section} must exclude the ${domain} domain`);
+    assert.ok(backupRules.includes(exclude), `backup_rules.xml must exclude the ${domain} domain`);
+  }
+}
+
+console.log(`Capacitor ${shellVersion} npm, Android, iOS, scene, and backup alignment verified.`);

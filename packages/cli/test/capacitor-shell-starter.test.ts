@@ -17,6 +17,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import {
+  androidBackupRulesXml,
+  androidDataExtractionRulesXml,
+  applyAndroidManifestBackupPolicy,
   applyCapacitorShellStarter,
   decodeAndroidStringResource,
   materializeCapacitorShellStarter,
@@ -29,6 +32,73 @@ assert.equal(decodeAndroidStringResource("King\\'s Quest"), "King's Quest");
 assert.equal(decodeAndroidStringResource('"King\\\'s Quest"'), "King's Quest");
 assert.equal(decodeAndroidStringResource('Puzzle   Game'), 'Puzzle Game');
 assert.equal(decodeAndroidStringResource('"Puzzle   Game"'), 'Puzzle   Game');
+
+const toolsNamespace = 'xmlns:tools="http://schemas.android.com/tools"';
+const backupAttributes = [
+  'android:allowBackup="false"',
+  'android:fullBackupContent="@xml/backup_rules"',
+  'android:dataExtractionRules="@xml/data_extraction_rules"',
+  'tools:targetApi="s"',
+];
+const inlineBackupAttributes = backupAttributes.join(' ');
+const capacitorTemplateManifest = [
+  '<?xml version="1.0" encoding="utf-8"?>',
+  '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+  '',
+  '    <application',
+  '        android:allowBackup="true"',
+  '        android:icon="@mipmap/ic_launcher"',
+  '        android:label="@string/app_name">',
+  '    </application>',
+  '</manifest>',
+].join('\n');
+const hardenedTemplateManifest = [
+  '<?xml version="1.0" encoding="utf-8"?>',
+  `<manifest xmlns:android="http://schemas.android.com/apk/res/android" ${toolsNamespace}>`,
+  '',
+  '    <application',
+  ...backupAttributes.map((attribute) => `        ${attribute}`),
+  '        android:icon="@mipmap/ic_launcher"',
+  '        android:label="@string/app_name">',
+  '    </application>',
+  '</manifest>',
+].join('\n');
+assert.equal(applyAndroidManifestBackupPolicy(capacitorTemplateManifest), hardenedTemplateManifest);
+assert.equal(
+  applyAndroidManifestBackupPolicy(hardenedTemplateManifest),
+  hardenedTemplateManifest,
+  'the backup policy is idempotent',
+);
+assert.equal(
+  applyAndroidManifestBackupPolicy('<manifest><application android:label="x"/></manifest>'),
+  `<manifest ${toolsNamespace}><application ${inlineBackupAttributes} android:label="x"/></manifest>`,
+);
+assert.equal(
+  applyAndroidManifestBackupPolicy(
+    "<manifest xmlns:tools='http://schemas.android.com/tools'><application android:allowBackup='true' android:dataExtractionRules='@xml/other' tools:targetApi='31'></application></manifest>",
+  ),
+  `<manifest xmlns:tools='http://schemas.android.com/tools'><application ${inlineBackupAttributes}></application></manifest>`,
+  'existing backup attributes are replaced in place and the tools namespace is kept',
+);
+assert.equal(applyAndroidManifestBackupPolicy('<manifest></manifest>'), '<manifest></manifest>');
+assert.equal(applyAndroidManifestBackupPolicy('<application/>'), '<application/>');
+
+for (const xml of [androidBackupRulesXml, androidDataExtractionRulesXml]) {
+  assert.match(xml, /^<\?xml version="1\.0" encoding="utf-8"\?>\n/u);
+  assert.doesNotMatch(xml, /<include\b/u, 'nothing is opted back in');
+}
+assert.match(androidBackupRulesXml, /<full-backup-content>[\s\S]*<\/full-backup-content>\n$/u);
+for (const section of ['cloud-backup', 'device-transfer']) {
+  const body = new RegExp(`<${section}>([\\s\\S]*?)</${section}>`, 'u').exec(
+    androidDataExtractionRulesXml,
+  )?.[1];
+  assert.ok(body !== undefined, `data extraction rules declare <${section}>`);
+  for (const domain of ['root', 'file', 'database', 'sharedpref', 'external']) {
+    const exclude = `<exclude domain="${domain}" path="." />`;
+    assert.ok(body.includes(exclude), `${section} excludes ${domain}`);
+    assert.ok(androidBackupRulesXml.includes(exclude), `backup rules exclude ${domain}`);
+  }
+}
 
 function writeJson(relative: string, value: unknown): void {
   const file = path.join(root, relative);
@@ -339,6 +409,26 @@ try {
   ]);
   const cli = path.join(root, 'apps/mobile-capacitor/node_modules/.bin/cap');
   assert.equal(existsSync(cli), true);
+  const generatedManifest = readFileSync(
+    path.join(root, 'apps/mobile-capacitor/android/app/src/main/AndroidManifest.xml'),
+    'utf8',
+  );
+  assert.ok(
+    generatedManifest.includes(
+      `<application ${inlineBackupAttributes} android:label="@string/app_name"`,
+    ),
+    'a freshly generated Android project opts out of backups and device transfers',
+  );
+  assert.ok(generatedManifest.includes(` ${toolsNamespace}`), 'the tools namespace is bound');
+  const generatedXml = path.join(root, 'apps/mobile-capacitor/android/app/src/main/res/xml');
+  assert.equal(
+    readFileSync(path.join(generatedXml, 'backup_rules.xml'), 'utf8'),
+    androidBackupRulesXml,
+  );
+  assert.equal(
+    readFileSync(path.join(generatedXml, 'data_extraction_rules.xml'), 'utf8'),
+    androidDataExtractionRulesXml,
+  );
   const smokeInfo = path.join(root, 'apps/mobile-capacitor/ios/App/App/Info-Smoke.plist');
   const originalSmoke = readFileSync(smokeInfo, 'utf8');
   assert.match(originalSmoke, /<string>Puzzle Game<\/string>/u);

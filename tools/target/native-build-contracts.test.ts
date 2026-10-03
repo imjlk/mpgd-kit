@@ -2,6 +2,7 @@ import './native-build-mode.test';
 import './native-command-launcher.test';
 import './native-build-attempt.test';
 import './native-build-stage.test';
+import './native-shell-csp.test';
 import './native-android-inspection.test';
 import './native-android-signing-args.test';
 import './native-ios-inspection.test';
