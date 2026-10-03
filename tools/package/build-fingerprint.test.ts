@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
   createInputFingerprints,
   isReusableBuild,
+  packageBuildToolchainFiles,
   recordBuild,
   workspaceDependencyNames,
 } from './build-fingerprint';
@@ -108,6 +109,22 @@ check('a recorded build is reused only with the same input and an untouched dist
   assert.equal(isReusableBuild(recordFile, input, distDir), false, 'edited dist must rebuild');
   rmSync(distDir, { recursive: true });
   assert.equal(isReusableBuild(recordFile, input, distDir), false, 'missing dist must rebuild');
+});
+
+check('every root ttsc config and the shared tsconfig are toolchain inputs', () => {
+  const rootTtscConfigs = readdirSync('.').filter((name) =>
+    /^(?:lint|strip)\.config\.[cm]?js$/u.test(name),
+  );
+  assert.ok(rootTtscConfigs.length >= 2, 'expected the root lint and strip configs');
+  for (const file of [...rootTtscConfigs, 'tsconfig.base.json', 'pnpm-lock.yaml']) {
+    assert.ok(
+      (packageBuildToolchainFiles as readonly string[]).includes(file),
+      `${file} must invalidate package builds`,
+    );
+  }
+  for (const file of packageBuildToolchainFiles) {
+    assert.ok(existsSync(file), `toolchain input ${file} must exist`);
+  }
 });
 
 console.log('Package build fingerprint tests passed.');

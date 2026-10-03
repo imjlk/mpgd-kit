@@ -4,6 +4,22 @@ import { join, relative } from 'node:path';
 
 import type { WorkspacePackage } from './workspace';
 
+/**
+ * Repository files that change every package build: the build scripts, the
+ * lockfile and root manifest, the shared tsconfig, and the ttsc configs that
+ * ttsc loads from the root (`@ttsc/lint` and `@ttsc/strip`).
+ */
+export const packageBuildToolchainFiles = [
+  'tools/package/build-packages.ts',
+  'tools/package/build-fingerprint.ts',
+  'tools/package/workspace.ts',
+  'pnpm-lock.yaml',
+  'package.json',
+  'tsconfig.base.json',
+  'lint.config.js',
+  'strip.config.js',
+] as const;
+
 export interface InputFingerprintOptions {
   /** Repository files whose content changes every package build. */
   readonly toolchainFiles: readonly string[];

@@ -13,7 +13,12 @@ import { basename, dirname, join, relative } from 'node:path';
 
 import { buildSync } from 'esbuild';
 
-import { createInputFingerprints, isReusableBuild, recordBuild } from './build-fingerprint';
+import {
+  createInputFingerprints,
+  isReusableBuild,
+  packageBuildToolchainFiles,
+  recordBuild,
+} from './build-fingerprint';
 import {
   discoverBuildablePackages,
   sortByWorkspaceDependencies,
@@ -43,15 +48,7 @@ const allowedGeneratedSourcePrefixes = [
 
 mkdirSync(fingerprintDir, { recursive: true });
 const inputFingerprints = createInputFingerprints(discoverBuildablePackages(), {
-  toolchainFiles: [
-    'tools/package/build-packages.ts',
-    'tools/package/build-fingerprint.ts',
-    'tools/package/workspace.ts',
-    'pnpm-lock.yaml',
-    'package.json',
-    'tsconfig.base.json',
-    'lint.config.js',
-  ],
+  toolchainFiles: packageBuildToolchainFiles,
   kitHead: cleanKitHead,
 });
 const reusedPackages: string[] = [];
