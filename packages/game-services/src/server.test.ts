@@ -20,6 +20,7 @@ import {
   type EvidenceVerificationDecision,
   type GameServicesBackendErrorResponse,
   type GameServicesEvidenceVerifier,
+  type GameServicesInternalErrorHandler,
   type GameServicesStore,
 } from './index';
 
@@ -2647,6 +2648,158 @@ assertEqual(
   3,
   'oRPC internal failures should be reported to the configured handler',
 );
+
+// A throwing or async-rejecting onInternalError hook is a diagnostics failure: every
+// transport must still answer with the generic internal error and nothing may escape as
+// an unhandled rejection.
+// This package compiles without Node typings, so the process emitter is looked up through
+// globalThis with the minimal shape the test needs.
+interface UnhandledRejectionEmitter {
+  on(event: 'unhandledRejection', listener: (reason: unknown) => void): unknown;
+  off(event: 'unhandledRejection', listener: (reason: unknown) => void): unknown;
+}
+
+const nodeProcess = (globalThis as { readonly process?: UnhandledRejectionEmitter }).process;
+if (nodeProcess === undefined) {
+  throw new Error('This test must run under Node to observe unhandled rejections.');
+}
+
+const unhandledRejections: unknown[] = [];
+const captureUnhandledRejection = (reason: unknown): void => {
+  unhandledRejections.push(reason);
+};
+const hookFailureLogs: string[] = [];
+const originalConsoleError = console.error;
+nodeProcess.on('unhandledRejection', captureUnhandledRejection);
+console.error = (...args: unknown[]): void => {
+  hookFailureLogs.push(args.map(String).join(' '));
+};
+
+try {
+  const throwingHook: GameServicesInternalErrorHandler = () => {
+    throw new Error('hook threw: secret hook details');
+  };
+  const rejectingHook: GameServicesInternalErrorHandler = () => {
+    return Promise.reject(new Error('hook rejected: secret hook details'));
+  };
+  const faultyHookScoreRequest = {
+    target: 'android',
+    playerId: 'player-faulty-hook',
+    leaderboardId: 'default',
+    score: 10,
+    runId: 'run-faulty-hook',
+    submittedAt: '2026-07-04T00:00:00.000Z',
+  } as const;
+  const faultyHookCases = [
+    { label: 'throwing', onInternalError: throwingHook },
+    { label: 'rejecting', onInternalError: rejectingHook },
+  ] as const;
+
+  for (const faultyHookCase of faultyHookCases) {
+    const faultyHookHandler = createGameServicesBackendApiHandler({
+      catalog,
+      placements,
+      store: internalFailureStore,
+      evidenceVerifier,
+      onInternalError: faultyHookCase.onInternalError,
+    });
+    const faultyHookHttpFetch = createGameServicesHttpFetchHandler(faultyHookHandler);
+    const faultyHookRpcFetch = createGameServicesRpcFetchHandler(
+      createGameServicesRouter(
+        createGameServicesBackend({
+          catalog,
+          placements,
+          store: internalFailureStore,
+          evidenceVerifier,
+        }),
+        { onInternalError: faultyHookCase.onInternalError },
+      ),
+    );
+    const faultyHookRpcClient = createGameServicesOrpcClient({
+      url: 'https://game-services.test/rpc',
+      fetch: (url, init) => faultyHookRpcFetch(new Request(url, init)),
+    });
+
+    const faultyHookResponse = await faultyHookHandler.handle({
+      method: 'POST',
+      endpoint: gameServicesBackendEndpoints.recordLeaderboardScore,
+      body: faultyHookScoreRequest,
+    });
+    const faultyHookHttpResponse = await faultyHookHttpFetch(
+      new Request(
+        `https://game-services.test${gameServicesBackendEndpoints.recordLeaderboardScore}`,
+        {
+          method: 'POST',
+          body: JSON.stringify(faultyHookScoreRequest),
+        },
+      ),
+    );
+    const faultyHookHttpBody = await faultyHookHttpResponse.json() as GameServicesBackendErrorResponse;
+    const faultyHookRpcError = await captureError(() => {
+      return faultyHookRpcClient.leaderboard.recordScore(faultyHookScoreRequest);
+    });
+
+    assertEqual(
+      faultyHookResponse.status,
+      500,
+      `a ${faultyHookCase.label} onInternalError hook must not replace the 500 response`,
+    );
+    assertEqual(
+      (faultyHookResponse.body as GameServicesBackendErrorResponse).error,
+      'INTERNAL_ERROR',
+      `a ${faultyHookCase.label} onInternalError hook must keep the generic error code`,
+    );
+    assertEqual(
+      faultyHookHttpResponse.status,
+      500,
+      `HTTP responses must stay 500 with a ${faultyHookCase.label} onInternalError hook`,
+    );
+    assertEqual(
+      faultyHookHttpBody.error,
+      'INTERNAL_ERROR',
+      `HTTP responses must keep the generic code with a ${faultyHookCase.label} hook`,
+    );
+    assertEqual(
+      JSON.stringify(faultyHookHttpBody).includes('secret hook details'),
+      false,
+      `a ${faultyHookCase.label} hook failure must never be echoed to HTTP clients`,
+    );
+    assertEqual(
+      faultyHookRpcError?.code,
+      'INTERNAL_SERVER_ERROR',
+      `oRPC responses must stay internal server errors with a ${faultyHookCase.label} hook`,
+    );
+    assertEqual(
+      faultyHookRpcError?.message.includes('secret hook details'),
+      false,
+      `a ${faultyHookCase.label} hook failure must never be echoed to oRPC clients`,
+    );
+  }
+
+  // Give any rejection the hooks produced a chance to surface before asserting.
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  assertEqual(
+    unhandledRejections.length,
+    0,
+    'onInternalError hook failures must never become unhandled rejections',
+  );
+  assertEqual(
+    hookFailureLogs.filter((entry) => entry.includes('onInternalError handler threw')).length,
+    3,
+    'a throwing onInternalError hook should be logged once per transport',
+  );
+  assertEqual(
+    hookFailureLogs.filter((entry) => entry.includes('onInternalError handler rejected')).length,
+    3,
+    'a rejecting onInternalError hook should be logged once per transport',
+  );
+} finally {
+  console.error = originalConsoleError;
+  nodeProcess.off('unhandledRejection', captureUnhandledRejection);
+}
 
 console.log('GameServices backend API handler smoke test passed.');
 

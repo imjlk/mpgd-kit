@@ -76,6 +76,8 @@ export interface CreateGameServicesBackendInput {
   /**
    * Receives unexpected (non-validation) failures such as store errors before the
    * transport answers with the generic `INTERNAL_ERROR` code. Defaults to `console.error`.
+   * The hook is diagnostics only: if it throws or returns a rejecting promise, the failure
+   * is logged and the generic error response is still returned.
    */
   readonly onInternalError?: GameServicesInternalErrorHandler;
 }
@@ -473,16 +475,39 @@ export function createGameServicesBackendApiHandler(
   };
 }
 
+/**
+ * Invokes the diagnostics hook in isolation: a throwing hook, or one that returns a
+ * rejecting promise (assignable to the `void`-returning handler type), must never replace
+ * the generic `INTERNAL_ERROR` response or escape as an unhandled rejection.
+ */
 function reportInternalError(
   handler: GameServicesInternalErrorHandler | undefined,
   error: unknown,
 ): void {
-  if (handler !== undefined) {
-    handler(error);
+  if (handler === undefined) {
+    console.error('GameServices backend internal error:', error);
     return;
   }
 
-  console.error('GameServices backend internal error:', error);
+  try {
+    const result: unknown = handler(error);
+
+    if (isPromiseLike(result)) {
+      result.then(undefined, (hookError: unknown) => {
+        console.error('GameServices backend onInternalError handler rejected:', hookError);
+      });
+    }
+  } catch (hookError) {
+    console.error('GameServices backend onInternalError handler threw:', hookError);
+  }
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    typeof value === 'object'
+    && value !== null
+    && typeof (value as { readonly then?: unknown }).then === 'function'
+  );
 }
 
 export function createInProcessGameServicesBackendTransport(
