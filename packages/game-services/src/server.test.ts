@@ -10,13 +10,17 @@ import {
   createGameServicesBackend,
   createGameServicesBackendApiHandler,
   createGameServicesHttpFetchHandler,
+  createGameServicesOrpcClient,
   createGameServicesRouter,
   createGameServicesRpcFetchHandler,
   createInMemoryGameServicesStore,
   createInProcessGameServicesBackendTransport,
+  gameServicesRequestLimits,
   InMemoryGameServicesStore,
   type EvidenceVerificationDecision,
+  type GameServicesBackendErrorResponse,
   type GameServicesEvidenceVerifier,
+  type GameServicesInternalErrorHandler,
   type GameServicesStore,
 } from './index';
 
@@ -1721,6 +1725,11 @@ const corsHealth = await corsFetch(new Request('https://game-services.test/healt
 
 assertEqual(httpHealthBody.version, 'test-http', 'HTTP health should expose handler version');
 assertEqual(malformedJson.status, 400, 'malformed JSON should return 400');
+assertEqual(
+  (await malformedJson.json() as GameServicesBackendErrorResponse).error,
+  'INVALID_JSON',
+  'malformed JSON should expose a stable error code instead of the parser message',
+);
 assertEqual(methodNotAllowed.status, 405, 'HTTP handler should reject non-POST writes');
 assertEqual(corsPreflight.status, 204, 'HTTP handler should answer CORS preflight');
 assertEqual(corsPost.status, 400, 'HTTP handler should reject invalid CORS POST bodies');
@@ -2224,7 +2233,591 @@ assertEqual(
   'analytics failures should not break backend ad reward claims',
 );
 
+// Client-supplied ad impression ids must not become a global uniqueness key unless the
+// verifier vouches for them. Otherwise an attacker can pre-register a victim's impression
+// id and have the victim's legitimate claim rejected as EVIDENCE_ALREADY_PROCESSED.
+const impressionDenialStore = createInMemoryGameServicesStore();
+let authorityTransactionSequence = 0;
+const authorityBackedBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: impressionDenialStore,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      return { status: 'rejected', reason: 'NOT_TESTED' } as const;
+    },
+    // Mirrors AdMob SSV: the signed transaction is the authority identity and the
+    // client-reported impression id is never validated.
+    async verifyAdReward({ request }) {
+      authorityTransactionSequence += 1;
+      const transactionId = `ssv-txn-${request.playerId}-${String(authorityTransactionSequence)}`;
+      return {
+        status: 'verified',
+        verificationId: `admob:ssv:${transactionId}`,
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+        platformEvidenceId: transactionId,
+        payload: { admobSsvTransactionId: transactionId },
+      } as const;
+    },
+  },
+});
+const attackerClaim = await authorityBackedBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-impression-attacker',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'victim-impression',
+  idempotencyKey: 'reward-impression-attacker',
+  completedAt: '2026-07-04T00:00:00.000Z',
+});
+const victimClaim = await authorityBackedBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-impression-victim',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'victim-impression',
+  idempotencyKey: 'reward-impression-victim',
+  completedAt: '2026-07-04T00:00:01.000Z',
+});
+const impressionDenialTransactions = await impressionDenialStore.listEntitlementTransactions();
+
+assertEqual(attackerClaim.granted, true, 'the attacker claim itself is legitimately verified');
+assertEqual(
+  victimClaim.granted,
+  true,
+  'a client-chosen impression id must not deny another player when the verifier supplies the '
+    + 'platform evidence id',
+);
+assertEqual(
+  impressionDenialTransactions.find(
+    (transaction) => transaction.playerId === 'player-impression-attacker',
+  )?.payload.platformImpressionId,
+  'ssv-txn-player-impression-attacker-1',
+  'the ledger should persist the verifier authority id instead of the client impression id',
+);
+assertEqual(
+  impressionDenialTransactions.find(
+    (transaction) => transaction.playerId === 'player-impression-victim',
+  )?.payload.platformImpressionId,
+  'ssv-txn-player-impression-victim-2',
+  'each verified claim should keep its own authority platform evidence id',
+);
+
+const suppressedImpressionStore = createInMemoryGameServicesStore();
+let suppressedImpressionSequence = 0;
+const suppressedImpressionBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: suppressedImpressionStore,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      return { status: 'rejected', reason: 'NOT_TESTED' } as const;
+    },
+    async verifyAdReward() {
+      suppressedImpressionSequence += 1;
+      return {
+        status: 'verified',
+        verificationId: `provider:reward:suppressed:${String(suppressedImpressionSequence)}`,
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+        platformEvidenceId: null,
+        payload: {
+          platformImpressionId: 'payload-untrusted-impression',
+          providerMetadata: 'preserved',
+        },
+      } as const;
+    },
+  },
+});
+for (const playerId of ['player-suppressed-impression-1', 'player-suppressed-impression-2']) {
+  const claim = await suppressedImpressionBackend.adRewards.claimAdReward({
+    target: 'android',
+    playerId,
+    placementId: 'CONTINUE_AFTER_FAIL',
+    platformImpressionId: 'shared-untrusted-impression',
+    idempotencyKey: `reward-${playerId}`,
+    completedAt: '2026-07-04T00:00:00.000Z',
+  });
+  assertEqual(claim.granted, true, 'suppressed impression identities should not collide');
+}
+for (const transaction of await suppressedImpressionStore.listEntitlementTransactions()) {
+  assertEqual(
+    transaction.payload.platformImpressionId,
+    undefined,
+    'suppressed impression identities must not reach the ledger payload',
+  );
+  assertEqual(
+    transaction.payload.providerMetadata,
+    'preserved',
+    'suppressing the impression identity should keep the rest of the verifier payload',
+  );
+}
+
+// Verifiers that validate the client impression id without replacing it (Verse8, AIT)
+// keep the existing cross-key replay protection.
+const vouchedImpressionBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: createInMemoryGameServicesStore(),
+  evidenceVerifier: {
+    async verifyPurchase() {
+      return { status: 'rejected', reason: 'NOT_TESTED' } as const;
+    },
+    async verifyAdReward({ request }) {
+      return {
+        status: 'verified',
+        verificationId: `provider:reward:${request.idempotencyKey}`,
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+      } as const;
+    },
+  },
+});
+await vouchedImpressionBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-vouched-impression',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'vouched-impression',
+  idempotencyKey: 'reward-vouched-1',
+  completedAt: '2026-07-04T00:00:00.000Z',
+});
+const vouchedImpressionReplay = await vouchedImpressionBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-vouched-impression',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'vouched-impression',
+  idempotencyKey: 'reward-vouched-2',
+  completedAt: '2026-07-04T00:00:01.000Z',
+});
+assertEqual(
+  vouchedImpressionReplay.reason,
+  'EVIDENCE_ALREADY_PROCESSED',
+  'verifier-vouched impression ids should still reject replays under a new idempotency key',
+);
+
+// Request limits and stable error codes.
+const limitsHandler = createGameServicesBackendApiHandler({
+  catalog,
+  placements,
+  store: createInMemoryGameServicesStore(),
+  evidenceVerifier,
+});
+const oversizedIdentifierResponse = await limitsHandler.handle({
+  method: 'POST',
+  endpoint: gameServicesBackendEndpoints.claimAdReward,
+  body: {
+    target: 'android',
+    playerId: 'p'.repeat(gameServicesRequestLimits.maxStringLength + 1),
+    placementId: 'CONTINUE_AFTER_FAIL',
+    idempotencyKey: 'reward-oversized-id',
+    completedAt: '2026-07-04T00:00:00.000Z',
+  },
+});
+const oversizedIdentifierBody = oversizedIdentifierResponse.body as GameServicesBackendErrorResponse;
+const missingFieldResponse = await limitsHandler.handle({
+  method: 'POST',
+  endpoint: gameServicesBackendEndpoints.recordLeaderboardScore,
+  body: { target: 'android' },
+});
+const missingFieldBody = missingFieldResponse.body as GameServicesBackendErrorResponse;
+const oversizedEvidenceResponse = await limitsHandler.handle({
+  method: 'POST',
+  endpoint: gameServicesBackendEndpoints.verifyPurchase,
+  body: {
+    target: 'android',
+    playerId: 'player-oversized-evidence',
+    productId: 'COINS_100',
+    platformTransactionId: 'txn-oversized-evidence',
+    idempotencyKey: 'purchase-oversized-evidence',
+    purchasedAt: '2026-07-04T00:00:00.000Z',
+    evidence: {
+      schema: 'test',
+      payload: Object.fromEntries(
+        Array.from(
+          { length: gameServicesRequestLimits.maxEvidencePayloadEntries + 1 },
+          (_, index) => [`entry${String(index)}`, true],
+        ),
+      ),
+    },
+  },
+});
+
+assertEqual(oversizedIdentifierResponse.status, 400, 'oversized identifiers should return 400');
+assertEqual(
+  oversizedIdentifierBody.error,
+  'INVALID_REQUEST',
+  'oversized identifiers should use the stable validation error code',
+);
+assertEqual(
+  oversizedIdentifierBody.message,
+  `playerId must not exceed ${String(gameServicesRequestLimits.maxStringLength)} characters.`,
+  'validation responses should describe the rejected field',
+);
+assertEqual(missingFieldResponse.status, 400, 'missing fields should return 400');
+assertEqual(missingFieldBody.error, 'INVALID_REQUEST', 'missing fields should use the stable code');
+assertEqual(
+  missingFieldBody.message,
+  'playerId must be a non-empty string.',
+  'validation responses should keep the field-level message',
+);
+assertEqual(
+  (oversizedEvidenceResponse.body as GameServicesBackendErrorResponse).error,
+  'INVALID_REQUEST',
+  'evidence payloads above the entry limit should be rejected as invalid requests',
+);
+
+const internalFailureStoreBase = createInMemoryGameServicesStore();
+const internalFailureStore: GameServicesStore = {
+  async recordEntitlementGrant() {
+    throw new Error('D1_ERROR: secret table details');
+  },
+  getEntitlementTransaction: (ledgerEntryId) => {
+    return internalFailureStoreBase.getEntitlementTransaction(ledgerEntryId);
+  },
+  listEntitlementTransactions: () => internalFailureStoreBase.listEntitlementTransactions(),
+  async recordLeaderboardScore() {
+    throw new Error('D1_ERROR: secret table details');
+  },
+  getLeaderboardTransaction: (ledgerEntryId) => {
+    return internalFailureStoreBase.getLeaderboardTransaction(ledgerEntryId);
+  },
+  listLeaderboardTransactions: () => internalFailureStoreBase.listLeaderboardTransactions(),
+};
+const reportedInternalErrors: unknown[] = [];
+const internalFailureHandler = createGameServicesBackendApiHandler({
+  catalog,
+  placements,
+  store: internalFailureStore,
+  evidenceVerifier,
+  onInternalError: (error) => {
+    reportedInternalErrors.push(error);
+  },
+});
+const internalFailureResponse = await internalFailureHandler.handle({
+  method: 'POST',
+  endpoint: gameServicesBackendEndpoints.recordLeaderboardScore,
+  body: {
+    target: 'android',
+    playerId: 'player-internal-failure',
+    leaderboardId: 'default',
+    score: 10,
+    runId: 'run-internal-failure',
+    submittedAt: '2026-07-04T00:00:00.000Z',
+  },
+});
+const internalFailureRewardResponse = await internalFailureHandler.handle({
+  method: 'POST',
+  endpoint: gameServicesBackendEndpoints.claimAdReward,
+  body: {
+    target: 'android',
+    playerId: 'player-internal-failure',
+    placementId: 'CONTINUE_AFTER_FAIL',
+    idempotencyKey: 'reward-internal-failure',
+    completedAt: '2026-07-04T00:00:00.000Z',
+  },
+});
+
+assertEqual(internalFailureResponse.status, 500, 'store failures should return 500');
+assertEqual(
+  (internalFailureResponse.body as GameServicesBackendErrorResponse).error,
+  'INTERNAL_ERROR',
+  'store failures should use the generic internal error code',
+);
+assertEqual(
+  JSON.stringify(internalFailureResponse.body).includes('secret table details'),
+  false,
+  'store failure details must never be echoed to clients',
+);
+assertEqual(internalFailureRewardResponse.status, 500, 'ledger failures should return 500');
+assertEqual(
+  JSON.stringify(internalFailureRewardResponse.body).includes('secret table details'),
+  false,
+  'ledger failure details must never be echoed to clients',
+);
+assertEqual(
+  reportedInternalErrors.length,
+  2,
+  'internal failures should be reported to the configured handler',
+);
+
+const limitedHttpFetch = createGameServicesHttpFetchHandler(limitsHandler, {
+  maxBodyBytes: 1024,
+});
+const oversizedHttpBody = await limitedHttpFetch(
+  new Request(`https://game-services.test${gameServicesBackendEndpoints.claimAdReward}`, {
+    method: 'POST',
+    body: JSON.stringify({ target: 'android', padding: 'x'.repeat(2048) }),
+  }),
+);
+const defaultLimitHttpBody = await httpFetch(
+  new Request(`https://game-services.test${gameServicesBackendEndpoints.claimAdReward}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      target: 'android',
+      padding: 'x'.repeat(gameServicesRequestLimits.maxBodyBytes),
+    }),
+  }),
+);
+const withinLimitHttpBody = await limitedHttpFetch(
+  new Request(`https://game-services.test${gameServicesBackendEndpoints.claimAdReward}`, {
+    method: 'POST',
+    body: JSON.stringify({ target: 'android' }),
+  }),
+);
+const httpValidationBody = await withinLimitHttpBody.json() as GameServicesBackendErrorResponse;
+
+assertEqual(oversizedHttpBody.status, 413, 'oversized HTTP bodies should return 413');
+assertEqual(
+  (await oversizedHttpBody.json() as GameServicesBackendErrorResponse).error,
+  'PAYLOAD_TOO_LARGE',
+  'oversized HTTP bodies should use the stable payload error code',
+);
+assertEqual(
+  defaultLimitHttpBody.status,
+  413,
+  'the default HTTP body limit should reject bodies above gameServicesRequestLimits',
+);
+assertEqual(withinLimitHttpBody.status, 400, 'bodies within the limit should be validated');
+assertEqual(
+  httpValidationBody.error,
+  'INVALID_REQUEST',
+  'HTTP validation failures should use the stable validation code',
+);
+
+const rpcLimitFetch = createGameServicesRpcFetchHandler(
+  createGameServicesRouter(
+    createGameServicesBackend({
+      catalog,
+      placements,
+      store: internalFailureStore,
+      evidenceVerifier,
+    }),
+    {
+      onInternalError: (error) => {
+        reportedInternalErrors.push(error);
+      },
+    },
+  ),
+);
+const oversizedRpcBody = await rpcLimitFetch(
+  new Request('https://game-services.test/rpc/ads/claimReward', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      json: { target: 'android', padding: 'x'.repeat(gameServicesRequestLimits.maxBodyBytes) },
+    }),
+  }),
+);
+const rpcLimitClient = createGameServicesOrpcClient({
+  url: 'https://game-services.test/rpc',
+  fetch: (url, init) => rpcLimitFetch(new Request(url, init)),
+});
+const rpcValidationError = await captureError(() => {
+  return rpcLimitClient.ads.claimReward({ target: 'android' } as never);
+});
+const rpcInternalError = await captureError(() => {
+  return rpcLimitClient.leaderboard.recordScore({
+    target: 'android',
+    playerId: 'player-rpc-internal-failure',
+    leaderboardId: 'default',
+    score: 10,
+    runId: 'run-rpc-internal-failure',
+    submittedAt: '2026-07-04T00:00:00.000Z',
+  });
+});
+
+assertEqual(oversizedRpcBody.status, 413, 'oversized oRPC bodies should return 413');
+assertEqual(
+  rpcValidationError?.code,
+  'BAD_REQUEST',
+  'oRPC validation failures should surface as BAD_REQUEST',
+);
+assertEqual(
+  rpcValidationError?.message,
+  'playerId must be a non-empty string.',
+  'oRPC validation failures should keep the field-level message',
+);
+assertEqual(
+  rpcInternalError?.code,
+  'INTERNAL_SERVER_ERROR',
+  'oRPC store failures should surface as internal server errors',
+);
+assertEqual(
+  rpcInternalError?.message.includes('secret table details'),
+  false,
+  'oRPC store failure details must never be echoed to clients',
+);
+assertEqual(
+  reportedInternalErrors.length,
+  3,
+  'oRPC internal failures should be reported to the configured handler',
+);
+
+// A throwing or async-rejecting onInternalError hook is a diagnostics failure: every
+// transport must still answer with the generic internal error and nothing may escape as
+// an unhandled rejection.
+// This package compiles without Node typings, so the process emitter is looked up through
+// globalThis with the minimal shape the test needs.
+interface UnhandledRejectionEmitter {
+  on(event: 'unhandledRejection', listener: (reason: unknown) => void): unknown;
+  off(event: 'unhandledRejection', listener: (reason: unknown) => void): unknown;
+}
+
+const nodeProcess = (globalThis as { readonly process?: UnhandledRejectionEmitter }).process;
+if (nodeProcess === undefined) {
+  throw new Error('This test must run under Node to observe unhandled rejections.');
+}
+
+const unhandledRejections: unknown[] = [];
+const captureUnhandledRejection = (reason: unknown): void => {
+  unhandledRejections.push(reason);
+};
+const hookFailureLogs: string[] = [];
+const originalConsoleError = console.error;
+nodeProcess.on('unhandledRejection', captureUnhandledRejection);
+console.error = (...args: unknown[]): void => {
+  hookFailureLogs.push(args.map(String).join(' '));
+};
+
+try {
+  const throwingHook: GameServicesInternalErrorHandler = () => {
+    throw new Error('hook threw: secret hook details');
+  };
+  const rejectingHook: GameServicesInternalErrorHandler = () => {
+    return Promise.reject(new Error('hook rejected: secret hook details'));
+  };
+  const faultyHookScoreRequest = {
+    target: 'android',
+    playerId: 'player-faulty-hook',
+    leaderboardId: 'default',
+    score: 10,
+    runId: 'run-faulty-hook',
+    submittedAt: '2026-07-04T00:00:00.000Z',
+  } as const;
+  const faultyHookCases = [
+    { label: 'throwing', onInternalError: throwingHook },
+    { label: 'rejecting', onInternalError: rejectingHook },
+  ] as const;
+
+  for (const faultyHookCase of faultyHookCases) {
+    const faultyHookHandler = createGameServicesBackendApiHandler({
+      catalog,
+      placements,
+      store: internalFailureStore,
+      evidenceVerifier,
+      onInternalError: faultyHookCase.onInternalError,
+    });
+    const faultyHookHttpFetch = createGameServicesHttpFetchHandler(faultyHookHandler);
+    const faultyHookRpcFetch = createGameServicesRpcFetchHandler(
+      createGameServicesRouter(
+        createGameServicesBackend({
+          catalog,
+          placements,
+          store: internalFailureStore,
+          evidenceVerifier,
+        }),
+        { onInternalError: faultyHookCase.onInternalError },
+      ),
+    );
+    const faultyHookRpcClient = createGameServicesOrpcClient({
+      url: 'https://game-services.test/rpc',
+      fetch: (url, init) => faultyHookRpcFetch(new Request(url, init)),
+    });
+
+    const faultyHookResponse = await faultyHookHandler.handle({
+      method: 'POST',
+      endpoint: gameServicesBackendEndpoints.recordLeaderboardScore,
+      body: faultyHookScoreRequest,
+    });
+    const faultyHookHttpResponse = await faultyHookHttpFetch(
+      new Request(
+        `https://game-services.test${gameServicesBackendEndpoints.recordLeaderboardScore}`,
+        {
+          method: 'POST',
+          body: JSON.stringify(faultyHookScoreRequest),
+        },
+      ),
+    );
+    const faultyHookHttpBody = await faultyHookHttpResponse.json() as GameServicesBackendErrorResponse;
+    const faultyHookRpcError = await captureError(() => {
+      return faultyHookRpcClient.leaderboard.recordScore(faultyHookScoreRequest);
+    });
+
+    assertEqual(
+      faultyHookResponse.status,
+      500,
+      `a ${faultyHookCase.label} onInternalError hook must not replace the 500 response`,
+    );
+    assertEqual(
+      (faultyHookResponse.body as GameServicesBackendErrorResponse).error,
+      'INTERNAL_ERROR',
+      `a ${faultyHookCase.label} onInternalError hook must keep the generic error code`,
+    );
+    assertEqual(
+      faultyHookHttpResponse.status,
+      500,
+      `HTTP responses must stay 500 with a ${faultyHookCase.label} onInternalError hook`,
+    );
+    assertEqual(
+      faultyHookHttpBody.error,
+      'INTERNAL_ERROR',
+      `HTTP responses must keep the generic code with a ${faultyHookCase.label} hook`,
+    );
+    assertEqual(
+      JSON.stringify(faultyHookHttpBody).includes('secret hook details'),
+      false,
+      `a ${faultyHookCase.label} hook failure must never be echoed to HTTP clients`,
+    );
+    assertEqual(
+      faultyHookRpcError?.code,
+      'INTERNAL_SERVER_ERROR',
+      `oRPC responses must stay internal server errors with a ${faultyHookCase.label} hook`,
+    );
+    assertEqual(
+      faultyHookRpcError?.message.includes('secret hook details'),
+      false,
+      `a ${faultyHookCase.label} hook failure must never be echoed to oRPC clients`,
+    );
+  }
+
+  // Give any rejection the hooks produced a chance to surface before asserting.
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+
+  assertEqual(
+    unhandledRejections.length,
+    0,
+    'onInternalError hook failures must never become unhandled rejections',
+  );
+  assertEqual(
+    hookFailureLogs.filter((entry) => entry.includes('onInternalError handler threw')).length,
+    3,
+    'a throwing onInternalError hook should be logged once per transport',
+  );
+  assertEqual(
+    hookFailureLogs.filter((entry) => entry.includes('onInternalError handler rejected')).length,
+    3,
+    'a rejecting onInternalError hook should be logged once per transport',
+  );
+} finally {
+  console.error = originalConsoleError;
+  nodeProcess.off('unhandledRejection', captureUnhandledRejection);
+}
+
 console.log('GameServices backend API handler smoke test passed.');
+
+async function captureError(
+  action: () => Promise<unknown>,
+): Promise<{ readonly code?: string; readonly status?: number; readonly message: string } | undefined> {
+  try {
+    await action();
+  } catch (error) {
+    if (error instanceof Error) {
+      return error as Error & { readonly code?: string; readonly status?: number };
+    }
+
+    throw error;
+  }
+
+  return undefined;
+}
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {

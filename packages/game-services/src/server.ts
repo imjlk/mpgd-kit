@@ -1,5 +1,5 @@
-import { implement } from '@orpc/server';
-import { RPCHandler } from '@orpc/server/fetch';
+import { implement, ORPCError } from '@orpc/server';
+import { BodyLimitHandlerPlugin, RPCHandler } from '@orpc/server/fetch';
 
 import { createAnalyticsReporter, type AnalyticsSink } from '@mpgd/analytics';
 import {
@@ -53,6 +53,9 @@ import {
   type VerifyPurchaseRequest,
   type VerifyPurchaseResponse,
 } from './types.js';
+import { gameServicesRequestLimits, GameServicesRequestValidationError } from './validation.js';
+
+export { gameServicesRequestLimits, GameServicesRequestValidationError } from './validation.js';
 
 type CorsHeaders = Record<string, string>;
 
@@ -70,7 +73,16 @@ export interface CreateGameServicesBackendInput {
   readonly evidenceVerificationTimeoutMs?: number;
   readonly purchaseGrantFinalizationTimeoutMs?: number;
   readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
+  /**
+   * Receives unexpected (non-validation) failures such as store errors before the
+   * transport answers with the generic `INTERNAL_ERROR` code. Defaults to `console.error`.
+   * The hook is diagnostics only: if it throws or returns a rejecting promise, the failure
+   * is logged and the generic error response is still returned.
+   */
+  readonly onInternalError?: GameServicesInternalErrorHandler;
 }
+
+export type GameServicesInternalErrorHandler = (error: unknown) => void;
 
 export type GameServicesDeploymentTargetBindings = Readonly<
   Partial<Record<GameServicesAdRewardTarget | GameServicesStoreTarget, string>>
@@ -83,8 +95,19 @@ export interface GameServicesBackendApiHandler {
   ): Promise<GameServicesBackendTransportResponse>;
 }
 
+/** Stable error codes emitted by the backend API handler and the HTTP fetch handler. */
+export type GameServicesBackendErrorCode =
+  | 'INVALID_REQUEST'
+  | 'INVALID_JSON'
+  | 'PAYLOAD_TOO_LARGE'
+  | 'METHOD_NOT_ALLOWED'
+  | 'UNKNOWN_ENDPOINT'
+  | 'INTERNAL_ERROR';
+
 export interface GameServicesBackendErrorResponse {
-  readonly error: string;
+  readonly error: GameServicesBackendErrorCode;
+  /** Present only for `INVALID_REQUEST`; never carries internal failure details. */
+  readonly message?: string;
 }
 
 export interface GameServicesStore {
@@ -124,6 +147,12 @@ export interface CreateGameServicesFetchHandlerOptions {
   readonly corsHeaders?: CorsHeaders;
   readonly healthPath?: string;
   readonly version?: string;
+  /** Request bodies above this byte size are rejected with 413. */
+  readonly maxBodyBytes?: number;
+}
+
+export interface CreateGameServicesRouterOptions {
+  readonly onInternalError?: GameServicesInternalErrorHandler;
 }
 
 export interface CreateGameServicesRpcFetchHandlerOptions
@@ -435,10 +464,50 @@ export function createGameServicesBackendApiHandler(
       try {
         return await routeGameServicesRequest(request.endpoint, request.body, backend);
       } catch (error) {
-        return errorResponse(400, error instanceof Error ? error.message : 'BAD_REQUEST');
+        if (error instanceof GameServicesRequestValidationError) {
+          return errorResponse(400, 'INVALID_REQUEST', error.message);
+        }
+
+        reportInternalError(input.onInternalError, error);
+        return errorResponse(500, 'INTERNAL_ERROR');
       }
     },
   };
+}
+
+/**
+ * Invokes the diagnostics hook in isolation: a throwing hook, or one that returns a
+ * rejecting promise (assignable to the `void`-returning handler type), must never replace
+ * the generic `INTERNAL_ERROR` response or escape as an unhandled rejection.
+ */
+function reportInternalError(
+  handler: GameServicesInternalErrorHandler | undefined,
+  error: unknown,
+): void {
+  if (handler === undefined) {
+    console.error('GameServices backend internal error:', error);
+    return;
+  }
+
+  try {
+    const result: unknown = handler(error);
+
+    if (isPromiseLike(result)) {
+      result.then(undefined, (hookError: unknown) => {
+        console.error('GameServices backend onInternalError handler rejected:', hookError);
+      });
+    }
+  } catch (hookError) {
+    console.error('GameServices backend onInternalError handler threw:', hookError);
+  }
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    typeof value === 'object'
+    && value !== null
+    && typeof (value as { readonly then?: unknown }).then === 'function'
+  );
 }
 
 export function createInProcessGameServicesBackendTransport(
@@ -451,24 +520,41 @@ export function createInProcessGameServicesBackendTransport(
   };
 }
 
-export function createGameServicesRouter(backend: GameServicesBackendApi) {
+export function createGameServicesRouter(
+  backend: GameServicesBackendApi,
+  options: CreateGameServicesRouterOptions = {},
+) {
   const contract = implement(gameServicesContract).$context<GameServicesOrpcContext>();
+  // oRPC already hides non-ORPCError messages behind INTERNAL_SERVER_ERROR; validation
+  // failures are surfaced as BAD_REQUEST so clients get a stable 400 instead of a 500.
+  const invoke = async <T>(task: () => Promise<T>): Promise<T> => {
+    try {
+      return await task();
+    } catch (error) {
+      if (error instanceof GameServicesRequestValidationError) {
+        throw new ORPCError('BAD_REQUEST', { message: error.message });
+      }
+
+      reportInternalError(options.onInternalError, error);
+      throw error;
+    }
+  };
 
   return contract.router({
     health: contract.health.handler(() => createHealthResponse(backend.version)),
     commerce: contract.commerce.router({
       verifyPurchase: contract.commerce.verifyPurchase.handler(({ input }) => {
-        return backend.purchases.verifyPurchase(input);
+        return invoke(() => backend.purchases.verifyPurchase(input));
       }),
     }),
     ads: contract.ads.router({
       claimReward: contract.ads.claimReward.handler(({ input }) => {
-        return backend.adRewards.claimAdReward(input);
+        return invoke(() => backend.adRewards.claimAdReward(input));
       }),
     }),
     leaderboard: contract.leaderboard.router({
       recordScore: contract.leaderboard.recordScore.handler(({ input }) => {
-        return backend.leaderboard.recordScore(input);
+        return invoke(() => backend.leaderboard.recordScore(input));
       }),
     }),
   });
@@ -478,7 +564,13 @@ export function createGameServicesRpcFetchHandler(
   router: ReturnType<typeof createGameServicesRouter>,
   options: CreateGameServicesRpcFetchHandlerOptions = {},
 ): (request: Request) => Promise<Response> {
-  const rpcHandler = new RPCHandler<GameServicesOrpcContext>(router as never);
+  const rpcHandler = new RPCHandler<GameServicesOrpcContext>(router as never, {
+    plugins: [
+      new BodyLimitHandlerPlugin({
+        maxBodySize: resolveMaxBodyBytes(options.maxBodyBytes),
+      }),
+    ],
+  });
   const prefix = options.prefix ?? '/rpc';
   const healthPath = options.healthPath ?? '/health';
 
@@ -516,6 +608,7 @@ export function createGameServicesHttpFetchHandler(
   options: CreateGameServicesFetchHandlerOptions = {},
 ): (request: Request) => Promise<Response> {
   const healthPath = options.healthPath ?? '/health';
+  const maxBodyBytes = resolveMaxBodyBytes(options.maxBodyBytes);
 
   return async (request) => {
     const requestUrl = new URL(request.url);
@@ -540,22 +633,42 @@ export function createGameServicesHttpFetchHandler(
       return jsonResponse({ error: 'UNKNOWN_ENDPOINT' }, 404, options.corsHeaders);
     }
 
+    let body: unknown;
+    try {
+      body = await readRequestJson(request, maxBodyBytes);
+    } catch (error) {
+      if (error instanceof RequestPayloadTooLargeError) {
+        return jsonResponse({ error: 'PAYLOAD_TOO_LARGE' }, 413, options.corsHeaders);
+      }
+
+      return jsonResponse({ error: 'INVALID_JSON' }, 400, options.corsHeaders);
+    }
+
     try {
       const response = await handler.handle({
         method: 'POST',
         endpoint: requestUrl.pathname,
-        body: await readRequestJson(request),
+        body,
       });
 
       return jsonResponse(response.body, response.status, options.corsHeaders);
     } catch (error) {
-      return jsonResponse(
-        { error: error instanceof Error ? error.message : 'BAD_REQUEST' },
-        400,
-        options.corsHeaders,
-      );
+      // The bundled API handler never throws, but a custom handler must not leak its
+      // failure details to clients either.
+      reportInternalError(undefined, error);
+      return jsonResponse({ error: 'INTERNAL_ERROR' }, 500, options.corsHeaders);
     }
   };
+}
+
+function resolveMaxBodyBytes(maxBodyBytes: number | undefined): number {
+  const resolved = maxBodyBytes ?? gameServicesRequestLimits.maxBodyBytes;
+
+  if (!Number.isInteger(resolved) || resolved <= 0) {
+    throw new Error('maxBodyBytes must be a positive integer.');
+  }
+
+  return resolved;
 }
 
 type GameServicesDeploymentTargetPlatform = GameServicesAdRewardTarget | GameServicesStoreTarget;
@@ -599,7 +712,9 @@ function bindRequestDeploymentTarget<
     request.deploymentTarget !== undefined
     && request.deploymentTarget !== deploymentTarget
   ) {
-    throw new Error(`deploymentTarget must match the backend binding for ${request.target}.`);
+    throw new GameServicesRequestValidationError(
+      `deploymentTarget must match the backend binding for ${request.target}.`,
+    );
   }
 
   return deploymentTarget === request.target || request.deploymentTarget === deploymentTarget
@@ -729,7 +844,11 @@ async function verifyPurchaseForRetry(
     });
   }
 
-  const verificationPayload = createPurchaseVerificationPayload(verification);
+  const verificationPayload = createVerificationPayload(verification, 'platformTransactionId');
+  const platformTransactionId = resolvePlatformEvidenceId(
+    verification,
+    request.platformTransactionId,
+  );
 
   const grant = await recordEntitlementGrantWithEvidence(context.store, {
     playerId: request.playerId,
@@ -748,12 +867,7 @@ async function verifyPurchaseForRetry(
       productId: request.productId,
       productType: product.type,
       platformProductId,
-      ...(verification.platformEvidenceId === null
-        ? {}
-        : {
-            platformTransactionId:
-              verification.platformEvidenceId ?? request.platformTransactionId,
-          }),
+      ...(platformTransactionId === undefined ? {} : { platformTransactionId }),
       purchasedAt: request.purchasedAt,
       evidenceVerificationId: verification.verificationId,
       evidenceVerifiedAt: verification.verifiedAt,
@@ -1105,8 +1219,16 @@ async function claimAdRewardForRetry(
     });
   }
 
+  // The client-reported impression id only becomes part of the globally unique platform
+  // evidence identity when the verifier vouches for it (or replaces it with its own
+  // authority id). Otherwise an attacker could pre-register another player's impression id
+  // and have that player's legitimate claim rejected as EVIDENCE_ALREADY_PROCESSED.
+  const platformImpressionId = resolvePlatformEvidenceId(
+    verification,
+    request.platformImpressionId,
+  );
   const payload: EntitlementLedgerPayload = {
-    ...verification.payload,
+    ...createVerificationPayload(verification, 'platformImpressionId'),
     target: request.target,
     ...(request.deploymentTarget === undefined
       ? {}
@@ -1123,8 +1245,8 @@ async function claimAdRewardForRetry(
     payload.currency = placement.reward.currency;
   }
 
-  if (request.platformImpressionId !== undefined) {
-    payload.platformImpressionId = request.platformImpressionId;
+  if (platformImpressionId !== undefined) {
+    payload.platformImpressionId = platformImpressionId;
   }
 
   const result = await recordEntitlementGrantWithEvidence(context.store, {
@@ -1201,16 +1323,38 @@ async function verifyEvidence(
   }
 }
 
-function createPurchaseVerificationPayload(
-  verification: Extract<EvidenceVerificationDecision, { readonly status: 'verified' }>,
+type VerifiedEvidenceDecision = Extract<
+  EvidenceVerificationDecision,
+  { readonly status: 'verified' }
+>;
+
+/**
+ * Resolves the platform evidence identity stored in the ledger: the verifier's authority id
+ * when it supplies one, the client value when the verifier validated the request without
+ * replacing it (`undefined`), and nothing at all when the verifier suppresses it (`null`).
+ */
+function resolvePlatformEvidenceId(
+  verification: VerifiedEvidenceDecision,
+  clientPlatformEvidenceId: string | undefined,
+): string | undefined {
+  if (verification.platformEvidenceId === null) {
+    return undefined;
+  }
+
+  return verification.platformEvidenceId ?? clientPlatformEvidenceId;
+}
+
+function createVerificationPayload(
+  verification: VerifiedEvidenceDecision,
+  platformEvidenceField: 'platformTransactionId' | 'platformImpressionId',
 ): EntitlementLedgerPayload | undefined {
   if (verification.platformEvidenceId !== null || verification.payload === undefined) {
     return verification.payload;
   }
 
-  const { platformTransactionId: suppressedPlatformTransactionId, ...payload }
+  const { [platformEvidenceField]: suppressedPlatformEvidenceId, ...payload }
     = verification.payload;
-  void suppressedPlatformTransactionId;
+  void suppressedPlatformEvidenceId;
   return payload;
 }
 
@@ -1624,12 +1768,14 @@ function okResponse(body: unknown): GameServicesBackendTransportResponse {
 
 function errorResponse(
   status: number,
-  error: string,
+  error: GameServicesBackendErrorCode,
+  message?: string,
 ): GameServicesBackendTransportResponse<GameServicesBackendErrorResponse> {
   return {
     status,
     body: {
       error,
+      ...(message === undefined ? {} : { message }),
     },
   };
 }
@@ -1726,14 +1872,63 @@ function isGameServicesBackendEndpoint(pathname: string): pathname is GameServic
   );
 }
 
-async function readRequestJson(request: Request): Promise<unknown> {
-  const text = await request.text();
+class RequestPayloadTooLargeError extends Error {
+  constructor() {
+    super('Request payload exceeds the configured body limit.');
+    this.name = 'RequestPayloadTooLargeError';
+  }
+}
+
+async function readRequestJson(request: Request, maxBodyBytes: number): Promise<unknown> {
+  const text = await readRequestText(request, maxBodyBytes);
 
   if (text.length === 0) {
     return {};
   }
 
   return JSON.parse(text);
+}
+
+/** Reads the body incrementally so an oversized payload is rejected before it is buffered. */
+async function readRequestText(request: Request, maxBodyBytes: number): Promise<string> {
+  const declaredLength = Number(request.headers.get('content-length') ?? '');
+  if (Number.isFinite(declaredLength) && declaredLength > maxBodyBytes) {
+    throw new RequestPayloadTooLargeError();
+  }
+
+  if (request.body === null) {
+    return '';
+  }
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let receivedBytes = 0;
+
+  for (;;) {
+    const { done, value } = await reader.read();
+
+    if (done) {
+      break;
+    }
+
+    receivedBytes += value.byteLength;
+
+    if (receivedBytes > maxBodyBytes) {
+      await reader.cancel();
+      throw new RequestPayloadTooLargeError();
+    }
+
+    chunks.push(value);
+  }
+
+  const bytes = new Uint8Array(receivedBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return new TextDecoder().decode(bytes);
 }
 
 function jsonResponse(body: unknown, status: number, corsHeaders: CorsHeaders | undefined): Response {

@@ -386,10 +386,13 @@ async function verifyAdMobSsvReward(
     return rejected('ADMOB_SSV_CALLBACK_EXPIRED');
   }
 
+  // SSV never validates the client-reported `platformImpressionId`, so the signed
+  // transaction becomes the platform evidence identity instead of the client value.
   return {
     status: 'verified',
     verificationId: `admob:ssv:${callback.transactionId}`,
     verifiedAt: new Date(callback.timestampMs).toISOString(),
+    platformEvidenceId: callback.transactionId,
     payload: {
       admobSsvTransactionId: callback.transactionId,
       admobSsvAdNetwork: callback.adNetwork,

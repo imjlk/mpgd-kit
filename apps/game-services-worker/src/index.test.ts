@@ -240,6 +240,7 @@ const conflictingDeploymentResponse = await configuredDeploymentFetch(
 );
 const conflictingDeploymentBody = await conflictingDeploymentResponse.json() as {
   readonly error?: string;
+  readonly message?: string;
 };
 
 assertEqual(
@@ -249,8 +250,13 @@ assertEqual(
 );
 assertEqual(
   conflictingDeploymentBody.error,
+  'INVALID_REQUEST',
+  'the worker should expose the stable validation error code across HTTP',
+);
+assertEqual(
+  conflictingDeploymentBody.message,
   'deploymentTarget must match the backend binding for android.',
-  'the worker should preserve the backend binding error across HTTP',
+  'the worker should preserve the backend binding error message across HTTP',
 );
 
 const targetVerifierCalls: string[] = [];
