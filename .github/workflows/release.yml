@@ -85,7 +85,12 @@ jobs:
           find "${roots[@]}" -mindepth 2 -maxdepth 2 -type d -name dist -print0 \
             | sort -z \
             | tar --null --files-from - -cf "${RUNNER_TEMP}/release-package-dist.tar"
-          tar -tf "${RUNNER_TEMP}/release-package-dist.tar" | grep -q '/dist/index\.js$'
+          # Read the whole listing before matching: `grep -q` exits on the first
+          # hit and the resulting EPIPE makes tar fail the step under pipefail.
+          if ! tar -tf "${RUNNER_TEMP}/release-package-dist.tar" | grep -c '/dist/index\.js$' >/dev/null; then
+            echo "::error::release-package-dist.tar contains no dist/index.js entries."
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
