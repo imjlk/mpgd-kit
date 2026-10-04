@@ -67,10 +67,12 @@ function normalizeDevvitOrder(
 
   const product = requireRecord(record.products[0], 'Devvit payment product');
   const orderId = requireString(record.id, 'order.id');
-  // The order must carry the purchasing user so the server-side binding to the
-  // authenticated context is always enforced; an order without userId cannot be
-  // attributed and must not be fulfilled or refunded.
-  if (requireString(record.userId, 'order.userId') !== playerId) {
+  // Devvit's payment handler request (`PaymentHandlerRequest` in @devvit/payments
+  // 0.14) has no userId: Devvit runs the handler in the purchasing user's request
+  // context, which is the authenticated playerId. When an order does carry a
+  // userId, it must still match that context.
+  if (record.userId !== undefined
+    && requireString(record.userId, 'order.userId') !== playerId) {
     throw new TypeError(
       'Devvit payment order userId must match the authenticated context playerId.',
     );
