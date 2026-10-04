@@ -74,17 +74,33 @@ describe('Devvit payment order normalization', () => {
     })).toThrow('exactly one product');
   });
 
-  it('rejects orders that omit userId instead of trusting the context alone', () => {
-    const { userId: _omitted, ...orderWithoutUser } = paidOrder;
+  it('binds Devvit handler orders, which carry no userId, to the request context', () => {
+    // Mirrors @devvit/payments 0.14 PaymentHandlerRequest: id, status, createdAt,
+    // updatedAt, products and metadata only.
+    const handlerOrder = Object.freeze({
+      id: 'order-1',
+      status: 'PAID',
+      createdAt: '2026-07-15T00:00:00.000Z',
+      updatedAt: '2026-07-15T00:01:00.000Z',
+      products: Object.freeze([Object.freeze({ sku: 'ttokdoku_final_nine_ember' })]),
+      metadata: Object.freeze({}),
+    });
 
-    expect(() => normalizeDevvitFulfillmentOrder({
-      order: orderWithoutUser,
+    expect(normalizeDevvitFulfillmentOrder({
+      order: handlerOrder,
       playerId: 'player-1',
-    })).toThrow('order.userId must be a string');
-    expect(() => normalizeDevvitRefundOrder({
-      order: { ...orderWithoutUser, status: 'REVERTED' },
+    })).toMatchObject({
+      orderId: 'order-1',
       playerId: 'player-1',
-    })).toThrow('order.userId must be a string');
+      evidence: { payload: { playerIdSource: 'devvit-context' } },
+    });
+    expect(normalizeDevvitRefundOrder({
+      order: { ...handlerOrder, status: 'REVERTED' },
+      playerId: 'player-1',
+    })).toMatchObject({ orderId: 'order-1', playerId: 'player-1' });
+  });
+
+  it('rejects a present userId that is not a string', () => {
     expect(() => normalizeDevvitFulfillmentOrder({
       order: { ...paidOrder, userId: 42 },
       playerId: 'player-1',
