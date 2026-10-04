@@ -20,8 +20,42 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  # Several merges in quick succession each complete CI and each start a
+  # release run, but only the run for the current main tip can release. End the
+  # stale runs as skipped here instead of failing them late in `publish`; the
+  # strict guard in `publish` stays as the final check against a race.
+  preflight:
     if: ${{ (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      current: ${{ steps.compare.outputs.current }}
+    steps:
+      - name: Compare the verified commit with current main
+        id: compare
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Release commit '${RELEASE_SHA}' is not a full SHA."
+            exit 1
+          fi
+          main_sha="$(gh api "repos/${GITHUB_REPOSITORY}/branches/main" --jq '.commit.sha')"
+          if [[ "${main_sha}" == "${RELEASE_SHA}" ]]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+            echo "Release commit ${RELEASE_SHA} is current main."
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping release for ${RELEASE_SHA}: main has moved to ${main_sha}; the run for that commit releases instead."
+          fi
+
+  build:
+    needs: preflight
+    if: ${{ needs.preflight.outputs.current == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     # `actions: read` only serves the manual-dispatch guard that inspects ci.yml
@@ -100,7 +134,8 @@ jobs:
           retention-days: 1
 
   publish:
-    needs: build
+    needs: [preflight, build]
+    if: ${{ needs.preflight.outputs.current == 'true' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     # Sampo pushes the release branch and tags, opens or updates the release
