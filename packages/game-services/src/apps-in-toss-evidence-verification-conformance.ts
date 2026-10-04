@@ -36,6 +36,7 @@ export const appsInTossProductionEvidenceConformanceScenarios = [
   'purchase-authority-retry',
   'purchase-pending-order-restore',
   'purchase-authority-matching',
+  'purchase-subscription-unsupported',
   'purchase-timestamp-normalization',
   'reward-authority-retry-and-replay',
   'reward-timestamp-validation',
@@ -87,6 +88,17 @@ const catalog = {
         ait: 'ait.conformance.coins',
       },
     },
+    {
+      id: 'CONFORMANCE_PASS',
+      type: 'subscription',
+      grant: {
+        type: 'entitlement',
+        entitlement: 'conformance_pass',
+      },
+      platformProductIds: {
+        ait: 'ait.conformance.pass',
+      },
+    },
   ],
 } as const satisfies ProductCatalog;
 
@@ -117,6 +129,7 @@ const scenarioRunners = {
   'purchase-authority-retry': runPurchaseAuthorityRetryScenario,
   'purchase-pending-order-restore': runPurchasePendingOrderRestoreScenario,
   'purchase-authority-matching': runPurchaseAuthorityMatchingScenario,
+  'purchase-subscription-unsupported': runPurchaseSubscriptionUnsupportedScenario,
   'purchase-timestamp-normalization': runPurchaseTimestampNormalizationScenario,
   'reward-authority-retry-and-replay': runRewardAuthorityRetryAndReplayScenario,
   'reward-timestamp-validation': runRewardTimestampValidationScenario,
@@ -503,6 +516,48 @@ async function runPurchaseAuthorityMatchingScenario(
   assertEqual(refunded.reason, 'AIT_PURCHASE_ORDER_REFUNDED', 'refunded purchase');
   assertEqual(progress.reason, 'AIT_PURCHASE_ORDER_ORDER_IN_PROGRESS', 'in-progress purchase');
   await assertEntitlementCount(context.store, 0, 'purchase mismatches and status');
+}
+
+async function runPurchaseSubscriptionUnsupportedScenario(
+  createVerifier: CreateAppsInTossProductionEvidenceVerifier,
+  now: string,
+): Promise<void> {
+  const fixture = createAppsInTossProductionEvidenceAuthorityFixture();
+  fixture.enqueuePurchaseResult(
+    resolvedOrder({
+      orderId: 'ait-order-subscription',
+      sku: 'ait.conformance.pass',
+    }),
+  );
+  const context = createScenarioContext(createVerifier, now, {
+    purchaseAuthority: fixture.purchaseAuthority,
+  });
+
+  const subscription = await context.backend.purchases.verifyPurchase(
+    purchaseRequest({
+      productId: 'CONFORMANCE_PASS',
+      platformTransactionId: 'ait-order-subscription',
+      idempotencyKey: 'purchase-subscription',
+      evidence: createAppsInTossPurchaseCallbackEvidence({
+        orderId: 'ait-order-subscription',
+        platformSku: 'ait.conformance.pass',
+        source: 'process-product-grant',
+      }),
+    }),
+  );
+
+  assertEqual(subscription.verified, false, 'subscription purchase must not grant');
+  assertEqual(
+    subscription.reason,
+    'APPS_IN_TOSS_SUBSCRIPTION_UNSUPPORTED',
+    'subscription purchase must be rejected explicitly',
+  );
+  assertEqual(
+    fixture.purchaseInputs.length,
+    0,
+    'unsupported subscriptions must fail before the purchase authority is called',
+  );
+  await assertEntitlementCount(context.store, 0, 'unsupported subscription purchase');
 }
 
 async function runPurchaseTimestampNormalizationScenario(

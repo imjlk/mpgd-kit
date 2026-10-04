@@ -205,6 +205,13 @@ The authority maps order states as follows:
 | `ORDER_IN_PROGRESS`, `ERROR` | pending; retry without granting |
 | `FAILED`, `REFUNDED`, `NOT_FOUND`, `MINIAPP_MISMATCH` | rejected |
 
+The verifier only grants one-time products. A catalog product with
+`type: 'subscription'` is rejected with `APPS_IN_TOSS_SUBSCRIPTION_UNSUPPORTED`
+before the order-status authority is called, because a one-time order status
+cannot express renewal, expiry, or revocation. This matches the Google Play and
+App Store verifiers and does not depend on the adapter hiding `SUBSCRIPTION`
+products or on target config leaving `subscriptions` disabled.
+
 The official order-status API base is `https://apps-in-toss-api.toss.im`; the
 partner-server call requires mTLS, and the mini app must have Toss Login
 integration configured before the status API is available. The request's
@@ -348,7 +355,7 @@ pnpm smoke:apps-in-toss-production-evidence
 It covers callback-only rejection, in-callback backend grants, purchase success
 and idempotent retry, server-grant failure followed by pending-order restoration,
 deterministic KST timestamp parsing, authoritative player/SKU/status matching,
-post-success purchase rejection, reward retry/replay rejection, explicit-zone
+subscription-product rejection, post-success purchase rejection, reward retry/replay rejection, explicit-zone
 reward timestamp validation, authority errors, and reward player/placement
 matching. No failed verification or rejection path writes a ledger grant;
 product completion can still fail after a durable grant and must then be retried.
