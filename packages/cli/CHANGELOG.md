@@ -1,5 +1,11 @@
 # @mpgd/cli
 
+## 0.36.2 — 2026-10-04
+
+### Patch changes
+
+- Updated dependencies: adapter-capacitor@0.6.2, adapter-devvit@0.9.14, adapter-verse8@0.3.12, game-services@0.17.2
+
 ## 0.36.1 — 2026-10-04
 
 ### Patch changes

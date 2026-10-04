@@ -1,5 +1,12 @@
 # @mpgd/adapter-devvit
 
+## 0.9.14 — 2026-10-04
+
+### Patch changes
+
+- [c6e760b6](https://github.com/imjlk/mpgd-kit/commit/c6e760b6ae70d8ed1728bc3265869c5bc100ee77) Accept Devvit payment handler orders without `userId` again. Devvit's `PaymentHandlerRequest` (`@devvit/payments` 0.14) carries only `id`, `status`, `createdAt`, `updatedAt`, `products` and `metadata`, and Devvit runs the handler in the purchasing user's request context. Since 0.9.13, `normalizeDevvitFulfillmentOrder` and `normalizeDevvitRefundOrder` rejected every real order with `order.userId must be a string`, so no Reddit purchase could be fulfilled or refunded. The authenticated context player is again the binding. An order that does carry a `userId` must still be a string that matches it. — Thanks @imjlk!
+- Updated dependencies: game-services@0.17.2
+
 ## 0.9.13 — 2026-10-04
 
 ### Patch changes
