@@ -383,6 +383,12 @@ async function verifyAppsInTossPurchase(
     return rejected('AIT_PURCHASE_TARGET_REQUIRED');
   }
 
+  // One-time order status cannot express renewal, expiry, or revocation. Reject
+  // explicitly instead of relying on the adapter hiding SUBSCRIPTION products.
+  if (input.product.type === 'subscription') {
+    return rejected('APPS_IN_TOSS_SUBSCRIPTION_UNSUPPORTED');
+  }
+
   if (request.evidence?.schema !== appsInTossPurchaseCallbackEvidenceSchema) {
     return rejected('AIT_PURCHASE_EVIDENCE_SCHEMA_INVALID');
   }
