@@ -12,10 +12,10 @@ Baseline: `main@646745bc`, 2026-10-04.
 The kit supports one-time purchases on every commerce target (Play Billing,
 StoreKit, Microsoft Store, Apps in Toss, Devvit, Verse8). Every server
 verifier rejects subscriptions, `subscriptionIap` is declared but never set,
-and no target configuration enables `subscriptions`. The platform that
-consumes the kit (play.1990.company) sells prepaid Credits through a merchant
-of record and lets games spend Credits for entitlements; it has no paid
-recurring plan today.
+and no target configuration enables `subscriptions`. A common consumer
+shape is a game platform that sells prepaid credits through a merchant of
+record and lets games spend those credits for entitlements; such a platform
+typically starts without a paid recurring plan.
 
 The question is whether subscriptions deserve implementation effort before
 the credit-pack and credit-spend flows are proven, and which subscription
@@ -24,7 +24,7 @@ shape fits a game platform.
 ## What the market data says (read 2026-10-04)
 
 Figures below are published benchmarks, each with its own sample bias; they
-are inputs to a judgement, not targets for this platform.
+are inputs to a judgement, not targets for any particular platform.
 
 | Observation | Figure | Source and window |
 | --- | --- | --- |
@@ -46,11 +46,11 @@ Reading of the data:
   plans. A subscription-only game economy is the exception.
 - Where subscriptions work in games they are layered over consumables: an
   ad-free or convenience tier with a recurring currency allowance, while
-  spenders keep buying packs. That shape is a recurring Credits grant, not a
+  spenders keep buying packs. That shape is a recurring credit grant, not a
   store-managed renewal.
 - Off-store web commerce is growing quickly and is already material for the
-  genres that lean on it. The platform's prepaid Credits wallet sits on that
-  side of the market, so the first recurring product should live there too.
+  genres that lean on it. A prepaid-credit wallet sits on that side of the
+  market, so the first recurring product should live there too.
 
 ## Decision
 
@@ -59,9 +59,9 @@ Reading of the data:
    expiry, renewal, and lapse events on the ledger, and exposes active
    subscriptions through the same reconciliation loop as one-time purchases.
    No provider sets the capability to true in the first release.
-2. **First recurring product is a Credits-funded membership, not a store
+2. **First recurring product is a credit-funded membership, not a store
    subscription.** When a recurring offer is wanted, it is an entitlement
-   renewed by a scheduled Credits debit on the platform wallet, with
+   renewed by a scheduled credit debit on the wallet that owns the balance, with
    `lifecycle.finish: 'none'` and `authority.evidence: 'server-push'`. It
    needs no store SDK, and expiry and lapse are decided by one server.
 3. **Store subscriptions (Play Billing, StoreKit) stay out of scope** until a
@@ -71,9 +71,9 @@ Reading of the data:
    and alternative-billing events are where the external cores add surface
    the kit's own plugins do not have.
 4. **Credit packs come first on native targets.** Play Billing and StoreKit
-   sell consumable Credit packs that settle in the game-services ledger and
-   top up the platform wallet. Their conversion is the baseline against which
-   any membership is judged.
+   sell consumable credit packs that settle in the game-services ledger and
+   top up the wallet. Their conversion is the baseline against which any
+   membership is judged.
 
 ## Triggers that reopen this decision
 
@@ -82,12 +82,12 @@ April 2027.
 
 | Trigger | Threshold to propose | Why |
 | --- | --- | --- |
-| Membership take-rate | A Credits-funded membership reaches 20% of paying accounts, or 10% of Credits revenue, for two consecutive months | Shows recurring demand exists before store renewals are built |
-| Native renewal requirement | A native target launch needs in-app renewals because off-app Credits cannot be spent there under store policy | Store subscriptions become the only compliant shape |
+| Membership take-rate | A credit-funded membership reaches 20% of paying accounts, or 10% of credit revenue, for two consecutive months | Shows recurring demand exists before store renewals are built |
+| Native renewal requirement | A native target launch needs in-app renewals because credits bought outside the app cannot be spent there under store policy | Store subscriptions become the only compliant shape |
 | Alternative billing | User-choice or developer-provided billing becomes applicable to a shipped target | The OpenIAP cores already surface these events |
 | Conversion evidence | Gaming subscription conversion benchmarks move materially, or the platform's own trial-to-paid data exceeds the 25% gaming median | The assumption behind deferral no longer holds |
 
-The thresholds are proposals to be adjusted by the product owner; the
+The thresholds are proposals to be adjusted by each product owner; the
 decision record is updated, not replaced, when they change.
 
 ## Consequences for the commerce v2 work
@@ -95,8 +95,9 @@ decision record is updated, not replaced, when they change.
 - The contract, conformance vectors, and capability matrix include
   subscription fields from the first release so adding a provider later is
   additive.
-- The platform wallet provider (`store: 'play-credits'` in the consumer
-  project) is the first place a recurring entitlement is implemented.
+- A prepaid-credit wallet provider, implemented by the consuming project
+  against the kit's wallet contract with its own open `StoreId`, is the first
+  place a recurring entitlement is implemented.
 - `@mpgd/capacitor-play-billing` and `@mpgd/capacitor-storekit` keep their
   one-time-purchase scope; no subscription surface is added to them.
 - Documentation that describes subscriptions must label them as designed but
