@@ -1,0 +1,197 @@
+{
+  "vector": "credit-lot-title-scope",
+  "protocol": "2.0.0-draft.1",
+  "summary": "Each credit lot records its purchasing store and title; store-purchased lots are spendable only in that title, off-store lots across titles, and a duplicate grant does not create a second lot.",
+  "profile": {
+    "store": "fixture.credit-wallet",
+    "purchase": {
+      "consumable": true,
+      "durable": true,
+      "subscription": false,
+      "quantity": false
+    },
+    "lifecycle": {
+      "availablePurchases": true,
+      "pending": false,
+      "restore": false,
+      "events": false,
+      "finish": "server"
+    },
+    "authority": {
+      "evidence": "adapter-settled",
+      "accountBinding": "host"
+    }
+  },
+  "wallet": {
+    "currencies": [
+      "credits"
+    ],
+    "billingAuthority": "host"
+  },
+  "steps": [
+    {
+      "actor": "wallet",
+      "action": "creditFromGrant",
+      "lot": {
+        "ledgerEntryId": "le-store-1",
+        "currency": "credits",
+        "amount": 100,
+        "origin": {
+          "channel": "store",
+          "store": "fixture.client-token",
+          "titleId": "title-a"
+        },
+        "createdAt": "2026-10-01T00:00:00Z"
+      }
+    },
+    {
+      "actor": "wallet",
+      "action": "creditFromGrant",
+      "lot": {
+        "ledgerEntryId": "le-store-1",
+        "currency": "credits",
+        "amount": 100,
+        "origin": {
+          "channel": "store",
+          "store": "fixture.client-token",
+          "titleId": "title-a"
+        },
+        "createdAt": "2026-10-01T00:00:00Z"
+      }
+    },
+    {
+      "actor": "wallet",
+      "action": "creditFromGrant",
+      "lot": {
+        "ledgerEntryId": "le-web-1",
+        "currency": "credits",
+        "amount": 50,
+        "origin": {
+          "channel": "off-store",
+          "store": "fixture.web-checkout",
+          "titleId": "title-a"
+        },
+        "createdAt": "2026-10-02T00:00:00Z"
+      }
+    },
+    {
+      "actor": "wallet",
+      "action": "spend",
+      "input": {
+        "titleId": "title-b",
+        "currency": "credits",
+        "amount": 80,
+        "idempotencyKey": "spend-1"
+      },
+      "returns": {
+        "status": "rejected",
+        "error": {
+          "code": "INSUFFICIENT_BALANCE"
+        }
+      }
+    },
+    {
+      "actor": "wallet",
+      "action": "spend",
+      "input": {
+        "titleId": "title-b",
+        "currency": "credits",
+        "amount": 40,
+        "idempotencyKey": "spend-2"
+      },
+      "returns": {
+        "status": "debited",
+        "debits": [
+          {
+            "lotId": "le-web-1",
+            "amount": 40
+          }
+        ]
+      }
+    },
+    {
+      "actor": "wallet",
+      "action": "spend",
+      "input": {
+        "titleId": "title-b",
+        "currency": "credits",
+        "amount": 40,
+        "idempotencyKey": "spend-2"
+      },
+      "returns": {
+        "status": "debited",
+        "debits": [
+          {
+            "lotId": "le-web-1",
+            "amount": 40
+          }
+        ],
+        "alreadyProcessed": true
+      }
+    },
+    {
+      "actor": "wallet",
+      "action": "spend",
+      "input": {
+        "titleId": "title-a",
+        "currency": "credits",
+        "amount": 105,
+        "idempotencyKey": "spend-3"
+      },
+      "returns": {
+        "status": "debited",
+        "debits": [
+          {
+            "lotId": "le-store-1",
+            "amount": 100
+          },
+          {
+            "lotId": "le-web-1",
+            "amount": 5
+          }
+        ]
+      }
+    }
+  ],
+  "expect": {
+    "lots": [
+      {
+        "lotId": "le-store-1",
+        "currency": "credits",
+        "amount": 100,
+        "remaining": 0,
+        "origin": {
+          "channel": "store",
+          "store": "fixture.client-token",
+          "titleId": "title-a"
+        },
+        "spendScope": {
+          "kind": "title",
+          "titleId": "title-a"
+        }
+      },
+      {
+        "lotId": "le-web-1",
+        "currency": "credits",
+        "amount": 50,
+        "remaining": 5,
+        "origin": {
+          "channel": "off-store",
+          "store": "fixture.web-checkout",
+          "titleId": "title-a"
+        },
+        "spendScope": {
+          "kind": "cross-title"
+        }
+      }
+    ],
+    "balances": {
+      "title-a": {
+        "credits": 5
+      },
+      "title-b": {
+        "credits": 5
+      }
+    }
+  }
+}

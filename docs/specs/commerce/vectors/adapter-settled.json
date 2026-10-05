@@ -1,0 +1,105 @@
+{
+  "vector": "adapter-settled",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A provider whose purchase call already settled with the backend still reaches granted only through a verify request that the ledger answers from the existing entry.",
+  "profile": {
+    "store": "fixture.adapter-settled",
+    "purchase": {
+      "consumable": true,
+      "durable": false,
+      "subscription": false,
+      "quantity": false
+    },
+    "lifecycle": {
+      "availablePurchases": true,
+      "pending": false,
+      "restore": false,
+      "events": false,
+      "finish": "server"
+    },
+    "authority": {
+      "evidence": "adapter-settled",
+      "accountBinding": "required"
+    }
+  },
+  "catalog": [
+    {
+      "logicalId": "gems_small",
+      "kind": "consumable",
+      "storeSku": "gems.small"
+    }
+  ],
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "queueVerify",
+      "decision": {
+        "status": "granted",
+        "ledgerEntryId": "le-1",
+        "finalization": "completed",
+        "alreadyProcessed": true
+      }
+    },
+    {
+      "actor": "store",
+      "action": "queueRequest",
+      "result": {
+        "outcome": "purchased",
+        "purchase": {
+          "transactionId": "tx-1",
+          "storeSku": "gems.small",
+          "token": "tx-1",
+          "state": "purchased"
+        },
+        "settlement": {
+          "ledgerEntryId": "le-1"
+        }
+      }
+    },
+    {
+      "actor": "game",
+      "action": "requestPurchase",
+      "input": {
+        "logicalId": "gems_small",
+        "idempotencyKey": "op-1"
+      },
+      "returns": {
+        "outcome": "purchased"
+      }
+    }
+  ],
+  "expect": {
+    "journal": {
+      "op-1": [
+        "requested",
+        "launched",
+        "purchased",
+        "verifying",
+        "granted",
+        "finishing",
+        "finished"
+      ]
+    },
+    "verifyRequests": [
+      {
+        "idempotencyKey": "op-1",
+        "store": "fixture.adapter-settled",
+        "transactionId": "tx-1",
+        "token": "tx-1"
+      }
+    ],
+    "ledger": [
+      {
+        "entryId": "le-1",
+        "type": "grant",
+        "logicalId": "gems_small"
+      }
+    ],
+    "finishCalls": [],
+    "available": []
+  }
+}

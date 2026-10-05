@@ -1,0 +1,122 @@
+{
+  "vector": "server-push-settlement",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A server-push store settles on the backend through the host's fulfillment call; the client stays pending until the ledger has the entry and has nothing to finish.",
+  "profile": {
+    "store": "fixture.server-push",
+    "purchase": {
+      "consumable": true,
+      "durable": false,
+      "subscription": false,
+      "quantity": false
+    },
+    "lifecycle": {
+      "availablePurchases": false,
+      "pending": true,
+      "restore": false,
+      "events": true,
+      "finish": "none"
+    },
+    "authority": {
+      "evidence": "server-push",
+      "accountBinding": "host"
+    }
+  },
+  "catalog": [
+    {
+      "logicalId": "gems_small",
+      "kind": "consumable",
+      "storeSku": "gems.small"
+    }
+  ],
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "queueVerify",
+      "decision": {
+        "status": "pending"
+      }
+    },
+    {
+      "actor": "game",
+      "action": "requestPurchase",
+      "input": {
+        "logicalId": "gems_small",
+        "idempotencyKey": "op-1"
+      },
+      "returns": {
+        "outcome": "launched"
+      }
+    },
+    {
+      "actor": "store",
+      "action": "complete",
+      "purchase": {
+        "transactionId": "order-1",
+        "storeSku": "gems.small",
+        "token": "order-1",
+        "state": "purchased"
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "push",
+      "transactionId": "order-1",
+      "entryId": "le-1",
+      "logicalId": "gems_small"
+    },
+    {
+      "actor": "backend",
+      "action": "queueVerify",
+      "decision": {
+        "status": "granted",
+        "ledgerEntryId": "le-1"
+      }
+    },
+    {
+      "actor": "runtime",
+      "action": "reconcile"
+    }
+  ],
+  "expect": {
+    "journal": {
+      "op-1": [
+        "requested",
+        "launched",
+        "purchased",
+        "verifying",
+        "pending",
+        "verifying",
+        "granted",
+        "finished"
+      ]
+    },
+    "verifyRequests": [
+      {
+        "idempotencyKey": "op-1",
+        "store": "fixture.server-push",
+        "transactionId": "order-1",
+        "token": "order-1"
+      },
+      {
+        "idempotencyKey": "op-1",
+        "store": "fixture.server-push",
+        "transactionId": "order-1",
+        "token": "order-1"
+      }
+    ],
+    "ledger": [
+      {
+        "entryId": "le-1",
+        "type": "grant",
+        "logicalId": "gems_small"
+      }
+    ],
+    "finishCalls": [],
+    "available": []
+  }
+}

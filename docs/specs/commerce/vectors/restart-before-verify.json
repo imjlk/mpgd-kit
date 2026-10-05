@@ -1,0 +1,114 @@
+{
+  "vector": "restart-before-verify",
+  "protocol": "2.0.0-draft.1",
+  "summary": "The app stops after the store completes but before the backend grant; the next start reconciles the available purchase into the original journal record without reopening purchase UI.",
+  "profile": {
+    "store": "fixture.client-token",
+    "purchase": {
+      "consumable": true,
+      "durable": true,
+      "subscription": false,
+      "quantity": false
+    },
+    "lifecycle": {
+      "availablePurchases": true,
+      "pending": false,
+      "restore": true,
+      "events": true,
+      "finish": "client"
+    },
+    "authority": {
+      "evidence": "client-token",
+      "accountBinding": "optional"
+    }
+  },
+  "catalog": [
+    {
+      "logicalId": "gems_small",
+      "kind": "consumable",
+      "storeSku": "gems.small"
+    }
+  ],
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "game",
+      "action": "requestPurchase",
+      "input": {
+        "logicalId": "gems_small",
+        "idempotencyKey": "op-1"
+      },
+      "returns": {
+        "outcome": "launched"
+      }
+    },
+    {
+      "actor": "runtime",
+      "action": "stop"
+    },
+    {
+      "actor": "store",
+      "action": "complete",
+      "purchase": {
+        "transactionId": "tx-1",
+        "storeSku": "gems.small",
+        "token": "token-1",
+        "state": "purchased"
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "queueVerify",
+      "decision": {
+        "status": "granted",
+        "ledgerEntryId": "le-1"
+      }
+    },
+    {
+      "actor": "runtime",
+      "action": "start"
+    }
+  ],
+  "expect": {
+    "journal": {
+      "op-1": [
+        "requested",
+        "launched",
+        "purchased",
+        "verifying",
+        "granted",
+        "finishing",
+        "finished"
+      ]
+    },
+    "verifyRequests": [
+      {
+        "idempotencyKey": "op-1",
+        "store": "fixture.client-token",
+        "transactionId": "tx-1",
+        "token": "token-1"
+      }
+    ],
+    "ledger": [
+      {
+        "entryId": "le-1",
+        "type": "grant",
+        "logicalId": "gems_small"
+      }
+    ],
+    "finishCalls": [
+      {
+        "by": "client",
+        "transactionId": "tx-1",
+        "ledgerEntryId": "le-1",
+        "isConsumable": true,
+        "result": "finished"
+      }
+    ],
+    "purchaseUiOpened": 1,
+    "available": []
+  }
+}
