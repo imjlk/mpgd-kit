@@ -12,9 +12,10 @@ import type {
 
 import { isAuthoritativeMicrosoftStoreCompletion } from './authoritative-purchase.js';
 import {
-  isClientRewardEvidence,
-  resolveRewardPlatformImpressionId,
-} from './admob-client-reward.js';
+  resolveClientRewardClaim,
+  type ClientRewardEvidenceRegistry,
+} from './client-reward-evidence.js';
+import { createDefaultClientRewardEvidenceRegistry } from './default-client-reward-evidence.js';
 import type {
   GameServicesOperationClient,
   GameServicesPurchaseResult,
@@ -205,6 +206,8 @@ export interface CreateGameServicesClientInput {
   readonly now?: () => string;
   /** Override backend evidence timestamps without backdating analytics events. */
   readonly requestNow?: () => string;
+  /** Explicit client decoders only; server verification is configured independently. */
+  readonly rewardEvidenceRegistry?: ClientRewardEvidenceRegistry;
 }
 
 export interface GameServicesLeaderboardInput extends LeaderboardScoreInput {}
@@ -220,6 +223,8 @@ export interface GameServicesLeaderboardResult {
 export function createGameServicesClient(input: CreateGameServicesClientInput): GameServicesClient {
   const now = input.now ?? (() => new Date().toISOString());
   const requestNow = input.requestNow ?? now;
+  const rewardEvidenceRegistry = input.rewardEvidenceRegistry ?? createDefaultClientRewardEvidenceRegistry();
+  const allowLegacyRewardCompletion = input.rewardEvidenceRegistry === undefined && input.gateway.ads?.provider === undefined;
   const analytics = createAnalyticsReporter({
     target: input.target,
     sessionId: input.analyticsSessionId ?? input.playerId,
@@ -385,8 +390,10 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
         const reward = await input.gateway.ads.showRewarded(rewardInput);
         progress.platformResult(reward.status);
 
-        if ((reward.status !== 'completed' || !reward.rewardGranted)
-          && !isClientRewardEvidence(reward)) {
+        const candidate = resolveClientRewardClaim(reward, rewardEvidenceRegistry, {
+          allowLegacyCompletion: allowLegacyRewardCompletion,
+        });
+        if (candidate === undefined) {
           await analytics.track({
             name: reward.status === 'pending' ? 'rewarded_ad_pending' : 'rewarded_ad_rejected',
             properties: {
@@ -402,7 +409,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
           };
         }
 
-        const platformImpressionId = resolveRewardPlatformImpressionId(reward);
+        const platformImpressionId = candidate.platformImpressionId;
         const claimRequest: ClaimAdRewardRequest = {
           target,
           ...(input.deploymentTarget === undefined || input.deploymentTarget === target
@@ -415,7 +422,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
             : { platformImpressionId }),
           idempotencyKey: rewardInput.idempotencyKey,
           completedAt: requestNow(),
-          ...(reward.evidence === undefined ? {} : { evidence: reward.evidence }),
+          ...(candidate.evidence === undefined ? {} : { evidence: candidate.evidence }),
         };
         progress.serverRequested();
         const claim = await input.backend.adRewards.claimAdReward(claimRequest);
