@@ -112,6 +112,12 @@ importers:
       '@apps-in-toss/web-framework':
         specifier: 3.5.0
         version: 3.5.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
+      '@mpgd/game-runtime':
+        specifier: workspace:*
+        version: link:../../packages/game-runtime
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
       ttsc:
         specifier: 0.30.4
         version: 0.30.4
@@ -120,7 +126,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: ^4.0.0
-        version: 4.1.9(@opentelemetry/api@1.9.0)(@types/node@24.13.2)(jsdom@24.1.0)(vite@8.1.3(@types/node@25.9.8)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
+        version: 4.1.9(@opentelemetry/api@1.9.0)(@types/node@24.13.3)(jsdom@24.1.0)(vite@8.1.3(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   adapters/browser:
     dependencies:

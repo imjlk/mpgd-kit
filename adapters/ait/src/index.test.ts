@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge';
+import { adProtocol, adProtocolVersion } from '@mpgd/platform/ads';
 
 import { createAitPlatformGateway, createAitSandboxBridge, type GamePlatformBridge } from './index';
 
@@ -42,6 +43,22 @@ describe('adapter-ait', () => {
         buildId: 'build-ait',
       },
     });
+  });
+
+  it('rejects advertising responses bound to another request or invocation', async () => {
+    for (const mismatch of ['request', 'invocation', 'provider'] as const) {
+      const bridge: GamePlatformBridge = {
+        advertising: { id: 'apps-in-toss-ads', protocol: adProtocol, protocolVersion: adProtocolVersion, rewardSignal: 'delayed', subscribe: () => () => {} },
+        async request(input) {
+          return { id: mismatch === 'request' ? 'another-request' : input.id, ok: true, data: {
+            providerId: mismatch === 'provider' ? 'another-provider' : 'apps-in-toss-ads',
+            invocationId: mismatch === 'invocation' ? 'another-invocation' : 'original', format: 'rewarded', outcome: 'shown', presentation: 'closed', eligibility: 'unknown',
+          } };
+        },
+      };
+      const gateway = createAitPlatformGateway({ appVersion: 'test', buildId: 'test', bridge });
+      await expect(gateway.ads.provider?.show({ placementId: 'CONTINUE', format: 'rewarded', invocationId: 'original', idempotencyKey: 'claim' })).rejects.toThrow(mismatch === 'request' ? 'another bridge request' : 'another invocation');
+    }
   });
 
   it('preserves bridge error codes and retry hints', async () => {

@@ -78,6 +78,8 @@
     }
   },
   "devDependencies": {
+    "@mpgd/game-runtime": "workspace:*",
+    "@types/node": "^24.0.0",
     "@apps-in-toss/web-framework": "3.5.0",
     "ttsc": "0.30.4",
     "typescript": "7.0.2",

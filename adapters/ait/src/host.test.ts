@@ -2234,7 +2234,7 @@ describe('AIT production host bridge', () => {
     }
   });
 
-  it('grants a configured rewarded ad only after userEarnedReward and dismissal', async () => {
+  it('returns ungranted candidate evidence after userEarnedReward and dismissal', async () => {
     let loadCallbacks: LoadAdCallbacks | undefined;
     let showCallbacks: ShowAdCallbacks | undefined;
     let markShowRegistered = (): void => {};
@@ -2281,8 +2281,7 @@ describe('AIT production host bridge', () => {
 
     await expect(reward).resolves.toEqual({
       status: 'completed',
-      rewardGranted: true,
-      ledgerEntryId: 'reward-correlation-1',
+      rewardGranted: false,
       evidence: {
         schema: 'apps-in-toss.rewarded-ad.callback.v1',
         payload: {
@@ -2361,8 +2360,7 @@ describe('AIT production host bridge', () => {
       showCallbacks[index]?.onEvent({ type: 'dismissed' });
       await expect(reward).resolves.toEqual({
         status: 'completed',
-        rewardGranted: true,
-        ledgerEntryId: expectedCorrelationId,
+        rewardGranted: false,
         evidence: {
           schema: 'apps-in-toss.rewarded-ad.callback.v1',
           payload: {
@@ -2429,8 +2427,7 @@ describe('AIT production host bridge', () => {
 
       await expect(reward).resolves.toMatchObject({
         status: 'completed',
-        rewardGranted: true,
-        ledgerEntryId: 'reward-long-display',
+        rewardGranted: false,
       });
     } finally {
       vi.useRealTimers();
@@ -2490,7 +2487,7 @@ describe('AIT production host bridge', () => {
     }
   });
 
-  it('recovers a rewarded ad when the native terminal callback is omitted', async () => {
+  it('retains unknown presentation until a late native dismissal', async () => {
     vi.useFakeTimers();
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
@@ -2543,14 +2540,11 @@ describe('AIT production host bridge', () => {
       await vi.advanceTimersByTimeAsync(100);
 
       await expect(reward).resolves.toMatchObject({
-        status: 'completed',
-        rewardGranted: true,
-        ledgerEntryId: 'reward-missing-dismissal',
+        status: 'pending',
+        rewardGranted: false,
       });
-      expect(warning).toHaveBeenCalledWith(
-        'AIT full-screen ad omitted its terminal callback; recovering the game lifecycle.',
-        'ait-ad-group-1',
-      );
+      expect(warning).not.toHaveBeenCalled();
+      showCallbacks?.onEvent({ type: 'dismissed' });
     } finally {
       warning.mockRestore();
       vi.useRealTimers();
@@ -2605,7 +2599,8 @@ describe('AIT production host bridge', () => {
       showCallbacks?.onEvent({ type: 'requested' });
       await vi.advanceTimersByTimeAsync(10);
 
-      await expect(reward).resolves.toEqual({ status: 'failed', rewardGranted: false });
+      await expect(reward).resolves.toEqual({ status: 'pending', rewardGranted: false });
+      showCallbacks?.onEvent({ type: 'failedToShow' });
     } finally {
       vi.useRealTimers();
     }
@@ -2785,12 +2780,11 @@ describe('AIT production host bridge', () => {
 
     await expect(reward).resolves.toMatchObject({
       status: 'completed',
-      rewardGranted: true,
-      ledgerEntryId: 'reward-direct-show',
+      rewardGranted: false,
     });
   });
 
-  it('logs one diagnostic when concurrent shows share a failed ad load', async () => {
+  it('rejects overlapping shows and reports the first native load failure', async () => {
     let loadCallbacks: LoadAdCallbacks | undefined;
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
@@ -2823,14 +2817,14 @@ describe('AIT production host bridge', () => {
       loadCallbacks?.onError(new Error('native load failed'));
 
       await expect(firstShow).resolves.toEqual({
-        status: 'unavailable',
+        status: 'failed',
         rewardGranted: false,
       });
       await expect(secondShow).resolves.toEqual({
         status: 'unavailable',
         rewardGranted: false,
       });
-      expect(warning).toHaveBeenCalledTimes(1);
+      expect(warning).not.toHaveBeenCalled();
     } finally {
       warning.mockRestore();
     }
@@ -2875,7 +2869,7 @@ describe('AIT production host bridge', () => {
     await showRegistered;
     showCallbacks?.onEvent({ type: 'dismissed' });
 
-    await expect(reward).resolves.toEqual({ status: 'skipped', rewardGranted: false });
+    await expect(reward).resolves.toEqual({ status: 'pending', rewardGranted: false });
   });
 
   it('consumes a preloaded ad before awaiting the native show result', async () => {
@@ -2928,7 +2922,7 @@ describe('AIT production host bridge', () => {
     showCallbacks?.onEvent({ type: 'dismissed' });
     await expect(firstShow).resolves.toMatchObject({
       status: 'completed',
-      rewardGranted: true,
+      rewardGranted: false,
     });
     expect(showCount).toBe(1);
   });
