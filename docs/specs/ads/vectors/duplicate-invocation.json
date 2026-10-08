@@ -1,0 +1,56 @@
+{
+  "vector": "duplicate-invocation",
+  "protocol": "2.0.0-draft.1",
+  "profile": {
+    "formats": [
+      "rewarded",
+      "interstitial"
+    ],
+    "configured": true,
+    "rewardSignal": "immediate"
+  },
+  "steps": [
+    {
+      "actor": "game",
+      "action": "start",
+      "invocationId": "a",
+      "format": "rewarded",
+      "placementId": "CONTINUE"
+    },
+    {
+      "actor": "game",
+      "action": "start",
+      "invocationId": "a",
+      "format": "rewarded",
+      "placementId": "CONTINUE"
+    },
+    {
+      "actor": "sdk",
+      "action": "started",
+      "invocationId": "a"
+    },
+    {
+      "actor": "sdk",
+      "action": "rewardEarned",
+      "invocationId": "a"
+    },
+    {
+      "actor": "sdk",
+      "action": "closed",
+      "invocationId": "a"
+    },
+    {
+      "actor": "backend",
+      "action": "grant",
+      "invocationId": "a",
+      "verifiedImpressionId": "impression-a",
+      "ledgerEntryId": "ledger-a"
+    }
+  ],
+  "expect": {
+    "sdkShows": 1,
+    "claimRequests": 1,
+    "ledgerGrants": 1,
+    "occupied": false
+  }
+}

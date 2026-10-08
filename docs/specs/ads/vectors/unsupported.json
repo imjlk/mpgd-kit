@@ -1,0 +1,27 @@
+{
+  "vector": "unsupported",
+  "protocol": "2.0.0-draft.1",
+  "profile": {
+    "formats": [],
+    "configured": true,
+    "rewardSignal": "immediate"
+  },
+  "steps": [
+    {
+      "actor": "game",
+      "action": "start",
+      "invocationId": "a",
+      "format": "rewarded",
+      "placementId": "CONTINUE"
+    }
+  ],
+  "expect": {
+    "sdkShows": 0,
+    "outcomes": {
+      "a": "unavailable"
+    },
+    "reason": "unsupported",
+    "occupied": false,
+    "ledgerGrants": 0
+  }
+}

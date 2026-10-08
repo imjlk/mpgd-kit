@@ -1,0 +1,50 @@
+{
+  "vector": "full-screen-arbitration",
+  "protocol": "2.0.0-draft.1",
+  "profile": {
+    "formats": [
+      "rewarded",
+      "interstitial"
+    ],
+    "configured": true,
+    "rewardSignal": "immediate"
+  },
+  "steps": [
+    {
+      "actor": "game",
+      "action": "start",
+      "invocationId": "a",
+      "format": "rewarded",
+      "placementId": "CONTINUE"
+    },
+    {
+      "actor": "sdk",
+      "action": "started",
+      "invocationId": "a"
+    },
+    {
+      "actor": "game",
+      "action": "start",
+      "invocationId": "b",
+      "format": "interstitial",
+      "placementId": "CONTINUE"
+    },
+    {
+      "actor": "game",
+      "action": "start",
+      "invocationId": "c",
+      "format": "purchase",
+      "placementId": "CONTINUE"
+    }
+  ],
+  "expect": {
+    "sdkShows": 1,
+    "purchaseUiOpened": 0,
+    "outcomes": {
+      "b": "busy",
+      "c": "busy"
+    },
+    "occupied": true,
+    "ledgerGrants": 0
+  }
+}

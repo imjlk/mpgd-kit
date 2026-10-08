@@ -1,0 +1,82 @@
+{
+  "vector": "impression-replay",
+  "protocol": "2.0.0-draft.1",
+  "profile": {
+    "formats": [
+      "rewarded",
+      "interstitial"
+    ],
+    "configured": true,
+    "rewardSignal": "immediate"
+  },
+  "steps": [
+    {
+      "actor": "game",
+      "action": "start",
+      "invocationId": "a",
+      "format": "rewarded",
+      "placementId": "CONTINUE"
+    },
+    {
+      "actor": "sdk",
+      "action": "started",
+      "invocationId": "a"
+    },
+    {
+      "actor": "sdk",
+      "action": "rewardEarned",
+      "invocationId": "a"
+    },
+    {
+      "actor": "sdk",
+      "action": "closed",
+      "invocationId": "a"
+    },
+    {
+      "actor": "backend",
+      "action": "grant",
+      "invocationId": "a",
+      "verifiedImpressionId": "shared-impression",
+      "ledgerEntryId": "ledger-shared"
+    },
+    {
+      "actor": "game",
+      "action": "start",
+      "invocationId": "b",
+      "format": "rewarded",
+      "placementId": "CONTINUE"
+    },
+    {
+      "actor": "sdk",
+      "action": "started",
+      "invocationId": "b"
+    },
+    {
+      "actor": "sdk",
+      "action": "rewardEarned",
+      "invocationId": "b"
+    },
+    {
+      "actor": "sdk",
+      "action": "closed",
+      "invocationId": "b"
+    },
+    {
+      "actor": "backend",
+      "action": "grant",
+      "invocationId": "b",
+      "verifiedImpressionId": "shared-impression",
+      "ledgerEntryId": "ledger-shared"
+    }
+  ],
+  "expect": {
+    "sdkShows": 2,
+    "claimRequests": 2,
+    "ledgerGrants": 1,
+    "claims": {
+      "a": "granted",
+      "b": "rejected"
+    },
+    "occupied": false
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "vector": "closed-pending-verification",
+  "protocol": "2.0.0-draft.1",
+  "profile": {
+    "formats": [
+      "rewarded",
+      "interstitial"
+    ],
+    "configured": true,
+    "rewardSignal": "immediate"
+  },
+  "steps": [
+    {
+      "actor": "game",
+      "action": "start",
+      "invocationId": "a",
+      "format": "rewarded",
+      "placementId": "CONTINUE"
+    },
+    {
+      "actor": "sdk",
+      "action": "started",
+      "invocationId": "a"
+    },
+    {
+      "actor": "sdk",
+      "action": "rewardEarned",
+      "invocationId": "a"
+    },
+    {
+      "actor": "sdk",
+      "action": "closed",
+      "invocationId": "a"
+    }
+  ],
+  "expect": {
+    "presentation": "closed",
+    "eligibility": "eligible",
+    "claimState": "pending",
+    "occupied": false,
+    "executionOwners": [],
+    "ledgerGrants": 0
+  }
+}
