@@ -14,8 +14,10 @@ import {
   microsoftStoreCollectionsConsumeUrl,
   microsoftStoreCollectionsQueryUrl,
   microsoftStoreDigitalGoodsEvidenceSchema,
+  type CreateMicrosoftStorePurchaseBoundaryInput,
   type MicrosoftStoreCollectionsClient,
   type MicrosoftStoreCollectionsCredentials,
+  type MicrosoftStoreConsumptionReceipt,
   type MicrosoftStoreRecoveryOwnershipStore,
 } from './microsoft-store-purchase';
 
@@ -123,6 +125,7 @@ class FixtureCollectionsClient implements MicrosoftStoreCollectionsClient {
     }
     return {
       itemId: collectionItemId,
+      productId: input.storeId,
       transactionId: 'consume-transaction-id',
       trackingId: input.trackingId,
       newQuantity: 0,
@@ -164,6 +167,8 @@ function createHarness(input: {
     signal: AbortSignal,
   ) => Promise<MicrosoftStoreCollectionsCredentials> | MicrosoftStoreCollectionsCredentials;
   readonly recoveryOwnershipStore?: MicrosoftStoreRecoveryOwnershipStore;
+  readonly persistConsumptionReceipt?: CreateMicrosoftStorePurchaseBoundaryInput['persistConsumptionReceipt'];
+  readonly onRelease?: () => void;
 } = {}) {
   const events = input.events ?? [];
   const client = new FixtureCollectionsClient(events);
@@ -174,6 +179,7 @@ function createHarness(input: {
         ?? inAppOfferToken,
     },
     storeIds: input.storeIds ?? { HINT_PACK_20: storeId },
+    ...(input.persistConsumptionReceipt === undefined ? {} : { persistConsumptionReceipt: input.persistConsumptionReceipt }),
     ...(input.historicalProductMappings === undefined
       ? {}
       : { historicalProductMappings: input.historicalProductMappings }),
@@ -193,7 +199,7 @@ function createHarness(input: {
             `microsoft-store:${ownership.storeId}:${collectionItemId}:${modifiedDate}`,
         };
       },
-      async release() {},
+      async release() { input.onRelease?.(); },
     },
     now: () => '2030-01-02T03:04:06.000Z',
   });
@@ -1068,5 +1074,160 @@ assert.equal(
 );
 assert.equal(requests[1]?.body.skuId, undefined);
 assert.equal(requests[1]?.body.removeQuantity, undefined);
+
+assert.equal(requests[1]?.body.includeOrderIds, true);
+
+const orderTransaction = {
+  orderId: '8060A406-85C8-4D01-A105-FF11725499C9',
+  orderLineItemId: 'CB054AA0-7392-4CC6-AF06-53B285E39259',
+  quantityConsumed: 1,
+};
+function receiptResponse(trackingId: string, orderTransactions: unknown = [orderTransaction]) {
+  return {
+    productId: storeId,
+    itemId: collectionItemId,
+    trackingId,
+    newQuantity: 0,
+    orderTransactions,
+  };
+}
+
+// A durable write (including retry lookup) must finish before ownership is released.
+const receiptEvents: string[] = [];
+let durableReceipt: MicrosoftStoreConsumptionReceipt | undefined;
+let loseReceiptAcknowledgment = true;
+const receiptHarness = createHarness({
+  events: receiptEvents,
+  onRelease: () => {
+    receiptEvents.push('ownership:release');
+  },
+  async persistConsumptionReceipt(receipt, signal) {
+    assert.equal(signal.aborted, false);
+    assert.equal(Object.isFrozen(receipt), true);
+    assert.equal(Object.isFrozen(receipt.orderTransactions), true);
+    if (receipt.orderTransactions.length) {
+      assert.equal(Object.isFrozen(receipt.orderTransactions[0]), true);
+      durableReceipt = receipt;
+      receiptEvents.push('receipt:write');
+    } else {
+      if (!durableReceipt) {
+        throw new Error('Original consume order IDs are unavailable.');
+      }
+      assert.deepEqual(
+        { ...receipt, orderTransactions: durableReceipt.orderTransactions },
+        durableReceipt,
+      );
+      receiptEvents.push('receipt:recover');
+    }
+    if (loseReceiptAcknowledgment) {
+      loseReceiptAcknowledgment = false;
+      throw new Error('Persisted, but the response was lost.');
+    }
+  },
+});
+let receiptConsumeCalls = 0;
+receiptHarness.client.consumeProduct = async ({ trackingId }) => {
+  receiptHarness.client.consumeTrackingIds.push(trackingId);
+  receiptConsumeCalls += 1;
+  return receiptResponse(trackingId, receiptConsumeCalls === 1 ? [orderTransaction] : []);
+};
+const receiptRequest = createRequest({ idempotencyKey: 'receipt-recovery' });
+const receiptPending = await receiptHarness.backend.purchases.verifyPurchase(receiptRequest);
+assert.equal(receiptPending.finalization?.status, 'pending');
+assert.equal(
+  receiptPending.finalization?.reason,
+  'MICROSOFT_STORE_CONSUMPTION_RECEIPT_UNAVAILABLE',
+);
+assert.equal(receiptEvents.includes('ownership:release'), false);
+if (!durableReceipt) {
+  throw new Error('Expected a persisted receipt.');
+}
+assert.deepEqual(Object.keys(durableReceipt).sort(), [
+  'evidenceVerificationId', 'playerId', 'productId', 'storeId', 'collectionItemId', 'trackingId', 'orderTransactions',
+].sort());
+assert.equal(durableReceipt.playerId, receiptRequest.playerId);
+assert.equal(durableReceipt.productId, receiptRequest.productId);
+assert.equal(durableReceipt.storeId, storeId);
+assert.equal(durableReceipt.collectionItemId, collectionItemId);
+assert.deepEqual(durableReceipt.orderTransactions, [
+  {
+    orderId: orderTransaction.orderId.toLowerCase(),
+    orderLineItemId: orderTransaction.orderLineItemId.toLowerCase(),
+    quantityConsumed: 1,
+  },
+]);
+const receiptRecovered = await receiptHarness.backend.purchases.verifyPurchase(receiptRequest);
+assert.equal(receiptRecovered.finalization?.status, 'completed');
+assert.deepEqual(receiptEvents, [
+  `provider:query:${storeId}`,
+  'ledger:receipt-recovery',
+  'receipt:write',
+  'receipt:recover',
+  'ownership:release',
+]);
+assert.equal(new Set(receiptHarness.client.consumeTrackingIds).size, 1);
+
+// If the original response never reached durable storage, missing retry IDs must
+// remain pending. They cannot be synthesized from any other purchase identifier.
+let missingReceiptCalls = 0;
+let missingReceiptReleases = 0;
+const missingReceiptHarness = createHarness({
+  onRelease: () => {
+    missingReceiptReleases += 1;
+  },
+  async persistConsumptionReceipt(receipt) {
+    missingReceiptCalls += 1;
+    assert.equal(receipt.orderTransactions.length, 0);
+    throw new Error('No matching durable receipt.');
+  },
+});
+const missingReceiptRequest = createRequest({ idempotencyKey: 'receipt-missing' });
+for (let attempt = 0; attempt < 2; attempt += 1) {
+  const result = await missingReceiptHarness.backend.purchases.verifyPurchase(
+    missingReceiptRequest,
+  );
+  assert.equal(result.finalization?.reason, 'MICROSOFT_STORE_CONSUMPTION_RECEIPT_UNAVAILABLE');
+}
+assert.equal(missingReceiptCalls, 2);
+assert.equal(missingReceiptReleases, 0);
+
+const invalidOrders = [
+  null,
+  {},
+  [null],
+  [{ ...orderTransaction, orderId: 'client-token' }],
+  [{ ...orderTransaction, orderLineItemId: '' }],
+  [{ ...orderTransaction, quantityConsumed: 0 }],
+  [{ ...orderTransaction, quantityConsumed: 2 }],
+  [{ ...orderTransaction, quantityConsumed: 0.5 }],
+  [orderTransaction, orderTransaction],
+];
+for (const invalidOrder of invalidOrders) {
+  let writes = 0;
+  let releases = 0;
+  const invalidReceiptHarness = createHarness({
+    async persistConsumptionReceipt() {
+      writes += 1;
+    },
+    onRelease: () => {
+      releases += 1;
+    },
+  });
+  invalidReceiptHarness.client.consumeProduct = async ({ trackingId }) => receiptResponse(trackingId, invalidOrder);
+  const result = await invalidReceiptHarness.backend.purchases.verifyPurchase(createRequest());
+  assert.equal(result.finalization?.reason, 'MICROSOFT_STORE_CONSUMPTION_RECEIPT_INVALID');
+  assert.equal(writes, 0);
+  assert.equal(releases, 0);
+}
+const wrongReceiptProduct = createHarness({
+  async persistConsumptionReceipt() {
+    throw new Error('Must not be called.');
+  },
+});
+wrongReceiptProduct.client.consumeProduct = async ({ trackingId }) => ({ ...receiptResponse(trackingId), productId: 'DIFFERENT-ID' });
+assert.equal(
+  (await wrongReceiptProduct.backend.purchases.verifyPurchase(createRequest())).finalization?.reason,
+  'MICROSOFT_STORE_CONSUMPTION_RECEIPT_INVALID',
+);
 
 console.log('Microsoft Store purchase boundary tests passed.');

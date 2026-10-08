@@ -144,6 +144,45 @@ XSTS authentication supplied by the game service.
 
 ## Game-owned setup
 
+### Persisting consume receipts for refund reconciliation
+
+Pass `persistConsumptionReceipt` to `createMicrosoftStorePurchaseBoundary()` to
+retain provider order attribution before recovery ownership is released. The
+optional server hook receives a frozen `MicrosoftStoreConsumptionReceipt` with
+the authenticated player, logical product, historical Store product ID,
+Collections item ID, deterministic tracking ID, evidence verification ID, and
+validated order transactions. It receives no Store credentials. Existing
+integrations without this hook retain their previous finalization behavior;
+they do not thereby acquire refund reconciliation support.
+
+The hook must durably and idempotently persist the receipt before resolving.
+The entitlement ledger write precedes consume; this hook gates finalization,
+not the original grant, and is not an atomic transaction with Microsoft.
+Use evidence verification ID/tracking ID to reject conflicting retries and
+index order ID, line item ID **and product ID** for later provider events. This
+boundary supports quantity-one developer-managed consumables; nonempty order
+data must describe exactly that quantity. Malformed IDs, quantities or a
+mismatched response product keep finalization pending without invoking the
+hook. Storage failures keep ownership unreleased and finalization pending with
+`MICROSOFT_STORE_CONSUMPTION_RECEIPT_UNAVAILABLE`.
+
+Microsoft's [Consume API](https://learn.microsoft.com/en-us/gaming/gdk/docs/store/commerce/service-to-service/microsoft-store-apis/xstore-v8-consume)
+does not replay order IDs for developer-managed consumables. The hook therefore
+receives an empty `orderTransactions` array when IDs are omitted on retry.
+Resolve only after finding the exact previously persisted attribution; throw
+if absent. If the first response was lost before storage, this hook cannot
+recover the missing IDs. Keep the purchase visible for trusted reconciliation;
+never synthesize order IDs from client evidence or silently complete it.
+
+This hook does not subscribe to or authorize refund events. Integrators must
+separately configure Microsoft's [Clawback queue](https://learn.microsoft.com/en-us/gaming/gdk/docs/store/commerce/service-to-service/xstore-managing-refunds-and-chargebacks),
+persist authenticated event delivery, and implement state-aware reconciliation
+including chargeback reversal. For consumables, `Refunded` permits retention;
+it must not be treated as `Revoked`. Do not delete queue messages before durable
+processing succeeds. See also Microsoft's [transaction tracking guidance](https://learn.microsoft.com/en-us/gaming/gdk/docs/store/commerce/service-to-service/xstore-managing-consumables-and-refunds).
+
+### Required configuration
+
 Generated and initialized Store targets start with `commerce.mode: "disabled"`
 and `authoritativeGameServices: false`, so their effective target disables IAP
 and every product. After the requirements below are configured, switch the
