@@ -40,6 +40,8 @@ export interface AdShowResult {
   readonly reason?: AdReason;
   /** A callback is a claim candidate only; no ledger grant belongs here. */
   readonly evidence?: PlatformEvidenceEnvelope;
+  /** Server proof-lookup correlation; it does not establish local reward eligibility. */
+  readonly claimEvidence?: PlatformEvidenceEnvelope;
 }
 
 export type AdPresentationEvent = Readonly<{
@@ -47,7 +49,8 @@ export type AdPresentationEvent = Readonly<{
   invocationId: string;
   sequence: number;
 } & (
-  | { type: 'requested' | 'started' | 'closed' | 'unknown' }
+  | { type: 'requested'; claimEvidence?: PlatformEvidenceEnvelope }
+  | { type: 'started' | 'closed' | 'unknown' }
   | { type: 'reward-earned'; evidence: PlatformEvidenceEnvelope }
   | { type: 'failed'; reason: AdReason }
 )>;
@@ -77,6 +80,7 @@ export interface AdSessionSnapshot {
   readonly terminal: boolean;
   readonly reason?: AdReason;
   readonly evidence?: PlatformEvidenceEnvelope;
+  readonly claimEvidence?: PlatformEvidenceEnvelope;
 }
 
 export function createAdSession(input: {
@@ -130,7 +134,8 @@ export function reduceAdSession(
   }
   switch (event.type) {
     case 'requested':
-      return Object.freeze(next);
+      return Object.freeze({ ...next, ...(snapshot.format !== 'rewarded' || event.claimEvidence === undefined
+        ? {} : { claimEvidence: snapshot.claimEvidence ?? event.claimEvidence }) });
     case 'started':
       return Object.freeze({ ...next, presentation: 'open', started: true });
     case 'reward-earned':
@@ -141,7 +146,7 @@ export function reduceAdSession(
     case 'unknown':
       return Object.freeze({ ...next, presentation: 'unknown', reason: 'outcome-unknown' });
     case 'closed': {
-      const { reason: previousReason, ...closed } = next;
+      const { reason: previousReason, claimEvidence, ...closed } = next;
       let eligibility = snapshot.eligibility;
       if (snapshot.format === 'interstitial') {
         eligibility = 'not-applicable';
@@ -154,15 +159,20 @@ export function reduceAdSession(
         terminal: true,
         ...(previousReason === undefined || previousReason === 'outcome-unknown' ? {} : { reason: previousReason }),
         eligibility,
+        ...(claimEvidence === undefined || eligibility === 'not-earned' || eligibility === 'not-applicable'
+          ? {} : { claimEvidence }),
       });
     }
-    case 'failed':
+    case 'failed': {
+      const { claimEvidence, ...failed } = next;
       return Object.freeze({
-        ...next,
+        ...failed,
         presentation: snapshot.started ? 'closed' : 'not-started',
         terminal: true,
         reason: event.reason,
+        ...(snapshot.started && claimEvidence !== undefined ? { claimEvidence } : {}),
       });
+    }
   }
 }
 
@@ -230,6 +240,8 @@ export function assertAdPresentationEvent(value: unknown): AdPresentationEvent {
   };
   switch (record.type) {
     case 'requested':
+      return Object.freeze({ ...base, type: 'requested', ...(record.claimEvidence === undefined
+        ? {} : { claimEvidence: assertEvidence(record.claimEvidence) }) });
     case 'started':
     case 'closed':
     case 'unknown':
@@ -273,6 +285,11 @@ export function assertAdShowResult(value: unknown): AdShowResult {
     || (record.evidence !== undefined && record.eligibility !== 'eligible')) {
     throw new TypeError('Inconsistent ad result state.');
   }
+  if (record.claimEvidence !== undefined && (record.format !== 'rewarded'
+    || record.presentation === 'not-started'
+    || record.eligibility === 'not-earned' || record.eligibility === 'not-applicable')) {
+    throw new TypeError('Inconsistent ad claim candidate state.');
+  }
   return Object.freeze({
     providerId: record.providerId,
     invocationId: record.invocationId,
@@ -282,6 +299,7 @@ export function assertAdShowResult(value: unknown): AdShowResult {
     eligibility: record.eligibility as AdRewardEligibility,
     ...(record.reason === undefined ? {} : { reason: record.reason }),
     ...(record.evidence === undefined ? {} : { evidence: assertEvidence(record.evidence) }),
+    ...(record.claimEvidence === undefined ? {} : { claimEvidence: assertEvidence(record.claimEvidence) }),
   });
 }
 
@@ -324,7 +342,8 @@ export function toAdAdapter(provider: AdProvider): AdAdapter {
       } else {
         status = result.outcome;
       }
-      return { status, rewardGranted: false, ...(result.evidence === undefined ? {} : { evidence: result.evidence }) };
+      const evidence = result.claimEvidence ?? result.evidence;
+      return { status, rewardGranted: false, ...(evidence === undefined ? {} : { evidence }) };
     },
     async showInterstitial(input) {
       const invocationId = `legacy-interstitial:${interstitialSessionId}:${++legacyInterstitialSequence}`;

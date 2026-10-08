@@ -28,6 +28,14 @@
     "./phaser": {
       "types": "./dist/phaser/index.d.ts",
       "default": "./dist/phaser/index.js"
+    },
+    "./presentation": {
+      "types": "./dist/presentation/index.d.ts",
+      "default": "./dist/presentation/index.js"
+    },
+    "./ads": {
+      "types": "./dist/ads/index.d.ts",
+      "default": "./dist/ads/index.js"
     }
   },
   "files": [
@@ -50,7 +58,8 @@
     "@types/node": "^24.0.0"
   },
   "dependencies": {
-    "@mpgd/game-services": "workspace:*"
+    "@mpgd/game-services": "workspace:*",
+    "@mpgd/platform": "workspace:*"
   },
   "repository": {
     "type": "git",

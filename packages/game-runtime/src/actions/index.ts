@@ -10,6 +10,7 @@ import type {
 
 import type { ExecutionBlock, GameExecutionController } from '../index.js';
 import { observe, type ObserverErrorHandler } from '../observers.js';
+import type { FullScreenPresentationScope } from '../presentation/index.js';
 import {
   createGameUiBridge,
   type GameUiBridge,
@@ -130,12 +131,19 @@ const purchaseSources: Readonly<Record<GameServicesPurchaseInput['source'], true
 export function createGameActionCoordinator(options: {
   readonly execution: GameExecutionController;
   readonly client: Pick<GameServicesOperationClient, 'purchase' | 'claimRewardedAd'>;
+  /** Use only with a client backed by createCoordinatedPlatformGateway sharing this scope/execution. */
+  readonly presentation?: FullScreenPresentationScope;
   /** Never evicts keys: once full, new keys are rejected until application teardown. Default 1024. */
   readonly maxRememberedKeys?: number;
   readonly reconciliation?: GameActionReconciliationPort;
   readonly onObserverError?: ObserverErrorHandler;
 }): GameActionCoordinator {
   const { execution, client, onObserverError } = options;
+  if (options.presentation !== undefined && options.presentation.execution !== execution) {
+    throw new TypeError(
+      'Action and presentation coordination must share one execution controller.',
+    );
+  }
   const capacity = options.maxRememberedKeys ?? 1024;
   const recoveryPlayerId = options.reconciliation?.playerId;
   const recoveryPort = options.reconciliation;
@@ -155,7 +163,8 @@ export function createGameActionCoordinator(options: {
   let recoveryFlight: Promise<GameActionReconciliationResult> | undefined;
 
   function isDisposed(): boolean {
-    return disposed || execution.getSnapshot().status === 'destroyed';
+    return disposed || execution.getSnapshot().status === 'destroyed'
+      || options.presentation?.getSnapshot().status === 'disposed';
   }
 
   function reserve<K extends GameActionKind>(kind: K, supplied: Inputs[K], canStart: () => boolean): Flight<K> {
@@ -198,6 +207,9 @@ export function createGameActionCoordinator(options: {
       throw new GameActionExecutionError('reconciliation-required');
     }
     if (current !== undefined) {
+      throw new GameActionExecutionError('busy');
+    }
+    if (options.presentation?.getSnapshot().owner !== undefined) {
       throw new GameActionExecutionError('busy');
     }
     if (history.size >= capacity) {
@@ -292,7 +304,9 @@ export function createGameActionCoordinator(options: {
             if (isDisposed() || !canStart()) {
               throw new GameActionExecutionError('disposed');
             }
-            block = execution.acquireBlock({ reason: `action:${kind}`, channels: ['simulation', 'gameplay-input'] });
+            if (options.presentation === undefined) {
+              block = execution.acquireBlock({ reason: `action:${kind}`, channels: ['simulation', 'gameplay-input'] });
+            }
             if (isDisposed() || !canStart()) {
               throw new GameActionExecutionError('disposed');
             }
@@ -491,6 +505,9 @@ export function createGameActionCoordinator(options: {
         return 'disposed';
       }
       if (current !== undefined) {
+        return 'busy';
+      }
+      if (options.presentation?.getSnapshot().owner !== undefined) {
         return 'busy';
       }
       if (unconfirmed !== undefined) {

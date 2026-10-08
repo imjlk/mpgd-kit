@@ -60,6 +60,20 @@ function provider(show: (input: AdShowInput) => Promise<AdShowResult>): AdProvid
 }
 
 describe('advertising session contract', () => {
+  it('retains server lookup correlation without inventing eligibility and drops it for unearned closes', () => {
+    const payload = { impressionId: 'lookup' };
+    const candidate = assertAdPresentationEvent({ ...event('requested', 1), claimEvidence: { schema: evidence.schema, payload } });
+    payload.impressionId = 'mutated';
+    const initial = createAdSession({ providerId: 'fixture-provider', invocationId: 'a', format: 'rewarded' });
+    const requested = reduceAdSession(initial, candidate);
+    expect(requested).toMatchObject({ eligibility: 'unknown', claimEvidence: { payload: { impressionId: 'lookup' } } });
+    expect(requested).not.toHaveProperty('evidence');
+    expect(reduceAdSession(requested, event('closed', 2))).not.toHaveProperty('claimEvidence');
+    expect(reduceAdSession(requested, event('failed', 2))).not.toHaveProperty('claimEvidence');
+    const interstitial = createAdSession({ providerId: 'fixture-provider', invocationId: 'a', format: 'interstitial' });
+    expect(reduceAdSession(interstitial, candidate)).not.toHaveProperty('claimEvidence');
+    expect(() => assertAdPresentationEvent({ ...event('requested', 1), claimEvidence: { schema: evidence.schema, payload: { amount: Infinity } } })).toThrow();
+  });
   it('keeps earning evidence independent of native closure and any ledger grant', () => {
     const initial = createAdSession({ providerId: 'fixture-provider', invocationId: 'a', format: 'rewarded' });
     const started = reduceAdSession(initial, event('started', 1));
@@ -170,6 +184,12 @@ describe('advertising session contract', () => {
 });
 
 describe('legacy advertising compatibility', () => {
+  it('forwards an uncertain server lookup candidate without reporting an SDK reward or ledger grant', async () => {
+    const { evidence: _evidence, ...base } = result();
+    const adapter = toAdAdapter(provider(async () => ({ ...base, outcome: 'pending', presentation: 'unknown', reason: 'outcome-unknown', eligibility: 'unknown', claimEvidence: evidence })));
+    expect(await adapter.showRewarded({ placementId: 'CONTINUE', idempotencyKey: 'a' })).toEqual({ status: 'pending', rewardGranted: false, evidence });
+    expect(() => assertAdShowResult({ ...base, eligibility: 'not-earned', claimEvidence: evidence })).toThrow();
+  });
   it('forwards eligibility as an ungranted claim candidate', async () => {
     const show = vi.fn(async (input: AdShowInput) => result({ invocationId: input.invocationId }));
     const gateway = toAdAdapter(provider(show));

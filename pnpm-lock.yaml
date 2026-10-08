@@ -826,6 +826,9 @@ importers:
       '@mpgd/game-services':
         specifier: workspace:*
         version: link:../game-services
+      '@mpgd/platform':
+        specifier: workspace:*
+        version: link:../platform
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
