@@ -4,6 +4,52 @@ Client, contract, backend, and store helpers for authoritative game services.
 See [backend integration](../../docs/GAME_SERVICES_BACKEND.md) for the existing
 verification and ledger boundaries.
 
+## Registered rewarded-ad evidence
+
+`createGameServicesClient`, `createRecoverableMonetizationClient`, and
+`createGameServicesRuntime` accept `rewardEvidenceRegistry`. Create one with
+`createClientRewardEvidenceRegistry` from
+`@mpgd/game-services/client-reward-evidence`, or extend the default AdMob,
+Verse8, and Apps in Toss decoders with
+`createDefaultClientRewardEvidenceRegistry` from
+`@mpgd/game-services/default-client-reward-evidence`.
+
+Each explicit registration has a unique `schema` and a `normalize(reward)`
+function returning `{ platformImpressionId? }` or `undefined`. The registry
+passes a bounded, frozen copy of the evidence to the decoder. Decoder errors,
+unknown schemas, and malformed candidates produce no claim. A decoder only
+recognizes a claim candidate: the backend must independently verify proof
+before a ledger grant. An SDK earned event may have `rewardGranted: false`
+and still produce a pending or verified backend claim.
+
+```ts
+import { createDefaultClientRewardEvidenceRegistry } from
+  '@mpgd/game-services/default-client-reward-evidence';
+
+const rewardEvidenceRegistry = createDefaultClientRewardEvidenceRegistry([{
+  schema: 'game-provider.reward.v1',
+  normalize(reward) {
+    const id = reward.evidence?.payload.impressionId;
+    return typeof id === 'string' && id.trim() !== ''
+      ? { platformImpressionId: id } : undefined;
+  },
+}]);
+// Pass this registry to the client/runtime, and configure server verification separately.
+```
+
+Recovery uses the same registered decoder and checks the journaled claim
+against the original evidence and impression identity. Missing registrations
+or altered evidence leave reconciliation `action-required`; they cannot
+reopen the SDK display. Supply the same registrations after a restart.
+
+For existing v1 consumers that supply neither a registry nor `ads.provider`,
+the completed SDK reward flag still forwards a legacy candidate to the
+backend. A registered schema that fails decoding cannot take this fallback.
+Explicit registries and versioned providers reject unknown schemas even if
+an SDK reports a reward. Existing `admob-client-reward` exports remain
+available for compatibility. Target routing and server verifier registration
+are separate integration boundaries.
+
 ## Optional operation progress
 
 `purchase(input, options?)` and `claimRewardedAd(input, options?)` accept optional

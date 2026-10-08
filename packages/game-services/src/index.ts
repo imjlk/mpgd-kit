@@ -4,6 +4,8 @@ export * from './app-store-recovery.js';
 export * from './apps-in-toss-evidence-verification.js';
 export * from './apps-in-toss-partner-api.js';
 export * from './client.js';
+export * from './client-reward-evidence.js';
+export * from './default-client-reward-evidence.js';
 export * from './admob-client-reward.js';
 export * from './contract.js';
 export * from './evidence-verification.js';

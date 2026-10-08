@@ -1,11 +1,9 @@
-import type { PurchaseResult, RewardedAdResult } from '@mpgd/platform';
+import type { PlatformEvidenceEnvelope, PurchaseResult, RewardedAdResult } from '@mpgd/platform';
 
 import { isAuthoritativeMicrosoftStoreCompletion } from './authoritative-purchase.js';
 import { createGameServicesClient, type CreateGameServicesClientInput } from './client.js';
-import {
-  isClientRewardEvidence,
-  resolveRewardPlatformImpressionId,
-} from './admob-client-reward.js';
+import { resolveClientRewardClaim } from './client-reward-evidence.js';
+import { createDefaultClientRewardEvidenceRegistry } from './default-client-reward-evidence.js';
 import type {
   GameServicesOperationClient,
   GameServicesPurchaseInput,
@@ -776,15 +774,33 @@ function assertRewardRequest(
   input: CreateRecoverableMonetizationClientInput,
 ): void {
   const request = record.request;
+  const candidate = record.platform === undefined ? undefined : resolveClientRewardClaim(
+    record.platform,
+    input.rewardEvidenceRegistry ?? createDefaultClientRewardEvidenceRegistry(),
+    { allowLegacyCompletion: input.rewardEvidenceRegistry === undefined && input.gateway.ads.provider === undefined },
+  );
   if (request === undefined || record.platform === undefined
-    || ((record.platform.status !== 'completed' || !record.platform.rewardGranted)
-      && !isClientRewardEvidence(record.platform))
+    || candidate === undefined
     || request.playerId !== record.playerId || request.playerId !== input.playerId
     || request.target !== record.target || request.placementId !== record.input.placementId
     || request.idempotencyKey !== record.input.idempotencyKey
-    || request.platformImpressionId !== resolveRewardPlatformImpressionId(record.platform)
+    || request.platformImpressionId !== candidate.platformImpressionId
+    || !sameRewardEvidence(request.evidence, candidate.evidence)
     || request.deploymentTarget !== (input.deploymentTarget === input.target
       ? undefined : input.deploymentTarget)) {
     throw new Error('Journaled ad claim is not bound to its platform result.');
   }
+}
+
+function sameRewardEvidence(
+  request: PlatformEvidenceEnvelope | undefined,
+  candidate: PlatformEvidenceEnvelope | undefined,
+): boolean {
+  if (request === undefined || candidate === undefined) {
+    return request === candidate;
+  }
+  return request.schema === candidate.schema
+    && Object.keys(request.payload).length === Object.keys(candidate.payload).length
+    && Object.entries(request.payload).every(([key, value]) =>
+      Object.hasOwn(candidate.payload, key) && candidate.payload[key] === value);
 }

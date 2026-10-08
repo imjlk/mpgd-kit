@@ -25,6 +25,14 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
+    "./client-reward-evidence": {
+      "types": "./dist/client-reward-evidence.d.ts",
+      "default": "./dist/client-reward-evidence.js"
+    },
+    "./default-client-reward-evidence": {
+      "types": "./dist/default-client-reward-evidence.d.ts",
+      "default": "./dist/default-client-reward-evidence.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
@@ -155,8 +163,8 @@
     "format": "ttsc format",
     "fix": "ttsc fix",
     "build": "cd ../.. && node tools/run-ttsx.mjs tools/package/build-packages.ts @mpgd/game-services",
-    "test:packed-transport": "pnpm build && node test/runtime-transport-package-import.mjs",
-    "test:unit": "cd ../.. && node tools/run-ttsx.mjs packages/game-services/src/client.test.ts && node tools/run-ttsx.mjs packages/game-services/src/client-progress.test.ts && node tools/run-ttsx.mjs packages/game-services/src/runtime.test.ts && node tools/run-ttsx.mjs packages/game-services/src/types.test.ts && node tools/run-ttsx.mjs packages/game-services/src/server.test.ts && node tools/run-ttsx.mjs packages/game-services/src/google-play-purchase.test.ts && node tools/run-ttsx.mjs packages/game-services/src/google-play-publisher-client.test.ts && node tools/run-ttsx.mjs packages/game-services/src/microsoft-store-purchase.test.ts && node tools/run-ttsx.mjs packages/game-services/src/microsoft-store-identity.test.ts && node tools/run-ttsx.mjs packages/game-services/src/platform-order.test.ts && node tools/run-ttsx.mjs packages/game-services/src/progress-link.test.ts && node tools/run-ttsx.mjs packages/game-services/src/notification-delivery.test.ts && node tools/run-ttsx.mjs packages/game-services/src/admob-ssv.test.ts && node tools/run-ttsx.mjs packages/game-services/src/app-store-verifier.test.ts && node tools/run-ttsx.mjs packages/game-services/src/apps-in-toss-evidence-verification-conformance.test.ts && node tools/run-ttsx.mjs packages/game-services/src/apps-in-toss-partner-api.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard-conformance.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard-durability-conformance.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard-transport.test.ts && node tools/run-ttsx.mjs packages/game-services/src/guest-session.test.ts",
+    "test:packed-transport": "pnpm build && node test/runtime-transport-package-import.mjs && node test/reward-evidence-import.mjs",
+    "test:unit": "cd ../.. && node tools/run-ttsx.mjs packages/game-services/src/client.test.ts && node tools/run-ttsx.mjs packages/game-services/src/client-progress.test.ts && node tools/run-ttsx.mjs packages/game-services/src/runtime.test.ts && node tools/run-ttsx.mjs packages/game-services/src/types.test.ts && node tools/run-ttsx.mjs packages/game-services/src/server.test.ts && node tools/run-ttsx.mjs packages/game-services/src/google-play-purchase.test.ts && node tools/run-ttsx.mjs packages/game-services/src/google-play-publisher-client.test.ts && node tools/run-ttsx.mjs packages/game-services/src/microsoft-store-purchase.test.ts && node tools/run-ttsx.mjs packages/game-services/src/microsoft-store-identity.test.ts && node tools/run-ttsx.mjs packages/game-services/src/platform-order.test.ts && node tools/run-ttsx.mjs packages/game-services/src/progress-link.test.ts && node tools/run-ttsx.mjs packages/game-services/src/notification-delivery.test.ts && node tools/run-ttsx.mjs packages/game-services/src/admob-ssv.test.ts && node tools/run-ttsx.mjs packages/game-services/src/app-store-verifier.test.ts && node tools/run-ttsx.mjs packages/game-services/src/apps-in-toss-evidence-verification-conformance.test.ts && node tools/run-ttsx.mjs packages/game-services/src/apps-in-toss-partner-api.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard-conformance.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard-durability-conformance.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard-transport.test.ts && node tools/run-ttsx.mjs packages/game-services/src/guest-session.test.ts && node tools/run-ttsx.mjs packages/game-services/src/client-reward-evidence.test.ts",
     "test:recovery": "cd ../.. && node tools/run-ttsx.mjs packages/game-services/src/monetization-recovery.test.ts && node tools/run-ttsx.mjs packages/game-services/src/app-store-recovery.test.ts",
     "test": "pnpm test:unit && pnpm test:recovery && pnpm test:packed-transport"
   },

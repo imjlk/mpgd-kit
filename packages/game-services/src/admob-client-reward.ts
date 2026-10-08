@@ -43,7 +43,7 @@ export const clientRewardEvidenceSchemas = Object.freeze([
 
 export type ClientRewardEvidenceSchema = (typeof clientRewardEvidenceSchemas)[number];
 
-/** True when a rewarded-ad result carries ungranted evidence from an allow-listed schema. */
+/** @deprecated Built-in v1 compatibility helper. Claim/recovery flows use the injected reward evidence registry. */
 export function isClientRewardEvidence(value: unknown): boolean {
   return isAdMobClientRewardEvidence(value) || isVerse8ClientRewardEvidence(value);
 }
