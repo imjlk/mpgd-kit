@@ -1,5 +1,19 @@
 # @mpgd/adapter-ait
 
+## 0.13.0 — 2026-10-09
+
+### Fixed
+
+- [b453182e](https://github.com/imjlk/mpgd-kit/commit/b453182e07aafc5e6db636422faa1bc29e3a97b7) Add a game-owned platform runtime and audio projection shared above scene lifetimes. Wire generated Phaser games to coordinated native presentation, registered late evidence recovery, application-owned journals and reconciliation, and scene-scoped action views. Preserve physical ownership after deadlines and prevent scene teardown from unmuting live ads. — Thanks @imjlk!
+
+### Added
+
+- [3e560af5](https://github.com/imjlk/mpgd-kit/commit/3e560af5b3f9e15ee561a51682828337fd614e22) Expose Apps in Toss advertising through a versioned proxy/host bridge with SDK-scoped native observations. Separate reward eligibility from closure and ledger grants, retain late callbacks after deadlines, coordinate the shared native SDK, and preserve background lifecycle ownership. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: bridge@0.11.0, game-runtime@0.3.0, platform@0.15.0
+
 ## 0.12.7 — 2026-10-04
 
 ### Patch changes

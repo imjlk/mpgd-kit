@@ -1,5 +1,23 @@
 # @mpgd/game-services
 
+## 0.18.0 — 2026-10-09
+
+### Added
+
+- [0b14ed3a](https://github.com/imjlk/mpgd-kit/commit/0b14ed3a9576c4ac848ec4cd072ec541196fda38) Add an optional Microsoft Store consumption receipt persistence hook before recovery ownership release. Validate provider order attribution and keep finalization pending when persistence fails. Expose missing retry order IDs explicitly so integrations can require an exact durable receipt instead of inventing refund attribution. — Thanks @imjlk!
+- [a0736142](https://github.com/imjlk/mpgd-kit/commit/a0736142e7bab338ab5580f1e319c5f6f43092f4) Add explicitly registered client reward evidence normalization and use it consistently for claims and journal recovery. Keep server verification independent, preserve legacy callback consumers, and support registered providers without editing common reward handling. — Thanks @imjlk!
+- [b8447285](https://github.com/imjlk/mpgd-kit/commit/b844728577c623f835f6e8d8fbb14a4f1fe284c7) Add deployment-owned advertising evidence verifier registrations keyed by schema, provider, target, and deployment. Permit all existing build targets to route rewarded claims through independently configured server proof verification, while preserving authoritative impression replay identities. — Thanks @imjlk!
+
+### Patch changes
+
+- [ce43de12](https://github.com/imjlk/mpgd-kit/commit/ce43de128c8a0f665aea520bd51884d63f4d8a85) Allow Microsoft Store consumption receipt persistence when the response omits the product ID echo. Use verified request attribution and keep rejecting conflicting product IDs, mismatched item or tracking IDs, and invalid order data before releasing recovery ownership. — Thanks @imjlk!
+- Updated dependencies: analytics@0.4.1, catalog@0.7.7, platform@0.15.0
+
+### Fixed
+
+- [0b0ec05c](https://github.com/imjlk/mpgd-kit/commit/0b0ec05c4347246be3aa9fb0b07553af3679723c) Bound newly generated Microsoft Store recovery keys to the purchase request limit. Long provider identities use a stable digest while verification and consumption retain the original provider identity. Reject oversized caller-supplied generations before recording recovery ownership. — Thanks @imjlk!
+- [0e5008a0](https://github.com/imjlk/mpgd-kit/commit/0e5008a08fe89638e832182af701310bf4af3406) Attach late registered advertising correlation to a reserved pending journal operation and retry the original claim without reopening native UI. Preserve recorded evidence, request identity, and timestamps, and provide an application-owned observer that uses the original idempotency key without asserting SDK eligibility or a ledger grant. — Thanks @imjlk!
+
 ## 0.17.2 — 2026-10-04
 
 ### Patch changes

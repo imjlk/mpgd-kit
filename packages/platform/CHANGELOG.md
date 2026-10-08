@@ -1,5 +1,12 @@
 # @mpgd/platform
 
+## 0.15.0 — 2026-10-09
+
+### Added
+
+- [da9fe97b](https://github.com/imjlk/mpgd-kit/commit/da9fe97b32d888a1f42acbd58aa48dbf35d07d35) Coordinate full-screen purchase and advertising ownership, independent execution blocks, caller deadlines, duplicate invocations, and late claim evidence. Keep native closure separate from backend settlement, and carry proof-lookup correlation without asserting reward eligibility. — Thanks @imjlk!
+- [dadcf725](https://github.com/imjlk/mpgd-kit/commit/dadcf725cd9939130f4790e1b20fd037f6888f8b) Add versioned advertising provider and conformance entrypoints with separate presentation and reward eligibility, validated event/result envelopes, pure session transitions, and a compatibility facade that leaves grants to the backend ledger. Run provider fixtures against shared scenario vectors with intermediate ownership checks and isolated expectations. — Thanks @imjlk!
+
 ## 0.14.0 — 2026-09-28
 
 ### Minor changes
