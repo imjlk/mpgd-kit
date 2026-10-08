@@ -1,4 +1,5 @@
 import type { AnalyticsReporter, BufferedAnalyticsSink } from '@mpgd/analytics';
+import type { GamePlatformRuntime } from '@mpgd/game-runtime/game';
 import type { Locale } from '@mpgd/i18n';
 import type { IdentitySession, LaunchIntent, PlayerIdentity } from '@mpgd/platform';
 import type {
@@ -12,6 +13,7 @@ import type { StarterGameServices } from '../platform/gameServices';
 export const starterContextKey = 'starterContext';
 
 export interface StarterContext {
+  readonly gameRuntime: GamePlatformRuntime<TargetConfiguredGateway, StarterGameServices>;
   readonly platform: TargetConfiguredGateway;
   readonly runtime: TargetRuntimeSnapshot;
   readonly viewport: TargetViewportSnapshot;

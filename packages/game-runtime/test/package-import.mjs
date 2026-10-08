@@ -43,7 +43,7 @@ try {
   assert.notEqual(installed.private, true);
   assert.equal(JSON.stringify(installed).includes('workspace:'), false);
   assert.equal(installed.peerDependenciesMeta?.phaser?.optional, true);
-  assert.deepEqual(Object.keys(installed.exports).sort(), ['.', './actions', './ads', './phaser', './platform', './presentation', './ui']);
+  assert.deepEqual(Object.keys(installed.exports).sort(), ['.', './actions', './ads', './audio', './game', './phaser', './platform', './presentation', './ui']);
   run(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';
     assert.throws(() => import.meta.resolve('phaser'), { code: 'ERR_MODULE_NOT_FOUND' });

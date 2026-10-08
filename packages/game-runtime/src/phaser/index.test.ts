@@ -2,6 +2,8 @@ import { EventEmitter } from 'node:events';
 
 import { describe, expect, it, vi } from 'vitest';
 
+import { bindGameAudio } from '../audio/index.js';
+import { createFullScreenPresentationScope } from '../presentation/index.js';
 import { createGameExecutionController } from '../index.js';
 import { bindPhaserGameScene, type GameplayScene } from './index.js';
 
@@ -708,5 +710,46 @@ describe('Phaser scene execution binding (headless fakes)', () => {
       'audio-sink-missing',
     );
     binding.dispose();
+  });
+});
+
+describe('Phaser scene disposal with game-owned audio', () => {
+  it('leaves a live native presentation muted across scene shutdown and replacement', () => {
+    const controller = createGameExecutionController();
+    const sink = audioSink();
+    const audio = bindGameAudio({ execution: controller, sink });
+    const presentation = createFullScreenPresentationScope({ execution: controller });
+    const first = fakeScene();
+    const unsupported = vi.fn();
+    const binding = bindPhaserGameScene({
+      controller,
+      scene: first.scene,
+      resetInput: () => {},
+      renderingPolicy: 'visibility',
+      audioOwner: 'game',
+      onUnsupportedState: unsupported,
+    });
+    const lease = presentation.acquire({ kind: 'rewarded', invocationId: 'original' });
+    lease.markUnknown();
+    first.sys.events.emit('shutdown');
+    binding.dispose();
+    expect(sink.getMuted()).toBe(true);
+    const next = fakeScene();
+    const replacement = bindPhaserGameScene({
+      controller,
+      scene: next.scene,
+      resetInput: () => {},
+      renderingPolicy: 'visibility',
+      audioOwner: 'game',
+      onUnsupportedState: unsupported,
+    });
+    expect(next.input.enabled).toBe(false);
+    expect(sink.getMuted()).toBe(true);
+    expect(unsupported).not.toHaveBeenCalled();
+    lease.confirmClosed();
+    expect(next.input.enabled).toBe(true);
+    expect(sink.getMuted()).toBe(false);
+    replacement.dispose();
+    audio.dispose();
   });
 });

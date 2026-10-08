@@ -542,3 +542,77 @@ describe('coordinated purchase presentation', () => {
     expect(original.commerce.purchase).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('late native failures and candidate preservation', () => {
+  it('keeps a failed-to-start native fact when the SDK Promise later returns a less specific result', async () => {
+    const native = sdk('delayed');
+    const { presentation } = environment();
+    let expire = () => {};
+    const late: AdShowResult[] = [];
+    const ads = createCoordinatedAdProvider({
+      provider: native.provider,
+      presentation,
+      deadline: {
+        milliseconds: 1,
+        schedule(callback) {
+          expire = callback;
+          return () => {};
+        },
+      },
+      onLateResult: ({ result }) => {
+        late.push(result);
+      },
+    });
+    const pending = ads.show(request());
+    await flush();
+    expire();
+    await pending;
+    native.emit('failed', 'a', 1);
+    native.finish(request(), 'not-earned');
+    await flush();
+    expect(presentation.getSnapshot().owner).toBeUndefined();
+    expect(late.length).toBeGreaterThan(0);
+    expect(late.every((result) => result.outcome === 'failed' && result.presentation === 'not-started')).toBe(
+      true,
+    );
+    expect(native.calls).toHaveLength(1);
+    ads.dispose();
+  });
+  it('never forwards a negative replacement once an original claim candidate has been observed', async () => {
+    const native = sdk('delayed');
+    const { presentation } = environment();
+    let expire = () => {};
+    const late = vi.fn();
+    const ads = createCoordinatedAdProvider({
+      provider: native.provider,
+      presentation,
+      deadline: {
+        milliseconds: 1,
+        schedule(callback) {
+          expire = callback;
+          return () => {};
+        },
+      },
+      onLateResult: late,
+    });
+    const pending = ads.show(request());
+    await flush();
+    for (const callback of native.callbacks) {
+      callback({
+        providerId: 'fixture',
+        invocationId: 'a',
+        sequence: 1,
+        type: 'requested',
+        claimEvidence: proof,
+      });
+    }
+    expire();
+    await expect(pending).resolves.toMatchObject({ claimEvidence: proof });
+    native.emit('failed', 'a', 2);
+    native.finish(request(), 'not-earned');
+    await flush();
+    expect(late).not.toHaveBeenCalled();
+    expect(native.calls).toHaveLength(1);
+    ads.dispose();
+  });
+});

@@ -474,6 +474,9 @@ importers:
       '@mpgd/catalog':
         specifier: workspace:*
         version: link:../../packages/catalog
+      '@mpgd/game-runtime':
+        specifier: workspace:*
+        version: link:../../packages/game-runtime
       '@mpgd/game-services':
         specifier: workspace:*
         version: link:../../packages/game-services
@@ -768,6 +771,9 @@ importers:
       '@mpgd/bridge':
         specifier: workspace:*
         version: link:../bridge
+      '@mpgd/game-runtime':
+        specifier: workspace:*
+        version: link:../game-runtime
       '@mpgd/game-services':
         specifier: workspace:*
         version: link:../game-services

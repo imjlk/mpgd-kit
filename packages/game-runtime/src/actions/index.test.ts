@@ -390,3 +390,48 @@ describe('monetization action ownership', () => {
     },
   );
 });
+
+describe('confirmed late rewarded non-grants', () => {
+  it('retires only the original rewarded key, retaining deduplication and purchase protection', async () => {
+    const client = {
+      purchase: vi.fn(async () => purchaseResult('pending')),
+      claimRewardedAd: vi.fn(async () => adResult('pending')),
+    };
+    const { coordinator, ad } = setup(client);
+    await ad.execute(adInput);
+    const failed: GameServicesRewardedAdResult = {
+      status: 'failed',
+      reward: { status: 'failed', rewardGranted: false },
+    };
+    expect(coordinator.confirmRecoveredRewardResult('foreign', failed)).toBe(false);
+    expect(coordinator.getAvailability()).toBe('reconciliation-required');
+    expect(() => coordinator.confirmRecoveredRewardResult('ad-1', { status: 'granted', reward: { status: 'completed', rewardGranted: false }, ledgerEntryId: 'untrusted-ledger' })).toThrow(
+      'invalid-reconciliation',
+    );
+    expect(coordinator.confirmRecoveredRewardResult('ad-1', failed)).toBe(true);
+    expect(coordinator.getAvailability()).toBe('ready');
+    await ad.execute(adInput);
+    expect(client.claimRewardedAd).toHaveBeenCalledOnce();
+    const purchase = coordinator.createPurchaseController();
+    await purchase.execute(purchaseInput);
+    expect(coordinator.confirmRecoveredRewardResult(purchaseInput.idempotencyKey, failed)).toBe(
+      false,
+    );
+    expect(coordinator.getAvailability()).toBe('reconciliation-required');
+  });
+  it('remembers a trusted non-grant that arrives before the original caller settles', async () => {
+    const waiting = deferred<GameServicesRewardedAdResult>();
+    const { coordinator, ad } = setup({
+      purchase: async () => purchaseResult('cancelled'),
+      claimRewardedAd: async () => waiting.promise,
+    });
+    const original = ad.execute(adInput);
+    expect(coordinator.confirmRecoveredRewardResult('ad-1', { status: 'rejected', reward: { status: 'pending', rewardGranted: false }, claim: { granted: false, disposition: 'rejected', alreadyProcessed: false } })).toBe(
+      true,
+    );
+    waiting.resolve(adResult('pending'));
+    await original;
+    expect(coordinator.getPendingOperation()).toBeUndefined();
+    expect(coordinator.getAvailability()).toBe('ready');
+  });
+});

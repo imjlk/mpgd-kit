@@ -24,6 +24,8 @@ export interface BindPhaserGameSceneInput {
   readonly resetInput: () => void;
   readonly renderingPolicy: 'visibility';
   readonly audio?: GameplayAudioSink;
+  /** A game-owned bindGameAudio projection survives this scene's disposal. */
+  readonly audioOwner?: 'scene' | 'game';
   readonly uiScope?: { dispose(): void };
   /** Phaser pause also suspends input: simulation-only blocking cannot preserve active input. */
   readonly onUnsupportedState: (
@@ -43,6 +45,9 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
   }
   if (controller.getSnapshot().status === 'destroyed') {
     throw new Error('Cannot bind a destroyed game execution controller.');
+  }
+  if (input.audioOwner === 'game' && audio !== undefined) {
+    throw new TypeError('Game-owned audio cannot also be controlled by a scene sink.');
   }
   const events = scene.sys.events;
   let disposed = false;
@@ -217,7 +222,7 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
         }
         const blocked = snapshot.blocked;
         const simulationUnsupported = blocked.simulation && !blocked['gameplay-input'];
-        const audioUnsupported = blocked.audio && audio === undefined;
+        const audioUnsupported = blocked.audio && audio === undefined && input.audioOwner !== 'game';
         const notifySimulation = simulationUnsupported && !reportedSimulation;
         const notifyAudio = audioUnsupported && !reportedAudio;
         reportedSimulation = simulationUnsupported;

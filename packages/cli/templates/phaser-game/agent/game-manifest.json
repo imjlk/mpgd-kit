@@ -5,8 +5,19 @@
     "title": "__GAME_TITLE__",
     "engine": "phaser-4"
   },
-  "targets": ["web-preview", "microsoft-store", "verse8", "android", "ios", "ait", "reddit"],
-  "futureTargets": ["telegram", "tauri"],
+  "targets": [
+    "web-preview",
+    "microsoft-store",
+    "verse8",
+    "android",
+    "ios",
+    "ait",
+    "reddit"
+  ],
+  "futureTargets": [
+    "telegram",
+    "tauri"
+  ],
   "platformBoundary": "PlatformGateway",
   "agentWorkflow": {
     "guide": "docs/MPGD_KIT_WORKFLOWS.md",
@@ -67,6 +78,22 @@
     {
       "id": "telemetry.analytics.best-effort",
       "owner": "src/main.ts"
+    },
+    {
+      "id": "runtime.game.owned-presentation",
+      "owner": "src/main.ts",
+      "capabilities": [
+        "game-owned-execution",
+        "shared-full-screen-presentation",
+        "late-claim-recovery",
+        "game-owned-audio"
+      ],
+      "gotchas": [
+        "Create one game runtime above scene lifetimes; scene teardown must not release native presentation or global audio.",
+        "Rewarded v2 requires an application-owned durable encrypted operation journal; never substitute an in-memory map.",
+        "SDK earning and physical closure are separate from an authoritative backend ledger grant.",
+        "Recover existing claims on startup and resume without reopening SDK UI."
+      ]
     }
   ],
   "acceptance": [

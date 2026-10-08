@@ -1,9 +1,11 @@
+import { createGamePlatformRuntime, type GamePlatformRuntime } from '@mpgd/game-runtime/game';
 import './styles.css';
 
 import { createAnalyticsReporter, createBufferedAnalyticsSink } from '@mpgd/analytics';
 import { resolveTargetMpgdLocale, type Locale } from '@mpgd/i18n';
 import type { IdentitySession, LaunchIntent, PlatformGateway } from '@mpgd/platform';
 import {
+  getEffectiveAdPlacementConfig,
   measureTargetViewport,
   resolveTargetViewportSnapshot,
   waitForTargetViewportMeasurement,
@@ -15,14 +17,15 @@ import { t } from './i18n/messages';
 import { createClientId } from './runtime/id';
 import { createStarterGame } from './runtime/createGame';
 import { detectRuntime } from './platform/runtimeDetector';
-import { createStarterGameServices } from './platform/gameServices';
+import { createStarterGameServices, type StarterMonetizationPorts } from './platform/gameServices';
 import { installPlatform } from './platform/installPlatform';
 import { installMicrosoftStorePwa } from './platform/microsoftStorePwa';
 
 await bootstrap();
 
 /** Install target services, analytics, and viewport state before starting the game. */
-async function bootstrap(): Promise<void> {
+async function bootstrap(options: { readonly monetization?: StarterMonetizationPorts } = {}): Promise<void> {
+  let gameRuntime: GamePlatformRuntime | undefined;
   let locale: Locale = 'en';
   let disposeMicrosoftStorePwa: (() => void) | undefined;
 
@@ -71,13 +74,43 @@ async function bootstrap(): Promise<void> {
       sessionId: analyticsSessionId,
       sink: analyticsSink,
     });
-    const gameServices = createStarterGameServices({
+    const ownedRuntime = createGamePlatformRuntime({
       gateway: platform,
-      playerId: identitySession.playerId ?? player.playerId,
-      configTarget: runtime.configTarget,
-      analytics: analyticsSink,
-      analyticsSessionId,
+      initialLifecycleState: document.visibilityState === 'hidden' ? 'inactive' : 'active',
+      canShow: (placement) => {
+        const enabled = placement.format === 'rewarded'
+          ? runtime.config.features.rewardedAds
+          : runtime.config.features.interstitialAds;
+        const configured = runtime.effectiveConfig === undefined
+          ? undefined
+          : getEffectiveAdPlacementConfig(runtime.effectiveConfig, placement.placementId);
+        return enabled && (runtime.effectiveConfig === undefined || configured !== undefined && configured.reason !== 'target-disabled');
+      },
+      deadline: {
+        milliseconds: 30000,
+        schedule(callback, milliseconds) {
+          const timer = setTimeout(callback, milliseconds);
+          return () => clearTimeout(timer);
+        },
+      },
+      ...(options.monetization?.reconciliation === undefined ? {} : { reconciliation: options.monetization.reconciliation }),
+      ...(options.monetization?.purchasePresentation === undefined ? {} : { purchasePresentation: options.monetization.purchasePresentation }),
+      onObserverError: (error) => {
+        console.error('[game-runtime]', error);
+      },
+      createServices: (gateway) =>
+        createStarterGameServices({
+          gateway,
+          playerId: identitySession.playerId ?? player.playerId,
+          configTarget: runtime.configTarget,
+          ...(options.monetization === undefined ? {} : { operationStore: options.monetization.operationStore }),
+          analytics: analyticsSink,
+          analyticsSessionId,
+        }),
     });
+    gameRuntime = ownedRuntime;
+    const gameServices = ownedRuntime.services;
+    await ownedRuntime.reconcile();
 
     await analytics.track({
       name: 'game_started',
@@ -92,7 +125,8 @@ async function bootstrap(): Promise<void> {
       preserveBrowserTouchGestures:
         document.body.dataset.mpgdPreserveBrowserTouchGestures === 'true',
       context: {
-        platform,
+        platform: ownedRuntime.gateway,
+        gameRuntime: ownedRuntime,
         runtime,
         viewport,
         player,
@@ -105,6 +139,7 @@ async function bootstrap(): Promise<void> {
       },
     });
   } catch (error) {
+    gameRuntime?.dispose();
     disposeMicrosoftStorePwa?.();
     renderBootstrapError(error, locale);
     console.error('[bootstrap]', error);

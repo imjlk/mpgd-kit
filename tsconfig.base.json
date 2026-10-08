@@ -39,6 +39,8 @@
       "@mpgd/game-runtime/platform": ["./packages/game-runtime/src/platform/index.ts"],
       "@mpgd/game-runtime/ui": ["./packages/game-runtime/src/ui/index.ts"],
       "@mpgd/game-runtime/actions": ["./packages/game-runtime/src/actions/index.ts"],
+      "@mpgd/game-runtime/game": ["./packages/game-runtime/src/game/index.ts"],
+      "@mpgd/game-runtime/audio": ["./packages/game-runtime/src/audio/index.ts"],
       "@mpgd/game-runtime/ads": ["./packages/game-runtime/src/ads/index.ts"],
       "@mpgd/game-runtime/presentation": ["./packages/game-runtime/src/presentation/index.ts"],
       "@mpgd/game-services/*": ["./packages/game-services/src/*"],

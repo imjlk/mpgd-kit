@@ -132,3 +132,15 @@ if (unresolved) {
   // @ts-expect-error Recovery identity must stay immutable.
   unresolved.input.idempotencyKey = 'different';
 }
+
+// New game/audio ports must also type-check with ES2022 and no DOM or Phaser.
+import { bindGameAudio } from '@mpgd/game-runtime/audio';
+import { createGamePlatformRuntime, type GameServicePorts } from '@mpgd/game-runtime/game';
+const ports: GameServicePorts = {};
+const audioProjection = bindGameAudio({
+  execution: createGameExecutionController(),
+  sink: { getMuted: () => false, setMuted: (_muted) => {} },
+});
+audioProjection.dispose();
+void createGamePlatformRuntime;
+void ports;

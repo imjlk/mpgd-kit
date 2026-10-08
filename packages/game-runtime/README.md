@@ -74,6 +74,8 @@ pnpm add phaser@^4.2.0
 | `@mpgd/game-runtime/platform` | Injected lifecycle source binding |
 | `@mpgd/game-runtime/actions` | Purchase and rewarded-ad coordination |
 | `@mpgd/game-runtime/presentation` | Shared native full-screen ownership |
+| `@mpgd/game-runtime/game` | Game-owned gateway, service, lifecycle and action assembly |
+| `@mpgd/game-runtime/audio` | Game-owned audio projection |
 | `@mpgd/game-runtime/ads` | Coordinated provider and gateway, injected deadlines and policy |
 | `@mpgd/game-runtime/phaser` | Optional gameplay scene binding |
 
@@ -412,3 +414,60 @@ A reentrant same-key joiner cannot cancel that owner's startup by disposing itse
 If owner/runtime disposal prevents any client invocation, the flight rejects with
 a scheduling error, resets its observed state to `idle`, and emits no business
 completion/exception event. An invoked client failure remains `exception`.
+
+## Game-owned platform assembly
+
+Create one `createGamePlatformRuntime` from `@mpgd/game-runtime/game` during
+bootstrap. Pass the original gateway, an explicit initial lifecycle state,
+a game policy, optional injected wait deadline, and `createServices(gateway)`.
+The services factory must use the supplied coordinated gateway. Its structural
+ports keep this subpath independent of DOM, Phaser, network and schema imports,
+while preserving target-specific gateway extensions and concrete service types.
+
+A versioned provider installs one shared scope for purchases, rewarded ads and
+interstitials. Legacy gateways retain their existing surface and coarse action
+blocking. V2 rewarded display is disabled until the services expose
+`monetizationRecovery`: the application must supply a durable, atomic,
+encrypted operation store rather than a memory fallback. Startup and resume
+reconcile existing records without opening SDK UI. Account changes require a
+new client/runtime bound to that account.
+
+Keep the runtime above scenes. Create scene-owned action controllers from
+`runtime.actions`; dispose those controllers and their input listeners on
+scene shutdown. After an await, check the captured controller's disposal state
+before touching scene objects. A trusted `reconciliation` port can unlock new
+financial keys only after reading the matching authoritative ledger grant.
+The original key/history remains retired and never becomes an SDK retry.
+
+Late registered candidates reach `recoverRewardResult` under the original
+operation idempotency key. `onLateResult` also exposes provider settlement
+that follows a caller deadline. The game assembly journals a definitive
+not-started/non-earned result only when no prior candidate was observed;
+previous proof/request identity is never replaced by a negative callback.
+Native closure and business settlement remain independent, including during
+runtime teardown. Purchase results still require native `purchasePresentation`
+facts to prove physical closure; a business success alone remains unknown.
+
+Bind `bindGameAudio({ execution, sink })` once to the game's sound manager.
+Scenes use `bindPhaserGameScene({ audioOwner: 'game', ... })` and never supply
+a competing scene audio sink. Scene shutdown therefore cannot unmute a live
+native presentation or release background/settings ownership. Disposing an
+audio projection while blocked leaves mute in place. Destroy execution on game
+teardown before detaching the audio projection. Express additional user mute
+ownership with an audio execution block.
+
+The AIT SDK/host/proxy integration test combines this assembly with the real
+client recovery, registered independent verifier and replay-safe ledger. It
+proves late evidence after view disposal, pending authority with zero grants,
+authoritative settlement, immutable request/timestamp reuse, proof replay
+rejection and reconstructed-client recovery with one SDK show. Its memory
+journal/ledger are test fixtures, not production persistence or live Toss
+certification.
+
+`actions.confirmRecoveredRewardResult(key, result)` accepts only a trusted
+journal recovery's confirmed non-grant result for a matching rewarded action.
+It can retire a late SDK preparation failure or a definitive server rejection,
+while preserving original key history and any live native lease. Foreign keys,
+purchase actions, pending results and grant-shaped results cannot be unlocked
+through this path. Positive grants continue through the authoritative ledger
+reconciliation port. This method never updates a disposed view or opens UI.

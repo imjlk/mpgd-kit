@@ -93,6 +93,7 @@ export function fixture(options: { configured?: boolean; supported?: boolean; ca
     execution,
     presentation,
     gateway,
+    original,
     evidence,
     events,
     input,

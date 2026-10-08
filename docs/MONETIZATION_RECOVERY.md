@@ -11,3 +11,21 @@ If the process stops before a platform result is saved, the journal stays pendin
 `pending` means no client-side grant is allowed. `rejected` means the backend returned a definitive non-grant decision. The backend makes that decision one request at a time per operation key within one backend process, including the awaited analytics call, so a concurrent same-key grant there wins. Across backend processes, a rejection can still race another process's grant; route a player's monetization requests to one process where that matters. Handled verifier, backend, and per-record journal read/write failures remain retryable or pending; malformed verifier decisions are rejected rather than retried forever. Initial `store.reserve()` failures in `purchase()` or `claimRewardedAd()`, and `store.listRecoverable()` failures in `reconcile()`, reject the call instead: callers must catch these outages and retry rather than interpreting them as a pending result. An already-recorded purchase or ad grant remains granted when a later retry is unavailable or the result journal write collides. When this runtime persists a backend grant that an earlier journal write lost, it also discards any non-grant result another runtime recorded meanwhile, so the operation is re-settled as granted instead of staying rejected. Calls for the same operation key are serialized within one runtime, and `reconcile()` skips an operation already running there. Progress observers see the whole journaled call. When a journal failure is resolved into a pending or already-known granted result, the call still ends with `completed` for the status it returns; `exception` means the call itself rejected. Cross-process deduplication still depends on the atomic store and authoritative backend ledger. `reconcile()` reports a malformed same-player journal entry as `action-required` without blocking other entries; records for another target are not processed. Purchase settlement helpers such as `findAuthoritativePurchaseSettlement` remain UI evidence only and must not credit a wallet. Account switching cannot adopt a journaled operation: its key remains bound to the original player.
 
 This contract and its mock tests do not prove that a native Billing, StoreKit, or AdMob provider can recover its callbacks on a device. Provider-specific replay, secure storage, SSV delivery, and real account/device evidence are separate release gates.
+
+## Phaser starter assembly
+
+The private starter and newly generated games construct one game-owned runtime
+above their scenes. Supply `bootstrapStarter({ monetization: { operationStore,
+reconciliation, purchasePresentation } })` in the private example, or provide
+those bootstrap options in a generated game's entrypoint. The operation store
+is application-owned and must satisfy the durability, encryption and CAS
+requirements above. No in-memory production fallback is installed. Without a
+recovery journal, versioned rewarded display remains policy-disabled before
+the SDK call. Backend URL/auth and independent server authorities are still
+required; a journal is not grant authority.
+
+The scene receives the coordinated gateway, services and action coordinator.
+It disposes its action view on shutdown, while the game retains late evidence
+observation and the original recovery client. Startup/resume recovery never
+opens advertising or purchase UI. Native presentation facts release execution;
+SDK eligibility and backend ledger results do not release a live native owner.

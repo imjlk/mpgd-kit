@@ -2257,13 +2257,29 @@ function validatePhaserTemplateRewardAuthority(): void {
   );
   assertIncludesText(
     sceneContent,
-    'gameServicesClient.claimRewardedAd',
-    `${scenePath}: rewarded ads must use the authoritative claim flow.`,
+    'action.execute',
+    `${scenePath}: rewarded ads must use the game-owned action controller.`,
   );
   assertIncludesText(
     sceneContent,
     'result.claim?.granted === true',
     `${scenePath}: reward presentation must depend on the authoritative ledger claim.`,
+  );
+
+  assertIncludesText(
+    sceneContent,
+    'this.context.gameRuntime.actions',
+    `${scenePath}: action coordination must be game-owned.`,
+  );
+  assertIncludesText(
+    readText('packages/game-runtime/src/actions/index.ts'),
+    'client.claimRewardedAd',
+    'Runtime actions must use the authoritative service operation.',
+  );
+  assertIncludesText(
+    readText('packages/cli/templates/phaser-game/src/main.ts'),
+    'createServices: (gateway)',
+    'Generated services must receive the coordinated gateway.',
   );
 
   if (sceneContent.includes('platform.ads.showRewarded')) {

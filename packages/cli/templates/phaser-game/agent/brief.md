@@ -39,3 +39,12 @@ the game-owned PWA before package generation, then run package acceptance on
 Windows before Partner Center submission. WACK remains an optional recommended
 evidence source, not a universal prerequisite.
 <!-- mpgd:microsoft-store:end -->
+
+## Game-owned execution and advertising
+
+Construct one `createGamePlatformRuntime` during bootstrap. Scenes bind gameplay
+execution with `audioOwner: 'game'`; the Phaser game's sound manager owns audio
+projection. Add SDKs only in target assembly or adapters. All rewarded views use
+the game-owned action coordinator and authoritative services, with an
+application-owned durable encrypted operation store. Keep recovery above scenes
+and reconcile existing operations on startup and resume without opening SDK UI.
