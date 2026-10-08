@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createUnsupportedCapabilities, type PlatformGateway, type PurchaseResult } from '@mpgd/platform';
+import {
+  createUnsupportedCapabilities,
+  type PlatformGateway,
+  type PurchaseResult,
+} from '@mpgd/platform';
 import {
   adProtocol,
   adProtocolVersion,
