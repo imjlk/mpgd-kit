@@ -125,6 +125,7 @@ const boundVerifierReward = await boundVerifierService.claimAdReward({
   placementId: 'CONTINUE_AFTER_FAIL',
   platformImpressionId: 'worker-binding-impression',
   idempotencyKey: 'worker-binding-reward',
+  evidence: { schema: 'mpgd.admob.client-reward.v1', payload: {} },
   completedAt: '2026-07-04T00:00:00.000Z',
 });
 const aggregateOnlyMicrosoftStorePurchase = await boundVerifierService.verifyPurchase({
@@ -284,6 +285,7 @@ const targetIosReward = await targetVerifierService.claimAdReward({
   placementId: 'CONTINUE_AFTER_FAIL',
   platformImpressionId: 'target-binding-ios-impression',
   idempotencyKey: 'target-binding-ios-reward',
+  evidence: { schema: 'mpgd.admob.client-reward.v1', payload: {} },
   completedAt: '2026-07-04T00:00:00.000Z',
 });
 const targetAitPurchase = await targetVerifierService.verifyPurchase({
@@ -300,6 +302,7 @@ const targetVerse8Reward = await targetVerifierService.claimAdReward({
   placementId: 'CONTINUE_AFTER_FAIL',
   platformImpressionId: 'target-binding-verse8-impression',
   idempotencyKey: 'target-binding-verse8-reward',
+  evidence: { schema: 'verse8.ads.reward.v1', payload: {} },
   completedAt: '2026-07-04T00:00:00.000Z',
 });
 
@@ -938,7 +941,10 @@ assertThrows(
   'service must refuse the development evidence verifier with a D1 store',
 );
 createWorkerFetchHandler(d1StubEnv);
-createWorkerFetchHandler({ MPGD_STORE: 'memory', MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE: 'true' });
+createWorkerFetchHandler({
+  MPGD_STORE: 'memory',
+  MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE: 'true',
+});
 
 // Optional ingress auth binding gates every public grant route.
 const ingressAuthCalls: string[] = [];
@@ -1187,6 +1193,65 @@ for (const authorization of [
     `${authorization} error code`,
   );
 }
+
+let registeredAdCalls = 0;
+const registeredAdService = createWorkerService({
+  MPGD_STORE: 'memory',
+  MPGD_DEPLOYMENT_TARGET_BINDINGS: { browser: 'browser-extra' },
+  MPGD_AD_REWARD_VERIFIERS: [
+    {
+      providerId: 'new-provider',
+      schema: 'new-provider.reward.v1',
+      bindings: [{ target: 'browser', deploymentTarget: 'browser-extra' }],
+    },
+  ],
+  GAME_SERVICES_AD_REWARD_EVIDENCE_VERIFIER: {
+    async verifyAdReward(input) {
+      registeredAdCalls += 1;
+      assertEqual(
+        input.providerId,
+        'new-provider',
+        'server-selected provider identity reaches its proof verifier',
+      );
+      assertEqual(Object.hasOwn(input, 'signal'), false, 'registered binding remains clone-safe');
+      return {
+        ...verifiedDecision('registered-ad:impression'),
+        platformEvidenceId: 'registered-native-impression',
+      };
+    },
+  },
+});
+const registeredAdRequest = {
+  target: 'browser' as const,
+  playerId: 'registered-ad-player',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  deploymentTarget: 'browser-extra',
+  idempotencyKey: 'registered-ad-key',
+  completedAt: '2026-10-09T00:00:00.000Z',
+  evidence: { schema: 'new-provider.reward.v1', payload: {} },
+};
+assertEqual(
+  (await registeredAdService.claimAdReward({ ...registeredAdRequest, evidence: { schema: 'unknown', payload: {} } }) as { readonly granted: boolean }).granted,
+  false,
+  'unregistered providers cannot grant',
+);
+assertEqual(registeredAdCalls, 0, 'unknown schema cannot reach a registered service binding');
+assertEqual(
+  (await registeredAdService.claimAdReward(registeredAdRequest) as { readonly granted: boolean }).granted,
+  true,
+  'a new registered provider can grant on an existing build target',
+);
+assertEqual(
+  (await registeredAdService.claimAdReward(registeredAdRequest) as { readonly granted: boolean }).granted,
+  true,
+  'same-key recovery preserves the grant',
+);
+assertEqual(registeredAdCalls, 1, 'recovery needs no second proof call for a recorded grant');
+assertEqual(
+  (await registeredAdService.claimAdReward({ ...registeredAdRequest, idempotencyKey: 'registered-another-key' }) as { readonly granted: boolean }).granted,
+  false,
+  'another key cannot replay a verified impression',
+);
 
 console.log('Game services Worker smoke passed: HTTP, oRPC, and private binding surfaces');
 

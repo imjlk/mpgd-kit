@@ -1,10 +1,12 @@
 # Advertising behavior contract (RFC)
 
-Status: **partially implemented proposal (AD2)**. The versioned types,
+Status: **partially implemented proposal (AD2 and registered claim routing)**. The versioned types,
 validators, pure session transitions, compatibility facade, and vector runner
 now exist in `@mpgd/platform/ads` and `@mpgd/platform/ads-conformance`.
-The reference-port tests exercise the vectors; shared runtime ownership,
-real adapter fixtures, and registered reward routing remain proposed work.
+The client decoder and independent server verifier registries now exist in
+`@mpgd/game-services`; registered advertising routing accepts all existing
+build targets. The reference-port tests exercise the vectors; shared runtime
+ownership and real adapter fixtures remain proposed work.
 The full behavior described here is outside the enforced
 [documentation evidence](../../DOCUMENTATION_EVIDENCE.md) scope until the
 contract, runner, and real adapter fixtures land.

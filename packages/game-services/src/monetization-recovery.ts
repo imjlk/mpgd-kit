@@ -785,6 +785,7 @@ function assertRewardRequest(
     || request.target !== record.target || request.placementId !== record.input.placementId
     || request.idempotencyKey !== record.input.idempotencyKey
     || request.platformImpressionId !== candidate.platformImpressionId
+    || request.providerId !== undefined && request.providerId !== input.gateway.ads.provider?.id
     || !sameRewardEvidence(request.evidence, candidate.evidence)
     || request.deploymentTarget !== (input.deploymentTarget === input.target
       ? undefined : input.deploymentTarget)) {

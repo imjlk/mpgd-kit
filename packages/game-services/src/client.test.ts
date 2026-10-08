@@ -381,9 +381,8 @@ const unsupportedGateway = {
       unsupportedRewardCalls += 1;
 
       return {
-        status: 'completed',
-        rewardGranted: true,
-        ledgerEntryId: 'unexpected-unsupported-impression',
+        status: 'unavailable',
+        rewardGranted: false,
       };
     },
   },
@@ -411,11 +410,15 @@ assertEqual(
   'failed',
   'unsupported target purchase should return a failed platform result without a platform call',
 );
-assertEqual(unsupportedReward.status, 'rejected', 'unsupported target rewarded ad should reject');
+assertEqual(
+  unsupportedReward.status,
+  'unavailable',
+  'unsupported provider should remain unavailable',
+);
 assertEqual(
   unsupportedReward.reward.status,
   'unavailable',
-  'unsupported target rewarded ad should return unavailable without a platform call',
+  'a supported build target uses the adapter availability result',
 );
 assertEqual(
   unsupportedPurchaseCalls,
@@ -424,8 +427,8 @@ assertEqual(
 );
 assertEqual(
   unsupportedRewardCalls,
-  0,
-  'unsupported target rewarded ad should not call platform ads',
+  1,
+  'reward eligibility is selected by the provider rather than a target allow-list',
 );
 assertEqual(
   purchaseClaims,

@@ -35,7 +35,6 @@ import { observeGameServicesOperation } from './operation-progress.js';
 import type {
   ClaimAdRewardRequest,
   ClaimAdRewardResponse,
-  GameServicesAdRewardTarget,
   GameServicesLeaderboardTarget,
   GameServicesLedgerTarget,
   GameServicesStoreTarget,
@@ -364,28 +363,6 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
       return observeGameServicesOperation('rewarded-ad', options, async (progress): Promise<GameServicesRewardedAdResult> => {
         const target = input.target;
 
-        if (!isGameServicesAdRewardTarget(target)) {
-          const reward = {
-            status: 'unavailable',
-            rewardGranted: false,
-          } satisfies RewardedAdResult;
-
-          await analytics.track({
-            name: 'rewarded_ad_rejected',
-            properties: {
-              placementId: rewardInput.placementId,
-              status: reward.status,
-              rewardGranted: reward.rewardGranted,
-              reason: 'unsupported_target',
-            },
-          });
-
-          return {
-            status: 'rejected',
-            reward,
-          };
-        }
-
         progress.platformRequested();
         const reward = await input.gateway.ads.showRewarded(rewardInput);
         progress.platformResult(reward.status);
@@ -412,6 +389,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
         const platformImpressionId = candidate.platformImpressionId;
         const claimRequest: ClaimAdRewardRequest = {
           target,
+          ...(input.gateway.ads.provider === undefined ? {} : { providerId: input.gateway.ads.provider.id }),
           ...(input.deploymentTarget === undefined || input.deploymentTarget === target
             ? {}
             : { deploymentTarget: input.deploymentTarget }),
@@ -659,12 +637,6 @@ function isGameServicesCommerceTarget(
     || target === 'ios'
     || target === 'ait'
     || target === 'verse8';
-}
-
-function isGameServicesAdRewardTarget(
-  target: GameServicesLedgerTarget,
-): target is GameServicesAdRewardTarget {
-  return target === 'android' || target === 'ios' || target === 'ait' || target === 'verse8';
 }
 
 function isGameServicesLeaderboardTarget(
