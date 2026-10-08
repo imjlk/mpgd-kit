@@ -109,17 +109,25 @@ export function reduceAdSession(
   snapshot: AdSessionSnapshot,
   supplied: AdPresentationEvent,
 ): AdSessionSnapshot {
-  const event = assertAdPresentationEvent(supplied);
-  if (event.providerId !== snapshot.providerId || event.invocationId !== snapshot.invocationId
-    || event.sequence <= snapshot.sequence) {
+  const header = assertRecord(supplied);
+  assertId(header.providerId, 'providerId');
+  assertId(header.invocationId, 'invocationId');
+  if (header.providerId !== snapshot.providerId || header.invocationId !== snapshot.invocationId) {
     return snapshot;
   }
+  if (!Number.isSafeInteger(header.sequence) || (header.sequence as number) < 1) {
+    throw new TypeError('Invalid ad event sequence.');
+  }
+  if ((header.sequence as number) <= snapshot.sequence) {
+    return snapshot;
+  }
+  const event = assertAdPresentationEvent(supplied);
+  const next = { ...snapshot, sequence: event.sequence };
   // A closed invocation may receive delayed reward evidence, but cannot reopen.
   if (snapshot.terminal && (event.type !== 'reward-earned'
     || snapshot.presentation !== 'closed' || snapshot.rewardSignal !== 'delayed')) {
-    return snapshot;
+    return Object.freeze(next);
   }
-  const next = { ...snapshot, sequence: event.sequence };
   switch (event.type) {
     case 'requested':
       return Object.freeze(next);
@@ -127,7 +135,7 @@ export function reduceAdSession(
       return Object.freeze({ ...next, presentation: 'open', started: true });
     case 'reward-earned':
       if (snapshot.format !== 'rewarded' || snapshot.eligibility === 'eligible') {
-        return snapshot;
+        return Object.freeze(next);
       }
       return Object.freeze({ ...next, eligibility: 'eligible', evidence: event.evidence });
     case 'unknown':
@@ -281,6 +289,11 @@ export function assertAdShowResult(value: unknown): AdShowResult {
 let legacyInterstitialSequence = 0;
 
 export function toAdAdapter(provider: AdProvider): AdAdapter {
+  // These ids identify impressions, not authorization. A per-facade nonce survives
+  // resettable module counters without requiring DOM/SDK/crypto globals.
+  const interstitialSessionId = [
+    Date.now().toString(36), Math.random().toString(36).slice(2), Math.random().toString(36).slice(2),
+  ].join('-');
   assertId(provider.id, 'providerId');
   if (provider.protocol !== adProtocol || provider.protocolVersion !== adProtocolVersion) {
     throw new TypeError('Unsupported advertising provider protocol.');
@@ -314,7 +327,7 @@ export function toAdAdapter(provider: AdProvider): AdAdapter {
       return { status, rewardGranted: false, ...(result.evidence === undefined ? {} : { evidence: result.evidence }) };
     },
     async showInterstitial(input) {
-      const invocationId = `legacy-interstitial:${++legacyInterstitialSequence}`;
+      const invocationId = `legacy-interstitial:${interstitialSessionId}:${++legacyInterstitialSequence}`;
       const result = assertAdShowResult(await provider.show({
         ...input, format: 'interstitial', invocationId, idempotencyKey: invocationId,
       }));

@@ -349,5 +349,11 @@ describe('advertising conformance orchestration', () => {
     expect(() => assertAdConformanceVector({ ...vector, steps: [{ actor: 'sdk', action: 'award-money', invocationId: 'a' }] })).toThrow();
     expect(() => assertAdConformanceVector({ ...vector, steps: [{ actor: 'clock', action: 'advance', milliseconds: -1 }] })).toThrow();
     expect(() => assertAdConformanceVector({ ...vector, expect: { success: true } })).toThrow();
+    expect(() => assertAdConformanceVector({
+      ...vector, steps: [{ actor: 'backend', action: 'grant', invocationId: 'a', ledgerEntryId: 'ledger-a' }],
+    })).toThrow('grant identity');
+    expect(() => assertAdConformanceVector({
+      ...vector, steps: [{ actor: 'backend', action: 'grant', invocationId: 'a', verifiedImpressionId: 'impression-a', ledgerEntryId: '' }],
+    })).toThrow('grant identity');
   });
 });

@@ -162,6 +162,14 @@ export function assertAdConformanceVector(value: unknown): AdConformanceVector {
         throw new TypeError('Invalid advertising step placement.');
       }
     }
+    if (step.actor === 'backend' && step.action === 'grant') {
+      for (const field of ['verifiedImpressionId', 'ledgerEntryId']) {
+        const id = step[field];
+        if (typeof id !== 'string' || id.trim() === '' || id.length > 512) {
+          throw new TypeError('Invalid advertising backend grant identity.');
+        }
+      }
+    }
     if (step.actor === 'clock' && (!Number.isSafeInteger(step.milliseconds) || (step.milliseconds as number) < 0)) {
       throw new TypeError('Invalid advertising clock advance.');
     }

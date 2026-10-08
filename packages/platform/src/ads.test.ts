@@ -90,8 +90,8 @@ describe('advertising session contract', () => {
     expect(reduceAdSession(started, event('closed', 1))).toBe(started);
     expect(reduceAdSession(started, event('started', 2))).toBe(started);
     const failed = reduceAdSession(started, event('failed', 3));
-    expect(reduceAdSession(failed, event('started', 4))).toBe(failed);
-    expect(reduceAdSession(failed, event('reward-earned', 5))).toBe(failed);
+    expect(reduceAdSession(failed, event('started', 4))).toMatchObject({ presentation: 'closed', sequence: 4 });
+    expect(reduceAdSession(failed, event('reward-earned', 5))).toMatchObject({ eligibility: failed.eligibility, sequence: 5 });
   });
 
   it('requires declared delayed rewards to change eligibility after a non-rewarded close', () => {
@@ -99,19 +99,37 @@ describe('advertising session contract', () => {
       providerId: 'fixture-provider', invocationId: 'a', format: 'rewarded',
     }), event('closed', 1));
     expect(immediate.eligibility).toBe('not-earned');
-    expect(reduceAdSession(immediate, event('reward-earned', 2))).toBe(immediate);
+    expect(reduceAdSession(immediate, event('reward-earned', 2))).toMatchObject({ eligibility: 'not-earned', sequence: 2 });
     const delayed = reduceAdSession(createAdSession({
       providerId: 'fixture-provider', invocationId: 'a', format: 'rewarded', rewardSignal: 'delayed',
     }), event('closed', 1));
     expect(delayed.eligibility).toBe('unknown');
     const earned = reduceAdSession(delayed, event('reward-earned', 2));
     expect(earned).toMatchObject({ presentation: 'closed', eligibility: 'eligible' });
-    expect(reduceAdSession(earned, event('started', 3))).toBe(earned);
+    expect(reduceAdSession(earned, event('started', 3))).toMatchObject({ presentation: 'closed', sequence: 3 });
   });
 
   it('ignores reward callbacks for interstitials', () => {
     const state = createAdSession({ providerId: 'fixture-provider', invocationId: 'a', format: 'interstitial' });
-    expect(reduceAdSession(state, event('reward-earned', 1))).toBe(state);
+    expect(reduceAdSession(state, event('reward-earned', 1))).toMatchObject({ eligibility: 'not-applicable', sequence: 1 });
+  });
+
+  it('ignores malformed payloads for foreign or already observed invocations', () => {
+    const initial = createAdSession({ providerId: 'fixture-provider', invocationId: 'a', format: 'rewarded' });
+    const malformed = { ...event('reward-earned', 1), invocationId: 'other', evidence: null } as unknown as AdPresentationEvent;
+    expect(reduceAdSession(initial, malformed)).toBe(initial);
+    const started = reduceAdSession(initial, event('started', 3));
+    expect(reduceAdSession(started, { ...malformed, invocationId: 'a', sequence: 2 })).toBe(started);
+  });
+
+  it('advances the sequence watermark even when reward semantics do not change', () => {
+    let state = createAdSession({ providerId: 'fixture-provider', invocationId: 'a', format: 'rewarded' });
+    state = reduceAdSession(state, event('started', 1));
+    state = reduceAdSession(state, event('reward-earned', 2));
+    state = reduceAdSession(state, event('reward-earned', 5));
+    expect(state.sequence).toBe(5);
+    expect(reduceAdSession(state, event('closed', 4))).toBe(state);
+    expect(state.presentation).toBe('open');
   });
 
   it('rejects malformed identifiers, sequences and evidence before applying an event', () => {
@@ -217,5 +235,29 @@ describe('legacy advertising compatibility', () => {
     await second.showInterstitial?.({ placementId: 'END' });
     expect(calls).toHaveLength(2);
     expect(new Set(calls).size).toBe(2);
+  });
+
+  it('does not reuse interstitial identities after a module restart', async () => {
+    const calls: string[] = [];
+    const implementation = provider(async (input) => {
+      calls.push(input.invocationId);
+      return {
+        providerId: 'fixture-provider', invocationId: input.invocationId, format: 'interstitial',
+        outcome: 'shown', presentation: 'closed', eligibility: 'not-applicable',
+      };
+    });
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1000);
+    const random = vi.spyOn(Math, 'random').mockReturnValueOnce(0.125).mockReturnValueOnce(0.25)
+      .mockReturnValueOnce(0.5).mockReturnValueOnce(0.75);
+    try {
+      await toAdAdapter(implementation).showInterstitial?.({ placementId: 'END' });
+      vi.resetModules();
+      const restarted = await import('./ads.js');
+      await restarted.toAdAdapter(implementation).showInterstitial?.({ placementId: 'END' });
+      expect(calls[0]).not.toBe(calls[1]);
+    } finally {
+      clock.mockRestore();
+      random.mockRestore();
+    }
   });
 });
