@@ -7,6 +7,8 @@ import type {
 import type { AnalyticsEvent } from '@mpgd/analytics';
 
 import type { GameServicesBackendApi } from './client.js';
+import type { ClaimAdRewardRequest } from './types.js';
+import { createDefaultClientRewardEvidenceRegistry } from './default-client-reward-evidence.js';
 import type {
   GameServicesOperationProgress,
   GameServicesPurchaseProgress,
@@ -1080,5 +1082,168 @@ assert.equal(
   provisionalUiBefore + 1,
   'SSV recovery must not reopen a provisional ad',
 );
+
+// Late callbacks must join the original journal operation, including after a
+// runtime restart, without changing proof identity or reopening native UI.
+{
+  const lateStore = createStore();
+  const requests: ClaimAdRewardRequest[] = [];
+  let sdkCalls = 0;
+  let ready = false;
+  let nowTick = 0;
+  const lateEvidence = {
+    schema: 'mpgd.admob.client-reward.v1',
+    payload: { adUnitId: 'ca-app-pub-1234567890123456/1234567890' },
+  };
+  const args = {
+    gateway: {
+      ...gateway,
+      ads: {
+        ...gateway.ads,
+        async showRewarded(): Promise<RewardedAdResult> {
+          sdkCalls += 1;
+          return { status: 'pending', rewardGranted: false };
+        },
+      },
+    },
+    backend: {
+      ...backend,
+      adRewards: {
+        async claimAdReward(request: ClaimAdRewardRequest) {
+          requests.push(structuredClone(request));
+          return ready
+            ? { granted: true, ledgerEntryId: 'late-server-ledger', alreadyProcessed: false }
+            : { granted: false, alreadyProcessed: false, disposition: 'pending' as const };
+        },
+      },
+    },
+    playerId: 'late-player',
+    target: 'android' as const,
+    operationStore: lateStore,
+    rewardEvidenceRegistry: createDefaultClientRewardEvidenceRegistry(),
+    now: () => `2026-10-09T00:00:${String(nowTick++).padStart(2, '0')}Z`,
+  };
+  const initial = createRecoverableMonetizationClient(args);
+  assert.equal(
+    (await initial.claimRewardedAd({ placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'late-key' })).status,
+    'pending',
+  );
+  assert.equal(requests.length, 0);
+  const recorded = (await lateStore.listRecoverable('late-player'))[0];
+  if (recorded === undefined) {
+    throw new Error('Reserved ad was not journaled.');
+  }
+  const restartedLate = createRecoverableMonetizationClient(args);
+  await assert.rejects(
+    restartedLate.recoverRewardResult('late-key', {
+      status: 'pending',
+      rewardGranted: false,
+      evidence: { schema: 'unknown.reward.v1', payload: {} },
+    }),
+    /conflicts/,
+  );
+  assert.equal(
+    (await restartedLate.recoverRewardResult('late-key', { status: 'pending', rewardGranted: false, evidence: lateEvidence })).status,
+    'pending',
+  );
+  assert.equal(requests.length, 1);
+  assert.equal(
+    requests[0]?.completedAt,
+    recorded.platformCompletedAt,
+    'first journal timestamp must remain fixed',
+  );
+  await assert.rejects(
+    restartedLate.recoverRewardResult('late-key', {
+      status: 'completed',
+      rewardGranted: false,
+      evidence: { ...lateEvidence, payload: { adUnitId: 'ca-app-pub-9999999999999999/9999999999' } },
+    }),
+    /conflicts/,
+  );
+  assert.equal(requests.length, 1, 'conflicting evidence cannot reach the backend');
+  ready = true;
+  const settled = await restartedLate.recoverRewardResult('late-key', {
+    status: 'completed',
+    rewardGranted: false,
+    evidence: lateEvidence,
+  });
+  assert.equal(settled.status, 'granted');
+  assert.equal(settled.ledgerEntryId, 'late-server-ledger');
+  assert.equal(
+    JSON.stringify(requests[1]),
+    JSON.stringify(requests[0]),
+    'reuse the original complete verification request',
+  );
+  assert.equal(sdkCalls, 1, 'late correlation and restart never reopen native UI');
+  const undispatchedStore = createStore();
+  const undispatched = createRecoverableMonetizationClient({
+    ...args,
+    gateway: {
+      ...args.gateway,
+      ads: {
+        ...args.gateway.ads,
+        async showRewarded(): Promise<RewardedAdResult> {
+          return { status: 'pending', rewardGranted: false, evidence: lateEvidence };
+        },
+      },
+    },
+    operationStore: {
+      ...undispatchedStore,
+      async replace(revision, record) {
+        if (record.request !== undefined) {
+          throw new Error('request journal unavailable');
+        }
+        await undispatchedStore.replace(revision, record);
+      },
+    },
+  });
+  const before = requests.length;
+  assert.equal(
+    (await undispatched.claimRewardedAd({ placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'bound-before-request' })).status,
+    'pending',
+  );
+  await assert.rejects(
+    undispatched.recoverRewardResult('bound-before-request', {
+      status: 'completed',
+      rewardGranted: false,
+      evidence: { ...lateEvidence, payload: { adUnitId: 'ca-app-pub-9999999999999999/9999999999' } },
+    }),
+    /conflicts/,
+  );
+  assert.equal(
+    requests.length,
+    before,
+    'proof binding remains immutable even before dispatch is journaled',
+  );
+  const legacyEvidence = { schema: 'legacy.reward.v1', payload: { operation: 'legacy-late' } };
+  const legacyLate = createRecoverableMonetizationClient({
+    gateway: {
+      ...gateway,
+      ads: {
+        ...gateway.ads,
+        async showRewarded(): Promise<RewardedAdResult> {
+          return { status: 'pending', rewardGranted: false, evidence: legacyEvidence };
+        },
+      },
+    },
+    backend: args.backend,
+    playerId: 'late-player',
+    target: 'android',
+    operationStore: createStore(),
+  });
+  assert.equal(
+    (await legacyLate.claimRewardedAd({ placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'legacy-late' })).status,
+    'pending',
+  );
+  assert.equal(
+    (await legacyLate.recoverRewardResult('legacy-late', { status: 'completed', rewardGranted: true, ledgerEntryId: 'legacy-impression', evidence: legacyEvidence })).status,
+    'granted',
+  );
+  assert.equal(
+    requests.at(-1)?.platformImpressionId,
+    'legacy-impression',
+    'legacy completion still goes through backend verification',
+  );
+}
 
 console.log('Durable monetization operation recovery passed.');

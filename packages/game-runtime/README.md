@@ -121,6 +121,18 @@ game-services operation store when recovery must survive process restart.
 `claimEvidence` carries a server proof-lookup correlation without asserting local
 SDK eligibility. Registered server verification and its ledger remain authoritative.
 
+Use `createAdClaimEvidenceRecoveryObserver({ recovery, onResult })` to connect
+`onClaimEvidence` to an application-owned recoverable monetization client. Bind
+the handler during bootstrap before enabling SDK entrypoints. The observer
+always forwards an ungranted pending candidate under the original idempotency
+key, which may differ from the display invocation ID. Recovery serializes with
+the original operation, attaches a newly registered lookup envelope to a pending
+journal, and retries its recorded verification request without another SDK call.
+Previously recorded evidence and the first journal timestamp remain fixed.
+An eligibility change can prompt another lookup under the same identity.
+`onResult` observes backend settlement; refresh authoritative state or reconcile
+the action coordinator rather than adding rewards directly from SDK callbacks.
+
 Purchase business results do not prove that native UI closed. Without a trusted
 `classifyPurchasePresentation` function or a native `purchasePresentation`
 event source, the wrapper keeps presentation unknown. Wire actual native close

@@ -4,12 +4,13 @@ import { createGameExecutionController } from '@mpgd/game-runtime';
 import { bindGameLifecycle } from '@mpgd/game-runtime/platform';
 import { createGameUiBridge } from '@mpgd/game-runtime/ui';
 import { createFullScreenPresentationScope } from '@mpgd/game-runtime/presentation';
-import { createCoordinatedAdProvider, createCoordinatedPlatformGateway } from '@mpgd/game-runtime/ads';
+import { createAdClaimEvidenceRecoveryObserver, createCoordinatedAdProvider, createCoordinatedPlatformGateway } from '@mpgd/game-runtime/ads';
 
 assert.equal(typeof globalThis.document, 'undefined');
 assert.equal(typeof globalThis.Phaser, 'undefined');
 assert.equal(typeof createCoordinatedAdProvider, 'function');
 assert.equal(typeof createCoordinatedPlatformGateway, 'function');
+assert.equal(typeof createAdClaimEvidenceRecoveryObserver, 'function');
 const presentationExecution = createGameExecutionController();
 const presentation = createFullScreenPresentationScope({ execution: presentationExecution });
 const native = presentation.acquire({ kind: 'interstitial', invocationId: 'headless-ad' });
