@@ -122,10 +122,15 @@ an unverified local guest label. Re-check consent when the game resumes or
 the privacy choice changes, and expose `admob.showPrivacyOptions()` from game
 settings where required. `getCapabilities()` reports `action-required` until
 consent is ready and `temporarily-unavailable` during a show. A timed-out
-native load or presentation reports non-retryable `action-required` and
-quarantines that SDK instance to avoid overlapping shows
-while its state is unknown. Recreating the Kit provider with the same SDK does
-not clear the quarantine; restart the native app before trying again. Do not
+native load or presentation reports `action-required` and quarantines that
+SDK instance to avoid overlapping shows. A timed-out load fails before display
+and remains quarantined until that original preparation settles; it never
+opens an ad later. A display timeout returns pending even if an SDK reward was
+observed, because earning does not prove closure. The provider retains native
+terminal listeners and clears presentation uncertainty after a confirmed late
+close. Listener registration/cleanup failures remain quarantined until native
+app restart. Recreating a Kit provider with the same SDK does not clear these
+guards. Do not
 show rewarded ads through another direct SDK caller concurrently: the plugin's
 reward and dismissal events are global, not tagged with a Kit operation ID.
 
@@ -142,6 +147,20 @@ for a later signed SSV callback without replaying the ad UI; a genuinely
 skipped ad may remain pending until game-owned support or expiry policy
 settles it. Mediation and asynchronous bridge delivery have no safe universal
 250 ms reward-event cutoff.
+
+The gateway exposes `ads.provider` with protocol `mpgd.ads.v2`. Its rewarded
+preparation is `deferred`, since the operation's SSV binding must be attached to
+the fresh load. Missing placements are `configuration-required`, consent is
+`action-required`, and interstitials are explicitly unsupported by this provider.
+Native `Showed`, `Dismissed`, and `FailedToShow` events establish presentation
+facts; the original `showRewardVideoAd` Promise establishes per-call SDK
+eligibility. Global `Rewarded` events carry no invocation identity and cannot
+bind a late reward to a new show. A requested event carries
+`claimEvidence` for server proof lookup under the original idempotency key;
+this does not assert local eligibility or a grant. Pass this actual provider to
+the shared [game runtime](../../packages/game-runtime/README.md#native-presentation-and-financial-settlement)
+to coordinate execution and deadlines above all scenes. Removing SDK listeners
+and disposing a view cannot establish native closure.
 The receiver and ledger described in [AdMob SSV](../../docs/ADMOB_SSV.md)
 remain mandatory. A late SSV callback can leave the claim pending for
 reconciliation. `isTesting: true` is for SDK test ads only; [the plugin notes
@@ -149,7 +168,12 @@ that test ads do not invoke the SSV endpoint](https://github.com/capacitor-commu
 so they cannot prove a production grant.
 
 The Kit tests cover consent, per-operation binding, reward versus dismissal,
-and bridge contracts with an injected SDK. They are not evidence of a real
+and bridge contracts with an injected SDK. Seven shared presentation vectors
+run through this real provider, the installed Capacitor gateway, and the common
+runtime: consent/action, configuration, policy, deferred preparation, deadline
+with late closure, full-screen arbitration, and background ownership. This is
+presentation coverage, not complete certification of the server-ledger vector
+matrix. The fixtures are not evidence of a real
 AdMob account, live callback delivery, native device behavior, or store policy
 approval.
 

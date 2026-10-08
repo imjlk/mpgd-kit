@@ -1,4 +1,5 @@
 import type { BridgeMethod, BridgeRequest, BridgeResponse } from '@mpgd/bridge';
+import type { AdProvider } from '@mpgd/platform/ads';
 import { isAdMobClientRewardEvidence } from '@mpgd/game-services/admob-client-reward';
 import {
   PlatformOperationError,
@@ -22,6 +23,8 @@ export interface CapacitorServiceProvider {
   readonly bridge: NativeBridge;
   readonly features: readonly PlatformProviderFeature[];
   readonly methods: readonly BridgeMethod[];
+  /** Optional native event surface. The base adapter never imports its SDK. */
+  readonly adProvider?: AdProvider;
   getAvailability(): Promise<Readonly<Partial<Record<
     PlatformProviderFeature,
     PlatformProviderAvailability

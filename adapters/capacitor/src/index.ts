@@ -117,6 +117,8 @@ export function createCapacitorPlatformGateway(input: {
 }): PlatformGateway {
   const bridge = input.bridge ?? CapacitorGameServices;
   const providers = createCapacitorProviderRegistry(input.providers ?? []);
+  const adProvider = providers.byMethod.get('ads.showRewarded')?.adProvider
+    ?? providers.byMethod.get('ads.showInterstitial')?.adProvider;
   const lifecycle = createCapacitorAppEvents({
     target: input.target,
     ...(input.app === undefined ? {} : { app: input.app }),
@@ -290,6 +292,7 @@ export function createCapacitorPlatformGateway(input: {
       getEntitlements: () => request('commerce.getEntitlements', {}),
     },
     ads: {
+      ...(adProvider === undefined ? {} : { provider: adProvider }),
       preload: (payload) => request('ads.preload', payload),
       showRewarded: (payload) => request('ads.showRewarded', payload),
       showInterstitial: (payload) => request('ads.showInterstitial', payload),
