@@ -63,3 +63,16 @@ locked orientation modes as soft prompts instead of unsafe WebView hard locks.
 Verify safe-area geometry is reserved exactly once: CSS-padded containers must
 not also subtract `safeArea.contentBounds`, while full-bleed game surfaces use
 the snapshot bounds for persistent controls.
+
+## Shared native presentation
+
+- Purchase, rewarded, and interstitial requests use the same game-owned scope.
+- Native closure resumes gameplay while backend verification can remain pending.
+- Timeouts preserve unknown occupancy and late native/recovery observers.
+- Scene shutdown removes its action view and keyboard handler; it never unmutes
+  a live ad or updates a replacement scene from an old Promise.
+- Background and settings ownership remain after another native lease closes.
+- Rewarded v2 is unavailable until a durable encrypted journal is supplied via
+  bootstrap monetization ports. A test memory store is not durable recovery.
+- Use the real adapter's SDK-driven conformance tests and a game-owned platform
+  test environment; generic unit tests do not certify live ad delivery.

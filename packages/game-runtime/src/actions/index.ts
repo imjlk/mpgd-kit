@@ -103,6 +103,8 @@ export interface GameActionCoordinator {
   createPurchaseController(): GameActionController<'purchase'>;
   createRewardedAdController(): GameActionController<'rewarded-ad'>;
   getPendingOperation(): GameActionPendingOperation | undefined;
+  /** Trusted journal recovery only. Retire a matching non-grant reward without reopening SDK UI. */
+  confirmRecoveredRewardResult(idempotencyKey: string, result: GameServicesRewardedAdResult): boolean;
   /** Concurrent callers join one recovery query; only a matching committed grant unlocks new keys. */
   reconcile(): Promise<GameActionReconciliationResult>;
   getAvailability(): 'ready' | 'busy' | 'reconciliation-required' | 'history-full' | 'disposed';
@@ -160,6 +162,7 @@ export function createGameActionCoordinator(options: {
   let nextId = 0;
   let disposed = false;
   let unconfirmed: GameActionPendingOperation | undefined;
+  const recoveredNonGrants = new Set<string>();
   let recoveryFlight: Promise<GameActionReconciliationResult> | undefined;
 
   function isDisposed(): boolean {
@@ -235,9 +238,10 @@ export function createGameActionCoordinator(options: {
 
     function finish(status: Results[K]['status'] | 'exception'): void {
       flight.settled = true;
-      if (invoked && (status === 'pending' || status === 'exception')) {
+      if (invoked && (status === 'pending' || status === 'exception') && !(kind === 'rewarded-ad' && recoveredNonGrants.has(key))) {
         unconfirmed = Object.freeze({ kind, operationId: id, input }) as GameActionPendingOperation;
       }
+      recoveredNonGrants.delete(key);
       current = undefined;
       if (invoked) {
         last = flight as AnyFlight;
@@ -498,6 +502,22 @@ export function createGameActionCoordinator(options: {
   return Object.freeze({
     createPurchaseController: () => makeController('purchase'),
     getPendingOperation: () => unconfirmed,
+    confirmRecoveredRewardResult(idempotencyKey: string, result: GameServicesRewardedAdResult) {
+      if (isDisposed()) { throw new GameActionExecutionError('disposed'); }
+      const rejected = result.status === 'rejected' && result.claim?.granted === false && result.claim.disposition === 'rejected';
+      const noCandidate = ['failed', 'skipped', 'unavailable'].includes(result.status) && result.reward.status === result.status
+        && result.reward.rewardGranted === false && result.reward.evidence === undefined && result.reward.ledgerEntryId === undefined && result.claim === undefined;
+      if ((!rejected && !noCandidate) || result.ledgerEntryId !== undefined || result.claim?.ledgerEntryId !== undefined || result.reward.ledgerEntryId !== undefined || result.reward.rewardGranted !== false) { throw new GameActionExecutionError('invalid-reconciliation'); }
+      if (unconfirmed?.kind === 'rewarded-ad' && unconfirmed.input.idempotencyKey === idempotencyKey) {
+        unconfirmed = undefined;
+        return true;
+      }
+      if (current !== undefined && current.key === idempotencyKey && current.bridge.getSnapshot().kind === 'rewarded-ad' && !current.settled) {
+        recoveredNonGrants.add(idempotencyKey);
+        return true;
+      }
+      return false;
+    },
     reconcile,
     createRewardedAdController: () => makeController('rewarded-ad'),
     getAvailability() {

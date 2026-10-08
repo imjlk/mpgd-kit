@@ -1,3 +1,4 @@
+import { bindGameAudio } from '@mpgd/game-runtime/audio';
 import Phaser from 'phaser';
 
 import { isMiniGameRuntime } from '@mpgd/target-config';
@@ -37,6 +38,7 @@ export function createStarterGame(input: CreateStarterGameInput): Phaser.Game {
     callbacks: {
       postBoot(game: Phaser.Game) {
         game.registry.set('starterContext', input.context);
+        ownGameAudio(game, input.context);
       },
     },
   } satisfies Phaser.Types.Core.GameConfig;
@@ -98,4 +100,24 @@ function reportFailedMiniGameCleanup(error: unknown): void {
   } catch {
     // Preserve the authoritative bootstrap error when host logging is unavailable.
   }
+}
+
+/** The sound manager and execution projection belong to the game, not a scene. */
+function ownGameAudio(game: Phaser.Game, context: StarterContext): void {
+  const audio = bindGameAudio({
+    execution: context.gameRuntime.execution,
+    sink: {
+      getMuted: () => game.sound.mute,
+      setMuted: (muted) => {
+        game.sound.mute = muted;
+      },
+    },
+    onError: (error) => {
+      console.error('[game-audio]', error);
+    },
+  });
+  game.events.once('destroy', () => {
+    context.gameRuntime.dispose();
+    audio.dispose();
+  });
 }

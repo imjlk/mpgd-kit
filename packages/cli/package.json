@@ -73,6 +73,7 @@
     "@mpgd/analytics": "workspace:*",
     "@mpgd/bridge": "workspace:*",
     "@mpgd/game-services": "workspace:*",
+    "@mpgd/game-runtime": "workspace:*",
     "@mpgd/i18n": "workspace:*",
     "@mpgd/platform": "workspace:*",
     "@types/node": "^24.0.0",

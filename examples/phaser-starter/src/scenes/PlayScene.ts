@@ -1,3 +1,4 @@
+import { bindPhaserGameScene } from '@mpgd/game-runtime/phaser';
 import { m } from '@mpgd/i18n';
 import Phaser from 'phaser';
 
@@ -19,6 +20,18 @@ export class PlayScene extends Phaser.Scene {
 
   create(): void {
     const context = this.registry.get('starterContext') as StarterContext;
+    bindPhaserGameScene({
+      controller: context.gameRuntime.execution,
+      scene: this,
+      renderingPolicy: 'visibility',
+      audioOwner: 'game',
+      resetInput: () => {
+        this.input.keyboard?.resetKeys();
+      },
+      onUnsupportedState: (_snapshot, reason) => {
+        console.error('[game-execution]', reason);
+      },
+    });
 
     this.add
       .text(480, 92, m.sdk_summary({ features: featureSummary(context) }, { locale: context.locale }), {

@@ -69,3 +69,12 @@ Manual playtest:
 - Verify Play full screen opens the separate expanded gameplay entry.
 - Start the play scene.
 - Verify the simulation loop advances without scene-local gameplay rules becoming the source of truth.
+
+## Game-owned execution and advertising
+
+Construct one `createGamePlatformRuntime` during bootstrap. Scenes bind gameplay
+execution with `audioOwner: 'game'`; the Phaser game's sound manager owns audio
+projection. Add SDKs only in target assembly or adapters. All rewarded views use
+the game-owned action coordinator and authoritative services, with an
+application-owned durable encrypted operation store. Keep recovery above scenes
+and reconcile existing operations on startup and resume without opening SDK UI.

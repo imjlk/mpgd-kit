@@ -1,3 +1,4 @@
+import { createGamePlatformRuntime, type GamePlatformRuntime } from '@mpgd/game-runtime/game';
 import { resolveTargetMpgdLocale } from '@mpgd/i18n';
 import type {
   IdentitySession,
@@ -6,6 +7,7 @@ import type {
   PlatformTarget,
 } from '@mpgd/platform';
 import {
+  getEffectiveAdPlacementConfig,
   measureTargetViewport,
   resolveTargetViewportSnapshot,
   waitForTargetViewportMeasurement,
@@ -16,12 +18,13 @@ import {
 import { createStarterGame } from './runtime/createGame';
 import { disposeStarterMiniGameBridgeAfterBootstrapFailure } from './platform/minigameBridge';
 import { detectRuntime } from './platform/runtimeDetector';
-import { createStarterGameServices } from './platform/gameServices';
+import { createStarterGameServices, type StarterMonetizationPorts } from './platform/gameServices';
 import { installStarterPlatform } from './platform/installStarterPlatform';
 import { installMicrosoftStorePwa } from './platform/microsoftStorePwa';
 
 /** Install target services, resolve viewport state, and start the example game. */
-export async function bootstrapStarter(): Promise<void> {
+export async function bootstrapStarter(options: { readonly monetization?: StarterMonetizationPorts } = {}): Promise<void> {
+  let gameRuntime: GamePlatformRuntime | undefined;
   let runtimeTarget: PlatformTarget | undefined;
   let disposeMicrosoftStorePwa: () => void = () => undefined;
 
@@ -59,18 +62,49 @@ export async function bootstrapStarter(): Promise<void> {
         runtime.effectiveConfig?.localization.fallbackLocale
         ?? runtime.config.localization.fallbackLocale,
     });
-    const gameServices = createStarterGameServices({
+    const ownedRuntime = createGamePlatformRuntime({
       gateway: platform,
-      playerId: identitySession.playerId ?? player.playerId,
-      configTarget: runtime.configTarget,
+      initialLifecycleState: document.visibilityState === 'hidden' ? 'inactive' : 'active',
+      canShow: (placement) => {
+        const enabled = placement.format === 'rewarded'
+          ? runtime.config.features.rewardedAds
+          : runtime.config.features.interstitialAds;
+        const configured = runtime.effectiveConfig === undefined
+          ? undefined
+          : getEffectiveAdPlacementConfig(runtime.effectiveConfig, placement.placementId);
+        return enabled && (runtime.effectiveConfig === undefined || configured !== undefined && configured.reason !== 'target-disabled');
+      },
+      deadline: {
+        milliseconds: 30000,
+        schedule(callback, milliseconds) {
+          const timer = setTimeout(callback, milliseconds);
+          return () => clearTimeout(timer);
+        },
+      },
+      ...(options.monetization?.reconciliation === undefined ? {} : { reconciliation: options.monetization.reconciliation }),
+      ...(options.monetization?.purchasePresentation === undefined ? {} : { purchasePresentation: options.monetization.purchasePresentation }),
+      onObserverError: (error) => {
+        console.error('[game-runtime]', error);
+      },
+      createServices: (gateway) =>
+        createStarterGameServices({
+          gateway,
+          playerId: identitySession.playerId ?? player.playerId,
+          configTarget: runtime.configTarget,
+          ...(options.monetization === undefined ? {} : { operationStore: options.monetization.operationStore }),
+        }),
     });
+    gameRuntime = ownedRuntime;
+    const gameServices = ownedRuntime.services;
+    await ownedRuntime.reconcile();
 
     createStarterGame({
       mountId: 'game',
       preserveBrowserTouchGestures:
         document.body.dataset.mpgdPreserveBrowserTouchGestures === 'true',
       context: {
-        platform,
+        platform: ownedRuntime.gateway,
+        gameRuntime: ownedRuntime,
         runtime,
         viewport,
         player,
@@ -81,6 +115,7 @@ export async function bootstrapStarter(): Promise<void> {
       },
     });
   } catch (error) {
+    gameRuntime?.dispose();
     disposeStarterMiniGameBridgeAfterBootstrapFailure(runtimeTarget);
     try {
       disposeMicrosoftStorePwa();

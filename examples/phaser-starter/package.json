@@ -25,7 +25,8 @@
     "@mpgd/platform": "workspace:*",
     "@mpgd/phaser-minigame-runtime": "workspace:*",
     "@mpgd/target-config": "workspace:*",
-    "phaser": "4.2.0"
+    "phaser": "4.2.0",
+    "@mpgd/game-runtime": "workspace:*"
   },
   "devDependencies": {
     "@ttsc/unplugin": "0.30.4",

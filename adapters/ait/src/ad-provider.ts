@@ -261,7 +261,8 @@ export function createAitAdProvider(input: {
               break;
           }
         },
-        onError() { if (started) { uncertain(); } else { close(true); } },
+        // A bridge error does not prove the native UI never opened.
+        onError() { uncertain(); },
       });
       if (cleaned) {
         try {

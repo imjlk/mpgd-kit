@@ -95,4 +95,18 @@ describe('AIT SDK to real host, proxy and coordinated gateway', () => {
     expect(f.cleanups.at(-1)).toHaveBeenCalledOnce();
     f.gateway.dispose();
   });
+  it('retains occupancy on SDK bridge error until a real failed-to-show callback', async () => {
+    const f = fixture();
+    const pending = f.ads.show(f.input);
+    await flush();
+    f.callbacks[0]?.onError(new Error('Bridge response was lost'));
+    await expect(pending).resolves.toMatchObject({ outcome: 'pending', presentation: 'unknown' });
+    expect(f.cleanups[0]).not.toHaveBeenCalled();
+    expect(f.presentation.getSnapshot().owner).toBeDefined();
+    f.callbacks[0]?.onEvent({ type: 'failedToShow' });
+    await flush();
+    expect(f.presentation.getSnapshot().owner).toBeUndefined();
+    expect(f.cleanups[0]).toHaveBeenCalledOnce();
+    f.gateway.dispose();
+  });
 });

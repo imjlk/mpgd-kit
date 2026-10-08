@@ -84,6 +84,8 @@ interface Flight {
   lease?: FullScreenPresentationLease;
   claimEvidence?: PlatformEvidenceEnvelope | undefined;
   lastClaimFingerprint?: string;
+  lastLateResultFingerprint?: string;
+  hasObservedCandidate?: boolean;
   called: boolean;
   delivered: boolean;
   cancelWait: () => void;
@@ -98,6 +100,8 @@ export function createCoordinatedAdProvider(input: {
   readonly onObserverError?: ObserverErrorHandler;
   /** Application-owned claim/journal observer, never a grant callback. Survives view disposal. */
   readonly onClaimEvidence?: (observation: AdClaimEvidenceObservation) => void | Promise<void>;
+  /** Application-owned provider settlement after a caller deadline; never a UI callback. */
+  readonly onLateResult?: (observation: { readonly input: AdShowInput; readonly result: AdShowResult }) => void | Promise<void>;
 }): CoordinatedAdProvider {
   const provider = input.provider;
   // Validate protocol metadata before installing any external observer.
@@ -155,6 +159,20 @@ export function createCoordinatedAdProvider(input: {
       input.onObserverError,
     );
   }
+  function lateResult(flight: Flight, result: AdShowResult): void {
+    if (!flight.delivered || flight.hasObservedCandidate && (result.eligibility === 'not-earned' || result.presentation === 'not-started')) {
+      return;
+    }
+    const fingerprint = JSON.stringify(result);
+    if (flight.lastLateResultFingerprint === fingerprint) {
+      return;
+    }
+    flight.lastLateResultFingerprint = fingerprint;
+    observe(
+      () => input.onLateResult?.(Object.freeze({ input: flight.input, result })),
+      input.onObserverError,
+    );
+  }
   function maybeDetach(): void {
     if (!disposed || detached || [...flights.values()].some((flight) => !flight.delivered
       || flight.session.presentation === 'unknown' || flight.session.presentation === 'open'
@@ -188,7 +206,13 @@ export function createCoordinatedAdProvider(input: {
       }
       flight.session = next;
       flight.claimEvidence = next.claimEvidence;
+      flight.hasObservedCandidate ||= next.evidence !== undefined || next.claimEvidence !== undefined;
       updateLease(flight);
+      if (event.type === 'failed' && next.presentation === 'not-started' && !next.started
+        && previous.evidence === undefined && previous.claimEvidence === undefined) {
+        lateResult(flight, assertAdShowResult({ providerId: id, invocationId: flight.input.invocationId, format: flight.input.format,
+          outcome: 'failed', presentation: 'not-started', eligibility: flight.input.format === 'rewarded' ? 'not-earned' : 'not-applicable', reason: event.reason }));
+      }
       if (!previous.terminal || event.type === 'reward-earned' && next.evidence !== previous.evidence) {
         if (event.type !== 'reward-earned' || next.evidence !== previous.evidence) {
           emit(flight, event);
@@ -312,6 +336,15 @@ export function createCoordinatedAdProvider(input: {
       throw new TypeError('Advertising result contradicts native presentation observations.');
     }
     const previous = flight.session;
+    flight.hasObservedCandidate ||= previous.evidence !== undefined || previous.claimEvidence !== undefined || result.evidence !== undefined || result.claimEvidence !== undefined;
+    if (previous.terminal && previous.presentation === 'not-started' && result.presentation !== 'not-started') {
+      // A less specific Promise cannot reopen a definitively failed native request.
+      const terminal = observation(flight);
+      lateResult(flight, terminal);
+      deliver(flight, terminal);
+      maybeDetach();
+      return;
+    }
     const closed = previous.presentation === 'closed' || result.presentation === 'closed';
     let eligibility = result.eligibility;
     if (previous.eligibility === 'eligible') {
@@ -362,17 +395,16 @@ export function createCoordinatedAdProvider(input: {
     if (closed && outcome === 'pending') {
       outcome = flight.session.started ? 'shown' : 'skipped';
     }
-    deliver(
-      flight,
-      assertAdShowResult({
-        ...resultBase,
-        outcome,
-        presentation: flight.session.presentation,
-        eligibility,
-        ...(rewardEvidence === undefined ? {} : { evidence: rewardEvidence }),
-        ...(flight.claimEvidence === undefined ? {} : { claimEvidence: flight.claimEvidence }),
-      }),
-    );
+    const settled = assertAdShowResult({
+      ...resultBase,
+      outcome,
+      presentation: flight.session.presentation,
+      eligibility,
+      ...(rewardEvidence === undefined ? {} : { evidence: rewardEvidence }),
+      ...(flight.claimEvidence === undefined ? {} : { claimEvidence: flight.claimEvidence }),
+    });
+    lateResult(flight, settled);
+    deliver(flight, settled);
     maybeDetach();
   }
   function show(supplied: AdShowInput): Promise<AdShowResult> {

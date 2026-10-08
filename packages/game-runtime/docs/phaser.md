@@ -104,3 +104,14 @@ subsequent explicit `dispose()` retries it while the runtime is active. Successf
 cleanup stays idempotent; terminal runtime destruction never retries an unmute.
 Complete this explicit cleanup before reusing the same sink for another binding,
 as required by the single-writer ownership contract. No retry timer is installed.
+
+## Game-owned sound manager
+
+Use `bindGameAudio` from `@mpgd/game-runtime/audio` above every scene and select
+`audioOwner: 'game'` in scene bindings. That option prevents scene-level audio
+projection and suppresses the missing-scene-audio diagnostic; providing both
+it and a scene audio sink is rejected. Connect the game sound manager's mute
+property to the sink. Scene shutdown only detaches its input/render binding.
+Destroy the shared runtime on the Phaser game's destroy event, then detach the
+audio projection. Unknown native presentation and application-owned claim
+recovery survive scene disposal and must not be canceled by SDK cleanup.

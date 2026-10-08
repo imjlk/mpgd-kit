@@ -4,8 +4,20 @@
   "version": "0.1.0",
   "engine": "phaser-4",
   "intent": "Minimal mpgd starter showing platform, target-config, i18n, game-services, asset, and simulation boundaries.",
-  "targets": ["web-preview", "microsoft-store", "verse8", "android", "ios", "ait", "reddit", "wechat"],
-  "futureTargets": ["telegram", "tauri"],
+  "targets": [
+    "web-preview",
+    "microsoft-store",
+    "verse8",
+    "android",
+    "ios",
+    "ait",
+    "reddit",
+    "wechat"
+  ],
+  "futureTargets": [
+    "telegram",
+    "tauri"
+  ],
   "agentWorkflow": {
     "brief": "agent/brief.template.md",
     "acceptance": "agent/acceptance.md",
@@ -47,7 +59,12 @@
       "id": "runtime.scene.shell",
       "kind": "scene",
       "entry": "src/scenes/StarterScene.ts",
-      "capabilities": ["scene-shell", "i18n", "target-summary", "viewport-orientation-summary"],
+      "capabilities": [
+        "scene-shell",
+        "i18n",
+        "target-summary",
+        "viewport-orientation-summary"
+      ],
       "gotchas": [
         "Keep dense HUD or settings in DOM overlays for downstream games.",
         "Do not make the scene the source of truth for progression.",
@@ -58,7 +75,10 @@
       "id": "simulation.loop.phase",
       "kind": "simulation",
       "entry": "src/game/simulation/state.ts",
-      "capabilities": ["deterministic-state", "fixed-boundary"],
+      "capabilities": [
+        "deterministic-state",
+        "fixed-boundary"
+      ],
       "gotchas": [
         "Save serializable state only.",
         "Do not store Phaser objects in simulation state."
@@ -97,7 +117,11 @@
       "id": "services.backend.game-services",
       "kind": "service",
       "entry": "src/platform/gameServices.ts",
-      "capabilities": ["ledger-first", "http-transport", "orpc-transport"],
+      "capabilities": [
+        "ledger-first",
+        "http-transport",
+        "orpc-transport"
+      ],
       "gotchas": [
         "Treat platform callbacks as evidence, not grants.",
         "Require backend ledger APIs for purchase, ad reward, and leaderboard records."
@@ -107,7 +131,10 @@
       "id": "platform.gateway.bootstrap-intents",
       "kind": "platform",
       "entry": "src/bootstrap.ts",
-      "capabilities": ["identity-session", "launch-intent"],
+      "capabilities": [
+        "identity-session",
+        "launch-intent"
+      ],
       "gotchas": [
         "Fall back to a local guest and home intent when an older host does not implement additive methods.",
         "Use the server-verified session player ID for backend services when it is available."
@@ -168,10 +195,30 @@
       "id": "assets.manifest.stable-keys",
       "kind": "asset",
       "entry": "src/game/assets/manifest.ts",
-      "capabilities": ["stable-asset-keys", "public-assets"],
+      "capabilities": [
+        "stable-asset-keys",
+        "public-assets"
+      ],
       "gotchas": [
         "Do not let raw file names become the gameplay API.",
         "Register every runtime asset in the manifest."
+      ]
+    },
+    {
+      "id": "runtime.game.owned-presentation",
+      "kind": "platform",
+      "entry": "src/bootstrap.ts",
+      "capabilities": [
+        "game-owned-execution",
+        "shared-full-screen-presentation",
+        "late-claim-recovery",
+        "game-owned-audio"
+      ],
+      "gotchas": [
+        "Create one game runtime above scene lifetimes; scene teardown must not release native presentation or global audio.",
+        "Rewarded v2 requires an application-owned durable encrypted operation journal; never substitute an in-memory map.",
+        "SDK earning and physical closure are separate from an authoritative backend ledger grant.",
+        "Recover existing claims on startup and resume without reopening SDK UI."
       ]
     }
   ],

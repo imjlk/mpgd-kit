@@ -5,8 +5,18 @@ import {
   resolveGameServicesTransport,
   type GameServicesRuntime,
   type GameServicesRuntimeMode,
+  type MonetizationOperationStore,
 } from '@mpgd/game-services';
 import type { PlatformGateway } from '@mpgd/platform';
+import type { GameActionReconciliationPort } from '@mpgd/game-runtime/actions';
+import type { PurchasePresentationEvent } from '@mpgd/game-runtime/ads';
+
+/** Supply a game-owned durable encrypted journal and trusted recovery/native facts. */
+export interface StarterMonetizationPorts {
+  readonly operationStore: MonetizationOperationStore;
+  readonly reconciliation?: GameActionReconciliationPort;
+  readonly purchasePresentation?: { subscribe(listener: (event: PurchasePresentationEvent) => void): () => void };
+}
 
 export type StarterBackendMode = GameServicesRuntimeMode;
 export type StarterGameServices = GameServicesRuntime;
@@ -15,12 +25,14 @@ export function createStarterGameServices(input: {
   readonly gateway: PlatformGateway;
   readonly playerId: string;
   readonly configTarget: string;
+  readonly operationStore?: MonetizationOperationStore;
   readonly analytics?: AnalyticsSink;
   readonly analyticsSessionId?: string;
 }): StarterGameServices {
   return createGameServicesRuntime({
     gateway: input.gateway,
     playerId: input.playerId,
+    ...(input.operationStore === undefined ? {} : { operationStore: input.operationStore }),
     ...(input.analytics === undefined ? {} : { analytics: input.analytics }),
     ...(input.analyticsSessionId === undefined
       ? {}

@@ -323,6 +323,7 @@ const mpgdTemplateDependencyPackages = [
   { name: '@mpgd/catalog', packageDir: 'packages/catalog' },
   { name: '@mpgd/cli', packageDir: 'packages/cli' },
   { name: '@mpgd/game-services', packageDir: 'packages/game-services' },
+  { name: '@mpgd/game-runtime', packageDir: 'packages/game-runtime' },
   { name: '@mpgd/i18n', packageDir: 'packages/i18n' },
   { name: '@mpgd/phaser-assets', packageDir: 'packages/phaser-assets' },
   { name: '@mpgd/platform', packageDir: 'packages/platform' },
