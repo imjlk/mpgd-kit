@@ -1,5 +1,5 @@
 {
-  "vector": "delayed-reward",
+  "vector": "delayed-dismissal-pending",
   "protocol": "mpgd.ads.v2",
   "profile": {
     "formats": [
@@ -26,28 +26,15 @@
       "actor": "sdk",
       "action": "closed",
       "invocationId": "a"
-    },
-    {
-      "actor": "sdk",
-      "action": "rewardEarned",
-      "invocationId": "a"
-    },
-    {
-      "actor": "backend",
-      "action": "grant",
-      "invocationId": "a",
-      "verifiedImpressionId": "impression-a",
-      "ledgerEntryId": "ledger-a"
     }
   ],
   "expect": {
     "presentation": "closed",
-    "eligibility": "eligible",
+    "eligibility": "unknown",
     "claimRequests": 1,
-    "claimState": "granted",
-    "ledgerGrants": 1,
-    "occupied": false,
-    "ledgerEntryId": "ledger-a"
+    "claimState": "pending",
+    "ledgerGrants": 0,
+    "occupied": false
   },
   "version": "2.0.0-draft.1"
 }

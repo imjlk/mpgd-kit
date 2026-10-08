@@ -1,7 +1,11 @@
 # Advertising behavior contract (RFC)
 
-Status: **draft proposal (AD1)**. This contract and its vectors do not describe
-implemented runtime guarantees. They remain outside the enforced
+Status: **partially implemented proposal (AD2)**. The versioned types,
+validators, pure session transitions, compatibility facade, and vector runner
+now exist in `@mpgd/platform/ads` and `@mpgd/platform/ads-conformance`.
+The reference-port tests exercise the vectors; shared runtime ownership,
+real adapter fixtures, and registered reward routing remain proposed work.
+The full behavior described here is outside the enforced
 [documentation evidence](../../DOCUMENTATION_EVIDENCE.md) scope until the
 contract, runner, and real adapter fixtures land.
 Baseline: `main@ce43de12`, 2026-10-08. Proposed protocol:
@@ -165,12 +169,24 @@ compatibility entrypoints when normalization moves to a neutral module.
 ## Conformance vectors {#vectors}
 
 Draft vectors are in [the vectors directory](https://github.com/imjlk/mpgd-kit/tree/main/docs/specs/ads/vectors).
-They are input to the AD2 runner, not executable tests in AD1.
+They run through the AD2 runner against test-only reference SDK and ledger
+ports. This does not establish that real adapters pass them.
 
-Each JSON file has `vector` (matching the file name), `protocol`, a
+Each JSON file has `vector` (matching the file name), `protocol`
+(`mpgd.ads.v2`), `version` (`2.0.0-draft.1`), a
 `profile`, ordered `steps`, and `expect`. The profile describes supported
 formats, configured placement, and immediate/delayed reward signals.
 Missing expectation fields are not assertions.
+
+Profiles may also specify `policyEnabled` (default true), `actionRequired`
+(default false), and `preparation`. A step may carry an `expect`
+checkpoint, checked immediately after that action. Expectations are stripped
+before an action is passed to a driver. Separate `callerId` values track the
+two callers joining a duplicate invocation. `outcomes` contain normalized
+outcomes; rejection classes such as `busy` belong in `reasons`.
+Client normalization failure leaves a claim `not-requested`, with a
+separate `normalization: rejected` observation. Grant and recovery
+assertions can check the exact authoritative `ledgerEntryId`.
 
 Fixture defaults are player `test-player`, registered provider
 `fixture-provider`, evidence schema `fixture.reward.v1`, and a 30,000 ms

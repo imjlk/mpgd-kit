@@ -1,3 +1,5 @@
+import type { AdProvider } from './ads.js';
+
 export type PlatformTarget =
   | 'browser'
   | 'microsoft-store'
@@ -210,6 +212,8 @@ export interface CommerceAdapter {
 }
 
 export interface AdAdapter {
+  /** Optional versioned provider surface; v1 methods remain compatible. */
+  readonly provider?: AdProvider;
   preload(input: {
     readonly placementId: LogicalAdPlacementId;
     /** Allows a shared provider preload method to enforce format readiness. */

@@ -1,6 +1,7 @@
 {
-  "vector": "recovery-without-display",
+  "vector": "evidence-binding-player",
   "protocol": "mpgd.ads.v2",
+  "version": "2.0.0-draft.1",
   "profile": {
     "formats": [
       "rewarded",
@@ -25,7 +26,10 @@
     {
       "actor": "sdk",
       "action": "rewardEarned",
-      "invocationId": "a"
+      "invocationId": "a",
+      "binding": {
+        "playerId": "other-player"
+      }
     },
     {
       "actor": "sdk",
@@ -33,28 +37,17 @@
       "invocationId": "a"
     },
     {
-      "actor": "runtime",
-      "action": "restart"
-    },
-    {
       "actor": "backend",
       "action": "grant",
       "invocationId": "a",
-      "verifiedImpressionId": "shared-impression",
-      "ledgerEntryId": "ledger-shared"
-    },
-    {
-      "actor": "runtime",
-      "action": "recover",
-      "invocationId": "a"
+      "verifiedImpressionId": "impression-a",
+      "ledgerEntryId": "ledger-a"
     }
   ],
   "expect": {
-    "sdkShows": 1,
-    "ledgerGrants": 1,
-    "claimState": "granted",
-    "occupied": false,
-    "ledgerEntryId": "ledger-shared"
-  },
-  "version": "2.0.0-draft.1"
+    "claimRequests": 1,
+    "claimState": "rejected",
+    "ledgerGrants": 0,
+    "occupied": false
+  }
 }

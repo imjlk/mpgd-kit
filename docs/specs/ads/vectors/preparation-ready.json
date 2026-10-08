@@ -1,6 +1,7 @@
 {
-  "vector": "preparation-deferred",
+  "vector": "preparation-ready",
   "protocol": "mpgd.ads.v2",
+  "version": "2.0.0-draft.1",
   "profile": {
     "formats": [
       "rewarded",
@@ -8,7 +9,7 @@
     ],
     "configured": true,
     "rewardSignal": "immediate",
-    "preparation": "deferred"
+    "preparation": "ready"
   },
   "steps": [
     {
@@ -19,9 +20,8 @@
     }
   ],
   "expect": {
-    "preparation": "deferred",
+    "preparation": "ready",
     "sdkShows": 0,
     "ledgerGrants": 0
-  },
-  "version": "2.0.0-draft.1"
+  }
 }

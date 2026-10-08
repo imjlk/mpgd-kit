@@ -25,6 +25,14 @@
   "type": "module",
   "sideEffects": false,
   "exports": {
+    "./ads": {
+      "types": "./dist/ads.d.ts",
+      "default": "./dist/ads.js"
+    },
+    "./ads-conformance": {
+      "types": "./dist/ads-conformance.d.ts",
+      "default": "./dist/ads-conformance.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
@@ -46,7 +54,7 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "vitest run && node test/capability-conformance-dist-import.mjs && node test/storage-conformance-dist-import.mjs"
+    "test": "vitest run && node test/capability-conformance-dist-import.mjs && node test/storage-conformance-dist-import.mjs && node test/ads-dist-import.mjs"
   },
   "devDependencies": {
     "ttsc": "0.30.4",
