@@ -1,0 +1,120 @@
+{
+  "vector": "purchase-pending-then-purchased",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A store-side pending purchase is never sent for a grant; it is verified only after the store reports it purchased.",
+  "profile": {
+    "store": "fixture.client-token",
+    "purchase": {
+      "consumable": true,
+      "durable": true,
+      "subscription": false,
+      "quantity": false
+    },
+    "lifecycle": {
+      "availablePurchases": true,
+      "pending": true,
+      "restore": true,
+      "events": true,
+      "finish": "client"
+    },
+    "authority": {
+      "evidence": "client-token",
+      "accountBinding": "optional"
+    }
+  },
+  "catalog": [
+    {
+      "logicalId": "gems_small",
+      "kind": "consumable",
+      "storeSku": "gems.small"
+    }
+  ],
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "game",
+      "action": "requestPurchase",
+      "input": {
+        "logicalId": "gems_small",
+        "idempotencyKey": "op-1"
+      },
+      "returns": {
+        "outcome": "launched"
+      }
+    },
+    {
+      "actor": "store",
+      "action": "complete",
+      "purchase": {
+        "transactionId": "tx-1",
+        "storeSku": "gems.small",
+        "token": "token-1",
+        "state": "pending"
+      }
+    },
+    {
+      "actor": "runtime",
+      "action": "reconcile"
+    },
+    {
+      "actor": "backend",
+      "action": "queueVerify",
+      "decision": {
+        "status": "granted",
+        "ledgerEntryId": "le-1"
+      }
+    },
+    {
+      "actor": "store",
+      "action": "update",
+      "purchase": {
+        "transactionId": "tx-1",
+        "storeSku": "gems.small",
+        "token": "token-1",
+        "state": "purchased"
+      }
+    }
+  ],
+  "expect": {
+    "journal": {
+      "op-1": [
+        "requested",
+        "launched",
+        "pending",
+        "purchased",
+        "verifying",
+        "granted",
+        "finishing",
+        "finished"
+      ]
+    },
+    "verifyRequests": [
+      {
+        "idempotencyKey": "op-1",
+        "store": "fixture.client-token",
+        "transactionId": "tx-1",
+        "token": "token-1"
+      }
+    ],
+    "ledger": [
+      {
+        "entryId": "le-1",
+        "type": "grant",
+        "logicalId": "gems_small"
+      }
+    ],
+    "finishCalls": [
+      {
+        "by": "client",
+        "transactionId": "tx-1",
+        "ledgerEntryId": "le-1",
+        "isConsumable": true,
+        "result": "finished"
+      }
+    ],
+    "available": []
+  }
+}

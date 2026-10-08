@@ -32,4 +32,7 @@ not mean that a device has passed or a release is ready.
 
 The [production integration roadmap](PRODUCTION_INTEGRATION_ROADMAP.md) and
 [roadmap checklist](ROADMAP_CHECKLIST.md) track intended work. They are not
-confirmed behavior specs and are not implementation-coverage targets.
+confirmed behavior specs and are not implementation-coverage targets. The
+[commerce v2 RFC](specs/commerce/commerce-v2-rfc.md) is a draft proposal for
+the next commerce contract, in the same category until its types and
+conformance runner land.

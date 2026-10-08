@@ -1,0 +1,136 @@
+{
+  "vector": "cancelled-and-failed",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A synchronous cancel, an asynchronous cancel event, and a store failure each end without a verify request, and the normalized code keeps the store's own code.",
+  "profile": {
+    "store": "fixture.client-token",
+    "purchase": {
+      "consumable": true,
+      "durable": true,
+      "subscription": false,
+      "quantity": false
+    },
+    "lifecycle": {
+      "availablePurchases": true,
+      "pending": false,
+      "restore": true,
+      "events": true,
+      "finish": "client"
+    },
+    "authority": {
+      "evidence": "client-token",
+      "accountBinding": "optional"
+    }
+  },
+  "catalog": [
+    {
+      "logicalId": "gems_small",
+      "kind": "consumable",
+      "storeSku": "gems.small"
+    }
+  ],
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "store",
+      "action": "queueRequest",
+      "result": {
+        "outcome": "cancelled",
+        "error": {
+          "code": "USER_CANCELLED",
+          "retryable": false,
+          "storeCode": "1"
+        }
+      }
+    },
+    {
+      "actor": "game",
+      "action": "requestPurchase",
+      "input": {
+        "logicalId": "gems_small",
+        "idempotencyKey": "op-1"
+      },
+      "returns": {
+        "outcome": "cancelled",
+        "error": {
+          "code": "USER_CANCELLED",
+          "storeCode": "1",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "actor": "game",
+      "action": "requestPurchase",
+      "input": {
+        "logicalId": "gems_small",
+        "idempotencyKey": "op-2"
+      },
+      "returns": {
+        "outcome": "launched"
+      }
+    },
+    {
+      "actor": "store",
+      "action": "error",
+      "logicalId": "gems_small",
+      "error": {
+        "code": "USER_CANCELLED",
+        "storeCode": "userCancelled",
+        "retryable": false
+      }
+    },
+    {
+      "actor": "store",
+      "action": "queueRequest",
+      "result": {
+        "outcome": "failed",
+        "error": {
+          "code": "STORE_UNAVAILABLE",
+          "retryable": true,
+          "storeCode": "fixture-unavailable"
+        }
+      }
+    },
+    {
+      "actor": "game",
+      "action": "requestPurchase",
+      "input": {
+        "logicalId": "gems_small",
+        "idempotencyKey": "op-3"
+      },
+      "returns": {
+        "outcome": "failed",
+        "error": {
+          "code": "STORE_UNAVAILABLE",
+          "storeCode": "fixture-unavailable",
+          "retryable": true
+        }
+      }
+    }
+  ],
+  "expect": {
+    "journal": {
+      "op-1": [
+        "requested",
+        "cancelled"
+      ],
+      "op-2": [
+        "requested",
+        "launched",
+        "cancelled"
+      ],
+      "op-3": [
+        "requested",
+        "failed"
+      ]
+    },
+    "verifyRequests": [],
+    "ledger": [],
+    "finishCalls": [],
+    "available": []
+  }
+}

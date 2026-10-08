@@ -1,0 +1,125 @@
+{
+  "vector": "revoked-after-grant",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A refund or chargeback reported to the backend reverses the ledger grant; the client learns it on reconcile and never revokes from a client signal alone.",
+  "profile": {
+    "store": "fixture.client-token",
+    "purchase": {
+      "consumable": true,
+      "durable": true,
+      "subscription": false,
+      "quantity": false
+    },
+    "lifecycle": {
+      "availablePurchases": true,
+      "pending": false,
+      "restore": true,
+      "events": true,
+      "finish": "client"
+    },
+    "authority": {
+      "evidence": "client-token",
+      "accountBinding": "optional"
+    }
+  },
+  "catalog": [
+    {
+      "logicalId": "remove_ads",
+      "kind": "durable",
+      "storeSku": "remove.ads"
+    }
+  ],
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "queueVerify",
+      "decision": {
+        "status": "granted",
+        "ledgerEntryId": "le-1"
+      }
+    },
+    {
+      "actor": "game",
+      "action": "requestPurchase",
+      "input": {
+        "logicalId": "remove_ads",
+        "idempotencyKey": "op-1"
+      },
+      "returns": {
+        "outcome": "launched"
+      }
+    },
+    {
+      "actor": "store",
+      "action": "complete",
+      "purchase": {
+        "transactionId": "tx-1",
+        "storeSku": "remove.ads",
+        "token": "token-1",
+        "state": "purchased"
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "revoke",
+      "ledgerEntryId": "le-1",
+      "entryId": "le-2",
+      "reason": "refunded"
+    },
+    {
+      "actor": "runtime",
+      "action": "reconcile"
+    }
+  ],
+  "expect": {
+    "journal": {
+      "op-1": [
+        "requested",
+        "launched",
+        "purchased",
+        "verifying",
+        "granted",
+        "finishing",
+        "finished",
+        "revoked"
+      ]
+    },
+    "verifyRequests": [
+      {
+        "idempotencyKey": "op-1",
+        "store": "fixture.client-token",
+        "transactionId": "tx-1",
+        "token": "token-1"
+      }
+    ],
+    "ledger": [
+      {
+        "entryId": "le-1",
+        "type": "grant",
+        "logicalId": "remove_ads"
+      },
+      {
+        "entryId": "le-2",
+        "type": "revoke",
+        "logicalId": "remove_ads",
+        "reverses": "le-1",
+        "reason": "refunded"
+      }
+    ],
+    "finishCalls": [
+      {
+        "by": "client",
+        "transactionId": "tx-1",
+        "ledgerEntryId": "le-1",
+        "isConsumable": false,
+        "result": "finished"
+      }
+    ],
+    "entitlements": [],
+    "available": []
+  }
+}

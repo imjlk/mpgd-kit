@@ -1,0 +1,90 @@
+{
+  "vector": "membership-store-billing-target",
+  "protocol": "2.0.0-draft.1",
+  "summary": "On a target whose distribution requires store billing for digital goods, a credit-funded membership is neither listed nor purchasable, while credit packs remain available.",
+  "profile": {
+    "store": "fixture.credit-wallet",
+    "purchase": {
+      "consumable": true,
+      "durable": true,
+      "subscription": false,
+      "quantity": false
+    },
+    "lifecycle": {
+      "availablePurchases": true,
+      "pending": false,
+      "restore": false,
+      "events": false,
+      "finish": "server"
+    },
+    "authority": {
+      "evidence": "adapter-settled",
+      "accountBinding": "host"
+    }
+  },
+  "wallet": {
+    "currencies": [
+      "credits"
+    ],
+    "billingAuthority": "store"
+  },
+  "catalog": [
+    {
+      "logicalId": "credits_100",
+      "kind": "consumable",
+      "storeSku": "credits.100"
+    },
+    {
+      "logicalId": "membership_plus",
+      "kind": "subscription",
+      "storeSku": "membership.plus",
+      "membership": {
+        "scope": "title",
+        "price": {
+          "currency": "credits",
+          "amount": 30
+        },
+        "period": "P30D"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "actor": "game",
+      "action": "fetchProducts",
+      "input": {
+        "type": "all"
+      },
+      "returns": {
+        "logicalIds": [
+          "credits_100"
+        ]
+      }
+    },
+    {
+      "actor": "game",
+      "action": "requestPurchase",
+      "input": {
+        "logicalId": "membership_plus",
+        "idempotencyKey": "op-1"
+      },
+      "returns": {
+        "outcome": "failed",
+        "error": {
+          "code": "ITEM_UNAVAILABLE"
+        }
+      }
+    }
+  ],
+  "expect": {
+    "journal": {
+      "op-1": [
+        "requested",
+        "failed"
+      ]
+    },
+    "verifyRequests": [],
+    "debits": [],
+    "activeSubscriptions": []
+  }
+}

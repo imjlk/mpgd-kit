@@ -1,0 +1,162 @@
+{
+  "vector": "credit-membership-renewal",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A credit-funded membership on a host-billing target renews by an idempotent scheduled debit per period and lapses at period end when eligible balance runs out; a platform-wide membership never debits title-scoped store lots.",
+  "profile": {
+    "store": "fixture.credit-wallet",
+    "purchase": {
+      "consumable": true,
+      "durable": true,
+      "subscription": true,
+      "quantity": false
+    },
+    "lifecycle": {
+      "availablePurchases": true,
+      "pending": false,
+      "restore": false,
+      "events": true,
+      "finish": "none"
+    },
+    "authority": {
+      "evidence": "server-push",
+      "accountBinding": "host"
+    }
+  },
+  "wallet": {
+    "currencies": [
+      "credits"
+    ],
+    "billingAuthority": "host"
+  },
+  "catalog": [
+    {
+      "logicalId": "membership_plus",
+      "kind": "subscription",
+      "storeSku": "membership.plus",
+      "membership": {
+        "scope": "platform",
+        "price": {
+          "currency": "credits",
+          "amount": 30
+        },
+        "period": "P30D"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "actor": "wallet",
+      "action": "creditFromGrant",
+      "lot": {
+        "ledgerEntryId": "le-store-1",
+        "currency": "credits",
+        "amount": 100,
+        "origin": {
+          "channel": "store",
+          "store": "fixture.client-token",
+          "titleId": "title-a"
+        },
+        "createdAt": "2026-10-01T00:00:00Z"
+      }
+    },
+    {
+      "actor": "wallet",
+      "action": "creditFromGrant",
+      "lot": {
+        "ledgerEntryId": "le-web-1",
+        "currency": "credits",
+        "amount": 70,
+        "origin": {
+          "channel": "off-store",
+          "store": "fixture.web-checkout",
+          "titleId": "title-a"
+        },
+        "createdAt": "2026-10-01T00:00:00Z"
+      }
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-01T00:00:00Z"
+    },
+    {
+      "actor": "game",
+      "action": "requestPurchase",
+      "input": {
+        "logicalId": "membership_plus",
+        "idempotencyKey": "op-1"
+      },
+      "returns": {
+        "outcome": "purchased"
+      }
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-31T00:00:00Z"
+    },
+    {
+      "actor": "wallet",
+      "action": "renewDue"
+    },
+    {
+      "actor": "wallet",
+      "action": "renewDue"
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-11-30T00:00:00Z"
+    },
+    {
+      "actor": "wallet",
+      "action": "renewDue"
+    }
+  ],
+  "expect": {
+    "debits": [
+      {
+        "idempotencyKey": "membership:op-1:0",
+        "lotId": "le-web-1",
+        "amount": 30
+      },
+      {
+        "idempotencyKey": "membership:op-1:1",
+        "lotId": "le-web-1",
+        "amount": 30
+      }
+    ],
+    "events": [
+      {
+        "type": "subscriptionStarted",
+        "logicalId": "membership_plus",
+        "periodIndex": 0,
+        "expiresAt": "2026-10-31T00:00:00Z"
+      },
+      {
+        "type": "subscriptionRenewed",
+        "logicalId": "membership_plus",
+        "periodIndex": 1,
+        "expiresAt": "2026-11-30T00:00:00Z"
+      },
+      {
+        "type": "subscriptionLapsed",
+        "logicalId": "membership_plus",
+        "periodIndex": 2,
+        "expiresAt": "2026-11-30T00:00:00Z",
+        "reason": "INSUFFICIENT_BALANCE"
+      }
+    ],
+    "activeSubscriptions": [],
+    "lots": [
+      {
+        "lotId": "le-store-1",
+        "remaining": 100
+      },
+      {
+        "lotId": "le-web-1",
+        "remaining": 10
+      }
+    ]
+  }
+}
