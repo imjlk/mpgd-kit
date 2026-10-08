@@ -168,6 +168,9 @@ importers:
       '@capacitor/core':
         specifier: 8.5.2
         version: 8.5.2
+      '@mpgd/game-runtime':
+        specifier: workspace:*
+        version: link:../../packages/game-runtime
       ttsc:
         specifier: 0.30.4
         version: 0.30.4

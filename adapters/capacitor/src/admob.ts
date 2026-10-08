@@ -4,6 +4,7 @@ import {
   RewardAdPluginEvents,
   type AdMobPlugin,
 } from '@capacitor-community/admob';
+import { Capacitor } from '@capacitor/core';
 import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge';
 import { admobClientRewardEvidenceSchema } from '@mpgd/game-services/admob-client-reward';
 import {
@@ -11,6 +12,21 @@ import {
   encodeAdMobSsvCustomData,
 } from '@mpgd/game-services/admob-ssv';
 import type { RewardedAdResult } from '@mpgd/platform';
+import {
+  adProtocol,
+  adProtocolVersion,
+  assertAdPresentationEvent,
+  assertAdShowInput,
+  assertAdShowResult,
+  toAdAdapter,
+  type AdAvailability,
+  type AdPlacementInput,
+  type AdPresentationEvent,
+  type AdProvider,
+  type AdReason,
+  type AdShowInput,
+  type AdShowResult,
+} from '@mpgd/platform/ads';
 
 import type { CapacitorServiceProvider } from './providers.js';
 
@@ -34,9 +50,12 @@ export interface CreateCapacitorAdMobRewardedProviderInput {
   readonly isTesting?: boolean;
   readonly sdk?: RewardedAdMobSdk;
   readonly showTimeoutMs?: number;
+  /** Used for native no-fill error codes; defaults to Capacitor's platform. */
+  readonly target?: 'android' | 'ios';
 }
 
 export interface CapacitorAdMobRewardedProvider extends CapacitorServiceProvider {
+  readonly adProvider: AdProvider;
   /** Present UMP when required. Call before the gateway advertises ad readiness. */
   requestConsent(): Promise<boolean>;
   /** Game settings should expose this when the privacy message requires it. */
@@ -53,6 +72,9 @@ const maximumCustomDataBytes = 1_024;
 // Coordinate Kit providers sharing one SDK instance, even across gateways.
 const activeSdk = new WeakSet<object>();
 const uncertainSdk = new WeakSet<object>();
+const pendingLoadSdk = new WeakSet<object>();
+type AdEventBody<T = AdPresentationEvent> = T extends AdPresentationEvent
+  ? Omit<T, 'providerId' | 'invocationId' | 'sequence'> : never;
 
 function response(input: BridgeRequest, result: RewardedAdResult | undefined): BridgeResponse {
   return { id: input.id, ok: true, data: result };
@@ -166,27 +188,120 @@ export function createCapacitorAdMobRewardedProvider(
     return consentTask;
   };
 
-  const showRewarded = async (
-    placementId: string,
-    idempotencyKey: string,
-  ): Promise<RewardedAdResult> => {
-    const adId = adUnits.get(placementId);
-    if (adId === undefined || !canRequestAds || activeSdk.has(sdk) || uncertainSdk.has(sdk)) {
-      return { status: 'unavailable', rewardGranted: false };
+  const providerId = 'admob-rewarded';
+  const nativeTarget = input.target ?? Capacitor.getPlatform();
+  const listeners = new Set<(event: AdPresentationEvent) => void>();
+  const availability = (request: AdPlacementInput): AdAvailability => {
+    if (request.format !== 'rewarded') {
+      return { state: 'unsupported', reason: 'unsupported' };
     }
-    if (idempotencyKey.trim() === ''
-      || idempotencyKey.length > admobSsvMaximumBindingFieldLength
-      || placementId.length > admobSsvMaximumBindingFieldLength) {
-      return { status: 'failed', rewardGranted: false };
+    if (!adUnits.has(request.placementId)) {
+      return {
+        state: 'configuration-required',
+        reason: 'configuration-required',
+      };
     }
-
+    if (!canRequestAds || uncertainSdk.has(sdk) || pendingLoadSdk.has(sdk)) {
+      return {
+        state: 'action-required',
+        reason: 'action-required',
+      };
+    }
+    if (activeSdk.has(sdk)) {
+      return { state: 'temporarily-unavailable', reason: 'busy' };
+    }
+    return { state: 'available' };
+  };
+  const show = async (supplied: AdShowInput): Promise<AdShowResult> => {
+    const request = assertAdShowInput(supplied);
+    const available = availability(request);
+    const result = (state: Omit<AdShowResult, 'providerId' | 'invocationId' | 'format'>): AdShowResult =>
+      assertAdShowResult({
+        providerId,
+        invocationId: request.invocationId,
+        format: request.format,
+        ...state,
+      });
+    const noStart = (reason: AdReason, outcome: 'failed' | 'unavailable' = 'failed') => result({
+      outcome,
+      presentation: 'not-started',
+      eligibility: request.format === 'rewarded' ? 'not-earned' : 'not-applicable',
+      reason,
+    });
+    if (available.state !== 'available') {
+      return noStart(available.reason ?? 'unsupported', 'unavailable');
+    }
+    if (request.idempotencyKey.length > admobSsvMaximumBindingFieldLength
+      || request.placementId.length > admobSsvMaximumBindingFieldLength) {
+      return noStart('transient-failure');
+    }
+    const adId = adUnits.get(request.placementId);
+    if (adId === undefined) {
+      return noStart('configuration-required', 'unavailable');
+    }
     activeSdk.add(sdk);
-    const handles: Array<{ remove(): Promise<void> }> = [];
+    let sequence = 0;
+    let started = false;
+    let displayCalled = false;
+    let closed = false;
     let rewardEarned = false;
+    let loadTimedOut = false;
+    let listenerTimedOut = false;
+    let loadFailure: AdReason = 'transient-failure';
     let timer: ReturnType<typeof setTimeout> | undefined;
     let loadTimer: ReturnType<typeof setTimeout> | undefined;
-    let loadTimedOut = false;
-    let nativePreflightStarted = false;
+    const handles: Array<{ remove(): Promise<void> }> = [];
+    const candidate = { schema: admobClientRewardEvidenceSchema, payload: { adUnitId: adId } };
+    const emit = (event: AdEventBody) => {
+      const published = assertAdPresentationEvent({
+        ...event,
+        providerId,
+        invocationId: request.invocationId,
+        sequence: ++sequence,
+      });
+      for (const listener of [...listeners]) {
+        try {
+          void Promise.resolve(listener(published)).catch(() => undefined);
+        } catch { /* Native observation must continue. */ }
+      }
+    };
+    let cleanupTask: Promise<void> | undefined;
+    const cleanup = (): Promise<void> => {
+      cleanupTask ??= (async () => {
+        const settled = await Promise.allSettled(handles.map((handle) =>
+          withTimeout(Promise.resolve().then(() => handle.remove()), listenerCleanupTimeoutMs)));
+        if (settled.some((entry) => entry.status === 'rejected')) { uncertainSdk.add(sdk); }
+        activeSdk.delete(sdk);
+      })();
+      return cleanupTask;
+    };
+    const earned = (reward: unknown) => {
+      // Global Rewarded events lack invocation identity. Only the original
+      // show promise can bind a late earned callback to this operation.
+      if (!displayCalled || rewardEarned || !isRewardItem(reward)) {
+        return;
+      }
+      rewardEarned = true;
+      emit({ type: 'reward-earned', evidence: candidate });
+    };
+    let finish!: (value: 'dismissed' | 'failed' | 'timeout') => void;
+    const terminal = new Promise<'dismissed' | 'failed' | 'timeout'>((resolve) => {
+      finish = resolve;
+    });
+    const close = (failed: boolean) => {
+      if (!displayCalled || closed) {
+        return;
+      }
+      closed = true;
+      uncertainSdk.delete(sdk);
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+      emit(failed ? { type: 'failed', reason: 'transient-failure' } : { type: 'closed' });
+      finish(failed ? 'failed' : 'dismissed');
+      // Also runs after the caller-facing promise has already returned pending.
+      void cleanup();
+    };
     try {
       const playerId = await withTimeout(
         Promise.resolve().then(() => input.getPlayerId()),
@@ -194,92 +309,128 @@ export function createCapacitorAdMobRewardedProvider(
       );
       if (typeof playerId !== 'string' || playerId.trim() === ''
         || playerId.length > admobSsvMaximumBindingFieldLength) {
-        return { status: 'failed', rewardGranted: false };
+        return noStart('transient-failure');
       }
-      const customData = encodeAdMobSsvCustomData({ playerId, placementId, idempotencyKey });
-      if (new TextEncoder().encode(customData).byteLength > maximumCustomDataBytes) {
-        return { status: 'failed', rewardGranted: false };
-      }
-      // This plugin resolves showRewardVideoAd on reward, but on Android a
-      // dismissal without reward leaves that promise unresolved. Observe the
-      // terminal native events separately, and hold lifecycle through close.
-      let finish!: (value: 'dismissed' | 'failed' | 'timeout') => void;
-      const terminal = new Promise<'dismissed' | 'failed' | 'timeout'>((resolve) => {
-        finish = resolve;
+      const customData = encodeAdMobSsvCustomData({
+        playerId,
+        placementId: request.placementId,
+        idempotencyKey: request.idempotencyKey,
       });
-      nativePreflightStarted = true;
-      handles.push(await withTimeout(sdk.addListener(RewardAdPluginEvents.Rewarded, (reward) => {
-        if (isRewardItem(reward)) {
-          rewardEarned = true;
+      if (new TextEncoder().encode(customData).byteLength > maximumCustomDataBytes) {
+        return noStart('transient-failure');
+      }
+      const listen = async (promise: Promise<{ remove(): Promise<void> }>) => {
+        try {
+          handles.push(await withTimeout(promise, preflightTimeoutMs, (handle) => handle.remove()));
+        } catch (error) {
+          listenerTimedOut = error instanceof PreflightTimeoutError;
+          throw error;
         }
-      }), preflightTimeoutMs, (handle) => handle.remove()));
-      handles.push(await withTimeout(sdk.addListener(RewardAdPluginEvents.Dismissed, () => {
-        // Let a same-turn Rewarded event settle before reading the flag.
-        queueMicrotask(() => finish('dismissed'));
-      }), preflightTimeoutMs, (handle) => handle.remove()));
-      handles.push(await withTimeout(sdk.addListener(RewardAdPluginEvents.FailedToShow, () => {
-        finish('failed');
-      }), preflightTimeoutMs, (handle) => handle.remove()));
-      const loaded = await Promise.race([
-        sdk.prepareRewardVideoAd({
-          adId,
-          ...(input.isTesting === undefined ? {} : { isTesting: input.isTesting }),
-          ssv: { userId: playerId, customData },
+      };
+      await listen(
+        sdk.addListener(RewardAdPluginEvents.Dismissed, () => queueMicrotask(() => close(false))),
+      );
+      await listen(sdk.addListener(RewardAdPluginEvents.FailedToShow, () => close(true)));
+      await listen(
+        sdk.addListener(RewardAdPluginEvents.Showed, () => {
+          if (displayCalled && !closed && !started) {
+            started = true;
+            emit({ type: 'started' });
+          }
         }),
+      );
+      await listen(
+        sdk.addListener(RewardAdPluginEvents.FailedToLoad, (error) => {
+          if (nativeTarget === 'android' && (error.code === 3 || error.code === 9) || nativeTarget === 'ios' && error.code === 1) {
+            loadFailure = 'no-fill';
+          }
+        }),
+      );
+      const preparation = sdk.prepareRewardVideoAd({
+        adId,
+        ...(input.isTesting === undefined ? {} : { isTesting: input.isTesting }),
+        ssv: { userId: playerId, customData },
+      });
+      void preparation.then(
+        () => {
+          if (loadTimedOut) {
+            pendingLoadSdk.delete(sdk);
+          }
+        },
+        () => {
+          if (loadTimedOut) {
+            pendingLoadSdk.delete(sdk);
+          }
+        },
+      );
+      const loaded = await Promise.race([
+        preparation,
         new Promise<never>((_resolve, reject) => {
-          loadTimer = setTimeout(() => {
-            loadTimedOut = true;
-            reject(new Error('AdMob load timed out.'));
-          }, loadTimeoutMs);
+          loadTimer = setTimeout(() => { loadTimedOut = true; pendingLoadSdk.add(sdk); reject(new Error('AdMob load timed out.')); }, loadTimeoutMs);
         }),
       ]);
       if (loadTimer !== undefined) {
         clearTimeout(loadTimer);
         loadTimer = undefined;
       }
-      if (typeof loaded.adUnitId !== 'string' || loaded.adUnitId.length === 0) {
-        return { status: 'failed', rewardGranted: false };
+      if (typeof loaded.adUnitId !== 'string' || !unitPattern.test(loaded.adUnitId)) {
+        return noStart('transient-failure');
       }
-      timer = setTimeout(() => finish('timeout'), showTimeoutMs);
-      // Always observe rejection, even if a Dismissed event wins the race.
-      const showResult = sdk.showRewardVideoAd({ adId: loaded.adUnitId });
-      const onReward = (reward: unknown) => {
-        if (isRewardItem(reward)) {
-          rewardEarned = true;
-        }
-      };
-      const onShowError = () => finish('failed');
-      void showResult.then(onReward, onShowError);
+      // At this point SSV is attached to the original operation. Lookup correlation
+      // is useful even when the caller's deadline precedes an earned SDK callback.
+      emit({ type: 'requested', claimEvidence: candidate });
+      displayCalled = true;
+      timer = setTimeout(() => { uncertainSdk.add(sdk); emit({ type: 'unknown' }); finish('timeout'); }, showTimeoutMs);
+      let showing: Promise<unknown>;
+      try {
+        showing = sdk.showRewardVideoAd({ adId: loaded.adUnitId });
+      } catch {
+        showing = Promise.reject(new Error('AdMob show invocation failed.'));
+      }
+      void showing.then((reward) => earned(reward), () => {
+        // Promise rejection alone is not a native close observation.
+        if (!closed) { uncertainSdk.add(sdk); emit({ type: 'unknown' }); finish('timeout'); }
+      });
       const outcome = await terminal;
-      if (outcome === 'timeout') {
-        // Native presentation state is unknown: do not allow another show.
+      if (outcome === 'failed') {
+        if (!started && !rewardEarned) {
+          return noStart('transient-failure');
+        }
+        return result({
+          outcome: 'failed',
+          presentation: 'closed',
+          eligibility: rewardEarned ? 'eligible' : 'unknown',
+          reason: 'transient-failure',
+          claimEvidence: candidate,
+          ...(rewardEarned ? { evidence: candidate } : {}),
+        });
+      }
+      const eligibility = rewardEarned ? 'eligible' : 'unknown';
+      return result({
+        outcome: outcome === 'timeout' ? 'pending' : 'shown',
+        presentation: outcome === 'timeout' ? 'unknown' : 'closed',
+        eligibility,
+        ...(outcome === 'timeout' ? { reason: 'outcome-unknown' } : {}),
+        claimEvidence: candidate,
+        ...(rewardEarned ? { evidence: candidate } : {}),
+      });
+    } catch {
+      if (displayCalled && !closed) {
+        uncertainSdk.add(sdk);
+        emit({ type: 'unknown' });
+        return result({
+          outcome: 'pending',
+          presentation: 'unknown',
+          eligibility: rewardEarned ? 'eligible' : 'unknown',
+          reason: 'outcome-unknown',
+          claimEvidence: candidate,
+          ...(rewardEarned ? { evidence: candidate } : {}),
+        });
+      }
+      if (listenerTimedOut) {
         uncertainSdk.add(sdk);
       }
-      let status: RewardedAdResult['status'] = 'failed';
-      if (rewardEarned) {
-        status = 'completed';
-      } else if (outcome === 'dismissed') {
-        // Mediation may deliver reward after dismissal. Only signed SSV can
-        // later distinguish a true skip from an earned reward.
-        status = 'pending';
-      } else if (outcome === 'timeout') {
-        status = 'pending';
-      }
-      return {
-        status,
-        rewardGranted: false,
-        ...(status === 'completed' || status === 'pending' ? { evidence: {
-          schema: admobClientRewardEvidenceSchema,
-          payload: { adUnitId: adId },
-        } } : {}),
-      };
-    } catch (error) {
-      const uncertain = loadTimedOut
-        || (nativePreflightStarted && error instanceof PreflightTimeoutError);
-      if (uncertain) {
-        uncertainSdk.add(sdk);
-      }
-      return { status: uncertain ? 'pending' : 'failed', rewardGranted: false };
+      return noStart(loadFailure);
     } finally {
       if (loadTimer !== undefined) {
         clearTimeout(loadTimer);
@@ -287,27 +438,42 @@ export function createCapacitorAdMobRewardedProvider(
       if (timer !== undefined) {
         clearTimeout(timer);
       }
-      try {
-        const removals = handles.map((handle) => {
-          const removal = Promise.resolve().then(() => handle.remove());
-          return withTimeout(removal, listenerCleanupTimeoutMs);
-        });
-        const settled = await Promise.allSettled(removals);
-        if (settled.some((result) => result.status === 'rejected')) {
-          uncertainSdk.add(sdk);
-        }
-      } finally {
-        activeSdk.delete(sdk);
+      // A caller deadline cannot remove the only native close observer. Keep
+      // listeners/ownership until a definitive close, and release only this SDK.
+      if (!displayCalled || closed) {
+        await cleanup();
       }
     }
   };
+  const adProvider: AdProvider = {
+    id: providerId,
+    protocol: adProtocol,
+    protocolVersion: adProtocolVersion,
+    rewardSignal: 'delayed',
+    getAvailability: async (request) => availability(request),
+    async preload(request) {
+      const available = availability(request);
+      return available.state === 'available'
+        ? { status: 'deferred' }
+        : { status: 'unavailable', reason: available.reason ?? 'unsupported' };
+    },
+    show,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+  const legacy = toAdAdapter(adProvider);
 
   return {
     id: 'admob-rewarded',
+    adProvider,
     features: ['rewardedAds'],
     methods: ['ads.preload', 'ads.showRewarded'],
     async getAvailability() {
-      if (uncertainSdk.has(sdk) || !canRequestAds) {
+      if (uncertainSdk.has(sdk) || pendingLoadSdk.has(sdk) || !canRequestAds) {
         return { rewardedAds: 'action-required' };
       }
       return { rewardedAds: activeSdk.has(sdk) ? 'temporarily-unavailable' : 'available' };
@@ -343,10 +509,10 @@ export function createCapacitorAdMobRewardedProvider(
           || typeof request.payload.idempotencyKey !== 'string') {
           return failure(request, 'ADMOB_REQUEST_INVALID');
         }
-        return response(request, await showRewarded(
-          request.payload.placementId,
-          request.payload.idempotencyKey,
-        ));
+        return response(request, await legacy.showRewarded({
+          placementId: request.payload.placementId,
+          idempotencyKey: request.payload.idempotencyKey,
+        }));
       },
     },
   };

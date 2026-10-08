@@ -9,8 +9,10 @@ build targets. `@mpgd/game-runtime/presentation` and `/ads` now coordinate
 full-screen ownership, separate native closure from backend settlement, retain
 late observers, and inject caller deadlines and placement policy. Purchase
 closure requires trusted native facts; business result statuses alone keep the
-surface uncertain. The reference-port tests exercise the vectors; real adapter
-fixtures and starter assembly remain proposed work.
+surface uncertain. AdMob now exposes its actual rewarded provider through the
+Capacitor gateway and runs seven shared native-presentation vectors with an
+injected native SDK. AIT/Verse8 fixtures, cross-provider ledger fixtures, and
+starter assembly remain proposed work.
 The full behavior described here is outside the enforced
 [documentation evidence](../../DOCUMENTATION_EVIDENCE.md) scope until the
 contract, runner, and real adapter fixtures land.
