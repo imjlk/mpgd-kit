@@ -19,10 +19,12 @@ import {
   type StorageAdapter,
 } from '@mpgd/platform';
 
-import { verse8AdsRewardEvidenceSchema } from './ads-contract.js';
+import { createVerse8AdProvider, type Verse8AdPresentationSource } from './ad-provider.js';
+import { toAdAdapter } from '@mpgd/platform/ads';
 import { defaultVerse8CatalogTarget } from './catalog-target.js';
 
 export { verse8AdsRewardEvidenceSchema } from './ads-contract.js';
+export type { Verse8AdPresentationEvent, Verse8AdPresentationSource } from './ad-provider.js';
 
 export interface Verse8Credential {
   readonly account: `0x${string}`;
@@ -55,11 +57,13 @@ export interface Verse8AdsClient {
   showRewarded(input: {
     readonly placementId: string;
     readonly timeoutMs?: number;
+    readonly requestId?: string;
     readonly meta?: Record<string, unknown>;
   }): Promise<Verse8RewardedAdResult>;
   showInterstitial(input: {
     readonly placementId: string;
     readonly timeoutMs?: number;
+    readonly requestId?: string;
     readonly meta?: Record<string, unknown>;
   }): Promise<Verse8InterstitialAdResult>;
 }
@@ -133,6 +137,8 @@ export interface Verse8PlatformGatewayOptions {
   readonly authClient?: Verse8AuthClient;
   readonly adsClient?: Verse8AdsClient;
   readonly adsTimeoutMs?: number;
+  /** Required for rewarded v2: SDK 0.4 reward completion does not prove native closure. */
+  readonly adPresentation?: Verse8AdPresentationSource;
   readonly resolveAdPlacementId?: (placementId: LogicalAdPlacementId) => string | undefined;
   readonly vxShop?: Verse8CommerceOptions;
   readonly agent8Storage?: Verse8Agent8StorageClient;
@@ -151,6 +157,14 @@ export function createVerse8PlatformGateway(
   const authClient = options.authClient ?? createDefaultAuthClient();
   const adsClient = options.adsClient ?? Verse8Ads;
   const adsAvailable = options.resolveAdPlacementId !== undefined;
+  const ads = toAdAdapter(
+    createVerse8AdProvider({
+      client: adsClient,
+      ...(options.resolveAdPlacementId === undefined ? {} : { resolvePlacement: options.resolveAdPlacementId }),
+      ...(options.adPresentation === undefined ? {} : { presentation: options.adPresentation }),
+      ...(options.adsTimeoutMs === undefined ? {} : { timeoutMs: options.adsTimeoutMs }),
+    }),
+  );
   const commerce = createVerse8Commerce(options.vxShop);
   const pauseListeners = new Set<() => void>();
   const resumeListeners = new Set<() => void>();
@@ -187,94 +201,7 @@ export function createVerse8PlatformGateway(
       },
     },
     commerce: commerce ?? createUnavailableVerse8Commerce(),
-    ads: {
-      async preload() {},
-      async showRewarded(input) {
-        const placementId = options.resolveAdPlacementId?.(input.placementId);
-
-        if (placementId === undefined) {
-          return unavailableReward();
-        }
-
-        try {
-          const result = await adsClient.showRewarded({
-            placementId,
-            ...(options.adsTimeoutMs === undefined
-              ? {}
-              : { timeoutMs: options.adsTimeoutMs }),
-            meta: {
-              logicalPlacementId: input.placementId,
-            },
-          });
-
-          if (result.status === 'rewarded') {
-            // The SDK callback is a claim candidate only. `requestId` is a Verse8
-            // impression id, not a ledger entry; the backend verifier consumes it
-            // from the evidence payload before any reward is granted.
-            return {
-              status: 'completed',
-              rewardGranted: false,
-              evidence: {
-                schema: verse8AdsRewardEvidenceSchema,
-                payload: {
-                  requestId: result.requestId,
-                  placementId,
-                  ...(result.platform === undefined ? {} : { platform: result.platform }),
-                },
-              },
-            };
-          }
-
-          if (result.status === 'dismissed') {
-            return {
-              status: 'skipped',
-              rewardGranted: false,
-            };
-          }
-
-          return result.error.code === 'unsupported_env'
-            ? unavailableReward()
-            : {
-                status: 'failed',
-                rewardGranted: false,
-              };
-        } catch {
-          return {
-            status: 'failed',
-            rewardGranted: false,
-          };
-        }
-      },
-      async showInterstitial(input) {
-        const placementId = options.resolveAdPlacementId?.(input.placementId);
-
-        if (placementId === undefined) {
-          return { status: 'unavailable' };
-        }
-
-        try {
-          const result = await adsClient.showInterstitial({
-            placementId,
-            ...(options.adsTimeoutMs === undefined
-              ? {}
-              : { timeoutMs: options.adsTimeoutMs }),
-            meta: {
-              logicalPlacementId: input.placementId,
-            },
-          });
-
-          if (result.status === 'dismissed') {
-            return { status: 'shown' };
-          }
-
-          return result.error.code === 'unsupported_env'
-            ? { status: 'unavailable' }
-            : { status: 'skipped' };
-        } catch {
-          return { status: 'skipped' };
-        }
-      },
-    },
+    ads,
     leaderboard: {
       async submitScore() {
         return {
@@ -487,13 +414,6 @@ function failedPurchase() {
 
 function canOpenDefaultVerse8Shop(): boolean {
   return typeof window !== 'undefined' && window.parent !== window;
-}
-
-function unavailableReward() {
-  return {
-    status: 'unavailable' as const,
-    rewardGranted: false,
-  };
 }
 
 function createDefaultAuthClient(): Verse8AuthClient {

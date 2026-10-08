@@ -243,6 +243,7 @@ entitlement. `@mpgd/adapter-verse8/agent8` consumes the reserved Agent8
 `$onItemPurchased` event under a per-account lock, ignores client metadata, and
 writes the catalog grant with its consume-once marker in the same user-state
 update. See [Verse8 VXShop and Agent8 Commerce](docs/VERSE8_COMMERCE.md).
+Verse8 ad presentation uses a separate [advertising behavior integration](docs/VERSE8_ADS.md); rewarded closure requires a trusted host observation port.
 
 Apps in Toss purchase and rewarded-ad callbacks use a public fail-closed
 game-services verifier boundary. The purchase authority normalizes the
