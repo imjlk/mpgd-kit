@@ -169,11 +169,12 @@ function createHarness(input: {
   readonly recoveryOwnershipStore?: MicrosoftStoreRecoveryOwnershipStore;
   readonly persistConsumptionReceipt?: CreateMicrosoftStorePurchaseBoundaryInput['persistConsumptionReceipt'];
   readonly onRelease?: () => void;
+  readonly collectionsClient?: MicrosoftStoreCollectionsClient;
 } = {}) {
   const events = input.events ?? [];
   const client = new FixtureCollectionsClient(events);
   const boundary = createMicrosoftStorePurchaseBoundary({
-    client,
+    client: input.collectionsClient ?? client,
     inAppOfferTokens: {
       HINT_PACK_20: input.catalog?.products[0]?.platformProductIds['microsoft-store']
         ?? inAppOfferToken,
@@ -1153,6 +1154,100 @@ function receiptResponse(trackingId: string, orderTransactions: unknown = [order
     newQuantity: 0,
     orderTransactions,
   };
+}
+
+// Exercise the built-in HTTP client through verification and receipt persistence,
+// including consume responses that omit the optional compatibility echo.
+for (const scenario of [
+  { name: 'omitted', response: {}, reason: undefined },
+  { name: 'matching', response: { productId: storeId }, reason: undefined },
+  {
+    name: 'different',
+    response: { productId: 'DIFFERENT-ID' },
+    reason: 'MICROSOFT_STORE_CONSUMPTION_RECEIPT_INVALID',
+  },
+  {
+    name: 'null',
+    response: { productId: null },
+    reason: 'MICROSOFT_STORE_CONSUMPTION_RECEIPT_INVALID',
+  },
+  {
+    name: 'non-string',
+    response: { productId: 123 },
+    reason: 'MICROSOFT_STORE_CONSUMPTION_RECEIPT_INVALID',
+  },
+  {
+    name: 'wrong-item',
+    response: { itemId: 'other-item' },
+    reason: 'MICROSOFT_STORE_CONSUME_RESPONSE_MISMATCH',
+  },
+  {
+    name: 'wrong-tracking',
+    response: { trackingId: 'other-tracking' },
+    reason: 'MICROSOFT_STORE_CONSUME_RESPONSE_MISMATCH',
+  },
+]) {
+  const events: string[] = [];
+  const request = createRequest({ idempotencyKey: `http-receipt-${scenario.name}` });
+  let storedReceipt: MicrosoftStoreConsumptionReceipt | undefined;
+  const collectionsClient = createMicrosoftStoreCollectionsClient({
+    fetch: async (url, init) => {
+      const body = JSON.parse(init.body) as Record<string, unknown>;
+      const response = url === microsoftStoreCollectionsQueryUrl
+        ? new FixtureCollectionsClient([]).queryResponse
+        : {
+            itemId: collectionItemId,
+            trackingId: body.trackingId,
+            newQuantity: 0,
+            orderTransactions: [orderTransaction],
+            ...scenario.response,
+          };
+      if (url === microsoftStoreCollectionsConsumeUrl) {
+        assert.equal(body.productId, storeId);
+        assert.equal(body.includeOrderIds, true);
+        events.push('http:consume');
+      }
+      return { status: 200, body: new Response(JSON.stringify(response)).body };
+    },
+  });
+  const harness = createHarness({
+    collectionsClient,
+    events,
+    async persistConsumptionReceipt(receipt) {
+      storedReceipt = receipt;
+      events.push('receipt:write');
+    },
+    onRelease: () => {
+      events.push('ownership:release');
+    },
+  });
+  const result = await harness.backend.purchases.verifyPurchase(request);
+  assert.equal(result.verified, true);
+  assert.equal(
+    result.finalization?.status,
+    scenario.reason === undefined ? 'completed' : 'pending',
+    scenario.name,
+  );
+  assert.equal(result.finalization?.reason, scenario.reason, scenario.name);
+  if (scenario.reason === undefined) {
+    assert.equal(storedReceipt?.storeId, storeId);
+    assert.equal(storedReceipt?.productId, request.productId);
+    assert.equal(storedReceipt?.playerId, request.playerId);
+    assert.equal(storedReceipt?.collectionItemId, collectionItemId);
+    assert.equal(
+      storedReceipt?.orderTransactions[0]?.orderId,
+      orderTransaction.orderId.toLowerCase(),
+    );
+    assert.deepEqual(events, [
+      `ledger:${request.idempotencyKey}`,
+      'http:consume',
+      'receipt:write',
+      'ownership:release',
+    ]);
+  } else {
+    assert.equal(storedReceipt, undefined);
+    assert.deepEqual(events, [`ledger:${request.idempotencyKey}`, 'http:consume']);
+  }
 }
 
 // A durable write (including retry lookup) must finish before ownership is released.
