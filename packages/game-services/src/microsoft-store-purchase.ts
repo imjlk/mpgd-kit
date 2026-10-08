@@ -84,7 +84,37 @@ export interface CreateMicrosoftStorePurchaseBoundaryInput {
    * Production implementations must share this state across every game-service instance.
    */
   readonly recoveryOwnershipStore: MicrosoftStoreRecoveryOwnershipStore;
+  /**
+   * Persist validated consume/order attribution before releasing recovery ownership.
+   * Must be durable and idempotent by evidenceVerificationId/trackingId. Throw to keep
+   * finalization pending. On developer-managed retries, orderTransactions can be empty;
+   * resolve only if an exact previously persisted receipt is available in that case.
+   * This hook does not receive credentials and does not process Clawback events.
+   */
+  readonly persistConsumptionReceipt?: (
+    receipt: MicrosoftStoreConsumptionReceipt,
+    signal: AbortSignal,
+  ) => Promise<void>;
   readonly now?: () => string;
+}
+
+export interface MicrosoftStoreConsumeOrderTransaction {
+  readonly orderId: string;
+  readonly orderLineItemId: string;
+  readonly quantityConsumed: number;
+}
+
+/** Server-only attribution for subsequent provider refund reconciliation. */
+export interface MicrosoftStoreConsumptionReceipt {
+  readonly evidenceVerificationId: string;
+  readonly playerId: string;
+  /** Stable logical product, distinct from the provider Store ID. */
+  readonly productId: string;
+  readonly storeId: string;
+  readonly collectionItemId: string;
+  readonly trackingId: string;
+  /** Empty when the provider omitted order IDs on a developer-managed retry. */
+  readonly orderTransactions: readonly MicrosoftStoreConsumeOrderTransaction[];
 }
 
 export interface MicrosoftStoreHistoricalProductMapping {
@@ -702,6 +732,34 @@ async function consumeMicrosoftStorePurchase(
       return finalizationPending('MICROSOFT_STORE_CONSUME_RESPONSE_MISMATCH');
     }
 
+    if (input.persistConsumptionReceipt !== undefined) {
+      const orderTransactions = readConsumeOrderTransactions(raw.orderTransactions);
+      if (raw.productId !== context.storeId || orderTransactions === undefined) {
+        return finalizationPending('MICROSOFT_STORE_CONSUMPTION_RECEIPT_INVALID');
+      }
+      finalizationInput.signal.throwIfAborted();
+      try {
+        await input.persistConsumptionReceipt(
+          Object.freeze({
+            evidenceVerificationId: finalizationInput.evidenceVerificationId,
+            playerId: finalizationInput.request.playerId,
+            productId: finalizationInput.request.productId,
+            storeId: context.storeId,
+            collectionItemId: context.collectionItemId,
+            trackingId,
+            orderTransactions,
+          }),
+          finalizationInput.signal,
+        );
+      } catch (error) {
+        if (finalizationInput.signal.aborted) {
+          throw error;
+        }
+        return finalizationPending('MICROSOFT_STORE_CONSUMPTION_RECEIPT_UNAVAILABLE');
+      }
+      finalizationInput.signal.throwIfAborted();
+    }
+
     try {
       await input.recoveryOwnershipStore.release({
         accountBindingHash,
@@ -725,6 +783,37 @@ async function consumeMicrosoftStorePurchase(
     }
     return finalizationPending('MICROSOFT_STORE_CONSUME_UNAVAILABLE');
   }
+}
+
+function readConsumeOrderTransactions(
+  value: unknown,
+): readonly MicrosoftStoreConsumeOrderTransaction[] | undefined {
+  // Microsoft documents omitted order IDs for developer-managed consume retries.
+  // Never invent them from the collection item, client token, or tracking ID.
+  if (value === undefined) {
+    return Object.freeze([]);
+  }
+  if (!Array.isArray(value) || value.length > 1) {
+    return undefined;
+  }
+  const transactions: MicrosoftStoreConsumeOrderTransaction[] = [];
+  const guid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/iu;
+  for (const item of value) {
+    // This boundary only grants developer-managed consumables with quantity one.
+    if (!isRecord(item) || typeof item.orderId !== 'string' || !guid.test(item.orderId)
+      || typeof item.orderLineItemId !== 'string' || !guid.test(item.orderLineItemId)
+      || item.quantityConsumed !== 1) {
+      return undefined;
+    }
+    transactions.push(
+      Object.freeze({
+        orderId: item.orderId.toLowerCase(),
+        orderLineItemId: item.orderLineItemId.toLowerCase(),
+        quantityConsumed: 1,
+      }),
+    );
+  }
+  return Object.freeze(transactions);
 }
 
 interface MicrosoftStoreCollectionItem {
