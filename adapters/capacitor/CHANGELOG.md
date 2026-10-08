@@ -1,5 +1,15 @@
 # @mpgd/adapter-capacitor
 
+## 0.7.0 — 2026-10-09
+
+### Added
+
+- [f3133fdf](https://github.com/imjlk/mpgd-kit/commit/f3133fdf5a628cae49296ed66072cd8c4e18c9e2) Expose the AdMob rewarded provider's versioned advertising surface through the Capacitor gateway. Keep native reward eligibility separate from physical closure, retain terminal observers after caller timeout, preserve original SSV operation bindings, and distinguish pre-display load failure from uncertain open UI. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: bridge@0.11.0, capacitor-game-services@0.6.1, game-runtime@0.3.0, game-services@0.18.0, platform@0.15.0, target-config@0.17.1
+
 ## 0.6.2 — 2026-10-04
 
 ### Patch changes

@@ -1,5 +1,15 @@
 # @mpgd/adapter-verse8
 
+## 0.4.0 — 2026-10-09
+
+### Added
+
+- [ae650009](https://github.com/imjlk/mpgd-kit/commit/ae65000999f0b97bbeebafd856bc8995bb890edd) Expose Verse8 advertising through the versioned behavior contract with original SDK request identity and scoped host presentation observations. Require reliable host closure for rewarded display, keep timed-out presentation occupied until a real terminal fact, and return only ungranted server-verifiable evidence. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: catalog@0.7.7, game-runtime@0.3.0, game-services@0.18.0, platform@0.15.0
+
 ## 0.3.12 — 2026-10-04
 
 ### Patch changes

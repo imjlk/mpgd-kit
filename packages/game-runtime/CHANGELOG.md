@@ -1,5 +1,17 @@
 # @mpgd/game-runtime
 
+## 0.3.0 — 2026-10-09
+
+### Added
+
+- [b453182e](https://github.com/imjlk/mpgd-kit/commit/b453182e07aafc5e6db636422faa1bc29e3a97b7) Add a game-owned platform runtime and audio projection shared above scene lifetimes. Wire generated Phaser games to coordinated native presentation, registered late evidence recovery, application-owned journals and reconciliation, and scene-scoped action views. Preserve physical ownership after deadlines and prevent scene teardown from unmuting live ads. — Thanks @imjlk!
+- [da9fe97b](https://github.com/imjlk/mpgd-kit/commit/da9fe97b32d888a1f42acbd58aa48dbf35d07d35) Coordinate full-screen purchase and advertising ownership, independent execution blocks, caller deadlines, duplicate invocations, and late claim evidence. Keep native closure separate from backend settlement, and carry proof-lookup correlation without asserting reward eligibility. — Thanks @imjlk!
+- [0e5008a0](https://github.com/imjlk/mpgd-kit/commit/0e5008a08fe89638e832182af701310bf4af3406) Attach late registered advertising correlation to a reserved pending journal operation and retry the original claim without reopening native UI. Preserve recorded evidence, request identity, and timestamps, and provide an application-owned observer that uses the original idempotency key without asserting SDK eligibility or a ledger grant. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: game-services@0.18.0, platform@0.15.0
+
 ## 0.2.6 — 2026-10-04
 
 ### Patch changes

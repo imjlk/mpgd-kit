@@ -1,5 +1,15 @@
 # @mpgd/cli
 
+## 0.37.0 — 2026-10-09
+
+### Added
+
+- [b453182e](https://github.com/imjlk/mpgd-kit/commit/b453182e07aafc5e6db636422faa1bc29e3a97b7) Add a game-owned platform runtime and audio projection shared above scene lifetimes. Wire generated Phaser games to coordinated native presentation, registered late evidence recovery, application-owned journals and reconciliation, and scene-scoped action views. Preserve physical ownership after deadlines and prevent scene teardown from unmuting live ads. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: adapter-ait@0.13.0, adapter-browser@0.7.9, adapter-capacitor@0.7.0, adapter-devvit@0.9.15, adapter-verse8@0.4.0, analytics@0.4.1, bridge@0.11.0, catalog@0.7.7, game-runtime@0.3.0, game-services@0.18.0, i18n@0.6.6, platform@0.15.0, target-config@0.17.1
+
 ## 0.36.2 — 2026-10-04
 
 ### Patch changes

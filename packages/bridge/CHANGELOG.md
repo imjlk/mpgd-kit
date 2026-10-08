@@ -1,5 +1,11 @@
 # @mpgd/bridge
 
+## 0.11.0 — 2026-10-09
+
+### Added
+
+- [3e560af5](https://github.com/imjlk/mpgd-kit/commit/3e560af5b3f9e15ee561a51682828337fd614e22) Expose Apps in Toss advertising through a versioned proxy/host bridge with SDK-scoped native observations. Separate reward eligibility from closure and ledger grants, retain late callbacks after deadlines, coordinate the shared native SDK, and preserve background lifecycle ownership. — Thanks @imjlk!
+
 ## 0.10.0 — 2026-09-25
 
 ### Minor changes
