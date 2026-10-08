@@ -1,6 +1,6 @@
 {
   "vector": "duplicate-invocation",
-  "protocol": "2.0.0-draft.1",
+  "protocol": "mpgd.ads.v2",
   "profile": {
     "formats": [
       "rewarded",
@@ -15,14 +15,16 @@
       "action": "start",
       "invocationId": "a",
       "format": "rewarded",
-      "placementId": "CONTINUE"
+      "placementId": "CONTINUE",
+      "callerId": "first"
     },
     {
       "actor": "game",
       "action": "start",
       "invocationId": "a",
       "format": "rewarded",
-      "placementId": "CONTINUE"
+      "placementId": "CONTINUE",
+      "callerId": "second"
     },
     {
       "actor": "sdk",
@@ -51,6 +53,17 @@
     "sdkShows": 1,
     "claimRequests": 1,
     "ledgerGrants": 1,
-    "occupied": false
-  }
+    "occupied": false,
+    "callerResults": {
+      "first": {
+        "invocationId": "a",
+        "outcome": "shown"
+      },
+      "second": {
+        "invocationId": "a",
+        "outcome": "shown"
+      }
+    }
+  },
+  "version": "2.0.0-draft.1"
 }

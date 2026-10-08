@@ -1,6 +1,6 @@
 {
   "vector": "view-disposal-grant",
-  "protocol": "2.0.0-draft.1",
+  "protocol": "mpgd.ads.v2",
   "profile": {
     "formats": [
       "rewarded",
@@ -30,7 +30,18 @@
     {
       "actor": "game",
       "action": "disposeView",
-      "invocationId": "a"
+      "invocationId": "a",
+      "expect": {
+        "occupied": true,
+        "activeInvocationId": "a"
+      }
+    },
+    {
+      "actor": "game",
+      "action": "start",
+      "invocationId": "b",
+      "format": "interstitial",
+      "placementId": "CONTINUE"
     },
     {
       "actor": "sdk",
@@ -48,6 +59,14 @@
   "expect": {
     "ledgerGrants": 1,
     "updatesAfterViewDisposal": 0,
-    "occupied": false
-  }
+    "occupied": false,
+    "outcomes": {
+      "b": "unavailable"
+    },
+    "reasons": {
+      "b": "busy"
+    },
+    "sdkShows": 1
+  },
+  "version": "2.0.0-draft.1"
 }

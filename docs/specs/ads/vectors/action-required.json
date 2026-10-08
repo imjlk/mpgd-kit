@@ -1,36 +1,32 @@
 {
-  "vector": "show-failure",
+  "vector": "action-required",
   "protocol": "mpgd.ads.v2",
+  "version": "2.0.0-draft.1",
   "profile": {
     "formats": [
       "rewarded",
       "interstitial"
     ],
     "configured": true,
-    "rewardSignal": "immediate"
+    "rewardSignal": "immediate",
+    "actionRequired": true
   },
   "steps": [
     {
       "actor": "game",
       "action": "start",
       "invocationId": "a",
-      "format": "interstitial",
+      "format": "rewarded",
       "placementId": "CONTINUE"
-    },
-    {
-      "actor": "sdk",
-      "action": "failed",
-      "invocationId": "a"
     }
   ],
   "expect": {
+    "sdkShows": 0,
     "outcomes": {
-      "a": "failed"
+      "a": "unavailable"
     },
-    "reason": "transient-failure",
-    "presentation": "not-started",
+    "reason": "action-required",
     "occupied": false,
     "ledgerGrants": 0
-  },
-  "version": "2.0.0-draft.1"
+  }
 }

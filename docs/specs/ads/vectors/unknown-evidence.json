@@ -1,6 +1,6 @@
 {
   "vector": "unknown-evidence",
-  "protocol": "2.0.0-draft.1",
+  "protocol": "mpgd.ads.v2",
   "profile": {
     "formats": [
       "rewarded",
@@ -36,8 +36,10 @@
   ],
   "expect": {
     "claimRequests": 0,
-    "claimState": "rejected",
+    "claimState": "not-requested",
     "ledgerGrants": 0,
-    "occupied": false
-  }
+    "occupied": false,
+    "normalization": "rejected"
+  },
+  "version": "2.0.0-draft.1"
 }

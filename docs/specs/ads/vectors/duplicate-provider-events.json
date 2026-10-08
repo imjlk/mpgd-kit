@@ -1,6 +1,6 @@
 {
   "vector": "duplicate-provider-events",
-  "protocol": "2.0.0-draft.1",
+  "protocol": "mpgd.ads.v2",
   "profile": {
     "formats": [
       "rewarded",
@@ -62,5 +62,6 @@
     "claimRequests": 1,
     "ledgerGrants": 1,
     "occupied": false
-  }
+  },
+  "version": "2.0.0-draft.1"
 }

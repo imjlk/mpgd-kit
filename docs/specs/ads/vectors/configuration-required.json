@@ -1,6 +1,6 @@
 {
   "vector": "configuration-required",
-  "protocol": "2.0.0-draft.1",
+  "protocol": "mpgd.ads.v2",
   "profile": {
     "formats": [
       "rewarded",
@@ -26,5 +26,6 @@
     "reason": "configuration-required",
     "occupied": false,
     "ledgerGrants": 0
-  }
+  },
+  "version": "2.0.0-draft.1"
 }

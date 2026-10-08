@@ -1,6 +1,6 @@
 {
   "vector": "timeout-late-close",
-  "protocol": "2.0.0-draft.1",
+  "protocol": "mpgd.ads.v2",
   "profile": {
     "formats": [
       "rewarded",
@@ -43,11 +43,15 @@
   "expect": {
     "outcomes": {
       "a": "pending",
-      "b": "busy"
+      "b": "unavailable"
     },
     "sdkShows": 1,
     "lateCloseObserved": true,
     "occupied": false,
-    "ledgerGrants": 0
-  }
+    "ledgerGrants": 0,
+    "reasons": {
+      "b": "busy"
+    }
+  },
+  "version": "2.0.0-draft.1"
 }

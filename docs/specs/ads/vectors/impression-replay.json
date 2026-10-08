@@ -1,6 +1,6 @@
 {
   "vector": "impression-replay",
-  "protocol": "2.0.0-draft.1",
+  "protocol": "mpgd.ads.v2",
   "profile": {
     "formats": [
       "rewarded",
@@ -78,5 +78,6 @@
       "b": "rejected"
     },
     "occupied": false
-  }
+  },
+  "version": "2.0.0-draft.1"
 }

@@ -1,6 +1,6 @@
 {
   "vector": "stale-close",
-  "protocol": "2.0.0-draft.1",
+  "protocol": "mpgd.ads.v2",
   "profile": {
     "formats": [
       "rewarded",
@@ -50,5 +50,6 @@
     "occupied": true,
     "activeInvocationId": "b",
     "ledgerGrants": 0
-  }
+  },
+  "version": "2.0.0-draft.1"
 }

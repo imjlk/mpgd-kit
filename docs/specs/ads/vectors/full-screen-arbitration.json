@@ -1,6 +1,6 @@
 {
   "vector": "full-screen-arbitration",
-  "protocol": "2.0.0-draft.1",
+  "protocol": "mpgd.ads.v2",
   "profile": {
     "formats": [
       "rewarded",
@@ -41,10 +41,15 @@
     "sdkShows": 1,
     "purchaseUiOpened": 0,
     "outcomes": {
-      "b": "busy",
-      "c": "busy"
+      "b": "unavailable",
+      "c": "unavailable"
     },
     "occupied": true,
-    "ledgerGrants": 0
-  }
+    "ledgerGrants": 0,
+    "reasons": {
+      "b": "busy",
+      "c": "busy"
+    }
+  },
+  "version": "2.0.0-draft.1"
 }
