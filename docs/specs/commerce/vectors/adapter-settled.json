@@ -53,10 +53,10 @@
           "transactionId": "tx-1",
           "storeSku": "gems.small",
           "token": "tx-1",
-          "state": "purchased"
-        },
-        "settlement": {
-          "ledgerEntryId": "le-1"
+          "state": "purchased",
+          "settlement": {
+            "ledgerEntryId": "le-1"
+          }
         }
       }
     },

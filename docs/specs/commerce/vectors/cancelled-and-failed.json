@@ -39,7 +39,11 @@
       "action": "queueRequest",
       "result": {
         "outcome": "cancelled",
-        "storeCode": "1"
+        "error": {
+          "code": "USER_CANCELLED",
+          "retryable": false,
+          "storeCode": "1"
+        }
       }
     },
     {
@@ -53,7 +57,8 @@
         "outcome": "cancelled",
         "error": {
           "code": "USER_CANCELLED",
-          "storeCode": "1"
+          "storeCode": "1",
+          "retryable": false
         }
       }
     },
@@ -74,7 +79,8 @@
       "logicalId": "gems_small",
       "error": {
         "code": "USER_CANCELLED",
-        "storeCode": "userCancelled"
+        "storeCode": "userCancelled",
+        "retryable": false
       }
     },
     {
@@ -82,7 +88,11 @@
       "action": "queueRequest",
       "result": {
         "outcome": "failed",
-        "storeCode": "6"
+        "error": {
+          "code": "STORE_UNAVAILABLE",
+          "retryable": true,
+          "storeCode": "fixture-unavailable"
+        }
       }
     },
     {
@@ -96,7 +106,8 @@
         "outcome": "failed",
         "error": {
           "code": "STORE_UNAVAILABLE",
-          "storeCode": "6"
+          "storeCode": "fixture-unavailable",
+          "retryable": true
         }
       }
     }

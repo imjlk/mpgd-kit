@@ -360,7 +360,7 @@ requested ──▶ launched ──▶ purchased ──▶ verifying ──▶ g
 | `granted` | `finishing` | The finish owner is `client`, `host`, or `server`. For `server` this means waiting for the backend to report `finalization: 'completed'`. |
 | `granted` | `finished` | The finish owner is `none`. |
 | `finishing` | `finished` | The finish call succeeded, or the backend reported finalization completed. |
-| `finished`, `granted` | `revoked` | The backend ledger holds a revocation entry for the grant. |
+| `finished`, `granted`, `finishing` | `revoked` | The backend ledger holds a revocation entry for the grant. |
 
 Rules:
 
@@ -716,8 +716,22 @@ Actors and actions:
 | `wallet` | `creditFromGrant`, `spend`, `renewDue` | Credit a lot from a ledger grant, spend, or run the renewal scheduler. |
 | `clock` | `set` | Set the current time. |
 
-After each step the runner lets the runtime run until it is idle. Unscripted
-store and backend calls fail the vector. `expect` may assert `journal` (the
+After each step the runner lets the runtime run until it is idle.
+The fake store defaults to `launched` for an unqueued `requestPurchase` and
+`{ finished: true }` for an unqueued `finishTransaction`; available-purchase
+and ledger-status reads derive from the fake store and ledger state. A
+`queueRequest` or `queueFinish` entry overrides the next such answer. Verify
+responses must be queued with `queueVerify`; no grant is inferred from a
+store callback. Wallet actions execute the declared in-memory wallet rules.
+Other unscripted operations fail the vector.
+
+Step inputs are fixture shorthand, not complete wire payloads. The runner
+fills the profile's `store`, quantity `1`, request source `shop`, and fake
+evidence/account binding from the fixture context before calling the typed
+provider. `returns` and `expect` match the listed fields; omitted fields are
+not assertions. Store `queueRequest` errors and `error` actions carry explicit
+normalized `code` and `retryable`; the runner never guesses an error class
+from a fixture `storeCode`. `expect` may assert `journal` (the
 full state sequence per key), `verifyRequests`, `ledger`, `finishCalls`,
 `available`, `entitlements`, `lots`, `balances`, `debits`, `events`,
 `activeSubscriptions`, and `purchaseUiOpened`.
