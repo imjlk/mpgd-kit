@@ -1,0 +1,26 @@
+{
+  "vector": "preparation-deferred",
+  "protocol": "2.0.0-draft.1",
+  "profile": {
+    "formats": [
+      "rewarded",
+      "interstitial"
+    ],
+    "configured": true,
+    "rewardSignal": "immediate",
+    "preparation": "deferred"
+  },
+  "steps": [
+    {
+      "actor": "game",
+      "action": "prepare",
+      "format": "rewarded",
+      "placementId": "CONTINUE"
+    }
+  ],
+  "expect": {
+    "preparation": "deferred",
+    "sdkShows": 0,
+    "ledgerGrants": 0
+  }
+}

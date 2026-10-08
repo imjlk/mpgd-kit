@@ -36,3 +36,8 @@ confirmed behavior specs and are not implementation-coverage targets. The
 [commerce v2 RFC](specs/commerce/commerce-v2-rfc.md) is a draft proposal for
 the next commerce contract, in the same category until its types and
 conformance runner land.
+
+The [advertising behavior RFC](specs/ads/ads-behavior-rfc.md) proposes common
+rewarded/interstitial semantics, presentation ownership, evidence registration,
+and fake-SDK conformance vectors. It is also a draft; its scenarios do not yet
+certify adapter behavior.

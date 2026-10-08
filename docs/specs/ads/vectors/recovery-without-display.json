@@ -1,0 +1,58 @@
+{
+  "vector": "recovery-without-display",
+  "protocol": "2.0.0-draft.1",
+  "profile": {
+    "formats": [
+      "rewarded",
+      "interstitial"
+    ],
+    "configured": true,
+    "rewardSignal": "immediate"
+  },
+  "steps": [
+    {
+      "actor": "game",
+      "action": "start",
+      "invocationId": "a",
+      "format": "rewarded",
+      "placementId": "CONTINUE"
+    },
+    {
+      "actor": "sdk",
+      "action": "started",
+      "invocationId": "a"
+    },
+    {
+      "actor": "sdk",
+      "action": "rewardEarned",
+      "invocationId": "a"
+    },
+    {
+      "actor": "sdk",
+      "action": "closed",
+      "invocationId": "a"
+    },
+    {
+      "actor": "runtime",
+      "action": "restart"
+    },
+    {
+      "actor": "backend",
+      "action": "grant",
+      "invocationId": "a",
+      "verifiedImpressionId": "shared-impression",
+      "ledgerEntryId": "ledger-shared"
+    },
+    {
+      "actor": "runtime",
+      "action": "recover",
+      "invocationId": "a"
+    }
+  ],
+  "expect": {
+    "sdkShows": 1,
+    "ledgerGrants": 1,
+    "claimState": "granted",
+    "occupied": false
+  }
+}

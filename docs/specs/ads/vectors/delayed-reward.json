@@ -1,0 +1,39 @@
+{
+  "vector": "delayed-reward",
+  "protocol": "2.0.0-draft.1",
+  "profile": {
+    "formats": [
+      "rewarded",
+      "interstitial"
+    ],
+    "configured": true,
+    "rewardSignal": "delayed"
+  },
+  "steps": [
+    {
+      "actor": "game",
+      "action": "start",
+      "invocationId": "a",
+      "format": "rewarded",
+      "placementId": "CONTINUE"
+    },
+    {
+      "actor": "sdk",
+      "action": "started",
+      "invocationId": "a"
+    },
+    {
+      "actor": "sdk",
+      "action": "closed",
+      "invocationId": "a"
+    }
+  ],
+  "expect": {
+    "presentation": "closed",
+    "eligibility": "unknown",
+    "claimRequests": 1,
+    "claimState": "pending",
+    "ledgerGrants": 0,
+    "occupied": false
+  }
+}

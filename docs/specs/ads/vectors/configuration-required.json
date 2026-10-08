@@ -1,0 +1,30 @@
+{
+  "vector": "configuration-required",
+  "protocol": "2.0.0-draft.1",
+  "profile": {
+    "formats": [
+      "rewarded",
+      "interstitial"
+    ],
+    "configured": false,
+    "rewardSignal": "immediate"
+  },
+  "steps": [
+    {
+      "actor": "game",
+      "action": "start",
+      "invocationId": "a",
+      "format": "rewarded",
+      "placementId": "CONTINUE"
+    }
+  ],
+  "expect": {
+    "sdkShows": 0,
+    "outcomes": {
+      "a": "unavailable"
+    },
+    "reason": "configuration-required",
+    "occupied": false,
+    "ledgerGrants": 0
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "vector": "view-disposal-grant",
+  "protocol": "2.0.0-draft.1",
+  "profile": {
+    "formats": [
+      "rewarded",
+      "interstitial"
+    ],
+    "configured": true,
+    "rewardSignal": "immediate"
+  },
+  "steps": [
+    {
+      "actor": "game",
+      "action": "start",
+      "invocationId": "a",
+      "format": "rewarded",
+      "placementId": "CONTINUE"
+    },
+    {
+      "actor": "sdk",
+      "action": "started",
+      "invocationId": "a"
+    },
+    {
+      "actor": "sdk",
+      "action": "rewardEarned",
+      "invocationId": "a"
+    },
+    {
+      "actor": "game",
+      "action": "disposeView",
+      "invocationId": "a"
+    },
+    {
+      "actor": "sdk",
+      "action": "closed",
+      "invocationId": "a"
+    },
+    {
+      "actor": "backend",
+      "action": "grant",
+      "invocationId": "a",
+      "verifiedImpressionId": "impression-a",
+      "ledgerEntryId": "ledger-a"
+    }
+  ],
+  "expect": {
+    "ledgerGrants": 1,
+    "updatesAfterViewDisposal": 0,
+    "occupied": false
+  }
+}

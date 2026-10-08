@@ -1,0 +1,53 @@
+{
+  "vector": "timeout-late-close",
+  "protocol": "2.0.0-draft.1",
+  "profile": {
+    "formats": [
+      "rewarded",
+      "interstitial"
+    ],
+    "configured": true,
+    "rewardSignal": "immediate"
+  },
+  "steps": [
+    {
+      "actor": "game",
+      "action": "start",
+      "invocationId": "a",
+      "format": "rewarded",
+      "placementId": "CONTINUE"
+    },
+    {
+      "actor": "sdk",
+      "action": "started",
+      "invocationId": "a"
+    },
+    {
+      "actor": "clock",
+      "action": "advance",
+      "milliseconds": 30000
+    },
+    {
+      "actor": "game",
+      "action": "start",
+      "invocationId": "b",
+      "format": "interstitial",
+      "placementId": "CONTINUE"
+    },
+    {
+      "actor": "sdk",
+      "action": "closed",
+      "invocationId": "a"
+    }
+  ],
+  "expect": {
+    "outcomes": {
+      "a": "pending",
+      "b": "busy"
+    },
+    "sdkShows": 1,
+    "lateCloseObserved": true,
+    "occupied": false,
+    "ledgerGrants": 0
+  }
+}
