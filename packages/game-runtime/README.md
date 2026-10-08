@@ -73,6 +73,8 @@ pnpm add phaser@^4.2.0
 | `@mpgd/game-runtime/ui` | Scoped snapshots, commands and events |
 | `@mpgd/game-runtime/platform` | Injected lifecycle source binding |
 | `@mpgd/game-runtime/actions` | Purchase and rewarded-ad coordination |
+| `@mpgd/game-runtime/presentation` | Shared native full-screen ownership |
+| `@mpgd/game-runtime/ads` | Coordinated provider and gateway, injected deadlines and policy |
 | `@mpgd/game-runtime/phaser` | Optional gameplay scene binding |
 
 Phaser is an optional peer dependency. The root and headless subpaths do not
@@ -95,6 +97,44 @@ Contributor validation: `pnpm --dir packages/game-runtime test`,
 and `node packages/game-runtime/test/dist-import.mjs`. The package test also
 installs packed tarballs in an isolated consumer, checks headless declarations
 without DOM types, and checks the optional binding with Phaser declarations.
+
+## Native presentation and financial settlement
+
+Create one `createFullScreenPresentationScope({ execution })` above all screens.
+Pass it to `createCoordinatedPlatformGateway` with the original gateway and its
+v2 ad provider. Use the returned gateway for both direct platform calls and the
+game-services client; pass the same scope and execution controller to
+`createGameActionCoordinator`. The coordinator rejects a mismatched controller.
+
+The scope owns simulation, gameplay input, and audio blocks only while native UI
+is open or uncertain. Native closure releases that invocation's blocks even
+while the game-services client is waiting for a backend claim. Settings and
+background blocks remain independently owned. Financial operations retain their
+existing duplicate, pending, and reconciliation guards.
+
+An injected advertising deadline ends caller waiting and returns an uncertain
+result. It never cancels the native SDK or proves closure. Native close and late
+reward observers survive view disposal while needed. `onClaimEvidence` reports
+late candidates under the original invocation and idempotency key for an
+application-owned claim journal; it cannot grant rewards. Use a durable
+game-services operation store when recovery must survive process restart.
+`claimEvidence` carries a server proof-lookup correlation without asserting local
+SDK eligibility. Registered server verification and its ledger remain authoritative.
+
+Purchase business results do not prove that native UI closed. Without a trusted
+`classifyPurchasePresentation` function or a native `purchasePresentation`
+event source, the wrapper keeps presentation unknown. Wire actual native close
+facts before enabling the managed purchase path. Events are scoped to the
+original idempotency key and a monotonic sequence; late or foreign events cannot
+release another invocation. Disposal rejects new calls and retains uncertain
+native close observation. Lightweight key history prevents retired purchase
+keys from reopening the SDK; only active/uncertain results and the last settled
+result are retained.
+
+`canShow` is an injected placement policy. No target-specific branch belongs in
+the game flow. Availability and preparation gate SDK calls; a shared busy surface
+blocks purchases, rewarded ads, and interstitials together. The adapter-level
+SDK conformance suites certify each provider separately from these runtime tests.
 
 ## Scoped UI bridge
 

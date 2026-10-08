@@ -8,10 +8,37 @@ import {
   type PurchaseActionSnapshot,
 } from '@mpgd/game-runtime/actions';
 import { bindGameLifecycle } from '@mpgd/game-runtime/platform';
+import { createFullScreenPresentationScope } from '@mpgd/game-runtime/presentation';
+import { createCoordinatedAdProvider } from '@mpgd/game-runtime/ads';
+import { adProtocol, adProtocolVersion } from '@mpgd/platform/ads';
 import { createGameUiBridge, type GameUiScope } from '@mpgd/game-runtime/ui';
 import type { GameServicesOperationClient } from '@mpgd/game-services/operations';
 
 const channel: ExecutionChannel = 'simulation';
+const presentationExecution = createGameExecutionController();
+const presentation = createFullScreenPresentationScope({ execution: presentationExecution });
+const ads = createCoordinatedAdProvider({
+  presentation,
+  provider: {
+    id: 'headless',
+    protocol: adProtocol,
+    protocolVersion: adProtocolVersion,
+    rewardSignal: 'immediate',
+    getAvailability: async () => ({ state: 'unsupported', reason: 'unsupported' }),
+    preload: async () => ({ status: 'unavailable', reason: 'unsupported' }),
+    show: async (input) => ({
+      providerId: 'headless',
+      invocationId: input.invocationId,
+      format: input.format,
+      outcome: 'unavailable',
+      presentation: 'not-started',
+      eligibility: input.format === 'rewarded' ? 'not-earned' : 'not-applicable',
+      reason: 'unsupported',
+    }),
+    subscribe: () => () => {},
+  },
+});
+void ads.getAvailability({ placementId: 'headless', format: 'rewarded' });
 const controller = createGameExecutionController();
 const token = controller.acquireBlock({ reason: 'consumer', channels: [channel] });
 const snapshot: GameExecutionSnapshot = controller.getSnapshot();

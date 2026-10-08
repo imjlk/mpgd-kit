@@ -22,6 +22,7 @@ try {
   const edges = new Map();
   const runtime = packInstalledPackage(join(repoRoot, 'packages/game-runtime'));
   const services = packInstalledPackage(join(repoRoot, 'packages/game-services'));
+  const platform = packInstalledPackage(join(repoRoot, 'packages/platform'));
   mkdirSync(consumer);
   const manifest = {
     name: 'mpgd-game-runtime-package-smoke',
@@ -31,6 +32,7 @@ try {
     dependencies: {
       '@mpgd/game-runtime': runtime.tarball,
       '@mpgd/game-services': services.tarball,
+      '@mpgd/platform': platform.tarball,
     },
   };
   writeJson(join(consumer, 'package.json'), manifest);
@@ -41,7 +43,7 @@ try {
   assert.notEqual(installed.private, true);
   assert.equal(JSON.stringify(installed).includes('workspace:'), false);
   assert.equal(installed.peerDependenciesMeta?.phaser?.optional, true);
-  assert.deepEqual(Object.keys(installed.exports).sort(), ['.', './actions', './phaser', './platform', './ui']);
+  assert.deepEqual(Object.keys(installed.exports).sort(), ['.', './actions', './ads', './phaser', './platform', './presentation', './ui']);
   run(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';
     assert.throws(() => import.meta.resolve('phaser'), { code: 'ERR_MODULE_NOT_FOUND' });
