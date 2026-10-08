@@ -520,6 +520,69 @@ assert.equal(advancedOwnershipResult.verified, true);
 assert.equal(advancedOwnershipResult.alreadyProcessed, false);
 assert.equal(advancedOwnershipHarness.events.includes('ledger:fresh-generation'), true);
 
+// Generated recovery keys must fit the same request contract as explicit checkout keys.
+const boundedRecoveryHarness = createHarness({
+  recoveryOwnershipStore: createInMemoryMicrosoftStoreRecoveryOwnershipStore(),
+});
+await boundedRecoveryHarness.boundary.claimRecoveryOwnership(
+  createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'earlier-checkout'),
+);
+const longCollectionItemId = `collection-${'a'.repeat(240)}`;
+boundedRecoveryHarness.client.queryResponse = {
+  items: [{
+    id: longCollectionItemId,
+    modifiedDate,
+    productId: storeId,
+    productKind: 'UnmanagedConsumable',
+    quantity: 1,
+    status: 'Active',
+  }],
+};
+const { idempotencyKey: _previousGeneration, ...withoutGeneration } =
+  createRecoveryOwnershipInput('player-microsoft-store');
+const boundedRecovery = await boundedRecoveryHarness.boundary.hasRecoveryOwnership(
+  withoutGeneration,
+);
+if (boundedRecovery.status !== 'granted') {
+  throw new Error('Expected a new generation for the same owner’s next purchase.');
+}
+assert.equal(
+  boundedRecovery.idempotencyKey.length <= 256,
+  true,
+  'recovery key exceeds request limit',
+);
+assert.deepEqual(
+  await boundedRecoveryHarness.boundary.hasRecoveryOwnership(withoutGeneration),
+  boundedRecovery,
+);
+boundedRecoveryHarness.client.consumeProduct = async (input) => {
+  boundedRecoveryHarness.client.consumeTrackingIds.push(input.trackingId);
+  return { itemId: longCollectionItemId, trackingId: input.trackingId, newQuantity: 0 };
+};
+const recoveredRequest = createRequest({ idempotencyKey: boundedRecovery.idempotencyKey });
+const boundedResult = await boundedRecoveryHarness.backend.purchases.verifyPurchase(
+  recoveredRequest,
+);
+assert.equal(boundedResult.verified, true);
+assert.equal(boundedResult.finalization?.status, 'completed');
+const replayedBoundedResult = await boundedRecoveryHarness.backend.purchases.verifyPurchase(
+  recoveredRequest,
+);
+assert.equal(replayedBoundedResult.alreadyProcessed, true);
+assert.equal(replayedBoundedResult.finalization?.status, 'completed');
+assert.equal(new Set(boundedRecoveryHarness.client.consumeTrackingIds).size, 1);
+
+const oversizedGenerationHarness = createHarness({
+  recoveryOwnershipStore: createInMemoryMicrosoftStoreRecoveryOwnershipStore(),
+});
+assert.deepEqual(
+  await oversizedGenerationHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'x'.repeat(257)),
+  ),
+  { status: 'denied' },
+);
+assert.deepEqual(oversizedGenerationHarness.events, []);
+
 const completed = createHarness();
 const completedResult = await completed.backend.purchases.verifyPurchase(createRequest());
 assert.equal(completedResult.verified, true);
