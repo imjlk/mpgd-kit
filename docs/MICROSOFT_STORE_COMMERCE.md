@@ -163,7 +163,12 @@ index order ID, line item ID **and product ID** for later provider events. This
 boundary supports quantity-one developer-managed consumables; nonempty order
 data must describe exactly that quantity. Malformed IDs, quantities or a
 mismatched response product keep finalization pending without invoking the
-hook. Storage failures keep ownership unreleased and finalization pending with
+hook. For compatibility with consume responses that omit `productId`, receipt
+attribution uses the verified request context after matching `itemId`,
+`trackingId`, and the consumed balance. A supplied `productId` must still match
+that context. The current provider schema includes the product field; omission
+tolerance is a compatibility rule, not a claim that it is always absent.
+Storage failures keep ownership unreleased and finalization pending with
 `MICROSOFT_STORE_CONSUMPTION_RECEIPT_UNAVAILABLE`.
 
 Microsoft's [Consume API](https://learn.microsoft.com/en-us/gaming/gdk/docs/store/commerce/service-to-service/microsoft-store-apis/xstore-v8-consume)

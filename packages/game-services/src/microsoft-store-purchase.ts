@@ -734,7 +734,10 @@ async function consumeMicrosoftStorePurchase(
 
     if (input.persistConsumptionReceipt !== undefined) {
       const orderTransactions = readConsumeOrderTransactions(raw.orderTransactions);
-      if (raw.productId !== context.storeId || orderTransactions === undefined) {
+      // Some consume responses omit the product echo. Attribution comes from the
+      // verified context and the item/tracking checks above; reject a conflicting echo.
+      if ((raw.productId !== undefined && raw.productId !== context.storeId)
+        || orderTransactions === undefined) {
         return finalizationPending('MICROSOFT_STORE_CONSUMPTION_RECEIPT_INVALID');
       }
       finalizationInput.signal.throwIfAborted();
