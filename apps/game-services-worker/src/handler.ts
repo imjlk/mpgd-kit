@@ -753,6 +753,7 @@ function createWorkerAdRewardRegistry(
     }
     registrations.push({
       providerId: entry.providerId, schema: entry.schema,
+      acceptsMissingEvidence: entry.native !== undefined,
       bindings: [{ target: entry.target, deploymentTarget: deploymentTargets[entry.target] ?? entry.target }],
       verify: (input) => {
         if (verifier !== undefined) { return verifier.verifyAdReward(input); }

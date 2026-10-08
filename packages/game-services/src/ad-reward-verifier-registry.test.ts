@@ -105,6 +105,33 @@ assert.equal(
   'rejected',
 );
 assert.equal(verifications, 0, 'a reported provider identity must match the schema owner');
+const serverLookup = createAdRewardEvidenceVerifierRegistry([
+  { ...registration, acceptsMissingEvidence: true },
+]);
+assert.equal(
+  (await serverLookup.verifyAdReward({ ...verificationInput, request: withoutEvidence })).status,
+  'rejected',
+  'explicit server proof lookup still authenticates all proof bindings',
+);
+assert.equal(
+  verifications,
+  1,
+  'only an explicit missing-envelope registration can dispatch server proof lookup',
+);
+assert.equal(
+  (await serverLookup.verifyAdReward({ ...verificationInput, request: { ...request, evidence: { schema: 'unknown', payload: {} } } })).status,
+  'rejected',
+);
+assert.equal(verifications, 1, 'an unknown schema cannot take the missing-envelope path');
+assert.throws(
+  () =>
+    createAdRewardEvidenceVerifierRegistry([
+      registration,
+      { ...registration, schema: 'other-schema', acceptsMissingEvidence: true },
+      { ...registration, schema: 'third-schema', acceptsMissingEvidence: true },
+    ]),
+  /missing-evidence/,
+);
 const malformedPayloads: readonly unknown[] = ['invalid-payload', null, { nested: {} }];
 for (const malformed of malformedPayloads) {
   const invalidRegistry = createAdRewardEvidenceVerifierRegistry([{

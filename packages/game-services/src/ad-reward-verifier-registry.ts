@@ -17,6 +17,8 @@ export interface AdRewardVerifierDescriptor {
 }
 
 export interface AdRewardVerifierRegistration extends AdRewardVerifierDescriptor {
+  /** Explicit server proof lookup without a client envelope (for example signed SSV recovery). */
+  readonly acceptsMissingEvidence?: boolean;
   /** Authenticate proof and all request bindings; registration itself proves no reward. */
   verify(input: VerifyAdRewardEvidenceInput): Promise<EvidenceVerificationDecision>;
 }
@@ -29,12 +31,13 @@ export interface AdRewardEvidenceVerifierRegistry {
 export function createAdRewardEvidenceVerifierRegistry(
   entries: readonly AdRewardVerifierRegistration[],
 ): AdRewardEvidenceVerifierRegistry {
-  const registered = new Map<string, AdRewardVerifierRegistration['verify']>();
+  const registered = new Map<string, Pick<AdRewardVerifierRegistration, 'providerId' | 'verify'>>();
   const providerSchemas = new Map<string, string>();
   for (const entry of entries) {
     assertIdentity(entry.providerId);
     assertIdentity(entry.schema);
-    if (!Array.isArray(entry.bindings) || entry.bindings.length === 0 || typeof entry.verify !== 'function') {
+    if (!Array.isArray(entry.bindings) || entry.bindings.length === 0 || typeof entry.verify !== 'function'
+      || entry.acceptsMissingEvidence !== undefined && typeof entry.acceptsMissingEvidence !== 'boolean') {
       throw new TypeError('Invalid advertising verifier registration.');
     }
     const owner = providerSchemas.get(entry.schema);
@@ -52,27 +55,35 @@ export function createAdRewardEvidenceVerifierRegistry(
       if (registered.has(key)) {
         throw new TypeError('Duplicate advertising verifier binding.');
       }
-      registered.set(key, entry.verify);
+      const verifier = Object.freeze({ providerId: entry.providerId, verify: entry.verify });
+      registered.set(key, verifier);
+      if (entry.acceptsMissingEvidence === true) {
+        const missingKey = bindingKey(null, binding.target, deploymentTarget);
+        if (registered.has(missingKey)) {
+          throw new TypeError('Duplicate missing-evidence advertising verifier binding.');
+        }
+        registered.set(missingKey, verifier);
+      }
     }
   }
   return Object.freeze({
     async verifyAdReward(input: VerifyAdRewardEvidenceInput): Promise<EvidenceVerificationDecision> {
       const request = input.request;
-      const schema = request.evidence?.schema;
-      const verify = schema === undefined ? undefined : registered.get(bindingKey(
+      const schema = request.evidence === undefined ? null : request.evidence?.schema;
+      const selected = schema === undefined || schema === '' ? undefined : registered.get(bindingKey(
         schema, request.target, request.deploymentTarget ?? request.target,
       ));
-      if (verify === undefined) {
+      if (selected === undefined) {
         return { status: 'rejected', reason: 'AD_REWARD_VERIFIER_UNREGISTERED' };
       }
-      const providerId = schema === undefined ? undefined : providerSchemas.get(schema);
+      const { providerId, verify } = selected;
       if (request.providerId !== undefined && request.providerId !== providerId) {
         return { status: 'rejected', reason: 'AD_REWARD_PROVIDER_MISMATCH' };
       }
       // Proof verification stays abortable and server-owned. Preserve its authoritative
       // identity so ledger replay checks remain stable across registry migration.
       const decision = await verify(input);
-      if (decision?.status !== 'verified' || providerId === undefined) {
+      if (decision?.status !== 'verified') {
         return decision;
       }
       const payload = decision.payload;
@@ -97,7 +108,7 @@ const rewardTargets = new Set<GameServicesAdRewardTarget>([
   'verse8',
 ]);
 
-function bindingKey(schema: string, target: string, deploymentTarget: string): string {
+function bindingKey(schema: string | null, target: string, deploymentTarget: string): string {
   return JSON.stringify([schema, target, deploymentTarget]);
 }
 

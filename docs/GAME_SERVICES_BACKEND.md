@@ -269,8 +269,14 @@ Recovery cannot replace a recorded provider while a claim is pending.
 The Worker assembles built-in AdMob, Apps in Toss, and Verse8 schemas from
 configured native/target bindings. Unknown schemas or target/deployment
 combinations reject with `AD_REWARD_VERIFIER_UNREGISTERED` before dispatch.
-Custom advertising integrations must explicitly register their schema;
-target-specific and aggregate bindings no longer imply arbitrary ad schema
+Custom advertising integrations must explicitly register their schema.
+the native AdMob SSV registration also explicitly permits a missing client
+envelope, so signed, stored SSV proof can settle an existing claim without
+an SDK reward callback. This opt-in `acceptsMissingEvidence` proof-lookup
+path still authenticates the original player, placement, and invocation;
+it cannot accept an unknown supplied schema. Only one such default is
+permitted per target/deployment binding.
+Target-specific and aggregate bindings no longer imply arbitrary ad schema
 permission. Purchase routing is unchanged.
 
 For another provider on any existing build target, configure the JSON var
