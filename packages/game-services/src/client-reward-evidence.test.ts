@@ -326,4 +326,26 @@ assert.equal(
   'recovery and repeat callers never reopen advertising',
 );
 assert.equal(claims, claimsBeforeRecovery + 1);
+verified = false;
+const versionedInput = { ...input, gateway: versionedGateway, operationStore };
+const versionedOperation = { ...operation, idempotencyKey: 'persist-provider-identity' };
+assert.equal(
+  (await createRecoverableMonetizationClient(versionedInput).claimRewardedAd(versionedOperation)).status,
+  'pending',
+);
+assert.equal((requests.at(-1) as { providerId?: string }).providerId, 'new-provider');
+const beforeChangedProvider = { displays, claims };
+const changedProvider = {
+  ...versionedGateway,
+  ads: { ...versionedGateway.ads, provider: { ...provider.provider, id: 'another-provider' } },
+};
+assert.equal(
+  (await createRecoverableMonetizationClient({ ...versionedInput, gateway: changedProvider }).reconcile())[0]?.status,
+  'action-required',
+);
+assert.deepEqual(
+  { displays, claims },
+  beforeChangedProvider,
+  'a recorded provider cannot be replaced during pending recovery',
+);
 console.log('Registered client evidence, backend authority, and durable reward recovery passed.');

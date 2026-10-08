@@ -23,6 +23,11 @@ MPGD_STORE = "memory"
 # placement/catalog and authenticated claim boundary before enabling.
 # MPGD_ADMOB_SSV_ANDROID_AD_UNIT = "<actual-android-ad-unit>"
 # MPGD_ADMOB_SSV_IOS_AD_UNIT = "<actual-ios-ad-unit>"
+# Optional explicit custom advertising registrations (JSON vars). Configure the
+# private GAME_SERVICES_AD_REWARD_EVIDENCE_VERIFIER service below and authenticate
+# provider proof there. Keep game-owned placement IDs under the same deployment key.
+# MPGD_AD_REWARD_VERIFIERS = [{ providerId = "game-provider", schema = "game-provider.reward.v1", bindings = [{ target = "browser", deploymentTarget = "browser-stage" }] }]
+# MPGD_DEPLOYMENT_TARGET_BINDINGS = { browser = "browser-stage" }
 
 [observability]
 enabled = true
@@ -74,6 +79,12 @@ head_sampling_rate = 1
 # [[services]]
 # binding = "GAME_SERVICES_EVIDENCE_VERIFIER"
 # service = "game-evidence-verifier"
+#
+# Optional registered advertising verifier. Implements verifyAdReward(input),
+# including the server-selected providerId and the numeric timeoutMs budget.
+# [[services]]
+# binding = "GAME_SERVICES_AD_REWARD_EVIDENCE_VERIFIER"
+# service = "game-ad-proof-verifier"
 #
 # [[services]]
 # binding = "GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER"

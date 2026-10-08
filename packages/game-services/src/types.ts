@@ -32,10 +32,7 @@ export type GameServicesStoreTarget = Extract<
   PlatformTarget,
   'microsoft-store' | 'android' | 'ios' | 'ait'
 >;
-export type GameServicesAdRewardTarget = Extract<
-  PlatformTarget,
-  'android' | 'ios' | 'ait' | 'verse8'
->;
+export type GameServicesAdRewardTarget = GameServicesLedgerTarget;
 export type GameServicesLeaderboardTarget = Extract<
   PlatformTarget,
   'browser' | 'microsoft-store' | 'android' | 'ios' | 'ait' | 'reddit'
@@ -66,6 +63,8 @@ export interface VerifyPurchaseRequest {
 
 export interface ClaimAdRewardRequest {
   readonly target: GameServicesAdRewardTarget;
+  /** Versioned provider identity, independent of build target; checked by server registration. */
+  readonly providerId?: string;
   /** Deployment config key used to resolve game-owned platform placement identifiers. */
   readonly deploymentTarget?: string;
   readonly playerId: string;
@@ -195,6 +194,7 @@ export function assertClaimAdRewardRequest(
   return validateRequest(() => {
     assertRecord(input, 'ClaimAdRewardRequest');
     assertAdRewardTarget(input.target);
+    assertOptionalRequestString(input.providerId, 'providerId');
     assertOptionalGameServicesDeploymentTarget(input.deploymentTarget);
     assertRequestString(input.playerId, 'playerId');
     assertRequestString(input.placementId, 'placementId');
@@ -332,8 +332,9 @@ function assertStoreTarget(input: unknown): asserts input is GameServicesStoreTa
 }
 
 function assertAdRewardTarget(input: unknown): asserts input is GameServicesAdRewardTarget {
-  if (input !== 'android' && input !== 'ios' && input !== 'ait' && input !== 'verse8') {
-    throw new Error('target must be android, ios, ait, or verse8.');
+  if (input !== 'browser' && input !== 'microsoft-store' && input !== 'android'
+    && input !== 'ios' && input !== 'ait' && input !== 'reddit' && input !== 'verse8') {
+    throw new Error('target must be a supported platform target.');
   }
 }
 

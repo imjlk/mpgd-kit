@@ -1,5 +1,6 @@
 import type { AdPlacements } from '@mpgd/catalog';
 import {
+  createAdRewardEvidenceVerifierRegistry,
   createDevelopmentGameServicesEvidenceVerifier,
   createGameServicesBackend,
   createGameServicesBackendApiHandler,
@@ -11,6 +12,9 @@ import {
   createVerifiedLeaderboardSnapshotFetchHandler,
   gameServicesBackendEndpoints,
   microsoftStoreDigitalGoodsEvidenceSchema,
+  type AdRewardEvidenceVerifierRegistry,
+  type AdRewardVerifierDescriptor,
+  type AdRewardVerifierRegistration,
   type ClaimAdRewardRequest,
   type EvidenceVerificationDecision,
   type FinalizePurchaseGrantInput,
@@ -64,6 +68,12 @@ export interface GameServicesWorkerEnv {
    */
   readonly GAME_SERVICES_INGRESS_AUTH?: GameServicesIngressAuthBinding;
   readonly GAME_SERVICES_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
+  /** Explicit advertising schema/provider/deployment registrations, independent of client decoders. */
+  readonly MPGD_AD_REWARD_VERIFIERS?: readonly AdRewardVerifierDescriptor[];
+  readonly MPGD_DEPLOYMENT_TARGET_BINDINGS?: GameServicesDeploymentTargetBindings;
+  readonly GAME_SERVICES_AD_REWARD_EVIDENCE_VERIFIER?: {
+    verifyAdReward(input: Omit<VerifyAdRewardEvidenceInput, 'signal'> & { readonly providerId: string }): Promise<EvidenceVerificationDecision>;
+  };
   readonly GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
   readonly GAME_SERVICES_IOS_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
   readonly GAME_SERVICES_AIT_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
@@ -558,6 +568,7 @@ function resolveWorkerDeploymentTargetBindings(
   env: GameServicesWorkerEnv,
 ): GameServicesDeploymentTargetBindings {
   return {
+    ...env.MPGD_DEPLOYMENT_TARGET_BINDINGS,
     ...(env.GAME_SERVICES_MICROSOFT_STORE_DEPLOYMENT_TARGET === undefined
       ? {}
       : { 'microsoft-store': env.GAME_SERVICES_MICROSOFT_STORE_DEPLOYMENT_TARGET }),
@@ -597,48 +608,31 @@ function resolveWorkerEvidenceVerifier(
     ? undefined
     : createD1AdMobSsvEvidenceVerifier(admobConfig);
 
-  if (hasTargetSpecificEvidenceVerifierBinding(env)) {
-    return createWorkerEvidenceVerifier(
-      (target) => resolveTargetSpecificEvidenceVerifierBinding(env, target),
-      verse8Verifier,
-      undefined,
-      admobVerifier,
-      admobConfig?.adUnits,
-    );
-  }
-
-  if (env.GAME_SERVICES_EVIDENCE_VERIFIER !== undefined) {
-    const binding = env.GAME_SERVICES_EVIDENCE_VERIFIER;
-
-    return createWorkerEvidenceVerifier(
-      (target) => {
-        // Microsoft Store consumables require a paired verifier/finalizer boundary. Never let
-        // the legacy aggregate verifier grant Store evidence without a consume finalizer.
-        if (target === 'microsoft-store') {
-          return undefined;
-        }
-        return target === 'verse8' && verse8Verifier !== undefined ? undefined : binding;
-      },
-      verse8Verifier,
-      undefined,
-      admobVerifier,
-      admobConfig?.adUnits,
-    );
-  }
-
-  const developmentVerifier = allowDevelopmentEvidence
+  const targetBindings = hasTargetSpecificEvidenceVerifierBinding(env);
+  const resolveBinding = (target: ClaimAdRewardRequest['target'] | GameServicesStoreTarget) => {
+    if (targetBindings) {
+      return resolveTargetSpecificEvidenceVerifierBinding(env, target);
+    }
+    // Store consumables need a paired finalizer, never the aggregate fallback.
+    return target === 'microsoft-store' || target === 'verse8' && verse8Verifier !== undefined
+      ? undefined
+      : env.GAME_SERVICES_EVIDENCE_VERIFIER;
+  };
+  const developmentVerifier = allowDevelopmentEvidence && !targetBindings
+      && env.GAME_SERVICES_EVIDENCE_VERIFIER === undefined
     ? createDevelopmentGameServicesEvidenceVerifier()
     : undefined;
-
-  if (verse8Verifier !== undefined || developmentVerifier !== undefined
-    || admobVerifier !== undefined) {
-    return createWorkerEvidenceVerifier(
-      () => undefined,
-      verse8Verifier,
-      developmentVerifier,
-      admobVerifier,
-      admobConfig?.adUnits,
-    );
+  const adRegistry = createWorkerAdRewardRegistry(
+    env,
+    resolveBinding,
+    verse8Verifier,
+    admobVerifier,
+    admobConfig?.adUnits,
+  );
+  if (targetBindings || env.GAME_SERVICES_EVIDENCE_VERIFIER !== undefined
+    || verse8Verifier !== undefined || developmentVerifier !== undefined
+    || admobVerifier !== undefined || env.GAME_SERVICES_AD_REWARD_EVIDENCE_VERIFIER !== undefined) {
+    return createWorkerEvidenceVerifier(resolveBinding, adRegistry, developmentVerifier);
   }
 
   return undefined;
@@ -667,11 +661,8 @@ function resolveTargetSpecificEvidenceVerifierBinding(
       return env.GAME_SERVICES_AIT_EVIDENCE_VERIFIER;
     case 'verse8':
       return env.GAME_SERVICES_VERSE8_EVIDENCE_VERIFIER;
-    default: {
-      const unsupportedTarget: never = target;
-
-      throw new Error(`Unsupported evidence verifier target: ${String(unsupportedTarget)}`);
-    }
+    default:
+      return undefined;
   }
 }
 
@@ -679,10 +670,8 @@ function createWorkerEvidenceVerifier(
   resolveBinding: (
     target: ClaimAdRewardRequest['target'] | GameServicesStoreTarget,
   ) => GameServicesEvidenceVerifierBinding | undefined,
-  verse8Verifier?: GameServicesEvidenceVerifier,
+  adRegistry: AdRewardEvidenceVerifierRegistry,
   fallbackVerifier?: GameServicesEvidenceVerifier,
-  admobVerifier?: GameServicesEvidenceVerifier,
-  admobAdUnits?: AdMobSsvWorkerConfig['adUnits'],
 ): GameServicesEvidenceVerifier {
   return {
     async verifyPurchase(input) {
@@ -713,28 +702,87 @@ function createWorkerEvidenceVerifier(
         ?? unavailableEvidenceVerificationDecision();
     },
     async verifyAdReward(input) {
-      const { request, placement, platformPlacementId, timeoutMs } = input;
-      if ((request.target === 'android' || request.target === 'ios')
-        && admobVerifier !== undefined && admobAdUnits?.[request.target] !== undefined) {
-        return admobVerifier.verifyAdReward(input);
-      }
-      const binding = resolveBinding(request.target);
-
-      if (binding !== undefined) {
-        return binding.verifyAdReward({
-          request,
-          placement,
-          ...(platformPlacementId === undefined ? {} : { platformPlacementId }),
-          timeoutMs,
-        });
-      }
-
-      return request.target === 'verse8' && verse8Verifier !== undefined
-        ? verse8Verifier.verifyAdReward(input)
-        : (fallbackVerifier?.verifyAdReward(input)
-          ?? unavailableEvidenceVerificationDecision());
+      const decision = await adRegistry.verifyAdReward(input);
+      return decision.status === 'rejected' && decision.reason === 'AD_REWARD_VERIFIER_UNREGISTERED'
+        && fallbackVerifier !== undefined ? fallbackVerifier.verifyAdReward(input) : decision;
     },
   };
+}
+
+function createWorkerAdRewardRegistry(
+  env: GameServicesWorkerEnv,
+  resolveBinding: (target: ClaimAdRewardRequest['target']) => GameServicesEvidenceVerifierBinding | undefined,
+  verse8Verifier: GameServicesEvidenceVerifier | undefined,
+  admobVerifier: GameServicesEvidenceVerifier | undefined,
+  admobAdUnits: AdMobSsvWorkerConfig['adUnits'] | undefined,
+): AdRewardEvidenceVerifierRegistry {
+  const registrations: AdRewardVerifierRegistration[] = [];
+  const deploymentTargets = resolveWorkerDeploymentTargetBindings(env);
+  // SDK selection is deployment assembly data. Claim dispatch only uses the registry.
+  const builtins = [
+    {
+      providerId: 'admob-rewarded',
+      schema: 'mpgd.admob.client-reward.v1',
+      target: 'android',
+      native: admobAdUnits?.android === undefined ? undefined : admobVerifier,
+    },
+    {
+      providerId: 'admob-rewarded',
+      schema: 'mpgd.admob.client-reward.v1',
+      target: 'ios',
+      native: admobAdUnits?.ios === undefined ? undefined : admobVerifier,
+    },
+    {
+      providerId: 'apps-in-toss-ads',
+      schema: 'apps-in-toss.rewarded-ad.callback.v1',
+      target: 'ait',
+      native: undefined,
+    },
+    {
+      providerId: 'verse8-ads',
+      schema: 'verse8.ads.reward.v1',
+      target: 'verse8',
+      native: undefined,
+    },
+  ] as const;
+  for (const entry of builtins) {
+    const binding = resolveBinding(entry.target);
+    const verifier = entry.native ?? (binding === undefined && entry.target === 'verse8' ? verse8Verifier : undefined);
+    if (verifier === undefined && binding === undefined) {
+      continue;
+    }
+    registrations.push({
+      providerId: entry.providerId, schema: entry.schema,
+      acceptsMissingEvidence: entry.native !== undefined,
+      bindings: [{ target: entry.target, deploymentTarget: deploymentTargets[entry.target] ?? entry.target }],
+      verify: (input) => {
+        if (verifier !== undefined) { return verifier.verifyAdReward(input); }
+        const { signal, ...bindingInput } = input;
+        void signal;
+        // Native bindings use clone-safe data and enforce the received timeout budget.
+        if (binding === undefined) { return Promise.resolve(unavailableEvidenceVerificationDecision()); }
+        return binding.verifyAdReward(bindingInput);
+      },
+    });
+  }
+  for (const descriptor of env.MPGD_AD_REWARD_VERIFIERS ?? []) {
+    const binding = env.GAME_SERVICES_AD_REWARD_EVIDENCE_VERIFIER;
+    if (binding === undefined) {
+      throw new Error(
+        'Registered ad reward providers require GAME_SERVICES_AD_REWARD_EVIDENCE_VERIFIER.',
+      );
+    }
+    const providerId = descriptor.providerId;
+    registrations.push({
+      ...descriptor,
+      verify: (input) => {
+        const { signal, ...bindingInput } = input;
+        void signal;
+        return binding.verifyAdReward({ ...bindingInput, providerId });
+      },
+    });
+  }
+  return createAdRewardEvidenceVerifierRegistry(registrations);
 }
 
 function resolveWorkerAdMobSsvConfig(

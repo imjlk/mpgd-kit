@@ -161,6 +161,7 @@ try {
     ...claimRequest,
     playerId: 'player-2',
     idempotencyKey: 'reward-other',
+    evidence: { schema: 'mpgd.admob.client-reward.v1', payload: {} },
   }) as { readonly granted: boolean };
   assert.equal(mixedClaim.granted, true);
   assert.equal(androidBindingCalls, 1);

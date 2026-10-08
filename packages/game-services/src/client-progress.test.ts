@@ -354,7 +354,10 @@ for (const kind of ['purchase', 'rewarded-ad'] as const) {
   }
 }
 
-const unsupported = harness({ target: 'reddit' });
+const unsupported = harness({
+  target: 'reddit',
+  reward: { status: 'unavailable', rewardGranted: false },
+});
 const unsupportedEvents: GameServicesOperationProgress[] = [];
 await unsupported.client.purchase(purchaseInput, {
   onProgress: (event) => {
@@ -368,13 +371,13 @@ await unsupported.client.claimRewardedAd(rewardInput, {
 });
 equal(
   phases(unsupportedEvents),
-  ['completed', 'completed'],
-  'Unsupported targets do not emit uncalled stages',
+  ['completed', 'platform-requested', 'platform-result', 'completed'],
+  'Unsupported purchases omit SDK stages; an unavailable ad provider omits server stages',
 );
 equal(
   unsupported.calls,
-  { purchase: 0, reward: 0, verify: 0, claim: 0 },
-  'Unsupported target performs no SDK/server call',
+  { purchase: 0, reward: 1, verify: 0, claim: 0 },
+  'Build-target support does not replace provider availability',
 );
 
 const authoritative = harness({

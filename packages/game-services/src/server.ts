@@ -674,11 +674,13 @@ function resolveMaxBodyBytes(maxBodyBytes: number | undefined): number {
 type GameServicesDeploymentTargetPlatform = GameServicesAdRewardTarget | GameServicesStoreTarget;
 
 const gameServicesDeploymentTargetPlatforms = new Set<GameServicesDeploymentTargetPlatform>([
+  'browser',
   'microsoft-store',
   'android',
   'ios',
   'ait',
   'verse8',
+  'reddit',
 ]);
 
 function resolveDeploymentTargetBindings(

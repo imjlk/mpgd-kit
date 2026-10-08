@@ -245,12 +245,53 @@ must apply the game-owned catalog grant through a consume-once server path. See
 boundary.
 
 If any target-specific binding is configured, the Worker enters strict
-target-specific mode. Each purchase or rewarded-ad request is sent only to the
-binding matching its target. A missing match fails closed with
+target-specific mode for purchase routing. Each purchase request is sent only
+to the binding matching its target. A missing match fails closed with
 `EVIDENCE_VERIFIER_UNAVAILABLE`; it never falls back to another target or the
 aggregate binding. Configure every target served by a deployment before
 enabling target-specific mode. Deployments with no target-specific bindings
-keep the aggregate binding behavior for backwards compatibility.
+keep the aggregate purchase binding behavior for backwards compatibility.
+
+Advertising proof dispatch uses
+`createAdRewardEvidenceVerifierRegistry()` from
+`@mpgd/game-services/ad-reward-verifier-registry`. Every server registration
+declares a `providerId`, unique provider-owned evidence `schema`, permitted
+`bindings` (`target` and optional `deploymentTarget`), and `verify(input)`.
+The selected verifier must authenticate proof and bind it to the player,
+placement, invocation, and provider. Pending proof cannot write a grant, and
+the ledger rejects reusing one authoritative impression under another key.
+Existing authoritative verification IDs stay unchanged during migration.
+Versioned clients also record the optional `providerId` in the claim and
+journal. The registry checks that identity against the schema owner, and
+records its trusted selected identity as `adProviderId` in ledger payloads.
+Recovery cannot replace a recorded provider while a claim is pending.
+
+The Worker assembles built-in AdMob, Apps in Toss, and Verse8 schemas from
+configured native/target bindings. Unknown schemas or target/deployment
+combinations reject with `AD_REWARD_VERIFIER_UNREGISTERED` before dispatch.
+Custom advertising integrations must explicitly register their schema.
+the native AdMob SSV registration also explicitly permits a missing client
+envelope, so signed, stored SSV proof can settle an existing claim without
+an SDK reward callback. This opt-in `acceptsMissingEvidence` proof-lookup
+path still authenticates the original player, placement, and invocation;
+it cannot accept an unknown supplied schema. Only one such default is
+permitted per target/deployment binding.
+Target-specific and aggregate bindings no longer imply arbitrary ad schema
+permission. Purchase routing is unchanged.
+
+For another provider on any existing build target, configure the JSON var
+`MPGD_AD_REWARD_VERIFIERS` with descriptors such as
+`[{ "providerId": "game-provider", "schema": "game-provider.reward.v1",
+"bindings": [{ "target": "browser", "deploymentTarget": "browser-stage" }] }]`
+and bind a private `GAME_SERVICES_AD_REWARD_EVIDENCE_VERIFIER` service.
+Its `verifyAdReward(input)` receives the trusted selected `providerId` alongside
+the clone-safe evidence verification input and must verify provider proof.
+Set `MPGD_DEPLOYMENT_TARGET_BINDINGS` to `{ "browser": "browser-stage" }`
+for a custom deployment key; existing named deployment vars take precedence.
+Game-owned placement configuration must use that same deployment key.
+Duplicate or conflicting registrations fail during handler construction.
+This server configuration is independent of the client's
+`rewardEvidenceRegistry`; adding a client decoder confers no server authority.
 
 Verifier calls receive an `AbortSignal` and default to a 10-second server-side
 timeout. Configure `evidenceVerificationTimeoutMs` when constructing the
