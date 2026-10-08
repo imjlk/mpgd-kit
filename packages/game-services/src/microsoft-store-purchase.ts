@@ -5,6 +5,7 @@ import type {
   VerifyPurchaseEvidenceInput,
 } from './evidence-verification.js';
 import type { EntitlementLedgerPayload, PurchaseGrantFinalization } from './types.js';
+import { gameServicesRequestLimits } from './validation.js';
 
 export const microsoftStoreDigitalGoodsEvidenceSchema =
   'mpgd.microsoft-store.digital-goods.v1' as const;
@@ -333,6 +334,8 @@ export function createMicrosoftStorePurchaseBoundary(
       playerId === undefined
       || productId === undefined
       || clientEvidence === undefined
+      || (ownershipInput.idempotencyKey !== undefined
+        && (generation === undefined || generation.length > gameServicesRequestLimits.maxStringLength))
     ) {
       return { status: 'denied' };
     }
@@ -472,7 +475,7 @@ export function createMicrosoftStorePurchaseBoundary(
         }
         const effective = await input.recoveryOwnershipStore.claim({
           ...ownership.record,
-          generation: ownership.providerPurchaseId,
+          generation: await createRecoveryGeneration(ownership.providerPurchaseId),
           providerPurchaseId: ownership.providerPurchaseId,
         });
         return effective?.playerId === ownership.record.playerId
@@ -928,6 +931,19 @@ function createVerificationId(
   item: Pick<MicrosoftStoreCollectionItem, 'id' | 'modifiedDate' | 'productId'>,
 ): string {
   return `microsoft-store:${item.productId}:${item.id}:${item.modifiedDate}`;
+}
+
+/** Keep existing short generations stable while bounding new provider-derived request keys. */
+async function createRecoveryGeneration(providerPurchaseId: string): Promise<string> {
+  if (providerPurchaseId.length <= gameServicesRequestLimits.maxStringLength) {
+    return providerPurchaseId;
+  }
+  const encoded = new TextEncoder().encode(providerPurchaseId);
+  const digest = new Uint8Array(await readGlobalSubtleCrypto().digest('SHA-256', encoded));
+  return `microsoft-store-recovery:${Array.from(
+    digest,
+    (byte) => byte.toString(16).padStart(2, '0'),
+  ).join('')}`;
 }
 
 async function deterministicTrackingId(value: string): Promise<string> {
