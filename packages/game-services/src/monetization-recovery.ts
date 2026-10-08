@@ -105,6 +105,8 @@ export function createRecoverableMonetizationClient(
   input: CreateRecoverableMonetizationClientInput,
 ): RecoverableMonetizationClient {
   const store = input.operationStore;
+  const rewardEvidenceRegistry = input.rewardEvidenceRegistry ?? createDefaultClientRewardEvidenceRegistry();
+  const allowLegacyRewardCompletion = input.rewardEvidenceRegistry === undefined && input.gateway.ads.provider === undefined;
   const observedAt = (): string => input.now?.() ?? new Date().toISOString();
   const inFlight = new Map<string, Promise<unknown>>();
   const unjournaledPurchases = new Map<string, {
@@ -572,18 +574,19 @@ export function createRecoverableMonetizationClient(
       assertOwner(found, 'rewarded-ad', idempotencyKey, found.input.placementId);
       const transient = unjournaledRewards.get(key);
       if (transient !== undefined && !samePlatformResult(transient.platform, platform)
-        && !(transient.platform.status === 'pending' && platform.status !== 'pending')) {
+        && !canAdvanceReward(transient.platform, platform, false)) {
         throw new Error('A platform ad callback conflicts with the unjournaled result.');
       }
-      const canAdvance = found.platform?.status === 'pending'
-        && platform.status !== 'pending' && found.request === undefined;
+      const canAdvance = found.platform !== undefined
+        && !samePlatformResult(found.platform, platform)
+        && canAdvanceReward(found.platform, platform, found.request !== undefined);
       if (found.platform !== undefined && !samePlatformResult(found.platform, platform)
         && !canAdvance) {
         throw new Error('A platform ad callback conflicts with the recorded operation.');
       }
       let record = found;
       if (found.platform === undefined || canAdvance) {
-        const completedAt = observedAt();
+        const completedAt = found.platformCompletedAt ?? observedAt();
         try {
           record = await save(found, { platform, platformCompletedAt: completedAt });
         } catch {
@@ -594,6 +597,38 @@ export function createRecoverableMonetizationClient(
       unjournaledRewards.delete(key);
       return resumeReward(record);
     });
+  }
+
+  function canAdvanceReward(previous: RewardedAdResult, next: RewardedAdResult, hasRequest: boolean): boolean {
+    if (previous.status !== 'pending') {
+      return false;
+    }
+    const legacyUpgrade = !hasRequest && allowLegacyRewardCompletion
+      && previous.rewardGranted === false && next.rewardGranted === true && next.status === 'completed';
+    // Once a candidate is recorded, its correlation cannot be replaced even
+    // when dispatch has not yet reached the server or its journal write failed.
+    if (previous.evidence !== undefined && (!sameRewardEvidence(previous.evidence, next.evidence)
+      || !legacyUpgrade && (previous.rewardGranted !== next.rewardGranted || previous.ledgerEntryId !== next.ledgerEntryId))) {
+      return false;
+    }
+    if (previous.ledgerEntryId !== undefined && previous.ledgerEntryId !== next.ledgerEntryId) {
+      return false;
+    }
+    const candidate = resolveClientRewardClaim(next, rewardEvidenceRegistry, {
+      allowLegacyCompletion: allowLegacyRewardCompletion,
+    });
+    if (candidate === undefined) {
+      return !hasRequest && previous.evidence === undefined && next.evidence === undefined
+        && (next.status === 'skipped' || next.status === 'unavailable' || next.status === 'failed');
+    }
+    const prior = resolveClientRewardClaim(previous, rewardEvidenceRegistry, {
+      allowLegacyCompletion: allowLegacyRewardCompletion,
+    });
+    if (prior !== undefined && (prior.platformImpressionId !== candidate.platformImpressionId
+      || !sameRewardEvidence(prior.evidence, candidate.evidence))) {
+      return false;
+    }
+    return !hasRequest || prior !== undefined;
   }
 
   async function reconcile(): Promise<readonly MonetizationOperationSummary[]> {

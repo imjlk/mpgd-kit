@@ -1,4 +1,5 @@
 import type { PlatformEvidenceEnvelope, PlatformGateway, PurchaseResult } from '@mpgd/platform';
+import type { GameServicesRewardedAdResult } from '@mpgd/game-services/operations';
 import {
   assertAdAvailability,
   assertAdPreparationResult,
@@ -34,6 +35,41 @@ export interface AdClaimEvidenceObservation {
   readonly input: AdShowInput;
   readonly evidence: PlatformEvidenceEnvelope;
   readonly eligibility: 'eligible' | 'unknown';
+}
+
+/** Connect late SDK candidates to the reserved journal operation, without reopening UI. */
+export function createAdClaimEvidenceRecoveryObserver(input: {
+  readonly recovery: {
+    recoverRewardResult(idempotencyKey: string, reward: { readonly status: 'pending'; readonly rewardGranted: false; readonly evidence: PlatformEvidenceEnvelope }): Promise<GameServicesRewardedAdResult>;
+  };
+  /** Application-owned settlement observation, never a view-scoped SDK grant callback. */
+  readonly onResult?: (request: AdShowInput, result: GameServicesRewardedAdResult) => void | Promise<void>;
+}): (observation: AdClaimEvidenceObservation) => Promise<void> {
+  const recover = input.recovery.recoverRewardResult.bind(input.recovery);
+  return async (observation) => {
+    const request = assertAdShowInput(observation.input);
+    if (request.format !== 'rewarded' || (observation.eligibility !== 'eligible' && observation.eligibility !== 'unknown')) {
+      throw new TypeError('Late claim observation must belong to a rewarded invocation.');
+    }
+    const result = assertAdShowResult({
+      providerId: 'claim-recovery',
+      invocationId: request.invocationId,
+      format: 'rewarded',
+      outcome: 'pending',
+      presentation: 'unknown',
+      eligibility: 'unknown',
+      reason: 'outcome-unknown',
+      claimEvidence: observation.evidence,
+    });
+    if (result.claimEvidence === undefined) {
+      throw new TypeError('Late claim observation lacks evidence.');
+    }
+    const settled = await recover(
+      request.idempotencyKey,
+      Object.freeze({ status: 'pending', rewardGranted: false, evidence: result.claimEvidence }),
+    );
+    await input.onResult?.(request, settled);
+  };
 }
 export interface CoordinatedAdProvider extends AdProvider {
   /** Detach projections and reject new calls; native terminal/reward observers remain while needed. */
@@ -103,6 +139,7 @@ export function createCoordinatedAdProvider(input: {
       return;
     }
     const fingerprint = JSON.stringify([
+      eligibility,
       candidate.schema,
       Object.entries(candidate.payload).sort(([a], [b]) => a.localeCompare(b)),
     ]);

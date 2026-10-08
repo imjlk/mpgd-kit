@@ -19,6 +19,7 @@ import { createGameExecutionController } from '../index.js';
 import { createFullScreenPresentationScope } from '../presentation/index.js';
 import { createGameActionCoordinator } from '../actions/index.js';
 import {
+  createAdClaimEvidenceRecoveryObserver,
   createCoordinatedAdProvider,
   createCoordinatedPlatformGateway,
   type PurchasePresentationEvent,
@@ -152,6 +153,59 @@ describe('full-screen presentation ownership', () => {
   });
 });
 describe('coordinated advertising', () => {
+  it('recovers late correlation using the original journal key and can retry when eligibility changes', async () => {
+    const native = sdk('delayed');
+    const recovery = {
+      recoverRewardResult: vi.fn(async () => ({
+        status: 'pending' as const,
+        reward: { status: 'pending' as const, rewardGranted: false },
+      })),
+    };
+    const onResult = vi.fn();
+    let expire: (() => void) | undefined;
+    const ads = createCoordinatedAdProvider({
+      provider: native.provider,
+      ...environment(),
+      onClaimEvidence: createAdClaimEvidenceRecoveryObserver({ recovery, onResult }),
+      deadline: {
+        milliseconds: 10,
+        schedule(callback) {
+          expire = callback;
+          return () => {};
+        },
+      },
+    });
+    const input = { ...request(), idempotencyKey: 'original-journal-key' };
+    const result = ads.show(input);
+    await flush();
+    expire?.();
+    await result;
+    for (const callback of native.callbacks) {
+      callback({
+        providerId: 'fixture',
+        invocationId: 'a',
+        sequence: 1,
+        type: 'requested',
+        claimEvidence: proof,
+      });
+    }
+    await flush();
+    expect(recovery.recoverRewardResult).toHaveBeenCalledWith('original-journal-key', {
+      status: 'pending',
+      rewardGranted: false,
+      evidence: proof,
+    });
+    native.emit('reward-earned', 'a', 2);
+    native.emit('reward-earned', 'a', 3);
+    native.finish(input, 'eligible');
+    await flush();
+    expect(recovery.recoverRewardResult).toHaveBeenCalledTimes(2);
+    expect(onResult).toHaveBeenCalledTimes(2);
+    expect(onResult.mock.calls[0]?.[0]).toMatchObject({
+      invocationId: 'a',
+      idempotencyKey: 'original-journal-key',
+    });
+  });
   it('makes early server correlation available at the deadline without claiming local eligibility', async () => {
     const native = sdk('delayed');
     let expire: (() => void) | undefined;

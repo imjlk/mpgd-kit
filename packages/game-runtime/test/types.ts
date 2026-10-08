@@ -9,7 +9,10 @@ import {
 } from '@mpgd/game-runtime/actions';
 import { bindGameLifecycle } from '@mpgd/game-runtime/platform';
 import { createFullScreenPresentationScope } from '@mpgd/game-runtime/presentation';
-import { createCoordinatedAdProvider } from '@mpgd/game-runtime/ads';
+import {
+  createAdClaimEvidenceRecoveryObserver,
+  createCoordinatedAdProvider,
+} from '@mpgd/game-runtime/ads';
 import { adProtocol, adProtocolVersion } from '@mpgd/platform/ads';
 import { createGameUiBridge, type GameUiScope } from '@mpgd/game-runtime/ui';
 import type { GameServicesOperationClient } from '@mpgd/game-services/operations';
@@ -39,6 +42,10 @@ const ads = createCoordinatedAdProvider({
   },
 });
 void ads.getAvailability({ placementId: 'headless', format: 'rewarded' });
+const lateEvidenceObserver = createAdClaimEvidenceRecoveryObserver({
+  recovery: { recoverRewardResult: async (_key, reward) => ({ status: 'pending', reward }) },
+});
+void lateEvidenceObserver;
 const controller = createGameExecutionController();
 const token = controller.acquireBlock({ reason: 'consumer', channels: [channel] });
 const snapshot: GameExecutionSnapshot = controller.getSnapshot();
