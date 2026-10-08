@@ -304,6 +304,49 @@ invent one. Games can adapt their approved server provider or existing
 first-party reward authority to the port. Without that authority, reward claims
 fail closed.
 
+## Advertising behavior and presentation
+
+The production host exposes `gateway.ads.provider` using `mpgd.ads.v2`.
+Availability, preparation, and show requests cross the existing bridge as
+`ads.getAvailability`, `ads.prepare`, and `ads.show`; invocation-scoped SDK
+observations return through the installed host's `advertising.subscribe` port.
+The proxy validates the request response id and the provider, invocation, and
+format of show results. Older bridges may omit this optional port.
+
+Create one game-owned `createFullScreenPresentationScope({ execution })` and
+wrap the gateway with `createCoordinatedPlatformGateway` from
+`@mpgd/game-runtime/ads`, passing `gateway.ads.provider` as `provider`.
+Use that coordinated gateway in scenes and service operations so purchases,
+rewarded ads, and interstitials share the same full-screen owner. Keep the
+scope and the claim recovery observer alive above scene lifetimes.
+
+AIT reports delayed reward eligibility because the SDK does not guarantee that
+`userEarnedReward` precedes `dismissed`. Dismissal releases physical ownership;
+a later reward event still belongs to the original idempotency key. The SDK
+callback envelope is candidate evidence. The v1 facade returns
+`rewardGranted: false` and never fabricates a `ledgerEntryId`; game-services
+obtains any grant from the independent authority and backend ledger.
+
+Both display-start and maximum-display deadlines end the caller's wait with
+pending/unknown presentation. They do not close the native UI, unregister its
+terminal callback, or resume the game. A real `dismissed` or `failedToShow`
+callback releases only that invocation's native ownership. A recreated host
+sharing the same SDK show function remains unavailable while the old native
+presentation is uncertain. SDK callback cleanup only unregisters observation,
+as documented in the [official showFullScreenAd API](https://developers-apps-in-toss.toss.im/documentation/sdk/domains-api/ads/showfullscreenad).
+
+Legacy presentation pause/resume, pagehide/pageshow, and document visibility
+are independent lifecycle owners. Native resume cannot make a hidden page
+active. Games using the coordinated provider receive presentation control from
+the shared scope instead of a second ad-specific lifecycle pause.
+
+`adapters/ait/src/ad-conformance.test.ts` runs seven shared presentation vectors
+through fake SDK callbacks and the real host/proxy/runtime: unsupported,
+configuration-required, policy-disabled, preparation-ready, timeout-late-close,
+full-screen-arbitration, and background-ownership. These tests certify that
+presentation subset; they have no ledger grant port and do not certify the
+remaining server verification/recovery vectors or a live Toss deployment.
+
 ## Server assembly
 
 ```ts

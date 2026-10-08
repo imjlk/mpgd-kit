@@ -36,6 +36,9 @@ import type {
   ShareResult,
 } from '@mpgd/platform';
 
+import { assertAdShowInput, toAdAdapter } from '@mpgd/platform/ads';
+import { createAitAdProvider } from './ad-provider.js';
+
 import type { AitAdPlacementType } from './ad-config.js';
 import type { GamePlatformBridge } from './index.js';
 import { dispatchAitLifecycleEvent } from './lifecycle.js';
@@ -52,7 +55,6 @@ const defaultIapPurchaseSessionTimeoutMs = 30 * 60_000;
 /** A provider response is untrusted input; keep restore work bounded per launch. */
 const maximumPendingIapOrders = 20;
 const invalidBridgeRequestId = 'ait-invalid-request';
-const rewardedAdEvidenceSchema = 'apps-in-toss.rewarded-ad.callback.v1';
 const iapEvidenceSchema = 'apps-in-toss.iap.callback.v1';
 const minimumPromotionTossAppVersion = '5.232.0';
 /**
@@ -286,7 +288,7 @@ export interface InstallAitHostBridgeOptions {
   readonly adLoadQueueTimeoutMs?: number;
   /** Upper bound for the requested-to-display portion of the total show timeout. */
   readonly adDisplayStartTimeoutMs?: number;
-  /** Last-resort cleanup when the native SDK omits its terminal display callback. */
+  /** Caller wait limit; a missing native terminal callback keeps presentation unknown. */
   readonly adMaximumDisplayMs?: number;
   /** Maximum wait for an inline banner to render or report no-fill/failure. */
   readonly bannerRenderTimeoutMs?: number;
@@ -344,7 +346,6 @@ export function createAitHostBridge(
   const notificationSubscriptions = new Set<NotificationTopic>();
   const loadedAdGroupIds = new Set<string>();
   const loadingAdGroups = new Map<string, Promise<void>>();
-  const activeAdGroupIds = new Set<string>();
   const activeBannerAttachments = new Map<string, { readonly destroy: () => void }>();
   const bannerMountOwners = new Map<string, symbol>();
   const pendingBannerMountSettlements = new Map<
@@ -363,10 +364,31 @@ export function createAitHostBridge(
     tone: options.bannerAppearance?.tone ?? 'blackAndWhite',
     variant: options.bannerAppearance?.variant ?? 'expanded',
   } as const;
-  const adLoadCoordinator: AitAdLoadCoordinator = {
-    active: undefined,
-    waitTimeoutMs: adLoadQueueTimeoutMs,
-  };
+  const adLoadCoordinator = createAdLoadCoordinator(
+    dependencies.loadFullScreenAd,
+    adLoadQueueTimeoutMs,
+  );
+  const nativeAds = createAitAdProvider({
+    dependencies,
+    groups: adGroupIds,
+    types: adPlacementTypes,
+    isSupported: () => areFullScreenAdsSupported(dependencies),
+    prepare: (group) =>
+      preloadAdGroup(
+        dependencies,
+        group,
+        loadedAdGroupIds,
+        loadingAdGroups,
+        adLoadCoordinator,
+        adTimeoutMs,
+      ),
+    consume: (group) => consumeLoadedAd(group, loadedAdGroupIds),
+    requestTimeoutMs: adTimeoutMs,
+    startTimeoutMs: adDisplayStartTimeoutMs,
+    displayTimeoutMs: adMaximumDisplayMs,
+    onLegacyPhase: (active) => dispatchAitLifecycleEvent(active ? 'pause' : 'resume'),
+  });
+  const legacyAds = toAdAdapter({ ...nativeAds, show: nativeAds.showLegacy });
 
   const enqueueCompletedIapAttemptRetention = (
     storage: Pick<typeof Storage, 'getItem' | 'setItem'>,
@@ -385,6 +407,13 @@ export function createAitHostBridge(
   };
 
   return {
+    advertising: {
+      id: nativeAds.id,
+      protocol: nativeAds.protocol,
+      protocolVersion: nativeAds.protocolVersion,
+      rewardSignal: nativeAds.rewardSignal,
+      subscribe: (listener) => nativeAds.subscribe(listener),
+    },
     async request(input) {
       try {
         return await handleRequest(parseBridgeRequest(input));
@@ -703,96 +732,33 @@ export function createAitHostBridge(
         return ok(request, {});
       }
 
-      case 'ads.showRewarded': {
-        const placementId = readPlacementId(request.payload);
-        const correlationId = readRewardedAdCorrelationId(request.payload, request.id);
-        const adGroupId = adGroupIds.get(placementId);
-
-        if (
-          adGroupId === undefined
-          || adPlacementTypes.get(placementId) !== 'rewarded'
-          || !areFullScreenAdsSupported(dependencies)
-        ) {
-          return ok(request, { status: 'unavailable', rewardGranted: false });
-        }
-
-        const shown = await withLoadedAdSlot(
-          dependencies,
-          adGroupId,
-          loadedAdGroupIds,
-          loadingAdGroups,
-          adLoadCoordinator,
-          activeAdGroupIds,
-          adTimeoutMs,
-          'rewarded',
-          async () => {
-            const result = await showRewardedAd(
-              dependencies,
-              adGroupId,
-              adTimeoutMs,
-              adDisplayStartTimeoutMs,
-              adMaximumDisplayMs,
-            );
-
-            return result.rewardGranted
-              ? {
-                  ...result,
-                  // The correlationId is client-supplied evidence, not a native receipt:
-                  // the Apps in Toss show call only carries the adGroupId, so nothing
-                  // native echoes it back. game-services forwards it as
-                  // platformImpressionId; the backend rewardAuthority must verify it
-                  // (and the rest of this evidence) before granting any reward.
-                  ledgerEntryId: correlationId,
-                  evidence: {
-                    schema: rewardedAdEvidenceSchema,
-                    payload: {
-                      event: 'user-earned-reward',
-                      correlationId,
-                      placementId: adGroupId,
-                    },
-                  },
-                }
-              : result;
-          },
+      case 'ads.getAvailability':
+      case 'ads.prepare': {
+        const payload = readPayloadRecord(request.payload);
+        const query = assertAdShowInput({
+          ...payload,
+          invocationId: 'host-query',
+          idempotencyKey: 'host-query',
+        });
+        return ok(
+          request,
+          request.method === 'ads.prepare'
+            ? await nativeAds.preload(query)
+            : await nativeAds.getAvailability(query),
         );
-        if (!shown.acquired) {
-          return ok(request, { status: 'unavailable', rewardGranted: false });
-        }
-        return ok(request, shown.value);
       }
-
-      case 'ads.showInterstitial': {
-        const placementId = readPlacementId(request.payload);
-        const adGroupId = adGroupIds.get(placementId);
-
-        if (
-          adGroupId === undefined
-          || adPlacementTypes.get(placementId) !== 'interstitial'
-          || !areFullScreenAdsSupported(dependencies)
-        ) {
-          return ok(request, { status: 'unavailable' });
-        }
-
-        const showInterstitial = () => showInterstitialAd(
-          dependencies,
-          adGroupId,
-          adTimeoutMs,
-          adDisplayStartTimeoutMs,
-          adMaximumDisplayMs,
+      case 'ads.show':
+        return ok(request, await nativeAds.show(assertAdShowInput(request.payload)));
+      case 'ads.showRewarded':
+        return ok(
+          request,
+          await legacyAds.showRewarded({ placementId: readPlacementId(request.payload), idempotencyKey: readRewardedAdCorrelationId(request.payload, request.id) }),
         );
-        const shown = await withLoadedAdSlot(
-          dependencies,
-          adGroupId,
-          loadedAdGroupIds,
-          loadingAdGroups,
-          adLoadCoordinator,
-          activeAdGroupIds,
-          adTimeoutMs,
-          'interstitial',
-          showInterstitial,
+      case 'ads.showInterstitial':
+        return ok(
+          request,
+          await legacyAds.showInterstitial?.({ placementId: readPlacementId(request.payload) }),
         );
-        return ok(request, shown.acquired ? shown.value : { status: 'unavailable' });
-      }
 
       case 'ads.mountBanner': {
         const placementId = readPlacementId(request.payload);
@@ -1357,6 +1323,25 @@ async function preloadAdGroup(
   }
 }
 
+const nativeAdLoadScopes = new WeakMap<object, { active: AitAdLoadCoordinator['active'] }>();
+function createAdLoadCoordinator(sdk: object, waitTimeoutMs: number): AitAdLoadCoordinator {
+  let shared = nativeAdLoadScopes.get(sdk);
+  if (shared === undefined) {
+    shared = { active: undefined };
+    nativeAdLoadScopes.set(sdk, shared);
+  }
+  const owned = shared;
+  return {
+    get active() {
+      return owned.active;
+    },
+    set active(value) {
+      owned.active = value;
+    },
+    waitTimeoutMs,
+  };
+}
+
 interface AitAdLoadCoordinator {
   active: { readonly promise: Promise<void> } | undefined;
   readonly waitTimeoutMs: number;
@@ -1425,43 +1410,6 @@ function waitForAdLoadSettlement(
   });
 }
 
-async function acquireLoadedAdSlot(
-  dependencies: AitHostDependencies,
-  adGroupId: string,
-  loaded: Set<string>,
-  loading: Map<string, Promise<void>>,
-  coordinator: AitAdLoadCoordinator,
-  active: Set<string>,
-  timeoutMs: number,
-  placementType: 'rewarded' | 'interstitial',
-): Promise<boolean> {
-  if (active.has(adGroupId)) {
-    return false;
-  }
-
-  const loadedSuccessfully = await preloadAdGroupWithDiagnostics(
-    dependencies,
-    adGroupId,
-    loaded,
-    loading,
-    coordinator,
-    timeoutMs,
-    placementType,
-  );
-  if (!loadedSuccessfully) {
-    return false;
-  }
-
-  // Re-check after the asynchronous load so concurrent callers cannot consume
-  // or display the same native ad slot twice.
-  if (active.has(adGroupId) || !consumeLoadedAd(adGroupId, loaded)) {
-    return false;
-  }
-
-  active.add(adGroupId);
-  return true;
-}
-
 async function preloadAdGroupWithDiagnostics(
   dependencies: AitHostDependencies,
   adGroupId: string,
@@ -1487,201 +1435,6 @@ async function preloadAdGroupWithDiagnostics(
     }
     return false;
   }
-}
-
-type LoadedAdSlotResult<Value> =
-  | { readonly acquired: false }
-  | { readonly acquired: true; readonly value: Value };
-
-async function withLoadedAdSlot<Value>(
-  dependencies: AitHostDependencies,
-  adGroupId: string,
-  loaded: Set<string>,
-  loading: Map<string, Promise<void>>,
-  coordinator: AitAdLoadCoordinator,
-  active: Set<string>,
-  timeoutMs: number,
-  placementType: 'rewarded' | 'interstitial',
-  display: () => Promise<Value>,
-): Promise<LoadedAdSlotResult<Value>> {
-  const acquired = await acquireLoadedAdSlot(
-    dependencies,
-    adGroupId,
-    loaded,
-    loading,
-    coordinator,
-    active,
-    timeoutMs,
-    placementType,
-  );
-  if (!acquired) {
-    return { acquired: false };
-  }
-
-  try {
-    return { acquired: true, value: await display() };
-  } finally {
-    active.delete(adGroupId);
-  }
-}
-
-async function showRewardedAd(
-  dependencies: AitHostDependencies,
-  adGroupId: string,
-  timeoutMs: number,
-  displayStartTimeoutMs: number,
-  maximumDisplayMs: number,
-): Promise<{ readonly status: 'completed' | 'skipped' | 'failed'; readonly rewardGranted: boolean }> {
-  let rewardGranted = false;
-  const status = await showAd(
-    dependencies,
-    adGroupId,
-    timeoutMs,
-    displayStartTimeoutMs,
-    maximumDisplayMs,
-    (eventType) => {
-      if (eventType === 'userEarnedReward') {
-        rewardGranted = true;
-      }
-    },
-  );
-  let resultStatus: 'completed' | 'skipped' | 'failed';
-
-  if (status === 'shown' && rewardGranted) {
-    resultStatus = 'completed';
-  } else if (status === 'failed') {
-    resultStatus = 'failed';
-  } else {
-    resultStatus = 'skipped';
-  }
-
-  return {
-    status: resultStatus,
-    rewardGranted,
-  };
-}
-
-async function showInterstitialAd(
-  dependencies: AitHostDependencies,
-  adGroupId: string,
-  timeoutMs: number,
-  displayStartTimeoutMs: number,
-  maximumDisplayMs: number,
-): Promise<{ readonly status: 'shown' | 'skipped' }> {
-  const status = await showAd(
-    dependencies,
-    adGroupId,
-    timeoutMs,
-    displayStartTimeoutMs,
-    maximumDisplayMs,
-  );
-  return { status: status === 'failed' ? 'skipped' : status };
-}
-
-function showAd(
-  dependencies: AitHostDependencies,
-  adGroupId: string,
-  timeoutMs: number,
-  displayStartTimeoutMs: number,
-  maximumDisplayMs: number,
-  observe?: (eventType: string) => void,
-): Promise<'shown' | 'failed'> {
-  dispatchAitLifecycleEvent('pause');
-
-  return new Promise((resolve) => {
-    const startedAt = Date.now();
-    let cleanup = (): void => {};
-    let settled = false;
-    let maximumDisplayTimeoutArmed = false;
-    let adTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
-    const clearAdTimer = (): void => {
-      if (adTimer !== undefined) {
-        globalThis.clearTimeout(adTimer);
-        adTimer = undefined;
-      }
-    };
-    const finish = (status: 'shown' | 'failed'): void => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearAdTimer();
-      cleanup();
-      dispatchAitLifecycleEvent('resume');
-      resolve(status);
-    };
-    const armDisplayStartTimeout = (): void => {
-      clearAdTimer();
-      const elapsedMs = Math.max(0, Date.now() - startedAt);
-      const remainingMs = Math.max(0, timeoutMs - elapsedMs);
-      adTimer = globalThis.setTimeout(
-        () => finish('failed'),
-        Math.min(displayStartTimeoutMs, remainingMs),
-      );
-    };
-    const armMaximumDisplayTimeout = (): void => {
-      if (maximumDisplayTimeoutArmed) {
-        return;
-      }
-      maximumDisplayTimeoutArmed = true;
-      clearAdTimer();
-      adTimer = globalThis.setTimeout(() => {
-        console.warn(
-          'AIT full-screen ad omitted its terminal callback; recovering the game lifecycle.',
-          adGroupId,
-        );
-        finish('shown');
-      }, maximumDisplayMs);
-    };
-    const failShow = (error?: unknown): void => {
-      if (settled) {
-        return;
-      }
-      console.warn(
-        'Failed to show AIT full-screen ad.',
-        adGroupId,
-        error ?? 'unknown native error',
-      );
-      finish('failed');
-    };
-    adTimer = globalThis.setTimeout(() => finish('failed'), timeoutMs);
-
-    try {
-      const unregister = dependencies.showFullScreenAd({
-        options: { adGroupId },
-        onEvent: (event) => {
-          observe?.(event.type);
-          switch (event.type) {
-            case 'requested':
-              armDisplayStartTimeout();
-              break;
-            case 'show':
-            case 'impression':
-            case 'clicked':
-            case 'userEarnedReward':
-              // Native terminal callbacks remain authoritative. A long, one-shot
-              // recovery timeout prevents a broken SDK callback from deadlocking
-              // the game forever without treating ordinary end-card dwell as failure.
-              armMaximumDisplayTimeout();
-              break;
-            case 'dismissed':
-              finish('shown');
-              break;
-            case 'failedToShow':
-              finish('failed');
-              break;
-          }
-        },
-        onError: failShow,
-      });
-      cleanup = unregister;
-      if (settled) {
-        cleanup();
-      }
-    } catch (error) {
-      failShow(error);
-    }
-  });
 }
 
 /**

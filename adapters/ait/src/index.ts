@@ -1,4 +1,5 @@
 import {
+  assertBridgeResponse,
   bridgeStorageLoadProtocol,
   decodeBridgeStorageLoadData,
   type BridgeMethod,
@@ -21,11 +22,22 @@ import {
   type PromotionRewardResult,
   type ShareResult,
 } from '@mpgd/platform';
+import {
+  assertAdAvailability,
+  assertAdPreparationResult,
+  assertAdPresentationEvent,
+  assertAdShowInput,
+  assertAdShowResult,
+  toAdAdapter,
+  type AdProvider,
+} from '@mpgd/platform/ads';
 
 import { createAitLifecycleAdapter } from './lifecycle.js';
 
 export interface GamePlatformBridge {
   request(input: BridgeRequest): Promise<BridgeResponse>;
+  /** Native observations are scoped to this host; SDK commands still use request envelopes. */
+  readonly advertising?: Pick<AdProvider, 'id' | 'protocol' | 'protocolVersion' | 'rewardSignal' | 'subscribe'>;
 }
 
 export interface AitSandboxStorage {
@@ -47,6 +59,51 @@ export function createAitPlatformGateway(input: {
   readonly bridge?: GamePlatformBridge;
   readonly fallbackBridge?: GamePlatformBridge;
 }): PlatformGateway {
+  const advertisingBridge = input.bridge ?? getBridge() ?? input.fallbackBridge;
+  const advertising = advertisingBridge?.advertising;
+  async function requestAdvertising(method: BridgeMethod, payload: unknown): Promise<unknown> {
+    if (advertisingBridge === undefined) {
+      throw new PlatformOperationError({
+        code: 'AIT_BRIDGE_NOT_INSTALLED',
+      });
+    }
+    const id = crypto.randomUUID();
+    const response = assertBridgeResponse(
+      await advertisingBridge.request({ id, method, payload, meta: { target: 'ait', appVersion: input.appVersion, buildId: input.buildId, sentAt: new Date().toISOString() } }),
+    );
+    if (response.id !== id) {
+      throw new TypeError('Advertising response belongs to another bridge request.');
+    }
+    if (!response.ok) {
+      throw new PlatformOperationError(response.error);
+    }
+    return response.data;
+  }
+  const provider: AdProvider | undefined = advertising === undefined
+    ? undefined
+    : {
+        id: advertising.id,
+        protocol: advertising.protocol,
+        protocolVersion: advertising.protocolVersion,
+        rewardSignal: advertising.rewardSignal,
+        getAvailability: async (payload) =>
+          assertAdAvailability(await requestAdvertising('ads.getAvailability', payload)),
+        preload: async (payload) =>
+          assertAdPreparationResult(await requestAdvertising('ads.prepare', payload)),
+        show: async (supplied) => {
+          const request = assertAdShowInput(supplied);
+          const result = assertAdShowResult(await requestAdvertising('ads.show', request));
+          if (result.providerId !== advertising.id || result.invocationId !== request.invocationId || result.format !== request.format) {
+            throw new TypeError('Advertising result belongs to another invocation.');
+          }
+          return result;
+        },
+        subscribe: (listener) =>
+          advertising.subscribe((event) => listener(assertAdPresentationEvent(event))),
+      };
+  if (provider !== undefined) {
+    toAdAdapter(provider);
+  }
   async function request<TData>(method: BridgeMethod, payload: unknown): Promise<TData> {
     const bridge = input.bridge ?? getBridge() ?? input.fallbackBridge;
 
@@ -115,6 +172,7 @@ export function createAitPlatformGateway(input: {
       getEntitlements: () => request('commerce.getEntitlements', {}),
     },
     ads: {
+      ...(provider === undefined ? {} : { provider }),
       preload: (payload) => request('ads.preload', payload),
       showRewarded: (payload) => request('ads.showRewarded', payload),
       showInterstitial: (payload) => request('ads.showInterstitial', payload),
