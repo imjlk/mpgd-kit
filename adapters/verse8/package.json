@@ -55,6 +55,8 @@
     "@verse8/platform": "2.1.0"
   },
   "devDependencies": {
+    "@mpgd/game-runtime": "workspace:*",
+    "@types/node": "^24.0.0",
     "ttsc": "0.30.4",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"

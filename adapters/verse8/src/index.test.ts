@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   createVerse8CommerceProducts,
   createVerse8PlatformGateway,
+  type Verse8AdPresentationEvent,
+  type Verse8AdPresentationSource,
   type Verse8AdsClient,
   type Verse8AuthClient,
   type Verse8VisibilitySource,
@@ -341,14 +343,17 @@ describe('adapter-verse8', () => {
 
   it('turns rewarded callbacks into evidence candidates without trusting reward values', async () => {
     const calls: unknown[] = [];
+    const native = createNativePresentation();
     const gateway = createVerse8PlatformGateway({
       authClient: authenticatedClient(),
+      adPresentation: native.source,
       adsClient: createAdsClient({
         async showRewarded(input) {
           calls.push(input);
+          setTimeout(() => native.emit({ requestId: input.requestId ?? '', sequence: 1, state: 'closed' }), 0);
           return {
             status: 'rewarded',
-            requestId: 'verse8-request-1',
+            requestId: 'reward-1',
             reward: {
               amount: 999_999,
               type: 'untrusted-client-value',
@@ -374,9 +379,8 @@ describe('adapter-verse8', () => {
       evidence: {
         schema: 'verse8.ads.reward.v1',
         payload: {
-          requestId: 'verse8-request-1',
+          requestId: 'reward-1',
           placementId: 'rewarded_continue',
-          platform: 'web',
         },
       },
     });
@@ -386,6 +390,7 @@ describe('adapter-verse8', () => {
       {
         placementId: 'rewarded_continue',
         timeoutMs: 12_000,
+        requestId: 'reward-1',
         meta: {
           logicalPlacementId: 'CONTINUE_AFTER_FAIL',
         },
@@ -394,19 +399,21 @@ describe('adapter-verse8', () => {
   });
 
   it('maps dismissed and unsupported host outcomes without producing grant evidence', async () => {
+    const native = createNativePresentation();
     const dismissedGateway = createVerse8PlatformGateway({
       authClient: authenticatedClient(),
+      adPresentation: native.source,
       adsClient: createAdsClient({
-        async showRewarded() {
+        async showRewarded(input) {
           return {
             status: 'dismissed',
-            requestId: 'dismissed-request',
+            requestId: input.requestId ?? '',
           };
         },
-        async showInterstitial() {
+        async showInterstitial(input) {
           return {
             status: 'dismissed',
-            requestId: 'interstitial-request',
+            requestId: input.requestId ?? '',
           };
         },
       }),
@@ -429,11 +436,12 @@ describe('adapter-verse8', () => {
 
     const unsupportedGateway = createVerse8PlatformGateway({
       authClient: authenticatedClient(),
+      adPresentation: native.source,
       adsClient: createAdsClient({
-        async showRewarded() {
+        async showRewarded(input) {
           return {
             status: 'failed',
-            requestId: 'unsupported-request',
+            requestId: input.requestId ?? '',
             error: { code: 'unsupported_env' },
           };
         },
@@ -580,6 +588,25 @@ function createShopClient(calls: unknown[]): Verse8VXShopClient {
     },
     async refresh() {
       calls.push(['refresh']);
+    },
+  };
+}
+
+function createNativePresentation(): { source: Verse8AdPresentationSource; emit(event: Verse8AdPresentationEvent): void } {
+  const listeners = new Set<(event: Verse8AdPresentationEvent) => void>();
+  return {
+    source: {
+      subscribe(listener) {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+    },
+    emit(event) {
+      for (const listener of listeners) {
+        listener(event);
+      }
     },
   };
 }
