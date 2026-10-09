@@ -541,3 +541,29 @@ shared dependencies count once. Admission evicts the oldest warm leases; a pack
 larger than the retained-byte limit is released without evicting useful warm packs.
 The limit bounds retained known payload after preparation, not peak/GPU/process
 memory. Results distinguish `warmed`, `cancelled`, `evicted` and `failed`.
+
+## Render density and backing-pixel budgets
+
+Three opt-in entrypoints keep logical world coordinates independent of raster quality:
+
+- `@mpgd/phaser-assets/resolution`: `validateRenderQualities` validates and copies up to
+  16 named presets. `resolveRenderBackingSize` fits integer backing dimensions into both
+  CSS/DPR axes, a raster-scale cap, and a total pixel budget. Exact `scaleX`/`scaleY`
+  describe the rounded result, including rendering below logical resolution.
+- `@mpgd/phaser-assets/render-density`: resolve procedural-texture density, maintain
+  immutable revisioned snapshots, and observe DPR-only changes through an injected
+  media-query source. The store copies policy at creation. Invalid/non-finite DPR is
+  normalized to 1; density is at least 1. If logical pixels already exceed the budget,
+  use the backing-size resolver to allow downscaling.
+- `@mpgd/phaser-assets/density-texture`: bake procedural art at a denser raster size,
+  preserve logical Phaser frame geometry, and read metadata. Generation restores the
+  graphics object's previous scale even if it throws. These helpers use Phaser types
+  only at import time and reject oversized textures before generation.
+
+Presets bound total pixels to 16,777,216; density-texture helpers additionally bound
+physical axes to 16,384. These are API allocation bounds, not a guarantee that every
+GPU supports that size. The consumer owns device limits, preset selection, HUD frequency,
+resize calls, world/camera layout, and pointer mapping. Safe areas and viewport composition
+continue to come from `@mpgd/target-config`. Importing these entrypoints creates no
+engine, DOM listeners, timers, or network requests; the explicit DPR observer returns
+an idempotent disposal function.
