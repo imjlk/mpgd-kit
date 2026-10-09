@@ -54,6 +54,27 @@ function fixture() {
   return { loader, calls, owners, paused, finish, bytes };
 }
 describe('idle-gated asset prefetch', () => {
+  it('hands a resident warm pack to the consumer without repeating delivery preparation', async () => {
+    const f = fixture();
+    const prepare = vi.fn(async (id: string, settings: { signal?: AbortSignal }) =>
+      f.loader.acquire(id, settings),
+    );
+    const prefetch = createPhaserPackPrefetcher(f.loader, { acquire: prepare });
+    prefetch.setIdle(true);
+    await prefetch.enqueue('a');
+    prefetch.setIdle(false);
+    const consumer = await prefetch.acquire('a');
+    expect(prepare.mock.calls.map(([id]) => id)).toEqual(['a']);
+    expect(f.owners.get('a')).toBe(1);
+    expect(consumer.key('a', 'asset')).toBe('texture-a');
+    expect(prefetch.snapshot().warm).toEqual([]);
+    consumer.release();
+    const cold = await prefetch.acquire('b');
+    expect(prepare.mock.calls.map(([id]) => id)).toEqual(['a', 'b']);
+    cold.release();
+    prefetch.dispose();
+    expect(f.owners.size).toBe(0);
+  });
   it('serializes foreground entries for a single-flight delivery and promptly cancels a queued entry', async () => {
     const f = fixture();
     f.paused.add('a');

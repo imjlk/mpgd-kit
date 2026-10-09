@@ -196,6 +196,8 @@ const model = {
   total: 0,
   error: '',
   lastPrepareMs: null as number | null,
+  /** Selection through queued preparation and display-object handover. */
+  lastEntryMs: null as number | null,
   observed,
   plan: null as PhaserPackPreparationPlan | null,
   cache: null as { report: WarmReport } | null,
@@ -331,7 +333,7 @@ class Board extends Phaser.Scene {
       packs = undefined;
       resetObserved();
       resetCacheReport();
-      Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null });
+      Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, lastEntryMs: null, plan: null });
       renderStatus();
     });
     this.showEmpty();
@@ -536,6 +538,7 @@ function renderStatus(): void {
 
 function enter(theme: Theme): void {
   if (!packs) return;
+  const requestedAt = performance.now();
   prefetch?.setIdle(false);
   const active = bootedGame();
   if (!active.loop.running) active.loop.start(active.step.bind(active));
@@ -555,12 +558,13 @@ function enter(theme: Theme): void {
     total: 0,
     error: '',
     lastPrepareMs: null,
+    lastEntryMs: null,
   });
   renderStatus();
   // Enters run one at a time: a superseded enter finishes (or aborts)
   // before the next begins, so overlapping transitions never surface the
   // delivery's single-flight busy error to the user.
-  enterChain = enterChain.then(() => runEnter(theme, ticket, controller)).catch((error) => {
+  enterChain = enterChain.then(() => runEnter(theme, ticket, controller, requestedAt)).catch((error) => {
     // runEnter handles its own failures; reaching here is a real bug and
     // must stay visible in the console the browser acceptance monitors.
     console.error('Unexpected sample enter failure', error);
@@ -574,7 +578,7 @@ function enter(theme: Theme): void {
 
 let enterChain: Promise<void> = Promise.resolve();
 
-async function runEnter(theme: Theme, ticket: number, controller: AbortController): Promise<void> {
+async function runEnter(theme: Theme, ticket: number, controller: AbortController, requestedAt: number): Promise<void> {
   if (!packs || ticket !== sequence) return;
   const acquireOptions = {
     signal: controller.signal,
@@ -609,7 +613,11 @@ async function runEnter(theme: Theme, ticket: number, controller: AbortControlle
       return;
     }
     board.enter(lease, theme);
-    Object.assign(model, { current: theme, phase: 'playing' });
+    Object.assign(model, {
+      current: theme,
+      phase: 'playing',
+      lastEntryMs: performance.now() - requestedAt,
+    });
   } catch (error) {
     if (ticket !== sequence) return;
     model.phase = 'error';
@@ -654,6 +662,7 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
     total: 0,
     error: '',
     lastPrepareMs: null,
+    lastEntryMs: null,
     plan: null,
   });
   renderStatus();
@@ -799,7 +808,7 @@ function wireSampleControls(): void {
     if (!packs) return;
     board.clear();
     board.showEmpty();
-    Object.assign(model, { phase: 'idle', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null });
+    Object.assign(model, { phase: 'idle', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, lastEntryMs: null, plan: null });
     prefetch?.setIdle(true);
     renderStatus();
   };

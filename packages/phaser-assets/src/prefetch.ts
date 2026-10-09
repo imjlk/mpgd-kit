@@ -12,7 +12,7 @@ export interface PhaserPackPrefetchOptions {
   readonly maxWarmPacks?: number;
   /** Unique retained RGBA estimates + PCM samples + HTML5 Blob bytes. Not total process/GPU memory. */
   readonly maxRetainedBytes?: number;
-  /** Use acquireDeliveredPack here for a ZIP/mixed delivery. Must use this same loader. */
+  /** Prepare cold packs with acquireDeliveredPack for ZIP/mixed delivery, using this same loader. Warm handover uses the resident loader directly. */
   readonly acquire?: (packId: string, options: PhaserPackPrefetchAcquireOptions) => Promise<PhaserAssetPackLease>;
 }
 export interface PhaserPackPrefetcher {
@@ -227,7 +227,10 @@ export function createPhaserPackPrefetcher(loader: PhaserAssetPackLoader, option
           throw new Error('Asset pack prefetcher is disposed');
         }
         controller.signal.throwIfAborted();
-        const lease = await acquire(id, { ...settings, signal: controller.signal });
+        // A warm lease already pins the entire decoded closure in this loader.
+        // Take independent consumer ownership before returning that warm lease;
+        // calling delivery again would unnecessarily download/decode its ZIP.
+        const lease = await (warm.has(id) ? loader.acquire(id, { ...settings, signal: controller.signal }) : acquire(id, { ...settings, signal: controller.signal }));
         if (disposed || controller.signal.aborted) {
           lease.release();
           throw controller.signal.reason ?? new Error('Asset pack prefetcher is disposed');

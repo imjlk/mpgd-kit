@@ -10,9 +10,9 @@ headed client run; fixed the dev favicon 404. Shared dependencies, known payload
 retention, FIFO foreground admission and cancellation are regression-covered.
 
 Initial #185 scope (historical): this private fixture explored pack ownership and preparation. It did not add a
-public API or npm package. Existing release PR #184 stays open and unmerged.
+public API or npm package. At that historical stage, release PR #184 stayed open and unmerged.
 
-Plan: shared image + two theme packs, bundled/hybrid builds, verified bytes,
+Historical initial plan: shared image + two theme packs, bundled/hybrid builds, verified bytes,
 bounded retry, cancellable shared leases, Phaser image preparation, explicit
 failure/retry UI, artifact exclusion checks, unit and real-browser validation.
 Disk caching/quota, audio/WebGL preparation, publication adapters and protected
@@ -148,3 +148,16 @@ consumer and gameplay client also pass; screenshots and playing-state JSON were
 inspected. Sampo dry-run accepts the focused runtime patch changeset. Scoped OCR
 reported no medium/high/critical findings; both low-severity test findings
 (failure-state fallback and missing Canvas transition coverage) were addressed.
+
+Issue #173 completion round (2026-10-09): audio/prefetch PR #304, target-policy
+and final native resource audits PR #306, and immutable SDK-backed publication
+PR #307 merged after local OCR and full CI. The final consumer measurement adds
+complete app inventories, selection-through-handover latency, Chromium main V8
+heap samples/post-GC checkpoints and separately labeled known payload/storage.
+A first run exposed redundant ZIP preparation during warm prefetch handover.
+Its unit regression failed before the fix; foreground warm acquisition now uses
+the resident loader, taking independent ownership before dropping its warm lease.
+The benchmark asserts zero completed response-body bytes for warmed first entry.
+The original design follow-ups above describe prior stages; current implemented
+scope and explicit limits are in docs/asset-packs-design.md. Release PR #305 is
+reserved for the final merge after this implementation and evidence PR.

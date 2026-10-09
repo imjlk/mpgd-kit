@@ -10,6 +10,7 @@
     "check": "ttsc --noEmit",
     "test:browser": "node test/browser.mjs",
     "test:packed-consumer": "node test/packed-consumer.mjs",
+    "test:measure": "node test/measure.mjs",
     "serve:assets": "node test/static-server.mjs artifacts/origin 5196",
     "build:delivery": "node ../../tools/run-ttsx.mjs --project tsconfig.delivery-build.json test/build-delivery.ts"
   },

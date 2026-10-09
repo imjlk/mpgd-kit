@@ -1,96 +1,88 @@
-# Asset packs: reusable texture loading
+# Asset packs: preparation, delivery and ownership
 
-[Issue #173](https://github.com/imjlk/mpgd-kit/issues/173) remains open for the
-production delivery/storage work listed below. The initial private study is now a
-consumer of the opt-in `@mpgd/phaser-assets/packs` API, in the existing package.
-See [API usage and lifecycle rules](https://github.com/imjlk/mpgd-kit/blob/main/packages/phaser-assets/README.md).
+[Issue #173](https://github.com/imjlk/mpgd-kit/issues/173) is implemented through
+opt-in entrypoints in the existing `@mpgd/phaser-assets` package, the published
+`@mpgd/target-config/asset-packs` policy and the `mpgd assets` CLI commands.
+The private playable explorer exercises these boundaries without changing the
+starter's default bundle or requiring a separate service per game or pack.
+See [runtime APIs](../packages/phaser-assets/README.md),
+[build/deployment contracts](ASSET_PACK_DELIVERY.md), and
+[consumer measurements](ASSET_PACK_MEASUREMENTS.md).
 
-## Ownership and boundaries
+## Ownership and preparation
 
-Games define logical pack IDs, revisions, dependencies, texture manifests and UX.
-`createPhaserAssetPackLoader` snapshots that catalog and owns shared preparation
-and resident textures. Consumers acquire a lease, obtain generated texture keys,
-and destroy their display/animation users before releasing it. A failed transition
-keeps an older lease alive. One caller's cancellation never evicts another owner's
-resources. Scene shutdown closes the loader; a long-lived asset scene can own
-resources used by several gameplay scenes.
+Games define logical pack IDs, immutable revisions, dependencies and UX.
+`createPhaserAssetPackLoader` owns shared preparation and resident resources.
+Acquire a lease, use its generated texture/audio keys, destroy consuming display
+and sound objects, then release it. A failed transition keeps the previous level
+alive. One caller's cancellation never evicts another owner's resources. A
+long-lived asset scene can share ownership across gameplay scenes; disposing its
+loader ends that ownership.
 
-The public API handles images, spritesheets and single-texture JSON atlases using
-the existing manifest types. It does not change the existing enqueue helpers.
-Its fetch/decode pipeline is independent of `scene.load`, allowing bounded deadlines
-and cancellation without resetting unrelated application loads. Image decode and
-texture/frame registration gate acquisition; shader warmup and arbitrary GPU
-first-frame timing are not guaranteed.
+PNG images, spritesheets, single-texture JSON atlases and single-format audio
+use the verified file-source path. Acquisition waits for image decode and frame
+registration or audio readiness. Web Audio preparation decodes in the game's
+context; HTML5 preparation waits for readiness and retains its Blob URL until
+last-owner cleanup. Neither unlocks audio nor starts playback. Playback remains an
+explicit game/user gesture. Shader warmup, context-loss recovery and arbitrary GPU
+first-frame timing are outside this readiness contract.
 
-No new package, object-storage SDK, credentials, deployment service or automatic
-generated-game migration is introduced. A URL resolver separates gameplay keys
-from location policy. Ordinary static HTTPS with CORS/MIME headers is sufficient.
+Files follow `open → read → release/close`; URL, ZIP and cache-backed sources feed
+the same preparation and ownership code. The module worker verifies bounded ZIP
+archives/entries and stages original file bytes. `acquireDeliveredPack` returns
+staging after the loader consumes them; decoded textures/audio remain playable.
+The application deploys the worker. Pure packages do not import Phaser, browser
+storage or platform SDKs.
 
-File delivery is an explicit boundary of the public loader: each file is
-requested as a logical `{ packId, revision, assetKey, role }` with an
-`open` → `read` → `release`/`close` lifecycle, and the loader keeps integrity
-verification, byte admission, decoding, registration and lease ownership for
-every source. The default URL transport preserves existing behavior; archive or
-on-device delivery is follow-up work that reuses the same preparation path
-instead of adding per-file transport assumptions.
+## Scheduling, storage and delivery policy
 
-## Build and executable evidence
+Separate download/decode permits, encoded reservations, body deadlines and whole
+preparation deadlines bound admission. Uncancellable native decode retains its
+permit/input until settlement; caller cancellation is prompt but cannot terminate
+the browser decoder. Cleanup errors are isolated and drainable. An empty ownership
+snapshot does not prove physical engine deletion when engine cleanup threw.
 
-The private example uses a shared PNG spritesheet, a PNG/JSON atlas and a separate
-PNG theme. The same game code runs in two layouts and in Canvas/WebGL:
+The optional prefetch scheduler runs only in an explicitly enabled idle window.
+Priorities and FIFO ties, bounded queued work, serial foreground admission and
+bounded warm leases are public contracts. Warm handover takes independent
+consumer ownership directly from the resident loader, avoiding repeated ZIP
+preparation. Known retained payload counts shared RGBA estimates, accepted PCM
+samples and HTML5 Blob bytes once; this is separate from total process memory.
 
-| Layout | Game artifact | Static origin |
-| --- | --- | --- |
-| bundled | Shared + both themes | Not required |
-| hybrid | Shared only | Optional themes, fetched when selected |
+The persistent-cache port reads/writes verified original files or ZIP archives.
+Every hit is reverified and still decoded/prepared. Applications own quota,
+eviction and namespaces. The private IndexedDB consumer validates warm offline
+reuse, corruption, quota/unavailable failures and transaction/deletion races.
 
-Source files stay outside Vite's public directory. Content-derived paths retain
-immutable revisions on the separate local origin. Artifact checks independently
-assert the intended inclusion policy, verify actual file sizes/digests, and reject
-copied remote payloads in the game artifact. The runtime catalog receives explicit
-packaged flags and per-file integrity metadata from the same build configuration.
+Per-target policy chooses packaged/remote packs, promotes offline dependency
+closures, pins URL resolution and rejects contradictory configuration. Staging
+verifies actual artifacts. Target builds audit the final web/wrapper output and
+native APK/AAB/IPA or expanded iOS resources, including the packaged namespace and
+absence of byte-identical remote payloads. Source assets stay outside Vite public
+and imports. Transformed/embedded representations need producer-specific audits.
 
-The larger PNG fixtures exercise representative dimensions and common file formats;
-they do not establish a production performance improvement. Encoded packaged asset
-bytes, width × height × 4 estimates, transfer compression and measured memory are
-different quantities. Reports include the first two only, excluding Phaser/app code
-and transient buffers. Tests cover real frames, shared reuse, failure rollback,
-bounded retries, cancellation, integrity, cold offline failure and last-owner release.
-Unit tests cover cleanup exceptions, body/preparation deadlines, queue admission,
-shutdown during download/decode and progress callbacks that throw. Browser checks
-include physical texture cleanup at shutdown and pending-entry cancellation.
+Optional `publish-s3` uses the official AWS SDK only in the deployment CLI. It
+validates staged bytes, issues bounded HEAD/conditional PUT operations, reuses
+matching immutable objects and writes a content-addressed manifest last. Named
+environment credentials and sanitized diagnostics stay outside catalogs and game
+code. This tool does not provision storage or CDN settings.
 
-## Lifetime and admission bounds
+## Executable evidence and scope
 
-The public helper isolates cleanup exceptions and exposes `takeCleanupErrors()`;
-owner returns and physical engine cleanup success are separate. The sample's
-shutdown handler cancels pending entry, invalidates late UI commits and destroys
-consuming display objects before releasing the current lease. Cross-scene users
-should share a dedicated long-lived asset scene and cancel/release only their
-own acquisitions on consumer shutdown. Disposing that store ends all ownership.
+| Concern | Implemented acceptance |
+| --- | --- |
+| Files/ZIP/mixed | Built artifacts → real module worker → verified loader → playable frames and release |
+| Audio | Web Audio/HTML5 × files/ZIP/mixed, explicit playback, shared final-owner cleanup |
+| Persistent reuse | Real Chromium IndexedDB, verified warm reuse and failure/race matrix |
+| Prefetch | Idle/priority/ownership unit regressions and zero-body-download warm game entry |
+| Target policy | Installed tarball consumer, offline dependency closure, separate-origin entry and actual native resource audits |
+| Publication | Actual SDK HTTP/signature/checksum fixture: immutable reuse, conflicts, retry/deadline/cancel and secret isolation |
+| Size/latency/memory | Reproducible playable explorer, complete app file inventory, entry timing, main V8 heap samples and separately labeled payload estimates |
 
-Network attempts include a body deadline. Separate download/decode permits and
-encoded-byte reservations bound preparation, including queue wait in the total
-asset deadline. Native decode retains its reservation until it actually settles
-even if its caller has already cancelled. Defaults are configurable starting
-limits; there is no claim of measured production memory or frame-time bounds.
-The sample uses 2 downloads, 1 decode and 8 MiB of encoded reservations. See the
-package README for fallback reservations when integrity sizes are absent.
-
-## Remaining work
-
-| Concern | Current behavior | Follow-up evidence needed |
-| --- | --- | --- |
-| Archive delivery | `mpgd assets build-packs` emits deterministic files/ZIP artifacts; `@mpgd/phaser-assets/archives` decodes them boundedly in an app-deployed worker | Phaser texture creation and loader integration over the file-source boundary |
-| Persistent storage | Resident leases; optional browser HTTP caching, no-store by default | Disk cache, quotas, eviction and offline cache hits |
-| Asset readiness | Image decode + texture/frame registration; Canvas/WebGL fixture | Audio unlock, context-loss recovery, measured shader/upload budgets |
-| Target configuration | Example build-time routing | Published per-target schema and installed/embedded target artifact tests |
-| Scheduling | Separate download/decode permits, encoded reservations, body and preparation deadlines | Prefetch priorities and device-specific contention/latency measurements |
-| Rollout | Catalog snapshot and optional SHA-256 | Catalog authenticity, retention and rollback policy on a real host |
-| Publication | Ordinary HTTP fixture | Only the required upload/provider operations; protected delivery if justified |
-| Size/performance benefit | Actual fixture artifact exclusion | A real consumer's package bytes, entry latency and memory pressure |
-
-Public immutable assets do not require a service per game or pack. CORS, MIME,
-cache headers and immutable revision retention belong to deployment. Keep supported
-builds' revisions available. Promote additional API/storage features only with a
-concrete consumer and acceptance cases; issue #173 is not completed by this slice.
+The measurement report records the device/browser, samples, prefetch lead time,
+artifact digests and metric limits. It measures this playable consumer; production
+game/device/network budgets require their own runs. GPU/process memory, shader
+warmup, context-loss recovery, catalog authenticity, protected delivery, real-host
+retention/rollback and live S3-provider certification are outside this completed
+slice. CORS, MIME, immutable cache headers and retaining revisions referenced by
+supported builds remain deployment responsibilities.
