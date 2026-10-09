@@ -12,7 +12,14 @@ import {
   snapshotPhaserPackPersistentCacheOptions,
   type PhaserPackPersistentCacheOptions,
 } from './pack-cache.js';
-import { cachedCopyBufferedBytes } from './pack-file-source.js';
+import {
+  cachedCopyBufferedBytes,
+  type PhaserPackFileBudgets,
+  type PhaserPackFileContext,
+  type PhaserPackFileRequest,
+  type PhaserPackFileRole,
+  type PhaserPackOpenedFile,
+} from './pack-file-source.js';
 import {
   PHASER_PACK_DELIVERY_VERSION,
   validatePhaserPackDeliveryManifest,
@@ -391,6 +398,14 @@ export interface PhaserPackDeliverySnapshot {
   readonly staging: readonly PhaserPackDeliveryStaging[];
 }
 
+export interface PhaserPackReadFileOptions {
+  readonly signal?: AbortSignal;
+  /** Optional shared transfer/encoded-byte limits. Defaults to unlimited
+   * permits; delivery transport/staging limits still apply. The returned
+   * Blob belongs to the caller after all internal permits are returned. */
+  readonly budgets?: PhaserPackFileBudgets;
+}
+
 export interface PhaserPackDelivery {
   /** Loader catalog derived once from the delivery manifest. */
   readonly catalog: readonly PhaserAssetPack[];
@@ -413,6 +428,16 @@ export interface PhaserPackDelivery {
    * starts when the queued work begins. Files-only closures touch no network.
    * Promises/handles are deliberately distinct to preserve release ownership. */
   prepare(packId: string, options?: { readonly signal?: AbortSignal }): Promise<PreparedPhaserPack>;
+  /** Read one verified encoded file without creating Phaser textures. Omitted
+   * role selects audio for audio assets and texture otherwise. Automatically
+   * prepares ZIP staging, then releases its body, reader and preparation before
+   * returning the immutable Blob. Asset keys are resolved within this pack. */
+  readFile(
+    packId: string,
+    assetKey: string,
+    role?: PhaserPackFileRole,
+    options?: PhaserPackReadFileOptions,
+  ): Promise<Blob>;
   /** Stop everything: aborts an active prepare and drops all staging. */
   dispose(): void;
   snapshot(): PhaserPackDeliverySnapshot;
@@ -1512,6 +1537,10 @@ export function createPhaserPackDelivery(
     return stagedPack;
   };
 
+  const readOperations = new WeakMap<PhaserPackFileContext, {
+    readonly operationId: number;
+    readonly tracker: OperationTracker;
+  }>();
   const fileSource: PhaserPackFileSource = {
     additionalBufferedBytes(request): number {
       const entry = packIndex.get(request.packId);
@@ -1549,8 +1578,9 @@ export function createPhaserPackDelivery(
             // One observed operation per files-delivery body read. Staged
             // zip entries are local bytes, not origin downloads, and emit
             // nothing.
-            const operationId = nextOperationId();
-            const tracker = createOperationTracker(operationId, 'file-read', emitEvent);
+            const ownedOperation = readOperations.get(context);
+            const operationId = ownedOperation?.operationId ?? nextOperationId();
+            const tracker = ownedOperation?.tracker ?? createOperationTracker(operationId, 'file-read', emitEvent);
             const requestContext = {
               kind: 'file-read' as const,
               operationId,
@@ -1666,15 +1696,17 @@ export function createPhaserPackDelivery(
                 },
               }).catch(mapReadAbort);
               const bytes = new Uint8Array(fileRead.bytes);
-              tracker.nextEvent('completed', {
-                packId: request.packId,
-                revision: request.revision,
-                assetKey: request.assetKey,
-                role: request.role,
-                ...(declared === undefined
-                  ? { progress: { bodyBytes: bytes.byteLength } }
-                  : { progress: { bodyBytes: bytes.byteLength, expectedBodyBytes: declared } }),
-              });
+              if (ownedOperation === undefined) {
+                tracker.nextEvent('completed', {
+                  packId: request.packId,
+                  revision: request.revision,
+                  assetKey: request.assetKey,
+                  role: request.role,
+                  ...(declared === undefined
+                    ? { progress: { bodyBytes: bytes.byteLength } }
+                    : { progress: { bodyBytes: bytes.byteLength, expectedBodyBytes: declared } }),
+                });
+              }
               const commitCache = fileRead.commit === undefined
                 ? undefined
                 : async (): Promise<void> => {
@@ -1718,7 +1750,7 @@ export function createPhaserPackDelivery(
               // The files-read operation ends exactly once with the
               // classified failure; already-terminal trackers (early
               // cancelled/disposed paths above) stay silent.
-              if (error instanceof PhaserPackDeliveryError) {
+              if (error instanceof PhaserPackDeliveryError && ownedOperation === undefined) {
                 const enriched = error.withDetails(requestContext);
                 tracker.nextEvent(
                   enriched.code === 'cancelled' ? 'cancelled'
@@ -2112,6 +2144,171 @@ export function createPhaserPackDelivery(
       startNextPreparation();
     });
   };
+
+  const readFile = async (
+    packId: string,
+    assetKey: string,
+    role?: PhaserPackFileRole,
+    readOptions: PhaserPackReadFileOptions = {},
+  ): Promise<Blob> => {
+    assertLive();
+    const entry = packIndex.get(packId);
+    const asset = entry?.pack.assets.find((candidate) => candidate.assetKey === assetKey);
+    const selectedRole = role ?? (asset?.kind === 'audio' ? 'audio' : 'texture');
+    const file = asset?.files.find((candidate) => candidate.role === selectedRole);
+    if (entry === undefined || file === undefined) {
+      throw new PhaserPackDeliveryError(
+        'config',
+        `Delivery pack ${packId} has no ${selectedRole} file for ${assetKey}`,
+      );
+    }
+    const operationId = nextOperationId();
+    const details = {
+      operationId,
+      kind: 'file-read' as const,
+      packId,
+      revision: entry.pack.revision,
+      assetKey,
+      role: selectedRole,
+    };
+    if (file.bytes > maxFileBytes) {
+      fail('budget', 'Delivery file exceeds its byte limit', {
+        ...details,
+        expectedBytes: file.bytes,
+      });
+    }
+    const request: PhaserPackFileRequest = {
+      packId,
+      revision: entry.pack.revision,
+      assetKey,
+      role: selectedRole,
+      url: file.path,
+      mediaType: file.mediaType,
+      integrity: integrityOf(file),
+    };
+    const reservation = safeSumBytes(
+      [file.bytes, fileSource.additionalBufferedBytes?.(request) ?? 0],
+      'file read reservation',
+    );
+    const callerSignal = readOptions.signal ?? new AbortController().signal;
+    const bridge = bridgeSignals(callerSignal, shutdown.signal);
+    const signal = bridge.signal;
+    const unlimited = async (): Promise<() => void> => {
+      signal.throwIfAborted();
+      return () => undefined;
+    };
+    const budgets = readOptions.budgets ?? { transfers: { acquire: unlimited }, bytes: { acquire: unlimited } };
+    const budgetFailure = (error: unknown): never => {
+      if (signal.aborted) {
+        throw abortCategory(signal.reason, `file read for ${packId}`).withDetails(details);
+      }
+      if (error instanceof PhaserPackDeliveryError) {
+        throw error.withDetails(details);
+      }
+      throw new PhaserPackDeliveryError('budget', 'Delivery file budget denied admission', details);
+    };
+    const ownedBudgets: PhaserPackFileBudgets = {
+      transfers: {
+        async acquire(transferSignal) {
+          try {
+            return await budgets.transfers.acquire(transferSignal);
+          } catch (error) {
+            return budgetFailure(error);
+          }
+        },
+      },
+      bytes: {
+        async acquire(weight, byteSignal) {
+          try {
+            return await budgets.bytes.acquire(weight, byteSignal);
+          } catch (error) {
+            return budgetFailure(error);
+          }
+        },
+      },
+    };
+    const tracker = createOperationTracker(operationId, 'file-read', emitEvent);
+    const context: PhaserPackFileContext = { signal, budgets: ownedBudgets };
+    // Reuse transport progress, but let readFile certify its own terminal after
+    // integrity/cache acceptance and cleanup. Advanced source reads retain
+    // their transport-only observation contract.
+    readOperations.set(context, { operationId, tracker });
+    let prepared: PreparedPhaserPack | undefined;
+    let opened: PhaserPackOpenedFile | undefined;
+    let body: PhaserPackFileBody | undefined;
+    let releaseBytes: (() => void) | undefined;
+    try {
+      let result: Blob;
+      try {
+        tracker.nextEvent('planning', details);
+        signal.throwIfAborted();
+        prepared = await enqueuePreparation(packId, { signal });
+        signal.throwIfAborted();
+        opened = await fileSource.open(request, context);
+        releaseBytes = await ownedBudgets.bytes.acquire(reservation, signal);
+        signal.throwIfAborted();
+        body = await opened.read();
+        signal.throwIfAborted();
+        if (body.bytes.size !== file.bytes) {
+          fail('integrity', 'Delivery file size mismatch', {
+            ...details,
+            expectedBytes: file.bytes,
+            receivedBytes: body.bytes.size,
+          });
+        }
+        const digest = new Uint8Array(
+          await crypto.subtle.digest('SHA-256', await body.bytes.arrayBuffer()),
+        );
+        signal.throwIfAborted();
+        const hex = Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
+        if (hex !== file.sha256.toLowerCase()) {
+          fail('integrity', 'Delivery file digest mismatch', details);
+        }
+        await body.commitCache?.();
+        signal.throwIfAborted();
+        result = body.bytes;
+      } finally {
+        try {
+          body?.release();
+        } finally {
+          try {
+            opened?.close();
+          } finally {
+            try {
+              releaseBytes?.();
+            } finally {
+              prepared?.release();
+              readOperations.delete(context);
+              bridge.dispose();
+            }
+          }
+        }
+      }
+      tracker.nextEvent('completed', details);
+      return result;
+    } catch (error) {
+      let failure: PhaserPackDeliveryError;
+      if (signal.aborted) {
+        failure = abortCategory(signal.reason, `file read for ${packId}`).withDetails(details);
+      } else if (error instanceof PhaserPackDeliveryError) {
+        failure = error.withDetails({ kind: 'file-read', operationId });
+      } else {
+        failure = new PhaserPackDeliveryError('transport', 'Could not read the delivery file', details);
+      }
+      let phase: 'cancelled' | 'disposed' | 'failed' = 'failed';
+      if (failure.code === 'cancelled') {
+        phase = 'cancelled';
+      }
+      if (failure.code === 'disposed') {
+        phase = 'disposed';
+      }
+      tracker.nextEvent(phase, {
+        ...details,
+        error: { code: failure.code, details: failure.details },
+      });
+      throw failure;
+    }
+  };
   return {
     catalog,
     /** Observation entry point (the only one): listeners receive events
@@ -2135,6 +2332,7 @@ export function createPhaserPackDelivery(
     },
     fileSource,
     prepare: enqueuePreparation,
+    readFile,
     dispose(): void {
       if (disposed) {
         return;
