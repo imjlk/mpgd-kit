@@ -1585,8 +1585,13 @@ const assetsCommand = defineI18n({
       run: async (ctx) => {
         const targetsPath = path.resolve(ctx.values['targets-file']);
         const document = JSON.parse(readFileSync(targetsPath, 'utf8')) as { targets?: Record<string, { assetPacks?: unknown }> };
-        const policy = Object.hasOwn(document.targets ?? {}, ctx.values.target)
-          ? document.targets?.[ctx.values.target]?.assetPacks : undefined;
+        if (!Object.hasOwn(document.targets ?? {}, ctx.values.target)) {
+          throw new Error(`Target ${ctx.values.target} is not defined in the target configuration.`);
+        }
+        const policy = document.targets?.[ctx.values.target]?.assetPacks;
+        if (policy === undefined) {
+          throw new Error(`Target ${ctx.values.target} has no assetPacks policy.`);
+        }
         assertAssetPackTargetPolicy(policy);
         const report = await buildAssetPackTarget({ policy, baseDir: path.dirname(targetsPath), outDir: ctx.values.out });
         if (ctx.values.json) {

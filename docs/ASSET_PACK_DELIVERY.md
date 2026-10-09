@@ -80,7 +80,7 @@ const delivery = createPhaserPackDelivery(manifest, {
 `resolveURL` receives paths already encoded once by delivery. The resolver
 snapshots locations and revisions and rejects mismatched contexts and escaping
 paths. `EffectiveTargetConfig.assetPacks` exposes the configured policy without
-introducing any storage provider SDK. A packaged first-level closure needs no
+the local `buildConfig` path or any storage provider SDK. A packaged first-level closure needs no
 download cache to enter offline; a remote-only uncached pack still fails clearly.
 
 `mpgd assets build-packs` turns a game's logical pack composition into

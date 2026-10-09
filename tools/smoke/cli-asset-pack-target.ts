@@ -224,7 +224,14 @@ try {
     adPlacements: { version: '1', placements: [] } as AdPlacements,
     platformTarget: { kind: 'web', adapter: 'browser', assetPacks: policy },
   });
-  assert.deepEqual(effective.assetPacks, policy);
+  const { buildConfig: localPath, ...deliveryPolicy } = policy;
+  assert.ok(localPath);
+  assert.deepEqual(effective.assetPacks, deliveryPolicy);
+  assert.equal(
+    JSON.stringify(effective).includes(fixtureConfig),
+    false,
+    'Embedded runtime metadata must not include local source paths',
+  );
   const targetsFile = join(root, 'mpgd.targets.json');
   await writeFile(targetsFile, JSON.stringify({ targets: { browser: { assetPacks: policy } } }));
   const cli = spawnSync(
@@ -245,6 +252,43 @@ try {
   );
   assert.equal(cli.status, 0, cli.stderr);
   assert.equal(JSON.parse(cli.stdout).packagedBytes, mixed.packagedBytes);
+  const missing = spawnSync(
+    process.execPath,
+    [
+      resolve('packages/cli/dist/bin.js'),
+      'assets',
+      'stage-target',
+      '--targets-file',
+      targetsFile,
+      '--target',
+      'misspelled',
+      '--out',
+      join(root, 'missing'),
+      '--json',
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /Target misspelled is not defined/);
+  await writeFile(targetsFile, JSON.stringify({ targets: { browser: {} } }));
+  const unconfigured = spawnSync(
+    process.execPath,
+    [
+      resolve('packages/cli/dist/bin.js'),
+      'assets',
+      'stage-target',
+      '--targets-file',
+      targetsFile,
+      '--target',
+      'browser',
+      '--out',
+      join(root, 'unconfigured'),
+      '--json',
+    ],
+    { encoding: 'utf8' },
+  );
+  assert.notEqual(unconfigured.status, 0);
+  assert.match(unconfigured.stderr, /Target browser has no assetPacks policy/);
   console.info(
     'Asset target policy smoke passed: dependency closure, bytes, actual exclusion, revision routing, bounded stage and installed CLI.',
   );

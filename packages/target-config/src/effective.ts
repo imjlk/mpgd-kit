@@ -21,7 +21,11 @@ import {
   type TargetReleaseConfig,
   type TargetRuntimeKind,
 } from './runtime.js';
-import { assertAssetPackTargetPolicy, type AssetPackTargetPolicy } from './asset-packs.js';
+import {
+  assertAssetPackTargetPolicy,
+  type AssetPackDeliveryPolicy,
+  type AssetPackTargetPolicy,
+} from './asset-packs.js';
 
 export type EffectiveAvailabilityReason =
   | FeatureAvailabilityReason
@@ -97,7 +101,7 @@ export interface EffectiveLocalizationConfig {
 }
 
 export interface EffectiveTargetConfig {
-  readonly assetPacks?: AssetPackTargetPolicy;
+  readonly assetPacks?: AssetPackDeliveryPolicy;
   readonly version: string;
   readonly target: string;
   readonly runtime: TargetRuntimeKind;
@@ -151,6 +155,14 @@ export function createEffectiveTargetConfig(
   if (input.platformTarget?.assetPacks !== undefined) {
     assertAssetPackTargetPolicy(input.platformTarget.assetPacks);
   }
+  const assetPolicy = input.platformTarget?.assetPacks;
+  const runtimeAssetPacks: AssetPackDeliveryPolicy | undefined = assetPolicy === undefined ? undefined : {
+    defaultLocation: assetPolicy.defaultLocation,
+    ...(assetPolicy.packs === undefined ? {} : { packs: { ...assetPolicy.packs } }),
+    ...(assetPolicy.offlineRequired === undefined ? {} : { offlineRequired: [...assetPolicy.offlineRequired] }),
+    ...(assetPolicy.remoteBaseUrl === undefined ? {} : { remoteBaseUrl: assetPolicy.remoteBaseUrl }),
+    ...(assetPolicy.maxPackagedBytes === undefined ? {} : { maxPackagedBytes: assetPolicy.maxPackagedBytes }),
+  };
   const products = input.catalog.products.map((product) =>
     createEffectiveProductConfig(input.target, config, product),
   );
@@ -174,7 +186,7 @@ export function createEffectiveTargetConfig(
       adPlacements: input.adPlacements.version,
     }),
     target: input.target,
-    ...(input.platformTarget?.assetPacks === undefined ? {} : { assetPacks: input.platformTarget.assetPacks }),
+    ...(runtimeAssetPacks === undefined ? {} : { assetPacks: runtimeAssetPacks }),
     runtime: config.runtime,
     release: config.release,
     features: config.features,
