@@ -589,3 +589,30 @@ none remain, active work aborts and rolls back before its last caller settles.
 Queued cancellation removes that request. Failed work is evicted, so a later
 call retries. Disposal aborts active work and rejects queued callers. Consumers
 can remove their serial chains and per-pack download caches.
+
+For Canvas2D, DOM images or workers, read a catalog file directly:
+
+```ts
+const texture = await delivery.readFile('level', 'background');
+const atlas = await delivery.readFile('level', 'characters', 'atlas', { signal });
+const audio = await delivery.readFile('level', 'music');
+```
+
+The omitted role chooses `audio` for audio assets and `texture` for other kinds.
+An explicit role must exist on that asset. The helper automatically prepares ZIP
+packs, verifies size/SHA-256, commits only verified cache bytes, and returns all
+body/reader/preparation ownership before settling. `fileSource` remains available
+for advanced consumers. Optional `budgets` share transfer and encoded-byte
+permits; defaults are unlimited permits within the delivery's existing staging,
+transport byte and timeout limits. Returned Blobs belong to the caller and no
+longer hold internal budget permits. `signal` cancels preparation, budget waits,
+transfer and acceptance, and disposal aborts in-progress reads.
+
+For `readFile`, the observed file-read operation remains open through integrity
+verification and cache acceptance; it emits one terminal after owned cleanup.
+Transport progress keeps the same operation ID. Supplied permit denials surface
+as `PhaserPackDeliveryError` with `code: 'budget'` and file context; cancellation
+and disposal retain their own categories. Advanced `fileSource` consumers retain
+their existing transport-only event semantics and own subsequent verification.
+For sequential reads of multiple ZIP entries, retain one outer `prepare()` handle
+around the batch to avoid repeatedly restaging an otherwise-unowned archive.
