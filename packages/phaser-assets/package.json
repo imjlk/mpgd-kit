@@ -53,6 +53,18 @@
     "./test-utils": {
       "types": "./dist/test-utils.d.ts",
       "default": "./dist/test-utils.js"
+    },
+    "./resolution": {
+      "types": "./dist/resolution.d.ts",
+      "default": "./dist/resolution.js"
+    },
+    "./render-density": {
+      "types": "./dist/render-density.d.ts",
+      "default": "./dist/render-density.js"
+    },
+    "./density-texture": {
+      "types": "./dist/density-texture.d.ts",
+      "default": "./dist/density-texture.js"
     }
   },
   "files": [
@@ -84,9 +96,10 @@
   "scripts": {
     "check": "ttsc --noEmit",
     "lint": "ttsc --noEmit",
-    "test": "vitest run",
+    "test": "pnpm build && vitest run && node test/resolution-dist-import.mjs",
     "format": "ttsc format",
-    "fix": "ttsc fix"
+    "fix": "ttsc fix",
+    "build": "cd ../.. && node tools/run-ttsx.mjs tools/package/build-packages.ts @mpgd/phaser-assets"
   },
   "sideEffects": [
     "./dist/archive-worker.js",
