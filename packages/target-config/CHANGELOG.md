@@ -1,5 +1,14 @@
 # @mpgd/target-config
 
+## 0.20.0 — 2026-10-10
+
+### Minor changes
+
+- [0e7ecd56](https://github.com/imjlk/mpgd-kit/commit/0e7ecd56988cdcf08a63d55e051bfe39712c9d33) Add provider-neutral per-target asset-pack placement, offline dependency closure
+  and revision-pinned URL routing. Build and stage verified local and remote objects
+  with actual byte reports, configurable packaged-asset limits and bundle checks;
+  wire the same policy into web, embedded-web and installed target builds. — Thanks @imjlk!
+
 ## 0.19.0 — 2026-10-09
 
 ### Added

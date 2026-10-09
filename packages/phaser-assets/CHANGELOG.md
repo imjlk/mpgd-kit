@@ -1,5 +1,22 @@
 # @mpgd/phaser-assets
 
+## 0.8.0 — 2026-10-10
+
+### Minor changes
+
+- [3ccec624](https://github.com/imjlk/mpgd-kit/commit/3ccec62425163c6e7fcd560670e3a3f01ace37e7) Prepare single-format audio assets through the verified file/ZIP delivery path
+  with shared audio-cache leases, decoded PCM/duration bounds and explicit playback
+  unlock ownership. Add an opt-in idle-gated prefetch scheduler with cancellable
+  foreground admission and bounded, deduplicated warm resource ownership. The asset
+  pack builder and delivery manifest now support audio file roles and MIME types. — Thanks @imjlk!
+
+### Patch changes
+
+- [c0453433](https://github.com/imjlk/mpgd-kit/commit/c04534331fc84e3924310400833afa1ab9051d13) Acquire foreground ownership directly from the resident loader for a prefetched
+  warm pack. ZIP/mixed delivery callbacks now prepare cold acquisitions only, so
+  handover preserves independent leases without downloading or staging an already
+  decoded pack again. — Thanks @imjlk!
+
 ## 0.7.0 — 2026-09-23
 
 ### Changed
