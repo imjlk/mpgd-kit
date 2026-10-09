@@ -538,3 +538,38 @@ describe('impact pool bounds', () => {
     expect(circle).not.toHaveBeenCalled();
   });
 });
+
+describe('impact pool mixed lifetimes', () => {
+  it('uses an expired slot before recycling active effects', () => {
+    const scene = { add: { circle: () => new FakeGameObject(), graphics: () => new FakeGraphics() },
+      cameras: { main: { flash: vi.fn() } }, events: { off: vi.fn(), once: vi.fn() } } as unknown as Phaser.Scene;
+    const pool = new PhaserImpactFeedbackPool(scene, { capacity: 3 });
+    const contact = createImpactContact({ atMs: 0, x: 0, y: 0, source: { kind: 'actor' }, target: { kind: 'wall' } });
+    pool.emit(contact, { ...recipe, durationMs: 100 });
+    pool.emit(contact, { ...recipe, durationMs: 10 });
+    pool.emit(contact, { ...recipe, durationMs: 100 });
+    pool.update(20);
+    expect(pool.diagnostics().availableEffects).toBe(1);
+    pool.emit({ ...contact, atMs: 20 }, recipe);
+    expect(pool.diagnostics()).toMatchObject({ activeEffects: 3, recycledEffects: 0 });
+    pool.emit({ ...contact, atMs: 20 }, recipe);
+    expect(pool.diagnostics().recycledEffects).toBe(1);
+    pool.destroy();
+  });
+  it('throttles against the flash already running, regardless of the next recipe duration', () => {
+    const flash = vi.fn();
+    const scene = { add: { circle: () => new FakeGameObject(), graphics: () => new FakeGraphics() },
+      cameras: { main: { flash } }, events: { off: vi.fn(), once: vi.fn() } } as unknown as Phaser.Scene;
+    const pool = new PhaserImpactFeedbackPool(scene, { capacity: 1 });
+    const contact = createImpactContact({ atMs: 0, x: 0, y: 0, source: { kind: 'actor' }, target: { kind: 'wall' } });
+    const hit = (atMs: number, durationMs: number) => pool.emit({ ...contact, atMs }, {
+      id: 'flash', durationMs: 10, flash: { color: 0xffffff, durationMs },
+    });
+    hit(0, 10);
+    hit(20, 500);
+    hit(40, 10);
+    hit(520, 10);
+    expect(flash.mock.calls.map((call) => call[0])).toEqual([10, 500, 10]);
+    pool.destroy();
+  });
+});

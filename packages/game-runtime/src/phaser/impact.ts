@@ -28,6 +28,7 @@ export interface PhaserImpactFeedbackPoolDiagnostics {
 }
 
 interface ImpactEffectSlot {
+  readonly index: number;
   active: boolean;
   activeIndex: number;
   endsAtMs: number;
@@ -70,11 +71,12 @@ export class PhaserImpactFeedbackPool {
   private readonly activeSlots: ImpactEffectSlot[] = [];
   private destroyed = false;
   private emittedEffects = 0;
-  private lastFlashAtMs = Number.NEGATIVE_INFINITY;
+  private flashEndsAtMs = Number.NEGATIVE_INFINITY;
   private nextSlotIndex = 0;
   private peakActiveEffects = 0;
   private recycledEffects = 0;
   private readonly slots: readonly ImpactEffectSlot[];
+  private readonly availableSlots: ImpactEffectSlot[];
   private readonly sparkBatch: Phaser.GameObjects.Graphics;
   private sparkBatchVisible = false;
   private readonly rasterRings: PhaserImpactFeedbackPoolOptions['rasterRings'];
@@ -111,7 +113,7 @@ export class PhaserImpactFeedbackPool {
       }
     }
 
-    this.slots = Array.from({ length: capacity }, () => {
+    this.slots = Array.from({ length: capacity }, (_, index) => {
       const ring = scene.add
         .circle(0, 0, 1, 0xffffff, 0)
         .setStrokeStyle(2, 0xffffff, 1)
@@ -119,6 +121,7 @@ export class PhaserImpactFeedbackPool {
         .setActive(false)
         .setVisible(false);
       return {
+        index,
         active: false,
         activeIndex: -1,
         endsAtMs: 0,
@@ -152,6 +155,7 @@ export class PhaserImpactFeedbackPool {
         y: 0,
       };
     });
+    this.availableSlots = [...this.slots].reverse();
     this.sparkBatch = scene.add
       .graphics()
       .setDepth(depth)
@@ -168,12 +172,13 @@ export class PhaserImpactFeedbackPool {
 
     assertImpactContact(contact);
     assertImpactFeedbackRecipe(recipe);
-    if (!Number.isFinite(contact.atMs + recipe.durationMs)) {
+    if (!Number.isFinite(contact.atMs + recipe.durationMs)
+      || (recipe.flash !== undefined && !Number.isFinite(contact.atMs + recipe.flash.durationMs))) {
       throw new Error('Impact end time must be finite.');
     }
-    const slot = this.slots[this.nextSlotIndex] as ImpactEffectSlot;
+    const slot = this.availableSlots.pop() ?? this.slots[this.nextSlotIndex] as ImpactEffectSlot;
 
-    this.nextSlotIndex = (this.nextSlotIndex + 1) % this.slots.length;
+    this.nextSlotIndex = (slot.index + 1) % this.slots.length;
 
     if (slot.active) {
       this.recycledEffects += 1;
@@ -194,10 +199,10 @@ export class PhaserImpactFeedbackPool {
 
     if (
       recipe.flash !== undefined
-      && contact.atMs - this.lastFlashAtMs >= recipe.flash.durationMs
+      && contact.atMs >= this.flashEndsAtMs
     ) {
       const { color, durationMs } = recipe.flash;
-      this.lastFlashAtMs = contact.atMs;
+      this.flashEndsAtMs = contact.atMs + durationMs;
       this.scene.cameras.main.flash(
         durationMs,
         (color >> 16) & 0xff,
@@ -255,7 +260,7 @@ export class PhaserImpactFeedbackPool {
     if (this.sparkBatchVisible) {
       this.hideSparkBatch();
     }
-    this.lastFlashAtMs = Number.NEGATIVE_INFINITY;
+    this.flashEndsAtMs = Number.NEGATIVE_INFINITY;
   }
 
   readonly destroy = (): void => {
@@ -279,6 +284,7 @@ export class PhaserImpactFeedbackPool {
     this.sparkBatch.destroy();
     this.activeSparkEffects = 0;
     this.activeSlots.length = 0;
+    this.availableSlots.length = 0;
   };
 
   private activateRecipe(
@@ -474,6 +480,7 @@ export class PhaserImpactFeedbackPool {
     }
 
     slot.activeIndex = -1;
+    this.availableSlots.push(slot);
   }
 }
 
