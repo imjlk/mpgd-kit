@@ -21,6 +21,7 @@ import { assertPlatformVersionLedger } from '@mpgd/target-config';
 import { buildAssetPacks } from './asset-pack-build.js';
 import { verifyAssetPackDelivery } from './asset-pack-verify.js';
 import { buildAssetPackTarget } from './asset-pack-target.js';
+import { publishAssetPacks } from './asset-pack-publish.js';
 import { assertAssetPackTargetPolicy } from '@mpgd/target-config/asset-packs';
 import {
   materializeCapacitorShellStarter,
@@ -412,7 +413,7 @@ export async function runMpgdCli(args: readonly string[]): Promise<void> {
     // partial document. Every other command keeps the default rendering.
     renderHeader: async (ctx) => {
       const values = ctx.values as Record<string, unknown>;
-      if ((ctx.name === 'verify-delivery' || ctx.name === 'stage-target' || ctx.name === 'upgrade') && values.json === true) {
+      if ((ctx.name === 'verify-delivery' || ctx.name === 'stage-target' || ctx.name === 'publish-s3' || ctx.name === 'upgrade') && values.json === true) {
         return '';
       }
       const title = ctx.env.description || ctx.env.name || '';
@@ -423,7 +424,7 @@ export async function runMpgdCli(args: readonly string[]): Promise<void> {
     renderValidationErrors: async (ctx, error) => {
       const messages = error.errors.map((entry) => String((entry as Error).message)).join('\n');
       const values = ctx.values as Record<string, unknown>;
-      if ((ctx.name === 'verify-delivery' || ctx.name === 'stage-target' || ctx.name === 'upgrade') && values.json === true) {
+      if ((ctx.name === 'verify-delivery' || ctx.name === 'stage-target' || ctx.name === 'publish-s3' || ctx.name === 'upgrade') && values.json === true) {
         process.stderr.write(`${messages}\n`);
         return '';
       }
@@ -1569,6 +1570,47 @@ const assetsCommand = defineI18n({
     ko: '결정적인 에셋 팩 전달 산출물을 빌드합니다.',
   }),
   subCommands: {
+    'publish-s3': defineI18n({
+      name: 'publish-s3',
+      description: 'Publish immutable remote objects from a staged asset deployment.',
+      resource: commandResource({ en: 'Publish immutable remote objects from a staged asset deployment.', ko: '배치된 에셋 배포의 원격 객체를 변경 불가능한 경로로 게시합니다.' }),
+      args: {
+        deployment: { type: 'string', required: true, description: 'stage-target output with packaged/ and remote/ children.' },
+        endpoint: { type: 'string', required: true, description: 'HTTPS S3 API root endpoint without credentials or query.' },
+        bucket: { type: 'string', required: true, description: 'Existing S3 bucket.' },
+        prefix: { type: 'string', required: true, description: 'Versioned object-key prefix matching the public asset origin.' },
+        region: { type: 'string', default: 'us-east-1', description: 'S3 signing region.' },
+        'dry-run': { type: 'boolean', default: false, description: 'Verify and report without credentials or network calls.' },
+        'allow-http-loopback': { type: 'boolean', default: false, description: 'Explicit development-only HTTP loopback endpoint opt-in.' },
+        'access-key-env': { type: 'string', default: 'MPGD_ASSETS_S3_ACCESS_KEY_ID', description: 'Access-key environment variable name, never its value.' },
+        'secret-key-env': { type: 'string', default: 'MPGD_ASSETS_S3_SECRET_ACCESS_KEY', description: 'Secret-key environment variable name, never its value.' },
+        'session-token-env': { type: 'string', default: 'MPGD_ASSETS_S3_SESSION_TOKEN', description: 'Optional session-token environment variable name.' },
+        'max-object-bytes': { type: 'number', description: 'Object-body cap; default64 MiB, maximum512 MiB.' },
+        'max-total-bytes': { type: 'number', description: 'Total planned object bodies; default1 GiB.' },
+        'max-objects': { type: 'number', description: 'Maximum objects including the immutable manifest snapshot; default10000.' },
+        'request-timeout-ms': { type: 'number', description: 'Per HTTP attempt deadline; default10000 ms.' },
+        'timeout-ms': { type: 'number', description: 'Whole preparation/publication deadline; default120000 ms.' },
+        json: { type: 'boolean', default: false, description: 'Print a single JSON report without sensitive headers or URLs.' },
+      },
+      run: async (ctx) => {
+        const report = await publishAssetPacks({
+          deployment: ctx.values.deployment, endpoint: ctx.values.endpoint, bucket: ctx.values.bucket, prefix: ctx.values.prefix,
+          region: ctx.values.region, dryRun: ctx.values['dry-run'], allowHttpLoopback: ctx.values['allow-http-loopback'],
+          accessKeyEnv: ctx.values['access-key-env'], secretKeyEnv: ctx.values['secret-key-env'], sessionTokenEnv: ctx.values['session-token-env'],
+          ...(ctx.values['max-object-bytes'] === undefined ? {} : { maxObjectBytes: ctx.values['max-object-bytes'] }),
+          ...(ctx.values['max-total-bytes'] === undefined ? {} : { maxTotalBytes: ctx.values['max-total-bytes'] }),
+          ...(ctx.values['max-objects'] === undefined ? {} : { maxObjects: ctx.values['max-objects'] }),
+          ...(ctx.values['request-timeout-ms'] === undefined ? {} : { requestTimeoutMs: ctx.values['request-timeout-ms'] }),
+          ...(ctx.values['timeout-ms'] === undefined ? {} : { timeoutMs: ctx.values['timeout-ms'] }),
+        });
+        if (ctx.values.json) {
+          console.info(JSON.stringify(report, null, 2));
+        } else {
+          console.info(`${report.dryRun ? 'Planned' : 'Published'} ${report.objects.length} immutable objects; ${report.plannedBytes} planned body bytes, ${report.uploadedBytes} newly uploaded body bytes.`);
+          console.info(`Manifest snapshot: ${report.objects.at(-1)?.key}`);
+        }
+      },
+    }),
     'stage-target': defineI18n({
       name: 'stage-target',
       description: "Build and stage one target's packaged and remote asset packs.",
