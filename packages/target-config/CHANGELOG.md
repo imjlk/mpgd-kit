@@ -1,5 +1,15 @@
 # @mpgd/target-config
 
+## 0.19.0 — 2026-10-09
+
+### Added
+
+- [537c6168](https://github.com/imjlk/mpgd-kit/commit/537c6168a902332e6c62ab0585d2cdfac946e51a) Add the ONE play H5 Web SDK target and browser adapter subpath, asynchronous host loading acknowledgements, synchronous exit checkpoints, platform asserted identity, audio/safe-area integration, and interstitial presentation handling that keeps uncertain native outcomes quarantined. Include target build, hosting headers, generated starter wiring and explicit server authority gates for subsequent monetization integrations. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: catalog@0.8.0, i18n@0.6.8, platform@0.17.0
+
 ## 0.18.0 — 2026-10-09
 
 ### Minor changes

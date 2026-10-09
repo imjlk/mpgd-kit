@@ -1,5 +1,11 @@
 # @mpgd/capacitor-storekit
 
+## 0.1.6 — 2026-10-09
+
+### Patch changes
+
+- Updated dependencies: adapter-capacitor@0.7.2, game-services@0.19.0, platform@0.17.0
+
 ## 0.1.5 — 2026-10-09
 
 ### Patch changes

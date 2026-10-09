@@ -1,5 +1,16 @@
 # @mpgd/cli
 
+## 0.39.0 — 2026-10-09
+
+### Added
+
+- [537c6168](https://github.com/imjlk/mpgd-kit/commit/537c6168a902332e6c62ab0585d2cdfac946e51a) Add the ONE play H5 Web SDK target and browser adapter subpath, asynchronous host loading acknowledgements, synchronous exit checkpoints, platform asserted identity, audio/safe-area integration, and interstitial presentation handling that keeps uncertain native outcomes quarantined. Include target build, hosting headers, generated starter wiring and explicit server authority gates for subsequent monetization integrations. — Thanks @imjlk!
+- [a483af3f](https://github.com/imjlk/mpgd-kit/commit/a483af3fb7f789a9edc71cc513e7c122d0b1e4b6) Add ONE play managed purchases with authenticated checkout intents, independent API V7 verification, ledger-before-consume or acknowledge finalization, signed PNS recovery and authoritative cancellation hooks. Map partial product detail batches and expose trusted native checkout presentation facts through the shared commerce contract and runtime. Keep subscriptions unsupported and server integrations required. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: adapter-ait@0.13.2, adapter-browser@0.9.0, adapter-capacitor@0.7.2, adapter-devvit@0.9.17, adapter-verse8@0.4.2, analytics@0.4.3, catalog@0.8.0, game-runtime@0.5.0, game-services@0.19.0, i18n@0.6.8, platform@0.17.0, target-config@0.19.0
+
 ## 0.38.0 — 2026-10-09
 
 ### Minor changes

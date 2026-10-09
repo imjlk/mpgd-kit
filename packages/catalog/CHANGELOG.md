@@ -1,5 +1,15 @@
 # @mpgd/catalog
 
+## 0.8.0 — 2026-10-09
+
+### Added
+
+- [8cd3e3f8](https://github.com/imjlk/mpgd-kit/commit/8cd3e3f81d49235bd537a02ac97ac157f6b40f5b) Add ONE play rewarded advertisements with authenticated server request issuance, raw-byte HMAC SSV verification, durable callback bindings and backend ledger recovery. Keep client callbacks as correlation evidence and quarantine uncertain native presentations. Allow explicit same-format physical placement sharing for selected catalog targets. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: platform@0.17.0
+
 ## 0.7.8 — 2026-10-09
 
 ### Patch changes
