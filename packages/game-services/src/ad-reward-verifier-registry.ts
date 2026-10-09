@@ -106,6 +106,7 @@ const rewardTargets = new Set<GameServicesAdRewardTarget>([
   'ait',
   'reddit',
   'verse8',
+  'oneplay',
 ]);
 
 function bindingKey(schema: string | null, target: string, deploymentTarget: string): string {

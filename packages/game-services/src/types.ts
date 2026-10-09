@@ -39,7 +39,7 @@ export type GameServicesLeaderboardTarget = Extract<
 >;
 export type GameServicesLedgerTarget = Extract<
   PlatformTarget,
-  'browser' | 'microsoft-store' | 'android' | 'ios' | 'ait' | 'reddit' | 'verse8'
+  'browser' | 'microsoft-store' | 'android' | 'ios' | 'ait' | 'reddit' | 'verse8' | 'oneplay'
 >;
 
 export type PurchaseIdempotencyKey = string;
@@ -333,7 +333,7 @@ function assertStoreTarget(input: unknown): asserts input is GameServicesStoreTa
 
 function assertAdRewardTarget(input: unknown): asserts input is GameServicesAdRewardTarget {
   if (input !== 'browser' && input !== 'microsoft-store' && input !== 'android'
-    && input !== 'ios' && input !== 'ait' && input !== 'reddit' && input !== 'verse8') {
+    && input !== 'ios' && input !== 'ait' && input !== 'reddit' && input !== 'verse8' && input !== 'oneplay') {
     throw new Error('target must be a supported platform target.');
   }
 }

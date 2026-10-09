@@ -3,4 +3,10 @@ import { createClientRewardEvidenceRegistry } from '@mpgd/game-services/client-r
 import { createDefaultClientRewardEvidenceRegistry } from '@mpgd/game-services/default-client-reward-evidence';
 assert.equal(createClientRewardEvidenceRegistry([]).recognizes('unknown'), false);
 assert.equal(createDefaultClientRewardEvidenceRegistry().recognizes('verse8.ads.reward.v1'), true);
+const oneplay = await import('@mpgd/game-services/oneplay-reward');
+const client = await import('@mpgd/game-services/oneplay-client-reward');
+assert.equal(typeof oneplay.createOnePlaySsvReceiver, 'function');
+assert.equal(typeof oneplay.createOnePlayAdRewardVerifier, 'function');
+assert.equal(typeof oneplay.createOnePlayRewardRequestIssuer, 'function');
+assert.equal(createDefaultClientRewardEvidenceRegistry().recognizes(client.onePlayClientRewardEvidenceSchema), true);
 console.log('Registered reward evidence dist entrypoints passed.');

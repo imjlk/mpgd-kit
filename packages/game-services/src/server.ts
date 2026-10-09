@@ -680,6 +680,7 @@ const gameServicesDeploymentTargetPlatforms = new Set<GameServicesDeploymentTarg
   'ios',
   'ait',
   'verse8',
+  'oneplay',
   'reddit',
 ]);
 
