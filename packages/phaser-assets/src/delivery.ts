@@ -12,7 +12,13 @@ import {
   snapshotPhaserPackPersistentCacheOptions,
   type PhaserPackPersistentCacheOptions,
 } from './pack-cache.js';
-import { cachedCopyBufferedBytes } from './pack-file-source.js';
+import {
+  cachedCopyBufferedBytes,
+  type PhaserPackFileBudgets,
+  type PhaserPackFileRequest,
+  type PhaserPackFileRole,
+  type PhaserPackOpenedFile,
+} from './pack-file-source.js';
 import {
   PHASER_PACK_DELIVERY_VERSION,
   validatePhaserPackDeliveryManifest,
@@ -391,6 +397,14 @@ export interface PhaserPackDeliverySnapshot {
   readonly staging: readonly PhaserPackDeliveryStaging[];
 }
 
+export interface PhaserPackReadFileOptions {
+  readonly signal?: AbortSignal;
+  /** Optional shared transfer/encoded-byte limits. Defaults to unlimited
+   * permits; delivery transport/staging limits still apply. The returned
+   * Blob belongs to the caller after all internal permits are returned. */
+  readonly budgets?: PhaserPackFileBudgets;
+}
+
 export interface PhaserPackDelivery {
   /** Loader catalog derived once from the delivery manifest. */
   readonly catalog: readonly PhaserAssetPack[];
@@ -413,6 +427,16 @@ export interface PhaserPackDelivery {
    * starts when the queued work begins. Files-only closures touch no network.
    * Promises/handles are deliberately distinct to preserve release ownership. */
   prepare(packId: string, options?: { readonly signal?: AbortSignal }): Promise<PreparedPhaserPack>;
+  /** Read one verified encoded file without creating Phaser textures. Omitted
+   * role selects audio for audio assets and texture otherwise. Automatically
+   * prepares ZIP staging, then releases its body, reader and preparation before
+   * returning the immutable Blob. Asset keys are resolved within this pack. */
+  readFile(
+    packId: string,
+    assetKey: string,
+    role?: PhaserPackFileRole,
+    options?: PhaserPackReadFileOptions,
+  ): Promise<Blob>;
   /** Stop everything: aborts an active prepare and drops all staging. */
   dispose(): void;
   snapshot(): PhaserPackDeliverySnapshot;
@@ -2104,6 +2128,111 @@ export function createPhaserPackDelivery(
       startNextPreparation();
     });
   };
+
+  const readFile = async (
+    packId: string,
+    assetKey: string,
+    role?: PhaserPackFileRole,
+    readOptions: PhaserPackReadFileOptions = {},
+  ): Promise<Blob> => {
+    assertLive();
+    const entry = packIndex.get(packId);
+    const asset = entry?.pack.assets.find((candidate) => candidate.assetKey === assetKey);
+    const selectedRole = role ?? (asset?.kind === 'audio' ? 'audio' : 'texture');
+    const file = asset?.files.find((candidate) => candidate.role === selectedRole);
+    if (entry === undefined || file === undefined) {
+      throw new PhaserPackDeliveryError(
+        'config',
+        `Delivery pack ${packId} has no ${selectedRole} file for ${assetKey}`,
+      );
+    }
+    const details = {
+      kind: 'file-read' as const,
+      packId,
+      revision: entry.pack.revision,
+      assetKey,
+      role: selectedRole,
+    };
+    if (file.bytes > maxFileBytes) {
+      fail('budget', 'Delivery file exceeds its byte limit', {
+        ...details,
+        expectedBytes: file.bytes,
+      });
+    }
+    const request: PhaserPackFileRequest = {
+      packId,
+      revision: entry.pack.revision,
+      assetKey,
+      role: selectedRole,
+      url: file.path,
+      mediaType: file.mediaType,
+      integrity: integrityOf(file),
+    };
+    const reservation = safeSumBytes(
+      [file.bytes, fileSource.additionalBufferedBytes?.(request) ?? 0],
+      'file read reservation',
+    );
+    const callerSignal = readOptions.signal ?? new AbortController().signal;
+    const bridge = bridgeSignals(callerSignal, shutdown.signal);
+    const signal = bridge.signal;
+    const unlimited = async (): Promise<() => void> => {
+      signal.throwIfAborted();
+      return () => undefined;
+    };
+    const budgets = readOptions.budgets ?? { transfers: { acquire: unlimited }, bytes: { acquire: unlimited } };
+    let prepared: PreparedPhaserPack | undefined;
+    let opened: PhaserPackOpenedFile | undefined;
+    let body: PhaserPackFileBody | undefined;
+    let releaseBytes: (() => void) | undefined;
+    try {
+      signal.throwIfAborted();
+      prepared = await enqueuePreparation(packId, { signal });
+      signal.throwIfAborted();
+      opened = await fileSource.open(request, { signal, budgets });
+      releaseBytes = await budgets.bytes.acquire(reservation, signal);
+      signal.throwIfAborted();
+      body = await opened.read();
+      signal.throwIfAborted();
+      if (body.bytes.size !== file.bytes) {
+        fail('integrity', 'Delivery file size mismatch', {
+          ...details,
+          expectedBytes: file.bytes,
+          receivedBytes: body.bytes.size,
+        });
+      }
+      const digest = new Uint8Array(
+        await crypto.subtle.digest('SHA-256', await body.bytes.arrayBuffer()),
+      );
+      signal.throwIfAborted();
+      const hex = Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
+      if (hex !== file.sha256.toLowerCase()) {
+        fail('integrity', 'Delivery file digest mismatch', details);
+      }
+      await body.commitCache?.();
+      signal.throwIfAborted();
+      return body.bytes;
+    } catch (error) {
+      if (signal.aborted) {
+        throw abortCategory(signal.reason, `file read for ${packId}`).withDetails(details);
+      }
+      throw error;
+    } finally {
+      try {
+        body?.release();
+      } finally {
+        try {
+          opened?.close();
+        } finally {
+          try {
+            releaseBytes?.();
+          } finally {
+            prepared?.release();
+            bridge.dispose();
+          }
+        }
+      }
+    }
+  };
   return {
     catalog,
     /** Observation entry point (the only one): listeners receive events
@@ -2127,6 +2256,7 @@ export function createPhaserPackDelivery(
     },
     fileSource,
     prepare: enqueuePreparation,
+    readFile,
     dispose(): void {
       if (disposed) {
         return;
