@@ -1,5 +1,12 @@
 # @mpgd/catalog
 
+## 0.7.8 — 2026-10-09
+
+### Patch changes
+
+- [2d35eb0e](https://github.com/imjlk/mpgd-kit/commit/2d35eb0ecd89eef1058e4b9983eb284f7ba38adc) Add a CrazyGames web target and the browser adapter's `/crazygames` entry point with official v3 SDK initialization, loading/gameplay reporting, and interstitial ads using the shared presentation contract. Basic Launch keeps monetization disabled; Full Launch enables configured interstitial placements. Rewarded ads and purchases remain unavailable pending independent backend verification. Generated starters enter free play directly and retain scene, lifecycle, and native presentation ownership through game-owned gameplay scopes. — Thanks @imjlk!
+- Updated dependencies: platform@0.16.0
+
 ## 0.7.7 — 2026-10-09
 
 ### Patch changes
