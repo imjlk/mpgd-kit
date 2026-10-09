@@ -43,7 +43,7 @@ try {
   assert.notEqual(installed.private, true);
   assert.equal(JSON.stringify(installed).includes('workspace:'), false);
   assert.equal(installed.peerDependenciesMeta?.phaser?.optional, true);
-  assert.deepEqual(Object.keys(installed.exports).sort(), ['.', './actions', './ads', './audio', './game', './phaser', './platform', './presentation', './ui']);
+  assert.deepEqual(Object.keys(installed.exports).sort(), ['.', './actions', './ads', './audio', './dom', './game', './phaser', './platform', './presentation', './ui']);
   run(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';
     assert.throws(() => import.meta.resolve('phaser'), { code: 'ERR_MODULE_NOT_FOUND' });
@@ -65,6 +65,14 @@ try {
   };
   writeJson(join(consumer, 'tsconfig.json'), config);
   run(compiler, ['-p', 'tsconfig.json'], consumer);
+
+  // Browser-only declarations remain an explicit opt-in for DOM consumers.
+  copyFileSync(join(repoRoot, 'packages/game-runtime/test/dom-types.ts'), join(consumer, 'dom-types.ts'));
+  writeJson(join(consumer, 'tsconfig.dom.json'), {
+    ...config, compilerOptions: { ...config.compilerOptions, lib: ['ES2022', 'DOM'] },
+    include: ['dom-types.ts'],
+  });
+  run(compiler, ['-p', 'tsconfig.dom.json'], consumer);
 
   // Opting into the binding adds Phaser; the emitted declarations must accept a real Scene.
   const phaserDirectory = findInstalledDependency(join(repoRoot, 'packages/game-runtime'), 'phaser');

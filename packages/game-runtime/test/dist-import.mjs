@@ -62,3 +62,6 @@ assert.equal((await owner.execute({ productId: 'fixture', source: 'shop', idempo
 assert.equal(actionRuntime.getSnapshot().blocks.length, 0);
 coordinator.dispose();
 console.log('Actions compiled ESM imports and executes without DOM, Phaser or loading game-services runtime');
+
+const { createInlineBannerManager } = await import('@mpgd/game-runtime/dom');
+assert.equal(typeof createInlineBannerManager, 'function');

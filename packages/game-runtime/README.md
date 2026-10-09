@@ -471,3 +471,38 @@ while preserving original key history and any live native lease. Foreign keys,
 purchase actions, pending results and grant-shaped results cannot be unlocked
 through this path. Positive grants continue through the authoritative ledger
 reconciliation port. This method never updates a disposed view or opens UI.
+
+## Scene-owned DOM banners
+
+`@mpgd/game-runtime/dom` is an opt-in browser entrypoint. It consumes the canonical
+`PlatformGateway.ads` banner methods and imports no platform SDK. The root and
+other headless entrypoints retain their engine- and DOM-free declaration contracts.
+
+```ts
+import { createInlineBannerManager } from '@mpgd/game-runtime/dom';
+
+const banner = createInlineBannerManager({
+  gameRoot, ads: gateway.ads, enabled: bannerEnabled,
+  placementId: 'FOOTER', surfaceId: 'footer-ad', label: 'Advertisement',
+  layoutClassName: 'banner-layout', surfaceClassName: 'banner-surface',
+  stateDataKey: 'bannerState',
+});
+const release = banner.acquire({ onLayoutChange: resizeGame });
+// Scene shutdown: release(); final game teardown: banner.destroy();
+```
+
+Each mount adds an opaque unique suffix to the supplied surface namespace. The
+provider receives that actual DOM ID. A newer acquisition replaces the parent
+slot's previous owner (disposing a displaced manager), and a stale release or provider response only cleans up
+its own native surface. Layout is `loading` until the provider confirms `mounted`;
+style only the mounted state to reserve banner height. Unavailable/failed results
+collapse the surface and rely on the provider's terminal cleanup contract. The
+helper never selects placements, enables a target, supplies fallback advertising,
+or grants rewards.
+
+Page restoration renews the current acquisition, including hosts that do not use
+BFCache. Lifecycle listeners and elements use the game root's own document/window
+so embedded surfaces work independently. Release and destroy are idempotent;
+layout observer errors cannot interrupt cleanup and can be observed through
+`onObserverError`. The consumer owns CSS, banner dimensions, eligibility, and
+scene shutdown wiring. Importing the module creates no DOM or lifecycle listeners.
