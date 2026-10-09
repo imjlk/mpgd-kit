@@ -1,5 +1,21 @@
 # @mpgd/phaser-assets
 
+## 0.9.0 — 2026-10-10
+
+### Minor changes
+
+- [e57b6806](https://github.com/imjlk/mpgd-kit/commit/e57b6806ed271b89531bd4f93e5942205ef6f482) Add validated render-quality presets, bounded backing resolution, render-density
+  stores and DPR observation, and density-aware procedural texture helpers. — Thanks @imjlk!
+- [7d9aa72c](https://github.com/imjlk/mpgd-kit/commit/7d9aa72c4b042eb184df60f52cf2dc891c4698fb) Add catalog-driven readFile for verified texture, atlas and audio Blobs, with
+  automatic ZIP preparation, optional budgets/cancellation and owned cleanup. — Thanks @imjlk!
+- [bf747302](https://github.com/imjlk/mpgd-kit/commit/bf7473028999fc8c9c63cb89fe8a79f8332265ec) Share in-flight same-pack staging, queue distinct preparations, preserve
+  independent caller cancellation and release ownership, and allow failed retries. — Thanks @imjlk!
+
+### Patch changes
+
+- [0917678c](https://github.com/imjlk/mpgd-kit/commit/0917678cdd3910bbb2729740b5ed6cb147e21e0a) Preserve literal @ in artifact URL paths so pack archives load on static hosts
+  that do not percent-decode request paths, while encoding unsafe characters once. — Thanks @imjlk!
+
 ## 0.8.0 — 2026-10-10
 
 ### Minor changes

@@ -1,5 +1,16 @@
 # @mpgd/cli
 
+## 0.41.0 — 2026-10-10
+
+### Minor changes
+
+- [03cb45e2](https://github.com/imjlk/mpgd-kit/commit/03cb45e2b6583934e04d758dab53fb451ec82b42) Add optional foreground performance collection to game acceptance, with bounded
+  consumer-authored budgets, sample/cadence checks and fresh artifact provenance. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: adapter-ait@0.13.3, adapter-capacitor@0.7.4, adapter-verse8@0.4.3, game-runtime@0.6.0, phaser-assets@0.9.0, target-config@0.21.0
+
 ## 0.40.0 — 2026-10-10
 
 ### Minor changes

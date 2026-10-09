@@ -1,5 +1,16 @@
 # @mpgd/create-game
 
+## 0.40.0 — 2026-10-10
+
+### Minor changes
+
+- [03cb45e2](https://github.com/imjlk/mpgd-kit/commit/03cb45e2b6583934e04d758dab53fb451ec82b42) Add optional foreground performance collection to game acceptance, with bounded
+  consumer-authored budgets, sample/cadence checks and fresh artifact provenance. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: cli@0.41.0
+
 ## 0.39.0 — 2026-10-10
 
 ### Patch changes

@@ -1,5 +1,12 @@
 # @mpgd/target-config
 
+## 0.21.0 — 2026-10-10
+
+### Minor changes
+
+- [07e760e4](https://github.com/imjlk/mpgd-kit/commit/07e760e4257e492a05e2fbca0f31e778888930db) Add opt-in responsive DOM shell bindings with shared viewport composition,
+  consumer-owned rail policies, zero-specificity geometry CSS and owned cleanup. — Thanks @imjlk!
+
 ## 0.20.0 — 2026-10-10
 
 ### Minor changes

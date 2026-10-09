@@ -1,5 +1,12 @@
 # @mpgd/runtime-diagnostics
 
+## 0.2.0 — 2026-10-10
+
+### Minor changes
+
+- [accab4eb](https://github.com/imjlk/mpgd-kit/commit/accab4ebe73e9000d1a4308b0100884348a4b532) Add an engine-independent named frame profiler with an injected monotonic clock,
+  bounded retention, explicit excluded frames, and nearest-rank percentile snapshots. — Thanks @imjlk!
+
 ## 0.1.2 — 2026-09-23
 
 ### Changed
