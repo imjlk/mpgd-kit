@@ -80,6 +80,7 @@ export function loadCrazyGamesSdk(document: Document = globalThis.document): Pro
       script.onerror = null;
       const sdk = read();
       if (error !== undefined || sdk === undefined) {
+        script.remove();
         reject(error ?? new Error('CrazyGames SDK did not expose its v3 API.'));
       } else {
         resolve(sdk);
@@ -95,6 +96,10 @@ export function loadCrazyGamesSdk(document: Document = globalThis.document): Pro
     }
   });
   sdkLoads.set(document, promise);
+  void promise.catch(() => {
+    // Also handles synchronous append failures, which occur before cache installation.
+    if (sdkLoads.get(document) === promise) { sdkLoads.delete(document); }
+  });
   return promise;
 }
 
@@ -116,6 +121,12 @@ export async function createCrazyGamesPlatformGateway(options: CrazyGamesGateway
       const candidate = sdk;
       initializing = Promise.resolve().then(() => candidate.init());
       sdkInitialization.set(sdk, initializing);
+      const attempt = initializing;
+      void attempt.catch(() => {
+        if (sdkInitialization.get(candidate) === attempt) {
+          sdkInitialization.delete(candidate);
+        }
+      });
     }
     await waitForInitialization(initializing);
     if (!['local', 'crazygames', 'disabled'].includes(sdk.environment)) {

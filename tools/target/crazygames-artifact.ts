@@ -24,8 +24,10 @@ export function assertCrazyGamesArtifact(root: string): { files: number; bytes: 
     throw new Error('CrazyGames submission exceeds 1500 files or 250 MB.');
   }
   const index = readFileSync(join(root, 'index.html'), 'utf8');
-  for (const match of index.matchAll(/\b(?:src|href)\s*=\s*["']([^"']+)["']/gu)) {
-    const path = match[1];
+  for (const match of index.matchAll(
+    /\b(?:src|href)\s*=\s*(?:["']([^"']+)["']|([^\s"'`=<>]+))/giu,
+  )) {
+    const path = match[1] ?? match[2];
     if (path?.startsWith('/') || /^https?:/iu.test(path ?? '')) {
       throw new Error('CrazyGames index assets must use relative paths.');
     }

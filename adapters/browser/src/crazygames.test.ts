@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createCrazyGamesAdProvider,
   createCrazyGamesPlatformGateway,
+  loadCrazyGamesSdk,
   type CrazyGamesAdCallbacks,
   type CrazyGamesSdk,
 } from './crazygames.js';
@@ -45,6 +46,31 @@ const input = {
 } as const;
 
 describe('CrazyGames interstitial adapter', () => {
+  it.each(['error', 'timeout', 'append'] as const)('retries a failed SDK %s without retaining scripts or rejected load promises', async (failure) => {
+    vi.useFakeTimers();
+    try {
+      const view: { CrazyGames?: { SDK: CrazyGamesSdk } } = {};
+      const scripts: { src: string; async: boolean; onload: (() => void) | null; onerror: (() => void) | null; remove: ReturnType<typeof vi.fn> }[] = [];
+      const document = {
+        defaultView: view,
+        createElement() { return { src: '', async: false, onload: null, onerror: null, remove: vi.fn() }; },
+        head: { appendChild(script: typeof scripts[number]) { scripts.push(script); if (failure === 'append' && scripts.length === 1) { throw new Error('append failed'); } } },
+      } as unknown as Document;
+      const first = loadCrazyGamesSdk(document);
+      expect(loadCrazyGamesSdk(document)).toBe(first);
+      const rejected = expect(first).rejects.toThrow(/could|timed/u);
+      if (failure === 'error') { scripts[0]?.onerror?.(); }
+      if (failure === 'timeout') { await vi.advanceTimersByTimeAsync(5000); }
+      await rejected;
+      expect(scripts[0]?.remove).toHaveBeenCalledTimes(1);
+      const retry = loadCrazyGamesSdk(document);
+      expect(retry).not.toBe(first);
+      view.CrazyGames = { SDK: fixture().sdk };
+      scripts[1]?.onload?.();
+      await expect(retry).resolves.toBe(view.CrazyGames.SDK);
+      expect(scripts).toHaveLength(2);
+    } finally { vi.useRealTimers(); }
+  });
   it('reads the environment only after initialization', async () => {
     const f = fixture();
     let initialized = false;

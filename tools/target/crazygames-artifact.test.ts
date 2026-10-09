@@ -15,6 +15,8 @@ try {
   ]) {
     writeFileSync(join(root, 'index.html'), `<script src="${path}"></script>`);
     assert.throws(() => assertCrazyGamesArtifact(root), /relative paths/u);
+    writeFileSync(join(root, 'index.html'), `<script SRC=${path}></script>`);
+    assert.throws(() => assertCrazyGamesArtifact(root), /relative paths/u);
   }
   writeFileSync(join(root, 'index.html'), '<script src="./game.js"></script>');
   for (let i = 0; i < 1500; i += 1) {
