@@ -571,3 +571,8 @@ resize calls, world/camera layout, and pointer mapping. Safe areas and viewport 
 continue to come from `@mpgd/target-config`. Importing these entrypoints creates no
 engine, DOM listeners, timers, or network requests; the explicit DPR observer returns
 an idempotent disposal function.
+
+Artifact URL resolution preserves the literal `@` in archive names, including
+paths passed to custom resolvers. Characters such as `%`, `#`, `?`, spaces and
+non-ASCII names remain encoded once. Existing archive names and manifests are
+unchanged; static hosts that use raw request paths can now serve these archives.

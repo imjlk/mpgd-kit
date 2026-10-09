@@ -323,7 +323,8 @@ export interface PhaserPackDeliveryOptions {
   /** Base URL manifest artifact paths resolve against. The delivery encodes
    * each path segment exactly once before resolving, so revisions and file
    * names carrying `#`, `?`, spaces or non-ASCII address the resource the
-   * static host serves. Mutually exclusive with `resolveURL`. */
+   * static host serves. The valid path character `@` stays literal so archive
+   * names also work on hosts that look up raw request paths. Mutually exclusive with `resolveURL`. */
   readonly baseUrl?: string;
   /** Custom artifact URL resolver; receives the once-encoded path and the
    * pack context, and returns the final URL. Mutually exclusive with
@@ -1095,11 +1096,12 @@ export function createPhaserPackDelivery(
 
   // Manifest paths are archive/disk paths, not URLs: encode each segment
   // exactly once, so revisions or file names carrying '#', '?' or spaces
-  // address the resource the static host actually serves. A custom
+  // address the resource the static host actually serves. Preserve literal
+  // @ for archive names on static hosts that do not decode paths. A custom
   // resolver receives the once-encoded path and owns only the location.
   const encodePath = (path: string): string => path
     .split('/')
-    .map((segment) => encodeURIComponent(segment))
+    .map((segment) => encodeURIComponent(segment).replace(/%40/gu, '@'))
     .join('/');
   const resolveArtifact = (path: string, context: {
     readonly packId: string;

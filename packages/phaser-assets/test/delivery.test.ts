@@ -26,7 +26,7 @@ interface ServedFile {
 
 /** In-memory static origin: records decoded request paths so encoding and
  * routing assertions observe exactly what the delivery asked for. */
-const startOrigin = async (): Promise<{
+const startOrigin = async (decodePaths = true): Promise<{
   readonly url: string;
   readonly requests: string[];
   readonly files: Map<string, ServedFile>;
@@ -35,14 +35,14 @@ const startOrigin = async (): Promise<{
   const files = new Map<string, ServedFile>();
   const requests: string[] = [];
   const server: Server = createServer((request, response) => {
-    const path = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname).replace(
-      /^\//u,
-      '',
-    );
+    const rawPath = new URL(request.url ?? '/', 'http://localhost').pathname;
+    const path = (decodePaths ? decodeURIComponent(rawPath) : rawPath).replace(/^\//u, '');
     requests.push(path);
     const file = files.get(path);
     if (file === undefined) {
-      response.writeHead(404).end('missing');
+      response.writeHead(decodePaths ? 404 : 200).end(
+        decodePaths ? 'missing' : '<html>SPA fallback</html>',
+      );
       return;
     }
     response.setHeader('Content-Type', file.mediaType);
@@ -574,7 +574,7 @@ describe('phaser pack delivery', () => {
     signature = 'fresh';
     admit(release);
     const body = await reading;
-    expect(resolveURL).toHaveReturnedWith(`${origin.url}packs/solo%401/pilot.png?signature=fresh`);
+    expect(resolveURL).toHaveReturnedWith(`${origin.url}packs/solo@1/pilot.png?signature=fresh`);
     expect(release).toHaveBeenCalledOnce();
     body.release();
     opened.close();
@@ -2106,6 +2106,26 @@ describe('delivery preparation inspection', () => {
     const again = delivery.inspectPreparation('solo');
     expect(again.stagingUsedBytes).toBe(plan.stagingUsedBytes);
     expect(again.projectedStagingBytes).toBe(plan.projectedStagingBytes);
+    delivery.dispose();
+  });
+});
+
+describe('static archive URL compatibility', () => {
+  it('prepares @-named archives on a raw-path static server with SPA fallback', async () => {
+    const origin = await startOrigin(false);
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+    for (const [path, file] of packFiles) { origin.files.set(path, file); }
+    // Encoded @ really falls through to HTML on this origin.
+    expect(await (await fetch(new URL('packs/solo%401.zip', origin.url))).text()).toContain('SPA fallback');
+    const delivery = createPhaserPackDelivery(manifest, {
+      baseUrl: origin.url, createWorker: createFakeWorkerFactory().factory,
+    });
+    const prepared = await delivery.prepare('solo');
+    expect(origin.requests.at(-1)).toBe('packs/solo@1.zip');
+    expect(delivery.snapshot().staging).toHaveLength(1);
+    prepared.release();
+    expect(delivery.snapshot().staging).toHaveLength(0);
     delivery.dispose();
   });
 });
