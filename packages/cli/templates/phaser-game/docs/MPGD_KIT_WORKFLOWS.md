@@ -153,3 +153,7 @@ Keep source revision, config, build/smoke results, gameplay evidence, target
 preflight, artifact hashes, and target acceptance reports together. A generic
 kit smoke test proves the reusable contract only; it does not replace
 game-owned production credentials, deployment, signing, or store evidence.
+
+### ONE play
+
+Use `@mpgd/adapter-browser/oneplay` through `PlatformGateway`. Build and smoke the `oneplay` target with the configured kit path. The adapter initializes the H5 SDK before gameplay; `completeLoading()` awaits host acknowledgement. Exit checkpoints must be synchronous through `storage.saveSync`. Use game-owned issued placement IDs and server verification before enabling ads or purchases. Check final HTTPS hosting headers for both ONE store domain families. See the [ONE play guide](https://github.com/imjlk/mpgd-kit/blob/main/docs/ONEPLAY.md) and [official SDK guide](https://onestore-dev.gitbook.io/dev/tools/web-sdk).

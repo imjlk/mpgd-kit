@@ -683,6 +683,8 @@ jobs:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
           VITE_MPGD_GAME_SERVICES_URL: https://services.example.com
       - run: pnpm smoke:target verse8
+      - run: pnpm build:oneplay
+      - run: pnpm smoke:target oneplay
       - run: pnpm build:crazygames
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'

@@ -35,6 +35,14 @@ const webStoreIntegrationConfig = {
 const expectedIntegrations: Record<string, TargetIntegrationConfig> = {
   'web-preview': webStoreIntegrationConfig,
   'microsoft-store': webStoreIntegrationConfig,
+  oneplay: {
+    identityUpgrade: 'unsupported',
+    presentation: 'available',
+    sharing: 'unsupported',
+    inboundShare: 'unsupported',
+    notifications: 'unsupported',
+    presentationMode: 'fullscreen',
+  },
   crazygames: {
     identityUpgrade: 'unsupported',
     presentation: 'available',
@@ -435,6 +443,25 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
     );
     assertEqual(config.localization.enabled, true, 'verse8 localization should be enabled');
     assertEqual(config.storage.support, 'local', 'verse8 should use local storage by default');
+    return;
+  }
+
+  if (target === 'oneplay') {
+    assertEqual(
+      config.monetization.products.every((product) => !product.enabled),
+      true,
+      'ONE play sample purchases require server configuration',
+    );
+    assertEqual(
+      config.ads.placements.every((placement) => !placement.enabled),
+      true,
+      'ONE play sample placements require issued platform IDs',
+    );
+    assertEqual(
+      config.ads.rewardedAds,
+      false,
+      'ONE play sample rewards require server configuration',
+    );
     return;
   }
 

@@ -51,6 +51,9 @@ export interface GamePlatformRuntime<
   readonly services: S;
   readonly actions?: GameActionCoordinator;
   createGameplayScope(): GameGameplayScope;
+  setLoadingProgress(progress: number): void;
+  /** Complete host loading before opening a play scene. Rejected starts remain blocked. */
+  completeLoading(): Promise<void>;
   /** Reconcile existing journal entries only; this method never opens platform UI. */
   reconcile(): Promise<void>;
   /** Game teardown; native observers and application-owned late recovery may continue. */
@@ -66,6 +69,8 @@ export function createGamePlatformRuntime<T extends PlatformGateway, S extends G
   readonly reconciliation?: GameActionReconciliationPort;
   readonly purchasePresentation?: { subscribe(listener: (event: PurchasePresentationEvent) => void): () => void };
   readonly onObserverError?: ObserverErrorHandler;
+  /** Must complete synchronously; asynchronous uploads belong at earlier checkpoints. */
+  readonly onExit?: () => void;
 }): GamePlatformRuntime<T, S> {
   const execution = createGameExecutionController({
     ...(input.onObserverError === undefined ? {} : { onListenerError: input.onObserverError }),
@@ -94,6 +99,50 @@ export function createGamePlatformRuntime<T extends PlatformGateway, S extends G
   let actions: GameActionCoordinator | undefined;
   let unsubscribeResume: (() => void) | undefined;
   let disposed = false;
+  let unsubscribeExit: (() => void) | undefined;
+  let startupBlock = input.gateway.gameLoading === undefined
+    ? undefined
+    : execution.acquireBlock({
+        reason: 'game-runtime:loading',
+        channels: ['simulation', 'gameplay-input', 'audio'],
+      });
+  let loadingCompletion: Promise<void> | undefined;
+  const setLoadingProgress = (progress: number) => {
+    if (!disposed && loadingCompletion === undefined) {
+      observe(
+        () => gateway.gameLoading?.setProgress(Math.max(0, Math.min(100, Number(progress) || 0))),
+        input.onObserverError,
+      );
+    }
+  };
+  const completeLoading = (): Promise<void> => {
+    if (disposed) {
+      return Promise.reject(new Error('Game runtime is disposed.'));
+    }
+    if (loadingCompletion !== undefined) {
+      return loadingCompletion;
+    }
+    const attempt = Promise.resolve().then(async () => {
+      if (disposed) {
+        throw new Error('Game runtime is disposed.');
+      }
+      gateway.gameLoading?.setProgress(100);
+      await gateway.gameLoading?.complete();
+      if (disposed) {
+        throw new Error('Game runtime was disposed during loading.');
+      }
+      const owned = startupBlock;
+      startupBlock = undefined;
+      owned?.release();
+    });
+    loadingCompletion = attempt;
+    void attempt.catch(() => {
+      if (loadingCompletion === attempt) {
+        loadingCompletion = undefined;
+      }
+    });
+    return attempt;
+  };
   let hostAudio: ExecutionBlock | undefined;
   let unsubscribeHostAudio: (() => void) | undefined;
   const gameplayScopes = new Map<object, boolean>();
@@ -163,6 +212,7 @@ export function createGamePlatformRuntime<T extends PlatformGateway, S extends G
       }, input.onObserverError);
     }
     unsubscribeActivity?.();
+    unsubscribeExit?.();
     gameplayScopes.clear();
     execution.destroy();
     if (unsubscribeHostAudio !== undefined) {
@@ -206,6 +256,14 @@ export function createGamePlatformRuntime<T extends PlatformGateway, S extends G
       ...(input.onObserverError === undefined ? {} : { onError: input.onObserverError }),
     });
     unsubscribeResume = gateway.lifecycle.onResume(() => { observe(reconcile, input.onObserverError); });
+    unsubscribeExit = gateway.lifecycle.onExit?.(() => {
+      observe(() => input.onExit?.(), input.onObserverError);
+      dispose();
+    });
+    if (disposed) {
+      unsubscribeExit?.();
+      throw new Error('Game exited during runtime initialization.');
+    }
     const settings = gateway.gameSettings;
     if (settings !== undefined) {
       const updateMute = (muted: boolean) => {
@@ -231,6 +289,8 @@ export function createGamePlatformRuntime<T extends PlatformGateway, S extends G
       presentation,
       services,
       createGameplayScope,
+      setLoadingProgress,
+      completeLoading,
       ...(actions === undefined ? {} : { actions }),
       reconcile,
       dispose,

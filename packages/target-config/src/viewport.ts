@@ -300,6 +300,7 @@ export function targetViewportShellForRuntime(
     case 'capacitor-android':
     case 'capacitor-ios':
     case 'apps-in-toss':
+    case 'oneplay-web':
       return 'mobile-webview';
     case 'devvit-web':
     case 'verse8-web':

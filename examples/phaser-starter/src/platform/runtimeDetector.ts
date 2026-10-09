@@ -8,6 +8,7 @@ const validTargets = new Set<string>([
   'reddit',
   'verse8',
   'crazygames',
+  'oneplay',
   'telegram',
   'tauri',
   'wechat',

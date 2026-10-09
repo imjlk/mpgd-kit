@@ -219,6 +219,20 @@ function resolveAuthoritativeGameServicesConfig(
   config: TargetConfig,
   platformTarget: EffectivePlatformTargetMetadata | undefined,
 ): TargetConfig {
+  if (config.runtime === 'oneplay-web') {
+    // Independent server integrations are opt-in; an ordinary preview cannot authorize grants.
+    const authority = platformTarget?.authoritativeGameServices === true;
+    const iap = authority && config.features.iap && config.monetization.iap;
+    const rewardedAds = authority && config.features.rewardedAds && config.monetization.rewardedAds;
+    const interstitialAds = config.features.interstitialAds && config.monetization.interstitialAds;
+    const monetization = {
+      ...disabledAuthoritativeMonetization,
+      iap,
+      rewardedAds,
+      interstitialAds,
+    };
+    return { ...config, features: { ...config.features, ...monetization }, monetization };
+  }
   if (config.runtime === 'crazygames-web') {
     const interstitialAds = platformTarget?.crazyGamesLaunch === 'full' && config.features.interstitialAds && config.monetization.interstitialAds;
     const monetization = { ...disabledAuthoritativeMonetization, interstitialAds };

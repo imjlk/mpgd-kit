@@ -44,6 +44,7 @@ export async function bootstrapStarter(options: { readonly monetization?: Starte
     });
     const viewport = resolveTargetViewportSnapshot({
       ...measurement,
+      ...(platform.viewport === undefined ? {} : { safeAreaInsets: platform.viewport.getState().safeAreaInsets }),
       runtime: runtime.config.runtime,
       orientationPolicy,
     });
@@ -58,6 +59,7 @@ export async function bootstrapStarter(options: { readonly monetization?: Starte
     ]);
     const locale = resolveTargetMpgdLocale({
       capabilities: runtime.capabilities,
+      ...(platform.gameSettings?.getLocale === undefined ? {} : { preferredLocales: [platform.gameSettings.getLocale()] }),
       fallbackLocale:
         runtime.effectiveConfig?.localization.fallbackLocale
         ?? runtime.config.localization.fallbackLocale,

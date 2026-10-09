@@ -9,6 +9,7 @@ export type PlatformTarget =
   | 'reddit'
   | 'verse8'
   | 'crazygames'
+  | 'oneplay'
   | 'telegram'
   | 'tauri'
   | 'wechat'
@@ -509,6 +510,8 @@ export interface ViewportAdapter {
 export interface LifecycleAdapter {
   onPause(callback: () => void): () => void;
   onResume(callback: () => void): () => void;
+  /** Synchronous checkpoint only. The host may destroy the document immediately afterward. */
+  onExit?(callback: () => void): () => void;
   /**
    * Android handlers run last-registered-first until one returns true. If none
    * consumes the event, Capacitor navigates WebView history when possible or
@@ -542,6 +545,14 @@ export interface StorageAdapter {
   load(input: { readonly key: string }): Promise<StorageLoadResult | null>;
   /** Persist a JSON-serializable value or reject without replacing the prior value. */
   save(input: { readonly key: string; readonly value: unknown }): Promise<void>;
+  /** Optional synchronous checkpoint for hosts whose exit event cannot await promises. */
+  saveSync?(input: { readonly key: string; readonly value: unknown }): void;
+}
+
+/** Host loading UI. Completion is an acknowledgement, not progress reaching 100%. */
+export interface GameLoadingAdapter {
+  setProgress(progress: number): void;
+  complete(): Promise<void>;
 }
 
 /** Device-protected opaque credentials; never backed by ordinary game storage. */
@@ -562,10 +573,12 @@ export interface GameActivityAdapter {
 export interface GameSettingsAdapter {
   getAudioMuted(): boolean;
   onAudioMuteChange(callback: (muted: boolean) => void): () => void;
+  getLocale?(): string;
 }
 
 export interface PlatformGateway {
   readonly target: PlatformTarget;
+  readonly gameLoading?: GameLoadingAdapter;
   getCapabilities(): Promise<PlatformCapabilities>;
   readonly identity: IdentityAdapter;
   readonly commerce: CommerceAdapter;

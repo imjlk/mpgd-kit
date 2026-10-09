@@ -293,6 +293,7 @@ function platformKindForRuntime(runtime: EffectiveTargetConfig['runtime']): stri
       return 'devvit-web';
     case 'verse8-web':
     case 'crazygames-web':
+    case 'oneplay-web':
       return 'web';
     case 'wechat-minigame':
       return 'wechat-minigame';
@@ -319,6 +320,8 @@ function platformAdapterForRuntime(runtime: EffectiveTargetConfig['runtime']): s
       return 'verse8';
     case 'crazygames-web':
       return 'crazygames';
+    case 'oneplay-web':
+      return 'oneplay';
     case 'wechat-minigame':
       return 'wechat';
     case 'tiktok-minigame':

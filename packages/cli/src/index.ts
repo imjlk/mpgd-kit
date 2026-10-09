@@ -334,6 +334,7 @@ const recommendedMatrixTargetOrder = [
   'microsoft-store',
   'verse8',
   'crazygames',
+  'oneplay',
   'ait',
   'reddit',
 ] as const;
@@ -342,6 +343,7 @@ const allMatrixTargetOrder = [
   'microsoft-store',
   'verse8',
   'crazygames',
+  'oneplay',
   'android',
   'ios',
   'ait',

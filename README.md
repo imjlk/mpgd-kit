@@ -323,6 +323,8 @@ pnpm build:microsoft-store
 pnpm smoke:target microsoft-store
 pnpm build:verse8
 pnpm smoke:target verse8
+pnpm build:oneplay
+pnpm smoke:target oneplay
 pnpm build:crazygames
 pnpm smoke:target crazygames
 pnpm build:devvit
@@ -589,3 +591,5 @@ Official references:
 - [Provide in-app purchases with Digital Goods API](https://learn.microsoft.com/en-us/microsoft-edge/progressive-web-apps/how-to/digital-goods-api)
 - [Query Microsoft Store products from a service](https://learn.microsoft.com/en-us/gaming/gdk/docs/store/commerce/service-to-service/microsoft-store-apis/xstore-v9-query-for-products)
 - [Consume Microsoft Store products from a service](https://learn.microsoft.com/en-us/gaming/gdk/docs/store/commerce/service-to-service/microsoft-store-apis/xstore-v8-consume)
+
+ONE play uses the browser adapter's `/oneplay` entry point and a hosted, non-installable web artifact. It supports asynchronous host startup, synchronous exit checkpoints and server-gated monetization. See [ONE play integration](docs/ONEPLAY.md).
