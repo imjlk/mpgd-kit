@@ -27,6 +27,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./frame-profiler": {
+      "types": "./dist/frame-profiler.d.ts",
+      "default": "./dist/frame-profiler.js"
     }
   },
   "files": [
@@ -37,10 +41,11 @@
   },
   "scripts": {
     "check": "ttsc --noEmit",
-    "test": "cd ../.. && node tools/run-ttsx.mjs packages/runtime-diagnostics/src/index.test.ts",
+    "test": "pnpm build && cd ../.. && node tools/run-ttsx.mjs packages/runtime-diagnostics/src/index.test.ts && node tools/run-ttsx.mjs packages/runtime-diagnostics/src/frame-profiler.test.ts && node packages/runtime-diagnostics/test/dist-import.mjs",
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
-    "fix": "ttsc fix"
+    "fix": "ttsc fix",
+    "build": "cd ../.. && node tools/run-ttsx.mjs tools/package/build-packages.ts @mpgd/runtime-diagnostics"
   },
   "devDependencies": {
     "ttsc": "0.30.4",

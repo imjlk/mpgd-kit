@@ -250,3 +250,35 @@ registration under the maintainer's auth, with a `.sampo/config.toml`
 release-group entry for automated releases. Subsequent versions ship through
 Sampo changesets once the package's npm Trusted Publishing/OIDC entry for
 `.github/workflows/release.yml` is registered on npmjs.com.
+
+## Named frame costs and counters
+
+Import `NamedFrameProfiler` from the root or `@mpgd/runtime-diagnostics/frame-profiler`.
+Supply registered metric names, a monotonic clock, and optional retention capacity
+(default 300, maximum 1,000 frames; up to 64 metric names).
+
+```ts
+import { NamedFrameProfiler } from '@mpgd/runtime-diagnostics/frame-profiler';
+
+const profiler = new NamedFrameProfiler(['simulationMs', 'entities'] as const, () => performance.now());
+profiler.begin();
+profiler.measure('simulationMs', () => updateSimulation());
+profiler.current.entities = countEntities();
+profiler.finish();
+const report = profiler.snapshot();
+```
+
+`measure` captures the synchronous call only; nested timings can overlap and must
+not be added to infer total CPU work. Counters retain consumer-defined units. All
+values must be finite and non-negative. Clock regressions and invalid values are
+rejected before a frame enters history. Begin/finish must be paired; reset aborts
+an active frame and starts a new clock epoch, but finish/reset cannot run inside
+measured work. A callback's original exception is preserved.
+
+`begin(true)` excludes manual, hidden, or interrupted work and breaks the cadence
+chain. The first following frame has no measured interval. Missing/zero intervals
+do not enter interval percentiles; `sampleCounts` makes this absence explicit.
+Snapshots use nearest-rank percentiles (`ceil(n × percentile) - 1`) over the retained
+window, with zero values and zero counts for empty metrics. Frame counts are
+cumulative until reset; every snapshot is detached. CPU costs do not measure GPU
+work or certify FPS. The existing hitch recorder remains the attribution mechanism.
