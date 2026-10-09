@@ -1030,3 +1030,14 @@ function assertString(value: string, field: string): void {
 function describeValue(value: unknown): string {
   return typeof value === 'string' ? JSON.stringify(value) : String(value);
 }
+
+export {
+  NamedFrameProfiler,
+  MAX_FRAME_PROFILE_CAPACITY,
+  MAX_FRAME_PROFILE_FIELDS,
+} from './frame-profiler.js';
+export type {
+  FramePercentiles,
+  FrameProfileSample,
+  FrameProfileSnapshot,
+} from './frame-profiler.js';
