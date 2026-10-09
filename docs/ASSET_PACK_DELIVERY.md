@@ -47,7 +47,16 @@ check required files and metadata against their digests, and reject byte-identic
 remote-only objects copied elsewhere in the artifact. Transformed or embedded
 payloads are outside this file-inventory check: keep source assets out of imports.
 Remote objects and the byte report are written separately under
-`artifacts/asset-packs/<target>/`. Experimental mini-game runtimes retain their
+`artifacts/asset-packs/<target>/` before the build writes its release manifest or
+native success marker. This final output is checked against the canonical original
+asset source and the build config before replacement; use a dedicated source
+folder such as `assets`, because `root: "."` also includes project-local artifacts.
+Web audits run after icons and target metadata have been staged. Native audits
+inspect the completed APK, AAB, IPA or expanded iOS artifact, including native
+resources outside the web bundle, and verify the platform's packaged namespace.
+Native ZIP inspection is sequential with limits of 2 GiB compressed, 512 MiB per
+entry, 4 GiB expanded and 100,000 entries. It never extracts or executes payloads.
+Experimental mini-game runtimes retain their
 existing package-local texture rules and reject this web-runtime opt-in.
 
 The consumer fetches the manifest and policy from its packaged namespace once

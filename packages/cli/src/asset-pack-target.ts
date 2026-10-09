@@ -219,11 +219,11 @@ export async function stageAssetPackTarget(options: {
 }
 
 /** Build from one target's policy without requiring a kit checkout. */
-export async function buildAssetPackTarget(options: {
+export async function assertAssetPackTargetOutput(options: {
   readonly policy: AssetPackTargetPolicy;
   readonly baseDir: string;
   readonly outDir: string;
-}): Promise<AssetPackTargetReport> {
+}): Promise<void> {
   assertAssetPackTargetPolicy(options.policy);
   const configPath = resolve(options.baseDir, options.policy.buildConfig);
   const config = validatePhaserPackBuildConfig(JSON.parse(await readFile(configPath, 'utf8')));
@@ -233,6 +233,18 @@ export async function buildAssetPackTarget(options: {
   if (inside(sourceRoot, output) || inside(output, sourceRoot)) {
     throw new Error('Asset target output must be disjoint from the original asset source root');
   }
+  if (inside(output, await realpath(configPath))) {
+    throw new Error('Asset target output must not replace its build config');
+  }
+}
+
+export async function buildAssetPackTarget(options: {
+  readonly policy: AssetPackTargetPolicy;
+  readonly baseDir: string;
+  readonly outDir: string;
+}): Promise<AssetPackTargetReport> {
+  await assertAssetPackTargetOutput(options);
+  const configPath = resolve(options.baseDir, options.policy.buildConfig);
   const temporary = await mkdtemp(join(tmpdir(), 'mpgd-asset-source-'));
   try {
     const built = buildAssetPacks({

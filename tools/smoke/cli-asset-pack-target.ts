@@ -11,9 +11,12 @@ import {
 } from '@mpgd/target-config/asset-packs';
 import {
   assertAssetPackTargetArtifact,
+  assertAssetPackTargetOutput,
   assetPackTargetNamespace,
   buildAssetPackTarget,
 } from '../../packages/cli/src/asset-pack-target';
+import { assertAssetPackNativeArtifact } from '../../packages/cli/src/asset-pack-native-audit';
+import { createDeterministicZip } from '../../packages/cli/src/asset-pack-zip';
 import { createEffectiveTargetConfig } from '../../packages/target-config/src/effective';
 import { readFileSync } from 'node:fs';
 import type { TargetConfigMatrix } from '../../packages/target-config/src/runtime';
@@ -127,6 +130,71 @@ try {
   await mkdir(artifact);
   await cp(mixed.packagedDir, join(artifact, assetPackTargetNamespace), { recursive: true });
   await assertAssetPackTargetArtifact(mixed, artifact);
+  const wideRoot = join(root, 'wide-source');
+  await mkdir(wideRoot);
+  const wideConfig = join(wideRoot, 'packs.json');
+  await writeFile(
+    wideConfig,
+    JSON.stringify({ ...JSON.parse(await readFile(fixtureConfig, 'utf8')), root: '.' }),
+  );
+  const marker = join(wideRoot, 'source-marker');
+  await writeFile(marker, 'preserve');
+  await assert.rejects(
+    assertAssetPackTargetOutput({
+      policy: { ...policy, buildConfig: wideConfig },
+      baseDir: '.',
+      outDir: join(wideRoot, 'artifacts/asset-packs/preview'),
+    }),
+    /original asset source root/,
+  );
+  assert.equal(await readFile(marker, 'utf8'), 'preserve');
+
+  const nativeEntries = [];
+  for (const object of mixed.objects.filter((object) => object.location === 'packaged')) {
+    nativeEntries.push({
+      path: object.path,
+      data: await readFile(join(mixed.packagedDir, object.path)),
+      method: 'deflate' as const,
+    });
+  }
+  for (const name of ['asset-pack-delivery.json', 'target-policy.json']) {
+    nativeEntries.push({
+      path: name,
+      data: await readFile(join(mixed.packagedDir, name)),
+      method: 'deflate' as const,
+    });
+  }
+  for (const [extension, prefix] of [
+    ['apk', 'assets/public'],
+    ['aab', 'base/assets/public'],
+    ['ipa', 'Payload/Example.app/public'],
+  ] as const) {
+    const file = join(root, `native.${extension}`);
+    const entries = nativeEntries.map((entry) => ({
+      ...entry,
+      path: `${prefix}/${assetPackTargetNamespace}/${entry.path}`,
+    }));
+    await writeFile(file, createDeterministicZip(entries));
+    await assertAssetPackNativeArtifact(mixed, file);
+    const remoteObject = mixed.objects.find((object) => object.location === 'remote')!;
+    await writeFile(
+      file,
+      createDeterministicZip([
+        ...entries,
+        {
+          path: 'res/raw/remote-copy.bin',
+          data: await readFile(join(mixed.remoteDir, remoteObject.path)),
+          method: 'store',
+        },
+      ]),
+    );
+    await assert.rejects(assertAssetPackNativeArtifact(mixed, file), /Remote-only/);
+    await writeFile(
+      file,
+      createDeterministicZip(entries.map((entry) => ({ ...entry, path: 'wrong/' + entry.path }))),
+    );
+    await assert.rejects(assertAssetPackNativeArtifact(mixed, file), /outside the platform/);
+  }
   const embedded = join(root, 'embedded');
   await mkdir(join(embedded, 'game'), { recursive: true });
   await cp(mixed.packagedDir, join(embedded, 'game', assetPackTargetNamespace), {

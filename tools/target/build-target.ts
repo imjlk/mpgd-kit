@@ -16,8 +16,10 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import { loadEnv } from 'vite';
+import { assertAssetPackNativeArtifact } from '../../packages/cli/src/asset-pack-native-audit';
 import {
   assertAssetPackTargetArtifact,
+  assertAssetPackTargetOutput,
   assetPackTargetNamespace,
   buildAssetPackTarget,
   type AssetPackTargetReport,
@@ -238,6 +240,11 @@ try {
         'assetPacks target builds require the web asset-pack runtime; experimental mini-game runtimes keep their existing package-local texture policy',
       );
     }
+    await assertAssetPackTargetOutput({
+      policy: target.assetPacks,
+      baseDir: configBaseDir,
+      outDir: targetPath(`artifacts/asset-packs/${targetName}`),
+    });
     assetTargetReport = await buildAssetPackTarget({
       policy: target.assetPacks,
       baseDir: configBaseDir,
@@ -342,9 +349,6 @@ try {
       if (staticDirPath !== undefined) {
         copyWebStaticDirectoryContents(staticDirPath, output);
       }
-      if (assetTargetReport !== undefined) {
-        await assertAssetPackTargetArtifact(assetTargetReport, output);
-      }
       stageWebIconEvidence(generatedIcons, output, {
         ...(target.installable === undefined ? {} : { installable: target.installable }),
         ...(staticDirPath === undefined
@@ -374,6 +378,10 @@ try {
       if (target.adapter === 'crazygames') {
         assertCrazyGamesArtifact(output);
       }
+      if (assetTargetReport !== undefined) {
+        await assertAssetPackTargetArtifact(assetTargetReport, output);
+      }
+      await writeRemoteAssetPacks();
       writeManifest(targetName, profile, outputConfigPath, env);
       break;
     }
@@ -408,6 +416,7 @@ try {
         console.warn('ait: package build skipped; release manifest points to copied wrapper dist.');
       }
 
+      await writeRemoteAssetPacks();
       writeManifest(targetName, profile, releaseArtifact, env);
       break;
     }
@@ -429,6 +438,7 @@ try {
           join(relative(join(wrapperApp, 'dist'), webDir), assetPackTargetNamespace),
         );
       }
+      await writeRemoteAssetPacks();
       writeManifest(targetName, profile, `${wrapperAppConfigPath}/dist`, env);
       break;
     }
@@ -455,24 +465,15 @@ try {
         copyIosSyncSwiftPackage,
         run,
       });
+      if (assetTargetReport !== undefined) {
+        await assertAssetPackNativeArtifact(assetTargetReport, targetPath(releaseArtifact));
+      }
+      await writeRemoteAssetPacks();
       writeManifest(targetName, profile, releaseArtifact, env);
       nativeAttempt.complete(releaseArtifact);
       nativeCompleted = true;
       break;
     }
-  }
-  if (assetTargetReport !== undefined) {
-    // This output contains only public immutable asset objects and the byte report.
-    // It is never inside the packaged target artifact.
-    const remoteOutput = targetPath(`artifacts/asset-packs/${targetName}`);
-    replaceDirectory(assetTargetReport.remoteDir, `${remoteOutput}/remote`);
-    mkdirSync(remoteOutput, { recursive: true });
-    writeFileSync(`${remoteOutput}/report.json`, JSON.stringify({
-      ...assetTargetReport,
-      outDir: remoteOutput,
-      packagedDir: assetPackTargetNamespace,
-      remoteDir: `${remoteOutput}/remote`,
-    }, null, 2) + '\n');
   }
 } finally {
   if (assetTargetTemporary !== undefined) {
@@ -538,6 +539,27 @@ async function stageTargetAssetPacks(webOutput: string): Promise<void> {
     force: false,
   });
   await assertAssetPackTargetArtifact(assetTargetReport, webOutput);
+}
+
+async function writeRemoteAssetPacks(): Promise<void> {
+  const policy = target?.assetPacks;
+  if (assetTargetReport === undefined || policy === undefined) {
+    return;
+  }
+  const remoteOutput = targetPath(`artifacts/asset-packs/${targetName}`);
+  await assertAssetPackTargetOutput({
+    policy,
+    baseDir: configBaseDir,
+    outDir: remoteOutput,
+  });
+  replaceDirectory(assetTargetReport.remoteDir, `${remoteOutput}/remote`);
+  mkdirSync(remoteOutput, { recursive: true });
+  writeFileSync(`${remoteOutput}/report.json`, JSON.stringify({
+    ...assetTargetReport,
+    outDir: remoteOutput,
+    packagedDir: assetPackTargetNamespace,
+    remoteDir: `${remoteOutput}/remote`,
+  }, null, 2) + '\n');
 }
 
 function targetBuildConfigEnv(target: PlatformTargetConfig): NodeJS.ProcessEnv {
