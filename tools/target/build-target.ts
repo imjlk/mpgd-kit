@@ -30,6 +30,7 @@ import {
 } from '../icons/staging';
 import { requireCanonicalAppVersion } from './app-version';
 import { assertCrazyGamesArtifact } from './crazygames-artifact';
+import { writeOnePlayHostingHeaders } from './oneplay-artifact';
 import { embeddedTargetConfigFileName, writeEffectiveTargetConfigs } from './effective-config';
 import { createReleaseManifestWriter, resolveReleaseProvenance } from './generate-release-manifest';
 import {
@@ -337,6 +338,9 @@ try {
         assertNonInstallableWebArtifact(output);
       } else {
         assertInstallableWebArtifact(output);
+      }
+      if (target.adapter === 'oneplay') {
+        writeOnePlayHostingHeaders(output);
       }
       if (target.adapter === 'crazygames') {
         assertCrazyGamesArtifact(output);

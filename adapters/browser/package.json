@@ -40,6 +40,10 @@
     "./crazygames": {
       "types": "./dist/crazygames.d.ts",
       "default": "./dist/crazygames.js"
+    },
+    "./oneplay": {
+      "types": "./dist/oneplay.d.ts",
+      "default": "./dist/oneplay.js"
     }
   },
   "files": [

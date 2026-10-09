@@ -36,6 +36,7 @@ export type TargetRuntimeKind =
   | 'devvit-web'
   | 'verse8-web'
   | 'crazygames-web'
+  | 'oneplay-web'
   | 'wechat-minigame'
   | 'tiktok-minigame';
 
@@ -49,6 +50,7 @@ export type ReleaseProfile =
   | 'devvit'
   | 'verse8'
   | 'crazygames'
+  | 'oneplay'
   | 'wechat-minigame'
   | 'tiktok-minigame';
 
@@ -240,6 +242,13 @@ const integrationUpperBoundsByRuntime = {
     inboundShare: 'unsupported',
     notifications: 'unsupported',
   },
+  'oneplay-web': {
+    identityUpgrade: 'unsupported',
+    presentation: 'available',
+    sharing: 'unsupported',
+    inboundShare: 'unsupported',
+    notifications: 'unsupported',
+  },
   'tiktok-minigame': {
     identityUpgrade: 'unsupported',
     presentation: 'available',
@@ -269,7 +278,7 @@ const integrationUpperBoundsByRuntime = {
     notifications: 'unsupported',
   },
 } as const satisfies Record<
-  'tiktok-minigame' | 'verse8-web' | 'web-preview' | 'wechat-minigame' | 'crazygames-web',
+  'tiktok-minigame' | 'verse8-web' | 'web-preview' | 'wechat-minigame' | 'crazygames-web' | 'oneplay-web',
   Record<TargetIntegration, IntegrationUpperBound>
 >;
 
@@ -356,6 +365,7 @@ export function assertTargetIntegrationRuntimeBounds(
     runtime !== 'tiktok-minigame'
     && runtime !== 'verse8-web'
     && runtime !== 'crazygames-web'
+    && runtime !== 'oneplay-web'
     && runtime !== 'web-preview'
     && runtime !== 'wechat-minigame'
   ) {

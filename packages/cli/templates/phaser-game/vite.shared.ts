@@ -152,6 +152,8 @@ export function resolveBuildGatewayModule(input: {
       return input.debug && input.buildId === devvitSandboxBuildId
         ? 'src/platform/buildGateways/redditSandbox.ts'
         : 'src/platform/buildGateways/reddit.ts';
+    case 'oneplay':
+      return 'src/platform/buildGateways/oneplay.ts';
     case 'crazygames':
       return 'src/platform/buildGateways/crazygames.ts';
     case 'verse8':

@@ -131,6 +131,12 @@ function assertPlatformTargetConfigShape(
   if (target === 'crazygames' && (input.kind !== 'web' || input.adapter !== 'crazygames')) {
     throw new Error('crazygames target must use the web kind and crazygames adapter.');
   }
+  if (target === 'oneplay' && (input.kind !== 'web' || input.adapter !== 'oneplay')) {
+    throw new Error('oneplay target must use the web kind and oneplay adapter.');
+  }
+  if (input.adapter === 'oneplay' && (input.kind !== 'web' || input.installable !== false)) {
+    throw new Error('ONE play requires a web target with installable: false.');
+  }
   if (input.adapter === 'crazygames' && (input.kind !== 'web' || input.installable !== false)) {
     throw new Error('CrazyGames requires a web target with installable: false.');
   }

@@ -21,6 +21,7 @@ const runtimeKinds = valueSet({
   'devvit-web': true,
   'verse8-web': true,
   'crazygames-web': true,
+  'oneplay-web': true,
   'wechat-minigame': true,
   'tiktok-minigame': true,
 } satisfies Record<TargetRuntimeKind, true>);
@@ -34,6 +35,7 @@ const releaseProfiles = valueSet({
   devvit: true,
   verse8: true,
   crazygames: true,
+  oneplay: true,
   'wechat-minigame': true,
   'tiktok-minigame': true,
 } satisfies Record<ReleaseProfile, true>);

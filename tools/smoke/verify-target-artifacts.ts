@@ -13,6 +13,7 @@ import {
 import { readJsonFile } from '../io';
 import { assertFreshNativeBuildArtifact } from '../target/native-build-attempt';
 import { assertCrazyGamesArtifact } from '../target/crazygames-artifact';
+import { assertOnePlayArtifact } from '../target/oneplay-artifact';
 import {
   createMicrosoftStorePwaRevision,
   readMicrosoftStorePwaReleaseEvidence,
@@ -118,6 +119,9 @@ export function verifyTargetArtifacts(
     assertPathExists(artifactPath, `${target} artifact`);
     if (targetConfig.kind === 'web') {
       assertWebArtifactInstallability(artifactPath, targetConfig.installable);
+      if (targetConfig.adapter === 'oneplay') {
+        assertOnePlayArtifact(artifactPath);
+      }
       if (targetConfig.adapter === 'crazygames') {
         assertCrazyGamesArtifact(artifactPath);
       }

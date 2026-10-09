@@ -29,6 +29,22 @@ export class PlayScene extends Phaser.Scene {
 
   create(): void {
     this.context = this.registry.get(starterContextKey) as StarterContext;
+    // A host exit callback cannot await a server upload. Keep this local checkpoint synchronous.
+    const checkpoint = () => {
+      try {
+        this.context.platform.storage.saveSync?.({
+          key: 'starter-run',
+          value: this.state,
+        });
+      } catch (error) {
+        console.error('[checkpoint]', error);
+      }
+    };
+    const unsubscribeExit = this.context.platform.lifecycle.onExit?.(checkpoint);
+    this.events.once('shutdown', () => {
+      checkpoint();
+      unsubscribeExit?.();
+    });
     bindPhaserGameScene({
       controller: this.context.gameRuntime.execution,
       gameplayScope: this.context.gameRuntime.createGameplayScope(),

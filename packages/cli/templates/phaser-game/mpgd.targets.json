@@ -33,6 +33,17 @@
       "crazyGamesLaunch": "basic",
       "output": "artifacts/crazygames"
     },
+    "oneplay": {
+      "kind": "web",
+      "gameApp": ".",
+      "adapter": "oneplay",
+      "icon": {
+        "profile": "web-preview"
+      },
+      "installable": false,
+      "output": "artifacts/oneplay",
+      "authoritativeGameServices": false
+    },
     "android": {
       "kind": "capacitor-android",
       "gameApp": ".",

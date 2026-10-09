@@ -432,6 +432,49 @@
         "requiresStoreReview": false,
         "requiresAitReview": false
       }
+    },
+    "oneplay": {
+      "runtime": "oneplay-web",
+      "features": {
+        "iap": false,
+        "rewardedAds": false,
+        "interstitialAds": false,
+        "leaderboard": false,
+        "localization": true
+      },
+      "capabilities": {
+        "storage": "local",
+        "localization": true
+      },
+      "localization": {
+        "fallbackLocale": "en"
+      },
+      "monetization": {
+        "iap": false,
+        "rewardedAds": false,
+        "interstitialAds": false
+      },
+      "leaderboard": {
+        "native": false
+      },
+      "release": {
+        "profile": "oneplay"
+      },
+      "integrations": {
+        "identityUpgrade": "unsupported",
+        "presentation": "available",
+        "sharing": "unsupported",
+        "inboundShare": "unsupported",
+        "notifications": "unsupported",
+        "presentationMode": "fullscreen"
+      },
+      "policy": {
+        "externalPaymentAllowed": false,
+        "remoteExecutableCodeAllowed": false,
+        "installOtherAppCTAAllowed": false,
+        "requiresStoreReview": true,
+        "requiresAitReview": false
+      }
     }
   }
 }

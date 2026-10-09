@@ -9,6 +9,85 @@ import {
 } from '@mpgd/platform/ads';
 import { createGamePlatformRuntime } from './index.js';
 
+describe('host loading and synchronous exit', () => {
+  it('holds gameplay until the asynchronous start is acknowledged and deduplicates completion', async () => {
+    const f = fixture();
+    let acknowledge!: () => void;
+    const complete = vi.fn(
+      () => new Promise<void>((resolve) => {
+        acknowledge = resolve;
+      }),
+    );
+    const setProgress = vi.fn();
+    const runtime = createGamePlatformRuntime({
+      gateway: { ...f.gateway, gameLoading: { setProgress, complete } },
+      createServices: () => ({}),
+      initialLifecycleState: 'active',
+    });
+    const scope = runtime.createGameplayScope();
+    scope.setActive(true);
+    expect(runtime.execution.getSnapshot().blocked.simulation).toBe(true);
+    runtime.setLoadingProgress(250);
+    expect(setProgress).toHaveBeenLastCalledWith(100);
+    const first = runtime.completeLoading();
+    expect(runtime.completeLoading()).toBe(first);
+    await Promise.resolve();
+    expect(complete).toHaveBeenCalledOnce();
+    expect(runtime.execution.getSnapshot().blocked.audio).toBe(true);
+    acknowledge();
+    await first;
+    expect(runtime.execution.getSnapshot().blocked.simulation).toBe(false);
+    runtime.dispose();
+  });
+  it('retains a failed loading gate, retries, and refuses a late completion after disposal', async () => {
+    const f = fixture();
+    let acknowledge!: () => void;
+    const complete = vi.fn().mockRejectedValueOnce(new Error('start failed')).mockImplementation(
+      () => new Promise<void>((resolve) => {
+        acknowledge = resolve;
+      }),
+    );
+    const runtime = createGamePlatformRuntime({
+      gateway: { ...f.gateway, gameLoading: { setProgress: () => {}, complete } },
+      createServices: () => ({}),
+      initialLifecycleState: 'active',
+    });
+    await expect(runtime.completeLoading()).rejects.toThrow('start failed');
+    expect(runtime.execution.getSnapshot().blocked.simulation).toBe(true);
+    const retry = runtime.completeLoading();
+    await Promise.resolve();
+    runtime.dispose();
+    acknowledge();
+    await expect(retry).rejects.toThrow('disposed');
+    expect(runtime.execution.getSnapshot().status).toBe('destroyed');
+  });
+  it('executes an exit checkpoint synchronously and destroys gameplay without awaiting work', () => {
+    const f = fixture();
+    let exit!: () => void;
+    const checkpoint = vi.fn();
+    const unsubscribe = vi.fn();
+    const runtime = createGamePlatformRuntime({
+      gateway: {
+        ...f.gateway,
+        lifecycle: {
+          ...f.gateway.lifecycle,
+          onExit(callback) {
+            exit = callback;
+            return unsubscribe;
+          },
+        },
+      },
+      createServices: () => ({}),
+      initialLifecycleState: 'active',
+      onExit: checkpoint,
+    });
+    exit();
+    expect(checkpoint).toHaveBeenCalledOnce();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(runtime.execution.getSnapshot().status).toBe('destroyed');
+  });
+});
+
 function fixture() {
   const listeners = new Set<(event: AdPresentationEvent) => void>();
   let resolve!: (value: AdShowResult) => void;
