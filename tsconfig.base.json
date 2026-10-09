@@ -62,6 +62,7 @@
       "@mpgd/phaser-assets/test-utils": ["./packages/phaser-assets/src/test-utils.ts"],
       "@mpgd/platform/*": ["./packages/platform/src/*"],
       "@mpgd/target-config/asset-packs": ["./packages/target-config/src/asset-packs.ts"],
+      "@mpgd/target-config/adaptive-shell": ["./packages/target-config/src/adaptive-shell/index.ts"],
       "@mpgd/tutorial": ["./packages/tutorial/src/index.ts"],
       "@mpgd/tutorial/driver.css": ["./packages/tutorial/driver.css"],
       "@mpgd/tutorial/*": ["./packages/tutorial/src/*"],

@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync } from 'node:fs';
+import { mountAdaptiveGameShell, resolveAdaptiveShellComposition } from '../dist/adaptive-shell/index.js';
+assert.equal(typeof globalThis.document, 'undefined');
+assert.equal(typeof globalThis.window, 'undefined');
+assert.equal(typeof mountAdaptiveGameShell, 'function');
+assert.equal(typeof resolveAdaptiveShellComposition, 'function');
+const metadata = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+assert.equal(metadata.exports['./adaptive-shell/base.css'], './adaptive-shell.css');
+assert.ok(metadata.files.includes('adaptive-shell.css'));
+assert.ok(existsSync(new URL('../adaptive-shell.css', import.meta.url)));
+console.info('Adaptive shell compiled ESM imports without a document or window.');
