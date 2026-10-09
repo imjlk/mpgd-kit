@@ -1,5 +1,27 @@
 # @mpgd/cli
 
+## 0.40.0 — 2026-10-10
+
+### Minor changes
+
+- [6f9c7c8e](https://github.com/imjlk/mpgd-kit/commit/6f9c7c8ee1d1170ce228230179c3a5573dfd2d24) Publish verified remote asset-pack objects through a bounded deployment-only S3
+  surface using conditional PUT, checksum/metadata HEAD verification and an immutable
+  manifest snapshot written last. Keep storage credentials in named environment
+  variables and preserve pinned live revisions with explicit collision failures. — Thanks @imjlk!
+- [0e7ecd56](https://github.com/imjlk/mpgd-kit/commit/0e7ecd56988cdcf08a63d55e051bfe39712c9d33) Add provider-neutral per-target asset-pack placement, offline dependency closure
+  and revision-pinned URL routing. Build and stage verified local and remote objects
+  with actual byte reports, configurable packaged-asset limits and bundle checks;
+  wire the same policy into web, embedded-web and installed target builds. — Thanks @imjlk!
+- [3ccec624](https://github.com/imjlk/mpgd-kit/commit/3ccec62425163c6e7fcd560670e3a3f01ace37e7) Prepare single-format audio assets through the verified file/ZIP delivery path
+  with shared audio-cache leases, decoded PCM/duration bounds and explicit playback
+  unlock ownership. Add an opt-in idle-gated prefetch scheduler with cancellable
+  foreground admission and bounded, deduplicated warm resource ownership. The asset
+  pack builder and delivery manifest now support audio file roles and MIME types. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: adapter-capacitor@0.7.3, phaser-assets@0.8.0, target-config@0.20.0
+
 ## 0.39.0 — 2026-10-09
 
 ### Added
