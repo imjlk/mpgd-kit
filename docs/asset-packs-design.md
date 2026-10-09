@@ -5,7 +5,7 @@ opt-in entrypoints in the existing `@mpgd/phaser-assets` package, the published
 `@mpgd/target-config/asset-packs` policy and the `mpgd assets` CLI commands.
 The private playable explorer exercises these boundaries without changing the
 starter's default bundle or requiring a separate service per game or pack.
-See [runtime APIs](../packages/phaser-assets/README.md),
+See [runtime APIs](https://github.com/imjlk/mpgd-kit/blob/main/packages/phaser-assets/README.md),
 [build/deployment contracts](ASSET_PACK_DELIVERY.md), and
 [consumer measurements](ASSET_PACK_MEASUREMENTS.md).
 

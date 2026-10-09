@@ -1,0 +1,5830 @@
+{
+  "schema": "mpgd-asset-pack-consumer-measurement-v1",
+  "generatedAt": "2026-10-09T14:26:14.204Z",
+  "environment": {
+    "node": "v24.11.0",
+    "chromium": "151.0.7922.34",
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M3 Max",
+    "renderer": "canvas",
+    "remoteDelayMs": 40,
+    "repetitions": 3
+  },
+  "source": {
+    "measurementScriptSha256": "9de1f4adf6a9334aaa3467a97701934007b745df6a5296eb826a1673acbf36fa",
+    "mode": "workspace source candidate",
+    "commit": "a6dc22839a30147c16d30d83ca220a942103b556",
+    "dirty": false
+  },
+  "metrics": {
+    "entryMs": "selection including queue, download/decode and consumer display-object handover; excludes later first-render work",
+    "memory": "Runtime.getHeapUsage for the main renderer V8 isolate; observed samples plus explicit post-GC checkpoints",
+    "knownPayload": "RGBA estimate, accepted AudioBuffer sample bytes and HTML5 Blob bytes; not total renderer memory",
+    "bodyBytes": "completed static-server HTTP response bodies; excludes request/response headers and physical wire overhead",
+    "notMeasured": [
+      "GPU memory",
+      "total process/native decoder memory",
+      "worker-isolate heap",
+      "exact instantaneous peak",
+      "production device/network performance"
+    ]
+  },
+  "artifacts": {
+    "bundled": {
+      "totalBytes": 1613437,
+      "files": [
+        {
+          "path": "asset-pack-report.json",
+          "bytes": 4715,
+          "sha256": "1fb9ded99ed2b6111831c172ad395ac7fdd1e488bc8a63fb6995e4f1bdb9af64"
+        },
+        {
+          "path": "assets/archive-decode-worker-YT6TVWKs.js",
+          "bytes": 16809,
+          "sha256": "8836c9a5f8a22d6919922dcf32cb9070da22e24537c9c447a1ecb83067bfa006"
+        },
+        {
+          "path": "assets/index-Dw8eJ3RU.js",
+          "bytes": 1482512,
+          "sha256": "41afc6febe7eac3fc91615ccec037444ba1b4815e1190dd1f3123df0188d31a7"
+        },
+        {
+          "path": "assets/index-Zfj1-4Fy.css",
+          "bytes": 1645,
+          "sha256": "bd4d80c269d964b4e96667de6330c37d06834fbbd8db36891ae197a05820af30"
+        },
+        {
+          "path": "assets/zipWorkerSelfTest-DzonpY-8.js",
+          "bytes": 3517,
+          "sha256": "d2294d144477205a7a0f96230af3c6783b727a42646221cb76d6085a99358901"
+        },
+        {
+          "path": "index.html",
+          "bytes": 2100,
+          "sha256": "358840642b323b73c7feae2cd492546d84e64f1082a92491b61ffefce17c615e"
+        },
+        {
+          "path": "packs/dunes/c6a04a2b1a25165841791f40160e9f25f4133bd145c83b4590201601c60d54a4/dunes.png",
+          "bytes": 27141,
+          "sha256": "acddc0e3bec0448c5da7dd37fa3cf76a92464fcfcbf15ec560f6f9175a895856"
+        },
+        {
+          "path": "packs/grove/ba82e46df7d910a8dda421e7b48995bc5baf3f32d59c4c27e829e70dc7b3a272/grove.json",
+          "bytes": 437,
+          "sha256": "fbe81a1f1676d4d59bec466a956a1bf043e33bb62c7fae6f069ab87d7cc8618e"
+        },
+        {
+          "path": "packs/grove/ba82e46df7d910a8dda421e7b48995bc5baf3f32d59c4c27e829e70dc7b3a272/grove.png",
+          "bytes": 58029,
+          "sha256": "24ed3283de29dd1e6c12a225e84a423f6fadfb8ab38f39b9b27187ed35cf019d"
+        },
+        {
+          "path": "packs/shared/6ff234fe2502e993addadc92e9565f4bad66627955807792929ddce855703d71/pilot.png",
+          "bytes": 488,
+          "sha256": "5abf891d878da5c1f42c4386d3751db7b16475cc838c313aefe1c32be2b5e3ef"
+        },
+        {
+          "path": "packs/sound/74cf5fbf8c919e292d4ff3d0f87aee36a0eb5eff61af6041cfbcc79cd034f2dd/chime.wav",
+          "bytes": 16044,
+          "sha256": "1e9368a15f27985467ae467d847d2c697ea0c104fd94abb7163685a279a24e7e"
+        }
+      ],
+      "assetReport": {
+        "mode": "bundled",
+        "remoteOrigin": "http://127.0.0.1:57660/",
+        "packagedAssetBytes": 102139,
+        "packs": [
+          {
+            "id": "shared",
+            "revision": "6ff234fe2502e993addadc92e9565f4bad66627955807792929ddce855703d71",
+            "dependsOn": [],
+            "packaged": true,
+            "assets": [
+              {
+                "kind": "spritesheet",
+                "key": "pilot",
+                "url": "packs/shared/6ff234fe2502e993addadc92e9565f4bad66627955807792929ddce855703d71/pilot.png",
+                "frameConfig": {
+                  "frameWidth": 64,
+                  "frameHeight": 64
+                },
+                "integrity": {
+                  "texture": {
+                    "bytes": 488,
+                    "sha256": "5abf891d878da5c1f42c4386d3751db7b16475cc838c313aefe1c32be2b5e3ef"
+                  }
+                }
+              }
+            ],
+            "files": [
+              {
+                "width": 256,
+                "height": 64,
+                "mediaType": "image/png",
+                "sha256": "5abf891d878da5c1f42c4386d3751db7b16475cc838c313aefe1c32be2b5e3ef",
+                "path": "packs/shared/6ff234fe2502e993addadc92e9565f4bad66627955807792929ddce855703d71/pilot.png",
+                "bytes": 488
+              }
+            ],
+            "rgbaEstimate": 65536
+          },
+          {
+            "id": "sound",
+            "revision": "74cf5fbf8c919e292d4ff3d0f87aee36a0eb5eff61af6041cfbcc79cd034f2dd",
+            "dependsOn": [],
+            "packaged": true,
+            "assets": [
+              {
+                "kind": "audio",
+                "key": "chime",
+                "url": "packs/sound/74cf5fbf8c919e292d4ff3d0f87aee36a0eb5eff61af6041cfbcc79cd034f2dd/chime.wav",
+                "mediaType": "audio/wav",
+                "integrity": {
+                  "audio": {
+                    "bytes": 16044,
+                    "sha256": "1e9368a15f27985467ae467d847d2c697ea0c104fd94abb7163685a279a24e7e"
+                  }
+                }
+              }
+            ],
+            "files": [
+              {
+                "width": 0,
+                "height": 0,
+                "mediaType": "audio/wav",
+                "sha256": "1e9368a15f27985467ae467d847d2c697ea0c104fd94abb7163685a279a24e7e",
+                "path": "packs/sound/74cf5fbf8c919e292d4ff3d0f87aee36a0eb5eff61af6041cfbcc79cd034f2dd/chime.wav",
+                "bytes": 16044
+              }
+            ],
+            "rgbaEstimate": 0
+          },
+          {
+            "id": "grove",
+            "revision": "ba82e46df7d910a8dda421e7b48995bc5baf3f32d59c4c27e829e70dc7b3a272",
+            "dependsOn": [
+              "shared"
+            ],
+            "packaged": true,
+            "assets": [
+              {
+                "kind": "atlas",
+                "key": "ground",
+                "textureUrl": "packs/grove/ba82e46df7d910a8dda421e7b48995bc5baf3f32d59c4c27e829e70dc7b3a272/grove.png",
+                "atlasUrl": "packs/grove/ba82e46df7d910a8dda421e7b48995bc5baf3f32d59c4c27e829e70dc7b3a272/grove.json",
+                "integrity": {
+                  "texture": {
+                    "bytes": 58029,
+                    "sha256": "24ed3283de29dd1e6c12a225e84a423f6fadfb8ab38f39b9b27187ed35cf019d"
+                  },
+                  "atlas": {
+                    "bytes": 437,
+                    "sha256": "fbe81a1f1676d4d59bec466a956a1bf043e33bb62c7fae6f069ab87d7cc8618e"
+                  }
+                }
+              }
+            ],
+            "files": [
+              {
+                "width": 2048,
+                "height": 1024,
+                "mediaType": "image/png",
+                "sha256": "24ed3283de29dd1e6c12a225e84a423f6fadfb8ab38f39b9b27187ed35cf019d",
+                "path": "packs/grove/ba82e46df7d910a8dda421e7b48995bc5baf3f32d59c4c27e829e70dc7b3a272/grove.png",
+                "bytes": 58029
+              },
+              {
+                "width": 0,
+                "height": 0,
+                "mediaType": "application/json",
+                "sha256": "fbe81a1f1676d4d59bec466a956a1bf043e33bb62c7fae6f069ab87d7cc8618e",
+                "path": "packs/grove/ba82e46df7d910a8dda421e7b48995bc5baf3f32d59c4c27e829e70dc7b3a272/grove.json",
+                "bytes": 437
+              }
+            ],
+            "rgbaEstimate": 8388608
+          },
+          {
+            "id": "dunes",
+            "revision": "c6a04a2b1a25165841791f40160e9f25f4133bd145c83b4590201601c60d54a4",
+            "dependsOn": [
+              "shared"
+            ],
+            "packaged": true,
+            "assets": [
+              {
+                "kind": "image",
+                "key": "ground",
+                "url": "packs/dunes/c6a04a2b1a25165841791f40160e9f25f4133bd145c83b4590201601c60d54a4/dunes.png",
+                "integrity": {
+                  "texture": {
+                    "bytes": 27141,
+                    "sha256": "acddc0e3bec0448c5da7dd37fa3cf76a92464fcfcbf15ec560f6f9175a895856"
+                  }
+                }
+              }
+            ],
+            "files": [
+              {
+                "width": 1024,
+                "height": 1024,
+                "mediaType": "image/png",
+                "sha256": "acddc0e3bec0448c5da7dd37fa3cf76a92464fcfcbf15ec560f6f9175a895856",
+                "path": "packs/dunes/c6a04a2b1a25165841791f40160e9f25f4133bd145c83b4590201601c60d54a4/dunes.png",
+                "bytes": 27141
+              }
+            ],
+            "rgbaEstimate": 4194304
+          }
+        ]
+      }
+    },
+    "hybrid": {
+      "totalBytes": 1511807,
+      "files": [
+        {
+          "path": "asset-pack-report.json",
+          "bytes": 4714,
+          "sha256": "a3b8ec8ff214fe3ec1ae2d2950db8e4e008c7c65fdc562c42ecab3cb92bab0cd"
+        },
+        {
+          "path": "assets/archive-decode-worker-YT6TVWKs.js",
+          "bytes": 16809,
+          "sha256": "8836c9a5f8a22d6919922dcf32cb9070da22e24537c9c447a1ecb83067bfa006"
+        },
+        {
+          "path": "assets/index-Dfl1-x-9.js",
+          "bytes": 1482534,
+          "sha256": "60d2bdb1a1edd7ea6b2b0aa995a24d0be2b2d016c4dbb4306c4ad485508f3398"
+        },
+        {
+          "path": "assets/index-Zfj1-4Fy.css",
+          "bytes": 1645,
+          "sha256": "bd4d80c269d964b4e96667de6330c37d06834fbbd8db36891ae197a05820af30"
+        },
+        {
+          "path": "assets/zipWorkerSelfTest-BRozOeOS.js",
+          "bytes": 3517,
+          "sha256": "8295946384c0b509ed949bba26ea77eac7dbedd9786d7a9ab0ad0aca40b19a34"
+        },
+        {
+          "path": "index.html",
+          "bytes": 2100,
+          "sha256": "a5b74888338e11bf2453e6bf608db95a966bb2783cc13f7675b2522d7b6b8639"
+        },
+        {
+          "path": "packs/shared/6ff234fe2502e993addadc92e9565f4bad66627955807792929ddce855703d71/pilot.png",
+          "bytes": 488,
+          "sha256": "5abf891d878da5c1f42c4386d3751db7b16475cc838c313aefe1c32be2b5e3ef"
+        }
+      ],
+      "assetReport": {
+        "mode": "hybrid",
+        "remoteOrigin": "http://127.0.0.1:57660/",
+        "packagedAssetBytes": 488,
+        "packs": [
+          {
+            "id": "shared",
+            "revision": "6ff234fe2502e993addadc92e9565f4bad66627955807792929ddce855703d71",
+            "dependsOn": [],
+            "packaged": true,
+            "assets": [
+              {
+                "kind": "spritesheet",
+                "key": "pilot",
+                "url": "packs/shared/6ff234fe2502e993addadc92e9565f4bad66627955807792929ddce855703d71/pilot.png",
+                "frameConfig": {
+                  "frameWidth": 64,
+                  "frameHeight": 64
+                },
+                "integrity": {
+                  "texture": {
+                    "bytes": 488,
+                    "sha256": "5abf891d878da5c1f42c4386d3751db7b16475cc838c313aefe1c32be2b5e3ef"
+                  }
+                }
+              }
+            ],
+            "files": [
+              {
+                "width": 256,
+                "height": 64,
+                "mediaType": "image/png",
+                "sha256": "5abf891d878da5c1f42c4386d3751db7b16475cc838c313aefe1c32be2b5e3ef",
+                "path": "packs/shared/6ff234fe2502e993addadc92e9565f4bad66627955807792929ddce855703d71/pilot.png",
+                "bytes": 488
+              }
+            ],
+            "rgbaEstimate": 65536
+          },
+          {
+            "id": "sound",
+            "revision": "74cf5fbf8c919e292d4ff3d0f87aee36a0eb5eff61af6041cfbcc79cd034f2dd",
+            "dependsOn": [],
+            "packaged": false,
+            "assets": [
+              {
+                "kind": "audio",
+                "key": "chime",
+                "url": "packs/sound/74cf5fbf8c919e292d4ff3d0f87aee36a0eb5eff61af6041cfbcc79cd034f2dd/chime.wav",
+                "mediaType": "audio/wav",
+                "integrity": {
+                  "audio": {
+                    "bytes": 16044,
+                    "sha256": "1e9368a15f27985467ae467d847d2c697ea0c104fd94abb7163685a279a24e7e"
+                  }
+                }
+              }
+            ],
+            "files": [
+              {
+                "width": 0,
+                "height": 0,
+                "mediaType": "audio/wav",
+                "sha256": "1e9368a15f27985467ae467d847d2c697ea0c104fd94abb7163685a279a24e7e",
+                "path": "packs/sound/74cf5fbf8c919e292d4ff3d0f87aee36a0eb5eff61af6041cfbcc79cd034f2dd/chime.wav",
+                "bytes": 16044
+              }
+            ],
+            "rgbaEstimate": 0
+          },
+          {
+            "id": "grove",
+            "revision": "ba82e46df7d910a8dda421e7b48995bc5baf3f32d59c4c27e829e70dc7b3a272",
+            "dependsOn": [
+              "shared"
+            ],
+            "packaged": false,
+            "assets": [
+              {
+                "kind": "atlas",
+                "key": "ground",
+                "textureUrl": "packs/grove/ba82e46df7d910a8dda421e7b48995bc5baf3f32d59c4c27e829e70dc7b3a272/grove.png",
+                "atlasUrl": "packs/grove/ba82e46df7d910a8dda421e7b48995bc5baf3f32d59c4c27e829e70dc7b3a272/grove.json",
+                "integrity": {
+                  "texture": {
+                    "bytes": 58029,
+                    "sha256": "24ed3283de29dd1e6c12a225e84a423f6fadfb8ab38f39b9b27187ed35cf019d"
+                  },
+                  "atlas": {
+                    "bytes": 437,
+                    "sha256": "fbe81a1f1676d4d59bec466a956a1bf043e33bb62c7fae6f069ab87d7cc8618e"
+                  }
+                }
+              }
+            ],
+            "files": [
+              {
+                "width": 2048,
+                "height": 1024,
+                "mediaType": "image/png",
+                "sha256": "24ed3283de29dd1e6c12a225e84a423f6fadfb8ab38f39b9b27187ed35cf019d",
+                "path": "packs/grove/ba82e46df7d910a8dda421e7b48995bc5baf3f32d59c4c27e829e70dc7b3a272/grove.png",
+                "bytes": 58029
+              },
+              {
+                "width": 0,
+                "height": 0,
+                "mediaType": "application/json",
+                "sha256": "fbe81a1f1676d4d59bec466a956a1bf043e33bb62c7fae6f069ab87d7cc8618e",
+                "path": "packs/grove/ba82e46df7d910a8dda421e7b48995bc5baf3f32d59c4c27e829e70dc7b3a272/grove.json",
+                "bytes": 437
+              }
+            ],
+            "rgbaEstimate": 8388608
+          },
+          {
+            "id": "dunes",
+            "revision": "c6a04a2b1a25165841791f40160e9f25f4133bd145c83b4590201601c60d54a4",
+            "dependsOn": [
+              "shared"
+            ],
+            "packaged": false,
+            "assets": [
+              {
+                "kind": "image",
+                "key": "ground",
+                "url": "packs/dunes/c6a04a2b1a25165841791f40160e9f25f4133bd145c83b4590201601c60d54a4/dunes.png",
+                "integrity": {
+                  "texture": {
+                    "bytes": 27141,
+                    "sha256": "acddc0e3bec0448c5da7dd37fa3cf76a92464fcfcbf15ec560f6f9175a895856"
+                  }
+                }
+              }
+            ],
+            "files": [
+              {
+                "width": 1024,
+                "height": 1024,
+                "mediaType": "image/png",
+                "sha256": "acddc0e3bec0448c5da7dd37fa3cf76a92464fcfcbf15ec560f6f9175a895856",
+                "path": "packs/dunes/c6a04a2b1a25165841791f40160e9f25f4133bd145c83b4590201601c60d54a4/dunes.png",
+                "bytes": 27141
+              }
+            ],
+            "rgbaEstimate": 4194304
+          }
+        ]
+      }
+    }
+  },
+  "summary": [
+    {
+      "scenario": "bundled-files",
+      "appArtifactBytes": 1613437,
+      "packagedAssetBytes": 102139,
+      "medianFirstGroveEntryMs": 55.40000003576279,
+      "medianPrefetchLeadMs": 0,
+      "medianFirstEntryBodyBytes": 74998,
+      "medianObservedHeapMaxBytes": 6471040,
+      "medianWarmReloadEntryMs": null
+    },
+    {
+      "scenario": "remote-files",
+      "appArtifactBytes": 1511807,
+      "packagedAssetBytes": 488,
+      "medianFirstGroveEntryMs": 92,
+      "medianPrefetchLeadMs": 0,
+      "medianFirstEntryBodyBytes": 74998,
+      "medianObservedHeapMaxBytes": 6369260,
+      "medianWarmReloadEntryMs": null
+    },
+    {
+      "scenario": "remote-files-prefetch",
+      "appArtifactBytes": 1511807,
+      "packagedAssetBytes": 488,
+      "medianFirstGroveEntryMs": 2.100000023841858,
+      "medianPrefetchLeadMs": 129,
+      "medianFirstEntryBodyBytes": 0,
+      "medianObservedHeapMaxBytes": 6462328,
+      "medianWarmReloadEntryMs": null
+    },
+    {
+      "scenario": "mixed-zip",
+      "appArtifactBytes": 1511807,
+      "packagedAssetBytes": 488,
+      "medianFirstGroveEntryMs": 107.5,
+      "medianPrefetchLeadMs": 0,
+      "medianFirstEntryBodyBytes": 91745,
+      "medianObservedHeapMaxBytes": 6672588,
+      "medianWarmReloadEntryMs": null
+    },
+    {
+      "scenario": "mixed-zip-prefetch",
+      "appArtifactBytes": 1511807,
+      "packagedAssetBytes": 488,
+      "medianFirstGroveEntryMs": 2.399999976158142,
+      "medianPrefetchLeadMs": 158,
+      "medianFirstEntryBodyBytes": 0,
+      "medianObservedHeapMaxBytes": 6706336,
+      "medianWarmReloadEntryMs": null
+    },
+    {
+      "scenario": "mixed-zip-persistent",
+      "appArtifactBytes": 1511807,
+      "packagedAssetBytes": 488,
+      "medianFirstGroveEntryMs": 144.79999995231628,
+      "medianPrefetchLeadMs": 0,
+      "medianFirstEntryBodyBytes": 91745,
+      "medianObservedHeapMaxBytes": 6850756,
+      "medianWarmReloadEntryMs": 26.5
+    }
+  ],
+  "runs": [
+    {
+      "scenario": "bundled-files",
+      "repetition": 0,
+      "bootToIdleMs": 406,
+      "prefetchLeadMs": 0,
+      "entries": [
+        {
+          "theme": "grove",
+          "entryMs": 437,
+          "completedResponseBodyBytes": 74998,
+          "textureCount": 2
+        },
+        {
+          "theme": "dunes",
+          "entryMs": 10,
+          "completedResponseBodyBytes": 27141,
+          "textureCount": 2
+        },
+        {
+          "theme": "grove",
+          "entryMs": 12.399999976158142,
+          "completedResponseBodyBytes": 58466,
+          "textureCount": 2
+        }
+      ],
+      "warmReloadEntryMs": null,
+      "persistentCache": null,
+      "checkpoints": [
+        {
+          "label": "post-boot",
+          "heap": {
+            "label": "post-boot",
+            "at": 1791555960571,
+            "usedSize": 5047148,
+            "totalSize": 6045696,
+            "embedderHeapUsedSize": 944728,
+            "backingStorageSize": 1944942
+          },
+          "phase": "idle",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555961072,
+            "usedSize": 6024744,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 924888,
+            "backingStorageSize": 1945684
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-dunes",
+          "heap": {
+            "label": "ready-dunes",
+            "at": 1791555961111,
+            "usedSize": 6095984,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 955944,
+            "backingStorageSize": 1945779
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 4259840,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555961153,
+            "usedSize": 6147560,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 963848,
+            "backingStorageSize": 1945779
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "shutdown",
+          "heap": {
+            "label": "shutdown",
+            "at": 1791555961271,
+            "usedSize": 6104072,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 684024,
+            "backingStorageSize": 1945348
+          },
+          "phase": "booting",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        }
+      ],
+      "observedMaxMainIsolateHeapBytes": 6602740,
+      "memorySampleCount": 12,
+      "memorySamples": [
+        {
+          "label": "post-boot",
+          "at": 1791555960571,
+          "usedSize": 5047148,
+          "totalSize": 6045696,
+          "embedderHeapUsedSize": 944728,
+          "backingStorageSize": 1944942
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555960592,
+          "usedSize": 5941088,
+          "totalSize": 6635520,
+          "embedderHeapUsedSize": 1167344,
+          "backingStorageSize": 1945101
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555961028,
+          "usedSize": 6158324,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1385256,
+          "backingStorageSize": 1945813
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555961053,
+          "usedSize": 6602740,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1830648,
+          "backingStorageSize": 2171989
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555961072,
+          "usedSize": 6024744,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 924888,
+          "backingStorageSize": 1945684
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555961073,
+          "usedSize": 6059136,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1141648,
+          "backingStorageSize": 1945714
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555961094,
+          "usedSize": 6223352,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1482936,
+          "backingStorageSize": 2027568
+        },
+        {
+          "label": "ready-dunes",
+          "at": 1791555961111,
+          "usedSize": 6095984,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 955944,
+          "backingStorageSize": 1945779
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555961113,
+          "usedSize": 6139872,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 955944,
+          "backingStorageSize": 1945809
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555961134,
+          "usedSize": 6269872,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1351736,
+          "backingStorageSize": 1946135
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555961153,
+          "usedSize": 6147560,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 963848,
+          "backingStorageSize": 1945779
+        },
+        {
+          "label": "shutdown",
+          "at": 1791555961271,
+          "usedSize": 6104072,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 684024,
+          "backingStorageSize": 1945348
+        }
+      ],
+      "completedSessionResponseBodyBytes": 1646862
+    },
+    {
+      "scenario": "bundled-files",
+      "repetition": 1,
+      "bootToIdleMs": 390,
+      "prefetchLeadMs": 0,
+      "entries": [
+        {
+          "theme": "grove",
+          "entryMs": 49.60000002384186,
+          "completedResponseBodyBytes": 74998,
+          "textureCount": 2
+        },
+        {
+          "theme": "dunes",
+          "entryMs": 10.600000023841858,
+          "completedResponseBodyBytes": 27141,
+          "textureCount": 2
+        },
+        {
+          "theme": "grove",
+          "entryMs": 12,
+          "completedResponseBodyBytes": 58466,
+          "textureCount": 2
+        }
+      ],
+      "warmReloadEntryMs": null,
+      "persistentCache": null,
+      "checkpoints": [
+        {
+          "label": "post-boot",
+          "heap": {
+            "label": "post-boot",
+            "at": 1791555961725,
+            "usedSize": 5041284,
+            "totalSize": 6307840,
+            "embedderHeapUsedSize": 894000,
+            "backingStorageSize": 1944942
+          },
+          "phase": "idle",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555961821,
+            "usedSize": 6017456,
+            "totalSize": 6897664,
+            "embedderHeapUsedSize": 918944,
+            "backingStorageSize": 1945684
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-dunes",
+          "heap": {
+            "label": "ready-dunes",
+            "at": 1791555961861,
+            "usedSize": 6088464,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 1029360,
+            "backingStorageSize": 1945779
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 4259840,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555961904,
+            "usedSize": 6139560,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 999760,
+            "backingStorageSize": 1945779
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "shutdown",
+          "heap": {
+            "label": "shutdown",
+            "at": 1791555961991,
+            "usedSize": 6091960,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 697784,
+            "backingStorageSize": 1945348
+          },
+          "phase": "booting",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        }
+      ],
+      "observedMaxMainIsolateHeapBytes": 6471040,
+      "memorySampleCount": 12,
+      "memorySamples": [
+        {
+          "label": "post-boot",
+          "at": 1791555961725,
+          "usedSize": 5041284,
+          "totalSize": 6307840,
+          "embedderHeapUsedSize": 894000,
+          "backingStorageSize": 1944942
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555961747,
+          "usedSize": 5869108,
+          "totalSize": 6635520,
+          "embedderHeapUsedSize": 1115424,
+          "backingStorageSize": 1945101
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555961791,
+          "usedSize": 6184860,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1368616,
+          "backingStorageSize": 1945813
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555961813,
+          "usedSize": 6471040,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1698744,
+          "backingStorageSize": 2172008
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555961821,
+          "usedSize": 6017456,
+          "totalSize": 6897664,
+          "embedderHeapUsedSize": 918944,
+          "backingStorageSize": 1945684
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555961834,
+          "usedSize": 6100184,
+          "totalSize": 6897664,
+          "embedderHeapUsedSize": 1235472,
+          "backingStorageSize": 1945733
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555961859,
+          "usedSize": 6032976,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 924688,
+          "backingStorageSize": 1945779
+        },
+        {
+          "label": "ready-dunes",
+          "at": 1791555961861,
+          "usedSize": 6088464,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1029360,
+          "backingStorageSize": 1945779
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555961880,
+          "usedSize": 6231532,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1355416,
+          "backingStorageSize": 1946135
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555961903,
+          "usedSize": 6084128,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 897816,
+          "backingStorageSize": 1945779
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555961904,
+          "usedSize": 6139560,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 999760,
+          "backingStorageSize": 1945779
+        },
+        {
+          "label": "shutdown",
+          "at": 1791555961991,
+          "usedSize": 6091960,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 697784,
+          "backingStorageSize": 1945348
+        }
+      ],
+      "completedSessionResponseBodyBytes": 1646862
+    },
+    {
+      "scenario": "bundled-files",
+      "repetition": 2,
+      "bootToIdleMs": 330,
+      "prefetchLeadMs": 0,
+      "entries": [
+        {
+          "theme": "grove",
+          "entryMs": 55.40000003576279,
+          "completedResponseBodyBytes": 74998,
+          "textureCount": 2
+        },
+        {
+          "theme": "dunes",
+          "entryMs": 10.399999976158142,
+          "completedResponseBodyBytes": 27141,
+          "textureCount": 2
+        },
+        {
+          "theme": "grove",
+          "entryMs": 11.5,
+          "completedResponseBodyBytes": 58466,
+          "textureCount": 2
+        }
+      ],
+      "warmReloadEntryMs": null,
+      "persistentCache": null,
+      "checkpoints": [
+        {
+          "label": "post-boot",
+          "heap": {
+            "label": "post-boot",
+            "at": 1791555962380,
+            "usedSize": 5021588,
+            "totalSize": 6307840,
+            "embedderHeapUsedSize": 887080,
+            "backingStorageSize": 1944942
+          },
+          "phase": "idle",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555962480,
+            "usedSize": 6016308,
+            "totalSize": 6897664,
+            "embedderHeapUsedSize": 931320,
+            "backingStorageSize": 1945684
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-dunes",
+          "heap": {
+            "label": "ready-dunes",
+            "at": 1791555962518,
+            "usedSize": 6088500,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 1033688,
+            "backingStorageSize": 1945779
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 4259840,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555962562,
+            "usedSize": 6139676,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 992928,
+            "backingStorageSize": 1945779
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "shutdown",
+          "heap": {
+            "label": "shutdown",
+            "at": 1791555962630,
+            "usedSize": 6092848,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 697784,
+            "backingStorageSize": 1945348
+          },
+          "phase": "booting",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        }
+      ],
+      "observedMaxMainIsolateHeapBytes": 6275424,
+      "memorySampleCount": 11,
+      "memorySamples": [
+        {
+          "label": "post-boot",
+          "at": 1791555962380,
+          "usedSize": 5021588,
+          "totalSize": 6307840,
+          "embedderHeapUsedSize": 887080,
+          "backingStorageSize": 1944942
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555962402,
+          "usedSize": 5869164,
+          "totalSize": 6635520,
+          "embedderHeapUsedSize": 1108504,
+          "backingStorageSize": 1945101
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555962456,
+          "usedSize": 6184916,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1366624,
+          "backingStorageSize": 1945813
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555962479,
+          "usedSize": 5960628,
+          "totalSize": 6897664,
+          "embedderHeapUsedSize": 931320,
+          "backingStorageSize": 1945684
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555962480,
+          "usedSize": 6016308,
+          "totalSize": 6897664,
+          "embedderHeapUsedSize": 931320,
+          "backingStorageSize": 1945684
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555962501,
+          "usedSize": 6204540,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1389352,
+          "backingStorageSize": 1946016
+        },
+        {
+          "label": "ready-dunes",
+          "at": 1791555962518,
+          "usedSize": 6088500,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1033688,
+          "backingStorageSize": 1945779
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555962522,
+          "usedSize": 6132388,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1033688,
+          "backingStorageSize": 1945809
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555962543,
+          "usedSize": 6275424,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1404448,
+          "backingStorageSize": 2063585
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555962562,
+          "usedSize": 6139676,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 992928,
+          "backingStorageSize": 1945779
+        },
+        {
+          "label": "shutdown",
+          "at": 1791555962630,
+          "usedSize": 6092848,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 697784,
+          "backingStorageSize": 1945348
+        }
+      ],
+      "completedSessionResponseBodyBytes": 1646862
+    },
+    {
+      "scenario": "remote-files",
+      "repetition": 0,
+      "bootToIdleMs": 314,
+      "prefetchLeadMs": 0,
+      "entries": [
+        {
+          "theme": "grove",
+          "entryMs": 91.19999998807907,
+          "completedResponseBodyBytes": 74998,
+          "textureCount": 2
+        },
+        {
+          "theme": "dunes",
+          "entryMs": 45.69999998807907,
+          "completedResponseBodyBytes": 27141,
+          "textureCount": 2
+        },
+        {
+          "theme": "grove",
+          "entryMs": 47.10000002384186,
+          "completedResponseBodyBytes": 58466,
+          "textureCount": 2
+        }
+      ],
+      "warmReloadEntryMs": null,
+      "persistentCache": null,
+      "checkpoints": [
+        {
+          "label": "post-boot",
+          "heap": {
+            "label": "post-boot",
+            "at": 1791555963001,
+            "usedSize": 5035640,
+            "totalSize": 6307840,
+            "embedderHeapUsedSize": 944312,
+            "backingStorageSize": 1944987
+          },
+          "phase": "idle",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555963137,
+            "usedSize": 6021656,
+            "totalSize": 6897664,
+            "embedderHeapUsedSize": 907640,
+            "backingStorageSize": 1945752
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-dunes",
+          "heap": {
+            "label": "ready-dunes",
+            "at": 1791555963210,
+            "usedSize": 6094744,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 906112,
+            "backingStorageSize": 1945847
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 4259840,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555963287,
+            "usedSize": 6139288,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 853568,
+            "backingStorageSize": 1945847
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "shutdown",
+          "heap": {
+            "label": "shutdown",
+            "at": 1791555963387,
+            "usedSize": 6103860,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 680664,
+            "backingStorageSize": 1945416
+          },
+          "phase": "booting",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        }
+      ],
+      "observedMaxMainIsolateHeapBytes": 6369252,
+      "memorySampleCount": 16,
+      "memorySamples": [
+        {
+          "label": "post-boot",
+          "at": 1791555963001,
+          "usedSize": 5035640,
+          "totalSize": 6307840,
+          "embedderHeapUsedSize": 944312,
+          "backingStorageSize": 1944987
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963022,
+          "usedSize": 5864796,
+          "totalSize": 6635520,
+          "embedderHeapUsedSize": 1166952,
+          "backingStorageSize": 1945146
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963070,
+          "usedSize": 6194216,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1386312,
+          "backingStorageSize": 1945881
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963092,
+          "usedSize": 6299888,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1636400,
+          "backingStorageSize": 1996058
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963113,
+          "usedSize": 6322016,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1636400,
+          "backingStorageSize": 1996058
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963136,
+          "usedSize": 5965972,
+          "totalSize": 6897664,
+          "embedderHeapUsedSize": 907640,
+          "backingStorageSize": 1945752
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555963137,
+          "usedSize": 6021656,
+          "totalSize": 6897664,
+          "embedderHeapUsedSize": 907640,
+          "backingStorageSize": 1945752
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963158,
+          "usedSize": 6204924,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1360352,
+          "backingStorageSize": 1946061
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963180,
+          "usedSize": 6233116,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1367720,
+          "backingStorageSize": 1946061
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963203,
+          "usedSize": 6369252,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1648520,
+          "backingStorageSize": 2027626
+        },
+        {
+          "label": "ready-dunes",
+          "at": 1791555963210,
+          "usedSize": 6094744,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 906112,
+          "backingStorageSize": 1945847
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963225,
+          "usedSize": 6164696,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1114656,
+          "backingStorageSize": 1945896
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963247,
+          "usedSize": 6271668,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1335976,
+          "backingStorageSize": 1946180
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963269,
+          "usedSize": 6308700,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1370424,
+          "backingStorageSize": 1946180
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555963287,
+          "usedSize": 6139288,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 853568,
+          "backingStorageSize": 1945847
+        },
+        {
+          "label": "shutdown",
+          "at": 1791555963387,
+          "usedSize": 6103860,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 680664,
+          "backingStorageSize": 1945416
+        }
+      ],
+      "completedSessionResponseBodyBytes": 1646884
+    },
+    {
+      "scenario": "remote-files",
+      "repetition": 1,
+      "bootToIdleMs": 199,
+      "prefetchLeadMs": 0,
+      "entries": [
+        {
+          "theme": "grove",
+          "entryMs": 93.5,
+          "completedResponseBodyBytes": 74998,
+          "textureCount": 2
+        },
+        {
+          "theme": "dunes",
+          "entryMs": 46.10000002384186,
+          "completedResponseBodyBytes": 27141,
+          "textureCount": 2
+        },
+        {
+          "theme": "grove",
+          "entryMs": 47.5,
+          "completedResponseBodyBytes": 58466,
+          "textureCount": 2
+        }
+      ],
+      "warmReloadEntryMs": null,
+      "persistentCache": null,
+      "checkpoints": [
+        {
+          "label": "post-boot",
+          "heap": {
+            "label": "post-boot",
+            "at": 1791555963643,
+            "usedSize": 5021556,
+            "totalSize": 6307840,
+            "embedderHeapUsedSize": 948424,
+            "backingStorageSize": 1944987
+          },
+          "phase": "idle",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555963779,
+            "usedSize": 6025376,
+            "totalSize": 6897664,
+            "embedderHeapUsedSize": 908288,
+            "backingStorageSize": 1945752
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-dunes",
+          "heap": {
+            "label": "ready-dunes",
+            "at": 1791555963853,
+            "usedSize": 6094688,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 906720,
+            "backingStorageSize": 1945847
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 4259840,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555963928,
+            "usedSize": 6139232,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 881872,
+            "backingStorageSize": 1945847
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "shutdown",
+          "heap": {
+            "label": "shutdown",
+            "at": 1791555964006,
+            "usedSize": 6097548,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 677896,
+            "backingStorageSize": 1945416
+          },
+          "phase": "booting",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        }
+      ],
+      "observedMaxMainIsolateHeapBytes": 6522612,
+      "memorySampleCount": 17,
+      "memorySamples": [
+        {
+          "label": "post-boot",
+          "at": 1791555963643,
+          "usedSize": 5021556,
+          "totalSize": 6307840,
+          "embedderHeapUsedSize": 948424,
+          "backingStorageSize": 1944987
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963665,
+          "usedSize": 5855596,
+          "totalSize": 6635520,
+          "embedderHeapUsedSize": 1171088,
+          "backingStorageSize": 1945146
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963707,
+          "usedSize": 6190836,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1392168,
+          "backingStorageSize": 1945881
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963728,
+          "usedSize": 6297048,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1644000,
+          "backingStorageSize": 1996058
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963750,
+          "usedSize": 6327648,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1644000,
+          "backingStorageSize": 1996058
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963771,
+          "usedSize": 6522612,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1728992,
+          "backingStorageSize": 2172076
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555963779,
+          "usedSize": 6025376,
+          "totalSize": 6897664,
+          "embedderHeapUsedSize": 908288,
+          "backingStorageSize": 1945752
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963793,
+          "usedSize": 6107752,
+          "totalSize": 6897664,
+          "embedderHeapUsedSize": 1225800,
+          "backingStorageSize": 1945801
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963814,
+          "usedSize": 6219000,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1367512,
+          "backingStorageSize": 1946061
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963836,
+          "usedSize": 6272280,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1379272,
+          "backingStorageSize": 1946061
+        },
+        {
+          "label": "ready-dunes",
+          "at": 1791555963853,
+          "usedSize": 6094688,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 906720,
+          "backingStorageSize": 1945847
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963857,
+          "usedSize": 6144920,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1012280,
+          "backingStorageSize": 1945877
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963878,
+          "usedSize": 6259288,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1336648,
+          "backingStorageSize": 1946180
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963900,
+          "usedSize": 6296296,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1354376,
+          "backingStorageSize": 1946180
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555963921,
+          "usedSize": 6433520,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1596032,
+          "backingStorageSize": 2122196
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555963928,
+          "usedSize": 6139232,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 881872,
+          "backingStorageSize": 1945847
+        },
+        {
+          "label": "shutdown",
+          "at": 1791555964006,
+          "usedSize": 6097548,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 677896,
+          "backingStorageSize": 1945416
+        }
+      ],
+      "completedSessionResponseBodyBytes": 1646884
+    },
+    {
+      "scenario": "remote-files",
+      "repetition": 2,
+      "bootToIdleMs": 137,
+      "prefetchLeadMs": 0,
+      "entries": [
+        {
+          "theme": "grove",
+          "entryMs": 92,
+          "completedResponseBodyBytes": 74998,
+          "textureCount": 2
+        },
+        {
+          "theme": "dunes",
+          "entryMs": 46.89999997615814,
+          "completedResponseBodyBytes": 27141,
+          "textureCount": 2
+        },
+        {
+          "theme": "grove",
+          "entryMs": 46.700000047683716,
+          "completedResponseBodyBytes": 58466,
+          "textureCount": 2
+        }
+      ],
+      "warmReloadEntryMs": null,
+      "persistentCache": null,
+      "checkpoints": [
+        {
+          "label": "post-boot",
+          "heap": {
+            "label": "post-boot",
+            "at": 1791555964201,
+            "usedSize": 5035652,
+            "totalSize": 6307840,
+            "embedderHeapUsedSize": 945792,
+            "backingStorageSize": 1944987
+          },
+          "phase": "idle",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555964338,
+            "usedSize": 6025452,
+            "totalSize": 6897664,
+            "embedderHeapUsedSize": 919944,
+            "backingStorageSize": 1945752
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-dunes",
+          "heap": {
+            "label": "ready-dunes",
+            "at": 1791555964411,
+            "usedSize": 6094744,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 918488,
+            "backingStorageSize": 1945847
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 4259840,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555964488,
+            "usedSize": 6139304,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 883832,
+            "backingStorageSize": 1945847
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "shutdown",
+          "heap": {
+            "label": "shutdown",
+            "at": 1791555964573,
+            "usedSize": 6097604,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 677896,
+            "backingStorageSize": 1945416
+          },
+          "phase": "booting",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        }
+      ],
+      "observedMaxMainIsolateHeapBytes": 6369260,
+      "memorySampleCount": 17,
+      "memorySamples": [
+        {
+          "label": "post-boot",
+          "at": 1791555964201,
+          "usedSize": 5035652,
+          "totalSize": 6307840,
+          "embedderHeapUsedSize": 945792,
+          "backingStorageSize": 1944987
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555964222,
+          "usedSize": 5864844,
+          "totalSize": 6635520,
+          "embedderHeapUsedSize": 1168456,
+          "backingStorageSize": 1945146
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555964270,
+          "usedSize": 6194192,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1389536,
+          "backingStorageSize": 1945881
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555964292,
+          "usedSize": 6296560,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1622344,
+          "backingStorageSize": 1996058
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555964313,
+          "usedSize": 6320256,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1642760,
+          "backingStorageSize": 1996058
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555964337,
+          "usedSize": 5969760,
+          "totalSize": 6897664,
+          "embedderHeapUsedSize": 919944,
+          "backingStorageSize": 1945752
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555964338,
+          "usedSize": 6025452,
+          "totalSize": 6897664,
+          "embedderHeapUsedSize": 919944,
+          "backingStorageSize": 1945752
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555964359,
+          "usedSize": 6205172,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1374280,
+          "backingStorageSize": 1946061
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555964380,
+          "usedSize": 6233340,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1383440,
+          "backingStorageSize": 1946061
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555964403,
+          "usedSize": 6369260,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1679680,
+          "backingStorageSize": 2027626
+        },
+        {
+          "label": "ready-dunes",
+          "at": 1791555964411,
+          "usedSize": 6094744,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 918488,
+          "backingStorageSize": 1945847
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555964425,
+          "usedSize": 6164696,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1127432,
+          "backingStorageSize": 1945896
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555964446,
+          "usedSize": 6271656,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1349168,
+          "backingStorageSize": 1946180
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555964467,
+          "usedSize": 6308688,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1367552,
+          "backingStorageSize": 1946180
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555964487,
+          "usedSize": 6139304,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 883832,
+          "backingStorageSize": 1945847
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555964488,
+          "usedSize": 6139304,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 883832,
+          "backingStorageSize": 1945847
+        },
+        {
+          "label": "shutdown",
+          "at": 1791555964573,
+          "usedSize": 6097604,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 677896,
+          "backingStorageSize": 1945416
+        }
+      ],
+      "completedSessionResponseBodyBytes": 1646884
+    },
+    {
+      "scenario": "remote-files-prefetch",
+      "repetition": 0,
+      "bootToIdleMs": 214,
+      "prefetchLeadMs": 124,
+      "entries": [
+        {
+          "theme": "grove",
+          "entryMs": 2.100000023841858,
+          "completedResponseBodyBytes": 0,
+          "textureCount": 3
+        },
+        {
+          "theme": "dunes",
+          "entryMs": 1.5,
+          "completedResponseBodyBytes": 0,
+          "textureCount": 2
+        },
+        {
+          "theme": "grove",
+          "entryMs": 47.60000002384186,
+          "completedResponseBodyBytes": 58466,
+          "textureCount": 2
+        }
+      ],
+      "warmReloadEntryMs": null,
+      "persistentCache": null,
+      "checkpoints": [
+        {
+          "label": "post-boot",
+          "heap": {
+            "label": "post-boot",
+            "at": 1791555964843,
+            "usedSize": 5184808,
+            "totalSize": 6307840,
+            "embedderHeapUsedSize": 920960,
+            "backingStorageSize": 1945279
+          },
+          "phase": "idle",
+          "textures": 1,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 65536,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 1,
+          "prefetch": {
+            "idle": true,
+            "foreground": 0,
+            "queued": [
+              "dunes"
+            ],
+            "warming": "grove",
+            "warm": [],
+            "retainedBytes": 0
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "warm-idle",
+          "heap": {
+            "label": "warm-idle",
+            "at": 1791555964966,
+            "usedSize": 5335784,
+            "totalSize": 6045696,
+            "embedderHeapUsedSize": 866200,
+            "backingStorageSize": 1945219
+          },
+          "phase": "idle",
+          "textures": 3,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 12648448,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 4,
+          "prefetch": {
+            "idle": true,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [
+              "grove",
+              "dunes"
+            ],
+            "retainedBytes": 12744448
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555965052,
+            "usedSize": 6094732,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 1019768,
+            "backingStorageSize": 1945579
+          },
+          "phase": "playing",
+          "textures": 3,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 12648448,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 4,
+          "prefetch": {
+            "idle": false,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [
+              "dunes"
+            ],
+            "retainedBytes": 4355840
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-dunes",
+          "heap": {
+            "label": "ready-dunes",
+            "at": 1791555965083,
+            "usedSize": 6142416,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 1048136,
+            "backingStorageSize": 1945588
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 4259840,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": {
+            "idle": false,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [],
+            "retainedBytes": 0
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555965162,
+            "usedSize": 6188544,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 902984,
+            "backingStorageSize": 1945674
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": {
+            "idle": false,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [],
+            "retainedBytes": 0
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "shutdown",
+          "heap": {
+            "label": "shutdown",
+            "at": 1791555965261,
+            "usedSize": 6141020,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 681288,
+            "backingStorageSize": 1945416
+          },
+          "phase": "booting",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        }
+      ],
+      "observedMaxMainIsolateHeapBytes": 6462328,
+      "memorySampleCount": 13,
+      "memorySamples": [
+        {
+          "label": "post-boot",
+          "at": 1791555964843,
+          "usedSize": 5184808,
+          "totalSize": 6307840,
+          "embedderHeapUsedSize": 920960,
+          "backingStorageSize": 1945279
+        },
+        {
+          "label": "warm-idle",
+          "at": 1791555964966,
+          "usedSize": 5335784,
+          "totalSize": 6045696,
+          "embedderHeapUsedSize": 866200,
+          "backingStorageSize": 1945219
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555964987,
+          "usedSize": 6149408,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1080472,
+          "backingStorageSize": 1945378
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555965043,
+          "usedSize": 6462328,
+          "totalSize": 7946240,
+          "embedderHeapUsedSize": 1573752,
+          "backingStorageSize": 1945682
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555965052,
+          "usedSize": 6094732,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1019768,
+          "backingStorageSize": 1945579
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555965063,
+          "usedSize": 6158172,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1127672,
+          "backingStorageSize": 1945609
+        },
+        {
+          "label": "ready-dunes",
+          "at": 1791555965083,
+          "usedSize": 6142416,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1048136,
+          "backingStorageSize": 1945588
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555965084,
+          "usedSize": 6142416,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1048136,
+          "backingStorageSize": 1945588
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555965104,
+          "usedSize": 6303408,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1372912,
+          "backingStorageSize": 1946007
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555965126,
+          "usedSize": 6341788,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1372912,
+          "backingStorageSize": 1946007
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555965146,
+          "usedSize": 6387636,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1554936,
+          "backingStorageSize": 2122019
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555965162,
+          "usedSize": 6188544,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 902984,
+          "backingStorageSize": 1945674
+        },
+        {
+          "label": "shutdown",
+          "at": 1791555965261,
+          "usedSize": 6141020,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 681288,
+          "backingStorageSize": 1945416
+        }
+      ],
+      "completedSessionResponseBodyBytes": 1646884
+    },
+    {
+      "scenario": "remote-files-prefetch",
+      "repetition": 1,
+      "bootToIdleMs": 170,
+      "prefetchLeadMs": 129,
+      "entries": [
+        {
+          "theme": "grove",
+          "entryMs": 2.200000047683716,
+          "completedResponseBodyBytes": 0,
+          "textureCount": 3
+        },
+        {
+          "theme": "dunes",
+          "entryMs": 1.399999976158142,
+          "completedResponseBodyBytes": 0,
+          "textureCount": 2
+        },
+        {
+          "theme": "grove",
+          "entryMs": 47.80000001192093,
+          "completedResponseBodyBytes": 58466,
+          "textureCount": 2
+        }
+      ],
+      "warmReloadEntryMs": null,
+      "persistentCache": null,
+      "checkpoints": [
+        {
+          "label": "post-boot",
+          "heap": {
+            "label": "post-boot",
+            "at": 1791555965489,
+            "usedSize": 5185056,
+            "totalSize": 6045696,
+            "embedderHeapUsedSize": 921672,
+            "backingStorageSize": 1945279
+          },
+          "phase": "idle",
+          "textures": 1,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 65536,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 1,
+          "prefetch": {
+            "idle": true,
+            "foreground": 0,
+            "queued": [
+              "dunes"
+            ],
+            "warming": "grove",
+            "warm": [],
+            "retainedBytes": 0
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "warm-idle",
+          "heap": {
+            "label": "warm-idle",
+            "at": 1791555965616,
+            "usedSize": 5331148,
+            "totalSize": 5783552,
+            "embedderHeapUsedSize": 573800,
+            "backingStorageSize": 1945219
+          },
+          "phase": "idle",
+          "textures": 3,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 12648448,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 4,
+          "prefetch": {
+            "idle": true,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [
+              "grove",
+              "dunes"
+            ],
+            "retainedBytes": 12744448
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555965701,
+            "usedSize": 6094868,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 886960,
+            "backingStorageSize": 1945579
+          },
+          "phase": "playing",
+          "textures": 3,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 12648448,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 4,
+          "prefetch": {
+            "idle": false,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [
+              "dunes"
+            ],
+            "retainedBytes": 4355840
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-dunes",
+          "heap": {
+            "label": "ready-dunes",
+            "at": 1791555965732,
+            "usedSize": 6133836,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 1047224,
+            "backingStorageSize": 1945588
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 4259840,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": {
+            "idle": false,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [],
+            "retainedBytes": 0
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555965812,
+            "usedSize": 6188704,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 902920,
+            "backingStorageSize": 1945674
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": {
+            "idle": false,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [],
+            "retainedBytes": 0
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "shutdown",
+          "heap": {
+            "label": "shutdown",
+            "at": 1791555965880,
+            "usedSize": 6135024,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 678520,
+            "backingStorageSize": 1945416
+          },
+          "phase": "booting",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        }
+      ],
+      "observedMaxMainIsolateHeapBytes": 6406704,
+      "memorySampleCount": 13,
+      "memorySamples": [
+        {
+          "label": "post-boot",
+          "at": 1791555965489,
+          "usedSize": 5185056,
+          "totalSize": 6045696,
+          "embedderHeapUsedSize": 921672,
+          "backingStorageSize": 1945279
+        },
+        {
+          "label": "warm-idle",
+          "at": 1791555965616,
+          "usedSize": 5331148,
+          "totalSize": 5783552,
+          "embedderHeapUsedSize": 573800,
+          "backingStorageSize": 1945219
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555965636,
+          "usedSize": 6148720,
+          "totalSize": 6897664,
+          "embedderHeapUsedSize": 1080504,
+          "backingStorageSize": 1945378
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555965689,
+          "usedSize": 6406704,
+          "totalSize": 7946240,
+          "embedderHeapUsedSize": 1573784,
+          "backingStorageSize": 1945682
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555965701,
+          "usedSize": 6094868,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 886960,
+          "backingStorageSize": 1945579
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555965710,
+          "usedSize": 6165836,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1102752,
+          "backingStorageSize": 1945609
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555965732,
+          "usedSize": 6133836,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1047224,
+          "backingStorageSize": 1945588
+        },
+        {
+          "label": "ready-dunes",
+          "at": 1791555965732,
+          "usedSize": 6133836,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1047224,
+          "backingStorageSize": 1945588
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555965751,
+          "usedSize": 6230668,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1150248,
+          "backingStorageSize": 1945637
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555965773,
+          "usedSize": 6332392,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1372000,
+          "backingStorageSize": 1946007
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555965794,
+          "usedSize": 6370888,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1388800,
+          "backingStorageSize": 1946007
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555965812,
+          "usedSize": 6188704,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 902920,
+          "backingStorageSize": 1945674
+        },
+        {
+          "label": "shutdown",
+          "at": 1791555965880,
+          "usedSize": 6135024,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 678520,
+          "backingStorageSize": 1945416
+        }
+      ],
+      "completedSessionResponseBodyBytes": 1646884
+    },
+    {
+      "scenario": "remote-files-prefetch",
+      "repetition": 2,
+      "bootToIdleMs": 265,
+      "prefetchLeadMs": 131,
+      "entries": [
+        {
+          "theme": "grove",
+          "entryMs": 2.099999964237213,
+          "completedResponseBodyBytes": 0,
+          "textureCount": 3
+        },
+        {
+          "theme": "dunes",
+          "entryMs": 1.600000023841858,
+          "completedResponseBodyBytes": 0,
+          "textureCount": 2
+        },
+        {
+          "theme": "grove",
+          "entryMs": 48.60000002384186,
+          "completedResponseBodyBytes": 58466,
+          "textureCount": 2
+        }
+      ],
+      "warmReloadEntryMs": null,
+      "persistentCache": null,
+      "checkpoints": [
+        {
+          "label": "post-boot",
+          "heap": {
+            "label": "post-boot",
+            "at": 1791555966203,
+            "usedSize": 5170872,
+            "totalSize": 6307840,
+            "embedderHeapUsedSize": 922880,
+            "backingStorageSize": 1945279
+          },
+          "phase": "idle",
+          "textures": 1,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 65536,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 1,
+          "prefetch": {
+            "idle": true,
+            "foreground": 0,
+            "queued": [
+              "dunes"
+            ],
+            "warming": "grove",
+            "warm": [],
+            "retainedBytes": 0
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "warm-idle",
+          "heap": {
+            "label": "warm-idle",
+            "at": 1791555966332,
+            "usedSize": 5335784,
+            "totalSize": 6045696,
+            "embedderHeapUsedSize": 859144,
+            "backingStorageSize": 1945219
+          },
+          "phase": "idle",
+          "textures": 3,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 12648448,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 4,
+          "prefetch": {
+            "idle": true,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [
+              "grove",
+              "dunes"
+            ],
+            "retainedBytes": 12744448
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555966410,
+            "usedSize": 6094772,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 1018872,
+            "backingStorageSize": 1945579
+          },
+          "phase": "playing",
+          "textures": 3,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 12648448,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 4,
+          "prefetch": {
+            "idle": false,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [
+              "dunes"
+            ],
+            "retainedBytes": 4355840
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-dunes",
+          "heap": {
+            "label": "ready-dunes",
+            "at": 1791555966442,
+            "usedSize": 6142468,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 1047240,
+            "backingStorageSize": 1945588
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 4259840,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": {
+            "idle": false,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [],
+            "retainedBytes": 0
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555966529,
+            "usedSize": 6188584,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 903008,
+            "backingStorageSize": 1945674
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": {
+            "idle": false,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [],
+            "retainedBytes": 0
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "shutdown",
+          "heap": {
+            "label": "shutdown",
+            "at": 1791555966594,
+            "usedSize": 6133256,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 678520,
+            "backingStorageSize": 1945416
+          },
+          "phase": "booting",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        }
+      ],
+      "observedMaxMainIsolateHeapBytes": 6462368,
+      "memorySampleCount": 14,
+      "memorySamples": [
+        {
+          "label": "post-boot",
+          "at": 1791555966203,
+          "usedSize": 5170872,
+          "totalSize": 6307840,
+          "embedderHeapUsedSize": 922880,
+          "backingStorageSize": 1945279
+        },
+        {
+          "label": "warm-idle",
+          "at": 1791555966332,
+          "usedSize": 5335784,
+          "totalSize": 6045696,
+          "embedderHeapUsedSize": 859144,
+          "backingStorageSize": 1945219
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555966354,
+          "usedSize": 6149408,
+          "totalSize": 6897664,
+          "embedderHeapUsedSize": 1073392,
+          "backingStorageSize": 1945378
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555966402,
+          "usedSize": 6462368,
+          "totalSize": 7946240,
+          "embedderHeapUsedSize": 1572816,
+          "backingStorageSize": 1945682
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555966410,
+          "usedSize": 6094772,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1018872,
+          "backingStorageSize": 1945579
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555966425,
+          "usedSize": 6177464,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1227728,
+          "backingStorageSize": 1945628
+        },
+        {
+          "label": "ready-dunes",
+          "at": 1791555966442,
+          "usedSize": 6142468,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1047240,
+          "backingStorageSize": 1945588
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555966445,
+          "usedSize": 6186356,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1047240,
+          "backingStorageSize": 1945618
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555966466,
+          "usedSize": 6303436,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1371976,
+          "backingStorageSize": 1946007
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555966487,
+          "usedSize": 6341840,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1371976,
+          "backingStorageSize": 1946007
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555966509,
+          "usedSize": 6457660,
+          "totalSize": 7946240,
+          "embedderHeapUsedSize": 1574680,
+          "backingStorageSize": 2122023
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555966529,
+          "usedSize": 6188584,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 903008,
+          "backingStorageSize": 1945674
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555966529,
+          "usedSize": 6188584,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 903008,
+          "backingStorageSize": 1945674
+        },
+        {
+          "label": "shutdown",
+          "at": 1791555966594,
+          "usedSize": 6133256,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 678520,
+          "backingStorageSize": 1945416
+        }
+      ],
+      "completedSessionResponseBodyBytes": 1646884
+    },
+    {
+      "scenario": "mixed-zip",
+      "repetition": 0,
+      "bootToIdleMs": 225,
+      "prefetchLeadMs": 0,
+      "entries": [
+        {
+          "theme": "grove",
+          "entryMs": 108.5,
+          "completedResponseBodyBytes": 91745,
+          "textureCount": 2
+        },
+        {
+          "theme": "dunes",
+          "entryMs": 54.60000002384186,
+          "completedResponseBodyBytes": 44066,
+          "textureCount": 2
+        },
+        {
+          "theme": "grove",
+          "entryMs": 58.09999996423721,
+          "completedResponseBodyBytes": 75213,
+          "textureCount": 2
+        }
+      ],
+      "warmReloadEntryMs": null,
+      "persistentCache": null,
+      "checkpoints": [
+        {
+          "label": "post-boot",
+          "heap": {
+            "label": "post-boot",
+            "at": 1791555966877,
+            "usedSize": 5212216,
+            "totalSize": 6307840,
+            "embedderHeapUsedSize": 892040,
+            "backingStorageSize": 1945011
+          },
+          "phase": "idle",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555967031,
+            "usedSize": 6217348,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 954528,
+            "backingStorageSize": 2004435
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-dunes",
+          "heap": {
+            "label": "ready-dunes",
+            "at": 1791555967111,
+            "usedSize": 6316384,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 958824,
+            "backingStorageSize": 1973128
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 4259840,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555967205,
+            "usedSize": 6390564,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 854960,
+            "backingStorageSize": 2004453
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "shutdown",
+          "heap": {
+            "label": "shutdown",
+            "at": 1791555967320,
+            "usedSize": 6302764,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 688240,
+            "backingStorageSize": 1945448
+          },
+          "phase": "booting",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        }
+      ],
+      "observedMaxMainIsolateHeapBytes": 6584172,
+      "memorySampleCount": 19,
+      "memorySamples": [
+        {
+          "label": "post-boot",
+          "at": 1791555966877,
+          "usedSize": 5212216,
+          "totalSize": 6307840,
+          "embedderHeapUsedSize": 892040,
+          "backingStorageSize": 1945011
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555966898,
+          "usedSize": 6025956,
+          "totalSize": 6635520,
+          "embedderHeapUsedSize": 1113512,
+          "backingStorageSize": 1945170
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555966941,
+          "usedSize": 6223272,
+          "totalSize": 6897664,
+          "embedderHeapUsedSize": 1341048,
+          "backingStorageSize": 1945578
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555966963,
+          "usedSize": 6313392,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1384080,
+          "backingStorageSize": 2237318
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555966984,
+          "usedSize": 6513628,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1540504,
+          "backingStorageSize": 2297407
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967005,
+          "usedSize": 6533228,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1546744,
+          "backingStorageSize": 2297407
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967029,
+          "usedSize": 6113344,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 954528,
+          "backingStorageSize": 2004435
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555967031,
+          "usedSize": 6217348,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 954528,
+          "backingStorageSize": 2004435
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967051,
+          "usedSize": 6415084,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1399248,
+          "backingStorageSize": 2004668
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967073,
+          "usedSize": 6445212,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1413360,
+          "backingStorageSize": 2004668
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967093,
+          "usedSize": 6529436,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1461344,
+          "backingStorageSize": 2086819
+        },
+        {
+          "label": "ready-dunes",
+          "at": 1791555967111,
+          "usedSize": 6316384,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 958824,
+          "backingStorageSize": 1973128
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967113,
+          "usedSize": 6360272,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1060928,
+          "backingStorageSize": 1973158
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967135,
+          "usedSize": 6478924,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1382920,
+          "backingStorageSize": 1973361
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967156,
+          "usedSize": 6506324,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1382920,
+          "backingStorageSize": 1973361
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967177,
+          "usedSize": 6584172,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1417688,
+          "backingStorageSize": 2148953
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967204,
+          "usedSize": 6285664,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 854960,
+          "backingStorageSize": 2004453
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555967205,
+          "usedSize": 6390564,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 854960,
+          "backingStorageSize": 2004453
+        },
+        {
+          "label": "shutdown",
+          "at": 1791555967320,
+          "usedSize": 6302764,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 688240,
+          "backingStorageSize": 1945448
+        }
+      ],
+      "completedSessionResponseBodyBytes": 1700460
+    },
+    {
+      "scenario": "mixed-zip",
+      "repetition": 1,
+      "bootToIdleMs": 165,
+      "prefetchLeadMs": 0,
+      "entries": [
+        {
+          "theme": "grove",
+          "entryMs": 104.19999998807907,
+          "completedResponseBodyBytes": 91745,
+          "textureCount": 2
+        },
+        {
+          "theme": "dunes",
+          "entryMs": 54.89999997615814,
+          "completedResponseBodyBytes": 44066,
+          "textureCount": 2
+        },
+        {
+          "theme": "grove",
+          "entryMs": 56.90000003576279,
+          "completedResponseBodyBytes": 75213,
+          "textureCount": 2
+        }
+      ],
+      "warmReloadEntryMs": null,
+      "persistentCache": null,
+      "checkpoints": [
+        {
+          "label": "post-boot",
+          "heap": {
+            "label": "post-boot",
+            "at": 1791555967543,
+            "usedSize": 5140600,
+            "totalSize": 6307840,
+            "embedderHeapUsedSize": 895544,
+            "backingStorageSize": 1945011
+          },
+          "phase": "idle",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555967688,
+            "usedSize": 6217808,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 841416,
+            "backingStorageSize": 2004435
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-dunes",
+          "heap": {
+            "label": "ready-dunes",
+            "at": 1791555967771,
+            "usedSize": 6316404,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 981528,
+            "backingStorageSize": 1973128
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 4259840,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555967862,
+            "usedSize": 6390584,
+            "totalSize": 7684096,
+            "embedderHeapUsedSize": 893448,
+            "backingStorageSize": 2004453
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "shutdown",
+          "heap": {
+            "label": "shutdown",
+            "at": 1791555967930,
+            "usedSize": 6294488,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 685472,
+            "backingStorageSize": 1945448
+          },
+          "phase": "booting",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        }
+      ],
+      "observedMaxMainIsolateHeapBytes": 6704968,
+      "memorySampleCount": 19,
+      "memorySamples": [
+        {
+          "label": "post-boot",
+          "at": 1791555967543,
+          "usedSize": 5140600,
+          "totalSize": 6307840,
+          "embedderHeapUsedSize": 895544,
+          "backingStorageSize": 1945011
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967564,
+          "usedSize": 6025952,
+          "totalSize": 6635520,
+          "embedderHeapUsedSize": 1117016,
+          "backingStorageSize": 1945170
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967609,
+          "usedSize": 6223216,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1344576,
+          "backingStorageSize": 1945578
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967629,
+          "usedSize": 6452104,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1524688,
+          "backingStorageSize": 2297407
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967651,
+          "usedSize": 6500580,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1541160,
+          "backingStorageSize": 2297407
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967672,
+          "usedSize": 6595584,
+          "totalSize": 7946240,
+          "embedderHeapUsedSize": 1547616,
+          "backingStorageSize": 2347149
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555967688,
+          "usedSize": 6217808,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 841416,
+          "backingStorageSize": 2004435
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967692,
+          "usedSize": 6281248,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1051176,
+          "backingStorageSize": 2004465
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967714,
+          "usedSize": 6415496,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1295528,
+          "backingStorageSize": 2004668
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967735,
+          "usedSize": 6461876,
+          "totalSize": 7946240,
+          "embedderHeapUsedSize": 1309016,
+          "backingStorageSize": 2004668
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967757,
+          "usedSize": 6645796,
+          "totalSize": 8208384,
+          "embedderHeapUsedSize": 1608584,
+          "backingStorageSize": 2168392
+        },
+        {
+          "label": "ready-dunes",
+          "at": 1791555967771,
+          "usedSize": 6316404,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 981528,
+          "backingStorageSize": 1973128
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967778,
+          "usedSize": 6369880,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1083920,
+          "backingStorageSize": 1973158
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967800,
+          "usedSize": 6492632,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1410952,
+          "backingStorageSize": 1973361
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967821,
+          "usedSize": 6520008,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1410952,
+          "backingStorageSize": 1973361
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967842,
+          "usedSize": 6704968,
+          "totalSize": 8208384,
+          "embedderHeapUsedSize": 1614688,
+          "backingStorageSize": 2324984
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555967862,
+          "usedSize": 6390584,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 893448,
+          "backingStorageSize": 2004453
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555967862,
+          "usedSize": 6390584,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 893448,
+          "backingStorageSize": 2004453
+        },
+        {
+          "label": "shutdown",
+          "at": 1791555967930,
+          "usedSize": 6294488,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 685472,
+          "backingStorageSize": 1945448
+        }
+      ],
+      "completedSessionResponseBodyBytes": 1700460
+    },
+    {
+      "scenario": "mixed-zip",
+      "repetition": 2,
+      "bootToIdleMs": 173,
+      "prefetchLeadMs": 0,
+      "entries": [
+        {
+          "theme": "grove",
+          "entryMs": 107.5,
+          "completedResponseBodyBytes": 91745,
+          "textureCount": 2
+        },
+        {
+          "theme": "dunes",
+          "entryMs": 54.39999997615814,
+          "completedResponseBodyBytes": 44066,
+          "textureCount": 2
+        },
+        {
+          "theme": "grove",
+          "entryMs": 58.10000002384186,
+          "completedResponseBodyBytes": 75213,
+          "textureCount": 2
+        }
+      ],
+      "warmReloadEntryMs": null,
+      "persistentCache": null,
+      "checkpoints": [
+        {
+          "label": "post-boot",
+          "heap": {
+            "label": "post-boot",
+            "at": 1791555968185,
+            "usedSize": 5140600,
+            "totalSize": 6569984,
+            "embedderHeapUsedSize": 895416,
+            "backingStorageSize": 1945011
+          },
+          "phase": "idle",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555968338,
+            "usedSize": 6213592,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 957752,
+            "backingStorageSize": 2004435
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-dunes",
+          "heap": {
+            "label": "ready-dunes",
+            "at": 1791555968422,
+            "usedSize": 6316404,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 954816,
+            "backingStorageSize": 1973128
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 4259840,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555968513,
+            "usedSize": 6390584,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 852504,
+            "backingStorageSize": 2004453
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "shutdown",
+          "heap": {
+            "label": "shutdown",
+            "at": 1791555968598,
+            "usedSize": 6294992,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 685536,
+            "backingStorageSize": 1945448
+          },
+          "phase": "booting",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        }
+      ],
+      "observedMaxMainIsolateHeapBytes": 6672588,
+      "memorySampleCount": 19,
+      "memorySamples": [
+        {
+          "label": "post-boot",
+          "at": 1791555968185,
+          "usedSize": 5140600,
+          "totalSize": 6569984,
+          "embedderHeapUsedSize": 895416,
+          "backingStorageSize": 1945011
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555968206,
+          "usedSize": 6025952,
+          "totalSize": 6897664,
+          "embedderHeapUsedSize": 1116888,
+          "backingStorageSize": 1945170
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555968254,
+          "usedSize": 6208512,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1344272,
+          "backingStorageSize": 1945578
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555968276,
+          "usedSize": 6470556,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1530312,
+          "backingStorageSize": 2297407
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555968297,
+          "usedSize": 6490144,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1543240,
+          "backingStorageSize": 2297407
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555968319,
+          "usedSize": 6672588,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1707776,
+          "backingStorageSize": 2347169
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555968338,
+          "usedSize": 6213592,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 957752,
+          "backingStorageSize": 2004435
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555968340,
+          "usedSize": 6247984,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1167176,
+          "backingStorageSize": 2004465
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555968360,
+          "usedSize": 6415032,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1407192,
+          "backingStorageSize": 2004668
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555968382,
+          "usedSize": 6445136,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1407192,
+          "backingStorageSize": 2004668
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555968403,
+          "usedSize": 6535844,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1456848,
+          "backingStorageSize": 2141133
+        },
+        {
+          "label": "ready-dunes",
+          "at": 1791555968422,
+          "usedSize": 6316404,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 954816,
+          "backingStorageSize": 1973128
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555968424,
+          "usedSize": 6351096,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1056872,
+          "backingStorageSize": 1973158
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555968445,
+          "usedSize": 6478956,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1387792,
+          "backingStorageSize": 1973361
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555968467,
+          "usedSize": 6520008,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1387792,
+          "backingStorageSize": 1973361
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555968488,
+          "usedSize": 6628276,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1435496,
+          "backingStorageSize": 2324479
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555968511,
+          "usedSize": 6285684,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 852504,
+          "backingStorageSize": 2004453
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555968513,
+          "usedSize": 6390584,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 852504,
+          "backingStorageSize": 2004453
+        },
+        {
+          "label": "shutdown",
+          "at": 1791555968598,
+          "usedSize": 6294992,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 685536,
+          "backingStorageSize": 1945448
+        }
+      ],
+      "completedSessionResponseBodyBytes": 1700460
+    },
+    {
+      "scenario": "mixed-zip-prefetch",
+      "repetition": 0,
+      "bootToIdleMs": 166,
+      "prefetchLeadMs": 158,
+      "entries": [
+        {
+          "theme": "grove",
+          "entryMs": 2.5,
+          "completedResponseBodyBytes": 0,
+          "textureCount": 3
+        },
+        {
+          "theme": "dunes",
+          "entryMs": 1.4000000357627869,
+          "completedResponseBodyBytes": 0,
+          "textureCount": 2
+        },
+        {
+          "theme": "grove",
+          "entryMs": 57.80000001192093,
+          "completedResponseBodyBytes": 75213,
+          "textureCount": 2
+        }
+      ],
+      "warmReloadEntryMs": null,
+      "persistentCache": null,
+      "checkpoints": [
+        {
+          "label": "post-boot",
+          "heap": {
+            "label": "post-boot",
+            "at": 1791555968826,
+            "usedSize": 5268568,
+            "totalSize": 6307840,
+            "embedderHeapUsedSize": 887088,
+            "backingStorageSize": 1945092
+          },
+          "phase": "idle",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": {
+            "idle": true,
+            "foreground": 0,
+            "queued": [
+              "dunes"
+            ],
+            "warming": "grove",
+            "warm": [],
+            "retainedBytes": 0
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "warm-idle",
+          "heap": {
+            "label": "warm-idle",
+            "at": 1791555968984,
+            "usedSize": 5502888,
+            "totalSize": 6307840,
+            "embedderHeapUsedSize": 761800,
+            "backingStorageSize": 2031225
+          },
+          "phase": "idle",
+          "textures": 3,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 12648448,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 4,
+          "prefetch": {
+            "idle": true,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [
+              "grove",
+              "dunes"
+            ],
+            "retainedBytes": 12744448
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555969070,
+            "usedSize": 6321464,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 807136,
+            "backingStorageSize": 2031585
+          },
+          "phase": "playing",
+          "textures": 3,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 12648448,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 4,
+          "prefetch": {
+            "idle": false,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [
+              "dunes"
+            ],
+            "retainedBytes": 4355840
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-dunes",
+          "heap": {
+            "label": "ready-dunes",
+            "at": 1791555969101,
+            "usedSize": 6364508,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 985592,
+            "backingStorageSize": 1973128
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 4259840,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": {
+            "idle": false,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [],
+            "retainedBytes": 0
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555969197,
+            "usedSize": 6439324,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 905016,
+            "backingStorageSize": 2004453
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": {
+            "idle": false,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [],
+            "retainedBytes": 0
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "shutdown",
+          "heap": {
+            "label": "shutdown",
+            "at": 1791555969303,
+            "usedSize": 6335804,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 684576,
+            "backingStorageSize": 1945448
+          },
+          "phase": "booting",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        }
+      ],
+      "observedMaxMainIsolateHeapBytes": 6933600,
+      "memorySampleCount": 14,
+      "memorySamples": [
+        {
+          "label": "post-boot",
+          "at": 1791555968826,
+          "usedSize": 5268568,
+          "totalSize": 6307840,
+          "embedderHeapUsedSize": 887088,
+          "backingStorageSize": 1945092
+        },
+        {
+          "label": "warm-idle",
+          "at": 1791555968984,
+          "usedSize": 5502888,
+          "totalSize": 6307840,
+          "embedderHeapUsedSize": 761800,
+          "backingStorageSize": 2031225
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555969005,
+          "usedSize": 6316636,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 967712,
+          "backingStorageSize": 2031384
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555969058,
+          "usedSize": 6606004,
+          "totalSize": 7946240,
+          "embedderHeapUsedSize": 1464912,
+          "backingStorageSize": 2031688
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555969070,
+          "usedSize": 6321464,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 807136,
+          "backingStorageSize": 2031585
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555969080,
+          "usedSize": 6385596,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1014584,
+          "backingStorageSize": 2031615
+        },
+        {
+          "label": "ready-dunes",
+          "at": 1791555969101,
+          "usedSize": 6364508,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 985592,
+          "backingStorageSize": 1973128
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555969101,
+          "usedSize": 6364508,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 985592,
+          "backingStorageSize": 1973128
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555969121,
+          "usedSize": 6508532,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1333792,
+          "backingStorageSize": 1973361
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555969142,
+          "usedSize": 6571972,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1337896,
+          "backingStorageSize": 1973361
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555969163,
+          "usedSize": 6933600,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1337896,
+          "backingStorageSize": 2148953
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555969187,
+          "usedSize": 6792456,
+          "totalSize": 7946240,
+          "embedderHeapUsedSize": 1698616,
+          "backingStorageSize": 2324984
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555969197,
+          "usedSize": 6439324,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 905016,
+          "backingStorageSize": 2004453
+        },
+        {
+          "label": "shutdown",
+          "at": 1791555969303,
+          "usedSize": 6335804,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 684576,
+          "backingStorageSize": 1945448
+        }
+      ],
+      "completedSessionResponseBodyBytes": 1700460
+    },
+    {
+      "scenario": "mixed-zip-prefetch",
+      "repetition": 1,
+      "bootToIdleMs": 181,
+      "prefetchLeadMs": 150,
+      "entries": [
+        {
+          "theme": "grove",
+          "entryMs": 2.199999988079071,
+          "completedResponseBodyBytes": 0,
+          "textureCount": 3
+        },
+        {
+          "theme": "dunes",
+          "entryMs": 1.5,
+          "completedResponseBodyBytes": 0,
+          "textureCount": 2
+        },
+        {
+          "theme": "grove",
+          "entryMs": 57.80000001192093,
+          "completedResponseBodyBytes": 75213,
+          "textureCount": 2
+        }
+      ],
+      "warmReloadEntryMs": null,
+      "persistentCache": null,
+      "checkpoints": [
+        {
+          "label": "post-boot",
+          "heap": {
+            "label": "post-boot",
+            "at": 1791555969543,
+            "usedSize": 5268580,
+            "totalSize": 6307840,
+            "embedderHeapUsedSize": 888568,
+            "backingStorageSize": 1945092
+          },
+          "phase": "idle",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": {
+            "idle": true,
+            "foreground": 0,
+            "queued": [
+              "dunes"
+            ],
+            "warming": "grove",
+            "warm": [],
+            "retainedBytes": 0
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "warm-idle",
+          "heap": {
+            "label": "warm-idle",
+            "at": 1791555969691,
+            "usedSize": 5502832,
+            "totalSize": 6569984,
+            "embedderHeapUsedSize": 751496,
+            "backingStorageSize": 2031225
+          },
+          "phase": "idle",
+          "textures": 3,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 12648448,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 4,
+          "prefetch": {
+            "idle": true,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [
+              "grove",
+              "dunes"
+            ],
+            "retainedBytes": 12744448
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555969772,
+            "usedSize": 6321528,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 926016,
+            "backingStorageSize": 2031585
+          },
+          "phase": "playing",
+          "textures": 3,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 12648448,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 4,
+          "prefetch": {
+            "idle": false,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [
+              "dunes"
+            ],
+            "retainedBytes": 4355840
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-dunes",
+          "heap": {
+            "label": "ready-dunes",
+            "at": 1791555969800,
+            "usedSize": 6364492,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 987784,
+            "backingStorageSize": 1973128
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 4259840,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": {
+            "idle": false,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [],
+            "retainedBytes": 0
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555969896,
+            "usedSize": 6439324,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 910984,
+            "backingStorageSize": 2004453
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": {
+            "idle": false,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [],
+            "retainedBytes": 0
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "shutdown",
+          "heap": {
+            "label": "shutdown",
+            "at": 1791555969981,
+            "usedSize": 6328000,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 681872,
+            "backingStorageSize": 1945448
+          },
+          "phase": "booting",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        }
+      ],
+      "observedMaxMainIsolateHeapBytes": 6651340,
+      "memorySampleCount": 14,
+      "memorySamples": [
+        {
+          "label": "post-boot",
+          "at": 1791555969543,
+          "usedSize": 5268580,
+          "totalSize": 6307840,
+          "embedderHeapUsedSize": 888568,
+          "backingStorageSize": 1945092
+        },
+        {
+          "label": "warm-idle",
+          "at": 1791555969691,
+          "usedSize": 5502832,
+          "totalSize": 6569984,
+          "embedderHeapUsedSize": 751496,
+          "backingStorageSize": 2031225
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555969712,
+          "usedSize": 6316304,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 971024,
+          "backingStorageSize": 2031384
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555969762,
+          "usedSize": 6608128,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1467568,
+          "backingStorageSize": 2031688
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555969772,
+          "usedSize": 6321528,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 926016,
+          "backingStorageSize": 2031585
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555969784,
+          "usedSize": 6403664,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1128192,
+          "backingStorageSize": 2031634
+        },
+        {
+          "label": "ready-dunes",
+          "at": 1791555969800,
+          "usedSize": 6364492,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 987784,
+          "backingStorageSize": 1973128
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555969805,
+          "usedSize": 6414272,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 987784,
+          "backingStorageSize": 1973158
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555969826,
+          "usedSize": 6543472,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1334272,
+          "backingStorageSize": 1973361
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555969848,
+          "usedSize": 6571848,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1334272,
+          "backingStorageSize": 1973361
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555969869,
+          "usedSize": 6651340,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1367608,
+          "backingStorageSize": 2148953
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555969894,
+          "usedSize": 6326856,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 910984,
+          "backingStorageSize": 2004453
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555969896,
+          "usedSize": 6439324,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 910984,
+          "backingStorageSize": 2004453
+        },
+        {
+          "label": "shutdown",
+          "at": 1791555969981,
+          "usedSize": 6328000,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 681872,
+          "backingStorageSize": 1945448
+        }
+      ],
+      "completedSessionResponseBodyBytes": 1700460
+    },
+    {
+      "scenario": "mixed-zip-prefetch",
+      "repetition": 2,
+      "bootToIdleMs": 193,
+      "prefetchLeadMs": 158,
+      "entries": [
+        {
+          "theme": "grove",
+          "entryMs": 2.399999976158142,
+          "completedResponseBodyBytes": 0,
+          "textureCount": 3
+        },
+        {
+          "theme": "dunes",
+          "entryMs": 1.399999976158142,
+          "completedResponseBodyBytes": 0,
+          "textureCount": 2
+        },
+        {
+          "theme": "grove",
+          "entryMs": 57.89999997615814,
+          "completedResponseBodyBytes": 75213,
+          "textureCount": 2
+        }
+      ],
+      "warmReloadEntryMs": null,
+      "persistentCache": null,
+      "checkpoints": [
+        {
+          "label": "post-boot",
+          "heap": {
+            "label": "post-boot",
+            "at": 1791555970236,
+            "usedSize": 5268580,
+            "totalSize": 6307840,
+            "embedderHeapUsedSize": 887088,
+            "backingStorageSize": 1945092
+          },
+          "phase": "idle",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": {
+            "idle": true,
+            "foreground": 0,
+            "queued": [
+              "dunes"
+            ],
+            "warming": "grove",
+            "warm": [],
+            "retainedBytes": 0
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "warm-idle",
+          "heap": {
+            "label": "warm-idle",
+            "at": 1791555970390,
+            "usedSize": 5498880,
+            "totalSize": 6569984,
+            "embedderHeapUsedSize": 576360,
+            "backingStorageSize": 2031225
+          },
+          "phase": "idle",
+          "textures": 3,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 12648448,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 4,
+          "prefetch": {
+            "idle": true,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [
+              "grove",
+              "dunes"
+            ],
+            "retainedBytes": 12744448
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555970470,
+            "usedSize": 6321528,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 921056,
+            "backingStorageSize": 2031585
+          },
+          "phase": "playing",
+          "textures": 3,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 12648448,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 4,
+          "prefetch": {
+            "idle": false,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [
+              "dunes"
+            ],
+            "retainedBytes": 4355840
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-dunes",
+          "heap": {
+            "label": "ready-dunes",
+            "at": 1791555970502,
+            "usedSize": 6348208,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 872584,
+            "backingStorageSize": 1973128
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 4259840,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": {
+            "idle": false,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [],
+            "retainedBytes": 0
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555970597,
+            "usedSize": 6439324,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 792608,
+            "backingStorageSize": 2004453
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": {
+            "idle": false,
+            "foreground": 0,
+            "queued": [],
+            "warming": null,
+            "warm": [],
+            "retainedBytes": 0
+          },
+          "stagingBytes": 0
+        },
+        {
+          "label": "shutdown",
+          "heap": {
+            "label": "shutdown",
+            "at": 1791555970684,
+            "usedSize": 6328000,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 681760,
+            "backingStorageSize": 1945448
+          },
+          "phase": "booting",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        }
+      ],
+      "observedMaxMainIsolateHeapBytes": 6706336,
+      "memorySampleCount": 14,
+      "memorySamples": [
+        {
+          "label": "post-boot",
+          "at": 1791555970236,
+          "usedSize": 5268580,
+          "totalSize": 6307840,
+          "embedderHeapUsedSize": 887088,
+          "backingStorageSize": 1945092
+        },
+        {
+          "label": "warm-idle",
+          "at": 1791555970390,
+          "usedSize": 5498880,
+          "totalSize": 6569984,
+          "embedderHeapUsedSize": 576360,
+          "backingStorageSize": 2031225
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555970410,
+          "usedSize": 6316264,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 960032,
+          "backingStorageSize": 2031384
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555970462,
+          "usedSize": 6706336,
+          "totalSize": 7946240,
+          "embedderHeapUsedSize": 1456744,
+          "backingStorageSize": 2031688
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555970470,
+          "usedSize": 6321528,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 921056,
+          "backingStorageSize": 2031585
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555970484,
+          "usedSize": 6403664,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1123192,
+          "backingStorageSize": 2031634
+        },
+        {
+          "label": "ready-dunes",
+          "at": 1791555970502,
+          "usedSize": 6348208,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 872584,
+          "backingStorageSize": 1973128
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555970505,
+          "usedSize": 6398180,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 977008,
+          "backingStorageSize": 1973158
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555970526,
+          "usedSize": 6527472,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1320528,
+          "backingStorageSize": 1973361
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555970548,
+          "usedSize": 6555848,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1320528,
+          "backingStorageSize": 1973361
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555970568,
+          "usedSize": 6635320,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1364472,
+          "backingStorageSize": 2148953
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555970596,
+          "usedSize": 6326856,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 792608,
+          "backingStorageSize": 2004453
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555970597,
+          "usedSize": 6439324,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 792608,
+          "backingStorageSize": 2004453
+        },
+        {
+          "label": "shutdown",
+          "at": 1791555970684,
+          "usedSize": 6328000,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 681760,
+          "backingStorageSize": 1945448
+        }
+      ],
+      "completedSessionResponseBodyBytes": 1700460
+    },
+    {
+      "scenario": "mixed-zip-persistent",
+      "repetition": 0,
+      "bootToIdleMs": 222,
+      "prefetchLeadMs": 0,
+      "entries": [
+        {
+          "theme": "grove",
+          "entryMs": 143.30000001192093,
+          "completedResponseBodyBytes": 91745,
+          "textureCount": 2
+        },
+        {
+          "theme": "dunes",
+          "entryMs": 61.80000001192093,
+          "completedResponseBodyBytes": 44066,
+          "textureCount": 2
+        },
+        {
+          "theme": "grove",
+          "entryMs": 21.200000047683716,
+          "completedResponseBodyBytes": 16809,
+          "textureCount": 2
+        }
+      ],
+      "warmReloadEntryMs": 28.100000023841858,
+      "persistentCache": {
+        "records": 4,
+        "totalBytes": 102193
+      },
+      "checkpoints": [
+        {
+          "label": "post-boot",
+          "heap": {
+            "label": "post-boot",
+            "at": 1791555970968,
+            "usedSize": 5241504,
+            "totalSize": 6307840,
+            "embedderHeapUsedSize": 875928,
+            "backingStorageSize": 1945133
+          },
+          "phase": "idle",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555971156,
+            "usedSize": 6300424,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 914504,
+            "backingStorageSize": 2004565
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-dunes",
+          "heap": {
+            "label": "ready-dunes",
+            "at": 1791555971244,
+            "usedSize": 6394884,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 923312,
+            "backingStorageSize": 1973258
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 4259840,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555971296,
+            "usedSize": 6467920,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 827376,
+            "backingStorageSize": 2004583
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "warm-cache-ready",
+          "heap": {
+            "label": "warm-cache-ready",
+            "at": 1791555971662,
+            "usedSize": 6356972,
+            "totalSize": 8470528,
+            "embedderHeapUsedSize": 959144,
+            "backingStorageSize": 2004527
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "shutdown",
+          "heap": {
+            "label": "shutdown",
+            "at": 1791555971673,
+            "usedSize": 6214136,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 1099160,
+            "backingStorageSize": 1945569
+          },
+          "phase": "booting",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        }
+      ],
+      "observedMaxMainIsolateHeapBytes": 6814992,
+      "memorySampleCount": 20,
+      "memorySamples": [
+        {
+          "label": "post-boot",
+          "at": 1791555970968,
+          "usedSize": 5241504,
+          "totalSize": 6307840,
+          "embedderHeapUsedSize": 875928,
+          "backingStorageSize": 1945133
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555970989,
+          "usedSize": 6052192,
+          "totalSize": 6635520,
+          "embedderHeapUsedSize": 1096936,
+          "backingStorageSize": 1945292
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555971033,
+          "usedSize": 6552936,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1339848,
+          "backingStorageSize": 1945708
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555971055,
+          "usedSize": 6274388,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1369056,
+          "backingStorageSize": 1945708
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555971077,
+          "usedSize": 6359536,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1369056,
+          "backingStorageSize": 2121358
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555971097,
+          "usedSize": 6573788,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1543872,
+          "backingStorageSize": 2297537
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555971119,
+          "usedSize": 6604020,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1693496,
+          "backingStorageSize": 2297537
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555971140,
+          "usedSize": 6814992,
+          "totalSize": 7946240,
+          "embedderHeapUsedSize": 1844424,
+          "backingStorageSize": 2347299
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555971156,
+          "usedSize": 6300424,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 914504,
+          "backingStorageSize": 2004565
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555971161,
+          "usedSize": 6363904,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1120784,
+          "backingStorageSize": 2004595
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555971184,
+          "usedSize": 6515828,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1394568,
+          "backingStorageSize": 2004798
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555971206,
+          "usedSize": 6545964,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1401768,
+          "backingStorageSize": 2004798
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555971228,
+          "usedSize": 6668980,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1457968,
+          "backingStorageSize": 2141272
+        },
+        {
+          "label": "ready-dunes",
+          "at": 1791555971244,
+          "usedSize": 6394884,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 923312,
+          "backingStorageSize": 1973258
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555971248,
+          "usedSize": 6442388,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1022384,
+          "backingStorageSize": 1973288
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555971269,
+          "usedSize": 6584076,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1351800,
+          "backingStorageSize": 2090292
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555971295,
+          "usedSize": 6350084,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 827376,
+          "backingStorageSize": 2004583
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555971296,
+          "usedSize": 6467920,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 827376,
+          "backingStorageSize": 2004583
+        },
+        {
+          "label": "warm-cache-ready",
+          "at": 1791555971662,
+          "usedSize": 6356972,
+          "totalSize": 8470528,
+          "embedderHeapUsedSize": 959144,
+          "backingStorageSize": 2004527
+        },
+        {
+          "label": "shutdown",
+          "at": 1791555971673,
+          "usedSize": 6214136,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1099160,
+          "backingStorageSize": 1945569
+        }
+      ],
+      "completedSessionResponseBodyBytes": 3148301
+    },
+    {
+      "scenario": "mixed-zip-persistent",
+      "repetition": 1,
+      "bootToIdleMs": 473,
+      "prefetchLeadMs": 0,
+      "entries": [
+        {
+          "theme": "grove",
+          "entryMs": 144.79999995231628,
+          "completedResponseBodyBytes": 91745,
+          "textureCount": 2
+        },
+        {
+          "theme": "dunes",
+          "entryMs": 61.89999997615814,
+          "completedResponseBodyBytes": 44066,
+          "textureCount": 2
+        },
+        {
+          "theme": "grove",
+          "entryMs": 20.599999964237213,
+          "completedResponseBodyBytes": 16809,
+          "textureCount": 2
+        }
+      ],
+      "warmReloadEntryMs": 25.899999976158142,
+      "persistentCache": {
+        "records": 4,
+        "totalBytes": 102193
+      },
+      "checkpoints": [
+        {
+          "label": "post-boot",
+          "heap": {
+            "label": "post-boot",
+            "at": 1791555972237,
+            "usedSize": 5166776,
+            "totalSize": 6307840,
+            "embedderHeapUsedSize": 880376,
+            "backingStorageSize": 1945133
+          },
+          "phase": "idle",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555972422,
+            "usedSize": 6300400,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 923936,
+            "backingStorageSize": 2004565
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-dunes",
+          "heap": {
+            "label": "ready-dunes",
+            "at": 1791555972510,
+            "usedSize": 6394740,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 929288,
+            "backingStorageSize": 1973258
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 4259840,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555972563,
+            "usedSize": 6467776,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 937784,
+            "backingStorageSize": 2004583
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "warm-cache-ready",
+          "heap": {
+            "label": "warm-cache-ready",
+            "at": 1791555972910,
+            "usedSize": 6351720,
+            "totalSize": 8208384,
+            "embedderHeapUsedSize": 1060536,
+            "backingStorageSize": 2004527
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "shutdown",
+          "heap": {
+            "label": "shutdown",
+            "at": 1791555972920,
+            "usedSize": 6208720,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 1206184,
+            "backingStorageSize": 1945569
+          },
+          "phase": "booting",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        }
+      ],
+      "observedMaxMainIsolateHeapBytes": 6850756,
+      "memorySampleCount": 19,
+      "memorySamples": [
+        {
+          "label": "post-boot",
+          "at": 1791555972237,
+          "usedSize": 5166776,
+          "totalSize": 6307840,
+          "embedderHeapUsedSize": 880376,
+          "backingStorageSize": 1945133
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555972258,
+          "usedSize": 6052016,
+          "totalSize": 6635520,
+          "embedderHeapUsedSize": 1101360,
+          "backingStorageSize": 1945292
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555972301,
+          "usedSize": 6263312,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1368256,
+          "backingStorageSize": 1945708
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555972323,
+          "usedSize": 6279600,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1368256,
+          "backingStorageSize": 1945708
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555972345,
+          "usedSize": 6370016,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1368256,
+          "backingStorageSize": 2121358
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555972365,
+          "usedSize": 6582120,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1542536,
+          "backingStorageSize": 2297537
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555972387,
+          "usedSize": 6612748,
+          "totalSize": 7946240,
+          "embedderHeapUsedSize": 1571832,
+          "backingStorageSize": 2297537
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555972413,
+          "usedSize": 6850756,
+          "totalSize": 7946240,
+          "embedderHeapUsedSize": 1852008,
+          "backingStorageSize": 2347318
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555972422,
+          "usedSize": 6300400,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 923936,
+          "backingStorageSize": 2004565
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555972434,
+          "usedSize": 6381904,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1230856,
+          "backingStorageSize": 2004614
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555972456,
+          "usedSize": 6517388,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1393568,
+          "backingStorageSize": 2004798
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555972478,
+          "usedSize": 6575116,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1413360,
+          "backingStorageSize": 2004798
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555972502,
+          "usedSize": 6771348,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1731928,
+          "backingStorageSize": 2168522
+        },
+        {
+          "label": "ready-dunes",
+          "at": 1791555972510,
+          "usedSize": 6394740,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 929288,
+          "backingStorageSize": 1973258
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555972524,
+          "usedSize": 6451820,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1028336,
+          "backingStorageSize": 1973288
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555972545,
+          "usedSize": 6645040,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1502152,
+          "backingStorageSize": 2266319
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555972563,
+          "usedSize": 6467776,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 937784,
+          "backingStorageSize": 2004583
+        },
+        {
+          "label": "warm-cache-ready",
+          "at": 1791555972910,
+          "usedSize": 6351720,
+          "totalSize": 8208384,
+          "embedderHeapUsedSize": 1060536,
+          "backingStorageSize": 2004527
+        },
+        {
+          "label": "shutdown",
+          "at": 1791555972920,
+          "usedSize": 6208720,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1206184,
+          "backingStorageSize": 1945569
+        }
+      ],
+      "completedSessionResponseBodyBytes": 3148301
+    },
+    {
+      "scenario": "mixed-zip-persistent",
+      "repetition": 2,
+      "bootToIdleMs": 528,
+      "prefetchLeadMs": 0,
+      "entries": [
+        {
+          "theme": "grove",
+          "entryMs": 146,
+          "completedResponseBodyBytes": 91745,
+          "textureCount": 2
+        },
+        {
+          "theme": "dunes",
+          "entryMs": 72,
+          "completedResponseBodyBytes": 44066,
+          "textureCount": 2
+        },
+        {
+          "theme": "grove",
+          "entryMs": 22.69999998807907,
+          "completedResponseBodyBytes": 16809,
+          "textureCount": 2
+        }
+      ],
+      "warmReloadEntryMs": 26.5,
+      "persistentCache": {
+        "records": 4,
+        "totalBytes": 102193
+      },
+      "checkpoints": [
+        {
+          "label": "post-boot",
+          "heap": {
+            "label": "post-boot",
+            "at": 1791555973529,
+            "usedSize": 5238412,
+            "totalSize": 6569984,
+            "embedderHeapUsedSize": 878544,
+            "backingStorageSize": 1945133
+          },
+          "phase": "idle",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555973722,
+            "usedSize": 6300396,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 925416,
+            "backingStorageSize": 2004565
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-dunes",
+          "heap": {
+            "label": "ready-dunes",
+            "at": 1791555973828,
+            "usedSize": 6390544,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 913672,
+            "backingStorageSize": 1973258
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 4259840,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "ready-grove",
+          "heap": {
+            "label": "ready-grove",
+            "at": 1791555973881,
+            "usedSize": 6467916,
+            "totalSize": 7421952,
+            "embedderHeapUsedSize": 834080,
+            "backingStorageSize": 2004583
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "warm-cache-ready",
+          "heap": {
+            "label": "warm-cache-ready",
+            "at": 1791555974192,
+            "usedSize": 6351736,
+            "totalSize": 8208384,
+            "embedderHeapUsedSize": 1046152,
+            "backingStorageSize": 2004527
+          },
+          "phase": "playing",
+          "textures": 2,
+          "audio": 1,
+          "knownPayload": {
+            "rgbaEstimate": 8454144,
+            "decodedPcmBytes": 96000,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 3,
+          "prefetch": null,
+          "stagingBytes": 0
+        },
+        {
+          "label": "shutdown",
+          "heap": {
+            "label": "shutdown",
+            "at": 1791555974202,
+            "usedSize": 6208748,
+            "totalSize": 7159808,
+            "embedderHeapUsedSize": 1191864,
+            "backingStorageSize": 1945569
+          },
+          "phase": "booting",
+          "textures": 0,
+          "audio": 0,
+          "knownPayload": {
+            "rgbaEstimate": 0,
+            "decodedPcmBytes": 0,
+            "html5BlobBytes": 0
+          },
+          "residentAssets": 0,
+          "prefetch": null,
+          "stagingBytes": 0
+        }
+      ],
+      "observedMaxMainIsolateHeapBytes": 6891552,
+      "memorySampleCount": 20,
+      "memorySamples": [
+        {
+          "label": "post-boot",
+          "at": 1791555973529,
+          "usedSize": 5238412,
+          "totalSize": 6569984,
+          "embedderHeapUsedSize": 878544,
+          "backingStorageSize": 1945133
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555973551,
+          "usedSize": 6056776,
+          "totalSize": 6897664,
+          "embedderHeapUsedSize": 1099528,
+          "backingStorageSize": 1945292
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555973601,
+          "usedSize": 6260804,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1340640,
+          "backingStorageSize": 1945708
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555973623,
+          "usedSize": 6277240,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1360896,
+          "backingStorageSize": 1945708
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555973646,
+          "usedSize": 6362532,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1386096,
+          "backingStorageSize": 2121358
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555973667,
+          "usedSize": 6589880,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1693224,
+          "backingStorageSize": 2297537
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555973689,
+          "usedSize": 6611816,
+          "totalSize": 7946240,
+          "embedderHeapUsedSize": 1693224,
+          "backingStorageSize": 2297537
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555973713,
+          "usedSize": 6849268,
+          "totalSize": 7946240,
+          "embedderHeapUsedSize": 1841576,
+          "backingStorageSize": 2347318
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555973722,
+          "usedSize": 6300396,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 925416,
+          "backingStorageSize": 2004565
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555973734,
+          "usedSize": 6373724,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1131960,
+          "backingStorageSize": 2004595
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555973755,
+          "usedSize": 6514416,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1380832,
+          "backingStorageSize": 2004798
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555973777,
+          "usedSize": 6567588,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1409264,
+          "backingStorageSize": 2004798
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555973799,
+          "usedSize": 6631300,
+          "totalSize": 7684096,
+          "embedderHeapUsedSize": 1441880,
+          "backingStorageSize": 2086949
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555973820,
+          "usedSize": 6891552,
+          "totalSize": 7946240,
+          "embedderHeapUsedSize": 1755224,
+          "backingStorageSize": 2168522
+        },
+        {
+          "label": "ready-dunes",
+          "at": 1791555973828,
+          "usedSize": 6390544,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 913672,
+          "backingStorageSize": 1973258
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555973842,
+          "usedSize": 6461012,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 1115464,
+          "backingStorageSize": 1973307
+        },
+        {
+          "label": "entry-sample",
+          "at": 1791555973863,
+          "usedSize": 6645184,
+          "totalSize": 7946240,
+          "embedderHeapUsedSize": 1496872,
+          "backingStorageSize": 2266319
+        },
+        {
+          "label": "ready-grove",
+          "at": 1791555973881,
+          "usedSize": 6467916,
+          "totalSize": 7421952,
+          "embedderHeapUsedSize": 834080,
+          "backingStorageSize": 2004583
+        },
+        {
+          "label": "warm-cache-ready",
+          "at": 1791555974192,
+          "usedSize": 6351736,
+          "totalSize": 8208384,
+          "embedderHeapUsedSize": 1046152,
+          "backingStorageSize": 2004527
+        },
+        {
+          "label": "shutdown",
+          "at": 1791555974202,
+          "usedSize": 6208748,
+          "totalSize": 7159808,
+          "embedderHeapUsedSize": 1191864,
+          "backingStorageSize": 1945569
+        }
+      ],
+      "completedSessionResponseBodyBytes": 3148301
+    }
+  ]
+}

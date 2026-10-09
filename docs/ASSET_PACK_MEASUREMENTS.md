@@ -2,12 +2,12 @@
 
 Run the private Phaser explorer with `pnpm --dir examples/asset-packs test:measure`
 after `pnpm build:packages` and installing its Chromium browser. The measurement
-script is [test/measure.mjs](../examples/asset-packs/test/measure.mjs).
+script is [test/measure.mjs](https://github.com/imjlk/mpgd-kit/blob/main/examples/asset-packs/test/measure.mjs).
 It builds and inventories actual bundled/hybrid outputs, independently verifies
 payload exclusion, enters Grove → Dunes → Grove, verifies arrow-key movement and
 checks that shutdown returns all asset ownership.
 
-The checked-in [raw report](../examples/asset-packs/evidence/measurements-2026-10-09.json)
+The checked-in [raw report](https://github.com/imjlk/mpgd-kit/blob/main/examples/asset-packs/evidence/measurements-2026-10-09.json)
 records three fresh contexts per scenario, Node/Chromium/CPU versions, source
 revision, complete artifact inventory/digests and individual observations.
 All scenarios use Canvas and the same optional audio closure. The separate
@@ -16,6 +16,23 @@ comparison, not a production network/device benchmark. Prefetch waits for both
 packs to warm, recording its observed idle lead time separately from entry.
 This lead starts when the driver observes idle, including its post-boot GC
 checkpoint; some warming can already have started before that observation.
+
+## Recorded comparison
+
+| Scenario | App bytes | First Grove entry (ms) | Observed idle lead (ms) | First entry body bytes | Sampled main heap maximum (bytes) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| bundled-files | 1,613,437 | 55.4 | 0 | 74,998 | 6,471,040 |
+| remote-files | 1,511,807 | 92.0 | 0 | 74,998 | 6,369,260 |
+| remote-files-prefetch | 1,511,807 | 2.1 | 129 | 0 | 6,462,328 |
+| mixed-zip | 1,511,807 | 107.5 | 0 | 91,745 | 6,672,588 |
+| mixed-zip-prefetch | 1,511,807 | 2.4 | 158 | 0 | 6,706,336 |
+| mixed-zip-persistent | 1,511,807 | 144.8 | 0 | 91,745 | 6,850,756 |
+
+Values are medians of three runs. IndexedDB warm reload entry was **26.5 ms**
+with zero remote pack-object responses during entry. Prefetch moved work into the
+idle window and retained both themes: known payload was **12,744,448 bytes**,
+compared with **8,550,144 bytes** for Grove plus shared/audio. The measured main
+heap does not include all these browser/engine allocations.
 
 ## Metrics and limits
 

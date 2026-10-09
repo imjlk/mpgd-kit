@@ -161,3 +161,12 @@ The benchmark asserts zero completed response-body bytes for warmed first entry.
 The original design follow-ups above describe prior stages; current implemented
 scope and explicit limits are in docs/asset-packs-design.md. Release PR #305 is
 reserved for the final merge after this implementation and evidence PR.
+
+Final measured-consumer validation: 415 package tests, root typecheck and package
+build pass. The complete source Chromium acceptance and installed tarball
+consumer pass after the warm handover fix. Six scenarios × three fresh contexts
+recorded source a6dc2283 with a clean tree; the raw report is checked in under
+evidence/. The headed skill client confirmed Grove ready 3/3 and movement from
+x=516 to x=552; Canvas gameplay and mixed-ZIP benchmark screenshots were inspected
+with no console/page errors. Updated stale design claims and documented the
+modeled origin, post-GC/sampled main heap boundaries and actual native APK evidence.
