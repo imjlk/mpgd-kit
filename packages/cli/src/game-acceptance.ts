@@ -18,6 +18,13 @@ import {
   resolveGameplayE2EPathInsideGameRoot,
 } from './gameplay-e2e.js';
 
+import {
+  preparePerformanceAcceptance,
+  readPerformanceAcceptanceEvidence,
+  type PerformanceAcceptanceEvidence,
+  type PerformanceAcceptanceInput,
+} from './performance-acceptance.js';
+
 export const defaultGameAcceptanceCommandTimeoutMs = 30 * 60 * 1_000;
 const defaultGameAcceptanceReleaseManifestFile = 'artifacts/release-manifest.json';
 export const maximumGameplayE2EReportBytes = 1_024 * 1_024;
@@ -70,6 +77,7 @@ export interface GameAcceptanceReport {
   readonly options: Readonly<Record<string, string | boolean | null>>;
   readonly steps: readonly GameAcceptanceStepResult[];
   readonly evidence: {
+    readonly performance?: PerformanceAcceptanceEvidence;
     readonly releaseManifest: {
       readonly file: string;
       readonly found: boolean;
@@ -100,6 +108,8 @@ export interface RunGameAcceptanceInput {
   readonly reportDir: string;
   readonly releaseManifestFile?: string;
   readonly gameplayE2EReportFile?: string;
+  /** Optional fresh performance collection and consumer-authored budget. */
+  readonly performance?: PerformanceAcceptanceInput;
   readonly requireGameplayE2EReport?: boolean;
   /** Step that must replace any previous gameplay report before evidence is accepted. */
   readonly gameplayE2EStepId?: string;
@@ -132,10 +142,26 @@ export function runGameAcceptance(input: RunGameAcceptanceInput): RunGameAccepta
   const commandRunner = input.commandRunner
     ?? ((step) => runAcceptanceCommand(step, input.env ?? process.env, commandTimeoutMs));
   const gameRoot = path.resolve(input.gameRoot);
+  const reportDir = path.resolve(input.reportDir);
+  const jsonFile = path.join(reportDir, 'acceptance-report.json');
+  const markdownFile = path.join(reportDir, 'acceptance-report.md');
   const startedAtMs = now();
   const results: GameAcceptanceStepResult[] = [];
   let failed = false;
   let gameplayE2EReportFileToReplace: string | undefined;
+  const performance = input.performance === undefined
+    ? undefined
+    : preparePerformanceAcceptance(gameRoot, input.performance);
+  if (performance !== undefined && [jsonFile, markdownFile].some((file) =>
+    file === performance.reportFile || file === path.resolve(gameRoot, performance.budgetEvidence.file))) {
+    throw new Error('Performance budget and report must not overwrite acceptance handoff files.');
+  }
+  let performanceStartedAtMs: number | undefined;
+  if (input.performance !== undefined
+    && (input.steps.filter((step) => step.id === input.performance?.stepId).length !== 1
+      || input.steps.some((step) => step.id === input.performance?.stepId && step.skipReason !== undefined))) {
+    throw new Error('Performance evidence needs exactly one runnable collection step.');
+  }
 
   if (input.gameplayE2EStepId !== undefined) {
     if (input.gameplayE2EReportFile === undefined) {
@@ -177,6 +203,23 @@ export function runGameAcceptance(input: RunGameAcceptanceInput): RunGameAccepta
       }
     }
 
+    if (!failed && step.id === input.performance?.stepId && performance !== undefined) {
+      try {
+        rmSync(
+          resolveGameplayE2EPathInsideGameRoot(
+            gameRoot,
+            performance.reportFile,
+            'Performance report',
+          ),
+          { force: true },
+        );
+      } catch (error) {
+        results.push(failedStepResult(step, now(), formatError(error)));
+        failed = true;
+        continue;
+      }
+    }
+
     if (failed) {
       results.push(skippedStepResult(step, now(), 'A previous acceptance step failed.'));
       continue;
@@ -201,6 +244,9 @@ export function runGameAcceptance(input: RunGameAcceptanceInput): RunGameAccepta
     const cwd = path.resolve(runnableStep.cwd);
     const stepStartedAtMs = now();
     const startedAt = new Date(stepStartedAtMs).toISOString();
+    if (step.id === input.performance?.stepId) {
+      performanceStartedAtMs = stepStartedAtMs;
+    }
 
     log(`[mpgd:accept] ${step.label}`);
 
@@ -248,11 +294,23 @@ export function runGameAcceptance(input: RunGameAcceptanceInput): RunGameAccepta
       || gameplayE2E.parseError !== null
       || gameplayE2E.validationError !== null
     );
+  const performanceEvidence = performance === undefined
+    ? undefined
+    : readPerformanceAcceptanceEvidence({
+        gameRoot,
+        prepared: performance,
+        startedAtMs: performanceStartedAtMs,
+        finishedAtMs: now(),
+        profile: typeof input.options.profile === 'string' ? input.options.profile : undefined,
+        releaseManifestFile: input.releaseManifestFile,
+      });
+  const performanceFailed = performanceEvidence?.validationError !== undefined
+    && performanceEvidence.validationError !== null;
   const finishedAtMs = now();
   const report: GameAcceptanceReport = {
     schemaVersion: 1,
     generatedAt: new Date(finishedAtMs).toISOString(),
-    status: failed || evidenceFailed ? 'failed' : 'passed',
+    status: failed || evidenceFailed || performanceFailed ? 'failed' : 'passed',
     gameRoot,
     durationMs: Math.max(0, finishedAtMs - startedAtMs),
     options: input.options,
@@ -260,12 +318,9 @@ export function runGameAcceptance(input: RunGameAcceptanceInput): RunGameAccepta
     evidence: {
       releaseManifest,
       gameplayE2E,
+      ...(performanceEvidence === undefined ? {} : { performance: performanceEvidence }),
     },
   };
-  const reportDir = path.resolve(input.reportDir);
-  const jsonFile = path.join(reportDir, 'acceptance-report.json');
-  const markdownFile = path.join(reportDir, 'acceptance-report.md');
-
   mkdirSync(reportDir, { recursive: true });
   writeEvidenceReportFiles({
     jsonFile,
@@ -336,6 +391,20 @@ export function renderGameAcceptanceMarkdown(report: GameAcceptanceReport): stri
     );
   } else {
     lines.push(`- Gameplay E2E report: ${escapeMarkdownInline(report.evidence.gameplayE2E.file)}`);
+  }
+
+  if (report.evidence.performance !== undefined) {
+    const performance = report.evidence.performance;
+    lines.push(
+      '',
+      '## Performance Evidence',
+      '',
+      `- Report: ${escapeMarkdownInline(performance.file)}`,
+      `- Budget: ${escapeMarkdownInline(performance.budget.file)} (${performance.budget.sha256})`,
+      performance.validationError === null
+        ? '- Budget validation passed.'
+        : `- Validation failed: ${escapeMarkdownInline(performance.validationError)}`,
+    );
   }
 
   return `${lines.join('\n')}\n`;

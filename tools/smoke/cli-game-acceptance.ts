@@ -1,3 +1,4 @@
+import './cli-performance-acceptance';
 import assert from 'node:assert/strict';
 import {
   mkdirSync,
@@ -965,6 +966,108 @@ try {
     /release manifest hash does not match its current contents/u,
     'directory release manifest evidence',
   );
+
+  // Exercise actual CLI option parsing, script overrides and collector environment.
+  const performanceBudgetFile = path.join(cliGameRoot, 'performance-budget.json');
+  const performanceArtifact = path.join(cliGameRoot, 'performance-artifact.txt');
+  writeFileSync(performanceArtifact, 'performance fixture build');
+  writeFileSync(
+    performanceBudgetFile,
+    JSON.stringify({
+      schemaVersion: 1,
+      profiles: [
+        {
+          id: 'steady',
+          target: 'web-preview',
+          scenario: 'steady',
+          renderer: 'webgl',
+          device: 'desktop',
+          minSamples: 2,
+          metrics: { intervalMs: { p99: 20 } },
+        },
+      ],
+    }),
+  );
+  const performanceFixture = {
+    schemaVersion: 1,
+    profile: 'staging',
+    budget: collectGameplayE2EPathEvidence(cliGameRoot, performanceBudgetFile, 'budget'),
+    measurements: [
+      {
+        id: 'steady',
+        context: {
+          target: 'web-preview',
+          scenario: 'steady',
+          renderer: 'webgl',
+          device: 'desktop',
+          devicePixelRatio: 1,
+          foreground: true,
+          logicalWidth: 400,
+          logicalHeight: 600,
+          backingWidth: 400,
+          backingHeight: 600,
+          instrumentation: { trace: false, screenshots: false },
+        },
+        artifact: collectGameplayE2EPathEvidence(cliGameRoot, performanceArtifact, 'artifact'),
+        snapshot: {
+          frames: 3,
+          retainedSamples: 3,
+          excludedFrames: 0,
+          metrics: { intervalMs: { p50: 16, p95: 17, p99: 18 } },
+          maximums: { intervalMs: 19 },
+          sampleCounts: { intervalMs: 2 },
+        },
+      },
+    ],
+  };
+  writeFileSync(
+    path.join(cliGameRoot, 'performance-source.json'),
+    JSON.stringify(performanceFixture),
+  );
+  writeFileSync(path.join(cliGameRoot, 'write-performance.mjs'), [
+    "import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';",
+    "import { dirname } from 'node:path';",
+    "const report = JSON.parse(readFileSync('performance-source.json', 'utf8'));",
+    "if (!process.env.MPGD_PERFORMANCE_BUDGET_FILE.endsWith('performance-budget.json')) throw new Error('budget environment');",
+    "if (process.env.MPGD_ACCEPTANCE_TARGETS !== 'web-preview') throw new Error('target environment');",
+    'report.generatedAt = new Date().toISOString(); report.profile = process.env.MPGD_ACCEPTANCE_PROFILE;',
+    'mkdirSync(dirname(process.env.MPGD_PERFORMANCE_REPORT_FILE), { recursive: true });',
+    'writeFileSync(process.env.MPGD_PERFORMANCE_REPORT_FILE, JSON.stringify(report));',
+  ].join('\n'));
+  const packageFile = path.join(cliGameRoot, 'package.json');
+  const metadata = JSON.parse(
+    readFileSync(packageFile, 'utf8'),
+  ) as { scripts: Record<string, string> };
+  metadata.scripts['perf:collect'] = 'node ./write-performance.mjs';
+  writeFileSync(packageFile, JSON.stringify(metadata));
+  await runMpgdCli([
+    'game',
+    'accept',
+    cliGameRoot,
+    '--kit-path',
+    process.cwd(),
+    '--targets',
+    'web',
+    '--report-dir',
+    'performance-handoff',
+    '--performance',
+    '--performance-script',
+    'perf:collect',
+    '--performance-budget',
+    'performance-budget.json',
+    '--skip-gameplay-e2e',
+    '--skip-test',
+    '--skip-graph',
+    '--skip-playtest',
+    '--skip-target-build',
+    '--skip-target-smoke',
+  ]);
+  const performanceHandoff = JSON.parse(
+    readFileSync(path.join(cliGameRoot, 'performance-handoff/acceptance-report.json'), 'utf8'),
+  ) as GameAcceptanceReport;
+  assert.equal(performanceHandoff.status, 'passed');
+  assert.equal(performanceHandoff.steps.at(-1)?.id, 'performance');
+  assert.equal(performanceHandoff.evidence.performance?.validationError, null);
 } finally {
   rmSync(fixtureRoot, { recursive: true, force: true });
 }
