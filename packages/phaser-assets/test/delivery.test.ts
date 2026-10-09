@@ -2129,3 +2129,134 @@ describe('static archive URL compatibility', () => {
     delivery.dispose();
   });
 });
+
+describe('queued preparations', () => {
+  async function setup(ids: readonly string[] = ['a', 'b']) {
+    const origin = await startGatedOrigin();
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest(ids.map((id) => ({ id, delivery: 'zip', zip: zipFixture() })));
+    for (const [path, file] of packFiles) { origin.files.set(path, file); }
+    const worker = createFakeWorkerFactory();
+    const delivery = createPhaserPackDelivery(manifest, { baseUrl: origin.url, createWorker: worker.factory });
+    return { origin, delivery, worker };
+  }
+  it('shares one download while giving callers independent idempotent handles', async () => {
+    const { origin, delivery } = await setup();
+    origin.hold('packs/a@1.zip');
+    const first = delivery.prepare('a');
+    const second = delivery.prepare('a');
+    await waitForRequest(origin.requests, 'packs/a@1.zip');
+    expect(origin.requests).toEqual(['packs/a@1.zip']);
+    origin.release('packs/a@1.zip');
+    const [one, two] = await Promise.all([first, second]);
+    expect(one).not.toBe(two);
+    expect(delivery.snapshot().staging[0]?.handles).toBe(2);
+    one.release();
+    one.release();
+    expect(delivery.snapshot().staging[0]?.handles).toBe(1);
+    const opened = await delivery.fileSource.open(openRequest('a'), {
+      signal: new AbortController().signal, budgets: budgets(),
+    });
+    expect((await opened.read()).bytes.size).toBe(pngBytes.length);
+    opened.close();
+    two.release();
+    expect(delivery.snapshot().staging).toEqual([]);
+    delivery.dispose();
+  });
+  it('queues distinct packs without starting the second request early', async () => {
+    const { origin, delivery } = await setup();
+    origin.hold('packs/a@1.zip');
+    const first = delivery.prepare('a');
+    const second = delivery.prepare('b');
+    await waitForRequest(origin.requests, 'packs/a@1.zip');
+    expect(origin.requests).toEqual(['packs/a@1.zip']);
+    origin.release('packs/a@1.zip');
+    const handles = await Promise.all([first, second]);
+    expect(origin.requests).toEqual(['packs/a@1.zip', 'packs/b@1.zip']);
+    for (const handle of handles) { handle.release(); }
+    delivery.dispose();
+  });
+  it('isolates cancellation when another caller still needs the shared pack', async () => {
+    const { origin, delivery } = await setup();
+    origin.hold('packs/a@1.zip');
+    const controller = new AbortController();
+    const cancelled = delivery.prepare('a', { signal: controller.signal });
+    const rejection = expect(cancelled).rejects.toMatchObject({ code: 'cancelled' });
+    const remaining = delivery.prepare('a');
+    await waitForRequest(origin.requests, 'packs/a@1.zip');
+    controller.abort();
+    await rejection;
+    origin.release('packs/a@1.zip');
+    const handle = await remaining;
+    expect(delivery.snapshot().archiveRequests).toBe(1);
+    expect(delivery.snapshot().staging[0]?.handles).toBe(1);
+    handle.release();
+    delivery.dispose();
+  });
+  it('evicts a failed shared preparation and continues the queue for retry', async () => {
+    const { origin, delivery } = await setup();
+    const saved = origin.files.get('packs/a@1.zip')!;
+    origin.files.delete('packs/a@1.zip');
+    const one = delivery.prepare('a');
+    const two = delivery.prepare('a');
+    const three = delivery.prepare('b');
+    const failures = await Promise.allSettled([one, two]);
+    expect(failures.map((result) => result.status)).toEqual(['rejected', 'rejected']);
+    const handleB = await three;
+    origin.files.set('packs/a@1.zip', saved);
+    const retry = await delivery.prepare('a');
+    expect(origin.requests.filter((path) => path === 'packs/a@1.zip')).toHaveLength(2);
+    handleB.release();
+    retry.release();
+    delivery.dispose();
+  });
+  it('removes cancelled queued callers and rejects queued work on disposal', async () => {
+    const { origin, delivery } = await setup(['a', 'b', 'c']);
+    origin.hold('packs/a@1.zip');
+    const active = delivery.prepare('a');
+    const activeRejection = expect(active).rejects.toMatchObject({ code: 'disposed' });
+    const controller = new AbortController();
+    const cancelled = delivery.prepare('b', { signal: controller.signal });
+    const cancelledRejection = expect(cancelled).rejects.toMatchObject({ code: 'cancelled' });
+    const queued = delivery.prepare('c');
+    const queuedRejection = expect(queued).rejects.toMatchObject({ code: 'disposed' });
+    await waitForRequest(origin.requests, 'packs/a@1.zip');
+    controller.abort();
+    await cancelledRejection;
+    delivery.dispose();
+    await Promise.all([activeRejection, queuedRejection]);
+    expect(origin.requests).toEqual(['packs/a@1.zip']);
+    expect(delivery.snapshot().staging).toEqual([]);
+    origin.release('packs/a@1.zip');
+  });
+});
+
+describe('preparation terminal retries', () => {
+  it('starts a fresh attempt when a failed-event listener retries synchronously', async () => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest([
+      { id: 'solo', delivery: 'zip', zip: zipFixture() },
+    ]);
+    const delivery = createPhaserPackDelivery(manifest, {
+      baseUrl: origin.url,
+      createWorker: createFakeWorkerFactory().factory,
+    });
+    let retry: ReturnType<typeof delivery.prepare> | undefined;
+    delivery.subscribe((event) => {
+      if (event.kind === 'prepare' && event.phase === 'failed') {
+        for (const [path, file] of packFiles) {
+          origin.files.set(path, file);
+        }
+        retry = delivery.prepare('solo');
+      }
+    });
+    await expect(delivery.prepare('solo')).rejects.toMatchObject({ code: 'transport' });
+    expect(retry).toBeDefined();
+    const handle = await retry!;
+    expect(delivery.snapshot().archiveRequests).toBe(2);
+    expect(delivery.snapshot().staging[0]?.handles).toBe(1);
+    handle.release();
+    delivery.dispose();
+  });
+});
