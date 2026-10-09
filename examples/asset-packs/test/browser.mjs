@@ -267,7 +267,7 @@ try {
     // The app resolves manifest artifact paths by URL-encoding each
     // segment; expected-failure URLs must match that encoding exactly.
     const encodedUrl = (artifactPath) => new URL(
-      artifactPath.split('/').map((segment) => encodeURIComponent(segment)).join('/'),
+      artifactPath.split('/').map((segment) => encodeURIComponent(segment).replace(/%40/gu, '@')).join('/'),
       remote.url,
     ).href;
     const zipManifest = JSON.parse(await readFile(join(root, 'artifacts/origin/delivery/zip/asset-pack-delivery.json'), 'utf8'));
