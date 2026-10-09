@@ -142,6 +142,9 @@ export function runGameAcceptance(input: RunGameAcceptanceInput): RunGameAccepta
   const commandRunner = input.commandRunner
     ?? ((step) => runAcceptanceCommand(step, input.env ?? process.env, commandTimeoutMs));
   const gameRoot = path.resolve(input.gameRoot);
+  const reportDir = path.resolve(input.reportDir);
+  const jsonFile = path.join(reportDir, 'acceptance-report.json');
+  const markdownFile = path.join(reportDir, 'acceptance-report.md');
   const startedAtMs = now();
   const results: GameAcceptanceStepResult[] = [];
   let failed = false;
@@ -149,6 +152,10 @@ export function runGameAcceptance(input: RunGameAcceptanceInput): RunGameAccepta
   const performance = input.performance === undefined
     ? undefined
     : preparePerformanceAcceptance(gameRoot, input.performance);
+  if (performance !== undefined && [jsonFile, markdownFile].some((file) =>
+    file === performance.reportFile || file === path.resolve(gameRoot, performance.budgetEvidence.file))) {
+    throw new Error('Performance budget and report must not overwrite acceptance handoff files.');
+  }
   let performanceStartedAtMs: number | undefined;
   if (input.performance !== undefined
     && (input.steps.filter((step) => step.id === input.performance?.stepId).length !== 1
@@ -314,10 +321,6 @@ export function runGameAcceptance(input: RunGameAcceptanceInput): RunGameAccepta
       ...(performanceEvidence === undefined ? {} : { performance: performanceEvidence }),
     },
   };
-  const reportDir = path.resolve(input.reportDir);
-  const jsonFile = path.join(reportDir, 'acceptance-report.json');
-  const markdownFile = path.join(reportDir, 'acceptance-report.md');
-
   mkdirSync(reportDir, { recursive: true });
   writeEvidenceReportFiles({
     jsonFile,

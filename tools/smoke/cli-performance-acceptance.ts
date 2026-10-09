@@ -243,6 +243,75 @@ try {
     'Success exit without a fresh report must fail',
   );
   writeBudget();
+  for (const name of ['acceptance-report.json', 'acceptance-report.md']) {
+    const handoffFile = join(root, 'acceptance', name);
+    for (const collision of ['budget', 'report']) {
+      if (collision === 'budget') {
+        writeFileSync(handoffFile, JSON.stringify(budget));
+      }
+      const before = readFileSync(handoffFile, 'utf8');
+      let ran = false;
+      assert.throws(
+        () =>
+          runGameAcceptance({
+            gameRoot: root,
+            reportDir: join(root, 'acceptance'),
+            options: {},
+            performance: {
+              budgetFile: collision === 'budget' ? handoffFile : budgetFile,
+              reportFile: collision === 'report' ? handoffFile : reportFile,
+              stepId: 'performance',
+              targets: ['web-preview'],
+            },
+            steps: [{ id: 'performance', label: 'Performance', command: 'pnpm', cwd: root }],
+            commandRunner: () => {
+              ran = true;
+              return { exitCode: 0 };
+            },
+            log: () => undefined,
+          }),
+        /handoff/u,
+      );
+      assert.equal(ran, false, 'Collisions must be rejected before collection');
+      assert.equal(
+        readFileSync(handoffFile, 'utf8'),
+        before,
+        'Rejected inputs must preserve handoff files',
+      );
+    }
+  }
+  for (const field of ['constructor', 'prototype', 'update-cost', '1update', 'x'.repeat(65)]) {
+    assert.throws(
+      () =>
+        validatePerformanceBudget({
+          ...budget,
+          profiles: [{ ...budget.profiles[0], metrics: { [field]: { p95: 1 } } }],
+        }),
+      /metric name/u,
+    );
+  }
+  const customMetrics = Object.fromEntries(
+    Array.from({ length: 64 }, (_, index) => [`field${index}`, { p95: 1 }]),
+  );
+  assert.doesNotThrow(() =>
+    validatePerformanceBudget({
+      ...budget,
+      profiles: [
+        {
+          ...budget.profiles[0],
+          metrics: { ...customMetrics, intervalMs: { p95: 1 }, totalCpuMs: { p95: 1 } },
+        },
+      ],
+    }),
+  );
+  assert.throws(
+    () =>
+      validatePerformanceBudget({
+        ...budget,
+        profiles: [{ ...budget.profiles[0], metrics: { ...customMetrics, extra: { p95: 1 } } }],
+      }),
+    /metric budgets/u,
+  );
   assert.throws(() =>
     preparePerformanceAcceptance(root, {
       budgetFile,

@@ -1,6 +1,6 @@
 ---
 npm/@mpgd/cli: minor
-npm/create-mpgd-game: minor
+npm/@mpgd/create-game: minor
 ---
 
 Add optional foreground performance collection to game acceptance, with bounded

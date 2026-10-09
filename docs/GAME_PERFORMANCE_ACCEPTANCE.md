@@ -19,7 +19,9 @@ contract and creates no performance requirement.
 
 A budget has schemaVersion 1 and 1–64 profiles. Each profile names an id, target,
 scenario, renderer, device, minimum sample count (at least two), and 1–66 metric
-budgets. Metric names match the profiler snapshot; thresholds `p95`, `p99` and
+budgets: the two built-ins (`intervalMs`, `totalCpuMs`) plus at most 64 custom
+names of at most 64 characters matching `[a-z][a-zA-Z0-9]*`, excluding
+`constructor` and `prototype`. Metric names match the profiler snapshot; thresholds `p95`, `p99` and
 `max` are milliseconds. Choose limits for the actual device/scenario. There is
 no global FPS threshold.
 
@@ -65,7 +67,8 @@ Each measurement contains:
 Before collection, acceptance removes old report output and pins the bounded
 budget file's identity. It accepts only timestamps within the current collection
 run and rechecks budget/artifact hashes. Report/budget JSON is capped at 1 MiB;
-paths must stay inside the game root without symlink escapes. Handoff JSON and
+paths must stay inside the game root without symlink escapes and cannot collide
+with the acceptance JSON/Markdown output paths. Handoff JSON and
 Markdown carry the checked report/budget evidence and any validation error.
 
 CPU fields are synchronous measured spans. They can overlap and do not certify

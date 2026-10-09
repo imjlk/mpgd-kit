@@ -103,8 +103,15 @@ export function validatePerformanceBudget(value: unknown): PerformanceBudget {
     ids.add(id);
     count(profile.minSamples, `${id} minSamples`, 2);
     const metrics = record(profile.metrics, `${id} metrics`);
-    if (Object.keys(metrics).length === 0 || Object.keys(metrics).length > 66) {
+    const metricNames = Object.keys(metrics);
+    const builtInMetrics = ['intervalMs', 'totalCpuMs'];
+    const customNames = metricNames.filter((field) => !builtInMetrics.includes(field));
+    if (metricNames.length === 0 || customNames.length > 64) {
       throw new Error(`${id} needs 1–66 metric budgets.`);
+    }
+    if (customNames.some((field) => field.length > 64 || !/^[a-z][a-zA-Z0-9]*$/.test(field)
+      || ['constructor', 'prototype'].includes(field))) {
+      throw new Error(`${id} has an invalid profiler metric name.`);
     }
     for (const [field, itemBudget] of Object.entries(metrics)) {
       text(field, 'Performance metric name');
