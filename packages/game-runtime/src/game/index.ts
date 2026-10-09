@@ -4,7 +4,11 @@ import type {
 } from '@mpgd/game-services/operations';
 import type { PlatformGateway, RewardedAdResult } from '@mpgd/platform';
 import type { AdPlacementInput } from '@mpgd/platform/ads';
-import { createGameExecutionController, type GameExecutionController } from '../index.js';
+import {
+  createGameExecutionController,
+  type ExecutionBlock,
+  type GameExecutionController,
+} from '../index.js';
 import { bindGameLifecycle, type GameLifecycleState } from '../platform/index.js';
 import {
   createFullScreenPresentationScope,
@@ -32,6 +36,11 @@ export interface GameServicePorts {
     reconcile(): Promise<unknown>;
   };
 }
+/** One scene's logical play state; execution blocks remain owned by the game runtime. */
+export interface GameGameplayScope {
+  setActive(active: boolean): void;
+  dispose(): void;
+}
 export interface GamePlatformRuntime<
   T extends PlatformGateway = PlatformGateway,
   S extends GameServicePorts = GameServicePorts,
@@ -41,6 +50,7 @@ export interface GamePlatformRuntime<
   readonly presentation: FullScreenPresentationScope;
   readonly services: S;
   readonly actions?: GameActionCoordinator;
+  createGameplayScope(): GameGameplayScope;
   /** Reconcile existing journal entries only; this method never opens platform UI. */
   reconcile(): Promise<void>;
   /** Game teardown; native observers and application-owned late recovery may continue. */
@@ -84,12 +94,81 @@ export function createGamePlatformRuntime<T extends PlatformGateway, S extends G
   let actions: GameActionCoordinator | undefined;
   let unsubscribeResume: (() => void) | undefined;
   let disposed = false;
+  let hostAudio: ExecutionBlock | undefined;
+  let unsubscribeHostAudio: (() => void) | undefined;
+  const gameplayScopes = new Map<object, boolean>();
+  const lifecycleReason = 'game-runtime:lifecycle';
+  let gameplayActive = false;
+  let hasPlayed = false;
+  let loading = true;
+  let unsubscribeActivity: (() => void) | undefined;
+  const updateActivity = () => {
+    const snapshot = execution.getSnapshot();
+    const activity = gateway.gameActivity;
+    const playable = [...gameplayScopes.values()].some(Boolean);
+    const blocked = snapshot.blocks.some((block) => block.channels.includes('simulation')
+      && !(activity?.handlesFocusChanges === true && hasPlayed && block.reason === lifecycleReason));
+    const next = !disposed && snapshot.status === 'active' && playable && !blocked;
+    if (next && loading) {
+      observe(() => {
+        activity?.setLoading(false);
+        loading = false;
+      }, input.onObserverError);
+      if (loading) {
+        return;
+      }
+    }
+    if (next !== gameplayActive) {
+      observe(() => {
+        activity?.setGameplayActive(next);
+        gameplayActive = next;
+        if (next) {
+          hasPlayed = true;
+        }
+      }, input.onObserverError);
+    }
+  };
+  const createGameplayScope = (): GameGameplayScope => {
+    const owner = {};
+    let ended = disposed;
+    if (!ended) {
+      gameplayScopes.set(owner, false);
+    }
+    return Object.freeze({
+      setActive(active: boolean) {
+        if (!ended && !disposed) {
+          gameplayScopes.set(owner, active);
+          updateActivity();
+        }
+      },
+      dispose() {
+        if (!ended) {
+          ended = true;
+          gameplayScopes.delete(owner);
+          updateActivity();
+        }
+      },
+    });
+  };
   const dispose = () => {
     if (disposed) {
       return;
     }
     disposed = true;
+    updateActivity();
+    if (loading) {
+      observe(() => {
+        gateway.gameActivity?.setLoading(false);
+        loading = false;
+      }, input.onObserverError);
+    }
+    unsubscribeActivity?.();
+    gameplayScopes.clear();
     execution.destroy();
+    if (unsubscribeHostAudio !== undefined) {
+      observe(unsubscribeHostAudio, input.onObserverError);
+    }
+    hostAudio?.release();
     actions?.dispose();
     coordinated?.dispose();
     presentation.dispose();
@@ -123,14 +202,35 @@ export function createGamePlatformRuntime<T extends PlatformGateway, S extends G
       });
     }
     lifecycle = bindGameLifecycle({ controller: execution, source: gateway.lifecycle, initialState: input.initialLifecycleState,
+      reason: lifecycleReason,
       ...(input.onObserverError === undefined ? {} : { onError: input.onObserverError }),
     });
     unsubscribeResume = gateway.lifecycle.onResume(() => { observe(reconcile, input.onObserverError); });
+    const settings = gateway.gameSettings;
+    if (settings !== undefined) {
+      const updateMute = (muted: boolean) => {
+        if (disposed) {
+          return;
+        }
+        if (muted && hostAudio === undefined) {
+          hostAudio = execution.acquireBlock({ reason: 'game-runtime:host-audio', channels: ['audio'] });
+        } else if (!muted && hostAudio !== undefined) {
+          const owned = hostAudio;
+          hostAudio = undefined;
+          owned.release();
+        }
+      };
+      unsubscribeHostAudio = settings.onAudioMuteChange(updateMute);
+      updateMute(settings.getAudioMuted());
+    }
+    observe(() => gateway.gameActivity?.setLoading(true), input.onObserverError);
+    unsubscribeActivity = execution.subscribe(updateActivity);
     return Object.freeze({
       gateway,
       execution,
       presentation,
       services,
+      createGameplayScope,
       ...(actions === undefined ? {} : { actions }),
       reconcile,
       dispose,

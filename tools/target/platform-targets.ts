@@ -128,6 +128,15 @@ function assertPlatformTargetConfigShape(
     throw new Error(`Platform target ${target} cannot use the reserved microsoft-store adapter.`);
   }
 
+  if (target === 'crazygames' && (input.kind !== 'web' || input.adapter !== 'crazygames')) {
+    throw new Error('crazygames target must use the web kind and crazygames adapter.');
+  }
+  if (input.adapter === 'crazygames' && (input.kind !== 'web' || input.installable !== false)) {
+    throw new Error('CrazyGames requires a web target with installable: false.');
+  }
+  if (input.crazyGamesLaunch !== undefined && (input.adapter !== 'crazygames' || !['basic', 'full'].includes(input.crazyGamesLaunch as string))) {
+    throw new Error('crazyGamesLaunch must be basic or full on a CrazyGames target.');
+  }
   switch (input.kind) {
     case 'web':
       assertString(input.output, `${target}.output`);

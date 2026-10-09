@@ -35,6 +35,14 @@ const webStoreIntegrationConfig = {
 const expectedIntegrations: Record<string, TargetIntegrationConfig> = {
   'web-preview': webStoreIntegrationConfig,
   'microsoft-store': webStoreIntegrationConfig,
+  crazygames: {
+    identityUpgrade: 'unsupported',
+    presentation: 'available',
+    sharing: 'unsupported',
+    inboundShare: 'unsupported',
+    notifications: 'unsupported',
+    presentationMode: 'fullscreen',
+  },
   verse8: {
     identityUpgrade: 'unsupported',
     presentation: 'available',
@@ -427,6 +435,23 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
     );
     assertEqual(config.localization.enabled, true, 'verse8 localization should be enabled');
     assertEqual(config.storage.support, 'local', 'verse8 should use local storage by default');
+    return;
+  }
+
+  if (target === 'crazygames') {
+    assertEqual(
+      config.monetization.products.every((product) => !product.enabled),
+      true,
+      'CrazyGames IAP is disabled',
+    );
+    assertEqual(config.ads.placements.every((placement) => placement.enabled
+      === (placement.type === 'interstitial' && config.ads.interstitialAds)), true, 'CrazyGames enables only approved interstitials');
+    assertEqual(
+      config.ads.rewardedAds,
+      false,
+      'CrazyGames rewards require independent verification',
+    );
+    assertEqual(config.storage.support, 'local', 'CrazyGames uses local saves');
     return;
   }
 

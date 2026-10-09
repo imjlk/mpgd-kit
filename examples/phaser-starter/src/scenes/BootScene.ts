@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
 
+import type { StarterContext } from '../runtime/starterContext';
+
 import { starterImageAssets } from '../game/assets/manifest';
 
 export class BootScene extends Phaser.Scene {
@@ -14,6 +16,7 @@ export class BootScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.scene.start('StarterScene');
+    const context = this.registry.get('starterContext') as StarterContext;
+    this.scene.start(context.launchIntent.entry === 'free-play' ? 'PlayScene' : 'StarterScene');
   }
 }

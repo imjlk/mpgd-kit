@@ -36,6 +36,10 @@
     "./microsoft-store-native": {
       "types": "./dist/microsoft-store-native.d.ts",
       "default": "./dist/microsoft-store-native.js"
+    },
+    "./crazygames": {
+      "types": "./dist/crazygames.d.ts",
+      "default": "./dist/crazygames.js"
     }
   },
   "files": [

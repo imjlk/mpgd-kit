@@ -104,6 +104,22 @@ state behind target services. Treat client commerce as pending; authoritative
 grants belong in a game-owned Agent8 server purchase event with consume-once
 catalog handling and verified completion logic for leaderboards.
 
+### CrazyGames
+
+Use the browser adapter's `/crazygames` entry point and the non-installable
+`crazygames` web target. `crazyGamesLaunch: "basic"` disables monetization;
+change it to `"full"` only after Full Launch approval. Configured midgame
+interstitials use the shared advertising presentation contract. SDK callbacks
+must never grant rewards or purchases: those capabilities remain disabled.
+
+Playable scenes own gameplay scopes through the game runtime. Keep loading,
+gameplay, and host `muteAudio` policy behind `PlatformGateway`; the host handles
+focus reporting. Build and smoke with `pnpm exec mpgd target build crazygames`
+and `pnpm exec mpgd target smoke crazygames`, providing `--kit-path` and the
+project's `--targets-file`. See the kit's
+[CrazyGames guide](https://github.com/imjlk/mpgd-kit/blob/main/docs/CRAZYGAMES.md)
+and [official SDK documentation](https://docs.crazygames.com/sdk/intro/).
+
 ### Apps in Toss
 
 Use official Apps in Toss documentation/MCP before SDK or review-flow changes.

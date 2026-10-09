@@ -90,6 +90,121 @@ const input = {
   idempotencyKey: 'original-claim',
 };
 describe('game-owned platform assembly', () => {
+  it('gives host mute and other audio owners independent lifetimes', () => {
+    const f = fixture();
+    let changed: ((muted: boolean) => void) | undefined;
+    const removed = vi.fn();
+    const runtime = createGamePlatformRuntime({
+      gateway: {
+        ...f.gateway,
+        gameSettings: {
+          getAudioMuted: () => true,
+          onAudioMuteChange(callback: (muted: boolean) => void) {
+            changed = callback;
+            return removed;
+          },
+        },
+      },
+      createServices: () => ({}),
+      initialLifecycleState: 'active',
+    });
+    expect(runtime.execution.getSnapshot().blocked.audio).toBe(true);
+    expect(runtime.execution.getSnapshot().blocked.simulation).toBe(false);
+    const settings = runtime.execution.acquireBlock({ reason: 'settings', channels: ['audio'] });
+    changed?.(false);
+    expect(runtime.execution.getSnapshot().blocked.audio).toBe(true);
+    settings.release();
+    expect(runtime.execution.getSnapshot().blocked.audio).toBe(false);
+    changed?.(true);
+    runtime.dispose();
+    changed?.(false);
+    expect(runtime.execution.getSnapshot().status).toBe('destroyed');
+    expect(runtime.execution.getSnapshot().blocked.audio).toBe(true);
+    expect(removed).toHaveBeenCalledTimes(1);
+  });
+  it('reports logical gameplay, keeps focus handling with the host, and preserves independent pause owners', () => {
+    const f = fixture();
+    const events: string[] = [];
+    const runtime = createGamePlatformRuntime({
+      gateway: {
+        ...f.gateway,
+        gameActivity: {
+          handlesFocusChanges: true,
+          setLoading: (loading: boolean) => {
+            events.push(`loading:${loading}`);
+          },
+          setGameplayActive: (active: boolean) => {
+            events.push(`gameplay:${active}`);
+          },
+        },
+      },
+      createServices: () => ({}),
+      initialLifecycleState: 'active',
+    });
+    const first = runtime.createGameplayScope();
+    expect(events).toEqual(['loading:true']);
+    first.setActive(true);
+    for (const pause of f.pauses) {
+      pause();
+    }
+    expect(runtime.execution.getSnapshot().blocked.simulation).toBe(true);
+    expect(events).toEqual(['loading:true', 'loading:false', 'gameplay:true']);
+    for (const resume of f.resumes) {
+      resume();
+    }
+    const settings = runtime.execution.acquireBlock({
+      reason: 'settings',
+      channels: ['simulation', 'gameplay-input'],
+    });
+    const native = runtime.execution.acquireBlock({
+      reason: 'native-ad',
+      channels: ['simulation', 'gameplay-input', 'audio'],
+    });
+    for (const pause of f.pauses) {
+      pause();
+    }
+    settings.release();
+    expect(events.at(-1)).toBe('gameplay:false');
+    native.release();
+    expect(events.at(-1)).toBe('gameplay:true');
+    const beforeFocus = events.length;
+    for (const resume of f.resumes) {
+      resume();
+    }
+    expect(events.length).toBe(beforeFocus);
+    const second = runtime.createGameplayScope();
+    second.setActive(true);
+    first.dispose();
+    expect(events.at(-1)).toBe('gameplay:true');
+    second.setActive(false);
+    expect(events.at(-1)).toBe('gameplay:false');
+    second.setActive(true);
+    runtime.dispose();
+    second.setActive(true);
+    second.dispose();
+    expect(events.filter((event) => event === 'gameplay:true')).toHaveLength(3);
+    expect(events.at(-1)).toBe('gameplay:false');
+    expect(f.pauses.size + f.resumes.size).toBe(0);
+  });
+
+  it('does not report initial gameplay while backgrounded and closes loading on early teardown', () => {
+    const f = fixture();
+    const loading = vi.fn();
+    const active = vi.fn();
+    const runtime = createGamePlatformRuntime({
+      gateway: {
+        ...f.gateway,
+        gameActivity: { handlesFocusChanges: true, setLoading: loading, setGameplayActive: active },
+      },
+      createServices: () => ({}),
+      initialLifecycleState: 'inactive',
+    });
+    runtime.createGameplayScope().setActive(true);
+    expect(active).not.toHaveBeenCalled();
+    runtime.dispose();
+    expect(loading.mock.calls).toEqual([[true], [false]]);
+    expect(active).not.toHaveBeenCalled();
+  });
   it('requires journal recovery before v2 rewarded display', async () => {
     const f = fixture();
     const runtime = createGamePlatformRuntime({

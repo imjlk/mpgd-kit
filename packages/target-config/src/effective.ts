@@ -29,6 +29,7 @@ export type EffectiveAvailabilityReason =
 export interface EffectivePlatformTargetMetadata {
   readonly kind: string;
   readonly adapter: string;
+  readonly crazyGamesLaunch?: 'basic' | 'full';
   readonly authoritativeGameServices?: boolean;
   readonly artifact?: string;
   readonly output?: string;
@@ -218,6 +219,11 @@ function resolveAuthoritativeGameServicesConfig(
   config: TargetConfig,
   platformTarget: EffectivePlatformTargetMetadata | undefined,
 ): TargetConfig {
+  if (config.runtime === 'crazygames-web') {
+    const interstitialAds = platformTarget?.crazyGamesLaunch === 'full' && config.features.interstitialAds && config.monetization.interstitialAds;
+    const monetization = { ...disabledAuthoritativeMonetization, interstitialAds };
+    return { ...config, features: { ...config.features, ...monetization }, monetization };
+  }
   if (platformTarget?.authoritativeGameServices !== false) {
     return config;
   }

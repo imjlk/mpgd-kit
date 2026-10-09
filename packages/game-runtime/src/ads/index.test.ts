@@ -114,6 +114,69 @@ function gateway(): PlatformGateway {
   };
 }
 describe('full-screen presentation ownership', () => {
+  it('handles closure and start reentry while acquiring deferred audio', () => {
+    for (const reentry of ['start', 'close'] as const) {
+      const { execution, presentation } = environment();
+      const ad = presentation.acquire({
+        kind: 'interstitial',
+        invocationId: 'audio',
+        audioStart: 'started',
+      });
+      execution.subscribe((snapshot) => {
+        if (snapshot.blocked.audio) {
+          if (reentry === 'start') {
+            ad.markStarted();
+          } else {
+            ad.confirmClosed();
+          }
+        }
+      });
+      ad.markStarted();
+      if (reentry === 'start') {
+        expect(execution.getSnapshot().blocks.filter((block) => block.channels.includes('audio'))).toHaveLength(
+          1,
+        );
+      } else {
+        expect(presentation.getSnapshot().status).toBe('ready');
+      }
+      ad.confirmClosed();
+      expect(execution.getSnapshot().blocks).toHaveLength(0);
+    }
+  });
+  it('defers audio until physical start and releases only its own blocks', () => {
+    const { execution, presentation } = environment();
+    const loadFailure = presentation.acquire({
+      kind: 'interstitial',
+      invocationId: 'a',
+      audioStart: 'started',
+    });
+    expect(execution.getSnapshot().blocked.simulation).toBe(true);
+    expect(execution.getSnapshot().blocked.audio).toBe(false);
+    loadFailure.confirmClosed();
+    expect(execution.getSnapshot().blocks).toHaveLength(0);
+    const ad = presentation.acquire({
+      kind: 'interstitial',
+      invocationId: 'b',
+      audioStart: 'started',
+    });
+    ad.markStarted();
+    const settings = execution.acquireBlock({ reason: 'settings', channels: ['audio'] });
+    expect(execution.getSnapshot().blocked.audio).toBe(true);
+    ad.confirmClosed();
+    expect(execution.getSnapshot().blocked.audio).toBe(true);
+    expect(execution.getSnapshot().blocked.simulation).toBe(false);
+    settings.release();
+    expect(execution.getSnapshot().blocked.audio).toBe(false);
+    const unknown = presentation.acquire({
+      kind: 'interstitial',
+      invocationId: 'c',
+      audioStart: 'started',
+    });
+    unknown.markUnknown();
+    expect(execution.getSnapshot().blocked.audio).toBe(true);
+    unknown.confirmClosed();
+    expect(execution.getSnapshot().blocks).toHaveLength(0);
+  });
   it('shares all formats and releases only its own execution/audio blocks', () => {
     const { execution, presentation } = environment();
     const background = execution.acquireBlock({
@@ -153,6 +216,27 @@ describe('full-screen presentation ownership', () => {
   });
 });
 describe('coordinated advertising', () => {
+  it('preserves deferred audio policy through the coordinated provider', async () => {
+    const native = sdk();
+    const state = environment();
+    const provider = createCoordinatedAdProvider({
+      provider: { ...native.provider, presentationAudio: 'started' },
+      ...state,
+    });
+    const input = { ...request('audio'), format: 'interstitial' as const };
+    const result = provider.show(input);
+    await flush();
+    expect(provider.presentationAudio).toBe('started');
+    expect(state.execution.getSnapshot().blocked.audio).toBe(false);
+    expect(state.execution.getSnapshot().blocked.simulation).toBe(true);
+    native.emit('started', 'audio', 1);
+    expect(state.execution.getSnapshot().blocked.audio).toBe(true);
+    native.emit('closed', 'audio', 2);
+    native.finish(input, 'not-applicable');
+    await result;
+    expect(state.execution.getSnapshot().blocked.audio).toBe(false);
+    expect(state.presentation.getSnapshot().status).toBe('ready');
+  });
   it('recovers late correlation using the original journal key and can retry when eligibility changes', async () => {
     const native = sdk('delayed');
     const recovery = {

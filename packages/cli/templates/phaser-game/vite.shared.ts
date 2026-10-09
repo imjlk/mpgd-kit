@@ -14,6 +14,7 @@ import { resolveTextSelectionMode } from './src/platform/textSelection';
 interface RuntimePlatformTargetMetadata {
   readonly kind: string;
   readonly adapter: string;
+  readonly crazyGamesLaunch?: 'basic' | 'full';
   readonly authoritativeGameServices?: boolean;
   readonly integrations?: Record<string, unknown>;
 }
@@ -151,6 +152,8 @@ export function resolveBuildGatewayModule(input: {
       return input.debug && input.buildId === devvitSandboxBuildId
         ? 'src/platform/buildGateways/redditSandbox.ts'
         : 'src/platform/buildGateways/reddit.ts';
+    case 'crazygames':
+      return 'src/platform/buildGateways/crazygames.ts';
     case 'verse8':
       return 'src/platform/buildGateways/verse8.ts';
     case 'microsoft-store':
@@ -245,6 +248,9 @@ function readRuntimePlatformTarget(
     throw new Error(`Platform target ${configTarget} must define kind and adapter.`);
   }
 
+  if (target.crazyGamesLaunch !== undefined && (target.adapter !== 'crazygames' || !['basic', 'full'].includes(target.crazyGamesLaunch as string))) {
+    throw new Error(`Invalid CrazyGames launch setting for ${configTarget}.`);
+  }
   if (target.integrations !== undefined && !isRecord(target.integrations)) {
     throw new Error(`Platform target ${configTarget} integrations must be an object.`);
   }
@@ -262,6 +268,7 @@ function readRuntimePlatformTarget(
     ...(target.authoritativeGameServices === undefined
       ? {}
       : { authoritativeGameServices: target.authoritativeGameServices }),
+    ...(target.crazyGamesLaunch === undefined ? {} : { crazyGamesLaunch: target.crazyGamesLaunch as 'basic' | 'full' }),
     ...(target.integrations === undefined ? {} : { integrations: target.integrations }),
   };
 }

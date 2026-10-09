@@ -110,6 +110,7 @@ export function createCoordinatedAdProvider(input: {
   const protocol = provider.protocol;
   const protocolVersion = provider.protocolVersion;
   const rewardSignal = provider.rewardSignal;
+  const presentationAudio = provider.presentationAudio;
   const capacity = input.maxRememberedInvocations ?? 1024;
   if (!Number.isSafeInteger(capacity) || capacity < 1 || capacity > 10000) {
     throw new RangeError('maxRememberedInvocations must be from 1 to 10000.');
@@ -455,7 +456,7 @@ export function createCoordinatedAdProvider(input: {
         }
         // Availability may await an SDK check; arbitrate again immediately before display.
         if (disposed || input.presentation.getSnapshot().status === 'disposed') { throw new PresentationExecutionError('disposed'); }
-        try { flight.lease = input.presentation.acquire({ kind: request.format, invocationId: request.invocationId }); } catch (error) {
+        try { flight.lease = input.presentation.acquire({ kind: request.format, invocationId: request.invocationId, audioStart: presentationAudio ?? 'requested' }); } catch (error) {
           if (error instanceof PresentationExecutionError && error.code === 'busy') {
             deliver(flight, unavailable(request, 'busy'));
             return;
@@ -485,6 +486,7 @@ export function createCoordinatedAdProvider(input: {
   }
   return Object.freeze({
     id: id, protocol: protocol, protocolVersion: protocolVersion, rewardSignal: rewardSignal,
+    ...(presentationAudio === undefined ? {} : { presentationAudio }),
     getAvailability,
     async preload(supplied) {
       const request = placement(supplied);

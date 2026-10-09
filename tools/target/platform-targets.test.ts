@@ -7,6 +7,14 @@ import {
 
 const validConfig = {
   targets: {
+    crazygames: {
+      kind: 'web',
+      gameApp: '.',
+      adapter: 'crazygames',
+      installable: false,
+      crazyGamesLaunch: 'basic',
+      output: 'artifacts/crazygames',
+    },
     wechat: {
       kind: 'wechat-minigame',
       gameApp: '.',
@@ -142,4 +150,20 @@ function withTikTokBudget(override: Readonly<Record<string, unknown>>): unknown 
       },
     },
   };
+}
+
+for (const overrides of [
+  { installable: true },
+  { crazyGamesLaunch: 'unapproved' },
+  { kind: 'devvit-web' },
+]) {
+  assert.throws(
+    () =>
+      assertPlatformTargetsConfigShape({
+        targets: {
+          crazygames: { ...validConfig.targets.crazygames, ...overrides },
+        },
+      }),
+    /CrazyGames|crazygames|crazyGamesLaunch/u,
+  );
 }

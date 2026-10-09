@@ -29,6 +29,7 @@ import {
   stageWrapperIcon,
 } from '../icons/staging';
 import { requireCanonicalAppVersion } from './app-version';
+import { assertCrazyGamesArtifact } from './crazygames-artifact';
 import { embeddedTargetConfigFileName, writeEffectiveTargetConfigs } from './effective-config';
 import { createReleaseManifestWriter, resolveReleaseProvenance } from './generate-release-manifest';
 import {
@@ -336,6 +337,9 @@ try {
         assertNonInstallableWebArtifact(output);
       } else {
         assertInstallableWebArtifact(output);
+      }
+      if (target.adapter === 'crazygames') {
+        assertCrazyGamesArtifact(output);
       }
       writeManifest(targetName, profile, outputConfigPath, env);
       break;

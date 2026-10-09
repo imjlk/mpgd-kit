@@ -12,6 +12,7 @@ import {
 
 import { readJsonFile } from '../io';
 import { assertFreshNativeBuildArtifact } from '../target/native-build-attempt';
+import { assertCrazyGamesArtifact } from '../target/crazygames-artifact';
 import {
   createMicrosoftStorePwaRevision,
   readMicrosoftStorePwaReleaseEvidence,
@@ -117,6 +118,9 @@ export function verifyTargetArtifacts(
     assertPathExists(artifactPath, `${target} artifact`);
     if (targetConfig.kind === 'web') {
       assertWebArtifactInstallability(artifactPath, targetConfig.installable);
+      if (targetConfig.adapter === 'crazygames') {
+        assertCrazyGamesArtifact(artifactPath);
+      }
     }
     assertPathInsideTargetBase(effectiveConfigPath, `${target} effective target config`);
     assertPathExists(effectiveConfigPath, `${target} effective target config`);

@@ -129,6 +129,11 @@ an uncoordinated provider through the gateway.
 - Execution ownership is per source: ad presentation, background, settings,
   and other callers release only their own blocks. Audio uses the same
   ownership discipline where the runtime exposes an audio channel.
+- `AdProvider.presentationAudio` defaults to `requested`. A provider can select
+  `started` when its host requires audio to continue until a native start
+  observation. Simulation/input arbitration still begins at request time;
+  native start adds a separate audio block. Unknown presentation quarantines
+  audio, and a terminal native observation releases only that lease's blocks.
 
 ## Waiting, uncertainty, and teardown {#uncertainty}
 
