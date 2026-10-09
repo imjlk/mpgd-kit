@@ -105,6 +105,7 @@
     "smoke:cli-hosted-pwa-deployment": "node tools/run-ttsx.mjs tools/smoke/cli-hosted-pwa-deployment.ts",
     "smoke:cli-kit-upgrade": "node tools/run-ttsx.mjs tools/smoke/cli-kit-upgrade.ts",
     "smoke:cli-asset-pack-build": "node tools/run-ttsx.mjs tools/smoke/cli-asset-pack-build.ts",
+    "smoke:cli-asset-pack-target": "node tools/run-ttsx.mjs tools/smoke/cli-asset-pack-target.ts",
     "smoke:phaser-assets-archive-decode": "node tools/run-ttsx.mjs tools/smoke/phaser-assets-archive-decode.ts",
     "smoke:cli-configured-web-targets": "node tools/run-ttsx.mjs tools/smoke/cli-configured-web-targets.ts",
     "smoke:cli-game-release-inputs": "node tools/run-ttsx.mjs tools/smoke/cli-game-release-inputs.ts",

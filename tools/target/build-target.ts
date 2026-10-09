@@ -16,6 +16,14 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import { loadEnv } from 'vite';
+import { assertAssetPackNativeArtifact } from '../../packages/cli/src/asset-pack-native-audit';
+import {
+  assertAssetPackTargetArtifact,
+  assertAssetPackTargetOutput,
+  assetPackTargetNamespace,
+  buildAssetPackTarget,
+  type AssetPackTargetReport,
+} from '../../packages/cli/src/asset-pack-target';
 
 import { assertProductionTargetReadiness } from '../../packages/cli/src/production-target-readiness';
 import {
@@ -117,6 +125,9 @@ assertDisjointWebTargetOutputs(config.targets, targetPath, [
     name: 'effective target config output',
     path: effectiveTargetConfigOutputDir(configBaseDir),
   },
+  ...Object.entries(config.targets).filter(([, configured]) => configured.assetPacks !== undefined).map(([name]) => ({
+    name: `remote asset pack output ${name}`, path: targetPath(`artifacts/asset-packs/${name}`),
+  })),
 ]);
 assertDisjointMiniGameTargetOutputs(config.targets, targetPath, [
   { name: 'release manifest', path: releaseManifestPath(configBaseDir) },
@@ -201,6 +212,10 @@ let nativeCompleted = false;
 const runtimeTargetConfigMatrixFile = createRuntimeTargetConfigMatrixFile(
   runtimeTargetConfigMatrix,
 );
+const assetTargetTemporary = target.assetPacks === undefined
+  ? undefined
+  : mkdtempSync(join(tmpdir(), 'mpgd-target-assets-'));
+let assetTargetReport: AssetPackTargetReport | undefined;
 const env: NodeJS.ProcessEnv = {
   ...process.env,
   ...monetizationCatalogEnv,
@@ -219,6 +234,23 @@ const env: NodeJS.ProcessEnv = {
 };
 
 try {
+  if (target.assetPacks !== undefined && assetTargetTemporary !== undefined) {
+    if (isMiniGameTarget(target)) {
+      throw new Error(
+        'assetPacks target builds require the web asset-pack runtime; experimental mini-game runtimes keep their existing package-local texture policy',
+      );
+    }
+    await assertAssetPackTargetOutput({
+      policy: target.assetPacks,
+      baseDir: configBaseDir,
+      outDir: targetPath(`artifacts/asset-packs/${targetName}`),
+    });
+    assetTargetReport = await buildAssetPackTarget({
+      policy: target.assetPacks,
+      baseDir: configBaseDir,
+      outDir: join(assetTargetTemporary, 'deployment'),
+    });
+  }
   if (targetName === 'microsoft-store' && target.kind === 'web' && profile === 'production') {
     assertMicrosoftStorePwaProvenance({
       appVersion: requireString(env.APP_VERSION, 'APP_VERSION'),
@@ -245,6 +277,7 @@ try {
       env,
     );
     embedEffectiveTargetConfig(targetName, webOutput, env);
+    await stageTargetAssetPacks(webOutput);
     if (target.kind !== 'web') {
       stageWebIconEvidence(generatedIcons, webOutput);
     }
@@ -345,6 +378,10 @@ try {
       if (target.adapter === 'crazygames') {
         assertCrazyGamesArtifact(output);
       }
+      if (assetTargetReport !== undefined) {
+        await assertAssetPackTargetArtifact(assetTargetReport, output);
+      }
+      await writeRemoteAssetPacks();
       writeManifest(targetName, profile, outputConfigPath, env);
       break;
     }
@@ -356,6 +393,13 @@ try {
       replaceDirectory(`${gameApp}/dist`, webDir);
       mirrorAitRuntimeAssets(gameApp, wrapperApp);
       run('pnpm', ['--dir', wrapperApp, 'exec', 'vite', 'build', '--mode', profile], env);
+      if (assetTargetReport !== undefined) {
+        await assertAssetPackTargetArtifact(
+          assetTargetReport,
+          `${wrapperApp}/dist`,
+          join(relative(join(wrapperApp, 'public'), webDir), assetPackTargetNamespace),
+        );
+      }
 
       let releaseArtifact = webDirConfigPath;
 
@@ -372,6 +416,7 @@ try {
         console.warn('ait: package build skipped; release manifest points to copied wrapper dist.');
       }
 
+      await writeRemoteAssetPacks();
       writeManifest(targetName, profile, releaseArtifact, env);
       break;
     }
@@ -384,7 +429,16 @@ try {
 
       run('pnpm', ['--dir', wrapperApp, 'exec', 'vite', 'build', '--mode', profile], env);
       embedEffectiveTargetConfig(targetName, webDir, env);
+      await stageTargetAssetPacks(webDir);
       stageWebIconEvidence(generatedIcons, webDir);
+      if (assetTargetReport !== undefined) {
+        await assertAssetPackTargetArtifact(
+          assetTargetReport,
+          `${wrapperApp}/dist`,
+          join(relative(join(wrapperApp, 'dist'), webDir), assetPackTargetNamespace),
+        );
+      }
+      await writeRemoteAssetPacks();
       writeManifest(targetName, profile, `${wrapperAppConfigPath}/dist`, env);
       break;
     }
@@ -411,6 +465,10 @@ try {
         copyIosSyncSwiftPackage,
         run,
       });
+      if (assetTargetReport !== undefined) {
+        await assertAssetPackNativeArtifact(assetTargetReport, targetPath(releaseArtifact));
+      }
+      await writeRemoteAssetPacks();
       writeManifest(targetName, profile, releaseArtifact, env);
       nativeAttempt.complete(releaseArtifact);
       nativeCompleted = true;
@@ -418,6 +476,9 @@ try {
     }
   }
 } finally {
+  if (assetTargetTemporary !== undefined) {
+    rmSync(assetTargetTemporary, { recursive: true, force: true });
+  }
   if (nativeAttempt !== undefined && !nativeCompleted) {
     nativeAttempt.fail();
   }
@@ -460,6 +521,45 @@ function mirrorAitRuntimeAssets(gameApp: string, wrapperApp: string): void {
   } else {
     rmSync(destinationAssets, { recursive: true, force: true });
   }
+}
+
+async function stageTargetAssetPacks(webOutput: string): Promise<void> {
+  if (assetTargetReport === undefined) {
+    return;
+  }
+  const destination = join(webOutput, assetPackTargetNamespace);
+  if (existsSync(destination)) {
+    throw new Error(
+      'mpgd-asset-packs is owned by the target policy; remove source/public copies from the game',
+    );
+  }
+  cpSync(assetTargetReport.packagedDir, destination, {
+    recursive: true,
+    errorOnExist: true,
+    force: false,
+  });
+  await assertAssetPackTargetArtifact(assetTargetReport, webOutput);
+}
+
+async function writeRemoteAssetPacks(): Promise<void> {
+  const policy = target?.assetPacks;
+  if (assetTargetReport === undefined || policy === undefined) {
+    return;
+  }
+  const remoteOutput = targetPath(`artifacts/asset-packs/${targetName}`);
+  await assertAssetPackTargetOutput({
+    policy,
+    baseDir: configBaseDir,
+    outDir: remoteOutput,
+  });
+  replaceDirectory(assetTargetReport.remoteDir, `${remoteOutput}/remote`);
+  mkdirSync(remoteOutput, { recursive: true });
+  writeFileSync(`${remoteOutput}/report.json`, JSON.stringify({
+    ...assetTargetReport,
+    outDir: remoteOutput,
+    packagedDir: assetPackTargetNamespace,
+    remoteDir: `${remoteOutput}/remote`,
+  }, null, 2) + '\n');
 }
 
 function targetBuildConfigEnv(target: PlatformTargetConfig): NodeJS.ProcessEnv {
