@@ -54,7 +54,10 @@ import {
   runGameAcceptance,
   type GameAcceptanceStep,
 } from './game-acceptance.js';
-import { resolveGameplayE2EReportFile } from './gameplay-e2e.js';
+import {
+  resolveGameplayE2EPathInsideGameRoot,
+  resolveGameplayE2EReportFile,
+} from './gameplay-e2e.js';
 import {
   cloudflarePagesDeploymentProfiles,
   hostedPwaDeploymentHosts,
@@ -102,6 +105,18 @@ export {
   type RunGameAcceptanceInput,
   type RunGameAcceptanceResult,
 } from './game-acceptance.js';
+export {
+  maximumPerformanceEvidenceBytes,
+  preparePerformanceAcceptance,
+  readPerformanceAcceptanceEvidence,
+  validatePerformanceBudget,
+  type PerformanceAcceptanceEvidence,
+  type PerformanceAcceptanceInput,
+  type PerformanceBudget,
+  type PerformanceBudgetProfile,
+  type PerformanceMetricBudget,
+  type PreparedPerformanceAcceptance,
+} from './performance-acceptance.js';
 
 export {
   applyCapacitorShellStarter,
@@ -363,6 +378,7 @@ const acceptanceStepIds = {
   targetBuild: 'target-build',
   targetSmoke: 'target-smoke',
   gameplayE2E: 'gameplay-e2e',
+  performance: 'performance',
 } as const;
 
 /** Whether the last run reported a deadline failure that leaves
@@ -1005,6 +1021,18 @@ const gameCommand = defineI18n({
           required: false,
           description: 'Skip the game-owned playtest package script.',
         },
+        performance: {
+          type: 'boolean', required: false,
+          description: 'Collect and validate fresh foreground performance evidence.',
+        },
+        'performance-script': {
+          type: 'string', required: false, default: 'performance:e2e',
+          description: 'Game-owned performance collection package script.',
+        },
+        'performance-budget': {
+          type: 'string', required: false, default: 'agent/performance.budget.json',
+          description: 'Consumer-authored performance budget JSON inside the game root.',
+        },
         'skip-gameplay-e2e': {
           type: 'boolean',
           required: false,
@@ -1048,6 +1076,9 @@ const gameCommand = defineI18n({
           skipGraph: ctx.values['skip-graph'] === true,
           skipPlaytest: ctx.values['skip-playtest'] === true,
           skipGameplayE2E: ctx.values['skip-gameplay-e2e'] === true,
+          performance: ctx.values.performance === true,
+          performanceScript: readOptionalString(ctx.values['performance-script']) ?? 'performance:e2e',
+          performanceBudget: readOptionalString(ctx.values['performance-budget']) ?? 'agent/performance.budget.json',
           skipTargetBuild: ctx.values['skip-target-build'] === true,
           skipTargetSmoke: ctx.values['skip-target-smoke'] === true,
         });
@@ -1210,6 +1241,9 @@ interface AcceptGameInput {
   readonly iosVariant?: string;
   readonly playtestScript: string;
   readonly gameplayScript: string;
+  readonly performance: boolean;
+  readonly performanceScript: string;
+  readonly performanceBudget: string;
   readonly reportDir?: string;
   readonly kitPath?: string;
   readonly timeoutMs: number;
@@ -1245,7 +1279,7 @@ function acceptGame(input: AcceptGameInput): void {
   const packageManager = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
   const gameplayE2EEnabled = !input.skipGameplayE2E
     && gamePackage.scripts?.[input.gameplayScript] !== undefined;
-  const gameplayE2ETargets = gameplayE2EEnabled
+  const gameplayE2ETargets = gameplayE2EEnabled || input.performance
     ? parseTargetList(input.targets, {
         ...process.env,
         MPGD_PLATFORM_TARGETS_FILE: targetsFile,
@@ -1340,12 +1374,36 @@ function acceptGame(input: AcceptGameInput): void {
       skipped: input.skipGameplayE2E,
     }),
   ];
+  const performanceReportFile = input.performance
+    ? resolveGameplayE2EPathInsideGameRoot(
+        gameRoot,
+        readOptionalString(process.env.MPGD_PERFORMANCE_REPORT_FILE) ?? 'artifacts/performance/report.json',
+        'Performance report',
+      )
+    : undefined;
+  if (input.performance) {
+    steps.push(
+      packageScriptAcceptanceStep({
+        id: acceptanceStepIds.performance,
+        label: 'Foreground performance collection',
+        script: input.performanceScript,
+        gameRoot,
+        packageManager,
+        scripts: gamePackage.scripts,
+        required: true,
+      }),
+    );
+  }
   const reportDir = path.resolve(gameRoot, input.reportDir ?? 'artifacts/acceptance');
   const releaseManifestFile = resolveGameAcceptanceReleaseManifestFile(gameRoot);
   const gameplayE2EReportFile = resolveGameplayE2EReportFile(gameRoot);
   const result = runGameAcceptance({
     gameRoot,
     reportDir,
+    ...(performanceReportFile === undefined ? {} : { performance: {
+      budgetFile: input.performanceBudget, reportFile: performanceReportFile,
+      stepId: acceptanceStepIds.performance, targets: gameplayE2ETargets,
+    } }),
     ...(input.skipTargetBuild
       ? {}
       : { releaseManifestFile }),
@@ -1364,6 +1422,8 @@ function acceptGame(input: AcceptGameInput): void {
       iosVariant: input.iosVariant ?? null,
       playtestScript: input.playtestScript,
       gameplayScript: input.gameplayScript,
+      ...(input.performance ? { performance: true, performanceScript: input.performanceScript,
+        performanceBudget: input.performanceBudget } : {}),
       skipTest: input.skipTest,
       skipGraph: input.skipGraph,
       skipPlaytest: input.skipPlaytest,
@@ -1377,12 +1437,16 @@ function acceptGame(input: AcceptGameInput): void {
     env: {
       ...process.env,
       MPGD_KIT_PATH: kitPath,
-      MPGD_ACCEPTANCE_TARGETS: gameplayE2EEnabled
+      MPGD_ACCEPTANCE_TARGETS: gameplayE2EEnabled || input.performance
         ? gameplayE2ETargets.join(',')
         : input.targets,
       MPGD_ACCEPTANCE_PROFILE: input.profile,
       MPGD_RELEASE_MANIFEST_FILE: releaseManifestFile,
       MPGD_GAMEPLAY_E2E_REPORT_FILE: gameplayE2EReportFile,
+      ...(performanceReportFile === undefined ? {} : {
+        MPGD_PERFORMANCE_REPORT_FILE: performanceReportFile,
+        MPGD_PERFORMANCE_BUDGET_FILE: path.resolve(gameRoot, input.performanceBudget),
+      }),
     },
   });
 

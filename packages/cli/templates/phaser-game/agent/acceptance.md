@@ -82,3 +82,10 @@ the snapshot bounds for persistent controls.
 Build and smoke the configured ONE play target using the game-owned kit path. Validate server-issued reward/checkout binding, raw-byte signed SSV, purchase token API verification, ledger-before-consume/acknowledge, retries without duplicate grants, signed PNS orphan-purchase recovery and atomic cancellation fences. Missing finalization must keep PNS pending; a busy SDK must report native not-started before rejecting a new checkout. Permit five minutes of provider/server clock skew while rejecting timestamps outside the intent window.
 
 Use an authenticated server session rather than the SDK player pseudonym. Confirm ad IDs, real payments, lifecycle, HTTPS iframe hosting and PNS/SSV in ONE store with issued ONEconsole credentials. Generic fixture and artifact smoke do not certify real-app commerce.
+
+Performance evidence can be required with `mpgd game accept . --performance`.
+Provide a game-owned `performance:e2e` script and `agent/performance.budget.json`;
+collect a fresh foreground report at `MPGD_PERFORMANCE_REPORT_FILE`. Calibrate
+per-device/scenario CPU and cadence budgets independently, link the tested
+artifact/budget hashes and keep trace/screenshots in separate diagnostic runs.
+See the [report contract](https://github.com/imjlk/mpgd-kit/blob/main/docs/GAME_PERFORMANCE_ACCEPTANCE.md).
