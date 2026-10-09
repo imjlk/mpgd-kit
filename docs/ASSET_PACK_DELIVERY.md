@@ -56,7 +56,7 @@ never downloads anything implicitly and never modifies source files.
 - Pack ids match `[A-Za-z0-9][A-Za-z0-9._-]*` and revisions match
   `[A-Za-z0-9][A-Za-z0-9._+=-]*`; revisions are logical content labels, not
   artifact digests.
-- Supported assets are `image`, `spritesheet` (with a Phaser-compatible
+- Supported assets are `image`, `audio` (one encoded file), `spritesheet` (with a Phaser-compatible
   `frameConfig`) and single-texture JSON `atlas`. `packId`, `assetKey`,
   dependencies, frame configs and atlas references are preserved verbatim in
   the manifest.
@@ -69,7 +69,7 @@ never downloads anything implicitly and never modifies source files.
 
 ## ZIP v1 scope
 
-Archives use only STORE and DEFLATE. PNG/JPEG/WebP textures default to STORE;
+Archives use only STORE and DEFLATE. PNG/JPEG/WebP textures and audio default to STORE;
 JSON/SVG default to DEFLATE, falling back to STORE when compression does not
 shrink the entry. Explicit per-asset overrides force their method without the
 fallback. Excluded: ZIP64, split archives, encryption, symlink entries,

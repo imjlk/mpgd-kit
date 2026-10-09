@@ -949,9 +949,19 @@ const loaderAsset = (
   asset: PhaserPackDeliveryPack['assets'][number],
 ): PhaserPackAsset => {
   // The validated snapshot guarantees the role pairing per asset kind.
-  const fileFor = (role: 'texture' | 'atlas') => asset.files.find(
+  const fileFor = (role: 'texture' | 'atlas' | 'audio') => asset.files.find(
     (candidate) => candidate.role === role,
   )!;
+  if (asset.kind === 'audio') {
+    const audio = fileFor('audio');
+    return {
+      kind: 'audio',
+      key: asset.assetKey,
+      url: audio.path,
+      mediaType: audio.mediaType,
+      integrity: { audio: integrityOf(audio) },
+    };
+  }
   const texture = fileFor('texture');
   if (asset.kind === 'atlas') {
     const atlas = fileFor('atlas');

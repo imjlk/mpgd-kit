@@ -1,5 +1,14 @@
 Original prompt: 이슈 한번 pr 진행해보자 — issue #173, following the proposal to start with a design and a small local/static-HTTP sample.
 
+2026-10-09 follow-up: complete remaining issue173 scope through reviewed feature
+PRs, with release PR merged last. Add optional `?audio=1` single-format WAV
+preparation and `?prefetch=1` idle-gated warm leases. Preserve the default
+non-speculative fixture and verify real files/ZIP, audio backend, foreground
+handover and consumer shutdown with Chromium. Source browser matrix and installed
+tarball consumer checks passed. Canvas gameplay screenshots inspected after a
+headed client run; fixed the dev favicon 404. Shared dependencies, known payload
+retention, FIFO foreground admission and cancellation are regression-covered.
+
 Initial #185 scope (historical): this private fixture explored pack ownership and preparation. It did not add a
 public API or npm package. Existing release PR #184 stays open and unmerged.
 

@@ -1,6 +1,7 @@
 import type Phaser from 'phaser';
 
 import { digestOf } from './archive-digest.js';
+import { preparePhaserPackAudio } from './pack-audio.js';
 import type { PhaserAtlasAsset, PhaserImageAsset, PhaserSpritesheetAsset } from './index.js';
 import { createPackBudget } from './pack-budget.js';
 import {
@@ -40,10 +41,18 @@ export type {
 /** Keep the cache public exports parallel with delivery.ts. */
 export { createPhaserPackCacheKey } from './pack-cache.js';
 /** Existing texture manifests can be used directly; integrity metadata is optional. */
-export type PhaserPackAsset = (PhaserImageAsset | PhaserSpritesheetAsset | PhaserAtlasAsset) & {
+export interface PhaserPackAudioAsset {
+  readonly kind: 'audio';
+  readonly key: string;
+  /** One encoded format; select alternatives when composing the target catalog. */
+  readonly url: string;
+  readonly mediaType?: string;
+}
+export type PhaserPackAsset = (PhaserImageAsset | PhaserSpritesheetAsset | PhaserAtlasAsset | PhaserPackAudioAsset) & {
   readonly integrity?: {
     readonly texture?: PhaserPackFileIntegrity;
     readonly atlas?: PhaserPackFileIntegrity;
+    readonly audio?: PhaserPackFileIntegrity;
   };
 };
 export interface PhaserAssetPack {
@@ -58,7 +67,7 @@ export interface PhaserAssetPackOptions {
     readonly packId: string;
     readonly revision: string;
   }) => string;
-  /** Deadline for each asset, including its files and image decoding. Default: 15 seconds. */
+  /** Deadline for each asset, including its files and image/audio decoding. Default: 15 seconds. */
   readonly timeoutMs?: number;
   /** Default URL source only: per HTTP attempt, including reading its body. Default: 10 seconds. */
   readonly requestTimeoutMs?: number;
@@ -78,6 +87,10 @@ export interface PhaserAssetPackOptions {
   readonly maxFileBytes?: number;
   /** Reject larger decoded images before registering a texture. Default: 16 million pixels. */
   readonly maxDecodedPixels?: number;
+  /** Decoded Web Audio sample payload per asset, not total process memory. Default: 64 MiB. */
+  readonly maxDecodedAudioBytes?: number;
+  /** Maximum duration per audio asset. Default: 300 seconds. */
+  readonly maxAudioDuration?: number;
   /** Supplies file bytes instead of the default manifest-URL HTTP transport.
    * Integrity verification, byte reservations and decoding stay with the loader. */
   readonly fileSource?: PhaserPackFileSource;
@@ -87,9 +100,9 @@ export interface PhaserAssetPackOptions {
   readonly persistentCache?: PhaserPackPersistentCacheOptions;
 }
 export interface PhaserAssetPackLease {
-  /** Resolve a logical manifest key to the owned Phaser texture key. Throws after release. */
+  /** Resolve a logical key to the owned Phaser texture/audio cache key. Throws after release. */
   key(packId: string, assetKey: string): string;
-  /** Destroy display objects/animations using these keys before release. Idempotent. */
+  /** Destroy display objects/animations/sounds using these keys before release. Idempotent. */
   release(): void;
 }
 export interface PhaserAssetPackLoader {
@@ -105,6 +118,10 @@ export interface PhaserAssetPackLoader {
     readonly owners: number;
     readonly ready: boolean;
     readonly rgbaEstimate: number;
+    /** Actual PCM sample payload; null for HTML5 Audio's opaque internal decoder. */
+    readonly decodedAudioBytes?: number | null;
+    /** Blob retained for HTML5 Audio, separate from decoder/process memory. */
+    readonly encodedAudioBytes?: number;
   }[];
   /** Drain cleanup failures. Ownership is already returned; failed engine deletion is not retried. */
   takeCleanupErrors(): readonly {
@@ -121,7 +138,7 @@ interface Planned {
   identity: string;
 }
 interface PlannedFile {
-  role: 'texture' | 'atlas';
+  role: 'texture' | 'atlas' | 'audio';
   url: string;
   mediaType?: string | undefined;
   integrity?: PhaserPackFileIntegrity | undefined;
@@ -129,6 +146,8 @@ interface PlannedFile {
 interface Resource {
   key: string;
   pixels: number;
+  decodedAudioBytes?: number | null;
+  encodedAudioBytes?: number;
   dispose(): void;
 }
 interface Entry {
@@ -169,7 +188,7 @@ export function definePhaserAssetPacks<const T extends readonly PhaserAssetPack[
       if (!asset || typeof asset.key !== 'string' || !asset.key || keys.has(asset.key)) {
         throw new Error(`Invalid or duplicate asset: ${pack.id}/${asset?.key}`);
       }
-      if (!['image', 'spritesheet', 'atlas'].includes(asset.kind)) {
+      if (!['image', 'spritesheet', 'atlas', 'audio'].includes(asset.kind)) {
         throw new Error(`Unsupported pack asset kind: ${asset.kind}`);
       }
       keys.add(asset.key);
@@ -177,7 +196,9 @@ export function definePhaserAssetPacks<const T extends readonly PhaserAssetPack[
       if (urls.some((url) => typeof url !== 'string' || !url.trim())) {
         throw new Error(`Missing asset URL: ${asset.key}`);
       }
-      const isTextureMediaType = (value: string): boolean => value.startsWith('image/');
+      const isTextureMediaType = (value: string): boolean => value.startsWith(
+        asset.kind === 'audio' ? 'audio/' : 'image/',
+      );
       const isAtlasMediaType = (value: string): boolean => value === 'application/json';
       const mediaHints: {
         field: 'mediaType' | 'textureMediaType' | 'atlasMediaType';
@@ -233,9 +254,14 @@ export function definePhaserAssetPacks<const T extends readonly PhaserAssetPack[
       ))) {
         throw new Error(`Invalid integrity: ${asset.key}`);
       }
-      const atlasEntryInapplicable = asset.kind !== 'atlas' && asset.integrity?.atlas !== undefined;
+      const applicableIntegrity = asset.kind === 'audio'
+        ? ['audio']
+        : asset.kind === 'atlas'
+          ? ['texture', 'atlas']
+          : ['texture'];
       for (const name of Object.keys(asset.integrity ?? {})) {
-        if (name !== 'texture' && (name !== 'atlas' || atlasEntryInapplicable)) {
+        if (!['texture', 'atlas', 'audio'].includes(name)
+          || (!applicableIntegrity.includes(name) && (asset.integrity as Record<string, unknown>)[name] !== undefined)) {
           throw new Error(`Unknown or inapplicable integrity entry '${name}': ${asset.key}`);
         }
       }
@@ -312,7 +338,9 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
   const requestCache = options.requestCache ?? 'no-store';
   const maxFileBytes = options.maxFileBytes ?? 32 * 1024 * 1024;
   const maxDecodedPixels = options.maxDecodedPixels ?? 16000000;
-  if (![timeoutMs, maxConcurrentDownloads, maxConcurrentDecodes, maxBufferedBytes, maxFileBytes, maxDecodedPixels].every(
+  const maxDecodedAudioBytes = options.maxDecodedAudioBytes ?? 64 * 1024 * 1024;
+  const maxAudioDuration = options.maxAudioDuration ?? 300;
+  if (![timeoutMs, maxConcurrentDownloads, maxConcurrentDecodes, maxBufferedBytes, maxFileBytes, maxDecodedPixels, maxDecodedAudioBytes, maxAudioDuration].every(
     (n) => Number.isSafeInteger(n) && n > 0,
   )) {
     throw new Error('Invalid asset pack limits');
@@ -413,12 +441,12 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
     const { asset, pack } = item;
     const files: PlannedFile[] = [
       {
-        role: 'texture',
+        role: asset.kind === 'audio' ? 'audio' : 'texture',
         url: asset.kind === 'atlas' ? asset.textureUrl : asset.url,
         mediaType: asset.kind === 'atlas'
           ? (asset.textureMediaType ?? mediaTypeFor('texture', asset.textureUrl))
-          : (asset.mediaType ?? mediaTypeFor('texture', asset.url)),
-        integrity: asset.integrity?.texture,
+          : (asset.mediaType ?? mediaTypeFor(asset.kind === 'audio' ? 'audio' : 'texture', asset.url)),
+        integrity: asset.kind === 'audio' ? asset.integrity?.audio : asset.integrity?.texture,
       },
     ];
     if (asset.kind === 'atlas') {
@@ -438,7 +466,7 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
       mediaType: file.mediaType,
       integrity: file.integrity,
     });
-    const baseReservation = (asset.integrity?.texture?.bytes ?? maxFileBytes)
+    const baseReservation = (files[0]?.integrity?.bytes ?? maxFileBytes)
       + (asset.kind === 'atlas' ? (asset.integrity?.atlas?.bytes ?? maxFileBytes) : 0);
     const sourceRequests = files.map(fileRequest);
     const additionalReservation = sourceRequests.reduce((sum, request) => {
@@ -538,6 +566,28 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
       const atlas = atlasResult.value;
       signal.throwIfAborted();
       returnDecode = await decodes.acquire(1, signal);
+      if (asset.kind === 'audio') {
+        let audioKey: string;
+        do {
+          audioKey = `__mpgd_pack_${++generation}`;
+        } while (scene.cache.audio.exists(audioKey));
+        const resource = await preparePhaserPackAudio(scene, blob, audioKey, signal, {
+          maxDecodedAudioBytes,
+          maxAudioDuration,
+        });
+        const releaseDecode = returnDecode;
+        returnDecode = undefined;
+        releaseDecode?.();
+        try {
+          for (const body of bodies) {
+            await body.commitCache?.();
+          }
+          return resource;
+        } catch (error) {
+          clean(item, () => resource.dispose());
+          throw error;
+        }
+      }
       const image = new Image();
       const url = URL.createObjectURL(blob);
       let key: string | undefined;
@@ -702,6 +752,7 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
     takeCleanupErrors: () => cleanupErrors.splice(0),
     snapshot: () => [...entries.values()].map((entry) => ({
       packId: entry.item.pack.id, assetKey: entry.item.asset.key, owners: entry.owners.size, ready: !!entry.resource, rgbaEstimate: (entry.resource?.pixels ?? 0) * 4,
+      ...(entry.item.asset.kind === 'audio' ? { decodedAudioBytes: entry.resource?.decodedAudioBytes ?? null, encodedAudioBytes: entry.resource?.encodedAudioBytes ?? 0 } : {}),
     })),
     async acquire(id, settings = {}) {
       if (disposed) {

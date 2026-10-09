@@ -1148,6 +1148,44 @@ try {
     await cacheContext.close();
   }
 
+  // Optional audio/prefetch paths use the very same playable Phaser consumer,
+  // preserving the default fixture's non-speculative loading checks above.
+  for (const delivery of ['files', 'zip', 'mixed']) for (const backend of ['webaudio', 'html5']) {
+    const app = await staticServer(join(builds, 'hybrid')); servers.push(app);
+    const context = await browser.newContext(); const page = await context.newPage(); const errors = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+    const query = `?audio=1&prefetch=1&audio-backend=${backend}${delivery === 'files' ? '' : '&delivery=' + delivery}`;
+    await page.goto(app.url + query);
+    await page.waitForFunction(() => typeof window.render_game_to_text === 'function' && JSON.parse(window.render_game_to_text()).phase === 'idle');
+    await page.waitForFunction(() => JSON.parse(window.render_game_to_text()).prefetch?.warm.length === 2);
+    const warmed = await page.evaluate(() => JSON.parse(window.render_game_to_text()));
+    assert.equal(warmed.audioCount, 1);
+    assert.equal(warmed.prefetch.foreground, 0);
+    await page.click('#grove');
+    await page.waitForFunction(() => JSON.parse(window.render_game_to_text()).phase === 'playing');
+    const playing = await page.evaluate(() => JSON.parse(window.render_game_to_text()));
+    assert.equal(playing.audioCount, 1);
+    assert.deepEqual([playing.ready, playing.total], [3, 3]);
+    assert.equal(playing.prefetch.idle, false);
+    assert.equal(playing.prefetch.warming, null);
+    const audio = playing.resources.find((entry) => entry.assetKey === 'chime');
+    assert.ok(audio);
+    if (backend === 'webaudio') assert.ok(Number.isSafeInteger(audio.decodedAudioBytes) && audio.decodedAudioBytes >= 8000 * 4, 'PCM payload reflects the sound context resampling');
+    else { assert.equal(audio.decodedAudioBytes, null); assert.equal(audio.encodedAudioBytes, 16044); }
+    await page.click('#sound');
+    await page.waitForFunction(() => JSON.parse(window.render_game_to_text()).audioPlaying);
+    await page.keyboard.down('ArrowRight'); await page.evaluate(() => window.advanceTime(100)); await page.keyboard.up('ArrowRight');
+    await page.screenshot({ path: join(artifacts, `audio-${delivery}-${backend}.png`), fullPage: true });
+    await page.click('#dunes');
+    await page.waitForFunction(() => JSON.parse(window.render_game_to_text()).current === 'dunes');
+    assert.equal((await page.evaluate(() => JSON.parse(window.render_game_to_text()))).audioCount, 1);
+    assert.equal(await page.evaluate(() => window.shutdownSample()), 0);
+    assert.equal((await page.evaluate(() => JSON.parse(window.render_game_to_text()))).audioCount, 0);
+    evidence.push({ scenario: 'audio-prefetch', delivery, backend, warmed, playing });
+    assert.deepEqual(errors, []);
+    await context.close();
+  }
   await writeFile(join(artifacts, 'evidence.json'), JSON.stringify(evidence, null, 2));
   console.info('Asset pack browser checks passed: bundled/hybrid, exclusion, sharing, readiness, retries, integrity, offline failure, cancellation, release, invalid level rollback and persistent artifact reuse (cold/warm reload, tamper, delete, quota, unavailable, abort, namespace isolation).');
 } finally {
