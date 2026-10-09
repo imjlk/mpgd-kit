@@ -83,6 +83,51 @@ paths. `EffectiveTargetConfig.assetPacks` exposes the configured policy without
 the local `buildConfig` path or any storage provider SDK. A packaged first-level closure needs no
 download cache to enter offline; a remote-only uncached pack still fails clearly.
 
+## Optional immutable S3 publication
+
+`publish-s3` runs only in the deployment CLI. It consumes a fresh `stage-target`
+deployment and selects the remote objects from its pinned manifest and runtime
+policy; it never imports storage SDKs or credentials into game code.
+
+```sh
+mpgd assets publish-s3 --deployment artifacts/assets/release-1 \
+  --endpoint https://s3.example.com/ --bucket my-game-assets \
+  --prefix my-game/release-1 --region us-east-1 --dry-run --json
+```
+
+Dry run validates every source object's bytes/digest and reports the plan without
+credentials or network calls. For actual publication, provide the existing
+bucket's deployment credentials through `MPGD_ASSETS_S3_ACCESS_KEY_ID`,
+`MPGD_ASSETS_S3_SECRET_ACCESS_KEY` and optional `MPGD_ASSETS_S3_SESSION_TOKEN`, then
+omit `--dry-run`. `--access-key-env`, `--secret-key-env` and `--session-token-env`
+accept variable names. No ambient AWS profile or instance credentials are used.
+Endpoint URLs must be HTTPS roots without credentials, path, query or fragment;
+HTTP loopback requires the explicit development-only `--allow-http-loopback` flag.
+
+The required subset is SigV4 `HeadObject` with checksum mode and conditional
+`PutObject` with `If-None-Match: *`, SHA-256 checksum, content type, immutable cache
+headers and SHA-256 metadata. Matching existing objects are reused; collisions
+fail instead of overwriting. The tool checks stored checksum, length and delivery
+metadata after each new write or conditional-write race. It uploads a
+content-addressed `manifests/<sha256>.json` snapshot last, without a mutable latest
+pointer. Partial failures can leave unreferenced objects and a rerun can reuse
+matching objects; this is not a transaction across multiple objects.
+
+Requests run sequentially with at most two attempts for 409/429/transient server
+errors. Defaults are 10 seconds per attempt, 120 seconds overall, 64 MiB per
+object body, 1 GiB of planned bodies and 10,000 objects including the snapshot.
+CLI flags override these limits (the per-object ceiling is 512 MiB). Accepted body
+bytes exclude HTTP overhead and temporary SDK/Buffer memory. SDK errors, response
+XML, authorization headers, session tokens and signed URLs are suppressed.
+
+The public `remoteBaseUrl` must map to the same prefix through the operator's
+existing static host/CDN. This command does not create buckets, IAM policies,
+public ACLs, CORS rules, CDN distributions or Workers, and it does not delete old
+revisions. Games continue consuming ordinary HTTPS files through delivery. The
+local protocol fixture verifies the exact required operations, real SDK signing,
+checksums, races, failures and cancellation; it does not certify a live provider
+or claim full S3 compatibility. A provider missing this subset fails explicitly.
+
 `mpgd assets build-packs` turns a game's logical pack composition into
 deliverable artifacts — individual files or per-pack ZIP archives — from one
 explicit build config. Logical composition and delivery format are separate
