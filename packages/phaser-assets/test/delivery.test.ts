@@ -2325,11 +2325,41 @@ describe('readFile', () => {
           signal.addEventListener('abort', () => reject(signal.reason), { once: true });
         });
       } } } });
-    const rejection = expect(pending).rejects.toMatchObject({ code: 'cancelled' });
+    const rejection = expect(pending).rejects.toMatchObject({ code: end === 'cancel' ? 'cancelled' : 'disposed' });
     await waiting;
-    controller.abort();
+    if (end === 'cancel') { controller.abort(); } else { delivery.dispose(); }
     await rejection;
     expect(delivery.snapshot().staging).toEqual([]);
+    delivery.dispose();
+  });
+});
+
+describe('preparation terminal retries', () => {
+  it('starts a fresh attempt when a failed-event listener retries synchronously', async () => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest([
+      { id: 'solo', delivery: 'zip', zip: zipFixture() },
+    ]);
+    const delivery = createPhaserPackDelivery(manifest, {
+      baseUrl: origin.url,
+      createWorker: createFakeWorkerFactory().factory,
+    });
+    let retry: ReturnType<typeof delivery.prepare> | undefined;
+    delivery.subscribe((event) => {
+      if (event.kind === 'prepare' && event.phase === 'failed') {
+        for (const [path, file] of packFiles) {
+          origin.files.set(path, file);
+        }
+        retry = delivery.prepare('solo');
+      }
+    });
+    await expect(delivery.prepare('solo')).rejects.toMatchObject({ code: 'transport' });
+    expect(retry).toBeDefined();
+    const handle = await retry!;
+    expect(delivery.snapshot().archiveRequests).toBe(2);
+    expect(delivery.snapshot().staging[0]?.handles).toBe(1);
+    handle.release();
     delivery.dispose();
   });
 });

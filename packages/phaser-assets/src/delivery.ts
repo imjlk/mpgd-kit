@@ -1864,7 +1864,8 @@ export function createPhaserPackDelivery(
 
   const runPreparation = async (
     packId: string,
-    prepareOptions: { readonly signal?: AbortSignal } = {},
+    prepareOptions: { readonly signal?: AbortSignal },
+    beforeFailure: () => void,
   ): Promise<PreparedPhaserPack> => {
     assertLive();
     if (activePrepare) {
@@ -1894,7 +1895,14 @@ export function createPhaserPackDelivery(
         );
     }
     const operationId = nextOperationId();
-    const tracker = createOperationTracker(operationId, 'prepare', emitEvent);
+    const tracker = createOperationTracker(operationId, 'prepare', (event) => {
+      // A terminal observer may synchronously retry this pack. Retire the old
+      // job first so that retry cannot subscribe to work already failing.
+      if (event.phase === 'failed' || event.phase === 'cancelled' || event.phase === 'disposed') {
+        beforeFailure();
+      }
+      emitEvent(event);
+    });
     const requestedRevision = revisionOf(packId);
     if (missing.length === 0) {
         // Everything is already staged (or the closure is files-only): just
@@ -2062,7 +2070,7 @@ export function createPhaserPackDelivery(
     job.started = true;
     // Register the job and its subscribers before entering the planner; progress
     // listeners may synchronously request the same pack or cancel their caller.
-    void runPreparation(job.packId, { signal: job.controller.signal }).then((pin) => {
+    void runPreparation(job.packId, { signal: job.controller.signal }, () => forgetJob(job)).then((pin) => {
       forgetJob(job);
       try {
         const zipPacks = closureOf(job.packId).filter((pack) => pack.delivery === 'zip');
