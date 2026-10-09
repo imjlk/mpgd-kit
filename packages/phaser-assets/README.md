@@ -576,3 +576,16 @@ Artifact URL resolution preserves the literal `@` in archive names, including
 paths passed to custom resolvers. Characters such as `%`, `#`, `?`, spaces and
 non-ASCII names remain encoded once. Existing archive names and manifests are
 unchanged; static hosts that use raw request paths can now serve these archives.
+
+Concurrent `delivery.prepare(id)` calls share one in-flight staging operation.
+Different pack IDs are queued in arrival order; admission uses the live staging
+budget when work starts. Queue wait is outside `prepareTimeoutMs`. Successful
+results are not permanently cached: retained handles/readers own staging.
+
+Each call returns an independent Promise and idempotent release handle. This is
+necessary because a shared releasable handle would let one consumer evict another
+consumer's files. Cancelling one caller leaves other subscribers running; when
+none remain, active work aborts and rolls back before its last caller settles.
+Queued cancellation removes that request. Failed work is evicted, so a later
+call retries. Disposal aborts active work and rejects queued callers. Consumers
+can remove their serial chains and per-pack download caches.

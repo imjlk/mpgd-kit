@@ -309,7 +309,7 @@ export interface PhaserPackPreparationPlan {
   readonly stagingBudgetBytes: number;
   readonly fitsBudget: boolean;
   /** Whether another preparation is running right now. Informational;
-   * `prepare` itself still rejects with a busy error. */
+   * new prepares join or queue internally. */
   readonly busy: boolean;
   /** Identifies the accounting model behind the reservation numbers:
    * per newly staged ZIP pack, archive bytes plus expanded file bytes.
@@ -406,9 +406,12 @@ export interface PhaserPackDelivery {
   inspectPreparation(packId: string): PhaserPackPreparationPlan;
   /** Supplies staged ZIP entries; files-delivery packs stay plain HTTP. */
   readonly fileSource: PhaserPackFileSource;
-  /** Stage a pack and its dependency closure. Single-flight: a concurrent
-   * prepare rejects with a busy error instead of racing the budget. A
-   * files-only closure is a light no-op that touches no network or worker. */
+  /** Stage a pack and its dependency closure. Same-pack calls share staging
+   * work; different packs run in FIFO order. Each caller receives its own
+   * idempotent handle and cancellation only cancels that caller, unless no
+   * callers remain. Rejections are evicted for retry. The prepare deadline
+   * starts when the queued work begins. Files-only closures touch no network.
+   * Promises/handles are deliberately distinct to preserve release ownership. */
   prepare(packId: string, options?: { readonly signal?: AbortSignal }): Promise<PreparedPhaserPack>;
   /** Stop everything: aborts an active prepare and drops all staging. */
   dispose(): void;
@@ -1835,6 +1838,272 @@ export function createPhaserPackDelivery(
     };
   };
 
+  const runPreparation = async (
+    packId: string,
+    prepareOptions: { readonly signal?: AbortSignal } = {},
+  ): Promise<PreparedPhaserPack> => {
+    assertLive();
+    if (activePrepare) {
+      fail('busy', 'Another delivery preparation is already running');
+    }
+    const closure = closureOf(packId);
+    const zipPacks = closure.filter((pack) => pack.delivery === 'zip');
+    const missing = zipPacks.filter((pack) => !staged.has(pack.packId));
+      // Admission runs through the same pure planner `inspectPreparation`
+      // exposes, on live state: an inspection result is never a
+      // reservation, and an oversized prepare is rejected without a
+      // single request.
+    const admission = planPackPreparation(
+      closure,
+      new Set(staged.keys()),
+      stagingUsedBytes,
+      stagingBudgetBytes,
+      false,
+    );
+    if (!admission.fitsBudget) {
+      fail(
+          'budget',
+          `Delivery staging budget exceeded: preparing ${packId} needs `
+            + `${admission.additionalReservationBytes} bytes with ${stagingUsedBytes} staged, `
+            + `over the ${stagingBudgetBytes} byte budget`,
+          { kind: 'prepare', packId, revision: revisionOf(packId) },
+        );
+    }
+    const operationId = nextOperationId();
+    const tracker = createOperationTracker(operationId, 'prepare', emitEvent);
+    const requestedRevision = revisionOf(packId);
+    if (missing.length === 0) {
+        // Everything is already staged (or the closure is files-only): just
+        // take handles, with no timer, worker or network work at all — but
+        // an already-aborted caller still gets the same 'cancelled' answer
+        // the staging path would give. The prepared event describes staging
+        // only: a files-only closure never downloads an image here, so
+        // "prepared" must not be rendered as images loaded.
+      tracker.nextEvent('planning', { packId, revision: requestedRevision });
+      if (prepareOptions.signal?.aborted) {
+        const cancelled = new PhaserPackDeliveryError(
+          'cancelled',
+          'Delivery preparation was cancelled',
+          { kind: 'prepare', operationId, packId, revision: requestedRevision },
+        );
+        tracker.nextEvent('cancelled', {
+          packId,
+          revision: requestedRevision,
+          error: { code: cancelled.code, details: cancelled.details },
+        });
+        throw cancelled;
+      }
+      const handles = acquireHandles(zipPacks);
+      tracker.nextEvent('prepared', { packId, revision: requestedRevision });
+      return { release: handles.release };
+    }
+      // A previous caller may return its final handle/reader while we await
+      // another archive. Pin resident dependencies until our complete closure
+      // has its own handles, so that late cleanup cannot evict our inputs.
+    const residentHandles = acquireHandles(zipPacks.filter((pack) => staged.has(pack.packId)));
+    activePrepare = true;
+    const controller = new AbortController();
+    const deadlineAt = monotonicNow() + prepareTimeoutMs;
+    const timer = setTimeout(
+      (): void =>
+        controller.abort(new DeliveryDeadlineAbort('Delivery preparation exceeded its deadline')),
+      prepareTimeoutMs,
+    );
+      // Caller cancel and delivery shutdown forward the triggering signal's
+      // own reason (the event target is whichever of the two fired), so the
+      // surfaced message stays the intended one; the deadline passes its
+      // reason directly through the timer abort above.
+    const forward = (event: Event): void => {
+      const reason = (event.target as AbortSignal).reason;
+      controller.abort(
+        reason instanceof Error ? reason : new Error('Delivery preparation was cancelled'),
+      );
+    };
+    prepareOptions.signal?.addEventListener('abort', forward, { once: true });
+      // dispose() stops an in-flight prepare too, not just future calls.
+    shutdown.signal.addEventListener('abort', forward, { once: true });
+    const newlyStaged: StagedPack[] = [];
+    try {
+      tracker.nextEvent('planning', { packId, revision: requestedRevision });
+      if (prepareOptions.signal?.aborted) {
+        fail('cancelled', 'Delivery preparation was cancelled');
+      }
+        // Staging is deliberately sequential: the serialized budget,
+        // the one shared never-restarting deadline and the bounded
+        // archive+expanded memory all depend on one stage at a time.
+      const assertBudgetLeft = (): void => {
+          // The abort timer's callback can lag the clock: no new archive
+          // request, and no successful return, may start or land on a
+          // budget the monotonic clock has already spent. The thrown
+          // reason is classified by the catch below like any abort.
+        if (deadlineAt - monotonicNow() <= 0) {
+          fail('deadline', 'Delivery preparation exceeded its deadline');
+        }
+      };
+      for (const pack of missing) {
+        assertBudgetLeft();
+        const stagedPack = await stagePack(pack, deadlineAt, controller.signal, tracker);
+          // dispose() during an await drops everything: a late stagePack
+          // result must not repopulate a cleared delivery.
+        if (disposed) {
+          unstage(stagedPack);
+          fail('disposed', 'Phaser pack delivery was disposed during preparation');
+        }
+        newlyStaged.push(stagedPack);
+      }
+        // Final success gate: a decode that resolved after the budget was
+        // spent — with the abort callback still queued — must not certify
+        // the preparation or hand out staging handles.
+      assertBudgetLeft();
+      const handles = acquireHandles(zipPacks);
+      tracker.nextEvent('prepared', { packId, revision: requestedRevision });
+      return { release: handles.release };
+    } catch (thrown) {
+      const classified = classifyPrepareFailure(thrown, controller.signal, packId);
+        // Correlation fields merge in unconditionally, but identity the
+        // failing site already recorded wins: a dependency archive's
+        // failure keeps naming that dependency, not the requested pack.
+      const error = classified.withDetails({
+          kind: 'prepare',
+          operationId,
+          ...(classified.details.packId === undefined
+            ? { packId, revision: requestedRevision }
+            : {}),
+        });
+        // acquireHandles rolls its own handles back on failure, so the only
+        // staged bytes to reclaim here are the ones this prepare staged.
+      for (const stagedPack of newlyStaged) {
+        unstage(stagedPack);
+      }
+      tracker.nextEvent(
+          error.code === 'cancelled'
+            ? 'cancelled'
+            : error.code === 'disposed'
+              ? 'disposed'
+              : 'failed',
+          {
+            packId,
+            revision: requestedRevision,
+            error: { code: error.code, details: error.details },
+          },
+        );
+      throw error;
+    } finally {
+      residentHandles.release();
+      clearTimeout(timer);
+      prepareOptions.signal?.removeEventListener('abort', forward);
+      shutdown.signal.removeEventListener('abort', forward);
+      activePrepare = false;
+    }
+  };
+
+  interface PreparationSubscriber {
+    readonly resolve: (value: PreparedPhaserPack) => void;
+    readonly reject: (error: unknown) => void;
+    readonly signal: AbortSignal | undefined;
+    readonly detach: () => void;
+  }
+  interface PreparationJob {
+    readonly packId: string;
+    readonly controller: AbortController;
+    readonly subscribers: Set<PreparationSubscriber>;
+    started: boolean;
+  }
+  const pendingPreparations = new Map<string, PreparationJob>();
+  const preparationQueue: PreparationJob[] = [];
+  let currentPreparation: PreparationJob | undefined;
+
+  const forgetJob = (job: PreparationJob): void => {
+    if (pendingPreparations.get(job.packId) === job) {
+      pendingPreparations.delete(job.packId);
+    }
+  };
+  const rejectJob = (job: PreparationJob, error: unknown): void => {
+    forgetJob(job);
+    for (const subscriber of job.subscribers) {
+      subscriber.detach();
+      subscriber.reject(error);
+    }
+    job.subscribers.clear();
+  };
+  const startNextPreparation = (): void => {
+    if (currentPreparation !== undefined || disposed) {
+      return;
+    }
+    const job = preparationQueue.shift();
+    if (job === undefined) {
+      return;
+    }
+    currentPreparation = job;
+    job.started = true;
+    // Register the job and its subscribers before entering the planner; progress
+    // listeners may synchronously request the same pack or cancel their caller.
+    void runPreparation(job.packId, { signal: job.controller.signal }).then((pin) => {
+      forgetJob(job);
+      try {
+        const zipPacks = closureOf(job.packId).filter((pack) => pack.delivery === 'zip');
+        for (const subscriber of job.subscribers) {
+          subscriber.detach();
+          if (disposed) {
+            subscriber.reject(new PhaserPackDeliveryError('disposed', 'Phaser pack delivery is disposed'));
+          } else if (subscriber.signal?.aborted) {
+            subscriber.reject(new PhaserPackDeliveryError('cancelled', 'Delivery preparation was cancelled'));
+          } else {
+            // Every caller has its own idempotent lifetime. The temporary pin
+            // holds the closure until all handles have been distributed.
+            subscriber.resolve({ release: acquireHandles(zipPacks).release });
+          }
+        }
+        job.subscribers.clear();
+      } finally {
+        pin.release();
+      }
+    }).catch((error: unknown) => rejectJob(job, error)).finally(() => {
+      currentPreparation = undefined;
+      startNextPreparation();
+    });
+  };
+  const enqueuePreparation = (
+    packId: string,
+    prepareOptions: { readonly signal?: AbortSignal } = {},
+  ): Promise<PreparedPhaserPack> => {
+    return new Promise((resolve, reject) => {
+      assertLive();
+      closureOf(packId); // Validate identity before occupying a queue slot.
+      let job = pendingPreparations.get(packId);
+      if (job === undefined) {
+        job = { packId, controller: new AbortController(), subscribers: new Set(), started: false };
+        pendingPreparations.set(packId, job);
+        preparationQueue.push(job);
+      }
+      const ownedJob = job;
+      const signal = prepareOptions.signal;
+      const detach = (): void => signal?.removeEventListener('abort', onAbort);
+      const subscriber: PreparationSubscriber = { resolve, reject, signal, detach };
+      const onAbort = (): void => {
+        // A sole active caller waits for rollback and the terminal event before
+        // rejection, preserving prepare's cleanup-on-settlement guarantee.
+        if (ownedJob.started && ownedJob.subscribers.size === 1) {
+          forgetJob(ownedJob);
+          ownedJob.controller.abort(signal?.reason);
+          return;
+        }
+        ownedJob.subscribers.delete(subscriber);
+        detach();
+        reject(new PhaserPackDeliveryError('cancelled', 'Delivery preparation was cancelled'));
+        if (ownedJob.subscribers.size === 0) {
+          forgetJob(ownedJob);
+          ownedJob.controller.abort(signal?.reason);
+          const index = preparationQueue.indexOf(ownedJob);
+          if (index >= 0) { preparationQueue.splice(index, 1); }
+        }
+      };
+      ownedJob.subscribers.add(subscriber);
+      signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal?.aborted) { onAbort(); }
+      startNextPreparation();
+    });
+  };
   return {
     catalog,
     /** Observation entry point (the only one): listeners receive events
@@ -1857,154 +2126,7 @@ export function createPhaserPackDelivery(
       };
     },
     fileSource,
-    async prepare(packId, prepareOptions = {}) {
-      assertLive();
-      if (activePrepare) {
-        fail('busy', 'Another delivery preparation is already running');
-      }
-      const closure = closureOf(packId);
-      const zipPacks = closure.filter((pack) => pack.delivery === 'zip');
-      const missing = zipPacks.filter((pack) => !staged.has(pack.packId));
-      // Admission runs through the same pure planner `inspectPreparation`
-      // exposes, on live state: an inspection result is never a
-      // reservation, and an oversized prepare is rejected without a
-      // single request.
-      const admission = planPackPreparation(
-        closure,
-        new Set(staged.keys()),
-        stagingUsedBytes,
-        stagingBudgetBytes,
-        false,
-      );
-      if (!admission.fitsBudget) {
-        fail(
-          'budget',
-          `Delivery staging budget exceeded: preparing ${packId} needs `
-            + `${admission.additionalReservationBytes} bytes with ${stagingUsedBytes} staged, `
-            + `over the ${stagingBudgetBytes} byte budget`,
-          { kind: 'prepare', packId, revision: revisionOf(packId) },
-        );
-      }
-      const operationId = nextOperationId();
-      const tracker = createOperationTracker(operationId, 'prepare', emitEvent);
-      const requestedRevision = revisionOf(packId);
-      if (missing.length === 0) {
-        // Everything is already staged (or the closure is files-only): just
-        // take handles, with no timer, worker or network work at all — but
-        // an already-aborted caller still gets the same 'cancelled' answer
-        // the staging path would give. The prepared event describes staging
-        // only: a files-only closure never downloads an image here, so
-        // "prepared" must not be rendered as images loaded.
-        tracker.nextEvent('planning', { packId, revision: requestedRevision });
-        if (prepareOptions.signal?.aborted) {
-          const cancelled = new PhaserPackDeliveryError(
-            'cancelled',
-            'Delivery preparation was cancelled',
-            { kind: 'prepare', operationId, packId, revision: requestedRevision },
-          );
-          tracker.nextEvent('cancelled', {
-            packId,
-            revision: requestedRevision,
-            error: { code: cancelled.code, details: cancelled.details },
-          });
-          throw cancelled;
-        }
-        const handles = acquireHandles(zipPacks);
-        tracker.nextEvent('prepared', { packId, revision: requestedRevision });
-        return { release: handles.release };
-      }
-      // A previous caller may return its final handle/reader while we await
-      // another archive. Pin resident dependencies until our complete closure
-      // has its own handles, so that late cleanup cannot evict our inputs.
-      const residentHandles = acquireHandles(zipPacks.filter((pack) => staged.has(pack.packId)));
-      activePrepare = true;
-      const controller = new AbortController();
-      const deadlineAt = monotonicNow() + prepareTimeoutMs;
-      const timer = setTimeout(
-        (): void => controller.abort(new DeliveryDeadlineAbort('Delivery preparation exceeded its deadline')),
-        prepareTimeoutMs,
-      );
-      // Caller cancel and delivery shutdown forward the triggering signal's
-      // own reason (the event target is whichever of the two fired), so the
-      // surfaced message stays the intended one; the deadline passes its
-      // reason directly through the timer abort above.
-      const forward = (event: Event): void => {
-        const reason = (event.target as AbortSignal).reason;
-        controller.abort(reason instanceof Error ? reason : new Error('Delivery preparation was cancelled'));
-      };
-      prepareOptions.signal?.addEventListener('abort', forward, { once: true });
-      // dispose() stops an in-flight prepare too, not just future calls.
-      shutdown.signal.addEventListener('abort', forward, { once: true });
-      const newlyStaged: StagedPack[] = [];
-      try {
-        tracker.nextEvent('planning', { packId, revision: requestedRevision });
-        if (prepareOptions.signal?.aborted) {
-          fail('cancelled', 'Delivery preparation was cancelled');
-        }
-        // Staging is deliberately sequential: the single-flight budget,
-        // the one shared never-restarting deadline and the bounded
-        // archive+expanded memory all depend on one stage at a time.
-        const assertBudgetLeft = (): void => {
-          // The abort timer's callback can lag the clock: no new archive
-          // request, and no successful return, may start or land on a
-          // budget the monotonic clock has already spent. The thrown
-          // reason is classified by the catch below like any abort.
-          if (deadlineAt - monotonicNow() <= 0) {
-            fail('deadline', 'Delivery preparation exceeded its deadline');
-          }
-        };
-        for (const pack of missing) {
-          assertBudgetLeft();
-          const stagedPack = await stagePack(pack, deadlineAt, controller.signal, tracker);
-          // dispose() during an await drops everything: a late stagePack
-          // result must not repopulate a cleared delivery.
-          if (disposed) {
-            unstage(stagedPack);
-            fail('disposed', 'Phaser pack delivery was disposed during preparation');
-          }
-          newlyStaged.push(stagedPack);
-        }
-        // Final success gate: a decode that resolved after the budget was
-        // spent — with the abort callback still queued — must not certify
-        // the preparation or hand out staging handles.
-        assertBudgetLeft();
-        const handles = acquireHandles(zipPacks);
-        tracker.nextEvent('prepared', { packId, revision: requestedRevision });
-        return { release: handles.release };
-      } catch (thrown) {
-        const classified = classifyPrepareFailure(thrown, controller.signal, packId);
-        // Correlation fields merge in unconditionally, but identity the
-        // failing site already recorded wins: a dependency archive's
-        // failure keeps naming that dependency, not the requested pack.
-        const error = classified.withDetails({
-          kind: 'prepare',
-          operationId,
-          ...(classified.details.packId === undefined
-            ? { packId, revision: requestedRevision }
-            : {}),
-        });
-        // acquireHandles rolls its own handles back on failure, so the only
-        // staged bytes to reclaim here are the ones this prepare staged.
-        for (const stagedPack of newlyStaged) {
-          unstage(stagedPack);
-        }
-        tracker.nextEvent(
-          error.code === 'cancelled' ? 'cancelled' : error.code === 'disposed' ? 'disposed' : 'failed',
-          {
-            packId,
-            revision: requestedRevision,
-            error: { code: error.code, details: error.details },
-          },
-        );
-        throw error;
-      } finally {
-        residentHandles.release();
-        clearTimeout(timer);
-        prepareOptions.signal?.removeEventListener('abort', forward);
-        shutdown.signal.removeEventListener('abort', forward);
-        activePrepare = false;
-      }
-    },
+    prepare: enqueuePreparation,
     dispose(): void {
       if (disposed) {
         return;
@@ -2013,6 +2135,10 @@ export function createPhaserPackDelivery(
       // The sentinel makes dispose-caused aborts classify as 'disposed'
       // everywhere the reason propagates, not just at explicit checks.
       shutdown.abort(new DeliveryDisposedAbort('Phaser pack delivery is disposed'));
+      for (const job of preparationQueue) {
+        rejectJob(job, new PhaserPackDeliveryError('disposed', 'Phaser pack delivery is disposed'));
+      }
+      preparationQueue.length = 0;
       for (const stagedPack of staged.values()) {
         stagedPack.handles = 0;
         stagedPack.openReaders = 0;
