@@ -2231,6 +2231,123 @@ describe('queued preparations', () => {
   });
 });
 
+describe('readFile', () => {
+  it.each(['files', 'zip'] as const)('reads texture, atlas and audio Blobs from %s without a loader', async (deliveryKind) => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const atlas = new TextEncoder().encode('{"frames":{}}');
+    const audio = new Uint8Array([1, 4, 8, 16]);
+    const entries = [{ path: 'image.png', data: pngBytes, mediaType: 'image/png' },
+      { path: 'sheet.png', data: pngBytes, mediaType: 'image/png' },
+      { path: 'atlas.png', data: pngBytes, mediaType: 'image/png' },
+      { path: 'atlas.json', data: atlas, mediaType: 'application/json' },
+      { path: 'loop.mp3', data: audio, mediaType: 'audio/mpeg' }];
+    const file = (index: number, role: 'texture' | 'atlas' | 'audio') => {
+      const item = entries[index]!;
+      return { path: item.path, role, mediaType: item.mediaType, bytes: item.data.length,
+        sha256: sha256(item.data), ...(deliveryKind === 'zip' ? { method: 'store' } : {}) };
+    };
+    const zip = withZipBytes(entries.map((entry) => ({ path: entry.path, data: entry.data, method: 'store' })));
+    const manifest = { format: 'mpgd-asset-packs', version: 1, packs: [{
+      packId: 'solo', revision: '1', delivery: deliveryKind, dependencies: [],
+      assets: [
+        { assetKey: 'image', kind: 'image', files: [file(0, 'texture')] },
+        { assetKey: 'sheet', kind: 'spritesheet', frameConfig: { frameWidth: 8, frameHeight: 8 }, files: [file(1, 'texture')] },
+        { assetKey: 'atlas', kind: 'atlas', files: [file(2, 'texture'), file(3, 'atlas')] },
+        { assetKey: 'audio', kind: 'audio', files: [file(4, 'audio')] },
+      ], ...(deliveryKind === 'zip' ? { archive: { path: 'packs/solo@1.zip', bytes: zip.archive.length,
+        sha256: sha256(zip.archive), entryCount: entries.length } } : {}),
+    }] };
+    if (deliveryKind === 'zip') {
+      origin.files.set('packs/solo@1.zip', { bytes: zip.archive, mediaType: 'application/zip' });
+    } else {
+      for (const entry of entries) { origin.files.set(entry.path, { bytes: entry.data, mediaType: entry.mediaType }); }
+    }
+    const delivery = createPhaserPackDelivery(manifest, { baseUrl: origin.url,
+      createWorker: createFakeWorkerFactory().factory });
+    const [imageBlob, sheetBlob, atlasBlob, atlasTexture, audioBlob] = await Promise.all([
+      delivery.readFile('solo', 'image'), delivery.readFile('solo', 'sheet'),
+      delivery.readFile('solo', 'atlas', 'atlas'), delivery.readFile('solo', 'atlas'),
+      delivery.readFile('solo', 'audio'),
+    ]);
+    expect(new Uint8Array(await imageBlob.arrayBuffer())).toEqual(pngBytes);
+    expect(sheetBlob.type).toBe('image/png');
+    expect(atlasTexture.size).toBe(pngBytes.length);
+    expect(await atlasBlob.text()).toBe('{"frames":{}}');
+    expect(audioBlob.type).toBe('audio/mpeg');
+    expect(new Uint8Array(await audioBlob.arrayBuffer())).toEqual(audio);
+    expect(delivery.snapshot().staging).toEqual([]);
+    expect(delivery.snapshot().archiveRequests).toBe(deliveryKind === 'zip' ? 1 : 0);
+    delivery.dispose();
+  });
+  it.each([false, true])('returns body, reader and budgets before settling (corrupt=%s)', async (corrupt) => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'files' }]);
+    for (const [path, file] of packFiles) {
+      origin.files.set(path, { ...file, bytes: corrupt ? new Uint8Array(file.bytes.length).fill(9) : file.bytes });
+    }
+    const delivery = createPhaserPackDelivery(manifest, { baseUrl: origin.url });
+    const cleanup: string[] = [];
+    const events: PhaserPackDeliveryEvent[] = [];
+    let cleanupAtCompletion: readonly string[] | undefined;
+    delivery.subscribe((event) => {
+      if (event.kind === 'file-read') { events.push(event); }
+      if (event.kind === 'file-read' && event.phase === 'completed') {
+        cleanupAtCompletion = [...cleanup];
+      }
+    });
+    const original = delivery.fileSource.open;
+    vi.spyOn(delivery.fileSource, 'open').mockImplementation(async (request, context) => {
+      const opened = await original(request, context);
+      return { read: async () => {
+        const body = await opened.read();
+        return { ...body, release: () => { cleanup.push('body'); body.release(); } };
+      }, close: () => { cleanup.push('reader'); opened.close(); } };
+    });
+    const bytes = vi.fn(async () => () => { cleanup.push('bytes'); });
+    const transfers = vi.fn(async () => () => { cleanup.push('transfer'); });
+    const pending = delivery.readFile('solo', 'pilot', undefined, { budgets: {
+      bytes: { acquire: bytes }, transfers: { acquire: transfers },
+    } });
+    if (corrupt) { await expect(pending).rejects.toMatchObject({ code: 'integrity' }); } else { expect((await pending).size).toBe(pngBytes.length); }
+    expect(bytes).toHaveBeenCalledWith(pngBytes.length, expect.any(AbortSignal));
+    expect(cleanup).toEqual(['transfer', 'body', 'reader', 'bytes']);
+    const terminals = events.filter((event) => ['completed', 'failed', 'cancelled', 'disposed'].includes(event.phase));
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]?.phase).toBe(corrupt ? 'failed' : 'completed');
+    if (!corrupt) { expect(cleanupAtCompletion).toEqual(['transfer', 'body', 'reader', 'bytes']); }
+    if (corrupt) { expect(terminals[0]?.error?.code).toBe('integrity'); }
+    expect(new Set(events.map((event) => event.operationId)).size).toBe(1);
+    delivery.dispose();
+  });
+  it.each(['cancel', 'dispose'] as const)('rejects missing roles and %ss while waiting on the byte budget', async (end) => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+    for (const [path, file] of packFiles) { origin.files.set(path, file); }
+    const delivery = createPhaserPackDelivery(manifest, { baseUrl: origin.url, createWorker: createFakeWorkerFactory().factory });
+    await expect(delivery.readFile('solo', 'pilot', 'atlas')).rejects.toMatchObject({ code: 'config' });
+    expect(origin.requests).toEqual([]);
+    const controller = new AbortController();
+    let entered!: () => void;
+    const waiting = new Promise<void>((resolve) => { entered = resolve; });
+    const pending = delivery.readFile('solo', 'pilot', undefined, { signal: controller.signal,
+      budgets: { transfers: budgets().transfers, bytes: { acquire: async (_weight, signal) => {
+        entered();
+        return await new Promise<() => void>((_resolve, reject) => {
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        });
+      } } } });
+    const rejection = expect(pending).rejects.toMatchObject({ code: end === 'cancel' ? 'cancelled' : 'disposed' });
+    await waiting;
+    if (end === 'cancel') { controller.abort(); } else { delivery.dispose(); }
+    await rejection;
+    expect(delivery.snapshot().staging).toEqual([]);
+    delivery.dispose();
+  });
+});
+
 describe('preparation terminal retries', () => {
   it('starts a fresh attempt when a failed-event listener retries synchronously', async () => {
     const origin = await startOrigin();
@@ -2257,6 +2374,27 @@ describe('preparation terminal retries', () => {
     expect(delivery.snapshot().archiveRequests).toBe(2);
     expect(delivery.snapshot().staging[0]?.handles).toBe(1);
     handle.release();
+    delivery.dispose();
+  });
+});
+
+describe('readFile budget denials', () => {
+  it.each(['bytes', 'transfers'] as const)('classifies %s permit rejection and returns owned resources', async (port) => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'files' }]);
+    for (const [path, file] of packFiles) { origin.files.set(path, file); }
+    const delivery = createPhaserPackDelivery(manifest, { baseUrl: origin.url });
+    const limits = budgets();
+    limits[port].acquire = async () => { throw new Error('capacity exceeded'); };
+    const events: PhaserPackDeliveryEvent[] = [];
+    delivery.subscribe((event) => { if (event.kind === 'file-read') { events.push(event); } });
+    await expect(delivery.readFile('solo', 'pilot', undefined, { budgets: limits })).rejects.toMatchObject({
+      code: 'budget', details: { kind: 'file-read', packId: 'solo', assetKey: 'pilot', role: 'texture' },
+    });
+    expect(events.at(-1)).toMatchObject({ phase: 'failed', error: { code: 'budget' } });
+    expect(origin.requests).toEqual([]);
+    expect(delivery.snapshot().staging).toEqual([]);
     delivery.dispose();
   });
 });

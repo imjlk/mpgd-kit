@@ -26,6 +26,22 @@ also fail. URLs require HTTPS, a trailing slash and no credentials, query or
 fragment; HTTP loopback origins are supported for development. These assets are
 public data, never executable code. Store credentials belong in deployment tools.
 
+To keep all archives and original files outside the application output, set
+`defaultLocation: "remote"`, provide `remoteBaseUrl`, and omit packaged overrides
+and offline-required packs. Only the pinned manifest and runtime policy remain in
+`mpgd-asset-packs/`; payloads go to the separate `remote/` deployment output. Keep
+the asset source outside Vite `public/`: copying a source folder into `public/`
+would bundle it independently of this policy. The completed artifact audit also
+rejects byte-identical remote payloads leaked into another output path.
+
+Use an immutable release directory for `remoteBaseUrl`. The build report's
+`manifestSha256` identifies the exact built manifest. `publish-s3` verifies each
+uploaded object's declared bytes/digest metadata and writes a content-addressed
+`manifests/<manifestSha256>.json` snapshot last. Use that snapshot/report for the
+release identity; an arbitrary mutable remote manifest is not certified by a
+local build. Runtime reads still verify the pinned revision's bytes and SHA-256.
+No project-level plugin is needed to delete pack archives after target bundling.
+
 Build just the deployment without building the game:
 
 ```sh
