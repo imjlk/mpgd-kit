@@ -385,8 +385,8 @@ is forwarded to the loader without merging it with staging progress. Use
 `delivery.subscribe` for staging events. The helper preserves the underlying
 errors and does not dispose either service. The game still owns successful
 leases, previous-level retention, selection ordering, retries, and shutdown.
-In particular, it does not serialize `prepare` calls or change their `busy`
-behavior, and aborting after success does not release the returned lease.
+Preparation concurrency is managed by the delivery itself; aborting after
+success does not release the returned texture lease.
 
 ### Observing delivery work
 
@@ -466,8 +466,8 @@ checked for the whole closure before any request. Failures throw `PhaserPackDeli
 `code` (`config`, `not-prepared`, `busy`, `budget`, `transport`,
 `integrity`, `cancelled`, `deadline`, `disposed`) and preserve the
 decoder's status and code in the message; there is no silent ZIP-to-files
-fallback. Preparations are single-flight — a concurrent `prepare`
-rejects with `busy` — and first-version ownership is one fixed manifest
+fallback. Preparations share same-pack work and queue different packs; each
+caller owns its own preparation handle. Ownership is one fixed manifest
 with one loader and no cross-tab sharing. Optional prefetch is layered over
 this loader/delivery pair as described below. Persistent caching is
 optional and remains application-owned at the acquisition boundary.
@@ -523,8 +523,8 @@ prefetch.dispose(); // Return warm leases and cancel this scheduler's work.
 Higher-priority queued packs run first, ties are FIFO and duplicate ids share one
 operation. The default queue limit is 16 and the warm-pack limit is two. Background
 preparation is single-flight. Foreground admission cancels it, waits for staging
-cancellation to settle and serializes foreground entries for a single-flight
-delivery. Cancelling a queued foreground entry rejects promptly. Consumers retain
+cancellation to settle and serializes its foreground entries to preserve
+selection ordering. Cancelling a queued foreground entry rejects promptly. Consumers retain
 independent leases; eviction/disposal cannot delete their resources.
 
 For ZIP/mixed manifests, pass an `acquire` callback that calls

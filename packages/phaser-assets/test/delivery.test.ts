@@ -2230,3 +2230,33 @@ describe('queued preparations', () => {
     origin.release('packs/a@1.zip');
   });
 });
+
+describe('preparation terminal retries', () => {
+  it('starts a fresh attempt when a failed-event listener retries synchronously', async () => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest([
+      { id: 'solo', delivery: 'zip', zip: zipFixture() },
+    ]);
+    const delivery = createPhaserPackDelivery(manifest, {
+      baseUrl: origin.url,
+      createWorker: createFakeWorkerFactory().factory,
+    });
+    let retry: ReturnType<typeof delivery.prepare> | undefined;
+    delivery.subscribe((event) => {
+      if (event.kind === 'prepare' && event.phase === 'failed') {
+        for (const [path, file] of packFiles) {
+          origin.files.set(path, file);
+        }
+        retry = delivery.prepare('solo');
+      }
+    });
+    await expect(delivery.prepare('solo')).rejects.toMatchObject({ code: 'transport' });
+    expect(retry).toBeDefined();
+    const handle = await retry!;
+    expect(delivery.snapshot().archiveRequests).toBe(2);
+    expect(delivery.snapshot().staging[0]?.handles).toBe(1);
+    handle.release();
+    delivery.dispose();
+  });
+});
