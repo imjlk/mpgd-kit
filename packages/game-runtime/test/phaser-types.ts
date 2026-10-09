@@ -14,3 +14,8 @@ const binding = bindPhaserGameScene({
   },
 });
 binding.dispose();
+
+import { PhaserImpactFeedbackPool } from '@mpgd/game-runtime/phaser/impact';
+const feedback = new PhaserImpactFeedbackPool(scene, { capacity: 8 });
+feedback.update(100);
+feedback.destroy();
