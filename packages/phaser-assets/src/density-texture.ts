@@ -8,16 +8,16 @@ export interface DensityAwareTextureMetrics {
   readonly logicalWidth: number;
   readonly pixelHeight: number;
   readonly pixelWidth: number;
+  /** Actual uniform ratio, quantized to integer physical dimensions. */
   readonly resolution: number;
 }
-
 interface MutableFrameData {
   readonly sourceSize: { h: number; w: number };
   readonly spriteSourceSize: { h: number; w: number };
   radius: number;
 }
 
-/** Bake procedural art densely while preserving logical Image and Sprite geometry. */
+/** Bake procedural art while retaining a uniform raster ratio and logical geometry. */
 export function generateDensityAwareTexture(
   scene: Phaser.Scene,
   graphics: Phaser.GameObjects.Graphics,
@@ -26,25 +26,32 @@ export function generateDensityAwareTexture(
   logicalHeight: number,
   resolution: number,
 ): void {
-  requirePositiveFinite('logicalWidth', logicalWidth);
-  requirePositiveFinite('logicalHeight', logicalHeight);
-  requirePositiveFinite('resolution', resolution);
-  const pixelWidth = Math.max(1, Math.round(logicalWidth * resolution));
-  const pixelHeight = Math.max(1, Math.round(logicalHeight * resolution));
-  requireTextureBudget(key, pixelWidth, pixelHeight);
+  const geometry = resolveTextureGeometry(logicalWidth, logicalHeight, resolution);
+  requireTextureBudget(key, geometry.pixelWidth, geometry.pixelHeight);
+  if (scene.textures.exists(key)) {
+    if (readDensityAwareTextureMetrics(scene, key) === undefined) {
+      throw new Error(`Cannot replace an unowned density texture: ${key}.`);
+    }
+    const texture = scene.textures.get(key) as Partial<Phaser.Textures.CanvasTexture>;
+    if (typeof texture.setSize !== 'function' || typeof texture.clear !== 'function') {
+      throw new Error('Density texture regeneration requires a canvas texture.');
+    }
+    // Keep the texture and base-frame identities alive for existing images.
+    texture.setSize(geometry.pixelWidth, geometry.pixelHeight);
+    texture.clear(0, 0, geometry.pixelWidth, geometry.pixelHeight, false);
+  }
   const previousScaleX = graphics.scaleX;
   const previousScaleY = graphics.scaleY;
-  graphics.setScale(resolution);
+  graphics.setScale(geometry.resolution);
   try {
-    graphics.generateTexture(key, pixelWidth, pixelHeight);
+    graphics.generateTexture(key, geometry.pixelWidth, geometry.pixelHeight);
   } finally {
     graphics.setScale(previousScaleX, previousScaleY);
   }
-
   normalizeTextureResolution(scene, key, logicalWidth, logicalHeight, resolution);
 }
 
-/** Retain raster source pixels without enlarging game-world bounds. */
+/** Normalize only a texture whose physical axes match one exact uniform ratio. */
 export function normalizeTextureResolution(
   scene: Phaser.Scene,
   key: string,
@@ -52,21 +59,20 @@ export function normalizeTextureResolution(
   logicalHeight: number,
   resolution: number,
 ): void {
-  requirePositiveFinite('logicalWidth', logicalWidth);
-  requirePositiveFinite('logicalHeight', logicalHeight);
-  requirePositiveFinite('resolution', resolution);
-  const pixelWidth = Math.max(1, Math.round(logicalWidth * resolution));
-  const pixelHeight = Math.max(1, Math.round(logicalHeight * resolution));
-  requireTextureBudget(key, pixelWidth, pixelHeight);
+  const geometry = resolveTextureGeometry(logicalWidth, logicalHeight, resolution);
+  requireTextureBudget(key, geometry.pixelWidth, geometry.pixelHeight);
   if (!scene.textures.exists(key)) {
     throw new Error(`Density-aware texture does not exist: ${key}.`);
   }
-  const texture = scene.textures.get(key);
-  const frame = texture.get();
-  // Phaser keeps Frame.data private in its declarations. Image sizing still reads these source
-  // metrics, so retain the physical cut rectangle and normalize only logical source geometry.
+  const frame = scene.textures.get(key).get();
+  if (frame.cutWidth !== geometry.pixelWidth || frame.cutHeight !== geometry.pixelHeight) {
+    throw new Error('Physical texture dimensions do not match the uniform density geometry.');
+  }
   const frameData = requireMutableFrameData(frame);
-  frame.source.resolution = resolution;
+  if (typeof frame.customData !== 'object' || frame.customData === null) {
+    throw new Error('Phaser frame custom data is unavailable.');
+  }
+  frame.source.resolution = geometry.resolution;
   frameData.sourceSize.w = logicalWidth;
   frameData.sourceSize.h = logicalHeight;
   frameData.spriteSourceSize.w = logicalWidth;
@@ -74,12 +80,7 @@ export function normalizeTextureResolution(
   frameData.radius = 0.5 * Math.hypot(logicalWidth, logicalHeight);
   Object.assign(frame.customData, {
     [densityAwareTextureMetadataKey]: Object.freeze({
-      key,
-      logicalHeight,
-      logicalWidth,
-      pixelHeight,
-      pixelWidth,
-      resolution,
+      key, logicalHeight, logicalWidth, ...geometry,
     } satisfies DensityAwareTextureMetrics),
   });
 }
@@ -91,45 +92,53 @@ export function readDensityAwareTextureMetrics(
   if (!scene.textures.exists(key)) {
     return undefined;
   }
-
-  const frame = scene.textures.get(key).get();
-  const metadata = (frame.customData as Record<string, unknown>)[densityAwareTextureMetadataKey];
-
+  const metadata = (scene.textures.get(key).get().customData as Record<string, unknown>)[
+    densityAwareTextureMetadataKey
+  ];
   return isDensityAwareTextureMetrics(metadata) && metadata.key === key ? metadata : undefined;
+}
+
+function resolveTextureGeometry(width: number, height: number, requested: number) {
+  for (const dimension of [width, height]) {
+    if (!Number.isInteger(dimension) || dimension < 1 || dimension > 1_000_000_000) {
+      throw new TypeError('logicalWidth/logicalHeight must be integers from 1 to 1000000000.');
+    }
+  }
+  if (!Number.isFinite(requested) || requested <= 0 || requested > 64) {
+    throw new TypeError('resolution must be positive, finite, and at most 64.');
+  }
+  let left = width;
+  let right = height;
+  while (right !== 0) {
+    const remainder = left % right;
+    left = right;
+    right = remainder;
+  }
+  // Phaser has one scalar resolution. Quantize both axes together rather than
+  // rounding each separately, which would change render size and aspect ratio.
+  const units = Math.max(1, Math.floor(requested * left));
+  return {
+    pixelWidth: (width / left) * units,
+    pixelHeight: (height / left) * units,
+    resolution: units / left,
+  };
 }
 
 function requireMutableFrameData(frame: Phaser.Textures.Frame): MutableFrameData {
   const candidate = (frame as Phaser.Textures.Frame & { readonly data?: unknown }).data;
-
   if (typeof candidate !== 'object' || candidate === null) {
     throw new Error('Phaser frame source metrics are unavailable.');
   }
-
-  const frameData = candidate as Partial<MutableFrameData>;
-  if (
-    typeof frameData.sourceSize !== 'object'
-    || frameData.sourceSize === null
-    || typeof frameData.spriteSourceSize !== 'object'
-    || frameData.spriteSourceSize === null
-    || !Number.isFinite(frameData.sourceSize.w)
-    || !Number.isFinite(frameData.sourceSize.h)
-    || !Number.isFinite(frameData.spriteSourceSize.w)
-    || !Number.isFinite(frameData.spriteSourceSize.h)
-    || !Number.isFinite(frameData.radius)
-  ) {
+  const data = candidate as Partial<MutableFrameData>;
+  if (typeof data.sourceSize !== 'object' || data.sourceSize === null
+    || typeof data.spriteSourceSize !== 'object' || data.spriteSourceSize === null
+    || !Number.isFinite(data.sourceSize.w) || !Number.isFinite(data.sourceSize.h)
+    || !Number.isFinite(data.spriteSourceSize.w) || !Number.isFinite(data.spriteSourceSize.h)
+    || !Number.isFinite(data.radius)) {
     throw new Error('Phaser frame source metrics have an unsupported shape.');
   }
-
-  return frameData as MutableFrameData;
+  return data as MutableFrameData;
 }
-
-function requirePositiveFinite(name: string, value: number): void {
-  const maximum = name === 'resolution' ? 64 : 1_000_000_000;
-  if (!Number.isFinite(value) || value <= 0 || value > maximum) {
-    throw new TypeError(`${name} must be positive, finite, and at most ${maximum}.`);
-  }
-}
-
 function requireTextureBudget(key: string, width: number, height: number): void {
   if (typeof key !== 'string' || key.length === 0 || key.length > 256) {
     throw new TypeError('Density-aware textures require a nonempty key of at most 256 characters.');
@@ -139,17 +148,13 @@ function requireTextureBudget(key: string, width: number, height: number): void 
     throw new TypeError('Density-aware texture dimensions exceed the supported pixel budget.');
   }
 }
-
-function isDensityAwareTextureMetrics(
-  value: unknown,
-): value is DensityAwareTextureMetrics {
+function isDensityAwareTextureMetrics(value: unknown): value is DensityAwareTextureMetrics {
   if (typeof value !== 'object' || value === null) {
     return false;
   }
-
   const candidate = value as Partial<DensityAwareTextureMetrics>;
   return typeof candidate.key === 'string'
     && [candidate.logicalHeight, candidate.logicalWidth, candidate.pixelHeight,
-      candidate.pixelWidth, candidate.resolution].every((value) =>
-        typeof value === 'number' && Number.isFinite(value) && value > 0);
+      candidate.pixelWidth, candidate.resolution].every((field) =>
+        typeof field === 'number' && Number.isFinite(field) && field > 0);
 }

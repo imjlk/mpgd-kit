@@ -10,6 +10,8 @@ describe('density-aware Phaser textures', () => {
   it('bakes physical pixels while preserving logical frame geometry', () => {
     const source = { resolution: 1 };
     const frame = {
+      cutWidth: 96,
+      cutHeight: 144,
       customData: {},
       data: {
         radius: 0,
@@ -18,15 +20,16 @@ describe('density-aware Phaser textures', () => {
       },
       source,
     };
+    let exists = false;
     const graphics = {
       scaleX: 1,
       scaleY: 1,
-      generateTexture: vi.fn(),
+      generateTexture: vi.fn(() => { exists = true; }),
       setScale: vi.fn(() => graphics),
     };
     const scene = {
       textures: {
-        exists: vi.fn(() => true),
+        exists: vi.fn(() => exists),
         get: vi.fn(() => ({ get: () => frame })),
       },
     };
@@ -85,14 +88,14 @@ describe('density-aware Phaser textures', () => {
 it('restores graphics scale when texture generation fails', () => {
   const failure = new Error('renderer failure');
   const graphics = { scaleX: 2, scaleY: 3, setScale: vi.fn(), generateTexture: () => { throw failure; } };
-  expect(() => generateDensityAwareTexture({} as Phaser.Scene, graphics as unknown as Phaser.GameObjects.Graphics,
+  expect(() => generateDensityAwareTexture({ textures: { exists: () => false } } as unknown as Phaser.Scene, graphics as unknown as Phaser.GameObjects.Graphics,
     'sample.texture', 48, 72, 2)).toThrow(failure);
   expect(graphics.setScale).toHaveBeenLastCalledWith(2, 3);
 });
 
 it('rejects excessive physical pixels before mutating the renderer', () => {
   const graphics = { setScale: vi.fn() };
-  expect(() => generateDensityAwareTexture({} as Phaser.Scene, graphics as unknown as Phaser.GameObjects.Graphics,
+  expect(() => generateDensityAwareTexture({ textures: { exists: () => false } } as unknown as Phaser.Scene, graphics as unknown as Phaser.GameObjects.Graphics,
     'sample.texture', 10_000, 10_000, 2)).toThrow(/pixel budget/u);
   expect(graphics.setScale).not.toHaveBeenCalled();
 });

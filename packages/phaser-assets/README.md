@@ -556,7 +556,11 @@ Three opt-in entrypoints keep logical world coordinates independent of raster qu
   normalized to 1; density is at least 1. If logical pixels already exceed the budget,
   use the backing-size resolver to allow downscaling.
 - `@mpgd/phaser-assets/density-texture`: bake procedural art at a denser raster size,
-  preserve logical Phaser frame geometry, and read metadata. Generation restores the
+  preserve logical Phaser frame geometry, and read metadata. Logical texture dimensions
+  are positive integers. Requested density is quantized downward to a uniform ratio
+  representable by both integer physical axes (with a one-pixel minimum); metadata
+  reports the actual ratio. Owned canvas textures are resized and cleared in place
+  on regeneration; occupied unowned keys are rejected. Generation restores the
   graphics object's previous scale even if it throws. These helpers use Phaser types
   only at import time and reject oversized textures before generation.
 
