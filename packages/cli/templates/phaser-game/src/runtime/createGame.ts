@@ -28,14 +28,14 @@ export function createStarterGame(input: {
     },
     scene: [BootScene, LobbyScene, PlayScene],
     callbacks: {
-      postBoot(game: Phaser.Game) {
+      preBoot(game: Phaser.Game) {
         game.registry.set(starterContextKey, input.context);
+      },
+      postBoot(game: Phaser.Game) {
         ownGameAudio(game, input.context);
       },
     },
   });
-
-  game.registry.set(starterContextKey, input.context);
 
   return game;
 }

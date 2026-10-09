@@ -36,8 +36,10 @@ export function createStarterGame(input: CreateStarterGameInput): Phaser.Game {
       pixelArt: false,
     },
     callbacks: {
-      postBoot(game: Phaser.Game) {
+      preBoot(game: Phaser.Game) {
         game.registry.set('starterContext', input.context);
+      },
+      postBoot(game: Phaser.Game) {
         ownGameAudio(game, input.context);
       },
     },
