@@ -561,10 +561,9 @@ function enter(theme: Theme): void {
     lastEntryMs: null,
   });
   renderStatus();
-  // Enters run one at a time: a superseded enter finishes (or aborts)
-  // before the next begins, so overlapping transitions never surface the
-  // delivery's single-flight busy error to the user.
-  enterChain = enterChain.then(() => runEnter(theme, ticket, controller, requestedAt)).catch((error) => {
+  // Delivery owns staging concurrency; the selection ticket still owns
+  // which completed lease may update display objects.
+  void runEnter(theme, ticket, controller, requestedAt).catch((error) => {
     // runEnter handles its own failures; reaching here is a real bug and
     // must stay visible in the console the browser acceptance monitors.
     console.error('Unexpected sample enter failure', error);
@@ -575,8 +574,6 @@ function enter(theme: Theme): void {
     }
   });
 }
-
-let enterChain: Promise<void> = Promise.resolve();
 
 async function runEnter(theme: Theme, ticket: number, controller: AbortController, requestedAt: number): Promise<void> {
   if (!packs || ticket !== sequence) return;
@@ -601,7 +598,9 @@ async function runEnter(theme: Theme, ticket: number, controller: AbortControlle
       // registered textures survive the staging release.
       const startedAt = performance.now();
       const prepared = await delivery.prepare(theme, { signal: controller.signal });
-      model.lastPrepareMs = Math.round(performance.now() - startedAt);
+      if (ticket === sequence) {
+        model.lastPrepareMs = Math.round(performance.now() - startedAt);
+      }
       try {
         lease = await packs.acquire(theme, acquireOptions);
       } finally {
