@@ -47,7 +47,7 @@ test('prepared workspace tests run mutating builds first, then the disjoint rema
   };
   const first = selectedNames(mutating);
   const second = selectedNames(remainder);
-  assert.deepEqual(first.sort(), ['@mpgd/adapter-wechat', '@mpgd/game-runtime', '@mpgd/i18n', '@mpgd/phaser-minigame-runtime'].sort());
+  assert.deepEqual(first.sort(), ['@mpgd/adapter-wechat', '@mpgd/game-runtime', '@mpgd/i18n', '@mpgd/phaser-minigame-runtime', '@mpgd/target-config'].sort());
   assert.ok(second.length > 0);
   assert.ok(!second.includes('mpgd-kit'));
   assert.ok(!second.includes('@mpgd/app-game-services-worker'));
