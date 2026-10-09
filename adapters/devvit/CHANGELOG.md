@@ -1,5 +1,11 @@
 # @mpgd/adapter-devvit
 
+## 0.9.17 — 2026-10-09
+
+### Patch changes
+
+- Updated dependencies: game-services@0.19.0, platform@0.17.0
+
 ## 0.9.16 — 2026-10-09
 
 ### Patch changes
