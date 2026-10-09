@@ -506,3 +506,8 @@ so embedded surfaces work independently. Release and destroy are idempotent;
 layout observer errors cannot interrupt cleanup and can be observed through
 `onObserverError`. The consumer owns CSS, banner dimensions, eligibility, and
 scene shutdown wiring. Importing the module creates no DOM or lifecycle listeners.
+
+## Impact feedback
+
+The opt-in `./impact` and `./phaser/impact` entries provide deterministic recipe
+matching and scene-owned pooled rendering. See [configuration and gotchas](docs/impact-feedback.md).
