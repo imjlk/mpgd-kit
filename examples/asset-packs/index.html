@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Asset pack field study · mpgd</title>
+    <link rel="icon" href="data:," />
   </head>
   <body>
     <main>
@@ -11,11 +12,12 @@
       <div class="toolbar" aria-label="Level controls">
         <button id="grove" disabled>Enter grove</button><button id="dunes" disabled>Enter dunes</button>
         <button id="cancel" disabled>Cancel</button><button id="retry" disabled>Retry</button><button id="unload" disabled>Unload</button>
+        <button id="sound" hidden disabled>Play chime</button>
       </div>
       <section id="game" aria-label="Asset pack exploration canvas"></section>
       <section class="readout" aria-label="Preparation status">
-        <div><span class="eyebrow" id="delivery">STARTING</span><strong id="status" role="status" aria-live="polite">Preparing the sample…</strong><progress id="progress" value="0" max="1" aria-label="Prepared textures"></progress></div>
-        <div><span class="eyebrow">RESIDENT TEXTURES</span><strong id="resident">0</strong><span id="memory">RGBA estimate: 0 bytes</span></div>
+        <div><span class="eyebrow" id="delivery">STARTING</span><strong id="status" role="status" aria-live="polite">Preparing the sample…</strong><progress id="progress" value="0" max="1" aria-label="Prepared assets"></progress></div>
+        <div><span class="eyebrow">RESIDENT ASSETS</span><strong id="resident">0</strong><span id="memory">RGBA estimate: 0 bytes</span></div>
       </section>
       <p class="footnote">Move with arrow keys. Loading waits for verified bytes, image decoding and texture registration. Switching keeps the shared explorer; unloading releases every owned texture.</p>
       <details><summary>What this study covers</summary><p>This sample uses the reusable texture-pack API with PNG images, spritesheets and JSON atlases in WebGL or Canvas. The same gameplay uses bundled files or a separate static origin. Persistent download caching, background prefetch and upload services remain follow-up work.</p></details>

@@ -169,7 +169,7 @@ function planAssetFiles(
         { role: 'texture', entryPath: asset.texture },
         { role: 'atlas', entryPath: asset.atlas },
       ]
-    : [{ role: 'texture', entryPath: asset.file }];
+    : [{ role: asset.kind === 'audio' ? 'audio' : 'texture', entryPath: asset.file }];
   return sources.map(({ role, entryPath }) => {
     const media = phaserPackMediaTypeForPath(entryPath);
     if (media === null) {
@@ -180,6 +180,9 @@ function planAssetFiles(
     }
     if (role === 'atlas' && media.mediaType !== 'application/json') {
       throw new Error(`Atlas metadata sources must be JSON: ${asset.key}/${entryPath}`);
+    }
+    if (role === 'audio' && !media.mediaType.startsWith('audio/')) {
+      throw new Error(`Audio sources must use an audio format: ${asset.key}/${entryPath}`);
     }
     const data = readSourceFile(rootPath, entryPath);
     let method: PhaserPackEntryMethod = asset.compression ?? media.defaultMethod;

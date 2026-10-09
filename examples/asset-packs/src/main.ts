@@ -5,6 +5,7 @@ import {
   type PhaserAssetPackLease as PackLease,
 } from '@mpgd/phaser-assets/packs';
 import {
+  acquireDeliveredPack,
   createPhaserPackDelivery,
   PhaserPackDeliveryError,
   readCappedDeliveryBody,
@@ -16,6 +17,11 @@ import {
   type PhaserPackDeliveryEvent,
   type PhaserPackPreparationPlan,
 } from '@mpgd/phaser-assets/delivery';
+import {
+  createPhaserPackPrefetcher,
+  type PhaserPackPrefetcher,
+} from '@mpgd/phaser-assets/prefetch';
+import { validatePhaserPackDeliveryManifest } from '@mpgd/phaser-assets/pack-format';
 import {
   ArtifactCache,
   artifactCacheIdentity,
@@ -57,7 +63,10 @@ const element = <T extends HTMLElement>(id: string): T => {
   return value as T;
 };
 const controls = Object.fromEntries(
-  ['grove', 'dunes', 'cancel', 'retry', 'unload'].map((id) => [id, element<HTMLButtonElement>(id)]),
+  ['grove', 'dunes', 'cancel', 'retry', 'unload', 'sound'].map((id) => [
+    id,
+    element<HTMLButtonElement>(id),
+  ]),
 );
 const errorText = (error: unknown): string => error instanceof Error
   ? error.message
@@ -68,6 +77,13 @@ const errorText = (error: unknown): string => error instanceof Error
 const DELIVERY_MANIFEST_PATH = (variant: string): string => `delivery/${variant}/asset-pack-delivery.json`;
 
 const params = new URLSearchParams(location.search);
+const audioEnabled = params.has('audio');
+const prefetchEnabled = params.has('prefetch');
+const runtimeCatalog = __ASSET_PACK_CATALOG__.map((pack) =>
+  audioEnabled && (pack.id === 'grove' || pack.id === 'dunes')
+    ? { ...pack, dependsOn: [...(pack.dependsOn ?? []), 'sound'] }
+    : pack,
+);
 /** One HTTP cache policy for the page: the documented http-cache=1 flag
  * covers the files loader, the manifest fetch and delivery requests. */
 const requestCache: 'default' | 'no-store' = params.has('http-cache') ? 'default' : 'no-store';
@@ -237,6 +253,27 @@ const observeCacheEvent = (event: PhaserPackCacheEvent): void => {
 };
 
 let packs: ReturnType<typeof createPhaserAssetPackLoader> | undefined;
+let prefetch: PhaserPackPrefetcher | undefined;
+function setupPrefetch(): void {
+  prefetch?.dispose();
+  prefetch = undefined;
+  if (!prefetchEnabled || !packs) return;
+  const loader = packs;
+  const source = delivery;
+  const current = createPhaserPackPrefetcher(loader, {
+    maxWarmPacks: 2,
+    maxRetainedBytes: 16 * 1024 * 1024,
+    acquire: (packId, settings) => source
+      ? acquireDeliveredPack({ delivery: source, loader, packId,
+        ...(settings.signal === undefined ? {} : { signal: settings.signal }),
+        ...(settings.onProgress === undefined ? {} : { onTextureProgress: settings.onProgress }),
+      })
+      : loader.acquire(packId, settings),
+  });
+  prefetch = current;
+  current.setIdle(true);
+  for (const id of ['grove', 'dunes']) void current.enqueue(id).then(() => { if (prefetch === current) renderStatus(); });
+}
 let delivery: PhaserPackDelivery | undefined;
 let unsubscribeDelivery: (() => void) | undefined;
 const namespaceParam = params.get('cache-namespace') ?? '';
@@ -259,6 +296,7 @@ class Board extends Phaser.Scene {
   private baselineTextures = new Set<string>();
   private hero: Phaser.GameObjects.Image | undefined;
   private lease: PackLease | undefined;
+  private chime: Phaser.Sound.BaseSound | undefined;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
 
   constructor() {
@@ -278,6 +316,8 @@ class Board extends Phaser.Scene {
       ++deliveryBootTicket;
       pending?.abort();
       pending = undefined;
+      prefetch?.dispose();
+      prefetch = undefined;
       this.clear();
       // Closing the sample detaches the observer first (idempotent):
       // stopping to watch is not the same act as cancelling a prepare,
@@ -297,13 +337,14 @@ class Board extends Phaser.Scene {
     this.showEmpty();
     this.baselineTextures = new Set(this.textures.getTextureKeys());
     if (deliveryMode === null) {
-      packs = createPhaserAssetPackLoader(this, __ASSET_PACK_CATALOG__, {
+      packs = createPhaserAssetPackLoader(this, runtimeCatalog, {
         ...loaderOptions,
         resolveURL: (url, pack) => new URL(url, bundled.has(pack.packId) ? localBase : __ASSET_PACK_ORIGIN__).href,
         requestTimeoutMs: 2_000,
         requestCache,
       });
       model.phase = 'idle';
+      setupPrefetch();
     } else {
       // ZIP delivery boots asynchronously: the CLI-built delivery manifest
       // is fetched, validated and turned into the loader catalog + prepared
@@ -315,6 +356,7 @@ class Board extends Phaser.Scene {
   enter(lease: PackLease, theme: Theme): void {
     let nextLayer: Phaser.GameObjects.Container | undefined;
     let nextHero: Phaser.GameObjects.Image;
+    let nextChime: Phaser.Sound.BaseSound | undefined;
     try {
       const required = (pack: string, id: string): string => {
         const key = lease.key(pack, id);
@@ -343,8 +385,10 @@ class Board extends Phaser.Scene {
       );
       nextHero = this.add.image(480, 270, pilot, 1).setScale(1.5);
       nextLayer.add(nextHero);
+      if (audioEnabled) nextChime = this.sound.add(lease.key('sound', 'chime'), { volume: .2 });
     } catch (error) {
       nextLayer?.destroy();
+      nextChime?.destroy();
       lease.release();
       throw error;
     }
@@ -353,12 +397,15 @@ class Board extends Phaser.Scene {
     this.layer = nextLayer;
     this.hero = nextHero;
     this.lease = lease;
+    this.chime = nextChime;
     this.layer.setVisible(true);
   }
   clear(): void {
     // Destroy all image users before returning their resident resource lease.
     this.layer.removeAll(true);
     this.hero = undefined;
+    this.chime?.destroy();
+    this.chime = undefined;
     this.lease?.release();
     this.lease = undefined;
   }
@@ -368,6 +415,24 @@ class Board extends Phaser.Scene {
         .5,
       ),
     );
+  }
+  async playChime(): Promise<boolean> {
+    const chime = this.chime;
+    if (!chime) return false;
+    // Only the explicit user gesture resumes playback; asset preparation never does.
+    if ('context' in this.sound) {
+      const context = (this.sound as Phaser.Sound.WebAudioSoundManager).context;
+      if (context.state === 'suspended') await context.resume();
+    }
+    return this.chime === chime && chime.play();
+  }
+  audioPlaying(): boolean {
+    return this.chime?.isPlaying ?? false;
+  }
+  audioCount(): number {
+    return this.cache.audio.getKeys().filter((key: string) =>
+      key.startsWith('__mpgd_pack_'),
+    ).length;
   }
   frames(pack: string, key: string): number {
     if (!this.lease) return 0;
@@ -407,7 +472,7 @@ const bootedGame = (): Phaser.Game => {
 const bootGame = (): void => {
   game = new Phaser.Game({
     type: new URLSearchParams(location.search).get('renderer') === 'canvas' ? Phaser.CANVAS : Phaser.WEBGL, width: 960, height: 540, parent: 'game', backgroundColor: '#142c31',
-    pixelArt: true, scene: [board], audio: { noAudio: true },
+    pixelArt: true, scene: [board], audio: { noAudio: !audioEnabled, disableWebAudio: params.get('audio-backend') === 'html5' },
     loader: { imageLoadType: 'HTMLImageElement' },
   });
 };
@@ -451,6 +516,8 @@ function renderStatus(): void {
   controls.cancel!.disabled = model.phase !== 'preparing';
   controls.retry!.disabled = model.phase !== 'error';
   controls.unload!.disabled = model.phase === 'booting' || (model.phase === 'idle' && !model.current);
+  controls.sound!.hidden = !audioEnabled;
+  controls.sound!.disabled = model.phase !== 'playing';
   const deliveryLabels: Record<string, string> = {
     zip: 'ZIP DELIVERY / REAL MODULE WORKER',
     mixed: 'MIXED FILES + ZIP DELIVERY',
@@ -468,6 +535,7 @@ function renderStatus(): void {
 
 function enter(theme: Theme): void {
   if (!packs) return;
+  prefetch?.setIdle(false);
   const active = bootedGame();
   if (!active.loop.running) active.loop.start(active.step.bind(active));
   const ticket = ++sequence;
@@ -517,7 +585,9 @@ async function runEnter(theme: Theme, ticket: number, controller: AbortControlle
   };
   try {
     let lease: PackLease;
-    if (delivery === undefined) {
+    if (prefetch) {
+      lease = await prefetch.acquire(theme, acquireOptions);
+    } else if (delivery === undefined) {
       lease = await packs.acquire(theme, acquireOptions);
     } else {
       resetCacheReport();
@@ -566,6 +636,8 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
   // booting so stale error text and timings cannot leak into evidence.
   unsubscribeDelivery?.();
   unsubscribeDelivery = undefined;
+  prefetch?.dispose();
+  prefetch = undefined;
   artifactCache?.close();
   artifactCache = undefined;
   delivery?.dispose();
@@ -627,7 +699,14 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
         bootCache = opened;
       }
     }
-    const booted = createPhaserPackDelivery(manifestDocument, {
+    let runtimeManifest = validatePhaserPackDeliveryManifest(manifestDocument);
+    if (audioEnabled) {
+      const sound = runtimeManifest.packs.find((pack) => pack.packId === 'sound');
+      if (!sound) throw new Error('Audio fixture pack is missing');
+      runtimeManifest = { ...runtimeManifest, packs: runtimeManifest.packs.map((pack) => pack.packId === 'grove' || pack.packId === 'dunes'
+        ? { ...pack, dependencies: [...pack.dependencies, { packId: sound.packId, revision: sound.revision }] } : pack) };
+    }
+    const booted = createPhaserPackDelivery(runtimeManifest, {
       baseUrl: manifestUrl,
       createWorker: (): Worker => new Worker(new URL('./archive-decode-worker.ts', import.meta.url), { type: 'module' }),
       stagingBudgetBytes: stagingParam,
@@ -661,6 +740,7 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
       fileSource: booted.fileSource,
     });
     model.phase = 'idle';
+    setupPrefetch();
   } catch (error) {
     // A boot-local connection is never owned by a published delivery.
     bootCache?.close();
@@ -685,6 +765,9 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
 }
 
 function wireSampleControls(): void {
+  controls.sound!.onclick = () => {
+    void board.playChime().catch(() => { model.error = 'Audio playback unavailable'; renderStatus(); });
+  };
   controls.grove!.onclick = () => {
     enter('grove');
   };
@@ -704,6 +787,7 @@ function wireSampleControls(): void {
     pending = undefined;
     model.phase = model.current ? 'playing' : 'idle';
     model.ready = model.total = 0;
+    if (model.phase === 'idle') prefetch?.setIdle(true);
     renderStatus();
   };
   controls.unload!.onclick = () => {
@@ -715,6 +799,7 @@ function wireSampleControls(): void {
     board.clear();
     board.showEmpty();
     Object.assign(model, { phase: 'idle', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null, plan: null });
+    prefetch?.setIdle(true);
     renderStatus();
   };
 }
@@ -747,6 +832,10 @@ function state() {
     player: model.phase === 'booting' ? null : board.player(),
     resources: packs?.snapshot().map((entry) => ({ ...entry, pack: entry.packId, identity: entry.packId + '/' + entry.assetKey })) ?? [],
     textureCount: model.phase === 'booting' ? 0 : board.textureCount(),
+    audioCount: model.phase === 'booting' ? 0 : board.audioCount(),
+    audioUnlocked: audioEnabled ? !board.sound.locked : null,
+    audioPlaying: board.audioPlaying(),
+    prefetch: prefetch?.snapshot() ?? null,
   };
 }
 function wireWindowHooks(): void {

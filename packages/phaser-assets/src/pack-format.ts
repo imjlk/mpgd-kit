@@ -7,9 +7,9 @@ export const PHASER_PACK_DELIVERY_FORMAT = 'mpgd-asset-packs';
 export const PHASER_PACK_DELIVERY_VERSION = 1;
 export type PhaserPackDeliveryKind = 'files' | 'zip';
 export type PhaserPackEntryMethod = 'store' | 'deflate';
-export type PhaserPackBuildAssetKind = 'image' | 'spritesheet' | 'atlas';
+export type PhaserPackBuildAssetKind = 'image' | 'spritesheet' | 'atlas' | 'audio';
 /** Mirrors the loader's file roles; an atlas asset uses both. */
-export type PhaserPackFormatFileRole = 'texture' | 'atlas';
+export type PhaserPackFormatFileRole = 'texture' | 'atlas' | 'audio';
 /** Structurally compatible with Phaser's spritesheet frame config. */
 export interface PhaserPackFrameConfig {
   readonly frameWidth: number;
@@ -41,6 +41,11 @@ export interface PhaserPackBuildImageAsset extends PhaserPackBuildAssetBase {
   readonly kind: 'image';
   readonly file: string;
 }
+export interface PhaserPackBuildAudioAsset extends PhaserPackBuildAssetBase {
+  readonly kind: 'audio';
+  /** One format selected by the game; decoding support is checked at preparation. */
+  readonly file: string;
+}
 export interface PhaserPackBuildSpritesheetAsset extends PhaserPackBuildAssetBase {
   readonly kind: 'spritesheet';
   readonly file: string;
@@ -53,6 +58,7 @@ export interface PhaserPackBuildAtlasAsset extends PhaserPackBuildAssetBase {
 }
 export type PhaserPackBuildAsset =
   | PhaserPackBuildImageAsset
+  | PhaserPackBuildAudioAsset
   | PhaserPackBuildSpritesheetAsset
   | PhaserPackBuildAtlasAsset;
 export interface PhaserPackDeliveryManifest {
@@ -121,6 +127,12 @@ const knownMediaTypes: ReadonlyMap<string, { mediaType: string; defaultMethod: P
     ['webp', { mediaType: 'image/webp', defaultMethod: 'store' }],
     ['svg', { mediaType: 'image/svg+xml', defaultMethod: 'deflate' }],
     ['json', { mediaType: 'application/json', defaultMethod: 'deflate' }],
+    ['wav', { mediaType: 'audio/wav', defaultMethod: 'store' }],
+    ['mp3', { mediaType: 'audio/mpeg', defaultMethod: 'store' }],
+    ['ogg', { mediaType: 'audio/ogg', defaultMethod: 'store' }],
+    ['m4a', { mediaType: 'audio/mp4', defaultMethod: 'store' }],
+    ['aac', { mediaType: 'audio/aac', defaultMethod: 'store' }],
+    ['flac', { mediaType: 'audio/flac', defaultMethod: 'store' }],
   ],
 );
 /** Media type and default ZIP entry method for a supported source path. */
@@ -216,14 +228,14 @@ function expectDeliveryKind(value: unknown, label: string): PhaserPackDeliveryKi
   return value;
 }
 function expectAssetKind(value: unknown, label: string): PhaserPackBuildAssetKind {
-  if (value !== 'image' && value !== 'spritesheet' && value !== 'atlas') {
-    throw new Error(`${label} kind must be image, spritesheet or atlas`);
+  if (value !== 'image' && value !== 'spritesheet' && value !== 'atlas' && value !== 'audio') {
+    throw new Error(`${label} kind must be image, spritesheet, atlas or audio`);
   }
   return value;
 }
 function expectFileRole(value: unknown, label: string): PhaserPackFormatFileRole {
-  if (value !== 'texture' && value !== 'atlas') {
-    throw new Error(`${label} role must be 'texture' or 'atlas'`);
+  if (value !== 'texture' && value !== 'atlas' && value !== 'audio') {
+    throw new Error(`${label} role must be 'texture', 'atlas' or 'audio'`);
   }
   return value;
 }
@@ -282,9 +294,9 @@ function parseBuildAsset(value: unknown, label: string): PhaserPackBuildAsset {
   const compression = source.compression === undefined
     ? undefined
     : expectEntryMethod(source.compression, `${label} compression`);
-  if (kind === 'image' || kind === 'spritesheet') {
+  if (kind === 'image' || kind === 'spritesheet' || kind === 'audio') {
     const file = parsePhaserPackEntryPath(expectString(source.file, `${label} file`));
-    if (kind === 'image') {
+    if (kind === 'image' || kind === 'audio') {
       return { kind, key, file, compression };
     }
     return {
@@ -305,7 +317,7 @@ function parseBuildAsset(value: unknown, label: string): PhaserPackBuildAsset {
     };
   }
   throw new Error(
-    `Invalid asset pack build config: ${label} kind must be image, spritesheet or atlas`,
+    `Invalid asset pack build config: ${label} kind must be image, spritesheet, atlas or audio`,
   );
 }
 /** Validate untrusted build input. Arrays keep their configured order. */
@@ -538,6 +550,9 @@ export function validatePhaserPackDeliveryManifest(input: unknown): PhaserPackDe
             `Invalid asset pack delivery manifest: ${fileLabel} atlas role requires application/json`,
           );
         }
+        if (role === 'audio' && !mediaType.startsWith('audio/')) {
+          throw new Error(`Invalid asset pack delivery manifest: ${fileLabel} audio role requires an audio media type`);
+        }
         return {
           role,
           mediaType,
@@ -550,7 +565,7 @@ export function validatePhaserPackDeliveryManifest(input: unknown): PhaserPackDe
       const roles = files.map((file) => file.role);
       const expectedRoles: PhaserPackFormatFileRole[] = asset.kind === 'atlas'
         ? ['texture', 'atlas']
-        : ['texture'];
+        : asset.kind === 'audio' ? ['audio'] : ['texture'];
       if (JSON.stringify(roles) !== JSON.stringify(expectedRoles)) {
         throw new Error(
           `Invalid asset pack delivery manifest: ${assetLabel} roles must be ${expectedRoles.join(',')}`,

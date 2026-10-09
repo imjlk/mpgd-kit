@@ -22,7 +22,7 @@ export const cachedCopyBufferedBytes = (
   ? integrity.bytes
   : 0;
 /** Which manifest slot a requested file fills; atlas assets request both roles. */
-export type PhaserPackFileRole = 'texture' | 'atlas';
+export type PhaserPackFileRole = 'texture' | 'atlas' | 'audio';
 /** One file the loader wants from a source. Logical identity, never a transfer URL. */
 export interface PhaserPackFileRequest {
   readonly packId: string;

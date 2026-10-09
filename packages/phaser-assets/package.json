@@ -46,6 +46,10 @@
       "types": "./dist/packs.d.ts",
       "default": "./dist/packs.js"
     },
+    "./prefetch": {
+      "types": "./dist/prefetch.d.ts",
+      "default": "./dist/prefetch.js"
+    },
     "./test-utils": {
       "types": "./dist/test-utils.d.ts",
       "default": "./dist/test-utils.js"

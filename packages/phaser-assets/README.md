@@ -1,6 +1,6 @@
 # @mpgd/phaser-assets
 
-Typed Phaser 4 manifests and optional texture-pack ownership. Existing
+Typed Phaser 4 manifests and optional texture/audio-pack ownership. Existing
 `definePhaserAssetManifest` / `loadPhaserAssets` enqueue helpers remain available
 from the root entrypoint. The optional `/packs` entrypoint adds awaitable loading
 without taking over or resetting `scene.load`.
@@ -67,7 +67,7 @@ Image, spritesheet and single-texture JSON atlas assets use the existing manifes
 shapes. PNG, JPEG, WebP and SVG decoding follows browser support and correct HTTP
 MIME headers. The integration fixture exercises PNG and JSON atlases in WebGL and
 Canvas. Atlas metadata must include `frames`; at least one usable frame is
-required. Array/multi-texture atlas manifests, audio, JSON data and binary assets
+required. Audio packs are described below. Array/multi-texture atlas manifests, JSON data and binary assets
 remain with the existing enqueue helpers for now.
 
 Preparation means the image has decoded and the texture/frames are registered.
@@ -478,3 +478,62 @@ See `examples/asset-packs` in the repository for two build layouts and executabl
 fault/lifetime tests, including a real module-worker decode scenario. Adding
 this API does not make generated games depend on the
 sample or require remote hosting.
+
+### Audio pack ownership
+
+An audio pack asset uses `{ kind: 'audio', key: 'theme', url: 'theme.wav',
+mediaType: 'audio/wav', integrity: { audio: { bytes, sha256 } } }`. It declares
+one encoded format; select browser-supported alternatives in the target catalog.
+CLI build configs use `{ kind: 'audio', key: 'theme', file: 'theme.wav' }`.
+WAV, MP3, Ogg, M4A, AAC and FLAC have canonical MIME hints; actual decoder support
+belongs to the browser. Audio works with files, ZIP and persistent artifact reuse.
+
+The loader verifies bytes, decodes with the game's Web Audio context and registers
+the AudioBuffer under `lease.key(packId, assetKey)` in Phaser's audio cache. Its
+decode and byte permits remain held until native decode settles even after caller
+cancellation. Disabled audio fails explicitly. The HTML5 Audio backend waits for
+`canplaythrough`, retains a verified Blob URL and reports opaque decoder memory
+as `decodedAudioBytes: null`; restricted devices may require a user gesture and
+retry. Preparation never plays sound or resumes/unlocks a context.
+
+`maxDecodedAudioBytes` (default 64 MiB) bounds the accepted PCM sample payload and
+`maxAudioDuration` (default 300 seconds) bounds duration. These checks happen after
+native decoding and are not a bound on decoder/transient/process memory.
+`snapshot` separates PCM samples, retained HTML5 Blob bytes and RGBA estimates.
+Destroy sound instances before returning the lease. Last-owner return removes
+the cache entry and remaining sounds for that generated key; scene shutdown does
+the same. Shared owners continue using the same decoded sound until then.
+
+### Idle-gated prefetch
+
+`createPhaserPackPrefetcher` from `@mpgd/phaser-assets/prefetch` wraps a loader:
+
+```ts
+const prefetch = createPhaserPackPrefetcher(loader, { maxWarmPacks: 2, maxRetainedBytes: 16 * 1024 * 1024 });
+prefetch.setIdle(true); // Only while gameplay is idle or paused.
+const result = await prefetch.enqueue('next-theme');
+prefetch.setIdle(false); // Abort background preparation before active gameplay.
+const lease = await prefetch.acquire('next-theme');
+// Destroy display/sound consumers, then lease.release().
+prefetch.dispose(); // Return warm leases and cancel this scheduler's work.
+```
+
+Higher-priority queued packs run first, ties are FIFO and duplicate ids share one
+operation. The default queue limit is 16 and the warm-pack limit is two. Background
+preparation is single-flight. Foreground admission cancels it, waits for staging
+cancellation to settle and serializes foreground entries for a single-flight
+delivery. Cancelling a queued foreground entry rejects promptly. Consumers retain
+independent leases; eviction/disposal cannot delete their resources.
+
+For ZIP/mixed manifests, pass an `acquire` callback that calls
+`acquireDeliveredPack` with this same loader/delivery, forwarding the signal and
+optional texture progress. Wire `setIdle` to game lifecycle/menu state and dispose
+the scheduler with its owning scene. It does not infer idle time or install timers.
+Ending idle prevents new background work and cancels owned transfers; an already
+running native image/audio decode can settle later and keeps its permits until
+then. Applications should end the idle window before resuming active gameplay.
+Warm retention counts distinct RGBA estimates, PCM samples and HTML5 Blob bytes;
+shared dependencies count once. Admission evicts the oldest warm leases; a pack
+larger than the retained-byte limit is released without evicting useful warm packs.
+The limit bounds retained known payload after preparation, not peak/GPU/process
+memory. Results distinguish `warmed`, `cancelled`, `evicted` and `failed`.

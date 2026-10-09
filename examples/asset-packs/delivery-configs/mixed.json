@@ -11,14 +11,19 @@
           "kind": "spritesheet",
           "key": "pilot",
           "file": "pilot.png",
-          "frameConfig": { "frameWidth": 64, "frameHeight": 64 }
+          "frameConfig": {
+            "frameWidth": 64,
+            "frameHeight": 64
+          }
         }
       ]
     },
     {
       "id": "grove",
       "revision": "1",
-      "dependsOn": ["shared"],
+      "dependsOn": [
+        "shared"
+      ],
       "delivery": "zip",
       "assets": [
         {
@@ -32,10 +37,29 @@
     {
       "id": "dunes",
       "revision": "1",
-      "dependsOn": ["shared"],
+      "dependsOn": [
+        "shared"
+      ],
       "delivery": "zip",
       "assets": [
-        { "kind": "image", "key": "ground", "file": "dunes.png" }
+        {
+          "kind": "image",
+          "key": "ground",
+          "file": "dunes.png"
+        }
+      ]
+    },
+    {
+      "id": "sound",
+      "revision": "1",
+      "dependsOn": [],
+      "delivery": "files",
+      "assets": [
+        {
+          "kind": "audio",
+          "key": "chime",
+          "file": "chime.wav"
+        }
       ]
     }
   ]

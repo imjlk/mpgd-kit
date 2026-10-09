@@ -11,6 +11,7 @@ const root = fileURLToPath(new URL('.', import.meta.url));
  * fresh checkout builds without a prior package build step. */
 const PHASER_ASSETS_SUBPATHS = [
   'packs',
+  'prefetch',
   'pack-format',
   'archives',
   'delivery',
@@ -22,6 +23,11 @@ const sources = [
     id: 'shared',
     dependsOn: [],
     files: [{ name: 'pilot.png', width: 256, height: 64, mediaType: 'image/png' }],
+  },
+  {
+    id: 'sound',
+    dependsOn: [],
+    files: [{ name: 'chime.wav', width: 0, height: 0, mediaType: 'audio/wav' }],
   },
   {
     id: 'grove',
@@ -58,15 +64,20 @@ export default defineConfig(({ mode }) => {
     const png = files.filter((file) => file.mediaType === 'image/png');
     const json = files.filter((file) => file.mediaType === 'application/json');
     const image = png[0];
+    let asset: PhaserPackAsset;
+    if (source.id === 'sound') {
+      const audio = files[0]!;
+      asset = { kind: 'audio', key: 'chime', url: audio.path, mediaType: audio.mediaType, integrity: { audio: { bytes: audio.bytes, sha256: audio.sha256 } } };
+    } else {
     if (png.length !== 1 || !image || (source.id === 'grove' && json.length !== 1)) throw new Error(`Pack ${source.id} requires one PNG and, for an atlas, one JSON file`);
     const texture = { bytes: image.bytes, sha256: image.sha256 };
-    let asset: PhaserPackAsset;
     if (source.id === 'shared') asset = { kind: 'spritesheet', key: 'pilot', url: image.path, frameConfig: { frameWidth: 64, frameHeight: 64 }, integrity: { texture } };
     else if (source.id === 'grove') {
       const atlas = json[0];
       if (!atlas) throw new Error('Missing grove atlas metadata');
       asset = { kind: 'atlas', key: 'ground', textureUrl: image.path, atlasUrl: atlas.path, integrity: { texture, atlas: { bytes: atlas.bytes, sha256: atlas.sha256 } } };
     } else asset = { kind: 'image', key: 'ground', url: image.path, integrity: { texture } };
+    }
     return { id: source.id, revision, dependsOn: source.dependsOn, packaged: !hybrid || source.id === 'shared', assets: [asset], files };
   });
   const report = {

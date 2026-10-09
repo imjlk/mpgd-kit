@@ -99,6 +99,19 @@ limits; there is no claim of measured production memory or frame-time bounds.
 The sample uses 2 downloads, 1 decode and 8 MiB of encoded reservations. See the
 package README for fallback reservations when integrity sizes are absent.
 
+## Optional audio and prefetch
+
+Add `?audio=1` to include the deterministic half-second WAV chime in the level
+dependency closure. Click **Play chime** after entry; preparation never starts
+playback. `audio-backend=html5` exercises the HTML5 backend explicitly. Audio is
+delivered through the same files/ZIP/mixed manifest and has shared cache ownership.
+
+Add `prefetch=1` to warm both landscapes while the menu is idle, with a two-pack,
+16 MiB known-payload retention limit. Selecting a landscape ends the idle window,
+aborts unfinished background work and enters through foreground admission. It
+never starts prefetch while the explorer is playing. Scene shutdown disposes the
+scheduler before the loader and returns warm audio/texture ownership.
+
 ## Persistent artifact reuse example (`?idcache=1`)
 
 The example supplies an IndexedDB implementation to the public
