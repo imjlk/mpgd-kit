@@ -1,5 +1,79 @@
 # Asset pack delivery builds
 
+## Per-target packaged and remote placement
+
+Targets can opt into `assetPacks` in `mpgd.targets.json`. Omission preserves
+existing builds. Keep source assets outside Vite `public` and JavaScript imports;
+the target builder owns the `mpgd-asset-packs/` namespace in the web bundle.
+
+```json
+{
+  "assetPacks": {
+    "buildConfig": "packs.config.json",
+    "defaultLocation": "remote",
+    "packs": { "ui": "packaged" },
+    "offlineRequired": ["first-level"],
+    "remoteBaseUrl": "https://cdn.example.com/game/release-1/",
+    "maxPackagedBytes": 8388608
+  }
+}
+```
+
+`buildConfig` resolves relative to `mpgd.targets.json`. `offlineRequired` promotes
+the complete dependency closure to packaged delivery. An explicit remote override
+inside that closure fails validation. Unknown pack IDs and missing remote origins
+also fail. URLs require HTTPS, a trailing slash and no credentials, query or
+fragment; HTTP loopback origins are supported for development. These assets are
+public data, never executable code. Store credentials belong in deployment tools.
+
+Build just the deployment without building the game:
+
+```sh
+mpgd assets stage-target --target web-preview --out artifacts/assets/release-1 --json
+```
+
+The output directory must be fresh and disjoint from source output. Its
+`packaged/` child contains local objects plus `asset-pack-delivery.json` and
+`target-policy.json`; `remote/` contains only remote objects. The command verifies
+source artifacts and copied bytes, reports SHA-256 and actual packaged/remote
+bytes, and rejects symbolic links and packaged-byte overruns. The limit covers
+the entire packaged asset namespace including metadata, rather than the game
+JavaScript or decoded resources. ZIP transfer bytes remain distinct from expanded
+entry bytes. No upload or network dependency is introduced by staging.
+
+Normal target builds use the same policy on web, Capacitor, Apps in Toss and
+Devvit. They stage local files before native sync or wrapper packaging,
+check required files and metadata against their digests, and reject byte-identical
+remote-only objects copied elsewhere in the artifact. Transformed or embedded
+payloads are outside this file-inventory check: keep source assets out of imports.
+Remote objects and the byte report are written separately under
+`artifacts/asset-packs/<target>/`. Experimental mini-game runtimes retain their
+existing package-local texture rules and reject this web-runtime opt-in.
+
+The consumer fetches the manifest and policy from its packaged namespace once
+at boot, then uses the provider-neutral URL resolver. Scene and level code keep
+the same logical IDs and pinned revisions:
+
+```ts
+import { createAssetPackTargetURLResolver } from '@mpgd/target-config/asset-packs';
+import { createPhaserPackDelivery } from '@mpgd/phaser-assets/delivery';
+
+const base = new URL('./mpgd-asset-packs/', document.baseURI);
+const manifest = await (await fetch(new URL('asset-pack-delivery.json', base))).json();
+const policy = await (await fetch(new URL('target-policy.json', base))).json();
+const delivery = createPhaserPackDelivery(manifest, {
+  resolveURL: createAssetPackTargetURLResolver(policy, manifest.packs, base.href),
+  // Supply the application's module Worker when any pack uses ZIP delivery.
+  createWorker,
+});
+```
+
+`resolveURL` receives paths already encoded once by delivery. The resolver
+snapshots locations and revisions and rejects mismatched contexts and escaping
+paths. `EffectiveTargetConfig.assetPacks` exposes the configured policy without
+introducing any storage provider SDK. A packaged first-level closure needs no
+download cache to enter offline; a remote-only uncached pack still fails clearly.
+
 `mpgd assets build-packs` turns a game's logical pack composition into
 deliverable artifacts — individual files or per-pack ZIP archives — from one
 explicit build config. Logical composition and delivery format are separate

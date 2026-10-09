@@ -16,6 +16,12 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import { loadEnv } from 'vite';
+import {
+  assertAssetPackTargetArtifact,
+  assetPackTargetNamespace,
+  buildAssetPackTarget,
+  type AssetPackTargetReport,
+} from '../../packages/cli/src/asset-pack-target';
 
 import { assertProductionTargetReadiness } from '../../packages/cli/src/production-target-readiness';
 import {
@@ -117,6 +123,9 @@ assertDisjointWebTargetOutputs(config.targets, targetPath, [
     name: 'effective target config output',
     path: effectiveTargetConfigOutputDir(configBaseDir),
   },
+  ...Object.entries(config.targets).filter(([, configured]) => configured.assetPacks !== undefined).map(([name]) => ({
+    name: `remote asset pack output ${name}`, path: targetPath(`artifacts/asset-packs/${name}`),
+  })),
 ]);
 assertDisjointMiniGameTargetOutputs(config.targets, targetPath, [
   { name: 'release manifest', path: releaseManifestPath(configBaseDir) },
@@ -201,6 +210,10 @@ let nativeCompleted = false;
 const runtimeTargetConfigMatrixFile = createRuntimeTargetConfigMatrixFile(
   runtimeTargetConfigMatrix,
 );
+const assetTargetTemporary = target.assetPacks === undefined
+  ? undefined
+  : mkdtempSync(join(tmpdir(), 'mpgd-target-assets-'));
+let assetTargetReport: AssetPackTargetReport | undefined;
 const env: NodeJS.ProcessEnv = {
   ...process.env,
   ...monetizationCatalogEnv,
@@ -219,6 +232,18 @@ const env: NodeJS.ProcessEnv = {
 };
 
 try {
+  if (target.assetPacks !== undefined && assetTargetTemporary !== undefined) {
+    if (isMiniGameTarget(target)) {
+      throw new Error(
+        'assetPacks target builds require the web asset-pack runtime; experimental mini-game runtimes keep their existing package-local texture policy',
+      );
+    }
+    assetTargetReport = await buildAssetPackTarget({
+      policy: target.assetPacks,
+      baseDir: configBaseDir,
+      outDir: join(assetTargetTemporary, 'deployment'),
+    });
+  }
   if (targetName === 'microsoft-store' && target.kind === 'web' && profile === 'production') {
     assertMicrosoftStorePwaProvenance({
       appVersion: requireString(env.APP_VERSION, 'APP_VERSION'),
@@ -245,6 +270,7 @@ try {
       env,
     );
     embedEffectiveTargetConfig(targetName, webOutput, env);
+    await stageTargetAssetPacks(webOutput);
     if (target.kind !== 'web') {
       stageWebIconEvidence(generatedIcons, webOutput);
     }
@@ -316,6 +342,9 @@ try {
       if (staticDirPath !== undefined) {
         copyWebStaticDirectoryContents(staticDirPath, output);
       }
+      if (assetTargetReport !== undefined) {
+        await assertAssetPackTargetArtifact(assetTargetReport, output);
+      }
       stageWebIconEvidence(generatedIcons, output, {
         ...(target.installable === undefined ? {} : { installable: target.installable }),
         ...(staticDirPath === undefined
@@ -356,6 +385,9 @@ try {
       replaceDirectory(`${gameApp}/dist`, webDir);
       mirrorAitRuntimeAssets(gameApp, wrapperApp);
       run('pnpm', ['--dir', wrapperApp, 'exec', 'vite', 'build', '--mode', profile], env);
+      if (assetTargetReport !== undefined) {
+        await assertAssetPackTargetArtifact(assetTargetReport, `${wrapperApp}/dist`);
+      }
 
       let releaseArtifact = webDirConfigPath;
 
@@ -384,6 +416,7 @@ try {
 
       run('pnpm', ['--dir', wrapperApp, 'exec', 'vite', 'build', '--mode', profile], env);
       embedEffectiveTargetConfig(targetName, webDir, env);
+      await stageTargetAssetPacks(webDir);
       stageWebIconEvidence(generatedIcons, webDir);
       writeManifest(targetName, profile, `${wrapperAppConfigPath}/dist`, env);
       break;
@@ -417,7 +450,23 @@ try {
       break;
     }
   }
+  if (assetTargetReport !== undefined) {
+    // This output contains only public immutable asset objects and the byte report.
+    // It is never inside the packaged target artifact.
+    const remoteOutput = targetPath(`artifacts/asset-packs/${targetName}`);
+    replaceDirectory(assetTargetReport.remoteDir, `${remoteOutput}/remote`);
+    mkdirSync(remoteOutput, { recursive: true });
+    writeFileSync(`${remoteOutput}/report.json`, JSON.stringify({
+      ...assetTargetReport,
+      outDir: remoteOutput,
+      packagedDir: assetPackTargetNamespace,
+      remoteDir: `${remoteOutput}/remote`,
+    }, null, 2) + '\n');
+  }
 } finally {
+  if (assetTargetTemporary !== undefined) {
+    rmSync(assetTargetTemporary, { recursive: true, force: true });
+  }
   if (nativeAttempt !== undefined && !nativeCompleted) {
     nativeAttempt.fail();
   }
@@ -460,6 +509,31 @@ function mirrorAitRuntimeAssets(gameApp: string, wrapperApp: string): void {
   } else {
     rmSync(destinationAssets, { recursive: true, force: true });
   }
+  const packSource = join(gameApp, 'dist', assetPackTargetNamespace);
+  const packDestination = join(wrapperApp, 'public', assetPackTargetNamespace);
+  if (existsSync(packSource)) {
+    replaceDirectory(packSource, packDestination);
+  } else {
+    rmSync(packDestination, { recursive: true, force: true });
+  }
+}
+
+async function stageTargetAssetPacks(webOutput: string): Promise<void> {
+  if (assetTargetReport === undefined) {
+    return;
+  }
+  const destination = join(webOutput, assetPackTargetNamespace);
+  if (existsSync(destination)) {
+    throw new Error(
+      'mpgd-asset-packs is owned by the target policy; remove source/public copies from the game',
+    );
+  }
+  cpSync(assetTargetReport.packagedDir, destination, {
+    recursive: true,
+    errorOnExist: true,
+    force: false,
+  });
+  await assertAssetPackTargetArtifact(assetTargetReport, webOutput);
 }
 
 function targetBuildConfigEnv(target: PlatformTargetConfig): NodeJS.ProcessEnv {

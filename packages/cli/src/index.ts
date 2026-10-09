@@ -20,6 +20,8 @@ import { assertPlatformVersionLedger } from '@mpgd/target-config';
 
 import { buildAssetPacks } from './asset-pack-build.js';
 import { verifyAssetPackDelivery } from './asset-pack-verify.js';
+import { buildAssetPackTarget } from './asset-pack-target.js';
+import { assertAssetPackTargetPolicy } from '@mpgd/target-config/asset-packs';
 import {
   materializeCapacitorShellStarter,
   planCapacitorShellStarter,
@@ -1567,6 +1569,35 @@ const assetsCommand = defineI18n({
     ko: '결정적인 에셋 팩 전달 산출물을 빌드합니다.',
   }),
   subCommands: {
+    'stage-target': defineI18n({
+      name: 'stage-target',
+      description: "Build and stage one target's packaged and remote asset packs.",
+      resource: commandResource({
+        en: "Build and stage one target's packaged and remote asset packs.",
+        ko: '한 타깃의 로컬·원격 에셋 팩을 빌드하고 배치합니다.',
+      }),
+      args: {
+        'targets-file': { type: 'string', default: 'mpgd.targets.json', description: 'Game target configuration file.' },
+        target: { type: 'string', required: true, description: 'Deployment target name.' },
+        out: { type: 'string', required: true, description: 'Fresh output directory with packaged/remote children.' },
+        json: { type: 'boolean', default: false, description: 'Print the actual byte and location report as JSON.' },
+      },
+      run: async (ctx) => {
+        const targetsPath = path.resolve(ctx.values['targets-file']);
+        const document = JSON.parse(readFileSync(targetsPath, 'utf8')) as { targets?: Record<string, { assetPacks?: unknown }> };
+        const policy = Object.hasOwn(document.targets ?? {}, ctx.values.target)
+          ? document.targets?.[ctx.values.target]?.assetPacks : undefined;
+        assertAssetPackTargetPolicy(policy);
+        const report = await buildAssetPackTarget({ policy, baseDir: path.dirname(targetsPath), outDir: ctx.values.out });
+        if (ctx.values.json) {
+          console.info(JSON.stringify(report, null, 2));
+        } else {
+          console.info(`Packaged assets: ${report.packagedAssetBytes} bytes (${report.packagedBytes} including metadata)`);
+          console.info(`Remote objects: ${report.remoteBytes} bytes; manifest sha256:${report.manifestSha256}`);
+          console.info(`Asset pack deployment: ${report.outDir}`);
+        }
+      },
+    }),
     'build-packs': defineI18n({
       name: 'build-packs',
       description: 'Build files or ZIP delivery artifacts for configured packs.',

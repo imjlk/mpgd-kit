@@ -56,6 +56,7 @@
       "@mpgd/phaser-assets/archive-worker": ["./packages/phaser-assets/src/archive-worker.ts"],
       "@mpgd/phaser-assets/test-utils": ["./packages/phaser-assets/src/test-utils.ts"],
       "@mpgd/platform/*": ["./packages/platform/src/*"],
+      "@mpgd/target-config/asset-packs": ["./packages/target-config/src/asset-packs.ts"],
       "@mpgd/tutorial": ["./packages/tutorial/src/index.ts"],
       "@mpgd/tutorial/driver.css": ["./packages/tutorial/driver.css"],
       "@mpgd/tutorial/*": ["./packages/tutorial/src/*"],

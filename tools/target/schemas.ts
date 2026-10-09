@@ -1,6 +1,6 @@
 import typia from 'typia';
 
-import type { TargetIntegrationConfig } from '@mpgd/target-config';
+import type { AssetPackTargetPolicy, TargetIntegrationConfig } from '@mpgd/target-config';
 
 export type TargetKind =
   | 'web'
@@ -12,6 +12,7 @@ export type TargetKind =
   | 'tiktok-minigame';
 
 export interface BaseTargetConfig {
+  readonly assetPacks?: AssetPackTargetPolicy;
   readonly kind: TargetKind;
   readonly gameApp: string;
   readonly adapter: string;

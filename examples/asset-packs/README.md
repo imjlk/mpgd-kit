@@ -1,5 +1,11 @@
 # Reusable asset packs example
 
+The packed-consumer acceptance also runs the installed `assets stage-target`
+command and the published target-policy URL resolver. A fresh target artifact
+packages Grove and its shared dependency, excludes remote-only Dunes/audio bytes,
+enters Grove with the separate remote origin blocked, and prepares Dunes from that
+origin with unchanged pack IDs and scene acquisition code.
+
 This private game consumes the public `@mpgd/phaser-assets/packs` API. It exercises
 PNG images, a four-frame spritesheet and a 2048×1024 JSON atlas in WebGL and Canvas.
 The loader implementation and unit tests live in the existing package; no new npm

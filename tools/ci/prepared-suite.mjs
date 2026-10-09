@@ -37,6 +37,7 @@ export const preparedGroups = Object.freeze({
     'smoke:cli-kit-upgrade',
     'smoke:cli-asset-pack-build',
     'smoke:cli-asset-pack-verify',
+    'smoke:cli-asset-pack-target',
     'smoke:cli-configured-web-targets',
     'smoke:cli-game-release-inputs',
     'smoke:cli-game-acceptance',

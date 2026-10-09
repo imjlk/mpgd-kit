@@ -29,7 +29,11 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./targets.json": "./targets.json"
+    "./targets.json": "./targets.json",
+    "./asset-packs": {
+      "types": "./dist/asset-packs.d.ts",
+      "default": "./dist/asset-packs.js"
+    }
   },
   "files": [
     "dist",

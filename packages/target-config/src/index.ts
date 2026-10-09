@@ -4,6 +4,7 @@ import type { EffectiveTargetConfigMatrix } from './effective.js';
 import type { TargetConfigMatrix } from './runtime.js';
 
 export * from './effective.js';
+export * from './asset-packs.js';
 export * from './platformVersionAllocation.js';
 export * from './releaseIdentity.js';
 export * from './runtime.js';

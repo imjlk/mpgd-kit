@@ -1,4 +1,5 @@
 import { dirname, isAbsolute, resolve } from 'node:path';
+import { assertAssetPackTargetPolicy } from '@mpgd/target-config/asset-packs';
 
 import { assertDeploymentTargetName } from '../../packages/cli/src/target-name';
 import { normalizeMiniGameHttpsOrigin } from '../../packages/phaser-minigame-runtime/src/url';
@@ -117,6 +118,9 @@ function assertPlatformTargetConfigShape(
   assertOptionalBoolean(input.authoritativeGameServices, `${target}.authoritativeGameServices`);
   assertTargetIntegrations(input.integrations, target);
   assertTargetIcon(input.icon, target);
+  if (input.assetPacks !== undefined) {
+    assertAssetPackTargetPolicy(input.assetPacks);
+  }
 
   if (
     target === 'microsoft-store'

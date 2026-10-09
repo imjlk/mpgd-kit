@@ -21,12 +21,14 @@ import {
   type TargetReleaseConfig,
   type TargetRuntimeKind,
 } from './runtime.js';
+import { assertAssetPackTargetPolicy, type AssetPackTargetPolicy } from './asset-packs.js';
 
 export type EffectiveAvailabilityReason =
   | FeatureAvailabilityReason
   | 'missing-platform-id';
 
 export interface EffectivePlatformTargetMetadata {
+  readonly assetPacks?: AssetPackTargetPolicy;
   readonly kind: string;
   readonly adapter: string;
   readonly crazyGamesLaunch?: 'basic' | 'full';
@@ -95,6 +97,7 @@ export interface EffectiveLocalizationConfig {
 }
 
 export interface EffectiveTargetConfig {
+  readonly assetPacks?: AssetPackTargetPolicy;
   readonly version: string;
   readonly target: string;
   readonly runtime: TargetRuntimeKind;
@@ -145,6 +148,9 @@ export function createEffectiveTargetConfig(
   input: CreateEffectiveTargetConfigInput,
 ): EffectiveTargetConfig {
   const config = resolveAuthoritativeGameServicesConfig(input.config, input.platformTarget);
+  if (input.platformTarget?.assetPacks !== undefined) {
+    assertAssetPackTargetPolicy(input.platformTarget.assetPacks);
+  }
   const products = input.catalog.products.map((product) =>
     createEffectiveProductConfig(input.target, config, product),
   );
@@ -168,6 +174,7 @@ export function createEffectiveTargetConfig(
       adPlacements: input.adPlacements.version,
     }),
     target: input.target,
+    ...(input.platformTarget?.assetPacks === undefined ? {} : { assetPacks: input.platformTarget.assetPacks }),
     runtime: config.runtime,
     release: config.release,
     features: config.features,

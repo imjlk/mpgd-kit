@@ -239,6 +239,7 @@ function toEffectivePlatformTargetMetadata(
   config: PlatformTargetConfig,
 ): EffectivePlatformTargetMetadata {
   const base = {
+    ...(config.assetPacks === undefined ? {} : { assetPacks: config.assetPacks }),
     kind: config.kind,
     adapter: config.adapter,
     ...(config.authoritativeGameServices === undefined

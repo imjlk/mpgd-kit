@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 import { chromium } from 'playwright';
@@ -126,6 +127,7 @@ function appSource() {
 import Phaser from 'phaser';
 import { createPhaserAssetPackLoader } from '@mpgd/phaser-assets/packs';
 import { acquireDeliveredPack, createPhaserPackDelivery } from '@mpgd/phaser-assets/delivery';
+import { createAssetPackTargetURLResolver } from '@mpgd/target-config/asset-packs';
 import workerUrl from '@mpgd/phaser-assets/archive-worker?worker&url';
 
 const query = new URLSearchParams(location.search);
@@ -134,12 +136,14 @@ const check = (condition, message) => { if (!condition) throw new Error(message)
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function execute(scene) {
-  const deliveryRoot = new URL('/delivery/' + mode + '/', location.href);
+  const targetPolicy = query.has('target');
+  const deliveryRoot = new URL(targetPolicy ? '/mpgd-asset-packs/' : '/delivery/' + mode + '/', location.href);
   const manifestResponse = await fetch(new URL('asset-pack-delivery.json', deliveryRoot));
   check(manifestResponse.ok, 'delivery manifest request failed');
   const manifest = await manifestResponse.json();
+  const policy = targetPolicy ? await (await fetch(new URL('target-policy.json', deliveryRoot))).json() : undefined;
   const delivery = createPhaserPackDelivery(manifest, {
-    resolveURL: (path) => new URL(path, deliveryRoot).href,
+    resolveURL: policy ? createAssetPackTargetURLResolver(policy, manifest.packs, deliveryRoot.href) : (path) => new URL(path, deliveryRoot).href,
     createWorker: () => new Worker(workerUrl, { type: 'module' }),
     prepareTimeoutMs: 5_000,
     requestTimeoutMs: 5_000,
@@ -202,6 +206,11 @@ async function execute(scene) {
   };
   image.destroy();
   lease.release();
+  if (targetPolicy && !query.has('offline')) {
+    const remoteLease = await acquireDeliveredPack({ delivery, loader, packId: 'dunes' });
+    check(scene.textures.exists(remoteLease.key('dunes', 'ground')), 'remote policy theme did not prepare');
+    remoteLease.release();
+  }
   check(loader.snapshot().length === 0, 'loader retained a released resource');
   check(!scene.textures.exists(pilotKey) && !scene.textures.exists(groundKey), 'released textures were not removed');
   check(loader.takeCleanupErrors().length === 0, 'texture cleanup reported an error');
@@ -213,6 +222,7 @@ async function execute(scene) {
     ok: true,
     mode,
     cancelled,
+    targetPolicy,
     workerUrl: String(workerUrl),
     frames,
     fileRequests: staging.fileRequests,
@@ -242,13 +252,14 @@ new Phaser.Game({
 `;
 }
 
-async function runBrowser(serverUrl) {
+async function runBrowser(serverUrl, options = {}) {
   const browser = await chromium.launch({ headless: true });
   const evidenceRoot = join(exampleRoot, 'artifacts/browser/packed-consumer');
   rmSync(evidenceRoot, { force: true, recursive: true });
   mkdirSync(evidenceRoot, { recursive: true });
   try {
-    for (const scenario of [{ mode: 'zip', cancel: true }, { mode: 'mixed', cancel: false }]) {
+    const scenarios = options.target ? [{ mode: 'mixed', cancel: false, target: true, offline: true }, { mode: 'mixed', cancel: false, target: true }] : [{ mode: 'zip', cancel: true }, { mode: 'mixed', cancel: false }];
+    for (const scenario of scenarios) {
       const context = await browser.newContext({ viewport: { width: 320, height: 240 } });
       const page = await context.newPage();
       const errors = [];
@@ -263,6 +274,11 @@ async function runBrowser(serverUrl) {
       try {
         const query = new URLSearchParams({ mode: scenario.mode });
         if (scenario.cancel) query.set('cancel', '1');
+        if (scenario.target) query.set('target', '1');
+        if (scenario.offline) {
+          query.set('offline', '1');
+          await page.route(options.remoteUrl + '**', (route) => route.abort());
+        }
         await page.goto(`${serverUrl}?${query}`, { waitUntil: 'load' });
         await page.waitForFunction(() => window.__packed_consumer_ready__ === true, null, { timeout: 15_000 });
         await page.waitForFunction(() => window.__packed_consumer_result__ !== undefined, null, { timeout: 30_000 });
@@ -270,6 +286,7 @@ async function runBrowser(serverUrl) {
         assert.equal(result.ok, true, `${scenario.mode} packaged browser consumer failed: ${result.error ?? errors.join('\n')}`);
         assert.equal(result.mode, scenario.mode);
         assert.equal(result.cancelled, scenario.cancel);
+        assert.equal(result.targetPolicy, scenario.target === true);
         assert.ok(result.workerUrl.includes('archive-worker'), `unexpected worker URL: ${result.workerUrl}`);
         assert.deepEqual(result.frames, { pilot: 4, ground: 2 });
         assert.ok(result.archiveRequests > 0, `${scenario.mode} never fetched a ZIP archive`);
@@ -408,6 +425,40 @@ try {
   } finally {
     await server.close();
   }
+  // A separate target artifact uses the installed CLI policy and a separate
+  // static origin. The offline-required Grove closure enters on its first
+  // launch while every remote request is blocked; Dunes uses the remote root.
+  rmSync(join(webRoot, 'public/delivery'), { recursive: true });
+  const remoteRoot = join(consumerRoot, 'target-origin');
+  mkdirSync(remoteRoot);
+  const remote = await staticServer(remoteRoot, { cors: true });
+  try {
+    writeJson(join(consumerRoot, 'mpgd.targets.json'), { targets: { preview: { assetPacks: {
+      buildConfig: 'mixed.config.json', defaultLocation: 'remote', offlineRequired: ['grove'], remoteBaseUrl: remote.url,
+    } } } });
+    const staged = runInstalledCli(consumerRoot, cliBin, ['assets', 'stage-target', '--target', 'preview', '--out', 'target-deployment', '--json']);
+    assert.equal(staged.status, 0, staged.stderr);
+    const targetReport = JSON.parse(staged.stdout);
+    cpSync(targetReport.packagedDir, join(webRoot, 'public/mpgd-asset-packs'), { recursive: true });
+    cpSync(targetReport.remoteDir, remoteRoot, { recursive: true });
+    const rebuilt = run(process.execPath, [join(exampleRoot, 'node_modules/vite/bin/vite.js'), 'build', '--outDir', 'dist', '--logLevel', 'warn'], webRoot);
+    assert.equal(rebuilt.status, 0, rebuilt.stderr);
+    const hashes = new Set();
+    function audit(directory) {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const file = join(directory, entry.name);
+        if (entry.isDirectory()) audit(file);
+        else hashes.add(createHash('sha256').update(readFileSync(file)).digest('hex'));
+      }
+    }
+    audit(webDist);
+    for (const object of targetReport.objects.filter((object) => object.location === 'remote')) {
+      assert.equal(hashes.has(object.sha256), false, 'Installed target artifact contains a remote-only object');
+    }
+    const policyServer = await staticServer(webDist);
+    try { await runBrowser(policyServer.url, { target: true, remoteUrl: remote.url }); }
+    finally { await policyServer.close(); }
+  } finally { await remote.close(); }
   console.info('Packaged asset consumer checks passed: installed CLI build-packs/verify-delivery, corrupt ZIP rejection, package-only Vite imports, module Worker decode, files+ZIP delivery, cancellation re-entry, Phaser frames and texture/staging cleanup.');
 } finally {
   rmSync(fixtureRoot, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
