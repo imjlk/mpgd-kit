@@ -17,6 +17,7 @@ for (const args of [
   ['build:web'],
   ['build:microsoft-store'],
   ['build:verse8'],
+  ['build:crazygames'],
   ['build:target', 'android', 'staging'],
   ['build:target', 'ios', 'staging'],
   ['build:target', 'ait', 'staging'],

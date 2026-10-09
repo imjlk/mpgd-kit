@@ -683,6 +683,10 @@ jobs:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
           VITE_MPGD_GAME_SERVICES_URL: https://services.example.com
       - run: pnpm smoke:target verse8
+      - run: pnpm build:crazygames
+        env:
+          MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
+      - run: pnpm smoke:target crazygames
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: ${{ failure() }}
         with:

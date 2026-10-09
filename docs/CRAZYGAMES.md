@@ -10,8 +10,8 @@ pnpm smoke:target crazygames
 Generated games include the target in `mpgd.targets.json`. Build through the CLI with a local kit checkout:
 
 ```sh
-pnpm mpgd target build crazygames --targets-file ./mpgd.targets.json --kit-path /path/to/mpgd-kit
-pnpm mpgd target smoke crazygames --targets-file ./mpgd.targets.json --kit-path /path/to/mpgd-kit
+pnpm exec mpgd target build crazygames --targets-file ./mpgd.targets.json --kit-path /path/to/mpgd-kit
+pnpm exec mpgd target smoke crazygames --targets-file ./mpgd.targets.json --kit-path /path/to/mpgd-kit
 ```
 
 The output directory is `artifacts/crazygames`, with `index.html` at its root. Create a ZIP from the directory's contents for the developer portal; keep the enclosing directory outside the archive. Portal submission, live advertising approval, and device testing require the game's developer account.
