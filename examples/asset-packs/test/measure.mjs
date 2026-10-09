@@ -35,7 +35,11 @@ async function inventory(directory) {
   }
   return { totalBytes: entries.reduce((sum, entry) => sum + entry.bytes, 0), files: entries };
 }
-const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
+const median = (values) => {
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
+};
 const oldOrigin = process.env.ASSET_PACK_REMOTE_ORIGIN;
 await mkdir(out, { recursive: true });
 const originRoot = join(root, 'artifacts/origin');
