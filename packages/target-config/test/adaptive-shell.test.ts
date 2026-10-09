@@ -353,6 +353,60 @@ function setViewportSize(width: number, height: number): void {
 }
 
 describe('shell lifetime and input ownership', () => {
+  it('rejects another stage owning a document prefix before changing either stage', () => {
+    stubFrameLoop();
+    setViewportSize(1280, 720);
+    const first = mountAdaptiveGameShell({ gameRoot: mountStage(), runtime: 'web-preview',
+      policy: { gameAspectRatio: 3 / 4, minRailWidth: 160 }, railSlots: [panelSlot] });
+    const stage = mountStage();
+    const width = document.documentElement.style.getPropertyValue(`${panelSlot.cssVariablePrefix}-width`);
+    expect(() => mountAdaptiveGameShell({ gameRoot: stage, runtime: 'web-preview',
+      policy: widePolicy, railSlots: [panelSlot] })).toThrow(/already in use in this document/u);
+    expect(stage.parentElement).toBe(document.body);
+    expect(stage.hasAttribute(adaptiveShellAttributes.stage)).toBe(false);
+    expect(document.documentElement.style.getPropertyValue(`${panelSlot.cssVariablePrefix}-width`)).toBe(width);
+    first.destroy();
+    const next = mountAdaptiveGameShell({ gameRoot: stage, runtime: 'web-preview',
+      policy: { gameAspectRatio: 3 / 4, minRailWidth: 160 }, railSlots: [panelSlot] });
+    first.destroy();
+    expect(document.documentElement.style.getPropertyValue(`${panelSlot.cssVariablePrefix}-width`)).toBe(width);
+    next.destroy();
+  });
+  it('transfers prefix ownership on same-stage replacement', () => {
+    stubFrameLoop();
+    setViewportSize(1280, 720);
+    const input = { gameRoot: mountStage(), runtime: 'web-preview' as const,
+      policy: { gameAspectRatio: 3 / 4, minRailWidth: 160 }, railSlots: [panelSlot] };
+    const first = mountAdaptiveGameShell(input);
+    const second = mountAdaptiveGameShell(input);
+    first.destroy();
+    expect(second.shell.getAttribute(panelSlot.readyAttribute)).toBe('true');
+    expect(document.documentElement.style.getPropertyValue(`${panelSlot.cssVariablePrefix}-width`)).toBe('320px');
+    second.destroy();
+    expect(document.documentElement.style.getPropertyValue(`${panelSlot.cssVariablePrefix}-width`)).toBe('');
+  });
+  it('scopes identical slot prefixes to each embedded document', () => {
+    stubFrameLoop();
+    setViewportSize(1280, 720);
+    const input = { runtime: 'web-preview' as const,
+      policy: { gameAspectRatio: 3 / 4, minRailWidth: 160 }, railSlots: [panelSlot] };
+    const outer = mountAdaptiveGameShell({ ...input, gameRoot: mountStage() });
+    const iframe = document.createElement('iframe');
+    document.body.append(iframe);
+    const doc = iframe.contentDocument!;
+    const view = iframe.contentWindow!;
+    Object.assign(view, { ResizeObserver: class { observe() {} disconnect() {} },
+      requestAnimationFrame: vi.fn(() => 1), cancelAnimationFrame: vi.fn() });
+    Object.defineProperty(view, 'innerWidth', { value: 1280 });
+    Object.defineProperty(view, 'innerHeight', { value: 720 });
+    const stage = doc.createElement('div');
+    doc.body.append(stage);
+    const inner = mountAdaptiveGameShell({ ...input, gameRoot: stage });
+    inner.destroy();
+    expect(doc.documentElement.style.getPropertyValue(`${panelSlot.cssVariablePrefix}-width`)).toBe('');
+    expect(document.documentElement.style.getPropertyValue(`${panelSlot.cssVariablePrefix}-width`)).toBe('320px');
+    outer.destroy();
+  });
   it('disposes the previous owner and ignores late frame callbacks', () => {
     const frames = stubFrameLoop();
     setViewportSize(1280, 720);

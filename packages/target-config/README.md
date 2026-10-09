@@ -24,6 +24,10 @@ a CSS variable prefix, min/max width, gutter and minimum rail height; their
 left/top/width variables are written on the owning document root. Inputs are
 snapshotted before observation starts and invalid policy/slot/measurement inputs
 fail before DOM restructuring.
+Each live controller reserves its slot variable prefixes in the owning document.
+Another stage using one of those prefixes fails before either stage is changed;
+destroy releases them, and replacing the same stage transfers ownership. Separate
+documents may reuse the same prefixes.
 
 ResizeObserver, window and visual-viewport events coalesce through one animation
 frame. A new controller for the same stage disposes its previous owner. Destroy

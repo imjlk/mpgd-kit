@@ -51,6 +51,7 @@ export interface AdaptiveShellElementNames {
 
 export const defaultAdaptiveShellId = 'game-shell';
 const shellOwners = new WeakMap<HTMLElement, () => void>();
+const documentSlotOwners = new WeakMap<Document, Map<string, () => void>>();
 
 /**
  * Root custom-property prefixes the shell reads back (`--mpgd-safe-area-top`, ...). A rail slot
@@ -137,6 +138,17 @@ export function mountAdaptiveGameShell(input: MountAdaptiveGameShellInput): Adap
     variablePrefixes: adaptiveShellReservedVariablePrefixes,
   });
   const railSlots = providedRailSlots.map((slot) => Object.freeze({ ...slot }));
+  const doc = input.gameRoot.ownerDocument;
+  const previousOwner = shellOwners.get(input.gameRoot);
+  const slotOwners = documentSlotOwners.get(doc) ?? new Map<string, () => void>();
+  for (const slot of railSlots) {
+    const owner = slotOwners.get(slot.cssVariablePrefix);
+    if (owner !== undefined && owner !== previousOwner) {
+      throw new Error(
+        `Rail slot cssVariablePrefix is already in use in this document: ${slot.cssVariablePrefix}`,
+      );
+    }
+  }
   // Measure before restructuring the DOM, so an unmeasurable host fails without a half-built shell.
   // Prefer the visible viewport for this fixed full-window shell.
   const initialMeasurement = input.initialMeasurement ?? measureContainer(input.gameRoot);
@@ -152,7 +164,7 @@ export function mountAdaptiveGameShell(input: MountAdaptiveGameShellInput): Adap
     }),
     ownedInput.policy,
   );
-  shellOwners.get(input.gameRoot)?.();
+  previousOwner?.();
   const elements = ensureShellElements(input.gameRoot, input.elements ?? {});
   const listeners = new Set<(state: AdaptiveGameShellState) => void>();
   let animationFrame: number | undefined;
@@ -234,11 +246,18 @@ export function mountAdaptiveGameShell(input: MountAdaptiveGameShellInput): Adap
       }
 
       for (const slot of railSlots) {
-        clearRailSlot(elements.shell, slot);
+        if (slotOwners.get(slot.cssVariablePrefix) === controller.destroy) {
+          slotOwners.delete(slot.cssVariablePrefix);
+          clearRailSlot(elements.shell, slot);
+        }
       }
     },
   };
   shellOwners.set(input.gameRoot, controller.destroy);
+  documentSlotOwners.set(doc, slotOwners);
+  for (const slot of railSlots) {
+    slotOwners.set(slot.cssVariablePrefix, controller.destroy);
+  }
   return controller;
 }
 
