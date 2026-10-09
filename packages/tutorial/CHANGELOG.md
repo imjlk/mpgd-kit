@@ -1,5 +1,11 @@
 # @mpgd/tutorial
 
+## 0.1.10 — 2026-10-09
+
+### Patch changes
+
+- Updated dependencies: platform@0.16.0
+
 ## 0.1.9 — 2026-10-09
 
 ### Patch changes

@@ -1,5 +1,11 @@
 # @mpgd/adapter-ait
 
+## 0.13.1 — 2026-10-09
+
+### Patch changes
+
+- Updated dependencies: game-runtime@0.4.0, platform@0.16.0
+
 ## 0.13.0 — 2026-10-09
 
 ### Fixed
