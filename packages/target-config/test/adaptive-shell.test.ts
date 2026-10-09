@@ -11,6 +11,7 @@ import {
   mountAdaptiveGameShell,
   resolveAdaptiveShellComposition,
   resolveAdaptiveShellRailSlot,
+  waitForAdaptiveShellViewport,
   type AdaptiveShellRailSlot,
 } from '../src/adaptive-shell/index.js';
 
@@ -417,6 +418,61 @@ describe('shell lifetime and input ownership', () => {
     expect(controller.shell.ownerDocument).toBe(doc);
     expect(controller.state.viewport.layout.orientation).toBe('portrait');
     expect(document.getElementById('game-shell')).toBeNull();
+    controller.destroy();
+  });
+});
+
+describe('visible viewport and startup cancellation', () => {
+  it('releases startup observation on abort for an unmeasurable surface', async () => {
+    stubFrameLoop();
+    setViewportSize(0, 0);
+    vi.stubGlobal('visualViewport', null);
+    const disconnect = vi.fn();
+    vi.stubGlobal('ResizeObserver', class { observe = vi.fn(); disconnect = disconnect; });
+    const controller = new AbortController();
+    const reason = new Error('startup cancelled');
+    const pending = waitForAdaptiveShellViewport(mountStage(), { signal: controller.signal });
+    const rejection = expect(pending).rejects.toBe(reason);
+    controller.abort(reason);
+    await rejection;
+    expect(disconnect).toHaveBeenCalledOnce();
+  });
+  it('follows visual resize and scroll offsets instead of the larger shell rectangle', () => {
+    const frames = stubFrameLoop();
+    setViewportSize(1920, 1080);
+    const visual = Object.assign(new EventTarget(), {
+      width: 1280,
+      height: 720,
+      offsetLeft: 30,
+      offsetTop: 40,
+    });
+    vi.stubGlobal('visualViewport', visual);
+    const controller = mountAdaptiveGameShell({
+      gameRoot: mountStage(),
+      runtime: 'web-preview',
+      policy: { gameAspectRatio: 3 / 4, minRailWidth: 160 },
+      railSlots: [panelSlot],
+    });
+    Object.defineProperty(controller.shell, 'getBoundingClientRect', {
+      value: () => ({ width: 1920, height: 1080 }),
+    });
+    expect(controller.shell.style.width).toBe('1280px');
+    expect(controller.shell.style.left).toBe('30px');
+    expect(document.documentElement.style.getPropertyValue(`${panelSlot.cssVariablePrefix}-top`)).toBe(
+      '400px',
+    );
+    visual.height = 500;
+    visual.dispatchEvent(new Event('resize'));
+    frames.shift()?.(0);
+    expect(controller.shell.style.height).toBe('500px');
+    expect(controller.state.viewport.layout.height).toBe(500);
+    visual.offsetTop = 100;
+    visual.dispatchEvent(new Event('scroll'));
+    frames.shift()?.(0);
+    expect(controller.shell.style.top).toBe('100px');
+    expect(document.documentElement.style.getPropertyValue(`${panelSlot.cssVariablePrefix}-top`)).toBe(
+      '350px',
+    );
     controller.destroy();
   });
 });

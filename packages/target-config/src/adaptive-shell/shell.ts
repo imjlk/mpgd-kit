@@ -96,21 +96,27 @@ interface ShellElements {
 }
 
 /** Wait for host layout instead of booting the engine with a zero-sized viewport. */
-export function waitForAdaptiveShellViewport(container: HTMLElement): Promise<TargetViewportMeasurement> {
+export function waitForAdaptiveShellViewport(
+  container: HTMLElement,
+  options: { readonly signal?: AbortSignal } = {},
+): Promise<TargetViewportMeasurement> {
   const view = requireWindow(container);
   const doc = container.ownerDocument;
   return waitForTargetViewportMeasurement({
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
     measure: () => measureContainer(container),
     subscribe: (refresh) => {
       const observer = new view.ResizeObserver(refresh);
       observer.observe(container);
       view.addEventListener('resize', refresh);
       view.visualViewport?.addEventListener('resize', refresh);
+      view.visualViewport?.addEventListener('scroll', refresh);
       doc.addEventListener('visibilitychange', refresh);
       return () => {
         observer.disconnect();
         view.removeEventListener('resize', refresh);
         view.visualViewport?.removeEventListener('resize', refresh);
+        view.visualViewport?.removeEventListener('scroll', refresh);
         doc.removeEventListener('visibilitychange', refresh);
       };
     },
@@ -132,7 +138,7 @@ export function mountAdaptiveGameShell(input: MountAdaptiveGameShellInput): Adap
   });
   const railSlots = providedRailSlots.map((slot) => Object.freeze({ ...slot }));
   // Measure before restructuring the DOM, so an unmeasurable host fails without a half-built shell.
-  // The container measurement falls back to the window, so the shell would measure no better.
+  // Prefer the visible viewport for this fixed full-window shell.
   const initialMeasurement = input.initialMeasurement ?? measureContainer(input.gameRoot);
   if (initialMeasurement === null) {
     throw new Error('Wait for a measurable viewport before mounting the game shell.');
@@ -152,8 +158,9 @@ export function mountAdaptiveGameShell(input: MountAdaptiveGameShellInput): Adap
   let animationFrame: number | undefined;
   let destroyed = false;
   let state = resolveShellState(elements.shell, ownedInput, initialMeasurement);
+  let offset = visualViewportOffset(elements.shell);
 
-  applyShellState(elements, state, railSlots);
+  applyShellState(elements, state, railSlots, offset);
 
   const refresh = (): void => {
     animationFrame = undefined;
@@ -161,13 +168,16 @@ export function mountAdaptiveGameShell(input: MountAdaptiveGameShellInput): Adap
       return;
     }
     const next = resolveShellState(elements.shell, ownedInput);
+    const nextOffset = visualViewportOffset(elements.shell);
 
-    if (next === null || shellStateSignature(next) === shellStateSignature(state)) {
+    if (next === null || (shellStateSignature(next) === shellStateSignature(state)
+      && nextOffset.x === offset.x && nextOffset.y === offset.y)) {
       return;
     }
 
     state = next;
-    applyShellState(elements, state, railSlots);
+    offset = nextOffset;
+    applyShellState(elements, state, railSlots, offset);
 
     for (const listener of listeners) {
       notifyListener(listener, state);
@@ -185,6 +195,7 @@ export function mountAdaptiveGameShell(input: MountAdaptiveGameShellInput): Adap
   resizeObserver.observe(elements.shell);
   view.addEventListener('resize', scheduleRefresh);
   view.visualViewport?.addEventListener('resize', scheduleRefresh);
+  view.visualViewport?.addEventListener('scroll', scheduleRefresh);
 
   const controller: AdaptiveGameShellController = {
     shell: elements.shell,
@@ -216,6 +227,7 @@ export function mountAdaptiveGameShell(input: MountAdaptiveGameShellInput): Adap
       resizeObserver.disconnect();
       view.removeEventListener('resize', scheduleRefresh);
       view.visualViewport?.removeEventListener('resize', scheduleRefresh);
+      view.visualViewport?.removeEventListener('scroll', scheduleRefresh);
 
       if (animationFrame !== undefined) {
         view.cancelAnimationFrame(animationFrame);
@@ -282,7 +294,8 @@ function resolveShellState(
 
 function measureContainer(container: HTMLElement): TargetViewportMeasurement | null {
   const view = requireWindow(container);
-  return measureTargetViewport({ container, visualViewport: view.visualViewport, window: view });
+  return measureTargetViewport({ visualViewport: view.visualViewport, window: view })
+    ?? measureTargetViewport({ container });
 }
 
 function ensureShellElements(gameRoot: HTMLElement, names: AdaptiveShellElementNames): ShellElements {
@@ -358,8 +371,15 @@ function applyShellState(
   elements: ShellElements,
   state: AdaptiveGameShellState,
   railSlots: readonly AdaptiveShellRailSlot[],
+  offset: { readonly x: number; readonly y: number },
 ): void {
   const { composition } = state;
+  elements.shell.style.left = `${offset.x}px`;
+  elements.shell.style.top = `${offset.y}px`;
+  elements.shell.style.right = 'auto';
+  elements.shell.style.bottom = 'auto';
+  elements.shell.style.width = `${state.viewport.layout.width}px`;
+  elements.shell.style.height = `${state.viewport.layout.height}px`;
   elements.shell.setAttribute(adaptiveShellAttributes.compositionMode, composition.mode);
   elements.shell.setAttribute(adaptiveShellAttributes.primaryControls, composition.primaryControls);
   elements.gameRoot.setAttribute(adaptiveShellAttributes.layoutMode, composition.mode);
@@ -373,7 +393,14 @@ function applyShellState(
   applyOptionalBounds(elements.leftRail, leftRailBounds);
   applyOptionalBounds(elements.rightRail, rightRailBounds);
   for (const slot of railSlots) {
-    applyRailSlot(elements.shell, slot, slot.rail === 'left' ? leftRailBounds : rightRailBounds);
+    const bounds = slot.rail === 'left' ? leftRailBounds : rightRailBounds;
+    applyRailSlot(
+      elements.shell,
+      slot,
+      bounds === undefined
+        ? undefined
+        : { ...bounds, x: bounds.x + offset.x, y: bounds.y + offset.y },
+    );
   }
   applyRailVisibility(elements.leftRail, leftRailBounds);
   applyRailVisibility(elements.rightRail, rightRailBounds);
@@ -449,4 +476,15 @@ function requireWindow(element: HTMLElement): Window & typeof globalThis {
     throw new Error('Adaptive shell needs a document with a window.');
   }
   return view as Window & typeof globalThis;
+}
+
+function visualViewportOffset(element: HTMLElement): { readonly x: number; readonly y: number } {
+  const viewport = requireWindow(element).visualViewport;
+  if ((viewport === null || viewport === undefined) || measureTargetViewport({ visualViewport: viewport }) === null) {
+    return { x: 0, y: 0 };
+  }
+  return {
+    x: Number.isFinite(viewport.offsetLeft) ? viewport.offsetLeft : 0,
+    y: Number.isFinite(viewport.offsetTop) ? viewport.offsetTop : 0,
+  };
 }

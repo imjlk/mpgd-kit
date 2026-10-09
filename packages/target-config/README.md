@@ -33,3 +33,9 @@ remove those elements separately if the page outlives the game. Embedded stages
 use their own document/window. Subscriber errors do not skip other listeners and
 are rethrown in a microtask for the host's error reporting. Importing the module
 creates no observers, elements or listeners and does not load a platform SDK.
+
+Startup waits accept `{ signal }` so teardown can cancel a still-unmeasurable
+surface and detach observation. Fixed shells prefer visual-viewport dimensions
+and follow its resize/scroll offsets; document-root panel variables include those
+offsets. This covers keyboard/zoom changes that leave layout-viewport dimensions
+unchanged ([VisualViewport reference](https://developer.mozilla.org/en-US/docs/Web/API/VisualViewport)).
