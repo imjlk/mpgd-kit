@@ -136,4 +136,10 @@ throws(() => badClock.begin());
 equal(badClock.snapshot().frames, 0);
 throws(() => new NamedFrameProfiler(new Array<string>(1), () => 0));
 
+const distantClock = new NamedFrameProfiler(['workMs'] as const, () => 1e16);
+distantClock.begin();
+distantClock.current.workMs = 1;
+distantClock.measure('workMs', () => {});
+equal(distantClock.current.workMs, 1);
+distantClock.finish();
 console.log('Named frame profiler tests passed.');

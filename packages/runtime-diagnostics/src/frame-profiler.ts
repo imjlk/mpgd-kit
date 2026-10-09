@@ -107,7 +107,8 @@ export class NamedFrameProfiler<Field extends string> {
       this.measuring -= 1;
     }
     try {
-      const next = this.current[cost] + this.readClock() - start;
+      const elapsed = this.readClock() - start;
+      const next = this.current[cost] + elapsed;
       assertNonNegative(next, `current.${cost}`);
       this.current[cost] = next;
     } catch (error) {
