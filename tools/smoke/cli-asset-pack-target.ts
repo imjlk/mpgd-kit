@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
@@ -38,6 +39,34 @@ try {
     outDir: join(root, 'bundled'),
   });
   const mixed = await buildAssetPackTarget({ policy, baseDir: '.', outDir: join(root, 'mixed') });
+  // A remote-only target keeps the pinned manifest/policy locally, but no payloads.
+  const allRemote = await buildAssetPackTarget({
+    policy: { ...policy, offlineRequired: [] },
+    baseDir: '.',
+    outDir: join(root, 'all-remote'),
+  });
+  assert.equal(allRemote.packagedAssetBytes, 0);
+  assert.equal(allRemote.remoteBytes, bundled.packagedAssetBytes);
+  assert.ok(allRemote.objects.every((object) => object.location === 'remote'));
+  assert.deepEqual((await readdir(allRemote.packagedDir)).sort(), [
+    'asset-pack-delivery.json',
+    'target-policy.json',
+  ]);
+  const pinnedManifest = await readFile(join(allRemote.packagedDir, 'asset-pack-delivery.json'));
+  assert.equal(createHash('sha256').update(pinnedManifest).digest('hex'), allRemote.manifestSha256);
+  const remoteOnlyArtifact = join(root, 'remote-only-artifact');
+  await mkdir(remoteOnlyArtifact);
+  await cp(allRemote.packagedDir, join(remoteOnlyArtifact, assetPackTargetNamespace), {
+    recursive: true,
+  });
+  await assertAssetPackTargetArtifact(allRemote, remoteOnlyArtifact);
+  const remoteOnlyObject = allRemote.objects[0]!;
+  await cp(
+    join(allRemote.remoteDir, remoteOnlyObject.path),
+    join(remoteOnlyArtifact, 'leaked-archive.bin'),
+  );
+  await assert.rejects(assertAssetPackTargetArtifact(allRemote, remoteOnlyArtifact), /Remote-only/);
+
   assert.deepEqual(
     { ...mixed.locations },
     { shared: 'packaged', sound: 'remote', grove: 'packaged', dunes: 'remote' },
