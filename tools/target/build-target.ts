@@ -386,7 +386,11 @@ try {
       mirrorAitRuntimeAssets(gameApp, wrapperApp);
       run('pnpm', ['--dir', wrapperApp, 'exec', 'vite', 'build', '--mode', profile], env);
       if (assetTargetReport !== undefined) {
-        await assertAssetPackTargetArtifact(assetTargetReport, `${wrapperApp}/dist`);
+        await assertAssetPackTargetArtifact(
+          assetTargetReport,
+          `${wrapperApp}/dist`,
+          join(relative(join(wrapperApp, 'public'), webDir), assetPackTargetNamespace),
+        );
       }
 
       let releaseArtifact = webDirConfigPath;
@@ -418,6 +422,13 @@ try {
       embedEffectiveTargetConfig(targetName, webDir, env);
       await stageTargetAssetPacks(webDir);
       stageWebIconEvidence(generatedIcons, webDir);
+      if (assetTargetReport !== undefined) {
+        await assertAssetPackTargetArtifact(
+          assetTargetReport,
+          `${wrapperApp}/dist`,
+          join(relative(join(wrapperApp, 'dist'), webDir), assetPackTargetNamespace),
+        );
+      }
       writeManifest(targetName, profile, `${wrapperAppConfigPath}/dist`, env);
       break;
     }
@@ -508,13 +519,6 @@ function mirrorAitRuntimeAssets(gameApp: string, wrapperApp: string): void {
     replaceDirectory(sourceAssets, destinationAssets);
   } else {
     rmSync(destinationAssets, { recursive: true, force: true });
-  }
-  const packSource = join(gameApp, 'dist', assetPackTargetNamespace);
-  const packDestination = join(wrapperApp, 'public', assetPackTargetNamespace);
-  if (existsSync(packSource)) {
-    replaceDirectory(packSource, packDestination);
-  } else {
-    rmSync(packDestination, { recursive: true, force: true });
   }
 }
 

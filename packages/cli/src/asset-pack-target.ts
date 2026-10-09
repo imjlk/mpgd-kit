@@ -252,9 +252,16 @@ export async function buildAssetPackTarget(options: {
 
 /** Verify the real bundle's asset namespace and reject byte-identical remote
  * objects copied elsewhere. This does not inspect transformed/embedded data. */
-export async function assertAssetPackTargetArtifact(report: AssetPackTargetReport, artifactRoot: string): Promise<void> {
+export async function assertAssetPackTargetArtifact(
+  report: AssetPackTargetReport,
+  artifactRoot: string,
+  namespacePath = assetPackTargetNamespace,
+): Promise<void> {
   const root = resolve(artifactRoot);
-  const namespace = join(root, assetPackTargetNamespace);
+  const namespace = resolve(root, namespacePath);
+  if (!inside(root, namespace) || namespace === root) {
+    throw new Error('Asset namespace must be inside the target artifact');
+  }
   const localHashes = new Set(
     report.objects.filter((object) => object.location === 'packaged').map((object) => object.sha256),
   );

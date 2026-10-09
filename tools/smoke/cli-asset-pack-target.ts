@@ -127,6 +127,16 @@ try {
   await mkdir(artifact);
   await cp(mixed.packagedDir, join(artifact, assetPackTargetNamespace), { recursive: true });
   await assertAssetPackTargetArtifact(mixed, artifact);
+  const embedded = join(root, 'embedded');
+  await mkdir(join(embedded, 'game'), { recursive: true });
+  await cp(mixed.packagedDir, join(embedded, 'game', assetPackTargetNamespace), {
+    recursive: true,
+  });
+  await assertAssetPackTargetArtifact(mixed, embedded, `game/${assetPackTargetNamespace}`);
+  await assert.rejects(
+    assertAssetPackTargetArtifact(mixed, embedded, '../outside'),
+    /inside the target artifact/,
+  );
   const remote = mixed.objects.find((object) => object.location === 'remote')!;
   await cp(join(mixed.remoteDir, remote.path), join(artifact, 'unexpected-copy.bin'));
   await assert.rejects(assertAssetPackTargetArtifact(mixed, artifact), /Remote-only/);
