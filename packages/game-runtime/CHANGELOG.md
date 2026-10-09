@@ -1,5 +1,14 @@
 # @mpgd/game-runtime
 
+## 0.6.0 — 2026-10-10
+
+### Minor changes
+
+- [54b14b31](https://github.com/imjlk/mpgd-kit/commit/54b14b31163f3d0326c9e7825b8fa7877109fd12) Add opt-in DOM banner bindings with scene ownership, unique mount identities,
+  confirmed-layout reservation, page-restore renewal, and asynchronous cleanup. — Thanks @imjlk!
+- [44b26173](https://github.com/imjlk/mpgd-kit/commit/44b261732b8c516c7c28f8b8edd17763144db386) Add bounded, deterministic impact feedback recipes and an opt-in Phaser pool
+  with preallocated rings, batched sparks, raster frame strips and scene cleanup. — Thanks @imjlk!
+
 ## 0.5.0 — 2026-10-09
 
 ### Added

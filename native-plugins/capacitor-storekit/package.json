@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/capacitor-storekit",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Opt-in StoreKit 2 one-time purchase collector for mpgd Capacitor games.",
   "license": "MIT",
   "repository": {
