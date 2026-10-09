@@ -7,7 +7,7 @@ import {
 } from '@mpgd/platform';
 import { toAdAdapter } from '@mpgd/platform/ads';
 import { createBrowserPlatformGateway, type BrowserPlatformGatewayOptions } from './index.js';
-import { createOnePlayAdProvider } from './oneplay-ads.js';
+import { createOnePlayAdProvider, type OnePlayRewardRequestPort } from './oneplay-ads.js';
 import {
   loadOnePlaySdk,
   waitForOnePlay,
@@ -20,7 +20,7 @@ export {
   type OnePlayEnvironment,
   type OnePlaySdk,
 } from './oneplay-sdk.js';
-export { createOnePlayAdProvider } from './oneplay-ads.js';
+export { createOnePlayAdProvider, type OnePlayRewardRequestPort } from './oneplay-ads.js';
 
 export interface OnePlayGatewayOptions {
   readonly sdk?: OnePlaySdk;
@@ -29,6 +29,7 @@ export interface OnePlayGatewayOptions {
   readonly document?: Document;
   readonly placementIds?: Readonly<Record<string, { readonly format: 'rewarded' | 'interstitial'; readonly platformId: string }>>;
   readonly onError?: (error: unknown) => void;
+  readonly rewardRequests?: OnePlayRewardRequestPort;
 }
 export async function createOnePlayPlatformGateway(options: OnePlayGatewayOptions = {}): Promise<PlatformGateway> {
   let sdk: OnePlaySdk | undefined;
@@ -218,7 +219,11 @@ export async function createOnePlayPlatformGateway(options: OnePlayGatewayOption
   }
   const placementIds = options.placementIds ?? {};
   const ads = toAdAdapter(
-    createOnePlayAdProvider({ ...(host === undefined ? {} : { sdk: host }), placementIds }),
+    createOnePlayAdProvider({
+      ...(host === undefined ? {} : { sdk: host }),
+      placementIds,
+      ...(options.rewardRequests === undefined ? {} : { rewardRequests: options.rewardRequests }),
+    }),
   );
   let complete: Promise<void> | undefined;
   return {
@@ -264,8 +269,13 @@ export async function createOnePlayPlatformGateway(options: OnePlayGatewayOption
     }),
     async getCapabilities() {
       const interstitialAds = host?.ads.isSupported('interstitial') === true && Object.values(placementIds).some((placement) => placement.format === 'interstitial' && placement.platformId.trim() !== '');
-      return { ...createUnsupportedCapabilities(), nativeAds: interstitialAds, interstitialAds, localizedContent: true,
-        providerAvailability: { interstitialAds: host === undefined ? 'unsupported' : interstitialAds ? 'available' : 'configuration-required' } };
+      const rewardedAds = host?.ads.isSupported('rewarded') === true && options.rewardRequests !== undefined
+        && Object.values(placementIds).some((placement) => placement.format === 'rewarded' && placement.platformId.trim() !== '');
+      return { ...createUnsupportedCapabilities(), nativeAds: interstitialAds || rewardedAds, interstitialAds, rewardedAds, localizedContent: true,
+        providerAvailability: {
+          interstitialAds: host?.ads.isSupported('interstitial') !== true ? 'unsupported' : interstitialAds ? 'available' : 'configuration-required',
+          rewardedAds: host?.ads.isSupported('rewarded') !== true ? 'unsupported' : rewardedAds ? 'available' : 'configuration-required',
+        } };
     },
     presentation: { getLaunchIntent: async () => ({ entry: 'free-play' }), requestGameSurface: async () => 'already-fullscreen' },
     sharing: {}, leaderboard: { submitScore: async () => ({ submitted: false }), open: async () => {} },

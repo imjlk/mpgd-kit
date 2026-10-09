@@ -142,6 +142,40 @@ assertThrows(
   'ad placement validation should reject normalized platform identifier collisions',
 );
 
+const sharedPlacements = {
+  version: 'shared-format',
+  sharedPlatformPlacementTargets: ['verse8-staging'],
+  placements: [customTargetPlacement, { ...customTargetPlacement, id: 'ANOTHER_REWARD' }],
+};
+assertAdPlacements(sharedPlacements);
+assertThrows(
+  () => assertAdPlacements({ ...sharedPlacements, sharedPlatformPlacementTargets: [] }),
+  'sharing requires an explicit target opt-in',
+);
+assertThrows(
+  () =>
+    assertAdPlacements({
+      ...sharedPlacements,
+      placements: [
+        customTargetPlacement,
+        { ...customTargetPlacement, id: 'INTERSTITIAL', type: 'interstitial' },
+      ],
+    }),
+  'a physical identifier cannot be shared across ad formats',
+);
+assertThrows(
+  () =>
+    assertAdPlacements({
+      ...sharedPlacements,
+      sharedPlatformPlacementTargets: ['verse8-staging', 'verse8-staging'],
+    }),
+  'sharing target identifiers must be unique',
+);
+assertThrows(
+  () => assertAdPlacements({ ...sharedPlacements, sharedPlatformPlacementTargets: [' '] }),
+  'sharing target identifiers must be normalized',
+);
+
 console.log('Catalog product grant validation test passed.');
 
 function assertThrows(callback: () => unknown, message: string): void {

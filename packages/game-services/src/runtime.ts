@@ -201,6 +201,7 @@ export function resolveGameServicesLedgerTarget(
     || target === 'ait'
     || target === 'reddit'
     || target === 'verse8'
+    || target === 'oneplay'
   ) {
     return target;
   }

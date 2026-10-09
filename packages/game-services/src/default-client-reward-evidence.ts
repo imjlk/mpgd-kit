@@ -9,9 +9,11 @@ import {
   type ClientRewardEvidenceNormalizer,
   type ClientRewardEvidenceRegistry,
 } from './client-reward-evidence.js';
+import { onePlayClientRewardEvidenceNormalizer } from './oneplay-client-reward.js';
 
 /** Registered decoder data. Common claim and recovery code never inspects these provider payloads. */
 export const defaultClientRewardEvidenceNormalizers: readonly ClientRewardEvidenceNormalizer[] = Object.freeze([
+  onePlayClientRewardEvidenceNormalizer,
   Object.freeze({
     schema: admobClientRewardEvidenceSchema,
     normalize: (reward) => isAdMobClientRewardEvidence(reward) ? {} : undefined,

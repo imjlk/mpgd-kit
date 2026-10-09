@@ -5,7 +5,7 @@ import {
   type OnePlayEnvironment,
   type OnePlaySdk,
 } from './oneplay.js';
-import type { AdPresentationEvent } from '@mpgd/platform/ads';
+import { toAdAdapter, type AdPresentationEvent } from '@mpgd/platform/ads';
 
 function fixture() {
   const listeners = new Map<string, Set<(event: never) => void>>();
@@ -67,6 +67,40 @@ const show = {
 } as const;
 
 describe('ONE play H5 adapter', () => {
+  it('requires server request issuance and never treats a rewarded callback as a grant', async () => {
+    const f = fixture();
+    const ids = { REWARD: { format: 'rewarded', platformId: 'issued-reward' } } as const;
+    const missing = createOnePlayAdProvider({ sdk: f.sdk, placementIds: ids });
+    expect(await missing.getAvailability({ format: 'rewarded', placementId: 'REWARD' })).toMatchObject({ state: 'configuration-required' });
+    const issueRequest = vi.fn(async () => ({ requestId: 'server-request' }));
+    f.sdk.ads.showRewardedAsync = vi.fn(async ({ requestId }: { requestId: string }) => ({ status: 'rewarded' as const, requestId }));
+    const gateway = await createOnePlayPlatformGateway({ sdk: f.sdk, storage: f.storage, placementIds: ids, rewardRequests: { issueRequest } });
+    expect(await gateway.getCapabilities()).toMatchObject({ rewardedAds: true });
+    const reward = await gateway.ads.showRewarded({ placementId: 'REWARD', idempotencyKey: 'claim' });
+    expect(issueRequest).toHaveBeenCalledWith({ placementId: 'REWARD', platformPlacementId: 'issued-reward', idempotencyKey: 'claim' });
+    expect(reward).toMatchObject({ status: 'completed', rewardGranted: false, evidence: { schema: 'oneplay.rewarded-ad.callback.v1', payload: { requestId: 'server-request', rewardGranted: false } } });
+    expect(reward.ledgerEntryId).toBeUndefined();
+    await gateway.lifecycle.dispose?.();
+  });
+  it('does not open native UI when authenticated request issuance fails', async () => {
+    const f = fixture();
+    const provider = createOnePlayAdProvider({ sdk: f.sdk, placementIds: { REWARD: { format: 'rewarded', platformId: 'issued' } }, rewardRequests: { issueRequest: async () => { throw new Error('unauthorized'); } } });
+    expect(await provider.show({ ...show, format: 'rewarded', placementId: 'REWARD' })).toMatchObject({ presentation: 'not-started', outcome: 'failed' });
+    expect(f.sdk.ads.showRewardedAsync).not.toHaveBeenCalled();
+    expect(await provider.getAvailability({ format: 'rewarded', placementId: 'REWARD' })).toMatchObject({ state: 'available' });
+  });
+  it.each(['no_fill', 'dismissed', 'timeout', 'mismatched'])('preserves reward semantics for %s', async (outcome) => {
+    const f = fixture();
+    f.sdk.ads.showRewardedAsync = async () => ({ requestId: outcome === 'mismatched' ? 'other-request' : 'server-request', status: outcome === 'dismissed' ? 'dismissed' : outcome === 'mismatched' ? 'rewarded' : 'failed', reason: outcome });
+    const provider = createOnePlayAdProvider({ sdk: f.sdk, placementIds: { REWARD: { format: 'rewarded', platformId: 'issued' } }, rewardRequests: { issueRequest: async () => ({ requestId: 'server-request' }) } });
+    const reward = await toAdAdapter(provider).showRewarded({ placementId: 'REWARD', idempotencyKey: 'claim' });
+    expect(reward.rewardGranted).toBe(false);
+    expect(reward.status).toBe(outcome === 'no_fill' ? 'unavailable' : outcome === 'dismissed' ? 'skipped' : 'pending');
+    if (reward.status === 'pending') {
+      expect(reward.evidence?.payload.requestId).toBe('server-request');
+      expect(await provider.getAvailability({ placementId: 'REWARD', format: 'rewarded' })).toMatchObject({ reason: 'busy' });
+    }
+  });
   it('preserves a newer ringer observation delivered during initialization', async () => {
     const f = fixture();
     f.sdk.initializeAsync = async () => { f.emit('resume', { ringerSilent: true }); return f.info; };

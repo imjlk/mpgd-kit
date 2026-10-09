@@ -75,6 +75,8 @@ export type AdPlacementEntry =
 export interface AdPlacements {
   readonly version: string;
   readonly placements: readonly AdPlacementEntry[];
+  /** Explicitly share a physical placement among logical placements of the same format. */
+  readonly sharedPlatformPlacementTargets?: readonly string[];
 }
 
 const assertProductCatalogShape = typia.createAssert<ProductCatalog>();
@@ -95,12 +97,19 @@ export function assertProductCatalog(input: unknown): ProductCatalog {
 
 export function assertAdPlacements(input: unknown): AdPlacements {
   const placements = assertAdPlacementsShape(input);
+  const sharingTargets = new Set(placements.sharedPlatformPlacementTargets ?? []);
+  if (sharingTargets.size !== (placements.sharedPlatformPlacementTargets?.length ?? 0)
+    || [...sharingTargets].some((target) => target.trim() !== target || target.length === 0)) {
+    throw new Error('Shared placement targets must be unique non-empty identifiers.');
+  }
   assertUniqueNormalizedPlatformIdentifiers(
     placements.placements.map((placement) => ({
       logicalId: placement.id,
       identifiers: placement.platformPlacementIds,
+      format: placement.type,
     })),
     'ad placement',
+    sharingTargets,
   );
   return placements;
 }
@@ -140,10 +149,12 @@ function assertUniqueNormalizedPlatformIdentifiers(
   entries: readonly {
     readonly logicalId: string;
     readonly identifiers: Partial<Record<string, string>>;
+    readonly format?: string;
   }[],
   kind: string,
+  sharingTargets: ReadonlySet<string> = new Set(),
 ): void {
-  const identifiersByTarget = new Map<string, Map<string, string>>();
+  const identifiersByTarget = new Map<string, Map<string, { readonly logicalId: string; readonly format?: string }>>();
 
   for (const entry of entries) {
     for (const [target, identifier] of Object.entries(entry.identifiers)) {
@@ -152,16 +163,19 @@ function assertUniqueNormalizedPlatformIdentifiers(
         continue;
       }
 
-      const targetIdentifiers = identifiersByTarget.get(target) ?? new Map<string, string>();
-      const existingLogicalId = targetIdentifiers.get(normalized);
-      if (existingLogicalId !== undefined) {
+      const targetIdentifiers = identifiersByTarget.get(target) ?? new Map<string, { readonly logicalId: string; readonly format?: string }>();
+      const existing = targetIdentifiers.get(normalized);
+      if (existing !== undefined && (!sharingTargets.has(target) || existing.format !== entry.format)) {
         throw new Error(
           `Duplicate normalized ${kind} platform identifier ${normalized} for target ${target}: `
-            + `${existingLogicalId} and ${entry.logicalId}.`,
+            + `${existing.logicalId} and ${entry.logicalId}.`,
         );
       }
 
-      targetIdentifiers.set(normalized, entry.logicalId);
+      targetIdentifiers.set(normalized, {
+        logicalId: entry.logicalId,
+        ...(entry.format === undefined ? {} : { format: entry.format }),
+      });
       identifiersByTarget.set(target, targetIdentifiers);
     }
   }
