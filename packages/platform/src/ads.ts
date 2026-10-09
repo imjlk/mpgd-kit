@@ -61,6 +61,8 @@ export interface AdProvider {
   readonly protocol: typeof adProtocol;
   readonly protocolVersion: typeof adProtocolVersion;
   readonly rewardSignal: 'immediate' | 'delayed';
+  /** Defaults to requested. Some hosts require audio to continue until physical start. */
+  readonly presentationAudio?: 'requested' | 'started';
   getAvailability(input: AdPlacementInput): Promise<AdAvailability>;
   preload(input: AdPlacementInput): Promise<AdPreparationResult>;
   show(input: AdShowInput): Promise<AdShowResult>;
@@ -318,6 +320,9 @@ export function toAdAdapter(provider: AdProvider): AdAdapter {
   }
   if (provider.rewardSignal !== 'immediate' && provider.rewardSignal !== 'delayed') {
     throw new TypeError('Invalid advertising provider reward signal.');
+  }
+  if (provider.presentationAudio !== undefined && provider.presentationAudio !== 'requested' && provider.presentationAudio !== 'started') {
+    throw new TypeError('Invalid advertising presentation audio policy.');
   }
   return {
     provider,

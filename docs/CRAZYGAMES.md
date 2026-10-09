@@ -28,11 +28,11 @@ SDK environment `local` uses CrazyGames' test overlays. It does not certify real
 
 ## Game activity and advertising ownership
 
-The game-owned runtime reports loading start, loading stop before first playable scene, and gameplay start/stop through `PlatformGateway.gameActivity`. Starters enter free play directly for this target. Gameplay scopes dispose with their scene and share the game's execution controller, so menus, settings, and native presentation pauses retain independent ownership.
+Use `@mpgd/game-runtime` 0.4 or newer for gameplay scopes and deferred advertising audio. The game-owned runtime reports loading start, loading stop before first playable scene, and gameplay start/stop through `PlatformGateway.gameActivity`. Starters enter free play directly for this target. Gameplay scopes dispose with their scene and share the game's execution controller, so menus, settings, and native presentation pauses retain independent ownership.
 
 CrazyGames handles focus changes itself, so the runtime suppresses focus-only SDK gameplay transitions while continuing to pause simulation, input, and audio locally. Explicit scene pauses and sleep still end logical gameplay. The gateway also exposes host audio policy through `gameSettings`: SDK `muteAudio` changes own a separate audio block, so in-game sound controls cannot override the host. See [game activity requirements](https://docs.crazygames.com/sdk/game/).
 
-The v2 advertising provider observes `adStarted`, `adFinished`, and `adError`. A documented load rejection before start releases native ownership. An error after start, an unknown error, or a thrown request keeps presentation uncertain and prevents another native request. Only a later physical finish releases that ownership. A caller timeout is not a cancellation. See [video ads](https://docs.crazygames.com/sdk/video-ads/).
+The v2 advertising provider observes `adStarted`, `adFinished`, and `adError`. The SDK defines both `adError` (including `other`) and `adFinished` as terminal resume signals. The adapter releases its native ownership on either callback and preserves whether an ad started. Audio continues during a request and is blocked when `adStarted` arrives. A thrown request or lost transport observation remains uncertain until a later terminal callback; that uncertainty quarantines presentation and audio. A caller timeout is not a cancellation. See [video ads](https://docs.crazygames.com/sdk/video-ads/).
 
 ## Submission verification
 

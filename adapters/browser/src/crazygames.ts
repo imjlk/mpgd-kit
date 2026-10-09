@@ -277,7 +277,7 @@ export function createCrazyGamesAdProvider(options: {
     return { state: 'available' };
   };
   return {
-    id, protocol: adProtocol, protocolVersion: adProtocolVersion, rewardSignal: 'immediate',
+    id, protocol: adProtocol, protocolVersion: adProtocolVersion, rewardSignal: 'immediate', presentationAudio: 'started',
     getAvailability: async (input) => availability(input),
     async preload(input) {
       const state = availability(input);
@@ -302,6 +302,7 @@ export function createCrazyGamesAdProvider(options: {
       const owner = {};
       nativeOwners.set(sdk.ad, owner);
       let started = false;
+      let uncertainPresentation = false;
       let terminal = false;
       let sequence = 0;
       const emit = (event: { type: 'requested' | 'started' | 'closed' | 'unknown' } | { type: 'failed'; reason: AdReason }) => {
@@ -312,6 +313,7 @@ export function createCrazyGamesAdProvider(options: {
       };
       const uncertain = () => {
         if (terminal) { return; }
+        uncertainPresentation = true;
         emit({ type: 'unknown' });
         resolve({ ...base, outcome: 'pending', presentation: 'unknown', reason: 'outcome-unknown' });
       };
@@ -323,8 +325,10 @@ export function createCrazyGamesAdProvider(options: {
           emit({ type: 'closed' });
           resolve({ ...base, outcome: 'shown', presentation: 'closed' });
         } else {
-          emit({ type: 'failed', reason });
-          resolve({ ...base, outcome: 'unavailable', presentation: 'not-started', reason });
+          // The SDK defines adError as a terminal resume signal, including `other`.
+          const notStarted = !started && !uncertainPresentation && reason !== 'transient-failure';
+          if (notStarted) { emit({ type: 'failed', reason }); } else { emit({ type: 'closed' }); }
+          resolve({ ...base, outcome: notStarted ? 'unavailable' : 'failed', presentation: notStarted ? 'not-started' : 'closed', reason });
         }
       };
       emit({ type: 'requested' });
@@ -334,8 +338,7 @@ export function createCrazyGamesAdProvider(options: {
           adFinished() { close(); },
           adError(error) {
             const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;
-            const reason = noStartReason(code);
-            if (!started && reason !== undefined) { close(reason); } else { uncertain(); }
+            close(noStartReason(code) ?? 'transient-failure');
           },
         });
         if (result !== undefined) { Promise.resolve(result).catch(uncertain); }

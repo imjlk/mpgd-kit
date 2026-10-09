@@ -21,7 +21,7 @@ export interface FullScreenPresentationLease {
 }
 export interface FullScreenPresentationScope {
   readonly execution: GameExecutionController;
-  acquire(input: { readonly kind: FullScreenPresentationKind; readonly invocationId: string }): FullScreenPresentationLease;
+  acquire(input: { readonly kind: FullScreenPresentationKind; readonly invocationId: string; readonly audioStart?: 'requested' | 'started' }): FullScreenPresentationLease;
   getSnapshot(): FullScreenPresentationSnapshot;
   subscribe(listener: UiListener<FullScreenPresentationSnapshot>): () => void;
   /** Stop new presentations and detach projections; retain any live native ownership. */
@@ -42,7 +42,7 @@ export function createFullScreenPresentationScope(input: {
 }): FullScreenPresentationScope {
   let disposed = false;
   let version = 0;
-  let owner: { info: FullScreenPresentationOwner; block?: ExecutionBlock } | undefined;
+  let owner: { info: FullScreenPresentationOwner; block?: ExecutionBlock; audioBlock?: ExecutionBlock } | undefined;
   let snapshot: FullScreenPresentationSnapshot = Object.freeze({ version, status: 'ready' });
   const bridge = createGameUiBridge<FullScreenPresentationSnapshot, never>({
     initialSnapshot: snapshot,
@@ -74,35 +74,53 @@ export function createFullScreenPresentationScope(input: {
       if (owner !== undefined) { throw new PresentationExecutionError('busy'); }
       const kind = request.kind;
       const invocationId = request.invocationId;
+      const audioStart = request.audioStart ?? 'requested';
       if (!['purchase', 'rewarded', 'interstitial'].includes(kind)
-        || typeof invocationId !== 'string' || invocationId.trim() === '' || invocationId.length > 512) {
+        || typeof invocationId !== 'string' || invocationId.trim() === '' || invocationId.length > 512
+        || (audioStart !== 'requested' && audioStart !== 'started')) {
         throw new TypeError('Invalid presentation identity.');
       }
       if (isDisposed()) { throw new PresentationExecutionError('disposed'); }
       if (owner !== undefined) { throw new PresentationExecutionError('busy'); }
-      const owned: { info: FullScreenPresentationOwner; block?: ExecutionBlock } = {
+      const owned: { info: FullScreenPresentationOwner; block?: ExecutionBlock; audioBlock?: ExecutionBlock } = {
         info: Object.freeze({ kind, invocationId, state: 'requested' }),
       };
       // Install ownership before execution listeners can reenter during acquisition.
       owner = owned;
       try {
         owned.block = input.execution.acquireBlock({
-          reason: `presentation:${kind}`, channels: ['simulation', 'gameplay-input', 'audio'],
+          reason: `presentation:${kind}`, channels: audioStart === 'started' ? ['simulation', 'gameplay-input'] : ['simulation', 'gameplay-input', 'audio'],
         });
       } catch (error) {
         if (owner === owned) { owner = undefined; }
         throw error;
       }
+      let acquiringAudio = false;
+      const ensureAudio = () => {
+        if (audioStart !== 'started' || acquiringAudio || owned.audioBlock !== undefined || input.execution.getSnapshot().status === 'destroyed') { return; }
+        acquiringAudio = true;
+        try {
+          const block = input.execution.acquireBlock({ reason: `presentation:${kind}:audio`, channels: ['audio'] });
+          if (owner === owned) { owned.audioBlock = block; } else { block.release(); }
+        } finally { acquiringAudio = false; }
+      };
       publish();
       return Object.freeze({
         markStarted(): void {
           if (owner === owned && owned.info.state !== 'open') {
+            const previousInfo = owned.info;
+            ensureAudio();
+            if (owner !== owned || owned.info !== previousInfo) { return; }
             owned.info = Object.freeze({ ...owned.info, state: 'open' });
             publish();
           }
         },
         markUnknown(): void {
           if (owner === owned && owned.info.state !== 'unknown') {
+            const previousInfo = owned.info;
+            // Lost native observations quarantine audio as well as execution.
+            ensureAudio();
+            if (owner !== owned || owned.info !== previousInfo) { return; }
             owned.info = Object.freeze({ ...owned.info, state: 'unknown' });
             publish();
           }
@@ -111,6 +129,7 @@ export function createFullScreenPresentationScope(input: {
           if (owner !== owned) { return; }
           owner = undefined;
           publish();
+          owned.audioBlock?.release();
           owned.block?.release();
         },
       });
