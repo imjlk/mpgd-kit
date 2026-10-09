@@ -11,6 +11,7 @@ export async function staticServer(directory, { cors = false, port = 0, gate } =
   await mkdir(directory, { recursive: true });
   const root = await realpath(directory);
   const requests = [];
+  const responses = [];
   const faults = new Map();
   const delays = new Map();
   let gateReleased = gate === undefined;
@@ -67,6 +68,7 @@ export async function staticServer(directory, { cors = false, port = 0, gate } =
       response.setHeader('Content-Type', types[extname(file)] ?? 'application/octet-stream');
       response.setHeader('Content-Length', bytes.length);
       response.setHeader('Cache-Control', path.startsWith('/packs/') ? 'public, max-age=31536000, immutable' : 'no-store');
+      response.once('finish', () => responses.push({ path, status: response.statusCode, bodyBytes: request.method === 'HEAD' ? 0 : bytes.length }));
       if (fault?.kind === 'stall') { response.write(bytes.subarray(0, 1)); return; }
       response.end(request.method === 'HEAD' ? undefined : bytes);
     } catch {
@@ -75,7 +77,7 @@ export async function staticServer(directory, { cors = false, port = 0, gate } =
   });
   await new Promise((yes, no) => { server.once('error', no); server.listen(port, '127.0.0.1', yes); });
   return {
-    url: `http://127.0.0.1:${server.address().port}/`, requests, faults, delays,
+    url: `http://127.0.0.1:${server.address().port}/`, requests, responses, faults, delays,
     async close() { releaseGate(); server.closeAllConnections(); await new Promise((yes, no) => server.close((error) => error ? no(error) : yes())); },
   };
 }

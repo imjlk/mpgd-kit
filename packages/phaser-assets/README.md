@@ -116,8 +116,9 @@ Changing a bad immutable response requires a new revision or a fresh-cache polic
 headers. `resolveURL` does not affect ordinary `scene.load` URL settings. Pack URLs are
 page-relative by default; they do not inherit `scene.load.baseURL/path/prefix`.
 
-There is no managed disk cache, offline download storage, prefetch scheduler or
-upload service in this API. `snapshot()` reports owned textures and width × height
+Storage providers and quota/eviction policy remain application-owned; the
+optional `/pack-cache` port and `/prefetch` scheduler are described below.
+Deployment uses CLI tooling rather than an upload service in the runtime API. `snapshot()` reports owned textures and width × height
 × 4 estimates, excluding engine overhead, GPU format, mipmaps and transient
 buffers. Games own catalog rollout, bundle membership and memory budgets.
 
@@ -467,7 +468,8 @@ checked for the whole closure before any request. Failures throw `PhaserPackDeli
 decoder's status and code in the message; there is no silent ZIP-to-files
 fallback. Preparations are single-flight — a concurrent `prepare`
 rejects with `busy` — and first-version ownership is one fixed manifest
-with one loader: no prefetch and no cross-tab sharing. Persistent caching is
+with one loader and no cross-tab sharing. Optional prefetch is layered over
+this loader/delivery pair as described below. Persistent caching is
 optional and remains application-owned at the acquisition boundary.
 Importing the module performs no network request, spawns no worker and
 arms no timer; the worker comes from the application's `createWorker`
@@ -527,7 +529,9 @@ independent leases; eviction/disposal cannot delete their resources.
 
 For ZIP/mixed manifests, pass an `acquire` callback that calls
 `acquireDeliveredPack` with this same loader/delivery, forwarding the signal and
-optional texture progress. Wire `setIdle` to game lifecycle/menu state and dispose
+optional texture progress. The callback prepares cold acquisitions only; warm
+handover takes independent ownership directly from the resident loader without
+re-downloading or staging ZIP files. Wire `setIdle` to game lifecycle/menu state and dispose
 the scheduler with its owning scene. It does not infer idle time or install timers.
 Ending idle prevents new background work and cancels owned transfers; an already
 running native image/audio decode can settle later and keeps its permits until

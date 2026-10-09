@@ -10,7 +10,7 @@ This private game consumes the public `@mpgd/phaser-assets/packs` API. It exerci
 PNG images, a four-frame spritesheet and a 2048×1024 JSON atlas in WebGL and Canvas.
 The loader implementation and unit tests live in the existing package; no new npm
 package is introduced. See [the API guide](../../packages/phaser-assets/README.md)
-and [design/remaining work](../../docs/asset-packs-design.md).
+and [design and scope](../../docs/asset-packs-design.md).
 
 From the repository root:
 
@@ -44,28 +44,29 @@ when changing source assets; the session catalog is pinned.
 ### ZIP delivery acceptance
 
 The same sample also runs the complete ZIP path end to end: real
-\`mpgd assets build-packs\` output (built by \`pnpm --dir examples/asset-packs
-build:delivery\` into \`artifacts/origin/delivery/\`) downloaded over plain
+`mpgd assets build-packs` output (built by `pnpm --dir examples/asset-packs
+build:delivery` into `artifacts/origin/delivery/`) downloaded over plain
 HTTP, decoded and verified by the real application-deployed module worker
 (#191), staged once per pack, supplied to the very same Phaser loader
 through a prepared file source, then displayed, switched, cancelled and
-released. Append \`&delivery=zip\` (all packs as archives) or
-\`&delivery=mixed\` (shared pack as plain files, themes as archives) to the
-sample URL. \`&staging=<bytes>\` shrinks the staging budget to exercise the
-pre-network rejection. Preparation precedes \`loader.acquire\`; staging is
+released. Append `&delivery=zip` (all packs as archives) or
+`&delivery=mixed` (shared pack as plain files, themes as archives) to the
+sample URL. `&staging=<bytes>` shrinks the staging budget to exercise the
+pre-network rejection. Preparation precedes `loader.acquire`; staging is
 returned as soon as the loader has consumed the files, and registered
 textures keep the level playable afterwards. Re-entering a level
 re-prepares from the network. The browser suite covers the happy path in
 WebGL and Canvas plus 404/corrupt archives, oversize and exact staging
 budgets, mid-preparation cancel, overlapping A→B→A transitions, shutdown
 during preparation, mixed files+ZIP manifests, and a files-vs-ZIP
-comparison recorded into \`artifacts/browser/evidence.json\`.
+comparison recorded into `artifacts/browser/evidence.json`.
 
 `dist/bundled` includes all pack files; `dist/hybrid` includes only the shared pack.
 Remote theme revisions live separately under `artifacts/origin`. Each build's
 `asset-pack-report.json` records actual encoded asset bytes and labeled RGBA
-estimates. These fixture measurements are not total app size, compressed traffic,
-measured GPU/process memory or a real-game performance benchmark.
+estimates. The separate playable-consumer measurement command below records complete app
+artifacts, entry latency and observed main-isolate heap. Encoded payload reports
+and RGBA estimates remain distinct from those measurements.
 
 ```sh
 pnpm --dir packages/phaser-assets test
@@ -84,9 +85,9 @@ release run in all four combinations. Another case checks HTTP cache reuse after
 release. Public API tests additionally cover timeouts,
 non-cooperative decode cleanup, shutdown, graph validation and observer failures.
 
-Persistent/offline caching, audio, prefetch scheduling, target-config integration
-and publication adapters remain follow-ups in issue #173. This PR has a changeset
-for the existing public package; the example itself remains private.
+Persistent reuse, audio, prefetch, published target policy and immutable S3
+publication are implemented. See [delivery commands](../../docs/ASSET_PACK_DELIVERY.md).
+The example remains private; public runtime changes carry Sampo changesets.
 
 ## Lifetime and admission bounds
 
@@ -157,3 +158,30 @@ delete-vs-late-write races, quota and unavailable fault injection,
 transaction-abort preservation, foreign-namespace isolation, and the
 regular Phaser frame/transition/release regressions through the public
 acquisition boundary — against real Chromium IndexedDB, never a fake.
+
+## Reproducible playable-consumer measurements
+
+```sh
+pnpm build:packages
+pnpm --dir examples/asset-packs exec playwright install chromium
+pnpm --dir examples/asset-packs test:measure
+```
+
+The command builds bundled/hybrid app artifacts, checks their physical payload
+inclusion, and runs six Canvas scenarios in fresh Chromium contexts: bundled
+files, remote files, remote files with prefetch, mixed ZIP, mixed ZIP with prefetch,
+and mixed ZIP with IndexedDB reuse. Each run enters Grove → Dunes → Grove,
+verifies explorer movement, confirms no required downloads during gameplay, and
+checks texture/audio/staging ownership after shutdown. Prefetch scenarios wait
+for both packs to warm and assert zero response-body bytes at first entry.
+
+Defaults are three repetitions and a modeled 40 ms delay per remote response;
+`ASSET_PACK_MEASURE_REPEATS=1..20` and
+`ASSET_PACK_MEASURE_REMOTE_DELAY_MS=0..500` select other bounded runs. Outputs
+are `artifacts/measurements/report.json` and screenshots. The report includes
+whole app file bytes/digests, completed HTTP response-body bytes, selection-to-
+display-object handover time, observed main V8 heap samples and post-GC checkpoints.
+It separately reports known RGBA/PCM/Blob payload and persistent artifact bytes.
+It does not measure physical wire overhead, exact peak, GPU, worker heap or total
+process/native decoder memory. Canvas results do not establish a WebGL/device
+performance budget. See [recorded evidence](../../docs/ASSET_PACK_MEASUREMENTS.md).

@@ -333,3 +333,6 @@ rules and the media-type/method mapping. The module is free of Node, DOM,
 Phaser and compression concerns, so producers and runtime consumers verify the
 same shapes. Client-side ZIP loading, persistent caches and deployment upload
 remain out of scope for this slice.
+
+See [playable-consumer measurements](ASSET_PACK_MEASUREMENTS.md) for complete
+artifact inventories, entry latency, heap observations and native build evidence.
