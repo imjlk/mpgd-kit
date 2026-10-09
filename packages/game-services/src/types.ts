@@ -30,7 +30,7 @@ export type { PlatformEvidenceEnvelope } from '@mpgd/platform';
 
 export type GameServicesStoreTarget = Extract<
   PlatformTarget,
-  'microsoft-store' | 'android' | 'ios' | 'ait'
+  'microsoft-store' | 'android' | 'ios' | 'ait' | 'oneplay'
 >;
 export type GameServicesAdRewardTarget = GameServicesLedgerTarget;
 export type GameServicesLeaderboardTarget = Extract<
@@ -326,8 +326,9 @@ function assertStoreTarget(input: unknown): asserts input is GameServicesStoreTa
     && input !== 'android'
     && input !== 'ios'
     && input !== 'ait'
+    && input !== 'oneplay'
   ) {
-    throw new Error('target must be microsoft-store, android, ios, or ait.');
+    throw new Error('target must be microsoft-store, android, ios, ait, or oneplay.');
   }
 }
 

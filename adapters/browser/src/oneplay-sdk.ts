@@ -12,6 +12,22 @@ export interface OnePlayAdResult {
   readonly requestId?: string;
   readonly reason?: string;
 }
+export interface OnePlayPurchase {
+  readonly orderId: string;
+  readonly purchaseTimeMillis: number;
+  readonly purchaseId: string;
+  readonly purchaseToken: string;
+  readonly productId: string;
+  readonly developerPayload?: string;
+}
+export interface OnePlayProductDetails {
+  readonly productId: string;
+  readonly type: string;
+  readonly title: string;
+  readonly price: string;
+  readonly priceAmountMicros: number;
+  readonly priceCurrencyCode: string;
+}
 export interface OnePlaySdk {
   initializeAsync(): Promise<OnePlayEnvironment | { readonly err: string }>;
   setLoadingProgress(progress: number): void;
@@ -28,6 +44,11 @@ export interface OnePlaySdk {
     isReadyAsync(type: 'rewarded' | 'interstitial', placementId: string): Promise<boolean>;
     showRewardedAsync(input: { readonly placementId: string; readonly requestId: string }): Promise<OnePlayAdResult>;
     showInterstitialAsync(input: { readonly placementId: string }): Promise<OnePlayAdResult>;
+  };
+  readonly iap?: {
+    isSupported(feature?: 'purchase' | 'getProductDetails'): boolean;
+    purchase(input: { readonly productId: string; readonly developerPayload: string }): Promise<OnePlayPurchase>;
+    getProductDetailsAsync(productIds: readonly string[]): Promise<readonly OnePlayProductDetails[]>;
   };
 }
 let loading: Promise<OnePlaySdk> | undefined;

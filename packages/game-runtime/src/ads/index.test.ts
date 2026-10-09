@@ -558,6 +558,22 @@ describe('coordinated advertising', () => {
 });
 
 describe('coordinated purchase presentation', () => {
+  it('uses adapter presentation facts to release known closure and retain unknown outcomes', async () => {
+    for (const fact of ['closed', 'unknown'] as const) {
+      const state = environment();
+      const original = gateway();
+      let nativeFact: (event: PurchasePresentationEvent) => void = () => {};
+      const source = { ...original, commerce: { ...original.commerce,
+        presentation: { subscribe(listener: typeof nativeFact) { nativeFact = listener; return () => {}; } },
+        async purchase() { nativeFact({ idempotencyKey: 'p', sequence: 1, state: fact }); return { status: 'completed' as const, entitlementIds: [] }; },
+      } };
+      const controlled = createCoordinatedPlatformGateway({ gateway: source, provider: sdk().provider, ...state });
+      await controlled.commerce.purchase({ productId: 'COINS', source: 'shop', idempotencyKey: 'p' });
+      expect(state.execution.getSnapshot().blocked.simulation).toBe(fact === 'unknown');
+      controlled.dispose();
+    }
+  });
+
   it('ignores contradictory no-start facts and isolates a late purchase result from the next ad', async () => {
     const state = environment();
     const native = sdk();

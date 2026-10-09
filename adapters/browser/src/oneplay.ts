@@ -9,6 +9,11 @@ import { toAdAdapter } from '@mpgd/platform/ads';
 import { createBrowserPlatformGateway, type BrowserPlatformGatewayOptions } from './index.js';
 import { createOnePlayAdProvider, type OnePlayRewardRequestPort } from './oneplay-ads.js';
 import {
+  createOnePlayCommerceAdapter,
+  type OnePlayCommerceProduct,
+  type OnePlayCommerceServerPort,
+} from './oneplay-commerce.js';
+import {
   loadOnePlaySdk,
   waitForOnePlay,
   type OnePlayEnvironment,
@@ -19,8 +24,16 @@ export {
   onePlaySdkUrl,
   type OnePlayEnvironment,
   type OnePlaySdk,
+  type OnePlayPurchase,
+  type OnePlayProductDetails,
 } from './oneplay-sdk.js';
 export { createOnePlayAdProvider, type OnePlayRewardRequestPort } from './oneplay-ads.js';
+
+export {
+  createOnePlayCommerceAdapter,
+  type OnePlayCommerceProduct,
+  type OnePlayCommerceServerPort,
+} from './oneplay-commerce.js';
 
 export interface OnePlayGatewayOptions {
   readonly sdk?: OnePlaySdk;
@@ -30,6 +43,8 @@ export interface OnePlayGatewayOptions {
   readonly placementIds?: Readonly<Record<string, { readonly format: 'rewarded' | 'interstitial'; readonly platformId: string }>>;
   readonly onError?: (error: unknown) => void;
   readonly rewardRequests?: OnePlayRewardRequestPort;
+  readonly products?: readonly OnePlayCommerceProduct[];
+  readonly commerceServer?: OnePlayCommerceServerPort;
 }
 export async function createOnePlayPlatformGateway(options: OnePlayGatewayOptions = {}): Promise<PlatformGateway> {
   let sdk: OnePlaySdk | undefined;
@@ -217,17 +232,26 @@ export async function createOnePlayPlatformGateway(options: OnePlayGatewayOption
       await dispose?.();
     };
   }
-  const placementIds = options.placementIds ?? {};
+  const placementIds = Object.fromEntries(
+    Object.entries(options.placementIds ?? {}).map(([key, value]) => [
+      key,
+      Object.freeze({ ...value }),
+    ]),
+  );
+  const products = options.products?.map((product) => Object.freeze({ ...product }));
+  const rewardRequests = options.rewardRequests;
+  const commerceServer = options.commerceServer;
   const ads = toAdAdapter(
     createOnePlayAdProvider({
       ...(host === undefined ? {} : { sdk: host }),
       placementIds,
-      ...(options.rewardRequests === undefined ? {} : { rewardRequests: options.rewardRequests }),
+      ...(rewardRequests === undefined ? {} : { rewardRequests }),
     }),
   );
   let complete: Promise<void> | undefined;
   return {
     ...browser, target: 'oneplay', lifecycle, storage, ads,
+    commerce: createOnePlayCommerceAdapter({ ...(host === undefined ? {} : { sdk: host }), ...(products === undefined ? {} : { products }), ...(commerceServer === undefined ? {} : { server: commerceServer }) }),
     ...(host === undefined || ready === undefined ? {} : {
       identity: {
         getPlayer: async () => ({ playerId: ready.playerId }),
@@ -269,10 +293,12 @@ export async function createOnePlayPlatformGateway(options: OnePlayGatewayOption
     }),
     async getCapabilities() {
       const interstitialAds = host?.ads.isSupported('interstitial') === true && Object.values(placementIds).some((placement) => placement.format === 'interstitial' && placement.platformId.trim() !== '');
-      const rewardedAds = host?.ads.isSupported('rewarded') === true && options.rewardRequests !== undefined
+      const rewardedAds = host?.ads.isSupported('rewarded') === true && rewardRequests !== undefined
         && Object.values(placementIds).some((placement) => placement.format === 'rewarded' && placement.platformId.trim() !== '');
-      return { ...createUnsupportedCapabilities(), nativeAds: interstitialAds || rewardedAds, interstitialAds, rewardedAds, localizedContent: true,
+      const nativeIap = host?.iap?.isSupported('purchase') === true && commerceServer !== undefined && (products?.length ?? 0) > 0;
+      return { ...createUnsupportedCapabilities(), nativeIap, subscriptionIap: false, nativeAds: interstitialAds || rewardedAds, interstitialAds, rewardedAds, localizedContent: true,
         providerAvailability: {
+          nativeIap: host?.iap?.isSupported('purchase') !== true ? 'unsupported' : nativeIap ? 'available' : 'configuration-required',
           interstitialAds: host?.ads.isSupported('interstitial') !== true ? 'unsupported' : interstitialAds ? 'available' : 'configuration-required',
           rewardedAds: host?.ads.isSupported('rewarded') !== true ? 'unsupported' : rewardedAds ? 'available' : 'configuration-required',
         } };

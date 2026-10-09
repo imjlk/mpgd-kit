@@ -1,4 +1,9 @@
-import type { PlatformEvidenceEnvelope, PlatformGateway, PurchaseResult } from '@mpgd/platform';
+import type {
+  PlatformEvidenceEnvelope,
+  PlatformGateway,
+  PlatformPurchasePresentationEvent,
+  PurchaseResult,
+} from '@mpgd/platform';
 import type { GameServicesRewardedAdResult } from '@mpgd/game-services/operations';
 import {
   assertAdAvailability,
@@ -507,11 +512,7 @@ export function createCoordinatedAdProvider(input: {
   } satisfies CoordinatedAdProvider);
 }
 
-export interface PurchasePresentationEvent {
-  readonly idempotencyKey: string;
-  readonly sequence: number;
-  readonly state: 'open' | 'closed' | 'not-started' | 'unknown';
-}
+export type PurchasePresentationEvent = PlatformPurchasePresentationEvent;
 export interface CoordinatedPlatformGateway extends PlatformGateway {
   dispose(): void;
 }
@@ -557,7 +558,8 @@ export function createCoordinatedPlatformGateway(input: Parameters<typeof create
     }
     maybeDetach();
   }
-  const unsubscribe = input.purchasePresentation?.subscribe((event) => {
+  const purchasePresentation = input.purchasePresentation ?? input.gateway.commerce.presentation;
+  const unsubscribe = purchasePresentation?.subscribe((event) => {
     observe(() => {
       const flight = purchases.get(event.idempotencyKey);
       if (flight === undefined || !flight.called || flight.closed) {

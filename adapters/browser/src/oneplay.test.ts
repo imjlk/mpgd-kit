@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createOnePlayAdProvider,
+  createOnePlayCommerceAdapter,
   createOnePlayPlatformGateway,
   type OnePlayEnvironment,
   type OnePlaySdk,
@@ -66,41 +67,214 @@ const show = {
   idempotencyKey: 'request',
 } as const;
 
+function commerceFixture() {
+  const f = fixture();
+  const purchase = vi.fn(async (input: { productId: string; developerPayload: string }) => ({
+    orderId: 'order',
+    purchaseTimeMillis: Date.now(),
+    purchaseId: 'purchase',
+    purchaseToken: 'token',
+    productId: input.productId,
+    developerPayload: input.developerPayload,
+  }));
+  const sdk: OnePlaySdk = {
+    ...f.sdk,
+    iap: { isSupported: () => true, purchase, getProductDetailsAsync: async () => [] },
+  };
+  const products = [{ id: 'COINS', platformId: 'coins-sku', type: 'consumable' as const }];
+  const server = {
+    issueIntent: vi.fn(async () => ({ developerPayload: 'server-intent' })),
+    getEntitlements: vi.fn(async () => []),
+    restore: vi.fn(async () => ({ restoredEntitlements: [] })),
+  };
+  return { sdk, purchase, products, server };
+}
 describe('ONE play H5 adapter', () => {
+  it('uses authenticated checkout payloads without granting and deduplicates checkout UI', async () => {
+    const f = commerceFixture();
+    const commerce = createOnePlayCommerceAdapter(f);
+    const request = { productId: 'COINS', source: 'shop' as const, idempotencyKey: 'checkout' };
+    const presentations: string[] = [];
+    commerce.presentation?.subscribe((event) => presentations.push(event.state));
+    const first = commerce.purchase(request);
+    expect(commerce.purchase(request)).toBe(first);
+    const result = await first;
+    expect(result).toMatchObject({
+      status: 'completed',
+      transactionId: 'purchase',
+      entitlementIds: [],
+      evidence: {
+        schema: 'oneplay.managed-purchase.v1',
+        payload: {
+          developerPayload: 'server-intent',
+          purchaseToken: 'token',
+          productId: 'coins-sku',
+        },
+      },
+    });
+    expect(result.authoritativeGrant).toBeUndefined();
+    expect(presentations).toEqual(['closed']);
+    expect(f.purchase).toHaveBeenCalledExactlyOnceWith({
+      productId: 'coins-sku',
+      developerPayload: 'server-intent',
+    });
+    expect(f.server.issueIntent).toHaveBeenCalledWith({
+      productId: 'COINS',
+      platformProductId: 'coins-sku',
+      idempotencyKey: 'checkout',
+    });
+    await commerce.restore?.();
+    expect(f.server.restore).toHaveBeenCalledOnce();
+  });
+  it('keeps purchase support independent from product detail support', async () => {
+    const f = commerceFixture();
+    const sdk: OnePlaySdk = {
+      ...f.sdk,
+      iap: { ...f.sdk.iap!, isSupported: (feature) => feature !== 'getProductDetails' },
+    };
+    const gateway = await createOnePlayPlatformGateway({ sdk, products: f.products, commerceServer: f.server });
+    expect(await gateway.getCapabilities()).toMatchObject({
+      nativeIap: true,
+      subscriptionIap: false,
+    });
+    expect(await gateway.commerce.getProducts()).toEqual([]);
+    await gateway.lifecycle.dispose?.();
+  });
+  it('batches price lookup by 20 and handles partial, reordered and unknown products', async () => {
+    const f = commerceFixture();
+    const products = Array.from({ length: 21 }, (_, index) => ({
+      id: `P${index}`,
+      platformId: `sku${index}`,
+      type: 'consumable' as const,
+    }));
+    const details = vi.fn(async (ids: readonly string[]) =>
+      [ids.at(-1)!, 'unknown', ids[0]!, ids[0]!].map((productId) => ({
+        productId,
+        type: 'inapp',
+        title: productId,
+        price: '1,000',
+        priceAmountMicros: 1_000_000_000,
+        priceCurrencyCode: 'KRW',
+      })),
+    );
+    const sdk: OnePlaySdk = { ...f.sdk, iap: { ...f.sdk.iap!, getProductDetailsAsync: details } };
+    const result = await createOnePlayCommerceAdapter({ ...f, sdk, products }).getProducts();
+    expect(details.mock.calls.map(([ids]) => ids.length)).toEqual([20, 1]);
+    expect(result.map((product) => product.id)).toEqual(['P19', 'P0', 'P20']);
+    expect(result[0]?.price).toEqual({ formatted: '1,000 KRW', currencyCode: 'KRW' });
+  });
+  it.each(['user_cancelled', 'already_owned', 'timeout', 'transport'])(
+    'handles checkout %s and shares fullscreen ownership with ads',
+    async (reason) => {
+      const f = commerceFixture();
+      const sdk: OnePlaySdk = {
+        ...f.sdk,
+        iap: {
+          ...f.sdk.iap!,
+          purchase: async () => {
+            throw reason === 'transport' ? new Error('bridge disconnected') : { reason };
+          },
+        },
+      };
+      const result = await createOnePlayCommerceAdapter({ ...f, sdk }).purchase({ productId: 'COINS', source: 'shop', idempotencyKey: 'checkout' });
+      expect(result.status).toBe(
+        reason === 'user_cancelled'
+          ? 'cancelled'
+          : reason === 'already_owned'
+            ? 'failed'
+            : 'pending',
+      );
+      const ads = createOnePlayAdProvider({ sdk, placementIds });
+      expect((await ads.getAvailability({ format: 'interstitial', placementId: 'STAGE_END_INTERSTITIAL' })).state).toBe(
+        reason === 'timeout' || reason === 'transport' ? 'temporarily-unavailable' : 'available',
+      );
+    },
+  );
+  it('requires server integration and validates developer payload byte length before native UI', async () => {
+    const f = commerceFixture();
+    expect((await createOnePlayCommerceAdapter({ sdk: f.sdk, products: f.products }).purchase({ productId: 'COINS', source: 'shop', idempotencyKey: 'missing' })).status).toBe(
+      'failed',
+    );
+    const commerce = createOnePlayCommerceAdapter({
+      ...f,
+      server: { ...f.server, issueIntent: async () => ({ developerPayload: '한'.repeat(70) }) },
+    });
+    expect((await commerce.purchase({ productId: 'COINS', source: 'shop', idempotencyKey: 'oversize' })).status).toBe(
+      'failed',
+    );
+    expect(f.purchase).not.toHaveBeenCalled();
+  });
+
   it('requires server request issuance and never treats a rewarded callback as a grant', async () => {
     const f = fixture();
     const ids = { REWARD: { format: 'rewarded', platformId: 'issued-reward' } } as const;
     const missing = createOnePlayAdProvider({ sdk: f.sdk, placementIds: ids });
-    expect(await missing.getAvailability({ format: 'rewarded', placementId: 'REWARD' })).toMatchObject({ state: 'configuration-required' });
+    expect(await missing.getAvailability({ format: 'rewarded', placementId: 'REWARD' })).toMatchObject(
+      { state: 'configuration-required' },
+    );
     const issueRequest = vi.fn(async () => ({ requestId: 'server-request' }));
     f.sdk.ads.showRewardedAsync = vi.fn(async ({ requestId }: { requestId: string }) => ({ status: 'rewarded' as const, requestId }));
     const gateway = await createOnePlayPlatformGateway({ sdk: f.sdk, storage: f.storage, placementIds: ids, rewardRequests: { issueRequest } });
     expect(await gateway.getCapabilities()).toMatchObject({ rewardedAds: true });
     const reward = await gateway.ads.showRewarded({ placementId: 'REWARD', idempotencyKey: 'claim' });
-    expect(issueRequest).toHaveBeenCalledWith({ placementId: 'REWARD', platformPlacementId: 'issued-reward', idempotencyKey: 'claim' });
-    expect(reward).toMatchObject({ status: 'completed', rewardGranted: false, evidence: { schema: 'oneplay.rewarded-ad.callback.v1', payload: { requestId: 'server-request', rewardGranted: false } } });
+    expect(issueRequest).toHaveBeenCalledWith({
+      placementId: 'REWARD',
+      platformPlacementId: 'issued-reward',
+      idempotencyKey: 'claim',
+    });
+    expect(reward).toMatchObject({
+      status: 'completed',
+      rewardGranted: false,
+      evidence: {
+        schema: 'oneplay.rewarded-ad.callback.v1',
+        payload: { requestId: 'server-request', rewardGranted: false },
+      },
+    });
     expect(reward.ledgerEntryId).toBeUndefined();
     await gateway.lifecycle.dispose?.();
   });
   it('does not open native UI when authenticated request issuance fails', async () => {
     const f = fixture();
-    const provider = createOnePlayAdProvider({ sdk: f.sdk, placementIds: { REWARD: { format: 'rewarded', platformId: 'issued' } }, rewardRequests: { issueRequest: async () => { throw new Error('unauthorized'); } } });
-    expect(await provider.show({ ...show, format: 'rewarded', placementId: 'REWARD' })).toMatchObject({ presentation: 'not-started', outcome: 'failed' });
+    const provider = createOnePlayAdProvider({
+      sdk: f.sdk,
+      placementIds: { REWARD: { format: 'rewarded', platformId: 'issued' } },
+      rewardRequests: {
+        issueRequest: async () => {
+          throw new Error('unauthorized');
+        },
+      },
+    });
+    expect(await provider.show({ ...show, format: 'rewarded', placementId: 'REWARD' })).toMatchObject(
+      { presentation: 'not-started', outcome: 'failed' },
+    );
     expect(f.sdk.ads.showRewardedAsync).not.toHaveBeenCalled();
-    expect(await provider.getAvailability({ format: 'rewarded', placementId: 'REWARD' })).toMatchObject({ state: 'available' });
+    expect(await provider.getAvailability({ format: 'rewarded', placementId: 'REWARD' })).toMatchObject(
+      { state: 'available' },
+    );
   });
-  it.each(['no_fill', 'dismissed', 'timeout', 'mismatched'])('preserves reward semantics for %s', async (outcome) => {
-    const f = fixture();
-    f.sdk.ads.showRewardedAsync = async () => ({ requestId: outcome === 'mismatched' ? 'other-request' : 'server-request', status: outcome === 'dismissed' ? 'dismissed' : outcome === 'mismatched' ? 'rewarded' : 'failed', reason: outcome });
-    const provider = createOnePlayAdProvider({ sdk: f.sdk, placementIds: { REWARD: { format: 'rewarded', platformId: 'issued' } }, rewardRequests: { issueRequest: async () => ({ requestId: 'server-request' }) } });
-    const reward = await toAdAdapter(provider).showRewarded({ placementId: 'REWARD', idempotencyKey: 'claim' });
-    expect(reward.rewardGranted).toBe(false);
-    expect(reward.status).toBe(outcome === 'no_fill' ? 'unavailable' : outcome === 'dismissed' ? 'skipped' : 'pending');
-    if (reward.status === 'pending') {
-      expect(reward.evidence?.payload.requestId).toBe('server-request');
-      expect(await provider.getAvailability({ placementId: 'REWARD', format: 'rewarded' })).toMatchObject({ reason: 'busy' });
-    }
-  });
+  it.each(['no_fill', 'dismissed', 'timeout', 'mismatched'])(
+    'preserves reward semantics for %s',
+    async (outcome) => {
+      const f = fixture();
+      f.sdk.ads.showRewardedAsync = async () => ({ requestId: outcome === 'mismatched' ? 'other-request' : 'server-request', status: outcome === 'dismissed' ? 'dismissed' : outcome === 'mismatched' ? 'rewarded' : 'failed', reason: outcome });
+      const provider = createOnePlayAdProvider({
+        sdk: f.sdk,
+        placementIds: { REWARD: { format: 'rewarded', platformId: 'issued' } },
+        rewardRequests: { issueRequest: async () => ({ requestId: 'server-request' }) },
+      });
+      const reward = await toAdAdapter(provider).showRewarded({ placementId: 'REWARD', idempotencyKey: 'claim' });
+      expect(reward.rewardGranted).toBe(false);
+      expect(reward.status).toBe(
+        outcome === 'no_fill' ? 'unavailable' : outcome === 'dismissed' ? 'skipped' : 'pending',
+      );
+      if (reward.status === 'pending') {
+        expect(reward.evidence?.payload.requestId).toBe('server-request');
+        expect(await provider.getAvailability({ placementId: 'REWARD', format: 'rewarded' })).toMatchObject(
+          { reason: 'busy' },
+        );
+      }
+    },
+  );
   it('preserves a newer ringer observation delivered during initialization', async () => {
     const f = fixture();
     f.sdk.initializeAsync = async () => { f.emit('resume', { ringerSilent: true }); return f.info; };
