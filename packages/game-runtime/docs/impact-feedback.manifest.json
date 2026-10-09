@@ -1,0 +1,35 @@
+{
+  "id": "feedback.impact.pool",
+  "kind": "presentation",
+  "capabilities": [
+    "feedback.impact.contact",
+    "feedback.impact.recipe",
+    "feedback.impact.pool"
+  ],
+  "entry": "@mpgd/game-runtime/phaser/impact",
+  "config": {
+    "capacity": {
+      "default": 48,
+      "min": 1,
+      "max": 1024
+    },
+    "maxSparksPerEffect": {
+      "default": 6,
+      "min": 0,
+      "max": 64
+    }
+  },
+  "tests": [
+    "src/impact/index.test.ts",
+    "src/phaser/impact.test.ts"
+  ],
+  "gotchas": [
+    "Emit after authoritative collision resolution.",
+    "Use the same simulation clock for emit and update.",
+    "Full pools recycle slots; clear resets retained state.",
+    "Raster rings require registered texture frames.",
+    "Graphics rebuilds its command buffer while sparks are active.",
+    "Scene shutdown destroys pool-owned objects."
+  ],
+  "acceptance": "pnpm --dir packages/game-runtime test"
+}

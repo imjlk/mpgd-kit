@@ -54,6 +54,14 @@
     "./dom": {
       "types": "./dist/dom/index.d.ts",
       "default": "./dist/dom/index.js"
+    },
+    "./impact": {
+      "types": "./dist/impact/index.d.ts",
+      "default": "./dist/impact/index.js"
+    },
+    "./phaser/impact": {
+      "types": "./dist/phaser/impact.d.ts",
+      "default": "./dist/phaser/impact.js"
     }
   },
   "files": [

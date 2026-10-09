@@ -40,6 +40,8 @@
       "@mpgd/game-runtime/phaser": ["./packages/game-runtime/src/phaser/index.ts"],
       "@mpgd/game-runtime/platform": ["./packages/game-runtime/src/platform/index.ts"],
       "@mpgd/game-runtime/dom": ["./packages/game-runtime/src/dom/index.ts"],
+      "@mpgd/game-runtime/impact": ["./packages/game-runtime/src/impact/index.ts"],
+      "@mpgd/game-runtime/phaser/impact": ["./packages/game-runtime/src/phaser/impact.ts"],
       "@mpgd/game-runtime/ui": ["./packages/game-runtime/src/ui/index.ts"],
       "@mpgd/game-runtime/actions": ["./packages/game-runtime/src/actions/index.ts"],
       "@mpgd/game-runtime/game": ["./packages/game-runtime/src/game/index.ts"],
