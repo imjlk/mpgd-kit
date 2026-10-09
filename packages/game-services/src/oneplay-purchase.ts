@@ -86,6 +86,7 @@ export function createOnePlayPurchaseBoundary(input: {
   const { client, store } = input;
   const deploymentTarget = onePlayIdentifier(input.deploymentTarget ?? 'oneplay');
   const now = input.now ?? Date.now;
+  // Provider and application clocks may differ within the five-minute verification tolerance.
   async function inspect(request: { readonly productId: string; readonly purchaseToken: string; readonly signal: AbortSignal }): Promise<OnePlayInspectedPurchase | undefined> {
     request.signal.throwIfAborted();
     const purchaseToken = onePlayIdentifier(request.purchaseToken, 4096);
@@ -106,7 +107,7 @@ export function createOnePlayPurchaseBoundary(input: {
     request.signal.throwIfAborted();
     if (intent === undefined || !validIntent(intent) || intent.clientId !== client.clientId || intent.environment !== client.environment || intent.marketCode !== client.marketCode
       || intent.deploymentTarget !== deploymentTarget || intent.platformProductId !== request.productId || intent.developerPayload !== raw.developerPayload
-      || raw.purchaseTime < intent.issuedAt || raw.purchaseTime > intent.expiresAt) {
+      || raw.purchaseTime < intent.issuedAt - 300_000 || raw.purchaseTime > intent.expiresAt + 300_000) {
       return undefined;
     }
     const digest = new Uint8Array(

@@ -147,7 +147,7 @@ export function createOnePlaySsvReceiver(input: {
       if (decision.status !== 'verified') { return decision; }
       const binding = await input.store.findByRequest({ applicationId, requestId: decision.requestId });
       if (binding === undefined || !validBinding(binding) || binding.applicationId !== applicationId || binding.requestId !== decision.requestId
-        || receivedAt < binding.issuedAt || receivedAt > binding.expiresAt) { return { status: 'rejected', reason: 'ONEPLAY_SSV_BINDING_INVALID' }; }
+        || receivedAt < binding.issuedAt - 300_000 || receivedAt > binding.expiresAt + 300_000) { return { status: 'rejected', reason: 'ONEPLAY_SSV_BINDING_INVALID' }; }
       await input.store.recordReceipt({ applicationId, requestId: decision.requestId, receipt: {
         rawBody: new Uint8Array(callback.rawBody), timestamp: callback.timestamp, signature: callback.signature, receivedAt,
       } });
@@ -197,7 +197,7 @@ export function createOnePlayAdRewardVerifier(input: {
       const receipt = await input.store.findReceipt({ applicationId, requestId: binding.requestId });
       signal.throwIfAborted();
       if (receipt === undefined) { return { status: 'pending', reason: 'ONEPLAY_SSV_PENDING' }; }
-      if (!Number.isSafeInteger(receipt.receivedAt) || receipt.receivedAt < binding.issuedAt || receipt.receivedAt > binding.expiresAt || receipt.receivedAt > now()) {
+      if (!Number.isSafeInteger(receipt.receivedAt) || receipt.receivedAt < binding.issuedAt - 300_000 || receipt.receivedAt > binding.expiresAt + 300_000 || receipt.receivedAt > now() + 300_000) {
         return { status: 'rejected', reason: 'ONEPLAY_SSV_BINDING_INVALID' };
       }
       const verified = await verifyOnePlaySsv({ ...receipt, apiKey: input.apiKey }, {

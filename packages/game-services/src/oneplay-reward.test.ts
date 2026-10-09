@@ -205,6 +205,39 @@ const delayed = createOnePlayAdRewardVerifier({
   now: () => now + 600_000,
 });
 assert.equal((await delayed.verify(verifyInput)).status, 'verified'); // receipt is checked at trusted receiver time, not the later claim time.
+const clockStore = new Store();
+const clockIssuer = createOnePlayRewardRequestIssuer({
+  applicationId: 'app',
+  placements,
+  store: clockStore,
+  now: () => now,
+  createRequestId: () => 'clock-request',
+});
+await clockIssuer.issue({
+  playerId: claim.playerId,
+  placementId: claim.placementId,
+  idempotencyKey: 'clock-claim',
+});
+const clockReceiver = createOnePlaySsvReceiver({
+  applicationId: 'app',
+  apiKey: key,
+  store: clockStore,
+  now: () => now - 1000,
+});
+assert.equal(
+  (await clockReceiver.receive(signed('{"requestId":"clock-request","status":"SUCCESS","reason":""}'))).status,
+  'verified',
+);
+const clockVerifier = createOnePlayAdRewardVerifier({
+  applicationId: 'app',
+  apiKey: key,
+  store: clockStore,
+  now: () => now - 2000,
+});
+assert.equal(
+  (await clockVerifier.verify({ ...verifyInput, request: { ...claim, idempotencyKey: 'clock-claim', platformImpressionId: 'clock-request' } })).status,
+  'verified',
+);
 store.receipts.set(issued.requestId, {
   ...store.receipts.get(issued.requestId)!,
   signature: '0'.repeat(64),

@@ -559,7 +559,7 @@ describe('coordinated advertising', () => {
 
 describe('coordinated purchase presentation', () => {
   it('uses adapter presentation facts to release known closure and retain unknown outcomes', async () => {
-    for (const fact of ['closed', 'unknown'] as const) {
+    for (const fact of ['closed', 'unknown', 'not-started'] as const) {
       const state = environment();
       const original = gateway();
       let nativeFact: (event: PurchasePresentationEvent) => void = () => {};

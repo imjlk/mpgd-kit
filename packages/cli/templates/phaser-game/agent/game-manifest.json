@@ -96,6 +96,26 @@
         "SDK earning and physical closure are separate from an authoritative backend ledger grant.",
         "Recover existing claims on startup and resume without reopening SDK UI."
       ]
+    },
+    {
+      "id": "commerce.checkout.verified-intent",
+      "owner": "src/platform/buildGateways/oneplay.ts",
+      "capabilities": [
+        "server-issued-checkout-intent",
+        "managed-purchase-verification",
+        "ledger-before-finalization",
+        "signed-notification-recovery",
+        "durable-cancellation-fence",
+        "native-checkout-presentation",
+        "server-issued-ad-request",
+        "signed-reward-ssv"
+      ],
+      "gotchas": [
+        "ONE play monetization stays unavailable without game-owned authenticated issuer routes and durable intent, receipt, ledger and encrypted client recovery stores.",
+        "SDK player IDs are platform asserted, not authenticated backend identities. Client ad or purchase callbacks never grant.",
+        "Require completed consume/acknowledge before accepting PNS; implement atomic cancellation fencing and authoritative revocation in the game ledger.",
+        "Keep uncertain native outcomes quarantined; SDK resume is not closure proof. Validate issued IDs, SSV, payments and hosting in the real ONE store app."
+      ]
     }
   ],
   "acceptance": [

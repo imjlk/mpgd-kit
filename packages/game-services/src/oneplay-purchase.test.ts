@@ -183,7 +183,7 @@ for (const alteration of [
   { quantity: 2 },
   { purchaseState: 1 },
   { consumptionState: 1 },
-  { purchaseTime: at - 1 },
+  { purchaseTime: at - 300_001 },
   { purchaseTime: at + 90_000_000 },
 ]) {
   const previous = state;
@@ -191,6 +191,10 @@ for (const alteration of [
   assert.equal((await boundary.verifyPurchase(verify)).status, 'rejected');
   state = previous;
 }
+const beforeClockTest = state;
+state = { ...state, purchaseTime: at - 1 };
+assert.equal((await boundary.verifyPurchase(verify)).status, 'verified');
+state = beforeClockTest;
 assert.equal((await ledger.listEntitlementTransactions()).length, 0);
 const first = await backend.purchases.verifyPurchase(request);
 assert.equal(first.verified, true);
@@ -277,6 +281,28 @@ assert.equal(
   await verifyOnePlayPns({ rawBody: new TextEncoder().encode(new TextDecoder().decode(valid).replace('한글 상품', 'modified')), publicKey: licenseKey, client }),
   undefined,
 );
+const missingFinalizerBackend = createGameServicesBackend({
+  catalog,
+  placements: { version: 'test', placements: [] },
+  store: ledger,
+  evidenceVerifier: {
+    verifyPurchase: boundary.verifyPurchase,
+    verifyAdReward: async () => ({ status: 'rejected', reason: 'unsupported' }),
+  },
+});
+const missingFinalizer = createOnePlayPnsReceiver({
+  publicKey: licenseKey,
+  client,
+  boundary,
+  backend: missingFinalizerBackend,
+  onCancelled: async () => {
+    throw new Error('Unexpected cancellation');
+  },
+});
+assert.deepEqual(await missingFinalizer.receive(valid), {
+  status: 'pending',
+  reason: 'ONEPLAY_FINALIZATION_REQUIRED',
+});
 const cancellations = new Set<string>();
 const pns = createOnePlayPnsReceiver({
   publicKey: licenseKey,

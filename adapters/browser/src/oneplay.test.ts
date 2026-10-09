@@ -126,6 +126,23 @@ describe('ONE play H5 adapter', () => {
     await commerce.restore?.();
     expect(f.server.restore).toHaveBeenCalledOnce();
   });
+  it('reports a busy SDK as not started before rejecting so another coordinator can release its lease', async () => {
+    const f = commerceFixture();
+    const ads = createOnePlayAdProvider({ sdk: f.sdk, placementIds });
+    const ad = ads.show(show);
+    const commerce = createOnePlayCommerceAdapter(f);
+    const facts: string[] = [];
+    commerce.presentation?.subscribe((event) => facts.push(event.state));
+    expect(() => commerce.purchase({ productId: 'COINS', source: 'shop', idempotencyKey: 'busy' })).toThrow(
+      'The platform operation failed.',
+    );
+    expect(facts).toEqual(['not-started']);
+    expect(f.purchase).not.toHaveBeenCalled();
+    await ad;
+    expect((await commerce.purchase({ productId: 'COINS', source: 'shop', idempotencyKey: 'retry' })).status).toBe(
+      'completed',
+    );
+  });
   it('keeps purchase support independent from product detail support', async () => {
     const f = commerceFixture();
     const sdk: OnePlaySdk = {

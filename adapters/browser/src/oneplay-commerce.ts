@@ -77,7 +77,7 @@ export function createOnePlayCommerceAdapter(input: {
         for (const listener of listeners) { try { listener(event); } catch { /* Observers cannot change native ownership. */ } }
       };
       if (sdk === undefined || iap?.isSupported('purchase') !== true || server === undefined || product === undefined) { emit('not-started'); return Promise.resolve({ status: 'failed', entitlementIds: [] }); }
-      if (onePlayFullscreenOwners.has(sdk)) { throw new PlatformOperationError({ code: 'ONEPLAY_BUSY', retryable: false }); }
+      if (onePlayFullscreenOwners.has(sdk)) { emit('not-started'); throw new PlatformOperationError({ code: 'ONEPLAY_BUSY', retryable: false }); }
       const owner = {};
       onePlayFullscreenOwners.set(sdk, owner);
       const release = () => { if (onePlayFullscreenOwners.get(sdk) === owner) { onePlayFullscreenOwners.delete(sdk); } };

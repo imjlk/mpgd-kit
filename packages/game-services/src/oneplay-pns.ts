@@ -119,7 +119,7 @@ export function createOnePlayPnsReceiver(input: {
           purchaseToken: purchase.purchaseToken, purchaseId: purchase.purchaseId, productId: intent.platformProductId, developerPayload: intent.developerPayload,
         } } });
       signal.throwIfAborted();
-      if (!grant.verified || grant.finalization?.status === 'pending') { return { status: 'pending', reason: grant.reason ?? grant.finalization?.reason ?? 'ONEPLAY_LEDGER_PENDING' }; }
+      if (!grant.verified || grant.finalization?.status !== 'completed') { return { status: 'pending', reason: grant.reason ?? grant.finalization?.reason ?? (grant.verified && grant.finalization === undefined ? 'ONEPLAY_FINALIZATION_REQUIRED' : 'ONEPLAY_LEDGER_PENDING') }; }
       return { status: 'processed', state: 'completed', grant };
     },
   };
