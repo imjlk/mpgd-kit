@@ -524,7 +524,8 @@ function renderStatus(): void {
   };
   element('delivery').textContent = deliveryLabels[deliveryMode ?? '']
     ?? (__ASSET_PACK_MODE__ === 'bundled' ? 'ALL PACKS BUNDLED' : 'SHARED BUNDLED / THEMES ON STATIC ORIGIN');
-  element('status').textContent = statusText();
+  element('status').textContent = model.error && model.phase !== 'error'
+    ? `${statusText()} · ${model.error}` : statusText();
   const progress = element<HTMLProgressElement>('progress');
   progress.max = Math.max(1, model.total);
   progress.value = model.ready;

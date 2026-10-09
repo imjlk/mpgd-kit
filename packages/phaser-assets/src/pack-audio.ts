@@ -159,7 +159,13 @@ export async function preparePhaserPackAudio(
     throw error;
   } finally {
     if (!retained) {
-      clear();
+      // Preparation already rejected. Attempt every cleanup action without
+      // replacing that error (or an engine remove error) with a media error.
+      try {
+        clear();
+      } catch {
+        // Disposal still surfaces cleanup errors through the loader.
+      }
     }
   }
 }

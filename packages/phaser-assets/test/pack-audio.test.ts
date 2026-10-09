@@ -44,6 +44,28 @@ afterEach(() => {
   vi.useRealTimers();
 });
 describe('owned audio pack resources', () => {
+  it('preserves preparation failure when HTML5 cleanup also fails', async () => {
+    const f = fixture();
+    Object.assign(f.scene.sound, { context: undefined, override: true });
+    const revoke = vi.spyOn(URL, 'revokeObjectURL');
+    vi.stubGlobal('Audio', class extends EventTarget {
+      duration = 1;
+      preload = '';
+      src = '';
+      dataset: Record<string, string> = {};
+      pause() { throw new Error('secondary cleanup failure'); }
+      removeAttribute() { this.src = ''; }
+      load() {
+        if (this.src) {
+          queueMicrotask(() => this.dispatchEvent(new Event('error')));
+        }
+      }
+    });
+    const loader = createPhaserAssetPackLoader(f.scene, catalog);
+    await expect(loader.acquire('sound')).rejects.toThrow('HTML5 Audio preparation failed');
+    expect(revoke).toHaveBeenCalledTimes(1);
+    expect(loader.snapshot()).toEqual([]);
+  });
   it('attempts HTML5 source/URL cleanup even when pausing the media element throws', async () => {
     const f = fixture();
     Object.assign(f.scene.sound, { context: undefined, override: true, locked: false });
