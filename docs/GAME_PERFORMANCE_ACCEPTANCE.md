@@ -22,7 +22,8 @@ scenario, renderer, device, minimum sample count (at least two), and 1–66 metr
 budgets: the two built-ins (`intervalMs`, `totalCpuMs`) plus at most 64 custom
 names of at most 64 characters matching `[a-z][a-zA-Z0-9]*`, excluding
 `constructor` and `prototype`. Metric names match the profiler snapshot; thresholds `p95`, `p99` and
-`max` are milliseconds. Choose limits for the actual device/scenario. There is
+`max` use that metric's units. Built-ins and measured CPU spans use milliseconds;
+consumer-authored counters retain their own units. Choose limits for the actual device/scenario. There is
 no global FPS threshold.
 
 ```json
