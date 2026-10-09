@@ -64,6 +64,28 @@ await assert.rejects(runtime.client.purchase({
 }), (error) => error instanceof GameServicesBackendError && error.status === 503);
 assert.equal(defaultFetchCalls, 0);
 
+const onePlayModules = await Promise.all([
+  import('@mpgd/game-services/oneplay-purchase-client'),
+  import('@mpgd/game-services/oneplay-purchase'),
+  import('@mpgd/game-services/oneplay-pns'),
+]);
+assert.equal(typeof onePlayModules[0].createOnePlayPurchaseClient, 'function');
+assert.equal(typeof onePlayModules[1].createOnePlayCheckoutIntentIssuer, 'function');
+assert.equal(typeof onePlayModules[1].createOnePlayPurchaseBoundary, 'function');
+assert.equal(typeof onePlayModules[2].verifyOnePlayPns, 'function');
+const onePlayRuntime = createGameServicesRuntime({
+  gateway: { ...gateway, target: 'oneplay' },
+  playerId: 'packed-player', authorityMode: 'production', baseUrl: 'https://api.example.com',
+  getHeaders: () => ({ authorization: 'Bearer own-session' }),
+  httpTransport: { async send(request) {
+    assert.equal(request.body.target, 'oneplay');
+    assert.equal(request.headers.authorization, 'Bearer own-session');
+    return { status: 200, body: { verified: true, ledgerEntryId: 'oneplay-ledger', alreadyProcessed: false } };
+  } },
+});
+assert.equal((await onePlayRuntime.client.purchase({ productId: 'COINS', source: 'shop', idempotencyKey: 'oneplay' })).status, 'granted');
+assert.equal(defaultFetchCalls, 0);
+
 const secureValues = new Map();
 const guest = createGuestSessionCoordinator({
   installationId: 'packed-installation',

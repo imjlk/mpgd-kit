@@ -636,7 +636,8 @@ function isGameServicesCommerceTarget(
     || target === 'android'
     || target === 'ios'
     || target === 'ait'
-    || target === 'verse8';
+    || target === 'verse8'
+    || target === 'oneplay';
 }
 
 function isGameServicesLeaderboardTarget(

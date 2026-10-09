@@ -75,3 +75,9 @@ validate a deployed game server or replace game-owned production evidence.
   bootstrap monetization ports. A test memory store is not durable recovery.
 - Use the real adapter's SDK-driven conformance tests and a game-owned platform
   test environment; generic unit tests do not certify live ad delivery.
+
+## ONE play acceptance
+
+Build and smoke the configured ONE play target using the game-owned kit path. Validate server-issued reward/checkout binding, raw-byte signed SSV, purchase token API verification, ledger-before-consume/acknowledge, retries without duplicate grants, signed PNS orphan-purchase recovery and atomic cancellation fences. Missing finalization must keep PNS pending; a busy SDK must report native not-started before rejecting a new checkout. Permit five minutes of provider/server clock skew while rejecting timestamps outside the intent window.
+
+Use an authenticated server session rather than the SDK player pseudonym. Confirm ad IDs, real payments, lifecycle, HTTPS iframe hosting and PNS/SSV in ONE store with issued ONEconsole credentials. Generic fixture and artifact smoke do not certify real-app commerce.

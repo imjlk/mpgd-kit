@@ -202,7 +202,16 @@ export interface BannerAdMountResult {
   readonly status: 'mounted' | 'unavailable' | 'failed';
 }
 
+export interface PlatformPurchasePresentationEvent {
+  readonly idempotencyKey: string;
+  readonly sequence: number;
+  readonly state: 'open' | 'closed' | 'not-started' | 'unknown';
+}
+
 export interface CommerceAdapter {
+  /** Trusted native presentation facts, independent of the purchase grant result. */
+  readonly presentation?: { subscribe(listener: (event: PlatformPurchasePresentationEvent) => void): () => void };
+
   getProducts(): Promise<readonly ProductInfo[]>;
   purchase(input: {
     readonly productId: LogicalProductId;

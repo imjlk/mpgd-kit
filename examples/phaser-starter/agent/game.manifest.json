@@ -28,15 +28,15 @@
         "target": "ait",
         "server": "apps-in-toss",
         "queries": [
-          "웹뷰 개발",
-          "인앱 결제",
-          "인앱 광고",
-          "사용자 식별키",
-          "공유 링크",
-          "알림 동의",
-          "샌드박스",
-          "심사",
-          "저장소"
+          "\uc6f9\ubdf0 \uac1c\ubc1c",
+          "\uc778\uc571 \uacb0\uc81c",
+          "\uc778\uc571 \uad11\uace0",
+          "\uc0ac\uc6a9\uc790 \uc2dd\ubcc4\ud0a4",
+          "\uacf5\uc720 \ub9c1\ud06c",
+          "\uc54c\ub9bc \ub3d9\uc758",
+          "\uc0cc\ub4dc\ubc15\uc2a4",
+          "\uc2ec\uc0ac",
+          "\uc800\uc7a5\uc18c"
         ]
       },
       {
@@ -222,6 +222,27 @@
         "SDK earning and physical closure are separate from an authoritative backend ledger grant.",
         "Recover existing claims on startup and resume without reopening SDK UI."
       ]
+    },
+    {
+      "id": "commerce.checkout.verified-intent",
+      "kind": "platform",
+      "entry": "src/platform/buildGateways/oneplay.ts",
+      "capabilities": [
+        "server-issued-checkout-intent",
+        "managed-purchase-verification",
+        "ledger-before-finalization",
+        "signed-notification-recovery",
+        "durable-cancellation-fence",
+        "native-checkout-presentation",
+        "server-issued-ad-request",
+        "signed-reward-ssv"
+      ],
+      "gotchas": [
+        "ONE play monetization stays unavailable without game-owned authenticated issuer routes and durable intent, receipt, ledger and encrypted client recovery stores.",
+        "SDK player IDs are platform asserted, not authenticated backend identities. Client ad or purchase callbacks never grant.",
+        "Require completed consume/acknowledge before accepting PNS; implement atomic cancellation fencing and authoritative revocation in the game ledger.",
+        "Keep uncertain native outcomes quarantined; SDK resume is not closure proof. Validate issued IDs, SSV, payments and hosting in the real ONE store app."
+      ]
     }
   ],
   "acceptance": {
@@ -233,7 +254,9 @@
       "pnpm --dir examples/phaser-starter check",
       "pnpm --dir examples/phaser-starter build",
       "pnpm build:wechat",
-      "pnpm smoke:wechat"
+      "pnpm smoke:wechat",
+      "pnpm build:oneplay",
+      "pnpm smoke:target oneplay"
     ],
     "manual": [
       "Target, player, effective config, and backend mode render on the starter screen.",
@@ -242,7 +265,8 @@
       "The play scene updates from serializable simulation state.",
       "Viewport orientation policy is visible and does not force unsafe WebView hard locks.",
       "Safe-area geometry is reserved exactly once: CSS-padded containers do not also subtract safeArea.contentBounds, while full-bleed surfaces use the snapshot bounds.",
-      "WeChat DevTools and a physical device load runtime.js before game.bundle.js, enter the Phaser scene, load the PNG marker, and preserve touch coordinates."
+      "WeChat DevTools and a physical device load runtime.js before game.bundle.js, enter the Phaser scene, load the PNG marker, and preserve touch coordinates.",
+      "ONE play issued-placement SSV, managed-purchase token verification, consume/acknowledge recovery, PNS signature validation and cancellation fences are tested with a game-owned server in the real app."
     ]
   }
 }

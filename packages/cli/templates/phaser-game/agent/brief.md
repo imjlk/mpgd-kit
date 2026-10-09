@@ -48,3 +48,7 @@ projection. Add SDKs only in target assembly or adapters. All rewarded views use
 the game-owned action coordinator and authoritative services, with an
 application-owned durable encrypted operation store. Keep recovery above scenes
 and reconcile existing operations on startup and resume without opening SDK UI.
+
+## ONE play server-owned monetization
+
+Specify issued placement/product IDs, the authenticated reward and checkout intent routes, durable SSV/intent/ledger stores, an encrypted client operation journal, and reconciliation plus atomic cancellation fencing. Keep monetization disabled until these ports are wired. Purchase/ad callbacks are evidence; backend grants precede consume/acknowledge. Separate confirmed checkout closure from financial completion. Plan real-app acceptance with ONEconsole credentials and hosting headers.
