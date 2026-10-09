@@ -2289,6 +2289,14 @@ describe('readFile', () => {
     }
     const delivery = createPhaserPackDelivery(manifest, { baseUrl: origin.url });
     const cleanup: string[] = [];
+    const events: PhaserPackDeliveryEvent[] = [];
+    let cleanupAtCompletion: readonly string[] | undefined;
+    delivery.subscribe((event) => {
+      if (event.kind === 'file-read') { events.push(event); }
+      if (event.kind === 'file-read' && event.phase === 'completed') {
+        cleanupAtCompletion = [...cleanup];
+      }
+    });
     const original = delivery.fileSource.open;
     vi.spyOn(delivery.fileSource, 'open').mockImplementation(async (request, context) => {
       const opened = await original(request, context);
@@ -2305,6 +2313,12 @@ describe('readFile', () => {
     if (corrupt) { await expect(pending).rejects.toMatchObject({ code: 'integrity' }); } else { expect((await pending).size).toBe(pngBytes.length); }
     expect(bytes).toHaveBeenCalledWith(pngBytes.length, expect.any(AbortSignal));
     expect(cleanup).toEqual(['transfer', 'body', 'reader', 'bytes']);
+    const terminals = events.filter((event) => ['completed', 'failed', 'cancelled', 'disposed'].includes(event.phase));
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0]?.phase).toBe(corrupt ? 'failed' : 'completed');
+    if (!corrupt) { expect(cleanupAtCompletion).toEqual(['transfer', 'body', 'reader', 'bytes']); }
+    if (corrupt) { expect(terminals[0]?.error?.code).toBe('integrity'); }
+    expect(new Set(events.map((event) => event.operationId)).size).toBe(1);
     delivery.dispose();
   });
   it.each(['cancel', 'dispose'] as const)('rejects missing roles and %ss while waiting on the byte budget', async (end) => {
@@ -2360,6 +2374,27 @@ describe('preparation terminal retries', () => {
     expect(delivery.snapshot().archiveRequests).toBe(2);
     expect(delivery.snapshot().staging[0]?.handles).toBe(1);
     handle.release();
+    delivery.dispose();
+  });
+});
+
+describe('readFile budget denials', () => {
+  it.each(['bytes', 'transfers'] as const)('classifies %s permit rejection and returns owned resources', async (port) => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'files' }]);
+    for (const [path, file] of packFiles) { origin.files.set(path, file); }
+    const delivery = createPhaserPackDelivery(manifest, { baseUrl: origin.url });
+    const limits = budgets();
+    limits[port].acquire = async () => { throw new Error('capacity exceeded'); };
+    const events: PhaserPackDeliveryEvent[] = [];
+    delivery.subscribe((event) => { if (event.kind === 'file-read') { events.push(event); } });
+    await expect(delivery.readFile('solo', 'pilot', undefined, { budgets: limits })).rejects.toMatchObject({
+      code: 'budget', details: { kind: 'file-read', packId: 'solo', assetKey: 'pilot', role: 'texture' },
+    });
+    expect(events.at(-1)).toMatchObject({ phase: 'failed', error: { code: 'budget' } });
+    expect(origin.requests).toEqual([]);
+    expect(delivery.snapshot().staging).toEqual([]);
     delivery.dispose();
   });
 });

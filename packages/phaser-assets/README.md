@@ -607,3 +607,12 @@ permits; defaults are unlimited permits within the delivery's existing staging,
 transport byte and timeout limits. Returned Blobs belong to the caller and no
 longer hold internal budget permits. `signal` cancels preparation, budget waits,
 transfer and acceptance, and disposal aborts in-progress reads.
+
+For `readFile`, the observed file-read operation remains open through integrity
+verification and cache acceptance; it emits one terminal after owned cleanup.
+Transport progress keeps the same operation ID. Supplied permit denials surface
+as `PhaserPackDeliveryError` with `code: 'budget'` and file context; cancellation
+and disposal retain their own categories. Advanced `fileSource` consumers retain
+their existing transport-only event semantics and own subsequent verification.
+For sequential reads of multiple ZIP entries, retain one outer `prepare()` handle
+around the batch to avoid repeatedly restaging an otherwise-unowned archive.
