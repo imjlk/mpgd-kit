@@ -580,6 +580,32 @@ assertDeepEqual(delegatedCalls, ['preload:CONTINUE_AFTER_FAIL', 'showRewarded'])
 delegatedCalls.length = 0;
 
 const androidConfig = getTargetConfig(targetConfigMatrix, 'android');
+const crazyGamesConfig: TargetConfig = {
+  ...androidConfig,
+  runtime: 'crazygames-web',
+  release: { profile: 'crazygames' },
+  integrations: {
+    identityUpgrade: 'unsupported',
+    presentation: 'available',
+    sharing: 'unsupported',
+    inboundShare: 'unsupported',
+    notifications: 'unsupported',
+    presentationMode: 'fullscreen',
+  },
+};
+for (const launch of ['basic', 'full'] as const) {
+  const effective = createEffectiveTargetConfig({
+    target: 'crazygames',
+    targetConfigVersion: 'test',
+    config: crazyGamesConfig,
+    catalog: productCatalog,
+    adPlacements,
+    platformTarget: { kind: 'web', adapter: 'crazygames', crazyGamesLaunch: launch },
+  });
+  assertEqual(effective.ads.interstitialAds, launch === 'full');
+  assertEqual(effective.ads.rewardedAds, false);
+  assertEqual(effective.monetization.iap, false);
+}
 const androidEffectiveConfig = createEffectiveTargetConfig({
   target: 'android',
   targetConfigVersion: targetConfigMatrix.version,

@@ -43,6 +43,7 @@ const releaseProfileByRuntime = {
   'apps-in-toss': 'apps-in-toss',
   'devvit-web': 'devvit',
   'verse8-web': 'verse8',
+  'crazygames-web': 'crazygames',
   'wechat-minigame': 'wechat-minigame',
   'tiktok-minigame': 'tiktok-minigame',
 } as const satisfies Record<TargetRuntimeKind, ReleaseProfile>;

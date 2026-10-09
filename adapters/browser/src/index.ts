@@ -5,6 +5,7 @@ import {
   type IdentitySession,
   type LaunchEntry,
   type LaunchIntent,
+  type LifecycleAdapter,
   type PlatformGateway,
   type PlayerIdentity,
   type ProductInfo,
@@ -34,6 +35,8 @@ const mockProducts = [
 ] as const satisfies readonly ProductInfo[];
 
 export interface BrowserPlatformGatewayOptions {
+  /** Supply a lifecycle owner when embedding the browser adapter. */
+  readonly lifecycle?: LifecycleAdapter;
   readonly locationHref?: string;
   readonly share?: (data: ShareData) => Promise<void>;
   readonly writeClipboardText?: (text: string) => Promise<void>;
@@ -65,7 +68,7 @@ export function createBrowserPlatformGateway(
   const shareSupported = canShare(options);
   const mockCommerce = options.mockCommerce === true;
 
-  if (typeof document !== 'undefined') {
+  if (options.lifecycle === undefined && typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
       const listeners = document.hidden ? pauseListeners : resumeListeners;
 
@@ -146,7 +149,7 @@ export function createBrowserPlatformGateway(
       },
       async open() {},
     },
-    lifecycle: {
+    lifecycle: options.lifecycle ?? {
       onPause(callback) {
         pauseListeners.add(callback);
         return () => pauseListeners.delete(callback);

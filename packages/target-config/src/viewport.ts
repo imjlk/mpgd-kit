@@ -303,6 +303,7 @@ export function targetViewportShellForRuntime(
       return 'mobile-webview';
     case 'devvit-web':
     case 'verse8-web':
+    case 'crazygames-web':
       return 'embedded-webview';
     case 'wechat-minigame':
     case 'tiktok-minigame':

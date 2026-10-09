@@ -78,6 +78,35 @@ function audioSink(initial = false) {
 const gameplayChannels = ['simulation', 'gameplay-input'] as const;
 
 describe('Phaser scene execution binding (headless fakes)', () => {
+  it('reports external scene activity and disposes its scope before restoring an owned pause', () => {
+    const controller = createGameExecutionController();
+    const gameplay = fakeScene('creating');
+    const scope = { setActive: vi.fn(), dispose: vi.fn() };
+    const binding = bindPhaserGameScene({
+      controller, scene: gameplay.scene, gameplayScope: scope,
+      renderingPolicy: 'visibility', audioOwner: 'game', resetInput: () => {}, onUnsupportedState: () => {},
+    });
+    expect(scope.setActive).toHaveBeenLastCalledWith(false);
+    gameplay.created();
+    expect(scope.setActive).toHaveBeenLastCalledWith(true);
+    const pause = controller.acquireBlock({ reason: 'ad', channels: gameplayChannels });
+    // The logical scene stays in play while the runtime independently owns the physical pause.
+    expect(scope.setActive).toHaveBeenLastCalledWith(true);
+    pause.release();
+    gameplay.sys.pause();
+    expect(scope.setActive).toHaveBeenLastCalledWith(false);
+    gameplay.sys.resume();
+    expect(scope.setActive).toHaveBeenLastCalledWith(true);
+    gameplay.sleep();
+    expect(scope.setActive).toHaveBeenLastCalledWith(false);
+    gameplay.wake();
+    expect(scope.setActive).toHaveBeenLastCalledWith(true);
+    controller.acquireBlock({ reason: 'ad', channels: gameplayChannels });
+    gameplay.sys.events.on('resume', () => expect(scope.dispose).toHaveBeenCalledTimes(1));
+    binding.dispose();
+    expect(scope.dispose).toHaveBeenCalledTimes(1);
+    expect(gameplay.listenerCount()).toBe(1);
+  });
   it.each(['error-observer', 'sink'] as const)(
     'guards disposal retry reentry from %s',
     (origin) => {

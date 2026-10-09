@@ -252,6 +252,7 @@ function toEffectivePlatformTargetMetadata(
       return {
         ...base,
         output: config.output,
+        ...(config.crazyGamesLaunch === undefined ? {} : { crazyGamesLaunch: config.crazyGamesLaunch }),
       };
     case 'capacitor-android':
     case 'capacitor-ios':
@@ -291,6 +292,7 @@ function platformKindForRuntime(runtime: EffectiveTargetConfig['runtime']): stri
     case 'devvit-web':
       return 'devvit-web';
     case 'verse8-web':
+    case 'crazygames-web':
       return 'web';
     case 'wechat-minigame':
       return 'wechat-minigame';
@@ -315,6 +317,8 @@ function platformAdapterForRuntime(runtime: EffectiveTargetConfig['runtime']): s
       return 'devvit';
     case 'verse8-web':
       return 'verse8';
+    case 'crazygames-web':
+      return 'crazygames';
     case 'wechat-minigame':
       return 'wechat';
     case 'tiktok-minigame':

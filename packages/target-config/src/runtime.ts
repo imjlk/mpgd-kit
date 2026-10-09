@@ -35,6 +35,7 @@ export type TargetRuntimeKind =
   | 'apps-in-toss'
   | 'devvit-web'
   | 'verse8-web'
+  | 'crazygames-web'
   | 'wechat-minigame'
   | 'tiktok-minigame';
 
@@ -47,6 +48,7 @@ export type ReleaseProfile =
   | 'apps-in-toss'
   | 'devvit'
   | 'verse8'
+  | 'crazygames'
   | 'wechat-minigame'
   | 'tiktok-minigame';
 
@@ -231,6 +233,13 @@ export const targetIntegrations = [
 
 type IntegrationUpperBound = 'available' | 'disabled' | 'unsupported';
 const integrationUpperBoundsByRuntime = {
+  'crazygames-web': {
+    identityUpgrade: 'unsupported',
+    presentation: 'available',
+    sharing: 'unsupported',
+    inboundShare: 'unsupported',
+    notifications: 'unsupported',
+  },
   'tiktok-minigame': {
     identityUpgrade: 'unsupported',
     presentation: 'available',
@@ -260,7 +269,7 @@ const integrationUpperBoundsByRuntime = {
     notifications: 'unsupported',
   },
 } as const satisfies Record<
-  'tiktok-minigame' | 'verse8-web' | 'web-preview' | 'wechat-minigame',
+  'tiktok-minigame' | 'verse8-web' | 'web-preview' | 'wechat-minigame' | 'crazygames-web',
   Record<TargetIntegration, IntegrationUpperBound>
 >;
 
@@ -346,6 +355,7 @@ export function assertTargetIntegrationRuntimeBounds(
   if (
     runtime !== 'tiktok-minigame'
     && runtime !== 'verse8-web'
+    && runtime !== 'crazygames-web'
     && runtime !== 'web-preview'
     && runtime !== 'wechat-minigame'
   ) {

@@ -31,6 +31,7 @@ export class PlayScene extends Phaser.Scene {
     this.context = this.registry.get(starterContextKey) as StarterContext;
     bindPhaserGameScene({
       controller: this.context.gameRuntime.execution,
+      gameplayScope: this.context.gameRuntime.createGameplayScope(),
       scene: this,
       renderingPolicy: 'visibility',
       audioOwner: 'game',

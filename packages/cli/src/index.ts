@@ -333,6 +333,7 @@ const recommendedMatrixTargetOrder = [
   'web-preview',
   'microsoft-store',
   'verse8',
+  'crazygames',
   'ait',
   'reddit',
 ] as const;
@@ -340,6 +341,7 @@ const allMatrixTargetOrder = [
   'web-preview',
   'microsoft-store',
   'verse8',
+  'crazygames',
   'android',
   'ios',
   'ait',

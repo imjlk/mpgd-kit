@@ -1,5 +1,6 @@
 import type Phaser from 'phaser';
 
+import type { GameGameplayScope } from '../game/index.js';
 import type { GameExecutionController, GameExecutionSnapshot } from '../index.js';
 
 export interface GameplayAudioSink {
@@ -27,6 +28,7 @@ export interface BindPhaserGameSceneInput {
   /** A game-owned bindGameAudio projection survives this scene's disposal. */
   readonly audioOwner?: 'scene' | 'game';
   readonly uiScope?: { dispose(): void };
+  readonly gameplayScope?: GameGameplayScope;
   /** Phaser pause also suspends input: simulation-only blocking cannot preserve active input. */
   readonly onUnsupportedState: (
     snapshot: GameExecutionSnapshot,
@@ -60,6 +62,7 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
   let ownedVisibility = false;
   let ownedAudio = false;
   let inputBlocked = false;
+  let externallyInactive = scene.sys.isPaused();
   const ownedInput = new Set<{ enabled: boolean }>();
   let unsubscribe = () => {};
 
@@ -139,6 +142,7 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
       }
       disposed = true;
       attempt(unsubscribe);
+      attempt(() => input.gameplayScope?.dispose());
       // Keep shutdown observation installed while restoration calls into consumer/engine code.
       if (mode !== 'terminal') {
         attempt(() => {
@@ -182,12 +186,15 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
   function onPause(): void {
     if (!disposed && !applying) {
       ownedPause = false;
+      externallyInactive = true;
+      attempt(() => input.gameplayScope?.setActive(false));
     }
   }
 
   function onResume(): void {
     if (!disposed && !applying) {
       ownedPause = false;
+      externallyInactive = false;
       apply();
     }
   }
@@ -196,9 +203,12 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
     // External sleep owns activity/visibility until an external wake. Never wake it ourselves.
     ownedPause = false;
     ownedVisibility = false;
+    externallyInactive = true;
+    attempt(() => input.gameplayScope?.setActive(false));
   }
 
   function onWake(): void {
+    externallyInactive = false;
     if (controller.getSnapshot().blocked['gameplay-input']) {
       inputBlocked = false;
     }
@@ -220,6 +230,11 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
           dispose('terminal');
           break;
         }
+        attempt(() =>
+          input.gameplayScope?.setActive(
+            !externallyInactive && (scene.sys.isActive() || scene.sys.isPaused()),
+          ),
+        );
         const blocked = snapshot.blocked;
         const simulationUnsupported = blocked.simulation && !blocked['gameplay-input'];
         const audioUnsupported = blocked.audio && audio === undefined && input.audioOwner !== 'game';

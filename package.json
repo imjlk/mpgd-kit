@@ -58,7 +58,7 @@
     "test:icons": "node tools/run-ttsx.mjs tools/icons/icons.test.ts",
     "test:package-build": "node tools/run-ttsx.mjs tools/package/build-fingerprint.test.ts && node tools/run-ttsx.mjs tools/package/build-scheduler.test.ts",
     "test:native-ios-signing": "node tools/run-ttsx.mjs tools/target/native-ios-signing.test.ts",
-    "test:target-artifacts": "node tools/run-ttsx.mjs tools/target/platform-targets.test.ts && node tools/run-ttsx.mjs tools/target/minigame-package-budget.test.ts && node tools/run-ttsx.mjs tools/target/minigame-project-files.test.ts && node tools/run-ttsx.mjs tools/target/minigame-artifact.test.ts && node tools/run-ttsx.mjs --project examples/phaser-starter/tsconfig.minigame-bridge-test.json examples/phaser-starter/src/platform/minigameBridgeLifecycle.test.ts && node tools/run-ttsx.mjs --project examples/phaser-starter/tsconfig.text-selection-test.json examples/phaser-starter/src/platform/textSelection.test.ts && node tools/run-ttsx.mjs --project examples/phaser-starter/tsconfig.minigame-output-test.json examples/phaser-starter/vite.minigame-output.test.ts && MPGD_PLATFORM_TARGETS_FILE=examples/phaser-starter/mpgd.targets.json node tools/run-ttsx.mjs tools/smoke/verify-target-artifacts.test.ts && node tools/run-ttsx.mjs tools/target/web-artifact.test.ts && node tools/run-ttsx.mjs tools/target/native-build-contracts.test.ts",
+    "test:target-artifacts": "node tools/run-ttsx.mjs tools/target/platform-targets.test.ts && node tools/run-ttsx.mjs tools/target/minigame-package-budget.test.ts && node tools/run-ttsx.mjs tools/target/minigame-project-files.test.ts && node tools/run-ttsx.mjs tools/target/minigame-artifact.test.ts && node tools/run-ttsx.mjs --project examples/phaser-starter/tsconfig.minigame-bridge-test.json examples/phaser-starter/src/platform/minigameBridgeLifecycle.test.ts && node tools/run-ttsx.mjs --project examples/phaser-starter/tsconfig.text-selection-test.json examples/phaser-starter/src/platform/textSelection.test.ts && node tools/run-ttsx.mjs --project examples/phaser-starter/tsconfig.minigame-output-test.json examples/phaser-starter/vite.minigame-output.test.ts && MPGD_PLATFORM_TARGETS_FILE=examples/phaser-starter/mpgd.targets.json node tools/run-ttsx.mjs tools/smoke/verify-target-artifacts.test.ts && node tools/run-ttsx.mjs tools/target/web-artifact.test.ts && node tools/run-ttsx.mjs tools/target/native-build-contracts.test.ts && node tools/run-ttsx.mjs tools/target/crazygames-artifact.test.ts",
     "test:workspaces": "pnpm -r --if-present test",
     "test:workspaces:prepared": "pnpm -r --workspace-concurrency=1 --filter @mpgd/i18n --filter @mpgd/game-runtime --filter @mpgd/phaser-minigame-runtime --filter @mpgd/adapter-wechat --if-present test && pnpm -r --filter '!@mpgd/app-game-services-worker' --filter '!@mpgd/i18n' --filter '!@mpgd/game-runtime' --filter '!@mpgd/phaser-minigame-runtime' --filter '!@mpgd/adapter-wechat' --filter '!{.}' --if-present test",
     "validate:catalog": "node tools/run-ttsx.mjs tools/validate-product-catalog.ts",
@@ -172,7 +172,8 @@
     "sampo:publish": "sampo publish",
     "sampo:pre": "sampo pre",
     "smoke:game-services:dist": "node packages/game-services/test/operation-progress-import.mjs && ttsc --noEmit -p packages/game-services/test/operation-progress-types.json && ttsc --noEmit -p packages/game-services/test/operations-headless-types.json",
-    "smoke:cli-asset-pack-verify": "node tools/run-ttsx.mjs tools/smoke/cli-asset-pack-verify.ts"
+    "smoke:cli-asset-pack-verify": "node tools/run-ttsx.mjs tools/smoke/cli-asset-pack-verify.ts",
+    "build:crazygames": "pnpm build:target crazygames production"
   },
   "devDependencies": {
     "@mpgd/adapter-devvit": "workspace:*",

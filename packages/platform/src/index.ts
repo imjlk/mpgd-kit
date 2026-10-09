@@ -8,6 +8,7 @@ export type PlatformTarget =
   | 'ait'
   | 'reddit'
   | 'verse8'
+  | 'crazygames'
   | 'telegram'
   | 'tauri'
   | 'wechat'
@@ -550,6 +551,19 @@ export interface SecureCredentialStore {
   remove(input: { readonly key: string }): Promise<void>;
 }
 
+/** Platform telemetry only; it never pauses execution or grants a reward. */
+export interface GameActivityAdapter {
+  /** The host already accounts for focus changes; avoid duplicate gameplay events. */
+  readonly handlesFocusChanges?: boolean;
+  setLoading(loading: boolean): void;
+  setGameplayActive(active: boolean): void;
+}
+/** Host audio policy takes precedence over an in-game sound toggle. */
+export interface GameSettingsAdapter {
+  getAudioMuted(): boolean;
+  onAudioMuteChange(callback: (muted: boolean) => void): () => void;
+}
+
 export interface PlatformGateway {
   readonly target: PlatformTarget;
   getCapabilities(): Promise<PlatformCapabilities>;
@@ -566,6 +580,8 @@ export interface PlatformGateway {
   readonly sharing?: ShareAdapter;
   readonly notifications?: NotificationSubscriptionAdapter;
   readonly promotions?: PromotionRewardAdapter;
+  readonly gameActivity?: GameActivityAdapter;
+  readonly gameSettings?: GameSettingsAdapter;
 }
 
 export function createUnsupportedCapabilities(): PlatformCapabilities {

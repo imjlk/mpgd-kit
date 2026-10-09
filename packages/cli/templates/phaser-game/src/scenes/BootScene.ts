@@ -2,6 +2,8 @@ import Phaser from 'phaser';
 
 import { loadPhaserAssets } from '@mpgd/phaser-assets';
 
+import { starterContextKey, type StarterContext } from '../runtime/gameContext';
+
 import { starterAssets } from '../assets/manifest';
 
 export class BootScene extends Phaser.Scene {
@@ -14,6 +16,7 @@ export class BootScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.scene.start('LobbyScene');
+    const context = this.registry.get(starterContextKey) as StarterContext;
+    this.scene.start(context.launchIntent.entry === 'free-play' ? 'PlayScene' : 'LobbyScene');
   }
 }

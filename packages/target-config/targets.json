@@ -389,6 +389,49 @@
         "requiresStoreReview": true,
         "requiresAitReview": false
       }
+    },
+    "crazygames": {
+      "runtime": "crazygames-web",
+      "features": {
+        "iap": false,
+        "rewardedAds": false,
+        "interstitialAds": true,
+        "leaderboard": false,
+        "localization": true
+      },
+      "capabilities": {
+        "storage": "local",
+        "localization": true
+      },
+      "localization": {
+        "fallbackLocale": "en"
+      },
+      "monetization": {
+        "iap": false,
+        "rewardedAds": false,
+        "interstitialAds": true
+      },
+      "leaderboard": {
+        "native": false
+      },
+      "release": {
+        "profile": "crazygames"
+      },
+      "integrations": {
+        "identityUpgrade": "unsupported",
+        "presentation": "available",
+        "sharing": "unsupported",
+        "inboundShare": "unsupported",
+        "notifications": "unsupported",
+        "presentationMode": "fullscreen"
+      },
+      "policy": {
+        "externalPaymentAllowed": false,
+        "remoteExecutableCodeAllowed": false,
+        "installOtherAppCTAAllowed": false,
+        "requiresStoreReview": false,
+        "requiresAitReview": false
+      }
     }
   }
 }

@@ -323,6 +323,8 @@ pnpm build:microsoft-store
 pnpm smoke:target microsoft-store
 pnpm build:verse8
 pnpm smoke:target verse8
+pnpm build:crazygames
+pnpm smoke:target crazygames
 pnpm build:devvit
 pnpm smoke:target reddit
 ```
@@ -341,6 +343,12 @@ playtest/upload. They also own an Apps in Toss wrapper in `apps/target-ait`, so
 app identity, console state, community devtools, icons, and review metadata stay
 with the game. Capacitor targets continue to use kit reference shells for smoke
 builds until a game creates production-owned Android and iOS shells.
+
+CrazyGames support uses the browser adapter's `/crazygames` entry point and a
+non-installable web artifact. Basic Launch disables monetization; approved Full
+Launch enables configured interstitial ads. The game-owned runtime reports
+loading and gameplay activity while preserving scene and native presentation
+ownership. See [CrazyGames integration](docs/CRAZYGAMES.md).
 
 Optional Microsoft Store support is modeled as a PWA/web target with a dedicated
 Digital Goods commerce adapter. `pnpm build:microsoft-store` builds the Phaser game with the

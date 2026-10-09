@@ -7,6 +7,7 @@ const validTargets = new Set<string>([
   'microsoft-store',
   'reddit',
   'verse8',
+  'crazygames',
   'telegram',
   'tauri',
   'wechat',

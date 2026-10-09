@@ -22,6 +22,17 @@
       "icon": { "profile": "web-preview" },
       "output": "artifacts/verse8"
     },
+    "crazygames": {
+      "kind": "web",
+      "gameApp": ".",
+      "adapter": "crazygames",
+      "icon": {
+        "profile": "web-preview"
+      },
+      "installable": false,
+      "crazyGamesLaunch": "basic",
+      "output": "artifacts/crazygames"
+    },
     "android": {
       "kind": "capacitor-android",
       "gameApp": ".",

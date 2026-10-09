@@ -51,6 +51,8 @@ export interface WebTargetConfig extends BaseTargetConfig {
   readonly output: string;
   /** Whether the artifact should include an installable web app manifest. Defaults to true. */
   readonly installable?: boolean;
+  /** CrazyGames monetization requires Full Launch approval. Defaults to basic. */
+  readonly crazyGamesLaunch?: 'basic' | 'full';
   /** Optional game-owned files copied over the built web artifact. */
   readonly staticDir?: string;
 }
