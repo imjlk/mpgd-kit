@@ -23,7 +23,9 @@
     "game-distribution"
   ],
   "type": "module",
-  "sideEffects": false,
+  "sideEffects": [
+    "./adaptive-shell.css"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -33,18 +35,25 @@
     "./asset-packs": {
       "types": "./dist/asset-packs.d.ts",
       "default": "./dist/asset-packs.js"
-    }
+    },
+    "./adaptive-shell": {
+      "types": "./dist/adaptive-shell/index.d.ts",
+      "default": "./dist/adaptive-shell/index.js"
+    },
+    "./adaptive-shell/base.css": "./adaptive-shell.css"
   },
   "files": [
     "dist",
-    "targets.json"
+    "targets.json",
+    "adaptive-shell.css"
   ],
   "scripts": {
     "check": "ttsc --noEmit",
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "cd ../.. && node tools/run-ttsx.mjs packages/target-config/test/target-config-smoke.ts && node tools/run-ttsx.mjs packages/target-config/test/platform-version-allocation-smoke.ts && node tools/run-ttsx.mjs packages/target-config/test/provider-availability-smoke.ts"
+    "test": "pnpm build && vitest run test/adaptive-shell.test.ts && node test/adaptive-shell-dist-import.mjs && cd ../.. && node tools/run-ttsx.mjs packages/target-config/test/target-config-smoke.ts && node tools/run-ttsx.mjs packages/target-config/test/platform-version-allocation-smoke.ts && node tools/run-ttsx.mjs packages/target-config/test/provider-availability-smoke.ts",
+    "build": "cd ../.. && node tools/run-ttsx.mjs tools/package/build-packages.ts @mpgd/target-config"
   },
   "dependencies": {
     "@mpgd/catalog": "workspace:*",
@@ -54,7 +63,10 @@
   },
   "devDependencies": {
     "ttsc": "0.30.4",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "jsdom": "24.1.0",
+    "vitest": "^4.0.0",
+    "@types/node": "24.13.2"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
