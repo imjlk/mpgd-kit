@@ -129,7 +129,15 @@ describe('AIT production host bridge', () => {
     await expect(request(bridge, 'commerce.purchase', {
       productId: 'HINT_PACK_5',
       idempotencyKey: 'unconfigured-iap-attempt',
-    })).resolves.toEqual({ status: 'failed', entitlementIds: [] });
+    })).resolves.toEqual({
+      status: 'failed',
+      entitlementIds: [],
+      diagnostic: { code: 'AIT_IAP_UNAVAILABLE', retryable: false },
+    });
+    await expect(requestError(bridge, 'commerce.restore', {})).resolves.toMatchObject({
+      code: 'AIT_IAP_UNAVAILABLE',
+      retryable: false,
+    });
     await expect(request(bridge, 'ads.showRewarded', {
       placementId: 'SUDOKU_HINT_REWARDED',
       idempotencyKey: 'reward-1',
@@ -482,6 +490,7 @@ describe('AIT production host bridge', () => {
       status: 'pending',
       transactionId: 'order-rejected',
       entitlementIds: [],
+      diagnostic: { code: 'AIT_IAP_GRANT_PENDING', retryable: true },
     });
   });
 
@@ -510,11 +519,18 @@ describe('AIT production host bridge', () => {
         }),
       });
 
-      await expect(request(bridge, 'commerce.getProducts', {})).resolves.toEqual([]);
+      await expect(requestError(bridge, 'commerce.getProducts', {})).resolves.toMatchObject({
+        code: 'AIT_IAP_CONFIGURED_SKUS_NOT_VISIBLE',
+        retryable: false,
+      });
       await expect(request(bridge, 'commerce.purchase', {
         productId: 'PREMIUM_MONTHLY',
         idempotencyKey: 'subscription-direct-purchase',
-      })).resolves.toEqual({ status: 'failed', entitlementIds: [] });
+      })).resolves.toEqual({
+        status: 'failed',
+        entitlementIds: [],
+        diagnostic: { code: 'AIT_IAP_PRODUCT_TYPE_UNSUPPORTED', retryable: false },
+      });
       expect(startPurchase).not.toHaveBeenCalled();
       expect(warning).toHaveBeenCalledWith(
         'AIT subscription IAP is unavailable through the one-time order bridge.',
@@ -703,6 +719,7 @@ describe('AIT production host bridge', () => {
         status: 'pending',
         transactionId: 'order-timeout',
         entitlementIds: [],
+        diagnostic: { code: 'AIT_IAP_GRANT_PENDING', retryable: true },
       });
     } finally {
       vi.useRealTimers();
@@ -750,8 +767,14 @@ describe('AIT production host bridge', () => {
         transactionId: 'order-lost-callback',
         entitlementIds: [],
       };
-      await expect(purchase).resolves.toEqual(pending);
-      await expect(request(bridge, 'commerce.purchase', payload)).resolves.toEqual(pending);
+      await expect(purchase).resolves.toEqual({
+        ...pending,
+        diagnostic: { code: 'AIT_IAP_CHECKOUT_TIMEOUT', retryable: true },
+      });
+      await expect(request(bridge, 'commerce.purchase', payload)).resolves.toEqual({
+        ...pending,
+        diagnostic: { code: 'AIT_IAP_GRANT_COMPLETION_FAILED', retryable: true },
+      });
       expect(nativePurchaseStarts).toBe(1);
     } finally {
       vi.useRealTimers();
@@ -817,17 +840,15 @@ describe('AIT production host bridge', () => {
       type: 'success',
       data: createIapSuccessEvent('order-persist-failure'),
     });
-    await expect(purchase).resolves.toEqual({
+    const pending = {
       status: 'pending',
       transactionId: 'order-persist-failure',
       entitlementIds: [],
-    });
+      diagnostic: { code: 'AIT_IAP_GRANT_PENDING', retryable: true },
+    };
+    await expect(purchase).resolves.toEqual(pending);
     await expect(request(createAitHostBridge(options), 'commerce.purchase', payload))
-      .resolves.toEqual({
-        status: 'pending',
-        transactionId: 'order-persist-failure',
-        entitlementIds: [],
-      });
+      .resolves.toEqual(pending);
     expect(nativePurchaseStarts).toBe(1);
   });
 
@@ -870,7 +891,8 @@ describe('AIT production host bridge', () => {
     await callbacks.onError({ name: 'AbortError' });
 
     await expect(purchase).resolves.toEqual({ status: 'cancelled', entitlementIds: [] });
-    expect(getPendingOrders).toHaveBeenCalledOnce();
+    // Once for the stale marker, once for the pre-checkout duplicate-charge check.
+    expect(getPendingOrders).toHaveBeenCalledTimes(2);
     expect(values.has(storageKey)).toBe(false);
   });
 
@@ -915,6 +937,7 @@ describe('AIT production host bridge', () => {
       status: 'pending',
       transactionId: 'racing-order',
       entitlementIds: [],
+      diagnostic: { code: 'AIT_IAP_GRANT_PENDING', retryable: true },
     });
     expect(values.has(storageKey)).toBe(true);
     resolveVerification?.(true);
@@ -928,6 +951,7 @@ describe('AIT production host bridge', () => {
         status: 'pending',
         transactionId: 'racing-order',
         entitlementIds: [],
+        diagnostic: { code: 'AIT_IAP_GRANT_COMPLETION_FAILED', retryable: true },
       });
     expect(nativePurchaseStarts).toBe(1);
   });
@@ -1017,7 +1041,11 @@ describe('AIT production host bridge', () => {
     await expect(request(bridge, 'commerce.purchase', {
       productId: 'HINT_PACK_5',
       idempotencyKey: 'stale-pending-order',
-    })).resolves.toEqual({ status: 'pending', entitlementIds: [] });
+    })).resolves.toEqual({
+      status: 'pending',
+      entitlementIds: [],
+      diagnostic: { code: 'AIT_IAP_ATTEMPT_PENDING', retryable: true },
+    });
     expect(startPurchase).not.toHaveBeenCalled();
   });
 
@@ -1055,6 +1083,11 @@ describe('AIT production host bridge', () => {
         id: 'HINT_PACK_5',
         source: 'purchase',
         grantedAt: '2026-08-08T10:00:00.000Z',
+      }],
+      settledPurchases: [{
+        transactionId: 'pending-order-1',
+        productId: 'HINT_PACK_5',
+        status: 'granted',
       }],
     });
     expect(verifyIapProductGrant).toHaveBeenCalledWith(expect.objectContaining({
@@ -1132,6 +1165,7 @@ describe('AIT production host bridge', () => {
         source: 'purchase',
         grantedAt: '2026-08-08T10:00:00.000Z',
       }],
+      diagnostic: { code: 'AIT_IAP_PENDING_ORDER_UNRESOLVED', retryable: true },
     });
     expect(verifyIapProductGrant).toHaveBeenCalledOnce();
     expect(completeProductGrant).toHaveBeenCalledOnce();
@@ -1179,6 +1213,11 @@ describe('AIT production host bridge', () => {
         source: 'purchase',
         grantedAt: '2026-08-08T10:00:00.000Z',
       }],
+      settledPurchases: [{
+        transactionId: 'eligible-order',
+        productId: 'HINT_PACK_5',
+        status: 'granted',
+      }],
     });
     expect(verifyIapProductGrant).toHaveBeenCalledTimes(1);
     expect(completeProductGrant).toHaveBeenCalledTimes(1);
@@ -1211,6 +1250,7 @@ describe('AIT production host bridge', () => {
 
     await expect(request(bridge, 'commerce.restore', {})).resolves.toEqual({
       restoredEntitlements: [],
+      diagnostic: { code: 'AIT_IAP_PENDING_ORDER_UNRESOLVED', retryable: true },
     });
     expect(verifyIapProductGrant).toHaveBeenCalledTimes(20);
     expect(completeProductGrant).not.toHaveBeenCalled();
@@ -1221,6 +1261,12 @@ describe('AIT production host bridge', () => {
         source: 'purchase',
         grantedAt: '2026-08-08T10:00:00.000Z',
       }],
+      settledPurchases: [{
+        transactionId: 'eligible-order-20',
+        productId: 'HINT_PACK_5',
+        status: 'granted',
+      }],
+      diagnostic: { code: 'AIT_IAP_PENDING_ORDER_UNRESOLVED', retryable: true },
     });
     expect(verifyIapProductGrant.mock.calls[20]?.[0]).toEqual(expect.objectContaining({
       orderId: 'eligible-order-20',
@@ -1257,7 +1303,11 @@ describe('AIT production host bridge', () => {
       });
       await vi.advanceTimersByTimeAsync(10);
 
-      await expect(purchase).resolves.toEqual({ status: 'failed', entitlementIds: [] });
+      await expect(purchase).resolves.toEqual({
+        status: 'failed',
+        entitlementIds: [],
+        diagnostic: { code: 'AIT_IAP_PREPARATION_FAILED', retryable: true },
+      });
       expect(nativePurchaseStarted).toBe(false);
     } finally {
       vi.useRealTimers();
@@ -1284,16 +1334,23 @@ describe('AIT production host bridge', () => {
         }),
       });
 
-      const products = request(bridge, 'commerce.getProducts', {});
+      const products = requestError(bridge, 'commerce.getProducts', {});
       await vi.advanceTimersByTimeAsync(10);
-      await expect(products).resolves.toEqual([]);
+      await expect(products).resolves.toMatchObject({
+        code: 'AIT_IAP_CATALOG_UNAVAILABLE',
+        retryable: true,
+      });
 
       const purchase = request(bridge, 'commerce.purchase', {
         productId: 'HINT_PACK_5',
         idempotencyKey: 'hung-iap-catalog',
       });
       await vi.advanceTimersByTimeAsync(10);
-      await expect(purchase).resolves.toEqual({ status: 'failed', entitlementIds: [] });
+      await expect(purchase).resolves.toEqual({
+        status: 'failed',
+        entitlementIds: [],
+        diagnostic: { code: 'AIT_IAP_CATALOG_UNAVAILABLE', retryable: true },
+      });
       expect(nativePurchaseStarted).toBe(false);
     } finally {
       vi.useRealTimers();
@@ -1318,7 +1375,11 @@ describe('AIT production host bridge', () => {
         }),
       });
 
-      await expect(request(bridge, 'commerce.getProducts', {})).resolves.toEqual([]);
+      await expect(requestError(bridge, 'commerce.getProducts', {})).resolves.toEqual({
+        code: 'AIT_IAP_CATALOG_UNAVAILABLE',
+        message: 'Apps in Toss IAP catalog is unavailable (AIT_IAP_CATALOG_UNAVAILABLE).',
+        retryable: true,
+      });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -1344,9 +1405,12 @@ describe('AIT production host bridge', () => {
         }),
       });
 
-      const pendingRestore = request(hungPendingOrders, 'commerce.restore', {});
+      const pendingRestore = requestError(hungPendingOrders, 'commerce.restore', {});
       await vi.advanceTimersByTimeAsync(10);
-      await expect(pendingRestore).resolves.toEqual({ restoredEntitlements: [] });
+      await expect(pendingRestore).resolves.toMatchObject({
+        code: 'AIT_IAP_PENDING_ORDER_CHECK_FAILED',
+        retryable: true,
+      });
 
       const hungCompletion = createAitHostBridge({
         ...commonOptions,
@@ -1366,7 +1430,10 @@ describe('AIT production host bridge', () => {
 
       const completionRestore = request(hungCompletion, 'commerce.restore', {});
       await vi.advanceTimersByTimeAsync(10);
-      await expect(completionRestore).resolves.toEqual({ restoredEntitlements: [] });
+      await expect(completionRestore).resolves.toEqual({
+        restoredEntitlements: [],
+        diagnostic: { code: 'AIT_IAP_PENDING_ORDER_UNRESOLVED', retryable: true },
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -1426,6 +1493,7 @@ describe('AIT production host bridge', () => {
           source: 'purchase',
           grantedAt: '2026-08-08T10:00:00.000Z',
         }],
+        diagnostic: { code: 'AIT_IAP_PENDING_ORDER_UNRESOLVED', retryable: true },
       });
       expect(verifyIapProductGrant).toHaveBeenCalledTimes(1);
       expect(completeProductGrant).not.toHaveBeenCalled();
@@ -1437,6 +1505,12 @@ describe('AIT production host bridge', () => {
           source: 'purchase',
           grantedAt: '2026-08-08T10:00:00.000Z',
         }],
+        settledPurchases: [{
+          transactionId: 'restore-budget-order-2',
+          productId: 'HINT_PACK_5',
+          status: 'granted',
+        }],
+        diagnostic: { code: 'AIT_IAP_PENDING_ORDER_UNRESOLVED', retryable: true },
       });
       expect(verifyIapProductGrant.mock.calls[1]?.[0]).toEqual(expect.objectContaining({
         orderId: 'restore-budget-order-2',
@@ -2988,6 +3062,597 @@ describe('AIT production host bridge', () => {
   });
 });
 
+describe('AIT IAP recovery hardening', () => {
+  const coinsSku = 'ait.game.coins.100';
+  const gemsSku = 'ait.game.gems.10';
+  const coinsProduct = { productId: 'COINS_100' as const, sku: coinsSku };
+  const gemsProduct = { productId: 'GEMS_10' as const, sku: gemsSku };
+  const coinsCatalog = [createIapProduct({ sku: coinsSku }), createIapProduct({ sku: gemsSku })];
+
+  function pendingOrder(orderId: string, sku = coinsSku) {
+    return { orderId, sku, paymentCompletedDate: '2026-09-01T10:00:00.000Z' };
+  }
+
+  it('passes the client purchase key to a verifier on the grant callback and on restore', async () => {
+    const values = new Map<string, string>();
+    let callbacks: IapPurchaseCallbacks | undefined;
+    let nativePurchaseStarts = 0;
+    let pendingOrders: IapPendingOrdersResult = { orders: [] };
+    let serverAvailable = false;
+    // The verifier is a plain boolean authority: it never echoes a key back.
+    const verifyIapProductGrant = vi.fn(
+      async (_input: AitIapProductGrantVerificationInput) => serverAvailable,
+    );
+    const completeProductGrant = vi.fn(async () => true);
+    const options = {
+      iapProducts: [coinsProduct],
+      prepareIap: async () => true,
+      verifyIapProductGrant,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        storage: createMemoryStorage(values),
+        iap: createSupportedIap({
+          products: coinsCatalog,
+          getPendingOrders: async () => pendingOrders,
+          completeProductGrant,
+          onPurchase: (input) => {
+            nativePurchaseStarts += 1;
+            callbacks = input;
+          },
+        }),
+      }),
+    };
+    const payload = { productId: 'COINS_100', idempotencyKey: 'game-operation-1' };
+
+    const purchase = request(createAitHostBridge(options), 'commerce.purchase', payload);
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    if (callbacks === undefined) {
+      throw new Error('Expected Apps in Toss purchase callbacks to be registered.');
+    }
+    await expect(callbacks.options.processProductGrant({ orderId: 'order-linked' }))
+      .resolves.toBe(false);
+    await callbacks.onEvent({ type: 'success', data: createIapSuccessEvent('order-linked') });
+    await expect(purchase).resolves.toMatchObject({
+      status: 'pending',
+      transactionId: 'order-linked',
+      diagnostic: { code: 'AIT_IAP_GRANT_PENDING' },
+    });
+    expect(verifyIapProductGrant).toHaveBeenLastCalledWith(expect.objectContaining({
+      orderId: 'order-linked',
+      idempotencyKey: 'apps-in-toss:purchase:order-linked',
+      clientIdempotencyKey: 'game-operation-1',
+      source: 'process-product-grant',
+    }));
+
+    // A reloaded bridge recovers the order from the provider list and still
+    // carries the game's key, although the verifier never returned it.
+    serverAvailable = true;
+    pendingOrders = { orders: [pendingOrder('order-linked'), pendingOrder('order-unlinked')] };
+    await expect(request(createAitHostBridge(options), 'commerce.restore', {})).resolves.toEqual({
+      restoredEntitlements: [{
+        id: 'COINS_100',
+        source: 'purchase',
+        grantedAt: '2026-09-01T10:00:00.000Z',
+      }],
+      settledPurchases: [
+        {
+          transactionId: 'order-linked',
+          productId: 'COINS_100',
+          status: 'granted',
+          idempotencyKey: 'game-operation-1',
+        },
+        {
+          transactionId: 'order-unlinked',
+          productId: 'COINS_100',
+          status: 'granted',
+        },
+      ],
+    });
+    const restoreCalls = verifyIapProductGrant.mock.calls.slice(1).map(([input]) => input);
+    expect(restoreCalls).toEqual([
+      expect.objectContaining({
+        orderId: 'order-linked',
+        idempotencyKey: 'apps-in-toss:purchase:order-linked',
+        clientIdempotencyKey: 'game-operation-1',
+        source: 'pending-order-restore',
+      }),
+      expect.objectContaining({ orderId: 'order-unlinked', source: 'pending-order-restore' }),
+    ]);
+    expect(restoreCalls[1]).not.toHaveProperty('clientIdempotencyKey');
+
+    // Replaying the game's key now reports the recovered order without a new checkout.
+    pendingOrders = { orders: [] };
+    await expect(request(createAitHostBridge(options), 'commerce.purchase', payload))
+      .resolves.toEqual({
+        status: 'completed',
+        transactionId: 'order-linked',
+        entitlementIds: ['COINS_100'],
+        evidence: {
+          schema: 'apps-in-toss.iap.callback.v1',
+          payload: { orderId: 'order-linked', sku: coinsSku, source: 'pending-order-restore' },
+        },
+      });
+    expect(nativePurchaseStarts).toBe(1);
+  });
+
+  it('settles a paid but ungranted same-product order before opening another checkout', async () => {
+    const values = new Map<string, string>();
+    const startPurchase = vi.fn();
+    const completeProductGrant = vi.fn(async () => true);
+    let serverAvailable = false;
+    const verifyIapProductGrant = vi.fn(async () => serverAvailable);
+    const bridge = createAitHostBridge({
+      iapProducts: [coinsProduct],
+      prepareIap: async () => true,
+      verifyIapProductGrant,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        storage: createMemoryStorage(values),
+        iap: createSupportedIap({
+          products: coinsCatalog,
+          pendingOrders: { orders: [pendingOrder('order-paid-earlier')] },
+          completeProductGrant,
+          onPurchase: startPurchase,
+        }),
+      }),
+    });
+
+    await expect(request(bridge, 'commerce.purchase', {
+      productId: 'COINS_100',
+      idempotencyKey: 'second-tap',
+    })).resolves.toEqual({
+      status: 'failed',
+      entitlementIds: [],
+      diagnostic: { code: 'AIT_IAP_PENDING_ORDER_UNRESOLVED', retryable: true },
+    });
+    expect(verifyIapProductGrant).toHaveBeenCalledWith(expect.objectContaining({
+      orderId: 'order-paid-earlier',
+      source: 'pending-order-restore',
+    }));
+    expect(completeProductGrant).not.toHaveBeenCalled();
+
+    serverAvailable = true;
+    await expect(request(bridge, 'commerce.purchase', {
+      productId: 'COINS_100',
+      idempotencyKey: 'third-tap',
+    })).resolves.toEqual({
+      status: 'failed',
+      entitlementIds: [],
+      diagnostic: { code: 'AIT_IAP_PENDING_ORDER_RECOVERED', retryable: true },
+    });
+    expect(completeProductGrant).toHaveBeenCalledWith({
+      params: { orderId: 'order-paid-earlier' },
+    });
+    expect(startPurchase).not.toHaveBeenCalled();
+    // Nothing was charged, so no retry barrier blocks the same keys later.
+    expect([...values.keys()].filter((key) => key.includes('iap-purchase-attempt'))).toEqual([]);
+  });
+
+  it('opens a checkout after recovering an order that belongs to another product', async () => {
+    let callbacks: IapPurchaseCallbacks | undefined;
+    const completeProductGrant = vi.fn(async () => true);
+    const bridge = createAitHostBridge({
+      iapProducts: [coinsProduct, gemsProduct],
+      prepareIap: async () => true,
+      verifyIapProductGrant: async () => true,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        iap: createSupportedIap({
+          products: coinsCatalog,
+          pendingOrders: { orders: [pendingOrder('order-gems', gemsSku)] },
+          completeProductGrant,
+          onPurchase: (input) => {
+            callbacks = input;
+          },
+        }),
+      }),
+    });
+
+    const purchase = request(bridge, 'commerce.purchase', {
+      productId: 'COINS_100',
+      idempotencyKey: 'coins-after-gems',
+    });
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    expect(completeProductGrant).toHaveBeenCalledWith({ params: { orderId: 'order-gems' } });
+    if (callbacks === undefined) {
+      throw new Error('Expected Apps in Toss purchase callbacks to be registered.');
+    }
+    await callbacks.options.processProductGrant({ orderId: 'order-coins' });
+    await callbacks.onEvent({ type: 'success', data: createIapSuccessEvent('order-coins') });
+    await expect(purchase).resolves.toMatchObject({
+      status: 'completed',
+      transactionId: 'order-coins',
+    });
+  });
+
+  it('does not open a checkout when pending orders cannot be checked', async () => {
+    const startPurchase = vi.fn();
+    const bridge = createAitHostBridge({
+      iapProducts: [coinsProduct],
+      prepareIap: async () => true,
+      verifyIapProductGrant: async () => true,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        iap: createSupportedIap({
+          products: coinsCatalog,
+          getPendingOrders: async () => {
+            throw Object.assign(new Error('pending orders failed for user 1234'), {
+              code: 'INTERNAL_ERROR',
+            });
+          },
+          onPurchase: startPurchase,
+        }),
+      }),
+    });
+
+    await expect(request(bridge, 'commerce.purchase', {
+      productId: 'COINS_100',
+      idempotencyKey: 'blind-checkout',
+    })).resolves.toEqual({
+      status: 'failed',
+      entitlementIds: [],
+      diagnostic: {
+        code: 'AIT_IAP_PENDING_ORDER_CHECK_FAILED',
+        retryable: true,
+        providerCode: 'INTERNAL_ERROR',
+      },
+    });
+    expect(startPurchase).not.toHaveBeenCalled();
+  });
+
+  it('shares one in-flight pending-order pass between restore and a purchase', async () => {
+    let releaseVerification: ((granted: boolean) => void) | undefined;
+    const getPendingOrders = vi.fn(async () => ({ orders: [pendingOrder('order-shared')] }));
+    const verifyIapProductGrant = vi.fn(async () => await new Promise<boolean>((resolve) => {
+      releaseVerification = resolve;
+    }));
+    const completeProductGrant = vi.fn(async () => true);
+    const startPurchase = vi.fn();
+    const prepareIap = vi.fn(async (_input: { readonly intent: string }) => true);
+    const bridge = createAitHostBridge({
+      iapProducts: [coinsProduct],
+      prepareIap,
+      verifyIapProductGrant,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        iap: createSupportedIap({
+          products: coinsCatalog,
+          getPendingOrders,
+          completeProductGrant,
+          onPurchase: startPurchase,
+        }),
+      }),
+    });
+
+    const restore = request(bridge, 'commerce.restore', {});
+    await vi.waitFor(() => expect(releaseVerification).toBeDefined());
+    const purchase = request(bridge, 'commerce.purchase', {
+      productId: 'COINS_100',
+      idempotencyKey: 'during-restore',
+    });
+    await vi.waitFor(() => expect(prepareIap).toHaveBeenCalledWith({
+      intent: 'purchase',
+      productId: 'COINS_100',
+      platformSku: coinsSku,
+    }));
+    // Let the purchase reach its pending-order check and join the restore pass.
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    releaseVerification?.(true);
+
+    await expect(restore).resolves.toMatchObject({
+      settledPurchases: [{ transactionId: 'order-shared', status: 'granted' }],
+    });
+    await expect(purchase).resolves.toMatchObject({
+      status: 'failed',
+      diagnostic: { code: 'AIT_IAP_PENDING_ORDER_RECOVERED' },
+    });
+    expect(getPendingOrders).toHaveBeenCalledOnce();
+    expect(verifyIapProductGrant).toHaveBeenCalledOnce();
+    expect(completeProductGrant).toHaveBeenCalledOnce();
+    expect(startPurchase).not.toHaveBeenCalled();
+  });
+
+  it('re-verifies the known order directly after PRODUCT_NOT_GRANTED_BY_PARTNER', async () => {
+    const values = new Map<string, string>();
+    let callbacks: IapPurchaseCallbacks | undefined;
+    const getPendingOrders = vi.fn(async () => ({ orders: [] }));
+    const completeProductGrant = vi.fn(async () => true);
+    const verifyIapProductGrant = vi.fn(
+      async (input: AitIapProductGrantVerificationInput) => input.source === 'pending-order-restore',
+    );
+    const options = {
+      iapProducts: [coinsProduct],
+      prepareIap: async () => true,
+      verifyIapProductGrant,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        storage: createMemoryStorage(values),
+        iap: createSupportedIap({
+          products: coinsCatalog,
+          getPendingOrders,
+          completeProductGrant,
+          onPurchase: (input) => {
+            callbacks = input;
+          },
+        }),
+      }),
+    };
+    const payload = { productId: 'COINS_100', idempotencyKey: 'not-granted-attempt' };
+
+    const purchase = request(createAitHostBridge(options), 'commerce.purchase', payload);
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    if (callbacks === undefined) {
+      throw new Error('Expected Apps in Toss purchase callbacks to be registered.');
+    }
+    await expect(callbacks.options.processProductGrant({ orderId: 'order-not-granted' }))
+      .resolves.toBe(false);
+    await callbacks.onError({ code: 'PRODUCT_NOT_GRANTED_BY_PARTNER' });
+
+    const completed = {
+      status: 'completed',
+      transactionId: 'order-not-granted',
+      entitlementIds: ['COINS_100'],
+      evidence: {
+        schema: 'apps-in-toss.iap.callback.v1',
+        payload: {
+          orderId: 'order-not-granted',
+          sku: coinsSku,
+          source: 'pending-order-restore',
+        },
+      },
+    };
+    await expect(purchase).resolves.toEqual(completed);
+    expect(verifyIapProductGrant).toHaveBeenCalledTimes(2);
+    expect(verifyIapProductGrant).toHaveBeenLastCalledWith(expect.objectContaining({
+      orderId: 'order-not-granted',
+      idempotencyKey: 'apps-in-toss:purchase:order-not-granted',
+      clientIdempotencyKey: 'not-granted-attempt',
+      source: 'pending-order-restore',
+    }));
+    expect(completeProductGrant).toHaveBeenCalledWith({
+      params: { orderId: 'order-not-granted' },
+    });
+    // The direct re-verify does not depend on the (possibly lagging) pending list.
+    expect(getPendingOrders).toHaveBeenCalledOnce();
+    await expect(request(createAitHostBridge(options), 'commerce.purchase', payload))
+      .resolves.toEqual(completed);
+  });
+
+  it('keeps a not-granted order pending after one bounded direct re-verify', async () => {
+    let callbacks: IapPurchaseCallbacks | undefined;
+    const completeProductGrant = vi.fn(async () => true);
+    const verifyIapProductGrant = vi.fn(async () => false);
+    const bridge = createAitHostBridge({
+      iapProducts: [coinsProduct],
+      prepareIap: async () => true,
+      verifyIapProductGrant,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        iap: createSupportedIap({
+          products: coinsCatalog,
+          completeProductGrant,
+          onPurchase: (input) => {
+            callbacks = input;
+          },
+        }),
+      }),
+    });
+
+    const purchase = request(bridge, 'commerce.purchase', {
+      productId: 'COINS_100',
+      idempotencyKey: 'still-not-granted',
+    });
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    if (callbacks === undefined) {
+      throw new Error('Expected Apps in Toss purchase callbacks to be registered.');
+    }
+    await callbacks.options.processProductGrant({ orderId: 'order-still-pending' });
+    await callbacks.onError(new Error('PRODUCT_NOT_GRANTED_BY_PARTNER'));
+
+    await expect(purchase).resolves.toEqual({
+      status: 'pending',
+      transactionId: 'order-still-pending',
+      entitlementIds: [],
+      diagnostic: {
+        code: 'AIT_IAP_GRANT_PENDING',
+        retryable: true,
+        providerCode: 'PRODUCT_NOT_GRANTED_BY_PARTNER',
+      },
+    });
+    expect(verifyIapProductGrant).toHaveBeenCalledTimes(2);
+    expect(completeProductGrant).not.toHaveBeenCalled();
+  });
+
+  it('surfaces restore failures as coded errors instead of an empty success', async () => {
+    const options = {
+      iapProducts: [coinsProduct],
+      verifyIapProductGrant: async () => true,
+    };
+    const rejectedPreparation = createAitHostBridge({
+      ...options,
+      prepareIap: async () => false,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({ iap: createSupportedIap({ products: coinsCatalog }) }),
+    });
+    await expect(requestError(rejectedPreparation, 'commerce.restore', {})).resolves.toEqual({
+      code: 'AIT_IAP_PREPARATION_FAILED',
+      message: 'Apps in Toss purchase restore did not complete (AIT_IAP_PREPARATION_FAILED).',
+      retryable: true,
+    });
+
+    const oldTossApp = createAitHostBridge({
+      ...options,
+      prepareIap: async () => true,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        iap: createSupportedIap({
+          getPendingOrders: async () => undefined as unknown as IapPendingOrdersResult,
+        }),
+      }),
+    });
+    await expect(requestError(oldTossApp, 'commerce.restore', {})).resolves.toMatchObject({
+      code: 'AIT_IAP_UNSUPPORTED_APP_VERSION',
+      retryable: false,
+    });
+
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const failedAuthority = createAitHostBridge({
+        ...options,
+        prepareIap: async () => true,
+        readIapEntitlements: async () => {
+          throw new Error('authority unavailable');
+        },
+        dependencies: createDependencies({ iap: createSupportedIap() }),
+      });
+      await expect(requestError(failedAuthority, 'commerce.restore', {})).resolves.toMatchObject({
+        code: 'AIT_IAP_ENTITLEMENT_READ_FAILED',
+        retryable: true,
+      });
+
+      // Settled orders are still reported when only the follow-up read fails.
+      const partialRestore = createAitHostBridge({
+        ...options,
+        prepareIap: async () => true,
+        readIapEntitlements: async () => {
+          throw new Error('authority unavailable');
+        },
+        dependencies: createDependencies({
+          iap: createSupportedIap({ pendingOrders: { orders: [pendingOrder('order-partial')] } }),
+        }),
+      });
+      await expect(request(partialRestore, 'commerce.restore', {})).resolves.toEqual({
+        restoredEntitlements: [{
+          id: 'COINS_100',
+          source: 'purchase',
+          grantedAt: '2026-09-01T10:00:00.000Z',
+        }],
+        settledPurchases: [{
+          transactionId: 'order-partial',
+          productId: 'COINS_100',
+          status: 'granted',
+        }],
+        diagnostic: { code: 'AIT_IAP_ENTITLEMENT_READ_FAILED', retryable: true },
+      });
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it('reports stable catalog and purchase diagnostic codes', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const baseOptions = {
+        iapProducts: [coinsProduct, gemsProduct],
+        prepareIap: async () => true,
+        verifyIapProductGrant: async () => true,
+        readIapEntitlements: async () => [],
+      };
+      const catalogBridge = (
+        getProductItemList: () => Promise<IapProductListResult>,
+      ) => createAitHostBridge({
+        ...baseOptions,
+        dependencies: createDependencies({ iap: createSupportedIap({ getProductItemList }) }),
+      });
+
+      await expect(requestError(
+        catalogBridge(async () => ({ products: [] })),
+        'commerce.getProducts',
+        {},
+      )).resolves.toMatchObject({ code: 'AIT_IAP_CATALOG_EMPTY', retryable: true });
+      await expect(requestError(
+        catalogBridge(async () => undefined as unknown as IapProductListResult),
+        'commerce.getProducts',
+        {},
+      )).resolves.toMatchObject({ code: 'AIT_IAP_UNSUPPORTED_APP_VERSION', retryable: false });
+      await expect(requestError(
+        catalogBridge(async () => ({ products: [createIapProduct({ sku: 'ait.other' })] })),
+        'commerce.getProducts',
+        {},
+      )).resolves.toMatchObject({ code: 'AIT_IAP_CONFIGURED_SKUS_NOT_VISIBLE', retryable: false });
+      await expect(requestError(
+        catalogBridge(async () => {
+          throw { code: 'NETWORK_ERROR', message: 'request for player 42 failed' };
+        }),
+        'commerce.getProducts',
+        {},
+      )).resolves.toEqual({
+        code: 'AIT_IAP_CATALOG_UNAVAILABLE',
+        message: 'Apps in Toss IAP catalog is unavailable '
+          + '(AIT_IAP_CATALOG_UNAVAILABLE; provider code NETWORK_ERROR).',
+        retryable: true,
+      });
+      // A partially visible catalog still lists the visible products.
+      await expect(request(
+        catalogBridge(async () => ({ products: [createIapProduct({ sku: coinsSku })] })),
+        'commerce.getProducts',
+        {},
+      )).resolves.toMatchObject([{ id: 'COINS_100' }]);
+
+      await expect(request(catalogBridge(async () => ({ products: coinsCatalog })),
+        'commerce.purchase',
+        { productId: 'UNKNOWN_PRODUCT', idempotencyKey: 'unknown-product' },
+      )).resolves.toEqual({
+        status: 'failed',
+        entitlementIds: [],
+        diagnostic: { code: 'AIT_IAP_PRODUCT_NOT_CONFIGURED', retryable: false },
+      });
+
+      const throwingCheckout = createAitHostBridge({
+        ...baseOptions,
+        dependencies: createDependencies({
+          iap: {
+            ...createSupportedIap({ products: coinsCatalog }),
+            createOneTimePurchaseOrder: Object.assign(() => {
+              throw Object.assign(new Error('checkout unavailable'), { code: 'APP_NOT_READY' });
+            }, { isSupported: () => true }),
+          },
+        }),
+      });
+      await expect(request(throwingCheckout, 'commerce.purchase', {
+        productId: 'COINS_100',
+        idempotencyKey: 'throwing-checkout',
+      })).resolves.toEqual({
+        status: 'failed',
+        entitlementIds: [],
+        diagnostic: {
+          code: 'AIT_IAP_CHECKOUT_START_FAILED',
+          retryable: true,
+          providerCode: 'APP_NOT_READY',
+        },
+      });
+
+      let callbacks: IapPurchaseCallbacks | undefined;
+      const nativeError = createAitHostBridge({
+        ...baseOptions,
+        dependencies: createDependencies({
+          iap: createSupportedIap({
+            products: coinsCatalog,
+            onPurchase: (input) => {
+              callbacks = input;
+            },
+          }),
+        }),
+      });
+      const purchase = request(nativeError, 'commerce.purchase', {
+        productId: 'COINS_100',
+        idempotencyKey: 'native-error',
+      });
+      await vi.waitFor(() => expect(callbacks).toBeDefined());
+      await callbacks?.onError(new Error('payment failed for card 1234-5678'));
+      await expect(purchase).resolves.toEqual({
+        status: 'pending',
+        entitlementIds: [],
+        diagnostic: { code: 'AIT_IAP_NATIVE_PURCHASE_FAILED', retryable: true },
+      });
+    } finally {
+      warning.mockRestore();
+    }
+  });
+});
+
 describe('AIT launch intent', () => {
   afterEach(() => vi.unstubAllGlobals());
 
@@ -3315,6 +3980,28 @@ function createIapSuccessEvent(orderId: string) {
     fraction: 0,
     miniAppIconUrl: null,
   };
+}
+
+async function requestError(
+  bridge: ReturnType<typeof createAitHostBridge>,
+  method: BridgeRequest['method'],
+  payload: unknown,
+): Promise<{ readonly code: string; readonly message: string; readonly retryable: boolean }> {
+  const response = await bridge.request({
+    id: `${method}:test`,
+    method,
+    payload,
+    meta: {
+      target: 'ait',
+      appVersion: '1.0.0',
+      buildId: 'test',
+      sentAt: '2026-07-19T00:00:00.000Z',
+    },
+  } satisfies BridgeRequest);
+  if (response.ok) {
+    throw new Error(`Expected ${method} to fail.`);
+  }
+  return response.error;
 }
 
 async function request(

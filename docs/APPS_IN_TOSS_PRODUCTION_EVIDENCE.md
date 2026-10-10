@@ -78,6 +78,57 @@ const bridge = createAitHostBridge({
 });
 ```
 
+## Built-in host bridge recovery
+
+`createAitHostBridge()` from `@mpgd/adapter-ait/host` owns the one-time order
+flow when a game passes `iapProducts`, `prepareIap`, `verifyIapProductGrant`
+and `readIapEntitlements`. It keeps the server authoritative and adds these
+recovery rules:
+
+- **Client purchase key.** `verifyIapProductGrant` always receives the
+  order-scoped `idempotencyKey` (`apps-in-toss:purchase:<encoded order id>`)
+  as the grant identity. It also receives `clientIdempotencyKey`, the key the
+  game passed to `commerce.purchase`, whenever the bridge can link the order to
+  that attempt: the grant callback, a direct re-verify, and restore or
+  pre-checkout recovery of an order this device started. The link is stored in
+  adapter-reserved native storage, so it survives a reload. Use the client key
+  to associate the order with a game operation; do not replace the order key
+  with it.
+- **No second charge.** Before opening a checkout, the bridge reads
+  `getPendingOrders()` and reconciles configured SKUs. If an order for the same
+  product is still ungranted, or was just granted by this check, the purchase
+  returns `failed` without opening a checkout, with `diagnostic.code`
+  `AIT_IAP_PENDING_ORDER_UNRESOLVED` or `AIT_IAP_PENDING_ORDER_RECOVERED`.
+  Nothing was charged for that request. If the list cannot be read, the result
+  is `failed` with `AIT_IAP_PENDING_ORDER_CHECK_FAILED`.
+- **Partner grant failure.** When the SDK reports
+  `PRODUCT_NOT_GRANTED_BY_PARTNER` for an order the callback saw, the bridge
+  verifies that exact order once more (`source: 'pending-order-restore'`) and
+  calls `completeProductGrant()` itself, because the pending-order list can lag
+  right after checkout. If that check also fails, the order stays `pending`.
+- **Restore.** `commerce.restore` returns `settledPurchases` for orders it
+  granted and acknowledged, including `idempotencyKey` when the order is linked
+  to a client attempt. It rejects with a coded `PlatformOperationError` when it
+  could not do its job (IAP unavailable, preparation rejected, pending orders
+  unreadable, or the entitlement read failed with nothing settled). A partial
+  restore resolves with `diagnostic`, for example
+  `AIT_IAP_PENDING_ORDER_UNRESOLVED`. After restore settles an order, replaying
+  its original client key returns the completed purchase.
+- **Startup recovery.** Call `gateway.commerce.restore()` once the game session
+  exists (after the account or identity that `prepareIap` checks is ready).
+  Restore and the pre-checkout check share one in-flight pass, so a startup
+  restore and an immediate purchase never acknowledge the same order twice.
+
+Non-completed purchase results carry `diagnostic: { code, retryable,
+providerCode? }`. The codes are exported as `aitIapDiagnosticCodes` from
+`@mpgd/adapter-ait`, which does not import the Apps in Toss SDK. Native SDK
+codes are passed through only as upper-case identifiers in `providerCode`;
+free-form provider messages are never copied. `commerce.getProducts` still
+returns an empty list when IAP is not configured or not supported, and rejects
+with `AIT_IAP_CATALOG_EMPTY`, `AIT_IAP_CONFIGURED_SKUS_NOT_VISIBLE`,
+`AIT_IAP_UNSUPPORTED_APP_VERSION` or `AIT_IAP_CATALOG_UNAVAILABLE` when the
+configured catalog cannot be shown.
+
 ## Purchase flow
 
 Apps in Toss SDK 1.1.3 and later requires product-grant completion. The current

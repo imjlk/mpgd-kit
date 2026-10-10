@@ -20,16 +20,30 @@ the web bundle and then runs `ait build`.
 
 ## CORS origins
 
-Before QR or production testing, allow both exact origins on every backend used
-by the mini-app:
+Before QR or production testing, allow all four exact origins on every backend
+used by the mini-app:
 
 ```text
 https://<appName>.web.tossmini.com
 https://<appName>.private-web.tossmini.com
+https://<appName>.apps.tossmini.com
+https://<appName>.private-apps.tossmini.com
 ```
 
-The first origin is used by the released service. The second is used by console
-QR tests. Do not use a wildcard when the backend supports an explicit allowlist.
+The `web` pair is used by the released service and console QR tests; SDK 3.x
+bundles can also send requests from the `apps` pair. Do not use a wildcard when
+the backend supports an explicit allowlist. A server can build the list from
+the app name without importing the Apps in Toss SDK:
+
+```ts
+import { aitBrowserOrigins, isAitBrowserOrigin } from '@mpgd/adapter-ait/origins';
+
+const allowedOrigins = aitBrowserOrigins(env.AIT_APP_NAME);
+const allowed = isAitBrowserOrigin(env.AIT_APP_NAME, request.headers.get('Origin'));
+```
+
+`aitBrowserOrigins()` lower-cases the app name and rejects anything that is not
+a single DNS label.
 
 ## Release gate
 
@@ -37,7 +51,7 @@ QR tests. Do not use a wildcard when the backend supports an explicit allowlist.
 2. Upload the bundle to the Apps in Toss console.
 3. Exercise identity, Storage, share, Game Center, ads, purchases, and every
    backend request through the Toss-app QR test appropriate to the game.
-4. Confirm both SDK 3 origins receive the expected CORS headers.
+4. Confirm all four origins receive the expected CORS headers.
 5. Publish only after the QR run succeeds.
 
 An app that has released an SDK 3 bundle cannot roll back to an SDK 2 bundle.

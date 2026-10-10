@@ -109,6 +109,16 @@ function isPlatformOperationCode(code: unknown): code is string {
     && /^[A-Z][A-Z0-9_:-]*$/u.test(code);
 }
 
+/**
+ * Stable, non-sensitive reason attached to a commerce outcome that did not
+ * fully complete. It is diagnostic only: it never grants or revokes anything.
+ * Games may use it for UI copy, retry decisions and support logs.
+ */
+export interface CommerceDiagnostic extends PlatformOperationFailure {
+  /** Provider SDK error code, passed through only when it is a safe identifier. */
+  readonly providerCode?: string;
+}
+
 export interface PurchaseResult {
   readonly status: 'completed' | 'cancelled' | 'pending' | 'failed';
   readonly transactionId?: string;
@@ -119,12 +129,16 @@ export interface PurchaseResult {
     readonly ledgerEntryId: string;
     readonly alreadyProcessed?: boolean;
   }>;
+  /** Optional reason for a cancelled, pending or failed result. */
+  readonly diagnostic?: CommerceDiagnostic;
 }
 
 export interface PurchaseRestoreResult {
   readonly restoredEntitlements: readonly Entitlement[];
   /** Server-confirmed consumable outcomes; native order visibility alone is not a grant. */
   readonly settledPurchases?: readonly PurchaseSettlement[];
+  /** Present when restore finished only partially, for example with orders still unresolved. */
+  readonly diagnostic?: CommerceDiagnostic;
 }
 
 export interface PurchaseSettlement {
@@ -133,6 +147,8 @@ export interface PurchaseSettlement {
   readonly status: 'granted' | 'refunded';
   readonly ledgerEntryId?: string;
   readonly alreadyProcessed?: boolean;
+  /** Client purchase idempotency key the order was started with, when the adapter can link it. */
+  readonly idempotencyKey?: string;
 }
 
 /**

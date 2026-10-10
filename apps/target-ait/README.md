@@ -42,11 +42,13 @@ to that process. Game identity requires Toss app 5.232.0 or newer, while Game
 Center requires Toss app 5.221.0 or newer. Verify IAP in the Sandbox and then
 verify the uploaded bundle through the Toss-app QR before publishing.
 
-SDK 3 bundles require API servers to allow both the production
-`https://<appName>.web.tossmini.com` origin and the QR-test
-`https://<appName>.private-web.tossmini.com` origin. Releasing SDK 3 is
-irreversible for that app: a later release cannot roll back to SDK 2. Complete
-the QR test and CORS verification before publishing.
+SDK 3 bundles require API servers to allow the production
+`https://<appName>.web.tossmini.com` and QR-test
+`https://<appName>.private-web.tossmini.com` origins, plus the matching
+`apps.tossmini.com` and `private-apps.tossmini.com` pair. Build the exact list
+with `aitBrowserOrigins(appName)` from `@mpgd/adapter-ait/origins`. Releasing
+SDK 3 is irreversible for that app: a later release cannot roll back to SDK 2.
+Complete the QR test and CORS verification before publishing.
 
 Purchases remain unavailable until a game configures the authoritative IAP
 contract. The generic bridge intentionally supports only one-time consumable
