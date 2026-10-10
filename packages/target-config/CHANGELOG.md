@@ -1,5 +1,11 @@
 # @mpgd/target-config
 
+## 0.21.1 — 2026-10-11
+
+### Patch changes
+
+- Updated dependencies: catalog@0.8.1, i18n@0.6.9, platform@0.18.0
+
 ## 0.21.0 — 2026-10-10
 
 ### Minor changes
