@@ -111,13 +111,26 @@ recovery rules:
   releases the lock only after its grant callbacks, direct recovery and order
   link writes have settled.
 - **Acknowledgement barrier.** Before every `completeProductGrant()` call, the
-  bridge records the order as in flight. If the call times out, the record
-  stays: once a later pass no longer sees the order in the provider list, it
-  reports the order as settled (so a same-product purchase returns
-  `AIT_IAP_PENDING_ORDER_RECOVERED`) and clears the record. If the record
-  cannot be read or written, the order is not acknowledged. Reads and writes
-  of the record run one at a time, and each waits until earlier storage calls
-  have actually finished, so a late write can never overwrite a newer one.
+  bridge records the order as in flight (`recorded`), then marks it
+  `started` right before dispatching the call. If the call times out, the
+  record stays. A later pass that no longer sees a `started` order in the
+  provider list reports it as settled (so a same-product purchase returns
+  `AIT_IAP_PENDING_ORDER_RECOVERED`) and clears the record. A `recorded`
+  order was never dispatched, so its absence proves nothing: it settles only
+  when the verifier confirms the grant again, and otherwise stays an
+  unresolved same-product barrier. If the record cannot be read or written,
+  the order is not acknowledged.
+- **Serialized storage.** Every adapter-reserved IAP storage key (attempt
+  markers, order links, the acknowledgement record, the cursor and the
+  completed index) is read and written one operation at a time. Each waits
+  until earlier calls on that key have actually finished, so a late write can
+  never overwrite a newer one and a read never sees an absence that races an
+  unfinished write. A call whose turn does not come in time fails closed.
+- **Storage growth.** Order links are removed once their order is settled and
+  kept while it is pending or its acknowledgement is ambiguous. The
+  acknowledgement record holds at most 32 orders and the completed index 64
+  keys. Completed attempt markers are kept, because they stop a replayed
+  client key from opening a second checkout.
 - **Partner grant failure.** When the SDK reports
   `PRODUCT_NOT_GRANTED_BY_PARTNER` for an order the callback saw, the bridge
   verifies that exact order once more (`source: 'pending-order-restore'`),

@@ -1,6 +1,7 @@
 ---
 npm/@mpgd/adapter-ait: minor
 npm/@mpgd/platform: minor
+npm/@mpgd/adapter-capacitor: patch
 ---
 
 Harden the built-in Apps in Toss purchase flow with recovery rules proven by a
@@ -17,3 +18,5 @@ fails. Catalog and purchase outcomes carry stable diagnostic codes
 (`@mpgd/adapter-ait/origins`) for exact CORS allowlists. `@mpgd/platform` adds
 the optional `CommerceDiagnostic` type, `diagnostic` fields on purchase and
 restore results, and `idempotencyKey` on `PurchaseSettlement`.
+`@mpgd/adapter-capacitor` validates the new `diagnostic` and settlement
+`idempotencyKey` fields in native provider responses.

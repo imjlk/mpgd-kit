@@ -709,7 +709,11 @@ describe('AIT production host bridge', () => {
         source: 'shop',
         idempotencyKey: 'hint-pack-5-timeout',
       });
-      await vi.waitFor(() => expect(callbacks).toBeDefined());
+      // Flush microtasks only: vi.waitFor would advance fake time past the
+      // 10ms deadlines of the pre-checkout steps.
+      for (let turn = 0; turn < 200 && callbacks === undefined; turn += 1) {
+        await Promise.resolve();
+      }
       if (callbacks === undefined) {
         throw new Error('Expected Apps in Toss purchase callbacks to be registered.');
       }
@@ -3456,6 +3460,9 @@ describe('AIT IAP recovery hardening', () => {
     });
     // The direct re-verify does not depend on the (possibly lagging) pending list.
     expect(getPendingOrders).toHaveBeenCalledOnce();
+    // The settled order's client link is removed.
+    expect([...values.keys()].some((key) => key.startsWith('mpgd:ait:iap-order-attempt:v1:')))
+      .toBe(false);
     await expect(request(createAitHostBridge(options), 'commerce.purchase', payload))
       .resolves.toEqual(completed);
   });
@@ -4366,7 +4373,7 @@ describe('AIT IAP recovery hardening', () => {
       idempotencyKey: 'ack-timeout-1',
     })).resolves.toEqual(blocked('AIT_IAP_PENDING_ORDER_UNRESOLVED'));
     expect(JSON.parse(values.get('mpgd:ait:iap-ack-in-flight:v1') ?? '[]')).toEqual([
-      { orderId: 'order-slow-ack', sku: coinsSku },
+      { orderId: 'order-slow-ack', sku: coinsSku, phase: 'started' },
     ]);
 
     // The timed-out native call succeeds later and the order leaves the list.
@@ -4456,8 +4463,9 @@ describe('AIT IAP recovery hardening', () => {
           setItem: async (key: string, value: string) => {
             if (key === ackKey) {
               ackWrites += 1;
-              if (ackWrites === 2) {
-                // The clear of order A stalls past its deadline, then lands late.
+              // Writes: A recorded, A started, then A's clear, which stalls
+              // past its deadline and lands late.
+              if (ackWrites === 3) {
                 await new Promise<void>((resolve) => {
                   releaseStalledWrite = resolve;
                 });
@@ -4492,8 +4500,197 @@ describe('AIT IAP recovery hardening', () => {
       diagnostic: { code: 'AIT_IAP_PENDING_ORDER_UNRESOLVED' },
     });
     expect(JSON.parse(values.get(ackKey) ?? '[]')).toEqual([
-      { orderId: 'order-b', sku: coinsSku },
+      { orderId: 'order-b', sku: coinsSku, phase: 'started' },
     ]);
+  });
+
+  it('keeps a restore from reading an order link while its native write still runs', async () => {
+    const values = new Map<string, string>();
+    const memoryStorage = createMemoryStorage(values);
+    const linkKey = 'mpgd:ait:iap-order-attempt:v1:order-native-link';
+    let releaseLinkWrite: (() => void) | undefined;
+    let callbacks: IapPurchaseCallbacks | undefined;
+    let pendingOrders: IapPendingOrdersResult = { orders: [] };
+    let serverAvailable = false;
+    const completeProductGrant = vi.fn(async () => true);
+    const bridge = createAitHostBridge({
+      iapProducts: [coinsProduct],
+      prepareIap: async () => true,
+      verifyIapProductGrant: async () => serverAvailable,
+      readIapEntitlements: async () => [],
+      iapProductGrantTimeoutMs: 150,
+      dependencies: createDependencies({
+        storage: {
+          ...memoryStorage,
+          setItem: async (key: string, value: string) => {
+            if (key === linkKey) {
+              // The native write outlives every deadline before it lands.
+              await new Promise<void>((resolve) => {
+                releaseLinkWrite = resolve;
+              });
+            }
+            await memoryStorage.setItem(key, value);
+          },
+        },
+        iap: createSupportedIap({
+          products: coinsCatalog,
+          getPendingOrders: async () => pendingOrders,
+          completeProductGrant,
+          onPurchase: (input) => {
+            callbacks = input;
+          },
+        }),
+      }),
+    });
+
+    const purchase = request(bridge, 'commerce.purchase', {
+      productId: 'COINS_100',
+      idempotencyKey: 'native-link',
+    });
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    await callbacks?.options.processProductGrant({ orderId: 'order-native-link' });
+    await callbacks?.onEvent({ type: 'success', data: createIapSuccessEvent('order-native-link') });
+    // The purchase gives up waiting after its bounded deadline.
+    await expect(purchase).resolves.toMatchObject({ status: 'pending' });
+    expect(values.has(linkKey)).toBe(false);
+
+    serverAvailable = true;
+    pendingOrders = { orders: [pendingOrder('order-native-link')] };
+    await expect(request(bridge, 'commerce.restore', {})).resolves.toEqual({
+      restoredEntitlements: [],
+      diagnostic: { code: 'AIT_IAP_PENDING_ORDER_UNRESOLVED', retryable: true },
+    });
+    expect(completeProductGrant).not.toHaveBeenCalled();
+
+    releaseLinkWrite?.();
+    await vi.waitFor(() => expect(values.has(linkKey)).toBe(true));
+    await expect(request(bridge, 'commerce.restore', {})).resolves.toMatchObject({
+      settledPurchases: [{ transactionId: 'order-native-link', idempotencyKey: 'native-link' }],
+    });
+    expect(completeProductGrant).toHaveBeenCalledOnce();
+  });
+
+  it('confirms only dispatched acknowledgements by the order leaving the provider list', async () => {
+    const ackKey = 'mpgd:ait:iap-ack-in-flight:v1';
+    for (const phase of ['recorded', 'started'] as const) {
+      const values = new Map<string, string>([[ackKey, JSON.stringify([
+        { orderId: 'order-phase', sku: coinsSku, phase },
+      ])]]);
+      let serverConfirms = false;
+      const verifyIapProductGrant = vi.fn(async () => serverConfirms);
+      const startPurchase = vi.fn();
+      const bridge = createAitHostBridge({
+        iapProducts: [coinsProduct],
+        prepareIap: async () => true,
+        verifyIapProductGrant,
+        readIapEntitlements: async () => [],
+        dependencies: createDependencies({
+          storage: createMemoryStorage(values),
+          iap: createSupportedIap({ products: coinsCatalog, onPurchase: startPurchase }),
+        }),
+      });
+      const purchase = () => request(bridge, 'commerce.purchase', {
+        productId: 'COINS_100',
+        idempotencyKey: `phase-${phase}`,
+      });
+
+      if (phase === 'started') {
+        await expect(purchase()).resolves.toMatchObject({
+          diagnostic: { code: 'AIT_IAP_PENDING_ORDER_RECOVERED' },
+        });
+        expect(verifyIapProductGrant).not.toHaveBeenCalled();
+        expect(values.get(ackKey)).toBe('[]');
+        continue;
+      }
+      // Never dispatched: absence is not confirmation, so the barrier stays.
+      await expect(purchase()).resolves.toMatchObject({
+        diagnostic: { code: 'AIT_IAP_PENDING_ORDER_UNRESOLVED' },
+      });
+      expect(JSON.parse(values.get(ackKey) ?? '[]')).toHaveLength(1);
+      expect(verifyIapProductGrant).toHaveBeenCalledWith(expect.objectContaining({
+        orderId: 'order-phase',
+        source: 'pending-order-restore',
+      }));
+      // Only a confirmed server grant settles it.
+      serverConfirms = true;
+      await expect(purchase()).resolves.toMatchObject({
+        diagnostic: { code: 'AIT_IAP_PENDING_ORDER_RECOVERED' },
+      });
+      expect(values.get(ackKey)).toBe('[]');
+      expect(startPurchase).not.toHaveBeenCalled();
+    }
+  });
+
+  it('removes order links once the order is settled and keeps them while ambiguous', async () => {
+    const linkKeys = (values: ReadonlyMap<string, string>) => [...values.keys()]
+      .filter((key) => key.startsWith('mpgd:ait:iap-order-attempt:v1:'));
+
+    // Grant callback success.
+    {
+      const values = new Map<string, string>();
+      let callbacks: IapPurchaseCallbacks | undefined;
+      const bridge = createAitHostBridge({
+        iapProducts: [coinsProduct],
+        prepareIap: async () => true,
+        verifyIapProductGrant: async () => true,
+        readIapEntitlements: async () => [],
+        dependencies: createDependencies({
+          storage: createMemoryStorage(values),
+          iap: createSupportedIap({
+            products: coinsCatalog,
+            onPurchase: (input) => {
+              callbacks = input;
+            },
+          }),
+        }),
+      });
+      const purchase = request(bridge, 'commerce.purchase', {
+        productId: 'COINS_100',
+        idempotencyKey: 'link-callback',
+      });
+      await vi.waitFor(() => expect(callbacks).toBeDefined());
+      await callbacks?.options.processProductGrant({ orderId: 'order-link-callback' });
+      await callbacks?.onEvent({
+        type: 'success',
+        data: createIapSuccessEvent('order-link-callback'),
+      });
+      await expect(purchase).resolves.toMatchObject({ status: 'completed' });
+      expect(linkKeys(values)).toEqual([]);
+    }
+
+    // Restore acknowledgement, then an ambiguous acknowledgement.
+    {
+      const values = new Map<string, string>([
+        ['mpgd:ait:iap-order-attempt:v1:order-restored', JSON.stringify({
+          productId: 'COINS_100', idempotencyKey: 'restored-key',
+        })],
+        ['mpgd:ait:iap-order-attempt:v1:order-ambiguous', JSON.stringify({
+          productId: 'COINS_100', idempotencyKey: 'ambiguous-key',
+        })],
+      ]);
+      const bridge = createAitHostBridge({
+        iapProducts: [coinsProduct],
+        prepareIap: async () => true,
+        verifyIapProductGrant: async () => true,
+        readIapEntitlements: async () => [],
+        iapProductGrantTimeoutMs: 150,
+        dependencies: createDependencies({
+          storage: createMemoryStorage(values),
+          iap: createSupportedIap({
+            pendingOrders: {
+              orders: [pendingOrder('order-restored'), pendingOrder('order-ambiguous')],
+            },
+            completeProductGrant: async ({ params }) => (
+              params.orderId === 'order-restored' ? true : await new Promise<boolean>(() => {})
+            ),
+          }),
+        }),
+      });
+      await expect(request(bridge, 'commerce.restore', {})).resolves.toMatchObject({
+        settledPurchases: [{ transactionId: 'order-restored' }],
+      });
+      expect(linkKeys(values)).toEqual(['mpgd:ait:iap-order-attempt:v1:order-ambiguous']);
+    }
   });
 
   it('reports stable catalog and purchase diagnostic codes', async () => {

@@ -455,8 +455,6 @@ export function createAitHostBridge(
     return next;
   };
 
-  const acknowledgementQueue = createAitIapStorageQueue();
-
   /** Callers must hold the single IAP lock for the whole pass. */
   const reconcilePendingIapOrders = async (
     verifier: AitIapProductGrantVerifier,
@@ -467,7 +465,6 @@ export function createAitHostBridge(
       products: iapProducts,
       verifier,
       retainCompletedAttempt: enqueueCompletedIapAttemptRetention,
-      acknowledgementQueue,
       timeoutMs,
     });
   };
@@ -756,7 +753,6 @@ export function createAitHostBridge(
             prepare: prepareIap,
             verifier: verifyIapProductGrant,
             retainCompletedAttempt: enqueueCompletedIapAttemptRetention,
-            acknowledgementQueue,
             reconcilePendingOrders: (timeoutMs) =>
               reconcilePendingIapOrders(verifyIapProductGrant, timeoutMs),
             timeoutMs: iapProductGrantTimeoutMs,
@@ -1711,7 +1707,6 @@ interface AitIapPurchaseInput {
   readonly prepare: AitIapPreparer;
   readonly verifier: AitIapProductGrantVerifier;
   readonly retainCompletedAttempt: AitIapCompletedAttemptRetention;
-  readonly acknowledgementQueue: AitIapStorageQueue;
   /** Checks provider orders for configured SKUs before a new checkout can charge again. */
   readonly reconcilePendingOrders: (
     timeoutMs: number,
@@ -1947,22 +1942,12 @@ async function resolvePersistedAitIapPurchaseAttempt(
   );
   const attemptPending = aitIapDiagnostic(aitIapDiagnosticCodes.attemptPending, true);
   const storageKey = aitIapPurchaseAttemptStorageKey(input.product.productId, input.idempotencyKey);
-  let serialized: string | null | undefined;
-  try {
-    serialized = await waitForAitIapNativeCall(
-      () => input.storage.getItem(storageKey),
-      input.timeoutMs,
-    );
-  } catch (error) {
-    console.warn(
-      'AIT IAP purchase attempt storage read failed; treating the attempt as pending.',
-      errorMessage(error),
-    );
+  const read = await readAitIapStorage(input.storage, storageKey, input.timeoutMs);
+  if (read.status !== 'ok') {
+    console.warn('AIT IAP purchase attempt storage read failed; treating the attempt as pending.');
     return pendingPurchase(undefined, storageUnavailable);
   }
-  if (serialized === undefined) {
-    return pendingPurchase(undefined, storageUnavailable);
-  }
+  const serialized = read.value;
   if (serialized === null) {
     return undefined;
   }
@@ -2137,7 +2122,12 @@ async function writeAitIapStorage(
   value: string,
   timeoutMs: number,
 ): Promise<boolean> {
-  return await waitForAitIapStorageOperation(() => storage.setItem(key, value), timeoutMs);
+  return (await runAitIapStorageOperation(
+    storage,
+    key,
+    () => storage.setItem(key, value),
+    timeoutMs,
+  )).status === 'ok';
 }
 
 async function removeAitIapStorage(
@@ -2145,27 +2135,12 @@ async function removeAitIapStorage(
   key: string,
   timeoutMs: number,
 ): Promise<boolean> {
-  return await waitForAitIapStorageOperation(() => storage.removeItem(key), timeoutMs);
-}
-
-async function waitForAitIapStorageOperation(
-  operation: () => Promise<void>,
-  timeoutMs: number,
-): Promise<boolean> {
-  let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
-  const timeoutResult = new Promise<false>((resolve) => {
-    timeout = globalThis.setTimeout(() => resolve(false), timeoutMs);
-  });
-  const operationResult = Promise.resolve()
-    .then(operation)
-    .then(() => true, () => false);
-  try {
-    return await Promise.race([operationResult, timeoutResult]);
-  } finally {
-    if (timeout !== undefined) {
-      globalThis.clearTimeout(timeout);
-    }
-  }
+  return (await runAitIapStorageOperation(
+    storage,
+    key,
+    () => storage.removeItem(key),
+    timeoutMs,
+  )).status === 'ok';
 }
 
 function aitIapPurchaseAttemptStorageKey(
@@ -2232,11 +2207,15 @@ async function retainCompletedAitIapPurchaseAttempt(
 ): Promise<void> {
   const startedAt = Date.now();
   try {
-    const serialized = await waitForAitIapNativeCall(
-      () => storage.getItem(iapCompletedPurchaseAttemptIndexStorageKey),
+    const read = await readAitIapStorage(
+      storage,
+      iapCompletedPurchaseAttemptIndexStorageKey,
       timeoutMs,
     );
-    const knownKeys = parseAitIapCompletedPurchaseAttemptIndex(serialized);
+    if (read.status !== 'ok') {
+      return;
+    }
+    const knownKeys = parseAitIapCompletedPurchaseAttemptIndex(read.value);
     const keys = [...knownKeys.filter((knownKey) => knownKey !== storageKey), storageKey];
     const retainedKeys = keys.slice(-maximumIndexedCompletedIapPurchaseAttempts);
     const retentionTimeoutMs = remainingAitIapOperationTimeout(startedAt, timeoutMs);
@@ -2281,19 +2260,15 @@ async function readAitIapPendingOrderCursor(
   storage: Pick<typeof Storage, 'getItem'>,
   timeoutMs: number,
 ): Promise<string | undefined> {
-  try {
-    const cursor = await waitForAitIapNativeCall(
-      () => storage.getItem(iapPendingOrderCursorStorageKey),
-      timeoutMs,
-    );
-    return typeof cursor === 'string' && isAitIapOrderId(cursor) ? cursor : undefined;
-  } catch (error) {
+  const read = await readAitIapStorage(storage, iapPendingOrderCursorStorageKey, timeoutMs);
+  if (read.status !== 'ok') {
     console.warn(
       'AIT IAP pending-order cursor read failed; starting from the first eligible order.',
-      errorMessage(error),
     );
     return undefined;
   }
+  const cursor = read.value;
+  return typeof cursor === 'string' && isAitIapOrderId(cursor) ? cursor : undefined;
 }
 
 async function writeAitIapPendingOrderCursor(
@@ -2544,7 +2519,6 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
       }
       const acknowledgement = await acknowledgeAitIapOrder({
         dependencies: input.dependencies,
-        acknowledgementQueue: input.acknowledgementQueue,
         orderId,
         product: input.product,
         idempotencyKey: input.idempotencyKey,
@@ -2555,6 +2529,11 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
         // acknowledge the still-pending provider order later.
         return pendingPurchase(orderId, acknowledgement.diagnostic);
       }
+      await removeAitIapOrderAttemptLink(
+        input.dependencies.storage,
+        orderId,
+        remainingAitIapOperationTimeout(startedAt, input.timeoutMs),
+      );
       return completed;
     };
 
@@ -2592,7 +2571,17 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
             ));
             return;
           }
-          finish(await completeAttempt(data.orderId, 'process-product-grant'));
+          const completed = await completeAttempt(data.orderId, 'process-product-grant');
+          if (completed.status === 'completed') {
+            // The SDK acknowledged the order after the grant callback, and the
+            // attempt marker is completed: the order link is no longer needed.
+            trackWrite(removeAitIapOrderAttemptLink(
+              input.dependencies.storage,
+              data.orderId,
+              input.timeoutMs,
+            ));
+          }
+          finish(completed);
         },
         onError: (error) => {
           if (settled) {
@@ -2787,7 +2776,6 @@ interface AitIapPendingOrderReconciliationInput {
   readonly products: NormalizedAitIapProducts;
   readonly verifier: AitIapProductGrantVerifier;
   readonly retainCompletedAttempt: AitIapCompletedAttemptRetention;
-  readonly acknowledgementQueue: AitIapStorageQueue;
   readonly timeoutMs: number;
 }
 
@@ -2887,29 +2875,53 @@ async function reconcileAitIapPendingOrders(
   const unresolvedOrders: AitIapUnresolvedOrder[] = [];
   let diagnostic: CommerceDiagnostic | undefined;
 
-  // An acknowledgement that timed out may have succeeded since. Its order is
-  // granted on the server; once the provider no longer lists it, report it as
-  // settled (which also keeps the same-product checkout barrier for this
-  // pass) and only then drop it from the in-flight list.
+  // A barrier whose order the provider no longer lists is resolved here:
+  // - `started`: the dispatched acknowledgement evidently succeeded, so the
+  //   server-granted order is settled.
+  // - `recorded`: no acknowledgement was dispatched, so absence proves
+  //   nothing (the list can lag). The server is asked again; only a confirmed
+  //   grant settles it, otherwise it stays an unresolved same-product barrier.
+  // A settled barrier is reported (keeping the same-product checkout barrier
+  // for this pass) and only then dropped, together with its order link.
   const acknowledgementReadTimeoutMs = getRemainingTimeout();
   const acknowledgements = acknowledgementReadTimeoutMs === 0
     ? undefined
     : await readAitIapAcknowledgementsInFlight(
         input.dependencies.storage,
-        input.acknowledgementQueue,
         acknowledgementReadTimeoutMs,
       );
   if (acknowledgements === undefined) {
     return malformedPendingOrders;
   }
-  const confirmedAcknowledgements = acknowledgements.filter(
-    (entry) => !providerPendingOrderIds.has(entry.orderId),
-  );
-  for (const entry of confirmedAcknowledgements) {
+  const confirmedAcknowledgements: AitIapAcknowledgementInFlight[] = [];
+  for (const entry of acknowledgements) {
+    if (providerPendingOrderIds.has(entry.orderId)) {
+      continue;
+    }
     const product = input.products.bySku.get(entry.sku);
     if (product === undefined) {
       continue;
     }
+    if (entry.phase === 'recorded') {
+      const verificationTimeoutMs = getRemainingTimeout();
+      const confirmed = verificationTimeoutMs > 0 && await verifyAitIapProductGrant({
+        verifier: input.verifier,
+        orderId: entry.orderId,
+        product,
+        idempotencyKey: createAitIapOrderIdempotencyKey(entry.orderId),
+        ...(entry.idempotencyKey === undefined
+          ? {}
+          : { clientIdempotencyKey: entry.idempotencyKey }),
+        source: 'pending-order-restore',
+        timeoutMs: verificationTimeoutMs,
+      });
+      if (!confirmed) {
+        unresolvedOrders.push({ orderId: entry.orderId, sku: entry.sku });
+        diagnostic ??= aitIapDiagnostic(aitIapDiagnosticCodes.grantPending, true);
+        continue;
+      }
+    }
+    confirmedAcknowledgements.push(entry);
     settledPurchases.push({
       transactionId: entry.orderId,
       productId: product.productId,
@@ -2926,12 +2938,20 @@ async function reconcileAitIapPendingOrders(
     const clearTimeoutMs = getRemainingTimeout();
     if (clearTimeoutMs > 0) {
       // A failed clear only reports the same settled order again next time.
-      await removeAitIapAcknowledgementsInFlight(
+      const cleared = await removeAitIapAcknowledgementsInFlight(
         input.dependencies.storage,
-        input.acknowledgementQueue,
         confirmedAcknowledgements.map(({ orderId }) => orderId),
         clearTimeoutMs,
       );
+      if (cleared) {
+        for (const { orderId } of confirmedAcknowledgements) {
+          await removeAitIapOrderAttemptLink(
+            input.dependencies.storage,
+            orderId,
+            getRemainingTimeout(),
+          );
+        }
+      }
     }
   }
 
@@ -3040,7 +3060,6 @@ async function reconcileAitIapPendingOrders(
     }
     const acknowledgement = await acknowledgeAitIapOrder({
       dependencies: input.dependencies,
-      acknowledgementQueue: input.acknowledgementQueue,
       orderId: order.orderId,
       product,
       ...(clientIdempotencyKey === undefined ? {} : { idempotencyKey: clientIdempotencyKey }),
@@ -3051,6 +3070,13 @@ async function reconcileAitIapPendingOrders(
       unresolvedOrders.push({ orderId: order.orderId, sku: order.sku });
       diagnostic ??= acknowledgement.diagnostic;
       continue;
+    }
+    if (link.status === 'linked') {
+      await removeAitIapOrderAttemptLink(
+        input.dependencies.storage,
+        order.orderId,
+        getRemainingTimeout(),
+      );
     }
     settledPurchases.push({
       transactionId: order.orderId,
@@ -3092,8 +3118,8 @@ async function completeLinkedAitIapPurchaseAttempt(input: {
 }): Promise<'completed' | 'not-applicable' | 'failed'> {
   const startedAt = Date.now();
   const storageKey = aitIapPurchaseAttemptStorageKey(input.product.productId, input.idempotencyKey);
-  const read = await callAitIapNative(() => input.storage.getItem(storageKey), input.timeoutMs);
-  if (read.status !== 'ok' || (read.value !== null && typeof read.value !== 'string')) {
+  const read = await readAitIapStorage(input.storage, storageKey, input.timeoutMs);
+  if (read.status !== 'ok') {
     return 'failed';
   }
   // A linked attempt without a marker would let a replay of its key open a
@@ -3142,6 +3168,12 @@ interface AitIapAcknowledgementInFlight {
   readonly orderId: string;
   readonly sku: string;
   readonly idempotencyKey?: string;
+  /**
+   * `recorded`: the barrier exists but `completeProductGrant()` was not
+   * dispatched yet. `started`: the native acknowledgement was dispatched, so
+   * the order leaving the provider list confirms it.
+   */
+  readonly phase: 'recorded' | 'started';
 }
 
 type AitIapAcknowledgement =
@@ -3158,7 +3190,6 @@ type AitIapAcknowledgement =
  */
 async function acknowledgeAitIapOrder(input: {
   readonly dependencies: Pick<AitHostDependencies, 'iap' | 'storage'>;
-  readonly acknowledgementQueue: AitIapStorageQueue;
   readonly orderId: string;
   readonly product: NormalizedAitIapProduct;
   readonly idempotencyKey?: string;
@@ -3171,10 +3202,9 @@ async function acknowledgeAitIapOrder(input: {
     diagnostic: aitIapDiagnostic(aitIapDiagnosticCodes.attemptStorageUnavailable, true),
   };
   const storage = input.dependencies.storage;
-  const queue = input.acknowledgementQueue;
   const entries = remaining() === 0
     ? undefined
-    : await readAitIapAcknowledgementsInFlight(storage, queue, remaining());
+    : await readAitIapAcknowledgementsInFlight(storage, remaining());
   if (entries === undefined) {
     return barrierUnavailable;
   }
@@ -3182,19 +3212,33 @@ async function acknowledgeAitIapOrder(input: {
   if (others.length >= maximumIapAcknowledgementsInFlight) {
     return barrierUnavailable;
   }
-  const serialized = JSON.stringify([
+  const withPhase = (phase: AitIapAcknowledgementInFlight['phase']): string => JSON.stringify([
     ...others,
     {
       orderId: input.orderId,
       sku: input.product.sku,
       ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+      phase,
     },
   ]);
-  const recorded = remaining() > 0 && (await queue(
-    () => storage.setItem(iapAcknowledgementsInFlightStorageKey, serialized),
+  // Two durable steps: the barrier first, then the dispatch mark. Only a
+  // record marked `started` may later be confirmed by the order's absence.
+  const recorded = remaining() > 0 && await writeAitIapStorage(
+    storage,
+    iapAcknowledgementsInFlightStorageKey,
+    withPhase('recorded'),
     remaining(),
-  )).status === 'ok';
+  );
   if (!recorded) {
+    return barrierUnavailable;
+  }
+  const dispatchMarked = remaining() > 0 && await writeAitIapStorage(
+    storage,
+    iapAcknowledgementsInFlightStorageKey,
+    withPhase('started'),
+    remaining(),
+  );
+  if (!dispatchMarked) {
     return barrierUnavailable;
   }
   const completionTimeoutMs = remaining();
@@ -3213,12 +3257,7 @@ async function acknowledgeAitIapOrder(input: {
   }
   // Confirmed success or a definitive rejection: the order is no longer in
   // flight. A failed removal only reports the order as settled once more.
-  await removeAitIapAcknowledgementsInFlight(
-    storage,
-    queue,
-    [input.orderId],
-    Math.max(1, remaining()),
-  );
+  await removeAitIapAcknowledgementsInFlight(storage, [input.orderId], Math.max(1, remaining()));
   if (completion.status === 'ok' && completion.value === true) {
     return { status: 'acknowledged' };
   }
@@ -3235,18 +3274,14 @@ async function acknowledgeAitIapOrder(input: {
 /** Returns undefined when the list cannot be read or is malformed. */
 async function readAitIapAcknowledgementsInFlight(
   storage: Pick<typeof Storage, 'getItem'>,
-  queue: AitIapStorageQueue,
   timeoutMs: number,
 ): Promise<readonly AitIapAcknowledgementInFlight[] | undefined> {
-  const read = await queue(() => storage.getItem(iapAcknowledgementsInFlightStorageKey), timeoutMs);
+  const read = await readAitIapStorage(storage, iapAcknowledgementsInFlightStorageKey, timeoutMs);
   if (read.status !== 'ok') {
     return undefined;
   }
   if (read.value === null) {
     return [];
-  }
-  if (typeof read.value !== 'string') {
-    return undefined;
   }
   try {
     const value: unknown = JSON.parse(read.value);
@@ -3262,6 +3297,7 @@ async function readAitIapAcknowledgementsInFlight(
         || typeof entry.sku !== 'string'
         || (entry.idempotencyKey !== undefined
           && !isAitIapClientIdempotencyKey(entry.idempotencyKey))
+        || (entry.phase !== 'recorded' && entry.phase !== 'started')
       ) {
         return undefined;
       }
@@ -3271,6 +3307,7 @@ async function readAitIapAcknowledgementsInFlight(
         ...(typeof entry.idempotencyKey === 'string'
           ? { idempotencyKey: entry.idempotencyKey }
           : {}),
+        phase: entry.phase,
       });
     }
     return entries;
@@ -3281,64 +3318,109 @@ async function readAitIapAcknowledgementsInFlight(
 
 async function removeAitIapAcknowledgementsInFlight(
   storage: Pick<typeof Storage, 'getItem' | 'setItem'>,
-  queue: AitIapStorageQueue,
   orderIds: readonly string[],
   timeoutMs: number,
 ): Promise<boolean> {
   const startedAt = Date.now();
-  const entries = await readAitIapAcknowledgementsInFlight(storage, queue, timeoutMs);
+  const entries = await readAitIapAcknowledgementsInFlight(storage, timeoutMs);
   const remainingTimeoutMs = remainingAitIapOperationTimeout(startedAt, timeoutMs);
   if (entries === undefined || remainingTimeoutMs === 0) {
     return false;
   }
   const removed = new Set(orderIds);
-  const serialized = JSON.stringify(entries.filter((entry) => !removed.has(entry.orderId)));
-  return (await queue(
-    () => storage.setItem(iapAcknowledgementsInFlightStorageKey, serialized),
+  return await writeAitIapStorage(
+    storage,
+    iapAcknowledgementsInFlightStorageKey,
+    JSON.stringify(entries.filter((entry) => !removed.has(entry.orderId))),
     remainingTimeoutMs,
-  )).status === 'ok';
+  );
+}
+
+interface AitIapStorageKeyQueue {
+  tail: Promise<void>;
+  active: number;
 }
 
 /**
- * Runs native storage operations on one shared key strictly one after another.
- * Each operation starts only after every earlier operation has actually
- * settled, not merely timed out, so a late-landing write can never overwrite
- * a newer read-modify-write. A caller whose turn does not come within its
- * deadline gets `timeout` and the operation is never started.
+ * Per native storage object and adapter-reserved key, operations run strictly
+ * one after another. Each starts only after every earlier operation on that
+ * key has actually settled, not merely timed out, so a late-landing write can
+ * never overwrite a newer one and a read never observes an absence that races
+ * an in-flight write. A caller whose turn does not come within its deadline
+ * gets `timeout` and its operation is never started. Idle keys are forgotten.
  */
-type AitIapStorageQueue = <T>(
+const aitIapStorageQueues = new WeakMap<object, Map<string, AitIapStorageKeyQueue>>();
+
+async function runAitIapStorageOperation<T>(
+  storage: object,
+  key: string,
   operation: () => Promise<T>,
   timeoutMs: number,
-) => Promise<AitIapNativeOutcome<T>>;
+): Promise<AitIapNativeOutcome<T>> {
+  const startedAt = Date.now();
+  let queues = aitIapStorageQueues.get(storage);
+  if (queues === undefined) {
+    queues = new Map();
+    aitIapStorageQueues.set(storage, queues);
+  }
+  const keyQueues = queues;
+  let queue = keyQueues.get(key);
+  if (queue === undefined) {
+    queue = { tail: Promise.resolve(), active: 0 };
+    keyQueues.set(key, queue);
+  }
+  const current = queue;
+  const previous = current.tail;
+  let release: () => void = () => {};
+  const turn = new Promise<void>((resolve) => {
+    let released = false;
+    release = () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      current.active -= 1;
+      if (current.active === 0 && keyQueues.get(key) === current) {
+        keyQueues.delete(key);
+      }
+      resolve();
+    };
+  });
+  current.active += 1;
+  current.tail = previous.then(() => turn);
+  const ready = await callAitIapNative(() => previous, timeoutMs);
+  const remainingTimeoutMs = remainingAitIapOperationTimeout(startedAt, timeoutMs);
+  if (ready.status !== 'ok' || remainingTimeoutMs === 0) {
+    // Give up this turn without starting the operation. Later operations
+    // still wait for the earlier ones through the tail chain.
+    void previous.then(release);
+    return { status: 'timeout' };
+  }
+  let started: Promise<T>;
+  try {
+    started = Promise.resolve(operation());
+  } catch (error) {
+    release();
+    const providerCode = readAitIapProviderCode(error);
+    return providerCode === undefined ? { status: 'error' } : { status: 'error', providerCode };
+  }
+  void started.then(release, release);
+  return await callAitIapNative(() => started, remainingTimeoutMs);
+}
 
-function createAitIapStorageQueue(): AitIapStorageQueue {
-  let tail: Promise<void> = Promise.resolve();
-  return async <T>(operation: () => Promise<T>, timeoutMs: number) => {
-    const startedAt = Date.now();
-    const previous = tail;
-    let release: () => void = () => {};
-    const turn = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    tail = previous.then(() => turn);
-    const ready = await callAitIapNative(() => previous, timeoutMs);
-    const remainingTimeoutMs = remainingAitIapOperationTimeout(startedAt, timeoutMs);
-    if (ready.status !== 'ok' || remainingTimeoutMs === 0) {
-      // Give up this turn without starting the operation.
-      release();
-      return { status: 'timeout' };
-    }
-    let started: Promise<T>;
-    try {
-      started = Promise.resolve(operation());
-    } catch (error) {
-      release();
-      const providerCode = readAitIapProviderCode(error);
-      return providerCode === undefined ? { status: 'error' } : { status: 'error', providerCode };
-    }
-    void started.then(release, release);
-    return await callAitIapNative(() => started, remainingTimeoutMs);
-  };
+async function readAitIapStorage(
+  storage: Pick<typeof Storage, 'getItem'>,
+  key: string,
+  timeoutMs: number,
+): Promise<AitIapNativeOutcome<string | null>> {
+  const read = await runAitIapStorageOperation(storage, key, () => storage.getItem(key), timeoutMs);
+  if (read.status !== 'ok') {
+    return read;
+  }
+  const value: unknown = read.value;
+  return value === null || typeof value === 'string'
+    ? { status: 'ok', value }
+    : { status: 'error' };
 }
 
 /**
@@ -3380,9 +3462,20 @@ type AitIapOrderAttemptLink =
   | { readonly status: 'absent' }
   | { readonly status: 'unavailable' };
 
+/** Best effort: a link has no recovery role once its order is terminal. */
+async function removeAitIapOrderAttemptLink(
+  storage: Pick<typeof Storage, 'removeItem'>,
+  orderId: string,
+  timeoutMs: number,
+): Promise<void> {
+  if (timeoutMs > 0) {
+    await removeAitIapStorage(storage, aitIapOrderAttemptLinkStorageKey(orderId), timeoutMs);
+  }
+}
+
 /**
  * Only a successful read that returns no value proves the order has no client
- * attempt link. A failed, timed-out or unreadable link must keep the order
+ * attempt link. A read also waits for any in-flight write of the same link. A failed, timed-out or unreadable link must keep the order
  * unacknowledged, or its attempt marker could later be cleared and reopen a
  * checkout for an order that was already granted.
  */
@@ -3392,8 +3485,9 @@ async function readAitIapOrderAttemptLink(input: {
   readonly orderId: string;
   readonly timeoutMs: number;
 }): Promise<AitIapOrderAttemptLink> {
-  const read = await callAitIapNative(
-    () => input.storage.getItem(aitIapOrderAttemptLinkStorageKey(input.orderId)),
+  const read = await readAitIapStorage(
+    input.storage,
+    aitIapOrderAttemptLinkStorageKey(input.orderId),
     input.timeoutMs,
   );
   if (read.status !== 'ok') {
@@ -3401,9 +3495,6 @@ async function readAitIapOrderAttemptLink(input: {
   }
   if (read.value === null) {
     return { status: 'absent' };
-  }
-  if (typeof read.value !== 'string') {
-    return { status: 'unavailable' };
   }
   try {
     const link: unknown = JSON.parse(read.value);

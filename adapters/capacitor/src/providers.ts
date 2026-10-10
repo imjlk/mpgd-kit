@@ -310,7 +310,8 @@ function isValidProviderData(method: BridgeMethod, value: unknown): boolean {
           && (value.authoritativeGrant.alreadyProcessed === undefined
             || typeof value.authoritativeGrant.alreadyProcessed === 'boolean')
         ))
-        && (value.evidence === undefined || isEvidence(value.evidence));
+        && (value.evidence === undefined || isEvidence(value.evidence))
+        && (value.diagnostic === undefined || isCommerceDiagnostic(value.diagnostic));
     case 'commerce.restore':
       return isRecord(value)
         && Array.isArray(value.restoredEntitlements)
@@ -324,9 +325,12 @@ function isValidProviderData(method: BridgeMethod, value: unknown): boolean {
             && ['granted', 'refunded'].includes(settlement.status as string)
             && (settlement.ledgerEntryId === undefined || isString(settlement.ledgerEntryId))
             && (settlement.alreadyProcessed === undefined
-              || typeof settlement.alreadyProcessed === 'boolean'),
+              || typeof settlement.alreadyProcessed === 'boolean')
+            && (settlement.idempotencyKey === undefined
+              || isIdempotencyKey(settlement.idempotencyKey)),
           )
-        ));
+        ))
+        && (value.diagnostic === undefined || isCommerceDiagnostic(value.diagnostic));
     case 'commerce.getEntitlements':
       return Array.isArray(value) && value.every(isEntitlement);
     case 'ads.preload':
@@ -389,6 +393,25 @@ function isEntitlement(value: unknown): boolean {
     && ['purchase', 'promotion', 'admin'].includes(value.source as string)
     && isString(value.grantedAt)
     && (value.expiresAt === undefined || isString(value.expiresAt));
+}
+
+/** Mirrors the stable, non-sensitive code format of `PlatformOperationError`. */
+function isDiagnosticCode(value: unknown): value is string {
+  return isString(value) && value.length <= 128 && /^[A-Z][A-Z0-9_:-]*$/u.test(value);
+}
+
+function isCommerceDiagnostic(value: unknown): boolean {
+  return isRecord(value)
+    && isDiagnosticCode(value.code)
+    && typeof value.retryable === 'boolean'
+    && (value.providerCode === undefined || isDiagnosticCode(value.providerCode));
+}
+
+function isIdempotencyKey(value: unknown): boolean {
+  return isString(value)
+    && value.length > 0
+    && value.length <= 256
+    && !/[\p{Cc}\p{Cf}]/u.test(value);
 }
 
 function isEvidence(value: unknown): boolean {
