@@ -119,13 +119,21 @@ recovery rules:
   order was never dispatched, so its absence proves nothing: it settles only
   when the verifier confirms the grant again, and otherwise stays an
   unresolved same-product barrier. If the record cannot be read or written,
-  the order is not acknowledged.
+  the order is not acknowledged. A retry while an earlier
+  `completeProductGrant()` for the same order is still running joins that
+  call instead of dispatching again. A `started` record is cleared only by a
+  confirmed acknowledgement or by the order leaving the provider list; a
+  timeout, `false` or an error leaves it in place.
 - **Serialized storage.** Every adapter-reserved IAP storage key (attempt
   markers, order links, the acknowledgement record, the cursor and the
   completed index) is read and written one operation at a time. Each waits
   until earlier calls on that key have actually finished, so a late write can
   never overwrite a newer one and a read never sees an absence that races an
   unfinished write. A call whose turn does not come in time fails closed.
+  Once a call on a key outlives a deadline, later calls on that key fail
+  closed immediately until it settles, instead of queueing behind it.
+  Concurrent `getPendingOrders()` and `getProductItemList()` reads also share
+  one native call.
 - **Storage growth.** Completed attempt markers are kept indefinitely by
   design. They back idempotency, so replaying an accepted client key returns
   the completed purchase instead of opening another checkout. Each is a

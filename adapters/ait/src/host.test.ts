@@ -4750,6 +4750,148 @@ describe('AIT IAP recovery hardening', () => {
     }
   });
 
+  it('joins a running acknowledgement and keeps its started barrier', async () => {
+    const values = new Map<string, string>();
+    const ackKey = 'mpgd:ait:iap-ack-in-flight:v1';
+    let pendingOrders: IapPendingOrdersResult = { orders: [pendingOrder('order-joined')] };
+    const results: Array<(value: boolean) => void> = [];
+    const completeProductGrant = vi.fn(async () => await new Promise<boolean>((resolve) => {
+      results.push(resolve);
+    }));
+    const bridge = createAitHostBridge({
+      iapProducts: [coinsProduct],
+      prepareIap: async () => true,
+      verifyIapProductGrant: async () => true,
+      readIapEntitlements: async () => [],
+      iapProductGrantTimeoutMs: 150,
+      dependencies: createDependencies({
+        storage: createMemoryStorage(values),
+        iap: createSupportedIap({
+          getPendingOrders: async () => pendingOrders,
+          completeProductGrant,
+        }),
+      }),
+    });
+    const started = [{ orderId: 'order-joined', sku: coinsSku, phase: 'started' }];
+    const unresolved = {
+      restoredEntitlements: [],
+      diagnostic: { code: 'AIT_IAP_PENDING_ORDER_UNRESOLVED', retryable: true },
+    };
+
+    await expect(request(bridge, 'commerce.restore', {})).resolves.toEqual(unresolved);
+    expect(JSON.parse(values.get(ackKey) ?? '[]')).toEqual(started);
+    // The first native call is still running: the retry joins it.
+    await expect(request(bridge, 'commerce.restore', {})).resolves.toEqual(unresolved);
+    expect(completeProductGrant).toHaveBeenCalledOnce();
+    expect(JSON.parse(values.get(ackKey) ?? '[]')).toEqual(started);
+
+    // A rejected dispatch never clears a started barrier.
+    results[0]?.(false);
+    const retry = request(bridge, 'commerce.restore', {});
+    await vi.waitFor(() => expect(completeProductGrant).toHaveBeenCalledTimes(2));
+    results[1]?.(false);
+    await expect(retry).resolves.toEqual(unresolved);
+    expect(JSON.parse(values.get(ackKey) ?? '[]')).toEqual(started);
+
+    // Only the order leaving the provider list confirms it.
+    pendingOrders = { orders: [] };
+    await expect(request(bridge, 'commerce.restore', {})).resolves.toMatchObject({
+      settledPurchases: [{ transactionId: 'order-joined' }],
+    });
+    expect(values.get(ackKey)).toBe('[]');
+    expect(completeProductGrant).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails fast without queueing behind a hung storage write', async () => {
+    const values = new Map<string, string>();
+    const memoryStorage = createMemoryStorage(values);
+    const ackKey = 'mpgd:ait:iap-ack-in-flight:v1';
+    let releaseHungWrite: (() => void) | undefined;
+    let hangNextWrite = true;
+    const completeProductGrant = vi.fn(async () => true);
+    const bridge = createAitHostBridge({
+      iapProducts: [coinsProduct],
+      prepareIap: async () => true,
+      verifyIapProductGrant: async () => true,
+      readIapEntitlements: async () => [],
+      iapProductGrantTimeoutMs: 150,
+      dependencies: createDependencies({
+        storage: {
+          ...memoryStorage,
+          setItem: async (key: string, value: string) => {
+            if (key === ackKey && hangNextWrite) {
+              hangNextWrite = false;
+              await new Promise<void>((resolve) => {
+                releaseHungWrite = resolve;
+              });
+            }
+            await memoryStorage.setItem(key, value);
+          },
+        },
+        iap: createSupportedIap({
+          pendingOrders: { orders: [pendingOrder('order-hung-storage')] },
+          completeProductGrant,
+        }),
+      }),
+    });
+
+    await expect(request(bridge, 'commerce.restore', {})).resolves.toMatchObject({
+      diagnostic: { code: 'AIT_IAP_PENDING_ORDER_UNRESOLVED' },
+    });
+    expect(releaseHungWrite).toBeDefined();
+
+    // Each later access fails closed at once instead of waiting its full
+    // deadline behind the hung call (50 waits would take about 5 seconds).
+    const startedAt = Date.now();
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      await expect(requestError(bridge, 'commerce.restore', {})).resolves.toMatchObject({
+        code: 'AIT_IAP_PENDING_ORDER_CHECK_FAILED',
+      });
+    }
+    expect(Date.now() - startedAt).toBeLessThan(1_500);
+    expect(completeProductGrant).not.toHaveBeenCalled();
+
+    // Once the hung call settles, the key works again.
+    releaseHungWrite?.();
+    await vi.waitFor(() => expect(values.has(ackKey)).toBe(true));
+    await expect(request(bridge, 'commerce.restore', {})).resolves.toMatchObject({
+      settledPurchases: [{ transactionId: 'order-hung-storage' }],
+    });
+    expect(completeProductGrant).toHaveBeenCalledOnce();
+  });
+
+  it('joins a hung native pending-order read instead of starting another', async () => {
+    let releaseRead: ((orders: IapPendingOrdersResult) => void) | undefined;
+    const getPendingOrders = vi.fn(async () => (
+      releaseRead === undefined
+        ? await new Promise<IapPendingOrdersResult>((resolve) => {
+            releaseRead = resolve;
+          })
+        : { orders: [] }
+    ));
+    const bridge = createAitHostBridge({
+      iapProducts: [coinsProduct],
+      prepareIap: async () => true,
+      verifyIapProductGrant: async () => true,
+      readIapEntitlements: async () => [],
+      iapProductGrantTimeoutMs: 60,
+      dependencies: createDependencies({ iap: createSupportedIap({ getPendingOrders }) }),
+    });
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(requestError(bridge, 'commerce.restore', {})).resolves.toMatchObject({
+        code: 'AIT_IAP_PENDING_ORDER_CHECK_FAILED',
+      });
+    }
+    expect(getPendingOrders).toHaveBeenCalledOnce();
+
+    releaseRead?.({ orders: [] });
+    await expect(request(bridge, 'commerce.restore', {})).resolves.toEqual({
+      restoredEntitlements: [],
+    });
+    expect(getPendingOrders).toHaveBeenCalledTimes(2);
+  });
+
   it('reports stable catalog and purchase diagnostic codes', async () => {
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {

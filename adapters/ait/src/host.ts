@@ -1865,7 +1865,13 @@ async function readAitIapCatalog(
   dependencies: Pick<AitHostDependencies, 'iap'>,
   timeoutMs: number,
 ): Promise<AitIapCatalogOutcome<readonly IapProductListItem[]>> {
-  const outcome = await callAitIapNative(() => dependencies.iap.getProductItemList(), timeoutMs);
+  const outcome = await callAitIapNative(
+    () =>
+      joinAitIapNativeRead(dependencies.iap, 'getProductItemList', () =>
+        dependencies.iap.getProductItemList(),
+      ),
+    timeoutMs,
+  );
   if (outcome.status === 'timeout') {
     return {
       status: 'failed',
@@ -2189,7 +2195,10 @@ async function hasAitIapPendingOrderForSku(
 ): Promise<boolean | undefined> {
   try {
     const result = await waitForAitIapNativeCall(
-      () => dependencies.iap.getPendingOrders(),
+      () =>
+        joinAitIapNativeRead(dependencies.iap, 'getPendingOrders', () =>
+          dependencies.iap.getPendingOrders(),
+        ),
       timeoutMs,
     );
     const orders: unknown = isRecord(result) ? result.orders : undefined;
@@ -2826,7 +2835,10 @@ async function reconcileAitIapPendingOrders(
     };
   }
   const pendingOrders = await callAitIapNative(
-    () => input.dependencies.iap.getPendingOrders(),
+    () =>
+      joinAitIapNativeRead(input.dependencies.iap, 'getPendingOrders', () =>
+        input.dependencies.iap.getPendingOrders(),
+      ),
     pendingOrderTimeoutMs,
   );
   if (pendingOrders.status !== 'ok') {
@@ -3211,6 +3223,55 @@ type AitIapAcknowledgement =
  * timeout it stays until reconciliation sees the order leave the provider
  * list. Without the record, the order is not acknowledged.
  */
+/**
+ * Native `completeProductGrant()` calls that have not settled yet, per IAP
+ * dependency object and order. A retry for the same order joins the running
+ * call instead of dispatching a second acknowledgement.
+ */
+const aitIapAcknowledgementsRunning = new WeakMap<
+  object,
+  Map<string, Promise<AitIapNativeOutcome<boolean>>>
+>();
+
+function dispatchAitIapAcknowledgement(
+  iap: Pick<AitHostDependencies['iap'], 'completeProductGrant'>,
+  orderId: string,
+): Promise<AitIapNativeOutcome<boolean>> {
+  let running = aitIapAcknowledgementsRunning.get(iap);
+  if (running === undefined) {
+    running = new Map();
+    aitIapAcknowledgementsRunning.set(iap, running);
+  }
+  const existing = running.get(orderId);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const calls = running;
+  const call: Promise<AitIapNativeOutcome<boolean>> = Promise.resolve()
+    .then(() => iap.completeProductGrant({ params: { orderId } }))
+    .then(
+      (value): AitIapNativeOutcome<boolean> => ({ status: 'ok', value: value === true }),
+      (error: unknown): AitIapNativeOutcome<boolean> => {
+        const providerCode = readAitIapProviderCode(error);
+        return providerCode === undefined ? { status: 'error' } : { status: 'error', providerCode };
+      },
+    )
+    .finally(() => {
+      if (calls.get(orderId) === call) {
+        calls.delete(orderId);
+      }
+    });
+  calls.set(orderId, call);
+  return call;
+}
+
+function isAitIapAcknowledgementRunning(
+  iap: object,
+  orderId: string,
+): boolean {
+  return aitIapAcknowledgementsRunning.get(iap)?.has(orderId) === true;
+}
+
 async function acknowledgeAitIapOrder(input: {
   readonly dependencies: Pick<AitHostDependencies, 'iap' | 'storage'>;
   readonly orderId: string;
@@ -3231,8 +3292,18 @@ async function acknowledgeAitIapOrder(input: {
   if (entries === undefined) {
     return barrierUnavailable;
   }
+  const iap = input.dependencies.iap;
+  const existing = entries.find((entry) => entry.orderId === input.orderId);
   const others = entries.filter((entry) => entry.orderId !== input.orderId);
   if (others.length >= maximumIapAcknowledgementsInFlight) {
+    return barrierUnavailable;
+  }
+  // A `started` barrier stays as written: a running acknowledgement is
+  // joined, and a fresh dispatch (only possible once no call is running, for
+  // example after a reload) reuses the existing barrier.
+  const barrierStarted = existing?.phase === 'started';
+  if (!barrierStarted && isAitIapAcknowledgementRunning(iap, input.orderId)) {
+    // A call is running without a durable `started` barrier; never touch it.
     return barrierUnavailable;
   }
   const withPhase = (phase: AitIapAcknowledgementInFlight['phase']): string => JSON.stringify([
@@ -3244,45 +3315,48 @@ async function acknowledgeAitIapOrder(input: {
       phase,
     },
   ]);
-  // Two durable steps: the barrier first, then the dispatch mark. Only a
-  // record marked `started` may later be confirmed by the order's absence.
-  const recorded = remaining() > 0 && await writeAitIapStorage(
-    storage,
-    iapAcknowledgementsInFlightStorageKey,
-    withPhase('recorded'),
-    remaining(),
-  );
-  if (!recorded) {
-    return barrierUnavailable;
-  }
-  const dispatchMarked = remaining() > 0 && await writeAitIapStorage(
-    storage,
-    iapAcknowledgementsInFlightStorageKey,
-    withPhase('started'),
-    remaining(),
-  );
-  if (!dispatchMarked) {
-    return barrierUnavailable;
+  if (!barrierStarted) {
+    // Two durable steps: the barrier first, then the dispatch mark. Only a
+    // record marked `started` may later be confirmed by the order's absence.
+    const recorded = remaining() > 0 && await writeAitIapStorage(
+      storage,
+      iapAcknowledgementsInFlightStorageKey,
+      withPhase('recorded'),
+      remaining(),
+    );
+    if (!recorded) {
+      return barrierUnavailable;
+    }
+    const dispatchMarked = remaining() > 0 && await writeAitIapStorage(
+      storage,
+      iapAcknowledgementsInFlightStorageKey,
+      withPhase('started'),
+      remaining(),
+    );
+    if (!dispatchMarked) {
+      return barrierUnavailable;
+    }
   }
   const completionTimeoutMs = remaining();
   const completion = completionTimeoutMs === 0
     ? { status: 'timeout' as const }
     : await callAitIapNative(
-        () => input.dependencies.iap.completeProductGrant({ params: { orderId: input.orderId } }),
+        () => dispatchAitIapAcknowledgement(iap, input.orderId),
         completionTimeoutMs,
-      );
+      ).then((outcome) => (outcome.status === 'ok' ? outcome.value : outcome));
+  if (completion.status === 'ok' && completion.value) {
+    // Only a confirmed acknowledgement clears a `started` barrier here.
+    await removeAitIapAcknowledgementsInFlight(storage, [input.orderId], Math.max(1, remaining()));
+    return { status: 'acknowledged' };
+  }
+  // A timeout, `false` or an error leaves the barrier `started`: an earlier
+  // or still-running dispatch may yet succeed. The order stays unresolved
+  // until a confirmed acknowledgement or the order leaving the provider list.
   if (completion.status === 'timeout') {
-    // Ambiguous: the native call may still succeed. Keep the in-flight record.
     return {
       status: 'not-acknowledged',
       diagnostic: aitIapDiagnostic(aitIapDiagnosticCodes.grantCompletionFailed, true),
     };
-  }
-  // Confirmed success or a definitive rejection: the order is no longer in
-  // flight. A failed removal only reports the order as settled once more.
-  await removeAitIapAcknowledgementsInFlight(storage, [input.orderId], Math.max(1, remaining()));
-  if (completion.status === 'ok' && completion.value === true) {
-    return { status: 'acknowledged' };
   }
   return {
     status: 'not-acknowledged',
@@ -3362,6 +3436,13 @@ async function removeAitIapAcknowledgementsInFlight(
 interface AitIapStorageKeyQueue {
   tail: Promise<void>;
   active: number;
+  /**
+   * Set once an operation on this key outlives a caller's deadline. Later
+   * callers then fail closed immediately instead of queueing behind it, so a
+   * native call that never settles cannot retain one node per retry. The
+   * queue is forgotten, and the flag with it, once the stuck work settles.
+   */
+  hung: boolean;
 }
 
 /**
@@ -3389,10 +3470,13 @@ async function runAitIapStorageOperation<T>(
   const keyQueues = queues;
   let queue = keyQueues.get(key);
   if (queue === undefined) {
-    queue = { tail: Promise.resolve(), active: 0 };
+    queue = { tail: Promise.resolve(), active: 0, hung: false };
     keyQueues.set(key, queue);
   }
   const current = queue;
+  if (current.hung) {
+    return { status: 'timeout' };
+  }
   const previous = current.tail;
   let release: () => void = () => {};
   const turn = new Promise<void>((resolve) => {
@@ -3416,6 +3500,9 @@ async function runAitIapStorageOperation<T>(
   if (ready.status !== 'ok' || remainingTimeoutMs === 0) {
     // Give up this turn without starting the operation. Later operations
     // still wait for the earlier ones through the tail chain.
+    if (ready.status !== 'ok') {
+      current.hung = true;
+    }
     void previous.then(release);
     return { status: 'timeout' };
   }
@@ -3428,7 +3515,11 @@ async function runAitIapStorageOperation<T>(
     return providerCode === undefined ? { status: 'error' } : { status: 'error', providerCode };
   }
   void started.then(release, release);
-  return await callAitIapNative(() => started, remainingTimeoutMs);
+  const outcome = await callAitIapNative(() => started, remainingTimeoutMs);
+  if (outcome.status === 'timeout') {
+    current.hung = true;
+  }
+  return outcome;
 }
 
 async function readAitIapStorage(
@@ -3607,6 +3698,40 @@ async function checkAitOneTimeIapProduct(
   return nativeProduct.type === 'CONSUMABLE' || nativeProduct.type === 'NON_CONSUMABLE'
     ? undefined
     : aitIapDiagnostic(aitIapDiagnosticCodes.productTypeUnsupported, false);
+}
+
+/**
+ * Native IAP reads that have not settled yet, per IAP dependency object and
+ * method. A retry while an earlier read is still running (for example a hung
+ * native call) joins it instead of starting another native request, so
+ * retries cannot pile up uncancelled native calls.
+ */
+const aitIapNativeReadsRunning = new WeakMap<object, Map<string, Promise<unknown>>>();
+
+function joinAitIapNativeRead<T>(
+  owner: object,
+  method: string,
+  read: () => Promise<T>,
+): Promise<T> {
+  let running = aitIapNativeReadsRunning.get(owner);
+  if (running === undefined) {
+    running = new Map();
+    aitIapNativeReadsRunning.set(owner, running);
+  }
+  const existing = running.get(method);
+  if (existing !== undefined) {
+    return existing as Promise<T>;
+  }
+  const reads = running;
+  const call = Promise.resolve().then(read);
+  const forget = (): void => {
+    if (reads.get(method) === call) {
+      reads.delete(method);
+    }
+  };
+  void call.then(forget, forget);
+  reads.set(method, call);
+  return call;
 }
 
 /**
