@@ -374,6 +374,12 @@ export function createAitHostBridge(
   );
   const promotionGrantsInFlight = new Map<string, Promise<PromotionRewardResult>>();
   const iapPurchasesInFlight = new Map<string, Promise<PurchaseResult>>();
+  /**
+   * SKUs with a purchase between its pending-order check and a terminal
+   * checkout result. Different client keys are not coalesced, so this keeps
+   * the duplicate-charge check exclusive until the first checkout settles.
+   */
+  const iapCheckoutsInProgress = new Set<string>();
   let completedIapAttemptRetention = Promise.resolve();
   const notificationSubscriptions = new Set<NotificationTopic>();
   const loadedAdGroupIds = new Set<string>();
@@ -743,6 +749,16 @@ export function createAitHostBridge(
         if (existing !== undefined) {
           return ok(request, await existing);
         }
+        // Check and claim synchronously: a second key for the same product must
+        // not pass the pending-order check while the first checkout can still
+        // produce an order that the provider list does not show yet.
+        if (iapCheckoutsInProgress.has(product.sku)) {
+          return ok(
+            request,
+            failedPurchase(aitIapDiagnostic(aitIapDiagnosticCodes.checkoutInProgress, true)),
+          );
+        }
+        iapCheckoutsInProgress.add(product.sku);
         const pending = purchaseAitIapProduct({
           dependencies,
           product,
@@ -758,6 +774,7 @@ export function createAitHostBridge(
         try {
           return ok(request, await pending);
         } finally {
+          iapCheckoutsInProgress.delete(product.sku);
           if (iapPurchasesInFlight.get(purchaseRequestKey) === pending) {
             iapPurchasesInFlight.delete(purchaseRequestKey);
           }
@@ -2735,9 +2752,14 @@ async function reconcileAitIapPendingOrders(
       diagnostic: aitIapDiagnostic(aitIapDiagnosticCodes.unsupportedAppVersion, false),
     };
   }
-  const nativeOrders = Array.isArray(pendingOrderResult.orders)
-    ? (pendingOrderResult.orders as readonly unknown[])
-    : [];
+  if (!Array.isArray(pendingOrderResult.orders)) {
+    // A malformed list is not proof that no paid order exists.
+    return {
+      status: 'unavailable',
+      diagnostic: aitIapDiagnostic(aitIapDiagnosticCodes.pendingOrderCheckFailed, true),
+    };
+  }
+  const nativeOrders = pendingOrderResult.orders as readonly unknown[];
 
   const eligibleOrders: Array<{
     readonly order: { readonly orderId: string; readonly sku: string; readonly paymentCompletedDate: string };
@@ -2933,11 +2955,7 @@ async function completeLinkedAitIapPurchaseAttempt(input: {
     !isRecord(state)
     || state.productId !== input.product.productId
     || state.idempotencyKey !== input.idempotencyKey
-    || state.orderId !== input.orderId
-    || (
-      state.status !== aitIapPurchaseAttemptStatus.pending
-      && state.status !== aitIapPurchaseAttemptStatus.serverGranted
-    )
+    || !isLinkedAitIapAttemptMarker(state, input.orderId)
   ) {
     return;
   }
@@ -2957,6 +2975,22 @@ async function completeLinkedAitIapPurchaseAttempt(input: {
   if (persisted) {
     void input.retainCompletedAttempt(input.storage, storageKey);
   }
+}
+
+/**
+ * The caller already validated the order link for this client key and
+ * product. A pending marker without an order id is the same attempt whose
+ * order-correlation write failed while the link write succeeded.
+ */
+function isLinkedAitIapAttemptMarker(
+  state: Readonly<Record<string, unknown>>,
+  orderId: string,
+): boolean {
+  if (state.status === aitIapPurchaseAttemptStatus.serverGranted) {
+    return state.orderId === orderId;
+  }
+  return state.status === aitIapPurchaseAttemptStatus.pending
+    && (state.orderId === orderId || state.orderId === undefined);
 }
 
 async function writeAitIapOrderAttemptLink(input: {

@@ -3541,6 +3541,176 @@ describe('AIT IAP recovery hardening', () => {
     }
   });
 
+  it('opens one checkout when two keys buy the same product concurrently', async () => {
+    const values = new Map<string, string>();
+    const callbacks: IapPurchaseCallbacks[] = [];
+    const getPendingOrders = vi.fn(async () => ({ orders: [] }));
+    const bridge = createAitHostBridge({
+      iapProducts: [coinsProduct],
+      prepareIap: async () => true,
+      verifyIapProductGrant: async () => true,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        storage: createMemoryStorage(values),
+        iap: createSupportedIap({
+          products: coinsCatalog,
+          getPendingOrders,
+          onPurchase: (input) => {
+            callbacks.push(input);
+          },
+        }),
+      }),
+    });
+
+    const first = request(bridge, 'commerce.purchase', {
+      productId: 'COINS_100',
+      idempotencyKey: 'double-tap-1',
+    });
+    const second = request(bridge, 'commerce.purchase', {
+      productId: 'COINS_100',
+      idempotencyKey: 'double-tap-2',
+    });
+    await expect(second).resolves.toEqual({
+      status: 'failed',
+      entitlementIds: [],
+      diagnostic: { code: 'AIT_IAP_CHECKOUT_IN_PROGRESS', retryable: true },
+    });
+    await vi.waitFor(() => expect(callbacks).toHaveLength(1));
+    const [checkout] = callbacks;
+    if (checkout === undefined) {
+      throw new Error('Expected one Apps in Toss checkout.');
+    }
+    await checkout.options.processProductGrant({ orderId: 'order-double-tap' });
+    await checkout.onEvent({ type: 'success', data: createIapSuccessEvent('order-double-tap') });
+    await expect(first).resolves.toMatchObject({
+      status: 'completed',
+      transactionId: 'order-double-tap',
+    });
+    expect(callbacks).toHaveLength(1);
+    expect(getPendingOrders).toHaveBeenCalledOnce();
+    expect(values.has(
+      'mpgd:ait:iap-purchase-attempt:v1:COINS_100:double-tap-2',
+    )).toBe(false);
+
+    // The barrier is released once the first checkout settles.
+    const later = request(bridge, 'commerce.purchase', {
+      productId: 'COINS_100',
+      idempotencyKey: 'double-tap-2',
+    });
+    await vi.waitFor(() => expect(callbacks).toHaveLength(2));
+    await callbacks[1]?.onError({ name: 'AbortError' });
+    await expect(later).resolves.toEqual({ status: 'cancelled', entitlementIds: [] });
+  });
+
+  it('fails closed when the pending-order payload has no order list', async () => {
+    for (const malformed of [{}, { orders: null }, { orders: 'order-1' }]) {
+      const startPurchase = vi.fn();
+      const options = {
+        iapProducts: [coinsProduct],
+        prepareIap: async () => true,
+        verifyIapProductGrant: async () => true,
+        readIapEntitlements: async () => [],
+        dependencies: createDependencies({
+          iap: createSupportedIap({
+            products: coinsCatalog,
+            getPendingOrders: async () => malformed as unknown as IapPendingOrdersResult,
+            onPurchase: startPurchase,
+          }),
+        }),
+      };
+      await expect(request(createAitHostBridge(options), 'commerce.purchase', {
+        productId: 'COINS_100',
+        idempotencyKey: 'malformed-pending-orders',
+      })).resolves.toEqual({
+        status: 'failed',
+        entitlementIds: [],
+        diagnostic: { code: 'AIT_IAP_PENDING_ORDER_CHECK_FAILED', retryable: true },
+      });
+      expect(startPurchase).not.toHaveBeenCalled();
+      await expect(requestError(createAitHostBridge(options), 'commerce.restore', {}))
+        .resolves.toMatchObject({ code: 'AIT_IAP_PENDING_ORDER_CHECK_FAILED', retryable: true });
+    }
+  });
+
+  it('completes a linked attempt whose order-correlation write failed', async () => {
+    const values = new Map<string, string>();
+    const memoryStorage = createMemoryStorage(values);
+    const attemptKey = 'mpgd:ait:iap-purchase-attempt:v1:COINS_100:lost-correlation';
+    let callbacks: IapPurchaseCallbacks | undefined;
+    let nativePurchaseStarts = 0;
+    let pendingOrders: IapPendingOrdersResult = { orders: [] };
+    const verifyIapProductGrant = vi.fn(async () => true);
+    const options = {
+      iapProducts: [coinsProduct],
+      prepareIap: async () => true,
+      verifyIapProductGrant,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        storage: {
+          ...memoryStorage,
+          setItem: async (key: string, value: string) => {
+            if (key === attemptKey) {
+              const marker = JSON.parse(value) as {
+                readonly status?: string;
+                readonly orderId?: string;
+              };
+              if (marker.status === 'pending' && marker.orderId !== undefined) {
+                throw new Error('order correlation unavailable');
+              }
+            }
+            await memoryStorage.setItem(key, value);
+          },
+        },
+        iap: createSupportedIap({
+          products: coinsCatalog,
+          getPendingOrders: async () => pendingOrders,
+          onPurchase: (input) => {
+            nativePurchaseStarts += 1;
+            callbacks = input;
+          },
+        }),
+      }),
+    };
+    const payload = { productId: 'COINS_100', idempotencyKey: 'lost-correlation' };
+
+    const purchase = request(createAitHostBridge(options), 'commerce.purchase', payload);
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    if (callbacks === undefined) {
+      throw new Error('Expected Apps in Toss purchase callbacks to be registered.');
+    }
+    // The marker cannot name the order, so the grant is refused, but the link survives.
+    await expect(callbacks.options.processProductGrant({ orderId: 'order-lost-correlation' }))
+      .resolves.toBe(false);
+    await callbacks.onEvent({
+      type: 'success',
+      data: createIapSuccessEvent('order-lost-correlation'),
+    });
+    await expect(purchase).resolves.toMatchObject({ status: 'pending' });
+    expect(verifyIapProductGrant).not.toHaveBeenCalled();
+    expect(JSON.parse(values.get(attemptKey) ?? '{}')).not.toHaveProperty('orderId');
+
+    pendingOrders = { orders: [pendingOrder('order-lost-correlation')] };
+    await expect(request(createAitHostBridge(options), 'commerce.restore', {}))
+      .resolves.toMatchObject({
+        settledPurchases: [{
+          transactionId: 'order-lost-correlation',
+          idempotencyKey: 'lost-correlation',
+        }],
+      });
+    expect(JSON.parse(values.get(attemptKey) ?? '{}')).toMatchObject({
+      status: 'completed',
+      orderId: 'order-lost-correlation',
+    });
+
+    pendingOrders = { orders: [] };
+    await expect(request(createAitHostBridge(options), 'commerce.purchase', payload))
+      .resolves.toMatchObject({
+        status: 'completed',
+        transactionId: 'order-lost-correlation',
+      });
+    expect(nativePurchaseStarts).toBe(1);
+  });
+
   it('reports stable catalog and purchase diagnostic codes', async () => {
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {

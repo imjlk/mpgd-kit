@@ -99,8 +99,11 @@ recovery rules:
   product is still ungranted, or was just granted by this check, the purchase
   returns `failed` without opening a checkout, with `diagnostic.code`
   `AIT_IAP_PENDING_ORDER_UNRESOLVED` or `AIT_IAP_PENDING_ORDER_RECOVERED`.
-  Nothing was charged for that request. If the list cannot be read, the result
-  is `failed` with `AIT_IAP_PENDING_ORDER_CHECK_FAILED`.
+  Nothing was charged for that request. If the list cannot be read or is
+  malformed, the result is `failed` with `AIT_IAP_PENDING_ORDER_CHECK_FAILED`.
+  While one purchase of a product is between that check and its checkout
+  result, a purchase of the same product with another key returns `failed`
+  with `AIT_IAP_CHECKOUT_IN_PROGRESS` instead of opening a second checkout.
 - **Partner grant failure.** When the SDK reports
   `PRODUCT_NOT_GRANTED_BY_PARTNER` for an order the callback saw, the bridge
   verifies that exact order once more (`source: 'pending-order-restore'`) and
