@@ -359,6 +359,13 @@ const defaultDependencies: AitHostDependencies = {
   iap: IAP,
 };
 
+/**
+ * Native IAP dependency objects whose single IAP lock is held. Module scoped
+ * so that two bridges on the same native SDK, for example after the host
+ * bridge is reinstalled while an old request is still active, share it.
+ */
+const aitIapExclusiveOperations = new WeakSet<object>();
+
 export function installAitHostBridge(options: InstallAitHostBridgeOptions = {}): GamePlatformBridge {
   const bridge = createAitHostBridge(options);
   (globalThis as { __GAME_PLATFORM_BRIDGE__?: GamePlatformBridge }).__GAME_PLATFORM_BRIDGE__ = bridge;
@@ -389,14 +396,15 @@ export function createAitHostBridge(
   const promotionGrantsInFlight = new Map<string, Promise<PromotionRewardResult>>();
   const iapPurchasesInFlight = new Map<string, Promise<PurchaseResult>>();
   /**
-   * The single IAP lock. A purchase holds it from its attempt-marker check
-   * until its checkout reaches a terminal result, and a restore holds it from
-   * before preparation until reconciliation and the entitlement read finish.
-   * Only one of them may read, verify or acknowledge provider orders or
-   * change attempt markers at a time; the other gets
-   * `AIT_IAP_CHECKOUT_IN_PROGRESS` and nothing is charged.
+   * The single IAP lock, shared by every bridge built on the same native IAP
+   * dependency (see `aitIapExclusiveOperations`). A purchase holds it from
+   * its attempt-marker check until its checkout reaches a terminal result,
+   * and a restore holds it from before preparation until reconciliation and
+   * the entitlement read finish. Only one of them may read, verify or
+   * acknowledge provider orders or change attempt markers at a time; the
+   * other gets `AIT_IAP_CHECKOUT_IN_PROGRESS` and nothing is charged.
    */
-  let iapExclusiveOperationActive = false;
+  const iapLockOwner: object = dependencies.iap;
   let completedIapAttemptRetention = Promise.resolve();
   const notificationSubscriptions = new Set<NotificationTopic>();
   const loadedAdGroupIds = new Set<string>();
@@ -726,13 +734,13 @@ export function createAitHostBridge(
         // the attempt marker: a restore or another key must not reconcile,
         // acknowledge or clear markers while this attempt decides whether to
         // open a checkout or while its grant callback is active.
-        if (iapExclusiveOperationActive) {
+        if (aitIapExclusiveOperations.has(iapLockOwner)) {
           return ok(
             request,
             failedPurchase(aitIapDiagnostic(aitIapDiagnosticCodes.checkoutInProgress, true)),
           );
         }
-        iapExclusiveOperationActive = true;
+        aitIapExclusiveOperations.add(iapLockOwner);
         const pending = (async (): Promise<PurchaseResult> => {
           const persisted = await resolvePersistedAitIapPurchaseAttempt({
             dependencies,
@@ -769,7 +777,7 @@ export function createAitHostBridge(
         try {
           return ok(request, await pending);
         } finally {
-          iapExclusiveOperationActive = false;
+          aitIapExclusiveOperations.delete(iapLockOwner);
           if (iapPurchasesInFlight.get(purchaseRequestKey) === pending) {
             iapPurchasesInFlight.delete(purchaseRequestKey);
           }
@@ -779,14 +787,14 @@ export function createAitHostBridge(
       case 'commerce.restore': {
         // Claimed before preparation and held until restore finishes, so a
         // purchase cannot start a checkout while restore is still preparing.
-        if (iapExclusiveOperationActive) {
+        if (aitIapExclusiveOperations.has(iapLockOwner)) {
           return createAitIapDiagnosticError(
             request.id,
             aitIapDiagnostic(aitIapDiagnosticCodes.checkoutInProgress, true),
             'Apps in Toss purchase restore did not complete',
           );
         }
-        iapExclusiveOperationActive = true;
+        aitIapExclusiveOperations.add(iapLockOwner);
         let restored: AitIapRestoreOutcome;
         try {
           restored = await restoreAitIapProducts({
@@ -799,7 +807,7 @@ export function createAitHostBridge(
             timeoutMs: iapProductGrantTimeoutMs,
           });
         } finally {
-          iapExclusiveOperationActive = false;
+          aitIapExclusiveOperations.delete(iapLockOwner);
         }
         return restored.status === 'ok'
           ? ok(request, restored.result)
@@ -2891,7 +2899,8 @@ async function reconcileAitIapPendingOrders(
     status: 'unavailable',
     diagnostic: aitIapDiagnostic(aitIapDiagnosticCodes.pendingOrderCheckFailed, true),
   };
-  const providerPendingOrderIds = new Set<string>();
+  /** Provider-reported SKU per pending order id. */
+  const providerPendingOrderSkus = new Map<string, string>();
   for (const order of nativeOrders) {
     // An entry that might be a configured product's paid order is never
     // proof of absence. Only well-formed entries for other SKUs are ignored.
@@ -2899,7 +2908,12 @@ async function reconcileAitIapPendingOrders(
       return malformedPendingOrders;
     }
     if (typeof order.orderId === 'string') {
-      providerPendingOrderIds.add(order.orderId);
+      const knownSku = providerPendingOrderSkus.get(order.orderId);
+      if (knownSku !== undefined && knownSku !== order.sku) {
+        // One order id reported with two SKUs cannot be attributed safely.
+        return malformedPendingOrders;
+      }
+      providerPendingOrderSkus.set(order.orderId, order.sku);
     }
     const product = input.products.bySku.get(order.sku);
     if (product === undefined) {
@@ -2947,7 +2961,13 @@ async function reconcileAitIapPendingOrders(
   }
   const confirmedAcknowledgements: AitIapAcknowledgementInFlight[] = [];
   for (const entry of acknowledgements) {
-    if (providerPendingOrderIds.has(entry.orderId)) {
+    const pendingSku = providerPendingOrderSkus.get(entry.orderId);
+    if (pendingSku !== undefined) {
+      if (pendingSku !== entry.sku) {
+        // The provider lists this barrier's order under another product. Do
+        // not let it stop guarding its own product: fail closed instead.
+        return malformedPendingOrders;
+      }
       continue;
     }
     const product = input.products.bySku.get(entry.sku);

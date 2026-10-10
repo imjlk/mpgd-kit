@@ -102,7 +102,9 @@ recovery rules:
   Nothing was charged for that request. If the list cannot be read, or it or
   any entry that could belong to a configured SKU is malformed, the result is
   `failed` with `AIT_IAP_PENDING_ORDER_CHECK_FAILED`.
-- **One IAP operation at a time.** A purchase holds a single lock from its
+- **One IAP operation at a time.** Every bridge built on the same native IAP
+  dependency shares one lock, so a reinstalled bridge cannot run a second
+  checkout beside an old one. A purchase holds it from its
   attempt-marker check until its checkout result, and a restore holds it from
   before `prepareIap` until it finishes. While the lock is held, another
   purchase returns `failed` and `commerce.restore` rejects, both with the
@@ -122,7 +124,22 @@ recovery rules:
   unresolved same-product barrier. A timeout, `false` or an error never
   clears a record. A retry while an earlier `completeProductGrant()` for the
   same order is still running joins that call instead of dispatching again.
-  If the record cannot be read or written, the order is not acknowledged.
+  If the record cannot be read or written, the order is not acknowledged. If
+  the provider lists a record's order under a different SKU, or one order
+  id under two SKUs, reconciliation fails closed with
+  `AIT_IAP_PENDING_ORDER_CHECK_FAILED`.
+
+  *Decision: a server-confirmed grant clears the record.* The record exists
+  to stop a new checkout while a paid order has not been granted. Once the
+  verifier confirms the grant for that order, the player has received its
+  value, so a later checkout is a genuinely new purchase request, not a
+  duplicate charge for the same request. An order whose native
+  acknowledgement failed stays in the provider's pending list and is
+  acknowledged by the next reconciliation when it reappears. The grant is
+  keyed by order on the server, so it cannot be granted twice. Requiring
+  evidence of native settlement instead would block every purchase of that
+  product indefinitely whenever the SDK's acknowledgement is unreliable,
+  which is worse for players.
   Records for SKUs that are no longer configured are kept apart from the
   32-order active capacity. At most 32 of them are kept, oldest dropped first,
   so they never block acknowledging products that are still sold.

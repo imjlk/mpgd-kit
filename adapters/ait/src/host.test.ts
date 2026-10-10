@@ -4993,6 +4993,110 @@ describe('AIT IAP recovery hardening', () => {
     expect(values.has('mpgd:ait:iap-order-attempt:v1:order-event-error')).toBe(false);
   });
 
+  it('fails closed when the provider lists a barrier order under another SKU', async () => {
+    const ackKey = 'mpgd:ait:iap-ack-in-flight:v1';
+    const barrier = JSON.stringify([{ orderId: 'order-moved', sku: coinsSku, phase: 'started' }]);
+    for (const listedSku of [gemsSku, 'ait.unconfigured']) {
+      const values = new Map<string, string>([[ackKey, barrier]]);
+      const startPurchase = vi.fn();
+      const completeProductGrant = vi.fn(async () => true);
+      const options = {
+        iapProducts: [coinsProduct, gemsProduct],
+        prepareIap: async () => true,
+        verifyIapProductGrant: async () => true,
+        readIapEntitlements: async () => [],
+        dependencies: createDependencies({
+          storage: createMemoryStorage(values),
+          iap: createSupportedIap({
+            products: coinsCatalog,
+            pendingOrders: { orders: [pendingOrder('order-moved', listedSku)] },
+            completeProductGrant,
+            onPurchase: startPurchase,
+          }),
+        }),
+      };
+      await expect(request(createAitHostBridge(options), 'commerce.purchase', {
+        productId: 'COINS_100',
+        idempotencyKey: `moved-${listedSku}`,
+      })).resolves.toEqual({
+        status: 'failed',
+        entitlementIds: [],
+        diagnostic: { code: 'AIT_IAP_PENDING_ORDER_CHECK_FAILED', retryable: true },
+      });
+      await expect(requestError(createAitHostBridge(options), 'commerce.restore', {}))
+        .resolves.toMatchObject({ code: 'AIT_IAP_PENDING_ORDER_CHECK_FAILED' });
+      expect(startPurchase).not.toHaveBeenCalled();
+      expect(completeProductGrant).not.toHaveBeenCalled();
+      expect(values.get(ackKey)).toBe(barrier);
+    }
+
+    // One order id reported under two SKUs also fails closed.
+    const conflicting = createAitHostBridge({
+      iapProducts: [coinsProduct, gemsProduct],
+      prepareIap: async () => true,
+      verifyIapProductGrant: async () => true,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        iap: createSupportedIap({
+          pendingOrders: {
+            orders: [pendingOrder('order-twice', coinsSku), pendingOrder('order-twice', gemsSku)],
+          },
+        }),
+      }),
+    });
+    await expect(requestError(conflicting, 'commerce.restore', {})).resolves.toMatchObject({
+      code: 'AIT_IAP_PENDING_ORDER_CHECK_FAILED',
+    });
+  });
+
+  it('shares one IAP lock between bridges built on the same native dependencies', async () => {
+    const callbacks: IapPurchaseCallbacks[] = [];
+    const dependencies = createDependencies({
+      storage: createMemoryStorage(new Map()),
+      iap: createSupportedIap({
+        products: coinsCatalog,
+        onPurchase: (input) => {
+          callbacks.push(input);
+        },
+      }),
+    });
+    const options = {
+      iapProducts: [coinsProduct],
+      prepareIap: async () => true,
+      verifyIapProductGrant: async () => true,
+      readIapEntitlements: async () => [],
+      dependencies,
+    };
+    const first = createAitHostBridge(options);
+    const reinstalled = createAitHostBridge(options);
+
+    const [firstResult, secondResult] = [
+      request(first, 'commerce.purchase', { productId: 'COINS_100', idempotencyKey: 'bridge-a' }),
+      request(reinstalled, 'commerce.purchase', {
+        productId: 'COINS_100',
+        idempotencyKey: 'bridge-b',
+      }),
+    ];
+    await expect(secondResult).resolves.toEqual({
+      status: 'failed',
+      entitlementIds: [],
+      diagnostic: { code: 'AIT_IAP_CHECKOUT_IN_PROGRESS', retryable: true },
+    });
+    await expect(requestError(reinstalled, 'commerce.restore', {})).resolves.toMatchObject({
+      code: 'AIT_IAP_CHECKOUT_IN_PROGRESS',
+    });
+    await vi.waitFor(() => expect(callbacks).toHaveLength(1));
+    await callbacks[0]?.options.processProductGrant({ orderId: 'order-shared-lock' });
+    await callbacks[0]?.onEvent({ type: 'success', data: createIapSuccessEvent('order-shared-lock') });
+    await expect(firstResult).resolves.toMatchObject({ status: 'completed' });
+    expect(callbacks).toHaveLength(1);
+
+    // Released for every bridge once the checkout settles.
+    await expect(request(reinstalled, 'commerce.restore', {})).resolves.toEqual({
+      restoredEntitlements: [],
+    });
+  });
+
   it('reports stable catalog and purchase diagnostic codes', async () => {
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
