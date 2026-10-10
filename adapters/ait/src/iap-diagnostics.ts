@@ -37,7 +37,7 @@ export const aitIapDiagnosticCodes = {
   attemptStorageUnavailable: 'AIT_IAP_ATTEMPT_STORAGE_UNAVAILABLE',
   /** The same client purchase key already has an unfinished attempt. */
   attemptPending: 'AIT_IAP_ATTEMPT_PENDING',
-  /** Another purchase is still between its pending-order check and checkout result. */
+  /** Another purchase checkout or restore holds the IAP lock; nothing was charged. */
   checkoutInProgress: 'AIT_IAP_CHECKOUT_IN_PROGRESS',
   /** The native checkout could not be opened. */
   checkoutStartFailed: 'AIT_IAP_CHECKOUT_START_FAILED',

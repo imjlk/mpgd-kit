@@ -3314,15 +3314,22 @@ describe('AIT IAP recovery hardening', () => {
     expect(startPurchase).not.toHaveBeenCalled();
   });
 
-  it('shares one in-flight pending-order pass between restore and a purchase', async () => {
+  it('holds the IAP lock from restore preparation through reconciliation', async () => {
+    let releasePreparation: ((prepared: boolean) => void) | undefined;
     let releaseVerification: ((granted: boolean) => void) | undefined;
-    const getPendingOrders = vi.fn(async () => ({ orders: [pendingOrder('order-shared')] }));
+    const getPendingOrders = vi.fn(async () => ({ orders: [pendingOrder('order-restore')] }));
     const verifyIapProductGrant = vi.fn(async () => await new Promise<boolean>((resolve) => {
       releaseVerification = resolve;
     }));
     const completeProductGrant = vi.fn(async () => true);
     const startPurchase = vi.fn();
-    const prepareIap = vi.fn(async (_input: { readonly intent: string }) => true);
+    const prepareIap = vi.fn(async (input: { readonly intent: string }) => (
+      input.intent === 'restore'
+        ? await new Promise<boolean>((resolve) => {
+            releasePreparation = resolve;
+          })
+        : true
+    ));
     const bridge = createAitHostBridge({
       iapProducts: [coinsProduct],
       prepareIap,
@@ -3337,31 +3344,35 @@ describe('AIT IAP recovery hardening', () => {
         }),
       }),
     });
+    const blocked = {
+      status: 'failed',
+      entitlementIds: [],
+      diagnostic: { code: 'AIT_IAP_CHECKOUT_IN_PROGRESS', retryable: true },
+    };
 
     const restore = request(bridge, 'commerce.restore', {});
+    await vi.waitFor(() => expect(releasePreparation).toBeDefined());
+    // Restore is still preparing: a purchase must not start its own check.
+    await expect(request(bridge, 'commerce.purchase', {
+      productId: 'COINS_100',
+      idempotencyKey: 'during-restore-preparation',
+    })).resolves.toEqual(blocked);
+    releasePreparation?.(true);
     await vi.waitFor(() => expect(releaseVerification).toBeDefined());
-    const purchase = request(bridge, 'commerce.purchase', {
+    // Restore is reconciling: still blocked, and a second restore is too.
+    await expect(request(bridge, 'commerce.purchase', {
       productId: 'COINS_100',
-      idempotencyKey: 'during-restore',
-    });
-    await vi.waitFor(() => expect(prepareIap).toHaveBeenCalledWith({
-      intent: 'purchase',
-      productId: 'COINS_100',
-      platformSku: coinsSku,
-    }));
-    // Let the purchase reach its pending-order check and join the restore pass.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 0);
+      idempotencyKey: 'during-restore-reconciliation',
+    })).resolves.toEqual(blocked);
+    await expect(requestError(bridge, 'commerce.restore', {})).resolves.toMatchObject({
+      code: 'AIT_IAP_CHECKOUT_IN_PROGRESS',
     });
     releaseVerification?.(true);
 
     await expect(restore).resolves.toMatchObject({
-      settledPurchases: [{ transactionId: 'order-shared', status: 'granted' }],
+      settledPurchases: [{ transactionId: 'order-restore', status: 'granted' }],
     });
-    await expect(purchase).resolves.toMatchObject({
-      status: 'failed',
-      diagnostic: { code: 'AIT_IAP_PENDING_ORDER_RECOVERED' },
-    });
+    expect(prepareIap).toHaveBeenCalledOnce();
     expect(getPendingOrders).toHaveBeenCalledOnce();
     expect(verifyIapProductGrant).toHaveBeenCalledOnce();
     expect(completeProductGrant).toHaveBeenCalledOnce();
@@ -4012,6 +4023,176 @@ describe('AIT IAP recovery hardening', () => {
       restoredEntitlements: [],
     });
     expect(completeProductGrant).toHaveBeenCalledOnce();
+  });
+
+  it('persists the direct-recovery marker before acknowledging the order', async () => {
+    for (const markerWritable of [false, true]) {
+      const values = new Map<string, string>();
+      const memoryStorage = createMemoryStorage(values);
+      const attemptKey = 'mpgd:ait:iap-purchase-attempt:v1:COINS_100:direct-ack';
+      let callbacks: IapPurchaseCallbacks | undefined;
+      const markerAtCompletion: unknown[] = [];
+      const completeProductGrant = vi.fn(async () => {
+        markerAtCompletion.push(JSON.parse(values.get(attemptKey) ?? '{}'));
+        return true;
+      });
+      const bridge = createAitHostBridge({
+        iapProducts: [coinsProduct],
+        prepareIap: async () => true,
+        verifyIapProductGrant: async (input) => input.source === 'pending-order-restore',
+        readIapEntitlements: async () => [],
+        dependencies: createDependencies({
+          storage: {
+            ...memoryStorage,
+            setItem: async (key: string, value: string) => {
+              if (
+                !markerWritable
+                && key === attemptKey
+                && (JSON.parse(value) as { readonly status?: string }).status === 'completed'
+              ) {
+                throw new Error('completed marker unavailable');
+              }
+              await memoryStorage.setItem(key, value);
+            },
+          },
+          iap: createSupportedIap({
+            products: coinsCatalog,
+            completeProductGrant,
+            onPurchase: (input) => {
+              callbacks = input;
+            },
+          }),
+        }),
+      });
+
+      const purchase = request(bridge, 'commerce.purchase', {
+        productId: 'COINS_100',
+        idempotencyKey: 'direct-ack',
+      });
+      await vi.waitFor(() => expect(callbacks).toBeDefined());
+      await callbacks?.options.processProductGrant({ orderId: 'order-direct-ack' });
+      await callbacks?.onError({ code: 'PRODUCT_NOT_GRANTED_BY_PARTNER' });
+
+      if (markerWritable) {
+        await expect(purchase).resolves.toMatchObject({ status: 'completed' });
+        expect(markerAtCompletion).toEqual([expect.objectContaining({
+          status: 'completed',
+          orderId: 'order-direct-ack',
+        })]);
+      } else {
+        await expect(purchase).resolves.toEqual({
+          status: 'pending',
+          transactionId: 'order-direct-ack',
+          entitlementIds: [],
+          diagnostic: { code: 'AIT_IAP_ATTEMPT_STORAGE_UNAVAILABLE', retryable: true },
+        });
+        expect(completeProductGrant).not.toHaveBeenCalled();
+      }
+    }
+  });
+
+  it('leaves an order unacknowledged when its link or attempt marker cannot be read', async () => {
+    const linkKey = 'mpgd:ait:iap-order-attempt:v1:order-unreadable';
+    const attemptKey = 'mpgd:ait:iap-purchase-attempt:v1:COINS_100:unreadable-attempt';
+    for (const failingKey of [linkKey, attemptKey]) {
+      const values = new Map<string, string>([
+        [linkKey, JSON.stringify({ productId: 'COINS_100', idempotencyKey: 'unreadable-attempt' })],
+        [attemptKey, JSON.stringify({
+          status: 'pending',
+          productId: 'COINS_100',
+          idempotencyKey: 'unreadable-attempt',
+          orderId: 'order-unreadable',
+          pendingSince: '2026-09-01T10:00:00.000Z',
+        })],
+      ]);
+      const memoryStorage = createMemoryStorage(values);
+      let readable = false;
+      const completeProductGrant = vi.fn(async () => true);
+      const startPurchase = vi.fn();
+      const bridge = createAitHostBridge({
+        iapProducts: [coinsProduct],
+        prepareIap: async () => true,
+        verifyIapProductGrant: async () => true,
+        readIapEntitlements: async () => [],
+        dependencies: createDependencies({
+          storage: {
+            ...memoryStorage,
+            getItem: async (key: string) => {
+              if (!readable && key === failingKey) {
+                throw new Error('storage read unavailable');
+              }
+              return await memoryStorage.getItem(key);
+            },
+          },
+          iap: createSupportedIap({
+            products: coinsCatalog,
+            pendingOrders: { orders: [pendingOrder('order-unreadable')] },
+            completeProductGrant,
+            onPurchase: startPurchase,
+          }),
+        }),
+      });
+
+      await expect(request(bridge, 'commerce.restore', {})).resolves.toEqual({
+        restoredEntitlements: [],
+        diagnostic: { code: 'AIT_IAP_PENDING_ORDER_UNRESOLVED', retryable: true },
+      });
+      await expect(request(bridge, 'commerce.purchase', {
+        productId: 'COINS_100',
+        idempotencyKey: 'another-attempt',
+      })).resolves.toMatchObject({
+        status: 'failed',
+        diagnostic: { code: 'AIT_IAP_PENDING_ORDER_UNRESOLVED' },
+      });
+      expect(completeProductGrant).not.toHaveBeenCalled();
+      expect(startPurchase).not.toHaveBeenCalled();
+
+      readable = true;
+      await expect(request(bridge, 'commerce.restore', {})).resolves.toMatchObject({
+        settledPurchases: [{ transactionId: 'order-unreadable', idempotencyKey: 'unreadable-attempt' }],
+      });
+      expect(completeProductGrant).toHaveBeenCalledOnce();
+      expect(JSON.parse(values.get(attemptKey) ?? '{}')).toMatchObject({ status: 'completed' });
+    }
+  });
+
+  it('keeps a stale attempt marker when the pending-order list has a malformed entry', async () => {
+    const values = new Map<string, string>();
+    const attemptKey = 'mpgd:ait:iap-purchase-attempt:v1:COINS_100:stale-malformed';
+    values.set(attemptKey, JSON.stringify({
+      status: 'pending',
+      productId: 'COINS_100',
+      idempotencyKey: 'stale-malformed',
+      pendingSince: new Date(Date.now() - (30 * 60_000) - 1).toISOString(),
+    }));
+    const startPurchase = vi.fn();
+    const bridge = createAitHostBridge({
+      iapProducts: [coinsProduct],
+      prepareIap: async () => true,
+      verifyIapProductGrant: async () => true,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        storage: createMemoryStorage(values),
+        iap: createSupportedIap({
+          products: coinsCatalog,
+          getPendingOrders: async () => ({
+            orders: [{ sku: coinsSku, orderId: '' }],
+          }) as unknown as IapPendingOrdersResult,
+          onPurchase: startPurchase,
+        }),
+      }),
+    });
+
+    await expect(request(bridge, 'commerce.purchase', {
+      productId: 'COINS_100',
+      idempotencyKey: 'stale-malformed',
+    })).resolves.toEqual({
+      status: 'pending',
+      entitlementIds: [],
+      diagnostic: { code: 'AIT_IAP_ATTEMPT_PENDING', retryable: true },
+    });
+    expect(values.has(attemptKey)).toBe(true);
+    expect(startPurchase).not.toHaveBeenCalled();
   });
 
   it('reports stable catalog and purchase diagnostic codes', async () => {

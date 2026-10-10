@@ -101,16 +101,20 @@ recovery rules:
   `AIT_IAP_PENDING_ORDER_UNRESOLVED` or `AIT_IAP_PENDING_ORDER_RECOVERED`.
   Nothing was charged for that request. If the list cannot be read, or it or
   any entry that could belong to a configured SKU is malformed, the result is
-  `failed` with `AIT_IAP_PENDING_ORDER_CHECK_FAILED`. One checkout runs at a
-  time: while a purchase is between that check and its checkout result,
-  another purchase returns `failed` and `commerce.restore` rejects, both with
-  `AIT_IAP_CHECKOUT_IN_PROGRESS`, so only the active checkout handles its own
-  order.
+  `failed` with `AIT_IAP_PENDING_ORDER_CHECK_FAILED`.
+- **One IAP operation at a time.** A purchase holds a single lock from its
+  attempt-marker check until its checkout result, and a restore holds it from
+  before `prepareIap` until it finishes. While the lock is held, another
+  purchase returns `failed` and `commerce.restore` rejects, both with the
+  retryable `AIT_IAP_CHECKOUT_IN_PROGRESS`. No other operation can then
+  verify, acknowledge or change markers for the same order.
 - **Partner grant failure.** When the SDK reports
   `PRODUCT_NOT_GRANTED_BY_PARTNER` for an order the callback saw, the bridge
-  verifies that exact order once more (`source: 'pending-order-restore'`) and
-  calls `completeProductGrant()` itself, because the pending-order list can lag
-  right after checkout. If that check also fails, the order stays `pending`.
+  verifies that exact order once more (`source: 'pending-order-restore'`),
+  marks the client attempt completed and then calls `completeProductGrant()`
+  itself, because the pending-order list can lag right after checkout. If the
+  check or the marker write fails, the order stays `pending` and
+  unacknowledged.
 - **Restore.** `commerce.restore` returns `settledPurchases` for orders it
   granted and acknowledged, including `idempotencyKey` when the order is linked
   to a client attempt. It rejects with a coded `PlatformOperationError` when it
@@ -118,13 +122,15 @@ recovery rules:
   unreadable, or the entitlement read failed with nothing settled). A partial
   restore resolves with `diagnostic`, for example
   `AIT_IAP_PENDING_ORDER_UNRESOLVED`. For a linked order, restore marks the
-  client attempt completed before calling `completeProductGrant()`; if that
-  write fails, the order stays unacknowledged for a later retry. Replaying the
-  original client key then returns the completed purchase.
+  client attempt completed before calling `completeProductGrant()`. If the
+  link or the marker cannot be read or written, the order stays
+  unacknowledged for a later retry; only a link that is confirmed absent lets
+  an unlinked order be acknowledged. Replaying the original client key then
+  returns the completed purchase.
 - **Startup recovery.** Call `gateway.commerce.restore()` once the game session
   exists (after the account or identity that `prepareIap` checks is ready).
-  Restore and the pre-checkout check share one in-flight pass, so a startup
-  restore and an immediate purchase never acknowledge the same order twice.
+  A purchase tapped while that restore runs gets
+  `AIT_IAP_CHECKOUT_IN_PROGRESS` and can be retried right after it.
 
 Non-completed purchase results carry `diagnostic: { code, retryable,
 providerCode? }`. The codes are exported as `aitIapDiagnosticCodes` from
