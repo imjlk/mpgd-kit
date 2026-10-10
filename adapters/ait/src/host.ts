@@ -455,6 +455,8 @@ export function createAitHostBridge(
     return next;
   };
 
+  const acknowledgementQueue = createAitIapStorageQueue();
+
   /** Callers must hold the single IAP lock for the whole pass. */
   const reconcilePendingIapOrders = async (
     verifier: AitIapProductGrantVerifier,
@@ -465,6 +467,7 @@ export function createAitHostBridge(
       products: iapProducts,
       verifier,
       retainCompletedAttempt: enqueueCompletedIapAttemptRetention,
+      acknowledgementQueue,
       timeoutMs,
     });
   };
@@ -753,6 +756,7 @@ export function createAitHostBridge(
             prepare: prepareIap,
             verifier: verifyIapProductGrant,
             retainCompletedAttempt: enqueueCompletedIapAttemptRetention,
+            acknowledgementQueue,
             reconcilePendingOrders: (timeoutMs) =>
               reconcilePendingIapOrders(verifyIapProductGrant, timeoutMs),
             timeoutMs: iapProductGrantTimeoutMs,
@@ -1707,6 +1711,7 @@ interface AitIapPurchaseInput {
   readonly prepare: AitIapPreparer;
   readonly verifier: AitIapProductGrantVerifier;
   readonly retainCompletedAttempt: AitIapCompletedAttemptRetention;
+  readonly acknowledgementQueue: AitIapStorageQueue;
   /** Checks provider orders for configured SKUs before a new checkout can charge again. */
   readonly reconcilePendingOrders: (
     timeoutMs: number,
@@ -2373,6 +2378,16 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
     const inFlightWork = new Set<Promise<unknown>>();
     const trackWrite = (work: Promise<unknown>): void => {
       inFlightWork.add(work);
+      const forget = (): void => {
+        inFlightWork.delete(work);
+      };
+      void work.then(forget, forget);
+    };
+    /** Waits until no tracked work remains, including work added while waiting. */
+    const drainInFlightWork = async (): Promise<void> => {
+      while (inFlightWork.size > 0) {
+        await Promise.allSettled([...inFlightWork]);
+      }
     };
     let settled = false;
     let cleanup: (() => void) | undefined;
@@ -2396,7 +2411,7 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
       } else {
         safelyCleanupAitIapPurchase(cleanup);
       }
-      void Promise.allSettled([...inFlightWork]).then(() => {
+      void drainInFlightWork().then(() => {
         resolve(result);
       });
     };
@@ -2457,7 +2472,7 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
         return granted;
       });
       grantAttempts.set(orderId, attempt);
-      inFlightWork.add(attempt);
+      trackWrite(attempt);
       return attempt;
     };
 
@@ -2529,6 +2544,7 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
       }
       const acknowledgement = await acknowledgeAitIapOrder({
         dependencies: input.dependencies,
+        acknowledgementQueue: input.acknowledgementQueue,
         orderId,
         product: input.product,
         idempotencyKey: input.idempotencyKey,
@@ -2559,9 +2575,16 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
           processProductGrant: ({ orderId }) => processProductGrant(orderId),
         },
         onEvent: async ({ data }) => {
+          if (settled) {
+            // A late terminal callback must not write after the result is decided.
+            return;
+          }
           const granted = await (
             grantAttempts.get(data.orderId) ?? processProductGrant(data.orderId)
           );
+          if (settled) {
+            return;
+          }
           if (!granted) {
             finish(pendingPurchase(
               providerOrderId,
@@ -2572,6 +2595,11 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
           finish(await completeAttempt(data.orderId, 'process-product-grant'));
         },
         onError: (error) => {
+          if (settled) {
+            // A late native error must not start recovery after the result
+            // (and the IAP lock) is released.
+            return;
+          }
           const providerCode = readAitIapProviderCode(error);
           const knownOrderId = providerOrderId;
           if (
@@ -2580,7 +2608,7 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
             && !markerDeletionStarted
           ) {
             const recovery = recoverNotGrantedOrder(knownOrderId, providerCode);
-            inFlightWork.add(recovery);
+            trackWrite(recovery);
             void recovery.then(finish, () => {
               finish(pendingPurchase(
                 knownOrderId,
@@ -2759,6 +2787,7 @@ interface AitIapPendingOrderReconciliationInput {
   readonly products: NormalizedAitIapProducts;
   readonly verifier: AitIapProductGrantVerifier;
   readonly retainCompletedAttempt: AitIapCompletedAttemptRetention;
+  readonly acknowledgementQueue: AitIapStorageQueue;
   readonly timeoutMs: number;
 }
 
@@ -2867,6 +2896,7 @@ async function reconcileAitIapPendingOrders(
     ? undefined
     : await readAitIapAcknowledgementsInFlight(
         input.dependencies.storage,
+        input.acknowledgementQueue,
         acknowledgementReadTimeoutMs,
       );
   if (acknowledgements === undefined) {
@@ -2898,6 +2928,7 @@ async function reconcileAitIapPendingOrders(
       // A failed clear only reports the same settled order again next time.
       await removeAitIapAcknowledgementsInFlight(
         input.dependencies.storage,
+        input.acknowledgementQueue,
         confirmedAcknowledgements.map(({ orderId }) => orderId),
         clearTimeoutMs,
       );
@@ -3009,6 +3040,7 @@ async function reconcileAitIapPendingOrders(
     }
     const acknowledgement = await acknowledgeAitIapOrder({
       dependencies: input.dependencies,
+      acknowledgementQueue: input.acknowledgementQueue,
       orderId: order.orderId,
       product,
       ...(clientIdempotencyKey === undefined ? {} : { idempotencyKey: clientIdempotencyKey }),
@@ -3126,6 +3158,7 @@ type AitIapAcknowledgement =
  */
 async function acknowledgeAitIapOrder(input: {
   readonly dependencies: Pick<AitHostDependencies, 'iap' | 'storage'>;
+  readonly acknowledgementQueue: AitIapStorageQueue;
   readonly orderId: string;
   readonly product: NormalizedAitIapProduct;
   readonly idempotencyKey?: string;
@@ -3138,9 +3171,10 @@ async function acknowledgeAitIapOrder(input: {
     diagnostic: aitIapDiagnostic(aitIapDiagnosticCodes.attemptStorageUnavailable, true),
   };
   const storage = input.dependencies.storage;
+  const queue = input.acknowledgementQueue;
   const entries = remaining() === 0
     ? undefined
-    : await readAitIapAcknowledgementsInFlight(storage, remaining());
+    : await readAitIapAcknowledgementsInFlight(storage, queue, remaining());
   if (entries === undefined) {
     return barrierUnavailable;
   }
@@ -3148,19 +3182,18 @@ async function acknowledgeAitIapOrder(input: {
   if (others.length >= maximumIapAcknowledgementsInFlight) {
     return barrierUnavailable;
   }
-  const recorded = remaining() > 0 && await writeAitIapStorage(
-    storage,
-    iapAcknowledgementsInFlightStorageKey,
-    JSON.stringify([
-      ...others,
-      {
-        orderId: input.orderId,
-        sku: input.product.sku,
-        ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
-      },
-    ]),
+  const serialized = JSON.stringify([
+    ...others,
+    {
+      orderId: input.orderId,
+      sku: input.product.sku,
+      ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+    },
+  ]);
+  const recorded = remaining() > 0 && (await queue(
+    () => storage.setItem(iapAcknowledgementsInFlightStorageKey, serialized),
     remaining(),
-  );
+  )).status === 'ok';
   if (!recorded) {
     return barrierUnavailable;
   }
@@ -3180,7 +3213,12 @@ async function acknowledgeAitIapOrder(input: {
   }
   // Confirmed success or a definitive rejection: the order is no longer in
   // flight. A failed removal only reports the order as settled once more.
-  await removeAitIapAcknowledgementsInFlight(storage, [input.orderId], Math.max(1, remaining()));
+  await removeAitIapAcknowledgementsInFlight(
+    storage,
+    queue,
+    [input.orderId],
+    Math.max(1, remaining()),
+  );
   if (completion.status === 'ok' && completion.value === true) {
     return { status: 'acknowledged' };
   }
@@ -3197,12 +3235,10 @@ async function acknowledgeAitIapOrder(input: {
 /** Returns undefined when the list cannot be read or is malformed. */
 async function readAitIapAcknowledgementsInFlight(
   storage: Pick<typeof Storage, 'getItem'>,
+  queue: AitIapStorageQueue,
   timeoutMs: number,
 ): Promise<readonly AitIapAcknowledgementInFlight[] | undefined> {
-  const read = await callAitIapNative(
-    () => storage.getItem(iapAcknowledgementsInFlightStorageKey),
-    timeoutMs,
-  );
+  const read = await queue(() => storage.getItem(iapAcknowledgementsInFlightStorageKey), timeoutMs);
   if (read.status !== 'ok') {
     return undefined;
   }
@@ -3245,22 +3281,64 @@ async function readAitIapAcknowledgementsInFlight(
 
 async function removeAitIapAcknowledgementsInFlight(
   storage: Pick<typeof Storage, 'getItem' | 'setItem'>,
+  queue: AitIapStorageQueue,
   orderIds: readonly string[],
   timeoutMs: number,
 ): Promise<boolean> {
   const startedAt = Date.now();
-  const entries = await readAitIapAcknowledgementsInFlight(storage, timeoutMs);
+  const entries = await readAitIapAcknowledgementsInFlight(storage, queue, timeoutMs);
   const remainingTimeoutMs = remainingAitIapOperationTimeout(startedAt, timeoutMs);
   if (entries === undefined || remainingTimeoutMs === 0) {
     return false;
   }
   const removed = new Set(orderIds);
-  return await writeAitIapStorage(
-    storage,
-    iapAcknowledgementsInFlightStorageKey,
-    JSON.stringify(entries.filter((entry) => !removed.has(entry.orderId))),
+  const serialized = JSON.stringify(entries.filter((entry) => !removed.has(entry.orderId)));
+  return (await queue(
+    () => storage.setItem(iapAcknowledgementsInFlightStorageKey, serialized),
     remainingTimeoutMs,
-  );
+  )).status === 'ok';
+}
+
+/**
+ * Runs native storage operations on one shared key strictly one after another.
+ * Each operation starts only after every earlier operation has actually
+ * settled, not merely timed out, so a late-landing write can never overwrite
+ * a newer read-modify-write. A caller whose turn does not come within its
+ * deadline gets `timeout` and the operation is never started.
+ */
+type AitIapStorageQueue = <T>(
+  operation: () => Promise<T>,
+  timeoutMs: number,
+) => Promise<AitIapNativeOutcome<T>>;
+
+function createAitIapStorageQueue(): AitIapStorageQueue {
+  let tail: Promise<void> = Promise.resolve();
+  return async <T>(operation: () => Promise<T>, timeoutMs: number) => {
+    const startedAt = Date.now();
+    const previous = tail;
+    let release: () => void = () => {};
+    const turn = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    tail = previous.then(() => turn);
+    const ready = await callAitIapNative(() => previous, timeoutMs);
+    const remainingTimeoutMs = remainingAitIapOperationTimeout(startedAt, timeoutMs);
+    if (ready.status !== 'ok' || remainingTimeoutMs === 0) {
+      // Give up this turn without starting the operation.
+      release();
+      return { status: 'timeout' };
+    }
+    let started: Promise<T>;
+    try {
+      started = Promise.resolve(operation());
+    } catch (error) {
+      release();
+      const providerCode = readAitIapProviderCode(error);
+      return providerCode === undefined ? { status: 'error' } : { status: 'error', providerCode };
+    }
+    void started.then(release, release);
+    return await callAitIapNative(() => started, remainingTimeoutMs);
+  };
 }
 
 /**

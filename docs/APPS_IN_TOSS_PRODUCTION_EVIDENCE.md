@@ -115,7 +115,9 @@ recovery rules:
   stays: once a later pass no longer sees the order in the provider list, it
   reports the order as settled (so a same-product purchase returns
   `AIT_IAP_PENDING_ORDER_RECOVERED`) and clears the record. If the record
-  cannot be read or written, the order is not acknowledged.
+  cannot be read or written, the order is not acknowledged. Reads and writes
+  of the record run one at a time, and each waits until earlier storage calls
+  have actually finished, so a late write can never overwrite a newer one.
 - **Partner grant failure.** When the SDK reports
   `PRODUCT_NOT_GRANTED_BY_PARTNER` for an order the callback saw, the bridge
   verifies that exact order once more (`source: 'pending-order-restore'`),
