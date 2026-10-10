@@ -106,6 +106,12 @@ const iapOrderAttemptLinkStoragePrefix = 'mpgd:ait:iap-order-attempt:v1:';
  */
 const iapAcknowledgementsInFlightStorageKey = 'mpgd:ait:iap-ack-in-flight:v1';
 const maximumIapAcknowledgementsInFlight = 32;
+/**
+ * Barriers whose SKU is no longer configured are kept apart from the active
+ * capacity. That product is no longer sold, so once more than this many
+ * accumulate, the oldest is dropped; it only served diagnostics by then.
+ */
+const maximumRetiredIapAcknowledgements = 32;
 const defaultNotificationAgreementTimeoutMs = 120_000;
 const notificationTopics = new Set<NotificationTopic>([
   'daily-ready',
@@ -748,6 +754,7 @@ export function createAitHostBridge(
           }
           return await purchaseAitIapProduct({
             dependencies,
+            products: iapProducts,
             product,
             idempotencyKey: purchase.idempotencyKey,
             prepare: prepareIap,
@@ -1702,6 +1709,7 @@ interface AitIapSupportInput {
 
 interface AitIapPurchaseInput {
   readonly dependencies: AitHostDependencies;
+  readonly products: NormalizedAitIapProducts;
   readonly product: NormalizedAitIapProduct;
   readonly idempotencyKey: string;
   readonly prepare: AitIapPreparer;
@@ -2555,6 +2563,7 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
       }
       const acknowledgement = await acknowledgeAitIapOrder({
         dependencies: input.dependencies,
+        configuredSkus: input.products.bySku,
         orderId,
         product: input.product,
         idempotencyKey: input.idempotencyKey,
@@ -2607,17 +2616,23 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
             ));
             return;
           }
-          const completed = await completeAttempt(data.orderId, 'process-product-grant');
-          if (completed.status === 'completed') {
-            // The SDK acknowledged the order after the grant callback, and the
-            // attempt marker is completed: the order link is no longer needed.
-            trackWrite(removeAitIapOrderAttemptLink(
-              input.dependencies.storage,
-              data.orderId,
-              input.timeoutMs,
-            ));
-          }
-          finish(completed);
+          // Tracked before awaiting, so another terminal path that finishes
+          // meanwhile still waits for these writes before releasing the lock.
+          const completion = (async (): Promise<PurchaseResult> => {
+            const completed = await completeAttempt(data.orderId, 'process-product-grant');
+            if (completed.status === 'completed') {
+              // The SDK acknowledged the order after the grant callback, and
+              // the attempt marker is completed: the link is no longer needed.
+              await removeAitIapOrderAttemptLink(
+                input.dependencies.storage,
+                data.orderId,
+                input.timeoutMs,
+              );
+            }
+            return completed;
+          })();
+          trackWrite(completion);
+          finish(await completion);
         },
         onError: (error) => {
           if (settled) {
@@ -2914,14 +2929,12 @@ async function reconcileAitIapPendingOrders(
   const unresolvedOrders: AitIapUnresolvedOrder[] = [];
   let diagnostic: CommerceDiagnostic | undefined;
 
-  // A barrier whose order the provider no longer lists is resolved here:
-  // - `started`: the dispatched acknowledgement evidently succeeded, so the
-  //   server-granted order is settled.
-  // - `recorded`: no acknowledgement was dispatched, so absence proves
-  //   nothing (the list can lag). The server is asked again; only a confirmed
-  //   grant settles it, otherwise it stays an unresolved same-product barrier.
-  // A settled barrier is reported (keeping the same-product checkout barrier
-  // for this pass) and only then dropped, together with its order link.
+  // A barrier whose order the provider no longer lists is settled only when
+  // the server confirms the grant again; otherwise it stays an unresolved
+  // same-product barrier. A settled barrier is reported (keeping the
+  // same-product checkout barrier for this pass) and only then dropped,
+  // together with its order link. Barriers for SKUs that are no longer
+  // configured are kept but not resolved here.
   const acknowledgementReadTimeoutMs = getRemainingTimeout();
   const acknowledgements = acknowledgementReadTimeoutMs === 0
     ? undefined
@@ -2941,24 +2954,25 @@ async function reconcileAitIapPendingOrders(
     if (product === undefined) {
       continue;
     }
-    if (entry.phase === 'recorded') {
-      const verificationTimeoutMs = getRemainingTimeout();
-      const confirmed = verificationTimeoutMs > 0 && await verifyAitIapProductGrant({
-        verifier: input.verifier,
-        orderId: entry.orderId,
-        product,
-        idempotencyKey: createAitIapOrderIdempotencyKey(entry.orderId),
-        ...(entry.idempotencyKey === undefined
-          ? {}
-          : { clientIdempotencyKey: entry.idempotencyKey }),
-        source: 'pending-order-restore',
-        timeoutMs: verificationTimeoutMs,
-      });
-      if (!confirmed) {
-        unresolvedOrders.push({ orderId: entry.orderId, sku: entry.sku });
-        diagnostic ??= aitIapDiagnostic(aitIapDiagnosticCodes.grantPending, true);
-        continue;
-      }
+    // Absence alone never settles a barrier, whatever its phase: a phase
+    // write can land late without a dispatch, and the list can lag. Only the
+    // server confirming the grant for this order settles it.
+    const verificationTimeoutMs = getRemainingTimeout();
+    const confirmed = verificationTimeoutMs > 0 && await verifyAitIapProductGrant({
+      verifier: input.verifier,
+      orderId: entry.orderId,
+      product,
+      idempotencyKey: createAitIapOrderIdempotencyKey(entry.orderId),
+      ...(entry.idempotencyKey === undefined
+        ? {}
+        : { clientIdempotencyKey: entry.idempotencyKey }),
+      source: 'pending-order-restore',
+      timeoutMs: verificationTimeoutMs,
+    });
+    if (!confirmed) {
+      unresolvedOrders.push({ orderId: entry.orderId, sku: entry.sku });
+      diagnostic ??= aitIapDiagnostic(aitIapDiagnosticCodes.grantPending, true);
+      continue;
     }
     confirmedAcknowledgements.push(entry);
     settledPurchases.push({
@@ -3099,6 +3113,7 @@ async function reconcileAitIapPendingOrders(
     }
     const acknowledgement = await acknowledgeAitIapOrder({
       dependencies: input.dependencies,
+      configuredSkus: input.products.bySku,
       orderId: order.orderId,
       product,
       ...(clientIdempotencyKey === undefined ? {} : { idempotencyKey: clientIdempotencyKey }),
@@ -3204,9 +3219,9 @@ interface AitIapAcknowledgementInFlight {
   readonly sku: string;
   readonly idempotencyKey?: string;
   /**
-   * `recorded`: the barrier exists but `completeProductGrant()` was not
-   * dispatched yet. `started`: the native acknowledgement was dispatched, so
-   * the order leaving the provider list confirms it.
+   * Diagnostic only: `recorded` is written before the acknowledgement and
+   * `started` right before it is dispatched. Neither phase lets the order's
+   * absence settle the barrier; only a server-confirmed grant does.
    */
   readonly phase: 'recorded' | 'started';
 }
@@ -3274,6 +3289,8 @@ function isAitIapAcknowledgementRunning(
 
 async function acknowledgeAitIapOrder(input: {
   readonly dependencies: Pick<AitHostDependencies, 'iap' | 'storage'>;
+  /** Currently configured SKUs; other barriers do not use active capacity. */
+  readonly configuredSkus: { has(sku: string): boolean };
   readonly orderId: string;
   readonly product: NormalizedAitIapProduct;
   readonly idempotencyKey?: string;
@@ -3294,10 +3311,17 @@ async function acknowledgeAitIapOrder(input: {
   }
   const iap = input.dependencies.iap;
   const existing = entries.find((entry) => entry.orderId === input.orderId);
-  const others = entries.filter((entry) => entry.orderId !== input.orderId);
-  if (others.length >= maximumIapAcknowledgementsInFlight) {
+  const otherEntries = entries.filter((entry) => entry.orderId !== input.orderId);
+  const activeCount = otherEntries
+    .filter((entry) => input.configuredSkus.has(entry.sku)).length;
+  if (activeCount >= maximumIapAcknowledgementsInFlight) {
     return barrierUnavailable;
   }
+  const retired = otherEntries.filter((entry) => !input.configuredSkus.has(entry.sku));
+  const droppedRetiredOrderIds = new Set(retired
+    .slice(0, Math.max(0, retired.length - maximumRetiredIapAcknowledgements))
+    .map((entry) => entry.orderId));
+  const others = otherEntries.filter((entry) => !droppedRetiredOrderIds.has(entry.orderId));
   // A `started` barrier stays as written: a running acknowledgement is
   // joined, and a fresh dispatch (only possible once no call is running, for
   // example after a reload) reuses the existing barrier.

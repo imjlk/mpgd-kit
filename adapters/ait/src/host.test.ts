@@ -4627,8 +4627,9 @@ describe('AIT IAP recovery hardening', () => {
     expect(completeProductGrant).toHaveBeenCalledOnce();
   });
 
-  it('confirms only dispatched acknowledgements by the order leaving the provider list', async () => {
+  it('settles an absent order barrier of any phase only on a confirmed server grant', async () => {
     const ackKey = 'mpgd:ait:iap-ack-in-flight:v1';
+    // `started` may be a phase write that landed late without any dispatch.
     for (const phase of ['recorded', 'started'] as const) {
       const values = new Map<string, string>([[ackKey, JSON.stringify([
         { orderId: 'order-phase', sku: coinsSku, phase },
@@ -4636,6 +4637,7 @@ describe('AIT IAP recovery hardening', () => {
       let serverConfirms = false;
       const verifyIapProductGrant = vi.fn(async () => serverConfirms);
       const startPurchase = vi.fn();
+      const completeProductGrant = vi.fn(async () => true);
       const bridge = createAitHostBridge({
         iapProducts: [coinsProduct],
         prepareIap: async () => true,
@@ -4643,7 +4645,11 @@ describe('AIT IAP recovery hardening', () => {
         readIapEntitlements: async () => [],
         dependencies: createDependencies({
           storage: createMemoryStorage(values),
-          iap: createSupportedIap({ products: coinsCatalog, onPurchase: startPurchase }),
+          iap: createSupportedIap({
+            products: coinsCatalog,
+            completeProductGrant,
+            onPurchase: startPurchase,
+          }),
         }),
       });
       const purchase = () => request(bridge, 'commerce.purchase', {
@@ -4651,15 +4657,7 @@ describe('AIT IAP recovery hardening', () => {
         idempotencyKey: `phase-${phase}`,
       });
 
-      if (phase === 'started') {
-        await expect(purchase()).resolves.toMatchObject({
-          diagnostic: { code: 'AIT_IAP_PENDING_ORDER_RECOVERED' },
-        });
-        expect(verifyIapProductGrant).not.toHaveBeenCalled();
-        expect(values.get(ackKey)).toBe('[]');
-        continue;
-      }
-      // Never dispatched: absence is not confirmation, so the barrier stays.
+      // The order is temporarily absent: absence alone settles nothing.
       await expect(purchase()).resolves.toMatchObject({
         diagnostic: { code: 'AIT_IAP_PENDING_ORDER_UNRESOLVED' },
       });
@@ -4675,7 +4673,43 @@ describe('AIT IAP recovery hardening', () => {
       });
       expect(values.get(ackKey)).toBe('[]');
       expect(startPurchase).not.toHaveBeenCalled();
+      expect(completeProductGrant).not.toHaveBeenCalled();
     }
+  });
+
+  it('keeps retired-SKU barriers out of the active acknowledgement capacity', async () => {
+    const ackKey = 'mpgd:ait:iap-ack-in-flight:v1';
+    const retired = Array.from({ length: 33 }, (_, index) => ({
+      orderId: `order-retired-${index}`,
+      sku: `ait.retired.${index}`,
+      phase: 'started',
+    }));
+    const values = new Map<string, string>([[ackKey, JSON.stringify(retired)]]);
+    const completeProductGrant = vi.fn(async () => true);
+    const bridge = createAitHostBridge({
+      iapProducts: [coinsProduct],
+      prepareIap: async () => true,
+      verifyIapProductGrant: async () => true,
+      readIapEntitlements: async () => [],
+      iapProductGrantTimeoutMs: 150,
+      dependencies: createDependencies({
+        storage: createMemoryStorage(values),
+        iap: createSupportedIap({
+          pendingOrders: { orders: [pendingOrder('order-current')] },
+          completeProductGrant,
+        }),
+      }),
+    });
+
+    await expect(request(bridge, 'commerce.restore', {})).resolves.toMatchObject({
+      settledPurchases: [{ transactionId: 'order-current' }],
+    });
+    expect(completeProductGrant).toHaveBeenCalledOnce();
+    const stored = JSON.parse(values.get(ackKey) ?? '[]') as Array<{ readonly orderId: string }>;
+    // Retired entries stay, capped at 32 with the oldest dropped.
+    expect(stored.map(({ orderId }) => orderId)).toEqual(
+      retired.slice(1).map(({ orderId }) => orderId),
+    );
   });
 
   it('removes order links once the order is settled and keeps them while ambiguous', async () => {
@@ -4890,6 +4924,73 @@ describe('AIT IAP recovery hardening', () => {
       restoredEntitlements: [],
     });
     expect(getPendingOrders).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the lock until an onEvent completion finishes after another terminal callback', async () => {
+    const values = new Map<string, string>();
+    const memoryStorage = createMemoryStorage(values);
+    const attemptKey = 'mpgd:ait:iap-purchase-attempt:v1:COINS_100:event-then-error';
+    let releaseCompletedWrite: (() => void) | undefined;
+    let callbacks: IapPurchaseCallbacks | undefined;
+    const bridge = createAitHostBridge({
+      iapProducts: [coinsProduct],
+      prepareIap: async () => true,
+      verifyIapProductGrant: async () => true,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        storage: {
+          ...memoryStorage,
+          setItem: async (key: string, value: string) => {
+            if (
+              key === attemptKey
+              && (JSON.parse(value) as { readonly status?: string }).status === 'completed'
+            ) {
+              await new Promise<void>((resolve) => {
+                releaseCompletedWrite = resolve;
+              });
+            }
+            await memoryStorage.setItem(key, value);
+          },
+        },
+        iap: createSupportedIap({
+          products: coinsCatalog,
+          onPurchase: (input) => {
+            callbacks = input;
+          },
+        }),
+      }),
+    });
+
+    const purchase = request(bridge, 'commerce.purchase', {
+      productId: 'COINS_100',
+      idempotencyKey: 'event-then-error',
+    });
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    await callbacks?.options.processProductGrant({ orderId: 'order-event-error' });
+    const event = callbacks?.onEvent({
+      type: 'success',
+      data: createIapSuccessEvent('order-event-error'),
+    });
+    await vi.waitFor(() => expect(releaseCompletedWrite).toBeDefined());
+    // Another terminal path finishes while the completion write is running.
+    await callbacks?.onError({ code: 'NETWORK_ERROR' });
+    let purchaseSettled = false;
+    void purchase.then(() => {
+      purchaseSettled = true;
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(purchaseSettled).toBe(false);
+    await expect(requestError(bridge, 'commerce.restore', {})).resolves.toMatchObject({
+      code: 'AIT_IAP_CHECKOUT_IN_PROGRESS',
+    });
+
+    releaseCompletedWrite?.();
+    await event;
+    await expect(purchase).resolves.toMatchObject({ transactionId: 'order-event-error' });
+    expect(JSON.parse(values.get(attemptKey) ?? '{}')).toMatchObject({ status: 'completed' });
+    expect(values.has('mpgd:ait:iap-order-attempt:v1:order-event-error')).toBe(false);
   });
 
   it('reports stable catalog and purchase diagnostic codes', async () => {

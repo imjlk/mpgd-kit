@@ -111,19 +111,21 @@ recovery rules:
   releases the lock only after its grant callbacks, direct recovery and order
   link writes have settled.
 - **Acknowledgement barrier.** Before every `completeProductGrant()` call, the
-  bridge records the order as in flight (`recorded`), then marks it
-  `started` right before dispatching the call. If the call times out, the
-  record stays. A later pass that no longer sees a `started` order in the
-  provider list reports it as settled (so a same-product purchase returns
-  `AIT_IAP_PENDING_ORDER_RECOVERED`) and clears the record. A `recorded`
-  order was never dispatched, so its absence proves nothing: it settles only
-  when the verifier confirms the grant again, and otherwise stays an
-  unresolved same-product barrier. If the record cannot be read or written,
-  the order is not acknowledged. A retry while an earlier
-  `completeProductGrant()` for the same order is still running joins that
-  call instead of dispatching again. A `started` record is cleared only by a
-  confirmed acknowledgement or by the order leaving the provider list; a
-  timeout, `false` or an error leaves it in place.
+  bridge records the order as in flight. The record's `recorded`/`started`
+  phase is diagnostic only. If the call times out, the record stays. A
+  record is cleared only by a confirmed acknowledgement, or, once the
+  provider no longer lists its order, by the verifier confirming the grant
+  for that order again. The order's absence alone never clears it, because
+  a record write can land late without any dispatch and the list can lag.
+  A cleared absent order is reported as settled, so a same-product purchase
+  returns `AIT_IAP_PENDING_ORDER_RECOVERED`. Otherwise the record stays an
+  unresolved same-product barrier. A timeout, `false` or an error never
+  clears a record. A retry while an earlier `completeProductGrant()` for the
+  same order is still running joins that call instead of dispatching again.
+  If the record cannot be read or written, the order is not acknowledged.
+  Records for SKUs that are no longer configured are kept apart from the
+  32-order active capacity. At most 32 of them are kept, oldest dropped first,
+  so they never block acknowledging products that are still sold.
 - **Serialized storage.** Every adapter-reserved IAP storage key (attempt
   markers, order links, the acknowledgement record, the cursor and the
   completed index) is read and written one operation at a time. Each waits
