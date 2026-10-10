@@ -99,11 +99,13 @@ recovery rules:
   product is still ungranted, or was just granted by this check, the purchase
   returns `failed` without opening a checkout, with `diagnostic.code`
   `AIT_IAP_PENDING_ORDER_UNRESOLVED` or `AIT_IAP_PENDING_ORDER_RECOVERED`.
-  Nothing was charged for that request. If the list cannot be read or is
-  malformed, the result is `failed` with `AIT_IAP_PENDING_ORDER_CHECK_FAILED`.
-  While one purchase of a product is between that check and its checkout
-  result, a purchase of the same product with another key returns `failed`
-  with `AIT_IAP_CHECKOUT_IN_PROGRESS` instead of opening a second checkout.
+  Nothing was charged for that request. If the list cannot be read, or it or
+  any entry that could belong to a configured SKU is malformed, the result is
+  `failed` with `AIT_IAP_PENDING_ORDER_CHECK_FAILED`. One checkout runs at a
+  time: while a purchase is between that check and its checkout result,
+  another purchase returns `failed` and `commerce.restore` rejects, both with
+  `AIT_IAP_CHECKOUT_IN_PROGRESS`, so only the active checkout handles its own
+  order.
 - **Partner grant failure.** When the SDK reports
   `PRODUCT_NOT_GRANTED_BY_PARTNER` for an order the callback saw, the bridge
   verifies that exact order once more (`source: 'pending-order-restore'`) and
@@ -115,8 +117,10 @@ recovery rules:
   could not do its job (IAP unavailable, preparation rejected, pending orders
   unreadable, or the entitlement read failed with nothing settled). A partial
   restore resolves with `diagnostic`, for example
-  `AIT_IAP_PENDING_ORDER_UNRESOLVED`. After restore settles an order, replaying
-  its original client key returns the completed purchase.
+  `AIT_IAP_PENDING_ORDER_UNRESOLVED`. For a linked order, restore marks the
+  client attempt completed before calling `completeProductGrant()`; if that
+  write fails, the order stays unacknowledged for a later retry. Replaying the
+  original client key then returns the completed purchase.
 - **Startup recovery.** Call `gateway.commerce.restore()` once the game session
   exists (after the account or identity that `prepareIap` checks is ready).
   Restore and the pre-checkout check share one in-flight pass, so a startup
@@ -124,9 +128,10 @@ recovery rules:
 
 Non-completed purchase results carry `diagnostic: { code, retryable,
 providerCode? }`. The codes are exported as `aitIapDiagnosticCodes` from
-`@mpgd/adapter-ait`, which does not import the Apps in Toss SDK. Native SDK
-codes are passed through only as upper-case identifiers in `providerCode`;
-free-form provider messages are never copied. `commerce.getProducts` still
+`@mpgd/adapter-ait`, which does not import the Apps in Toss SDK.
+`providerCode` comes only from a structured `code` or `errorCode` field, or
+from an exact allowlisted SDK code such as `PRODUCT_NOT_GRANTED_BY_PARTNER`;
+other message text is never copied. `commerce.getProducts` still
 returns an empty list when IAP is not configured or not supported, and rejects
 with `AIT_IAP_CATALOG_EMPTY`, `AIT_IAP_CONFIGURED_SKUS_NOT_VISIBLE`,
 `AIT_IAP_UNSUPPORTED_APP_VERSION` or `AIT_IAP_CATALOG_UNAVAILABLE` when the

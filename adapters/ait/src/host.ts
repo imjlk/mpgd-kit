@@ -375,11 +375,12 @@ export function createAitHostBridge(
   const promotionGrantsInFlight = new Map<string, Promise<PromotionRewardResult>>();
   const iapPurchasesInFlight = new Map<string, Promise<PurchaseResult>>();
   /**
-   * SKUs with a purchase between its pending-order check and a terminal
-   * checkout result. Different client keys are not coalesced, so this keeps
-   * the duplicate-charge check exclusive until the first checkout settles.
+   * One purchase may be between its pending-order check and a terminal
+   * checkout result at a time. While it is, neither another purchase nor a
+   * restore may reconcile provider orders, because the active checkout's own
+   * grant callback may be verifying and acknowledging a just-paid order.
    */
-  const iapCheckoutsInProgress = new Set<string>();
+  let iapCheckoutInProgress = false;
   let completedIapAttemptRetention = Promise.resolve();
   const notificationSubscriptions = new Set<NotificationTopic>();
   const loadedAdGroupIds = new Set<string>();
@@ -749,16 +750,17 @@ export function createAitHostBridge(
         if (existing !== undefined) {
           return ok(request, await existing);
         }
-        // Check and claim synchronously: a second key for the same product must
-        // not pass the pending-order check while the first checkout can still
-        // produce an order that the provider list does not show yet.
-        if (iapCheckoutsInProgress.has(product.sku)) {
+        // Check and claim synchronously: another key must not pass the
+        // pending-order check while the active checkout can still produce an
+        // order that the provider list does not show yet, or that its own
+        // grant callback is acknowledging.
+        if (iapCheckoutInProgress) {
           return ok(
             request,
             failedPurchase(aitIapDiagnostic(aitIapDiagnosticCodes.checkoutInProgress, true)),
           );
         }
-        iapCheckoutsInProgress.add(product.sku);
+        iapCheckoutInProgress = true;
         const pending = purchaseAitIapProduct({
           dependencies,
           product,
@@ -774,7 +776,7 @@ export function createAitHostBridge(
         try {
           return ok(request, await pending);
         } finally {
-          iapCheckoutsInProgress.delete(product.sku);
+          iapCheckoutInProgress = false;
           if (iapPurchasesInFlight.get(purchaseRequestKey) === pending) {
             iapPurchasesInFlight.delete(purchaseRequestKey);
           }
@@ -782,6 +784,13 @@ export function createAitHostBridge(
       }
 
       case 'commerce.restore': {
+        if (iapCheckoutInProgress) {
+          return createAitIapDiagnosticError(
+            request.id,
+            aitIapDiagnostic(aitIapDiagnosticCodes.checkoutInProgress, true),
+            'Apps in Toss purchase restore did not complete',
+          );
+        }
         const restored = await restoreAitIapProducts({
           dependencies,
           products: iapProducts,
@@ -2055,25 +2064,24 @@ async function verifyAndPersistAitIapProductGrant(
   input: VerifyAndPersistAitIapProductGrantInput,
 ): Promise<boolean> {
   const startedAt = Date.now();
-  const [correlated] = await Promise.all([
-    persistAitIapPurchaseAttempt({
-      storage: input.storage,
-      product: input.product,
-      idempotencyKey: input.idempotencyKey,
-      orderId: input.orderId,
-      status: aitIapPurchaseAttemptStatus.pending,
-      timeoutMs: input.timeoutMs,
-    }),
-    // Best effort: lets restore and pre-checkout recovery pass the client key
-    // for this order. The attempt marker above remains the retry barrier.
-    writeAitIapOrderAttemptLink({
-      storage: input.storage,
-      product: input.product,
-      idempotencyKey: input.idempotencyKey,
-      orderId: input.orderId,
-      timeoutMs: input.timeoutMs,
-    }),
-  ]);
+  // Best effort and deliberately not awaited: the link only lets recovery pass
+  // the client key for this order, so a slow write must never consume the
+  // grant deadline. The attempt marker below remains the retry barrier.
+  void writeAitIapOrderAttemptLink({
+    storage: input.storage,
+    product: input.product,
+    idempotencyKey: input.idempotencyKey,
+    orderId: input.orderId,
+    timeoutMs: input.timeoutMs,
+  });
+  const correlated = await persistAitIapPurchaseAttempt({
+    storage: input.storage,
+    product: input.product,
+    idempotencyKey: input.idempotencyKey,
+    orderId: input.orderId,
+    status: aitIapPurchaseAttemptStatus.pending,
+    timeoutMs: input.timeoutMs,
+  });
   if (!correlated) {
     // Never let the backend commit a grant unless the provider order is first
     // durably tied to the client attempt. Otherwise a lost response could let
@@ -2766,20 +2774,24 @@ async function reconcileAitIapPendingOrders(
     readonly product: NormalizedAitIapProduct;
   }> = [];
   const seenOrderIds = new Set<string>();
+  const malformedPendingOrders: AitIapPendingOrderReconciliation = {
+    status: 'unavailable',
+    diagnostic: aitIapDiagnostic(aitIapDiagnosticCodes.pendingOrderCheckFailed, true),
+  };
   for (const order of nativeOrders) {
-    if (
-      !isRecord(order)
-      || typeof order.orderId !== 'string'
-      || typeof order.sku !== 'string'
-    ) {
-      continue;
+    // An entry that might be a configured product's paid order is never
+    // proof of absence. Only well-formed entries for other SKUs are ignored.
+    if (!isRecord(order) || typeof order.sku !== 'string') {
+      return malformedPendingOrders;
     }
     const product = input.products.bySku.get(order.sku);
-    if (
-      product === undefined
-      || !isAitIapOrderId(order.orderId)
-      || seenOrderIds.has(order.orderId)
-    ) {
+    if (product === undefined) {
+      continue;
+    }
+    if (typeof order.orderId !== 'string' || !isAitIapOrderId(order.orderId)) {
+      return malformedPendingOrders;
+    }
+    if (seenOrderIds.has(order.orderId)) {
       continue;
     }
     seenOrderIds.add(order.orderId);
@@ -2868,6 +2880,27 @@ async function reconcileAitIapPendingOrders(
       continue;
     }
 
+    if (clientIdempotencyKey !== undefined) {
+      // Secure the client attempt before acknowledging: once acknowledged, the
+      // order leaves the pending list and could no longer finish this marker.
+      const markerTimeoutMs = getRemainingTimeout();
+      const marker = markerTimeoutMs === 0
+        ? 'failed'
+        : await completeLinkedAitIapPurchaseAttempt({
+            storage: input.dependencies.storage,
+            product,
+            idempotencyKey: clientIdempotencyKey,
+            orderId: order.orderId,
+            retainCompletedAttempt: input.retainCompletedAttempt,
+            timeoutMs: markerTimeoutMs,
+          });
+      if (marker === 'failed') {
+        unresolvedOrders.push({ orderId: order.orderId, sku: order.sku });
+        diagnostic ??= aitIapDiagnostic(aitIapDiagnosticCodes.attemptStorageUnavailable, true);
+        continue;
+      }
+    }
+
     const completionTimeoutMs = getRemainingTimeout();
     if (completionTimeoutMs === 0) {
       deferRemaining();
@@ -2901,19 +2934,6 @@ async function reconcileAitIapPendingOrders(
       source: 'purchase',
       grantedAt: normalizeAitIapGrantTime(order.paymentCompletedDate),
     });
-    if (clientIdempotencyKey !== undefined) {
-      const markerTimeoutMs = getRemainingTimeout();
-      if (markerTimeoutMs > 0) {
-        await completeLinkedAitIapPurchaseAttempt({
-          storage: input.dependencies.storage,
-          product,
-          idempotencyKey: clientIdempotencyKey,
-          orderId: order.orderId,
-          retainCompletedAttempt: input.retainCompletedAttempt,
-          timeoutMs: markerTimeoutMs,
-        });
-      }
-    }
   }
 
   return {
@@ -2928,8 +2948,10 @@ async function reconcileAitIapPendingOrders(
 /**
  * Finishes the retry barrier of the client attempt that opened a recovered
  * order, so replaying that client key reports the completed purchase instead
- * of staying pending forever. Only a marker that already names this order is
- * upgraded; storage failures leave the conservative marker intact.
+ * of staying pending or reopening a checkout. It runs after the server grant
+ * and before the provider acknowledgement. `failed` means the marker could not
+ * be read or written and the order must stay unacknowledged; `not-applicable`
+ * means no marker for this order needs finishing.
  */
 async function completeLinkedAitIapPurchaseAttempt(input: {
   readonly storage: AitHostDependencies['storage'];
@@ -2938,18 +2960,21 @@ async function completeLinkedAitIapPurchaseAttempt(input: {
   readonly orderId: string;
   readonly retainCompletedAttempt: AitIapCompletedAttemptRetention;
   readonly timeoutMs: number;
-}): Promise<void> {
+}): Promise<'completed' | 'not-applicable' | 'failed'> {
   const startedAt = Date.now();
   const storageKey = aitIapPurchaseAttemptStorageKey(input.product.productId, input.idempotencyKey);
   const read = await callAitIapNative(() => input.storage.getItem(storageKey), input.timeoutMs);
-  if (read.status !== 'ok' || typeof read.value !== 'string') {
-    return;
+  if (read.status !== 'ok') {
+    return 'failed';
+  }
+  if (typeof read.value !== 'string') {
+    return 'not-applicable';
   }
   let state: unknown;
   try {
     state = JSON.parse(read.value);
   } catch {
-    return;
+    return 'not-applicable';
   }
   if (
     !isRecord(state)
@@ -2957,11 +2982,11 @@ async function completeLinkedAitIapPurchaseAttempt(input: {
     || state.idempotencyKey !== input.idempotencyKey
     || !isLinkedAitIapAttemptMarker(state, input.orderId)
   ) {
-    return;
+    return 'not-applicable';
   }
   const remainingTimeoutMs = remainingAitIapOperationTimeout(startedAt, input.timeoutMs);
   if (remainingTimeoutMs === 0) {
-    return;
+    return 'failed';
   }
   const persisted = await persistAitIapPurchaseAttempt({
     storage: input.storage,
@@ -2972,9 +2997,11 @@ async function completeLinkedAitIapPurchaseAttempt(input: {
     source: 'pending-order-restore',
     timeoutMs: remainingTimeoutMs,
   });
-  if (persisted) {
-    void input.retainCompletedAttempt(input.storage, storageKey);
+  if (!persisted) {
+    return 'failed';
   }
+  void input.retainCompletedAttempt(input.storage, storageKey);
+  return 'completed';
 }
 
 /**
@@ -3265,8 +3292,15 @@ function createAitIapDiagnosticError(
 }
 
 /**
- * Reads a native SDK error code without copying free-form error text, which
- * can contain order or account details. Only upper-case identifiers pass.
+ * Native SDK codes that may be recognized in error text when the SDK does not
+ * attach a structured code. Nothing else is ever read from a message.
+ */
+const aitIapKnownMessageProviderCodes: readonly string[] = [aitIapProductNotGrantedByPartnerCode];
+
+/**
+ * Reads a native SDK error code from structured `code`/`errorCode` fields.
+ * Free-form error text can contain order or account identifiers, so it is
+ * only checked for an exact, allowlisted SDK code.
  */
 function readAitIapProviderCode(error: unknown): string | undefined {
   if (isRecord(error)) {
@@ -3282,8 +3316,8 @@ function readAitIapProviderCode(error: unknown): string | undefined {
   } else if (typeof error === 'string') {
     message = error;
   }
-  return message.match(/[A-Z][A-Z0-9_]{2,127}/gu)
-    ?.find((candidate) => candidate.includes('_'));
+  const tokens = new Set(message.split(/[^A-Z0-9_]+/u));
+  return aitIapKnownMessageProviderCodes.find((code) => tokens.has(code));
 }
 
 function isAitIapProviderCode(value: unknown): value is string {
