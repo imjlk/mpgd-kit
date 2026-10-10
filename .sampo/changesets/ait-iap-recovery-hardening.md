@@ -11,7 +11,8 @@ for the same product is still ungranted, only one checkout runs at a time
 (restore waits its turn with a retryable code), and a `PRODUCT_NOT_GRANTED_BY_PARTNER`
 error triggers one direct re-check of that order. Restore returns
 `settledPurchases` and reports failures as coded errors instead of an empty
-success. Catalog and purchase outcomes carry stable diagnostic codes
+success; `getEntitlements` likewise rejects when the configured authority read
+fails. Catalog and purchase outcomes carry stable diagnostic codes
 (`aitIapDiagnosticCodes`). Add `aitBrowserOrigins()` and `isAitBrowserOrigin()`
 (`@mpgd/adapter-ait/origins`) for exact CORS allowlists. `@mpgd/platform` adds
 the optional `CommerceDiagnostic` type, `diagnostic` fields on purchase and

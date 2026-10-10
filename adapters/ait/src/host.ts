@@ -98,6 +98,14 @@ const iapPendingOrderCursorStorageKey = 'mpgd:ait:pending-order-cursor:v1';
  * finish that attempt's retry barrier.
  */
 const iapOrderAttemptLinkStoragePrefix = 'mpgd:ait:iap-order-attempt:v1:';
+/**
+ * Orders whose provider acknowledgement was started after a server grant but
+ * not confirmed. A timed-out `completeProductGrant()` may still succeed later
+ * and remove the order from the pending list, so this list keeps the
+ * same-product checkout barrier until a later pass sees the order gone.
+ */
+const iapAcknowledgementsInFlightStorageKey = 'mpgd:ait:iap-ack-in-flight:v1';
+const maximumIapAcknowledgementsInFlight = 32;
 const defaultNotificationAgreementTimeoutMs = 120_000;
 const notificationTopics = new Set<NotificationTopic>([
   'daily-ready',
@@ -795,11 +803,23 @@ export function createAitHostBridge(
             );
       }
 
-      case 'commerce.getEntitlements':
-        return ok(request, await readAitIapEntitlements(
+      case 'commerce.getEntitlements': {
+        if (options.readIapEntitlements === undefined) {
+          return ok(request, []);
+        }
+        // A failed or timed-out authority read is not proof of no ownership.
+        const entitlements = await readAitIapEntitlementsIfAvailable(
           options.readIapEntitlements,
           iapProductGrantTimeoutMs,
-        ));
+        );
+        return entitlements === undefined
+          ? createAitIapDiagnosticError(
+              request.id,
+              aitIapDiagnostic(aitIapDiagnosticCodes.entitlementReadFailed, true),
+              'Apps in Toss purchase entitlements are unavailable',
+            )
+          : ok(request, entitlements);
+      }
 
       case 'ads.preload': {
         const placementId = readPlacementId(request.payload);
@@ -1778,6 +1798,8 @@ interface VerifyAndPersistAitIapProductGrantInput extends PersistAitIapServerGra
   readonly verifier: AitIapProductGrantVerifier;
   readonly orderIdempotencyKey: string;
   readonly source: AitIapGrantSource;
+  /** Receives the best-effort link write so the caller can settle it before releasing the lock. */
+  readonly trackWrite: (write: Promise<unknown>) => void;
 }
 
 function isAitIapSupported(input: AitIapSupportInput): boolean {
@@ -1881,13 +1903,6 @@ async function readAitIapCatalog(
     };
   }
   return { status: 'ok', products };
-}
-
-async function readAitIapEntitlements(
-  reader: AitIapEntitlementReader | undefined,
-  timeoutMs: number,
-): Promise<readonly Entitlement[]> {
-  return await readAitIapEntitlementsIfAvailable(reader, timeoutMs) ?? [];
 }
 
 /** Returns undefined when the game authority could not be read in time. */
@@ -2050,16 +2065,19 @@ async function verifyAndPersistAitIapProductGrant(
   input: VerifyAndPersistAitIapProductGrantInput,
 ): Promise<boolean> {
   const startedAt = Date.now();
-  // Best effort and deliberately not awaited: the link only lets recovery pass
-  // the client key for this order, so a slow write must never consume the
-  // grant deadline. The attempt marker below remains the retry barrier.
-  void writeAitIapOrderAttemptLink({
-    storage: input.storage,
-    product: input.product,
-    idempotencyKey: input.idempotencyKey,
-    orderId: input.orderId,
-    timeoutMs: input.timeoutMs,
-  });
+  // Best effort and not awaited here: the link only lets recovery pass the
+  // client key for this order, so a slow write must never consume the grant
+  // deadline. The purchase still settles it before releasing the IAP lock, so
+  // restore never reads an absence that races this write.
+  input.trackWrite(
+    writeAitIapOrderAttemptLink({
+      storage: input.storage,
+      product: input.product,
+      idempotencyKey: input.idempotencyKey,
+      orderId: input.orderId,
+      timeoutMs: input.timeoutMs,
+    }),
+  );
   const correlated = await persistAitIapPurchaseAttempt({
     storage: input.storage,
     product: input.product,
@@ -2347,6 +2365,15 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
 
   return new Promise<PurchaseResult>((resolve) => {
     const grantAttempts = new Map<string, Promise<boolean>>();
+    /**
+     * Grant attempts, link writes and direct recovery that may outlive the
+     * terminal callback. The result (and with it the IAP lock) is released
+     * only after all of them settle; each is bounded by its own deadline.
+     */
+    const inFlightWork = new Set<Promise<unknown>>();
+    const trackWrite = (work: Promise<unknown>): void => {
+      inFlightWork.add(work);
+    };
     let settled = false;
     let cleanup: (() => void) | undefined;
     let cleanupRequested = false;
@@ -2369,7 +2396,9 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
       } else {
         safelyCleanupAitIapPurchase(cleanup);
       }
-      resolve(result);
+      void Promise.allSettled([...inFlightWork]).then(() => {
+        resolve(result);
+      });
     };
 
     const startMarkerDeletion = (clearedResult: PurchaseResult): void => {
@@ -2390,6 +2419,11 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
     };
 
     const processProductGrant = (orderId: string): Promise<boolean> => {
+      if (settled) {
+        // The terminal result is already decided; never start a grant whose
+        // writes could land after the IAP lock is released.
+        return Promise.resolve(false);
+      }
       if (markerDeletionStarted) {
         // Cancellation won the serialization race. Do not let a later queued
         // grant callback commit after its retry barrier starts disappearing.
@@ -2414,6 +2448,7 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
         idempotencyKey: input.idempotencyKey,
         orderIdempotencyKey: createAitIapOrderIdempotencyKey(orderId),
         source: 'process-product-grant',
+        trackWrite,
         timeoutMs: input.timeoutMs,
       }).then((granted) => {
         if (granted) {
@@ -2422,6 +2457,7 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
         return granted;
       });
       grantAttempts.set(orderId, attempt);
+      inFlightWork.add(attempt);
       return attempt;
     };
 
@@ -2473,6 +2509,7 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
           idempotencyKey: input.idempotencyKey,
           orderIdempotencyKey: createAitIapOrderIdempotencyKey(orderId),
           source: 'pending-order-restore',
+          trackWrite,
           timeoutMs: input.timeoutMs,
         });
       }
@@ -2490,24 +2527,17 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
       if (completed.status !== 'completed') {
         return completed;
       }
-      const completionTimeoutMs = remainingAitIapOperationTimeout(startedAt, input.timeoutMs);
-      const completion = completionTimeoutMs === 0
-        ? { status: 'timeout' as const }
-        : await callAitIapNative(
-            () => input.dependencies.iap.completeProductGrant({ params: { orderId } }),
-            completionTimeoutMs,
-          );
-      if (completion.status !== 'ok' || completion.value !== true) {
+      const acknowledgement = await acknowledgeAitIapOrder({
+        dependencies: input.dependencies,
+        orderId,
+        product: input.product,
+        idempotencyKey: input.idempotencyKey,
+        timeoutMs: remainingAitIapOperationTimeout(startedAt, input.timeoutMs),
+      });
+      if (acknowledgement.status !== 'acknowledged') {
         // The server grant and the client marker are durable; restore will
         // acknowledge the still-pending provider order later.
-        return pendingPurchase(
-          orderId,
-          aitIapDiagnostic(
-            aitIapDiagnosticCodes.grantCompletionFailed,
-            true,
-            completion.status === 'error' ? completion.providerCode : undefined,
-          ),
-        );
+        return pendingPurchase(orderId, acknowledgement.diagnostic);
       }
       return completed;
     };
@@ -2549,7 +2579,9 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
             && knownOrderId !== undefined
             && !markerDeletionStarted
           ) {
-            void recoverNotGrantedOrder(knownOrderId, providerCode).then(finish, () => {
+            const recovery = recoverNotGrantedOrder(knownOrderId, providerCode);
+            inFlightWork.add(recovery);
+            void recovery.then(finish, () => {
               finish(pendingPurchase(
                 knownOrderId,
                 aitIapDiagnostic(aitIapDiagnosticCodes.grantPending, true, providerCode),
@@ -2788,11 +2820,15 @@ async function reconcileAitIapPendingOrders(
     status: 'unavailable',
     diagnostic: aitIapDiagnostic(aitIapDiagnosticCodes.pendingOrderCheckFailed, true),
   };
+  const providerPendingOrderIds = new Set<string>();
   for (const order of nativeOrders) {
     // An entry that might be a configured product's paid order is never
     // proof of absence. Only well-formed entries for other SKUs are ignored.
     if (!isRecord(order) || typeof order.sku !== 'string') {
       return malformedPendingOrders;
+    }
+    if (typeof order.orderId === 'string') {
+      providerPendingOrderIds.add(order.orderId);
     }
     const product = input.products.bySku.get(order.sku);
     if (product === undefined) {
@@ -2821,6 +2857,53 @@ async function reconcileAitIapPendingOrders(
   const restoredEntitlements: Entitlement[] = [];
   const unresolvedOrders: AitIapUnresolvedOrder[] = [];
   let diagnostic: CommerceDiagnostic | undefined;
+
+  // An acknowledgement that timed out may have succeeded since. Its order is
+  // granted on the server; once the provider no longer lists it, report it as
+  // settled (which also keeps the same-product checkout barrier for this
+  // pass) and only then drop it from the in-flight list.
+  const acknowledgementReadTimeoutMs = getRemainingTimeout();
+  const acknowledgements = acknowledgementReadTimeoutMs === 0
+    ? undefined
+    : await readAitIapAcknowledgementsInFlight(
+        input.dependencies.storage,
+        acknowledgementReadTimeoutMs,
+      );
+  if (acknowledgements === undefined) {
+    return malformedPendingOrders;
+  }
+  const confirmedAcknowledgements = acknowledgements.filter(
+    (entry) => !providerPendingOrderIds.has(entry.orderId),
+  );
+  for (const entry of confirmedAcknowledgements) {
+    const product = input.products.bySku.get(entry.sku);
+    if (product === undefined) {
+      continue;
+    }
+    settledPurchases.push({
+      transactionId: entry.orderId,
+      productId: product.productId,
+      status: 'granted',
+      ...(entry.idempotencyKey === undefined ? {} : { idempotencyKey: entry.idempotencyKey }),
+    });
+    restoredEntitlements.push({
+      id: product.productId,
+      source: 'purchase',
+      grantedAt: new Date().toISOString(),
+    });
+  }
+  if (confirmedAcknowledgements.length > 0) {
+    const clearTimeoutMs = getRemainingTimeout();
+    if (clearTimeoutMs > 0) {
+      // A failed clear only reports the same settled order again next time.
+      await removeAitIapAcknowledgementsInFlight(
+        input.dependencies.storage,
+        confirmedAcknowledgements.map(({ orderId }) => orderId),
+        clearTimeoutMs,
+      );
+    }
+  }
+
   const cursorTimeoutMs = getRemainingTimeout();
   const cursor = cursorTimeoutMs === 0
     ? undefined
@@ -2924,21 +3007,17 @@ async function reconcileAitIapPendingOrders(
       deferRemaining();
       break;
     }
-    const completion = await callAitIapNative(
-      () =>
-        input.dependencies.iap.completeProductGrant({
-          params: { orderId: order.orderId },
-        }),
-      completionTimeoutMs,
-    );
-    if (completion.status !== 'ok' || completion.value !== true) {
+    const acknowledgement = await acknowledgeAitIapOrder({
+      dependencies: input.dependencies,
+      orderId: order.orderId,
+      product,
+      ...(clientIdempotencyKey === undefined ? {} : { idempotencyKey: clientIdempotencyKey }),
+      timeoutMs: completionTimeoutMs,
+    });
+    if (acknowledgement.status !== 'acknowledged') {
       // Keep provider state pending when its completion acknowledgement fails.
       unresolvedOrders.push({ orderId: order.orderId, sku: order.sku });
-      diagnostic ??= aitIapDiagnostic(
-        aitIapDiagnosticCodes.grantCompletionFailed,
-        true,
-        completion.status === 'error' ? completion.providerCode : undefined,
-      );
+      diagnostic ??= acknowledgement.diagnostic;
       continue;
     }
     settledPurchases.push({
@@ -2982,28 +3061,30 @@ async function completeLinkedAitIapPurchaseAttempt(input: {
   const startedAt = Date.now();
   const storageKey = aitIapPurchaseAttemptStorageKey(input.product.productId, input.idempotencyKey);
   const read = await callAitIapNative(() => input.storage.getItem(storageKey), input.timeoutMs);
-  if (read.status !== 'ok') {
+  if (read.status !== 'ok' || (read.value !== null && typeof read.value !== 'string')) {
     return 'failed';
   }
-  if (read.value === null) {
-    return 'not-applicable';
-  }
-  if (typeof read.value !== 'string') {
-    return 'failed';
-  }
-  let state: unknown;
-  try {
-    state = JSON.parse(read.value);
-  } catch {
-    return 'not-applicable';
-  }
-  if (
-    !isRecord(state)
-    || state.productId !== input.product.productId
-    || state.idempotencyKey !== input.idempotencyKey
-    || !isLinkedAitIapAttemptMarker(state, input.orderId)
-  ) {
-    return 'not-applicable';
+  // A linked attempt without a marker would let a replay of its key open a
+  // new checkout for an order that is about to be acknowledged, so write the
+  // completed marker in that case too.
+  if (read.value !== null) {
+    let state: unknown;
+    try {
+      state = JSON.parse(read.value);
+    } catch {
+      return 'failed';
+    }
+    if (
+      !isRecord(state)
+      || state.productId !== input.product.productId
+      || state.idempotencyKey !== input.idempotencyKey
+    ) {
+      // A corrupted linked marker cannot be finished; keep the order pending.
+      return 'failed';
+    }
+    if (!isLinkedAitIapAttemptMarker(state, input.orderId)) {
+      return 'not-applicable';
+    }
   }
   const remainingTimeoutMs = remainingAitIapOperationTimeout(startedAt, input.timeoutMs);
   if (remainingTimeoutMs === 0) {
@@ -3023,6 +3104,163 @@ async function completeLinkedAitIapPurchaseAttempt(input: {
   }
   void input.retainCompletedAttempt(input.storage, storageKey);
   return 'completed';
+}
+
+interface AitIapAcknowledgementInFlight {
+  readonly orderId: string;
+  readonly sku: string;
+  readonly idempotencyKey?: string;
+}
+
+type AitIapAcknowledgement =
+  | { readonly status: 'acknowledged' }
+  | { readonly status: 'not-acknowledged'; readonly diagnostic: CommerceDiagnostic };
+
+/**
+ * Acknowledges a server-granted order with `completeProductGrant()`. The
+ * order is first recorded as in flight, so a timed-out acknowledgement that
+ * succeeds later still leaves a same-product checkout barrier. The record is
+ * removed after a confirmed success or a definitive rejection; after a
+ * timeout it stays until reconciliation sees the order leave the provider
+ * list. Without the record, the order is not acknowledged.
+ */
+async function acknowledgeAitIapOrder(input: {
+  readonly dependencies: Pick<AitHostDependencies, 'iap' | 'storage'>;
+  readonly orderId: string;
+  readonly product: NormalizedAitIapProduct;
+  readonly idempotencyKey?: string;
+  readonly timeoutMs: number;
+}): Promise<AitIapAcknowledgement> {
+  const startedAt = Date.now();
+  const remaining = (): number => remainingAitIapOperationTimeout(startedAt, input.timeoutMs);
+  const barrierUnavailable: AitIapAcknowledgement = {
+    status: 'not-acknowledged',
+    diagnostic: aitIapDiagnostic(aitIapDiagnosticCodes.attemptStorageUnavailable, true),
+  };
+  const storage = input.dependencies.storage;
+  const entries = remaining() === 0
+    ? undefined
+    : await readAitIapAcknowledgementsInFlight(storage, remaining());
+  if (entries === undefined) {
+    return barrierUnavailable;
+  }
+  const others = entries.filter((entry) => entry.orderId !== input.orderId);
+  if (others.length >= maximumIapAcknowledgementsInFlight) {
+    return barrierUnavailable;
+  }
+  const recorded = remaining() > 0 && await writeAitIapStorage(
+    storage,
+    iapAcknowledgementsInFlightStorageKey,
+    JSON.stringify([
+      ...others,
+      {
+        orderId: input.orderId,
+        sku: input.product.sku,
+        ...(input.idempotencyKey === undefined ? {} : { idempotencyKey: input.idempotencyKey }),
+      },
+    ]),
+    remaining(),
+  );
+  if (!recorded) {
+    return barrierUnavailable;
+  }
+  const completionTimeoutMs = remaining();
+  const completion = completionTimeoutMs === 0
+    ? { status: 'timeout' as const }
+    : await callAitIapNative(
+        () => input.dependencies.iap.completeProductGrant({ params: { orderId: input.orderId } }),
+        completionTimeoutMs,
+      );
+  if (completion.status === 'timeout') {
+    // Ambiguous: the native call may still succeed. Keep the in-flight record.
+    return {
+      status: 'not-acknowledged',
+      diagnostic: aitIapDiagnostic(aitIapDiagnosticCodes.grantCompletionFailed, true),
+    };
+  }
+  // Confirmed success or a definitive rejection: the order is no longer in
+  // flight. A failed removal only reports the order as settled once more.
+  await removeAitIapAcknowledgementsInFlight(storage, [input.orderId], Math.max(1, remaining()));
+  if (completion.status === 'ok' && completion.value === true) {
+    return { status: 'acknowledged' };
+  }
+  return {
+    status: 'not-acknowledged',
+    diagnostic: aitIapDiagnostic(
+      aitIapDiagnosticCodes.grantCompletionFailed,
+      true,
+      completion.status === 'error' ? completion.providerCode : undefined,
+    ),
+  };
+}
+
+/** Returns undefined when the list cannot be read or is malformed. */
+async function readAitIapAcknowledgementsInFlight(
+  storage: Pick<typeof Storage, 'getItem'>,
+  timeoutMs: number,
+): Promise<readonly AitIapAcknowledgementInFlight[] | undefined> {
+  const read = await callAitIapNative(
+    () => storage.getItem(iapAcknowledgementsInFlightStorageKey),
+    timeoutMs,
+  );
+  if (read.status !== 'ok') {
+    return undefined;
+  }
+  if (read.value === null) {
+    return [];
+  }
+  if (typeof read.value !== 'string') {
+    return undefined;
+  }
+  try {
+    const value: unknown = JSON.parse(read.value);
+    if (!Array.isArray(value)) {
+      return undefined;
+    }
+    const entries: AitIapAcknowledgementInFlight[] = [];
+    for (const entry of value as readonly unknown[]) {
+      if (
+        !isRecord(entry)
+        || typeof entry.orderId !== 'string'
+        || !isAitIapOrderId(entry.orderId)
+        || typeof entry.sku !== 'string'
+        || (entry.idempotencyKey !== undefined
+          && !isAitIapClientIdempotencyKey(entry.idempotencyKey))
+      ) {
+        return undefined;
+      }
+      entries.push({
+        orderId: entry.orderId,
+        sku: entry.sku,
+        ...(typeof entry.idempotencyKey === 'string'
+          ? { idempotencyKey: entry.idempotencyKey }
+          : {}),
+      });
+    }
+    return entries;
+  } catch {
+    return undefined;
+  }
+}
+
+async function removeAitIapAcknowledgementsInFlight(
+  storage: Pick<typeof Storage, 'getItem' | 'setItem'>,
+  orderIds: readonly string[],
+  timeoutMs: number,
+): Promise<boolean> {
+  const startedAt = Date.now();
+  const entries = await readAitIapAcknowledgementsInFlight(storage, timeoutMs);
+  const remainingTimeoutMs = remainingAitIapOperationTimeout(startedAt, timeoutMs);
+  if (entries === undefined || remainingTimeoutMs === 0) {
+    return false;
+  }
+  const removed = new Set(orderIds);
+  return await writeAitIapStorage(
+    storage,
+    iapAcknowledgementsInFlightStorageKey,
+    JSON.stringify(entries.filter((entry) => !removed.has(entry.orderId))),
+    remainingTimeoutMs,
+  );
 }
 
 /**

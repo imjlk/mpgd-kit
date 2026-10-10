@@ -107,7 +107,15 @@ recovery rules:
   before `prepareIap` until it finishes. While the lock is held, another
   purchase returns `failed` and `commerce.restore` rejects, both with the
   retryable `AIT_IAP_CHECKOUT_IN_PROGRESS`. No other operation can then
-  verify, acknowledge or change markers for the same order.
+  verify, acknowledge or change markers for the same order. A purchase
+  releases the lock only after its grant callbacks, direct recovery and order
+  link writes have settled.
+- **Acknowledgement barrier.** Before every `completeProductGrant()` call, the
+  bridge records the order as in flight. If the call times out, the record
+  stays: once a later pass no longer sees the order in the provider list, it
+  reports the order as settled (so a same-product purchase returns
+  `AIT_IAP_PENDING_ORDER_RECOVERED`) and clears the record. If the record
+  cannot be read or written, the order is not acknowledged.
 - **Partner grant failure.** When the SDK reports
   `PRODUCT_NOT_GRANTED_BY_PARTNER` for an order the callback saw, the bridge
   verifies that exact order once more (`source: 'pending-order-restore'`),
@@ -124,9 +132,10 @@ recovery rules:
   `AIT_IAP_PENDING_ORDER_UNRESOLVED`. For a linked order, restore marks the
   client attempt completed before calling `completeProductGrant()`. If the
   link or the marker cannot be read or written, the order stays
-  unacknowledged for a later retry; only a link that is confirmed absent lets
-  an unlinked order be acknowledged. Replaying the original client key then
-  returns the completed purchase.
+  unacknowledged for a later retry, as it does when the linked marker is
+  corrupted; only a link that is confirmed absent lets an unlinked order be
+  acknowledged. A linked attempt without a marker gets a completed marker.
+  Replaying the original client key then returns the completed purchase.
 - **Startup recovery.** Call `gateway.commerce.restore()` once the game session
   exists (after the account or identity that `prepareIap` checks is ready).
   A purchase tapped while that restore runs gets
@@ -141,7 +150,9 @@ other message text is never copied. `commerce.getProducts` still
 returns an empty list when IAP is not configured or not supported, and rejects
 with `AIT_IAP_CATALOG_EMPTY`, `AIT_IAP_CONFIGURED_SKUS_NOT_VISIBLE`,
 `AIT_IAP_UNSUPPORTED_APP_VERSION` or `AIT_IAP_CATALOG_UNAVAILABLE` when the
-configured catalog cannot be shown.
+configured catalog cannot be shown. `commerce.getEntitlements` rejects with
+`AIT_IAP_ENTITLEMENT_READ_FAILED` when the configured `readIapEntitlements`
+fails or times out, instead of reporting no entitlements.
 
 ## Purchase flow
 
