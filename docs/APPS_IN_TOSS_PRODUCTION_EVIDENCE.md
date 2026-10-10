@@ -128,9 +128,15 @@ recovery rules:
   unfinished write. A call whose turn does not come in time fails closed.
 - **Storage growth.** Order links are removed once their order is settled and
   kept while it is pending or its acknowledgement is ambiguous. The
-  acknowledgement record holds at most 32 orders and the completed index 64
-  keys. Completed attempt markers are kept, because they stop a replayed
-  client key from opening a second checkout.
+  acknowledgement record holds at most 32 orders. The bridge keeps the 100
+  most recent completed attempt markers, ordered by completion through the
+  completed index. When a new completion pushes past that cap, the oldest
+  marker is deleted if it is still `completed`. A pending, server-granted or
+  unreadable marker is never deleted. An eviction whose deletion fails stays
+  indexed and is retried on the next completion. This is safe because a game
+  only replays its own latest unfinished client key, and the server grant
+  ledger is keyed by order: replaying an evicted old key can at most open a
+  checkout for a new request, never grant the same order twice.
 - **Partner grant failure.** When the SDK reports
   `PRODUCT_NOT_GRANTED_BY_PARTNER` for an order the callback saw, the bridge
   verifies that exact order once more (`source: 'pending-order-restore'`),

@@ -389,7 +389,7 @@ describe('AIT production host bridge', () => {
     ]);
   });
 
-  it('bounds the completed-attempt index without evicting durable retry barriers', async () => {
+  it('prunes the oldest completed attempt once 101 purchases complete', async () => {
     const values = new Map<string, string>();
     const callbacks: IapPurchaseCallbacks[] = [];
     const bridge = createAitHostBridge({
@@ -408,7 +408,7 @@ describe('AIT production host bridge', () => {
       }),
     });
 
-    for (let index = 0; index < 65; index += 1) {
+    for (let index = 0; index < 101; index += 1) {
       const idempotencyKey = `retained-attempt-${index}`;
       const orderId = `order-retention-${index}`;
       const purchase = request(bridge, 'commerce.purchase', {
@@ -429,21 +429,87 @@ describe('AIT production host bridge', () => {
     }
 
     const indexKey = 'mpgd:ait:iap-completed-purchase-index:v1';
+    const attemptKey = (index: number) =>
+      `mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:retained-attempt-${index}`;
     await vi.waitFor(() => expect(
-      JSON.parse(values.get(indexKey) ?? '[]'),
-    ).toHaveLength(64));
-    expect(values.has('mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:retained-attempt-0'))
-      .toBe(true);
-    expect(values.has('mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:retained-attempt-64'))
-      .toBe(true);
+      (JSON.parse(values.get(indexKey) ?? '[]') as string[]).at(-1),
+    ).toBe(attemptKey(100)));
+    expect(values.has(attemptKey(0))).toBe(false);
+    const indexed = JSON.parse(values.get(indexKey) ?? '[]') as string[];
+    expect(indexed).toHaveLength(100);
+    expect(indexed[0]).toBe(attemptKey(1));
+    expect(indexed.at(-1)).toBe(attemptKey(100));
+    expect(values.has(attemptKey(1))).toBe(true);
     await expect(request(bridge, 'commerce.purchase', {
       productId: 'HINT_PACK_5',
-      idempotencyKey: 'retained-attempt-0',
+      idempotencyKey: 'retained-attempt-100',
     })).resolves.toMatchObject({
       status: 'completed',
-      transactionId: 'order-retention-0',
+      transactionId: 'order-retention-100',
     });
-    expect(callbacks).toHaveLength(65);
+    expect(callbacks).toHaveLength(101);
+  }, 30_000);
+
+  it('never prunes an attempt marker that is not completed', async () => {
+    const indexKey = 'mpgd:ait:iap-completed-purchase-index:v1';
+    const attemptKey = (key: string) => `mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:${key}`;
+    const completedMarker = (key: string) => JSON.stringify({
+      status: 'completed', productId: 'HINT_PACK_5', idempotencyKey: key, orderId: `order-${key}`,
+    });
+    const values = new Map<string, string>();
+    const seededKeys = Array.from({ length: 99 }, (_, index) => `seeded-${index}`);
+    for (const key of seededKeys) {
+      values.set(attemptKey(key), completedMarker(key));
+    }
+    const pendingMarker = JSON.stringify({
+      status: 'server-granted',
+      productId: 'HINT_PACK_5',
+      idempotencyKey: 'still-open',
+      orderId: 'order-still-open',
+    });
+    values.set(attemptKey('still-open'), pendingMarker);
+    // The unfinished marker is the oldest index entry and is evicted first.
+    values.set(indexKey, JSON.stringify([
+      attemptKey('still-open'),
+      ...seededKeys.map(attemptKey),
+    ]));
+    const callbacks: IapPurchaseCallbacks[] = [];
+    const bridge = createAitHostBridge({
+      iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
+      prepareIap: async () => true,
+      verifyIapProductGrant: async () => true,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        storage: createMemoryStorage(values),
+        iap: createSupportedIap({
+          products: [createIapProduct()],
+          onPurchase: (input) => {
+            callbacks.push(input);
+          },
+        }),
+      }),
+    });
+
+    for (const [index, key] of ['newest-1', 'newest-2'].entries()) {
+      const purchase = request(bridge, 'commerce.purchase', {
+        productId: 'HINT_PACK_5',
+        idempotencyKey: key,
+      });
+      await vi.waitFor(() => expect(callbacks).toHaveLength(index + 1));
+      await callbacks[index]?.options.processProductGrant({ orderId: `order-${key}` });
+      await callbacks[index]?.onEvent({ type: 'success', data: createIapSuccessEvent(`order-${key}`) });
+      await expect(purchase).resolves.toMatchObject({ status: 'completed' });
+      await vi.waitFor(() => expect(
+        (JSON.parse(values.get(indexKey) ?? '[]') as string[]).at(-1),
+      ).toBe(attemptKey(key)));
+    }
+
+    expect(values.get(attemptKey('still-open'))).toBe(pendingMarker);
+    expect(values.has(attemptKey('seeded-0'))).toBe(false);
+    expect(values.has(attemptKey('seeded-1'))).toBe(true);
+    const indexed = JSON.parse(values.get(indexKey) ?? '[]') as string[];
+    expect(indexed).toHaveLength(100);
+    expect(indexed).not.toContain(attemptKey('still-open'));
   });
 
   it('fails closed when the native IAP callback cannot verify the product grant', async () => {
