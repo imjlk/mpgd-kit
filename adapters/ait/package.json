@@ -53,6 +53,10 @@
       "types": "./dist/authority-fetch.d.ts",
       "default": "./dist/authority-fetch.js"
     },
+    "./origins": {
+      "types": "./dist/origins.d.ts",
+      "default": "./dist/origins.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

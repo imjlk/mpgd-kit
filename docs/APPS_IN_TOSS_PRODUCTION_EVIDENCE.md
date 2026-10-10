@@ -78,6 +78,131 @@ const bridge = createAitHostBridge({
 });
 ```
 
+## Built-in host bridge recovery
+
+`createAitHostBridge()` from `@mpgd/adapter-ait/host` owns the one-time order
+flow when a game passes `iapProducts`, `prepareIap`, `verifyIapProductGrant`
+and `readIapEntitlements`. It keeps the server authoritative and adds these
+recovery rules:
+
+- **Client purchase key.** `verifyIapProductGrant` always receives the
+  order-scoped `idempotencyKey` (`apps-in-toss:purchase:<encoded order id>`)
+  as the grant identity. It also receives `clientIdempotencyKey`, the key the
+  game passed to `commerce.purchase`, whenever the bridge can link the order to
+  that attempt: the grant callback, a direct re-verify, and restore or
+  pre-checkout recovery of an order this device started. The link is stored in
+  adapter-reserved native storage, so it survives a reload. Use the client key
+  to associate the order with a game operation; do not replace the order key
+  with it.
+- **No second charge.** Before opening a checkout, the bridge reads
+  `getPendingOrders()` and reconciles configured SKUs. If an order for the same
+  product is still ungranted, or was just granted by this check, the purchase
+  returns `failed` without opening a checkout, with `diagnostic.code`
+  `AIT_IAP_PENDING_ORDER_UNRESOLVED` or `AIT_IAP_PENDING_ORDER_RECOVERED`.
+  Nothing was charged for that request. If the list cannot be read, or it or
+  any entry that could belong to a configured SKU is malformed, the result is
+  `failed` with `AIT_IAP_PENDING_ORDER_CHECK_FAILED`.
+- **One IAP operation at a time.** Every bridge built on the same native IAP
+  dependency shares one lock, so a reinstalled bridge cannot run a second
+  checkout beside an old one. A purchase holds it from its
+  attempt-marker check until its checkout result, and a restore holds it from
+  before `prepareIap` until it finishes. While the lock is held, another
+  purchase returns `failed` and `commerce.restore` rejects, both with the
+  retryable `AIT_IAP_CHECKOUT_IN_PROGRESS`. No other operation can then
+  verify, acknowledge or change markers for the same order. A purchase
+  releases the lock only after its grant callbacks, direct recovery and order
+  link writes have settled.
+- **Acknowledgement barrier.** Before every `completeProductGrant()` call, the
+  bridge records the order as in flight. The record's `recorded`/`started`
+  phase is diagnostic only. If the call times out, the record stays. A
+  record is cleared only by a confirmed acknowledgement, or, once the
+  provider no longer lists its order, by the verifier confirming the grant
+  for that order again. The order's absence alone never clears it, because
+  a record write can land late without any dispatch and the list can lag.
+  A cleared absent order is reported as settled, so a same-product purchase
+  returns `AIT_IAP_PENDING_ORDER_RECOVERED`. Otherwise the record stays an
+  unresolved same-product barrier. A timeout, `false` or an error never
+  clears a record. A retry while an earlier `completeProductGrant()` for the
+  same order is still running joins that call instead of dispatching again.
+  If the record cannot be read or written, the order is not acknowledged. If
+  the provider lists a record's order under a different SKU, or one order
+  id under two SKUs, reconciliation fails closed with
+  `AIT_IAP_PENDING_ORDER_CHECK_FAILED`.
+
+  *Decision: a server-confirmed grant clears the record.* The record exists
+  to stop a new checkout while a paid order has not been granted. Once the
+  verifier confirms the grant for that order, the player has received its
+  value, so a later checkout is a genuinely new purchase request, not a
+  duplicate charge for the same request. An order whose native
+  acknowledgement failed stays in the provider's pending list and is
+  acknowledged by the next reconciliation when it reappears. The grant is
+  keyed by order on the server, so it cannot be granted twice. Requiring
+  evidence of native settlement instead would block every purchase of that
+  product indefinitely whenever the SDK's acknowledgement is unreliable,
+  which is worse for players.
+  Records for SKUs that are no longer configured are kept apart from the
+  32-order active capacity. At most 32 of them are kept, oldest dropped first,
+  so they never block acknowledging products that are still sold.
+- **Serialized storage.** Every adapter-reserved IAP storage key (attempt
+  markers, order links, the acknowledgement record, the cursor and the
+  completed index) is read and written one operation at a time. Each waits
+  until earlier calls on that key have actually finished, so a late write can
+  never overwrite a newer one and a read never sees an absence that races an
+  unfinished write. A call whose turn does not come in time fails closed.
+  Once a call on a key outlives a deadline, later calls on that key fail
+  closed immediately until it settles, instead of queueing behind it.
+  Concurrent `getPendingOrders()` and `getProductItemList()` reads also share
+  one native call.
+- **Storage growth.** Completed attempt markers are kept indefinitely by
+  design. They back idempotency, so replaying an accepted client key returns
+  the completed purchase instead of opening another checkout. Each is a
+  compact tombstone (`{ v, status, productId, orderId, source? }`), because
+  the storage key already names the product and client key, so growth is
+  one small record per accepted purchase key. Full-form completed markers
+  written earlier remain readable. Every other IAP key is bounded:
+  - order links are removed once their order is settled, and kept while it
+    is pending or its acknowledgement is ambiguous;
+  - the acknowledgement record holds at most 32 orders;
+  - the completed index keeps the 64 most recent keys as bookkeeping only;
+  - the restore cursor is a single key.
+- **Partner grant failure.** When the SDK reports
+  `PRODUCT_NOT_GRANTED_BY_PARTNER` for an order the callback saw, the bridge
+  verifies that exact order once more (`source: 'pending-order-restore'`),
+  marks the client attempt completed and then calls `completeProductGrant()`
+  itself, because the pending-order list can lag right after checkout. If the
+  check or the marker write fails, the order stays `pending` and
+  unacknowledged.
+- **Restore.** `commerce.restore` returns `settledPurchases` for orders it
+  granted and acknowledged, including `idempotencyKey` when the order is linked
+  to a client attempt. It rejects with a coded `PlatformOperationError` when it
+  could not do its job (IAP unavailable, preparation rejected, pending orders
+  unreadable, or the entitlement read failed with nothing settled). A partial
+  restore resolves with `diagnostic`, for example
+  `AIT_IAP_PENDING_ORDER_UNRESOLVED`. For a linked order, restore marks the
+  client attempt completed before calling `completeProductGrant()`. If the
+  link or the marker cannot be read or written, the order stays
+  unacknowledged for a later retry, as it does when the linked marker is
+  corrupted; only a link that is confirmed absent lets an unlinked order be
+  acknowledged. A linked attempt without a marker gets a completed marker.
+  Replaying the original client key then returns the completed purchase.
+- **Startup recovery.** Call `gateway.commerce.restore()` once the game session
+  exists (after the account or identity that `prepareIap` checks is ready).
+  A purchase tapped while that restore runs gets
+  `AIT_IAP_CHECKOUT_IN_PROGRESS` and can be retried right after it.
+
+Non-completed purchase results carry `diagnostic: { code, retryable,
+providerCode? }`. The codes are exported as `aitIapDiagnosticCodes` from
+`@mpgd/adapter-ait`, which does not import the Apps in Toss SDK.
+`providerCode` comes only from a structured `code` or `errorCode` field, or
+from an exact allowlisted SDK code such as `PRODUCT_NOT_GRANTED_BY_PARTNER`;
+other message text is never copied. `commerce.getProducts` still
+returns an empty list when IAP is not configured or not supported, and rejects
+with `AIT_IAP_CATALOG_EMPTY`, `AIT_IAP_CONFIGURED_SKUS_NOT_VISIBLE`,
+`AIT_IAP_UNSUPPORTED_APP_VERSION` or `AIT_IAP_CATALOG_UNAVAILABLE` when the
+configured catalog cannot be shown. `commerce.getEntitlements` rejects with
+`AIT_IAP_ENTITLEMENT_READ_FAILED` when the configured `readIapEntitlements`
+fails or times out, instead of reporting no entitlements.
+
 ## Purchase flow
 
 Apps in Toss SDK 1.1.3 and later requires product-grant completion. The current

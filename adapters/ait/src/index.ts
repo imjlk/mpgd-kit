@@ -194,6 +194,13 @@ export function createAitPlatformGateway(input: {
 }
 
 export {
+  aitIapDiagnosticCodes,
+  aitIapProductNotGrantedByPartnerCode,
+  type AitIapDiagnosticCode,
+} from './iap-diagnostics.js';
+export { aitBrowserOrigins, isAitBrowserOrigin } from './origins.js';
+
+export {
   aitLifecyclePauseEvent,
   aitLifecycleResumeEvent,
   createAitLifecycleAdapter,

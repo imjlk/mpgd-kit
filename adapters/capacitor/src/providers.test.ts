@@ -543,6 +543,84 @@ describe('Capacitor optional provider composition', () => {
     })).rejects.toMatchObject({ code: 'NATIVE_PROVIDER_INVALID_RESPONSE' });
   });
 
+  it.each([
+    { name: 'a non-object diagnostic', diagnostic: 'invalid' },
+    { name: 'a lower-case diagnostic code', diagnostic: { code: 'not granted', retryable: true } },
+    { name: 'a non-boolean retry hint', diagnostic: { code: 'STORE_PENDING', retryable: 'yes' } },
+    { name: 'an unsafe provider code', diagnostic: {
+      code: 'STORE_PENDING', retryable: true, providerCode: 'user 1234 failed',
+    } },
+  ])('rejects $name on a purchase result', async ({ diagnostic }) => {
+    const gateway = createCapacitorPlatformGateway({
+      target: 'ios', appVersion: '1', buildId: 'base', bridge: baseBridge([]),
+      providers: [commerceProvider([], async () => 'available', {
+        status: 'pending', entitlementIds: [], diagnostic,
+      })],
+    });
+    await expect(gateway.commerce.purchase({
+      productId: 'COINS_100', source: 'shop', idempotencyKey: 'op-1',
+    })).rejects.toMatchObject({ code: 'NATIVE_PROVIDER_INVALID_RESPONSE' });
+  });
+
+  it('accepts a well-formed purchase diagnostic', async () => {
+    const data = {
+      status: 'pending',
+      entitlementIds: [],
+      diagnostic: { code: 'STORE_PENDING', retryable: true, providerCode: 'ITEM_PENDING' },
+    };
+    const gateway = createCapacitorPlatformGateway({
+      target: 'ios', appVersion: '1', buildId: 'base', bridge: baseBridge([]),
+      providers: [commerceProvider([], async () => 'available', data)],
+    });
+    await expect(gateway.commerce.purchase({
+      productId: 'COINS_100', source: 'shop', idempotencyKey: 'op-1',
+    })).resolves.toEqual(data);
+  });
+
+  it.each([
+    { name: 'a numeric settlement key', valid: false, data: {
+      restoredEntitlements: [],
+      settledPurchases: [{
+        transactionId: 'order-1', productId: 'COINS_100', status: 'granted', idempotencyKey: 42,
+      }],
+    } },
+    { name: 'an empty settlement key', valid: false, data: {
+      restoredEntitlements: [],
+      settledPurchases: [{
+        transactionId: 'order-1', productId: 'COINS_100', status: 'granted', idempotencyKey: '',
+      }],
+    } },
+    { name: 'a malformed restore diagnostic', valid: false, data: {
+      restoredEntitlements: [], diagnostic: { code: 'STORE_PENDING' },
+    } },
+    { name: 'well-formed restore metadata', valid: true, data: {
+      restoredEntitlements: [],
+      settledPurchases: [{
+        transactionId: 'order-1', productId: 'COINS_100', status: 'granted', idempotencyKey: 'op-1',
+      }],
+      diagnostic: { code: 'STORE_PENDING_ORDER_UNRESOLVED', retryable: true },
+    } },
+  ])('validates restore results with $name', async ({ valid, data }) => {
+    const provider: CapacitorServiceProvider = {
+      ...commerceProvider([], async () => 'available'),
+      bridge: {
+        async request(input) {
+          return { id: input.id, ok: true, data: input.method === 'commerce.restore' ? data : [] };
+        },
+      },
+    };
+    const gateway = createCapacitorPlatformGateway({
+      target: 'ios', appVersion: '1', buildId: 'base', bridge: baseBridge([]),
+      providers: [provider],
+    });
+    const restore = gateway.commerce.restore?.();
+    if (valid) {
+      await expect(restore).resolves.toEqual(data);
+    } else {
+      await expect(restore).rejects.toMatchObject({ code: 'NATIVE_PROVIDER_INVALID_RESPONSE' });
+    }
+  });
+
   it('rejects duplicate and base-method registrations', () => {
     const provider = commerceProvider([], async () => 'available');
     expect(() => createCapacitorProviderRegistry([provider, provider])).toThrow(/registered twice/);
