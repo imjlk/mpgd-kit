@@ -71,7 +71,7 @@ assert.deepEqual(calls.map(({ url, init }) => [init.method, url]), [
 ]);
 for (const { init } of calls) {
   assert.equal(new Headers(init.headers).get('Authorization'), 'Bearer secret-access-token');
-  assert.equal(init.redirect, 'error');
+  assert.equal(init.redirect, 'manual');
   assert.equal(init.signal, controller.signal);
 }
 
@@ -84,6 +84,38 @@ await assert.rejects(
   (error: unknown) => error instanceof Error
     && error.message === 'Google Play Publisher request failed (HTTP 403).',
 );
+
+// Workers only support manual redirects; a 3xx with a plausible purchase body must still fail.
+const redirectInits: RequestInit[] = [];
+const redirected = createGooglePlayPublisherClient({
+  getAccessToken: () => 'secret-access-token',
+  fetch: async (_url, init) => {
+    redirectInits.push(init ?? {});
+    return Response.json(
+      { purchaseStateContext: { purchaseState: 'PURCHASED' } },
+      { status: 302, headers: { Location: 'https://attacker.example/purchase' } },
+    );
+  },
+});
+await assert.rejects(
+  redirected.getProductPurchaseV2(input),
+  (error: unknown) => error instanceof Error
+    && error.message === 'Google Play Publisher request failed (HTTP 302).',
+);
+await assert.rejects(redirected.acknowledgeProductPurchase(input), /HTTP 302/u);
+assert.equal(redirectInits.length, 2);
+assert.equal(
+  redirectInits.every((init) => init.redirect === 'manual'),
+  true,
+);
+
+const followedResponse = Response.json({ purchaseStateContext: { purchaseState: 'PURCHASED' } });
+Object.defineProperty(followedResponse, 'redirected', { value: true });
+const followed = createGooglePlayPublisherClient({
+  getAccessToken: () => 'secret-access-token',
+  fetch: async () => followedResponse,
+});
+await assert.rejects(followed.getProductPurchaseV2(input), /request failed \(HTTP 200\)/u);
 
 const fetchFailure = createGooglePlayPublisherClient({
   getAccessToken: () => 'secret-access-token',

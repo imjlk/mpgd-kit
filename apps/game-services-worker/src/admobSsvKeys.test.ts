@@ -6,7 +6,7 @@ let called = 0;
 const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
   called += 1;
   assert.equal(String(input), 'https://www.gstatic.com/admob/reward/verifier-keys.json');
-  assert.equal(init?.redirect, 'error');
+  assert.equal(init?.redirect, 'manual');
   return Response.json({
     keys: [
       { keyId: 1, base64: 'YWJj' },
@@ -20,17 +20,34 @@ assert.equal(await fetchAdMobSsvPublicKeySpki('3', { fetcher }), undefined);
 assert.equal(await fetchAdMobSsvPublicKeySpki('bad', { fetcher }), undefined);
 assert.equal(called, 2);
 const duplicateFetcher = (async () => Response.json({
-  keys: [{ keyId: 1, base64: 'YWJj' }, { keyId: '1', base64: 'ZGVm' }],
+  keys: [
+    { keyId: 1, base64: 'YWJj' },
+    { keyId: '1', base64: 'ZGVm' },
+  ],
 })) as typeof fetch;
 await assert.rejects(
   fetchAdMobSsvPublicKeySpki('1', { fetcher: duplicateFetcher }),
   /duplicate key ID/u,
 );
 const oversizedFetcher = (async () => new Response('x'.repeat(70_000))) as typeof fetch;
-await assert.rejects(
-  fetchAdMobSsvPublicKeySpki('1', { fetcher: oversizedFetcher }),
-  /size limit/u,
-);
+await assert.rejects(fetchAdMobSsvPublicKeySpki('1', { fetcher: oversizedFetcher }), /size limit/u);
+// Workers only support manual redirects; a 3xx with a plausible key feed must fail closed.
+let redirectInit: RequestInit | undefined;
+const redirectFetcher = (async (_input: string | URL | Request, init?: RequestInit) => {
+  redirectInit = init;
+  return Response.json(
+    { keys: [{ keyId: 1, base64: 'YWJj' }] },
+    { status: 302, headers: { Location: 'https://attacker.example/verifier-keys.json' } },
+  );
+}) as typeof fetch;
+await assert.rejects(fetchAdMobSsvPublicKeySpki('1', { fetcher: redirectFetcher }), /HTTP 302/u);
+assert.equal(redirectInit?.redirect, 'manual');
+const followedFetcher = (async () => {
+  const response = Response.json({ keys: [{ keyId: 1, base64: 'YWJj' }] });
+  Object.defineProperty(response, 'redirected', { value: true });
+  return response;
+}) as typeof fetch;
+await assert.rejects(fetchAdMobSsvPublicKeySpki('1', { fetcher: followedFetcher }), /HTTP 200/u);
 const originalFetch = globalThis.fetch;
 globalThis.fetch = fetcher;
 try {

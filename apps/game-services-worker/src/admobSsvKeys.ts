@@ -48,12 +48,15 @@ async function loadKeyFeed(
 ): Promise<ReadonlyMap<string, string>> {
   const response = await fetcher(googleAdMobSsvKeyFeed, {
     method: 'GET',
-    redirect: 'error',
+    // Workers reject redirect: 'error'; a manual 3xx/opaque redirect is never ok and fails below.
+    redirect: 'manual',
     signal: signal === undefined
       ? AbortSignal.timeout(5_000)
       : AbortSignal.any([signal, AbortSignal.timeout(5_000)]),
   });
-  if (!response.ok) {
+  // Also reject a redirect followed by an injected fetch that ignores redirect: 'manual'.
+  if (!response.ok || response.redirected) {
+    await response.body?.cancel().catch(() => undefined);
     throw new Error(`AdMob SSV key feed returned HTTP ${response.status}.`);
   }
   const declaredLength = Number(response.headers.get('content-length'));
