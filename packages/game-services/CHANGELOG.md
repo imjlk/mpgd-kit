@@ -1,5 +1,14 @@
 # @mpgd/game-services
 
+## 0.19.1 — 2026-10-11
+
+### Patch changes
+
+- [4eb0f79b](https://github.com/imjlk/mpgd-kit/commit/4eb0f79b7216a86989ac5ebfc9ed90cf1a93811e) Fix the Google Play Publisher and ONE play purchase clients on Cloudflare
+  Workers, which reject `redirect: 'error'`. Requests now use `redirect: 'manual'`,
+  and any redirect response is still rejected instead of being treated as success. — Thanks @imjlk!
+- Updated dependencies: analytics@0.4.4, catalog@0.8.1, platform@0.18.0
+
 ## 0.19.0 — 2026-10-09
 
 ### Added
