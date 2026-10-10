@@ -126,17 +126,18 @@ recovery rules:
   until earlier calls on that key have actually finished, so a late write can
   never overwrite a newer one and a read never sees an absence that races an
   unfinished write. A call whose turn does not come in time fails closed.
-- **Storage growth.** Order links are removed once their order is settled and
-  kept while it is pending or its acknowledgement is ambiguous. The
-  acknowledgement record holds at most 32 orders. The bridge keeps the 100
-  most recent completed attempt markers, ordered by completion through the
-  completed index. When a new completion pushes past that cap, the oldest
-  marker is deleted if it is still `completed`. A pending, server-granted or
-  unreadable marker is never deleted. An eviction whose deletion fails stays
-  indexed and is retried on the next completion. This is safe because a game
-  only replays its own latest unfinished client key, and the server grant
-  ledger is keyed by order: replaying an evicted old key can at most open a
-  checkout for a new request, never grant the same order twice.
+- **Storage growth.** Completed attempt markers are kept indefinitely by
+  design. They back idempotency, so replaying an accepted client key returns
+  the completed purchase instead of opening another checkout. Each is a
+  compact tombstone (`{ v, status, productId, orderId, source? }`), because
+  the storage key already names the product and client key, so growth is
+  one small record per accepted purchase key. Full-form completed markers
+  written earlier remain readable. Every other IAP key is bounded:
+  - order links are removed once their order is settled, and kept while it
+    is pending or its acknowledgement is ambiguous;
+  - the acknowledgement record holds at most 32 orders;
+  - the completed index keeps the 64 most recent keys as bookkeeping only;
+  - the restore cursor is a single key.
 - **Partner grant failure.** When the SDK reports
   `PRODUCT_NOT_GRANTED_BY_PARTNER` for an order the callback saw, the bridge
   verifies that exact order once more (`source: 'pending-order-restore'`),

@@ -87,13 +87,7 @@ const promotionGrantStoragePrefix = 'mpgd:ait:promotion-grant:v1:';
  */
 const iapPurchaseAttemptStoragePrefix = 'mpgd:ait:iap-purchase-attempt:v1:';
 const iapCompletedPurchaseAttemptIndexStorageKey = 'mpgd:ait:iap-completed-purchase-index:v1';
-/**
- * Completed attempt markers kept for client-key replays, newest first. A game
- * only replays its own latest pending key, and the server grant ledger is keyed
- * by order, so an evicted older key can at most open a checkout for a new
- * request; it can never grant the same order twice.
- */
-const maximumIndexedCompletedIapPurchaseAttempts = 100;
+const maximumIndexedCompletedIapPurchaseAttempts = 64;
 /** A crashed pre-checkout attempt can be retried only after provider recovery finds no order. */
 const pendingIapPurchaseAttemptRecoveryAgeMs = defaultIapPurchaseSessionTimeoutMs;
 /** Rotates bounded pending-order recovery so an early rejected order cannot starve later work. */
@@ -446,7 +440,7 @@ export function createAitHostBridge(
   const legacyAds = toAdAdapter({ ...nativeAds, show: nativeAds.showLegacy });
 
   const enqueueCompletedIapAttemptRetention = (
-    storage: Pick<typeof Storage, 'getItem' | 'removeItem' | 'setItem'>,
+    storage: Pick<typeof Storage, 'getItem' | 'setItem'>,
     storageKey: string,
   ): Promise<void> => {
     const scheduled = completedIapAttemptRetention.then(async () => {
@@ -1721,7 +1715,7 @@ interface AitIapPurchaseInput {
 }
 
 type AitIapCompletedAttemptRetention = (
-  storage: Pick<typeof Storage, 'getItem' | 'removeItem' | 'setItem'>,
+  storage: Pick<typeof Storage, 'getItem' | 'setItem'>,
   storageKey: string,
 ) => Promise<void>;
 
@@ -1968,11 +1962,7 @@ async function resolvePersistedAitIapPurchaseAttempt(
     );
     return pendingPurchase(undefined, storageUnavailable);
   }
-  if (
-    !isRecord(state)
-    || state.productId !== input.product.productId
-    || state.idempotencyKey !== input.idempotencyKey
-  ) {
+  if (!isAitIapMarkerForAttempt(state, input.product, input.idempotencyKey)) {
     return pendingPurchase(undefined, storageUnavailable);
   }
   if (state.status === aitIapPurchaseAttemptStatus.pending) {
@@ -2024,25 +2014,55 @@ async function resolvePersistedAitIapPurchaseAttempt(
   return pendingPurchase(undefined, storageUnavailable);
 }
 
+const completedAitIapAttemptTombstoneVersion = 1;
+
+/**
+ * Whether a parsed marker belongs to this product and client key. Completed
+ * tombstones omit the client key (their storage key carries it); full-form
+ * markers, including completed ones written before tombstones, must match it.
+ */
+function isAitIapMarkerForAttempt(
+  state: unknown,
+  product: NormalizedAitIapProduct,
+  idempotencyKey: string,
+): state is Readonly<Record<string, unknown>> {
+  if (!isRecord(state) || state.productId !== product.productId) {
+    return false;
+  }
+  if (state.v === completedAitIapAttemptTombstoneVersion) {
+    return state.status === aitIapPurchaseAttemptStatus.completed
+      && state.idempotencyKey === undefined;
+  }
+  return state.v === undefined && state.idempotencyKey === idempotencyKey;
+}
+
 async function persistAitIapPurchaseAttempt(
   input: PersistAitIapPurchaseAttemptInput,
 ): Promise<boolean> {
+  // A completed marker is kept forever as the idempotency record of its
+  // client key, so it is a compact tombstone: the storage key already names
+  // the product and client key, and replay needs only the order and source.
+  const marker = input.status === aitIapPurchaseAttemptStatus.completed
+    ? {
+        v: completedAitIapAttemptTombstoneVersion,
+        status: input.status,
+        productId: input.product.productId,
+        ...(input.orderId === undefined ? {} : { orderId: input.orderId }),
+        ...(input.source === 'pending-order-restore' ? { source: input.source } : {}),
+      }
+    : {
+        status: input.status,
+        productId: input.product.productId,
+        idempotencyKey: input.idempotencyKey,
+        ...(input.status === aitIapPurchaseAttemptStatus.pending
+          ? { pendingSince: new Date().toISOString() }
+          : {}),
+        ...(input.orderId === undefined ? {} : { orderId: input.orderId }),
+      };
   return await writeAitIapStorage(
     input.storage,
     aitIapPurchaseAttemptStorageKey(input.product.productId, input.idempotencyKey),
-    JSON.stringify({
-      status: input.status,
-      productId: input.product.productId,
-      idempotencyKey: input.idempotencyKey,
-      ...(input.status === aitIapPurchaseAttemptStatus.pending
-        ? { pendingSince: new Date().toISOString() }
-        : {}),
-      ...(input.orderId === undefined ? {} : { orderId: input.orderId }),
-      ...(input.status === aitIapPurchaseAttemptStatus.completed
-        && input.source === 'pending-order-restore'
-        ? { source: input.source }
-        : {}),
-    }),
+    JSON.stringify(marker),
     input.timeoutMs,
   );
 }
@@ -2201,20 +2221,18 @@ async function hasAitIapPendingOrderForSku(
 }
 
 /**
- * Keeps the most recent completed attempt markers, ordered by completion, and
- * deletes the oldest completed marker once a new completion pushes the index
- * past its cap. Only a marker that is still `completed` is ever deleted; a
- * pending, server-granted or unreadable marker is dropped from the index but
- * kept. An eviction whose deletion fails stays indexed and is retried on the
- * next completion. All storage failures leave markers intact.
+ * Keep the completed-attempt index bounded without deleting terminal retry
+ * markers. A client idempotency key may be replayed indefinitely, so removing
+ * its durable result could open a second native checkout. Completed markers
+ * are compact tombstones instead. The index is only bookkeeping for recent
+ * entries; all storage failures leave markers intact.
  */
 async function retainCompletedAitIapPurchaseAttempt(
-  storage: Pick<typeof Storage, 'getItem' | 'removeItem' | 'setItem'>,
+  storage: Pick<typeof Storage, 'getItem' | 'setItem'>,
   storageKey: string,
   timeoutMs: number,
 ): Promise<void> {
   const startedAt = Date.now();
-  const remaining = (): number => remainingAitIapOperationTimeout(startedAt, timeoutMs);
   try {
     const read = await readAitIapStorage(
       storage,
@@ -2226,62 +2244,21 @@ async function retainCompletedAitIapPurchaseAttempt(
     }
     const knownKeys = parseAitIapCompletedPurchaseAttemptIndex(read.value);
     const keys = [...knownKeys.filter((knownKey) => knownKey !== storageKey), storageKey];
-    const evictionCount = Math.max(0, keys.length - maximumIndexedCompletedIapPurchaseAttempts);
-    const unevicted: string[] = [];
-    for (const evictedKey of keys.slice(0, evictionCount)) {
-      const outcome = await evictCompletedAitIapPurchaseAttempt(storage, evictedKey, remaining());
-      if (outcome === 'kept-for-retry') {
-        unevicted.push(evictedKey);
-      }
-    }
-    const retentionTimeoutMs = remaining();
+    const retainedKeys = keys.slice(-maximumIndexedCompletedIapPurchaseAttempts);
+    const retentionTimeoutMs = remainingAitIapOperationTimeout(startedAt, timeoutMs);
     if (retentionTimeoutMs === 0) {
       return;
     }
     await writeAitIapStorage(
       storage,
       iapCompletedPurchaseAttemptIndexStorageKey,
-      JSON.stringify([...unevicted, ...keys.slice(evictionCount)]),
+      JSON.stringify(retainedKeys),
       retentionTimeoutMs,
     );
   } catch {
     // Index maintenance is best effort. The terminal marker remains the
     // durable retry barrier even when its recent-entry index cannot be written.
   }
-}
-
-async function evictCompletedAitIapPurchaseAttempt(
-  storage: Pick<typeof Storage, 'getItem' | 'removeItem'>,
-  storageKey: string,
-  timeoutMs: number,
-): Promise<'deleted' | 'not-completed' | 'kept-for-retry'> {
-  if (timeoutMs === 0) {
-    return 'kept-for-retry';
-  }
-  const startedAt = Date.now();
-  const read = await readAitIapStorage(storage, storageKey, timeoutMs);
-  if (read.status !== 'ok') {
-    return 'kept-for-retry';
-  }
-  if (read.value === null) {
-    return 'deleted';
-  }
-  let state: unknown;
-  try {
-    state = JSON.parse(read.value);
-  } catch {
-    return 'not-completed';
-  }
-  if (!isRecord(state) || state.status !== aitIapPurchaseAttemptStatus.completed) {
-    // Never prune a marker that may still guard an unfinished purchase.
-    return 'not-completed';
-  }
-  const removed = await removeAitIapStorage(
-    storage,
-    storageKey,
-    remainingAitIapOperationTimeout(startedAt, timeoutMs),
-  );
-  return removed ? 'deleted' : 'kept-for-retry';
 }
 
 function parseAitIapCompletedPurchaseAttemptIndex(
@@ -2300,8 +2277,7 @@ function parseAitIapCompletedPurchaseAttemptIndex(
       && key.startsWith(iapPurchaseAttemptStoragePrefix)
       && key.length <= 4_096
     ));
-    // Leaves room for evictions whose deletion is being retried.
-    return [...new Set(keys)].slice(-2 * maximumIndexedCompletedIapPurchaseAttempts);
+    return [...new Set(keys)].slice(-maximumIndexedCompletedIapPurchaseAttempts);
   } catch {
     return [];
   }
@@ -3183,11 +3159,7 @@ async function completeLinkedAitIapPurchaseAttempt(input: {
     } catch {
       return 'failed';
     }
-    if (
-      !isRecord(state)
-      || state.productId !== input.product.productId
-      || state.idempotencyKey !== input.idempotencyKey
-    ) {
+    if (!isAitIapMarkerForAttempt(state, input.product, input.idempotencyKey)) {
       // A corrupted linked marker cannot be finished; keep the order pending.
       return 'failed';
     }

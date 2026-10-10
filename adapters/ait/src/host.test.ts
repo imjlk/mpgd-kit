@@ -389,7 +389,7 @@ describe('AIT production host bridge', () => {
     ]);
   });
 
-  it('prunes the oldest completed attempt once 101 purchases complete', async () => {
+  it('keeps every completed attempt as a compact tombstone that still replays', async () => {
     const values = new Map<string, string>();
     const callbacks: IapPurchaseCallbacks[] = [];
     const bridge = createAitHostBridge({
@@ -434,46 +434,45 @@ describe('AIT production host bridge', () => {
     await vi.waitFor(() => expect(
       (JSON.parse(values.get(indexKey) ?? '[]') as string[]).at(-1),
     ).toBe(attemptKey(100)));
-    expect(values.has(attemptKey(0))).toBe(false);
-    const indexed = JSON.parse(values.get(indexKey) ?? '[]') as string[];
-    expect(indexed).toHaveLength(100);
-    expect(indexed[0]).toBe(attemptKey(1));
-    expect(indexed.at(-1)).toBe(attemptKey(100));
-    expect(values.has(attemptKey(1))).toBe(true);
-    await expect(request(bridge, 'commerce.purchase', {
-      productId: 'HINT_PACK_5',
-      idempotencyKey: 'retained-attempt-100',
-    })).resolves.toMatchObject({
-      status: 'completed',
-      transactionId: 'order-retention-100',
-    });
+    // The index stays bounded bookkeeping; no completed marker is ever deleted.
+    expect(JSON.parse(values.get(indexKey) ?? '[]')).toHaveLength(64);
+    for (let index = 0; index < 101; index += 1) {
+      expect(JSON.parse(values.get(attemptKey(index)) ?? 'null')).toEqual({
+        v: 1,
+        status: 'completed',
+        productId: 'HINT_PACK_5',
+        orderId: `order-retention-${index}`,
+      });
+    }
+    for (const index of [0, 50, 100]) {
+      await expect(request(bridge, 'commerce.purchase', {
+        productId: 'HINT_PACK_5',
+        idempotencyKey: `retained-attempt-${index}`,
+      })).resolves.toMatchObject({
+        status: 'completed',
+        transactionId: `order-retention-${index}`,
+      });
+    }
     expect(callbacks).toHaveLength(101);
   }, 30_000);
 
-  it('never prunes an attempt marker that is not completed', async () => {
-    const indexKey = 'mpgd:ait:iap-completed-purchase-index:v1';
-    const attemptKey = (key: string) => `mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:${key}`;
-    const completedMarker = (key: string) => JSON.stringify({
-      status: 'completed', productId: 'HINT_PACK_5', idempotencyKey: key, orderId: `order-${key}`,
-    });
-    const values = new Map<string, string>();
-    const seededKeys = Array.from({ length: 99 }, (_, index) => `seeded-${index}`);
-    for (const key of seededKeys) {
-      values.set(attemptKey(key), completedMarker(key));
-    }
-    const pendingMarker = JSON.stringify({
-      status: 'server-granted',
-      productId: 'HINT_PACK_5',
-      idempotencyKey: 'still-open',
-      orderId: 'order-still-open',
-    });
-    values.set(attemptKey('still-open'), pendingMarker);
-    // The unfinished marker is the oldest index entry and is evicted first.
-    values.set(indexKey, JSON.stringify([
-      attemptKey('still-open'),
-      ...seededKeys.map(attemptKey),
-    ]));
-    const callbacks: IapPurchaseCallbacks[] = [];
+  it('still replays completed attempt markers written in the full form', async () => {
+    const startPurchase = vi.fn();
+    const values = new Map<string, string>([
+      ['mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:legacy-completed', JSON.stringify({
+        status: 'completed',
+        productId: 'HINT_PACK_5',
+        idempotencyKey: 'legacy-completed',
+        orderId: 'order-legacy',
+        source: 'pending-order-restore',
+      })],
+      ['mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:mismatched-key', JSON.stringify({
+        status: 'completed',
+        productId: 'HINT_PACK_5',
+        idempotencyKey: 'another-key',
+        orderId: 'order-mismatched',
+      })],
+    ]);
     const bridge = createAitHostBridge({
       iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
       prepareIap: async () => true,
@@ -481,35 +480,27 @@ describe('AIT production host bridge', () => {
       readIapEntitlements: async () => [],
       dependencies: createDependencies({
         storage: createMemoryStorage(values),
-        iap: createSupportedIap({
-          products: [createIapProduct()],
-          onPurchase: (input) => {
-            callbacks.push(input);
-          },
-        }),
+        iap: createSupportedIap({ products: [createIapProduct()], onPurchase: startPurchase }),
       }),
     });
 
-    for (const [index, key] of ['newest-1', 'newest-2'].entries()) {
-      const purchase = request(bridge, 'commerce.purchase', {
-        productId: 'HINT_PACK_5',
-        idempotencyKey: key,
-      });
-      await vi.waitFor(() => expect(callbacks).toHaveLength(index + 1));
-      await callbacks[index]?.options.processProductGrant({ orderId: `order-${key}` });
-      await callbacks[index]?.onEvent({ type: 'success', data: createIapSuccessEvent(`order-${key}`) });
-      await expect(purchase).resolves.toMatchObject({ status: 'completed' });
-      await vi.waitFor(() => expect(
-        (JSON.parse(values.get(indexKey) ?? '[]') as string[]).at(-1),
-      ).toBe(attemptKey(key)));
-    }
-
-    expect(values.get(attemptKey('still-open'))).toBe(pendingMarker);
-    expect(values.has(attemptKey('seeded-0'))).toBe(false);
-    expect(values.has(attemptKey('seeded-1'))).toBe(true);
-    const indexed = JSON.parse(values.get(indexKey) ?? '[]') as string[];
-    expect(indexed).toHaveLength(100);
-    expect(indexed).not.toContain(attemptKey('still-open'));
+    await expect(request(bridge, 'commerce.purchase', {
+      productId: 'HINT_PACK_5',
+      idempotencyKey: 'legacy-completed',
+    })).resolves.toMatchObject({
+      status: 'completed',
+      transactionId: 'order-legacy',
+      evidence: { payload: { source: 'pending-order-restore' } },
+    });
+    // A full-form marker must still name its own client key.
+    await expect(request(bridge, 'commerce.purchase', {
+      productId: 'HINT_PACK_5',
+      idempotencyKey: 'mismatched-key',
+    })).resolves.toMatchObject({
+      status: 'pending',
+      diagnostic: { code: 'AIT_IAP_ATTEMPT_STORAGE_UNAVAILABLE' },
+    });
+    expect(startPurchase).not.toHaveBeenCalled();
   });
 
   it('fails closed when the native IAP callback cannot verify the product grant', async () => {
