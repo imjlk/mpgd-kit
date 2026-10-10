@@ -40,10 +40,12 @@ export function createOnePlayPurchaseClient(input: {
     try {
       const response = await requestFetch(`${origin}${path}`, {
         ...init,
-        redirect: 'error',
+        // Workers reject redirect: 'error'; a manual 3xx/opaque redirect is never ok and fails below.
+        redirect: 'manual',
         signal,
       });
-      if (!response.ok) {
+      // Also reject a redirect followed by an injected fetch that ignores redirect: 'manual'.
+      if (!response.ok || response.redirected) {
         if (response.status === 401) {
           cached = undefined;
         }

@@ -31,7 +31,8 @@ export function createGooglePlayPublisherClient(
       response = await requestFetch(`${publisherOrigin}${path}`, {
         method,
         headers: { Authorization: `Bearer ${accessToken}` },
-        redirect: 'error',
+        // Workers reject redirect: 'error'; a manual 3xx/opaque redirect is never ok and fails below.
+        redirect: 'manual',
         signal,
       });
     } catch {
@@ -41,7 +42,8 @@ export function createGooglePlayPublisherClient(
       // Fetch errors can contain the request URL (including the purchase token).
       throw new Error('Google Play Publisher request failed.');
     }
-    if (!response.ok) {
+    // Also reject a redirect followed by an injected fetch that ignores redirect: 'manual'.
+    if (!response.ok || response.redirected) {
       await discardBody(response);
       // Do not forward an error body or URL: both can contain purchase credentials.
       throw new Error(`Google Play Publisher request failed (HTTP ${response.status}).`);

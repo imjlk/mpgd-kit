@@ -387,7 +387,8 @@ assert.match(String(httpCalls[0]?.init?.body), /grant_type=client_credentials/u)
 assert.match(httpCalls[1]?.url ?? '', /products\/sku%2Fencoded\/secret-token$/u);
 assert.equal(new Headers(httpCalls[1]?.init?.headers).get('authorization'), 'Bearer access-token');
 assert.equal(httpCalls[2]?.init?.body, '{"developerPayload":"payload"}');
-assert.equal(httpCalls[2]?.init?.redirect, 'error');
+assert.equal(httpCalls[2]?.init?.redirect, 'manual');
+assert.ok(httpCalls.every((call) => call.init?.redirect === 'manual'));
 await assert.rejects(
   () =>
     transport.consumePurchase({
@@ -397,6 +398,62 @@ await assert.rejects(
       signal: new AbortController().signal,
     }),
   /too long/u,
+);
+// Workers only support manual redirects; a 3xx with a plausible OAuth or purchase body must fail.
+const redirectCalls: { url: string; init?: RequestInit }[] = [];
+const redirected = createOnePlayPurchaseClient({
+  clientId: 'client',
+  clientSecret: 'server-only-secret',
+  environment: 'SANDBOX',
+  now: () => at,
+  fetch: async (url, init) => {
+    redirectCalls.push({ url: String(url), ...(init === undefined ? {} : { init }) });
+    return Response.json(
+      String(url).endsWith('/oauth/token')
+        ? {
+            client_id: 'client',
+            access_token: 'access-token',
+            token_type: 'bearer',
+            expires_in: 3600,
+          }
+        : state,
+      { status: 302, headers: { Location: 'https://attacker.example/v7/oauth/token' } },
+    );
+  },
+});
+await assert.rejects(
+  () =>
+    redirected.getPurchaseDetails({
+      productId: 'sku',
+      purchaseToken: 'secret-token',
+      signal: new AbortController().signal,
+    }),
+  /ONE play purchase API request failed/u,
+);
+assert.equal(redirectCalls.length, 1, 'a redirected OAuth response must not yield a token');
+assert.equal(redirectCalls[0]?.init?.redirect, 'manual');
+const followedResponse = Response.json({
+  client_id: 'client',
+  access_token: 'access-token',
+  token_type: 'bearer',
+  expires_in: 3600,
+});
+Object.defineProperty(followedResponse, 'redirected', { value: true });
+const followed = createOnePlayPurchaseClient({
+  clientId: 'client',
+  clientSecret: 'server-only-secret',
+  environment: 'SANDBOX',
+  now: () => at,
+  fetch: async () => followedResponse,
+});
+await assert.rejects(
+  () =>
+    followed.getPurchaseDetails({
+      productId: 'sku',
+      purchaseToken: 'secret-token',
+      signal: new AbortController().signal,
+    }),
+  /ONE play purchase API request failed/u,
 );
 const failed = createOnePlayPurchaseClient({
   clientId: 'client',
