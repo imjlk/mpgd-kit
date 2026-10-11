@@ -12,6 +12,97 @@ must resolve the same UUID for the player. Product lookup, purchase results,
 entitlements provide **provisional evidence**, never a wallet or entitlement
 grant. A completed native purchase returns no `authoritativeGrant`.
 
+## Commerce v2 provider
+
+Commerce v2 ([RFC](../../docs/specs/commerce/commerce-v2-rfc.md), PR B3)
+adds a second surface next to the v1 provider above. The package exposes the
+native plugin as a `StoreSdk` from `@mpgd/adapter-capacitor` and a
+`CommerceProvider` from `@mpgd/platform/commerce` built on
+`createStoreCommerceProvider`. Register the v2 service provider **or** the v1
+`createCapacitorStoreKitProvider` in a gateway, never both.
+
+```ts
+import { createCapacitorPlatformGateway } from '@mpgd/adapter-capacitor';
+import { createCapacitorStoreKitServiceProvider } from '@mpgd/capacitor-storekit';
+
+export function createIosGateway(getAppAccountToken: () => Promise<string>) {
+  return createCapacitorPlatformGateway({
+    target: 'ios',
+    appVersion: '1.0.0',
+    buildId: 'game-build',
+    providers: [
+      createCapacitorStoreKitServiceProvider({
+        products: [
+          { logicalId: 'gems_small', storeSku: 'com.example.game.gems.small', kind: 'consumable' },
+          { logicalId: 'remove_ads', storeSku: 'com.example.game.remove.ads', kind: 'durable' },
+        ],
+        // Authenticated, stable UUID; the backend's resolveAppAccountToken returns the same.
+        getAppAccountToken,
+        bundleId: 'com.example.game',
+      }),
+    ],
+  });
+}
+```
+
+`createCapacitorStoreKitStoreSdk({ productIds, sdk?, isIos? })` is the
+`StoreSdk`: `store: 'app-store'`; capabilities consumable and durable, no
+subscription, no quantity, `pending` (Ask to Buy), `restore`
+(`AppStore.sync()`), and `finish: 'client'`; `fetchProducts` over
+`getProducts` (subscription lookups are empty without a native call);
+`requestPurchase` over `purchase` with the `app-account-token` binding as the
+`appAccountToken` (a missing binding fails with `ACCOUNT_BINDING_REQUIRED`,
+a non-UUID one with `STOREKIT_CONFIGURATION_ERROR`, and the store never
+opens), answering `purchased` with the transaction, `launched` for a pending
+Ask to Buy, and `cancelled` for a dismissed sheet; `getAvailablePurchases`
+over `getTransactions`, listing unfinished transactions once (a current
+non-consumable entitlement the native side marks `unfinished: false` is not
+listed, a `revokedAt` maps to `state: 'revoked'`, and one malformed
+transaction is reported as a `purchaseError` without blocking its siblings);
+`finishTransaction({ transactionId, ledgerEntryId })` over the native finish;
+`restorePurchases` over `sync`; `transactionUpdated` as `purchaseUpdated`;
+and the v1 availability probe as `getAvailability`. Every purchase carries
+the StoreKit-verified `signedTransaction` JWS as its `token`, the
+`transactionId`, `originalTransactionId`, `purchasedAt`, `quantity: 1`, and
+the `app-account-token` binding. `storeKitStoreSdkErrorCodeMap` maps every
+`STOREKIT_*` plugin code onto the RFC "Errors" codes;
+`STOREKIT_PURCHASE_UNCERTAIN` and `STOREKIT_UNKNOWN_RESULT` normalize to
+`OUTCOME_UNKNOWN`, which `createStoreCommerceProvider` keeps recoverable (the
+attempt stays `launched` and the reconciler resolves it from
+`getAvailablePurchases`).
+
+`createCapacitorStoreKitCommerceProvider({ products, getAppAccountToken,
+bundleId?, sdk?, isIos?, mapError? })` builds the provider with
+`authority: { evidence: 'client-token', accountBinding: 'required' }` and
+evidence `{ schema: 'app-store.signed-transaction.v1', payload: {
+signedTransaction, transactionId, originalTransactionId?, bundleId? } }`,
+where `signedTransaction` is the same JWS as `StorePurchase.token`.
+`@mpgd/game-services/app-store-verifier` verifies that JWS offline through
+its `signedTransactionVerifier` and falls back to the App Store Server API
+lookup only for requests without it. Subscription mappings are rejected at
+construction. `createCapacitorStoreKitServiceProvider` wraps the provider as
+a `CapacitorServiceProvider` (id `apple-storekit` by default) so the gateway
+serves the `commerce.v2.*` and v1 `commerce.*` bridge methods from it and
+exposes it as `gateway.commerceV2`.
+
+Finishing never grants. The v2 SDK finishes any transaction it is given a
+`ledgerEntryId` for: the commerce v2 reconciler is the gate, and it calls
+`finishTransaction` only after the backend ledger granted the purchase. The
+v1 `finishGrantedTransaction` allow-list guard is not reproduced; the real
+control stays server-side, in the verifier that checks the JWS before the
+ledger grant, and in the native plugin never granting anything on finish.
+The v1 recovery helpers (`recoverStoreKitPurchases`,
+`getRecoverableTransactions`, `finishGrantedTransaction`) are deprecated in
+favor of the single reconciler (RFC C1) and are removed in C4.
+
+The conformance test runs every store vector whose profile the App Store
+supports against a fake plugin, directly and through the gateway bridge path,
+and lists each skipped vector with its reason (host or server finish,
+quantity, server-push, an asynchronous store error event StoreKit never
+emits, and a pending transaction state StoreKit never reports).
+
+## v1 provider and recovery
+
 On startup, account restoration, and after a pending or uncertain checkout,
 call `recoverStoreKitPurchases({ provider, backend, playerId })`. It sends only
 transactions whose `appAccountToken` matches the current authenticated game

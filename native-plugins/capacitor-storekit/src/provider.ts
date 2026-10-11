@@ -79,8 +79,17 @@ export interface CapacitorStoreKitProvider {
     nativeIap: 'available' | 'configuration-required' | 'temporarily-unavailable' | 'unsupported';
   }>>;
   getAppAccountToken(): Promise<string>;
+  /**
+   * @deprecated v1 recovery driver. Commerce v2 lists unfinished transactions
+   * through `createCapacitorStoreKitCommerceProvider().getAvailablePurchases`
+   * and the single reconciler (RFC C1) resolves them; removed in C4.
+   */
   getRecoverableTransactions(): Promise<StoreKitRecoverySnapshot>;
   /**
+   * @deprecated v1 recovery driver. Commerce v2 finishes through
+   * `CommerceProvider.finishTransaction` after the ledger grant, driven by
+   * the single reconciler (RFC C1); removed in C4.
+   *
    * Finish a transaction the backend already granted. The provider accepts
    * only a transaction and ledger entry pair that recoverStoreKitPurchases
    * recorded from a backend answer in this session, and consumes the pair
@@ -134,7 +143,12 @@ export interface RecoveredStoreKitPurchase {
   readonly verification?: StoreKitPurchaseVerification;
 }
 
-/** Submit unfinished purchases to the backend before asking StoreKit to finish. */
+/**
+ * Submit unfinished purchases to the backend before asking StoreKit to finish.
+ *
+ * @deprecated v1 recovery driver. The commerce v2 reconciler (RFC C1) over
+ * `createCapacitorStoreKitCommerceProvider` replaces it; removed in C4.
+ */
 export async function recoverStoreKitPurchases(input: {
   readonly provider: CapacitorStoreKitProvider;
   readonly backend: StoreKitRecoveryBackend;
