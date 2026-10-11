@@ -12,6 +12,8 @@ import {
   type CommerceErrorCode,
   type CommerceErrorInfo,
   type CommerceEvent,
+  type CommerceEvidenceAuthority,
+  type CommerceFinishOwner,
   type CommerceLogicalProductId,
   type CommerceProvider,
   type CommercePurchaseState,
@@ -40,6 +42,7 @@ import {
 import type {
   CommerceConformanceCatalogEntry,
   CommerceConformanceErrorFixture,
+  CommerceConformanceExpectation,
   CommerceConformanceFinishResultFixture,
   CommerceConformanceLotFixture,
   CommerceConformanceProfile,
@@ -63,7 +66,11 @@ import type { PlatformEvidenceEnvelope } from './index.js';
  *
  * Store (B-phase) providers run the same vectors by supplying
  * `createProvider` and translating the store actor steps into their own fake
- * SDK; the reconciler, journal, backend, and matcher stay shared.
+ * SDK; the reconciler, journal, backend, and matcher stay shared. A vector
+ * flagged `profile.adaptive` then matches expectations derived from the
+ * provider's declared capabilities rather than its fixture profile; see
+ * `deriveAdaptiveCommerceConformanceExpectation` and
+ * `commerceConformanceAdaptiveSkipReason`.
  */
 
 export const commerceConformanceDefaultPlayerId = 'player-1';
@@ -2001,10 +2008,39 @@ export interface CommerceConformanceFailure {
   readonly actual: unknown;
 }
 
+export type CommerceConformanceVectorStatus = 'passed' | 'failed' | 'skipped';
+
+/**
+ * `CommerceConformanceExpectation` as the matcher consumes it: a derived
+ * `finishCalls` list carries the store actor's own records, whose `result` may
+ * also be `unfinished`.
+ */
+export interface CommerceConformanceResolvedExpectation extends Omit<
+  CommerceConformanceExpectation,
+  'finishCalls'
+> {
+  readonly finishCalls?: readonly CommerceConformanceFinishCall[];
+}
+
+/** How an adaptive vector's expectations were derived for the provider under test. */
+export interface CommerceConformanceAdaptation {
+  /** The provider's store id; it replaces the fixture store id in derived keys and verify requests. */
+  readonly store: StoreId;
+  readonly finish: CommerceFinishOwner;
+  readonly evidence: CommerceEvidenceAuthority;
+  /** The expectation the vector was matched against. */
+  readonly expect: CommerceConformanceResolvedExpectation;
+}
+
 export interface CommerceConformanceVectorResult {
   readonly vector: string;
+  /** `skipped` vectors did not run; `passed` is false and `reason` says why. */
+  readonly status: CommerceConformanceVectorStatus;
   readonly passed: boolean;
   readonly failures: readonly CommerceConformanceFailure[];
+  readonly reason?: string;
+  /** Present when the vector ran with adaptive expectations. */
+  readonly adaptive?: CommerceConformanceAdaptation;
 }
 
 export function createCommerceConformanceHarness(
@@ -2036,14 +2072,132 @@ export function createCommerceConformanceHarness(
  * each, then matches `expect`. Matching compares only the listed fields; arrays
  * compare in order and by length; a listed `journal` is the whole journal.
  * Any unscripted operation fails the vector at the step that needed it.
+ *
+ * With `options.createProvider`, a vector flagged `profile.adaptive` is first
+ * checked against the provider's declared capabilities
+ * (`commerceConformanceAdaptiveSkipReason`) and then matched against
+ * expectations derived from a reference run under those capabilities
+ * (`deriveAdaptiveCommerceConformanceExpectation`). Duplicate detection needs
+ * the whole run set, so it applies through `runCommerceConformanceVectors`.
  */
 export async function runCommerceConformanceVector(
   vector: CommerceConformanceVector,
   options: CommerceConformanceRunOptions = {},
 ): Promise<CommerceConformanceVectorResult> {
-  const failures: CommerceConformanceFailure[] = [];
-  const playerId = options.playerId ?? commerceConformanceDefaultPlayerId;
-  const titleId = options.titleId ?? commerceConformanceDefaultTitleId;
+  return runVectorIn(vector, options, [vector]);
+}
+
+export async function runCommerceConformanceVectors(
+  vectors: readonly CommerceConformanceVector[],
+  options: CommerceConformanceRunOptions = {},
+): Promise<readonly CommerceConformanceVectorResult[]> {
+  const results: CommerceConformanceVectorResult[] = [];
+  for (const vector of vectors) {
+    results.push(await runVectorIn(vector, options, vectors));
+  }
+  return results;
+}
+
+async function runVectorIn(
+  vector: CommerceConformanceVector,
+  options: CommerceConformanceRunOptions,
+  set: readonly CommerceConformanceVector[],
+): Promise<CommerceConformanceVectorResult> {
+  const ids = {
+    playerId: options.playerId ?? commerceConformanceDefaultPlayerId,
+    titleId: options.titleId ?? commerceConformanceDefaultTitleId,
+  };
+  const execution = await prepareExecution(
+    vector,
+    options.createProvider ?? createCommerceConformanceHarness,
+    ids,
+  );
+  const failed = (failures: readonly CommerceConformanceFailure[]): CommerceConformanceVectorResult =>
+    ({ vector: vector.vector, status: 'failed', passed: false, failures });
+
+  let expectation: CommerceConformanceResolvedExpectation = vector.expect;
+  let adaptive: CommerceConformanceAdaptation | undefined;
+  let adaptation: StepAdaptation | undefined;
+  if (options.createProvider !== undefined && vector.profile.adaptive === true) {
+    let capabilities: CommerceCapabilities;
+    try {
+      capabilities = await execution.harness.provider.getCapabilities();
+    } catch (error) {
+      return failed([
+        {
+          path: 'capabilities',
+          expected: 'provider.getCapabilities() resolves',
+          actual: describeError(error),
+        },
+      ]);
+    }
+    const reason = commerceConformanceAdaptiveSkipReason(vector, capabilities, set);
+    if (reason !== undefined) {
+      return { vector: vector.vector, status: 'skipped', passed: false, failures: [], reason };
+    }
+    const store = execution.harness.provider.store;
+    adaptation = adaptationFor(vector, capabilities);
+    const reference = await prepareExecution(
+      referenceVectorFor(vector, store, capabilities),
+      createCommerceConformanceHarness,
+      ids,
+    );
+    const referenceFailures = await executeSteps(reference, adaptation);
+    if (referenceFailures.length > 0) {
+      return failed(
+        referenceFailures.map((failure) => ({
+          ...failure,
+          path: `reference.${failure.path}`,
+        })),
+      );
+    }
+    const derived = deriveAdaptiveExpectation(vector, reference, store);
+    if (derived.reason !== undefined) {
+      return {
+        vector: vector.vector,
+        status: 'skipped',
+        passed: false,
+        failures: [],
+        reason: derived.reason,
+      };
+    }
+    expectation = derived.expect;
+    adaptive = {
+      store,
+      finish: capabilities.lifecycle.finish,
+      evidence: capabilities.authority.evidence,
+      expect: expectation,
+    };
+  }
+
+  const failures = await executeSteps(execution, adaptation);
+  if (failures.length > 0) {
+    return { ...failed(failures), ...(adaptive === undefined ? {} : { adaptive }) };
+  }
+  await matchExpectations(expectation, { ...execution, failures });
+  return {
+    vector: vector.vector,
+    status: failures.length === 0 ? 'passed' : 'failed',
+    passed: failures.length === 0,
+    failures,
+    ...(adaptive === undefined ? {} : { adaptive }),
+  };
+}
+
+interface Execution {
+  readonly vector: CommerceConformanceVector;
+  readonly harness: CommerceConformanceHarness;
+  readonly runtime: CommerceConformanceRuntime;
+  readonly backend: CommerceConformanceBackend;
+  readonly journal: CommerceConformanceJournal;
+  readonly clock: CommerceConformanceClock;
+}
+
+async function prepareExecution(
+  vector: CommerceConformanceVector,
+  createHarness: NonNullable<CommerceConformanceRunOptions['createProvider']>,
+  ids: { readonly playerId: string; readonly titleId: string },
+): Promise<Execution> {
   const clock = createCommerceConformanceClock();
   const journal = createCommerceConformanceJournal();
   const harnessRef: { current?: CommerceConformanceHarness } = {};
@@ -2057,13 +2211,13 @@ export async function runCommerceConformanceVector(
     vector,
     profile: vector.profile,
     catalog: vector.catalog ?? [],
-    playerId,
-    titleId,
+    playerId: ids.playerId,
+    titleId: ids.titleId,
     clock,
     backend,
     journal,
   };
-  const harness = await (options.createProvider ?? createCommerceConformanceHarness)(context);
+  const harness = await createHarness(context);
   harnessRef.current = harness;
   const runtime = createCommerceConformanceRuntime({
     provider: harness.provider,
@@ -2071,37 +2225,241 @@ export async function runCommerceConformanceVector(
     journal,
     clock,
     catalog: context.catalog,
-    playerId,
+    playerId: ids.playerId,
   });
+  return { vector, harness, runtime, backend, journal, clock };
+}
 
-  for (const [index, step] of vector.steps.entries()) {
+/** Runs every step; a thrown step ends the run with a failure at that step. */
+async function executeSteps(
+  execution: Execution,
+  adaptation: StepAdaptation | undefined,
+): Promise<CommerceConformanceFailure[]> {
+  const failures: CommerceConformanceFailure[] = [];
+  const context: StepContext = {
+    ...execution,
+    failures,
+    ...(adaptation === undefined ? {} : { adaptation }),
+  };
+  for (const [index, step] of execution.vector.steps.entries()) {
     const path = `steps[${index}]`;
     try {
-      await runStep(step, path, { harness, runtime, backend, clock, failures });
-      await runtime.runUntilIdle();
+      await runStep(step, path, context);
+      await execution.runtime.runUntilIdle();
     } catch (error) {
       failures.push({
         path,
         expected: `${step.actor}.${step.action} completes`,
-        actual: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+        actual: describeError(error),
       });
-      return { vector: vector.vector, passed: false, failures };
+      break;
     }
   }
-
-  await matchExpectations(vector, { harness, runtime, backend, journal, failures });
-  return { vector: vector.vector, passed: failures.length === 0, failures };
+  return failures;
 }
 
-export async function runCommerceConformanceVectors(
-  vectors: readonly CommerceConformanceVector[],
-  options: CommerceConformanceRunOptions = {},
-): Promise<readonly CommerceConformanceVectorResult[]> {
-  const results: CommerceConformanceVectorResult[] = [];
-  for (const vector of vectors) {
-    results.push(await runCommerceConformanceVector(vector, options));
+function describeError(error: unknown): string {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+}
+
+// Adaptive vectors (RFC "Conformance vectors", adaptive vectors).
+
+/**
+ * Members of the `purchase-<owner>-finish` family describe the same purchase
+ * under different fixture finish owners; a provider runs the one named after
+ * its own owner, or the first by name when none is (`finish: 'none'`).
+ */
+const purchaseFinishFamily = /^purchase-(?:client|server|host|none)-finish$/u;
+
+export function isAdaptiveCommerceConformanceVector(vector: CommerceConformanceVector): boolean {
+  return vector.profile.adaptive === true;
+}
+
+/**
+ * Why an adaptive vector does not apply to a provider with `capabilities`, or
+ * `undefined` when it runs. `set` is the whole run (for duplicate detection).
+ * The rules:
+ *
+ * - a store-side `pending` purchase needs `lifecycle.pending`;
+ * - a store `error` event needs `lifecycle.events`;
+ * - a `queueFinish` script needs a `client` or `host` finish owner, since the
+ *   provider never calls `finishTransaction` under `server` or `none`;
+ * - within the `purchase-<owner>-finish` family only one member runs: the
+ *   one named after the provider's owner, else the first by name.
+ */
+export function commerceConformanceAdaptiveSkipReason(
+  vector: CommerceConformanceVector,
+  capabilities: CommerceCapabilities,
+  set: readonly CommerceConformanceVector[] = [vector],
+): string | undefined {
+  const { lifecycle } = capabilities;
+  const owner = lifecycle.finish;
+  for (const step of vector.steps) {
+    if (step.actor !== 'store') {
+      continue;
+    }
+    if (
+      !lifecycle.pending
+      && ((step.action === 'complete' || step.action === 'update') && step.purchase.state === 'pending'
+        || (step.action === 'queueRequest'
+          && step.result.outcome === 'purchased'
+          && step.result.purchase.state === 'pending'))
+    ) {
+      return 'store-side pending purchase needs lifecycle.pending; the provider declares pending: false';
+    }
+    if (step.action === 'error' && !lifecycle.events) {
+      return 'purchaseError event needs lifecycle.events; the provider declares events: false';
+    }
+    if (step.action === 'queueFinish' && owner !== 'client' && owner !== 'host') {
+      return `queueFinish scripts a client finish; the provider declares finish: '${owner}'`;
+    }
   }
-  return results;
+  const canonical = canonicalPurchaseFinishVector(vector, set, owner);
+  if (canonical !== undefined && canonical !== vector.vector) {
+    return `duplicate of ${canonical} for finish='${owner}'`;
+  }
+  return undefined;
+}
+
+function canonicalPurchaseFinishVector(
+  vector: CommerceConformanceVector,
+  set: readonly CommerceConformanceVector[],
+  owner: CommerceFinishOwner,
+): string | undefined {
+  if (!purchaseFinishFamily.test(vector.vector)) {
+    return undefined;
+  }
+  const members = set
+    .filter((candidate) => candidate.profile.adaptive === true && purchaseFinishFamily.test(candidate.vector))
+    .map((candidate) => candidate.vector)
+    .sort();
+  const named = `purchase-${owner}-finish`;
+  return members.includes(named) ? named : members[0];
+}
+
+interface StepAdaptation {
+  /**
+   * The provider finishes on the server but the vector was written for another
+   * owner: a `granted` decision without `finalization: 'completed'` is followed
+   * by the completed decision that answers the reconciler's finalization read.
+   */
+  readonly autoFinalize: boolean;
+}
+
+function adaptationFor(
+  vector: CommerceConformanceVector,
+  capabilities: CommerceCapabilities,
+): StepAdaptation {
+  const fixtureOwner = createCommerceConformanceCapabilities(vector.profile).lifecycle.finish;
+  return {
+    autoFinalize: capabilities.lifecycle.finish === 'server' && fixtureOwner !== 'server',
+  };
+}
+
+/** The vector with the provider's store id and declared capabilities as its profile. */
+function referenceVectorFor(
+  vector: CommerceConformanceVector,
+  store: StoreId,
+  capabilities: CommerceCapabilities,
+): CommerceConformanceVector {
+  return {
+    ...vector,
+    profile: {
+      store,
+      purchase: capabilities.purchase,
+      lifecycle: capabilities.lifecycle,
+      authority: capabilities.authority,
+      adaptive: true,
+    },
+  };
+}
+
+/**
+ * Derives the adaptive expectation for `vector` from the observable state of a
+ * finished reference run under the provider's capabilities, applying the
+ * rules the RFC table states:
+ *
+ * - `journal`: the reference journal, so the tail after `granted` is
+ *   `finishing, finished` for `client`, `host`, and `server` owners and
+ *   `finished` for `none`; derived keys carry the provider's store id;
+ * - `finishCalls`: the reference store's calls, `by` the owner for `client`
+ *   and `host`, none for `server` and `none`;
+ * - `verifyRequests`: the reference backend's log, with the finalization
+ *   re-read a `server` owner adds unless the grant already reported
+ *   `finalization: 'completed'`;
+ * - `available`: empty for every owner.
+ *
+ * Fields the fixture does not assert stay unasserted. The derivation is
+ * refused (a skip reason) when the reference run does not end every journal
+ * key in the fixture's terminal state, since the scenario then depends on a
+ * capability the provider lacks.
+ */
+export function deriveAdaptiveCommerceConformanceExpectation(
+  vector: CommerceConformanceVector,
+  reference: {
+    readonly store: StoreId;
+    readonly journal: Readonly<Record<string, readonly CommercePurchaseState[]>>;
+    readonly verifyRequests: readonly CommerceVerifyRequest[];
+    readonly finishCalls: readonly CommerceConformanceFinishCall[];
+  },
+): { readonly expect: CommerceConformanceResolvedExpectation; readonly reason?: undefined }
+  | { readonly expect?: undefined; readonly reason: string } {
+  const { expect } = vector;
+  if (expect.journal !== undefined) {
+    const fixtureStore = vector.profile.store;
+    for (const [fixtureKey, states] of Object.entries(expect.journal)) {
+      const key = fixtureKey.split(fixtureStore).join(reference.store);
+      const terminal = states.at(-1);
+      const actual = reference.journal[key]?.at(-1);
+      if (actual !== terminal) {
+        return {
+          reason: `the reference run under the provider capabilities ends ${key} in `
+            + `'${String(actual)}', not '${String(terminal)}'`,
+        };
+      }
+    }
+    const extra = Object.keys(reference.journal).filter((key) =>
+      !Object.keys(expect.journal ?? {}).some(
+        (fixtureKey) => fixtureKey.split(fixtureStore).join(reference.store) === key,
+      ));
+    if (extra.length > 0) {
+      return {
+        reason: `the reference run under the provider capabilities journals ${extra.join(', ')}, `
+          + 'which the vector does not expect',
+      };
+    }
+  }
+  return {
+    expect: {
+      ...expect,
+      ...(expect.journal === undefined ? {} : { journal: reference.journal }),
+      ...(expect.verifyRequests === undefined
+        ? {}
+        : {
+            verifyRequests: reference.verifyRequests.map((request) => ({
+              idempotencyKey: request.idempotencyKey,
+              store: request.store,
+              transactionId: request.transactionId,
+              token: request.token,
+            })),
+          }),
+      ...(expect.finishCalls === undefined ? {} : { finishCalls: reference.finishCalls }),
+      ...(expect.available === undefined ? {} : { available: [] }),
+    },
+  };
+}
+
+function deriveAdaptiveExpectation(
+  vector: CommerceConformanceVector,
+  reference: Execution,
+  store: StoreId,
+): ReturnType<typeof deriveAdaptiveCommerceConformanceExpectation> {
+  return deriveAdaptiveCommerceConformanceExpectation(vector, {
+    store,
+    journal: reference.journal.snapshot(),
+    verifyRequests: reference.backend.verifyRequests,
+    finishCalls: reference.harness.store?.finishCalls ?? [],
+  });
 }
 
 interface StepContext {
@@ -2110,6 +2468,7 @@ interface StepContext {
   readonly backend: CommerceConformanceBackend;
   readonly clock: CommerceConformanceClock;
   readonly failures: CommerceConformanceFailure[];
+  readonly adaptation?: StepAdaptation;
 }
 
 function storeActorOf(context: StepContext, step: CommerceConformanceStep): CommerceConformanceStoreActor {
@@ -2200,9 +2559,26 @@ async function runStep(
     }
     case 'backend':
       switch (step.action) {
-        case 'queueVerify':
-          context.backend.queueVerify(step.decision);
+        case 'queueVerify': {
+          const { decision } = step;
+          context.backend.queueVerify(decision);
+          if (
+            context.adaptation?.autoFinalize === true
+            && decision.status === 'granted'
+            && decision.finalization !== 'completed'
+            && decision.ledgerEntryId !== undefined
+          ) {
+            // The reference reconciler re-reads finalization with the saved
+            // request once a server-owned finish is pending; this is the answer.
+            context.backend.queueVerify({
+              status: 'granted',
+              ledgerEntryId: decision.ledgerEntryId,
+              finalization: 'completed',
+              alreadyProcessed: true,
+            });
+          }
           return;
+        }
         case 'push':
           context.backend.push({
             transactionId: step.transactionId,
@@ -2253,10 +2629,9 @@ interface ExpectationContext {
 }
 
 async function matchExpectations(
-  vector: CommerceConformanceVector,
+  expect: CommerceConformanceResolvedExpectation,
   context: ExpectationContext,
 ): Promise<void> {
-  const { expect } = vector;
   const { failures, harness } = context;
   if (expect.journal !== undefined) {
     const actual = context.journal.snapshot();

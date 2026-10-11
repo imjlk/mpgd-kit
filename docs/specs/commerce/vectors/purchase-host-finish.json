@@ -20,7 +20,8 @@
     "authority": {
       "evidence": "host-callback",
       "accountBinding": "host"
-    }
+    },
+    "adaptive": true
   },
   "catalog": [
     {

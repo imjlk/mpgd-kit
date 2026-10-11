@@ -738,7 +738,9 @@ same files against its own fake SDK.
 
 The runner ships as `@mpgd/platform/commerce-conformance`:
 `runCommerceConformanceVector(vector, options?)` returns
-`{ vector, passed, failures: [{ path, expected, actual }] }` and
+`{ vector, status, passed, failures: [{ path, expected, actual }], reason?,
+adaptive? }` (`status` is `passed`, `failed`, or `skipped`; a skipped vector
+did not run, has `passed: false`, no failures, and a `reason`) and
 `runCommerceConformanceVectors(vectors, options?)` runs a list. The package
 test suite (`pnpm --filter @mpgd/platform test`, source tests in
 `packages/platform/src/commerce-conformance.test.ts` and the dist smoke in
@@ -760,13 +762,85 @@ own fake SDK and reports `purchaseUiOpened` and `finishCalls`; the shared
 runtime, backend, journal, and matcher stay the same. The fakes are exported
 individually so such tests can compose them.
 
+### Adaptive vectors {#adaptive-vectors}
+
+A vector's `profile` fixes one finish owner and one evidence authority, and
+its `expect` block is written for that profile; a real provider declares its
+own. The lifecycle vectors whose scenario does not depend on the owner set
+`profile.adaptive: true` (`purchase-client-finish`, `purchase-server-finish`,
+`purchase-host-finish`, `purchase-pending-then-purchased`,
+`restart-before-verify`, `event-before-listener`, `finish-failure-retry`,
+`revoked-after-grant`, `cancelled-and-failed`; `server-push-settlement`,
+`adapter-settled`, and the three wallet vectors stay profile-specific). A
+provider gets adaptive behaviour only by running
+`runCommerceConformanceVectors` (or `runCommerceConformanceVector`) with
+`options.createProvider`; the reference harness ignores the flag, so the
+committed fixture profiles keep passing unchanged. For such a run the runner
+reads the harness provider's `getCapabilities()` and `store`, replays the
+vector's steps against the reference fake store configured with exactly
+those capabilities and that store id, and matches the provider under test
+against the observable state of that reference run instead of the fixture's
+`expect`. The result carries the derivation as `adaptive: { store, finish,
+evidence, expect }`. Only `journal`, `finishCalls`, `verifyRequests`, and
+`available` are derived, and only when the fixture asserts them; `ledger`,
+`entitlements`, `purchaseUiOpened`, and step `returns` are owner-independent
+and keep the fixture's values. What the reference run yields per declared
+`lifecycle.finish`:
+
+| Owner | `journal` tail after `granted` | `finishCalls` | `verifyRequests` | `available` after finish |
+| --- | --- | --- | --- | --- |
+| `client` | `finishing`, `finished` | one per grant, `by: 'client'` | one per grant | `[]` |
+| `host` | `finishing`, `finished` | one per grant, `by: 'host'` | one per grant | `[]` |
+| `server` | `finishing`, `finished` | `[]` | one per grant, plus one finalization re-read unless the grant already reported `finalization: 'completed'` | `[]` |
+| `none` | `finished` | `[]` | one per grant | `[]` |
+
+The `server` row encodes what the reference reconciler does: a `finishing`
+record whose grant did not report `finalization: 'completed'` resends the
+saved verify request to read finalization. When the vector was written for a
+non-server fixture, the runner follows every `granted` decision that lacks
+`finalization: 'completed'` with an auto-queued `{ status: 'granted',
+ledgerEntryId, finalization: 'completed', alreadyProcessed: true }` decision
+(the backend's answer to that re-read, which also invokes the harness
+`finalize` hook), in both the reference run and the run under test; a vector
+written for a server fixture scripts its own finalization decisions. Derived
+journal keys and verify requests carry the provider's store id in place of
+the fixture's (`store:app-store:tx-1` for a derived key), so a provider need
+not rewrite the files. `available` is empty after finish for every owner: a
+store that lists unfinished purchases must stop listing one the ledger has
+settled, whether the client, the host, or the backend finalizer removed it. A
+provider whose declared owner disagrees with its behaviour fails on these
+paths: declaring `server` while the SDK finishes on its own fails
+`finishCalls.length`, declaring `client` while never finishing fails
+`journal.<key>.length`, `finishCalls.length`, and `available.length`, and
+declaring `server` without consuming on finalization fails
+`available.length`.
+
+Skip and duplicate rules (`commerceConformanceAdaptiveSkipReason(vector,
+capabilities, vectors?)`): an adaptive vector is reported `skipped` with a
+`reason` instead of failing when a store-side `pending` purchase needs
+`lifecycle.pending` the provider does not declare, when a store `error` event
+needs `lifecycle.events` it does not declare, or when a `queueFinish` script
+needs a `client` or `host` owner and the provider declares `server` or
+`none` (so `finish-failure-retry` runs only for client and host owners).
+Within one `runCommerceConformanceVectors` call only one member of the
+`purchase-<owner>-finish` family runs: the member named after the provider's
+owner when the set holds it, otherwise the first by name
+(`purchase-client-finish` for `none`); the others are reported `skipped:
+duplicate of <vector> for finish=<owner>`. A single
+`runCommerceConformanceVector` call never deduplicates. The derivation is
+also refused as a skip when the reference run under the provider's
+capabilities does not end every journal key in the fixture's terminal state,
+since the scenario then depends on a capability the provider lacks. Vectors
+without the flag run against a caller-supplied provider exactly as before,
+with their fixture expectations.
+
 A vector is one JSON file:
 
 | Field | Meaning |
 | --- | --- |
 | `vector` | Name; equals the file name without `.json`. |
 | `protocol` | Commerce protocol version the vector targets. |
-| `profile` | Store id plus the `purchase`, `lifecycle`, and `authority` capability blocks under test. Omitted blocks default to all supported and `available`. |
+| `profile` | Store id plus the `purchase`, `lifecycle`, and `authority` capability blocks under test. Omitted blocks default to all supported and `available`. `adaptive: true` marks an owner-independent scenario (see [Adaptive vectors](#adaptive-vectors)). |
 | `catalog` | Logical products with `kind` and `storeSku`, plus `membership` terms for memberships. |
 | `wallet` | Wallet vectors only: declared currencies and the target's billing authority. |
 | `steps` | Ordered actions. |

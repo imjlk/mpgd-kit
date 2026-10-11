@@ -20,7 +20,8 @@
     "authority": {
       "evidence": "client-token",
       "accountBinding": "optional"
-    }
+    },
+    "adaptive": true
   },
   "catalog": [
     {
