@@ -99,6 +99,11 @@ export interface DevvitPlatformGatewayOptions {
    * `commerceV2`, with the `commerce` capability block and `nativeIap` and
    * `subscriptionIap` derived from it. Absent, the gateway offers no
    * `commerceV2`; the v1 `commerce` surface is the bridge's either way.
+   *
+   * Not yet usable in production before C2: the backend lookup verifier for
+   * `devvit.order.v1` does not exist yet, so a verify request for a Devvit
+   * purchase is refused today instead of answering `pending`, and no journal
+   * record can reach `granted`. Enable it once the backend can answer.
    */
   readonly commerce?: DevvitGatewayCommerceOptions;
 }
@@ -217,12 +222,16 @@ export function createDevvitPlatformGateway(
  * provider rebuilds the purchases under its own store id), and the
  * availability the server reports. `COMMERCE_V2_UNAVAILABLE` from a bridge
  * without the commerce handler is `configuration-required`; another bridge
- * failure is `temporarily-unavailable` for the capability read and a
- * `CommerceError` (`UNKNOWN`, the bridge code as `storeCode`) for a list read.
+ * failure keeps the availability the server last answered (or is
+ * `temporarily-unavailable` before any answer) for the capability read and is
+ * a `CommerceError` for a list read (`NETWORK` for a transport failure,
+ * otherwise `UNKNOWN` with the bridge code as `storeCode`).
  */
 export function createDevvitBridgeOrderSource(
   request: <TData>(method: BridgeMethod, payload: unknown) => Promise<TData>,
 ): DevvitOrderSource {
+  /** The availability the server last answered; kept across transient read failures. */
+  let lastAvailability: PlatformProviderAvailability | undefined;
   return {
     async listPaidOrders(): Promise<readonly DevvitPaidOrder[]> {
       let data: unknown;
@@ -269,14 +278,19 @@ export function createDevvitBridgeOrderSource(
           error instanceof DevvitBridgeError
           && error.code === commerceV2UnavailableBridgeErrorCode
         ) {
+          // The server does not serve commerce v2: fail closed, whatever it answered before.
+          lastAvailability = undefined;
           return 'configuration-required';
         }
-        return 'temporarily-unavailable';
+        // A transient failure keeps the last answer the server gave, so one
+        // timed-out read does not hide the shop; the first read fails closed.
+        return lastAvailability ?? 'temporarily-unavailable';
       }
       try {
-        return assertCommerceBridgeGetCapabilitiesResult(data).capabilities.availability;
+        lastAvailability = assertCommerceBridgeGetCapabilitiesResult(data).capabilities.availability;
+        return lastAvailability;
       } catch {
-        return 'temporarily-unavailable';
+        return lastAvailability ?? 'temporarily-unavailable';
       }
     },
   };

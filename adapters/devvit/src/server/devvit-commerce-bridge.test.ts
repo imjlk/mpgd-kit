@@ -237,8 +237,46 @@ describe('createDevvitCommerceV2BridgeHandler', () => {
     // The unparseable `updatedAt` is not a time; the order is listed without one.
     expect(response.purchases[3]).not.toHaveProperty('purchasedAt');
     expect(getOrders).toHaveBeenCalledTimes(2);
-    expect(getOrders).toHaveBeenNthCalledWith(1, { limit: maximumDevvitAvailableOrders });
-    expect(getOrders).toHaveBeenNthCalledWith(2, { limit: maximumDevvitAvailableOrders, cursor: '1' });
+    expect(getOrders).toHaveBeenNthCalledWith(1, { limit: maximumDevvitAvailableOrders, status: 3 });
+    expect(getOrders).toHaveBeenNthCalledWith(2, {
+      limit: maximumDevvitAvailableOrders,
+      status: 3,
+      cursor: '1',
+    });
+  });
+
+  it('stops paging at the first page without a paid order', async () => {
+    const { handler, getOrders } = createFixture({
+      pages: [
+        [order({ id: 'order-paid' }), order({ id: 'order-delivered', status: 4 })],
+        [order({ id: 'order-old-delivered', status: 4 }), order({ id: 'order-old-reverted', status: 6 })],
+        [order({ id: 'order-ancient-paid' })],
+      ],
+    });
+    const response = data(await handler.request(request('commerce.v2.getAvailablePurchases', {}))) as {
+      readonly purchases: readonly { readonly transactionId: string }[];
+    };
+    expect(response.purchases.map((purchase) => purchase.transactionId)).toEqual(['order-paid']);
+    // Page two holds no paid order, so page three (older still) is never read.
+    expect(getOrders).toHaveBeenCalledTimes(2);
+    expect(getOrders).toHaveBeenNthCalledWith(1, { limit: maximumDevvitAvailableOrders, status: 3 });
+    expect(getOrders).toHaveBeenNthCalledWith(2, {
+      limit: maximumDevvitAvailableOrders,
+      status: 3,
+      cursor: '1',
+    });
+    // A paid order for another SKU keeps the scan going: it is paid, so older pages may hold ours.
+    const foreign = createFixture({
+      pages: [
+        [order({ id: 'order-foreign', products: [{ sku: 'foreign_sku' }] })],
+        [order({ id: 'order-ours' })],
+      ],
+    });
+    const ours = data(await foreign.handler.request(request('commerce.v2.getAvailablePurchases', {}))) as {
+      readonly purchases: readonly { readonly transactionId: string }[];
+    };
+    expect(ours.purchases.map((purchase) => purchase.transactionId)).toEqual(['order-ours']);
+    expect(foreign.getOrders).toHaveBeenCalledTimes(2);
   });
 
   it('bounds the listed orders and stops paging at the bound', async () => {

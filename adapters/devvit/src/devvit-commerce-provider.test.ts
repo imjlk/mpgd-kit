@@ -11,6 +11,7 @@ import {
   type DevvitPaidOrder,
 } from './commerce-contract.js';
 import {
+  checkoutOrderListingGrace,
   createDevvitCommerceProvider,
   devvitCommerceStoreCodes,
   type DevvitOrdersChangeListener,
@@ -413,6 +414,38 @@ describe('createDevvitCommerceProvider', () => {
     await fixture.provider.restorePurchases();
     expect(events).toEqual([]);
     await expect(fixture.provider.getAvailablePurchases()).resolves.toHaveLength(1);
+  });
+
+  it('does not report a checkout order again when the server lists it a moment later', async () => {
+    const fixture = createFixture({ checkout: { status: 'completed', orderId: 'order-1' } });
+    const events: CommerceEvent[] = [];
+    fixture.provider.subscribe((event) => events.push(event));
+    await fixture.provider.requestPurchase(request);
+    // The server has not caught up: the list is empty for a few refreshes.
+    await fixture.provider.restorePurchases();
+    await fixture.provider.restorePurchases();
+    fixture.orders.push({ orderId: 'order-1', sku: 'coins_100' });
+    await fixture.provider.restorePurchases();
+    expect(events).toEqual([]);
+    // Delivered (no longer listed) and then listed again: that is a new report.
+    fixture.orders.splice(0, 1);
+    await fixture.provider.restorePurchases();
+    fixture.orders.push({ orderId: 'order-1', sku: 'coins_100' });
+    await fixture.provider.restorePurchases();
+    expect(events).toHaveLength(1);
+  });
+
+  it('forgets a checkout order no listing ever confirmed after the grace', async () => {
+    const fixture = createFixture({ checkout: { status: 'completed', orderId: 'order-1' } });
+    const events: CommerceEvent[] = [];
+    fixture.provider.subscribe((event) => events.push(event));
+    await fixture.provider.requestPurchase(request);
+    for (let refresh = 0; refresh < checkoutOrderListingGrace; refresh += 1) {
+      await fixture.provider.restorePurchases();
+    }
+    fixture.orders.push({ orderId: 'order-1', sku: 'coins_100' });
+    await fixture.provider.restorePurchases();
+    expect(events).toHaveLength(1);
   });
 
   it('runs under a caller-supplied store id', async () => {

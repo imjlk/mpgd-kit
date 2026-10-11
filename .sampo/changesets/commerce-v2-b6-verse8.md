@@ -4,6 +4,13 @@ npm/@mpgd/adapter-verse8: minor
 
 Commerce v2, PR B6: the Verse8 provider on the server-push lookup.
 
+Not yet usable in production before C2: the backend lookup verifier for
+`verse8.agent8-event.v1` is C2 work, so today a verify request for a Verse8
+purchase is refused by `@mpgd/game-services` (no verifier for the schema,
+`verse8` not a store target) instead of answering `pending`, and no journal
+record can reach `granted`. `vxShop.purchases` is opt-in; without it nothing
+changes.
+
 `@mpgd/adapter-verse8` adds `createVerse8CommerceProvider({ products, client,
 purchases, store?, init?, canOpenShop?, onPurchasesChanged? })`, a
 `CommerceProvider` with `store: 'verse8'` and the RFC profile (consumable and

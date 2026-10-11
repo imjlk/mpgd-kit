@@ -1,5 +1,14 @@
 # Devvit Payments and Commerce v2
 
+> **Not yet usable in production before C2.** The backend side of the
+> server-push lookup (a verifier registered for `devvit.order.v1` that answers
+> `granted` once the fulfillment handler's ledger entry exists and `pending`
+> otherwise) is C2 work. Today `@mpgd/game-services` registers no verifier for
+> that schema and `GameServicesStoreTarget` does not accept the `reddit`
+> target, so a verify request for a Devvit purchase is refused instead of
+> answering `pending`; a journal record would end rejected, not granted.
+> Enable the gateway `commerce` option only once the backend can answer.
+
 Reddit settles a Devvit purchase on the server: the payment handler your app
 registers (`fulfillOrder`) runs when an order is `PAID`, and only the backend
 ledger that handler writes grants anything. The webview never grants, never

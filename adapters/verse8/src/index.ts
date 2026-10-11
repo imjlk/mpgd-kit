@@ -127,6 +127,12 @@ export interface Verse8CommerceOptions {
    * (`listPurchases` of `createVerse8Agent8CommerceService`). With it the
    * gateway exposes `commerceV2` (`createVerse8CommerceProvider`) and the
    * `commerce` capability block; without it only the v1 adapter is offered.
+   *
+   * Not yet usable in production before C2: the backend lookup verifier for
+   * `verse8.agent8-event.v1` does not exist yet, so a verify request for a
+   * Verse8 purchase is refused today instead of answering `pending`, and no
+   * journal record can reach `granted`. Configure it once the backend can
+   * answer.
    */
   readonly purchases?: Verse8PurchaseSource;
   /** Signal that the recorded purchases may have changed; defaults to the VXShop dialog closing after a purchase. */

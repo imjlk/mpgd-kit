@@ -1023,6 +1023,52 @@ describe('adapter-devvit commerce v2 gateway', () => {
     });
   });
 
+  it('keeps the last availability the server answered across a transient read failure', async () => {
+    let failing = false;
+    let closed = false;
+    const { bridge: served } = createServerBridge({ served: true });
+    const bridge: DevvitBridge = {
+      async request(request) {
+        if (request.method === 'commerce.v2.getCapabilities') {
+          if (closed) {
+            return createBridgeError(request.id, 'COMMERCE_V2_UNAVAILABLE', 'closed');
+          }
+          if (failing) {
+            return createBridgeError(request.id, 'DEVVIT_BRIDGE_NETWORK_ERROR', 'offline', true);
+          }
+        }
+        return served.request(request);
+      },
+    };
+    const gateway = createDevvitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'b',
+      bridge,
+      commerce: { products, client: { purchase: async () => ({ status: 'pending' as const }) } },
+    });
+    await expect(gateway.getCapabilities()).resolves.toMatchObject({
+      nativeIap: true,
+      commerce: { availability: 'available' },
+    });
+    failing = true;
+    // One timed-out read must not hide the shop the server served a moment ago.
+    await expect(gateway.getCapabilities()).resolves.toMatchObject({
+      nativeIap: true,
+      commerce: { availability: 'available' },
+    });
+    closed = true;
+    await expect(gateway.getCapabilities()).resolves.toMatchObject({
+      nativeIap: false,
+      commerce: { availability: 'configuration-required' },
+    });
+    // After the server closed, a transient failure fails closed again.
+    closed = false;
+    await expect(gateway.getCapabilities()).resolves.toMatchObject({
+      nativeIap: false,
+      commerce: { availability: 'temporarily-unavailable' },
+    });
+  });
+
   it('maps a transport failure of the order list to a retryable NETWORK error', async () => {
     const bridge = createDevvitOrpcBridge({
       fetch: async () => {
@@ -1040,6 +1086,7 @@ describe('adapter-devvit commerce v2 gateway', () => {
       retryable: true,
       storeCode: 'DEVVIT_BRIDGE_NETWORK_ERROR',
     });
+    // The snapshot itself is unreachable; the first availability read fails closed.
     await expect(gateway.getCapabilities()).rejects.toThrow();
   });
 });

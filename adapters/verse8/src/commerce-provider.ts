@@ -306,6 +306,8 @@ export function createVerse8CommerceProvider(
             void refreshInBackground();
           }
         }, delay);
+        // A Node host (tests, tooling) must not stay alive for a follow-up read.
+        unrefTimer(timer);
         followUpTimers.add(timer);
       }
     });
@@ -494,6 +496,13 @@ export function createVerse8CommerceProvider(
 export const verse8PurchaseFollowUpDelaysMs: readonly number[] = Object.freeze([
   1_000, 3_000, 7_000,
 ]);
+
+function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
+  const handle = timer as { readonly unref?: () => unknown };
+  if (typeof handle.unref === 'function') {
+    handle.unref();
+  }
+}
 
 function purchaseKindOf(type: ProductType): PurchaseKind {
   switch (type) {

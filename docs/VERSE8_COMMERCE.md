@@ -126,6 +126,15 @@ event has arrived. Do not poll `VXShop.onClose` as proof of completion.
 
 ## Commerce v2 provider
 
+> **Not yet usable in production before C2.** The backend side of the
+> server-push lookup (a verifier registered for `verse8.agent8-event.v1` that
+> answers `granted` once the Agent8 record exists and `pending` otherwise) is
+> C2 work. Today `@mpgd/game-services` registers no verifier for that schema
+> and `GameServicesStoreTarget` does not accept the `verse8` target, so a
+> verify request for a Verse8 purchase is refused instead of answering
+> `pending`; a journal record would end rejected, not granted. Configure
+> `vxShop.purchases` only once the backend can answer.
+
 `createVerse8CommerceProvider(input)` from `@mpgd/adapter-verse8` is the
 commerce v2 `CommerceProvider` (RFC:
 [docs/specs/commerce/commerce-v2-rfc.md](specs/commerce/commerce-v2-rfc.md))

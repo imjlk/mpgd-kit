@@ -88,6 +88,8 @@ export interface DevvitServerPaymentsLike {
   getOrders(filters: {
     readonly limit: number;
     readonly cursor?: string;
+    /** `OrderStatus` hint; `@devvit/payments` 0.14 ignores it, so the handler filters itself. */
+    readonly status?: number;
   }): Promise<{
     readonly orders: readonly DevvitPaymentsOrderLike[];
     readonly pageInfo?: { readonly hasNextPage: boolean; readonly endCursor: string } | undefined;
@@ -149,11 +151,15 @@ const durableAccountingTypes: ReadonlySet<number | string> = new Set([
 ]);
 const orderPageSize = maximumDevvitAvailableOrders;
 /**
- * Pages scanned per listing. The plugin's `status` filter does nothing in
- * `@devvit/payments` 0.14, so delivered orders are scanned too; a paid order
- * beyond this window is not listed until the window moves.
+ * Hard cap on the pages scanned per listing. The plugin's `status` filter
+ * does nothing in `@devvit/payments` 0.14 (its proto marks it so, and the
+ * `PaymentsClient` forwards it unchanged), so delivered orders are scanned
+ * too; the scan stops early at the first page without a `PAID` order, since
+ * Reddit lists orders newest first and every older order is settled.
  */
 const maximumOrderPages = 8;
+/** `OrderStatus.ORDER_STATUS_PAID`, passed as a hint for a plugin version that honours it. */
+const paidOrderStatusHint = 3;
 
 /**
  * Serves `commerce.v2.*` from the payments plugin:
@@ -167,6 +173,9 @@ const maximumOrderPages = 8;
  *   `transactionId` and `token`, `devvit.order.v1` evidence), bounded by
  *   `maximumDevvitAvailableOrders`. A delivered order is no longer listed:
  *   Reddit marks it `DELIVERED` once the fulfillment handler acknowledged it.
+ *   The scan reads pages of 64, newest first, and stops at the first page
+ *   without a paid order (or after `maximumOrderPages`), so a reconciler poll
+ *   of a settled account costs one plugin round trip.
  * - `requestPurchase` is refused with `DEVVIT_COMMERCE_CHECKOUT_CLIENT_ONLY`,
  *   `finishTransaction` with `COMMERCE_V2_METHOD_UNSUPPORTED`, and
  *   `restorePurchases` answers `{ restored: false }`: the webview provider
@@ -195,11 +204,16 @@ export function createDevvitCommerceV2BridgeHandler(
     for (let page = 0; page < maximumOrderPages; page += 1) {
       const response = await input.payments.getOrders({
         limit: orderPageSize,
+        status: paidOrderStatusHint,
         ...(cursor === undefined ? {} : { cursor }),
       });
       const next = response.pageInfo;
       const hasNextPage = next !== undefined && next.hasNextPage && next.endCursor.length > 0;
+      let paidOnPage = 0;
       for (const [index, order] of response.orders.entries()) {
+        if (paidOrderStatuses.has(order.status)) {
+          paidOnPage += 1;
+        }
         const paid = readPaidOrder(order, productsBySku);
         if (paid !== undefined) {
           orders.push(paid);
@@ -211,7 +225,8 @@ export function createDevvitCommerceV2BridgeHandler(
           return orders;
         }
       }
-      if (!hasNextPage || next === undefined) {
+      if (!hasNextPage || next === undefined || paidOnPage === 0) {
+        // Newest first: a page without a paid order means every older order is settled.
         break;
       }
       cursor = next.endCursor;

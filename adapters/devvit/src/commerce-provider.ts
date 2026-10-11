@@ -35,6 +35,9 @@ import {
   type DevvitPaymentsClient,
 } from './payments.js';
 
+/** Refreshes a checkout-reported order stays remembered while no listing shows it yet. */
+export const checkoutOrderListingGrace = 8;
+
 /** Store codes the provider attaches to failures of its own. */
 export const devvitCommerceStoreCodes = Object.freeze({
   productNotConfigured: 'DEVVIT_PRODUCT_NOT_CONFIGURED',
@@ -133,6 +136,12 @@ export function createDevvitCommerceProvider(
   const listeners = new Set<(event: CommerceEvent) => void>();
   /** Orders already reported, through a checkout result or a `purchaseUpdated` event. */
   const reportedOrders = new Set<string>();
+  /**
+   * Orders a checkout reported that no listing has confirmed yet, with the
+   * refreshes left before an unlisted one is forgotten: the server may list a
+   * just-created order a moment later, and it must not be reported twice.
+   */
+  const checkoutOrders = new Map<string, number>();
 
   const bound = (collection: Set<string>): void => {
     for (const oldest of collection) {
@@ -227,12 +236,22 @@ export function createDevvitCommerceProvider(
     for (const order of orders) {
       reportOrder(order);
     }
-    // An order the server stopped listing was delivered; it is forgotten so a
-    // re-listed order is reported again.
     for (const orderId of [...reportedOrders]) {
-      if (!listed.has(orderId)) {
-        reportedOrders.delete(orderId);
+      if (listed.has(orderId)) {
+        // A listing confirmed the checkout order; it is a listed order now.
+        checkoutOrders.delete(orderId);
+        continue;
       }
+      const grace = checkoutOrders.get(orderId);
+      if (grace !== undefined && grace > 1) {
+        // Not listed yet: the server may still be catching up with the checkout.
+        checkoutOrders.set(orderId, grace - 1);
+        continue;
+      }
+      // An order the server stopped listing (or never listed within the grace)
+      // was delivered; it is forgotten so a re-listed order is reported again.
+      checkoutOrders.delete(orderId);
+      reportedOrders.delete(orderId);
     }
   };
   const refreshInBackground = (): void => {
@@ -294,7 +313,13 @@ export function createDevvitCommerceProvider(
           source: 'checkout',
         });
         reportedOrders.add(orderId);
+        checkoutOrders.set(orderId, checkoutOrderListingGrace);
         bound(reportedOrders);
+        for (const tracked of [...checkoutOrders.keys()]) {
+          if (!reportedOrders.has(tracked)) {
+            checkoutOrders.delete(tracked);
+          }
+        }
         return { outcome: 'purchased', purchase };
       }
       case 'pending':

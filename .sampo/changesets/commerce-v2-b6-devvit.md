@@ -4,6 +4,13 @@ npm/@mpgd/adapter-devvit: minor
 
 Commerce v2, PR B6: the Devvit provider on the server-push lookup.
 
+Not yet usable in production before C2: the backend lookup verifier for
+`devvit.order.v1` is C2 work, so today a verify request for a Devvit purchase
+is refused by `@mpgd/game-services` (no verifier for the schema, `reddit` not
+a store target) instead of answering `pending`, and no journal record can
+reach `granted`. The gateway `commerce` option is opt-in; without it nothing
+changes.
+
 `@mpgd/adapter-devvit` adds `createDevvitCommerceProvider({ products, client,
 orders, store?, onOrdersChanged?, onCheckoutError? })`, a `CommerceProvider`
 with `store: 'devvit'` and the RFC profile (consumable and durable one-time

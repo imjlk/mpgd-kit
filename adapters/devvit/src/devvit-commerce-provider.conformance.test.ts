@@ -1,3 +1,6 @@
+/// <reference types="node" />
+// The vectors are read from the repository with Node APIs; the webview
+// adapter itself compiles without Node types (`types: []` in tsconfig).
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
