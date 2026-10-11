@@ -96,6 +96,12 @@ export interface PlayPurchaseRecoveryBackend {
 /**
  * Resubmit owned purchases after a callback was missed or the app restarted.
  * A native purchase is never credited locally; only the backend response grants it.
+ *
+ * @deprecated v1 recovery driver. Commerce v2 games register
+ * `createCapacitorPlayBillingServiceProvider` and let the single reconciler
+ * in `@mpgd/game-services` (PR C1) resolve unfinished purchases from
+ * `getAvailablePurchases` and `purchaseUpdated`; this driver is removed with
+ * the v1 adapter in the next major version.
  */
 export async function recoverOwnedPlayPurchases(input: {
   readonly provider: CapacitorPlayBillingProvider;

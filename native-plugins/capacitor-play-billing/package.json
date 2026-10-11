@@ -30,20 +30,24 @@
   "scripts": {
     "check": "ttsc --noEmit",
     "lint": "ttsc --noEmit",
-    "test": "cd ../.. && node tools/run-ttsx.mjs native-plugins/capacitor-play-billing/src/provider.test.ts"
+    "test": "vitest run && cd ../.. && node tools/run-ttsx.mjs native-plugins/capacitor-play-billing/src/provider.test.ts"
   },
   "peerDependencies": {
     "@capacitor/core": "^8.5.1",
+    "@mpgd/adapter-capacitor": "^0.8.0",
     "@mpgd/bridge": "^0.12.0",
     "@mpgd/platform": "^0.19.0"
   },
   "devDependencies": {
     "@capacitor/core": "8.5.2",
+    "@mpgd/adapter-capacitor": "workspace:*",
     "@mpgd/bridge": "workspace:*",
     "@mpgd/game-services": "workspace:*",
     "@mpgd/platform": "workspace:*",
+    "@types/node": "^24.0.0",
     "ttsc": "0.30.4",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "vitest": "^4.0.0"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

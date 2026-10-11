@@ -11,7 +11,34 @@ import {
   createGooglePlayTokenTransactionId,
   recoverOwnedPlayPurchases,
 } from './provider.js';
-import type { CapacitorPlayBillingPlugin, PlayPurchaseOutcome } from './definitions.js';
+import type {
+  CapacitorPlayBillingPlugin,
+  PlayPurchase,
+  PlayPurchaseOutcome,
+  PlayPurchaseState,
+} from './definitions.js';
+
+/** A plugin purchase under the 0.1 names; the 0.2 Billing getter names carry the same values. */
+function playPurchase(input: {
+  readonly productIds: readonly string[];
+  readonly purchaseToken: string;
+  readonly state: PlayPurchaseState;
+  readonly orderId?: string;
+  readonly purchaseTimeMillis?: number;
+}): PlayPurchase {
+  return {
+    products: input.productIds,
+    productIds: input.productIds,
+    purchaseToken: input.purchaseToken,
+    purchaseState: input.state,
+    state: input.state,
+    purchaseTime: input.purchaseTimeMillis ?? 0,
+    isAcknowledged: false,
+    quantity: 1,
+    ...(input.orderId === undefined ? {} : { orderId: input.orderId }),
+    ...(input.purchaseTimeMillis === undefined ? {} : { purchaseTimeMillis: input.purchaseTimeMillis }),
+  };
+}
 
 const calls: string[] = [];
 let nativeError: Error | undefined;
@@ -19,12 +46,12 @@ let productLookupError: Error | undefined;
 let productOffers = [{ offerToken: 'offer-1', formattedPrice: '$1.00', currencyCode: 'USD' }];
 let nextOutcome: PlayPurchaseOutcome = {
   status: 'purchased',
-  purchase: {
+  purchase: playPurchase({
     productIds: ['coins_100'],
     purchaseToken: 'private-play-token',
     orderId: 'GPA.1111-2222',
     state: 'purchased',
-  },
+  }),
 };
 async function getProducts() {
   if (productLookupError !== undefined) {
@@ -51,23 +78,23 @@ async function getPurchases() {
   calls.push('getPurchases');
   return {
     purchases: [
-      {
+      playPurchase({
         productIds: ['coins_100'],
         purchaseToken: 'private-play-token',
         orderId: 'GPA.1111-2222',
         purchaseTimeMillis: 1_893_456_000_000,
-        state: 'purchased' as const,
-      },
-      {
+        state: 'purchased',
+      }),
+      playPurchase({
         productIds: ['coins_100'],
         purchaseToken: 'pending-recovery-token',
-        state: 'pending' as const,
-      },
-      {
+        state: 'pending',
+      }),
+      playPurchase({
         productIds: ['unknown-store-product'],
         purchaseToken: 'unrelated-token',
-        state: 'purchased' as const,
-      },
+        state: 'purchased',
+      }),
     ],
   };
 }
@@ -171,11 +198,11 @@ equal(calls, ['purchase:coins_100:player-hash-1'], 'native purchase arguments');
 
 nextOutcome = {
   status: 'purchased',
-  purchase: {
+  purchase: playPurchase({
     productIds: ['coins_100'],
     purchaseToken: 'order-not-yet-visible',
     state: 'purchased',
-  },
+  }),
 };
 const orderlessRequest = request('commerce.purchase', { productId: 'COINS_100' });
 const orderless = await provider.bridge.request(orderlessRequest);
@@ -206,11 +233,11 @@ if (JSON.stringify(orderless).includes('authoritativeGrant')) {
 
 nextOutcome = {
   status: 'pending',
-  purchase: {
+  purchase: playPurchase({
     productIds: ['coins_100'],
     purchaseToken: 'pending-token',
     state: 'pending',
-  },
+  }),
 };
 equal(await provider.bridge.request(request('commerce.purchase', {
   productId: 'COINS_100',
@@ -262,7 +289,11 @@ nativeError = undefined;
 
 nextOutcome = {
   status: 'purchased',
-  purchase: { productIds: ['different-product'], purchaseToken: 'unsafe', state: 'purchased' },
+  purchase: playPurchase({
+    productIds: ['different-product'],
+    purchaseToken: 'unsafe',
+    state: 'purchased',
+  }),
 };
 const mismatch = await provider.bridge.request(orderlessRequest);
 const mismatchError = {
