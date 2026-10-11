@@ -30,7 +30,7 @@
   "scripts": {
     "check": "ttsc --noEmit",
     "lint": "ttsc --noEmit",
-    "test": "vitest run && cd ../.. && node tools/run-ttsx.mjs native-plugins/capacitor-play-billing/src/provider.test.ts"
+    "test": "vitest run && cd ../.. && node tools/run-ttsx.mjs --project native-plugins/capacitor-play-billing/tsconfig.json native-plugins/capacitor-play-billing/src/provider.test.ts"
   },
   "peerDependencies": {
     "@capacitor/core": "^8.5.1",

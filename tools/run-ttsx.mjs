@@ -4,15 +4,12 @@ import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { assertEntryInProject, resolveTsgoBinary } from './ttsx-project-entry.mjs';
+
 const toolsDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = dirname(toolsDir);
 const rootRequire = createRequire(join(repoRoot, 'package.json'));
-const typescriptPackageJson = rootRequire.resolve('typescript/package.json');
-const typescriptRequire = createRequire(typescriptPackageJson);
-const platformPackage = `@typescript/typescript-${process.platform}-${process.arch}`;
-const platformPackageJson = typescriptRequire.resolve(`${platformPackage}/package.json`);
-const platformRoot = dirname(platformPackageJson);
-const tsgoBinary = join(platformRoot, 'lib', process.platform === 'win32' ? 'tsc.exe' : 'tsc');
+const tsgoBinary = resolveTsgoBinary(repoRoot);
 const ttscPackageJson = rootRequire.resolve('ttsc/package.json');
 const ttscLauncher = join(dirname(ttscPackageJson), 'lib', 'launcher', 'ttsc.js');
 const ttsxLauncher = join(dirname(ttscPackageJson), 'lib', 'launcher', 'ttsx.js');
@@ -30,15 +27,35 @@ const forceTtsx = process.env.MPGD_FORCE_TTSX === '1';
 if (!existsSync(tsgoBinary)) {
   throw new Error(`TypeScript-Go binary not found: ${tsgoBinary}`);
 }
+const startedAt = process.hrtime.bigint();
 const inheritedEmitRoot = readInheritedEmitRoot(compileOnce);
+const inheritedEntry = emittedEntryIn(inheritedEmitRoot);
+const useInheritedEmit = !forceTtsx && toolsEntry && inheritedEntry !== undefined && existsSync(inheritedEntry);
+
+// ttsx must only see an entry its project selects. For an entry outside the
+// project's file set, the launcher's emitted-entry lookup falls back to
+// trailing-path-stem matching and can run an unrelated same-named file under
+// the requested entry's URL (see tools/ttsx-project-entry.mjs). The compiled
+// lane is exact by construction: it runs the emit at the entry's own path, so
+// an entry already present in an inherited emit needs no gate. Everything else
+// is gated here, before --compile-once spends an emit on it.
+if (!useInheritedEmit && sourceEntry !== undefined && /\.[cm]?tsx?$/i.test(sourceEntry)) {
+  try {
+    assertEntryInProject({ tsgoBinary, project, entry: sourceEntry });
+  } catch (error) {
+    console.error(error.message);
+    recordTiming('refused', entry, startedAt, 1);
+    process.exit(1);
+  }
+}
+
 // --compile-once type-checks and emits the tools program a single time for a
 // command tree (for example build:target and the validators it spawns) instead
 // of once per ttsx process. Nested runners inherit the emit through the env.
 const ownedEmitRoot = compileOnce && toolsEntry && !forceTtsx && inheritedEmitRoot === undefined
   ? emitToolsProgram()
   : undefined;
-const emittedRoot = ownedEmitRoot ?? inheritedEmitRoot;
-const emittedEntry = emittedRoot && relativeEntry && join(emittedRoot, relativeEntry.replace(/\.ts$/, '.js'));
+const emittedEntry = emittedEntryIn(ownedEmitRoot ?? inheritedEmitRoot);
 const useCompiled = !forceTtsx
   && toolsEntry
   && emittedEntry !== undefined
@@ -46,7 +63,6 @@ const useCompiled = !forceTtsx
 
 // ttsx owns its emitted files under its execution cache. Authored .js/.d.ts
 // siblings are valid inputs and must not be deleted by a repository-wide scan.
-const startedAt = process.hrtime.bigint();
 const result = spawnSync(process.execPath, useCompiled
   ? [join(toolsDir, 'ci', 'run-compiled.mjs'), sourceEntry, ...passthroughArgs.slice(1)]
   : [ttsxLauncher, '--cwd', process.cwd(), '--project', project, ...passthroughArgs], {
@@ -68,6 +84,13 @@ if (result.error !== undefined) {
 }
 
 process.exit(exitCode);
+
+// The entry's mirrored JavaScript inside an emit root, or undefined without one.
+function emittedEntryIn(emitRoot) {
+  return emitRoot !== undefined && relativeEntry !== undefined
+    ? join(emitRoot, relativeEntry.replace(/\.ts$/, '.js'))
+    : undefined;
+}
 
 function readInheritedEmitRoot(requireSourceRoot) {
   const emitRoot = process.env.MPGD_CI_EMIT_ROOT;
