@@ -74,6 +74,49 @@ Generated standalone games use their own root; `--workspace` games explicitly
 use the common ancestor of the game and kit. Target wrappers inherit that game
 setting, so a sibling checkout does not inherit the kit's narrower root.
 
+## Entries must belong to the selected project
+
+`run-ttsx.mjs` runs the entry through the project named by `--project` (or
+`TTSC_PROJECT`, default `tsconfig.tools.json`). The entry must be one of that
+project's root files, that is, matched by its `files`/`include` globs after
+`exclude`. The runner asks TypeScript-Go for that set (`tsgo --showConfig`,
+a few milliseconds) and refuses any other entry before ttsx starts, naming the
+project and the fix. Being imported by a project file is not enough: the entry
+itself must be selected. `--project <directory>` names that directory's
+`tsconfig.json`, as with `tsc -p`. A project whose globs match nothing is
+reported as a project problem (`tsgo --showConfig` exits 0 and prints no
+`files`); other config errors, such as unreadable JSON or a missing `extends`
+target, still yield a file set and are reported by ttsx when it builds.
+
+The rule exists because ttsx compiles the whole project and then looks up the
+entry's emitted JavaScript. The ttsc launcher documents an entry-only build for
+files the project does not select, but its lookup first falls back to
+trailing-path-stem matching across the project emit
+(`resolveEmittedJavaScript` in `ttsc/lib/compiler/internal`, reached from
+`prepareExecution`). With `rootDir` at the repository root, an entry such as
+`native-plugins/capacitor-storekit/src/commerce-provider.test.ts` run through
+`tsconfig.tools.json` is answered with the emit of
+`adapters/ait/src/commerce-provider.test.ts`, and that unrelated file executes
+under the requested entry's URL (its relative imports then fail with
+`ERR_MODULE_NOT_FOUND` against the wrong directory, or worse, succeed). The
+runner's gate makes that substitution impossible. It is deliberately narrower
+than ttsc's own behaviour: ttsx would also build an entry outside the project's
+`rootDir` through a synthesized entry-only project, and this repository turns
+that lane off on purpose so every entry runs inside a project that selects it.
+The compiled `--compile-once`/`MPGD_CI_EMIT_ROOT` lane is unaffected because it
+only runs an emit at the entry's own mirrored path; the gate runs before a
+`--compile-once` emit is spent on an entry, and a refused entry still records a
+`refused` row in the CI timing summary. The gate guards a ttsc launcher
+behaviour (ttsc 0.30.x); when upstream stops answering an out-of-project entry
+with a stem match, revisit whether it can be narrowed to the documented
+entry-only lane. `tools/run-ttsx.test.mjs` holds the reproduction.
+
+Workspace packages whose sources are outside `tsconfig.tools.json` (the
+`native-plugins/capacitor-storekit` and `native-plugins/capacitor-play-billing`
+test scripts) pass `--project native-plugins/<plugin>/tsconfig.json`; those
+configs select `src/**` and the `test/**` fixtures. `tools/run-ttsx.test.mjs`
+keeps the gate and that wiring under test.
+
 ## Cache ownership and measurement
 
 Run `pnpm cache:paths` to distinguish compiled plugin binaries (`requiredRoots`)
