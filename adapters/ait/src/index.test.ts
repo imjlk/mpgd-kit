@@ -422,4 +422,132 @@ describe('adapter-ait', () => {
       });
     }
   });
+
+  it('answers commerce v2 with an evidence-only stub for the sandbox build only', async () => {
+    const gateway = createAitPlatformGateway({
+      appVersion: '1.2.3',
+      buildId: 'ait-sandbox',
+      fallbackBridge: createAitSandboxBridge({ storage: null, buildId: 'ait-sandbox' }),
+    });
+    const provider = gateway.commerceV2;
+    if (provider === undefined) {
+      throw new Error('The sandbox gateway must expose commerceV2.');
+    }
+    expect(provider.store).toBe('apps-in-toss');
+    await expect(gateway.getCapabilities()).resolves.toMatchObject({
+      nativeIap: true,
+      subscriptionIap: false,
+      commerce: { availability: 'available', lifecycle: { finish: 'host' } },
+    });
+    await expect(provider.getCapabilities()).resolves.toMatchObject({
+      lifecycle: { finish: 'host' },
+      authority: { evidence: 'host-callback', accountBinding: 'host' },
+      availability: 'available',
+    });
+    await expect(provider.fetchProducts({})).resolves.toMatchObject([
+      { logicalId: 'COINS_100', storeSku: 'coins_100', kind: 'consumable' },
+    ]);
+    const result = await provider.requestPurchase({
+      logicalId: 'COINS_100',
+      idempotencyKey: 'sandbox-purchase-v2',
+      source: 'shop',
+    });
+    expect(result).toMatchObject({
+      outcome: 'purchased',
+      purchase: {
+        store: 'apps-in-toss',
+        state: 'purchased',
+        transactionId: 'ait-sandbox-sandbox-purchase-v2',
+        evidence: { schema: 'apps-in-toss.iap.callback.v1' },
+        accountBinding: { kind: 'host-identity' },
+      },
+    });
+    // A retried attempt key answers the same order.
+    await expect(provider.requestPurchase({
+      logicalId: 'COINS_100',
+      idempotencyKey: 'sandbox-purchase-v2',
+      source: 'shop',
+    })).resolves.toEqual(result);
+    // The sandbox sells one product; another logical id is not for sale.
+    await expect(provider.requestPurchase({
+      logicalId: 'GEMS_500',
+      idempotencyKey: 'sandbox-purchase-v2-other',
+      source: 'shop',
+    })).resolves.toEqual({
+      outcome: 'failed',
+      error: { code: 'ITEM_UNAVAILABLE', retryable: false, message: expect.any(String) },
+    });
+    await expect(provider.getAvailablePurchases({})).resolves.toEqual([]);
+    await expect(provider.finishTransaction?.({
+      transactionId: 'ait-sandbox-x',
+      ledgerEntryId: 'le-1',
+      isConsumable: true,
+    })).resolves.toEqual({ finished: true });
+    await expect(provider.restorePurchases?.()).resolves.toBeUndefined();
+    expect(provider.subscribe(() => {})).toBeTypeOf('function');
+
+    // Any other build gets no event channel, so its gateway offers no
+    // commerceV2 at all; the v2 methods themselves stay fail-closed.
+    const other = createAitPlatformGateway({
+      appVersion: '1.2.3',
+      buildId: 'build-ait',
+      fallbackBridge: createAitSandboxBridge({ storage: null, buildId: 'build-ait' }),
+    });
+    expect(other.commerceV2).toBeUndefined();
+    await expect(other.getCapabilities()).resolves.not.toHaveProperty('commerce');
+    const unset = createAitPlatformGateway({
+      appVersion: '1.2.3',
+      buildId: 'ait-sandbox',
+      fallbackBridge: createAitSandboxBridge({ storage: null }),
+    });
+    expect(unset.commerceV2).toBeUndefined();
+    // A sandbox bridge wired behind a gateway of another build stays closed
+    // even though it exposes the channel.
+    const mismatch = createAitPlatformGateway({
+      appVersion: '1.2.3',
+      buildId: 'build-ait',
+      fallbackBridge: createAitSandboxBridge({ storage: null, buildId: 'ait-sandbox' }),
+    });
+    await expect(mismatch.getCapabilities()).resolves.not.toHaveProperty('commerce');
+    await expect(mismatch.commerceV2?.requestPurchase({
+      logicalId: 'COINS_100',
+      idempotencyKey: 'sandbox-purchase-v2-mismatch',
+      source: 'shop',
+    })).rejects.toMatchObject({ storeCode: 'COMMERCE_V2_UNAVAILABLE' });
+  });
+
+  it('keeps commerce v2 commands on the bridge whose events it subscribed to', async () => {
+    const globals = globalThis as { __GAME_PLATFORM_BRIDGE__?: GamePlatformBridge };
+    const previous = globals.__GAME_PLATFORM_BRIDGE__;
+    const served: string[] = [];
+    const hostBridge = (name: string): GamePlatformBridge => ({
+      commerceV2: { subscribe: () => () => {} },
+      async request(input) {
+        served.push(`${name}:${input.method}`);
+        return {
+          id: input.id,
+          ok: true,
+          data: input.method === 'commerce.v2.restorePurchases'
+            ? { restored: true }
+            : { playerId: name },
+        };
+      },
+    });
+    try {
+      globals.__GAME_PLATFORM_BRIDGE__ = hostBridge('first');
+      const gateway = createAitPlatformGateway({ appVersion: '1.2.3', buildId: 'build-ait' });
+      // The host bridge is reinstalled: ordinary requests follow the global
+      // bridge, commerce v2 stays with the bridge that owns its events.
+      globals.__GAME_PLATFORM_BRIDGE__ = hostBridge('second');
+      await expect(gateway.identity.getPlayer()).resolves.toEqual({ playerId: 'second' });
+      await expect(gateway.commerceV2?.restorePurchases?.()).resolves.toBeUndefined();
+      expect(served).toEqual(['second:identity.getPlayer', 'first:commerce.v2.restorePurchases']);
+    } finally {
+      if (previous === undefined) {
+        delete globals.__GAME_PLATFORM_BRIDGE__;
+      } else {
+        globals.__GAME_PLATFORM_BRIDGE__ = previous;
+      }
+    }
+  });
 });

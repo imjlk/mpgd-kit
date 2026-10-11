@@ -255,6 +255,14 @@ export interface CommerceConformanceStoreActor {
     readonly transactionId: string;
     readonly ledgerEntryId: string;
   }): void | Promise<void>;
+  /**
+   * The `token` this store reports for a fixture purchase when it is not the
+   * fixture's own: a host-order store reports the transaction id (RFC "Client
+   * contract"). An adaptive run replays the fixture purchases with this token
+   * into the reference store, so the derived verify requests carry the token
+   * the provider under test reports. Absent, the fixture token is used.
+   */
+  tokenOf?(purchase: CommerceConformancePurchaseFixture): string;
 }
 
 export interface CommerceConformanceStore extends CommerceConformanceStoreActor {
@@ -2201,10 +2209,15 @@ async function runVectorIn(
     }
     const store = execution.harness.provider.store;
     adaptation = adaptationFor(vector, capabilities);
+    // The reference run reports the tokens the provider under test reports.
+    const tokenOf = execution.harness.store?.tokenOf;
+    const tokenAdaptedVector = tokenOf === undefined
+      ? vector
+      : withStoreTokens(vector, (purchase) => tokenOf.call(execution.harness.store, purchase));
     let reference: Execution;
     try {
       reference = await prepareExecution(
-        referenceVectorFor(vector, store, capabilities),
+        referenceVectorFor(tokenAdaptedVector, store, capabilities),
         createCommerceConformanceHarness,
         ids,
       );
@@ -2228,7 +2241,7 @@ async function runVectorIn(
           + `expected ${String(referenceFailure.expected)}, got ${String(referenceFailure.actual)}`,
       );
     }
-    const derived = await deriveAdaptiveExpectation(vector, reference, store);
+    const derived = await deriveAdaptiveExpectation(tokenAdaptedVector, reference, store);
     if (derived.reason !== undefined) {
       return skipped(derived.reason);
     }
@@ -2504,6 +2517,35 @@ function adaptationFor(
   const fixtureOwner = createCommerceConformanceCapabilities(vector.profile).lifecycle.finish;
   return {
     serverFinalization: capabilities.lifecycle.finish === 'server' && fixtureOwner !== 'server',
+  };
+}
+
+/**
+ * The vector with every scripted store purchase (`complete`, `update`, and a
+ * `queueRequest` answering `purchased`) carrying the token the store actor
+ * reports for it (`CommerceConformanceStoreActor.tokenOf`).
+ */
+export function withStoreTokens(
+  vector: CommerceConformanceVector,
+  tokenOf: (purchase: CommerceConformancePurchaseFixture) => string,
+): CommerceConformanceVector {
+  const withToken = (
+    purchase: CommerceConformancePurchaseFixture,
+  ): CommerceConformancePurchaseFixture => ({ ...purchase, token: tokenOf(purchase) });
+  return {
+    ...vector,
+    steps: vector.steps.map((step) => {
+      if (step.actor !== 'store') {
+        return step;
+      }
+      if (step.action === 'complete' || step.action === 'update') {
+        return { ...step, purchase: withToken(step.purchase) };
+      }
+      if (step.action === 'queueRequest' && step.result.outcome === 'purchased') {
+        return { ...step, result: { ...step.result, purchase: withToken(step.result.purchase) } };
+      }
+      return step;
+    }),
   };
 }
 

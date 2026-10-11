@@ -809,7 +809,12 @@ backend consumes them as written. Derived journal keys and verify requests
 carry the provider's store id in place of the fixture's (`store:app-store:tx-1`
 for a derived key; only the encoded `store:<store>:` prefix is replaced, so a
 transaction id or game key that happens to contain the fixture store id is
-left alone), so a provider need not rewrite the files. `available` is what
+left alone), so a provider need not rewrite the files. A store whose `token`
+is not the fixture's, for example a host-order store that reports the
+transaction id, declares `tokenOf(purchase)` on its store actor; the runner
+replays the scripted purchases with that token into the reference store
+(`withStoreTokens`), so the derived `verifyRequests` carry the token the
+provider reports. `available` is what
 the reference store still lists (pending included) once the run is idle: empty
 after a completed finish for `client`, `host`, and `server` owners, since the
 client, the host, or the backend finalizer removed the purchase, and still
@@ -937,7 +942,7 @@ package carries a Sampo changeset.
 | B2 (landed, draft) | `@mpgd/capacitor-play-billing`: `createCapacitorPlayBillingStoreSdk` over the plugin (unfinished purchases from `getPurchases` with the `isAcknowledged` flag, `purchaseUpdated` subscription with retained native events, token key or order id as `transactionId`), `createCapacitorPlayBillingCommerceProvider` and the registry entry with the v1 evidence payload; the server-finish vector passes directly and through the gateway, client- and host-finish vectors are listed as not applicable | Unused native events |
 | B3 (landed, draft) | `@mpgd/capacitor-storekit`: `createCapacitorStoreKitStoreSdk` and `createCapacitorStoreKitCommerceProvider` over B1's `createStoreCommerceProvider` with the App Store profile, the StoreKit-verified JWS as `token` and as `app-store.signed-transaction.v1` evidence, and the v1 recovery helpers deprecated; the SDK answers only for the configured catalog and the active `appAccountToken` and checks the declared kind before the sheet opens; `@mpgd/game-services/app-store-verifier` verifies that evidence offline through its `signedTransactionVerifier` (authenticity, `APP_STORE_SIGNED_TRANSACTION_ID_MISMATCH` on a foreign id) and then decides the grant on the current status from the Server API by default (`signedTransactionEvidence: { mode: 'offline-only', maxSignedAgeMs }` is the documented opt-in for deployments without Server API access); requests without the evidence keep the Server API lookup | JWS dropped |
 | B4 (landed, draft) | `@mpgd/adapter-browser/microsoft-store`: `createMicrosoftStoreCommerceProvider` over the Digital Goods engine shared with the v1 adapter (`transactionId` and `token` are the `purchaseToken`, `settlement` is the authority's ledger entry, `launched` while the authority answer is open, `finish: 'server'`), `withMicrosoftStoreCommerceProvider` wiring `commerceV2`, the v1 wrapper, and the capability block; the `adapter-settled` vector passes directly and through the gateway, every other store vector is listed as not applicable to the profile; `@mpgd/game-services` grants on `findAdapterSettledGrant` (capability block `authority.evidence: 'adapter-settled'` plus `authoritativeGrant`) when `commerceV2` exists and keeps `isAuthoritativeMicrosoftStoreCompletion` (deprecated) for v1-only gateways | Target-name settlement check |
-| B5 | Apps in Toss provider: pending orders as available, host finish | |
+| B5 (landed, draft) | `@mpgd/adapter-ait`: `createAitCommerceProvider` over the host bridge's IAP machinery (one controller shared with the v1 `commerce.*` methods), pending orders as available purchases, `finishTransaction` as the host finish (`completeProductGrant` after the ledger grant, never without a ledger entry id), `restorePurchases` as the pending-order recovery pass, the six `commerce.v2.*` bridge methods and the `commerceV2` event channel on the host bridge, `gateway.commerceV2` and the `commerce` capability block; the host-finish vectors pass directly and through the gateway with the store actor's `tokenOf` (the token is the order id) | |
 | B6 | Devvit and Verse8 providers on server-push lookup | |
 | B7 | Credit wallet contract: `CreditWalletClient`, `createCreditCommerceProvider`, lot and membership rules, reference in-memory wallet | |
 | C1 | Single reconciler in the game-services client replacing the four drivers | Four recovery drivers |
