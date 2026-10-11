@@ -404,7 +404,8 @@ One pass:
 1. On start, subscribe to the provider, then read `getAvailablePurchases`
    when `lifecycle.availablePurchases` is declared. Always read after
    subscribing, so an event that arrived before the listener is found either
-   way.
+   way. A provider without `lifecycle.events` is polled instead: every pass
+   reads `getAvailablePurchases`.
 2. Match every reported purchase to a journal record, in this order: a record
    with the same `store` and `transactionId`; otherwise the single open
    (`launched` or `pending`) record for the same player, store, and logical
@@ -787,52 +788,71 @@ evidence, expect }`. Only `journal`, `finishCalls`, `verifyRequests`, and
 and keep the fixture's values. What the reference run yields per declared
 `lifecycle.finish`:
 
-| Owner | `journal` tail after `granted` | `finishCalls` | `verifyRequests` | `available` after finish |
+| Owner | `journal` tail after `granted` | `finishCalls` | `verifyRequests` | `available` after a completed finish |
 | --- | --- | --- | --- | --- |
 | `client` | `finishing`, `finished` | one per grant, `by: 'client'` | one per grant | `[]` |
 | `host` | `finishing`, `finished` | one per grant, `by: 'host'` | one per grant | `[]` |
 | `server` | `finishing`, `finished` | `[]` | one per grant, plus one finalization re-read unless the grant already reported `finalization: 'completed'` | `[]` |
-| `none` | `finished` | `[]` | one per grant | `[]` |
+| `none` | `finished` | `[]` | one per grant | what the store still lists |
 
 The `server` row encodes what the reference reconciler does: a `finishing`
 record whose grant did not report `finalization: 'completed'` resends the
 saved verify request to read finalization. When the vector was written for a
-non-server fixture, the runner follows every `granted` decision that lacks
-`finalization: 'completed'` with an auto-queued `{ status: 'granted',
-ledgerEntryId, finalization: 'completed', alreadyProcessed: true }` decision
-(the backend's answer to that re-read, which also invokes the harness
-`finalize` hook), in both the reference run and the run under test; a vector
-written for a server fixture scripts its own finalization decisions. Derived
-journal keys and verify requests carry the provider's store id in place of
-the fixture's (`store:app-store:tx-1` for a derived key), so a provider need
-not rewrite the files. `available` is empty after finish for every owner: a
-store that lists unfinished purchases must stop listing one the ledger has
-settled, whether the client, the host, or the backend finalizer removed it. A
-provider whose declared owner disagrees with its behaviour fails on these
-paths: declaring `server` while the SDK finishes on its own fails
+non-server fixture, the fake backend answers that re-read itself
+(`finalizeOnReread`): a verify request that replays a key the backend already
+granted is answered `{ status: 'granted', ledgerEntryId, finalization:
+'completed', alreadyProcessed: true }` from the backend's own grant state and
+invokes the harness `finalize` hook, consuming no queued decision, so a
+decision scripted for another record is never taken by the re-read; a vector
+written for a server fixture scripts its own finalization decisions and the
+backend consumes them as written. Derived journal keys and verify requests
+carry the provider's store id in place of the fixture's (`store:app-store:tx-1`
+for a derived key; only the encoded `store:<store>:` prefix is replaced, so a
+transaction id or game key that happens to contain the fixture store id is
+left alone), so a provider need not rewrite the files. `available` is what
+the reference store still lists (pending included) once the run is idle: empty
+after a completed finish for `client`, `host`, and `server` owners, since the
+client, the host, or the backend finalizer removed the purchase, and still
+listed for a fixture that leaves a finish failed without retry. A provider
+whose declared owner disagrees with its behaviour fails on these paths:
+declaring `server` while the SDK finishes on its own fails
 `finishCalls.length`, declaring `client` while never finishing fails
 `journal.<key>.length`, `finishCalls.length`, and `available.length`, and
 declaring `server` without consuming on finalization fails
-`available.length`.
+`available.length`. A `createProvider` that throws is a `failed` result at
+path `harness`, and a `getCapabilities()` that rejects one at path
+`capabilities`; the runner never rejects.
 
 Skip and duplicate rules (`commerceConformanceAdaptiveSkipReason(vector,
 capabilities, vectors?)`): an adaptive vector is reported `skipped` with a
-`reason` instead of failing when a store-side `pending` purchase needs
-`lifecycle.pending` the provider does not declare, when a store `error` event
-needs `lifecycle.events` it does not declare, or when a `queueFinish` script
-needs a `client` or `host` owner and the provider declares `server` or
-`none` (so `finish-failure-retry` runs only for client and host owners).
-Within one `runCommerceConformanceVectors` call only one member of the
-`purchase-<owner>-finish` family runs: the member named after the provider's
-owner when the set holds it, otherwise the first by name
+`reason` instead of failing when a `game.requestPurchase` names a product
+whose catalog `kind` the provider does not sell (`purchase.<kind>` false) or
+a `quantity` above one without `purchase.quantity`, when a store-side
+`pending` purchase needs `lifecycle.pending` the provider does not declare,
+when a store `error` event needs `lifecycle.events` it does not declare, when
+a store `complete` or `update` cannot be polled (see below), or when a
+`queueFinish` script needs a `client` or `host` owner and the provider
+declares `server` or `none` (so `finish-failure-retry` runs only for client
+and host owners). A provider without `lifecycle.events` is polled: the
+reference reconciler reads `getAvailablePurchases` on every pass, and the
+reference fake store emits nothing for such a profile, so a store completion
+reaches the journal at the next `runtime.reconcile` or `runtime.start`. A
+completion is therefore applicable only when such a step follows it with
+nothing in between but `backend.queueVerify` and `clock.set`; a `runtime.stop`
+first, no runtime step at all, or an intervening step that would have
+observed the event-driven grant or finish (another `store` script, a ledger
+`push` or `revoke`) makes the scenario timing-bound and skips it with the
+intervening step named. Within one `runCommerceConformanceVectors` call only
+one member of the `purchase-<owner>-finish` family runs: the member named
+after the provider's owner when the set holds it, otherwise the first by name
 (`purchase-client-finish` for `none`); the others are reported `skipped:
-duplicate of <vector> for finish=<owner>`. A single
-`runCommerceConformanceVector` call never deduplicates. The derivation is
-also refused as a skip when the reference run under the provider's
-capabilities does not end every journal key in the fixture's terminal state,
-since the scenario then depends on a capability the provider lacks. Vectors
-without the flag run against a caller-supplied provider exactly as before,
-with their fixture expectations.
+duplicate of <vector> for finish=<owner>`. The family is fixed once per call;
+a single `runCommerceConformanceVector` call never deduplicates. The
+derivation is also refused as a skip when the reference run under the
+provider's capabilities does not end every journal key in the fixture's
+terminal state, since the scenario then depends on a capability the provider
+lacks. Vectors without the flag run against a caller-supplied provider
+exactly as before, with their fixture expectations.
 
 A vector is one JSON file:
 
