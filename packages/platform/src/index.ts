@@ -332,6 +332,55 @@ export type PlatformProviderFeature =
   | 'identityUpgrade'
   | 'pushNotifications';
 
+export type CommerceFinishOwner = 'client' | 'server' | 'host' | 'none';
+export type CommerceEvidenceAuthority =
+  | 'client-token'
+  | 'host-callback'
+  | 'adapter-settled'
+  | 'server-push';
+export type CommerceAccountBindingPolicy = 'required' | 'optional' | 'host';
+
+export interface CommercePurchaseCapabilities {
+  readonly consumable: boolean;
+  readonly durable: boolean;
+  readonly subscription: boolean;
+  readonly quantity: boolean;
+}
+
+export interface CommerceCatalogCapabilities {
+  readonly products: boolean;
+  readonly offers: boolean;
+  readonly localizedPrice: boolean;
+}
+
+export interface CommerceLifecycleCapabilities {
+  readonly availablePurchases: boolean;
+  readonly pending: boolean;
+  readonly restore: boolean;
+  readonly events: boolean;
+  /** Who finishes a granted purchase. */
+  readonly finish: CommerceFinishOwner;
+}
+
+export interface CommerceAuthorityCapabilities {
+  /** What the backend verifies to grant. */
+  readonly evidence: CommerceEvidenceAuthority;
+  readonly accountBinding: CommerceAccountBindingPolicy;
+}
+
+/**
+ * Commerce v2 capability declaration (`@mpgd/platform/commerce`). Declared
+ * here so the main entry stays free of validator imports; code branches on
+ * these declarations, never on a store id or target name.
+ */
+export interface CommerceCapabilities {
+  readonly purchase: CommercePurchaseCapabilities;
+  readonly catalog: CommerceCatalogCapabilities;
+  readonly lifecycle: CommerceLifecycleCapabilities;
+  readonly authority: CommerceAuthorityCapabilities;
+  readonly availability: PlatformProviderAvailability;
+}
+
 export interface PlatformCapabilities {
   readonly nativeIap: boolean;
   /** Optional for adapters published before subscription-specific support. */
@@ -354,6 +403,12 @@ export interface PlatformCapabilities {
     PlatformProviderFeature,
     PlatformProviderAvailability
   >>>;
+  /**
+   * Optional commerce v2 capability block. When present it must be a fresh
+   * object on every read with no unknown keys, and `nativeIap` and
+   * `subscriptionIap` must equal `deriveLegacyCommerceCapabilities(commerce)`.
+   */
+  readonly commerce?: CommerceCapabilities;
 }
 
 export interface PlayerIdentity {

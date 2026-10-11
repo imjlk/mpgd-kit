@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/commerce/schemas/credit-lot.schema.json",
+  "title": "CreditLot",
+  "x-mpgd-protocol": "mpgd.commerce.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/CreditLot",
+  "components": {
+    "schemas": {
+      "CreditLot": {
+        "type": "object",
+        "properties": {
+          "lotId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "Equals the ledgerEntryId of the granting purchase, so a replayed grant cannot create a second lot.",
+            "readOnly": true
+          },
+          "currency": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "readOnly": true
+          },
+          "remaining": {
+            "type": "number",
+            "minimum": 0,
+            "readOnly": true
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "readOnly": true
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "readOnly": true
+          },
+          "origin": {
+            "$ref": "#/components/schemas/CreditLotOrigin",
+            "readOnly": true
+          },
+          "spendScope": {
+            "$ref": "#/components/schemas/CreditLotSpendScope",
+            "description": "Derived from the origin, never supplied by the caller.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "lotId",
+          "currency",
+          "amount",
+          "remaining",
+          "createdAt",
+          "origin",
+          "spendScope"
+        ],
+        "additionalProperties": false
+      },
+      "CreditLotChannel": {
+        "oneOf": [
+          {
+            "const": "off-store"
+          },
+          {
+            "const": "promotion"
+          },
+          {
+            "const": "store"
+          }
+        ]
+      },
+      "CreditLotOrigin": {
+        "type": "object",
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/CreditLotChannel",
+            "readOnly": true
+          },
+          "store": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "titleId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "channel",
+          "store",
+          "titleId"
+        ],
+        "additionalProperties": false
+      },
+      "CreditLotSpendScope": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "title",
+                "readOnly": true
+              },
+              "titleId": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "kind",
+              "titleId"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "cross-title",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "IsoTimestamp": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

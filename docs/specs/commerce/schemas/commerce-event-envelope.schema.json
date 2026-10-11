@@ -1,0 +1,401 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/commerce/schemas/commerce-event-envelope.schema.json",
+  "title": "CommerceEventEnvelope",
+  "x-mpgd-protocol": "mpgd.commerce.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/CommerceEventEnvelope",
+  "components": {
+    "schemas": {
+      "ActiveSubscription": {
+        "type": "object",
+        "properties": {
+          "store": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "logicalId": {
+            "$ref": "#/components/schemas/LogicalProductId",
+            "readOnly": true
+          },
+          "subscriptionId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "periodIndex": {
+            "$ref": "#/components/schemas/NonNegativeInteger",
+            "readOnly": true
+          },
+          "state": {
+            "$ref": "#/components/schemas/ActiveSubscriptionState",
+            "readOnly": true
+          },
+          "startedAt": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "readOnly": true
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "readOnly": true
+          },
+          "autoRenew": {
+            "type": "boolean",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "store",
+          "logicalId",
+          "subscriptionId",
+          "periodIndex",
+          "state",
+          "startedAt",
+          "expiresAt",
+          "autoRenew"
+        ],
+        "additionalProperties": false
+      },
+      "ActiveSubscriptionState": {
+        "oneOf": [
+          {
+            "const": "active"
+          },
+          {
+            "const": "lapsed"
+          },
+          {
+            "const": "revoked"
+          }
+        ]
+      },
+      "CommerceErrorCode": {
+        "oneOf": [
+          {
+            "const": "ACCOUNT_BINDING_REQUIRED"
+          },
+          {
+            "const": "ACTION_REQUIRED"
+          },
+          {
+            "const": "ALREADY_OWNED"
+          },
+          {
+            "const": "CONFIGURATION_REQUIRED"
+          },
+          {
+            "const": "INSUFFICIENT_BALANCE"
+          },
+          {
+            "const": "INVALID_RESPONSE"
+          },
+          {
+            "const": "IN_PROGRESS"
+          },
+          {
+            "const": "ITEM_UNAVAILABLE"
+          },
+          {
+            "const": "NETWORK"
+          },
+          {
+            "const": "NOT_PREPARED"
+          },
+          {
+            "const": "OUTCOME_UNKNOWN"
+          },
+          {
+            "const": "STORE_UNAVAILABLE"
+          },
+          {
+            "const": "UNKNOWN"
+          },
+          {
+            "const": "USER_CANCELLED"
+          }
+        ]
+      },
+      "CommerceErrorInfo": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/CommerceErrorCode",
+            "readOnly": true
+          },
+          "retryable": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "storeCode": {
+            "type": "string",
+            "description": "The store's original code, for example PLAY_BILLING_SERVICE_UNAVAILABLE.",
+            "readOnly": true
+          },
+          "message": {
+            "type": "string",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "code",
+          "retryable"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "purchaseUpdated",
+                "readOnly": true
+              },
+              "purchase": {
+                "$ref": "#/components/schemas/StorePurchase",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "type",
+              "purchase"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "purchaseError",
+                "readOnly": true
+              },
+              "logicalId": {
+                "$ref": "#/components/schemas/LogicalProductId",
+                "readOnly": true
+              },
+              "error": {
+                "$ref": "#/components/schemas/CommerceErrorInfo",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "type",
+              "error"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "subscriptionUpdated",
+                "readOnly": true
+              },
+              "subscription": {
+                "$ref": "#/components/schemas/ActiveSubscription",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "type",
+              "subscription"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "CommerceEventEnvelope": {
+        "type": "object",
+        "properties": {
+          "protocol": {
+            "const": "mpgd.commerce.v2",
+            "readOnly": true
+          },
+          "sequence": {
+            "$ref": "#/components/schemas/NonNegativeInteger",
+            "readOnly": true
+          },
+          "event": {
+            "$ref": "#/components/schemas/CommerceEvent",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "protocol",
+          "sequence",
+          "event"
+        ],
+        "additionalProperties": false,
+        "description": "Bridge event envelope; `sequence` is per session and starts at 0."
+      },
+      "IsoTimestamp": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "LogicalProductId": {
+        "type": "string"
+      },
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NonNegativeInteger": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "PlatformEvidenceEnvelope": {
+        "type": "object",
+        "properties": {
+          "schema": {
+            "type": "string",
+            "readOnly": true
+          },
+          "payload": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "schema",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      "PositiveQuantity": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "ReadonlyRecordstringstringnumberboolean": {
+        "type": "object",
+        "additionalProperties": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        }
+      },
+      "StorePurchase": {
+        "type": "object",
+        "properties": {
+          "store": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "transactionId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "Store transaction id; a provider derives one when the store has none.",
+            "readOnly": true
+          },
+          "originalTransactionId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "storeSku": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "logicalId": {
+            "$ref": "#/components/schemas/LogicalProductId",
+            "readOnly": true
+          },
+          "quantity": {
+            "$ref": "#/components/schemas/PositiveQuantity",
+            "readOnly": true
+          },
+          "state": {
+            "$ref": "#/components/schemas/StorePurchaseState",
+            "readOnly": true
+          },
+          "purchasedAt": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "readOnly": true
+          },
+          "token": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "Play purchase token, App Store signed transaction (JWS), or host order id.",
+            "readOnly": true
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/PlatformEvidenceEnvelope",
+            "readOnly": true
+          },
+          "accountBinding": {
+            "$ref": "#/components/schemas/StorePurchaseAccountBinding",
+            "readOnly": true
+          },
+          "settlement": {
+            "type": "object",
+            "properties": {
+              "ledgerEntryId": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "ledgerEntryId"
+            ],
+            "additionalProperties": false,
+            "description": "Present only for `authority.evidence: 'adapter-settled'`; a reconciler pointer, not a grant.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "store",
+          "transactionId",
+          "storeSku",
+          "quantity",
+          "state",
+          "token",
+          "evidence"
+        ],
+        "additionalProperties": false
+      },
+      "StorePurchaseAccountBinding": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "oneOf": [
+              {
+                "const": "app-account-token"
+              },
+              {
+                "const": "host-identity"
+              },
+              {
+                "const": "obfuscated-account-id"
+              }
+            ],
+            "readOnly": true
+          },
+          "value": {
+            "type": "string",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "additionalProperties": false
+      },
+      "StorePurchaseState": {
+        "oneOf": [
+          {
+            "const": "pending"
+          },
+          {
+            "const": "purchased"
+          },
+          {
+            "const": "revoked"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/commerce/schemas/commerce-capabilities.schema.json",
+  "title": "CommerceCapabilities",
+  "x-mpgd-protocol": "mpgd.commerce.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/CommerceCapabilities",
+  "components": {
+    "schemas": {
+      "CommerceAccountBindingPolicy": {
+        "oneOf": [
+          {
+            "const": "host"
+          },
+          {
+            "const": "optional"
+          },
+          {
+            "const": "required"
+          }
+        ]
+      },
+      "CommerceAuthorityCapabilities": {
+        "type": "object",
+        "properties": {
+          "evidence": {
+            "$ref": "#/components/schemas/CommerceEvidenceAuthority",
+            "description": "What the backend verifies to grant.",
+            "readOnly": true
+          },
+          "accountBinding": {
+            "$ref": "#/components/schemas/CommerceAccountBindingPolicy",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "evidence",
+          "accountBinding"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceCapabilities": {
+        "type": "object",
+        "properties": {
+          "purchase": {
+            "$ref": "#/components/schemas/CommercePurchaseCapabilities",
+            "readOnly": true
+          },
+          "catalog": {
+            "$ref": "#/components/schemas/CommerceCatalogCapabilities",
+            "readOnly": true
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/CommerceLifecycleCapabilities",
+            "readOnly": true
+          },
+          "authority": {
+            "$ref": "#/components/schemas/CommerceAuthorityCapabilities",
+            "readOnly": true
+          },
+          "availability": {
+            "$ref": "#/components/schemas/PlatformProviderAvailability",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "purchase",
+          "catalog",
+          "lifecycle",
+          "authority",
+          "availability"
+        ],
+        "additionalProperties": false,
+        "description": "Commerce v2 capability declaration (`@mpgd/platform/commerce`). Declared\nhere so the main entry stays free of validator imports; code branches on\nthese declarations, never on a store id or target name."
+      },
+      "CommerceCatalogCapabilities": {
+        "type": "object",
+        "properties": {
+          "products": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "offers": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "localizedPrice": {
+            "type": "boolean",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "products",
+          "offers",
+          "localizedPrice"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceEvidenceAuthority": {
+        "oneOf": [
+          {
+            "const": "adapter-settled"
+          },
+          {
+            "const": "client-token"
+          },
+          {
+            "const": "host-callback"
+          },
+          {
+            "const": "server-push"
+          }
+        ]
+      },
+      "CommerceFinishOwner": {
+        "oneOf": [
+          {
+            "const": "client"
+          },
+          {
+            "const": "host"
+          },
+          {
+            "const": "none"
+          },
+          {
+            "const": "server"
+          }
+        ]
+      },
+      "CommerceLifecycleCapabilities": {
+        "type": "object",
+        "properties": {
+          "availablePurchases": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "pending": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "restore": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "events": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "finish": {
+            "$ref": "#/components/schemas/CommerceFinishOwner",
+            "description": "Who finishes a granted purchase.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "availablePurchases",
+          "pending",
+          "restore",
+          "events",
+          "finish"
+        ],
+        "additionalProperties": false
+      },
+      "CommercePurchaseCapabilities": {
+        "type": "object",
+        "properties": {
+          "consumable": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "durable": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "subscription": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "quantity": {
+            "type": "boolean",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "consumable",
+          "durable",
+          "subscription",
+          "quantity"
+        ],
+        "additionalProperties": false
+      },
+      "PlatformProviderAvailability": {
+        "oneOf": [
+          {
+            "const": "action-required"
+          },
+          {
+            "const": "available"
+          },
+          {
+            "const": "configuration-required"
+          },
+          {
+            "const": "temporarily-unavailable"
+          },
+          {
+            "const": "unsupported"
+          }
+        ],
+        "description": "Readiness of an installed platform provider, independent of target policy."
+      }
+    }
+  }
+}

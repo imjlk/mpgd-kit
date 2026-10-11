@@ -1,0 +1,87 @@
+{
+  "protocol": "mpgd.commerce.v2",
+  "protocolVersion": "2.0.0-draft.1",
+  "regenerate": "pnpm generate:commerce-schemas",
+  "schemas": [
+    {
+      "title": "StoreProduct",
+      "file": "store-product.schema.json"
+    },
+    {
+      "title": "StorePurchase",
+      "file": "store-purchase.schema.json"
+    },
+    {
+      "title": "CommerceCapabilities",
+      "file": "commerce-capabilities.schema.json"
+    },
+    {
+      "title": "CommerceEvent",
+      "file": "commerce-event.schema.json"
+    },
+    {
+      "title": "CommerceEventEnvelope",
+      "file": "commerce-event-envelope.schema.json"
+    },
+    {
+      "title": "ActiveSubscription",
+      "file": "active-subscription.schema.json"
+    },
+    {
+      "title": "CreditLot",
+      "file": "credit-lot.schema.json"
+    },
+    {
+      "title": "CommerceBridgeGetCapabilitiesPayload",
+      "file": "commerce-bridge-get-capabilities-payload.schema.json"
+    },
+    {
+      "title": "CommerceBridgeGetCapabilitiesResult",
+      "file": "commerce-bridge-get-capabilities-result.schema.json"
+    },
+    {
+      "title": "CommerceBridgeFetchProductsPayload",
+      "file": "commerce-bridge-fetch-products-payload.schema.json"
+    },
+    {
+      "title": "CommerceBridgeFetchProductsResult",
+      "file": "commerce-bridge-fetch-products-result.schema.json"
+    },
+    {
+      "title": "CommerceBridgeRequestPurchasePayload",
+      "file": "commerce-bridge-request-purchase-payload.schema.json"
+    },
+    {
+      "title": "CommerceBridgeRequestPurchaseResult",
+      "file": "commerce-bridge-request-purchase-result.schema.json"
+    },
+    {
+      "title": "CommerceBridgeGetAvailablePurchasesPayload",
+      "file": "commerce-bridge-get-available-purchases-payload.schema.json"
+    },
+    {
+      "title": "CommerceBridgeGetAvailablePurchasesResult",
+      "file": "commerce-bridge-get-available-purchases-result.schema.json"
+    },
+    {
+      "title": "CommerceBridgeFinishTransactionPayload",
+      "file": "commerce-bridge-finish-transaction-payload.schema.json"
+    },
+    {
+      "title": "CommerceBridgeFinishTransactionResult",
+      "file": "commerce-bridge-finish-transaction-result.schema.json"
+    },
+    {
+      "title": "CommerceBridgeRestorePurchasesPayload",
+      "file": "commerce-bridge-restore-purchases-payload.schema.json"
+    },
+    {
+      "title": "CommerceBridgeRestorePurchasesResult",
+      "file": "commerce-bridge-restore-purchases-result.schema.json"
+    },
+    {
+      "title": "CommerceConformanceVector",
+      "file": "commerce-conformance-vector.schema.json"
+    }
+  ]
+}
