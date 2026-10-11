@@ -53,9 +53,21 @@ export interface PlayPurchase {
   readonly obfuscatedAccountId?: string;
 }
 
+/**
+ * Result of a `purchase` call (`purchased`, `pending`, or `cancelled`) and
+ * payload of every `purchaseUpdated` event. A `purchase` call never resolves
+ * `failed`: it rejects with the plugin code instead. On `purchaseUpdated`, a
+ * `cancelled` or `failed` outcome without a `purchase` is a terminal result
+ * that arrived after the `purchase` call for `productId` already timed out
+ * (`PLAY_BILLING_TIMEOUT`), so the attempt the timeout left open can close.
+ */
 export interface PlayPurchaseOutcome {
-  readonly status: 'purchased' | 'pending' | 'cancelled';
+  readonly status: 'purchased' | 'pending' | 'cancelled' | 'failed';
   readonly purchase?: PlayPurchase;
+  /** The timed-out product a late `cancelled` or `failed` result belongs to. */
+  readonly productId?: string;
+  /** The `PLAY_BILLING_*` code of a late `failed` result. */
+  readonly code?: string;
 }
 
 export interface CapacitorPlayBillingPlugin {

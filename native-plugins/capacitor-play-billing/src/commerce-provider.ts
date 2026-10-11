@@ -15,7 +15,7 @@ import {
   type StorePurchaseAccountBinding,
 } from '@mpgd/platform/commerce';
 
-import type { CapacitorPlayBillingPlugin } from './definitions.js';
+import type { CapacitorPlayBillingPlugin, PlayPurchase } from './definitions.js';
 import {
   createCapacitorPlayBillingStoreSdk,
   googlePlayStoreId,
@@ -75,6 +75,8 @@ export interface CreateCapacitorPlayBillingCommerceProviderInput {
   readonly store?: StoreId;
   /** Extra plugin codes merged over `playBillingStoreSdkErrorCodeMap`. */
   readonly mapError?: StoreSdkErrorCodeMap;
+  /** Diagnostics for plugin purchases left out of recovery (retired SKU, multi-line); see the SDK input. */
+  readonly onUnmappedPurchase?: (purchase: PlayPurchase) => void;
 }
 
 /**
@@ -106,6 +108,9 @@ export function createCapacitorPlayBillingCommerceProvider(
     products: sdkProducts,
     ...(input.plugin === undefined ? {} : { plugin: input.plugin }),
     ...(input.isAndroid === undefined ? {} : { isAndroid: input.isAndroid }),
+    ...(input.onUnmappedPurchase === undefined
+      ? {}
+      : { onUnmappedPurchase: input.onUnmappedPurchase }),
   });
   const resolveAccountBinding = input.accountBinding;
   return createStoreCommerceProvider({

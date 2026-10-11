@@ -82,6 +82,14 @@ export interface CreateCapacitorPlayBillingStoreSdkInput {
   readonly plugin?: CapacitorPlayBillingPlugin;
   /** Defaults to `Capacitor.getPlatform() === 'android'`. */
   readonly isAndroid?: () => boolean;
+  /**
+   * Diagnostics hook for a plugin purchase the SDK leaves out of
+   * `getAvailablePurchases` and events: a SKU not in `products` (for example
+   * a retired product) or a multi-line purchase. Such a purchase has no
+   * logical id for the reconciler; the backend finalizer still sees it
+   * through the Play Developer API.
+   */
+  readonly onUnmappedPurchase?: (purchase: PlayPurchase) => void;
 }
 
 export interface CapacitorPlayBillingStoreSdk extends StoreSdk {
@@ -190,25 +198,112 @@ export function createCapacitorPlayBillingStoreSdk(
     }
     return count;
   };
-  const onPurchaseUpdated = (outcome: unknown): void => {
-    const purchase = isRecord(outcome) ? outcome.purchase : undefined;
-    if (purchase === undefined) {
-      // The plugin emits an update only with a purchase; a cancel has no event.
+  const reportUnmapped = (purchase: unknown): void => {
+    try {
+      input.onUnmappedPurchase?.(purchase as PlayPurchase);
+    } catch {
+      // Diagnostics never break delivery.
+    }
+  };
+  /** Whether a plugin purchase maps to one configured SKU; anything else is diagnostics only. */
+  const isMapped = (purchase: Readonly<Record<string, unknown>>): boolean => {
+    const sku = skuOf(purchase);
+    if (sku !== undefined && products.has(sku)) {
+      return true;
+    }
+    reportUnmapped(purchase);
+    return false;
+  };
+  // Deliveries leave in the order the plugin reported them: a purchase with
+  // an order id converts and emits synchronously, one without awaits the token
+  // digest, and while such a conversion is in flight every later delivery
+  // queues behind it instead of overtaking it.
+  let deliveries: Promise<void> | undefined;
+  const enqueue = (task: () => void | Promise<void>): void => {
+    const settle = (result: void | Promise<void>, previous: Promise<void> | undefined): void => {
+      if (result === undefined) {
+        return;
+      }
+      const chained: Promise<void> = (previous ?? Promise.resolve())
+        .then(() => result)
+        .catch(() => undefined)
+        .then(() => {
+          if (deliveries === chained) {
+            deliveries = undefined;
+          }
+        });
+      deliveries = chained;
+    };
+    if (deliveries === undefined) {
+      settle(task(), undefined);
       return;
     }
-    toSdkPurchase(purchase).then(
-      (converted) => {
-        emit({ type: 'purchaseUpdated', purchase: converted });
-      },
-      (error: unknown) => {
-        const sku = skuOf(purchase);
-        emit({
-          type: 'purchaseError',
-          ...(sku === undefined ? {} : { sku }),
-          error: toSdkError(error),
-        });
-      },
-    ).catch(() => undefined);
+    const pending = deliveries;
+    settle(pending.then(task), pending);
+  };
+  const emitConverted = (purchase: Readonly<Record<string, unknown>>): void | Promise<void> => {
+    const deliver = (converted: StoreSdkPurchase): void => {
+      emit({ type: 'purchaseUpdated', purchase: converted });
+    };
+    const fail = (error: unknown): void => {
+      const sku = skuOf(purchase);
+      emit({
+        type: 'purchaseError',
+        ...(sku === undefined ? {} : { sku }),
+        error: toSdkError(error),
+      });
+    };
+    let converted: StoreSdkPurchase | Promise<StoreSdkPurchase>;
+    try {
+      converted = convertPurchase(purchase);
+    } catch (error) {
+      fail(error);
+      return;
+    }
+    if (!(converted instanceof Promise)) {
+      deliver(converted);
+      return;
+    }
+    return converted.then(deliver, fail);
+  };
+  const onPurchaseUpdated = (outcome: unknown): void => {
+    if (!isRecord(outcome)) {
+      return;
+    }
+    const purchase = outcome.purchase;
+    if (purchase === undefined) {
+      emitLateTerminalResult(outcome);
+      return;
+    }
+    if (!isRecord(purchase) || !isMapped(purchase)) {
+      return;
+    }
+    enqueue(() => emitConverted(purchase));
+  };
+  /**
+   * A `cancelled` or `failed` update without a purchase is the plugin's late
+   * terminal result for a purchase call that already timed out (the provider
+   * answered `launched` for `PLAY_BILLING_TIMEOUT`); it closes that attempt.
+   */
+  const emitLateTerminalResult = (outcome: Readonly<Record<string, unknown>>): void => {
+    const sku = typeof outcome.productId === 'string' && products.has(outcome.productId)
+      ? outcome.productId
+      : undefined;
+    if (sku === undefined || (outcome.status !== 'cancelled' && outcome.status !== 'failed')) {
+      // Without a product the result cannot be correlated to an attempt.
+      return;
+    }
+    const error: StoreSdkError = outcome.status === 'cancelled'
+      ? { code: 'USER_CANCELLED', retryable: false, message: 'Purchase cancelled.' }
+      : {
+          code: typeof outcome.code === 'string' && outcome.code.length > 0
+            ? outcome.code
+            : 'PLAY_BILLING_ERROR',
+          message: 'Purchase failed after the purchase call timed out.',
+        };
+    enqueue(() => {
+      emit({ type: 'purchaseError', sku, error });
+    });
   };
   const attachPluginListener = (): void => {
     if (pluginListener !== undefined) {
@@ -362,10 +457,9 @@ export function createCapacitorPlayBillingStoreSdk(
         if (!isUnfinished(purchase, includePending)) {
           continue;
         }
-        const productList = purchase.products ?? purchase.productIds;
-        if (Array.isArray(productList) && productList.length > 1) {
-          // A multi-line purchase has no single SKU to map; the backend
-          // finalizer still sees it through the Play Developer API.
+        if (!isMapped(purchase)) {
+          // A retired SKU or a multi-line purchase has no logical id for the
+          // reconciler; onUnmappedPurchase sees it.
           continue;
         }
         available.push(await toSdkPurchase(purchase));
@@ -436,6 +530,14 @@ export async function toPlayBillingSdkPurchase(purchase: PlayPurchase): Promise<
 }
 
 async function toSdkPurchase(purchase: unknown): Promise<StoreSdkPurchase> {
+  return convertPurchase(purchase);
+}
+
+/**
+ * Synchronous when Play already assigned an order id; a promise only while
+ * the token key is derived, so event delivery is immediate in the common case.
+ */
+function convertPurchase(purchase: unknown): StoreSdkPurchase | Promise<StoreSdkPurchase> {
   if (!isRecord(purchase)) {
     throw evidenceInvalid('Play purchase is not an object.');
   }
@@ -452,9 +554,24 @@ async function toSdkPurchase(purchase: unknown): Promise<StoreSdkPurchase> {
     throw evidenceInvalid('Play purchase token is invalid.');
   }
   const orderId = typeof purchase.orderId === 'string' ? purchase.orderId.trim() : '';
-  const transactionId = orderId.length > 0
-    ? orderId
-    : await createGooglePlayTokenPurchaseKey(token);
+  const build = (transactionId: string): StoreSdkPurchase =>
+    buildSdkPurchase(purchase, { sku, state, token, transactionId });
+  if (orderId.length > 0) {
+    return build(orderId);
+  }
+  return createGooglePlayTokenPurchaseKey(token).then(build);
+}
+
+function buildSdkPurchase(
+  purchase: Readonly<Record<string, unknown>>,
+  parsed: {
+    readonly sku: string;
+    readonly state: 'pending' | 'purchased';
+    readonly token: string;
+    readonly transactionId: string;
+  },
+): StoreSdkPurchase {
+  const { sku, state, token, transactionId } = parsed;
   const purchaseTime = typeof purchase.purchaseTime === 'number'
     ? purchase.purchaseTime
     : purchase.purchaseTimeMillis;
@@ -495,7 +612,9 @@ function skuOf(purchase: unknown): string | undefined {
 function isUnfinished(purchase: Readonly<Record<string, unknown>>, includePending: boolean): boolean {
   const state = purchase.purchaseState ?? purchase.state;
   if (state === 'purchased') {
-    return purchase.isAcknowledged === false;
+    // A 0.1 native build reports no flag; an absent flag is unfinished so a
+    // paid purchase is never dropped from recovery during a staged upgrade.
+    return purchase.isAcknowledged !== true;
   }
   return state === 'pending' && includePending;
 }

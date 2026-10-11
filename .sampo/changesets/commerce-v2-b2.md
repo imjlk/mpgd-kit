@@ -19,8 +19,12 @@ stays `purchased`, `pending` becomes `launched`, `cancelled` becomes
 `getAvailablePurchases` maps `getPurchases` filtered to unfinished entries
 (`purchased` and not acknowledged, plus `pending` on request) with `token =
 purchaseToken` and `transactionId = orderId` or the v1
-`play-token-sha256:<hex>` key, `addListener` is backed by the plugin's
-`purchaseUpdated` listener, and `getAvailability` keeps the v1 logic.
+`play-token-sha256:<hex>` key (an absent `isAcknowledged` from a 0.1 native
+build counts as unfinished; a retired or multi-line SKU is left out and handed
+to the optional `onUnmappedPurchase` hook), `addListener` is backed by the
+plugin's `purchaseUpdated` listener with deliveries kept in plugin order and
+a late `cancelled` or `failed` result for a timed-out product emitted as a
+`purchaseError`, and `getAvailability` keeps the v1 logic.
 `playBillingStoreSdkErrorCodeMap` extends `defaultStoreSdkErrorCodeMap` with
 `PLAY_BILLING_BUSY` (`IN_PROGRESS`), `PLAY_BILLING_OFFER_REQUIRED`,
 `PLAY_BILLING_INVALID_PRODUCTS`, `PLAY_BILLING_INVALID_PRODUCT`,
@@ -50,6 +54,8 @@ every reported purchase: `products`, `purchaseState`, `purchaseTime`,
 `priceAmountMicros` on offers. The 0.1 names `productIds`, `state`, and
 `purchaseTimeMillis` keep their values and are deprecated until the next
 major version. The Android plugin now retains `purchaseUpdated` until a
-listener consumes it and still never acknowledges or consumes.
+listener consumes it, delivers a cancel or non-OK result that arrives after
+the `purchase` timeout as a `cancelled` or `failed` update for the timed-out
+product, and still never acknowledges or consumes.
 `createCapacitorPlayBillingProvider` is unchanged; `recoverOwnedPlayPurchases`
 is deprecated in favour of the commerce v2 reconciler (PR C1).

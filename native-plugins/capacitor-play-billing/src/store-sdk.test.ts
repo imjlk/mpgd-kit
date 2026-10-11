@@ -20,6 +20,8 @@ import type { StoreSdkEvent } from '@mpgd/adapter-capacitor';
 
 const binding = { kind: 'obfuscated-account-id', value: 'player-hash-1' } as const;
 
+const unmapped: unknown[] = [];
+
 function createSdk(
   plugin = createFakePlayBillingPlugin({
     products: [
@@ -45,6 +47,9 @@ function createSdk(
     sdk: createCapacitorPlayBillingStoreSdk({
       plugin,
       isAndroid,
+      onUnmappedPurchase: (purchase) => {
+        unmapped.push(purchase);
+      },
       products: [
         { sku: 'gems.small', kind: 'consumable' },
         { sku: 'remove.ads', kind: 'durable', offerToken: 'intro' },
@@ -324,13 +329,17 @@ describe('createCapacitorPlayBillingStoreSdk', () => {
     }));
     plugin.upsert(fakePlayPurchase({ purchaseToken: 'other', products: ['not.sold'], orderId: 'GPA.o' }));
 
+    unmapped.length = 0;
     const unfinished = await sdk.getAvailablePurchases({});
-    expect(unfinished.map((purchase) => purchase.token)).toEqual(['open', 'other']);
+    // A retired SKU and a multi-line purchase have no logical id for the
+    // reconciler; they reach the diagnostics hook instead of the list.
+    expect(unfinished.map((purchase) => purchase.token)).toEqual(['open']);
+    expect(unmapped.map((purchase) => (purchase as { purchaseToken: string }).purchaseToken))
+      .toEqual(['multi', 'other']);
     const withPending = await sdk.getAvailablePurchases({ includePending: true });
     expect(withPending.map((purchase) => [purchase.token, purchase.state])).toEqual([
       ['open', 'purchased'],
       ['wait', 'pending'],
-      ['other', 'purchased'],
     ]);
     expect(withPending[1]).toEqual({
       sku: 'gems.small',
@@ -341,6 +350,123 @@ describe('createCapacitorPlayBillingStoreSdk', () => {
       quantity: 1,
     });
     expect(plugin.getPurchasesCalls).toBe(2);
+  });
+
+  it('keeps a purchase from a 0.1 native build available when it carries no acknowledged flag', async () => {
+    const { sdk, plugin } = createSdk();
+    // A legacy payload: the 0.1 names only, no isAcknowledged, no quantity.
+    plugin.upsert({
+      productIds: ['gems.small'],
+      purchaseToken: 'legacy-paid',
+      orderId: 'GPA.legacy',
+      purchaseTimeMillis: 1_000,
+      state: 'purchased',
+    } as never);
+    plugin.upsert({
+      productIds: ['gems.small'],
+      purchaseToken: 'legacy-pending',
+      state: 'pending',
+    } as never);
+    expect(await sdk.getAvailablePurchases({ includePending: true })).toEqual([
+      {
+        sku: 'gems.small',
+        transactionId: 'GPA.legacy',
+        state: 'purchased',
+        purchasedAt: '1970-01-01T00:00:01.000Z',
+        token: 'legacy-paid',
+        quantity: 1,
+      },
+      {
+        sku: 'gems.small',
+        transactionId: await createGooglePlayTokenPurchaseKey('legacy-pending'),
+        state: 'pending',
+        token: 'legacy-pending',
+        quantity: 1,
+      },
+    ]);
+    // Only an explicit acknowledgement finishes a purchased entry.
+    plugin.upsert({
+      productIds: ['gems.small'], purchaseToken: 'legacy-paid', orderId: 'GPA.legacy',
+      state: 'purchased', isAcknowledged: true,
+    } as never);
+    expect((await sdk.getAvailablePurchases({})).map((purchase) => purchase.token)).toEqual([]);
+  });
+
+  it('emits purchase updates in the order the plugin delivered them', async () => {
+    const { sdk, plugin } = createSdk();
+    const events: StoreSdkEvent[] = [];
+    sdk.addListener('purchaseUpdated', (event) => {
+      events.push(event);
+    });
+    sdk.addListener('purchaseError', (event) => {
+      events.push(event);
+    });
+    await flush();
+    // The pending update has no order id, so its conversion awaits the token
+    // digest; the purchased update that follows resolves immediately.
+    plugin.emit({
+      status: 'pending',
+      purchase: fakePlayPurchase({ purchaseToken: 'same-token', purchaseState: 'pending' }),
+    });
+    plugin.emit({
+      status: 'purchased',
+      purchase: fakePlayPurchase({ purchaseToken: 'same-token', orderId: 'GPA.same' }),
+    });
+    plugin.emit({ status: 'purchased', purchase: fakePlayPurchase({ purchaseToken: ' bad' }) });
+    plugin.emit({ status: 'cancelled', productId: 'gems.small' });
+    await until(() => events.length === 4);
+    expect(events.map((event) => event.type === 'purchaseUpdated'
+      ? [event.purchase.state, event.purchase.transactionId]
+      : [event.type, event.error.code])).toEqual([
+      ['pending', await createGooglePlayTokenPurchaseKey('same-token')],
+      ['purchased', 'GPA.same'],
+      ['purchaseError', 'PLAY_BILLING_EVIDENCE_INVALID'],
+      ['purchaseError', 'USER_CANCELLED'],
+    ]);
+  });
+
+  it('reports a late terminal result for a timed-out product as a purchase error', async () => {
+    const { sdk, plugin } = createSdk();
+    const events: StoreSdkEvent[] = [];
+    sdk.addListener('purchaseError', (event) => {
+      events.push(event);
+    });
+    sdk.addListener('purchaseUpdated', (event) => {
+      events.push(event);
+    });
+    plugin.queuePurchase({
+      throws: Object.assign(new Error('timed out'), { code: 'PLAY_BILLING_TIMEOUT' }),
+    });
+    expect(await sdk.requestPurchase({ sku: 'gems.small', accountBinding: binding }))
+      .toMatchObject({ outcome: 'failed', error: { code: 'PLAY_BILLING_TIMEOUT' } });
+    // The Java plugin delivers the result that arrives after its 180 s timeout
+    // as a purchaseUpdated event correlated to the timed-out product.
+    plugin.emit({ status: 'cancelled', productId: 'gems.small' });
+    plugin.emit({ status: 'failed', productId: 'remove.ads', code: 'PLAY_BILLING_TRANSIENT_ERROR' });
+    plugin.emit({ status: 'failed', productId: 'gems.small' });
+    // Uncorrelated or unknown-product results close nothing.
+    plugin.emit({ status: 'cancelled' });
+    plugin.emit({ status: 'cancelled', productId: 'retired.sku' });
+    plugin.emit({ status: 'pending', productId: 'gems.small' });
+    await until(() => events.length === 3);
+    await flush();
+    expect(events).toEqual([
+      {
+        type: 'purchaseError',
+        sku: 'gems.small',
+        error: { code: 'USER_CANCELLED', retryable: false, message: 'Purchase cancelled.' },
+      },
+      {
+        type: 'purchaseError',
+        sku: 'remove.ads',
+        error: expect.objectContaining({ code: 'PLAY_BILLING_TRANSIENT_ERROR' }),
+      },
+      {
+        type: 'purchaseError',
+        sku: 'gems.small',
+        error: expect.objectContaining({ code: 'PLAY_BILLING_ERROR' }),
+      },
+    ]);
   });
 
   it('derives the transaction id from the order id or the v1 token key', async () => {

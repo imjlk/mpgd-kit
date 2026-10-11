@@ -37,6 +37,12 @@ public class CapacitorPlayBillingPlugin extends Plugin {
     private PluginCall activePurchase;
     private String activeProductId;
     private Runnable purchaseTimeout;
+    /**
+     * Product of a purchase call that timed out while the Play UI was still up. A later
+     * terminal callback (cancel or non-OK result) is delivered for it as a purchaseUpdated
+     * event, so the JavaScript attempt the timeout left open can close.
+     */
+    private String timedOutProductId;
 
     @Override
     public void load() {
@@ -150,8 +156,10 @@ public class CapacitorPlayBillingPlugin extends Plugin {
         }
         activePurchase = call;
         activeProductId = productId;
+        timedOutProductId = null;
         purchaseTimeout = () -> {
             if (activePurchase == call) {
+                timedOutProductId = activeProductId;
                 clearActivePurchase(call);
                 call.reject("Purchase confirmation timed out; requery owned purchases.",
                     "PLAY_BILLING_TIMEOUT");
@@ -254,6 +262,8 @@ public class CapacitorPlayBillingPlugin extends Plugin {
             if (pending != null) {
                 clearActivePurchase(pending);
                 pending.resolve(new JSObject().put("status", "cancelled"));
+            } else {
+                notifyLateTerminalResult("cancelled", null);
             }
             return;
         }
@@ -261,6 +271,8 @@ public class CapacitorPlayBillingPlugin extends Plugin {
             if (pending != null) {
                 clearActivePurchase(pending);
                 rejectBilling(pending, result);
+            } else {
+                notifyLateTerminalResult("failed", billingErrorCode(result));
             }
             return;
         }
@@ -284,12 +296,33 @@ public class CapacitorPlayBillingPlugin extends Plugin {
             // purchase call timed out, or before the web view attached its listener, must
             // still reach the provider's purchaseUpdated subscription.
             notifyListeners("purchaseUpdated", outcome, true);
+            if (timedOutProductId != null && purchase.getProducts().contains(timedOutProductId)) {
+                timedOutProductId = null;
+            }
             if (pending != null && purchase.getProducts().contains(expectedProductId)) {
                 clearActivePurchase(pending);
                 pending.resolve(outcome);
                 pending = null;
             }
         }
+    }
+
+    /**
+     * A cancel or non-OK result that arrives after the purchase call already timed out has no
+     * call to answer; without this event the JavaScript attempt would stay open forever and
+     * block another purchase of the product. Only the timed-out product is correlated.
+     */
+    private void notifyLateTerminalResult(String status, String code) {
+        String productId = timedOutProductId;
+        if (productId == null) {
+            return;
+        }
+        timedOutProductId = null;
+        JSObject outcome = new JSObject().put("status", status).put("productId", productId);
+        if (code != null) {
+            outcome.put("code", code);
+        }
+        notifyListeners("purchaseUpdated", outcome, true);
     }
 
     private JSObject encodePurchase(Purchase purchase) {
@@ -399,6 +432,11 @@ public class CapacitorPlayBillingPlugin extends Plugin {
     }
 
     private void rejectBilling(PluginCall call, BillingResult result) {
+        call.reject("Google Play Billing is unavailable (" + result.getResponseCode() + ").",
+            billingErrorCode(result));
+    }
+
+    private String billingErrorCode(BillingResult result) {
         int responseCode = result.getResponseCode();
         String code;
         switch (responseCode) {
@@ -427,8 +465,7 @@ public class CapacitorPlayBillingPlugin extends Plugin {
             default:
                 code = "PLAY_BILLING_ERROR";
         }
-        call.reject("Google Play Billing is unavailable (" + result.getResponseCode() + ").",
-            code);
+        return code;
     }
 
     private void clearActivePurchase(PluginCall call) {

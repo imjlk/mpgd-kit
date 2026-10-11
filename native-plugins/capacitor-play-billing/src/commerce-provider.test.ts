@@ -10,6 +10,12 @@ import {
   type CommerceEvent,
   type StorePurchase,
 } from '@mpgd/platform/commerce';
+import {
+  createCommerceConformanceBackend,
+  createCommerceConformanceClock,
+  createCommerceConformanceJournal,
+  createCommerceConformanceRuntime,
+} from '@mpgd/platform/commerce-conformance';
 
 import {
   createFakePlayBillingPlugin,
@@ -349,6 +355,82 @@ describe('createCapacitorPlayBillingCommerceProvider', () => {
       store: 'fixture.play',
       evidence: { schema: 'google-play.product-purchase.v2', payload: { purchaseToken: 't' } },
     }]);
+  });
+});
+
+describe('createCapacitorPlayBillingCommerceProvider with the reference reconciler', () => {
+  const catalog = [
+    { logicalId: 'gems_small', kind: 'consumable', storeSku: 'gems.small' },
+    { logicalId: 'remove_ads', kind: 'durable', storeSku: 'remove.ads' },
+  ] as const;
+
+  function createRuntime(plugin: FakePlayBillingPlugin, unmapped: unknown[] = []) {
+    const { provider } = createProvider(plugin, {
+      onUnmappedPurchase: (purchase) => {
+        unmapped.push(purchase);
+      },
+    });
+    const backend = createCommerceConformanceBackend();
+    const journal = createCommerceConformanceJournal();
+    const runtime = createCommerceConformanceRuntime({
+      provider,
+      backend,
+      journal,
+      clock: createCommerceConformanceClock(),
+      catalog,
+      playerId: 'player-1',
+    });
+    return { provider, backend, journal, runtime };
+  }
+
+  it('reconciles a valid purchase next to an unfinished purchase for a retired SKU', async () => {
+    const plugin = createPlugin();
+    plugin.upsert(fakePlayPurchase({ products: ['retired.sku'], purchaseToken: 'token-r', orderId: 'GPA.r' }));
+    plugin.upsert(fakePlayPurchase({ products: ['gems.small'], purchaseToken: 'token-v', orderId: 'GPA.v' }));
+    const unmapped: unknown[] = [];
+    const { backend, journal, runtime } = createRuntime(plugin, unmapped);
+    backend.queueVerify({ status: 'granted', ledgerEntryId: 'le-1', finalization: 'completed' });
+
+    await runtime.start();
+    await runtime.runUntilIdle();
+    expect(journal.snapshot()).toEqual({
+      [await createGooglePlayTokenPurchaseKey('token-v')]: [
+        'purchased', 'verifying', 'granted', 'finishing', 'finished',
+      ],
+    });
+    expect(backend.verifyRequests).toMatchObject([{ transactionId: 'GPA.v', token: 'token-v' }]);
+    expect(unmapped).toMatchObject([{ purchaseToken: 'token-r' }]);
+    // The retired purchase stays with the plugin for the backend finalizer.
+    expect(plugin.purchases.map((purchase) => purchase.purchaseToken)).toContain('token-r');
+  });
+
+  it('closes a launched attempt when the plugin reports a late cancel after its timeout', async () => {
+    const plugin = createPlugin();
+    const { journal, runtime } = createRuntime(plugin);
+    await runtime.start();
+    plugin.queuePurchase({
+      throws: Object.assign(new Error('timed out'), { code: 'PLAY_BILLING_TIMEOUT' }),
+    });
+    expect(await runtime.requestPurchase({
+      logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop',
+    })).toEqual({ outcome: 'launched' });
+    await runtime.runUntilIdle();
+    expect(journal.history('op-1')).toEqual(['requested', 'launched']);
+    // While the attempt is open another purchase of the product is refused.
+    expect(await runtime.requestPurchase({
+      logicalId: 'gems_small', idempotencyKey: 'op-2', source: 'shop',
+    })).toMatchObject({ outcome: 'failed', error: { code: 'IN_PROGRESS' } });
+
+    plugin.emit({ status: 'cancelled', productId: 'gems.small' });
+    await until(() => journal.history('op-1').at(-1) === 'cancelled');
+    await runtime.runUntilIdle();
+    expect(journal.history('op-1')).toEqual(['requested', 'launched', 'cancelled']);
+
+    plugin.queuePurchase({ status: 'cancelled' });
+    expect(await runtime.requestPurchase({
+      logicalId: 'gems_small', idempotencyKey: 'op-3', source: 'shop',
+    })).toMatchObject({ outcome: 'cancelled', error: { code: 'USER_CANCELLED' } });
+    expect(plugin.purchaseCalls).toHaveLength(2);
   });
 });
 

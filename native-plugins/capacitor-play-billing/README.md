@@ -66,9 +66,21 @@ the plugin code. `getAvailablePurchases` is `getPurchases` filtered to
 unfinished entries: `purchased` with `isAcknowledged: false`, plus `pending`
 when `includePending` is set; each carries `token = purchaseToken` and
 `transactionId = orderId`, or the `play-token-sha256:<hex>` token key until
-Play assigns an order id, so ledgers written by v1 deduplicate. The plugin's
-`purchaseUpdated` listener backs `addListener`, and `getAvailability` is the
-v1 logic (Android check, offer configuration, service state).
+Play assigns an order id, so ledgers written by v1 deduplicate. A purchased
+entry from a 0.1 native build carries no `isAcknowledged`; an absent flag
+counts as unfinished so a paid purchase is never dropped during a staged
+upgrade. A purchase for a SKU that is not in `products` (a retired product)
+or a multi-line purchase has no logical id for the reconciler, so it is left
+out of the list and of events and handed to the optional `onUnmappedPurchase`
+diagnostics hook instead; the backend finalizer still sees it through the
+Play Developer API. The plugin's `purchaseUpdated` listener backs
+`addListener`: deliveries leave in the order the plugin reported them (a
+purchase without an order id waits for the token digest, and later updates
+queue behind it), and a `cancelled` or `failed` update without a purchase is
+the plugin's late terminal result for a purchase call that already timed out
+(`PLAY_BILLING_TIMEOUT`), emitted as a `purchaseError` for that product so
+the attempt the timeout left open closes. `getAvailability` is the v1 logic
+(Android check, offer configuration, service state).
 `playBillingStoreSdkErrorCodeMap` extends `defaultStoreSdkErrorCodeMap` with
 every other `PLAY_BILLING_*` code (`BUSY` is `IN_PROGRESS`, `OFFER_REQUIRED`
 and the invalid-product codes are `CONFIGURATION_REQUIRED`,
@@ -103,7 +115,10 @@ and `obfuscatedAccountId`, with `priceAmountMicros` on offers. The 0.1 names
 deprecated until the next major version. `purchaseUpdated` is now retained
 until a listener consumes it, so a purchase that completes after the
 `purchase` call timed out, or before the web view attached its listener,
-still reaches the provider. The plugin still never acknowledges or consumes;
+still reaches the provider, and a cancel or non-OK result that arrives after
+the 180-second `purchase` timeout is delivered as `{ status: 'cancelled' |
+'failed', productId, code? }` for the timed-out product instead of being
+discarded. The plugin still never acknowledges or consumes;
 `isAcknowledged: false` on a purchased entry marks it unfinished for the
 backend finalizer.
 
