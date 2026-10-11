@@ -16,6 +16,8 @@
     "type": "tour",
     "includeTests": true,
     "limit": 60,
-    "reinterpretations": []
+    "reinterpretations": [
+      "executeNativeTargetBuild"
+    ]
   }
 }
