@@ -52,6 +52,10 @@
     "./commerce-vectors": {
       "types": "./dist/commerce-vectors.d.ts",
       "default": "./dist/commerce-vectors.js"
+    },
+    "./commerce-conformance": {
+      "types": "./dist/commerce-conformance.d.ts",
+      "default": "./dist/commerce-conformance.js"
     }
   },
   "files": [
@@ -62,7 +66,7 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "vitest run && node test/capability-conformance-dist-import.mjs && node test/storage-conformance-dist-import.mjs && node test/ads-dist-import.mjs && node test/commerce-dist-import.mjs && cd ../.. && node tools/run-ttsx.mjs packages/platform/test/commerce-derived-key-parity.ts"
+    "test": "vitest run && node test/capability-conformance-dist-import.mjs && node test/storage-conformance-dist-import.mjs && node test/ads-dist-import.mjs && node test/commerce-dist-import.mjs && node test/commerce-conformance-dist-import.mjs && cd ../.. && node tools/run-ttsx.mjs packages/platform/test/commerce-derived-key-parity.ts"
   },
   "dependencies": {
     "typia": "13.0.2"

@@ -697,6 +697,30 @@ A3 adds the runner to `@mpgd/platform` with an in-memory reference provider,
 fake store, fake backend, and in-memory journal. Every provider in B runs the
 same files against its own fake SDK.
 
+The runner ships as `@mpgd/platform/commerce-conformance`:
+`runCommerceConformanceVector(vector, options?)` returns
+`{ vector, passed, failures: [{ path, expected, actual }] }` and
+`runCommerceConformanceVectors(vectors, options?)` runs a list. The package
+test suite (`pnpm --filter @mpgd/platform test`, source tests in
+`packages/platform/src/commerce-conformance.test.ts` and the dist smoke in
+`packages/platform/test/commerce-conformance-dist-import.mjs`) loads every
+file in the vectors directory and requires all fourteen to pass with the
+reference pieces: `createCommerceConformanceClock`,
+`createCommerceConformanceStore` (fake store plus its `CommerceProvider`),
+`createCommerceConformanceBackend` (scripted verify decisions and the ledger),
+`createCommerceConformanceJournal` (compare-and-replace journal that keeps
+every revision), `createCommerceConformanceRuntime` (the reference
+reconciler), and `createCommerceConformanceWallet` with
+`createCommerceConformanceWalletProvider` for the `fixture.credit-wallet`
+profiles. A B-phase provider runs the same vectors by passing
+`options.createProvider(context)`, which receives the vector, profile,
+catalog, clock, backend, and journal and returns a harness
+`{ provider, store?, wallet? }` whose `store` actor translates the `store`
+steps (`complete`, `update`, `error`, `queueRequest`, `queueFinish`) into its
+own fake SDK and reports `purchaseUiOpened` and `finishCalls`; the shared
+runtime, backend, journal, and matcher stay the same. The fakes are exported
+individually so such tests can compose them.
+
 A vector is one JSON file:
 
 | Field | Meaning |
