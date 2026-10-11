@@ -1525,3 +1525,55 @@ describe('commerce conformance adaptive vectors', () => {
     }]);
   });
 });
+
+describe('commerce conformance adaptive derived keys', () => {
+  it('rewrites only the store segment of a derived key, never the transaction id', async () => {
+    const vector = vectorNamed('event-before-listener');
+    const fixtureStore = vector.profile.store;
+    // A transaction id that happens to contain the fixture store id.
+    const transactionId = `tx-${fixtureStore}-1`;
+    const fixtureKey = `store:${encodeURIComponent(fixtureStore)}:${encodeURIComponent(transactionId)}`;
+    const tricky: CommerceConformanceVector = {
+      ...vector,
+      steps: vector.steps.map((step) =>
+        step.actor === 'store' && step.action === 'complete'
+          ? { ...step, purchase: { ...step.purchase, transactionId } }
+          : step),
+      expect: {
+        ...vector.expect,
+        journal: { [fixtureKey]: vector.expect.journal?.[`store:${fixtureStore}:tx-1`] ?? [] },
+        verifyRequests: (vector.expect.verifyRequests ?? []).map((request) => ({
+          ...request,
+          idempotencyKey: fixtureKey,
+          transactionId,
+        })),
+        finishCalls: (vector.expect.finishCalls ?? []).map((call) => ({ ...call, transactionId })),
+      },
+    };
+    expect((await runCommerceConformanceVector(tricky)).failures).toEqual([]);
+    const [result] = await runCommerceConformanceVectors([tricky], {
+      createProvider: fakeProviderWith(ownerProfiles.client, 'app-store'),
+    });
+    expect(result?.failures).toEqual([]);
+    expect(result?.status).toBe('passed');
+    expect(Object.keys(result?.adaptive?.expect.journal ?? {})).toEqual([
+      `store:app-store:${encodeURIComponent(transactionId)}`,
+    ]);
+    expect(result?.adaptive?.expect.verifyRequests?.[0]?.transactionId).toBe(transactionId);
+  });
+
+  it('keeps a derived key that does not carry the fixture store prefix', () => {
+    const vector = vectorNamed('event-before-listener');
+    const derived = deriveAdaptiveCommerceConformanceExpectation(
+      { ...vector, expect: { journal: { 'apps-in-toss:purchase:tx-1': ['purchased', 'finished'] } } },
+      {
+        store: 'app-store',
+        journal: { 'apps-in-toss:purchase:tx-1': ['purchased', 'finished'] },
+        verifyRequests: [],
+        finishCalls: [],
+      },
+    );
+    expect(derived.reason).toBeUndefined();
+    expect(Object.keys(derived.expect?.journal ?? {})).toEqual(['apps-in-toss:purchase:tx-1']);
+  });
+});

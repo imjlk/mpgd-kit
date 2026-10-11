@@ -2406,9 +2406,10 @@ export function deriveAdaptiveCommerceConformanceExpectation(
   | { readonly expect?: undefined; readonly reason: string } {
   const { expect } = vector;
   if (expect.journal !== undefined) {
-    const fixtureStore = vector.profile.store;
+    const adaptKey = (fixtureKey: string): string =>
+      adaptDerivedPurchaseKeyStore(fixtureKey, vector.profile.store, reference.store);
     for (const [fixtureKey, states] of Object.entries(expect.journal)) {
-      const key = fixtureKey.split(fixtureStore).join(reference.store);
+      const key = adaptKey(fixtureKey);
       const terminal = states.at(-1);
       const actual = reference.journal[key]?.at(-1);
       if (actual !== terminal) {
@@ -2418,10 +2419,8 @@ export function deriveAdaptiveCommerceConformanceExpectation(
         };
       }
     }
-    const extra = Object.keys(reference.journal).filter((key) =>
-      !Object.keys(expect.journal ?? {}).some(
-        (fixtureKey) => fixtureKey.split(fixtureStore).join(reference.store) === key,
-      ));
+    const expectedKeys = new Set(Object.keys(expect.journal).map(adaptKey));
+    const extra = Object.keys(reference.journal).filter((key) => !expectedKeys.has(key));
     if (extra.length > 0) {
       return {
         reason: `the reference run under the provider capabilities journals ${extra.join(', ')}, `
@@ -2447,6 +2446,24 @@ export function deriveAdaptiveCommerceConformanceExpectation(
       ...(expect.available === undefined ? {} : { available: [] }),
     },
   };
+}
+
+/**
+ * A fixture journal key as the provider's store id derives it: only the
+ * encoded store segment of a `store:<store>:<transactionId>` key
+ * (`createDerivedPurchaseIdempotencyKey`) is replaced, so a transaction id
+ * that happens to contain the fixture store id is left alone. Game-chosen
+ * keys and store-specific key forms carry no such prefix and pass through.
+ */
+export function adaptDerivedPurchaseKeyStore(
+  key: string,
+  fixtureStore: string,
+  providerStore: string,
+): string {
+  const fixturePrefix = `store:${encodeURIComponent(fixtureStore)}:`;
+  return key.startsWith(fixturePrefix)
+    ? `store:${encodeURIComponent(providerStore)}:${key.slice(fixturePrefix.length)}`
+    : key;
 }
 
 function deriveAdaptiveExpectation(
