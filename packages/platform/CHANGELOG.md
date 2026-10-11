@@ -1,5 +1,63 @@
 # @mpgd/platform
 
+## 0.19.0 — 2026-10-11
+
+### Minor changes
+
+- [a4fa5b14](https://github.com/imjlk/mpgd-kit/commit/a4fa5b14440e94c775baaf574dece7abaa0092b7) `@mpgd/platform` adds the commerce v2 contract module as the new `./commerce`
+  and `./commerce-vectors` subpaths: the client contract types (`StoreProduct`,
+  `StorePurchase`, `RequestPurchaseInput`, `CommerceEvent`, `CommerceProvider`,
+  `CommerceCapabilities`, `ActiveSubscription`, credit wallet types), the bridge
+  v2 payload shapes and event envelope, `CommerceError` with normalized codes,
+  the purchase lifecycle state machine, typia validators that reject unknown
+  keys, `createDerivedPurchaseIdempotencyKey`, the bounded pre-listener event
+  buffer, `assertRequestPurchaseSupported`, the v1 `toCommerceAdapter` wrapper
+  (which never grants), and the conformance vector format. `PlatformCapabilities`
+  gains an optional `commerce` block that the capability conformance runner
+  checks for fresh objects, exact keys, and agreement with `nativeIap` and
+  `subscriptionIap`. This is additive: no reference provider implements v2 yet,
+  and the protocol version stays `2.0.0-draft.1`. The package now depends on
+  `typia`.
+  
+  `@mpgd/catalog` opens `ProductGrant.currency` and `AdReward.currency` to any
+  non-empty string validated against a new optional `ProductCatalog.currencies`
+  list (non-empty, unique, trimmed); when absent the catalog accepts `coin` and
+  `gem` as before. `assertProductCatalog` and `validate:catalog` reject a currency
+  grant that names an undeclared currency, `validate:ads` cross-checks reward
+  currencies against the catalog, and `resolveCatalogCurrencies` and
+  `defaultCatalogCurrencies` are exported. The kit adds no wallet currency
+  literal.
+  
+  `@mpgd/adapter-verse8` keeps its `coin` and `gem` balance map and now fails a
+  currency grant for any other catalog currency with a clear error instead of
+  writing an untracked balance.
+  
+  `@mpgd/game-services` accepts any currency the product catalog declares: the
+  ledger grant validator no longer hard-codes `coin` and `gem` (it requires a
+  trimmed non-empty code), and `createGameServicesBackend` rejects a catalog
+  product grant or placement reward whose currency the catalog does not declare,
+  so an undeclared currency fails at startup instead of at the first grant. — Thanks @imjlk!
+- [b8183b9a](https://github.com/imjlk/mpgd-kit/commit/b8183b9a93fd47b83d2fb4f27f0f8d5fd56db86f) `@mpgd/platform` adds the commerce v2 conformance runner as the new
+  `./commerce-conformance` subpath. `runCommerceConformanceVector` and
+  `runCommerceConformanceVectors` execute the RFC vector files against a
+  provider and report `{ vector, passed, failures: [{ path, expected, actual }] }`,
+  matching only the listed expectation fields. The subpath also exports the
+  in-memory reference pieces every vector needs and that B-phase provider tests
+  can compose: a fake clock, a fake store with its `CommerceProvider`
+  (scripted `requestPurchase` and `finishTransaction` answers, buffered
+  pre-listener events, unfinished purchase listing), a fake backend with a
+  scripted verify queue and an append-only ledger with server-push grants,
+  revocations, and ledger status reads, a `CommerceJournalStore` interface with
+  an in-memory journal that keeps every state revision, the reference
+  reconciler runtime implementing the RFC purchase lifecycle (derived keys for
+  discovered purchases, `IN_PROGRESS` serialization per product, client, host,
+  server, and none finish owners, ledger-driven revocation), and a reference
+  credit wallet with a wallet-backed provider implementing the credit lot spend
+  order, idempotent spends and grants, and credit-funded memberships with
+  idempotent per-period renewal and lapse. All fourteen vectors pass with the
+  reference provider; `options.createProvider` lets another provider run the
+  same files. The protocol version stays `2.0.0-draft.1`. — Thanks @imjlk!
+
 ## 0.18.0 — 2026-10-11
 
 ### Minor changes
