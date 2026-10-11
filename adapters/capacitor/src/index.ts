@@ -21,15 +21,18 @@ import {
   type ShareResult,
   type ViewportAdapter,
 } from '@mpgd/platform';
+import { deriveLegacyCommerceCapabilities } from '@mpgd/platform/commerce';
 import {
   createCapacitorAppEvents,
   type CapacitorAppEventsApi,
   type CapacitorIncomingUrlKind,
   type CapacitorVisibilitySource,
 } from './app-events.js';
+import { createBridgeCommerceProvider } from './commerce-bridge.js';
 import {
   assertProviderResponseData,
   createCapacitorProviderRegistry,
+  type CapacitorCommerceServiceProvider,
   type CapacitorServiceProvider,
   type NativeBridge,
 } from './providers.js';
@@ -37,9 +40,54 @@ import { createCapacitorViewport } from './viewport.js';
 
 export {
   createCapacitorProviderRegistry,
+  createDegradedCommerceCapabilities,
+  deriveCommerceFeatureStates,
+  type CapacitorCommerceServiceProvider,
+  type CapacitorProviderCapabilitySnapshot,
+  type CapacitorProviderRegistry,
   type CapacitorServiceProvider,
   type NativeBridge,
 } from './providers.js';
+export {
+  assertCommerceBridgeResult,
+  commerceV2InvalidPayloadBridgeErrorCode,
+  commerceV2MethodUnsupportedBridgeErrorCode,
+  createBridgeCommerceProvider,
+  createCommerceProviderBridge,
+  createCommerceServiceProvider,
+  type CapacitorCommerceFeature,
+  type CommerceProviderBridge,
+  type CreateBridgeCommerceProviderInput,
+  type CreateCommerceProviderBridgeInput,
+  type CreateCommerceServiceProviderInput,
+} from './commerce-bridge.js';
+export {
+  createStoreCommerceProvider,
+  recoverableErrorCodes,
+  type CreateStoreCommerceProviderInput,
+  type StoreCommerceCapabilityOverrides,
+  type StoreCommerceProductMapping,
+  type StoreCommerceProvider,
+} from './store-commerce-provider.js';
+export {
+  defaultStoreSdkErrorCodeMap,
+  normalizeStoreSdkError,
+  type StoreSdk,
+  type StoreSdkCapabilities,
+  type StoreSdkError,
+  type StoreSdkErrorCodeMap,
+  type StoreSdkEvent,
+  type StoreSdkEventName,
+  type StoreSdkEventOf,
+  type StoreSdkFetchProductsInput,
+  type StoreSdkFinishTransactionInput,
+  type StoreSdkFinishTransactionResult,
+  type StoreSdkGetAvailablePurchasesInput,
+  type StoreSdkProduct,
+  type StoreSdkPurchase,
+  type StoreSdkRequestPurchaseInput,
+  type StoreSdkRequestPurchaseResult,
+} from './store-sdk.js';
 export {
   createCapacitorAppEvents,
   type CapacitorAppEventsApi,
@@ -65,6 +113,7 @@ export {
 
 const externalActivityMethods = new Set<BridgeMethod>([
   'commerce.purchase',
+  'commerce.v2.requestPurchase',
   'ads.showRewarded',
   'ads.showInterstitial',
   'identity.requestUpgrade',
@@ -74,6 +123,13 @@ const externalActivityMethods = new Set<BridgeMethod>([
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+
+/**
+ * Upper bound on how long a `launched` commerce v2 purchase keeps the game
+ * paused when no purchase event for the product arrives (for example a store
+ * sheet dismissed without a callback).
+ */
+export const launchedPurchaseActivityTimeoutMs = 120_000;
 
 const safeFallbackMethods = new Set<BridgeMethod>([
   'identity.getPlayer',
@@ -119,6 +175,17 @@ export function createCapacitorPlatformGateway(input: {
   const providers = createCapacitorProviderRegistry(input.providers ?? []);
   const adProvider = providers.byMethod.get('ads.showRewarded')?.adProvider
     ?? providers.byMethod.get('ads.showInterstitial')?.adProvider;
+  const commerceProvider: CapacitorCommerceServiceProvider | undefined = providers.commerce;
+  // The v2 surface is served through the same request path as every other
+  // provider method, so the bridge envelope, response validation, and external
+  // activity bookkeeping are exercised in process exactly as over a transport.
+  const commerceV2 = commerceProvider === undefined
+    ? undefined
+    : createBridgeCommerceProvider({
+        store: commerceProvider.commerce.store,
+        request: (method, payload) => request(method, payload),
+        subscribe: (listener) => commerceProvider.bridge.subscribe(listener),
+      });
   const lifecycle = createCapacitorAppEvents({
     target: input.target,
     ...(input.app === undefined ? {} : { app: input.app }),
@@ -132,10 +199,14 @@ export function createCapacitorPlatformGateway(input: {
   const viewport = input.viewport ?? createCapacitorViewport({
     ...(input.onAppEventError === undefined ? {} : { onError: input.onAppEventError }),
   });
+  const launchedPurchaseHolds = new Set<() => void>();
   const gatewayLifecycle = {
     ...lifecycle,
     async dispose() {
       try {
+        for (const finish of [...launchedPurchaseHolds]) {
+          finish();
+        }
         await lifecycle.dispose?.();
       } finally {
         if (input.viewport === undefined) {
@@ -153,6 +224,7 @@ export function createCapacitorPlatformGateway(input: {
     const releaseExternalActivity = externalActivityMethods.has(method)
       ? lifecycle.beginExternalActivity?.()
       : undefined;
+    let holdActivity = false;
     try {
       const provider = leaderboardRoute === 'remote'
         && (method === 'leaderboard.submitScore' || method === 'leaderboard.open')
@@ -175,7 +247,20 @@ export function createCapacitorPlatformGateway(input: {
         }
         try {
           await providers.assertMethodReady(method, payload, productType);
-          return await sendRequest<TData>(method, payload, provider);
+          const data = await sendRequest<TData>(method, payload, provider);
+          if (releaseExternalActivity !== undefined
+            && method === 'commerce.v2.requestPurchase'
+            && isRecord(data) && data.outcome === 'launched') {
+            // The store UI is still open: stay paused until this product's
+            // purchase event arrives or the safety timeout ends. The v1 path
+            // has no event to wait for and releases when its request returns.
+            holdActivity = true;
+            holdLaunchedPurchaseActivity(
+              releaseExternalActivity,
+              isRecord(payload) ? payload.logicalId : undefined,
+            );
+          }
+          return data;
         } catch (error) {
           // Only non-mutating guest/status queries may degrade. A stale readiness
           // snapshot, SDK rejection, or malformed provider response is no safer
@@ -187,7 +272,53 @@ export function createCapacitorPlatformGateway(input: {
       }
       return await sendRequest<TData>(method, payload, undefined);
     } finally {
-      releaseExternalActivity?.();
+      if (!holdActivity) {
+        releaseExternalActivity?.();
+      }
+    }
+  }
+
+  /**
+   * Keeps the external activity of a `launched` purchase open until the
+   * provider reports that product (`purchaseUpdated` or `purchaseError`, or an
+   * event without a logical id), the safety timeout ends, or the gateway is
+   * disposed. Every path releases exactly once.
+   */
+  function holdLaunchedPurchaseActivity(release: () => void, logicalId: unknown): void {
+    let done = false;
+    let unsubscribe: (() => void) | undefined;
+    const finish = (): void => {
+      if (done) {
+        return;
+      }
+      done = true;
+      launchedPurchaseHolds.delete(finish);
+      clearTimeout(timer);
+      unsubscribe?.();
+      release();
+    };
+    launchedPurchaseHolds.add(finish);
+    const timer = setTimeout(finish, launchedPurchaseActivityTimeoutMs);
+    if (commerceProvider === undefined) {
+      return;
+    }
+    const subscription = commerceProvider.bridge.subscribe(({ event }) => {
+      if (event.type === 'subscriptionUpdated') {
+        return;
+      }
+      const eventLogicalId = event.type === 'purchaseUpdated'
+        ? event.purchase.logicalId
+        : event.logicalId;
+      if (eventLogicalId === undefined || typeof logicalId !== 'string'
+        || eventLogicalId === logicalId) {
+        finish();
+      }
+    });
+    // A buffered event may have finished the hold while subscribing.
+    if (done) {
+      subscription();
+    } else {
+      unsubscribe = subscription;
     }
   }
 
@@ -248,22 +379,28 @@ export function createCapacitorPlatformGateway(input: {
     target: input.target,
     async getCapabilities() {
       const base = await request<PlatformCapabilities>('runtime.getCapabilities', {});
-      const states = await providers.getAvailability();
+      // One bounded registry read serves the feature states and the commerce
+      // block, so a stalled or invalid provider degrades the snapshot instead
+      // of rejecting it, and the boolean flags always follow the block.
+      const { availability: states, commerce } = await providers.getCapabilitySnapshot();
       const rewardedAds = states.rewardedAds === 'available';
       const interstitialAds = states.interstitialAds === 'available';
       const bannerAds = states.bannerAds === 'available';
+      const legacy = commerce === undefined ? undefined : deriveLegacyCommerceCapabilities(commerce);
       return {
         ...base,
-        nativeIap: states.nativeIap === 'available',
-        subscriptionIap: states.subscriptionIap === 'available',
+        nativeIap: legacy?.nativeIap ?? states.nativeIap === 'available',
+        subscriptionIap: legacy?.subscriptionIap ?? states.subscriptionIap === 'available',
         nativeAds: rewardedAds || interstitialAds || bannerAds,
         rewardedAds,
         interstitialAds,
         bannerAds,
         nativeLeaderboard: states.nativeLeaderboard === 'available',
         providerAvailability: states,
+        ...(commerce === undefined ? {} : { commerce }),
       };
     },
+    ...(commerceV2 === undefined ? {} : { commerceV2 }),
     identity: {
       getPlayer: () => request('identity.getPlayer', {}),
       getSession: () => request<IdentitySession>('identity.getSession', {}),

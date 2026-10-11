@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -94,5 +97,38 @@ describe('platform operation failures', () => {
       message: 'The platform operation failed.',
       retryable: false,
     });
+  });
+});
+
+describe('main entry import closure', () => {
+  // Headless consumers (`packages/game-runtime` tsconfig.headless.json) type-check
+  // this entry with `skipLibCheck: false` and no DOM lib, where typia's root
+  // declarations do not compile. The contract types `index.ts` needs live in the
+  // typia-free `commerce-contract.ts`; `commerce.ts` must never be reachable.
+  it('never reaches typia or the commerce validator module', () => {
+    const root = import.meta.dirname;
+    const visited = new Set<string>();
+    const pending = [resolve(root, 'index.ts')];
+    while (pending.length > 0) {
+      const file = pending.pop();
+      if (file === undefined || visited.has(file)) {
+        continue;
+      }
+      visited.add(file);
+      const source = readFileSync(file, 'utf8');
+      for (const match of source.matchAll(/from\s+'([^']+)'/gu)) {
+        const specifier = match[1] ?? '';
+        expect(specifier, `${file} imports ${specifier}`).not.toBe('typia');
+        expect(specifier, `${file} imports ${specifier}`).not.toMatch(/\/commerce(\.js)?$/u);
+        if (specifier.startsWith('.')) {
+          pending.push(join(dirname(file), specifier.replace(/\.js$/u, '.ts')));
+        }
+      }
+    }
+    expect([...visited].map((file) => file.slice(root.length + 1)).sort()).toEqual([
+      'ads.ts',
+      'commerce-contract.ts',
+      'index.ts',
+    ]);
   });
 });

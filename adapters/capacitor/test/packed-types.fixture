@@ -1,11 +1,20 @@
 // Copied as types.ts into a tarball-installed consumer after packages are built.
 import {
   createCapacitorNativeJsonTransport,
+  createCommerceServiceProvider,
+  createStoreCommerceProvider,
+  normalizeStoreSdkError,
+  type CapacitorCommerceServiceProvider,
   type CapacitorNativeJsonTransport,
   type CapacitorServiceProvider,
   type CapacitorViewportBaseState,
   type CapacitorViewportController,
+  type StoreCommerceProvider,
+  type StoreSdk,
+  type StoreSdkErrorCodeMap,
+  type StoreSdkEvent,
 } from '@mpgd/adapter-capacitor';
+import type { CommerceError, CommerceProvider } from '@mpgd/platform/commerce';
 import {
   createCapacitorAdMobRewardedProvider,
   type CapacitorAdMobRewardedProvider,
@@ -83,3 +92,25 @@ void hostState;
 declare const packedGateway: import('@mpgd/platform').PlatformGateway;
 const secureCredentials: SecureCredentialStore | undefined = packedGateway.secureCredentials;
 void secureCredentials;
+const commerceV2: CommerceProvider | undefined = packedGateway.commerceV2;
+void commerceV2;
+
+declare const storeSdk: StoreSdk;
+const storeEvent: StoreSdkEvent = { type: 'purchaseError', error: { code: 'E_X' } };
+void storeEvent;
+const mapError: StoreSdkErrorCodeMap = { E_X: 'NETWORK' };
+const storeProvider: StoreCommerceProvider = createStoreCommerceProvider({
+  sdk: storeSdk,
+  products: [{ logicalId: 'gems_small', storeSku: 'gems.small', kind: 'consumable' }],
+  evidenceSchema: 'packed.store.v1',
+  authority: { evidence: 'client-token', accountBinding: 'optional' },
+  mapError,
+});
+const storeService: CapacitorCommerceServiceProvider = createCommerceServiceProvider({
+  id: 'packed-store',
+  commerce: storeProvider,
+});
+const storeServiceAsProvider: CapacitorServiceProvider = storeService;
+void storeServiceAsProvider;
+const normalized: CommerceError = normalizeStoreSdkError({ code: 'E_X' }, mapError);
+void normalized;

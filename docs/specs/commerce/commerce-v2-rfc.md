@@ -331,6 +331,14 @@ Backend error codes such as `IDEMPOTENCY_KEY_CONFLICT` or
 `EVIDENCE_VERIFIER_UNAVAILABLE` are not client commerce errors. They surface
 as journal states, as described in [lifecycle](#lifecycle).
 
+`OUTCOME_UNKNOWN` and `ALREADY_OWNED` are not terminal for a purchase
+attempt. A provider whose store call throws or returns one of them answers
+`requestPurchase` with `launched` rather than `failed`, and it does not emit
+a `purchaseError` for them: an unfinished purchase may exist, so the attempt
+stays open and the [reconciler](#reconciler) resolves it from
+`getAvailablePurchases` without reopening the store UI (B1 implements this
+rule in `createStoreCommerceProvider`).
+
 ## Purchase lifecycle {#lifecycle}
 
 Every purchase, whether started by the game or discovered by the reconciler,
@@ -688,6 +696,26 @@ not in the catalog. The kit adds no wallet currency literal.
   `COMMERCE_V2_UNAVAILABLE` (`createCommerceV2UnavailableBridgeError`), and
   the Capacitor provider registry rejects a v1 provider that declares a v2
   method. The B-phase PRs wire providers behind these methods.
+- B1 landed the first transport in `@mpgd/adapter-capacitor` (status: draft,
+  no store plugin adapted yet): `StoreSdk` is the in-process surface a store
+  plugin exposes, `createStoreCommerceProvider` turns it into a
+  `CommerceProvider`, and `createCommerceServiceProvider` registers that
+  provider so the registry serves the six `commerce.v2.*` methods through
+  `createCommerceProviderBridge` (payloads and results validated with the A2
+  asserts, events in the envelope with a per-bridge sequence) and the four v1
+  `commerce.*` methods through `toCommerceAdapter`. The gateway exposes the
+  provider as the transitional `PlatformGateway.commerceV2` and derives
+  `nativeIap` and `subscriptionIap` from its `commerce` capability block,
+  read once per snapshot with the registry's three-second bound (a stalled or
+  invalid provider yields a degraded block, never a rejected read). A
+  `launched` purchase keeps the gateway's external activity open until the
+  product's purchase event, a two-minute safety timeout, or dispose. A thrown
+  failure crosses the bridge as `{ code, message, retryable }`; a `cancelled`
+  or `failed` purchase result keeps its `storeCode`. The contract types that
+  `PlatformGateway` references live in the typia-free
+  `@mpgd/platform` module `commerce-contract` (re-exported by
+  `@mpgd/platform/commerce`), so headless consumers can type-check the main
+  entry without typia's declarations.
 - Payloads are validated with typia on both sides. A2 generates JSON Schemas
   for the bridge payloads and the vector format into
   `docs/specs/commerce/schemas/`, and `validate:commerce-alignment` checks that
@@ -811,7 +839,7 @@ package carries a Sampo changeset.
 | A2 | `@mpgd/platform` `commerce/` module: types, `CommerceError`, capabilities, state machine, typia validators, JSON Schemas, `validate:commerce-alignment`; catalog currency list | Closed currencies |
 | A3 | Conformance runner and in-memory reference provider passing every vector | |
 | A4 | Bridge v2 methods, event envelope, and `COMMERCE_V2_UNAVAILABLE` fail-closed answers; `app-store-server` moved into `@mpgd/game-services` (deprecated re-export kept); `createGooglePlayTokenTransactionId` aliases `createGooglePlayTokenPurchaseKey` | Duplicated helper, server code in client package |
-| B1 | `@mpgd/adapter-capacitor`: `StoreSdk` interface, `createStoreCommerceProvider`, registry wiring, v1 wrapper | |
+| B1 (landed, draft) | `@mpgd/adapter-capacitor`: `StoreSdk` interface, `createStoreCommerceProvider`, registry wiring, v1 wrapper; every store vector passes directly and through the gateway bridge path | |
 | B2 | Play Billing provider: available purchases, `purchaseUpdated` subscription, acknowledged flag from the plugin | Unused native events |
 | B3 | StoreKit provider: JWS as `token` and evidence; server verifies offline with Server API fallback | JWS dropped |
 | B4 | Microsoft Store provider | Target-name settlement check |

@@ -26,7 +26,12 @@ import {
   createMicrosoftStoreCommerceAdapter,
   withMicrosoftStoreCommerceAdapter,
 } from '../../adapters/browser/src/microsoft-store';
-import { createCapacitorPlatformGateway } from '../../adapters/capacitor/src/index';
+import {
+  createCapacitorPlatformGateway,
+  createCommerceServiceProvider,
+  createStoreCommerceProvider,
+  type StoreSdk,
+} from '../../adapters/capacitor/src/index';
 import { createDevvitPlatformGateway } from '../../adapters/devvit/src/index';
 import { createVerse8PlatformGateway } from '../../adapters/verse8/src/index';
 import { readJsonFile } from '../io';
@@ -113,6 +118,9 @@ for (const spec of targetSpecs) {
   fixtures.push(configured.fixture);
   runtimeMirrorChecks.push(configured.runtimeMirrorCheck);
 }
+// A Capacitor gateway with a commerce v2 provider reports the optional
+// `commerce` block; the booleans must follow it and every read must be fresh.
+fixtures.push(createCommerceV2Fixture());
 
 const report = await runPlatformGatewayCapabilityConformance({ fixtures });
 
@@ -125,12 +133,12 @@ for (const check of runtimeMirrorChecks) {
   );
 }
 
-if (report.passedFixtures.length !== targetSpecs.length * 2) {
+if (report.passedFixtures.length !== targetSpecs.length * 2 + 1) {
   throw new Error('Expected raw and target-configured capability fixtures for every target.');
 }
 
 console.log(
-  'Platform capability conformance passed: raw and target-configured snapshots for web-preview, microsoft-store, verse8, android, ios, ait, reddit',
+  'Platform capability conformance passed: raw and target-configured snapshots for web-preview, microsoft-store, verse8, android, ios, ait, reddit, plus the android commerce v2 block',
 );
 
 function createRawFixture(spec: TargetSpec): PlatformGatewayCapabilityConformanceFixture {
@@ -316,6 +324,83 @@ function createBridgeGateway(
         mutableBridge.setCapabilities(updatedBridgeCapabilities);
       },
       expectedCapabilities: expectedUpdated,
+    },
+  };
+}
+
+function createCommerceV2Fixture(): PlatformGatewayCapabilityConformanceFixture {
+  let availability: PlatformProviderAvailability = 'available';
+  const sdk: StoreSdk = {
+    store: 'conformance-store',
+    capabilities: {
+      purchase: { consumable: true, durable: true, subscription: false, quantity: false },
+      pending: true,
+      restore: false,
+      finish: 'server',
+    },
+    async fetchProducts() {
+      return [];
+    },
+    async requestPurchase() {
+      return { outcome: 'launched' };
+    },
+    async getAvailablePurchases() {
+      return [];
+    },
+    addListener() {
+      return () => undefined;
+    },
+    async getAvailability() {
+      return availability;
+    },
+  };
+  const commerce = createStoreCommerceProvider({
+    sdk,
+    products: [{ logicalId: 'gems_small', storeSku: 'gems.small', kind: 'consumable' }],
+    evidenceSchema: 'conformance.store.v1',
+    authority: { evidence: 'client-token', accountBinding: 'required' },
+  });
+  const gateway = createCapacitorPlatformGateway({
+    appVersion: '1.0.0',
+    buildId: 'capability-conformance:android:commerce-v2',
+    target: 'android',
+    bridge: createMutableCapabilityBridge(initialBridgeCapabilities).bridge,
+    providers: [createCommerceServiceProvider({ id: 'conformance-store', commerce })],
+  });
+  const expected = (
+    state: PlatformProviderAvailability,
+  ): PlatformCapabilities => {
+    const base = withoutCapacitorProviders(initialBridgeCapabilities);
+    return {
+      ...base,
+      nativeIap: state === 'available',
+      providerAvailability: { ...base.providerAvailability, nativeIap: state },
+      commerce: {
+        purchase: { consumable: true, durable: true, subscription: false, quantity: false },
+        catalog: { products: true, offers: false, localizedPrice: true },
+        lifecycle: {
+          availablePurchases: true,
+          pending: true,
+          restore: false,
+          events: true,
+          finish: 'server',
+        },
+        authority: { evidence: 'client-token', accountBinding: 'required' },
+        availability: state,
+      },
+    };
+  };
+
+  return {
+    name: 'android:commerce-v2',
+    gateway,
+    expectedTarget: 'android',
+    expectedCapabilities: expected('available'),
+    transition: {
+      update() {
+        availability = 'configuration-required';
+      },
+      expectedCapabilities: expected('configuration-required'),
     },
   };
 }

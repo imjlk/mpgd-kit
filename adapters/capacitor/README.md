@@ -64,6 +64,113 @@ The source tests and installed-tarball consumer validate composition, types,
 error paths, and fallback behavior. They do not establish that any optional
 SDK works on a physical device or that a store/ad setup is release-ready.
 
+## Commerce v2 providers
+
+Commerce v2 ([RFC](../../docs/specs/commerce/commerce-v2-rfc.md), PR B1) adds
+a second commerce surface next to the v1 `commerce.*` bridge methods. A store
+plugin exposes an in-process `StoreSdk`, the adapter turns it into a
+`CommerceProvider` from `@mpgd/platform/commerce`, and the provider registry
+serves both the six `commerce.v2.*` bridge methods and the four v1 methods
+from it.
+
+`StoreSdk` is shaped like the OpenIAP Client Protocol so a future Capacitor
+IAP plugin over the OpenIAP cores is a drop-in: `fetchProducts({ skus, type })`,
+`requestPurchase({ sku, offerId?, quantity?, accountBinding? })` answering
+`launched`, `purchased`, `cancelled`, or `failed`, `getAvailablePurchases`
+listing unfinished store purchases, optional `finishTransaction` and
+`restorePurchases`, `addListener('purchaseUpdated' | 'purchaseError')`, an
+optional `getAvailability`, and a static `capabilities` declaration (purchase
+kinds, quantity, pending, restore, finish owner). The SDK speaks store SKUs
+and its own error codes only. B2 adapts `@mpgd/capacitor-play-billing` and B3
+adapts `@mpgd/capacitor-storekit` to this interface; B1 ships no plugin
+change.
+
+```ts
+import {
+  createCapacitorPlatformGateway,
+  createCommerceServiceProvider,
+  createStoreCommerceProvider,
+  type StoreSdk,
+} from '@mpgd/adapter-capacitor';
+
+export function createStoreGateway(sdk: StoreSdk) {
+  const commerce = createStoreCommerceProvider({
+    sdk,
+    products: [
+      { logicalId: 'gems_small', storeSku: 'gems.small', kind: 'consumable' },
+      { logicalId: 'remove_ads', storeSku: 'remove.ads', kind: 'durable' },
+    ],
+    evidenceSchema: 'google-play.product-purchase.v2',
+    evidencePayload: (purchase) => ({ purchaseToken: purchase.token }),
+    accountBinding: async () => ({ kind: 'obfuscated-account-id', value: 'player-1' }),
+    authority: { evidence: 'client-token', accountBinding: 'required' },
+    mapError: { PLAY_BILLING_OFFER_REQUIRED: 'CONFIGURATION_REQUIRED' },
+  });
+  return createCapacitorPlatformGateway({
+    target: 'android',
+    appVersion: '1.0.0',
+    buildId: 'game-build',
+    providers: [createCommerceServiceProvider({ id: 'play-billing', commerce })],
+  });
+}
+```
+
+`createStoreCommerceProvider` maps logical ids to store SKUs both ways (an
+unknown SKU is still reported, with `logicalId` undefined; an unknown logical
+id fails with `ITEM_UNAVAILABLE`), rejects unsupported kinds and quantities
+with `assertRequestPurchaseSupported` before any store UI opens, refuses to
+open the store while `getAvailability` is not `available`, builds every
+`StorePurchase` with the store `token` and the `{ schema: evidenceSchema,
+payload }` envelope, buffers SDK events until the first `subscribe` with
+`createCommerceEventBuffer`, composes `CommerceCapabilities` from the SDK
+declaration plus `capabilities` overrides and a fresh `availability` read
+(three-second timeout, degraded to `temporarily-unavailable`), validates every
+SDK answer with the platform typia asserts (`INVALID_RESPONSE` otherwise), and
+normalizes every SDK failure through `mapError` into a `CommerceError` whose
+`storeCode` keeps the store's own code. It never grants and never sets
+`settlement`; the backend ledger decides.
+
+Two failure classes are not terminal. When `requestPurchase` throws or
+returns a code that normalizes to `OUTCOME_UNKNOWN` (for example
+`PLAY_BILLING_TIMEOUT`, `PLAY_BILLING_INTERRUPTED`,
+`STOREKIT_PURCHASE_UNCERTAIN`) or `ALREADY_OWNED`, an unfinished purchase may
+exist, so the provider answers `{ outcome: 'launched' }` instead of `failed`
+and does not forward a `purchaseError` event carrying those codes
+(`recoverableErrorCodes`). The attempt stays open and the reconciler resolves
+it from `getAvailablePurchases`; the store UI is never reopened blindly. A
+`capabilities.lifecycle` override may hide `restore` or `finish`, but it
+cannot advertise one the SDK lacks: `restore: true` without
+`sdk.restorePurchases`, like `finish: 'client' | 'host'` without
+`sdk.finishTransaction`, is rejected when the provider is created.
+
+`createCommerceServiceProvider` wraps the provider as a `CapacitorServiceProvider`
+whose `commerce` field the registry recognizes: the ten commerce bridge
+methods are implied (declaring a v1 `commerce.*` method alongside is an
+error), `nativeIap` and `subscriptionIap` readiness derive from
+`commerce.getCapabilities()`, and the in-process bridge delivers events as
+`{ protocol: 'mpgd.commerce.v2', sequence, event }` with a per-session
+sequence starting at 0. v1 callers keep working: `gateway.commerce` is served
+by `toCommerceAdapter(provider)`, so a `launched` purchase is `pending`, a
+synchronous purchase is `completed` with evidence and no entitlements, and
+`restore` returns no entitlements. The gateway exposes the v2 surface as
+`gateway.commerceV2` (served through the same validated bridge path, which
+the conformance test exercises for every store vector) and adds a `commerce`
+block to `getCapabilities()` from which `nativeIap` and `subscriptionIap` are
+derived. The block comes from the registry's one bounded read per snapshot
+(`getCapabilitySnapshot`, three-second timeout, shape validated): a stalled,
+failing, or invalid provider yields a degraded block
+(`createDegradedCommerceCapabilities`: `availability:
+'temporarily-unavailable'`, nothing sold, `nativeIap: false`) and never
+rejects the capability read. A `launched` v2 purchase keeps
+`beginExternalActivity()` open after the request returns, since the store UI
+is still up: the gateway releases it when the provider reports that product
+(`purchaseUpdated` or `purchaseError`), after
+`launchedPurchaseActivityTimeoutMs` (two minutes), or on `lifecycle.dispose`;
+the v1 `commerce.purchase` path has no event to wait for and releases when
+its request returns. Without a v2 provider nothing changes: `commerceV2` is
+absent and a `commerce.v2.*` request still answers `COMMERCE_V2_UNAVAILABLE`
+as the transport left it.
+
 ## App Store server-side transaction signatures
 
 The server-side verifier moved to `@mpgd/game-services/app-store-server`
