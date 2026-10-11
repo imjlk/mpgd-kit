@@ -5,6 +5,11 @@ import {
   type PlatformGatewayCapabilityConformanceFixture,
 } from './capability-conformance';
 import {
+  createUnsupportedCommerceCapabilities,
+  deriveLegacyCommerceCapabilities,
+  type CommerceCapabilities,
+} from './commerce';
+import {
   createUnsupportedCapabilities,
   type PlatformCapabilities,
   type PlatformGateway,
@@ -95,7 +100,136 @@ describe('platform gateway capability conformance', () => {
       runPlatformGatewayCapabilityConformance({ fixtures: [fixture] }),
     ).rejects.toThrow('Platform capability conformance fixture names must not be empty.');
   });
+
+  it('accepts a fresh commerce block that agrees with the legacy flags', async () => {
+    const expected = withCommerce(createAvailableCommerce());
+    const fixture = createFixture(() => withCommerce(createAvailableCommerce()));
+    await expect(runPlatformGatewayCapabilityConformance({
+      fixtures: [{ ...fixture, expectedCapabilities: expected }],
+    })).resolves.toEqual({ passedFixtures: ['test-gateway'] });
+  });
+
+  it('observes a transition that only changes the commerce block', async () => {
+    let finish: CommerceCapabilities['lifecycle']['finish'] = 'client';
+    const snapshot = () => withCommerce({
+      ...createAvailableCommerce(),
+      lifecycle: { ...createAvailableCommerce().lifecycle, finish },
+    });
+    const fixture = createFixture(snapshot, {
+      update() {
+        finish = 'server';
+      },
+      expectedCapabilities: withCommerce({
+        ...createAvailableCommerce(),
+        lifecycle: { ...createAvailableCommerce().lifecycle, finish: 'server' },
+      }),
+    });
+    await expect(runPlatformGatewayCapabilityConformance({
+      fixtures: [{ ...fixture, expectedCapabilities: snapshot() }],
+    })).resolves.toEqual({ passedFixtures: ['test-gateway'] });
+  });
+
+  it.each([
+    ['a shared nested commerce object', (shared: CommerceCapabilities) => shared],
+    ['a shared purchase block', (shared: CommerceCapabilities) => sharingOnly(shared, 'purchase')],
+    ['a shared catalog block', (shared: CommerceCapabilities) => sharingOnly(shared, 'catalog')],
+    ['a shared lifecycle block', (shared: CommerceCapabilities) => sharingOnly(shared, 'lifecycle')],
+    ['a shared authority block', (shared: CommerceCapabilities) => sharingOnly(shared, 'authority')],
+  ])('rejects %s across reads', async (_name, read) => {
+    const shared = createAvailableCommerce();
+    const fixture = createFixture(() => withCommerce(read(shared)));
+    await expect(runPlatformGatewayCapabilityConformance({
+      fixtures: [{ ...fixture, expectedCapabilities: withCommerce(createAvailableCommerce()) }],
+    })).rejects.toThrow('Platform gateway capability conformance failed: test-gateway.');
+  });
+
+  it.each([
+    ['an unknown commerce key', { ...createAvailableCommerce(), bundles: true }],
+    ['an unknown purchase key', {
+      ...createAvailableCommerce(),
+      purchase: { ...createAvailableCommerce().purchase, gifting: false },
+    }],
+    ['a missing lifecycle key', {
+      ...createAvailableCommerce(),
+      lifecycle: { availablePurchases: true, pending: true, restore: true, events: true },
+    }],
+    ['a non-boolean flag', {
+      ...createAvailableCommerce(),
+      catalog: { products: 'yes', offers: false, localizedPrice: false },
+    }],
+    ['an unknown finish owner', {
+      ...createAvailableCommerce(),
+      lifecycle: { ...createAvailableCommerce().lifecycle, finish: 'backend' },
+    }],
+    ['an unknown readiness state', { ...createAvailableCommerce(), availability: 'ready' }],
+    ['an array', []],
+  ])('rejects %s in the commerce block', async (_name, commerce) => {
+    const fixture = createFixture(() => withCommerce(commerce as CommerceCapabilities));
+    await expect(runPlatformGatewayCapabilityConformance({
+      fixtures: [{ ...fixture, expectedCapabilities: withCommerce(createAvailableCommerce()) }],
+    })).rejects.toThrow('Platform gateway capability conformance failed: test-gateway.');
+  });
+
+  it('rejects legacy flags that disagree with the commerce block', async () => {
+    const fixture = createFixture(() => ({
+      ...withCommerce(createAvailableCommerce()),
+      nativeIap: false,
+    }));
+    await expect(runPlatformGatewayCapabilityConformance({
+      fixtures: [{
+        ...fixture,
+        expectedCapabilities: { ...withCommerce(createAvailableCommerce()), nativeIap: false },
+      }],
+    })).rejects.toThrow('Platform gateway capability conformance failed: test-gateway.');
+  });
+
+  it('rejects a commerce block the fixture does not expect, and the reverse', async () => {
+    const present = createFixture(() => withCommerce(createAvailableCommerce()));
+    await expect(runPlatformGatewayCapabilityConformance({
+      fixtures: [{ ...present, expectedCapabilities: createUnsupportedCapabilities() }],
+    })).rejects.toThrow('Platform gateway capability conformance failed: test-gateway.');
+    const absent = createFixture(() => createUnsupportedCapabilities());
+    await expect(runPlatformGatewayCapabilityConformance({
+      fixtures: [{
+        ...absent,
+        expectedCapabilities: {
+          ...createUnsupportedCapabilities(),
+          commerce: createUnsupportedCommerceCapabilities(),
+        },
+      }],
+    })).rejects.toThrow('Platform gateway capability conformance failed: test-gateway.');
+  });
 });
+
+/** A fresh commerce block that reuses exactly one nested record from `shared`. */
+function sharingOnly(
+  shared: CommerceCapabilities,
+  block: 'purchase' | 'catalog' | 'lifecycle' | 'authority',
+): CommerceCapabilities {
+  return {
+    purchase: block === 'purchase' ? shared.purchase : { ...shared.purchase },
+    catalog: block === 'catalog' ? shared.catalog : { ...shared.catalog },
+    lifecycle: block === 'lifecycle' ? shared.lifecycle : { ...shared.lifecycle },
+    authority: block === 'authority' ? shared.authority : { ...shared.authority },
+    availability: shared.availability,
+  };
+}
+
+function createAvailableCommerce(): CommerceCapabilities {
+  return {
+    ...createUnsupportedCommerceCapabilities(),
+    purchase: { consumable: true, durable: true, subscription: false, quantity: false },
+    availability: 'available',
+  };
+}
+
+function withCommerce(commerce: CommerceCapabilities): PlatformCapabilities {
+  return {
+    ...createUnsupportedCapabilities(),
+    ...deriveLegacyCommerceCapabilities(commerce),
+    commerce,
+  };
+}
 
 /**
  * @evidence docs/specs/platform-capability-snapshots.md#fixture-validation An empty fixture list is rejected before a gateway is read.

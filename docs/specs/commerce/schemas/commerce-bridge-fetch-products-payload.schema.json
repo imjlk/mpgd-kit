@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/commerce/schemas/commerce-bridge-fetch-products-payload.schema.json",
+  "title": "CommerceBridgeFetchProductsPayload",
+  "x-mpgd-protocol": "mpgd.commerce.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/FetchProductsInput",
+  "components": {
+    "schemas": {
+      "CommerceLogicalProductId": {
+        "type": "string",
+        "minLength": 1,
+        "description": "`LogicalProductId` narrowed to its open string branch and tagged non-empty,\nso validators and the generated schemas carry `minLength: 1`. Starter ids and\nplain `LogicalProductId` values remain assignable."
+      },
+      "FetchProductsInput": {
+        "type": "object",
+        "properties": {
+          "logicalIds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommerceLogicalProductId"
+            },
+            "readOnly": true
+          },
+          "type": {
+            "$ref": "#/components/schemas/FetchProductsType",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "FetchProductsType": {
+        "oneOf": [
+          {
+            "const": "all"
+          },
+          {
+            "const": "in-app"
+          },
+          {
+            "const": "subscription"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -8,10 +8,14 @@ export type CatalogTarget = string;
 /** Built-in and game-owned ad placement target names. */
 export type AdPlacementTarget = string;
 
+/** Currencies a catalog accepts when it declares none. The kit adds no wallet currency literal. */
+export const defaultCatalogCurrencies = Object.freeze(['coin', 'gem'] as const);
+
 export type ProductGrant =
   | {
       readonly type: 'currency';
-      readonly currency: 'coin' | 'gem';
+      /** Must be declared by the catalog's `currencies` list (default `coin`, `gem`). */
+      readonly currency: string & tags.MinLength<1>;
       readonly amount: number;
     }
   | {
@@ -35,6 +39,11 @@ export interface ProductCatalogEntry {
 
 export interface ProductCatalog {
   readonly version: string;
+  /**
+   * Currencies a `currency` grant may name. Non-empty, unique, trimmed; when
+   * absent the catalog accepts `coin` and `gem` only.
+   */
+  readonly currencies?: readonly (string & tags.MinLength<1>)[] & tags.MinItems<1>;
   readonly products: readonly ProductCatalogEntry[];
 }
 
@@ -52,7 +61,8 @@ export type AdReward =
   | {
       readonly type: 'currency';
       readonly amount: number;
-      readonly currency: 'coin' | 'gem';
+      /** Validated against the product catalog's declared currencies by `validate:ads`. */
+      readonly currency: string & tags.MinLength<1>;
     };
 
 interface AdPlacementEntryBase {
@@ -85,6 +95,15 @@ export const assertProductGrant = typia.createAssert<ProductGrant>();
 
 export function assertProductCatalog(input: unknown): ProductCatalog {
   const catalog = assertProductCatalogShape(input);
+  const currencies = resolveCatalogCurrencies(catalog);
+  for (const product of catalog.products) {
+    if (product.grant.type === 'currency' && !currencies.has(product.grant.currency)) {
+      throw new Error(
+        `Product ${product.id} grants undeclared currency ${product.grant.currency}; `
+          + `declared currencies: ${[...currencies].join(', ')}.`,
+      );
+    }
+  }
   assertUniqueNormalizedPlatformIdentifiers(
     catalog.products.map((product) => ({
       logicalId: product.id,
@@ -93,6 +112,29 @@ export function assertProductCatalog(input: unknown): ProductCatalog {
     'product',
   );
   return catalog;
+}
+
+/**
+ * The currencies a catalog accepts, in declaration order. Rejects blank,
+ * untrimmed, or duplicate entries; an absent list means `coin` and `gem`.
+ */
+export function resolveCatalogCurrencies(
+  catalog: Pick<ProductCatalog, 'currencies'>,
+): ReadonlySet<string> {
+  const declared = catalog.currencies ?? defaultCatalogCurrencies;
+  const currencies = new Set<string>();
+  for (const currency of declared) {
+    if (currency.trim() !== currency || currency.length === 0) {
+      throw new Error(
+        `Catalog currency ${JSON.stringify(currency)} must be a trimmed non-empty code.`,
+      );
+    }
+    if (currencies.has(currency)) {
+      throw new Error(`Catalog currency ${currency} is declared more than once.`);
+    }
+    currencies.add(currency);
+  }
+  return currencies;
 }
 
 export function assertAdPlacements(input: unknown): AdPlacements {

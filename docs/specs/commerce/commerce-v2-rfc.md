@@ -427,7 +427,10 @@ regenerated on retry.
 A purchase discovered without a journal record gets a key derived from the
 purchase alone, so every runtime derives the same key:
 
-- Reference rule for new stores: `store:<storeId>:<transactionId>`.
+- Reference rule for new stores: `store:<storeId>:<transactionId>`, with each
+  component percent-encoded (`encodeURIComponent`) so the key is injective:
+  store `a:b` with transaction `c` and store `a` with transaction `b:c` derive
+  different keys.
 - Existing stores keep their current forms so ledgers written by v1 still
   deduplicate: `play-token-sha256:<hex>` for `google-play` (one shared helper
   replaces the two copies), and `apps-in-toss:purchase:<orderId>` for
@@ -679,6 +682,12 @@ not in the catalog. The kit adds no wallet currency literal.
   `docs/specs/commerce/schemas/`, and `validate:commerce-alignment` checks that
   the protocol constant, the vectors, the schemas, and each provider's
   declared version agree.
+- The committed schemas live in
+  [`docs/specs/commerce/schemas/`](https://github.com/imjlk/mpgd-kit/tree/main/docs/specs/commerce/schemas)
+  (`pnpm generate:commerce-schemas` rewrites them from
+  `@mpgd/platform/commerce`), and `pnpm validate:commerce-alignment` runs in
+  the root `check` chain; the module's helpers are tested against every vector
+  file in `packages/platform/src/commerce-vectors.test.ts`.
 
 ## Conformance vectors {#vectors}
 
@@ -815,13 +824,26 @@ after it passes these vectors.
 1. How long the journal keeps finished records for revocation reporting, and
    whether revocations older than that window should reach the client
    through entitlement reads only.
-2. Whether the lot spend order should be configurable per wallet, or fixed so
-   every wallet passes the same vectors.
+2. Resolved in A2: the lot spend order is fixed, not configurable. Every
+   wallet consumes eligible lots in the order under [credit lots](#credit-lots)
+   (earliest `expiresAt`, then `title` before `cross-title`, then oldest
+   `createdAt`, then `lotId`), so every wallet passes the same vectors and the
+   spend expectations in `credit-lot-title-scope` are normative.
 3. Whether memberships need a grace period before lapse, and how a lapsed
    membership resumes.
-4. Whether `quantity` above 1 is allowed for credit packs; the App Store
-   verifier currently requires 1.
-5. A bound for the pre-listener event buffer.
+4. Resolved in A2: `quantity` is a provider capability. `RequestPurchaseInput.
+   quantity` stays optional (integer >= 1); a request above 1 is rejected with
+   `ITEM_UNAVAILABLE` by `assertRequestPurchaseSupported` when the provider
+   does not declare `purchase.quantity`, before any store UI opens. Verifiers
+   may still require 1 (the App Store verifier does today), which surfaces as a
+   journal rejection, not as a client error.
+5. Resolved in A2: the pre-listener buffer holds 64 events
+   (`commerceEventBufferLimit`). Over the limit, `createCommerceEventBuffer`
+   drops the oldest recoverable `purchaseUpdated` first: a pending or purchased
+   purchase is still returned by `getAvailablePurchases`. A revoked purchase is
+   not, so revoked `purchaseUpdated`, `purchaseError`, and `subscriptionUpdated`
+   events are dropped oldest-first only when no recoverable `purchaseUpdated`
+   remains.
 6. Default billing authority and credit scope for Microsoft Store, Apps in
    Toss, Devvit, and Verse8 builds, pending each platform's policy review.
 

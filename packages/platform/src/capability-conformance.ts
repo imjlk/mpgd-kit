@@ -1,4 +1,6 @@
+import { deriveLegacyCommerceCapabilities } from './commerce-capabilities.js';
 import type {
+  CommerceCapabilities,
   PlatformCapabilities,
   PlatformGateway,
   PlatformProviderAvailability,
@@ -31,6 +33,7 @@ const allowedPlatformCapabilityKeys = Object.freeze([
 const allowedPlatformCapabilityKeySet = new Set<keyof PlatformCapabilities>([
   ...allowedPlatformCapabilityKeys,
   'providerAvailability',
+  'commerce',
 ]);
 const optionalPlatformCapabilityKeySet = new Set<keyof PlatformCapabilities>(
   optionalPlatformCapabilityKeys,
@@ -52,6 +55,19 @@ const providerAvailabilitySet = new Set<PlatformProviderAvailability>([
   'temporarily-unavailable',
   'available',
 ]);
+// The optional commerce v2 block follows the same rules as the boolean
+// snapshot: exact keys, typed values, and a fresh object on every read.
+const commerceCapabilityBlockKeys = Object.freeze({
+  purchase: ['consumable', 'durable', 'subscription', 'quantity'],
+  catalog: ['products', 'offers', 'localizedPrice'],
+  lifecycle: ['availablePurchases', 'pending', 'restore', 'events', 'finish'],
+  authority: ['evidence', 'accountBinding'],
+} as const);
+const commerceCapabilityEnums = Object.freeze({
+  'lifecycle.finish': ['client', 'server', 'host', 'none'],
+  'authority.evidence': ['client-token', 'host-callback', 'adapter-settled', 'server-push'],
+  'authority.accountBinding': ['required', 'optional', 'host'],
+} as const);
 
 export interface PlatformGatewayCapabilityConformanceTransition {
   readonly update: () => Promise<void> | void;
@@ -204,6 +220,98 @@ function assertCapabilitySnapshot(
     normalizedAvailability(expected.providerAvailability),
     'provider availability must match the expected provider state',
   );
+  assertCommerceCapabilityBlock(actual, expected.commerce);
+}
+
+function assertCommerceCapabilityBlock(
+  snapshot: PlatformCapabilities,
+  expected: CommerceCapabilities | undefined,
+): void {
+  const actual: unknown = snapshot.commerce;
+  if (actual === undefined) {
+    assert(
+      expected === undefined,
+      'commerce capabilities must be present when the fixture expects them',
+    );
+    return;
+  }
+  assert(
+    expected !== undefined,
+    'commerce capabilities must be absent when the fixture omits them',
+  );
+  assert(
+    typeof actual === 'object' && actual !== null && !Array.isArray(actual),
+    'commerce capabilities must be a non-array record',
+  );
+  const block = actual as Readonly<Record<string, unknown>>;
+  const blockKeys = Object.keys(block).sort();
+  assertEqual(
+    JSON.stringify(blockKeys),
+    JSON.stringify([...Object.keys(commerceCapabilityBlockKeys), 'availability'].sort()),
+    'commerce capabilities must contain exactly purchase, catalog, lifecycle, authority, and availability',
+  );
+  for (const [group, keys] of Object.entries(commerceCapabilityBlockKeys)) {
+    const nested = block[group];
+    assert(
+      typeof nested === 'object' && nested !== null && !Array.isArray(nested),
+      `commerce ${group} capabilities must be a non-array record`,
+    );
+    const record = nested as Readonly<Record<string, unknown>>;
+    assertEqual(
+      JSON.stringify(Object.keys(record).sort()),
+      JSON.stringify([...keys].sort()),
+      `commerce ${group} capabilities must contain exactly ${keys.join(', ')}`,
+    );
+    for (const key of keys) {
+      const path = `${group}.${key}` as keyof typeof commerceCapabilityEnums;
+      const allowed = commerceCapabilityEnums[path] as readonly string[] | undefined;
+      if (allowed === undefined) {
+        assertEqual(typeof record[key], 'boolean', `commerce capability ${path} must be a boolean`);
+      } else {
+        assert(
+          allowed.includes(record[key] as string),
+          `commerce capability ${path} must be one of ${allowed.join(', ')}`,
+        );
+      }
+    }
+  }
+  assert(
+    providerAvailabilitySet.has(block.availability as PlatformProviderAvailability),
+    'commerce availability must be a known readiness state',
+  );
+  assertEqual(
+    normalizedCommerce(block as unknown as CommerceCapabilities),
+    normalizedCommerce(expected),
+    'commerce capabilities must match the expected provider state',
+  );
+  const legacy = deriveLegacyCommerceCapabilities(block as unknown as CommerceCapabilities);
+  assertEqual(
+    snapshot.nativeIap,
+    legacy.nativeIap,
+    'nativeIap must equal the value derived from the commerce capabilities',
+  );
+  assertEqual(
+    snapshot.subscriptionIap ?? false,
+    legacy.subscriptionIap,
+    'subscriptionIap must equal the value derived from the commerce capabilities',
+  );
+}
+
+function normalizedCommerce(value: CommerceCapabilities | undefined): string {
+  if (value === undefined) {
+    return 'undefined';
+  }
+  return JSON.stringify([
+    ['purchase', sortedEntries(value.purchase)],
+    ['catalog', sortedEntries(value.catalog)],
+    ['lifecycle', sortedEntries(value.lifecycle)],
+    ['authority', sortedEntries(value.authority)],
+    ['availability', value.availability],
+  ]);
+}
+
+function sortedEntries(value: object): readonly (readonly [string, unknown])[] {
+  return Object.entries(value).sort(([a], [b]) => a.localeCompare(b));
 }
 
 function assertProviderAvailabilityShape(value: unknown): void {
@@ -229,6 +337,17 @@ function cloneExpectedCapabilities(value: PlatformCapabilities): PlatformCapabil
     ...(value.providerAvailability === undefined
       ? {}
       : { providerAvailability: { ...value.providerAvailability } }),
+    ...(value.commerce === undefined
+      ? {}
+      : {
+          commerce: {
+            purchase: { ...value.commerce.purchase },
+            catalog: { ...value.commerce.catalog },
+            lifecycle: { ...value.commerce.lifecycle },
+            authority: { ...value.commerce.authority },
+            availability: value.commerce.availability,
+          },
+        }),
   };
 }
 
@@ -252,6 +371,32 @@ function tryMutateSnapshot(snapshot: PlatformCapabilities): void {
       // A frozen nested readiness record already satisfies isolation.
     }
   }
+  if (snapshot.commerce !== undefined) {
+    tryMutateCommerceSnapshot(snapshot.commerce);
+  }
+}
+
+// Every nested block is probed: a gateway may rebuild the outer object while
+// reusing one mutable nested record across reads.
+function tryMutateCommerceSnapshot(commerce: CommerceCapabilities): void {
+  const probes: readonly (readonly [object, string, unknown])[] = [
+    [commerce.purchase, 'consumable', !commerce.purchase.consumable],
+    [commerce.catalog, 'products', !commerce.catalog.products],
+    [commerce.lifecycle, 'events', !commerce.lifecycle.events],
+    [
+      commerce.authority,
+      'accountBinding',
+      commerce.authority.accountBinding === 'host' ? 'optional' : 'host',
+    ],
+    [commerce, 'availability', commerce.availability === 'available' ? 'unsupported' : 'available'],
+  ];
+  for (const [target, key, next] of probes) {
+    try {
+      Reflect.set(target, key, next);
+    } catch {
+      // A frozen nested commerce block already satisfies isolation.
+    }
+  }
 }
 
 function hasCapabilityDifference(
@@ -261,7 +406,8 @@ function hasCapabilityDifference(
   return allowedPlatformCapabilityKeys
     .some((key) => (first[key] ?? false) !== (second[key] ?? false))
     || normalizedAvailability(first.providerAvailability)
-      !== normalizedAvailability(second.providerAvailability);
+      !== normalizedAvailability(second.providerAvailability)
+    || normalizedCommerce(first.commerce) !== normalizedCommerce(second.commerce);
 }
 
 function assert(condition: unknown, message: string): asserts condition {

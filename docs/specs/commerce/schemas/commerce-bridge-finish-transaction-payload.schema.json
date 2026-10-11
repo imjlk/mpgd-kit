@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/commerce/schemas/commerce-bridge-finish-transaction-payload.schema.json",
+  "title": "CommerceBridgeFinishTransactionPayload",
+  "x-mpgd-protocol": "mpgd.commerce.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/FinishTransactionInput",
+  "components": {
+    "schemas": {
+      "FinishTransactionInput": {
+        "type": "object",
+        "properties": {
+          "transactionId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "ledgerEntryId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "isConsumable": {
+            "type": "boolean",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "transactionId",
+          "ledgerEntryId",
+          "isConsumable"
+        ],
+        "additionalProperties": false
+      },
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

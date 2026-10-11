@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/commerce/schemas/commerce-bridge-request-purchase-payload.schema.json",
+  "title": "CommerceBridgeRequestPurchasePayload",
+  "x-mpgd-protocol": "mpgd.commerce.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/RequestPurchaseInput",
+  "components": {
+    "schemas": {
+      "CommerceLogicalProductId": {
+        "type": "string",
+        "minLength": 1,
+        "description": "`LogicalProductId` narrowed to its open string branch and tagged non-empty,\nso validators and the generated schemas carry `minLength: 1`. Starter ids and\nplain `LogicalProductId` values remain assignable."
+      },
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "PositiveQuantity": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "PurchaseSource": {
+        "oneOf": [
+          {
+            "const": "event"
+          },
+          {
+            "const": "result"
+          },
+          {
+            "const": "shop"
+          },
+          {
+            "const": "stage_fail"
+          }
+        ]
+      },
+      "RequestPurchaseInput": {
+        "type": "object",
+        "properties": {
+          "logicalId": {
+            "$ref": "#/components/schemas/CommerceLogicalProductId",
+            "readOnly": true
+          },
+          "idempotencyKey": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "source": {
+            "$ref": "#/components/schemas/PurchaseSource",
+            "readOnly": true
+          },
+          "offerId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "quantity": {
+            "$ref": "#/components/schemas/PositiveQuantity",
+            "description": "Integer >= 1. Rejected with ITEM_UNAVAILABLE when the provider does not declare `purchase.quantity`.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "logicalId",
+          "idempotencyKey",
+          "source"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

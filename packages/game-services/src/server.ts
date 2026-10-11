@@ -4,6 +4,7 @@ import { BodyLimitHandlerPlugin, RPCHandler } from '@orpc/server/fetch';
 import { createAnalyticsReporter, type AnalyticsSink } from '@mpgd/analytics';
 import {
   resolveAdPlacementPlatformId,
+  resolveCatalogCurrencies,
   resolveProductPlatformId,
   type AdPlacements,
   type ProductCatalog,
@@ -345,6 +346,7 @@ export function createInMemoryGameServicesStore(): InMemoryGameServicesStore {
 export function createGameServicesBackend(
   input: CreateGameServicesBackendInput,
 ): GameServicesBackendApi {
+  assertDeclaredCatalogCurrencies(input.catalog, input.placements);
   const store = input.store ?? createInMemoryGameServicesStore();
   const now = input.now ?? (() => new Date().toISOString());
   const version = input.version ?? '0.0.0';
@@ -447,6 +449,31 @@ export function createGameServicesBackend(
       },
     },
   };
+}
+
+/**
+ * Every grant and reward the backend can write comes from the catalog or the
+ * placements, so an undeclared currency is a configuration error at startup
+ * rather than a rejected ledger write on the first purchase.
+ */
+function assertDeclaredCatalogCurrencies(catalog: ProductCatalog, placements: AdPlacements): void {
+  const currencies = resolveCatalogCurrencies(catalog);
+  for (const product of catalog.products) {
+    if (product.grant.type === 'currency' && !currencies.has(product.grant.currency)) {
+      throw new Error(
+        `Product ${product.id} grants undeclared currency ${product.grant.currency}; `
+          + `declared currencies: ${[...currencies].join(', ')}.`,
+      );
+    }
+  }
+  for (const placement of placements.placements) {
+    if (placement.reward?.type === 'currency' && !currencies.has(placement.reward.currency)) {
+      throw new Error(
+        `Ad placement ${placement.id} rewards undeclared currency ${placement.reward.currency}; `
+          + `declared currencies: ${[...currencies].join(', ')}.`,
+      );
+    }
+  }
 }
 
 export function createGameServicesBackendApiHandler(

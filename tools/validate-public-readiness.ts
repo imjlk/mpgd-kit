@@ -314,7 +314,7 @@ function collectCatalogReadiness(): void {
   }
 
   try {
-    validateAdPlacementsFile(defaultAdPlacementsFile);
+    validateAdPlacementsFile(defaultAdPlacementsFile, defaultProductCatalogFile);
   } catch (error) {
     failures.push(`Ad placement public readiness failed: ${errorMessage(error)}`);
   }

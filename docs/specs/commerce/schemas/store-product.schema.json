@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/commerce/schemas/store-product.schema.json",
+  "title": "StoreProduct",
+  "x-mpgd-protocol": "mpgd.commerce.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/StoreProduct",
+  "components": {
+    "schemas": {
+      "CommerceLogicalProductId": {
+        "type": "string",
+        "minLength": 1,
+        "description": "`LogicalProductId` narrowed to its open string branch and tagged non-empty,\nso validators and the generated schemas carry `minLength: 1`. Starter ids and\nplain `LogicalProductId` values remain assignable."
+      },
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "PurchaseKind": {
+        "oneOf": [
+          {
+            "const": "consumable"
+          },
+          {
+            "const": "durable"
+          },
+          {
+            "const": "subscription"
+          }
+        ]
+      },
+      "StoreOffer": {
+        "type": "object",
+        "properties": {
+          "offerId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "price": {
+            "$ref": "#/components/schemas/StorePrice",
+            "readOnly": true
+          },
+          "title": {
+            "type": "string",
+            "readOnly": true
+          },
+          "description": {
+            "type": "string",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "offerId",
+          "price"
+        ],
+        "additionalProperties": false
+      },
+      "StorePrice": {
+        "type": "object",
+        "properties": {
+          "formatted": {
+            "type": "string",
+            "readOnly": true
+          },
+          "currencyCode": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "ISO 4217 code or a project-declared code such as a wallet currency.",
+            "readOnly": true
+          },
+          "amountMicros": {
+            "type": "integer",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "formatted",
+          "currencyCode"
+        ],
+        "additionalProperties": false
+      },
+      "StoreProduct": {
+        "type": "object",
+        "properties": {
+          "logicalId": {
+            "$ref": "#/components/schemas/CommerceLogicalProductId",
+            "readOnly": true
+          },
+          "store": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "storeSku": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PurchaseKind",
+            "readOnly": true
+          },
+          "title": {
+            "type": "string",
+            "readOnly": true
+          },
+          "description": {
+            "type": "string",
+            "readOnly": true
+          },
+          "price": {
+            "$ref": "#/components/schemas/StorePrice",
+            "readOnly": true
+          },
+          "offers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoreOffer"
+            },
+            "readOnly": true
+          }
+        },
+        "required": [
+          "logicalId",
+          "store",
+          "storeSku",
+          "kind",
+          "title",
+          "description",
+          "price"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

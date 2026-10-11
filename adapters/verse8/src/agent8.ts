@@ -242,7 +242,12 @@ function applyGrant(
       throw new Error('Verse8 currency grant exceeds the safe integer range.');
     }
 
-    const balance = state.balances[grant.currency] + amount;
+    const currency = grant.currency;
+    if (!isVerse8Currency(currency)) {
+      throw new Error(`Verse8 commerce state does not track the ${currency} currency.`);
+    }
+
+    const balance = state.balances[currency] + amount;
 
     if (!Number.isSafeInteger(balance)) {
       throw new Error('Verse8 currency balance exceeds the safe integer range.');
@@ -253,7 +258,7 @@ function applyGrant(
         ...state,
         balances: {
           ...state.balances,
-          [grant.currency]: balance,
+          [currency]: balance,
         },
       },
       entitlementIds: [],
@@ -313,6 +318,11 @@ function emptyCommerceState(): StoredCommerceState {
     entitlements: [],
     purchasesById: {},
   };
+}
+
+/** The stored state tracks the starter currencies only; other catalog currencies are rejected. */
+function isVerse8Currency(value: string): value is keyof StoredCommerceState['balances'] {
+  return value === 'coin' || value === 'gem';
 }
 
 function readBalances(value: unknown): StoredCommerceState['balances'] {

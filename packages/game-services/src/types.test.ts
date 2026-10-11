@@ -32,6 +32,26 @@ assertProductGrantTransaction({
   ...resourceTransaction,
   grant: { type: 'entitlement', entitlement: 'theme.ember' },
 });
+assertProductGrantTransaction({
+  ...resourceTransaction,
+  grant: { type: 'currency', currency: 'credits', amount: 100 },
+});
+assertThrows(
+  () =>
+    assertProductGrantTransaction({
+      ...resourceTransaction,
+      grant: { type: 'currency', currency: '', amount: 100 },
+    }),
+  'currency grants should require a non-empty currency code',
+);
+assertThrows(
+  () =>
+    assertProductGrantTransaction({
+      ...resourceTransaction,
+      grant: { type: 'currency', currency: ' coin', amount: 100 },
+    }),
+  'currency grants should require a trimmed currency code',
+);
 assertThrows(
   () =>
     assertProductGrantTransaction({

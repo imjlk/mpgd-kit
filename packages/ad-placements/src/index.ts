@@ -1,4 +1,4 @@
-import typia from 'typia';
+import typia, { type tags } from 'typia';
 
 import type { LogicalAdPlacementId } from '@mpgd/platform';
 
@@ -13,7 +13,8 @@ export interface FrequencyCap {
 export interface AdReward {
   readonly type: 'continue' | 'currency';
   readonly amount: number;
-  readonly currency?: 'coin' | 'gem';
+  /** A currency the product catalog declares; checked by `validate:ads`. */
+  readonly currency?: string & tags.MinLength<1>;
 }
 
 export interface AdPlacementEntry {

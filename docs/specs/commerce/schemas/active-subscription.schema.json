@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/commerce/schemas/active-subscription.schema.json",
+  "title": "ActiveSubscription",
+  "x-mpgd-protocol": "mpgd.commerce.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/ActiveSubscription",
+  "components": {
+    "schemas": {
+      "ActiveSubscription": {
+        "type": "object",
+        "properties": {
+          "store": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "logicalId": {
+            "$ref": "#/components/schemas/CommerceLogicalProductId",
+            "readOnly": true
+          },
+          "subscriptionId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "periodIndex": {
+            "$ref": "#/components/schemas/NonNegativeInteger",
+            "readOnly": true
+          },
+          "state": {
+            "$ref": "#/components/schemas/ActiveSubscriptionState",
+            "readOnly": true
+          },
+          "startedAt": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "readOnly": true
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "readOnly": true
+          },
+          "autoRenew": {
+            "type": "boolean",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "store",
+          "logicalId",
+          "subscriptionId",
+          "periodIndex",
+          "state",
+          "startedAt",
+          "expiresAt",
+          "autoRenew"
+        ],
+        "additionalProperties": false
+      },
+      "ActiveSubscriptionState": {
+        "oneOf": [
+          {
+            "const": "active"
+          },
+          {
+            "const": "lapsed"
+          },
+          {
+            "const": "revoked"
+          }
+        ]
+      },
+      "CommerceLogicalProductId": {
+        "type": "string",
+        "minLength": 1,
+        "description": "`LogicalProductId` narrowed to its open string branch and tagged non-empty,\nso validators and the generated schemas carry `minLength: 1`. Starter ids and\nplain `LogicalProductId` values remain assignable."
+      },
+      "IsoTimestamp": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NonNegativeInteger": {
+        "type": "integer",
+        "minimum": 0
+      }
+    }
+  }
+}

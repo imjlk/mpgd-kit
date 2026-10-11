@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/commerce/schemas/commerce-bridge-restore-purchases-result.schema.json",
+  "title": "CommerceBridgeRestorePurchasesResult",
+  "x-mpgd-protocol": "mpgd.commerce.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/CommerceBridgeRestorePurchasesResult",
+  "components": {
+    "schemas": {
+      "CommerceBridgeRestorePurchasesResult": {
+        "type": "object",
+        "properties": {
+          "restored": {
+            "type": "boolean",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "restored"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

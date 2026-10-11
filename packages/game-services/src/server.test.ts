@@ -2801,6 +2801,78 @@ try {
   nodeProcess.off('unhandledRejection', captureUnhandledRejection);
 }
 
+// A catalog may declare its own currency; the ledger records grants in it,
+// and an undeclared currency is rejected when the backend is constructed.
+const creditsCatalog = {
+  version: 'credits',
+  currencies: ['coin', 'credits'],
+  products: [
+    {
+      id: 'CREDITS_100',
+      type: 'consumable',
+      grant: { type: 'currency', currency: 'credits', amount: 100 },
+      platformProductIds: { android: 'credits_100_android' },
+    },
+  ],
+} as const satisfies ProductCatalog;
+const creditsStore = createInMemoryGameServicesStore();
+const creditsBackend = createGameServicesBackend({
+  catalog: creditsCatalog,
+  placements,
+  store: creditsStore,
+  evidenceVerifier,
+  now: () => '2026-07-04T00:00:00.000Z',
+});
+const creditsPurchase = await creditsBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-credits',
+  productId: 'CREDITS_100',
+  platformTransactionId: 'txn-credits-1',
+  idempotencyKey: 'purchase-credits-1',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+assertEqual(creditsPurchase.verified, true, 'declared custom currency purchases should verify');
+const creditsTransaction = await creditsStore.findEntitlementTransactionByIdempotency({
+  source: 'purchase',
+  playerId: 'player-credits',
+  idempotencyKey: 'purchase-credits-1',
+});
+assertEqual(
+  creditsTransaction?.grant?.type === 'currency' ? creditsTransaction.grant.currency : undefined,
+  'credits',
+  'the ledger should record the declared custom currency',
+);
+await assertRejects(
+  async () =>
+    createGameServicesBackend({
+      catalog: { ...creditsCatalog, currencies: ['coin'] },
+      placements,
+      store: createInMemoryGameServicesStore(),
+      evidenceVerifier,
+    }),
+  /CREDITS_100 grants undeclared currency credits/u,
+  'an undeclared product grant currency should fail at backend construction',
+);
+await assertRejects(
+  async () =>
+    createGameServicesBackend({
+      catalog: creditsCatalog,
+      placements: {
+        ...placements,
+        placements: [
+          {
+            ...placements.placements[0],
+            reward: { type: 'currency', currency: 'gem', amount: 1 },
+          },
+        ],
+      },
+      store: createInMemoryGameServicesStore(),
+      evidenceVerifier,
+    }),
+  /CONTINUE_AFTER_FAIL rewards undeclared currency gem/u,
+  'an undeclared reward currency should fail at backend construction',
+);
+
 console.log('GameServices backend API handler smoke test passed.');
 
 async function captureError(

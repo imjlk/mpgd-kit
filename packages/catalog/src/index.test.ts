@@ -2,7 +2,9 @@ import {
   assertAdPlacements,
   assertProductCatalog,
   assertProductGrant,
+  defaultCatalogCurrencies,
   resolveAdPlacementPlatformId,
+  resolveCatalogCurrencies,
   resolveProductPlatformId,
   type AdPlacementEntry,
   type ProductCatalogEntry,
@@ -175,6 +177,71 @@ assertThrows(
   () => assertAdPlacements({ ...sharedPlacements, sharedPlatformPlacementTargets: [' '] }),
   'sharing target identifiers must be normalized',
 );
+
+// Declared currencies: a catalog may name its own wallet currency, and a
+// currency grant must name one of the declared codes (coin and gem by default).
+assertEqual(
+  [...resolveCatalogCurrencies({})].join(','),
+  [...defaultCatalogCurrencies].join(','),
+  'an absent currency list defaults to coin and gem',
+);
+const walletCurrencyProduct = {
+  id: 'WALLET_PACK_100',
+  type: 'consumable',
+  grant: { type: 'currency', currency: 'wallet-credit', amount: 100 },
+  platformProductIds: { android: 'wallet_pack_100' },
+} satisfies ProductCatalogEntry;
+const walletCurrencyCatalog = assertProductCatalog({
+  version: 'custom-currency',
+  currencies: ['coin', 'wallet-credit'],
+  products: [walletCurrencyProduct],
+});
+assertEqual(
+  [...resolveCatalogCurrencies(walletCurrencyCatalog)].join(','),
+  'coin,wallet-credit',
+  'declared currencies resolve in declaration order',
+);
+assertProductGrant({ type: 'currency', currency: 'wallet-credit', amount: 5 });
+assertThrows(
+  () => assertProductGrant({ type: 'currency', currency: '', amount: 5 } as never),
+  'currency grant codes must be non-empty',
+);
+assertThrows(
+  () => assertProductCatalog({ version: 'undeclared', products: [walletCurrencyProduct] }),
+  'a currency grant must name a declared currency',
+);
+assertThrows(
+  () =>
+    assertProductCatalog({
+      version: 'default-list',
+      currencies: ['gem'],
+      products: [
+        { ...walletCurrencyProduct, grant: { type: 'currency', currency: 'coin', amount: 1 } },
+      ],
+    }),
+  'declaring a currency list replaces the default list',
+);
+assertThrows(
+  () => assertProductCatalog({ version: 'empty', currencies: [], products: [] }),
+  'a declared currency list must not be empty',
+);
+assertThrows(
+  () => assertProductCatalog({ version: 'duplicate', currencies: ['coin', 'coin'], products: [] }),
+  'declared currencies must be unique',
+);
+assertThrows(
+  () => assertProductCatalog({ version: 'untrimmed', currencies: [' coin'], products: [] }),
+  'declared currencies must be trimmed',
+);
+assertAdPlacements({
+  version: 'custom-currency',
+  placements: [
+    {
+      ...customTargetPlacement,
+      reward: { type: 'currency', currency: 'wallet-credit', amount: 3 },
+    },
+  ],
+});
 
 console.log('Catalog product grant validation test passed.');
 

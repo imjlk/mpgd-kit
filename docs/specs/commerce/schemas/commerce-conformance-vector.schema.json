@@ -1,0 +1,1813 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/commerce/schemas/commerce-conformance-vector.schema.json",
+  "title": "CommerceConformanceVector",
+  "x-mpgd-protocol": "mpgd.commerce.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/CommerceConformanceVector",
+  "components": {
+    "schemas": {
+      "ActiveSubscriptionState": {
+        "oneOf": [
+          {
+            "const": "active"
+          },
+          {
+            "const": "lapsed"
+          },
+          {
+            "const": "revoked"
+          }
+        ]
+      },
+      "CommerceAccountBindingPolicy": {
+        "oneOf": [
+          {
+            "const": "host"
+          },
+          {
+            "const": "optional"
+          },
+          {
+            "const": "required"
+          }
+        ]
+      },
+      "CommerceAuthorityCapabilities": {
+        "type": "object",
+        "properties": {
+          "evidence": {
+            "$ref": "#/components/schemas/CommerceEvidenceAuthority",
+            "description": "What the backend verifies to grant.",
+            "readOnly": true
+          },
+          "accountBinding": {
+            "$ref": "#/components/schemas/CommerceAccountBindingPolicy",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "evidence",
+          "accountBinding"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceBillingAuthority": {
+        "oneOf": [
+          {
+            "const": "host"
+          },
+          {
+            "const": "store"
+          }
+        ]
+      },
+      "CommerceConformanceActiveSubscriptionExpectation": {
+        "type": "object",
+        "properties": {
+          "logicalId": {
+            "$ref": "#/components/schemas/CommerceLogicalProductId",
+            "readOnly": true
+          },
+          "periodIndex": {
+            "$ref": "#/components/schemas/NonNegativeInteger",
+            "readOnly": true
+          },
+          "state": {
+            "$ref": "#/components/schemas/ActiveSubscriptionState",
+            "readOnly": true
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "logicalId"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceConformanceAvailableExpectation": {
+        "type": "object",
+        "properties": {
+          "transactionId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "storeSku": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "state": {
+            "$ref": "#/components/schemas/StorePurchaseState",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "transactionId"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceConformanceCatalogEntry": {
+        "type": "object",
+        "properties": {
+          "logicalId": {
+            "$ref": "#/components/schemas/CommerceLogicalProductId",
+            "readOnly": true
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PurchaseKind",
+            "readOnly": true
+          },
+          "storeSku": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "membership": {
+            "$ref": "#/components/schemas/CreditMembershipTerms",
+            "description": "Membership terms for credit-funded subscription products.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "logicalId",
+          "kind",
+          "storeSku"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceConformanceDebitExpectation": {
+        "type": "object",
+        "properties": {
+          "lotId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "readOnly": true
+          }
+        },
+        "required": [
+          "lotId",
+          "amount"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceConformanceEntitlementExpectation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "logicalId": {
+            "$ref": "#/components/schemas/CommerceLogicalProductId",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceConformanceErrorExpectation": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/CommerceErrorCode",
+            "readOnly": true
+          },
+          "retryable": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "storeCode": {
+            "type": "string",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "additionalProperties": false,
+        "description": "Partial expectation; omitted fields are not assertions."
+      },
+      "CommerceConformanceErrorFixture": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/CommerceErrorCode",
+            "readOnly": true
+          },
+          "retryable": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "storeCode": {
+            "type": "string",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "code",
+          "retryable"
+        ],
+        "additionalProperties": false,
+        "description": "Explicit normalized class; the runner never guesses it from `storeCode`."
+      },
+      "CommerceConformanceExpectation": {
+        "type": "object",
+        "properties": {
+          "journal": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringreadonlyCommercePurchaseState",
+            "description": "Full state sequence per journal key.",
+            "readOnly": true
+          },
+          "verifyRequests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommerceConformanceVerifyRequestExpectation"
+            },
+            "readOnly": true
+          },
+          "ledger": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommerceConformanceLedgerEntryExpectation"
+            },
+            "readOnly": true
+          },
+          "finishCalls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommerceConformanceFinishCallExpectation"
+            },
+            "readOnly": true
+          },
+          "available": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommerceConformanceAvailableExpectation"
+            },
+            "readOnly": true
+          },
+          "entitlements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommerceConformanceEntitlementExpectation"
+            },
+            "readOnly": true
+          },
+          "lots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommerceConformanceLotExpectation"
+            },
+            "readOnly": true
+          },
+          "balances": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringReadonlyRecordstringnumber",
+            "description": "Spendable balance per title and currency.",
+            "readOnly": true
+          },
+          "debits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommerceConformanceScheduledDebitExpectation"
+            },
+            "readOnly": true
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommerceConformanceSubscriptionEventExpectation"
+            },
+            "readOnly": true
+          },
+          "activeSubscriptions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommerceConformanceActiveSubscriptionExpectation"
+            },
+            "readOnly": true
+          },
+          "purchaseUiOpened": {
+            "$ref": "#/components/schemas/NonNegativeInteger",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "CommerceConformanceFetchProductsExpectation": {
+        "type": "object",
+        "properties": {
+          "logicalIds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommerceLogicalProductId"
+            },
+            "readOnly": true
+          }
+        },
+        "required": [
+          "logicalIds"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceConformanceFinishCallExpectation": {
+        "type": "object",
+        "properties": {
+          "by": {
+            "oneOf": [
+              {
+                "const": "client"
+              },
+              {
+                "const": "host"
+              }
+            ],
+            "readOnly": true
+          },
+          "transactionId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "ledgerEntryId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "isConsumable": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "result": {
+            "oneOf": [
+              {
+                "const": "ACCOUNT_BINDING_REQUIRED"
+              },
+              {
+                "const": "ACTION_REQUIRED"
+              },
+              {
+                "const": "ALREADY_OWNED"
+              },
+              {
+                "const": "CONFIGURATION_REQUIRED"
+              },
+              {
+                "const": "INSUFFICIENT_BALANCE"
+              },
+              {
+                "const": "INVALID_RESPONSE"
+              },
+              {
+                "const": "IN_PROGRESS"
+              },
+              {
+                "const": "ITEM_UNAVAILABLE"
+              },
+              {
+                "const": "NETWORK"
+              },
+              {
+                "const": "NOT_PREPARED"
+              },
+              {
+                "const": "OUTCOME_UNKNOWN"
+              },
+              {
+                "const": "STORE_UNAVAILABLE"
+              },
+              {
+                "const": "UNKNOWN"
+              },
+              {
+                "const": "USER_CANCELLED"
+              },
+              {
+                "const": "finished"
+              }
+            ],
+            "readOnly": true
+          }
+        },
+        "required": [
+          "by",
+          "transactionId",
+          "ledgerEntryId",
+          "isConsumable",
+          "result"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceConformanceFinishResultFixture": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "finished": {
+                "type": "boolean",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "finished"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "error": {
+                "$ref": "#/components/schemas/CommerceErrorCode",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "CommerceConformanceLedgerEntryExpectation": {
+        "type": "object",
+        "properties": {
+          "entryId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "type": {
+            "oneOf": [
+              {
+                "const": "grant"
+              },
+              {
+                "const": "period"
+              },
+              {
+                "const": "revoke"
+              }
+            ],
+            "readOnly": true
+          },
+          "logicalId": {
+            "$ref": "#/components/schemas/CommerceLogicalProductId",
+            "readOnly": true
+          },
+          "reverses": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The grant a `revoke` entry reverses.",
+            "readOnly": true
+          },
+          "reason": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "entryId",
+          "type",
+          "logicalId"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceConformanceLotExpectation": {
+        "type": "object",
+        "properties": {
+          "lotId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "currency": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "readOnly": true
+          },
+          "remaining": {
+            "type": "number",
+            "minimum": 0,
+            "readOnly": true
+          },
+          "origin": {
+            "$ref": "#/components/schemas/CreditLotOrigin",
+            "readOnly": true
+          },
+          "spendScope": {
+            "$ref": "#/components/schemas/CreditLotSpendScope",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "lotId",
+          "remaining"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceConformanceLotFixture": {
+        "type": "object",
+        "properties": {
+          "ledgerEntryId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "currency": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "readOnly": true
+          },
+          "origin": {
+            "$ref": "#/components/schemas/CreditLotOrigin",
+            "readOnly": true
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "readOnly": true
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "ledgerEntryId",
+          "currency",
+          "amount",
+          "origin",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceConformanceProfile": {
+        "type": "object",
+        "properties": {
+          "store": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "purchase": {
+            "$ref": "#/components/schemas/CommercePurchaseCapabilities",
+            "description": "Omitted blocks default to all supported.",
+            "readOnly": true
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/CommerceLifecycleCapabilities",
+            "readOnly": true
+          },
+          "authority": {
+            "$ref": "#/components/schemas/CommerceAuthorityCapabilities",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "store"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceConformancePurchaseFixture": {
+        "type": "object",
+        "properties": {
+          "transactionId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "storeSku": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "token": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "state": {
+            "$ref": "#/components/schemas/StorePurchaseState",
+            "readOnly": true
+          },
+          "originalTransactionId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "purchasedAt": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "readOnly": true
+          },
+          "settlement": {
+            "type": "object",
+            "properties": {
+              "ledgerEntryId": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "ledgerEntryId"
+            ],
+            "additionalProperties": false,
+            "readOnly": true
+          }
+        },
+        "required": [
+          "transactionId",
+          "storeSku",
+          "token",
+          "state"
+        ],
+        "additionalProperties": false,
+        "description": "Fixture purchase; `store`, `quantity`, and `evidence` come from the profile."
+      },
+      "CommerceConformanceRequestPurchaseExpectation": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "oneOf": [
+              {
+                "const": "cancelled"
+              },
+              {
+                "const": "failed"
+              },
+              {
+                "const": "launched"
+              },
+              {
+                "const": "purchased"
+              }
+            ],
+            "readOnly": true
+          },
+          "error": {
+            "$ref": "#/components/schemas/CommerceConformanceErrorExpectation",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceConformanceRequestResultFixture": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "outcome": {
+                "const": "launched",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "outcome"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "outcome": {
+                "const": "purchased",
+                "readOnly": true
+              },
+              "purchase": {
+                "$ref": "#/components/schemas/CommerceConformancePurchaseFixture",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "outcome",
+              "purchase"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "outcome": {
+                "oneOf": [
+                  {
+                    "const": "cancelled"
+                  },
+                  {
+                    "const": "failed"
+                  }
+                ],
+                "readOnly": true
+              },
+              "error": {
+                "$ref": "#/components/schemas/CommerceConformanceErrorFixture",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "CommerceConformanceScheduledDebitExpectation": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "lotId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "readOnly": true
+          }
+        },
+        "required": [
+          "idempotencyKey",
+          "lotId",
+          "amount"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceConformanceSpendExpectation": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "oneOf": [
+              {
+                "const": "debited"
+              },
+              {
+                "const": "rejected"
+              }
+            ],
+            "readOnly": true
+          },
+          "debits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommerceConformanceDebitExpectation"
+            },
+            "readOnly": true
+          },
+          "alreadyProcessed": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "error": {
+            "$ref": "#/components/schemas/CommerceConformanceErrorExpectation",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceConformanceSpendInput": {
+        "type": "object",
+        "properties": {
+          "titleId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "currency": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "readOnly": true
+          },
+          "idempotencyKey": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "titleId",
+          "currency",
+          "amount",
+          "idempotencyKey"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceConformanceStep": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "runtime",
+                "readOnly": true
+              },
+              "action": {
+                "oneOf": [
+                  {
+                    "const": "reconcile"
+                  },
+                  {
+                    "const": "start"
+                  },
+                  {
+                    "const": "stop"
+                  }
+                ],
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "game",
+                "readOnly": true
+              },
+              "action": {
+                "const": "requestPurchase",
+                "readOnly": true
+              },
+              "input": {
+                "type": "object",
+                "properties": {
+                  "logicalId": {
+                    "$ref": "#/components/schemas/CommerceLogicalProductId",
+                    "readOnly": true
+                  },
+                  "idempotencyKey": {
+                    "$ref": "#/components/schemas/NonEmptyString",
+                    "readOnly": true
+                  },
+                  "source": {
+                    "$ref": "#/components/schemas/PurchaseSource",
+                    "readOnly": true
+                  },
+                  "offerId": {
+                    "$ref": "#/components/schemas/NonEmptyString",
+                    "readOnly": true
+                  },
+                  "quantity": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "readOnly": true
+                  }
+                },
+                "required": [
+                  "logicalId",
+                  "idempotencyKey"
+                ],
+                "additionalProperties": false,
+                "readOnly": true
+              },
+              "returns": {
+                "$ref": "#/components/schemas/CommerceConformanceRequestPurchaseExpectation",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "input"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "game",
+                "readOnly": true
+              },
+              "action": {
+                "const": "fetchProducts",
+                "readOnly": true
+              },
+              "input": {
+                "type": "object",
+                "properties": {
+                  "logicalIds": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/CommerceLogicalProductId"
+                    },
+                    "readOnly": true
+                  },
+                  "type": {
+                    "oneOf": [
+                      {
+                        "const": "all"
+                      },
+                      {
+                        "const": "in-app"
+                      },
+                      {
+                        "const": "subscription"
+                      }
+                    ],
+                    "readOnly": true
+                  }
+                },
+                "required": [],
+                "additionalProperties": false,
+                "readOnly": true
+              },
+              "returns": {
+                "$ref": "#/components/schemas/CommerceConformanceFetchProductsExpectation",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "store",
+                "readOnly": true
+              },
+              "action": {
+                "oneOf": [
+                  {
+                    "const": "complete"
+                  },
+                  {
+                    "const": "update"
+                  }
+                ],
+                "readOnly": true
+              },
+              "purchase": {
+                "$ref": "#/components/schemas/CommerceConformancePurchaseFixture",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "purchase"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "store",
+                "readOnly": true
+              },
+              "action": {
+                "const": "error",
+                "readOnly": true
+              },
+              "logicalId": {
+                "$ref": "#/components/schemas/CommerceLogicalProductId",
+                "readOnly": true
+              },
+              "error": {
+                "$ref": "#/components/schemas/CommerceConformanceErrorFixture",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "error"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "store",
+                "readOnly": true
+              },
+              "action": {
+                "const": "queueRequest",
+                "readOnly": true
+              },
+              "result": {
+                "$ref": "#/components/schemas/CommerceConformanceRequestResultFixture",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "result"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "store",
+                "readOnly": true
+              },
+              "action": {
+                "const": "queueFinish",
+                "readOnly": true
+              },
+              "result": {
+                "$ref": "#/components/schemas/CommerceConformanceFinishResultFixture",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "result"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "backend",
+                "readOnly": true
+              },
+              "action": {
+                "const": "queueVerify",
+                "readOnly": true
+              },
+              "decision": {
+                "$ref": "#/components/schemas/CommerceConformanceVerifyDecision",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "decision"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "backend",
+                "readOnly": true
+              },
+              "action": {
+                "const": "push",
+                "readOnly": true
+              },
+              "transactionId": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "readOnly": true
+              },
+              "entryId": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "readOnly": true
+              },
+              "logicalId": {
+                "$ref": "#/components/schemas/CommerceLogicalProductId",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "transactionId",
+              "entryId",
+              "logicalId"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "backend",
+                "readOnly": true
+              },
+              "action": {
+                "const": "revoke",
+                "readOnly": true
+              },
+              "ledgerEntryId": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "readOnly": true
+              },
+              "entryId": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "readOnly": true
+              },
+              "reason": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "ledgerEntryId",
+              "entryId",
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "wallet",
+                "readOnly": true
+              },
+              "action": {
+                "const": "creditFromGrant",
+                "readOnly": true
+              },
+              "lot": {
+                "$ref": "#/components/schemas/CommerceConformanceLotFixture",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "lot"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "wallet",
+                "readOnly": true
+              },
+              "action": {
+                "const": "spend",
+                "readOnly": true
+              },
+              "input": {
+                "$ref": "#/components/schemas/CommerceConformanceSpendInput",
+                "readOnly": true
+              },
+              "returns": {
+                "$ref": "#/components/schemas/CommerceConformanceSpendExpectation",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "input"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "wallet",
+                "readOnly": true
+              },
+              "action": {
+                "const": "renewDue",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "clock",
+                "readOnly": true
+              },
+              "action": {
+                "const": "set",
+                "readOnly": true
+              },
+              "at": {
+                "$ref": "#/components/schemas/IsoTimestamp",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "at"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "CommerceConformanceSubscriptionEventExpectation": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/CommerceConformanceSubscriptionEventType",
+            "readOnly": true
+          },
+          "logicalId": {
+            "$ref": "#/components/schemas/CommerceLogicalProductId",
+            "readOnly": true
+          },
+          "periodIndex": {
+            "$ref": "#/components/schemas/NonNegativeInteger",
+            "readOnly": true
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "readOnly": true
+          },
+          "reason": {
+            "$ref": "#/components/schemas/CommerceErrorCode",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "type",
+          "logicalId",
+          "periodIndex",
+          "expiresAt"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceConformanceSubscriptionEventType": {
+        "oneOf": [
+          {
+            "const": "subscriptionLapsed"
+          },
+          {
+            "const": "subscriptionRenewed"
+          },
+          {
+            "const": "subscriptionRevoked"
+          },
+          {
+            "const": "subscriptionStarted"
+          }
+        ]
+      },
+      "CommerceConformanceVector": {
+        "type": "object",
+        "properties": {
+          "vector": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "description": "Equals the file name without `.json`.",
+            "readOnly": true
+          },
+          "protocol": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "summary": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "profile": {
+            "$ref": "#/components/schemas/CommerceConformanceProfile",
+            "readOnly": true
+          },
+          "catalog": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommerceConformanceCatalogEntry"
+            },
+            "readOnly": true
+          },
+          "wallet": {
+            "$ref": "#/components/schemas/CommerceConformanceWallet",
+            "readOnly": true
+          },
+          "steps": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/CommerceConformanceStep"
+            },
+            "readOnly": true
+          },
+          "expect": {
+            "$ref": "#/components/schemas/CommerceConformanceExpectation",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "vector",
+          "protocol",
+          "summary",
+          "profile",
+          "steps",
+          "expect"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceConformanceVerifyDecision": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "oneOf": [
+              {
+                "const": "granted"
+              },
+              {
+                "const": "pending"
+              },
+              {
+                "const": "rejected"
+              }
+            ],
+            "readOnly": true
+          },
+          "ledgerEntryId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "finalization": {
+            "oneOf": [
+              {
+                "const": "completed"
+              },
+              {
+                "const": "pending"
+              }
+            ],
+            "readOnly": true
+          },
+          "alreadyProcessed": {
+            "type": "boolean",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceConformanceVerifyRequestExpectation": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "store": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "transactionId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "token": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "idempotencyKey",
+          "store",
+          "transactionId",
+          "token"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceConformanceWallet": {
+        "type": "object",
+        "properties": {
+          "currencies": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/NonEmptyString"
+            },
+            "readOnly": true
+          },
+          "billingAuthority": {
+            "$ref": "#/components/schemas/CommerceBillingAuthority",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "currencies",
+          "billingAuthority"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceErrorCode": {
+        "oneOf": [
+          {
+            "const": "ACCOUNT_BINDING_REQUIRED"
+          },
+          {
+            "const": "ACTION_REQUIRED"
+          },
+          {
+            "const": "ALREADY_OWNED"
+          },
+          {
+            "const": "CONFIGURATION_REQUIRED"
+          },
+          {
+            "const": "INSUFFICIENT_BALANCE"
+          },
+          {
+            "const": "INVALID_RESPONSE"
+          },
+          {
+            "const": "IN_PROGRESS"
+          },
+          {
+            "const": "ITEM_UNAVAILABLE"
+          },
+          {
+            "const": "NETWORK"
+          },
+          {
+            "const": "NOT_PREPARED"
+          },
+          {
+            "const": "OUTCOME_UNKNOWN"
+          },
+          {
+            "const": "STORE_UNAVAILABLE"
+          },
+          {
+            "const": "UNKNOWN"
+          },
+          {
+            "const": "USER_CANCELLED"
+          }
+        ]
+      },
+      "CommerceEvidenceAuthority": {
+        "oneOf": [
+          {
+            "const": "adapter-settled"
+          },
+          {
+            "const": "client-token"
+          },
+          {
+            "const": "host-callback"
+          },
+          {
+            "const": "server-push"
+          }
+        ]
+      },
+      "CommerceFinishOwner": {
+        "oneOf": [
+          {
+            "const": "client"
+          },
+          {
+            "const": "host"
+          },
+          {
+            "const": "none"
+          },
+          {
+            "const": "server"
+          }
+        ]
+      },
+      "CommerceLifecycleCapabilities": {
+        "type": "object",
+        "properties": {
+          "availablePurchases": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "pending": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "restore": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "events": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "finish": {
+            "$ref": "#/components/schemas/CommerceFinishOwner",
+            "description": "Who finishes a granted purchase.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "availablePurchases",
+          "pending",
+          "restore",
+          "events",
+          "finish"
+        ],
+        "additionalProperties": false
+      },
+      "CommerceLogicalProductId": {
+        "type": "string",
+        "minLength": 1,
+        "description": "`LogicalProductId` narrowed to its open string branch and tagged non-empty,\nso validators and the generated schemas carry `minLength: 1`. Starter ids and\nplain `LogicalProductId` values remain assignable."
+      },
+      "CommercePurchaseCapabilities": {
+        "type": "object",
+        "properties": {
+          "consumable": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "durable": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "subscription": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "quantity": {
+            "type": "boolean",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "consumable",
+          "durable",
+          "subscription",
+          "quantity"
+        ],
+        "additionalProperties": false
+      },
+      "CommercePurchaseState": {
+        "oneOf": [
+          {
+            "const": "cancelled"
+          },
+          {
+            "const": "failed"
+          },
+          {
+            "const": "finished"
+          },
+          {
+            "const": "finishing"
+          },
+          {
+            "const": "granted"
+          },
+          {
+            "const": "launched"
+          },
+          {
+            "const": "pending"
+          },
+          {
+            "const": "purchased"
+          },
+          {
+            "const": "rejected"
+          },
+          {
+            "const": "requested"
+          },
+          {
+            "const": "revoked"
+          },
+          {
+            "const": "verifying"
+          }
+        ]
+      },
+      "CreditLotChannel": {
+        "oneOf": [
+          {
+            "const": "off-store"
+          },
+          {
+            "const": "promotion"
+          },
+          {
+            "const": "store"
+          }
+        ]
+      },
+      "CreditLotOrigin": {
+        "type": "object",
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/CreditLotChannel",
+            "readOnly": true
+          },
+          "store": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "titleId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "channel",
+          "store",
+          "titleId"
+        ],
+        "additionalProperties": false
+      },
+      "CreditLotSpendScope": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "title",
+                "readOnly": true
+              },
+              "titleId": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "kind",
+              "titleId"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "cross-title",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "CreditMembershipScope": {
+        "oneOf": [
+          {
+            "const": "platform"
+          },
+          {
+            "const": "title"
+          }
+        ]
+      },
+      "CreditMembershipTerms": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/CreditMembershipScope",
+            "readOnly": true
+          },
+          "price": {
+            "$ref": "#/components/schemas/CreditPrice",
+            "readOnly": true
+          },
+          "period": {
+            "$ref": "#/components/schemas/NonEmptyString.o1",
+            "description": "ISO 8601 duration, for example P30D.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "scope",
+          "price",
+          "period"
+        ],
+        "additionalProperties": false
+      },
+      "CreditPrice": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "$ref": "#/components/schemas/NonEmptyString.o1",
+            "readOnly": true
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "readOnly": true
+          }
+        },
+        "required": [
+          "currency",
+          "amount"
+        ],
+        "additionalProperties": false
+      },
+      "IsoTimestamp": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NonEmptyString.o1": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NonNegativeInteger": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "PurchaseKind": {
+        "oneOf": [
+          {
+            "const": "consumable"
+          },
+          {
+            "const": "durable"
+          },
+          {
+            "const": "subscription"
+          }
+        ]
+      },
+      "PurchaseSource": {
+        "oneOf": [
+          {
+            "const": "event"
+          },
+          {
+            "const": "result"
+          },
+          {
+            "const": "shop"
+          },
+          {
+            "const": "stage_fail"
+          }
+        ]
+      },
+      "ReadonlyRecordstringReadonlyRecordstringnumber": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/ReadonlyRecordstringnumber"
+        }
+      },
+      "ReadonlyRecordstringnumber": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "number"
+        }
+      },
+      "ReadonlyRecordstringreadonlyCommercePurchaseState": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/CommercePurchaseState"
+          }
+        }
+      },
+      "StorePurchaseState": {
+        "oneOf": [
+          {
+            "const": "pending"
+          },
+          {
+            "const": "purchased"
+          },
+          {
+            "const": "revoked"
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,14 +1,22 @@
 import typia from 'typia';
 
-import type { AdPlacements } from '@mpgd/catalog';
+import { resolveCatalogCurrencies, type AdPlacements, type ProductCatalog } from '@mpgd/catalog';
 
-import { adPlacementsFilePath } from './catalog-paths';
+import { adPlacementsFilePath, productCatalogFilePath } from './catalog-paths';
 import { isCliEntrypoint, readJsonFile } from './io';
 
 const assertAdPlacements = typia.createAssert<AdPlacements>();
+const assertProductCatalogCurrencies = typia.createAssert<Pick<ProductCatalog, 'currencies'>>();
 
-export function validateAdPlacementsFile(path = adPlacementsFilePath()) {
+export function validateAdPlacementsFile(
+  path = adPlacementsFilePath(),
+  catalogPath = productCatalogFilePath(),
+) {
   const adPlacements = assertAdPlacements(readJsonFile(path));
+  // Reward currencies must be declared by the product catalog the game ships.
+  const currencies = resolveCatalogCurrencies(
+    assertProductCatalogCurrencies(readJsonFile(catalogPath)),
+  );
   const ids = new Set<string>();
 
   for (const placement of adPlacements.placements) {
@@ -30,6 +38,13 @@ export function validateAdPlacementsFile(path = adPlacementsFilePath()) {
 
     if (placement.type === 'rewarded' && placement.reward === undefined) {
       throw new Error(`Rewarded placement ${placement.id} must define reward.`);
+    }
+
+    if (placement.reward?.type === 'currency' && !currencies.has(placement.reward.currency)) {
+      throw new Error(
+        `Ad placement ${placement.id} rewards undeclared currency ${placement.reward.currency}; `
+          + `declared currencies: ${[...currencies].join(', ')}.`,
+      );
     }
 
     for (const [target, platformPlacementId] of Object.entries(placement.platformPlacementIds)) {
