@@ -1,13 +1,20 @@
 import {
   AppStoreDependencyUnavailableError,
+  appStoreSignedTransactionEvidenceSchema,
   createAppStoreGameServicesEvidenceVerifier,
   createAppStoreServerApiClient,
+  createAppStoreSignedTransactionEvidence,
   isAppStoreVerificationId,
   type AppStoreServerApiClient,
+  type AppStoreSignedTransactionEvidencePolicy,
   type AppStoreSignedTransactionVerifier,
   type AppStoreTransactionPayload,
 } from './app-store-verifier';
-import { createAppStoreTransactionConformanceFixture } from './app-store-verifier-conformance';
+import {
+  appStoreConformanceSignedTransaction,
+  createAppStoreSignedTransactionEvidenceFixture,
+  createAppStoreTransactionConformanceFixture,
+} from './app-store-verifier-conformance';
 import type { VerifyPurchaseEvidenceInput } from './evidence-verification';
 
 const controller = new AbortController();
@@ -853,6 +860,389 @@ assertEqual(
   true,
   'the Server API client must cancel an oversized response stream before releasing it',
 );
+
+// Commerce v2 (RFC B3): `app-store.signed-transaction.v1` evidence is verified
+// offline through the signed-transaction verifier; the Server API is the
+// fallback for requests without it.
+{
+  const clientJws = appStoreConformanceSignedTransaction;
+  const evidenceInput = {
+    ...baseInput,
+    request: {
+      ...baseInput.request,
+      evidence: createAppStoreSignedTransactionEvidenceFixture({
+        transactionId: baseInput.request.platformTransactionId,
+        originalTransactionId: baseTransaction.originalTransactionId,
+        bundleId: baseTransaction.bundleId,
+      }),
+    },
+  } satisfies VerifyPurchaseEvidenceInput;
+  assertEqual(
+    evidenceInput.request.evidence.schema,
+    appStoreSignedTransactionEvidenceSchema,
+    'the fixture envelope uses the published evidence schema',
+  );
+  assertEqual(
+    evidenceInput.request.evidence.payload.signedTransaction,
+    clientJws,
+    'the fixture envelope carries the placeholder JWS',
+  );
+
+  const freshJws = 'signed-transaction-jws';
+  /**
+   * A verifier whose signature port decodes the client JWS to `client` and
+   * the Server API JWS to `fresh` (both default to the base transaction), and
+   * whose Server API answers `found` unless `serverApi` overrides it.
+   */
+  function createOfflineHarness(input: {
+    readonly client?: AppStoreTransactionPayload;
+    readonly fresh?: AppStoreTransactionPayload;
+    readonly policy?: AppStoreSignedTransactionEvidencePolicy;
+    readonly serverApi?: AppStoreServerApiClient;
+  } = {}): {
+    readonly verifier: ReturnType<typeof createVerifier>;
+    readonly serverApiCalls: string[];
+    readonly verifiedJws: string[];
+  } {
+    const serverApiCalls: string[] = [];
+    const verifiedJws: string[] = [];
+    const client = input.client ?? baseTransaction;
+    const fresh = input.fresh ?? baseTransaction;
+    const verifier = createAppStoreGameServicesEvidenceVerifier({
+      bundleId: baseTransaction.bundleId,
+      environment: baseTransaction.environment,
+      serverApi: {
+        async getTransactionInfo(request) {
+          serverApiCalls.push(request.transactionId);
+          if (input.serverApi !== undefined) {
+            return input.serverApi.getTransactionInfo(request);
+          }
+          return { status: 'found', signedTransactionInfo: freshJws };
+        },
+      },
+      signedTransactionVerifier: {
+        async verifyAndDecode(request) {
+          verifiedJws.push(request.signedTransaction);
+          if (request.signedTransaction === clientJws) {
+            return { status: 'verified', payload: client };
+          }
+          if (request.signedTransaction === freshJws) {
+            return { status: 'verified', payload: fresh };
+          }
+          return { status: 'rejected', reason: 'APP_STORE_SIGNATURE_INVALID' };
+        },
+      },
+      resolveAppAccountToken: () => baseTransaction.appAccountToken ?? '',
+      now: () => '2026-07-16T13:00:00.000Z',
+      ...(input.policy === undefined ? {} : { signedTransactionEvidence: input.policy }),
+    });
+    return { verifier, serverApiCalls, verifiedJws };
+  }
+
+  // Default policy: the client JWS proves authenticity and binds the id; the
+  // grant decision reads the transaction's current status from the Server API.
+  const offline = createOfflineHarness();
+  const offlineVerified = await offline.verifier.verifyPurchase(evidenceInput);
+  assertEqual(offlineVerified.status, 'verified', 'signed-transaction evidence verifies');
+  assertEqual(
+    offline.verifiedJws.join(','),
+    `${clientJws},${freshJws}`,
+    'the client JWS is verified first, then the fresh Server API JWS',
+  );
+  assertEqual(
+    offline.serverApiCalls.join(','),
+    baseInput.request.platformTransactionId,
+    'the default policy confirms the current transaction status through the Server API',
+  );
+  assertEqual(
+    offlineVerified.status === 'verified' ? offlineVerified.verificationId : '',
+    verified.verificationId,
+    'the evidence path yields the same verification identity as the evidence-less path',
+  );
+  assertEqual(
+    offlineVerified.status === 'verified'
+      ? offlineVerified.payload?.appStoreOriginalTransactionId
+      : '',
+    baseTransaction.originalTransactionId,
+    'the evidence path retains the signed original transaction identity',
+  );
+
+  // A JWS cached before a refund carries no revocationDate; the fresh status does.
+  const refundedAfterSigning = createOfflineHarness({
+    fresh: { ...baseTransaction, revocationDate: signedDate + 60_000 },
+  });
+  assertDecision(
+    await refundedAfterSigning.verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_TRANSACTION_REVOKED',
+    'a transaction refunded after the client JWS was signed is rejected by default',
+  );
+  assertEqual(
+    refundedAfterSigning.serverApiCalls.length,
+    1,
+    'the refund is seen because the current status was fetched',
+  );
+  const freshDisagrees = createOfflineHarness({
+    fresh: { ...baseTransaction, transactionId: '2000000123456790' },
+  });
+  assertDecision(
+    await freshDisagrees.verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_SIGNED_TRANSACTION_ID_MISMATCH',
+    'a Server API answer for another transaction than the client JWS is rejected',
+  );
+  const serverApiDown = createOfflineHarness({
+    serverApi: {
+      async getTransactionInfo() {
+        throw new AppStoreDependencyUnavailableError('App Store Server API is down.');
+      },
+    },
+  });
+  assertDecision(
+    await serverApiDown.verifier.verifyPurchase(evidenceInput),
+    'pending',
+    'APP_STORE_SERVER_API_UNAVAILABLE',
+    'without the current status a valid client JWS stays pending, never granted',
+  );
+
+  const tampered = createOfflineHarness();
+  const tamperedDecision = await tampered.verifier.verifyPurchase({
+    ...evidenceInput,
+    request: {
+      ...evidenceInput.request,
+      evidence: createAppStoreSignedTransactionEvidenceFixture({
+        signedTransaction: `${clientJws}.tampered`,
+        transactionId: baseInput.request.platformTransactionId,
+      }),
+    },
+  });
+  assertDecision(
+    tamperedDecision,
+    'rejected',
+    'APP_STORE_SIGNATURE_INVALID',
+    'a tampered client JWS is rejected by the signature verifier',
+  );
+  assertEqual(
+    tampered.serverApiCalls.length,
+    0,
+    'a rejected JWS never falls back to the Server API',
+  );
+
+  const mismatched = createOfflineHarness({
+    client: { ...baseTransaction, transactionId: '2000000123456790' },
+  });
+  assertDecision(
+    await mismatched.verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_SIGNED_TRANSACTION_ID_MISMATCH',
+    'a JWS decoding to another transaction id than the request is rejected',
+  );
+  assertEqual(
+    mismatched.serverApiCalls.length,
+    0,
+    'an id mismatch never falls back to the Server API',
+  );
+
+  const payloadMismatch = createOfflineHarness();
+  assertDecision(
+    await payloadMismatch.verifier.verifyPurchase({
+      ...evidenceInput,
+      request: {
+        ...evidenceInput.request,
+        evidence: createAppStoreSignedTransactionEvidenceFixture({ transactionId: '2000000123456790' }),
+      },
+    }),
+    'rejected',
+    'APP_STORE_SIGNED_TRANSACTION_ID_MISMATCH',
+    'an envelope transactionId that differs from the request is rejected before verification',
+  );
+  assertEqual(
+    payloadMismatch.verifiedJws.length,
+    0,
+    'an envelope id mismatch never runs the verifier',
+  );
+
+  const malformedEvidence = createOfflineHarness();
+  assertDecision(
+    await malformedEvidence.verifier.verifyPurchase({
+      ...evidenceInput,
+      request: {
+        ...evidenceInput.request,
+        evidence: { schema: appStoreSignedTransactionEvidenceSchema, payload: { signedTransaction: '' } },
+      },
+    }),
+    'rejected',
+    'APP_STORE_SIGNED_TRANSACTION_EVIDENCE_INVALID',
+    'an envelope without a JWS is rejected',
+  );
+  assertEqual(
+    malformedEvidence.serverApiCalls.length + malformedEvidence.verifiedJws.length,
+    0,
+    'malformed evidence reaches neither the verifier nor the Server API',
+  );
+
+  const otherAccountPayload = {
+    ...baseTransaction,
+    appAccountToken: '0f0f0f0f-0f0f-4f0f-8f0f-0f0f0f0f0f0f',
+  };
+  const otherAccount = createOfflineHarness({
+    client: otherAccountPayload,
+    fresh: otherAccountPayload,
+  });
+  assertDecision(
+    await otherAccount.verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
+    'the evidence path applies the same account binding check as the evidence-less path',
+  );
+
+  // Offline-only: the client JWS alone decides, within the freshness window.
+  const offlineOnly = createOfflineHarness({
+    policy: { mode: 'offline-only', maxSignedAgeMs: 2 * 60 * 60 * 1000 },
+  });
+  assertEqual(
+    (await offlineOnly.verifier.verifyPurchase(evidenceInput)).status,
+    'verified',
+    'offline-only verifies a fresh client JWS',
+  );
+  assertEqual(offlineOnly.serverApiCalls.length, 0, 'offline-only never calls the Server API');
+  assertEqual(
+    offlineOnly.verifiedJws.join(','),
+    clientJws,
+    'offline-only verifies only the client JWS',
+  );
+  const staleOfflineOnly = createOfflineHarness({
+    policy: { mode: 'offline-only', maxSignedAgeMs: 30 * 60 * 1000 },
+  });
+  assertDecision(
+    await staleOfflineOnly.verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_SIGNED_TRANSACTION_STALE',
+    'offline-only rejects a client JWS signed before the freshness window',
+  );
+  const refundedOfflineOnly = createOfflineHarness({
+    policy: { mode: 'offline-only', maxSignedAgeMs: 2 * 60 * 60 * 1000 },
+    fresh: { ...baseTransaction, revocationDate: signedDate + 60_000 },
+  });
+  assertEqual(
+    (await refundedOfflineOnly.verifier.verifyPurchase(evidenceInput)).status,
+    'verified',
+    'offline-only cannot see a refund after signing: the documented risk of that mode',
+  );
+  const revokedOfflineOnly = createOfflineHarness({
+    policy: { mode: 'offline-only', maxSignedAgeMs: 2 * 60 * 60 * 1000 },
+    client: { ...baseTransaction, revocationDate: signedDate + 1_000 },
+  });
+  assertDecision(
+    await revokedOfflineOnly.verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_TRANSACTION_REVOKED',
+    'offline-only applies the revocation check to the client JWS',
+  );
+  const otherAccountOfflineOnly = createOfflineHarness({
+    policy: { mode: 'offline-only', maxSignedAgeMs: 2 * 60 * 60 * 1000 },
+    client: otherAccountPayload,
+  });
+  assertDecision(
+    await otherAccountOfflineOnly.verifier.verifyPurchase(evidenceInput),
+    'rejected',
+    'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
+    'offline-only applies the account binding check to the client JWS',
+  );
+
+  // Ignore: the evidence is not read and the transaction is fetched by id.
+  const ignored = createOfflineHarness({ policy: { mode: 'ignore' } });
+  assertEqual(
+    (await ignored.verifier.verifyPurchase(evidenceInput)).status,
+    'verified',
+    'with evidence ignored the Server API lookup verifies the request',
+  );
+  assertEqual(
+    ignored.verifiedJws.join(','),
+    freshJws,
+    'with evidence ignored only the Server API JWS is verified',
+  );
+  assertEqual(
+    ignored.serverApiCalls.join(','),
+    baseInput.request.platformTransactionId,
+    'with evidence ignored the transaction is fetched by id',
+  );
+  for (const policy of [
+    { mode: 'offline-only' },
+    { mode: 'offline-only', maxSignedAgeMs: 0 },
+    { mode: 'cached' },
+  ]) {
+    await assertRejects(
+      async () =>
+        createAppStoreGameServicesEvidenceVerifier({
+          bundleId: baseTransaction.bundleId,
+          environment: baseTransaction.environment,
+          serverApi: createFoundServerApi(),
+          signedTransactionVerifier: createSignedTransactionVerifier(baseTransaction),
+          resolveAppAccountToken: () => baseTransaction.appAccountToken ?? '',
+          signedTransactionEvidence: policy as AppStoreSignedTransactionEvidencePolicy,
+        }),
+      'signedTransactionEvidence',
+      `an invalid evidence policy ${JSON.stringify(policy)} is rejected at construction`,
+    );
+  }
+
+  const absent = createOfflineHarness();
+  assertEqual(
+    (await absent.verifier.verifyPurchase(baseInput)).status,
+    'verified',
+    'a request without evidence keeps the Server API path',
+  );
+  assertEqual(
+    absent.serverApiCalls.join(','),
+    baseInput.request.platformTransactionId,
+    'a request without evidence fetches the transaction by id',
+  );
+  const otherSchema = createOfflineHarness();
+  assertEqual(
+    (await otherSchema.verifier.verifyPurchase({
+      ...baseInput,
+      request: {
+        ...baseInput.request,
+        evidence: { schema: 'google-play.product-purchase.v2', payload: { purchaseToken: 'x' } },
+      },
+    })).status,
+    'verified',
+    'evidence of another schema is ignored and the Server API path verifies the request',
+  );
+  assertEqual(
+    otherSchema.serverApiCalls.join(','),
+    baseInput.request.platformTransactionId,
+    'evidence of another schema keeps the Server API lookup',
+  );
+
+  assertEqual(
+    JSON.stringify(
+      createAppStoreSignedTransactionEvidence({
+        signedTransaction: clientJws,
+        transactionId: '1',
+        originalTransactionId: '0',
+        bundleId: 'com.example.game',
+      }),
+    ),
+    JSON.stringify({
+      schema: appStoreSignedTransactionEvidenceSchema,
+      payload: {
+        signedTransaction: clientJws,
+        transactionId: '1',
+        originalTransactionId: '0',
+        bundleId: 'com.example.game',
+      },
+    }),
+    'the evidence builder emits the published envelope',
+  );
+  await assertRejects(
+    async () =>
+      createAppStoreSignedTransactionEvidence({ signedTransaction: '', transactionId: '1' }),
+    'signedTransaction must be a non-empty string',
+    'the evidence builder rejects an empty JWS',
+  );
+}
 
 console.log('App Store signed transaction verifier tests passed.');
 

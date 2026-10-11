@@ -19,6 +19,13 @@ export interface StoreKitTransaction {
   readonly revokedAt?: string;
   /** StoreKit-verified JWS; the game backend independently verifies Apple data. */
   readonly signedTransaction: string;
+  /**
+   * Present on `getTransactions` results: true for `Transaction.unfinished`
+   * entries, false for current non-consumable entitlements that are already
+   * finished. Omitted by native builds predating the field and by
+   * `purchase` and `transactionUpdated` payloads.
+   */
+  readonly unfinished?: boolean;
 }
 
 export type StoreKitPurchaseOutcome =

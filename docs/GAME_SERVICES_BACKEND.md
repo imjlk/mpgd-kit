@@ -123,6 +123,43 @@ The bearer-token provider receives the request `AbortSignal`; it should throw
 outage and let cancellation, invalid credentials, and programming errors
 propagate.
 
+Commerce v2 clients (`@mpgd/capacitor-storekit`'s
+`createCapacitorStoreKitCommerceProvider`, RFC B3) submit the
+StoreKit-verified JWS as request evidence with schema
+`app-store.signed-transaction.v1` (`appStoreSignedTransactionEvidenceSchema`;
+`createAppStoreSignedTransactionEvidence` builds the envelope). The verifier
+first checks that JWS offline through the same `signedTransactionVerifier`:
+a tampered JWS is rejected before any network call, a decoded transaction id
+that differs from the request's `platformTransactionId` is rejected with
+`APP_STORE_SIGNED_TRANSACTION_ID_MISMATCH`, and a missing or oversized
+`signedTransaction` with `APP_STORE_SIGNED_TRANSACTION_EVIDENCE_INVALID`.
+A valid client JWS is a signed snapshot, not the current status: a player
+can retain a JWS signed before a refund, and that JWS carries no
+`revocationDate`. The grant decision is therefore taken on the transaction's
+current status, selected by `signedTransactionEvidence`:
+
+- `{ mode: 'server-api' }` (default): after the offline check, the
+  transaction is fetched by id through `Get Transaction Info` and every
+  check below runs on that fresh payload, so a refund after signing is
+  rejected (`APP_STORE_TRANSACTION_REVOKED`) and a Server API outage stays
+  `pending`, never a grant.
+- `{ mode: 'offline-only', maxSignedAgeMs }`: for deployments without Server
+  API access only. The client JWS alone decides; its `signedDate` must be
+  within `maxSignedAgeMs` of the verifier clock
+  (`APP_STORE_SIGNED_TRANSACTION_STALE` otherwise). The documented risk: a
+  transaction refunded after its JWS was signed is accepted until the window
+  closes, so pair this mode with App Store Server Notifications or a periodic
+  revocation sweep over the ledger.
+- `{ mode: 'ignore' }`: the evidence is not read and the transaction is
+  fetched by id for every request.
+
+A request without that evidence, or with another schema, keeps the
+`Get Transaction Info` lookup unchanged, so current clients are unaffected.
+A `GAME_SERVICES_IOS_EVIDENCE_VERIFIER` service binding receives the request
+with its `evidence`, so a deployment behind that binding must construct its
+verifier with a `signedTransactionVerifier` able to verify client-supplied
+JWS (`createAppleSignedTransactionVerifier` is) for the offline check.
+
 The verifier matches the signed transaction to the configured bundle and
 environment, the catalog's platform product and type, the submitted transaction
 identifier, and a valid non-nil UUID `appAccountToken` resolved server-side for
