@@ -553,7 +553,8 @@ export interface CreditWalletClient {
   listUnredeemed(input: { readonly titleId: string }): Promise<readonly CreditEntitlement[]>;
   redeem(input: { readonly entitlementId: string; readonly ledgerEntryId: string }): Promise<{ readonly redeemed: boolean }>;
   getBalance(input: { readonly titleId: string }): Promise<CreditBalance>;
-  subscribe?(listener: (event: CommerceEvent) => void): () => void;
+  getActiveSubscriptions?(input: { readonly titleId: string }): Promise<readonly ActiveSubscription[]>;
+  subscribe?(listener: (event: CommerceEvent) => void, input?: { readonly titleId?: string }): () => void;
 }
 
 export function createCreditCommerceProvider(
@@ -566,6 +567,21 @@ The provider maps `fetchProducts` to `listOffers`, `requestPurchase` to
 `spend` (outcome `purchased`, evidence `adapter-settled`),
 `getAvailablePurchases` to `listUnredeemed`, and finishing to a server-side
 `redeem`.
+
+B7 ships the contract as `@mpgd/platform/commerce-wallet`
+([Credit wallet commerce](../../CREDIT_WALLET_COMMERCE.md)): the provider
+answers a spend with evidence `credit-wallet.spend.v1` carrying the debits and
+the wallet's entitlement id and no `settlement` pointer (the backend ledger
+entry exists only once that evidence is verified), `finishTransaction`
+refuses to redeem without the ledger entry id of the grant, `restorePurchases`
+re-reads unredeemed entitlements as `purchaseUpdated` events, a `spend` of a
+membership offer starts the membership with the spend key as its subscription
+id, the wallet prices the spend (a `purchased` answer requires debits that add
+up to the offer price), and the client's `getActiveSubscriptions` serves the
+provider's. The lot and membership rules below are exported as pure
+functions, and `createInMemoryCreditWallet` is the reference wallet the
+conformance runner's wallet now wraps. The wallet service itself stays in the
+consuming project.
 
 ### Credit lots {#credit-lots}
 
@@ -602,7 +618,9 @@ export interface CreditLot {
   `createdAt`, then `lotId`. A spend that eligible lots cannot cover fails
   with `INSUFFICIENT_BALANCE` and debits nothing.
 - Spends are idempotent by key: a repeated key returns the original debits
-  with `alreadyProcessed: true`.
+  with `alreadyProcessed: true`. The reference wallet rejects a key reused
+  for a different spend and reserves the `membership:` prefix for scheduled
+  debits.
 
 ### Billing authority and memberships {#billing-authority}
 
@@ -614,7 +632,10 @@ Each target resolves a billing authority from its release profile.
 `google-play` and `app-store` are always `store`. `web` and `web-preview`
 default to `host`. Every other profile defaults to `store`; a project may set
 `host` for one of them after its own policy review. The target-config
-validator rejects `host` for `google-play` and `app-store`.
+validator rejects `host` for `google-play` and `app-store`
+(`resolveCommerceBillingAuthority(profile, override?)` in
+`@mpgd/platform/commerce-wallet`; the override is
+`TargetReleaseConfig.billingAuthority`, B7).
 
 A credit-funded membership is a `subscription`-kind product priced in a
 wallet currency with a period. It is offered only where the billing
@@ -631,7 +652,10 @@ authority is `host`:
   `title`-scoped membership debits that title's lots and `cross-title` lots,
   in the spend order above.
 - When eligible balance cannot cover a renewal, the membership lapses at the
-  end of the paid period with reason `INSUFFICIENT_BALANCE`.
+  end of the paid period with reason `INSUFFICIENT_BALANCE`. A renewal judges
+  lot eligibility at the boundary of the period it pays for, not at the time
+  the scheduler runs, and period `n` ends at `startedAt + (n + 1) × period`
+  with calendar months clamped to the month length.
 - Membership authority is `server-push`: the wallet service decides
   renewal, expiry, and lapse alone, and the client learns them through
   `subscriptionUpdated` events and `getActiveSubscriptions`.
@@ -944,7 +968,7 @@ package carries a Sampo changeset.
 | B4 (landed, draft) | `@mpgd/adapter-browser/microsoft-store`: `createMicrosoftStoreCommerceProvider` over the Digital Goods engine shared with the v1 adapter (`transactionId` and `token` are the `purchaseToken`, `settlement` is the authority's ledger entry, `launched` while the authority answer is open, `finish: 'server'`), `withMicrosoftStoreCommerceProvider` wiring `commerceV2`, the v1 wrapper, and the capability block; the `adapter-settled` vector passes directly and through the gateway, every other store vector is listed as not applicable to the profile; `@mpgd/game-services` grants on `findAdapterSettledGrant` (capability block `authority.evidence: 'adapter-settled'` plus `authoritativeGrant`) when `commerceV2` exists and keeps `isAuthoritativeMicrosoftStoreCompletion` (deprecated) for v1-only gateways | Target-name settlement check |
 | B5 (landed, draft) | `@mpgd/adapter-ait`: `createAitCommerceProvider` over the host bridge's IAP machinery (one controller shared with the v1 `commerce.*` methods), pending orders as available purchases, `finishTransaction` as the host finish (`completeProductGrant` after the ledger grant, never without a ledger entry id), `restorePurchases` as the pending-order recovery pass, the six `commerce.v2.*` bridge methods and the `commerceV2` event channel on the host bridge, `gateway.commerceV2` and the `commerce` capability block; the host-finish vectors pass directly and through the gateway with the store actor's `tokenOf` (the token is the order id) | |
 | B6 | Devvit and Verse8 providers on server-push lookup | |
-| B7 | Credit wallet contract: `CreditWalletClient`, `createCreditCommerceProvider`, lot and membership rules, reference in-memory wallet | |
+| B7 (landed, draft) | `@mpgd/platform/commerce-wallet`: `createCreditCommerceProvider` over a project-owned `CreditWalletClient` (offers as products with memberships omitted under `store` authority, a spend as a `purchased` outcome with `credit-wallet.spend.v1` adapter-settled evidence carrying the debits and the wallet entitlement id and no `settlement` pointer, unredeemed entitlements as available purchases, `finishTransaction` as the redeem that refuses to run without the ledger entry id, `restorePurchases` as the unredeemed re-read, client events through the pre-listener buffer, the RFC capability row with `purchase.subscription` only under `host`); the lot and membership rules as pure functions (`deriveCreditLotSpendScope` with a `creditScope` registry that keeps Google Play and the App Store `title`, `selectEligibleCreditLots`, `compareCreditLotSpendOrder`, `planCreditDebits`, `createMembershipRenewalKey`, `createCreditSubscriptionEventId`); `resolveCommerceBillingAuthority` with `TargetReleaseConfig.billingAuthority` and the target-config validator rejecting `host` on `google-play` and `app-store`; `createInMemoryCreditWallet` as the reference wallet the conformance wallet wraps, so the three wallet vectors pass through the public provider (a lapsed membership cannot be restarted by replaying its period-0 key); `CreditWalletClient.getActiveSubscriptions?` | |
 | C1 | Single reconciler in the game-services client replacing the four drivers | Four recovery drivers |
 | C2 | Server: open `StoreId`, evidence registry, capabilities endpoint, revocation entries, worker Play finalizer and App Store recovery bindings | Closed targets, missing Play finalizer, no revocation |
 | C3 | CLI and templates: wire store providers in `capacitorAndroid.ts` and `capacitorIos.ts`, make `--providers` install them, connect Apps in Toss and Devvit products | Template wiring |

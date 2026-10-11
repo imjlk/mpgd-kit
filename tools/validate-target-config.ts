@@ -1,3 +1,4 @@
+import { resolveCommerceBillingAuthority } from '@mpgd/platform/commerce-wallet';
 import type { TargetConfig } from '@mpgd/target-config';
 
 import { isCliEntrypoint, readJsonFile } from './io';
@@ -78,6 +79,17 @@ function validateTargetConfigConsistency(target: string, config: TargetConfig): 
   if (mismatches.length > 0) {
     const names = mismatches.map(([name]) => name).join(', ');
     throw new Error(`Target ${target} has feature availability mismatches: ${names}`);
+  }
+
+  // D-02: Google Play and App Store builds cannot declare host billing; the
+  // resolver throws for that pair, so the matrix fails before a build does.
+  try {
+    resolveCommerceBillingAuthority(config.release.profile, config.release.billingAuthority);
+  } catch (error) {
+    throw new Error(
+      `Target ${target} release.billingAuthority is invalid: `
+        + `${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 
   if (target === 'ait' && !config.policy.requiresAitReview) {

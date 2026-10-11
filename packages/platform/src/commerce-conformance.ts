@@ -18,15 +18,14 @@ import {
   type CommerceProvider,
   type CommercePurchaseState,
   type CreditBalance,
-  type CreditDebit,
   type CreditEntitlement,
   type CreditLot,
   type CreditLotSpendScope,
-  type CreditMembershipTerms,
   type CreditOffer,
   type CreditSpendInput,
   type CreditSpendResult,
   type CreditWalletClient,
+  type CreditWalletSubscribeInput,
   type FetchProductsInput,
   type FinishTransactionInput,
   type FinishTransactionResult,
@@ -49,11 +48,28 @@ import type {
   CommerceConformancePurchaseFixture,
   CommerceConformanceRequestResultFixture,
   CommerceConformanceStep,
-  CommerceConformanceSubscriptionEventType,
   CommerceConformanceVector,
   CommerceConformanceVerifyDecision,
 } from './commerce-vectors.js';
+import {
+  addIsoDuration,
+  createCreditCommerceProvider,
+  createInMemoryCreditWallet,
+  normalizeIsoTimestamp,
+  type CreditMembershipStartInput,
+  type CreditMembershipStartResult,
+  type CreditScheduledDebit,
+  type CreditSubscriptionEvent,
+} from './commerce-wallet.js';
 import type { PlatformEvidenceEnvelope } from './index.js';
+
+// The wallet rules moved to `./commerce-wallet` with B7; they stay importable here.
+export {
+  addIsoDuration,
+  compareCreditLotSpendOrder,
+  deriveCreditLotSpendScope,
+  normalizeIsoTimestamp,
+} from './commerce-wallet.js';
 
 /**
  * Commerce v2 conformance runner (RFC "Conformance vectors") with the in-memory
@@ -100,42 +116,6 @@ export function createCommerceConformanceClock(
       current = normalizeIsoTimestamp(at);
     },
   };
-}
-
-/** Canonical `YYYY-MM-DDTHH:mm:ssZ`; milliseconds are kept only when non-zero. */
-export function normalizeIsoTimestamp(input: string): string {
-  const millis = Date.parse(input);
-  if (Number.isNaN(millis)) {
-    throw new TypeError(`Invalid ISO-8601 timestamp: ${input}`);
-  }
-  return formatIsoTimestamp(millis);
-}
-
-function formatIsoTimestamp(millis: number): string {
-  const iso = new Date(millis).toISOString();
-  return iso.endsWith('.000Z') ? `${iso.slice(0, -5)}Z` : iso;
-}
-
-/** Adds an ISO-8601 duration (`P30D`, `P1M`, `PT12H`, ...) to a timestamp, in UTC calendar units. */
-export function addIsoDuration(at: string, duration: string): string {
-  const match = /^P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/u
-    .exec(duration);
-  if (match === null || duration === 'P' || duration === 'PT') {
-    throw new TypeError(`Invalid ISO-8601 duration: ${duration}`);
-  }
-  const [, years, months, weeks, days, hours, minutes, seconds] = match;
-  const date = new Date(normalizeIsoTimestamp(at));
-  date.setUTCFullYear(
-    date.getUTCFullYear() + Number(years ?? 0),
-    date.getUTCMonth() + Number(months ?? 0),
-    date.getUTCDate() + Number(weeks ?? 0) * 7 + Number(days ?? 0),
-  );
-  date.setUTCHours(
-    date.getUTCHours() + Number(hours ?? 0),
-    date.getUTCMinutes() + Number(minutes ?? 0),
-    date.getUTCSeconds() + Number(seconds ?? 0),
-  );
-  return formatIsoTimestamp(date.getTime());
 }
 
 // Capabilities and fixture filling.
@@ -1399,33 +1379,18 @@ export function createCommerceConformanceRuntime(
   };
 }
 
-// Reference credit wallet.
+// Reference credit wallet. The lot and membership rules and the in-memory
+// wallet live in `./commerce-wallet` (B7); the conformance wallet wraps that
+// wallet with the vector actor surface and the backend finalizer hook.
 
-export interface CommerceScheduledDebit extends CreditDebit {
-  readonly idempotencyKey: string;
-}
+export type CommerceScheduledDebit = CreditScheduledDebit;
 
-export interface CommerceConformanceSubscriptionEvent {
-  /** Stable id `<subscriptionId>:<periodIndex>:<type>`, so redelivery is idempotent. */
-  readonly eventId: string;
-  readonly type: CommerceConformanceSubscriptionEventType;
-  readonly subscriptionId: string;
-  readonly logicalId: CommerceLogicalProductId;
-  readonly periodIndex: number;
-  readonly expiresAt: string;
-  readonly reason?: CommerceErrorCode;
-}
+/** Stable id `<subscriptionId>:<periodIndex>:<type>`, so redelivery is idempotent. */
+export type CommerceConformanceSubscriptionEvent = CreditSubscriptionEvent;
 
-export interface CommerceConformanceMembershipStart {
-  readonly subscriptionId: string;
-  readonly titleId: string;
-  readonly logicalId: CommerceLogicalProductId;
-  readonly terms: CreditMembershipTerms;
-}
+export type CommerceConformanceMembershipStart = CreditMembershipStartInput;
 
-export type CommerceConformanceMembershipResult =
-  | { readonly status: 'started'; readonly subscription: ActiveSubscription; readonly entitlementId: string }
-  | { readonly status: 'rejected'; readonly error: CommerceErrorInfo };
+export type CommerceConformanceMembershipResult = CreditMembershipStartResult;
 
 /** The wallet actor of a vector: wallet steps plus wallet observations. */
 export interface CommerceConformanceWalletActor {
@@ -1452,8 +1417,15 @@ export interface CommerceConformanceWalletActor {
 export interface CommerceConformanceWallet
   extends CreditWalletClient, CommerceConformanceWalletActor {
   readonly entitlements: readonly CreditEntitlement[];
+  /** Offers the wallet prices spends against; the provider registers the vector catalog when empty. */
+  readonly offers: readonly CreditOffer[];
+  addOffers(offers: readonly CreditOffer[]): void;
   startMembership(input: CommerceConformanceMembershipStart): Promise<CommerceConformanceMembershipResult>;
-  subscribe(listener: (event: CommerceEvent) => void): () => void;
+  getActiveSubscriptions(input?: { readonly titleId?: string }): Promise<readonly ActiveSubscription[]>;
+  subscribe(
+    listener: (event: CommerceEvent) => void,
+    input?: CreditWalletSubscribeInput,
+  ): () => void;
 }
 
 export interface CreateCommerceConformanceWalletInput {
@@ -1464,405 +1436,66 @@ export interface CreateCommerceConformanceWalletInput {
   readonly offers?: readonly CreditOffer[];
 }
 
-interface WalletLot extends CreditLot {
-  remaining: number;
-}
-
-interface WalletSpend {
-  readonly entitlementId: string;
-  readonly debits: readonly CreditDebit[];
-}
-
-interface WalletEntitlement extends CreditEntitlement {
-  redeemed: boolean;
-}
-
-interface WalletSubscription {
-  readonly subscriptionId: string;
-  readonly titleId: string;
-  readonly logicalId: CommerceLogicalProductId;
-  readonly terms: CreditMembershipTerms;
-  periodIndex: number;
-  readonly startedAt: string;
-  expiresAt: string;
-  state: ActiveSubscription['state'];
-}
-
 /**
- * Reference in-memory wallet implementing the RFC "Credit lots" and "Billing
- * authority and memberships" rules: lot ids equal ledger entry ids, spend
- * scope derives from the lot origin, spends consume eligible lots in the
- * fixed order, are idempotent by key, and debit nothing on
- * `INSUFFICIENT_BALANCE`; memberships debit `membership:<id>:<period>` per
- * paid period and lapse at period end when the eligible balance runs out.
+ * The reference wallet (`createInMemoryCreditWallet`) on the vector clock,
+ * with the actor surface: fixture lots credit through `creditFromGrant`, the
+ * backend finalizer redeems through `finalize`, and owner-side mistakes in a
+ * vector surface as script errors.
  */
 export function createCommerceConformanceWallet(
   input: CreateCommerceConformanceWalletInput,
 ): CommerceConformanceWallet {
-  const { clock, store } = input;
-  const currencies = new Set(input.currencies);
-  const lots: WalletLot[] = [];
-  const spends = new Map<string, WalletSpend>();
-  const debits: CommerceScheduledDebit[] = [];
-  const entitlements: WalletEntitlement[] = [];
-  const subscriptions = new Map<string, WalletSubscription>();
-  const subscriptionEvents: CommerceConformanceSubscriptionEvent[] = [];
-  const listeners = new Set<(event: CommerceEvent) => void>();
-  const buffer = createCommerceEventBuffer();
-
-  const snapshotLot = (lot: WalletLot): CreditLot => ({ ...lot });
-  const toEntitlement = (entitlement: WalletEntitlement): CreditEntitlement => ({
-    entitlementId: entitlement.entitlementId,
-    titleId: entitlement.titleId,
-    logicalId: entitlement.logicalId,
-    idempotencyKey: entitlement.idempotencyKey,
-    createdAt: entitlement.createdAt,
-    debits: [...entitlement.debits],
+  const { clock } = input;
+  const wallet = createInMemoryCreditWallet({
+    store: input.store,
+    currencies: input.currencies,
+    now: () => clock.now(),
+    ...(input.offers === undefined ? {} : { offers: input.offers }),
   });
-  const toActiveSubscription = (subscription: WalletSubscription): ActiveSubscription => ({
-    store,
-    logicalId: subscription.logicalId,
-    subscriptionId: subscription.subscriptionId,
-    periodIndex: subscription.periodIndex,
-    state: subscription.state,
-    startedAt: subscription.startedAt,
-    expiresAt: subscription.expiresAt,
-    autoRenew: subscription.state === 'active',
-  });
-  const emitSubscription = (
-    subscription: WalletSubscription,
-    type: CommerceConformanceSubscriptionEventType,
-    periodIndex: number,
-    reason?: CommerceErrorCode,
-  ): void => {
-    const eventId = `${subscription.subscriptionId}:${periodIndex}:${type}`;
-    if (subscriptionEvents.some((event) => event.eventId === eventId)) {
-      return;
-    }
-    subscriptionEvents.push({
-      eventId,
-      type,
-      subscriptionId: subscription.subscriptionId,
-      logicalId: subscription.logicalId,
-      periodIndex,
-      expiresAt: subscription.expiresAt,
-      ...(reason === undefined ? {} : { reason }),
-    });
-    const event: CommerceEvent = {
-      type: 'subscriptionUpdated',
-      subscription: toActiveSubscription(subscription),
-    };
-    if (listeners.size === 0) {
-      buffer.push(event);
-      return;
-    }
-    for (const listener of listeners) {
-      listener(event);
-    }
-  };
-
-  const eligibleLots = (
-    titleId: string,
-    currency: string,
-    scope: 'title' | 'platform',
-  ): WalletLot[] => {
-    const now = Date.parse(clock.now());
-    return lots
-      .filter(
-        (lot) =>
-          lot.currency === currency
-          && lot.remaining > 0
-          && (lot.expiresAt === undefined || Date.parse(lot.expiresAt) > now)
-          && (lot.spendScope.kind === 'cross-title'
-            || (scope === 'title' && lot.spendScope.titleId === titleId)),
-      )
-      .sort(compareCreditLotSpendOrder);
-  };
-
-  const spendScoped = async (
-    request: CreditSpendInput,
-    scope: 'title' | 'platform',
-  ): Promise<CreditSpendResult> => {
-    const replay = spends.get(request.idempotencyKey);
-    if (replay !== undefined) {
-      return {
-        status: 'debited',
-        entitlementId: replay.entitlementId,
-        debits: [...replay.debits],
-        alreadyProcessed: true,
-      };
-    }
-    if (!currencies.has(request.currency)) {
-      return {
-        status: 'rejected',
-        error: {
-          code: 'ITEM_UNAVAILABLE',
-          retryable: false,
-          message: `Currency ${request.currency} is not declared by the wallet.`,
-        },
-      };
-    }
-    if (!(request.amount > 0)) {
-      return {
-        status: 'rejected',
-        error: {
-          code: 'INVALID_RESPONSE',
-          retryable: false,
-          message: 'Spend amount must be positive.',
-        },
-      };
-    }
-    const candidates = eligibleLots(request.titleId, request.currency, scope);
-    const available = candidates.reduce((sum, lot) => sum + lot.remaining, 0);
-    if (available < request.amount) {
-      return {
-        status: 'rejected',
-        error: {
-          code: 'INSUFFICIENT_BALANCE',
-          retryable: false,
-          message: `Eligible ${request.currency} balance ${available} cannot cover ${request.amount}.`,
-        },
-      };
-    }
-    const spent: CreditDebit[] = [];
-    let remaining = request.amount;
-    for (const lot of candidates) {
-      if (remaining <= 0) {
-        break;
-      }
-      const amount = Math.min(lot.remaining, remaining);
-      lot.remaining -= amount;
-      remaining -= amount;
-      spent.push({ lotId: lot.lotId, amount });
-      debits.push({ idempotencyKey: request.idempotencyKey, lotId: lot.lotId, amount });
-    }
-    const entitlementId = request.idempotencyKey;
-    spends.set(request.idempotencyKey, { entitlementId, debits: spent });
-    if (request.logicalId !== undefined) {
-      entitlements.push({
-        entitlementId,
-        titleId: request.titleId,
-        logicalId: request.logicalId,
-        idempotencyKey: request.idempotencyKey,
-        createdAt: clock.now(),
-        debits: [...spent],
-        redeemed: false,
-      });
-    }
-    return { status: 'debited', entitlementId, debits: [...spent] };
-  };
-
-  const renew = async (subscription: WalletSubscription): Promise<void> => {
-    while (subscription.state === 'active' && Date.parse(subscription.expiresAt) <= Date.parse(clock.now())) {
-      const nextPeriod = subscription.periodIndex + 1;
-      const result = await spendScoped(
-        {
-          titleId: subscription.titleId,
-          currency: subscription.terms.price.currency,
-          amount: subscription.terms.price.amount,
-          idempotencyKey: `membership:${subscription.subscriptionId}:${nextPeriod}`,
-        },
-        subscription.terms.scope,
-      );
-      if (result.status === 'rejected') {
-        subscription.state = 'lapsed';
-        emitSubscription(subscription, 'subscriptionLapsed', nextPeriod, result.error.code);
-        return;
-      }
-      subscription.periodIndex = nextPeriod;
-      subscription.expiresAt = addIsoDuration(subscription.expiresAt, subscription.terms.period);
-      emitSubscription(subscription, 'subscriptionRenewed', nextPeriod);
-    }
-  };
-
   return {
-    store,
+    store: wallet.store,
     get lots() {
-      return lots.map(snapshotLot);
+      return wallet.lots;
     },
     get debits() {
-      return [...debits];
+      return wallet.debits;
     },
     get entitlements() {
-      return entitlements.map(toEntitlement);
+      return wallet.entitlements;
     },
     get subscriptionEvents() {
-      return [...subscriptionEvents];
+      return wallet.subscriptionEvents;
     },
+    get offers() {
+      return wallet.offers;
+    },
+    addOffers: (offers) => wallet.addOffers(offers),
     creditFromGrant(fixture, options = {}) {
-      const existing = lots.find((lot) => lot.lotId === fixture.ledgerEntryId);
-      if (existing !== undefined) {
-        return snapshotLot(existing);
-      }
-      if (!currencies.has(fixture.currency)) {
-        throw new CommerceConformanceScriptError(
-          `Lot ${fixture.ledgerEntryId} uses currency ${fixture.currency}, which the wallet does not declare.`,
-        );
-      }
-      const lot: WalletLot = {
-        lotId: fixture.ledgerEntryId,
-        currency: fixture.currency,
-        amount: fixture.amount,
-        remaining: fixture.amount,
-        createdAt: normalizeIsoTimestamp(fixture.createdAt),
-        ...(fixture.expiresAt === undefined
-          ? {}
-          : { expiresAt: normalizeIsoTimestamp(fixture.expiresAt) }),
-        origin: { ...fixture.origin },
-        spendScope: deriveCreditLotSpendScope(fixture.origin, options.spendScope),
-      };
-      lots.push(lot);
-      return snapshotLot(lot);
-    },
-    spend: (request) => spendScoped(request, 'title'),
-    async startMembership(request) {
-      const current = subscriptions.get(request.subscriptionId);
-      if (current !== undefined && current.state === 'active') {
-        return {
-          status: 'started',
-          subscription: toActiveSubscription(current),
-          entitlementId: `membership:${request.subscriptionId}:0`,
-        };
-      }
-      // The terms are validated before any credit moves, so malformed terms never charge.
-      const startedAt = clock.now();
-      let expiresAt: string;
       try {
-        expiresAt = addIsoDuration(startedAt, request.terms.period);
-      } catch {
-        return {
-          status: 'rejected',
-          error: {
-            code: 'ITEM_UNAVAILABLE',
-            retryable: false,
-            message: `Membership period ${request.terms.period} is not an ISO-8601 duration.`,
-          },
-        };
-      }
-      const result = await spendScoped(
-        {
-          titleId: request.titleId,
-          currency: request.terms.price.currency,
-          amount: request.terms.price.amount,
-          idempotencyKey: `membership:${request.subscriptionId}:0`,
-          logicalId: request.logicalId,
-        },
-        request.terms.scope,
-      );
-      if (result.status === 'rejected') {
-        return result;
-      }
-      const subscription: WalletSubscription = {
-        subscriptionId: request.subscriptionId,
-        titleId: request.titleId,
-        logicalId: request.logicalId,
-        terms: request.terms,
-        periodIndex: 0,
-        startedAt,
-        expiresAt,
-        state: 'active',
-      };
-      subscriptions.set(subscription.subscriptionId, subscription);
-      emitSubscription(subscription, 'subscriptionStarted', 0);
-      return {
-        status: 'started',
-        subscription: toActiveSubscription(subscription),
-        entitlementId: result.entitlementId,
-      };
-    },
-    async renewDue() {
-      for (const subscription of subscriptions.values()) {
-        await renew(subscription);
-      }
-    },
-    async listOffers() {
-      return [...(input.offers ?? [])];
-    },
-    async listUnredeemed(request) {
-      return entitlements
-        .filter((entitlement) => !entitlement.redeemed && entitlement.titleId === request.titleId)
-        .map(toEntitlement);
-    },
-    async redeem(request) {
-      const entitlement = entitlements.find(
-        (candidate) => candidate.entitlementId === request.entitlementId,
-      );
-      if (entitlement === undefined) {
-        return { redeemed: false };
-      }
-      entitlement.redeemed = true;
-      return { redeemed: true };
-    },
-    finalize(request) {
-      const entitlement = entitlements.find(
-        (candidate) => candidate.entitlementId === request.transactionId,
-      );
-      if (entitlement !== undefined) {
-        entitlement.redeemed = true;
-      }
-    },
-    async getBalance(request) {
-      const balances: Record<string, number> = {};
-      for (const currency of currencies) {
-        balances[currency] = eligibleLots(request.titleId, currency, 'title').reduce(
-          (sum, lot) => sum + lot.remaining,
-          0,
+        return wallet.creditFromGrant(
+          fixture,
+          options.spendScope === undefined ? {} : { explicit: options.spendScope },
         );
+      } catch (error) {
+        throw new CommerceConformanceScriptError(describeError(error));
       }
-      return { titleId: request.titleId, balances };
     },
-    async getActiveSubscriptions() {
-      return [...subscriptions.values()]
-        .filter((subscription) => subscription.state === 'active')
-        .map(toActiveSubscription);
+    spend: (request) => wallet.spend(request),
+    startMembership: (request) => wallet.startMembership(request),
+    renewDue: () => wallet.renewDue(),
+    listOffers: (request) => wallet.listOffers(request),
+    listUnredeemed: (request) => wallet.listUnredeemed(request),
+    redeem: (request) => wallet.redeem(request),
+    async finalize(request) {
+      await wallet.redeem({
+        entitlementId: request.transactionId,
+        ledgerEntryId: request.ledgerEntryId,
+      });
     },
-    subscribe(listener) {
-      const first = listeners.size === 0;
-      listeners.add(listener);
-      if (first) {
-        buffer.drain(listener);
-      }
-      return () => {
-        listeners.delete(listener);
-      };
-    },
+    getBalance: (request) => wallet.getBalance(request),
+    getActiveSubscriptions: (request) => wallet.getActiveSubscriptions(request),
+    subscribe: (listener, request) => wallet.subscribe(listener, request),
   };
-}
-
-/** Store lots are title-scoped, off-store lots cross-title, promotion lots as issued (title by default). */
-export function deriveCreditLotSpendScope(
-  origin: CreditLot['origin'],
-  explicit?: CreditLotSpendScope,
-): CreditLotSpendScope {
-  switch (origin.channel) {
-    case 'store':
-      return { kind: 'title', titleId: origin.titleId };
-    case 'off-store':
-      return { kind: 'cross-title' };
-    case 'promotion':
-      return explicit ?? { kind: 'title', titleId: origin.titleId };
-  }
-}
-
-/** RFC spend order: earliest `expiresAt` (none last), `title` before `cross-title`, oldest `createdAt`, then `lotId`. */
-export function compareCreditLotSpendOrder(left: CreditLot, right: CreditLot): number {
-  const leftExpiry = left.expiresAt === undefined
-    ? Number.POSITIVE_INFINITY
-    : Date.parse(left.expiresAt);
-  const rightExpiry = right.expiresAt === undefined
-    ? Number.POSITIVE_INFINITY
-    : Date.parse(right.expiresAt);
-  if (leftExpiry !== rightExpiry) {
-    return leftExpiry < rightExpiry ? -1 : 1;
-  }
-  if (left.spendScope.kind !== right.spendScope.kind) {
-    return left.spendScope.kind === 'title' ? -1 : 1;
-  }
-  const createdDelta = Date.parse(left.createdAt) - Date.parse(right.createdAt);
-  if (createdDelta !== 0) {
-    return createdDelta < 0 ? -1 : 1;
-  }
-  return left.lotId < right.lotId ? -1 : left.lotId > right.lotId ? 1 : 0;
 }
 
 // Wallet-backed provider.
@@ -1878,28 +1511,21 @@ export interface CreateCommerceConformanceWalletProviderInput {
 }
 
 /**
- * `CommerceProvider` over the reference wallet: `fetchProducts` lists the
- * wallet's offers (catalog-derived offers only when the wallet lists none),
- * `requestPurchase` spends the offer price times the requested quantity
- * (outcome `purchased`, `settlement` set, evidence adapter-settled),
- * `getAvailablePurchases` lists unredeemed entitlements, and finishing is the
- * backend's `redeem`. Memberships exist only where the billing authority is
- * `host`.
+ * `createCreditCommerceProvider` over the reference wallet with the vector
+ * profile as its capability block. A wallet that lists no offers has the
+ * vector catalog registered as its offers first (a fixture price of one unit
+ * of the first wallet currency for entries without membership terms), so the
+ * wallet prices every spend and starts memberships itself. Memberships exist
+ * only where the billing authority is `host`.
  */
 export function createCommerceConformanceWalletProvider(
   input: CreateCommerceConformanceWalletProviderInput,
 ): CommerceProvider {
   const { wallet, catalog, titleId, clock } = input;
-  const store = input.profile.store;
-  const membershipsOffered = input.billingAuthority === 'host';
-  const defaultCurrency = input.currencies[0] ?? 'credits';
-  const capabilities = (): CommerceCapabilities => {
-    const base = createCommerceConformanceCapabilities(input.profile);
-    return {
-      ...base,
-      purchase: { ...base.purchase, subscription: base.purchase.subscription && membershipsOffered },
-    };
-  };
+  const defaultCurrency = input.currencies[0];
+  if (defaultCurrency === undefined) {
+    throw new CommerceConformanceScriptError('The wallet profile declares no currencies.');
+  }
   const toOffer = (entry: CommerceConformanceCatalogEntry): CreditOffer => ({
     logicalId: entry.logicalId,
     storeSku: entry.storeSku,
@@ -1910,127 +1536,23 @@ export function createCommerceConformanceWalletProvider(
     price: entry.membership?.price ?? { currency: defaultCurrency, amount: 1 },
     ...(entry.membership === undefined ? {} : { membership: entry.membership }),
   });
-  /** The wallet's own offers decide availability and price; the catalog fills in only when it lists none. */
-  const listOffers = async (): Promise<readonly CreditOffer[]> => {
-    const offers = await wallet.listOffers({ titleId });
-    return (offers.length === 0 ? catalog.map(toOffer) : offers).filter(
-      (offer) => offer.membership === undefined || membershipsOffered,
-    );
-  };
-  /** Quantities of purchases made through this provider, so re-listed entitlements keep them. */
-  const quantities = new Map<string, number>();
-  const toPurchase = (
-    offer: CreditOffer,
-    entitlementId: string,
-    createdAt: string,
-    quantity: number,
-  ): StorePurchase => ({
-    store,
-    transactionId: entitlementId,
-    storeSku: offer.storeSku,
-    logicalId: offer.logicalId,
-    quantity,
-    state: 'purchased',
-    purchasedAt: createdAt,
-    token: entitlementId,
-    evidence: { schema: `fixture.${store}.entitlement.v1`, payload: { entitlementId } },
-    accountBinding: { kind: 'host-identity' },
-    settlement: { ledgerEntryId: entitlementId },
+  if (wallet.offers.length === 0) {
+    wallet.addOffers(catalog.map(toOffer));
+  }
+  const capabilities = createCommerceConformanceCapabilities(input.profile);
+  return createCreditCommerceProvider(wallet, {
+    titleId,
+    billingAuthority: input.billingAuthority,
+    currencies: input.currencies,
+    capabilities: {
+      purchase: capabilities.purchase,
+      catalog: capabilities.catalog,
+      lifecycle: capabilities.lifecycle,
+      authority: capabilities.authority,
+      availability: capabilities.availability,
+    },
+    now: () => clock.now(),
   });
-  const unavailable = (message: string): RequestPurchaseResult => ({
-    outcome: 'failed',
-    error: new CommerceError('ITEM_UNAVAILABLE', { message }).toCommerceErrorInfo(),
-  });
-
-  return {
-    store,
-    async getCapabilities() {
-      return capabilities();
-    },
-    async fetchProducts(request) {
-      return (await listOffers())
-        .filter((offer) => matchesFetchProducts(offer, request))
-        .map((offer): StoreProduct => ({
-          logicalId: offer.logicalId,
-          store,
-          storeSku: offer.storeSku,
-          kind: offer.kind,
-          title: offer.title,
-          description: offer.description,
-          price: {
-            formatted: `${offer.price.amount} ${offer.price.currency}`,
-            currencyCode: offer.price.currency,
-          },
-        }));
-    },
-    async requestPurchase(request) {
-      const offer = (await listOffers()).find(
-        (candidate) => candidate.logicalId === request.logicalId,
-      );
-      if (offer === undefined) {
-        return unavailable(`The wallet offers no product ${request.logicalId}.`);
-      }
-      const quantity = request.quantity ?? 1;
-      if (quantity > 1 && !capabilities().purchase.quantity) {
-        return unavailable('The wallet does not support purchase quantities above 1.');
-      }
-      if (offer.membership !== undefined) {
-        if (quantity > 1) {
-          return unavailable('A membership is purchased one period at a time.');
-        }
-        const started = await wallet.startMembership({
-          subscriptionId: request.idempotencyKey,
-          titleId,
-          logicalId: offer.logicalId,
-          terms: offer.membership,
-        });
-        if (started.status === 'rejected') {
-          return { outcome: 'failed', error: started.error };
-        }
-        quantities.set(started.entitlementId, 1);
-        return {
-          outcome: 'purchased',
-          purchase: toPurchase(offer, started.entitlementId, started.subscription.startedAt, 1),
-        };
-      }
-      const spend = await wallet.spend({
-        titleId,
-        currency: offer.price.currency,
-        amount: offer.price.amount * quantity,
-        idempotencyKey: request.idempotencyKey,
-        logicalId: offer.logicalId,
-      });
-      if (spend.status === 'rejected') {
-        return { outcome: 'failed', error: spend.error };
-      }
-      quantities.set(spend.entitlementId, quantity);
-      return {
-        outcome: 'purchased',
-        purchase: toPurchase(offer, spend.entitlementId, clock.now(), quantity),
-      };
-    },
-    async getAvailablePurchases() {
-      const offers = await listOffers();
-      const unredeemed = await wallet.listUnredeemed({ titleId });
-      return unredeemed.flatMap((entitlement) => {
-        const offer = offers.find((candidate) => candidate.logicalId === entitlement.logicalId);
-        return offer === undefined
-          ? []
-          : [toPurchase(
-              offer,
-              entitlement.entitlementId,
-              entitlement.createdAt,
-              quantities.get(entitlement.entitlementId) ?? 1,
-            )];
-      });
-    },
-    async getActiveSubscriptions() {
-      return wallet.getActiveSubscriptions();
-    },
-    subscribe(listener) {
-      return wallet.subscribe(listener);
-    },
-  };
 }
 
 // Runner.

@@ -1,3 +1,4 @@
+import type { CommerceBillingAuthority } from '@mpgd/platform/commerce-wallet';
 import type {
   IntegrationAvailabilityState,
   PresentationMode,
@@ -57,6 +58,10 @@ const presentationModeValues = valueSet({
   fullscreen: true,
   'inline-expanded': true,
 } satisfies Record<PresentationMode, true>);
+const billingAuthorities = valueSet({
+  store: true,
+  host: true,
+} satisfies Record<CommerceBillingAuthority, true>);
 const targetIntegrations = Object.keys({
   identityUpgrade: true,
   presentation: true,
@@ -113,6 +118,13 @@ function assertTargetConfig(input: unknown, label: string): asserts input is Tar
 
   assertRecord(input.release, `${label}.release`);
   assertOneOf(input.release.profile, releaseProfiles, `${label}.release.profile`);
+  if (input.release.billingAuthority !== undefined) {
+    assertOneOf(
+      input.release.billingAuthority,
+      billingAuthorities,
+      `${label}.release.billingAuthority`,
+    );
+  }
 
   assertRecord(input.policy, `${label}.policy`);
   assertBooleanFields(
