@@ -1,5 +1,16 @@
 # @mpgd/cli
 
+## 0.43.0 — 2026-10-11
+
+### Patch changes
+
+- [6c0cdf1e](https://github.com/imjlk/mpgd-kit/commit/6c0cdf1e8bbd3a786db61fc12a8a02f29f69f3b5) Generated games now document how to ship stretchable UI art for Phaser 4
+  `NineSlice`: untrimmed atlas frames carry `scale9Borders`, so scenes create
+  them with `this.add.nineslice(x, y, key, frame)` instead of hard-coding slice
+  insets. The workflow guide and `use-mpgd-kit` skill point to the optional
+  external slicewright tool for generating and checking that art. — Thanks @imjlk!
+- Updated dependencies: adapter-ait@0.14.1, adapter-browser@0.9.2, adapter-capacitor@0.8.0, adapter-devvit@0.9.19, adapter-verse8@0.4.5, analytics@0.4.5, bridge@0.12.0, catalog@0.9.0, game-runtime@0.6.2, game-services@0.20.0, i18n@0.6.10, platform@0.19.0, target-config@0.21.2
+
 ## 0.42.0 — 2026-10-11
 
 ### Patch changes
