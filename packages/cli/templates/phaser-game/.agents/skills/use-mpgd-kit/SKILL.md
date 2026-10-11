@@ -22,6 +22,8 @@ enabled targets and the workflow guide as the routing reference.
   `mpgd.targets.json` for build ownership.
 - Use the generated icon, localization, analytics, acceptance, and evidence
   flows instead of creating target-specific copies.
+- Ship stretchable UI art as untrimmed atlas frames with `scale9Borders`, as
+  described under Assets and icons in the workflow guide.
 - For a configured target with a target skill in `agent/game-manifest.json`,
   read that skill before changing its release flow.
 

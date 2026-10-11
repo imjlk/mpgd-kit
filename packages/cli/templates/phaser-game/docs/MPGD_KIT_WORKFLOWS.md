@@ -28,6 +28,12 @@ capability-disabled fallback where the target cannot support it.
   and optionally `pnpm icons:inspect`.
 - Use target icon profiles from `mpgd.targets.json`; do not maintain unrelated
   hand-copied icon sets.
+- Ship stretchable UI art (panels, buttons, bars) as untrimmed atlas frames
+  with `scale9Borders` in the atlas JSON, so `this.add.nineslice(x, y, key,
+  frame)` reads the slice insets instead of scenes hard-coding them. mpgd-kit
+  does not generate or inspect that art; the optional external
+  [slicewright](https://github.com/imjlk/slicewright) tool owns prompts,
+  inset detection, stretch checks, and `scale9Borders` output.
 
 ### Localization and orientation
 

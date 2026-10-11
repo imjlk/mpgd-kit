@@ -491,6 +491,37 @@ Generated games own their asset conventions. The template demonstrates
 manifest-driven Phaser loading through `@mpgd/phaser-assets`, while the game
 project decides which public assets, remote assets, and bundle budgets apply.
 
+### Nine-slice UI assets
+
+Phaser 4's `NineSlice` keeps corners fixed and stretches edges and the center.
+Its source is an ordinary image; slice insets come from constructor arguments
+or from a `scale9Borders` rectangle (the stretchable center) on a JSON Hash or
+JSON Array atlas frame:
+
+```json
+"button": {
+  "frame": { "x": 0, "y": 0, "w": 96, "h": 48 },
+  "trimmed": false,
+  "scale9Borders": { "x": 16, "y": 12, "w": 64, "h": 24 }
+}
+```
+
+```ts
+this.add.nineslice(x, y, 'ui', 'button', 240, 64);
+```
+
+- Keep nine-slice frames untrimmed; Phaser does not support trimmed frames here.
+- A frame whose `scale9Borders` has `y: 0` and full height is a 3-slice that
+  only stretches horizontally.
+- Edges must be uniform along their stretch axis, or seamless when `tileX` /
+  `tileY` repeat them.
+- Extrude or pad atlas frames so linear filtering does not bleed neighbors into
+  the seams.
+
+Creating and checking that art is outside mpgd-kit. The external
+[slicewright](https://github.com/imjlk/slicewright) tool covers generation
+prompts, inset detection, stretch checks, previews, and `scale9Borders` output.
+
 ## Platform Readiness
 
 Builds embed the effective target config into each payload as
