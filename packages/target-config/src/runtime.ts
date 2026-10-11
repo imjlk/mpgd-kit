@@ -4,6 +4,7 @@ import type {
   PlatformGateway,
   PlatformProviderAvailability,
 } from '@mpgd/platform';
+import type { CommerceBillingAuthority } from '@mpgd/platform/commerce-wallet';
 
 import type { EffectiveTargetConfig } from './effective.js';
 
@@ -121,6 +122,14 @@ export interface TargetLeaderboardConfig {
 
 export interface TargetReleaseConfig {
   readonly profile: ReleaseProfile;
+  /**
+   * Commerce v2 billing authority override (RFC "Billing authority and
+   * memberships"). Absent, `resolveCommerceBillingAuthority(profile)` applies:
+   * `web` and `web-preview` are `host`, every other profile `store`.
+   * `google-play` and `app-store` are always `store`; `validate:target-config`
+   * rejects `host` for them.
+   */
+  readonly billingAuthority?: CommerceBillingAuthority;
 }
 
 export interface TargetPolicyRestrictions {

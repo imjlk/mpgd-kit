@@ -116,8 +116,9 @@ export interface CommerceEventEnvelope {
   readonly event: CommerceEvent;
 }
 
-// Credit wallet types. The wallet rules, `createCreditCommerceProvider`, and a
-// reference in-memory wallet arrive with B7; A2 only fixes the shapes.
+// Credit wallet types (RFC "Credit wallet"). The wallet rules,
+// `createCreditCommerceProvider`, and the reference in-memory wallet live in
+// `@mpgd/platform/commerce-wallet`; this module fixes the shapes and validators.
 
 export type CommerceBillingAuthority = 'store' | 'host';
 
@@ -164,6 +165,8 @@ export type CreditSpendResult =
       readonly status: 'debited';
       readonly entitlementId: NonEmptyString;
       readonly debits: readonly CreditDebit[];
+      /** When the wallet settled the spend; a replay repeats the original time. */
+      readonly createdAt?: IsoTimestamp;
       /** A repeated idempotency key returns the original debits. */
       readonly alreadyProcessed?: boolean;
     }
@@ -209,17 +212,35 @@ export interface CreditLot {
   readonly spendScope: CreditLotSpendScope;
 }
 
+/**
+ * The client a consuming project implements against its wallet service.
+ * `createCreditCommerceProvider` (`@mpgd/platform/commerce-wallet`) turns it
+ * into a `CommerceProvider`. A `spend` of a membership offer starts the
+ * membership under the spend's idempotency key as its subscription id; the
+ * wallet service alone renews, lapses, and expires it.
+ */
 export interface CreditWalletClient {
   readonly store: StoreId;
   listOffers(input: { readonly titleId: string }): Promise<readonly CreditOffer[]>;
   spend(input: CreditSpendInput): Promise<CreditSpendResult>;
   listUnredeemed(input: { readonly titleId: string }): Promise<readonly CreditEntitlement[]>;
+  /** Redeems an entitlement for the ledger entry that granted it; the wallet service verifies the pair. */
   redeem(input: {
     readonly entitlementId: string;
     readonly ledgerEntryId: string;
   }): Promise<{ readonly redeemed: boolean }>;
   getBalance(input: { readonly titleId: string }): Promise<CreditBalance>;
-  subscribe?(listener: (event: CommerceEvent) => void): () => void;
+  /** Memberships the wallet service reports as active for the title; absent when the wallet sells none. */
+  getActiveSubscriptions?(input: { readonly titleId: string }): Promise<readonly ActiveSubscription[]>;
+  /** With `input.titleId`, only events that concern that title (platform memberships concern every title). */
+  subscribe?(
+    listener: (event: CommerceEvent) => void,
+    input?: CreditWalletSubscribeInput,
+  ): () => void;
+}
+
+export interface CreditWalletSubscribeInput {
+  readonly titleId?: string;
 }
 
 // Bridge v2 method shapes. The bridge wiring is A4; A2 fixes and validates the

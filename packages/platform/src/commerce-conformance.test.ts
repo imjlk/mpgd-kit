@@ -513,12 +513,15 @@ describe('commerce conformance fakes', () => {
     expect(clock.now()).toBe('2026-10-31T12:30:00Z');
     expect(() => clock.set('yesterday')).toThrow(TypeError);
     expect(addIsoDuration('2026-10-01T00:00:00Z', 'P30D')).toBe('2026-10-31T00:00:00Z');
-    expect(addIsoDuration('2026-01-31T00:00:00Z', 'P1M')).toBe('2026-03-03T00:00:00Z');
+    expect(addIsoDuration('2026-01-31T00:00:00Z', 'P1M')).toBe('2026-02-28T00:00:00Z');
+    expect(addIsoDuration('2026-01-31T00:00:00Z', 'P1M', 2)).toBe('2026-03-31T00:00:00Z');
     expect(addIsoDuration('2026-10-01T00:00:00Z', 'P1W')).toBe('2026-10-08T00:00:00Z');
     expect(addIsoDuration('2026-10-01T00:00:00Z', 'PT1H30M')).toBe('2026-10-01T01:30:00Z');
     expect(addIsoDuration('2026-10-01T00:00:00Z', 'P1Y')).toBe('2027-10-01T00:00:00Z');
     expect(() => addIsoDuration('2026-10-01T00:00:00Z', '30D')).toThrow(TypeError);
     expect(() => addIsoDuration('2026-10-01T00:00:00Z', 'P')).toThrow(TypeError);
+    expect(() => addIsoDuration('2026-10-01T00:00:00Z', 'P0D')).toThrow(TypeError);
+    expect(() => addIsoDuration('2026-10-01T00:00:00Z', 'P1DT')).toThrow(TypeError);
   });
 });
 
@@ -594,6 +597,7 @@ describe('commerce conformance wallet', () => {
     expect(spend).toEqual({
       status: 'debited',
       entitlementId: 's-1',
+      createdAt: '2026-10-01T00:00:00Z',
       debits: [{ lotId: 'le-expiring', amount: 5 }, { lotId: 'le-title', amount: 10 }, { lotId: 'le-cross', amount: 3 }],
     });
     expect(await wallet.spend({ titleId: 'title-a', currency: 'credits', amount: 18, idempotencyKey: 's-1' }))
