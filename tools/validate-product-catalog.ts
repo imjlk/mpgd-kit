@@ -1,6 +1,6 @@
 import typia from 'typia';
 
-import type { ProductCatalog } from '@mpgd/catalog';
+import { resolveCatalogCurrencies, type ProductCatalog } from '@mpgd/catalog';
 
 import { productCatalogFilePath } from './catalog-paths';
 import { isCliEntrypoint, readJsonFile } from './io';
@@ -9,6 +9,7 @@ const assertProductCatalog = typia.createAssert<ProductCatalog>();
 
 export function validateProductCatalogFile(path = productCatalogFilePath()) {
   const catalog = assertProductCatalog(readJsonFile(path));
+  const currencies = resolveCatalogCurrencies(catalog);
   const ids = new Set<string>();
 
   for (const product of catalog.products) {
@@ -28,6 +29,13 @@ export function validateProductCatalogFile(path = productCatalogFilePath()) {
 
     ids.add(product.id);
 
+    if (product.grant.type === 'currency' && !currencies.has(product.grant.currency)) {
+      throw new Error(
+        `Product ${product.id} grants undeclared currency ${product.grant.currency}; `
+          + `declared currencies: ${[...currencies].join(', ')}.`,
+      );
+    }
+
     if (Object.keys(product.platformProductIds).length === 0) {
       throw new Error(`Product ${product.id} has no platformProductIds.`);
     }
@@ -44,5 +52,9 @@ export function validateProductCatalogFile(path = productCatalogFilePath()) {
 
 if (isCliEntrypoint(import.meta.url)) {
   const catalog = validateProductCatalogFile();
-  console.info(`Product catalog ${catalog.version}: ${catalog.products.length} products`);
+  const currencies = [...resolveCatalogCurrencies(catalog)].join(', ');
+  console.info(
+    `Product catalog ${catalog.version}: ${catalog.products.length} products; `
+      + `currencies: ${currencies}`,
+  );
 }
