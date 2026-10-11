@@ -4,6 +4,7 @@ import type { PurchaseVerificationApi } from '@mpgd/game-services/client';
 import {
   createGooglePlayTokenTransactionId as createServerTokenTransactionId,
 } from '@mpgd/game-services/google-play-purchase';
+import { createGooglePlayTokenPurchaseKey } from '@mpgd/platform/commerce';
 
 import {
   createCapacitorPlayBillingProvider,
@@ -181,10 +182,13 @@ const orderless = await provider.bridge.request(orderlessRequest);
 if (!orderless.ok || typeof orderless.data !== 'object' || orderless.data === null) {
   throw new Error('Orderless purchase should remain valid provisional evidence.');
 }
-const expectedTokenId = await createGooglePlayTokenTransactionId('order-not-yet-visible');
+const expectedTokenId = await createGooglePlayTokenPurchaseKey('order-not-yet-visible');
 equal((orderless.data as { transactionId?: string }).transactionId, expectedTokenId, 'token ID');
 const serverTokenId = await createServerTokenTransactionId('order-not-yet-visible');
 equal(expectedTokenId, serverTokenId, 'server token ID');
+// Both deprecated aliases are the platform helper itself, not reimplementations.
+equal(createGooglePlayTokenTransactionId, createGooglePlayTokenPurchaseKey, 'plugin alias');
+equal(createServerTokenTransactionId, createGooglePlayTokenPurchaseKey, 'server alias');
 for (const token of ['simple-token', 'internal space', 'unicode-한글', 'slash/token+value']) {
   const clientId = await createGooglePlayTokenTransactionId(token);
   const serverId = await createServerTokenTransactionId(token);

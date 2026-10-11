@@ -57,6 +57,10 @@
       "types": "./dist/app-store-recovery.d.ts",
       "default": "./dist/app-store-recovery.js"
     },
+    "./app-store-server": {
+      "types": "./dist/app-store-server.d.ts",
+      "default": "./dist/app-store-server.js"
+    },
     "./app-store-verifier-conformance": {
       "types": "./dist/app-store-verifier-conformance.d.ts",
       "default": "./dist/app-store-verifier-conformance.js"
@@ -190,7 +194,8 @@
     "test:packed-transport": "pnpm build && node test/runtime-transport-package-import.mjs && node test/reward-evidence-import.mjs",
     "test:unit": "cd ../.. && node tools/run-ttsx.mjs packages/game-services/src/client.test.ts && node tools/run-ttsx.mjs packages/game-services/src/client-progress.test.ts && node tools/run-ttsx.mjs packages/game-services/src/runtime.test.ts && node tools/run-ttsx.mjs packages/game-services/src/types.test.ts && node tools/run-ttsx.mjs packages/game-services/src/server.test.ts && node tools/run-ttsx.mjs packages/game-services/src/google-play-purchase.test.ts && node tools/run-ttsx.mjs packages/game-services/src/google-play-publisher-client.test.ts && node tools/run-ttsx.mjs packages/game-services/src/microsoft-store-purchase.test.ts && node tools/run-ttsx.mjs packages/game-services/src/microsoft-store-identity.test.ts && node tools/run-ttsx.mjs packages/game-services/src/platform-order.test.ts && node tools/run-ttsx.mjs packages/game-services/src/progress-link.test.ts && node tools/run-ttsx.mjs packages/game-services/src/notification-delivery.test.ts && node tools/run-ttsx.mjs packages/game-services/src/admob-ssv.test.ts && node tools/run-ttsx.mjs packages/game-services/src/app-store-verifier.test.ts && node tools/run-ttsx.mjs packages/game-services/src/apps-in-toss-evidence-verification-conformance.test.ts && node tools/run-ttsx.mjs packages/game-services/src/apps-in-toss-partner-api.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard-conformance.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard-durability-conformance.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard-transport.test.ts && node tools/run-ttsx.mjs packages/game-services/src/guest-session.test.ts && node tools/run-ttsx.mjs packages/game-services/src/client-reward-evidence.test.ts && node tools/run-ttsx.mjs packages/game-services/src/ad-reward-verifier-registry.test.ts && node tools/run-ttsx.mjs packages/game-services/src/oneplay-reward.test.ts && node tools/run-ttsx.mjs packages/game-services/src/oneplay-purchase.test.ts",
     "test:recovery": "cd ../.. && node tools/run-ttsx.mjs packages/game-services/src/monetization-recovery.test.ts && node tools/run-ttsx.mjs packages/game-services/src/app-store-recovery.test.ts",
-    "test": "pnpm test:unit && pnpm test:recovery && pnpm test:packed-transport"
+    "test": "pnpm test:unit && pnpm test:app-store-server && pnpm test:recovery && pnpm test:packed-transport",
+    "test:app-store-server": "vitest run"
   },
   "dependencies": {
     "@mpgd/analytics": "workspace:*",
@@ -201,10 +206,20 @@
     "@orpc/contract": "2.0.0-beta.14",
     "@orpc/server": "2.0.0-beta.14"
   },
+  "peerDependencies": {
+    "@apple/app-store-server-library": "^3.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@apple/app-store-server-library": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@apple/app-store-server-library": "3.1.0",
     "@opentelemetry/api": "1.9.0",
     "ttsc": "0.30.4",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "vitest": "^4.0.0"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

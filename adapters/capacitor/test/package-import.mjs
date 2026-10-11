@@ -26,7 +26,7 @@ try {
     '@capacitor-community/admob');
   assert.ok(admobDirectory, 'Expected the optional AdMob peer in the development installation.');
   const admob = packInstalledPackage(admobDirectory);
-  const appleDirectory = findInstalledDependency(join(repoRoot, 'adapters/capacitor'),
+  const appleDirectory = findInstalledDependency(join(repoRoot, 'packages/game-services'),
     '@apple/app-store-server-library');
   assert.ok(appleDirectory, 'Expected the optional Apple server peer in the development installation.');
   const appleServer = packInstalledPackage(appleDirectory);
@@ -35,6 +35,8 @@ try {
   const appleNodeTypes = packInstalledPackage(appleNodeTypesDirectory);
   const capacitorCore = [...packages.values()].find((entry) => entry.name === '@capacitor/core');
   assert.ok(capacitorCore, 'Expected the installed Capacitor peer in the packed dependency closure.');
+  const gameServices = [...packages.values()].find((entry) => entry.name === '@mpgd/game-services');
+  assert.ok(gameServices, 'Expected @mpgd/game-services in the packed dependency closure.');
   mkdirSync(consumer);
   writeJson(join(consumer, 'package.json'), {
     name: 'mpgd-capacitor-provider-consumer',
@@ -45,6 +47,7 @@ try {
       '@mpgd/adapter-capacitor': adapter.tarball,
       '@mpgd/target-config': targetConfig.tarball,
       '@mpgd/platform': platform.tarball,
+      '@mpgd/game-services': gameServices.tarball,
       '@capacitor/core': capacitorCore.tarball,
       '@capacitor-community/admob': admob.tarball,
       '@apple/app-store-server-library': appleServer.tarball,
@@ -64,7 +67,7 @@ try {
     'install', '--offline', '--ignore-scripts', '--store-dir', join(fixture, 'store'),
   ], consumer, false, { CI: 'false' });
 
-  for (const name of ['adapter-capacitor', 'target-config', 'platform']) {
+  for (const name of ['adapter-capacitor', 'target-config', 'platform', 'game-services']) {
     const metadata = readJson(join(consumer, `node_modules/@mpgd/${name}/package.json`));
     assert.equal(JSON.stringify(metadata).includes('workspace:'), false);
   }
@@ -75,10 +78,20 @@ try {
         .includes('@capacitor-community/admob'), false,
       `Base adapter artifact ${file} must not import the optional AdMob peer.`);
     }
-    if (file.endsWith('.js') && file !== 'app-store-server.js') {
+    if (file.endsWith('.js')) {
       assert.equal(readFileSync(join(adapterDist, file), 'utf8')
-        .includes('@apple/app-store-server-library'), false,
-      `Base adapter artifact ${file} must not import the optional Apple server peer.`);
+        .includes("'@apple/app-store-server-library'"), false,
+      `Adapter artifact ${file} must not import the Apple server library; it lives in @mpgd/game-services.`);
+    }
+  }
+  const servicesDirectory = findInstalledDependency(
+    realpathSync(join(consumer, 'node_modules/@mpgd/adapter-capacitor')), '@mpgd/game-services');
+  assert.ok(servicesDirectory, 'Expected @mpgd/game-services beside the packed adapter.');
+  for (const file of readdirSync(join(servicesDirectory, 'dist'))) {
+    if (file.endsWith('.js') && file !== 'app-store-server.js') {
+      assert.equal(readFileSync(join(servicesDirectory, 'dist', file), 'utf8')
+        .includes("'@apple/app-store-server-library'"), false,
+      `game-services artifact ${file} must not import the optional Apple server peer.`);
     }
   }
   copyFileSync(join(repoRoot, 'adapters/capacitor/test/packed-runtime.mjs'), join(consumer, 'runtime.mjs'));

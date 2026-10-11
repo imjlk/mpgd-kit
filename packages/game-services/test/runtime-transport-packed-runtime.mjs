@@ -3,8 +3,16 @@ import { createGameServicesRuntime } from '@mpgd/game-services/runtime';
 import { GameServicesBackendError } from '@mpgd/game-services/client';
 import { createGuestSessionCoordinator } from '@mpgd/game-services/guest-session';
 import { createRecoverableMonetizationClient } from '@mpgd/game-services';
+import { createAppleSignedTransactionVerifier } from '@mpgd/game-services/app-store-server';
 
 assert.equal(typeof createRecoverableMonetizationClient, 'function');
+assert.equal(typeof createAppleSignedTransactionVerifier, 'function');
+assert.throws(
+  () => createAppleSignedTransactionVerifier({
+    rootCertificates: [], environment: 'Sandbox', bundleId: 'dev.mpgd.packed',
+  }),
+  /Apple root certificates are required/u,
+);
 
 let defaultFetchCalls = 0;
 globalThis.fetch = async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  bridgeCommerceV2Methods,
   bridgeStorageLoadProtocol,
   createBridgeError,
   type BridgeRequest,
@@ -853,6 +854,34 @@ describe('adapter-devvit', () => {
       );
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+
+  it('fails closed for commerce v2 methods until a Devvit v2 provider exists', async () => {
+    const bridge = createDevvitSandboxBridge();
+
+    for (const method of bridgeCommerceV2Methods) {
+      const response = await bridge.request({
+        id: `v2-${method}`,
+        method,
+        payload: { protocol: 'mpgd.commerce.v2' },
+        meta: {
+          target: 'reddit',
+          appVersion: '1.2.3',
+          buildId: 'build-reddit',
+          sentAt: '2026-10-11T00:00:00.000Z',
+        },
+      });
+
+      expect(response).toEqual({
+        id: `v2-${method}`,
+        ok: false,
+        error: {
+          code: 'COMMERCE_V2_UNAVAILABLE',
+          message: expect.stringContaining(method),
+          retryable: false,
+        },
+      });
     }
   });
 });

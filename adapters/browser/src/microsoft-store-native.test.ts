@@ -272,6 +272,30 @@ describe('Microsoft Store native bridge', () => {
     } satisfies Partial<MicrosoftStoreNativeBridgeError>);
   });
 
+  it('ignores commerce v2 envelopes, which are not part of its native protocol', async () => {
+    const webView = new FakeWebView();
+    const client = createMicrosoftStoreNativeBridgeClient({
+      webView,
+      createRequestId: () => 'catalog-2',
+    });
+    const pending = client.getDetails(['hint_pack_20']);
+    webView.respond({
+      requestId: 'catalog-2.0',
+      method: 'commerce.v2.fetchProducts',
+      ok: true,
+      result: { products: [] },
+    });
+    webView.respond({
+      requestId: 'catalog-2.0',
+      method: 'catalog.getDetails',
+      ok: true,
+      result: { items: [] },
+    });
+
+    await expect(pending).resolves.toEqual([]);
+    client.dispose();
+  });
+
   it('maps a throwing native transport to NATIVE_OPERATION_FAILED', async () => {
     const client = createMicrosoftStoreNativeBridgeClient({
       webView: new ThrowingWebView(),

@@ -1,5 +1,5 @@
 import { VerificationException, VerificationStatus } from '@apple/app-store-server-library';
-import { AppStoreDependencyUnavailableError } from '@mpgd/game-services/app-store-verifier';
+import { AppStoreDependencyUnavailableError } from './app-store-verifier.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createAppleSignedTransactionVerifier } from './app-store-server.js';

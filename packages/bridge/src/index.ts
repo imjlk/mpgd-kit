@@ -1,5 +1,26 @@
 import typia from 'typia';
 
+import {
+  commerceBridgeMethods,
+  commerceProtocol,
+  type CommerceBridgeMethod,
+  type CommerceEventEnvelope,
+} from '@mpgd/platform/commerce';
+
+/**
+ * Commerce v2 request methods (RFC "Bridge and versioning"). The literal
+ * union below spells them out so the published declaration stays readable;
+ * `bridgeCommerceV2Methods` and the type checks under it keep the list equal
+ * to `commerceBridgeMethods` from `@mpgd/platform/commerce`.
+ */
+export type BridgeCommerceV2Method =
+  | 'commerce.v2.getCapabilities'
+  | 'commerce.v2.fetchProducts'
+  | 'commerce.v2.requestPurchase'
+  | 'commerce.v2.getAvailablePurchases'
+  | 'commerce.v2.finishTransaction'
+  | 'commerce.v2.restorePurchases';
+
 export type BridgeMethod =
   | 'runtime.getCapabilities'
   | 'identity.getPlayer'
@@ -17,6 +38,7 @@ export type BridgeMethod =
   | 'commerce.purchase'
   | 'commerce.restore'
   | 'commerce.getEntitlements'
+  | BridgeCommerceV2Method
   | 'ads.preload'
   | 'ads.getAvailability'
   | 'ads.prepare'
@@ -60,6 +82,56 @@ export type BridgeResponse<TData = unknown> =
         readonly retryable: boolean;
       };
     };
+
+export const bridgeCommerceV2Methods: readonly BridgeCommerceV2Method[] = commerceBridgeMethods;
+
+// Both directions must hold: every platform method is a bridge method, and the
+// bridge union names nothing the platform contract does not define.
+type MethodsAgree<A extends string, B extends string> =
+  [A] extends [B] ? [B] extends [A] ? true : never : never;
+const bridgeCommerceV2MethodsAgree: MethodsAgree<BridgeCommerceV2Method, CommerceBridgeMethod> =
+  true;
+void bridgeCommerceV2MethodsAgree;
+
+const bridgeCommerceV2MethodSet: ReadonlySet<string> = new Set(bridgeCommerceV2Methods);
+
+export function isBridgeCommerceV2Method(method: string): method is BridgeCommerceV2Method {
+  return bridgeCommerceV2MethodSet.has(method);
+}
+
+/**
+ * Answer for a commerce v2 request that reaches a transport without a v2
+ * provider. Non-retryable: the caller must fall back to v1 or a server route,
+ * not retry the same transport.
+ */
+export const commerceV2UnavailableBridgeErrorCode = 'COMMERCE_V2_UNAVAILABLE' as const;
+
+export function createCommerceV2UnavailableBridgeError(
+  request: Pick<BridgeRequest, 'id' | 'method'>,
+  transport: string,
+): BridgeResponse {
+  return createBridgeError(
+    request.id,
+    commerceV2UnavailableBridgeErrorCode,
+    `${transport} does not provide commerce v2; ${request.method} is unavailable.`,
+  );
+}
+
+/**
+ * Event side of the bridge. Transports push commerce v2 events in the
+ * envelope `{ protocol: 'mpgd.commerce.v2', sequence, event }`; `sequence` is
+ * per session and starts at 0.
+ */
+export const bridgeEventProtocol = commerceProtocol;
+
+export type BridgeEvent = CommerceEventEnvelope;
+
+export type BridgeEventListener = (event: BridgeEvent) => void;
+
+/** Implemented by transports that can deliver events; the unsubscribe stops delivery. */
+export interface BridgeEventSource {
+  subscribe(listener: BridgeEventListener): () => void;
+}
 
 export const bridgeStorageLoadProtocol = 'mpgd.storage.load.v1' as const;
 export const bridgeCredentialLoadProtocol = 'mpgd.credentials.load.v1' as const;
@@ -105,6 +177,7 @@ export type BridgeStorageLoadData =
 
 export const assertBridgeRequest = typia.createAssert<BridgeRequest>();
 export const assertBridgeResponse = typia.createAssert<BridgeResponse>();
+export const assertBridgeEvent = typia.createAssertEquals<BridgeEvent>();
 
 export function decodeBridgeStorageLoadData(
   input: unknown,

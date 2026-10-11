@@ -7,6 +7,9 @@ import {
 } from '@mpgd/adapter-capacitor';
 import { createCapacitorAdMobRewardedProvider } from '@mpgd/adapter-capacitor/admob';
 import { createAppleSignedTransactionVerifier } from '@mpgd/adapter-capacitor/app-store-server';
+import {
+  createAppleSignedTransactionVerifier as createGameServicesAppleVerifier,
+} from '@mpgd/game-services/app-store-server';
 import { createUnsupportedCapabilities } from '@mpgd/platform';
 import { getFeatureAvailability, resolveTargetViewportUsableArea } from '@mpgd/target-config';
 
@@ -26,6 +29,8 @@ assert.equal(capabilities.providerAvailability.nativeIap, 'unsupported');
 assert.equal(typeof getFeatureAvailability, 'function');
 assert.equal(typeof createCapacitorAdMobRewardedProvider, 'function');
 assert.equal(typeof createAppleSignedTransactionVerifier, 'function');
+// The deprecated adapter subpath is the game-services implementation.
+assert.equal(createAppleSignedTransactionVerifier, createGameServicesAppleVerifier);
 
 const composed = createCapacitorPlatformGateway({
   target: 'android', appVersion: '1', buildId: 'packed-provider',

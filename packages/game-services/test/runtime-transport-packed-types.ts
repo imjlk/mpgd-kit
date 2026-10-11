@@ -12,6 +12,16 @@ import {
 } from '@mpgd/game-services/guest-session';
 import type { PlatformGateway, SecureCredentialStore } from '@mpgd/platform';
 import type { MonetizationOperationStore } from '@mpgd/game-services';
+import {
+  createAppleSignedTransactionVerifier,
+  type CreateAppleSignedTransactionVerifierOptions,
+} from '@mpgd/game-services/app-store-server';
+import type { AppStoreSignedTransactionVerifier } from '@mpgd/game-services/app-store-verifier';
+
+declare const appleVerifierOptions: CreateAppleSignedTransactionVerifierOptions;
+const appleVerifier: AppStoreSignedTransactionVerifier =
+  createAppleSignedTransactionVerifier(appleVerifierOptions);
+void appleVerifier;
 
 declare const gateway: PlatformGateway;
 declare const transport: GameServicesBackendTransport;

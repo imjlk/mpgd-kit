@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { bridgeStorageLoadProtocol, type BridgeRequest } from '@mpgd/bridge';
+import {
+  bridgeCommerceV2Methods,
+  bridgeStorageLoadProtocol,
+  type BridgeRequest,
+} from '@mpgd/bridge';
 import { createUnsupportedCapabilities } from '@mpgd/platform';
 
 import { createCapacitorPlatformGateway } from './index.js';
@@ -627,6 +631,11 @@ describe('Capacitor optional provider composition', () => {
     expect(() => createCapacitorProviderRegistry([{
       ...provider, id: 'other', methods: ['storage.save'],
     }])).toThrow(/cannot replace base method/);
+    for (const method of bridgeCommerceV2Methods) {
+      expect(() => createCapacitorProviderRegistry([{
+        ...provider, id: 'v2', methods: [...commerceMethods, method],
+      }])).toThrow(/commerce v2 is unavailable/);
+    }
     expect(() => createCapacitorProviderRegistry([{
       ...provider, methods: ['commerce.purchase'],
     }])).toThrow(/lacks methods/);

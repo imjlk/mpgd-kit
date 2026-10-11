@@ -1,6 +1,7 @@
 import {
   assertBridgeResponse,
   bridgeStorageLoadProtocol,
+  createCommerceV2UnavailableBridgeError,
   decodeBridgeStorageLoadData,
   type BridgeMethod,
   type BridgeRequest,
@@ -426,6 +427,15 @@ export function createAitSandboxBridge(
 
           return ok(input, {});
         }
+
+        // Commerce v2 providers arrive with the B-phase PRs (B5 for Apps in Toss).
+        case 'commerce.v2.getCapabilities':
+        case 'commerce.v2.fetchProducts':
+        case 'commerce.v2.requestPurchase':
+        case 'commerce.v2.getAvailablePurchases':
+        case 'commerce.v2.finishTransaction':
+        case 'commerce.v2.restorePurchases':
+          return createCommerceV2UnavailableBridgeError(input, 'Apps in Toss sandbox bridge');
 
         default:
           return createSandboxBridgeError(

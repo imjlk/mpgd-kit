@@ -1,6 +1,7 @@
 import {
   bridgeStorageLoadProtocol,
   createBridgeError,
+  createCommerceV2UnavailableBridgeError,
   decodeBridgeStorageLoadData,
   type BridgeMethod,
   type BridgeRequest,
@@ -348,6 +349,15 @@ export function createDevvitSandboxBridge(): DevvitBridge {
             saved: key !== undefined,
           });
         }
+
+        // Commerce v2 providers arrive with the B-phase PRs (B6 for Devvit).
+        case 'commerce.v2.getCapabilities':
+        case 'commerce.v2.fetchProducts':
+        case 'commerce.v2.requestPurchase':
+        case 'commerce.v2.getAvailablePurchases':
+        case 'commerce.v2.finishTransaction':
+        case 'commerce.v2.restorePurchases':
+          return createCommerceV2UnavailableBridgeError(input, 'Devvit sandbox bridge');
 
         default:
           return createBridgeError(

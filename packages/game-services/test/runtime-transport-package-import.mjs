@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -26,6 +28,13 @@ try {
     '@opentelemetry/api');
   assert.ok(telemetryDirectory, 'Missing installed @opentelemetry/api test dependency.');
   const telemetry = closer.pack(telemetryDirectory);
+  const appleDirectory = findInstalledDependency(join(repoRoot, 'packages/game-services'),
+    '@apple/app-store-server-library');
+  assert.ok(appleDirectory, 'Missing installed @apple/app-store-server-library optional peer.');
+  const appleServer = closer.pack(appleDirectory);
+  const appleNodeTypesDirectory = findInstalledDependency(appleDirectory, '@types/node');
+  assert.ok(appleNodeTypesDirectory, 'Expected the Apple server library Node types.');
+  const appleNodeTypes = closer.pack(appleNodeTypesDirectory);
   mkdirSync(consumer);
   writeFileSync(join(consumer, 'package.json'), `${JSON.stringify({
     name: 'mpgd-runtime-transport-consumer',
@@ -36,6 +45,8 @@ try {
       '@mpgd/game-services': services.tarball,
       '@mpgd/platform': platform.tarball,
       '@opentelemetry/api': telemetry.tarball,
+      '@apple/app-store-server-library': appleServer.tarball,
+      '@types/node': appleNodeTypes.tarball,
     },
   }, null, 2)}\n`);
   writeFileSync(join(consumer, 'pnpm-workspace.yaml'), [
@@ -47,6 +58,14 @@ try {
   for (const name of ['@mpgd/game-services', '@mpgd/platform']) {
     const metadata = readFileSync(join(consumer, 'node_modules', name, 'package.json'), 'utf8');
     assert.equal(metadata.includes('workspace:'), false);
+  }
+  const servicesDist = join(consumer, 'node_modules/@mpgd/game-services/dist');
+  for (const file of readdirSync(servicesDist)) {
+    if (file.endsWith('.js') && file !== 'app-store-server.js') {
+      assert.equal(readFileSync(join(servicesDist, file), 'utf8')
+        .includes("'@apple/app-store-server-library'"), false,
+      `game-services artifact ${file} must not import the optional Apple server peer.`);
+    }
   }
   copyFileSync(join(repoRoot, 'packages/game-services/test/runtime-transport-packed-runtime.mjs'),
     join(consumer, 'runtime.mjs'));

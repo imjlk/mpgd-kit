@@ -113,8 +113,11 @@ contract. It never accepts App Store credentials, private keys, or signed
 authorization tokens from a game client or checked-in configuration. Connect
 `AppStoreSignedTransactionVerifier` to a verifier that validates Apple's JWS
 certificate chain and signature before returning the decoded transaction
-payload; the official App Store Server Library is the recommended production
-implementation.
+payload; `createAppleSignedTransactionVerifier` from
+`@mpgd/game-services/app-store-server` (over the optional
+`@apple/app-store-server-library` peer) is that production implementation. The
+former `@mpgd/adapter-capacitor/app-store-server` path is a deprecated
+re-export.
 The bearer-token provider receives the request `AbortSignal`; it should throw
 `AppStoreDependencyUnavailableError` only for a transient signing dependency
 outage and let cancellation, invalid credentials, and programming errors
@@ -460,9 +463,11 @@ contract does not carry rental expiry semantics. `refundableQuantity` must equal
 missing, malformed, fully refunded, and partially refunded values do not grant.
 Google may omit `orderId`, so a missing provider order is accepted while a
 present order must match the request. The optional Capacitor Play Billing
-provider uses `createGooglePlayTokenTransactionId(purchaseToken)` when the
-device has not yet received an order ID. The server recomputes that digest
-from the evidence token before allowing token-only order matching; an
+provider uses `createGooglePlayTokenPurchaseKey(purchaseToken)` from
+`@mpgd/platform/commerce` when the device has not yet received an order ID
+(`createGooglePlayTokenTransactionId` remains as a deprecated alias of the same
+helper in both packages). The server recomputes that digest with the same
+helper from the evidence token before allowing token-only order matching; an
 unrelated client-supplied ID still fails when Google reports an order. The
 client-reported `purchasedAt` is not
 compared with provider time; the authoritative time is persisted as
