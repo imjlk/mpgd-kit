@@ -36,13 +36,14 @@ answers `pending` until it exists.
   `onPurchasesChanged` signal does the same and may carry the purchases it
   knows; by default it is the VXShop dialog closing after a purchase
   (`VXShop.onClose`, now an optional member of `Verse8VXShopClient`), observed
-  from creation until `dispose()` so a purchase signalled while nobody listens
-  is buffered. The first listener triggers a re-read (a restart finds the
-  purchases recorded meanwhile), a signal nothing was recorded for yet is
-  followed by re-reads at `verse8PurchaseFollowUpDelaysMs` (the Agent8 event
-  may land after the dialog closed), and the newest
-  `maximumVerse8ReportedPurchases` records are the ones reported. Events
-  before the first listener are buffered.
+  while a listener exists. The first listener triggers a re-read (a restart,
+  or a gap without listeners, finds the purchases recorded meanwhile), a
+  signal nothing was recorded for yet is followed by re-reads at
+  `verse8PurchaseFollowUpDelaysMs` (up to about nine minutes, ending at the
+  first read that finds a new record, since the Agent8 event may land after
+  the dialog closed), and the newest `maximumVerse8ReportedPurchases` records
+  are the ones reported. A catalog without a consumable or durable product is
+  `configuration-required`. Events before the first listener are buffered.
 - `createVerse8CommerceCapabilities`, `createVerse8StorePurchase`,
   `createVerse8Agent8EventEvidence`, and `assertVerse8Agent8EventEvidence` (the
   server-side validation of `verse8.agent8-event.v1`) are exported from the

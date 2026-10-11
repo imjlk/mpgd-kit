@@ -115,13 +115,12 @@ export interface CreateVerse8CommerceProviderInput {
    * reports the purchases the signal carries at once, then re-reads the
    * purchase source and emits `purchaseUpdated` for purchases it has not
    * reported yet. Defaults to the VXShop dialog closing after a purchase
-   * (`client.onClose`, which carries no purchase). Observed from creation
-   * until `dispose()`, with or without a listener: VXShop lists nothing the
-   * reconciler could re-read, so a purchase signalled while nobody listens
-   * is buffered for the next listener instead of being lost. A signal that
-   * reports nothing new is followed by re-reads at
-   * `verse8PurchaseFollowUpDelaysMs`, since the Agent8 event may land after
-   * the dialog closed; the first listener also triggers a re-read.
+   * (`client.onClose`, which carries no purchase). Observed while a listener
+   * exists; the first listener triggers a re-read of the purchase source, so
+   * purchases recorded while nobody listened (or before a restart) are found
+   * then. A signal that reports nothing new is followed by re-reads at
+   * `verse8PurchaseFollowUpDelaysMs` until one finds a new record, since the
+   * Agent8 event may land after the dialog closed.
    */
   readonly onPurchasesChanged?: (listener: Verse8PurchasesChangeListener) => () => void;
 }
@@ -166,6 +165,7 @@ export function createVerse8CommerceProvider(
     throw new TypeError('A Verse8 commerce provider requires a non-empty store id.');
   }
   const products = normalizeProducts(input.products);
+  const oneTimeProductCount = products.filter((product) => product.type !== 'subscription').length;
   const productsById = new Map(products.map((product) => [product.id, product]));
   const productsByPlatformId = new Map(
     products.map((product) => [product.platformProductId, product]),
@@ -294,17 +294,31 @@ export function createVerse8CommerceProvider(
    * nothing new is followed by a few spaced re-reads until a record appears.
    */
   const followUpTimers = new Set<ReturnType<typeof setTimeout>>();
+  const cancelFollowUps = (): void => {
+    for (const timer of followUpTimers) {
+      clearTimeout(timer);
+    }
+    followUpTimers.clear();
+  };
   const refreshWithFollowUps = (change: Verse8PurchasesChange | undefined): void => {
     void refreshInBackground().then((reported) => {
       if (reported > 0 || change?.purchases !== undefined || disposed) {
         return;
       }
+      // One window of follow-ups at a time; a new signal restarts it.
+      cancelFollowUps();
       for (const delay of verse8PurchaseFollowUpDelaysMs) {
         const timer = setTimeout(() => {
           followUpTimers.delete(timer);
-          if (!disposed) {
-            void refreshInBackground();
+          if (disposed) {
+            return;
           }
+          void refreshInBackground().then((late) => {
+            if (late > 0) {
+              // The record arrived: the remaining follow-ups have nothing to find.
+              cancelFollowUps();
+            }
+          });
         }, delay);
         // A Node host (tests, tooling) must not stay alive for a follow-up read.
         unrefTimer(timer);
@@ -316,14 +330,30 @@ export function createVerse8CommerceProvider(
 
   const subscribeToPurchaseChanges = input.onPurchasesChanged
     ?? ((listener: Verse8PurchasesChangeListener) => subscribeToDialogClose(client, listener));
-  // Observed for the provider's lifetime: a purchase signalled while nobody
-  // listens is buffered, since no list read could find it later.
-  let detachPurchaseSignal: (() => void) | undefined = subscribeToPurchaseChanges((change) => {
-    if (change?.purchases !== undefined && Array.isArray(change.purchases)) {
-      reportSignalledPurchases(change.purchases);
+  // Observed while a listener exists: the first listener's own re-read finds
+  // the purchases recorded meanwhile, so an abandoned provider (a gateway
+  // rebuilt without disposal) holds no VXShop listener.
+  let detachPurchaseSignal: (() => void) | undefined;
+  const attachPurchaseSignal = (): void => {
+    if (detachPurchaseSignal !== undefined || disposed) {
+      return;
     }
-    refreshWithFollowUps(change);
-  });
+    detachPurchaseSignal = subscribeToPurchaseChanges((change) => {
+      if (change?.purchases !== undefined && Array.isArray(change.purchases)) {
+        reportSignalledPurchases(change.purchases);
+      }
+      refreshWithFollowUps(change);
+    });
+  };
+  const detachPurchaseSignalIfIdle = (): void => {
+    if (listeners.size > 0 || detachPurchaseSignal === undefined) {
+      return;
+    }
+    const detach = detachPurchaseSignal;
+    detachPurchaseSignal = undefined;
+    detach();
+    cancelFollowUps();
+  };
 
   const failed = (
     code: 'ITEM_UNAVAILABLE' | 'CONFIGURATION_REQUIRED' | 'STORE_UNAVAILABLE',
@@ -342,7 +372,8 @@ export function createVerse8CommerceProvider(
   const provider: Verse8CommerceProvider = {
     store,
     async getCapabilities(): Promise<CommerceCapabilities> {
-      const availability: PlatformProviderAvailability = products.length === 0
+      // A catalog without a consumable or durable product sells nothing here.
+      const availability: PlatformProviderAvailability = oneTimeProductCount === 0
         ? 'configuration-required'
         : 'available';
       return createVerse8CommerceCapabilities(availability);
@@ -461,6 +492,7 @@ export function createVerse8CommerceProvider(
     },
     subscribe(listener) {
       listeners.add(listener);
+      attachPurchaseSignal();
       if (listeners.size === 1) {
         buffer.drain((event) => {
           try {
@@ -476,6 +508,7 @@ export function createVerse8CommerceProvider(
       }
       return () => {
         listeners.delete(listener);
+        detachPurchaseSignalIfIdle();
       };
     },
     dispose() {
@@ -483,18 +516,21 @@ export function createVerse8CommerceProvider(
       listeners.clear();
       detachPurchaseSignal?.();
       detachPurchaseSignal = undefined;
-      for (const timer of followUpTimers) {
-        clearTimeout(timer);
-      }
-      followUpTimers.clear();
+      cancelFollowUps();
     },
   };
   return provider;
 }
 
-/** Delays of the re-reads that follow a purchase signal nothing was recorded for yet. */
+/**
+ * Delays of the re-reads that follow a purchase signal nothing was recorded
+ * for yet: the Agent8 event may land seconds after the dialog closed. The
+ * window ends at the first read that finds a new record, so a settled
+ * purchase costs no further reads; after the window, `restorePurchases`
+ * (the reconciler's manual restore) and the next signal are the readers.
+ */
 export const verse8PurchaseFollowUpDelaysMs: readonly number[] = Object.freeze([
-  1_000, 3_000, 7_000,
+  1_000, 3_000, 7_000, 15_000, 30_000, 60_000, 120_000, 300_000,
 ]);
 
 function unrefTimer(timer: ReturnType<typeof setTimeout>): void {

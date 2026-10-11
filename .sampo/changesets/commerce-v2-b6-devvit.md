@@ -31,10 +31,14 @@ writes the ledger on the server, and the backend's lookup verifier answers
   new and optional), with `OUTCOME_UNKNOWN` and `ALREADY_OWNED` classes kept
   open as `launched`.
 - `getAvailablePurchases` lists the paid orders whose delivery Reddit has not
-  acknowledged, read from the `orders` source (`DevvitOrderSource`), bounded by
-  `maximumDevvitAvailableOrders`; `restorePurchases` re-reads it and emits
-  `purchaseUpdated` once per order not reported before, as the
-  `onOrdersChanged` signal does (orders it carries are reported first).
+  acknowledged, read from the `orders` source (`DevvitOrderSource`, whose
+  entries carry a `delivered` flag), bounded by `maximumDevvitAvailableOrders`;
+  `restorePurchases` and the first listener re-read it and emit
+  `purchaseUpdated` once per order not reported before, delivered orders
+  included (so a checkout result lost to a restart still reaches the
+  reconciler), as the `onOrdersChanged` signal does (orders it carries are
+  reported first). An unconfigured catalog, or one without a consumable or
+  durable product, is `configuration-required`.
 - `createDevvitCommerceCapabilities`, `createDevvitStorePurchase`,
   `createDevvitOrderEvidence`, and `assertDevvitOrderEvidence` (the server-side
   validation of `devvit.order.v1`) are exported for registries and tests;
@@ -43,8 +47,10 @@ writes the ledger on the server, and the backend's lookup verifier answers
 `@mpgd/adapter-devvit/server` adds `createDevvitCommerceV2BridgeHandler({
 payments, products, store?, warn? })`, which serves the six `commerce.v2.*`
 bridge methods over the Devvit `payments` plugin (`PaymentsClient` of
-`@devvit/payments/server` fits `DevvitServerPaymentsLike`): `PAID` orders of
-configured SKUs as available purchases (four pages of 64 at most), configured
+`@devvit/payments/server` fits `DevvitServerPaymentsLike`): `PAID` and
+`DELIVERED` orders of configured SKUs as purchases (evidence `status` says
+which; pages of 64 newest first, stopping after two pages without one or at
+eight pages), configured
 products from `getProducts` priced in Reddit Gold, the profile capabilities,
 `restorePurchases` as `{ restored: false }`, `requestPurchase` refused with
 `DEVVIT_COMMERCE_CHECKOUT_CLIENT_ONLY` (the checkout is a webview effect), and

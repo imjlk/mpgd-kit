@@ -30,21 +30,30 @@ export const maximumDevvitAvailableOrders = 64;
 
 export type DevvitOrderEvidenceSource = 'checkout' | 'order-list';
 export type DevvitOrderEnvironment = 'sandbox' | 'production';
+/** The Reddit order status an order-list envelope reports: paid and awaiting delivery, or delivered. */
+export type DevvitOrderEvidenceStatus = 'PAID' | 'DELIVERED';
 
 export interface DevvitOrderEvidencePayload {
   readonly orderId: string;
   readonly sku: string;
   readonly source: DevvitOrderEvidenceSource;
   readonly environment?: DevvitOrderEnvironment;
+  readonly status?: DevvitOrderEvidenceStatus;
 }
 
-/** A paid Devvit order whose delivery Reddit has not acknowledged yet. */
+/**
+ * A paid Devvit order as the order list reports it: `delivered` says whether
+ * Reddit already acknowledged its delivery (`DELIVERED`), which it does as
+ * soon as the fulfillment handler answered; absent, the order is `PAID` and
+ * the handler has not settled it yet.
+ */
 export interface DevvitPaidOrder {
   readonly orderId: string;
   readonly sku: string;
   /** ISO timestamp of the payment (`Order.updatedAt`, else `createdAt`). */
   readonly paidAt?: string;
   readonly environment?: DevvitOrderEnvironment;
+  readonly delivered?: boolean;
 }
 
 /**
@@ -85,6 +94,7 @@ export function createDevvitOrderEvidence(
       sku: payload.sku,
       source: payload.source,
       ...(payload.environment === undefined ? {} : { environment: payload.environment }),
+      ...(payload.status === undefined ? {} : { status: payload.status }),
     },
   };
 }
@@ -92,7 +102,8 @@ export function createDevvitOrderEvidence(
 /**
  * Validates a `devvit.order.v1` envelope the way a server registry entry must
  * before it looks the order up: the schema, a bounded order id and SKU, a
- * known source, and an optional environment. Throws `TypeError` otherwise.
+ * known source, and optional environment and status. Throws `TypeError`
+ * otherwise.
  */
 export function assertDevvitOrderEvidence(
   envelope: PlatformEvidenceEnvelope,
@@ -109,18 +120,22 @@ export function assertDevvitOrderEvidence(
   if (sku === undefined) {
     throw new TypeError('Devvit order evidence must carry a sku.');
   }
-  const { source, environment } = payload;
+  const { source, environment, status } = payload;
   if (source !== 'checkout' && source !== 'order-list') {
     throw new TypeError('Devvit order evidence source must be checkout or order-list.');
   }
   if (environment !== undefined && environment !== 'sandbox' && environment !== 'production') {
     throw new TypeError('Devvit order evidence environment must be sandbox or production.');
   }
+  if (status !== undefined && status !== 'PAID' && status !== 'DELIVERED') {
+    throw new TypeError('Devvit order evidence status must be PAID or DELIVERED.');
+  }
   return {
     orderId,
     sku,
     source,
     ...(environment === undefined ? {} : { environment }),
+    ...(status === undefined ? {} : { status }),
   };
 }
 
@@ -155,6 +170,8 @@ export interface DevvitStorePurchaseInput {
   readonly source: DevvitOrderEvidenceSource;
   readonly paidAt?: string | undefined;
   readonly environment?: DevvitOrderEnvironment | undefined;
+  /** Known from the order list only; a checkout result carries no status. */
+  readonly delivered?: boolean | undefined;
 }
 
 /**
@@ -179,6 +196,7 @@ export function createDevvitStorePurchase(input: DevvitStorePurchaseInput): Stor
         sku: input.sku,
         source: input.source,
         ...(input.environment === undefined ? {} : { environment: input.environment }),
+        ...(input.delivered === undefined ? {} : { status: input.delivered ? 'DELIVERED' : 'PAID' }),
       }),
       accountBinding: { kind: 'host-identity' },
     });

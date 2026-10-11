@@ -1023,9 +1023,11 @@ describe('adapter-devvit commerce v2 gateway', () => {
     });
   });
 
-  it('keeps the last availability the server answered across a transient read failure', async () => {
+  it('keeps the last availability the server answered across a retryable read failure', async () => {
     let failing = false;
     let closed = false;
+    let broken = false;
+    let invalid = false;
     const { bridge: served } = createServerBridge({ served: true });
     const bridge: DevvitBridge = {
       async request(request) {
@@ -1035,6 +1037,12 @@ describe('adapter-devvit commerce v2 gateway', () => {
           }
           if (failing) {
             return createBridgeError(request.id, 'DEVVIT_BRIDGE_NETWORK_ERROR', 'offline', true);
+          }
+          if (broken) {
+            return createBridgeError(request.id, 'DEVVIT_SERVER_INTERNAL_ERROR', 'broken', false);
+          }
+          if (invalid) {
+            return { id: request.id, ok: true, data: { nonsense: true } };
           }
         }
         return served.request(request);
@@ -1056,13 +1064,38 @@ describe('adapter-devvit commerce v2 gateway', () => {
       nativeIap: true,
       commerce: { availability: 'available' },
     });
+    failing = false;
+    // A non-retryable failure and an invalid answer fail closed and forget the old answer.
+    broken = true;
+    await expect(gateway.getCapabilities()).resolves.toMatchObject({
+      nativeIap: false,
+      commerce: { availability: 'temporarily-unavailable' },
+    });
+    broken = false;
+    await expect(gateway.getCapabilities()).resolves.toMatchObject({
+      commerce: { availability: 'available' },
+    });
+    invalid = true;
+    await expect(gateway.getCapabilities()).resolves.toMatchObject({
+      commerce: { availability: 'temporarily-unavailable' },
+    });
+    invalid = false;
+    failing = true;
+    await expect(gateway.getCapabilities()).resolves.toMatchObject({
+      commerce: { availability: 'temporarily-unavailable' },
+    });
+    failing = false;
+    await expect(gateway.getCapabilities()).resolves.toMatchObject({
+      commerce: { availability: 'available' },
+    });
     closed = true;
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
       nativeIap: false,
       commerce: { availability: 'configuration-required' },
     });
-    // After the server closed, a transient failure fails closed again.
+    // After the server closed, a retryable failure fails closed again.
     closed = false;
+    failing = true;
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
       nativeIap: false,
       commerce: { availability: 'temporarily-unavailable' },

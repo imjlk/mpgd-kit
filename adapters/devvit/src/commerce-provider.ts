@@ -35,8 +35,12 @@ import {
   type DevvitPaymentsClient,
 } from './payments.js';
 
-/** Refreshes a checkout-reported order stays remembered while no listing shows it yet. */
-export const checkoutOrderListingGrace = 8;
+/**
+ * Refreshes an order reported ahead of the list (by a checkout result or a
+ * signal) survives without a listing showing it; it is forgotten on the next
+ * one, so a re-listed order is reported again.
+ */
+export const unlistedOrderGraceRefreshes = 7;
 
 /** Store codes the provider attaches to failures of its own. */
 export const devvitCommerceStoreCodes = Object.freeze({
@@ -47,8 +51,9 @@ export const devvitCommerceStoreCodes = Object.freeze({
 } as const);
 
 /**
- * The server-push lookup of the Devvit provider: the paid orders whose
- * delivery Reddit has not acknowledged (`PAID`, not `DELIVERED`). The order
+ * The server-push lookup of the Devvit provider: the user's recent paid
+ * orders, each marked `delivered` once Reddit acknowledged its delivery
+ * (which happens as soon as the fulfillment handler answered). The order
  * list is server-only in Devvit (`payments.getOrders`), so the webview reads
  * it through the server bridge (`commerce.v2.getAvailablePurchases`); the
  * conformance harness reads it from its fake payments plugin.
@@ -113,12 +118,15 @@ export interface DevvitCommerceProvider extends CommerceProvider {
  *   `launched`, as the RFC requires, and so does a `purchase()` call that
  *   rejects, since a missing response does not prove a missing order).
  * - `getAvailablePurchases` lists the paid orders whose delivery the server
- *   has not acknowledged (the order source), bounded by
- *   `maximumDevvitAvailableOrders`; `includePending` adds nothing because
- *   Devvit has no store-side pending order.
+ *   has not acknowledged (the order source without its delivered entries),
+ *   bounded by `maximumDevvitAvailableOrders`; `includePending` adds nothing
+ *   because Devvit has no store-side pending order.
  * - `restorePurchases` re-reads the order source and emits `purchaseUpdated`
- *   once per paid order not reported before; events before the first
- *   `subscribe` are buffered.
+ *   once per order not reported before, delivered orders included: Reddit
+ *   marks an order delivered as soon as the fulfillment handler answered, so
+ *   a session that lost its checkout result finds the order this way and the
+ *   backend lookup answers `granted` for it. The first listener triggers the
+ *   same read. Events before the first `subscribe` are buffered.
  * - The provider emits no `purchaseError`: every checkout outcome is a
  *   synchronous result of the purchase call.
  */
@@ -130,6 +138,9 @@ export function createDevvitCommerceProvider(
     throw new TypeError('A Devvit commerce provider requires a non-empty store id.');
   }
   const products = normalizeDevvitCommerceProducts(input.products);
+  const oneTimeProductCount = products.filter(
+    (product) => product.info.type !== 'subscription',
+  ).length;
   const productsById = new Map(products.map((product) => [product.info.id, product]));
   const productsBySku = new Map(products.map((product) => [product.sku, product]));
   const buffer = createCommerceEventBuffer();
@@ -137,18 +148,25 @@ export function createDevvitCommerceProvider(
   /** Orders already reported, through a checkout result or a `purchaseUpdated` event. */
   const reportedOrders = new Set<string>();
   /**
-   * Orders a checkout reported that no listing has confirmed yet, with the
-   * refreshes left before an unlisted one is forgotten: the server may list a
-   * just-created order a moment later, and it must not be reported twice.
+   * Orders reported ahead of the list (a checkout result or a signal) that no
+   * listing has confirmed yet, with the unlisted refreshes left before one is
+   * forgotten: the server may list a just-created order a moment later, and
+   * it must not be reported twice.
    */
-  const checkoutOrders = new Map<string, number>();
+  const unlistedOrders = new Map<string, number>();
 
-  const bound = (collection: Set<string>): void => {
-    for (const oldest of collection) {
-      if (collection.size <= maximumDevvitAvailableOrders) {
+  /** Bounds the reported set (oldest first) and drops grace entries of evicted orders. */
+  const boundReported = (): void => {
+    for (const oldest of reportedOrders) {
+      if (reportedOrders.size <= maximumDevvitAvailableOrders) {
         break;
       }
-      collection.delete(oldest);
+      reportedOrders.delete(oldest);
+    }
+    for (const tracked of [...unlistedOrders.keys()]) {
+      if (!reportedOrders.has(tracked)) {
+        unlistedOrders.delete(tracked);
+      }
     }
   };
 
@@ -184,6 +202,7 @@ export function createDevvitCommerceProvider(
       source,
       paidAt: order.paidAt,
       environment: order.environment,
+      delivered: order.delivered,
     });
   };
 
@@ -209,7 +228,7 @@ export function createDevvitCommerceProvider(
    * Reports a paid order once. The purchase is built before any bookkeeping,
    * so an order the contract rejects is neither marked reported nor emitted.
    */
-  const reportOrder = (order: DevvitPaidOrder): void => {
+  const reportOrder = (order: DevvitPaidOrder, aheadOfList = false): void => {
     if (reportedOrders.has(order.orderId)) {
       return;
     }
@@ -225,7 +244,10 @@ export function createDevvitCommerceProvider(
       return;
     }
     reportedOrders.add(order.orderId);
-    bound(reportedOrders);
+    if (aheadOfList) {
+      unlistedOrders.set(order.orderId, unlistedOrderGraceRefreshes);
+    }
+    boundReported();
     emit({ type: 'purchaseUpdated', purchase });
   };
 
@@ -238,19 +260,19 @@ export function createDevvitCommerceProvider(
     }
     for (const orderId of [...reportedOrders]) {
       if (listed.has(orderId)) {
-        // A listing confirmed the checkout order; it is a listed order now.
-        checkoutOrders.delete(orderId);
+        // A listing confirmed the order; it is a listed order now.
+        unlistedOrders.delete(orderId);
         continue;
       }
-      const grace = checkoutOrders.get(orderId);
-      if (grace !== undefined && grace > 1) {
-        // Not listed yet: the server may still be catching up with the checkout.
-        checkoutOrders.set(orderId, grace - 1);
+      const remaining = unlistedOrders.get(orderId);
+      if (remaining !== undefined && remaining > 0) {
+        // Not listed yet: the server may still be catching up.
+        unlistedOrders.set(orderId, remaining - 1);
         continue;
       }
       // An order the server stopped listing (or never listed within the grace)
       // was delivered; it is forgotten so a re-listed order is reported again.
-      checkoutOrders.delete(orderId);
+      unlistedOrders.delete(orderId);
       reportedOrders.delete(orderId);
     }
   };
@@ -269,7 +291,7 @@ export function createDevvitCommerceProvider(
       ) {
         continue;
       }
-      reportOrder(order);
+      reportOrder(order, true);
     }
   };
 
@@ -313,13 +335,8 @@ export function createDevvitCommerceProvider(
           source: 'checkout',
         });
         reportedOrders.add(orderId);
-        checkoutOrders.set(orderId, checkoutOrderListingGrace);
-        bound(reportedOrders);
-        for (const tracked of [...checkoutOrders.keys()]) {
-          if (!reportedOrders.has(tracked)) {
-            checkoutOrders.delete(tracked);
-          }
-        }
+        unlistedOrders.set(orderId, unlistedOrderGraceRefreshes);
+        boundReported();
         return { outcome: 'purchased', purchase };
       }
       case 'pending':
@@ -354,7 +371,8 @@ export function createDevvitCommerceProvider(
     store,
     async getCapabilities(): Promise<CommerceCapabilities> {
       let availability: PlatformProviderAvailability = 'available';
-      if (products.length === 0) {
+      if (oneTimeProductCount === 0) {
+        // A catalog without a consumable or durable product sells nothing here.
         availability = 'configuration-required';
       } else if (input.orders.getAvailability !== undefined) {
         try {
@@ -426,6 +444,11 @@ export function createDevvitCommerceProvider(
     ): Promise<readonly StorePurchase[]> {
       const purchases: StorePurchase[] = [];
       for (const order of await readPaidOrders()) {
+        if (order.delivered === true) {
+          // Delivered: the fulfillment handler settled it; it reaches the
+          // reconciler as an event, not as an unfinished purchase.
+          continue;
+        }
         try {
           const purchase = toPurchase(order, 'order-list');
           if (purchase !== undefined) {
@@ -452,6 +475,11 @@ export function createDevvitCommerceProvider(
             console.warn('Devvit commerce listener failed.', errorMessage(error));
           }
         });
+        // A fresh listener (a new session, or a restart) learns of the recent
+        // orders, delivered ones included, so a checkout result lost to a
+        // restart still reaches the reconciler; it matches them to its
+        // records by store and transaction id.
+        refreshInBackground();
       }
       return () => {
         listeners.delete(listener);

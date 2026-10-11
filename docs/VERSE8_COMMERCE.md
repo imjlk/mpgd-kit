@@ -215,9 +215,13 @@ Methods:
   the purchases it already knows (`Verse8PurchasesChange`); by default it is
   the VXShop dialog closing after a purchase (`VXShop.onClose` with
   `purchased: true`), which is a signal to re-read the server and never
-  evidence. The signal is observed from creation until `dispose()`, so a
-  purchase signalled while nobody listens is buffered for the next listener.
-  The provider emits no `purchaseError`.
+  evidence. The signal is observed while a listener exists; the first
+  listener triggers a re-read, so purchases recorded before it (or before a
+  restart) are found then. A signal nothing was recorded for yet is followed
+  by re-reads at `verse8PurchaseFollowUpDelaysMs` (1 s to 5 min, about nine
+  minutes in all) until one finds a new record; after that window the
+  reconciler's `restorePurchases` and the next signal are the readers. The
+  provider emits no `purchaseError`.
 
 The backend side of the lookup is the server-push verifier the RFC describes
 for C2: a verify request carrying `verse8.agent8-event.v1` evidence

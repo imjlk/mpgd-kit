@@ -11,9 +11,9 @@ import {
   type DevvitPaidOrder,
 } from './commerce-contract.js';
 import {
-  checkoutOrderListingGrace,
   createDevvitCommerceProvider,
   devvitCommerceStoreCodes,
+  unlistedOrderGraceRefreshes,
   type DevvitOrdersChangeListener,
   type DevvitOrderSource,
 } from './commerce-provider.js';
@@ -302,12 +302,13 @@ describe('createDevvitCommerceProvider', () => {
     expect(fixture.purchase).not.toHaveBeenCalled();
   });
 
-  it('lists paid orders for configured SKUs as purchased, bounded', async () => {
+  it('lists undelivered paid orders for configured SKUs as purchased, bounded', async () => {
     const orders: DevvitPaidOrder[] = [
       { orderId: 'order-1', sku: 'coins_100', paidAt: '2026-10-12T00:00:00.000Z', environment: 'sandbox' },
       { orderId: 'order-2', sku: 'other_game_sku' },
       { orderId: ' bad ', sku: 'coins_100' },
       { orderId: 'order-3', sku: 'ember_theme' },
+      { orderId: 'order-4', sku: 'coins_100', delivered: true },
     ];
     const { provider } = createFixture({ orders });
     await expect(provider.getAvailablePurchases({ includePending: true })).resolves.toEqual([
@@ -333,6 +334,16 @@ describe('createDevvitCommerceProvider', () => {
       },
       expect.objectContaining({ transactionId: 'order-3', logicalId: 'EMBER_THEME' }),
     ]);
+    // A delivered order is settled: never available, but reported as an event
+    // so a session that lost its checkout result still finds it.
+    const events: CommerceEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    await provider.restorePurchases();
+    expect(events.map((event) => event.type === 'purchaseUpdated' && event.purchase.transactionId))
+      .toEqual(['order-1', 'order-3', 'order-4']);
+    expect(events[2]).toMatchObject({
+      purchase: { evidence: { payload: { status: 'DELIVERED' } } },
+    });
     const many = createFixture({
       orders: Array.from({ length: maximumDevvitAvailableOrders + 1 }, (_, index) => ({
         orderId: `order-${String(index)}`,
@@ -342,6 +353,27 @@ describe('createDevvitCommerceProvider', () => {
     await expect(many.provider.getAvailablePurchases()).resolves.toHaveLength(
       maximumDevvitAvailableOrders,
     );
+  });
+
+  it('re-reads the orders for the first listener, so a restart finds a delivered order', async () => {
+    const fixture = createFixture({
+      orders: [{ orderId: 'order-9', sku: 'coins_100', delivered: true }],
+    });
+    const events: CommerceEvent[] = [];
+    fixture.provider.subscribe((event) => events.push(event));
+    await flush();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ purchase: { transactionId: 'order-9' } });
+    expect(fixture.listPaidOrders).toHaveBeenCalledTimes(1);
+  });
+
+  it('is configuration-required when no consumable or durable product is configured', async () => {
+    const fixture = createFixture({
+      products: [{ info: { ...coins.info, id: 'VIP', type: 'subscription' }, sku: 'vip' }],
+    });
+    await expect(fixture.provider.getCapabilities()).resolves.toMatchObject({
+      availability: 'configuration-required',
+    });
   });
 
   it('reports an unreadable order list as a retryable store failure', async () => {
@@ -439,11 +471,35 @@ describe('createDevvitCommerceProvider', () => {
     const fixture = createFixture({ checkout: { status: 'completed', orderId: 'order-1' } });
     const events: CommerceEvent[] = [];
     fixture.provider.subscribe((event) => events.push(event));
+    // The first listener's own read completes before the checkout, so it counts for nothing.
+    await flush();
     await fixture.provider.requestPurchase(request);
-    for (let refresh = 0; refresh < checkoutOrderListingGrace; refresh += 1) {
+    // The order survives the grace refreshes unlisted and is forgotten on the next one.
+    for (let refresh = 0; refresh < unlistedOrderGraceRefreshes; refresh += 1) {
       await fixture.provider.restorePurchases();
     }
     fixture.orders.push({ orderId: 'order-1', sku: 'coins_100' });
+    await fixture.provider.restorePurchases();
+    expect(events).toEqual([]);
+    fixture.orders.splice(0, 1);
+    for (let refresh = 0; refresh <= unlistedOrderGraceRefreshes; refresh += 1) {
+      await fixture.provider.restorePurchases();
+    }
+    fixture.orders.push({ orderId: 'order-1', sku: 'coins_100' });
+    await fixture.provider.restorePurchases();
+    expect(events).toHaveLength(1);
+  });
+
+  it('keeps a signalled order through the grace while the list has not caught up', async () => {
+    const fixture = createFixture();
+    const events: CommerceEvent[] = [];
+    fixture.provider.subscribe((event) => events.push(event));
+    fixture.signal({ orders: [{ orderId: 'order-7', sku: 'coins_100' }] });
+    expect(events).toHaveLength(1);
+    await flush();
+    // The background read after the signal found nothing; the order is kept, not re-reported.
+    await fixture.provider.restorePurchases();
+    fixture.orders.push({ orderId: 'order-7', sku: 'coins_100' });
     await fixture.provider.restorePurchases();
     expect(events).toHaveLength(1);
   });

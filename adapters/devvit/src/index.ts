@@ -222,8 +222,10 @@ export function createDevvitPlatformGateway(
  * provider rebuilds the purchases under its own store id), and the
  * availability the server reports. `COMMERCE_V2_UNAVAILABLE` from a bridge
  * without the commerce handler is `configuration-required`; another bridge
- * failure keeps the availability the server last answered (or is
- * `temporarily-unavailable` before any answer) for the capability read and is
+ * failure that is retryable (or the transport failing) keeps the availability
+ * the server last answered for the capability read (`temporarily-unavailable`
+ * before any answer; a non-retryable failure or an invalid answer fails
+ * closed) and is
  * a `CommerceError` for a list read (`NETWORK` for a transport failure,
  * otherwise `UNKNOWN` with the bridge code as `storeCode`).
  */
@@ -253,8 +255,11 @@ export function createDevvitBridgeOrderSource(
       const orders: DevvitPaidOrder[] = [];
       for (const purchase of purchases) {
         let environment: DevvitPaidOrder['environment'];
+        let delivered: boolean | undefined;
         try {
-          environment = assertDevvitOrderEvidence(purchase.evidence).environment;
+          const evidence = assertDevvitOrderEvidence(purchase.evidence);
+          environment = evidence.environment;
+          delivered = evidence.status === undefined ? undefined : evidence.status === 'DELIVERED';
         } catch {
           // The server listed an order under another evidence schema; the
           // order itself is still the server's word.
@@ -265,6 +270,7 @@ export function createDevvitBridgeOrderSource(
           sku: purchase.storeSku,
           ...(purchase.purchasedAt === undefined ? {} : { paidAt: purchase.purchasedAt }),
           ...(environment === undefined ? {} : { environment }),
+          ...(delivered === undefined ? {} : { delivered }),
         });
       }
       return orders;
@@ -282,15 +288,22 @@ export function createDevvitBridgeOrderSource(
           lastAvailability = undefined;
           return 'configuration-required';
         }
-        // A transient failure keeps the last answer the server gave, so one
-        // timed-out read does not hide the shop; the first read fails closed.
-        return lastAvailability ?? 'temporarily-unavailable';
+        if (isTransientBridgeFailure(error)) {
+          // A retryable failure keeps the last answer the server gave, so one
+          // timed-out read does not hide the shop; the first read fails closed.
+          return lastAvailability ?? 'temporarily-unavailable';
+        }
+        // Anything else is not transient: fail closed and forget the old answer.
+        lastAvailability = undefined;
+        return 'temporarily-unavailable';
       }
       try {
         lastAvailability = assertCommerceBridgeGetCapabilitiesResult(data).capabilities.availability;
         return lastAvailability;
       } catch {
-        return lastAvailability ?? 'temporarily-unavailable';
+        // The server answered something the contract rejects: fail closed.
+        lastAvailability = undefined;
+        return 'temporarily-unavailable';
       }
     },
   };
@@ -302,6 +315,14 @@ export function createDevvitBridgeOrderSource(
  * (`DEVVIT_BRIDGE_NETWORK_ERROR`) is `NETWORK`, a v2 code is kept, and any
  * other bridge code is `UNKNOWN` with the code as `storeCode`.
  */
+/** A retryable bridge error, or the oRPC transport failing: the server may answer again shortly. */
+function isTransientBridgeFailure(error: unknown): boolean {
+  if (error instanceof DevvitBridgeError) {
+    return error.retryable || error.code === devvitBridgeNetworkErrorCode;
+  }
+  return error instanceof PlatformOperationError && error.retryable;
+}
+
 function toCommerceError(error: unknown): CommerceError {
   if (error instanceof CommerceError) {
     return error;

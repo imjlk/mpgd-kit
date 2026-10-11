@@ -1,13 +1,16 @@
 # Devvit Payments and Commerce v2
 
-> **Not yet usable in production before C2.** The backend side of the
-> server-push lookup (a verifier registered for `devvit.order.v1` that answers
-> `granted` once the fulfillment handler's ledger entry exists and `pending`
-> otherwise) is C2 work. Today `@mpgd/game-services` registers no verifier for
-> that schema and `GameServicesStoreTarget` does not accept the `reddit`
-> target, so a verify request for a Devvit purchase is refused instead of
-> answering `pending`; a journal record would end rejected, not granted.
-> Enable the gateway `commerce` option only once the backend can answer.
+> **The commerce v2 gateway option is not yet usable in production before
+> C2.** The v1 payments adapter and the fulfillment handler path
+> (`normalizeDevvitFulfillmentOrder`, `fulfillPlatformOrder`) keep working as
+> before. The backend side of the v2 server-push lookup (a verifier registered
+> for `devvit.order.v1` that answers `granted` once the fulfillment handler's
+> ledger entry exists and `pending` otherwise) is C2 work: today
+> `@mpgd/game-services` registers no verifier for that schema and
+> `GameServicesStoreTarget` does not accept the `reddit` target, so a v2
+> verify request is refused instead of answering `pending`, and a journal
+> record would end rejected, not granted. Enable `createDevvitPlatformGateway`'s
+> `commerce` option only once the backend can answer.
 
 Reddit settles a Devvit purchase on the server: the payment handler your app
 registers (`fulfillOrder`) runs when an order is `PAID`, and only the backend
@@ -87,15 +90,21 @@ Methods:
   unconfigured product fails with `ITEM_UNAVAILABLE` before any checkout; a
   quantity above one is rejected by `assertRequestPurchaseSupported`.
 - `getAvailablePurchases` lists the paid orders whose delivery Reddit has not
-  acknowledged, as `purchased` with `devvit.order.v1` `{ source: 'order-list'
-  }` evidence, bounded by `maximumDevvitAvailableOrders` (64). Orders for
-  SKUs this build does not sell are not listed. `includePending` adds nothing.
+  acknowledged (`PAID`), as `purchased` with `devvit.order.v1`
+  `{ source: 'order-list', status: 'PAID' }` evidence, bounded by
+  `maximumDevvitAvailableOrders` (64). Orders for SKUs this build does not
+  sell are not listed. `includePending` adds nothing.
 - `restorePurchases` re-reads the order source and emits `purchaseUpdated`
-  once per paid order not reported before. The `onOrdersChanged` signal does
-  the same and may carry the orders it already knows (`DevvitOrdersChange`),
-  which are reported before the read; it is observed only while a listener
-  exists. Events before the first `subscribe` are buffered
-  (`createCommerceEventBuffer`). The provider emits no `purchaseError`.
+  once per order not reported before, delivered orders included (`status:
+  'DELIVERED'`): Reddit marks an order delivered as soon as the fulfillment
+  handler answered, so a session that lost its checkout result to a restart
+  finds the order this way, the backend lookup answers `granted` for it, and
+  the open journal record closes. The first listener triggers the same read.
+  The `onOrdersChanged` signal does the same and may carry the orders it
+  already knows (`DevvitOrdersChange`), which are reported before the read;
+  it is observed only while a listener exists. Events before the first
+  `subscribe` are buffered (`createCommerceEventBuffer`). The provider emits
+  no `purchaseError`.
 
 ### The server-push lookup
 
@@ -111,9 +120,12 @@ methods over the plugin:
   priced in Reddit Gold (`{ formatted: '<amount> Gold', currencyCode: 'GOLD'
   }`); time-limited goods (`VALID_FOR_*`) are not listed.
 - `getAvailablePurchases` pages `payments.getOrders` (64 per page, eight pages
-  at most) and lists the `PAID` orders of configured SKUs with exactly one
-  product, each as `purchased` with order evidence; a `DELIVERED`, `NEW`,
-  `CANCELED`, or `REVERTED` order is not listed. The plugin runs in the
+  at most, stopping after two consecutive pages without a paid or delivered
+  order) and lists the `PAID` and `DELIVERED` orders of configured SKUs with
+  exactly one product, each as `purchased` with order evidence whose `status`
+  says which; a `NEW`, `CANCELED`, or `REVERTED` order is not listed. The
+  webview provider keeps only the `PAID` ones as available and reports both
+  as events. The plugin runs in the
   request context of the authenticated Reddit user, and Reddit documents
   server-side `payments.getOrders()` as that user's orders in reverse
   chronological order (Devvit docs, "Manage Payments", "Check orders", whose

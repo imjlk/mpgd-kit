@@ -60,6 +60,7 @@ function createFixture(input: {
   readonly catalog?: readonly DevvitPaymentsProductLike[];
   readonly configured?: readonly { readonly productId: string; readonly sku: string }[];
   readonly failing?: boolean;
+  readonly warn?: (message: string) => void;
 } = {}) {
   const pages = input.pages ?? [[]];
   const getOrders = vi.fn(async (filters: { readonly limit: number; readonly cursor?: string }) => {
@@ -83,7 +84,7 @@ function createFixture(input: {
   const handler = createDevvitCommerceV2BridgeHandler({
     payments: { getOrders, getProducts },
     products: input.configured ?? products,
-    warn: () => {},
+    warn: input.warn ?? (() => {}),
   });
   return { handler, getOrders, getProducts };
 }
@@ -185,7 +186,7 @@ describe('createDevvitCommerceV2BridgeHandler', () => {
     expect(getProducts).toHaveBeenCalledTimes(2);
   });
 
-  it('lists the paid, undelivered orders of configured SKUs as purchased with order evidence', async () => {
+  it('lists the paid and delivered orders of configured SKUs as purchased with order evidence', async () => {
     const { handler, getOrders } = createFixture({
       pages: [
         [
@@ -221,6 +222,7 @@ describe('createDevvitCommerceV2BridgeHandler', () => {
             sku: 'coins_100',
             source: 'order-list',
             environment: 'production',
+            status: 'PAID',
           },
         },
         accountBinding: { kind: 'host-identity' },
@@ -228,55 +230,87 @@ describe('createDevvitCommerceV2BridgeHandler', () => {
       expect.objectContaining({
         transactionId: 'order-paid-named',
         logicalId: 'EMBER_THEME',
-        evidence: { schema: devvitOrderEvidenceSchema, payload: expect.objectContaining({ environment: 'sandbox' }) },
+        evidence: {
+          schema: devvitOrderEvidenceSchema,
+          payload: expect.objectContaining({ environment: 'sandbox', status: 'PAID' }),
+        },
+      }),
+      // Delivered orders are listed too, marked as such: the fulfillment handler settled them.
+      expect.objectContaining({
+        transactionId: 'order-delivered',
+        evidence: { schema: devvitOrderEvidenceSchema, payload: expect.objectContaining({ status: 'DELIVERED' }) },
       }),
       expect.objectContaining({ transactionId: 'order-no-time' }),
       expect.objectContaining({ transactionId: 'order-page-2' }),
     ]);
-    expect(response.purchases[2]).not.toHaveProperty('purchasedAt');
-    // The unparseable `updatedAt` is not a time; the order is listed without one.
     expect(response.purchases[3]).not.toHaveProperty('purchasedAt');
+    // The unparseable `updatedAt` is not a time; the order is listed without one.
+    expect(response.purchases[4]).not.toHaveProperty('purchasedAt');
     expect(getOrders).toHaveBeenCalledTimes(2);
-    expect(getOrders).toHaveBeenNthCalledWith(1, { limit: maximumDevvitAvailableOrders, status: 3 });
-    expect(getOrders).toHaveBeenNthCalledWith(2, {
-      limit: maximumDevvitAvailableOrders,
-      status: 3,
-      cursor: '1',
-    });
+    expect(getOrders).toHaveBeenNthCalledWith(1, { limit: maximumDevvitAvailableOrders });
+    expect(getOrders).toHaveBeenNthCalledWith(2, { limit: maximumDevvitAvailableOrders, cursor: '1' });
   });
 
-  it('stops paging at the first page without a paid order', async () => {
+  it('stops paging after two consecutive pages without a paid or delivered order and warns', async () => {
+    const warnings: string[] = [];
     const { handler, getOrders } = createFixture({
       pages: [
-        [order({ id: 'order-paid' }), order({ id: 'order-delivered', status: 4 })],
-        [order({ id: 'order-old-delivered', status: 4 }), order({ id: 'order-old-reverted', status: 6 })],
+        [order({ id: 'order-paid' }), order({ id: 'order-canceled', status: 5 })],
+        [order({ id: 'order-old-canceled', status: 5 }), order({ id: 'order-old-reverted', status: 6 })],
+        [order({ id: 'order-older-new', status: 1 })],
         [order({ id: 'order-ancient-paid' })],
       ],
+      warn: (message) => warnings.push(message),
     });
     const response = data(await handler.request(request('commerce.v2.getAvailablePurchases', {}))) as {
       readonly purchases: readonly { readonly transactionId: string }[];
     };
     expect(response.purchases.map((purchase) => purchase.transactionId)).toEqual(['order-paid']);
-    // Page two holds no paid order, so page three (older still) is never read.
-    expect(getOrders).toHaveBeenCalledTimes(2);
-    expect(getOrders).toHaveBeenNthCalledWith(1, { limit: maximumDevvitAvailableOrders, status: 3 });
-    expect(getOrders).toHaveBeenNthCalledWith(2, {
-      limit: maximumDevvitAvailableOrders,
-      status: 3,
-      cursor: '1',
-    });
-    // A paid order for another SKU keeps the scan going: it is paid, so older pages may hold ours.
-    const foreign = createFixture({
+    // Pages two and three hold nothing to list, so page four (older still) is never read.
+    expect(getOrders).toHaveBeenCalledTimes(3);
+    expect(getOrders).toHaveBeenNthCalledWith(1, { limit: maximumDevvitAvailableOrders });
+    expect(getOrders).toHaveBeenNthCalledWith(2, { limit: maximumDevvitAvailableOrders, cursor: '1' });
+    expect(warnings).toEqual([expect.stringContaining('older pages were not read')]);
+
+    // One page without a listable order is not enough: the next page is still read.
+    const single = createFixture({
       pages: [
-        [order({ id: 'order-foreign', products: [{ sku: 'foreign_sku' }] })],
+        [order({ id: 'order-canceled', status: 5 })],
         [order({ id: 'order-ours' })],
       ],
     });
-    const ours = data(await foreign.handler.request(request('commerce.v2.getAvailablePurchases', {}))) as {
+    const ours = data(await single.handler.request(request('commerce.v2.getAvailablePurchases', {}))) as {
       readonly purchases: readonly { readonly transactionId: string }[];
     };
     expect(ours.purchases.map((purchase) => purchase.transactionId)).toEqual(['order-ours']);
-    expect(foreign.getOrders).toHaveBeenCalledTimes(2);
+    expect(single.getOrders).toHaveBeenCalledTimes(2);
+
+    // A first page without a listable order and more pages: the stop fires after the second such page.
+    const settled = createFixture({
+      pages: [
+        [order({ id: 'order-a', status: 5 })],
+        [order({ id: 'order-b', status: 6 })],
+        [order({ id: 'order-c' })],
+      ],
+    });
+    const none = data(await settled.handler.request(request('commerce.v2.getAvailablePurchases', {}))) as {
+      readonly purchases: readonly unknown[];
+    };
+    expect(none.purchases).toEqual([]);
+    expect(settled.getOrders).toHaveBeenCalledTimes(2);
+
+    // A delivered order for another SKU keeps the scan going: older pages may hold ours.
+    const foreign = createFixture({
+      pages: Array.from({ length: 10 }, (_, index) => [
+        order({ id: `order-foreign-${String(index)}`, status: 4, products: [{ sku: 'foreign_sku' }] }),
+      ]),
+      warn: () => {},
+    });
+    const capped = data(await foreign.handler.request(request('commerce.v2.getAvailablePurchases', {}))) as {
+      readonly purchases: readonly unknown[];
+    };
+    expect(capped.purchases).toEqual([]);
+    expect(foreign.getOrders).toHaveBeenCalledTimes(8);
   });
 
   it('bounds the listed orders and stops paging at the bound', async () => {

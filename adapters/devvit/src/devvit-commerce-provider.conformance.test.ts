@@ -1,6 +1,6 @@
-/// <reference types="node" />
-// The vectors are read from the repository with Node APIs; the webview
-// adapter itself compiles without Node types (`types: []` in tsconfig).
+// The vectors are read from the repository with Node APIs, which is why the
+// package tsconfig lists the Node types (as the other adapters do); the
+// published sources use none of them.
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -182,8 +182,10 @@ function createConformanceReddit(context: CommerceConformanceContext): Conforman
     context.backend.ledger.some(
       (entry) => entry.type === 'grant' && entry.pushed === true && entry.transactionId === orderId,
     );
+  // Every order stays listed; a pushed one is `DELIVERED` (the fulfillment
+  // handler answered), the rest are `PAID`.
   const listed = (): readonly DevvitPaidOrder[] =>
-    paidOrders.filter((order) => !delivered(order.orderId));
+    paidOrders.map((order) => ({ ...order, delivered: delivered(order.orderId) }));
   const list = (fixture: CommerceConformancePurchaseFixture): DevvitPaidOrder => {
     if (fixture.state !== 'purchased') {
       throw new Error(`Reddit lists paid orders only, not ${fixture.state} ones.`);
@@ -247,7 +249,7 @@ function createConformanceReddit(context: CommerceConformanceContext): Conforman
         orders: listed().map(
           (order): DevvitPaymentsOrderLike => ({
             id: order.orderId,
-            status: 3,
+            status: order.delivered === true ? 4 : 3,
             createdAt: order.paidAt,
             updatedAt: order.paidAt,
             products: [{ sku: order.sku }],

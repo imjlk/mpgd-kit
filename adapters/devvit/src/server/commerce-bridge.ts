@@ -124,6 +124,12 @@ const paidOrderStatuses: ReadonlySet<DevvitPaymentsOrderStatusLike> = new Set([
   'PAID',
   'ORDER_STATUS_PAID',
 ]);
+/** `OrderStatus.ORDER_STATUS_DELIVERED` of `@devvit/protos`, and its handler-type spelling. */
+const deliveredOrderStatuses: ReadonlySet<DevvitPaymentsOrderStatusLike> = new Set([
+  4,
+  'DELIVERED',
+  'ORDER_STATUS_DELIVERED',
+]);
 /** `Environment` of `@devvit/protos`, and its string spellings. */
 const sandboxEnvironments: ReadonlySet<number | string> = new Set([
   1,
@@ -153,13 +159,15 @@ const orderPageSize = maximumDevvitAvailableOrders;
 /**
  * Hard cap on the pages scanned per listing. The plugin's `status` filter
  * does nothing in `@devvit/payments` 0.14 (its proto marks it so, and the
- * `PaymentsClient` forwards it unchanged), so delivered orders are scanned
- * too; the scan stops early at the first page without a `PAID` order, since
- * Reddit lists orders newest first and every older order is settled.
+ * `PaymentsClient` forwards it unchanged), so every status is scanned. The
+ * Devvit docs describe the list as newest first ("Manage Payments", "Check
+ * orders"); that is documentation, not a plugin guarantee, so the scan stops
+ * early only after two consecutive pages without a paid or delivered order,
+ * and warns when it stops with pages left.
  */
 const maximumOrderPages = 8;
-/** `OrderStatus.ORDER_STATUS_PAID`, passed as a hint for a plugin version that honours it. */
-const paidOrderStatusHint = 3;
+/** Consecutive pages without a paid or delivered order after which the scan stops early. */
+const settledPagesBeforeStop = 2;
 
 /**
  * Serves `commerce.v2.*` from the payments plugin:
@@ -168,14 +176,18 @@ const paidOrderStatusHint = 3;
  * - `fetchProducts` lists the configured SKUs from `payments.getProducts`
  *   (instant and consumable goods as `consumable`, durable goods as
  *   `durable`; time-limited goods are not listed) priced in Reddit Gold.
- * - `getAvailablePurchases` lists the authenticated user's `PAID` orders for
- *   configured SKUs from `payments.getOrders` as `purchased` (the order id as
- *   `transactionId` and `token`, `devvit.order.v1` evidence), bounded by
- *   `maximumDevvitAvailableOrders`. A delivered order is no longer listed:
- *   Reddit marks it `DELIVERED` once the fulfillment handler acknowledged it.
- *   The scan reads pages of 64, newest first, and stops at the first page
- *   without a paid order (or after `maximumOrderPages`), so a reconciler poll
- *   of a settled account costs one plugin round trip.
+ * - `getAvailablePurchases` lists the authenticated user's `PAID` and
+ *   `DELIVERED` orders for configured SKUs from `payments.getOrders` as
+ *   `purchased` (the order id as `transactionId` and `token`,
+ *   `devvit.order.v1` evidence whose `status` says which), bounded by
+ *   `maximumDevvitAvailableOrders`. Reddit marks an order `DELIVERED` as soon
+ *   as the fulfillment handler answered, so the delivered orders are the ones
+ *   whose ledger entry exists; the webview provider lists only the `PAID`
+ *   ones as available and reports both as events, so a session that lost its
+ *   checkout result still finds the order. The scan reads pages of 64
+ *   (newest first, as the Devvit docs describe) and stops after two
+ *   consecutive pages without a paid or delivered order or after
+ *   `maximumOrderPages`, warning when pages are left.
  * - `requestPurchase` is refused with `DEVVIT_COMMERCE_CHECKOUT_CLIENT_ONLY`,
  *   `finishTransaction` with `COMMERCE_V2_METHOD_UNSUPPORTED`, and
  *   `restorePurchases` answers `{ restored: false }`: the webview provider
@@ -201,20 +213,20 @@ export function createDevvitCommerceV2BridgeHandler(
   const listPaidOrders = async (): Promise<readonly DevvitPaidOrder[]> => {
     const orders: DevvitPaidOrder[] = [];
     let cursor: string | undefined;
+    let settledPages = 0;
     for (let page = 0; page < maximumOrderPages; page += 1) {
       const response = await input.payments.getOrders({
         limit: orderPageSize,
-        status: paidOrderStatusHint,
         ...(cursor === undefined ? {} : { cursor }),
       });
       const next = response.pageInfo;
       const hasNextPage = next !== undefined && next.hasNextPage && next.endCursor.length > 0;
-      let paidOnPage = 0;
+      let listableOnPage = 0;
       for (const [index, order] of response.orders.entries()) {
-        if (paidOrderStatuses.has(order.status)) {
-          paidOnPage += 1;
+        if (paidOrderStatuses.has(order.status) || deliveredOrderStatuses.has(order.status)) {
+          listableOnPage += 1;
         }
-        const paid = readPaidOrder(order, productsBySku);
+        const paid = readListedOrder(order, productsBySku);
         if (paid !== undefined) {
           orders.push(paid);
         }
@@ -225,9 +237,20 @@ export function createDevvitCommerceV2BridgeHandler(
           return orders;
         }
       }
-      if (!hasNextPage || next === undefined || paidOnPage === 0) {
-        // Newest first: a page without a paid order means every older order is settled.
+      if (!hasNextPage || next === undefined) {
         break;
+      }
+      settledPages = listableOnPage === 0 ? settledPages + 1 : 0;
+      if (settledPages >= settledPagesBeforeStop) {
+        // Newest first, as documented: the older pages left hold nothing to list.
+        warn(
+          `Devvit order scan stopped after ${String(settledPagesBeforeStop)} pages without a `
+            + 'paid or delivered order; older pages were not read.',
+        );
+        break;
+      }
+      if (page + 1 === maximumOrderPages) {
+        warn('Devvit order scan reached its page cap; older pages were not read.');
       }
       cursor = next.endCursor;
     }
@@ -296,6 +319,7 @@ export function createDevvitCommerceV2BridgeHandler(
                 source: 'order-list',
                 paidAt: order.paidAt,
                 environment: order.environment,
+                delivered: order.delivered ?? false,
               }),
             );
           } catch (error) {
@@ -333,12 +357,13 @@ export function createDevvitCommerceV2BridgeHandler(
   };
 }
 
-/** A `PAID` order for a configured SKU with exactly one product, or nothing. */
-function readPaidOrder(
+/** A `PAID` or `DELIVERED` order for a configured SKU with exactly one product, or nothing. */
+function readListedOrder(
   order: DevvitPaymentsOrderLike,
   productsBySku: ReadonlyMap<string, DevvitCommerceBridgeProduct>,
 ): DevvitPaidOrder | undefined {
-  if (!paidOrderStatuses.has(order.status)) {
+  const delivered = deliveredOrderStatuses.has(order.status);
+  if (!delivered && !paidOrderStatuses.has(order.status)) {
     return undefined;
   }
   const orderId = readDevvitIdentifier(order.id);
@@ -356,6 +381,7 @@ function readPaidOrder(
     sku,
     ...(paidAt === undefined ? {} : { paidAt }),
     ...(environment === undefined ? {} : { environment }),
+    delivered,
   };
 }
 

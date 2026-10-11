@@ -135,6 +135,12 @@ describe('createVerse8CommerceProvider', () => {
     await expect(empty.getCapabilities()).resolves.toMatchObject({
       availability: 'configuration-required',
     });
+    const subscriptionOnly = createFixture({
+      products: [{ id: 'VIP', type: 'subscription', platformProductId: 'vip' }],
+    });
+    await expect(subscriptionOnly.provider.getCapabilities()).resolves.toMatchObject({
+      availability: 'configuration-required',
+    });
   });
 
   it('lists the configured products VXShop offers, priced in VX', async () => {
@@ -249,6 +255,8 @@ describe('createVerse8CommerceProvider', () => {
     await expect(fixture.provider.getAvailablePurchases({ includePending: true })).resolves.toEqual([]);
     await fixture.provider.restorePurchases();
     await fixture.provider.restorePurchases();
+    // No listener yet: the VXShop dialog is not observed, and the events are buffered.
+    expect(fixture.closeListeners.size).toBe(0);
     const events: CommerceEvent[] = [];
     const unsubscribe = fixture.provider.subscribe((event) => events.push(event));
     expect(events).toEqual([
@@ -283,17 +291,17 @@ describe('createVerse8CommerceProvider', () => {
     expect(events).toHaveLength(2);
     expect(events[1]).toMatchObject({ purchase: { transactionId: '9', logicalId: 'REMOVE_ADS' } });
 
-    // The dialog stays observed while nobody listens: a purchase signalled
-    // then is buffered for the next listener, since no list could find it.
+    // The last listener leaving detaches the dialog; the next listener's own
+    // re-read finds what was recorded meanwhile.
     unsubscribe();
-    expect(fixture.closeListeners.size).toBe(1);
+    expect(fixture.closeListeners.size).toBe(0);
     fixture.recorded.push({ purchaseId: '10', productId: 'coins-100', quantity: 1 });
-    fixture.closeDialog(true);
-    await flush();
     const late: CommerceEvent[] = [];
     fixture.provider.subscribe((event) => late.push(event));
+    await flush();
     expect(late).toHaveLength(1);
     expect(late[0]).toMatchObject({ purchase: { transactionId: '10' } });
+    expect(fixture.closeListeners.size).toBe(1);
     fixture.provider.dispose();
     expect(fixture.closeListeners.size).toBe(0);
   });
@@ -344,21 +352,25 @@ describe('createVerse8CommerceProvider', () => {
     await flush();
     fixture.listPurchases.mockClear();
 
-    // The dialog closed before the Agent8 event landed.
+    // The dialog closed and no record ever arrives: every follow-up reads once.
     fixture.closeDialog(true);
     await flush();
     expect(fixture.listPurchases).toHaveBeenCalledTimes(1);
     expect(events).toEqual([]);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(fixture.listPurchases).toHaveBeenCalledTimes(verse8PurchaseFollowUpDelaysMs.length + 1);
+    expect(events).toEqual([]);
 
+    // The record arrives after the first delay: the remaining follow-ups are cancelled.
+    fixture.listPurchases.mockClear();
+    fixture.closeDialog(true);
+    await flush();
     fixture.recorded.push({ purchaseId: '4', productId: 'coins-100', quantity: 1 });
     await vi.advanceTimersByTimeAsync(verse8PurchaseFollowUpDelaysMs[0] ?? 0);
-    expect(fixture.listPurchases).toHaveBeenCalledTimes(2);
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({ purchase: { transactionId: '4' } });
-
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(fixture.listPurchases).toHaveBeenCalledTimes(verse8PurchaseFollowUpDelaysMs.length + 1);
-    expect(events).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(600_000);
+    expect(fixture.listPurchases).toHaveBeenCalledTimes(2);
 
     // A signal that reported something schedules nothing, and dispose cancels pending re-reads.
     fixture.recorded.push({ purchaseId: '5', productId: 'coins-100', quantity: 1 });
@@ -369,7 +381,7 @@ describe('createVerse8CommerceProvider', () => {
     await flush();
     fixture.provider.dispose();
     const calls = fixture.listPurchases.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(600_000);
     expect(fixture.listPurchases).toHaveBeenCalledTimes(calls);
   });
 
