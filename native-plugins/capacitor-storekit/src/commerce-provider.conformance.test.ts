@@ -5,11 +5,13 @@ import { createCapacitorPlatformGateway } from '@mpgd/adapter-capacitor';
 import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge';
 import type { CommerceProvider } from '@mpgd/platform/commerce';
 import {
+  isAdaptiveCommerceConformanceVector,
   runCommerceConformanceVectors,
   type CommerceConformanceContext,
   type CommerceConformanceFinishCall,
   type CommerceConformanceHarness,
   type CommerceConformanceStoreActor,
+  type CommerceConformanceVectorResult,
 } from '@mpgd/platform/commerce-conformance';
 import {
   assertCommerceConformanceVector,
@@ -48,12 +50,32 @@ const allVectors: readonly CommerceConformanceVector[] = readdirSync(vectorsDir)
   ));
 
 /**
- * Why a vector cannot run against the StoreKit profile. The reason names the
- * profile field or store behavior the vector needs and StoreKit lacks.
+ * Why a vector cannot be handed to the runner for the StoreKit provider. An
+ * adaptive vector (`profile.adaptive`) is matched against expectations the
+ * runner derives from the StoreKit capabilities and the `app-store` id, so
+ * only a step the plugin has no surface for rules it out here: StoreKit
+ * reports no purchase error events, and a StoreKit transaction is never in
+ * state `pending` (Ask to Buy answers with a pending purchase result and no
+ * transaction), even though the provider declares `lifecycle.pending`. A
+ * profile-specific vector is compared against expectations written for its
+ * fixture profile, so that profile must match StoreKit's.
  */
 function skipReason(vector: CommerceConformanceVector): string | undefined {
   if (vector.wallet !== undefined) {
     return 'wallet vector: the project-owned credit wallet (B7), no store SDK';
+  }
+  if (vector.steps.some((step) => step.actor === 'store' && step.action === 'error')) {
+    return 'vector emits an asynchronous store error event; StoreKit reports no purchase error '
+      + 'events (a declined Ask to Buy never produces a transaction)';
+  }
+  if (vector.steps.some((step) => step.actor === 'store'
+    && (step.action === 'complete' || step.action === 'update')
+    && step.purchase.state === 'pending')) {
+    return 'vector reports a pending transaction; StoreKit answers Ask to Buy with a pending '
+      + 'purchase result and no transaction, so a transaction is never in state pending';
+  }
+  if (isAdaptiveCommerceConformanceVector(vector)) {
+    return undefined;
   }
   const profile = vector.profile;
   const purchase = profile.purchase;
@@ -74,23 +96,7 @@ function skipReason(vector: CommerceConformanceVector): string | undefined {
   if (authority !== undefined && authority.evidence !== 'client-token') {
     return `profile evidence is '${authority.evidence}'; StoreKit evidence is the client JWS token`;
   }
-  if (vector.steps.some((step) => step.actor === 'store' && step.action === 'error')) {
-    return 'vector emits an asynchronous store error event; StoreKit reports no purchase error '
-      + 'events (a declined Ask to Buy never produces a transaction)';
-  }
-  if (vector.steps.some((step) => step.actor === 'store'
-    && (step.action === 'complete' || step.action === 'update')
-    && step.purchase.state === 'pending')) {
-    return 'vector reports a pending transaction; StoreKit answers Ask to Buy with a pending '
-      + 'purchase result and no transaction, so a transaction is never in state pending';
-  }
   return undefined;
-}
-
-/** The vector with the fixture store id replaced by `app-store`, the id this provider reports. */
-function toAppStoreVector(vector: CommerceConformanceVector): CommerceConformanceVector {
-  const text = JSON.stringify(vector).split(vector.profile.store).join('app-store');
-  return assertCommerceConformanceVector(JSON.parse(text) as unknown);
 }
 
 const skipped: { readonly vector: string; readonly reason: string }[] = [];
@@ -98,7 +104,7 @@ const runnable: CommerceConformanceVector[] = [];
 for (const vector of allVectors) {
   const reason = skipReason(vector);
   if (reason === undefined) {
-    runnable.push(toAppStoreVector(vector));
+    runnable.push(vector);
   } else {
     skipped.push({ vector: vector.vector, reason });
   }
@@ -258,11 +264,12 @@ function createBridgedVectorProvider(context: CommerceConformanceContext): Comme
   return { provider: gateway.commerceV2, store: actor };
 }
 
-function summarize(results: readonly { vector: string; passed: boolean; failures: unknown }[]) {
+function summarize(results: readonly CommerceConformanceVectorResult[]) {
   return results.map((result) => ({
     vector: result.vector,
-    passed: result.passed,
-    failures: result.failures,
+    status: result.status,
+    ...(result.reason === undefined ? {} : { reason: result.reason }),
+    ...(result.failures.length === 0 ? {} : { failures: result.failures }),
   }));
 }
 
@@ -291,17 +298,9 @@ assertEqual(
       reason: 'wallet vector: the project-owned credit wallet (B7), no store SDK',
     },
     {
-      vector: 'purchase-host-finish',
-      reason: "profile finishes by 'host'; StoreKit finishes on the client after the ledger grant",
-    },
-    {
       vector: 'purchase-pending-then-purchased',
       reason: 'vector reports a pending transaction; StoreKit answers Ask to Buy with a pending '
         + 'purchase result and no transaction, so a transaction is never in state pending',
-    },
-    {
-      vector: 'purchase-server-finish',
-      reason: 'profile supports quantity; StoreKit sells one unit per transaction',
     },
     {
       vector: 'server-push-settlement',
@@ -316,19 +315,50 @@ assertEqual(
     'event-before-listener',
     'finish-failure-retry',
     'purchase-client-finish',
+    'purchase-host-finish',
+    'purchase-server-finish',
     'restart-before-verify',
     'revoked-after-grant',
   ],
-  'every other store vector runs against the StoreKit provider',
+  'every other store vector is handed to the runner',
+);
+assertEqual(
+  runnable.every(isAdaptiveCommerceConformanceVector),
+  true,
+  'every vector handed to the runner is adaptive',
 );
 assertEqual(allVectors.length, skipped.length + runnable.length, 'every vector is classified');
+
+/**
+ * What the runner reports under StoreKit's declared `finish: 'client'`: the
+ * two other members of the `purchase-<owner>-finish` family are duplicates of
+ * `purchase-client-finish`, and the rest run with client-finish expectations
+ * derived for the `app-store` id.
+ */
+const expectedStatuses = [
+  { vector: 'event-before-listener', status: 'passed' },
+  { vector: 'finish-failure-retry', status: 'passed' },
+  { vector: 'purchase-client-finish', status: 'passed' },
+  {
+    vector: 'purchase-host-finish',
+    status: 'skipped',
+    reason: "duplicate of purchase-client-finish for finish='client'",
+  },
+  {
+    vector: 'purchase-server-finish',
+    status: 'skipped',
+    reason: "duplicate of purchase-client-finish for finish='client'",
+  },
+  { vector: 'restart-before-verify', status: 'passed' },
+  { vector: 'revoked-after-grant', status: 'passed' },
+] as const;
 
 const direct = await runCommerceConformanceVectors(runnable, {
   createProvider: createVectorProvider,
 });
 assertEqual(
   summarize(direct),
-  runnable.map((vector) => ({ vector: vector.vector, passed: true, failures: [] })),
+  [...expectedStatuses],
   'every runnable vector passes against the StoreKit provider over the fake plugin',
 );
 
@@ -337,22 +367,54 @@ const bridged = await runCommerceConformanceVectors(runnable, {
 });
 assertEqual(
   summarize(bridged),
-  runnable.map((vector) => ({ vector: vector.vector, passed: true, failures: [] })),
+  [...expectedStatuses],
   'every runnable vector passes through the gateway bridge path',
 );
 
-// The finish: 'client' vectors prove the client finished with the ledger entry id.
-for (const vector of runnable) {
-  if (vector.expect.finishCalls !== undefined && vector.expect.finishCalls.length > 0) {
-    assertEqual(
-      vector.expect.finishCalls.every(
-        (call) => call.by === 'client' && call.ledgerEntryId.length > 0,
-      ),
-      true,
-      `${vector.vector} expects client finish calls carrying the ledger entry id`,
-    );
+// The derived expectations prove the client finished with the ledger entry id,
+// under the `app-store` id the provider reports rather than the fixture's.
+for (const result of [...direct, ...bridged]) {
+  if (result.status !== 'passed') {
+    continue;
   }
+  const adaptive = result.adaptive;
+  if (adaptive === undefined) {
+    throw new Error(`${result.vector} did not run adaptively.`);
+  }
+  assertEqual(adaptive.store, 'app-store', `${result.vector} derived for the app-store id`);
+  assertEqual(adaptive.finish, 'client', `${result.vector} derived for the client finish owner`);
+  assertEqual(
+    adaptive.evidence,
+    'client-token',
+    `${result.vector} derived for client-token evidence`,
+  );
+  const finishCalls = adaptive.expect.finishCalls ?? [];
+  assertEqual(finishCalls.length > 0, true, `${result.vector} expects client finish calls`);
+  assertEqual(
+    finishCalls.every((call) => call.by === 'client' && call.ledgerEntryId.length > 0),
+    true,
+    `${result.vector} expects client finish calls carrying the ledger entry id`,
+  );
+  assertEqual(
+    (adaptive.expect.verifyRequests ?? []).every((request) => request.store === 'app-store'),
+    true,
+    `${result.vector} expects verify requests for the app-store id`,
+  );
+  assertEqual(adaptive.expect.available, [], `${result.vector} expects no unfinished transaction`);
 }
+assertEqual(
+  Object.keys(
+    direct.find((result) => result.vector === 'event-before-listener')?.adaptive?.expect.journal ?? {},
+  ),
+  ['store:app-store:tx-1'],
+  'the derived key carries the app-store id',
+);
+assertEqual(
+  direct.find((result) => result.vector === 'finish-failure-retry')?.adaptive?.expect.finishCalls
+    ?.map((call) => call.result),
+  ['NETWORK', 'finished'],
+  'the finish retry keeps the failed and the retried client finish',
+);
 
 // A changed expectation fails, so the pass above is a real check.
 {
@@ -364,7 +426,7 @@ for (const vector of runnable) {
     [{ ...vector, expect: { ...vector.expect, purchaseUiOpened: 99 } }],
     { createProvider: createVectorProvider },
   );
-  assertEqual(result?.passed, false, 'a wrong expectation fails');
+  assertEqual(result?.status, 'failed', 'a wrong expectation fails');
   assertEqual(
     result?.failures,
     [{ path: 'purchaseUiOpened', expected: 99, actual: 1 }],
@@ -372,7 +434,35 @@ for (const vector of runnable) {
   );
 }
 
+// A family member run on its own is not a duplicate and passes with the same derivation.
+{
+  const vector = runnable.find((candidate) => candidate.vector === 'purchase-server-finish');
+  if (vector === undefined) {
+    throw new Error('Missing vector.');
+  }
+  const [result] = await runCommerceConformanceVectors([vector], {
+    createProvider: createVectorProvider,
+  });
+  assertEqual(
+    result?.failures,
+    [],
+    'purchase-server-finish passes alone with client-finish expectations',
+  );
+  assertEqual(result?.status, 'passed', 'purchase-server-finish is not a duplicate on its own');
+  assertEqual(
+    result?.adaptive?.expect.finishCalls?.map((call) => call.by),
+    ['client'],
+    'the server-finish fixture is finished by the StoreKit client',
+  );
+  assertEqual(
+    result?.adaptive?.expect.verifyRequests?.length,
+    1,
+    'no finalization re-read for a client finish owner',
+  );
+}
+
+const ran = direct.filter((result) => result.status === 'passed').length;
 console.info(
-  `StoreKit commerce v2 conformance passed: ${String(runnable.length)} vectors ran, `
-    + `${String(skipped.length)} skipped.`,
+  `StoreKit commerce v2 conformance passed: ${String(ran)} vectors ran, `
+    + `${String(runnable.length - ran)} runner-skipped, ${String(skipped.length)} pre-skipped.`,
 );
