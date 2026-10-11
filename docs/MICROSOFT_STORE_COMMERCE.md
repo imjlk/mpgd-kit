@@ -62,7 +62,8 @@ does not fabricate evidence from a newer catalog mapping. The required
 currently authenticated player. Recovery storage is partitioned by that scope
 and the stable logical product ID to avoid accidental cross-account retries;
 the partition is not an authorization boundary. Refresh
-`getProducts()` after the authenticated player changes; checkout fails before
+`getProducts()` (`fetchProducts()` on the v2 provider) after the authenticated
+player changes; checkout fails before
 opening Payment Request if the scope changed after catalog preparation. The
 scope is checked again after the payment UI returns and after the asynchronous
 ownership lookup; if it changed in either window, no authority call is made and
@@ -141,6 +142,104 @@ User Store ID plus Entra authentication cannot consume developer-managed
 consumables in non-RETAIL sandboxes. The boundary fails closed with
 `MICROSOFT_STORE_XSTS_REQUIRED_FOR_SANDBOX`; sandbox testing requires delegated
 XSTS authentication supplied by the game service.
+
+## Commerce v2 provider
+
+`createMicrosoftStoreCommerceProvider(input)` from
+`@mpgd/adapter-browser/microsoft-store` is the commerce v2 `CommerceProvider`
+(RFC: [docs/specs/commerce/commerce-v2-rfc.md](specs/commerce/commerce-v2-rfc.md))
+over the same Digital Goods path. It takes the
+`createMicrosoftStoreCommerceAdapter` input unchanged (products, authority,
+`getRecoveryScope`, recovery storage, Digital Goods and Payment Request
+factories) plus an optional `store` id, and runs the same engine, so the v1
+adapter keeps its behaviour and both surfaces share one recovery-record format.
+
+Capability block (`store: 'microsoft-store'`), the RFC profile row:
+
+- `purchase`: consumable only; no durable, subscription, or quantity.
+- `catalog`: products with localized prices, no offers.
+- `lifecycle`: `availablePurchases`, `restore`, `events`, `finish: 'server'`
+  (the backend consume finalizer finishes; the provider has no
+  `finishTransaction`). `pending` is `false`: Microsoft has no store-side
+  pending state. A scoped recovery record is a paid, unconsumed purchase the
+  authority has not answered yet, so `getAvailablePurchases` lists it as
+  `purchased`.
+- `authority`: `evidence: 'adapter-settled'`, `accountBinding: 'required'`.
+- `availability`: the v1 `getAvailability()` value.
+
+Methods:
+
+- `fetchProducts` maps Digital Goods `getDetails()` to `StoreProduct`
+  (`storeSku` is the `inAppOfferToken`, `amountMicros` comes from the numeric
+  price). An unconfigured or unsupported store returns no products; a Digital
+  Goods failure throws `STORE_UNAVAILABLE`.
+- `requestPurchase` runs the v1 flow (`claimRecoveryOwnership` → Payment
+  Request → `verifyAndGrant`). Call `fetchProducts` first: it prepares checkout
+  so Payment Request opens inside the caller's user activation; otherwise the
+  provider prepares the catalog itself before showing the sheet. A grant
+  returns `purchased` with `settlement: { ledgerEntryId }`; a pending or
+  unavailable authority, an unlisted purchase, or an interrupted checkout
+  returns `launched` and the reconciler resolves it from
+  `getAvailablePurchases`; a Store identity bound to another player fails with
+  `ACCOUNT_BINDING_REQUIRED`; a dismissed sheet is `cancelled`. Every failure
+  carries the client outcome code as `storeCode` (`MICROSOFT_STORE_*`, see
+  `microsoftStoreCommerceErrorCodeMap`); a native bridge payment failure keeps
+  its `NATIVE_PURCHASE_*` code.
+- `getAvailablePurchases` lists `listPurchases()` items of the configured
+  (including historical) tokens plus scoped recovery records, each once.
+  `settlement` appears on a purchase the authority granted in this session
+  under the checkout key that still identifies it, for the player scope that
+  bought it; because the Store reuses the token, the pointer is forgotten as
+  soon as a new checkout of that add-on starts, the Store stops listing the
+  purchase, or the authenticated player scope changes (another player signed in
+  on the same Windows profile sees the purchase unsettled). `accountBinding`
+  appears only on purchases this player claimed (a scoped recovery record or a
+  settlement of this session); a globally listed purchase nobody claimed has
+  none, and the backend still validates ownership.
+- `restorePurchases` replays recovery exactly like the v1 `restore()` and emits
+  `purchaseUpdated` (with `settlement`) for every grant and `purchaseError` for
+  a denied recovery; events before the first `subscribe` are buffered, and a
+  buffered settlement is delivered only while the player scope that restored it
+  is still signed in. It skips the v1 trailing `authority.getEntitlements()`
+  read (entitlements come from the ledger), so an entitlement outage cannot
+  fail a replay that settled purchases. A Digital Goods failure during the
+  replay rejects with `STORE_UNAVAILABLE`.
+- A throwing `authority.getAvailability()` never leaks out: `getCapabilities`
+  reports `temporarily-unavailable`, and `fetchProducts`,
+  `getAvailablePurchases`, `restorePurchases`, and a `requestPurchase` that has
+  to prepare the catalog reject with `STORE_UNAVAILABLE` (retryable,
+  `storeCode: MICROSOFT_STORE_AUTHORITY_UNAVAILABLE`).
+- A `failed` answer after the Store payment resolved (the authority rejected
+  the grant, or the identity belongs to another player) leaves the unconsumed
+  purchase listed by the Store; `getAvailablePurchases` keeps reporting it,
+  unsettled and without an account binding, until the backend decides.
+
+`StorePurchase.transactionId` and `token` are both the Digital Goods
+`purchaseToken`: Microsoft issues no transaction-unique id, the server boundary
+matches `platformTransactionId` against the token, and the token repeats once
+the previous purchase of the same add-on is consumed. A reconciler must
+therefore match a reported Microsoft purchase against open journal records
+only. `accountBinding` is `{ kind: 'obfuscated-account-id', value }` with the
+`getRecoveryScope()` value of the claiming player. The provider never grants:
+`settlement` is the authority's ledger pointer and the reconciler still
+confirms it through the backend, as the `adapter-settled` conformance vector
+requires.
+
+`withMicrosoftStoreCommerceProvider(gateway, provider, options)` installs it on
+a `microsoft-store` gateway: `commerceV2` is the provider, the v1 `commerce` is
+`toCommerceAdapter(provider)` (a `purchased` outcome becomes a `completed`
+result whose `authoritativeGrant` carries the settlement; `restore()` returns
+`settledPurchases` instead of authority entitlements, and `getEntitlements()`
+is empty because entitlements come from the ledger), `getCapabilities()` adds
+the `commerce` block with `nativeIap` and `subscriptionIap` derived from it,
+and the ads surface is the unavailable adapter as with
+`withMicrosoftStoreCommerceAdapter`. The `@mpgd/game-services` client reads
+that block: a completed purchase with `authoritativeGrant` from a provider
+declaring `adapter-settled` is granted without a second verification (the
+declaration is read once per provider instance and cached, a failed read is
+retried on the next checkout), and the target-name rule applies only to
+gateways without `commerceV2`. The CLI template still wires the v1 adapter
+until C3.
 
 ## Game-owned setup
 

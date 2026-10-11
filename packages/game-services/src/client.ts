@@ -10,7 +10,7 @@ import type {
   RewardedAdResult,
 } from '@mpgd/platform';
 
-import { isAuthoritativeMicrosoftStoreCompletion } from './authoritative-purchase.js';
+import { findAdapterSettledGrant } from './authoritative-purchase.js';
 import {
   resolveClientRewardClaim,
   type ClientRewardEvidenceRegistry,
@@ -283,11 +283,19 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
           };
         }
 
-        if (isAuthoritativeMicrosoftStoreCompletion(target, purchase)) {
+        // A provider that declares adapter settlement already wrote the ledger
+        // grant before returning; the target-name rule remains only for
+        // gateways without a commerce v2 provider (removed in C4).
+        const settledGrant = await findAdapterSettledGrant({
+          gateway: input.gateway,
+          target,
+          purchase,
+        });
+        if (settledGrant !== undefined) {
           const result = {
             status: 'granted',
             purchase,
-            ledgerEntryId: purchase.transactionId,
+            ledgerEntryId: settledGrant.ledgerEntryId,
           } satisfies GameServicesPurchaseResult;
 
           await analytics.track({
@@ -295,8 +303,8 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
             properties: {
               productId: purchaseInput.productId,
               status: result.status,
-              ledgerEntryId: purchase.transactionId,
-              alreadyProcessed: purchase.authoritativeGrant?.alreadyProcessed,
+              ledgerEntryId: settledGrant.ledgerEntryId,
+              alreadyProcessed: settledGrant.alreadyProcessed,
             },
           });
 

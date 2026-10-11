@@ -1,4 +1,5 @@
-import type { PlatformGateway, ProductInfo } from '@mpgd/platform';
+import type { CommerceCapabilities, PlatformGateway, ProductInfo } from '@mpgd/platform';
+import type { CommerceProvider } from '@mpgd/platform/commerce';
 
 import {
   createGameServicesClient,
@@ -515,6 +516,362 @@ assertEqual(
   microsoftStoreLeaderboard.platformSubmitted,
   true,
   'Microsoft Store should submit the score through its browser gateway',
+);
+
+// Commerce v2: settlement is declared by the provider's capability block, not
+// by the target name. The v1 wrapper of a v2 provider reports the Store
+// purchase token as transactionId, so the legacy equality rule would not match.
+function createMockCommerceV2(
+  evidence: CommerceCapabilities['authority']['evidence'],
+): CommerceProvider {
+  return {
+    store: 'mock-store',
+    async getCapabilities() {
+      return {
+        purchase: { consumable: true, durable: false, subscription: false, quantity: false },
+        catalog: { products: true, offers: false, localizedPrice: true },
+        lifecycle: {
+          availablePurchases: true,
+          pending: false,
+          restore: true,
+          events: true,
+          finish: 'server',
+        },
+        authority: { evidence, accountBinding: 'required' },
+        availability: 'available',
+      };
+    },
+    async fetchProducts() {
+      return [];
+    },
+    async requestPurchase() {
+      return { outcome: 'launched' };
+    },
+    async getAvailablePurchases() {
+      return [];
+    },
+    subscribe() {
+      return () => {};
+    },
+  };
+}
+
+function createSettledCommerceGateway(
+  target: PlatformGateway['target'],
+  evidence: CommerceCapabilities['authority']['evidence'] | undefined,
+): PlatformGateway {
+  const base = createMockGateway();
+  return {
+    ...base,
+    target,
+    ...(evidence === undefined ? {} : { commerceV2: createMockCommerceV2(evidence) }),
+    commerce: {
+      ...base.commerce,
+      async purchase() {
+        return {
+          status: 'completed',
+          transactionId: 'coins_100',
+          authoritativeGrant: { ledgerEntryId: 'ledger-v2', alreadyProcessed: true },
+          entitlementIds: [],
+          evidence: {
+            schema: 'mpgd.microsoft-store.digital-goods.v1',
+            payload: { itemId: 'coins_100', purchaseToken: 'coins_100' },
+          },
+        } as const;
+      },
+    },
+  };
+}
+
+let adapterSettledVerificationCalls = 0;
+const adapterSettledClient = createGameServicesClient({
+  gateway: createSettledCommerceGateway('microsoft-store', 'adapter-settled'),
+  playerId,
+  target: 'microsoft-store',
+  backend: {
+    ...backend,
+    purchases: {
+      async verifyPurchase() {
+        adapterSettledVerificationCalls += 1;
+        throw new Error('an adapter-settled completion must not be reverified');
+      },
+    },
+  },
+});
+const adapterSettledPurchase = await adapterSettledClient.purchase({
+  productId: 'COINS_100',
+  source: 'shop',
+  idempotencyKey: 'adapter-settled-purchase',
+});
+
+assertEqual(
+  adapterSettledPurchase.status,
+  'granted',
+  'a commerce v2 adapter-settled completion should be granted from the authoritative grant',
+);
+assertEqual(
+  adapterSettledPurchase.ledgerEntryId,
+  'ledger-v2',
+  'the ledger entry should come from authoritativeGrant, not from the Store transaction id',
+);
+assertEqual(
+  adapterSettledVerificationCalls,
+  0,
+  'an adapter-settled completion should not be sent through verification',
+);
+
+let clientTokenVerificationCalls = 0;
+const clientTokenClient = createGameServicesClient({
+  gateway: createSettledCommerceGateway('microsoft-store', 'client-token'),
+  playerId,
+  target: 'microsoft-store',
+  backend: {
+    ...backend,
+    purchases: {
+      async verifyPurchase(input) {
+        clientTokenVerificationCalls += 1;
+        return {
+          verified: true,
+          ledgerEntryId: `verified-${input.platformTransactionId}`,
+          alreadyProcessed: false,
+        };
+      },
+    },
+  },
+});
+const clientTokenPurchase = await clientTokenClient.purchase({
+  productId: 'COINS_100',
+  source: 'shop',
+  idempotencyKey: 'client-token-purchase',
+});
+
+assertEqual(
+  clientTokenPurchase.status,
+  'granted',
+  'a client-token provider completion should be granted by the backend verifier',
+);
+assertEqual(
+  clientTokenPurchase.ledgerEntryId,
+  'verified-coins_100',
+  'a client-token provider completion should take the verifier ledger entry',
+);
+assertEqual(
+  clientTokenVerificationCalls,
+  1,
+  'a v2 provider without adapter settlement must still be verified, even on the microsoft-store target',
+);
+
+let capabilityReads = 0;
+const cachedCapabilityClient = createGameServicesClient({
+  gateway: {
+    ...createSettledCommerceGateway('microsoft-store', 'adapter-settled'),
+    commerceV2: {
+      ...createMockCommerceV2('adapter-settled'),
+      async getCapabilities() {
+        capabilityReads += 1;
+        return createMockCommerceV2('adapter-settled').getCapabilities();
+      },
+    },
+  },
+  playerId,
+  target: 'microsoft-store',
+  backend: {
+    ...backend,
+    purchases: {
+      async verifyPurchase() {
+        throw new Error('an adapter-settled completion must not be reverified');
+      },
+    },
+  },
+});
+for (const idempotencyKey of ['cached-capability-1', 'cached-capability-2']) {
+  const cachedPurchase = await cachedCapabilityClient.purchase({
+    productId: 'COINS_100',
+    source: 'shop',
+    idempotencyKey,
+  });
+  assertEqual(cachedPurchase.status, 'granted', `${idempotencyKey} should be granted`);
+}
+assertEqual(
+  capabilityReads,
+  1,
+  'the provider authority declaration is read once per provider, not on every checkout',
+);
+
+let retriedCapabilityReads = 0;
+let retriedVerificationCalls = 0;
+const retriedCapabilityClient = createGameServicesClient({
+  gateway: {
+    ...createSettledCommerceGateway('microsoft-store', 'adapter-settled'),
+    commerceV2: {
+      ...createMockCommerceV2('adapter-settled'),
+      async getCapabilities() {
+        retriedCapabilityReads += 1;
+        if (retriedCapabilityReads === 1) {
+          throw new Error('capability probe failed once');
+        }
+        return createMockCommerceV2('adapter-settled').getCapabilities();
+      },
+    },
+  },
+  playerId,
+  target: 'microsoft-store',
+  backend: {
+    ...backend,
+    purchases: {
+      async verifyPurchase(input) {
+        retriedVerificationCalls += 1;
+        return {
+          verified: true,
+          ledgerEntryId: `verified-${input.platformTransactionId}`,
+          alreadyProcessed: false,
+        };
+      },
+    },
+  },
+});
+const retriedFirstPurchase = await retriedCapabilityClient.purchase({
+  productId: 'COINS_100',
+  source: 'shop',
+  idempotencyKey: 'retried-capability-1',
+});
+const retriedSecondPurchase = await retriedCapabilityClient.purchase({
+  productId: 'COINS_100',
+  source: 'shop',
+  idempotencyKey: 'retried-capability-2',
+});
+
+assertEqual(
+  retriedFirstPurchase.ledgerEntryId,
+  'verified-coins_100',
+  'a failed capability read verifies the first checkout through the backend',
+);
+assertEqual(
+  retriedCapabilityReads,
+  2,
+  'a failed capability read is not cached and is retried on the next checkout',
+);
+assertEqual(
+  retriedSecondPurchase.ledgerEntryId,
+  'ledger-v2',
+  'the retried read grants the second checkout from the authoritative grant',
+);
+assertEqual(retriedVerificationCalls, 1, 'only the first checkout was verified');
+
+let clientTokenRepeatVerificationCalls = 0;
+const clientTokenRepeatClient = createGameServicesClient({
+  gateway: createSettledCommerceGateway('microsoft-store', 'client-token'),
+  playerId,
+  target: 'microsoft-store',
+  backend: {
+    ...backend,
+    purchases: {
+      async verifyPurchase(input) {
+        clientTokenRepeatVerificationCalls += 1;
+        return {
+          verified: true,
+          ledgerEntryId: `verified-${input.platformTransactionId}`,
+          alreadyProcessed: false,
+        };
+      },
+    },
+  },
+});
+for (const idempotencyKey of ['client-token-repeat-1', 'client-token-repeat-2']) {
+  await clientTokenRepeatClient.purchase({
+    productId: 'COINS_100',
+    source: 'shop',
+    idempotencyKey,
+  });
+}
+assertEqual(
+  clientTokenRepeatVerificationCalls,
+  2,
+  'a cached client-token declaration keeps verifying every checkout',
+);
+
+let unreadableCapabilityVerificationCalls = 0;
+const unreadableCapabilityGateway = createSettledCommerceGateway(
+  'microsoft-store',
+  'adapter-settled',
+);
+const unreadableCapabilityClient = createGameServicesClient({
+  gateway: {
+    ...unreadableCapabilityGateway,
+    commerceV2: {
+      ...createMockCommerceV2('adapter-settled'),
+      async getCapabilities() {
+        throw new Error('capability probe failed');
+      },
+    },
+  },
+  playerId,
+  target: 'microsoft-store',
+  backend: {
+    ...backend,
+    purchases: {
+      async verifyPurchase(input) {
+        unreadableCapabilityVerificationCalls += 1;
+        return {
+          verified: true,
+          ledgerEntryId: `verified-${input.platformTransactionId}`,
+          alreadyProcessed: false,
+        };
+      },
+    },
+  },
+});
+const unreadableCapabilityPurchase = await unreadableCapabilityClient.purchase({
+  productId: 'COINS_100',
+  source: 'shop',
+  idempotencyKey: 'unreadable-capability-purchase',
+});
+
+assertEqual(
+  unreadableCapabilityVerificationCalls,
+  1,
+  'a v2 provider whose capabilities cannot be read must fail closed into verification',
+);
+assertEqual(
+  unreadableCapabilityPurchase.ledgerEntryId,
+  'verified-coins_100',
+  'the fail-closed path takes the verifier ledger entry',
+);
+
+let wrappedLegacyVerificationCalls = 0;
+const wrappedLegacyClient = createGameServicesClient({
+  gateway: createSettledCommerceGateway('microsoft-store', undefined),
+  playerId,
+  target: 'microsoft-store',
+  backend: {
+    ...backend,
+    purchases: {
+      async verifyPurchase(input) {
+        wrappedLegacyVerificationCalls += 1;
+        return {
+          verified: true,
+          ledgerEntryId: `verified-${input.platformTransactionId}`,
+          alreadyProcessed: false,
+        };
+      },
+    },
+  },
+});
+const wrappedLegacyPurchase = await wrappedLegacyClient.purchase({
+  productId: 'COINS_100',
+  source: 'shop',
+  idempotencyKey: 'wrapped-legacy-purchase',
+});
+
+assertEqual(
+  wrappedLegacyVerificationCalls,
+  1,
+  'without commerceV2 the legacy target-name rule applies, which does not match a token transaction id',
+);
+assertEqual(
+  wrappedLegacyPurchase.status,
+  'granted',
+  'the legacy path still grants through the backend verifier',
 );
 
 let verse8PurchaseCalls = 0;

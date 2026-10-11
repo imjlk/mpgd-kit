@@ -24,7 +24,10 @@ import { createAitPlatformGateway } from '../../adapters/ait/src/index';
 import { createBrowserPlatformGateway } from '../../adapters/browser/src/index';
 import {
   createMicrosoftStoreCommerceAdapter,
+  createMicrosoftStoreCommerceProvider,
   withMicrosoftStoreCommerceAdapter,
+  withMicrosoftStoreCommerceProvider,
+  type MicrosoftStoreCommerceAvailability,
 } from '../../adapters/browser/src/microsoft-store';
 import {
   createCapacitorPlatformGateway,
@@ -121,6 +124,9 @@ for (const spec of targetSpecs) {
 // A Capacitor gateway with a commerce v2 provider reports the optional
 // `commerce` block; the booleans must follow it and every read must be fresh.
 fixtures.push(createCommerceV2Fixture());
+// The Microsoft Store commerce v2 provider wiring reports the same block over
+// the browser base gateway, with `nativeIap` derived from its availability.
+fixtures.push(createMicrosoftStoreCommerceV2Fixture());
 
 const report = await runPlatformGatewayCapabilityConformance({ fixtures });
 
@@ -133,12 +139,12 @@ for (const check of runtimeMirrorChecks) {
   );
 }
 
-if (report.passedFixtures.length !== targetSpecs.length * 2 + 1) {
+if (report.passedFixtures.length !== targetSpecs.length * 2 + 2) {
   throw new Error('Expected raw and target-configured capability fixtures for every target.');
 }
 
 console.log(
-  'Platform capability conformance passed: raw and target-configured snapshots for web-preview, microsoft-store, verse8, android, ios, ait, reddit, plus the android commerce v2 block',
+  'Platform capability conformance passed: raw and target-configured snapshots for web-preview, microsoft-store, verse8, android, ios, ait, reddit, plus the android and microsoft-store commerce v2 blocks',
 );
 
 function createRawFixture(spec: TargetSpec): PlatformGatewayCapabilityConformanceFixture {
@@ -395,6 +401,74 @@ function createCommerceV2Fixture(): PlatformGatewayCapabilityConformanceFixture 
     name: 'android:commerce-v2',
     gateway,
     expectedTarget: 'android',
+    expectedCapabilities: expected('available'),
+    transition: {
+      update() {
+        availability = 'configuration-required';
+      },
+      expectedCapabilities: expected('configuration-required'),
+    },
+  };
+}
+
+function createMicrosoftStoreCommerceV2Fixture(): PlatformGatewayCapabilityConformanceFixture {
+  let availability: MicrosoftStoreCommerceAvailability = 'available';
+  const browser = createBrowserGateway();
+  const base: PlatformGateway = { ...browser.gateway, target: 'microsoft-store' };
+  const provider = createMicrosoftStoreCommerceProvider({
+    getRecoveryScope: () => 'capability-conformance',
+    products: [],
+    authority: {
+      async getAvailability() {
+        return availability;
+      },
+      async claimRecoveryOwnership() {
+        return { status: 'denied' } as const;
+      },
+      async hasRecoveryOwnership() {
+        return { status: 'denied' } as const;
+      },
+      async verifyAndGrant() {
+        return { status: 'failed' };
+      },
+      async getEntitlements() {
+        return [];
+      },
+    },
+    async getDigitalGoodsService() {
+      return {
+        async getDetails() {
+          return [];
+        },
+        async listPurchases() {
+          return [];
+        },
+      };
+    },
+  });
+  const expected = (state: MicrosoftStoreCommerceAvailability): PlatformCapabilities => ({
+    ...browser.expectedCapabilities,
+    nativeIap: state === 'available',
+    subscriptionIap: false,
+    commerce: {
+      purchase: { consumable: true, durable: false, subscription: false, quantity: false },
+      catalog: { products: true, offers: false, localizedPrice: true },
+      lifecycle: {
+        availablePurchases: true,
+        pending: false,
+        restore: true,
+        events: true,
+        finish: 'server',
+      },
+      authority: { evidence: 'adapter-settled', accountBinding: 'required' },
+      availability: state,
+    },
+  });
+
+  return {
+    name: 'microsoft-store:commerce-v2',
+    gateway: withMicrosoftStoreCommerceProvider(base, provider),
+    expectedTarget: 'microsoft-store',
     expectedCapabilities: expected('available'),
     transition: {
       update() {
