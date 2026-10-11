@@ -116,7 +116,8 @@ handles. The runner preserves the outer `{ audit, next, result }` envelope and
 requires answer-ready results that cite each preset's `namedEntrypoints` by
 file and symbol name. It does not check which directories the ranked anchors
 land in, because that ranking drifts with unrelated code; see
-[`tools/graph/README.md`](../tools/graph/README.md) for the preset contract,
+[`tools/graph/README.md`](https://github.com/imjlk/mpgd-kit/blob/main/tools/graph/README.md)
+for the preset contract,
 how to add a preset, and why feature PRs must not edit presets to make
 `pnpm graph:preflight` pass.
 
