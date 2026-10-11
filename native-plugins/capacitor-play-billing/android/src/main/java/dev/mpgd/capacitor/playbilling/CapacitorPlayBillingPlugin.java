@@ -2,6 +2,7 @@ package dev.mpgd.capacitor.playbilling;
 
 import android.os.Handler;
 import android.os.Looper;
+import com.android.billingclient.api.AccountIdentifiers;
 import com.android.billingclient.api.BillingClient;
 import com.android.billingclient.api.BillingClientStateListener;
 import com.android.billingclient.api.BillingFlowParams;
@@ -22,7 +23,11 @@ import java.util.Collections;
 import java.util.List;
 import org.json.JSONException;
 
-/** Purchase collection only. Finalization is server-owned after the mpgd ledger grant. */
+/**
+ * Purchase collection only. Finalization is server-owned after the mpgd ledger grant: this
+ * plugin never calls acknowledgePurchase or consumeAsync, and the encoded isAcknowledged flag
+ * lets the TypeScript provider list unfinished purchases for the backend finalizer.
+ */
 @CapacitorPlugin(name = "CapacitorPlayBilling")
 public class CapacitorPlayBillingPlugin extends Plugin {
     private BillingClient billingClient;
@@ -107,7 +112,8 @@ public class CapacitorPlayBillingPlugin extends Plugin {
                             eligibleOffers.put(new JSObject()
                                 .put("offerToken", offer.getOfferToken())
                                 .put("formattedPrice", offer.getFormattedPrice())
-                                .put("currencyCode", offer.getPriceCurrencyCode()));
+                                .put("currencyCode", offer.getPriceCurrencyCode())
+                                .put("priceAmountMicros", offer.getPriceAmountMicros()));
                         }
                     }
                     if (eligibleOffers.length() == 0) {
@@ -272,9 +278,12 @@ public class CapacitorPlayBillingPlugin extends Plugin {
                 continue;
             }
             JSObject outcome = new JSObject()
-                .put("status", encoded.optString("state"))
+                .put("status", encoded.optString("purchaseState"))
                 .put("purchase", encoded);
-            notifyListeners("purchaseUpdated", outcome);
+            // Retained until a listener consumes it: a purchase that completes after the
+            // purchase call timed out, or before the web view attached its listener, must
+            // still reach the provider's purchaseUpdated subscription.
+            notifyListeners("purchaseUpdated", outcome, true);
             if (pending != null && purchase.getProducts().contains(expectedProductId)) {
                 clearActivePurchase(pending);
                 pending.resolve(outcome);
@@ -293,19 +302,31 @@ public class CapacitorPlayBillingPlugin extends Plugin {
         if (token == null || token.trim().isEmpty() || purchase.getProducts().isEmpty()) {
             return null;
         }
-        JSArray productIds = new JSArray();
+        JSArray products = new JSArray();
         for (String productId : purchase.getProducts()) {
-            productIds.put(productId);
+            products.put(productId);
         }
+        String purchaseState = state == Purchase.PurchaseState.PURCHASED ? "purchased" : "pending";
+        // Billing 9.1.0 Purchase getters under their own names, plus the 0.1 names
+        // (productIds, state, purchaseTimeMillis) until the next major version.
         JSObject encoded = new JSObject()
-            .put("productIds", productIds)
+            .put("products", products)
+            .put("productIds", products)
             .put("purchaseToken", token)
-            .put("state", state == Purchase.PurchaseState.PURCHASED ? "purchased" : "pending");
+            .put("purchaseState", purchaseState)
+            .put("state", purchaseState)
+            .put("purchaseTime", purchase.getPurchaseTime())
+            .put("quantity", purchase.getQuantity())
+            .put("isAcknowledged", purchase.isAcknowledged());
         if (purchase.getPurchaseTime() > 0) {
             encoded.put("purchaseTimeMillis", purchase.getPurchaseTime());
         }
         if (purchase.getOrderId() != null) {
             encoded.put("orderId", purchase.getOrderId());
+        }
+        AccountIdentifiers accountIdentifiers = purchase.getAccountIdentifiers();
+        if (accountIdentifiers != null && accountIdentifiers.getObfuscatedAccountId() != null) {
+            encoded.put("obfuscatedAccountId", accountIdentifiers.getObfuscatedAccountId());
         }
         return encoded;
     }

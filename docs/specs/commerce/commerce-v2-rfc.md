@@ -840,7 +840,7 @@ package carries a Sampo changeset.
 | A3 | Conformance runner and in-memory reference provider passing every vector | |
 | A4 | Bridge v2 methods, event envelope, and `COMMERCE_V2_UNAVAILABLE` fail-closed answers; `app-store-server` moved into `@mpgd/game-services` (deprecated re-export kept); `createGooglePlayTokenTransactionId` aliases `createGooglePlayTokenPurchaseKey` | Duplicated helper, server code in client package |
 | B1 (landed, draft) | `@mpgd/adapter-capacitor`: `StoreSdk` interface, `createStoreCommerceProvider`, registry wiring, v1 wrapper; every store vector passes directly and through the gateway bridge path | |
-| B2 | Play Billing provider: available purchases, `purchaseUpdated` subscription, acknowledged flag from the plugin | Unused native events |
+| B2 (landed, draft) | `@mpgd/capacitor-play-billing`: `createCapacitorPlayBillingStoreSdk` over the plugin (unfinished purchases from `getPurchases` with the `isAcknowledged` flag, `purchaseUpdated` subscription with retained native events, token key or order id as `transactionId`), `createCapacitorPlayBillingCommerceProvider` and the registry entry with the v1 evidence payload; the server-finish vector passes directly and through the gateway, client- and host-finish vectors are listed as not applicable | Unused native events |
 | B3 | StoreKit provider: JWS as `token` and evidence; server verifies offline with Server API fallback | JWS dropped |
 | B4 | Microsoft Store provider | Target-name settlement check |
 | B5 | Apps in Toss provider: pending orders as available, host finish | |

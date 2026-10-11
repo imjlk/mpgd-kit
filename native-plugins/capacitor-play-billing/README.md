@@ -13,6 +13,116 @@ This package is published for opt-in integration, but Kit's mock and compile
 checks do not establish live Play purchase behavior. Validate it in a
 game-owned Play Console project before relying on it in a published game.
 
+## Commerce v2 provider
+
+Commerce v2 ([RFC](../../docs/specs/commerce/commerce-v2-rfc.md), PR B2) adds
+a `StoreSdk` over this plugin and a `CommerceProvider` built from it with
+`createStoreCommerceProvider` from `@mpgd/adapter-capacitor` (a peer
+dependency since 0.2.0). Register the service provider with the Capacitor
+gateway and it serves the six `commerce.v2.*` bridge methods as
+`gateway.commerceV2`, plus the four v1 `commerce.*` methods through
+`toCommerceAdapter`, so v1 callers keep working.
+
+```ts
+import { createCapacitorPlatformGateway } from '@mpgd/adapter-capacitor';
+import { createCapacitorPlayBillingServiceProvider } from '@mpgd/capacitor-play-billing';
+
+export function createPlayGateway(getObfuscatedAccountId: () => Promise<string>) {
+  return createCapacitorPlatformGateway({
+    target: 'android',
+    appVersion: '1.0.0',
+    buildId: 'game-build',
+    providers: [
+      createCapacitorPlayBillingServiceProvider({
+        products: [
+          { logicalId: 'gems_small', storeSku: 'gems.small', kind: 'consumable' },
+          { logicalId: 'remove_ads', storeSku: 'remove.ads', kind: 'durable', offerId: 'intro' },
+        ],
+        // Must agree with the backend's resolveObfuscatedAccountId.
+        accountBinding: async () => ({
+          kind: 'obfuscated-account-id',
+          value: await getObfuscatedAccountId(),
+        }),
+      }),
+    ],
+  });
+}
+```
+
+`createCapacitorPlayBillingStoreSdk({ products, plugin?, isAndroid? })` is
+the `StoreSdk`: store `google-play`; capabilities consumable and durable
+(no subscriptions, no multi-quantity), `pending: true`, `restore: false`,
+`offers: true`, and `finish: 'server'`. `fetchProducts` is `getProducts`
+with the selected one-time offer as the price (`PLAY_BILLING_OFFER_REQUIRED`
+when several offers are eligible and none is configured) and every eligible
+offer listed as `offers[].offerId` (the Play `offerToken`). `requestPurchase`
+is `purchase` with the obfuscated account id from the request's
+`accountBinding` (`kind: 'obfuscated-account-id'`; anything else is
+`PLAY_BILLING_ACCOUNT_REQUIRED`) and `offerToken` from `offerId`: a
+`purchased` outcome is `purchased`, a `pending` outcome is `launched` because
+Play resolves it later through `purchaseUpdated` or `getPurchases`, a
+`cancelled` outcome is `cancelled`, and a plugin rejection is `failed` with
+the plugin code. `getAvailablePurchases` is `getPurchases` filtered to
+unfinished entries: `purchased` with `isAcknowledged: false`, plus `pending`
+when `includePending` is set; each carries `token = purchaseToken` and
+`transactionId = orderId`, or the `play-token-sha256:<hex>` token key until
+Play assigns an order id, so ledgers written by v1 deduplicate. The plugin's
+`purchaseUpdated` listener backs `addListener`, and `getAvailability` is the
+v1 logic (Android check, offer configuration, service state).
+`playBillingStoreSdkErrorCodeMap` extends `defaultStoreSdkErrorCodeMap` with
+every other `PLAY_BILLING_*` code (`BUSY` is `IN_PROGRESS`, `OFFER_REQUIRED`
+and the invalid-product codes are `CONFIGURATION_REQUIRED`,
+`ACTIVITY_REQUIRED` is `NOT_PREPARED`, `ANDROID_REQUIRED` is
+`STORE_UNAVAILABLE`); `PLAY_BILLING_TIMEOUT`, `PLAY_BILLING_INTERRUPTED`,
+`PLAY_BILLING_EMPTY_PURCHASE`, and `PLAY_BILLING_ALREADY_OWNED` stay
+recoverable, so the provider answers `launched` and the reconciler resolves
+the attempt from `getAvailablePurchases` without reopening the store UI.
+
+`createCapacitorPlayBillingCommerceProvider({ products, accountBinding,
+plugin?, isAndroid?, store?, mapError? })` composes the provider: evidence
+schema `google-play.product-purchase.v2` with payload `{ purchaseToken }`,
+byte-identical to the v1 provider's evidence, so
+`createGooglePlayProductPurchaseBoundary` verifies both; authority
+`{ evidence: 'client-token', accountBinding: 'required' }`; no
+`finishTransaction` and no `restorePurchases`. A thrown `accountBinding`
+lookup is `ACCOUNT_BINDING_REQUIRED` with `PLAY_BILLING_ACCOUNT_LOOKUP_FAILED`
+kept as the store code. `store` defaults to `google-play`; only a conformance
+harness overrides it, because the derived idempotency key follows the store
+id. The conformance test runs every store vector whose profile the Play
+capabilities can serve (`purchase-server-finish`) against a fake plugin,
+directly and through the gateway bridge path, and lists the skipped vectors
+with their reason: the client-finish, host-finish, adapter-settled, and
+server-push profiles need a finish owner or evidence authority Play does not
+have.
+
+The plugin surface gained the Billing Library 9.1.0 `Purchase` getters on
+every purchase (`getPurchases()`, `purchase()`, and `purchaseUpdated`):
+`products`, `purchaseState`, `purchaseTime`, `quantity`, `isAcknowledged`,
+and `obfuscatedAccountId`, with `priceAmountMicros` on offers. The 0.1 names
+`productIds`, `state`, and `purchaseTimeMillis` carry the same values and are
+deprecated until the next major version. `purchaseUpdated` is now retained
+until a listener consumes it, so a purchase that completes after the
+`purchase` call timed out, or before the web view attached its listener,
+still reaches the provider. The plugin still never acknowledges or consumes;
+`isAcknowledged: false` on a purchased entry marks it unfinished for the
+backend finalizer.
+
+### Migrating from the v1 provider
+
+`createCapacitorPlayBillingProvider` and `recoverOwnedPlayPurchases` are
+unchanged and keep working; both providers can share the plugin. Games that
+move to v2 replace the v1 provider in `providers` with
+`createCapacitorPlayBillingServiceProvider`, turn `getObfuscatedAccountId`
+into an `accountBinding` resolver returning `{ kind: 'obfuscated-account-id',
+value }`, rename `id`/`storeId`/`type` to `logicalId`/`storeSku`/`kind`
+(`non_consumable` becomes `durable`) and `offerToken` to `offerId`, and stop
+calling `recoverOwnedPlayPurchases`: it is deprecated in favour of the single
+reconciler landing in `@mpgd/game-services` (PR C1), which reads
+`getAvailablePurchases` and `purchaseUpdated` from `gateway.commerceV2`. The
+backend contract is unchanged, since the evidence payload is the same.
+
+## v1 provider
+
 The provider maps game logical product IDs to Play product IDs and requires a
 stable obfuscated account ID that agrees with the backend account resolver.
 When Play returns multiple eligible one-time offers, map an explicit
