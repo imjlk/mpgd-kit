@@ -28,7 +28,7 @@ import {
   microsoftStoreDigitalGoodsEvidenceSchema,
   type CreateMicrosoftStoreCommerceAdapterInput,
   type MicrosoftStoreCatalogEntry,
-  type MicrosoftStoreCheckoutOutcome,
+  type MicrosoftStoreCheckoutReport,
   type MicrosoftStoreCommerceAvailability,
   type MicrosoftStoreCommerceGatewayOptions,
   type MicrosoftStoreCommerceOutcomeCode,
@@ -82,6 +82,8 @@ interface RememberedSettlement {
   readonly ledgerEntryId: string;
   readonly idempotencyKey: string;
   readonly itemId: string;
+  /** The player scope whose checkout the authority settled. */
+  readonly recoveryScope: string;
 }
 
 const purchaseCapabilities = Object.freeze({
@@ -118,8 +120,9 @@ export function createMicrosoftStoreCommerceProvider(
    * Ledger pointers the authority reported this session, by Store purchase
    * identity. Microsoft reuses the purchase token across purchases of one
    * add-on, so a pointer is bound to the checkout key it settled and is
-   * forgotten when a new checkout of the add-on starts or the Store stops
-   * listing the purchase (the finalizer consumed it).
+   * forgotten when a new checkout of the add-on starts, the Store stops
+   * listing the purchase (the finalizer consumed it), or the authenticated
+   * player scope changes.
    */
   const settlements = new Map<string, RememberedSettlement>();
 
@@ -149,7 +152,7 @@ export function createMicrosoftStoreCommerceProvider(
     purchase: MicrosoftStoreDigitalGoodsPurchase,
     /** The player scope that claimed the purchase; a globally listed item nobody claimed has none. */
     claimedScope: string | undefined,
-    settlement: RememberedSettlement | undefined,
+    settlement: Pick<RememberedSettlement, 'ledgerEntryId'> | undefined,
   ): StorePurchase => {
     const accountBinding: StorePurchaseAccountBinding | undefined = claimedScope === undefined
       ? undefined
@@ -186,8 +189,14 @@ export function createMicrosoftStoreCommerceProvider(
     purchase: MicrosoftStoreDigitalGoodsPurchase,
     idempotencyKey: string,
     ledgerEntryId: string,
+    recoveryScope: string,
   ): RememberedSettlement => {
-    const settlement = Object.freeze({ ledgerEntryId, idempotencyKey, itemId: purchase.itemId });
+    const settlement = Object.freeze({
+      ledgerEntryId,
+      idempotencyKey,
+      itemId: purchase.itemId,
+      recoveryScope,
+    });
     settlements.set(purchaseIdentity(purchase), settlement);
     return settlement;
   };
@@ -197,6 +206,24 @@ export function createMicrosoftStoreCommerceProvider(
         || product.historicalInAppOfferTokens?.includes(settlement.itemId) === true) {
         settlements.delete(identity);
       }
+    }
+  };
+
+  /**
+   * The engine catches Digital Goods and authority failures itself; the one
+   * thing that can still throw out of it is the availability probe. Keep that
+   * normalized at the provider boundary, like `getCapabilities` does.
+   */
+  const probed = async <T>(run: () => Promise<T>): Promise<T> => {
+    try {
+      return await run();
+    } catch (error) {
+      throw new CommerceError('STORE_UNAVAILABLE', {
+        message: 'Microsoft Store purchase authority availability could not be read.',
+        storeCode: 'MICROSOFT_STORE_AUTHORITY_UNAVAILABLE',
+        retryable: true,
+        cause: error,
+      });
     }
   };
 
@@ -220,7 +247,7 @@ export function createMicrosoftStoreCommerceProvider(
       if (type === 'subscription') {
         return [];
       }
-      const catalog = await engine.loadCatalog();
+      const catalog = await probed(() => engine.loadCatalog());
       if (catalog.status === 'unavailable') {
         // The capability block already explains an unconfigured or unsupported store.
         return [];
@@ -248,7 +275,7 @@ export function createMicrosoftStoreCommerceProvider(
       if (!engine.isPrepared(request.logicalId)) {
         // A game normally calls fetchProducts first; preparing here keeps the
         // request valid but spends the user activation on the catalog read.
-        const catalog = await engine.loadCatalog();
+        const catalog = await probed(() => engine.loadCatalog());
         if (catalog.status === 'unavailable') {
           throw availabilityError(catalog.availability);
         }
@@ -264,11 +291,15 @@ export function createMicrosoftStoreCommerceProvider(
         idempotencyKey: request.idempotencyKey,
         source: request.source,
       });
-      return toRequestPurchaseResult(report.outcome, product);
+      return toRequestPurchaseResult(report, product);
     },
+    /**
+     * Store-listed purchases plus scoped recovery records, each `purchased`.
+     * `includePending` is ignored: Microsoft has no store-side pending state,
+     * so the list is the same with or without it.
+     */
     async getAvailablePurchases(): Promise<readonly StorePurchase[]> {
-      // Microsoft has no store-side pending state, so includePending changes nothing.
-      const report = await engine.listUnsettledPurchases();
+      const report = await probed(() => engine.listUnsettledPurchases());
       if (report.status === 'unavailable') {
         return [];
       }
@@ -276,9 +307,10 @@ export function createMicrosoftStoreCommerceProvider(
         throw digitalGoodsUnavailable(report.cause);
       }
       const listed = new Set(report.purchases.map((entry) => purchaseIdentity(entry.purchase)));
-      for (const identity of settlements.keys()) {
-        if (!listed.has(identity)) {
-          // The finalizer consumed it; the next purchase of the add-on starts unsettled.
+      for (const [identity, settlement] of settlements) {
+        if (!listed.has(identity) || settlement.recoveryScope !== report.recoveryScope) {
+          // The finalizer consumed it, or another player signed in: the next
+          // purchase of the add-on (and the other player) starts unsettled.
           settlements.delete(identity);
         }
       }
@@ -298,15 +330,22 @@ export function createMicrosoftStoreCommerceProvider(
       });
     },
     async restorePurchases(): Promise<void> {
-      const report = await engine.restore();
-      const recoveryScope = readRecoveryScope();
+      // Entitlements come from the ledger, so the v1 trailing entitlement read
+      // is skipped: an entitlement outage cannot fail a replay that settled.
+      const report = await probed(() => engine.restore({ readEntitlements: false }));
+      const recoveryScope = report.recoveryScope;
       for (const fulfillment of report.fulfillments) {
         if (fulfillment.outcome.kind === 'granted') {
-          const settlement = rememberSettlement(
-            fulfillment.purchase,
-            fulfillment.outcome.idempotencyKey,
-            fulfillment.outcome.ledgerEntryId,
-          );
+          // The engine resolves the scope before any replay, so a grant always
+          // has one; without it the event still carries the ledger pointer.
+          const settlement = recoveryScope === undefined
+            ? { ledgerEntryId: fulfillment.outcome.ledgerEntryId }
+            : rememberSettlement(
+                fulfillment.purchase,
+                fulfillment.outcome.idempotencyKey,
+                fulfillment.outcome.ledgerEntryId,
+                recoveryScope,
+              );
           emit({
             type: 'purchaseUpdated',
             purchase: toStorePurchase(
@@ -333,6 +372,21 @@ export function createMicrosoftStoreCommerceProvider(
     subscribe(listener) {
       listeners.add(listener);
       if (listeners.size === 1) {
+        // A buffered settlement belongs to the player who restored it; another
+        // player signing in before the first subscriber must not receive it.
+        const scope = readRecoveryScope();
+        const kept: CommerceEvent[] = [];
+        buffer.drain((event) => {
+          kept.push(event);
+        });
+        for (const event of kept) {
+          const boundTo = event.type === 'purchaseUpdated'
+            ? event.purchase.accountBinding?.value
+            : undefined;
+          if (boundTo === undefined || boundTo === scope) {
+            buffer.push(event);
+          }
+        }
         buffer.drain(listener);
       }
       return () => {
@@ -342,20 +396,28 @@ export function createMicrosoftStoreCommerceProvider(
   };
 
   function toRequestPurchaseResult(
-    outcome: MicrosoftStoreCheckoutOutcome,
+    report: MicrosoftStoreCheckoutReport,
     product: MicrosoftStoreCommerceProduct,
   ): RequestPurchaseResult {
+    const { outcome } = report;
     switch (outcome.kind) {
-      case 'granted':
+      case 'granted': {
+        // The engine refuses to settle without a resolved scope, so a granted
+        // outcome always carries the scope the authority bound the grant to.
+        const recoveryScope = report.recoveryScope ?? readRecoveryScope();
+        const settlement = recoveryScope === undefined
+          ? { ledgerEntryId: outcome.ledgerEntryId }
+          : rememberSettlement(
+              outcome.purchase,
+              outcome.idempotencyKey,
+              outcome.ledgerEntryId,
+              recoveryScope,
+            );
         return {
           outcome: 'purchased',
-          purchase: toStorePurchase(
-            product,
-            outcome.purchase,
-            readRecoveryScope(),
-            rememberSettlement(outcome.purchase, outcome.idempotencyKey, outcome.ledgerEntryId),
-          ),
+          purchase: toStorePurchase(product, outcome.purchase, recoveryScope, settlement),
         };
+      }
       case 'cancelled':
         return { outcome: 'cancelled', error: outcomeError('MICROSOFT_STORE_USER_CANCELLED') };
       case 'pending':

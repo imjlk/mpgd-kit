@@ -600,6 +600,189 @@ describe('createMicrosoftStoreCommerceProvider', () => {
     });
   });
 
+  it('does not carry a settlement across an authenticated player switch', async () => {
+    let scope = 'player-a';
+    const fixture = createFixture({
+      listed: [{ itemId: sku, purchaseToken: sku }],
+      scope: () => scope,
+    });
+    await fixture.provider.fetchProducts({});
+    await expect(fixture.provider.requestPurchase(purchaseInput)).resolves.toMatchObject({
+      outcome: 'purchased',
+      purchase: {
+        settlement: { ledgerEntryId: 'ledger-1' },
+        accountBinding: { kind: 'obfuscated-account-id', value: 'player-a' },
+      },
+    });
+    // Player B signs in on the same Windows profile and refreshes the catalog;
+    // the Store still lists A's unconsumed purchase and A's record is gone.
+    scope = 'player-b';
+    await fixture.provider.fetchProducts({});
+    const { accountBinding: _claimed, ...unclaimed } = expectedPurchase;
+    await expect(fixture.provider.getAvailablePurchases()).resolves.toEqual([unclaimed]);
+    expect(fixture.verifyAndGrant).toHaveBeenCalledOnce();
+  });
+
+  it('completes a restore that settled purchases even when the entitlement read fails', async () => {
+    const storage = memoryStorage();
+    const first = createFixture({
+      listed: [],
+      storage,
+      async claim() {
+        throw new Error('authority offline');
+      },
+    });
+    await first.provider.fetchProducts({});
+    await first.provider.requestPurchase(purchaseInput);
+
+    const grant = vi.fn(async () => ({ status: 'completed' as const, transactionId: 'ledger-1' }));
+    const provider = createMicrosoftStoreCommerceProvider({
+      getRecoveryScope: () => 'player-1',
+      products: [{ info: product, inAppOfferToken: sku }],
+      authority: {
+        async getAvailability() {
+          return 'available';
+        },
+        async claimRecoveryOwnership(input) {
+          return { status: 'granted', idempotencyKey: input.idempotencyKey ?? 'durable' };
+        },
+        async hasRecoveryOwnership(input) {
+          return { status: 'granted', idempotencyKey: input.idempotencyKey ?? 'durable' };
+        },
+        verifyAndGrant: grant,
+        async getEntitlements() {
+          throw new Error('entitlement service down');
+        },
+      },
+      async getDigitalGoodsService() {
+        return {
+          async getDetails() {
+            return [];
+          },
+          async listPurchases() {
+            return [{ itemId: sku, purchaseToken: sku }];
+          },
+        };
+      },
+      recoveryIdStorage: storage.storage,
+    });
+    const events: CommerceEvent[] = [];
+    provider.subscribe((event) => {
+      events.push(event);
+    });
+    await expect(provider.restorePurchases?.()).resolves.toBeUndefined();
+    expect(grant).toHaveBeenCalledOnce();
+    expect(events).toEqual([{
+      type: 'purchaseUpdated',
+      purchase: { ...expectedPurchase, settlement: { ledgerEntryId: 'ledger-1' } },
+    }]);
+  });
+
+  it('normalizes a throwing availability probe on every operation', async () => {
+    const provider = createMicrosoftStoreCommerceProvider({
+      getRecoveryScope: () => 'player-1',
+      products: [{ info: product, inAppOfferToken: sku }],
+      authority: {
+        async getAvailability() {
+          throw new Error('probe failed');
+        },
+        async claimRecoveryOwnership() {
+          return { status: 'denied' };
+        },
+        async hasRecoveryOwnership() {
+          return { status: 'denied' };
+        },
+        async verifyAndGrant() {
+          return { status: 'failed' };
+        },
+        async getEntitlements() {
+          return [];
+        },
+      },
+      createPaymentRequest: () => {
+        throw new Error('Payment Request must not open.');
+      },
+    });
+    const expected = {
+      code: 'STORE_UNAVAILABLE',
+      retryable: true,
+      storeCode: 'MICROSOFT_STORE_AUTHORITY_UNAVAILABLE',
+    };
+    await expect(provider.fetchProducts({})).rejects.toMatchObject(expected);
+    await expect(provider.getAvailablePurchases()).rejects.toMatchObject(expected);
+    await expect(provider.restorePurchases?.()).rejects.toMatchObject(expected);
+    await expect(provider.requestPurchase(purchaseInput)).rejects.toMatchObject(expected);
+    await expect(provider.getCapabilities()).resolves.toMatchObject({
+      availability: 'temporarily-unavailable',
+    });
+  });
+
+  it('keeps a settlement for the same player across a catalog refresh', async () => {
+    const fixture = createFixture({ listed: [{ itemId: sku, purchaseToken: sku }] });
+    await fixture.provider.fetchProducts({});
+    await fixture.provider.requestPurchase(purchaseInput);
+    await fixture.provider.fetchProducts({});
+    await expect(fixture.provider.getAvailablePurchases()).resolves.toEqual([
+      { ...expectedPurchase, settlement: { ledgerEntryId: 'ledger-1' } },
+    ]);
+    await expect(fixture.provider.getAvailablePurchases()).resolves.toEqual([
+      { ...expectedPurchase, settlement: { ledgerEntryId: 'ledger-1' } },
+    ]);
+  });
+
+  it('binds a settlement made by restorePurchases to the restoring player', async () => {
+    const storage = memoryStorage();
+    let scope = 'player-a';
+    const first = createFixture({
+      listed: [],
+      storage,
+      scope: () => scope,
+      async claim() {
+        throw new Error('authority offline');
+      },
+    });
+    await first.provider.fetchProducts({});
+    await first.provider.requestPurchase(purchaseInput);
+
+    const second = createFixture({
+      listed: [{ itemId: sku, purchaseToken: sku }],
+      storage,
+      scope: () => scope,
+    });
+    await second.provider.restorePurchases?.();
+    scope = 'player-b';
+    const { accountBinding: _claimed, ...unclaimed } = expectedPurchase;
+    await expect(second.provider.getAvailablePurchases()).resolves.toEqual([unclaimed]);
+  });
+
+  it('does not deliver a buffered settlement to a subscriber of another player', async () => {
+    const storage = memoryStorage();
+    let scope = 'player-a';
+    const first = createFixture({
+      listed: [],
+      storage,
+      scope: () => scope,
+      async claim() {
+        throw new Error('authority offline');
+      },
+    });
+    await first.provider.fetchProducts({});
+    await first.provider.requestPurchase(purchaseInput);
+
+    const second = createFixture({
+      listed: [{ itemId: sku, purchaseToken: sku }],
+      storage,
+      scope: () => scope,
+    });
+    await second.provider.restorePurchases?.();
+    scope = 'player-b';
+    const events: CommerceEvent[] = [];
+    second.provider.subscribe((event) => {
+      events.push(event);
+    });
+    expect(events).toEqual([]);
+  });
+
   it('never settles a purchase from the Store callback alone', async () => {
     const fixture = createFixture({
       listed: [{ itemId: sku, purchaseToken: sku }],

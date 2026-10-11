@@ -1,4 +1,6 @@
-import type { PlatformGateway, PurchaseResult } from '@mpgd/platform';
+import type { CommerceCapabilities, PlatformGateway, PurchaseResult } from '@mpgd/platform';
+
+type CommerceProvider = NonNullable<PlatformGateway['commerceV2']>;
 
 export interface AdapterSettledGrant {
   readonly ledgerEntryId: string;
@@ -26,16 +28,9 @@ export async function findAdapterSettledGrant(input: {
     return undefined;
   }
   const provider = input.gateway.commerceV2;
-  let settled: boolean;
-  if (provider === undefined) {
-    settled = isAuthoritativeMicrosoftStoreCompletion(input.target, purchase);
-  } else {
-    try {
-      settled = (await provider.getCapabilities()).authority.evidence === 'adapter-settled';
-    } catch {
-      settled = false;
-    }
-  }
+  const settled = provider === undefined
+    ? isAuthoritativeMicrosoftStoreCompletion(input.target, purchase)
+    : (await readEvidenceAuthority(provider)) === 'adapter-settled';
   if (!settled) {
     return undefined;
   }
@@ -43,6 +38,32 @@ export async function findAdapterSettledGrant(input: {
     ledgerEntryId: grant.ledgerEntryId,
     ...(grant.alreadyProcessed === undefined ? {} : { alreadyProcessed: grant.alreadyProcessed }),
   };
+}
+
+/**
+ * A provider's `authority.evidence` declaration is fixed for its lifetime, so
+ * one successful read serves every later checkout; a failed read is not
+ * cached, and the next checkout probes again.
+ */
+const evidenceAuthorityByProvider = new WeakMap<
+  CommerceProvider,
+  CommerceCapabilities['authority']['evidence']
+>();
+
+async function readEvidenceAuthority(
+  provider: CommerceProvider,
+): Promise<CommerceCapabilities['authority']['evidence'] | undefined> {
+  const cached = evidenceAuthorityByProvider.get(provider);
+  if (cached !== undefined) {
+    return cached;
+  }
+  try {
+    const { evidence } = (await provider.getCapabilities()).authority;
+    evidenceAuthorityByProvider.set(provider, evidence);
+    return evidence;
+  } catch {
+    return undefined;
+  }
 }
 
 /**

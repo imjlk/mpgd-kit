@@ -242,6 +242,8 @@ export interface MicrosoftStoreCheckoutReport {
   /** The v1 `PurchaseResult`, unchanged. */
   readonly result: PurchaseResult;
   readonly outcome: MicrosoftStoreCheckoutOutcome;
+  /** The player scope the checkout ran under; absent when it failed before resolving one. */
+  readonly recoveryScope?: string;
 }
 
 export interface MicrosoftStoreCatalogEntry {
@@ -256,10 +258,23 @@ export type MicrosoftStoreCatalogReport =
   | { readonly status: 'loaded'; readonly entries: readonly MicrosoftStoreCatalogEntry[] }
   | { readonly status: 'failed'; readonly cause: unknown };
 
+export interface MicrosoftStoreRestoreOptions {
+  /**
+   * Whether to finish with the v1 `authority.getEntitlements()` read. The v1
+   * adapter needs it for `restoredEntitlements`; the commerce v2 provider
+   * reports entitlements from the ledger and skips it, so an entitlement
+   * outage cannot fail a restore that already settled purchases.
+   * Defaults to true.
+   */
+  readonly readEntitlements?: boolean;
+}
+
 export interface MicrosoftStoreRestoreReport {
   /** The v1 `PurchaseRestoreResult`, unchanged. */
   readonly result: PurchaseRestoreResult;
   readonly fulfillments: readonly MicrosoftStoreFulfillmentReport[];
+  /** The player scope the replay ran under; absent when it failed before resolving one. */
+  readonly recoveryScope?: string;
   readonly failure?: { readonly cause: unknown };
 }
 
@@ -298,7 +313,7 @@ export interface MicrosoftStoreCommerceEngine {
   /** Opens Payment Request synchronously and runs the authority flow on its result. */
   checkout(request: MicrosoftStoreCheckoutRequest): Promise<MicrosoftStoreCheckoutReport>;
   /** Replays scoped recovery records and globally listed purchases through the authority. */
-  restore(): Promise<MicrosoftStoreRestoreReport>;
+  restore(options?: MicrosoftStoreRestoreOptions): Promise<MicrosoftStoreRestoreReport>;
   /** Store-listed purchases plus scoped recovery records, without calling the authority. */
   listUnsettledPurchases(): Promise<MicrosoftStoreUnsettledReport>;
   getEntitlements(): Promise<readonly Entitlement[]>;
@@ -782,10 +797,10 @@ export function createMicrosoftStoreCommerceEngine(
         }
 
         await completePayment(response, paymentCompletionStatus(checkoutReport.result));
-        return checkoutReport;
+        return { ...checkoutReport, recoveryScope };
       } catch (error) {
         if (isAbortError(error) && response === undefined) {
-          return { result: cancelledPurchase(), outcome: { kind: 'cancelled' } };
+          return { result: cancelledPurchase(), outcome: { kind: 'cancelled' }, recoveryScope };
         }
         if (response !== undefined) {
           await completePayment(response, 'unknown');
@@ -799,6 +814,7 @@ export function createMicrosoftStoreCommerceEngine(
               code: 'MICROSOFT_STORE_CHECKOUT_INTERRUPTED',
               purchase: { itemId: product.inAppOfferToken, purchaseToken },
             },
+            recoveryScope,
           };
         }
         return response === undefined
@@ -809,21 +825,25 @@ export function createMicrosoftStoreCommerceEngine(
                 code: 'MICROSOFT_STORE_PAYMENT_REQUEST_FAILED',
                 cause: error,
               },
+              recoveryScope,
             }
           : {
               result: pendingUnidentifiedPurchase(),
               outcome: { kind: 'pending', code: 'MICROSOFT_STORE_CHECKOUT_INTERRUPTED' },
+              recoveryScope,
             };
       }
     },
-    async restore() {
+    async restore(options = {}) {
       if (await getAvailability() !== 'available') {
         return { result: { restoredEntitlements: [] }, fulfillments: [] };
       }
 
       const fulfillments: MicrosoftStoreFulfillmentReport[] = [];
+      let resolvedScope: string | undefined;
       try {
         const recoveryScope = resolveRecoveryScope(input.getRecoveryScope);
+        resolvedScope = recoveryScope;
         const service = await getService();
         if (resolveRecoveryScope(input.getRecoveryScope) !== recoveryScope) {
           throw new Error('Microsoft Store player scope changed before recovery.');
@@ -868,13 +888,18 @@ export function createMicrosoftStoreCommerceEngine(
             }),
           ];
         }));
-        return {
-          result: { restoredEntitlements: await input.authority.getEntitlements() },
-          fulfillments,
-        };
+        const restoredEntitlements = options.readEntitlements === false
+          ? []
+          : await input.authority.getEntitlements();
+        return { result: { restoredEntitlements }, fulfillments, recoveryScope };
       } catch (error) {
         input.onError?.(error);
-        return { result: { restoredEntitlements: [] }, fulfillments, failure: { cause: error } };
+        return {
+          result: { restoredEntitlements: [] },
+          fulfillments,
+          ...(resolvedScope === undefined ? {} : { recoveryScope: resolvedScope }),
+          failure: { cause: error },
+        };
       }
     },
     async listUnsettledPurchases() {

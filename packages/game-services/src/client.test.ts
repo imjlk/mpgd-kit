@@ -661,6 +661,135 @@ assertEqual(
   'a v2 provider without adapter settlement must still be verified, even on the microsoft-store target',
 );
 
+let capabilityReads = 0;
+const cachedCapabilityClient = createGameServicesClient({
+  gateway: {
+    ...createSettledCommerceGateway('microsoft-store', 'adapter-settled'),
+    commerceV2: {
+      ...createMockCommerceV2('adapter-settled'),
+      async getCapabilities() {
+        capabilityReads += 1;
+        return createMockCommerceV2('adapter-settled').getCapabilities();
+      },
+    },
+  },
+  playerId,
+  target: 'microsoft-store',
+  backend: {
+    ...backend,
+    purchases: {
+      async verifyPurchase() {
+        throw new Error('an adapter-settled completion must not be reverified');
+      },
+    },
+  },
+});
+for (const idempotencyKey of ['cached-capability-1', 'cached-capability-2']) {
+  const cachedPurchase = await cachedCapabilityClient.purchase({
+    productId: 'COINS_100',
+    source: 'shop',
+    idempotencyKey,
+  });
+  assertEqual(cachedPurchase.status, 'granted', `${idempotencyKey} should be granted`);
+}
+assertEqual(
+  capabilityReads,
+  1,
+  'the provider authority declaration is read once per provider, not on every checkout',
+);
+
+let retriedCapabilityReads = 0;
+let retriedVerificationCalls = 0;
+const retriedCapabilityClient = createGameServicesClient({
+  gateway: {
+    ...createSettledCommerceGateway('microsoft-store', 'adapter-settled'),
+    commerceV2: {
+      ...createMockCommerceV2('adapter-settled'),
+      async getCapabilities() {
+        retriedCapabilityReads += 1;
+        if (retriedCapabilityReads === 1) {
+          throw new Error('capability probe failed once');
+        }
+        return createMockCommerceV2('adapter-settled').getCapabilities();
+      },
+    },
+  },
+  playerId,
+  target: 'microsoft-store',
+  backend: {
+    ...backend,
+    purchases: {
+      async verifyPurchase(input) {
+        retriedVerificationCalls += 1;
+        return {
+          verified: true,
+          ledgerEntryId: `verified-${input.platformTransactionId}`,
+          alreadyProcessed: false,
+        };
+      },
+    },
+  },
+});
+const retriedFirstPurchase = await retriedCapabilityClient.purchase({
+  productId: 'COINS_100',
+  source: 'shop',
+  idempotencyKey: 'retried-capability-1',
+});
+const retriedSecondPurchase = await retriedCapabilityClient.purchase({
+  productId: 'COINS_100',
+  source: 'shop',
+  idempotencyKey: 'retried-capability-2',
+});
+
+assertEqual(
+  retriedFirstPurchase.ledgerEntryId,
+  'verified-coins_100',
+  'a failed capability read verifies the first checkout through the backend',
+);
+assertEqual(
+  retriedCapabilityReads,
+  2,
+  'a failed capability read is not cached and is retried on the next checkout',
+);
+assertEqual(
+  retriedSecondPurchase.ledgerEntryId,
+  'ledger-v2',
+  'the retried read grants the second checkout from the authoritative grant',
+);
+assertEqual(retriedVerificationCalls, 1, 'only the first checkout was verified');
+
+let clientTokenRepeatVerificationCalls = 0;
+const clientTokenRepeatClient = createGameServicesClient({
+  gateway: createSettledCommerceGateway('microsoft-store', 'client-token'),
+  playerId,
+  target: 'microsoft-store',
+  backend: {
+    ...backend,
+    purchases: {
+      async verifyPurchase(input) {
+        clientTokenRepeatVerificationCalls += 1;
+        return {
+          verified: true,
+          ledgerEntryId: `verified-${input.platformTransactionId}`,
+          alreadyProcessed: false,
+        };
+      },
+    },
+  },
+});
+for (const idempotencyKey of ['client-token-repeat-1', 'client-token-repeat-2']) {
+  await clientTokenRepeatClient.purchase({
+    productId: 'COINS_100',
+    source: 'shop',
+    idempotencyKey,
+  });
+}
+assertEqual(
+  clientTokenRepeatVerificationCalls,
+  2,
+  'a cached client-token declaration keeps verifying every checkout',
+);
+
 let unreadableCapabilityVerificationCalls = 0;
 const unreadableCapabilityGateway = createSettledCommerceGateway(
   'microsoft-store',
