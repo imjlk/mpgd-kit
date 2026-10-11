@@ -478,8 +478,11 @@ function assertProductGrant(input: unknown): asserts input is ProductGrant {
   assertRecord(input, 'grant');
 
   if (input.type === 'currency') {
-    if (input.currency !== 'coin' && input.currency !== 'gem') {
-      throw new Error('grant.currency must be coin or gem.');
+    // The currency list is open; the backend checks it against the catalog's
+    // declared currencies when it is constructed.
+    assertNonEmptyString(input.currency, 'grant.currency');
+    if (input.currency.trim() !== input.currency) {
+      throw new Error('grant.currency must be a trimmed currency code.');
     }
 
     assertFiniteNumber(input.amount, 'grant.amount');

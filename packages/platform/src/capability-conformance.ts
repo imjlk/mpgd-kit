@@ -1,4 +1,4 @@
-import { deriveLegacyCommerceCapabilities } from './commerce.js';
+import { deriveLegacyCommerceCapabilities } from './commerce-capabilities.js';
 import type {
   CommerceCapabilities,
   PlatformCapabilities,
@@ -372,13 +372,27 @@ function tryMutateSnapshot(snapshot: PlatformCapabilities): void {
     }
   }
   if (snapshot.commerce !== undefined) {
+    tryMutateCommerceSnapshot(snapshot.commerce);
+  }
+}
+
+// Every nested block is probed: a gateway may rebuild the outer object while
+// reusing one mutable nested record across reads.
+function tryMutateCommerceSnapshot(commerce: CommerceCapabilities): void {
+  const probes: readonly (readonly [object, string, unknown])[] = [
+    [commerce.purchase, 'consumable', !commerce.purchase.consumable],
+    [commerce.catalog, 'products', !commerce.catalog.products],
+    [commerce.lifecycle, 'events', !commerce.lifecycle.events],
+    [
+      commerce.authority,
+      'accountBinding',
+      commerce.authority.accountBinding === 'host' ? 'optional' : 'host',
+    ],
+    [commerce, 'availability', commerce.availability === 'available' ? 'unsupported' : 'available'],
+  ];
+  for (const [target, key, next] of probes) {
     try {
-      Reflect.set(snapshot.commerce.purchase, 'consumable', !snapshot.commerce.purchase.consumable);
-      Reflect.set(
-        snapshot.commerce,
-        'availability',
-        snapshot.commerce.availability === 'available' ? 'unsupported' : 'available',
-      );
+      Reflect.set(target, key, next);
     } catch {
       // A frozen nested commerce block already satisfies isolation.
     }

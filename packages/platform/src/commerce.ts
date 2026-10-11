@@ -13,8 +13,14 @@ import {
   type PurchaseRestoreResult,
   type PurchaseResult,
   type PurchaseSettlement,
+  type StarterLogicalProductId,
 } from './index.js';
 
+export {
+  createUnsupportedCommerceCapabilities,
+  deriveLegacyCommerceCapabilities,
+  type LegacyCommerceCapabilities,
+} from './commerce-capabilities.js';
 export type {
   CommerceAccountBindingPolicy,
   CommerceAuthorityCapabilities,
@@ -49,6 +55,14 @@ export type StoreId = NonEmptyString;
 
 export type PurchaseKind = 'consumable' | 'durable' | 'subscription';
 
+/**
+ * `LogicalProductId` narrowed to its open string branch and tagged non-empty,
+ * so validators and the generated schemas carry `minLength: 1`. Starter ids and
+ * plain `LogicalProductId` values remain assignable.
+ */
+export type CommerceLogicalProductId = Exclude<LogicalProductId, StarterLogicalProductId>
+  & tags.MinLength<1>;
+
 export interface StorePrice {
   readonly formatted: string;
   /** ISO 4217 code or a project-declared code such as a wallet currency. */
@@ -64,7 +78,7 @@ export interface StoreOffer {
 }
 
 export interface StoreProduct {
-  readonly logicalId: LogicalProductId;
+  readonly logicalId: CommerceLogicalProductId;
   readonly store: StoreId;
   readonly storeSku: NonEmptyString;
   readonly kind: PurchaseKind;
@@ -87,7 +101,7 @@ export interface StorePurchase {
   readonly transactionId: NonEmptyString;
   readonly originalTransactionId?: NonEmptyString;
   readonly storeSku: NonEmptyString;
-  readonly logicalId?: LogicalProductId;
+  readonly logicalId?: CommerceLogicalProductId;
   readonly quantity: PositiveQuantity;
   readonly state: StorePurchaseState;
   readonly purchasedAt?: IsoTimestamp;
@@ -102,7 +116,7 @@ export interface StorePurchase {
 export type PurchaseSource = 'shop' | 'stage_fail' | 'result' | 'event';
 
 export interface RequestPurchaseInput {
-  readonly logicalId: LogicalProductId;
+  readonly logicalId: CommerceLogicalProductId;
   readonly idempotencyKey: NonEmptyString;
   readonly source: PurchaseSource;
   readonly offerId?: NonEmptyString;
@@ -160,7 +174,7 @@ export type CommerceEvent =
   | { readonly type: 'purchaseUpdated'; readonly purchase: StorePurchase }
   | {
       readonly type: 'purchaseError';
-      readonly logicalId?: LogicalProductId;
+      readonly logicalId?: CommerceLogicalProductId;
       readonly error: CommerceErrorInfo;
     }
   | { readonly type: 'subscriptionUpdated'; readonly subscription: ActiveSubscription };
@@ -175,7 +189,7 @@ export interface CommerceEventEnvelope {
 export type FetchProductsType = 'in-app' | 'subscription' | 'all';
 
 export interface FetchProductsInput {
-  readonly logicalIds?: readonly LogicalProductId[];
+  readonly logicalIds?: readonly CommerceLogicalProductId[];
   readonly type?: FetchProductsType;
 }
 
@@ -215,7 +229,7 @@ export type ActiveSubscriptionState = 'active' | 'lapsed' | 'revoked';
 
 export interface ActiveSubscription {
   readonly store: StoreId;
-  readonly logicalId: LogicalProductId;
+  readonly logicalId: CommerceLogicalProductId;
   readonly subscriptionId: NonEmptyString;
   readonly periodIndex: NonNegativeInteger;
   readonly state: ActiveSubscriptionState;
@@ -244,7 +258,7 @@ export interface CreditMembershipTerms {
 }
 
 export interface CreditOffer {
-  readonly logicalId: LogicalProductId;
+  readonly logicalId: CommerceLogicalProductId;
   readonly storeSku: NonEmptyString;
   readonly kind: PurchaseKind;
   readonly title: string;
@@ -259,7 +273,7 @@ export interface CreditSpendInput {
   readonly currency: NonEmptyString;
   readonly amount: number & tags.ExclusiveMinimum<0>;
   readonly idempotencyKey: NonEmptyString;
-  readonly logicalId?: LogicalProductId;
+  readonly logicalId?: CommerceLogicalProductId;
 }
 
 export interface CreditDebit {
@@ -280,7 +294,7 @@ export type CreditSpendResult =
 export interface CreditEntitlement {
   readonly entitlementId: NonEmptyString;
   readonly titleId: NonEmptyString;
-  readonly logicalId: LogicalProductId;
+  readonly logicalId: CommerceLogicalProductId;
   readonly idempotencyKey: NonEmptyString;
   readonly createdAt: IsoTimestamp;
   readonly debits: readonly CreditDebit[];
@@ -611,39 +625,6 @@ export function summarizeCommercePurchaseState(
 
 // Capabilities.
 
-export interface LegacyCommerceCapabilities {
-  readonly nativeIap: boolean;
-  readonly subscriptionIap: boolean;
-}
-
-/** Transition rule for the boolean `PlatformCapabilities` flags. */
-export function deriveLegacyCommerceCapabilities(
-  capabilities: CommerceCapabilities,
-): LegacyCommerceCapabilities {
-  return {
-    nativeIap: capabilities.availability === 'available'
-      && (capabilities.purchase.consumable || capabilities.purchase.durable),
-    subscriptionIap: capabilities.purchase.subscription,
-  };
-}
-
-/** A fresh all-false snapshot; callers must not share or mutate a returned object. */
-export function createUnsupportedCommerceCapabilities(): CommerceCapabilities {
-  return {
-    purchase: { consumable: false, durable: false, subscription: false, quantity: false },
-    catalog: { products: false, offers: false, localizedPrice: false },
-    lifecycle: {
-      availablePurchases: false,
-      pending: false,
-      restore: false,
-      events: false,
-      finish: 'none',
-    },
-    authority: { evidence: 'client-token', accountBinding: 'optional' },
-    availability: 'unsupported',
-  };
-}
-
 /**
  * Rejects a purchase the provider cannot serve before any store UI opens.
  * `kind` is the catalog kind of `input.logicalId`; the caller resolves it.
@@ -675,9 +656,11 @@ export interface DerivedPurchaseIdempotencyKeyInput {
 
 /**
  * Key for a purchase discovered without a journal record. Every runtime derives
- * the same key: `store:<storeId>:<transactionId>` by default, and the forms v1
- * ledgers already use for Google Play (`play-token-sha256:<hex>`) and Apps in
- * Toss (`apps-in-toss:purchase:<orderId>`).
+ * the same key: `store:<storeId>:<transactionId>` by default, with each
+ * component percent-encoded (`encodeURIComponent`) so ids containing `:`
+ * cannot collide, and the forms v1 ledgers already use for Google Play
+ * (`play-token-sha256:<hex>`) and Apps in Toss (`apps-in-toss:purchase:<orderId>`),
+ * which stay byte-identical.
  */
 export async function createDerivedPurchaseIdempotencyKey(
   input: DerivedPurchaseIdempotencyKeyInput,
@@ -696,7 +679,7 @@ export async function createDerivedPurchaseIdempotencyKey(
   if (store === 'apps-in-toss') {
     return `apps-in-toss:purchase:${transactionId}`;
   }
-  return `store:${store}:${transactionId}`;
+  return `store:${encodeURIComponent(store)}:${encodeURIComponent(transactionId)}`;
 }
 
 /** Byte-for-byte the v1 `createGooglePlayTokenTransactionId` form; A4 replaces the two copies with this helper. */
@@ -750,7 +733,7 @@ export const commerceEventBufferLimit = 64;
 
 export interface CommerceEventBuffer {
   readonly size: number;
-  /** Keeps the event for the first subscriber; drops the oldest `purchaseUpdated` when full. */
+  /** Keeps the event for the first subscriber; drops the oldest recoverable `purchaseUpdated` when full. */
   push(event: CommerceEvent): void;
   /** Delivers and clears every buffered event in order. */
   drain(listener: (event: CommerceEvent) => void): number;
@@ -758,9 +741,11 @@ export interface CommerceEventBuffer {
 
 /**
  * Buffer for events emitted before the first `subscribe` call. Over the limit
- * it drops the oldest `purchaseUpdated` first because those are recoverable
- * from `getAvailablePurchases`; `purchaseError` and `subscriptionUpdated` are
- * dropped only when no `purchaseUpdated` remains.
+ * it drops the oldest recoverable `purchaseUpdated` first: a pending or
+ * purchased purchase is still returned by `getAvailablePurchases`. A revoked
+ * purchase is not, so revoked `purchaseUpdated`, `purchaseError`, and
+ * `subscriptionUpdated` events are dropped oldest-first only when no
+ * recoverable `purchaseUpdated` remains.
  */
 export function createCommerceEventBuffer(
   options: { readonly limit?: number } = {},
@@ -779,7 +764,9 @@ export function createCommerceEventBuffer(
       if (events.length <= limit) {
         return;
       }
-      const recoverable = events.findIndex((buffered) => buffered.type === 'purchaseUpdated');
+      const recoverable = events.findIndex(
+        (buffered) => buffered.type === 'purchaseUpdated' && buffered.purchase.state !== 'revoked',
+      );
       events.splice(recoverable === -1 ? 0 : recoverable, 1);
     },
     drain(listener) {
@@ -792,201 +779,54 @@ export function createCommerceEventBuffer(
   };
 }
 
-// Validators. typia checks the shape, the tags, and rejects unknown keys;
-// logical ids are post-checked because `LogicalProductId` is a branded string
-// union typia reads as `string`.
+// Validators. typia checks the shape and the tags and rejects unknown keys.
 
-const assertStoreProductShape = typia.createAssertEquals<StoreProduct>();
-const assertStorePurchaseShape = typia.createAssertEquals<StorePurchase>();
-const assertRequestPurchaseInputShape = typia.createAssertEquals<RequestPurchaseInput>();
-const assertRequestPurchaseResultShape = typia.createAssertEquals<RequestPurchaseResult>();
-const assertCommerceEventShape = typia.createAssertEquals<CommerceEvent>();
-const assertCommerceEventEnvelopeShape = typia.createAssertEquals<CommerceEventEnvelope>();
-const assertActiveSubscriptionShape = typia.createAssertEquals<ActiveSubscription>();
-const assertFetchProductsInputShape = typia.createAssertEquals<FetchProductsInput>();
-const assertCreditOfferShape = typia.createAssertEquals<CreditOffer>();
-const assertCreditSpendInputShape = typia.createAssertEquals<CreditSpendInput>();
-const assertCreditEntitlementShape = typia.createAssertEquals<CreditEntitlement>();
-
+export const assertStoreProduct = typia.createAssertEquals<StoreProduct>();
+export const isStoreProduct = typia.createEquals<StoreProduct>();
+export const assertStorePurchase = typia.createAssertEquals<StorePurchase>();
+export const isStorePurchase = typia.createEquals<StorePurchase>();
+export const assertRequestPurchaseInput = typia.createAssertEquals<RequestPurchaseInput>();
+export const isRequestPurchaseInput = typia.createEquals<RequestPurchaseInput>();
+export const assertRequestPurchaseResult = typia.createAssertEquals<RequestPurchaseResult>();
+export const isRequestPurchaseResult = typia.createEquals<RequestPurchaseResult>();
+export const assertCommerceEvent = typia.createAssertEquals<CommerceEvent>();
+export const isCommerceEvent = typia.createEquals<CommerceEvent>();
+export const assertCommerceEventEnvelope = typia.createAssertEquals<CommerceEventEnvelope>();
+export const isCommerceEventEnvelope = typia.createEquals<CommerceEventEnvelope>();
+export const assertActiveSubscription = typia.createAssertEquals<ActiveSubscription>();
+export const isActiveSubscription = typia.createEquals<ActiveSubscription>();
+export const assertFetchProductsInput = typia.createAssertEquals<FetchProductsInput>();
 export const assertCommerceCapabilities = typia.createAssertEquals<CommerceCapabilities>();
 export const isCommerceCapabilities = typia.createEquals<CommerceCapabilities>();
 export const assertCommerceErrorInfo = typia.createAssertEquals<CommerceErrorInfo>();
-export const assertCreditLot = typia.createAssertEquals<CreditLot>();
+export const assertCreditOffer = typia.createAssertEquals<CreditOffer>();
+export const assertCreditSpendInput = typia.createAssertEquals<CreditSpendInput>();
 export const assertCreditSpendResult = typia.createAssertEquals<CreditSpendResult>();
+export const assertCreditEntitlement = typia.createAssertEquals<CreditEntitlement>();
 export const assertCreditBalance = typia.createAssertEquals<CreditBalance>();
+export const assertCreditLot = typia.createAssertEquals<CreditLot>();
 export const assertFinishTransactionInput = typia.createAssertEquals<FinishTransactionInput>();
 export const assertFinishTransactionResult = typia.createAssertEquals<FinishTransactionResult>();
-export const assertGetAvailablePurchasesInput = typia.createAssertEquals<GetAvailablePurchasesInput>();
+export const assertGetAvailablePurchasesInput =
+  typia.createAssertEquals<GetAvailablePurchasesInput>();
 export const assertCommerceBridgeGetCapabilitiesPayload =
   typia.createAssertEquals<CommerceBridgeGetCapabilitiesPayload>();
 export const assertCommerceBridgeGetCapabilitiesResult =
   typia.createAssertEquals<CommerceBridgeGetCapabilitiesResult>();
+export const assertCommerceBridgeFetchProductsPayload = assertFetchProductsInput;
+export const assertCommerceBridgeFetchProductsResult =
+  typia.createAssertEquals<CommerceBridgeFetchProductsResult>();
+export const assertCommerceBridgeRequestPurchasePayload = assertRequestPurchaseInput;
+export const assertCommerceBridgeRequestPurchaseResult = assertRequestPurchaseResult;
+export const assertCommerceBridgeGetAvailablePurchasesPayload = assertGetAvailablePurchasesInput;
+export const assertCommerceBridgeGetAvailablePurchasesResult =
+  typia.createAssertEquals<CommerceBridgeGetAvailablePurchasesResult>();
+export const assertCommerceBridgeFinishTransactionPayload = assertFinishTransactionInput;
+export const assertCommerceBridgeFinishTransactionResult = assertFinishTransactionResult;
 export const assertCommerceBridgeRestorePurchasesPayload =
   typia.createAssertEquals<CommerceBridgeRestorePurchasesPayload>();
 export const assertCommerceBridgeRestorePurchasesResult =
   typia.createAssertEquals<CommerceBridgeRestorePurchasesResult>();
-const assertCommerceBridgeFetchProductsResultShape =
-  typia.createAssertEquals<CommerceBridgeFetchProductsResult>();
-const assertCommerceBridgeGetAvailablePurchasesResultShape =
-  typia.createAssertEquals<CommerceBridgeGetAvailablePurchasesResult>();
-
-export function assertStoreProduct(input: unknown): StoreProduct {
-  const product = assertStoreProductShape(input);
-  assertLogicalId(product.logicalId, '$input.logicalId');
-  return product;
-}
-
-export function isStoreProduct(input: unknown): input is StoreProduct {
-  return tryAssert(() => assertStoreProduct(input));
-}
-
-export function assertStorePurchase(input: unknown): StorePurchase {
-  const purchase = assertStorePurchaseShape(input);
-  if (purchase.logicalId !== undefined) {
-    assertLogicalId(purchase.logicalId, '$input.logicalId');
-  }
-  return purchase;
-}
-
-export function isStorePurchase(input: unknown): input is StorePurchase {
-  return tryAssert(() => assertStorePurchase(input));
-}
-
-export function assertRequestPurchaseInput(input: unknown): RequestPurchaseInput {
-  const request = assertRequestPurchaseInputShape(input);
-  assertLogicalId(request.logicalId, '$input.logicalId');
-  return request;
-}
-
-export function isRequestPurchaseInput(input: unknown): input is RequestPurchaseInput {
-  return tryAssert(() => assertRequestPurchaseInput(input));
-}
-
-export function assertRequestPurchaseResult(input: unknown): RequestPurchaseResult {
-  const result = assertRequestPurchaseResultShape(input);
-  if (result.outcome === 'purchased' && result.purchase.logicalId !== undefined) {
-    assertLogicalId(result.purchase.logicalId, '$input.purchase.logicalId');
-  }
-  return result;
-}
-
-export function isRequestPurchaseResult(input: unknown): input is RequestPurchaseResult {
-  return tryAssert(() => assertRequestPurchaseResult(input));
-}
-
-export function assertCommerceEvent(input: unknown): CommerceEvent {
-  const event = assertCommerceEventShape(input);
-  assertCommerceEventLogicalIds(event, '$input');
-  return event;
-}
-
-export function isCommerceEvent(input: unknown): input is CommerceEvent {
-  return tryAssert(() => assertCommerceEvent(input));
-}
-
-export function assertCommerceEventEnvelope(input: unknown): CommerceEventEnvelope {
-  const envelope = assertCommerceEventEnvelopeShape(input);
-  assertCommerceEventLogicalIds(envelope.event, '$input.event');
-  return envelope;
-}
-
-export function isCommerceEventEnvelope(input: unknown): input is CommerceEventEnvelope {
-  return tryAssert(() => assertCommerceEventEnvelope(input));
-}
-
-export function assertActiveSubscription(input: unknown): ActiveSubscription {
-  const subscription = assertActiveSubscriptionShape(input);
-  assertLogicalId(subscription.logicalId, '$input.logicalId');
-  return subscription;
-}
-
-export function isActiveSubscription(input: unknown): input is ActiveSubscription {
-  return tryAssert(() => assertActiveSubscription(input));
-}
-
-export function assertFetchProductsInput(input: unknown): FetchProductsInput {
-  const request = assertFetchProductsInputShape(input);
-  request.logicalIds?.forEach((logicalId, index) => {
-    assertLogicalId(logicalId, `$input.logicalIds[${index}]`);
-  });
-  return request;
-}
-
-export function assertCreditOffer(input: unknown): CreditOffer {
-  const offer = assertCreditOfferShape(input);
-  assertLogicalId(offer.logicalId, '$input.logicalId');
-  return offer;
-}
-
-export function assertCreditSpendInput(input: unknown): CreditSpendInput {
-  const spend = assertCreditSpendInputShape(input);
-  if (spend.logicalId !== undefined) {
-    assertLogicalId(spend.logicalId, '$input.logicalId');
-  }
-  return spend;
-}
-
-export function assertCreditEntitlement(input: unknown): CreditEntitlement {
-  const entitlement = assertCreditEntitlementShape(input);
-  assertLogicalId(entitlement.logicalId, '$input.logicalId');
-  return entitlement;
-}
-
-export const assertCommerceBridgeFetchProductsPayload = assertFetchProductsInput;
-
-export function assertCommerceBridgeFetchProductsResult(
-  input: unknown,
-): CommerceBridgeFetchProductsResult {
-  const result = assertCommerceBridgeFetchProductsResultShape(input);
-  result.products.forEach((product, index) => {
-    assertLogicalId(product.logicalId, `$input.products[${index}].logicalId`);
-  });
-  return result;
-}
-
-export const assertCommerceBridgeRequestPurchasePayload = assertRequestPurchaseInput;
-export const assertCommerceBridgeRequestPurchaseResult = assertRequestPurchaseResult;
-export const assertCommerceBridgeGetAvailablePurchasesPayload = assertGetAvailablePurchasesInput;
-
-export function assertCommerceBridgeGetAvailablePurchasesResult(
-  input: unknown,
-): CommerceBridgeGetAvailablePurchasesResult {
-  const result = assertCommerceBridgeGetAvailablePurchasesResultShape(input);
-  result.purchases.forEach((purchase, index) => {
-    if (purchase.logicalId !== undefined) {
-      assertLogicalId(purchase.logicalId, `$input.purchases[${index}].logicalId`);
-    }
-  });
-  return result;
-}
-
-export const assertCommerceBridgeFinishTransactionPayload = assertFinishTransactionInput;
-export const assertCommerceBridgeFinishTransactionResult = assertFinishTransactionResult;
-
-function assertCommerceEventLogicalIds(event: CommerceEvent, path: string): void {
-  if (event.type === 'purchaseUpdated' && event.purchase.logicalId !== undefined) {
-    assertLogicalId(event.purchase.logicalId, `${path}.purchase.logicalId`);
-  } else if (event.type === 'purchaseError' && event.logicalId !== undefined) {
-    assertLogicalId(event.logicalId, `${path}.logicalId`);
-  } else if (event.type === 'subscriptionUpdated') {
-    assertLogicalId(event.subscription.logicalId, `${path}.subscription.logicalId`);
-  }
-}
-
-function assertLogicalId(value: string, path: string): void {
-  if (value.length === 0) {
-    throw new TypeError(`Logical product id at ${path} must not be empty.`);
-  }
-}
-
-function tryAssert(check: () => unknown): boolean {
-  try {
-    check();
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 // v1 compatibility wrapper.
 
@@ -1038,7 +878,13 @@ export function toCommerceAdapter(
       const purchases = await provider.getAvailablePurchases({ includePending });
       const settledPurchases: PurchaseSettlement[] = [];
       for (const purchase of purchases) {
-        if (purchase.settlement === undefined || purchase.logicalId === undefined) {
+        // A pending purchase is never a settled outcome, even when the adapter
+        // already attached a ledger pointer to it.
+        if (
+          purchase.settlement === undefined
+          || purchase.logicalId === undefined
+          || purchase.state === 'pending'
+        ) {
           continue;
         }
         settledPurchases.push({

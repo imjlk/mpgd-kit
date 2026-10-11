@@ -131,7 +131,10 @@ describe('platform gateway capability conformance', () => {
 
   it.each([
     ['a shared nested commerce object', (shared: CommerceCapabilities) => shared],
-    ['a shared purchase block', (shared: CommerceCapabilities) => ({ ...shared })],
+    ['a shared purchase block', (shared: CommerceCapabilities) => sharingOnly(shared, 'purchase')],
+    ['a shared catalog block', (shared: CommerceCapabilities) => sharingOnly(shared, 'catalog')],
+    ['a shared lifecycle block', (shared: CommerceCapabilities) => sharingOnly(shared, 'lifecycle')],
+    ['a shared authority block', (shared: CommerceCapabilities) => sharingOnly(shared, 'authority')],
   ])('rejects %s across reads', async (_name, read) => {
     const shared = createAvailableCommerce();
     const fixture = createFixture(() => withCommerce(read(shared)));
@@ -197,6 +200,20 @@ describe('platform gateway capability conformance', () => {
     })).rejects.toThrow('Platform gateway capability conformance failed: test-gateway.');
   });
 });
+
+/** A fresh commerce block that reuses exactly one nested record from `shared`. */
+function sharingOnly(
+  shared: CommerceCapabilities,
+  block: 'purchase' | 'catalog' | 'lifecycle' | 'authority',
+): CommerceCapabilities {
+  return {
+    purchase: block === 'purchase' ? shared.purchase : { ...shared.purchase },
+    catalog: block === 'catalog' ? shared.catalog : { ...shared.catalog },
+    lifecycle: block === 'lifecycle' ? shared.lifecycle : { ...shared.lifecycle },
+    authority: block === 'authority' ? shared.authority : { ...shared.authority },
+    availability: shared.availability,
+  };
+}
 
 function createAvailableCommerce(): CommerceCapabilities {
   return {

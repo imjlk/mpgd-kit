@@ -6,6 +6,7 @@ import type {
   CommerceBillingAuthority,
   CommerceErrorCode,
   CommerceLifecycleCapabilities,
+  CommerceLogicalProductId,
   CommercePurchaseCapabilities,
   CommercePurchaseState,
   CreditLotOrigin,
@@ -15,7 +16,6 @@ import type {
   PurchaseSource,
   StorePurchaseState,
 } from './commerce.js';
-import type { LogicalProductId } from './index.js';
 
 /**
  * Conformance vector format for docs/specs/commerce/vectors/*.json. A3 adds
@@ -38,7 +38,7 @@ export interface CommerceConformanceProfile {
 }
 
 export interface CommerceConformanceCatalogEntry {
-  readonly logicalId: LogicalProductId;
+  readonly logicalId: CommerceLogicalProductId;
   readonly kind: PurchaseKind;
   readonly storeSku: NonEmptyString;
   /** Membership terms for credit-funded subscription products. */
@@ -125,7 +125,7 @@ export interface CommerceConformanceRequestPurchaseExpectation {
 }
 
 export interface CommerceConformanceFetchProductsExpectation {
-  readonly logicalIds: readonly LogicalProductId[];
+  readonly logicalIds: readonly CommerceLogicalProductId[];
 }
 
 export type CommerceConformanceStep =
@@ -134,7 +134,7 @@ export type CommerceConformanceStep =
       readonly actor: 'game';
       readonly action: 'requestPurchase';
       readonly input: {
-        readonly logicalId: LogicalProductId;
+        readonly logicalId: CommerceLogicalProductId;
         readonly idempotencyKey: NonEmptyString;
         readonly source?: PurchaseSource;
         readonly offerId?: NonEmptyString;
@@ -146,7 +146,7 @@ export type CommerceConformanceStep =
       readonly actor: 'game';
       readonly action: 'fetchProducts';
       readonly input?: {
-        readonly logicalIds?: readonly LogicalProductId[];
+        readonly logicalIds?: readonly CommerceLogicalProductId[];
         readonly type?: 'in-app' | 'subscription' | 'all';
       };
       readonly returns?: CommerceConformanceFetchProductsExpectation;
@@ -159,7 +159,7 @@ export type CommerceConformanceStep =
   | {
       readonly actor: 'store';
       readonly action: 'error';
-      readonly logicalId?: LogicalProductId;
+      readonly logicalId?: CommerceLogicalProductId;
       readonly error: CommerceConformanceErrorFixture;
     }
   | {
@@ -182,7 +182,7 @@ export type CommerceConformanceStep =
       readonly action: 'push';
       readonly transactionId: NonEmptyString;
       readonly entryId: NonEmptyString;
-      readonly logicalId: LogicalProductId;
+      readonly logicalId: CommerceLogicalProductId;
     }
   | {
       readonly actor: 'backend';
@@ -218,7 +218,7 @@ export interface CommerceConformanceVerifyRequestExpectation {
 export interface CommerceConformanceLedgerEntryExpectation {
   readonly entryId: NonEmptyString;
   readonly type: 'grant' | 'revoke' | 'period';
-  readonly logicalId: LogicalProductId;
+  readonly logicalId: CommerceLogicalProductId;
   /** The grant a `revoke` entry reverses. */
   readonly reverses?: NonEmptyString;
   readonly reason?: NonEmptyString;
@@ -240,7 +240,7 @@ export interface CommerceConformanceAvailableExpectation {
 
 export interface CommerceConformanceEntitlementExpectation {
   readonly id: NonEmptyString;
-  readonly logicalId?: LogicalProductId;
+  readonly logicalId?: CommerceLogicalProductId;
 }
 
 export interface CommerceConformanceLotExpectation {
@@ -266,14 +266,14 @@ export type CommerceConformanceSubscriptionEventType =
 
 export interface CommerceConformanceSubscriptionEventExpectation {
   readonly type: CommerceConformanceSubscriptionEventType;
-  readonly logicalId: LogicalProductId;
+  readonly logicalId: CommerceLogicalProductId;
   readonly periodIndex: NonNegativeInteger;
   readonly expiresAt: IsoTimestamp;
   readonly reason?: CommerceErrorCode;
 }
 
 export interface CommerceConformanceActiveSubscriptionExpectation {
-  readonly logicalId: LogicalProductId;
+  readonly logicalId: CommerceLogicalProductId;
   readonly periodIndex?: NonNegativeInteger;
   readonly state?: ActiveSubscriptionState;
   readonly expiresAt?: IsoTimestamp;
@@ -310,14 +310,11 @@ export interface CommerceConformanceVector {
 
 const assertCommerceConformanceVectorShape = typia.createAssertEquals<CommerceConformanceVector>();
 
-/** Validates one vector file. Catalog logical ids must be non-empty and unique. */
+/** Validates one vector file. Catalog logical ids must be unique. */
 export function assertCommerceConformanceVector(input: unknown): CommerceConformanceVector {
   const vector = assertCommerceConformanceVectorShape(input);
   const logicalIds = new Set<string>();
   for (const entry of vector.catalog ?? []) {
-    if (entry.logicalId.length === 0) {
-      throw new TypeError(`Vector ${vector.vector} declares an empty catalog logical id.`);
-    }
     if (logicalIds.has(entry.logicalId)) {
       throw new TypeError(`Vector ${vector.vector} declares ${entry.logicalId} twice.`);
     }

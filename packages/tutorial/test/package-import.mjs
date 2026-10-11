@@ -1,16 +1,16 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
+  mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+
+import {
+  createPackedDependencyCloser,
+  findInstalledDependency,
+} from '../../../tools/package/packed-dependency-closure.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const packageManager = readJson(join(repoRoot, 'package.json')).packageManager;
@@ -63,13 +63,13 @@ assert.match(driverCss, /\.driver-popover/);
 `;
 
 try {
-  const platformTarball = packPackageDirectory(join(repoRoot, 'packages/platform'));
-  const tutorialTarball = packPackageDirectory(join(repoRoot, 'packages/tutorial'));
-  const driverTarball = packPackageDirectory(
-    realpathSync(join(repoRoot, 'packages/tutorial/node_modules/driver.js')),
-  );
-  const platformDependency = fileDependency(platformTarball);
-  const driverDependency = fileDependency(driverTarball);
+  // The offline store holds the packed packages plus every runtime dependency
+  // their manifests declare (for example typia under @mpgd/platform, driver.js
+  // under @mpgd/tutorial), so the install proves the published closure is complete.
+  const closer = createPackedDependencyCloser({ fixture: fixtureRoot, pnpm });
+  const platform = closer.pack(join(repoRoot, 'packages/platform'));
+  const tutorial = closer.pack(join(repoRoot, 'packages/tutorial'));
+  const driver = closer.packed('driver.js');
 
   mkdirSync(consumerRoot);
   writeJson(join(consumerRoot, 'package.json'), {
@@ -78,20 +78,14 @@ try {
     type: 'module',
     packageManager,
     dependencies: {
-      '@mpgd/platform': platformDependency,
-      '@mpgd/tutorial': fileDependency(tutorialTarball),
-      'driver.js': driverDependency,
+      '@mpgd/platform': platform.tarball,
+      '@mpgd/tutorial': tutorial.tarball,
+      'driver.js': driver.tarball,
     },
   });
   writeFileSync(
     join(consumerRoot, 'pnpm-workspace.yaml'),
-    [
-      'packages: []',
-      'overrides:',
-      `  '@mpgd/platform': ${JSON.stringify(platformDependency)}`,
-      `  'driver.js': ${JSON.stringify(driverDependency)}`,
-      '',
-    ].join('\n'),
+    ['packages: []', closer.overridesYaml(), ''].join('\n'),
   );
 
   run(pnpm, [
@@ -114,6 +108,13 @@ try {
   assert.equal(installedTutorial.dependencies?.['@mpgd/platform'], installedPlatform.version);
   assert.equal(installedTutorial.dependencies?.['driver.js'], installedDriver.version);
   assert.equal(JSON.stringify(installedTutorial).includes('workspace:'), false);
+  const installedPlatformDir = realpathSync(join(consumerRoot, 'node_modules/@mpgd/platform'));
+  for (const dependency of Object.keys(installedPlatform.dependencies ?? {})) {
+    assert.ok(
+      findInstalledDependency(installedPlatformDir, dependency),
+      `@mpgd/platform runtime dependency ${dependency} is missing from the packed closure.`,
+    );
+  }
 
   writeFileSync(join(consumerRoot, 'smoke.mjs'), consumerSmokeSource);
   run(process.execPath, ['smoke.mjs'], consumerRoot);
@@ -121,24 +122,6 @@ try {
   console.log('@mpgd/tutorial packed consumer smoke passed.');
 } finally {
   rmSync(fixtureRoot, { force: true, recursive: true });
-}
-
-function packPackageDirectory(packageDirectory) {
-  const result = run(
-    pnpm,
-    ['pack', '--json', '--pack-destination', fixtureRoot],
-    packageDirectory,
-    true,
-  );
-  const packed = JSON.parse(result.stdout);
-
-  assert.equal(typeof packed.filename, 'string');
-
-  return packed.filename;
-}
-
-function fileDependency(tarball) {
-  return `file:${relative(consumerRoot, tarball).split('\\').join('/')}`;
 }
 
 function readJson(path) {
@@ -149,12 +132,12 @@ function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function run(command, args, cwd, capture = false) {
+function run(command, args, cwd) {
   const result = spawnSync(command, args, {
     cwd,
     encoding: 'utf8',
     env: process.env,
-    stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
+    stdio: 'inherit',
   });
 
   if (result.error !== undefined) {
@@ -162,9 +145,7 @@ function run(command, args, cwd, capture = false) {
   }
 
   if (result.status !== 0) {
-    throw new Error(
-      `${command} ${args.join(' ')} failed in ${cwd}:\n${result.stdout ?? ''}${result.stderr ?? ''}`,
-    );
+    throw new Error(`${command} ${args.join(' ')} failed in ${cwd}.`);
   }
 
   return result;

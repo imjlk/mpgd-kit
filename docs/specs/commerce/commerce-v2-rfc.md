@@ -427,7 +427,10 @@ regenerated on retry.
 A purchase discovered without a journal record gets a key derived from the
 purchase alone, so every runtime derives the same key:
 
-- Reference rule for new stores: `store:<storeId>:<transactionId>`.
+- Reference rule for new stores: `store:<storeId>:<transactionId>`, with each
+  component percent-encoded (`encodeURIComponent`) so the key is injective:
+  store `a:b` with transaction `c` and store `a` with transaction `b:c` derive
+  different keys.
 - Existing stores keep their current forms so ledgers written by v1 still
   deduplicate: `play-token-sha256:<hex>` for `google-play` (one shared helper
   replaces the two copies), and `apps-in-toss:purchase:<orderId>` for
@@ -836,9 +839,11 @@ after it passes these vectors.
    journal rejection, not as a client error.
 5. Resolved in A2: the pre-listener buffer holds 64 events
    (`commerceEventBufferLimit`). Over the limit, `createCommerceEventBuffer`
-   drops the oldest `purchaseUpdated` first, because those purchases are still
-   returned by `getAvailablePurchases`; `purchaseError` and
-   `subscriptionUpdated` are dropped only when no `purchaseUpdated` remains.
+   drops the oldest recoverable `purchaseUpdated` first: a pending or purchased
+   purchase is still returned by `getAvailablePurchases`. A revoked purchase is
+   not, so revoked `purchaseUpdated`, `purchaseError`, and `subscriptionUpdated`
+   events are dropped oldest-first only when no recoverable `purchaseUpdated`
+   remains.
 6. Default billing authority and credit scope for Microsoft Store, Apps in
    Toss, Devvit, and Verse8 builds, pending each platform's policy review.
 

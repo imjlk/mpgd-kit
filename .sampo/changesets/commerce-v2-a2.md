@@ -2,6 +2,7 @@
 npm/@mpgd/platform: minor
 npm/@mpgd/catalog: minor
 npm/@mpgd/adapter-verse8: patch
+npm/@mpgd/game-services: patch
 ---
 
 `@mpgd/platform` adds the commerce v2 contract module as the new `./commerce`
@@ -31,3 +32,9 @@ literal.
 `@mpgd/adapter-verse8` keeps its `coin` and `gem` balance map and now fails a
 currency grant for any other catalog currency with a clear error instead of
 writing an untracked balance.
+
+`@mpgd/game-services` accepts any currency the product catalog declares: the
+ledger grant validator no longer hard-codes `coin` and `gem` (it requires a
+trimmed non-empty code), and `createGameServicesBackend` rejects a catalog
+product grant or placement reward whose currency the catalog does not declare,
+so an undeclared currency fails at startup instead of at the first grant.

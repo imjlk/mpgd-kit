@@ -66,7 +66,7 @@
         "type": "object",
         "properties": {
           "logicalId": {
-            "$ref": "#/components/schemas/LogicalProductId",
+            "$ref": "#/components/schemas/CommerceLogicalProductId",
             "readOnly": true
           },
           "periodIndex": {
@@ -112,7 +112,7 @@
         "type": "object",
         "properties": {
           "logicalId": {
-            "$ref": "#/components/schemas/LogicalProductId",
+            "$ref": "#/components/schemas/CommerceLogicalProductId",
             "readOnly": true
           },
           "kind": {
@@ -163,7 +163,7 @@
             "readOnly": true
           },
           "logicalId": {
-            "$ref": "#/components/schemas/LogicalProductId",
+            "$ref": "#/components/schemas/CommerceLogicalProductId",
             "readOnly": true
           }
         },
@@ -307,7 +307,7 @@
           "logicalIds": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/LogicalProductId"
+              "$ref": "#/components/schemas/CommerceLogicalProductId"
             },
             "readOnly": true
           }
@@ -455,7 +455,7 @@
             "readOnly": true
           },
           "logicalId": {
-            "$ref": "#/components/schemas/LogicalProductId",
+            "$ref": "#/components/schemas/CommerceLogicalProductId",
             "readOnly": true
           },
           "reverses": {
@@ -849,7 +849,7 @@
                 "type": "object",
                 "properties": {
                   "logicalId": {
-                    "$ref": "#/components/schemas/LogicalProductId",
+                    "$ref": "#/components/schemas/CommerceLogicalProductId",
                     "readOnly": true
                   },
                   "idempotencyKey": {
@@ -906,7 +906,7 @@
                   "logicalIds": {
                     "type": "array",
                     "items": {
-                      "$ref": "#/components/schemas/LogicalProductId"
+                      "$ref": "#/components/schemas/CommerceLogicalProductId"
                     },
                     "readOnly": true
                   },
@@ -982,7 +982,7 @@
                 "readOnly": true
               },
               "logicalId": {
-                "$ref": "#/components/schemas/LogicalProductId",
+                "$ref": "#/components/schemas/CommerceLogicalProductId",
                 "readOnly": true
               },
               "error": {
@@ -1086,7 +1086,7 @@
                 "readOnly": true
               },
               "logicalId": {
-                "$ref": "#/components/schemas/LogicalProductId",
+                "$ref": "#/components/schemas/CommerceLogicalProductId",
                 "readOnly": true
               }
             },
@@ -1233,7 +1233,7 @@
             "readOnly": true
           },
           "logicalId": {
-            "$ref": "#/components/schemas/LogicalProductId",
+            "$ref": "#/components/schemas/CommerceLogicalProductId",
             "readOnly": true
           },
           "periodIndex": {
@@ -1532,6 +1532,11 @@
         ],
         "additionalProperties": false
       },
+      "CommerceLogicalProductId": {
+        "type": "string",
+        "minLength": 1,
+        "description": "`LogicalProductId` narrowed to its open string branch and tagged non-empty,\nso validators and the generated schemas carry `minLength: 1`. Starter ids and\nplain `LogicalProductId` values remain assignable."
+      },
       "CommercePurchaseCapabilities": {
         "type": "object",
         "properties": {
@@ -1727,9 +1732,6 @@
       "IsoTimestamp": {
         "type": "string",
         "format": "date-time"
-      },
-      "LogicalProductId": {
-        "type": "string"
       },
       "NonEmptyString": {
         "type": "string",

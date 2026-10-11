@@ -389,6 +389,24 @@ describe('event buffer', () => {
       .toEqual(['subscriptionUpdated', 'purchaseError', 'purchaseError']);
   });
 
+  it('never evicts a revoked purchaseUpdated ahead of other events', () => {
+    const buffer = createCommerceEventBuffer({ limit: 2 });
+    const revoked: CommerceEvent = {
+      type: 'purchaseUpdated',
+      purchase: purchase({ transactionId: 'tx-revoked', state: 'revoked' }),
+    };
+    buffer.push(revoked);
+    buffer.push(errorEvent);
+    // The recoverable purchased event is evicted, not the revocation.
+    buffer.push(updated('tx-1'));
+    expect(buffer.size).toBe(2);
+    // With nothing recoverable left, eviction falls back to the oldest event.
+    buffer.push(subscriptionEvent);
+    const kept: CommerceEvent[] = [];
+    buffer.drain((event) => kept.push(event));
+    expect(kept).toEqual([errorEvent, subscriptionEvent]);
+  });
+
   it('rejects a non-positive limit', () => {
     expect(() => createCommerceEventBuffer({ limit: 0 })).toThrow(RangeError);
   });
@@ -399,6 +417,21 @@ describe('derived idempotency keys', () => {
     await expect(createDerivedPurchaseIdempotencyKey({
       store: 'fixture.client-token', transactionId: 'tx-1', token: 'token-1',
     })).resolves.toBe('store:fixture.client-token:tx-1');
+  });
+
+  it('percent-encodes components so the reference form is injective', async () => {
+    const first = await createDerivedPurchaseIdempotencyKey({
+      store: 'a:b', transactionId: 'c', token: 't',
+    });
+    const second = await createDerivedPurchaseIdempotencyKey({
+      store: 'a', transactionId: 'b:c', token: 't',
+    });
+    expect(first).toBe('store:a%3Ab:c');
+    expect(second).toBe('store:a:b%3Ac');
+    expect(first).not.toBe(second);
+    await expect(createDerivedPurchaseIdempotencyKey({
+      store: 'wallet', transactionId: 'order/1 2', token: 't',
+    })).resolves.toBe('store:wallet:order%2F1%202');
   });
 
   it('keeps the Apps in Toss order form', async () => {
@@ -521,6 +554,12 @@ describe('toCommerceAdapter', () => {
               transactionId: 'tx-4',
               state: 'revoked',
               settlement: { ledgerEntryId: 'le-4' },
+            }),
+            // Pending with a settlement pointer is still not a settled outcome.
+            purchase({
+              transactionId: 'tx-5',
+              state: 'pending',
+              settlement: { ledgerEntryId: 'le-5' },
             }),
           ];
         },

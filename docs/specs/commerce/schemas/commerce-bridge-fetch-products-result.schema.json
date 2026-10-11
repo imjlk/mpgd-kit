@@ -23,8 +23,10 @@
         ],
         "additionalProperties": false
       },
-      "LogicalProductId": {
-        "type": "string"
+      "CommerceLogicalProductId": {
+        "type": "string",
+        "minLength": 1,
+        "description": "`LogicalProductId` narrowed to its open string branch and tagged non-empty,\nso validators and the generated schemas carry `minLength: 1`. Starter ids and\nplain `LogicalProductId` values remain assignable."
       },
       "NonEmptyString": {
         "type": "string",
@@ -96,7 +98,7 @@
         "type": "object",
         "properties": {
           "logicalId": {
-            "$ref": "#/components/schemas/LogicalProductId",
+            "$ref": "#/components/schemas/CommerceLogicalProductId",
             "readOnly": true
           },
           "store": {

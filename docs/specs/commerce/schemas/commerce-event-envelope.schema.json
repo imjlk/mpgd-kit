@@ -15,7 +15,7 @@
             "readOnly": true
           },
           "logicalId": {
-            "$ref": "#/components/schemas/LogicalProductId",
+            "$ref": "#/components/schemas/CommerceLogicalProductId",
             "readOnly": true
           },
           "subscriptionId": {
@@ -169,7 +169,7 @@
                 "readOnly": true
               },
               "logicalId": {
-                "$ref": "#/components/schemas/LogicalProductId",
+                "$ref": "#/components/schemas/CommerceLogicalProductId",
                 "readOnly": true
               },
               "error": {
@@ -227,12 +227,14 @@
         "additionalProperties": false,
         "description": "Bridge event envelope; `sequence` is per session and starts at 0."
       },
+      "CommerceLogicalProductId": {
+        "type": "string",
+        "minLength": 1,
+        "description": "`LogicalProductId` narrowed to its open string branch and tagged non-empty,\nso validators and the generated schemas carry `minLength: 1`. Starter ids and\nplain `LogicalProductId` values remain assignable."
+      },
       "IsoTimestamp": {
         "type": "string",
         "format": "date-time"
-      },
-      "LogicalProductId": {
-        "type": "string"
       },
       "NonEmptyString": {
         "type": "string",
@@ -301,7 +303,7 @@
             "readOnly": true
           },
           "logicalId": {
-            "$ref": "#/components/schemas/LogicalProductId",
+            "$ref": "#/components/schemas/CommerceLogicalProductId",
             "readOnly": true
           },
           "quantity": {
