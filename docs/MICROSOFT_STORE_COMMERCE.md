@@ -145,9 +145,9 @@ XSTS authentication supplied by the game service.
 
 ## Commerce v2 provider
 
-`createMicrosoftStoreCommerceProvider(input)` from `@mpgd/adapter-
-browser/microsoft-store` is the commerce v2 `CommerceProvider` (RFC:
-[docs/specs/commerce/commerce-v2-rfc.md](specs/commerce/commerce-v2-rfc.md))
+`createMicrosoftStoreCommerceProvider(input)` from
+`@mpgd/adapter-browser/microsoft-store` is the commerce v2 `CommerceProvider`
+(RFC: [docs/specs/commerce/commerce-v2-rfc.md](specs/commerce/commerce-v2-rfc.md))
 over the same Digital Goods path. It takes the
 `createMicrosoftStoreCommerceAdapter` input unchanged (products, authority,
 `getRecoveryScope`, recovery storage, Digital Goods and Payment Request
