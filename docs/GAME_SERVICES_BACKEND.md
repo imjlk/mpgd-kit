@@ -123,6 +123,24 @@ The bearer-token provider receives the request `AbortSignal`; it should throw
 outage and let cancellation, invalid credentials, and programming errors
 propagate.
 
+Commerce v2 clients (`@mpgd/capacitor-storekit`'s
+`createCapacitorStoreKitCommerceProvider`, RFC B3) submit the
+StoreKit-verified JWS as request evidence with schema
+`app-store.signed-transaction.v1` (`appStoreSignedTransactionEvidenceSchema`;
+`createAppStoreSignedTransactionEvidence` builds the envelope). The verifier
+checks that JWS offline through the same `signedTransactionVerifier` and
+makes no Server API call: the decoded transaction id must equal the request's
+`platformTransactionId` (`APP_STORE_SIGNED_TRANSACTION_ID_MISMATCH`
+otherwise), a missing or oversized `signedTransaction` is rejected with
+`APP_STORE_SIGNED_TRANSACTION_EVIDENCE_INVALID`, and every check below then
+applies unchanged. A request without that evidence, or with another schema,
+keeps the `Get Transaction Info` lookup, so current clients are unaffected;
+`acceptSignedTransactionEvidence: false` keeps the lookup for every request.
+A `GAME_SERVICES_IOS_EVIDENCE_VERIFIER` service binding receives the request
+with its `evidence`, so a deployment behind that binding must construct its
+verifier with a `signedTransactionVerifier` able to verify client-supplied
+JWS (`createAppleSignedTransactionVerifier` is) to use the offline path.
+
 The verifier matches the signed transaction to the configured bundle and
 environment, the catalog's platform product and type, the submitted transaction
 identifier, and a valid non-nil UUID `appAccountToken` resolved server-side for

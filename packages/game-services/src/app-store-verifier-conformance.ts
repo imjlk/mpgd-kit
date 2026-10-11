@@ -1,8 +1,41 @@
-import type {
-  AppStoreEnvironment,
-  AppStoreInAppPurchaseType,
-  AppStoreTransactionPayload,
+import type { PlatformEvidenceEnvelope } from '@mpgd/platform';
+
+import {
+  createAppStoreSignedTransactionEvidence,
+  type AppStoreEnvironment,
+  type AppStoreInAppPurchaseType,
+  type AppStoreTransactionPayload,
 } from './app-store-verifier.js';
+
+/** The placeholder JWS the signed-transaction evidence fixture carries; never a real signature. */
+export const appStoreConformanceSignedTransaction = 'conformance.signed-transaction.jws';
+
+export interface CreateAppStoreSignedTransactionEvidenceFixtureInput {
+  readonly signedTransaction?: string;
+  readonly transactionId?: string;
+  readonly originalTransactionId?: string;
+  readonly bundleId?: string;
+}
+
+/**
+ * Builds the `app-store.signed-transaction.v1` evidence envelope a commerce v2
+ * StoreKit client submits, with a placeholder JWS by default. Pair it with a
+ * fake `AppStoreSignedTransactionVerifier` that answers
+ * `createAppStoreTransactionConformanceFixture` for that string; the fixture
+ * is not signed evidence and contains no Apple credentials.
+ */
+export function createAppStoreSignedTransactionEvidenceFixture(
+  input: CreateAppStoreSignedTransactionEvidenceFixtureInput = {},
+): PlatformEvidenceEnvelope {
+  return createAppStoreSignedTransactionEvidence({
+    signedTransaction: input.signedTransaction ?? appStoreConformanceSignedTransaction,
+    transactionId: input.transactionId ?? '2000000000000001',
+    ...(input.originalTransactionId === undefined
+      ? {}
+      : { originalTransactionId: input.originalTransactionId }),
+    ...(input.bundleId === undefined ? {} : { bundleId: input.bundleId }),
+  });
+}
 
 export interface CreateAppStoreTransactionConformanceFixtureInput {
   readonly transactionId?: string;

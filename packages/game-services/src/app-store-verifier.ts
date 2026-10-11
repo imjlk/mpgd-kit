@@ -1,4 +1,4 @@
-import type { ProductType } from '@mpgd/platform';
+import type { PlatformEvidenceEnvelope, ProductType } from '@mpgd/platform';
 
 import type {
   EvidenceVerificationDecision,
@@ -112,7 +112,86 @@ export interface CreateAppStoreEvidenceVerifierOptions {
   }) => string | Promise<string>;
   readonly now?: () => string;
   readonly clockSkewMs?: number;
+  /**
+   * Verify `app-store.signed-transaction.v1` request evidence offline through
+   * `signedTransactionVerifier` instead of fetching the transaction by id from
+   * the App Store Server API. Defaults to true; false keeps the Server API
+   * lookup for every request, for a deployment whose signed-transaction
+   * verifier is not configured for client-supplied JWS.
+   */
+  readonly acceptSignedTransactionEvidence?: boolean;
 }
+
+/**
+ * Evidence schema of a commerce v2 App Store purchase (RFC B3): the payload's
+ * `signedTransaction` is the StoreKit-verified JWS the client received, so the
+ * server verifies it offline and the Server API lookup is only the fallback.
+ */
+export const appStoreSignedTransactionEvidenceSchema = 'app-store.signed-transaction.v1';
+
+export interface AppStoreSignedTransactionEvidencePayload {
+  readonly signedTransaction: string;
+  readonly transactionId: string;
+  readonly originalTransactionId?: string;
+  readonly bundleId?: string;
+}
+
+/** Builds the `app-store.signed-transaction.v1` envelope a client submits with `verifyPurchase`. */
+export function createAppStoreSignedTransactionEvidence(
+  payload: AppStoreSignedTransactionEvidencePayload,
+): PlatformEvidenceEnvelope {
+  assertNonEmptyString(payload.signedTransaction, 'signedTransaction');
+  assertNonEmptyString(payload.transactionId, 'transactionId');
+  return {
+    schema: appStoreSignedTransactionEvidenceSchema,
+    payload: {
+      signedTransaction: payload.signedTransaction,
+      transactionId: payload.transactionId,
+      ...(payload.originalTransactionId === undefined
+        ? {}
+        : { originalTransactionId: payload.originalTransactionId }),
+      ...(payload.bundleId === undefined ? {} : { bundleId: payload.bundleId }),
+    },
+  };
+}
+
+type SignedTransactionEvidenceRead =
+  | { readonly status: 'absent' }
+  | { readonly status: 'present'; readonly signedTransaction: string }
+  | { readonly status: 'rejected'; readonly reason: string };
+
+/**
+ * Reads the client JWS from `app-store.signed-transaction.v1` evidence. Any
+ * other schema, or no evidence, is `absent` (the Server API path); a present
+ * envelope whose payload is malformed, or whose `transactionId` differs from
+ * the request, is rejected before any verifier runs.
+ */
+function readSignedTransactionEvidence(
+  request: VerifyPurchaseEvidenceInput['request'],
+): SignedTransactionEvidenceRead {
+  const evidence = request.evidence;
+  if (evidence?.schema !== appStoreSignedTransactionEvidenceSchema) {
+    return { status: 'absent' };
+  }
+  const payload: unknown = evidence.payload;
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    return { status: 'rejected', reason: 'APP_STORE_SIGNED_TRANSACTION_EVIDENCE_INVALID' };
+  }
+  const { signedTransaction, transactionId } = payload as Readonly<Record<string, unknown>>;
+  if (
+    typeof signedTransaction !== 'string'
+    || signedTransaction.length === 0
+    || signedTransaction.length > maxSignedTransactionEvidenceLength
+  ) {
+    return { status: 'rejected', reason: 'APP_STORE_SIGNED_TRANSACTION_EVIDENCE_INVALID' };
+  }
+  if (transactionId !== undefined && transactionId !== request.platformTransactionId) {
+    return { status: 'rejected', reason: 'APP_STORE_SIGNED_TRANSACTION_ID_MISMATCH' };
+  }
+  return { status: 'present', signedTransaction };
+}
+
+const maxSignedTransactionEvidenceLength = 512 * 1024;
 
 export interface AppStoreFetchResponse {
   readonly status: number;
@@ -248,33 +327,49 @@ async function verifyAppStorePurchase(
     return { status: 'rejected', reason: 'APP_STORE_SUBSCRIPTION_UNSUPPORTED' };
   }
 
-  let transactionResult: AppStoreServerApiTransactionResult;
-  try {
-    transactionResult = await options.serverApi.getTransactionInfo({
-      transactionId: input.request.platformTransactionId,
-      environment: options.environment,
-      signal: input.signal,
-    });
-  } catch (error) {
-    if (!(error instanceof AppStoreDependencyUnavailableError)) {
-      throw error;
-    }
-    return { status: 'pending', reason: 'APP_STORE_SERVER_API_UNAVAILABLE' };
+  // Commerce v2 evidence carries the client's StoreKit-verified JWS: verify it
+  // offline and skip the Server API. Without it (current clients), or when
+  // offline evidence is not accepted, fetch the transaction by id as before.
+  const evidence = options.acceptSignedTransactionEvidence === false
+    ? { status: 'absent' as const }
+    : readSignedTransactionEvidence(input.request);
+  if (evidence.status === 'rejected') {
+    return { status: 'rejected', reason: evidence.reason };
   }
 
-  try {
-    assertAppStoreServerApiTransactionResult(transactionResult);
-  } catch {
-    return { status: 'pending', reason: 'APP_STORE_SERVER_API_INVALID_RESPONSE' };
-  }
-  if (transactionResult.status !== 'found') {
-    return { status: transactionResult.status, reason: transactionResult.reason };
+  let signedTransaction: string;
+  if (evidence.status === 'present') {
+    signedTransaction = evidence.signedTransaction;
+  } else {
+    let transactionResult: AppStoreServerApiTransactionResult;
+    try {
+      transactionResult = await options.serverApi.getTransactionInfo({
+        transactionId: input.request.platformTransactionId,
+        environment: options.environment,
+        signal: input.signal,
+      });
+    } catch (error) {
+      if (!(error instanceof AppStoreDependencyUnavailableError)) {
+        throw error;
+      }
+      return { status: 'pending', reason: 'APP_STORE_SERVER_API_UNAVAILABLE' };
+    }
+
+    try {
+      assertAppStoreServerApiTransactionResult(transactionResult);
+    } catch {
+      return { status: 'pending', reason: 'APP_STORE_SERVER_API_INVALID_RESPONSE' };
+    }
+    if (transactionResult.status !== 'found') {
+      return { status: transactionResult.status, reason: transactionResult.reason };
+    }
+    signedTransaction = transactionResult.signedTransactionInfo;
   }
 
   let signatureResult: AppStoreSignedTransactionVerificationResult;
   try {
     signatureResult = await options.signedTransactionVerifier.verifyAndDecode({
-      signedTransaction: transactionResult.signedTransactionInfo,
+      signedTransaction,
       environment: options.environment,
       bundleId: options.bundleId,
       signal: input.signal,
@@ -296,6 +391,14 @@ async function verifyAppStorePurchase(
   }
 
   const transaction = signatureResult.payload;
+  if (
+    evidence.status === 'present'
+    && transaction.transactionId !== input.request.platformTransactionId
+  ) {
+    // A client-supplied JWS for another transaction is a stable rejection,
+    // distinct from a Server API answer that disagrees with the request.
+    return { status: 'rejected', reason: 'APP_STORE_SIGNED_TRANSACTION_ID_MISMATCH' };
+  }
   const expectedAccountToken = await resolveExpectedAppAccountToken(input, options);
   if (expectedAccountToken.status !== 'verified') {
     return expectedAccountToken;
