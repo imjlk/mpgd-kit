@@ -24,6 +24,7 @@ import {
   matchPartial,
   runCommerceConformanceVector,
   runCommerceConformanceVectors,
+  withStoreTokens,
   type CommerceConformanceAdaptation,
   type CommerceConformanceContext,
   type CommerceConformanceFailure,
@@ -34,6 +35,7 @@ import {
 import {
   assertCommerceConformanceVector,
   type CommerceConformanceProfile,
+  type CommerceConformancePurchaseFixture,
   type CommerceConformanceVector,
 } from './commerce-vectors.js';
 import {
@@ -1381,6 +1383,72 @@ describe('commerce conformance adaptive vectors', () => {
     expect(result?.adaptive?.store).toBe('app-store');
     expect(Object.keys(result?.adaptive?.expect.journal ?? {})).toEqual(['store:app-store:tx-1']);
     expect(result?.adaptive?.expect.verifyRequests?.[0]?.store).toBe('app-store');
+  });
+
+  it('replays the token a store actor reports into the derived verify requests', async () => {
+    // A host-order store reports the transaction id as the token; the fixture
+    // carries `token-1`. The derivation must expect what the provider reports.
+    const hostOrderStore = (declareToken: boolean) =>
+      (context: CommerceConformanceContext): CommerceConformanceHarness => {
+        const fake = createCommerceConformanceStore({
+          ...context,
+          profile: { ...context.profile, store: 'apps-in-toss', ...ownerProfiles.host },
+        });
+        const withOrderToken = (purchase: CommerceConformancePurchaseFixture) =>
+          ({ ...purchase, token: purchase.transactionId });
+        const store: CommerceConformanceStoreActor = {
+          get purchaseUiOpened() {
+            return fake.purchaseUiOpened;
+          },
+          get finishCalls() {
+            return fake.finishCalls;
+          },
+          complete: (purchase) => fake.complete(withOrderToken(purchase)),
+          update: (purchase) => fake.update(withOrderToken(purchase)),
+          error: (input) => fake.error(input),
+          queueRequest: (result) => fake.queueRequest(
+            result.outcome === 'purchased'
+              ? { ...result, purchase: withOrderToken(result.purchase) }
+              : result,
+          ),
+          queueFinish: (result) => fake.queueFinish(result),
+          ...(declareToken ? { tokenOf: (purchase) => purchase.transactionId } : {}),
+        };
+        return { provider: fake.provider, store };
+      };
+    const results = await runCommerceConformanceVectors(
+      [vectorNamed('event-before-listener'), vectorNamed('purchase-host-finish')],
+      { createProvider: hostOrderStore(true) },
+    );
+    expect(summarize(results)).toEqual([
+      { vector: 'event-before-listener', status: 'passed' },
+      { vector: 'purchase-host-finish', status: 'passed' },
+    ]);
+    expect(adaptiveResult(results, 'event-before-listener').expect.verifyRequests).toEqual([
+      {
+        idempotencyKey: 'apps-in-toss:purchase:tx-1',
+        store: 'apps-in-toss',
+        transactionId: 'tx-1',
+        token: 'tx-1',
+      },
+    ]);
+    expect(adaptiveResult(results, 'purchase-host-finish').expect.verifyRequests?.[0]?.token).toBe(
+      'order-1',
+    );
+    expect(withStoreTokens(vectorNamed('event-before-listener'), () => 'mapped').steps[0]).toMatchObject({
+      actor: 'store',
+      action: 'complete',
+      purchase: { transactionId: 'tx-1', token: 'mapped' },
+    });
+
+    // Without the hook the fixture token stays, so such a provider fails on the token.
+    const [unmapped] = await runCommerceConformanceVectors([vectorNamed('event-before-listener')], {
+      createProvider: hostOrderStore(false),
+    });
+    expect(unmapped?.status).toBe('failed');
+    expect(unmapped?.failures).toEqual([
+      { path: 'verifyRequests[0].token', expected: 'token-1', actual: 'tx-1' },
+    ]);
   });
 
   it('runs a non-adaptive vector with its fixture expectations unchanged', async () => {

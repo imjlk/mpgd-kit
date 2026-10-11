@@ -400,6 +400,96 @@ The verifier parses that exact calendar form as UTC+09:00 and also accepts
 explicit UTC/offset timestamps; malformed dates and calendar overflows fail
 closed instead of relying on deployment-local `Date.parse()` behavior.
 
+## Commerce v2 provider
+
+`createAitCommerceProvider()` from `@mpgd/adapter-ait` is the commerce v2
+`CommerceProvider` for Apps in Toss (store id `apps-in-toss`, RFC profile:
+consumable and durable one-time products, no subscription, no quantity,
+`lifecycle.finish: 'host'`, `authority.evidence: 'host-callback'`,
+`accountBinding: 'host'`). `createAitHostBridge()` builds it from the same
+`iapProducts`, `prepareIap`, `verifyIapProductGrant` and `readIapEntitlements`
+options as the v1 flow and serves the six `commerce.v2.*` bridge methods from
+it; `createAitPlatformGateway()` exposes it as `gateway.commerceV2` whenever the
+installed bridge has the `commerceV2` event channel. Both flows run one IAP
+controller, so a v1 `commerce.purchase` and a v2 `requestPurchase` hold the
+same IAP lock, attempt markers, pre-checkout barrier and acknowledgement
+barriers described above.
+
+- **Server confirmation does not move.** `requestPurchase` opens the same
+  `createOneTimePurchaseOrder()` checkout, and `verifyIapProductGrant` inside
+  the SDK grant callback is still the only path that grants. A `purchased`
+  result exists only after that hook confirmed the grant; it carries the order
+  id as `transactionId` and `token`, the `apps-in-toss.iap.callback.v1`
+  envelope `{ orderId, sku, source }` as `evidence`, and a `host-identity`
+  binding. The v2 reconciler then sends that evidence to the game-services
+  verifier, which replays the grant (`alreadyProcessed`) and returns the
+  ledger entry id.
+- **Everything the host cannot settle is `launched`.** A grant the server
+  refused or that timed out, an acknowledgement that was not confirmed, a
+  checkout without a terminal callback, and the pre-checkout barrier
+  outcomes (`AIT_IAP_PENDING_ORDER_RECOVERED`, `AIT_IAP_PENDING_ORDER_UNRESOLVED`,
+  the `ALREADY_OWNED` class) all answer `launched`: the attempt stays open and
+  the reconciler resolves it from the pending orders. A cancellation is
+  `cancelled`; a terminal failure is `failed` with the `AIT_IAP_*` code as
+  `storeCode` (`aitIapCommerceErrorCodeMap` lists the RFC class of every
+  code).
+- **Pending orders are the available purchases.** `getAvailablePurchases`
+  lists the paid, ungranted orders of `getPendingOrders()` as `purchased`
+  (evidence source `pending-order-restore`), orders whose server grant exists
+  but whose `completeProductGrant()` was never confirmed as `purchased`, and,
+  with `includePending`, orders a checkout of this session observed that the
+  provider does not list yet as `pending`. The reconciler verifies each
+  through the backend before any grant; nothing is granted on the client.
+- **The host finishes after the ledger grant, and checks it.**
+  `finishTransaction` runs only with the reconciler's `ledgerEntryId`, and the
+  game side of the bridge is not trusted to have one: like the restore pass,
+  the host confirms the grant for the order through `verifyIapProductGrant`
+  (idempotent under the order key) before anything is acknowledged. While the
+  provider lists the order it then marks the linked client attempt completed
+  and calls `completeProductGrant()` through the acknowledgement barrier; an
+  order the provider no longer lists was finished by the host (the SDK
+  completes an order itself after a confirmed grant callback), and a barrier
+  an unconfirmed acknowledgement left behind is settled only by that
+  confirmed grant, never by absence alone. An order the provider lists under
+  another SKU is never acknowledged. A refused confirmation, a failed or an
+  unconfirmed acknowledgement answer `{ finished: false }` and are retried on
+  the next reconcile through the same barrier.
+- **Restore is the recovery pass.** `restorePurchases` runs `prepareIap`
+  (`intent: 'restore'`) and the pending-order reconciliation, and reports
+  settled and still-pending orders as `purchaseUpdated` events. Events emitted
+  before the first listener are buffered.
+- **Events come from pending-order reads.** The SDK pushes no purchase
+  events. `onPendingOrdersChanged` (the app resuming, by default) makes the
+  provider re-read the list and emit `purchaseUpdated` once per paid order it
+  has not reported; a host that already knows an order may pass it with the
+  signal, and a `launched` purchase that observed an order triggers a read at
+  once. The signal is observed only while a v2 listener exists, so a v1-only
+  integration never reads pending orders on resume. Orders the host finished
+  stay in `getAvailablePurchases` until the reconciler finishes their record,
+  so a buffered event the provider had to drop is still recoverable. The
+  provider emits no `purchaseError`: every checkout outcome is a synchronous
+  result.
+
+The sandbox bridge answers commerce v2 only when it is created with
+`buildId: 'ait-sandbox'` (the starter passes `runtime.buildId`), with an
+evidence-only stub for `COINS_100` whose order ids no backend authority knows,
+so a verify request for them fails closed; it exposes the commerce v2 event
+channel only then, so a gateway over any other build has no `commerceV2` and
+the v2 methods keep the `COMMERCE_V2_UNAVAILABLE` bridge error.
+
+`adapters/ait/src/ait-commerce-provider.conformance.test.ts` runs the RFC vectors
+through `runCommerceConformanceVectors` with a fake Apps in Toss host, directly
+and through the host bridge and gateway. `purchase-host-finish` is the
+canonical finish-family member; `event-before-listener`,
+`finish-failure-retry`, `restart-before-verify` and `revoked-after-grant` run
+with host-finish expectations derived for the `apps-in-toss` id (the store
+actor declares `tokenOf`, since the token is the order id). The remaining
+vectors are skipped with reasons: `cancelled-and-failed` scripts a store error
+event and a cancellation store code the terminal callback does not carry,
+`purchase-pending-then-purchased` scripts a store-side pending purchase the
+host cannot list, `adapter-settled` and `server-push-settlement` are
+profile-specific, and the three wallet vectors belong to B7.
+
 ## Rewarded-ad flow
 
 `userEarnedReward` is client evidence, not grant authority. The wrapper can use
