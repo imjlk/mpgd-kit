@@ -1,12 +1,6 @@
 {
   "name": "tutorial-driver",
   "description": "Driver presenter, target resolution, modal ownership, replay binding, and debug helper flow.",
-  "expectedFiles": [
-    "packages/tutorial/src/driver.ts",
-    "packages/tutorial/src/testing.ts",
-    "packages/tutorial/test/driver.test.ts",
-    "packages/tutorial/test/testing.test.ts"
-  ],
   "tsconfig": "tsconfig.graph.json",
   "question": "What are the central Driver tutorial presentation, target resolution, accessibility ownership, target rebinding, replay trigger, and debug helper flows?",
   "draft": {

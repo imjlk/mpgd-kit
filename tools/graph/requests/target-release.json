@@ -1,9 +1,23 @@
 {
   "name": "target-release",
   "description": "Target build, validation, smoke, and release manifest flow.",
-  "expectedFiles": [
-    "tools/target/",
-    "tools/smoke/"
+  "namedEntrypoints": [
+    {
+      "name": "executeNativeTargetBuild",
+      "file": "tools/target/native-build-execution.ts"
+    },
+    {
+      "name": "validatePlatformTargetsFile",
+      "file": "tools/target/validate-platform-targets.ts"
+    },
+    {
+      "name": "generateReleaseManifest",
+      "file": "tools/target/generate-release-manifest.ts"
+    },
+    {
+      "name": "verifyTargetArtifacts",
+      "file": "tools/smoke/verify-target-artifacts.ts"
+    }
   ],
   "tsconfig": "tsconfig.graph.json",
   "question": "What are the central target build, validation, smoke, and release manifest flows?",
@@ -17,7 +31,10 @@
     "includeTests": true,
     "limit": 60,
     "reinterpretations": [
-      "executeNativeTargetBuild"
+      "executeNativeTargetBuild",
+      "validatePlatformTargetsFile",
+      "generateReleaseManifest",
+      "verifyTargetArtifacts"
     ]
   }
 }

@@ -1,9 +1,19 @@
 {
   "name": "i18n-locale-resolution",
   "description": "Public target-aware locale resolution and injectable browser or WebView language collection.",
-  "expectedFiles": [
-    "packages/i18n/src/index.ts",
-    "packages/i18n/test/i18n-smoke.ts"
+  "namedEntrypoints": [
+    {
+      "name": "readMpgdPreferredLocales",
+      "file": "packages/i18n/src/index.ts"
+    },
+    {
+      "name": "resolveTargetMpgdLocale",
+      "file": "packages/i18n/src/index.ts"
+    },
+    {
+      "name": "normalizeMpgdLocale",
+      "file": "packages/i18n/src/index.ts"
+    }
   ],
   "tsconfig": "tsconfig.graph.json",
   "question": "How does @mpgd/i18n collect host language preferences and resolve saved, preferred, disabled, and fallback locales?",
@@ -18,13 +28,8 @@
     "limit": 20,
     "reinterpretations": [
       "readMpgdPreferredLocales",
-      "resolveMpgdLocale",
       "resolveTargetMpgdLocale",
-      "normalizeMpgdLocale",
-      "MpgdLocaleEnvironment",
-      "preferredLocales",
-      "fallbackLocale",
-      "localizedContent"
+      "normalizeMpgdLocale"
     ]
   }
 }

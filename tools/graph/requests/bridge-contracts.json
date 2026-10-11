@@ -1,9 +1,19 @@
 {
   "name": "bridge-contracts",
   "description": "Bridge protocol validators, fixtures, and Apps in Toss host parsing flow.",
-  "expectedFiles": [
-    "packages/bridge/",
-    "adapters/ait/"
+  "namedEntrypoints": [
+    {
+      "name": "assertBridgeRequest",
+      "file": "packages/bridge/src/index.ts"
+    },
+    {
+      "name": "assertBridgeResponse",
+      "file": "packages/bridge/src/index.ts"
+    },
+    {
+      "name": "parseBridgeRequest",
+      "file": "adapters/ait/src/host.ts"
+    }
   ],
   "tsconfig": "tsconfig.graph.json",
   "question": "What are the central bridge protocol validator, fixture, and Apps in Toss host parsing flows?",
@@ -19,8 +29,6 @@
     "reinterpretations": [
       "assertBridgeRequest",
       "assertBridgeResponse",
-      "BridgeRequest",
-      "BridgeResponse",
       "parseBridgeRequest"
     ]
   }

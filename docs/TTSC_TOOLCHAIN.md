@@ -113,7 +113,12 @@ as a separate change from the toolchain upgrade; do not symlink entire
 Local presets carry `{ reason, type }` in `draft`. Tours use the question plus
 `request.reinterpretations` symbol names; details and traces keep their selected
 handles. The runner preserves the outer `{ audit, next, result }` envelope and
-requires answer-ready results with the preset's expected source anchors.
+requires answer-ready results that cite each preset's `namedEntrypoints` by
+file and symbol name. It does not check which directories the ranked anchors
+land in, because that ranking drifts with unrelated code; see
+[`tools/graph/README.md`](../tools/graph/README.md) for the preset contract,
+how to add a preset, and why feature PRs must not edit presets to make
+`pnpm graph:preflight` pass.
 
 `pnpm graph:preflight` reuses one dump per cwd/tsconfig within the invocation.
 The upstream resident graph session supports incremental refreshes, but this
