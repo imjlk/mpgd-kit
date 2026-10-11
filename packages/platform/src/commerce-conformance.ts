@@ -351,7 +351,11 @@ export function createCommerceConformanceStore(
         return [];
       }
       const includePending = request.includePending ?? false;
-      return purchases.filter((purchase) => includePending || purchase.state !== 'pending');
+      // A revoked purchase is not recoverable; it reaches the runtime through the event path only.
+      return purchases.filter(
+        (purchase) =>
+          purchase.state !== 'revoked' && (includePending || purchase.state !== 'pending'),
+      );
     },
     async finishTransaction(request: FinishTransactionInput): Promise<FinishTransactionResult> {
       const by = finishOwner === 'host' ? 'host' : 'client';
@@ -420,7 +424,7 @@ export function createCommerceConformanceStore(
 }
 
 function matchesFetchProducts(
-  entry: CommerceConformanceCatalogEntry,
+  entry: { readonly logicalId: CommerceLogicalProductId; readonly kind: PurchaseKind },
   request: FetchProductsInput,
 ): boolean {
   const type = request.type ?? 'all';
@@ -489,7 +493,7 @@ export interface CommerceConformanceBackend extends CommerceConformanceBackendCl
   readonly verifyRequests: readonly CommerceVerifyRequest[];
   readonly ledger: readonly CommerceLedgerEntry[];
   queueVerify(decision: CommerceConformanceVerifyDecision): void;
-  /** Writes a server-push grant keyed by transaction id. */
+  /** Writes a server-push grant keyed by transaction id; a retry for the same transaction replays the original entry. */
   push(input: {
     readonly transactionId: string;
     readonly entryId: string;
@@ -601,7 +605,14 @@ export function createCommerceConformanceBackend(
       });
     },
     push(grant) {
-      if (findEntry(grant.entryId) !== undefined) {
+      // Keyed by store transaction id: a retried fulfillment replays the
+      // original grant, even when the retry names a different entry id.
+      const replayed = ledger.find(
+        (entry) =>
+          entry.type === 'grant'
+          && (entry.entryId === grant.entryId || entry.transactionId === grant.transactionId),
+      );
+      if (replayed !== undefined) {
         return;
       }
       ledger.push({
@@ -821,6 +832,8 @@ export function createCommerceConformanceRuntime(
   let started = false;
   let triggerPending = false;
   let running: Promise<void> | undefined;
+  /** A failure from a pass nobody awaited; the next `runUntilIdle` rethrows it. */
+  let pendingFailure: { readonly error: unknown } | undefined;
 
   const catalogEntry = (logicalId: string): CommerceConformanceCatalogEntry => {
     const entry = catalog.find((candidate) => candidate.logicalId === logicalId);
@@ -890,6 +903,8 @@ export function createCommerceConformanceRuntime(
   const listener = (event: CommerceEvent): void => {
     inbox.push(event);
     trigger();
+    // Every event starts a pass on its own; a pass already in flight picks the trigger up.
+    scheduleRun();
   };
 
   // Reconciler step 2: match a reported purchase to a journal record.
@@ -1126,21 +1141,38 @@ export function createCommerceConformanceRuntime(
 
   const runUntilIdle = async (): Promise<void> => {
     if (running !== undefined) {
-      await running;
+      try {
+        await running;
+      } catch (error) {
+        pendingFailure = undefined;
+        throw error;
+      }
       return;
     }
-    running = (async () => {
+    if (pendingFailure !== undefined) {
+      const failure = pendingFailure;
+      pendingFailure = undefined;
+      throw failure.error;
+    }
+    if (!started || !triggerPending) {
+      return;
+    }
+    const loop = (async () => {
       while (started && triggerPending) {
         triggerPending = false;
         await pass();
       }
     })();
-    try {
-      await running;
-    } finally {
+    running = loop.finally(() => {
       running = undefined;
-    }
+    });
+    await running;
   };
+  function scheduleRun(): void {
+    runUntilIdle().catch((error: unknown) => {
+      pendingFailure = { error };
+    });
+  }
 
   return {
     get started() {
@@ -1166,9 +1198,17 @@ export function createCommerceConformanceRuntime(
       await runUntilIdle();
     },
     async stop() {
+      started = false;
       unsubscribe?.();
       unsubscribe = undefined;
-      started = false;
+      // Quiesce: a pass awaiting the backend or the store finishes before state is dropped.
+      if (running !== undefined) {
+        try {
+          await running;
+        } catch (error) {
+          pendingFailure = { error };
+        }
+      }
       triggerPending = false;
       inbox.length = 0;
       records.clear();
@@ -1183,17 +1223,27 @@ export function createCommerceConformanceRuntime(
     runUntilIdle,
     async requestPurchase(request) {
       const entry = catalogEntry(request.logicalId);
-      const existing = await journal.read(request.idempotencyKey);
-      if (existing !== undefined) {
-        // A key is never regenerated on retry; the journaled attempt is the answer.
+      // A key is never regenerated on retry: the journaled attempt is the answer,
+      // and the store UI opens once per key however many calls overlap.
+      const journaled = (existing: CommerceJournalRecord): RequestPurchaseResult => {
+        if (
+          (existing.state === 'cancelled' || existing.state === 'failed')
+          && existing.error !== undefined
+        ) {
+          return { outcome: existing.state, error: existing.error };
+        }
         return {
           outcome: 'failed',
           error: new CommerceError('IN_PROGRESS', {
             message: `Idempotency key ${request.idempotencyKey} is already journaled.`,
           }).toCommerceErrorInfo(),
         };
+      };
+      const existing = await journal.read(request.idempotencyKey);
+      if (existing !== undefined) {
+        return journaled(existing);
       }
-      const { record } = await create({
+      const { created, record } = await create({
         key: request.idempotencyKey,
         playerId,
         store,
@@ -1202,6 +1252,9 @@ export function createCommerceConformanceRuntime(
         origin: 'game',
         state: 'requested',
       });
+      if (!created) {
+        return journaled(record);
+      }
       const failWith = async (error: unknown): Promise<RequestPurchaseResult> => {
         const info = commerceErrorInfoOf(error);
         await write(record, 'failed', { error: info });
@@ -1215,13 +1268,23 @@ export function createCommerceConformanceRuntime(
       if (!started) {
         await loadRecords();
       }
-      const open = (await journal.listRecoverable(playerId)).filter(
-        (candidate) =>
-          candidate.key !== record.key
-          && candidate.store === store
+      // An overlapping request for the same product that reserved its record
+      // earlier counts too: the earlier reservation reaches the store, the
+      // later one fails, so two overlapping calls never both open the UI.
+      let reservedEarlier = true;
+      const open = (await journal.listRecoverable(playerId)).filter((candidate) => {
+        if (candidate.key === record.key) {
+          reservedEarlier = false;
+          return false;
+        }
+        return (
+          candidate.store === store
           && candidate.logicalId === entry.logicalId
-          && (candidate.state === 'launched' || candidate.state === 'pending'),
-      );
+          && (candidate.state === 'launched'
+            || candidate.state === 'pending'
+            || (candidate.state === 'requested' && reservedEarlier))
+        );
+      });
       if (open.length > 0) {
         return failWith(new CommerceError('IN_PROGRESS', {
           message: `A purchase of ${entry.logicalId} is already in progress (${open[0]?.key}).`,
@@ -1239,9 +1302,20 @@ export function createCommerceConformanceRuntime(
       if (result.outcome === 'launched') {
         await write(record, 'launched');
       } else if (result.outcome === 'purchased') {
+        // A synchronous answer passes the same store and product checks as a reported purchase.
+        const purchase = result.purchase;
+        if (
+          purchase.store !== store
+          || purchase.storeSku !== entry.storeSku
+          || resolveLogicalId(purchase) !== entry.logicalId
+        ) {
+          throw new CommerceConformanceScriptError(
+            `The provider answered ${request.idempotencyKey} (${store}/${entry.logicalId}) with `
+              + `purchase ${purchase.transactionId} for ${purchase.store}/${purchase.storeSku}.`,
+          );
+        }
         // Both states are written, in order, when the store answered synchronously.
         const launched = await write(record, 'launched');
-        const purchase = result.purchase;
         if (purchase.state === 'pending') {
           await write(launched, 'pending', { purchase });
         } else if (purchase.state === 'purchased') {
@@ -1369,6 +1443,7 @@ export function createCommerceConformanceWallet(
   const subscriptions = new Map<string, WalletSubscription>();
   const subscriptionEvents: CommerceConformanceSubscriptionEvent[] = [];
   const listeners = new Set<(event: CommerceEvent) => void>();
+  const buffer = createCommerceEventBuffer();
 
   const snapshotLot = (lot: WalletLot): CreditLot => ({ ...lot });
   const toEntitlement = (entitlement: WalletEntitlement): CreditEntitlement => ({
@@ -1412,6 +1487,10 @@ export function createCommerceConformanceWallet(
       type: 'subscriptionUpdated',
       subscription: toActiveSubscription(subscription),
     };
+    if (listeners.size === 0) {
+      buffer.push(event);
+      return;
+    }
     for (const listener of listeners) {
       listener(event);
     }
@@ -1580,6 +1659,21 @@ export function createCommerceConformanceWallet(
           entitlementId: `membership:${request.subscriptionId}:0`,
         };
       }
+      // The terms are validated before any credit moves, so malformed terms never charge.
+      const startedAt = clock.now();
+      let expiresAt: string;
+      try {
+        expiresAt = addIsoDuration(startedAt, request.terms.period);
+      } catch {
+        return {
+          status: 'rejected',
+          error: {
+            code: 'ITEM_UNAVAILABLE',
+            retryable: false,
+            message: `Membership period ${request.terms.period} is not an ISO-8601 duration.`,
+          },
+        };
+      }
       const result = await spendScoped(
         {
           titleId: request.titleId,
@@ -1593,7 +1687,6 @@ export function createCommerceConformanceWallet(
       if (result.status === 'rejected') {
         return result;
       }
-      const startedAt = clock.now();
       const subscription: WalletSubscription = {
         subscriptionId: request.subscriptionId,
         titleId: request.titleId,
@@ -1601,7 +1694,7 @@ export function createCommerceConformanceWallet(
         terms: request.terms,
         periodIndex: 0,
         startedAt,
-        expiresAt: addIsoDuration(startedAt, request.terms.period),
+        expiresAt,
         state: 'active',
       };
       subscriptions.set(subscription.subscriptionId, subscription);
@@ -1659,7 +1752,11 @@ export function createCommerceConformanceWallet(
         .map(toActiveSubscription);
     },
     subscribe(listener) {
+      const first = listeners.size === 0;
       listeners.add(listener);
+      if (first) {
+        buffer.drain(listener);
+      }
       return () => {
         listeners.delete(listener);
       };
@@ -1716,11 +1813,13 @@ export interface CreateCommerceConformanceWalletProviderInput {
 }
 
 /**
- * `CommerceProvider` over the reference wallet: `fetchProducts` lists offers,
- * `requestPurchase` spends (outcome `purchased`, `settlement` set, evidence
- * adapter-settled), `getAvailablePurchases` lists unredeemed entitlements, and
- * finishing is the backend's `redeem`. Memberships exist only where the
- * billing authority is `host`.
+ * `CommerceProvider` over the reference wallet: `fetchProducts` lists the
+ * wallet's offers (catalog-derived offers only when the wallet lists none),
+ * `requestPurchase` spends the offer price times the requested quantity
+ * (outcome `purchased`, `settlement` set, evidence adapter-settled),
+ * `getAvailablePurchases` lists unredeemed entitlements, and finishing is the
+ * backend's `redeem`. Memberships exist only where the billing authority is
+ * `host`.
  */
 export function createCommerceConformanceWalletProvider(
   input: CreateCommerceConformanceWalletProviderInput,
@@ -1736,20 +1835,36 @@ export function createCommerceConformanceWalletProvider(
       purchase: { ...base.purchase, subscription: base.purchase.subscription && membershipsOffered },
     };
   };
-  const offered = (entry: CommerceConformanceCatalogEntry): boolean =>
-    entry.membership === undefined || membershipsOffered;
-  const priceOf = (entry: CommerceConformanceCatalogEntry): CreditOffer['price'] =>
-    entry.membership?.price ?? { currency: defaultCurrency, amount: 1 };
+  const toOffer = (entry: CommerceConformanceCatalogEntry): CreditOffer => ({
+    logicalId: entry.logicalId,
+    storeSku: entry.storeSku,
+    kind: entry.kind,
+    title: entry.logicalId,
+    description: `Wallet offer ${entry.storeSku}`,
+    // Fixture price for catalog entries without terms: one unit of the first wallet currency.
+    price: entry.membership?.price ?? { currency: defaultCurrency, amount: 1 },
+    ...(entry.membership === undefined ? {} : { membership: entry.membership }),
+  });
+  /** The wallet's own offers decide availability and price; the catalog fills in only when it lists none. */
+  const listOffers = async (): Promise<readonly CreditOffer[]> => {
+    const offers = await wallet.listOffers({ titleId });
+    return (offers.length === 0 ? catalog.map(toOffer) : offers).filter(
+      (offer) => offer.membership === undefined || membershipsOffered,
+    );
+  };
+  /** Quantities of purchases made through this provider, so re-listed entitlements keep them. */
+  const quantities = new Map<string, number>();
   const toPurchase = (
-    entry: CommerceConformanceCatalogEntry,
+    offer: CreditOffer,
     entitlementId: string,
     createdAt: string,
+    quantity: number,
   ): StorePurchase => ({
     store,
     transactionId: entitlementId,
-    storeSku: entry.storeSku,
-    logicalId: entry.logicalId,
-    quantity: 1,
+    storeSku: offer.storeSku,
+    logicalId: offer.logicalId,
+    quantity,
     state: 'purchased',
     purchasedAt: createdAt,
     token: entitlementId,
@@ -1768,64 +1883,80 @@ export function createCommerceConformanceWalletProvider(
       return capabilities();
     },
     async fetchProducts(request) {
-      return catalog
-        .filter((entry) => offered(entry) && matchesFetchProducts(entry, request))
-        .map((entry): StoreProduct => {
-          const price = priceOf(entry);
-          return {
-            logicalId: entry.logicalId,
-            store,
-            storeSku: entry.storeSku,
-            kind: entry.kind,
-            title: entry.logicalId,
-            description: `Wallet offer ${entry.storeSku}`,
-            price: { formatted: `${price.amount} ${price.currency}`, currencyCode: price.currency },
-          };
-        });
+      return (await listOffers())
+        .filter((offer) => matchesFetchProducts(offer, request))
+        .map((offer): StoreProduct => ({
+          logicalId: offer.logicalId,
+          store,
+          storeSku: offer.storeSku,
+          kind: offer.kind,
+          title: offer.title,
+          description: offer.description,
+          price: {
+            formatted: `${offer.price.amount} ${offer.price.currency}`,
+            currencyCode: offer.price.currency,
+          },
+        }));
     },
     async requestPurchase(request) {
-      const entry = catalog.find((candidate) => candidate.logicalId === request.logicalId);
-      if (entry === undefined) {
+      const offer = (await listOffers()).find(
+        (candidate) => candidate.logicalId === request.logicalId,
+      );
+      if (offer === undefined) {
         return unavailable(`The wallet offers no product ${request.logicalId}.`);
       }
-      if (entry.membership !== undefined) {
-        if (!membershipsOffered) {
-          return unavailable('Memberships are offered only where the billing authority is host.');
+      const quantity = request.quantity ?? 1;
+      if (quantity > 1 && !capabilities().purchase.quantity) {
+        return unavailable('The wallet does not support purchase quantities above 1.');
+      }
+      if (offer.membership !== undefined) {
+        if (quantity > 1) {
+          return unavailable('A membership is purchased one period at a time.');
         }
         const started = await wallet.startMembership({
           subscriptionId: request.idempotencyKey,
           titleId,
-          logicalId: entry.logicalId,
-          terms: entry.membership,
+          logicalId: offer.logicalId,
+          terms: offer.membership,
         });
         if (started.status === 'rejected') {
           return { outcome: 'failed', error: started.error };
         }
+        quantities.set(started.entitlementId, 1);
         return {
           outcome: 'purchased',
-          purchase: toPurchase(entry, started.entitlementId, started.subscription.startedAt),
+          purchase: toPurchase(offer, started.entitlementId, started.subscription.startedAt, 1),
         };
       }
-      const price = priceOf(entry);
       const spend = await wallet.spend({
         titleId,
-        currency: price.currency,
-        amount: price.amount * (request.quantity ?? 1),
+        currency: offer.price.currency,
+        amount: offer.price.amount * quantity,
         idempotencyKey: request.idempotencyKey,
-        logicalId: entry.logicalId,
+        logicalId: offer.logicalId,
       });
       if (spend.status === 'rejected') {
         return { outcome: 'failed', error: spend.error };
       }
-      return { outcome: 'purchased', purchase: toPurchase(entry, spend.entitlementId, clock.now()) };
+      quantities.set(spend.entitlementId, quantity);
+      return {
+        outcome: 'purchased',
+        purchase: toPurchase(offer, spend.entitlementId, clock.now(), quantity),
+      };
     },
     async getAvailablePurchases() {
+      const offers = await listOffers();
       const unredeemed = await wallet.listUnredeemed({ titleId });
       return unredeemed.flatMap((entitlement) => {
-        const entry = catalog.find((candidate) => candidate.logicalId === entitlement.logicalId);
-        return entry === undefined
+        const offer = offers.find((candidate) => candidate.logicalId === entitlement.logicalId);
+        return offer === undefined
           ? []
-          : [toPurchase(entry, entitlement.entitlementId, entitlement.createdAt)];
+          : [toPurchase(
+              offer,
+              entitlement.entitlementId,
+              entitlement.createdAt,
+              quantities.get(entitlement.entitlementId) ?? 1,
+            )];
       });
     },
     async getActiveSubscriptions() {

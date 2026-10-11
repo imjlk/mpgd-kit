@@ -26,7 +26,7 @@ import {
   assertCommerceConformanceVector,
   type CommerceConformanceVector,
 } from './commerce-vectors.js';
-import type { CreditLot } from './commerce.js';
+import type { CommerceProvider, CreditLot } from './commerce.js';
 
 const vectorsDir = join(
   import.meta.dirname,
@@ -709,5 +709,325 @@ describe('commerce conformance wallet', () => {
     expect(walletHarness.wallet).toBeDefined();
     expect(walletHarness.store).toBeUndefined();
     expect(walletHarness.provider.store).toBe('fixture.credit-wallet');
+  });
+});
+
+async function flushMicrotasks(): Promise<void> {
+  for (let index = 0; index < 8; index += 1) {
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
+}
+
+describe('commerce conformance review fixes', () => {
+  it('opens the store UI once when two requests with the same key overlap', async () => {
+    const { runtime, journal, store } = createStoreFixture();
+    await runtime.start();
+    const [first, second] = await Promise.all([
+      runtime.requestPurchase({ logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop' }),
+      runtime.requestPurchase({ logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop' }),
+    ]);
+    expect(first).toEqual({ outcome: 'launched' });
+    expect(second).toMatchObject({ outcome: 'failed', error: { code: 'IN_PROGRESS' } });
+    expect(store.purchaseUiOpened).toBe(1);
+    expect(journal.snapshot()).toEqual({ 'op-1': ['requested', 'launched'] });
+  });
+
+  it('answers a replayed key with the journaled terminal outcome', async () => {
+    const { runtime, journal, store } = createStoreFixture();
+    await runtime.start();
+    store.queueRequest({
+      outcome: 'cancelled',
+      error: { code: 'USER_CANCELLED', retryable: false, storeCode: '1' },
+    });
+    const cancelled = await runtime.requestPurchase({
+      logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop',
+    });
+    const replay = await runtime.requestPurchase({
+      logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop',
+    });
+    expect(replay).toEqual(cancelled);
+    expect(replay).toMatchObject({ outcome: 'cancelled', error: { storeCode: '1' } });
+    expect(store.purchaseUiOpened).toBe(1);
+    expect(journal.snapshot()).toEqual({ 'op-1': ['requested', 'cancelled'] });
+  });
+
+  it('serializes overlapping requests for the same product under different keys', async () => {
+    const { runtime, journal, store } = createStoreFixture();
+    await runtime.start();
+    const [first, second] = await Promise.all([
+      runtime.requestPurchase({ logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop' }),
+      runtime.requestPurchase({ logicalId: 'gems_small', idempotencyKey: 'op-2', source: 'shop' }),
+    ]);
+    expect(first).toEqual({ outcome: 'launched' });
+    expect(second).toMatchObject({ outcome: 'failed', error: { code: 'IN_PROGRESS' } });
+    expect(store.purchaseUiOpened).toBe(1);
+    expect(journal.snapshot()).toEqual({
+      'op-1': ['requested', 'launched'],
+      'op-2': ['requested', 'failed'],
+    });
+  });
+
+  it('starts a pass from a provider event without an explicit reconcile', async () => {
+    const { runtime, journal, store, backend } = createStoreFixture();
+    await runtime.start();
+    backend.queueVerify({ status: 'granted', ledgerEntryId: 'le-1' });
+    await runtime.requestPurchase({ logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop' });
+    store.complete({ transactionId: 'tx-1', storeSku: 'gems.small', token: 'token-1', state: 'purchased' });
+    await flushMicrotasks();
+    expect(journal.history('op-1')).toEqual([
+      'requested', 'launched', 'purchased', 'verifying', 'granted', 'finishing', 'finished',
+    ]);
+    expect(store.finishCalls).toHaveLength(1);
+  });
+
+  it('surfaces a failure from an event-started pass on the next runUntilIdle', async () => {
+    const { runtime, store } = createStoreFixture();
+    await runtime.start();
+    await runtime.requestPurchase({ logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop' });
+    store.complete({ transactionId: 'tx-1', storeSku: 'gems.small', token: 'token-1', state: 'purchased' });
+    await flushMicrotasks();
+    await expect(runtime.runUntilIdle()).rejects.toThrow('Unscripted verify for op-1');
+    await expect(runtime.runUntilIdle()).resolves.toBeUndefined();
+  });
+
+  it('rejects a synchronous purchase for another product as unscripted', async () => {
+    const result = await runCommerceConformanceVector(vectorNamed('purchase-client-finish'), {
+      createProvider(context): CommerceConformanceHarness {
+        const store = createCommerceConformanceStore(context);
+        const provider: CommerceProvider = {
+          ...store.provider,
+          async requestPurchase() {
+            return {
+              outcome: 'purchased',
+              purchase: fillCommerceConformancePurchase(
+                { transactionId: 'tx-9', storeSku: 'other.sku', token: 't', state: 'purchased' },
+                context,
+              ),
+            };
+          },
+        };
+        return { provider, store };
+      },
+    });
+    expect(result.passed).toBe(false);
+    expect(result.failures[0]?.path).toBe('steps[2]');
+    expect(String(result.failures[0]?.actual)).toContain('for fixture.client-token/other.sku');
+  });
+
+  it('rejects a synchronous purchase from another store as unscripted', async () => {
+    const { store, journal } = createStoreFixture();
+    const provider: CommerceProvider = {
+      ...store.provider,
+      async requestPurchase() {
+        return {
+          outcome: 'purchased',
+          purchase: {
+            ...fillCommerceConformancePurchase(
+              { transactionId: 'tx-9', storeSku: 'gems.small', token: 't', state: 'purchased' },
+              { profile: clientTokenProfile, catalog: gemsCatalog, playerId: 'player-1' },
+            ),
+            store: 'another-store',
+          },
+        };
+      },
+    };
+    const foreign = createCommerceConformanceRuntime({
+      provider, backend: createCommerceConformanceBackend(), journal, clock: createCommerceConformanceClock(),
+      catalog: gemsCatalog, playerId: 'player-1',
+    });
+    await expect(foreign.requestPurchase({ logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop' }))
+      .rejects.toThrow('for another-store/gems.small');
+    expect(journal.history('op-1')).toEqual(['requested']);
+  });
+
+  it('quiesces an in-flight pass on stop and resumes from the journal on start', async () => {
+    const { journal, store, clock } = createStoreFixture();
+    const backend = createCommerceConformanceBackend({ finalize: (request) => store.finalize?.(request) });
+    let releaseVerify: (() => void) | undefined;
+    const gated: typeof backend = {
+      ...backend,
+      get verifyRequests() {
+        return backend.verifyRequests;
+      },
+      get ledger() {
+        return backend.ledger;
+      },
+      async verifyPurchase(request) {
+        if (releaseVerify === undefined) {
+          await new Promise<void>((resolve) => {
+            releaseVerify = resolve;
+          });
+        }
+        return backend.verifyPurchase(request);
+      },
+    };
+    const runtime = createCommerceConformanceRuntime({
+      provider: store.provider, backend: gated, journal, clock, catalog: gemsCatalog, playerId: 'player-1',
+    });
+    await runtime.start();
+    backend.queueVerify({ status: 'pending' });
+    await runtime.requestPurchase({ logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop' });
+    store.complete({ transactionId: 'tx-1', storeSku: 'gems.small', token: 'token-1', state: 'purchased' });
+    await flushMicrotasks();
+    expect(journal.history('op-1')).toEqual(['requested', 'launched', 'purchased', 'verifying']);
+    const stopping = runtime.stop();
+    expect(runtime.started).toBe(false);
+    releaseVerify?.();
+    await stopping;
+    expect(journal.history('op-1')).toEqual(['requested', 'launched', 'purchased', 'verifying', 'pending']);
+    backend.queueVerify({ status: 'granted', ledgerEntryId: 'le-1' });
+    await runtime.start();
+    expect(journal.history('op-1')).toEqual([
+      'requested', 'launched', 'purchased', 'verifying', 'pending', 'verifying', 'granted',
+      'finishing', 'finished',
+    ]);
+    expect(backend.verifyRequests).toHaveLength(2);
+    expect(store.finishCalls).toHaveLength(1);
+  });
+
+  it('keeps revoked purchases out of the available list', async () => {
+    const store = createCommerceConformanceStore({ profile: clientTokenProfile, catalog: gemsCatalog, playerId: 'player-1' });
+    const received: string[] = [];
+    store.provider.subscribe((event) => {
+      received.push(event.type === 'purchaseUpdated' ? event.purchase.state : event.type);
+    });
+    store.complete({ transactionId: 'tx-1', storeSku: 'gems.small', token: 'token-1', state: 'revoked' });
+    expect(received).toEqual(['revoked']);
+    expect(await store.provider.getAvailablePurchases({ includePending: true })).toEqual([]);
+    expect(await store.provider.getAvailablePurchases()).toEqual([]);
+  });
+
+  it('replays a pushed grant for a retried fulfillment of the same transaction', () => {
+    const backend = createCommerceConformanceBackend();
+    backend.push({ transactionId: 'order-1', entryId: 'le-1', logicalId: 'gems_small' });
+    backend.push({ transactionId: 'order-1', entryId: 'le-2', logicalId: 'gems_small' });
+    expect(backend.ledger).toEqual([
+      { entryId: 'le-1', type: 'grant', logicalId: 'gems_small', store: 'server-push', transactionId: 'order-1', pushed: true },
+    ]);
+    expect(backend.entitlements()).toEqual([{ id: 'le-1', logicalId: 'gems_small' }]);
+    backend.push({ transactionId: 'order-2', entryId: 'le-2', logicalId: 'gems_small' });
+    expect(backend.ledger).toHaveLength(2);
+  });
+
+  it('carries the requested quantity into the wallet purchase and debit', async () => {
+    const clock = createCommerceConformanceClock();
+    const catalog = [{ logicalId: 'booster', kind: 'consumable' as const, storeSku: 'booster.1' }];
+    const build = (quantity: boolean) => {
+      const wallet = createCommerceConformanceWallet({ store: 'fixture.credit-wallet', clock, currencies: ['credits'] });
+      wallet.creditFromGrant({
+        ledgerEntryId: 'le-1', currency: 'credits', amount: 10,
+        origin: { channel: 'off-store', store: 'fixture.web-checkout', titleId: 'title-a' },
+        createdAt: '2026-10-01T00:00:00Z',
+      });
+      const provider = createCommerceConformanceWalletProvider({
+        wallet,
+        profile: {
+          store: 'fixture.credit-wallet',
+          purchase: { consumable: true, durable: true, subscription: false, quantity },
+        },
+        catalog, currencies: ['credits'], billingAuthority: 'host', titleId: 'title-a', clock,
+      });
+      return { wallet, provider };
+    };
+    const capable = build(true);
+    const purchased = await capable.provider.requestPurchase({
+      logicalId: 'booster', idempotencyKey: 'op-1', source: 'shop', quantity: 3,
+    });
+    expect(purchased).toMatchObject({ outcome: 'purchased', purchase: { quantity: 3 } });
+    expect(capable.wallet.debits).toEqual([{ idempotencyKey: 'op-1', lotId: 'le-1', amount: 3 }]);
+    expect(await capable.provider.getAvailablePurchases()).toMatchObject([{ quantity: 3 }]);
+    const limited = build(false);
+    expect(await limited.provider.requestPurchase({
+      logicalId: 'booster', idempotencyKey: 'op-1', source: 'shop', quantity: 2,
+    })).toMatchObject({ outcome: 'failed', error: { code: 'ITEM_UNAVAILABLE' } });
+    expect(limited.wallet.debits).toEqual([]);
+  });
+
+  it('lists and prices products from the wallet offers when the wallet declares them', async () => {
+    const clock = createCommerceConformanceClock();
+    const catalog = [
+      { logicalId: 'booster', kind: 'consumable' as const, storeSku: 'booster.1' },
+      { logicalId: 'hidden', kind: 'consumable' as const, storeSku: 'hidden.1' },
+    ];
+    const wallet = createCommerceConformanceWallet({
+      store: 'fixture.credit-wallet',
+      clock,
+      currencies: ['credits'],
+      offers: [{
+        logicalId: 'booster', storeSku: 'booster.1', kind: 'consumable',
+        title: 'Booster', description: 'Five credits', price: { currency: 'credits', amount: 5 },
+      }],
+    });
+    wallet.creditFromGrant({
+      ledgerEntryId: 'le-1', currency: 'credits', amount: 12,
+      origin: { channel: 'off-store', store: 'fixture.web-checkout', titleId: 'title-a' },
+      createdAt: '2026-10-01T00:00:00Z',
+    });
+    const provider = createCommerceConformanceWalletProvider({
+      wallet, profile: { store: 'fixture.credit-wallet' }, catalog, currencies: ['credits'],
+      billingAuthority: 'host', titleId: 'title-a', clock,
+    });
+    expect(await provider.fetchProducts({ type: 'all' })).toEqual([{
+      logicalId: 'booster', store: 'fixture.credit-wallet', storeSku: 'booster.1', kind: 'consumable',
+      title: 'Booster', description: 'Five credits',
+      price: { formatted: '5 credits', currencyCode: 'credits' },
+    }]);
+    expect(await provider.requestPurchase({ logicalId: 'booster', idempotencyKey: 'op-1', source: 'shop' }))
+      .toMatchObject({ outcome: 'purchased' });
+    expect(wallet.debits).toEqual([{ idempotencyKey: 'op-1', lotId: 'le-1', amount: 5 }]);
+    expect(await provider.requestPurchase({ logicalId: 'hidden', idempotencyKey: 'op-2', source: 'shop' }))
+      .toMatchObject({ outcome: 'failed', error: { code: 'ITEM_UNAVAILABLE' } });
+    expect(wallet.debits).toHaveLength(1);
+  });
+
+  it('rejects a membership with a malformed period before any debit', async () => {
+    const clock = createCommerceConformanceClock();
+    const wallet = createCommerceConformanceWallet({ store: 'fixture.credit-wallet', clock, currencies: ['credits'] });
+    wallet.creditFromGrant({
+      ledgerEntryId: 'le-1', currency: 'credits', amount: 100,
+      origin: { channel: 'off-store', store: 'fixture.web-checkout', titleId: 'title-a' },
+      createdAt: '2026-10-01T00:00:00Z',
+    });
+    const rejected = await wallet.startMembership({
+      subscriptionId: 'op-1', titleId: 'title-a', logicalId: 'membership_plus',
+      terms: { scope: 'title', price: { currency: 'credits', amount: 30 }, period: 'thirty days' },
+    });
+    expect(rejected).toMatchObject({ status: 'rejected', error: { code: 'ITEM_UNAVAILABLE', retryable: false } });
+    expect(wallet.debits).toEqual([]);
+    expect(wallet.entitlements).toEqual([]);
+    expect(wallet.subscriptionEvents).toEqual([]);
+    expect(await wallet.getActiveSubscriptions()).toEqual([]);
+    expect(await wallet.getBalance({ titleId: 'title-a' })).toEqual({ titleId: 'title-a', balances: { credits: 100 } });
+  });
+
+  it('buffers subscription events until the first wallet subscriber', async () => {
+    const clock = createCommerceConformanceClock('2026-10-01T00:00:00Z');
+    const wallet = createCommerceConformanceWallet({ store: 'fixture.credit-wallet', clock, currencies: ['credits'] });
+    wallet.creditFromGrant({
+      ledgerEntryId: 'le-1', currency: 'credits', amount: 10,
+      origin: { channel: 'off-store', store: 'fixture.web-checkout', titleId: 'title-a' },
+      createdAt: '2026-10-01T00:00:00Z',
+    });
+    await wallet.startMembership({
+      subscriptionId: 'op-1', titleId: 'title-a', logicalId: 'membership_plus',
+      terms: { scope: 'platform', price: { currency: 'credits', amount: 10 }, period: 'P30D' },
+    });
+    clock.set('2026-10-31T00:00:00Z');
+    await wallet.renewDue();
+    expect(await wallet.getActiveSubscriptions()).toEqual([]);
+    const received: string[] = [];
+    wallet.subscribe((event) => {
+      if (event.type === 'subscriptionUpdated') {
+        received.push(`${event.subscription.state}:${event.subscription.periodIndex}`);
+      }
+    });
+    expect(received).toEqual(['active:0', 'lapsed:0']);
+    const late: string[] = [];
+    wallet.subscribe((event) => {
+      late.push(event.type);
+    });
+    expect(late).toEqual([]);
   });
 });
