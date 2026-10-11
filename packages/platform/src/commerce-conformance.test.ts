@@ -4,7 +4,10 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  adaptDerivedPurchaseKey,
+  adaptDerivedPurchaseKeyStore,
   addIsoDuration,
+  commerceConformanceAdaptiveSkipReason,
   compareCreditLotSpendOrder,
   createCommerceConformanceBackend,
   createCommerceConformanceCapabilities,
@@ -15,18 +18,31 @@ import {
   createCommerceConformanceStore,
   createCommerceConformanceWallet,
   createCommerceConformanceWalletProvider,
+  deriveAdaptiveCommerceConformanceExpectation,
   fillCommerceConformancePurchase,
+  isAdaptiveCommerceConformanceVector,
   matchPartial,
   runCommerceConformanceVector,
   runCommerceConformanceVectors,
+  type CommerceConformanceAdaptation,
+  type CommerceConformanceContext,
   type CommerceConformanceFailure,
   type CommerceConformanceHarness,
+  type CommerceConformanceStoreActor,
+  type CommerceConformanceVectorResult,
 } from './commerce-conformance.js';
 import {
   assertCommerceConformanceVector,
+  type CommerceConformanceProfile,
   type CommerceConformanceVector,
 } from './commerce-vectors.js';
-import type { CommerceProvider, CreditLot } from './commerce.js';
+import {
+  createDerivedPurchaseIdempotencyKey,
+  type CommerceFinishOwner,
+  type CommerceProvider,
+  type CreditLot,
+  type GetAvailablePurchasesInput,
+} from './commerce.js';
 
 const vectorsDir = join(
   import.meta.dirname,
@@ -1029,5 +1045,996 @@ describe('commerce conformance review fixes', () => {
       late.push(event.type);
     });
     expect(late).toEqual([]);
+  });
+});
+
+// Adaptive vectors: expectations derived from the provider's declared capabilities.
+
+const adaptiveVectors = vectors.filter(isAdaptiveCommerceConformanceVector);
+
+type OwnerProfile = Required<Pick<CommerceConformanceProfile, 'lifecycle' | 'authority'>>;
+
+/** Capability sets a real store provider declares, one per finish owner. */
+const ownerProfiles: Readonly<Record<CommerceFinishOwner, OwnerProfile>> = {
+  client: {
+    lifecycle: {
+      availablePurchases: true,
+      pending: true,
+      restore: true,
+      events: true,
+      finish: 'client',
+    },
+    authority: { evidence: 'client-token', accountBinding: 'optional' },
+  },
+  host: {
+    lifecycle: {
+      availablePurchases: true,
+      pending: true,
+      restore: true,
+      events: true,
+      finish: 'host',
+    },
+    authority: { evidence: 'host-callback', accountBinding: 'host' },
+  },
+  server: {
+    lifecycle: {
+      availablePurchases: true,
+      pending: true,
+      restore: false,
+      events: true,
+      finish: 'server',
+    },
+    authority: { evidence: 'client-token', accountBinding: 'required' },
+  },
+  none: {
+    lifecycle: {
+      availablePurchases: false,
+      pending: true,
+      restore: false,
+      events: true,
+      finish: 'none',
+    },
+    authority: { evidence: 'server-push', accountBinding: 'host' },
+  },
+};
+
+/** The fake store as a caller-supplied provider with its own store id and capabilities. */
+function fakeProviderWith(
+  overrides: Partial<CommerceConformanceProfile>,
+  store = 'test.store',
+): (context: CommerceConformanceContext) => CommerceConformanceHarness {
+  return (context) => {
+    const fake = createCommerceConformanceStore({
+      ...context,
+      profile: { ...context.profile, store, ...overrides },
+    });
+    return { provider: fake.provider, store: fake };
+  };
+}
+
+function summarize(results: readonly CommerceConformanceVectorResult[]) {
+  return results.map((result) => ({
+    vector: result.vector,
+    status: result.status,
+    ...(result.reason === undefined ? {} : { reason: result.reason }),
+    ...(result.failures.length === 0 ? {} : { failures: result.failures }),
+  }));
+}
+
+function adaptiveResult(
+  results: readonly CommerceConformanceVectorResult[],
+  name: string,
+): CommerceConformanceAdaptation {
+  const result = results.find((candidate) => candidate.vector === name);
+  if (result?.adaptive === undefined) {
+    throw new Error(`${name} did not run adaptively: ${JSON.stringify(result)}`);
+  }
+  return result.adaptive;
+}
+
+const pendingJournal = ['requested', 'launched', 'pending', 'purchased', 'verifying', 'granted'];
+const verifyOp1 = {
+  idempotencyKey: 'op-1',
+  store: 'test.store',
+  transactionId: 'tx-1',
+  token: 'token-1',
+};
+
+describe('commerce conformance adaptive vectors', () => {
+  it('flags the nine owner-independent lifecycle vectors', () => {
+    expect(adaptiveVectors.map((vector) => vector.vector)).toEqual([
+      'cancelled-and-failed',
+      'event-before-listener',
+      'finish-failure-retry',
+      'purchase-client-finish',
+      'purchase-host-finish',
+      'purchase-pending-then-purchased',
+      'purchase-server-finish',
+      'restart-before-verify',
+      'revoked-after-grant',
+    ]);
+  });
+
+  it('ignores the flag on the reference harness', async () => {
+    const results = await runCommerceConformanceVectors(adaptiveVectors);
+    expect(summarize(results)).toEqual(
+      adaptiveVectors.map((vector) => ({ vector: vector.vector, status: 'passed' })),
+    );
+    expect(results.every((result) => result.passed && result.adaptive === undefined)).toBe(true);
+  });
+
+  it("runs the client-finish set against a provider declaring finish: 'client'", async () => {
+    const results = await runCommerceConformanceVectors(adaptiveVectors, {
+      createProvider: fakeProviderWith(ownerProfiles.client),
+    });
+    expect(summarize(results)).toEqual([
+      { vector: 'cancelled-and-failed', status: 'passed' },
+      { vector: 'event-before-listener', status: 'passed' },
+      { vector: 'finish-failure-retry', status: 'passed' },
+      { vector: 'purchase-client-finish', status: 'passed' },
+      {
+        vector: 'purchase-host-finish',
+        status: 'skipped',
+        reason: "duplicate of purchase-client-finish for finish='client'",
+      },
+      { vector: 'purchase-pending-then-purchased', status: 'passed' },
+      {
+        vector: 'purchase-server-finish',
+        status: 'skipped',
+        reason: "duplicate of purchase-client-finish for finish='client'",
+      },
+      { vector: 'restart-before-verify', status: 'passed' },
+      { vector: 'revoked-after-grant', status: 'passed' },
+    ]);
+    const adaptive = adaptiveResult(results, 'purchase-pending-then-purchased');
+    expect(adaptive.finish).toBe('client');
+    expect(adaptive.evidence).toBe('client-token');
+    expect(adaptive.store).toBe('test.store');
+    expect(adaptive.expect.journal).toEqual({ 'op-1': [...pendingJournal, 'finishing', 'finished'] });
+    expect(adaptive.expect.finishCalls).toEqual([
+      { by: 'client', transactionId: 'tx-1', ledgerEntryId: 'le-1', isConsumable: true, result: 'finished' },
+    ]);
+    expect(adaptive.expect.verifyRequests).toEqual([verifyOp1]);
+    expect(adaptive.expect.available).toEqual([]);
+    // Owner-independent fields keep the fixture's expectation.
+    expect(adaptive.expect.ledger).toEqual(vectorNamed('purchase-pending-then-purchased').expect.ledger);
+    expect(adaptiveResult(results, 'finish-failure-retry').expect.finishCalls?.map((call) => call.result))
+      .toEqual(['NETWORK', 'finished']);
+  });
+
+  it("runs the host-finish set against a provider declaring finish: 'host'", async () => {
+    const results = await runCommerceConformanceVectors(adaptiveVectors, {
+      createProvider: fakeProviderWith(ownerProfiles.host),
+    });
+    expect(summarize(results).filter((result) => result.status !== 'passed')).toEqual([
+      {
+        vector: 'purchase-client-finish',
+        status: 'skipped',
+        reason: "duplicate of purchase-host-finish for finish='host'",
+      },
+      {
+        vector: 'purchase-server-finish',
+        status: 'skipped',
+        reason: "duplicate of purchase-host-finish for finish='host'",
+      },
+    ]);
+    const adaptive = adaptiveResult(results, 'purchase-pending-then-purchased');
+    expect(adaptive.finish).toBe('host');
+    expect(adaptive.evidence).toBe('host-callback');
+    expect(adaptive.expect.journal).toEqual({ 'op-1': [...pendingJournal, 'finishing', 'finished'] });
+    expect(adaptive.expect.finishCalls).toEqual([
+      { by: 'host', transactionId: 'tx-1', ledgerEntryId: 'le-1', isConsumable: true, result: 'finished' },
+    ]);
+    expect(adaptive.expect.verifyRequests).toEqual([verifyOp1]);
+    expect(adaptive.expect.available).toEqual([]);
+  });
+
+  it("runs the server-finish set against a provider declaring finish: 'server'", async () => {
+    const results = await runCommerceConformanceVectors(adaptiveVectors, {
+      createProvider: fakeProviderWith(ownerProfiles.server),
+    });
+    expect(summarize(results).filter((result) => result.status !== 'passed')).toEqual([
+      {
+        vector: 'finish-failure-retry',
+        status: 'skipped',
+        reason: "queueFinish scripts a client finish; the provider declares finish: 'server'",
+      },
+      {
+        vector: 'purchase-client-finish',
+        status: 'skipped',
+        reason: "duplicate of purchase-server-finish for finish='server'",
+      },
+      {
+        vector: 'purchase-host-finish',
+        status: 'skipped',
+        reason: "duplicate of purchase-server-finish for finish='server'",
+      },
+    ]);
+    const adaptive = adaptiveResult(results, 'purchase-pending-then-purchased');
+    expect(adaptive.finish).toBe('server');
+    expect(adaptive.expect.journal).toEqual({ 'op-1': [...pendingJournal, 'finishing', 'finished'] });
+    expect(adaptive.expect.finishCalls).toEqual([]);
+    // The grant reported no finalization, so the reconciler re-read it once.
+    expect(adaptive.expect.verifyRequests).toEqual([verifyOp1, verifyOp1]);
+    expect(adaptive.expect.available).toEqual([]);
+    // A vector written for a server fixture scripts its own finalization.
+    expect(adaptiveResult(results, 'purchase-server-finish').expect.verifyRequests).toHaveLength(2);
+    expect(adaptiveResult(results, 'revoked-after-grant').expect.journal).toEqual({
+      'op-1': [
+        'requested', 'launched', 'purchased', 'verifying', 'granted', 'finishing', 'finished', 'revoked',
+      ],
+    });
+  });
+
+  it('re-reads finalization only when the grant did not already report it completed', async () => {
+    const vector = vectorNamed('purchase-client-finish');
+    const completed: CommerceConformanceVector = {
+      ...vector,
+      steps: vector.steps.map((step) =>
+        step.actor === 'backend' && step.action === 'queueVerify'
+          ? { ...step, decision: { ...step.decision, finalization: 'completed' as const } }
+          : step),
+    };
+    const [result] = await runCommerceConformanceVectors([completed], {
+      createProvider: fakeProviderWith(ownerProfiles.server),
+    });
+    expect(result?.failures).toEqual([]);
+    expect(result?.status).toBe('passed');
+    expect(result?.adaptive?.expect.verifyRequests).toEqual([verifyOp1]);
+  });
+
+  it("runs the no-finish set against a provider declaring finish: 'none'", async () => {
+    const results = await runCommerceConformanceVectors(adaptiveVectors, {
+      createProvider: fakeProviderWith(ownerProfiles.none),
+    });
+    expect(summarize(results).filter((result) => result.status !== 'passed')).toEqual([
+      {
+        vector: 'finish-failure-retry',
+        status: 'skipped',
+        reason: "queueFinish scripts a client finish; the provider declares finish: 'none'",
+      },
+      {
+        vector: 'purchase-host-finish',
+        status: 'skipped',
+        reason: "duplicate of purchase-client-finish for finish='none'",
+      },
+      {
+        vector: 'purchase-server-finish',
+        status: 'skipped',
+        reason: "duplicate of purchase-client-finish for finish='none'",
+      },
+    ]);
+    const adaptive = adaptiveResult(results, 'purchase-pending-then-purchased');
+    expect(adaptive.finish).toBe('none');
+    expect(adaptive.evidence).toBe('server-push');
+    expect(adaptive.expect.journal).toEqual({ 'op-1': [...pendingJournal, 'finished'] });
+    expect(adaptive.expect.finishCalls).toEqual([]);
+    expect(adaptive.expect.verifyRequests).toEqual([verifyOp1]);
+    expect(adaptive.expect.available).toEqual([]);
+  });
+
+  it('skips store-side pending scenarios the provider does not declare', async () => {
+    const results = await runCommerceConformanceVectors(adaptiveVectors, {
+      createProvider: fakeProviderWith({
+        ...ownerProfiles.client,
+        lifecycle: { ...ownerProfiles.client.lifecycle, pending: false },
+      }),
+    });
+    expect(summarize(results).filter((result) => result.status === 'skipped')).toEqual([
+      {
+        vector: 'purchase-host-finish',
+        status: 'skipped',
+        reason: "duplicate of purchase-client-finish for finish='client'",
+      },
+      {
+        vector: 'purchase-pending-then-purchased',
+        status: 'skipped',
+        reason: 'store-side pending purchase needs lifecycle.pending; the provider declares pending: false',
+      },
+      {
+        vector: 'purchase-server-finish',
+        status: 'skipped',
+        reason: "duplicate of purchase-client-finish for finish='client'",
+      },
+    ]);
+    const skipped = results.filter((result) => result.status === 'skipped');
+    expect(skipped.every((result) => !result.passed && result.failures.length === 0)).toBe(true);
+  });
+
+  it('dedupes the purchase-finish family only within one run', async () => {
+    const [alone] = await runCommerceConformanceVectors([vectorNamed('purchase-server-finish')], {
+      createProvider: fakeProviderWith(ownerProfiles.client),
+    });
+    expect(alone?.failures).toEqual([]);
+    expect(alone?.status).toBe('passed');
+    expect(alone?.adaptive?.expect.finishCalls).toHaveLength(1);
+    const single = await runCommerceConformanceVector(vectorNamed('purchase-host-finish'), {
+      createProvider: fakeProviderWith(ownerProfiles.server),
+    });
+    expect(single.status).toBe('passed');
+    expect(single.adaptive?.expect.finishCalls).toEqual([]);
+  });
+
+  it('names the skip reasons without running anything', () => {
+    const capabilities = createCommerceConformanceCapabilities({ store: 'x', ...ownerProfiles.server });
+    expect(commerceConformanceAdaptiveSkipReason(vectorNamed('finish-failure-retry'), capabilities))
+      .toBe("queueFinish scripts a client finish; the provider declares finish: 'server'");
+    expect(commerceConformanceAdaptiveSkipReason(vectorNamed('purchase-client-finish'), capabilities))
+      .toBeUndefined();
+    expect(commerceConformanceAdaptiveSkipReason(
+      vectorNamed('purchase-client-finish'),
+      capabilities,
+      adaptiveVectors,
+    )).toBe("duplicate of purchase-server-finish for finish='server'");
+    expect(commerceConformanceAdaptiveSkipReason(
+      vectorNamed('purchase-server-finish'),
+      capabilities,
+      adaptiveVectors,
+    )).toBeUndefined();
+  });
+
+  it('carries the provider store id into derived keys and verify requests', async () => {
+    const [result] = await runCommerceConformanceVectors([vectorNamed('event-before-listener')], {
+      createProvider: fakeProviderWith(ownerProfiles.client, 'app-store'),
+    });
+    expect(result?.failures).toEqual([]);
+    expect(result?.adaptive?.store).toBe('app-store');
+    expect(Object.keys(result?.adaptive?.expect.journal ?? {})).toEqual(['store:app-store:tx-1']);
+    expect(result?.adaptive?.expect.verifyRequests?.[0]?.store).toBe('app-store');
+  });
+
+  it('runs a non-adaptive vector with its fixture expectations unchanged', async () => {
+    const vector = vectorNamed('server-push-settlement');
+    const [result] = await runCommerceConformanceVectors([vector], {
+      createProvider(context) {
+        const fake = createCommerceConformanceStore(context);
+        return { provider: fake.provider, store: fake };
+      },
+    });
+    expect(result).toEqual({ vector: vector.vector, status: 'passed', passed: true, failures: [] });
+    const [mismatched] = await runCommerceConformanceVectors([vector], {
+      createProvider: fakeProviderWith(ownerProfiles.client, vector.profile.store),
+    });
+    expect(mismatched?.status).toBe('failed');
+    expect(mismatched?.adaptive).toBeUndefined();
+  });
+
+  it("fails a provider that declares finish: 'server' but finishes on the client", async () => {
+    const [result] = await runCommerceConformanceVectors([vectorNamed('purchase-client-finish')], {
+      createProvider(context) {
+        const fake = createCommerceConformanceStore({
+          ...context,
+          profile: { ...context.profile, store: 'test.store', ...ownerProfiles.server },
+        });
+        // The SDK finishes every purchase it reports, behind the reconciler's back.
+        const actor: CommerceConformanceStoreActor = {
+          ...fake,
+          get purchaseUiOpened() {
+            return fake.purchaseUiOpened;
+          },
+          get finishCalls() {
+            return fake.finishCalls;
+          },
+          complete(purchase) {
+            fake.complete(purchase);
+            void fake.provider.finishTransaction?.({
+              transactionId: purchase.transactionId,
+              ledgerEntryId: 'sdk-self-finish',
+              isConsumable: true,
+            });
+          },
+        };
+        return { provider: fake.provider, store: actor };
+      },
+    });
+    expect(result?.status).toBe('failed');
+    expect(result?.failures).toEqual([{ path: 'finishCalls.length', expected: 0, actual: 1 }]);
+  });
+
+  it("fails a provider that declares finish: 'client' but never finishes", async () => {
+    const [result] = await runCommerceConformanceVectors([vectorNamed('purchase-client-finish')], {
+      createProvider(context) {
+        const fake = createCommerceConformanceStore({
+          ...context,
+          profile: { ...context.profile, store: 'test.store', ...ownerProfiles.client },
+        });
+        const provider: CommerceProvider = {
+          ...fake.provider,
+          async finishTransaction() {
+            return { finished: false };
+          },
+        };
+        return { provider, store: fake };
+      },
+    });
+    expect(result?.status).toBe('failed');
+    expect(result?.failures).toEqual([
+      { path: 'journal.op-1.length', expected: 7, actual: 6 },
+      { path: 'finishCalls.length', expected: 1, actual: 0 },
+      { path: 'available.length', expected: 0, actual: 1 },
+    ]);
+  });
+
+  it("fails a provider that declares finish: 'server' but whose store is never finalized", async () => {
+    const [result] = await runCommerceConformanceVectors([vectorNamed('purchase-client-finish')], {
+      createProvider(context) {
+        const fake = createCommerceConformanceStore({
+          ...context,
+          profile: { ...context.profile, store: 'test.store', ...ownerProfiles.server },
+        });
+        const actor: CommerceConformanceStoreActor = {
+          get purchaseUiOpened() {
+            return fake.purchaseUiOpened;
+          },
+          get finishCalls() {
+            return fake.finishCalls;
+          },
+          complete: (purchase) => fake.complete(purchase),
+          update: (purchase) => fake.update(purchase),
+          error: (event) => fake.error(event),
+          queueRequest: (result) => fake.queueRequest(result),
+          queueFinish: (result) => fake.queueFinish(result),
+          // No finalize: the backend's finalizer never consumes the purchase.
+        };
+        return { provider: fake.provider, store: actor };
+      },
+    });
+    expect(result?.status).toBe('failed');
+    expect(result?.failures).toEqual([{ path: 'available.length', expected: 0, actual: 1 }]);
+  });
+
+  it('refuses a derivation whose reference run does not reach the fixture terminal state', async () => {
+    const vector = vectorNamed('purchase-client-finish');
+    const derived = await deriveAdaptiveCommerceConformanceExpectation(vector, {
+      store: 'test.store',
+      journal: { 'op-1': ['requested', 'launched'] },
+      verifyRequests: [],
+      finishCalls: [],
+      available: [],
+    });
+    expect(derived.reason).toBe(
+      "the reference run under the provider capabilities ends op-1 in 'launched', not 'finished'",
+    );
+    const extra = await deriveAdaptiveCommerceConformanceExpectation(vector, {
+      store: 'test.store',
+      journal: { 'op-1': ['requested', 'finished'], 'op-2': ['requested'] },
+      verifyRequests: [],
+      finishCalls: [],
+      available: [],
+    });
+    expect(extra.reason).toBe(
+      'the reference run under the provider capabilities journals op-2, which the vector does not expect',
+    );
+  });
+
+  it('reports a provider whose capabilities cannot be read', async () => {
+    const [result] = await runCommerceConformanceVectors([vectorNamed('purchase-client-finish')], {
+      createProvider(context) {
+        const fake = createCommerceConformanceStore(context);
+        return {
+          provider: {
+            ...fake.provider,
+            async getCapabilities() {
+              throw new Error('capabilities unavailable');
+            },
+          },
+          store: fake,
+        };
+      },
+    });
+    expect(result?.status).toBe('failed');
+    expect(result?.failures).toEqual([{
+      path: 'capabilities',
+      expected: 'provider.getCapabilities() resolves',
+      actual: 'Error: capabilities unavailable',
+    }]);
+  });
+});
+
+describe('commerce conformance adaptive derived keys', () => {
+  it('rewrites only the store segment of a derived key, never the transaction id', async () => {
+    const vector = vectorNamed('event-before-listener');
+    const fixtureStore = vector.profile.store;
+    // A transaction id that happens to contain the fixture store id.
+    const transactionId = `tx-${fixtureStore}-1`;
+    const fixtureKey = `store:${encodeURIComponent(fixtureStore)}:${encodeURIComponent(transactionId)}`;
+    const tricky: CommerceConformanceVector = {
+      ...vector,
+      steps: vector.steps.map((step) =>
+        step.actor === 'store' && step.action === 'complete'
+          ? { ...step, purchase: { ...step.purchase, transactionId } }
+          : step),
+      expect: {
+        ...vector.expect,
+        journal: { [fixtureKey]: vector.expect.journal?.[`store:${fixtureStore}:tx-1`] ?? [] },
+        verifyRequests: (vector.expect.verifyRequests ?? []).map((request) => ({
+          ...request,
+          idempotencyKey: fixtureKey,
+          transactionId,
+        })),
+        finishCalls: (vector.expect.finishCalls ?? []).map((call) => ({ ...call, transactionId })),
+      },
+    };
+    expect((await runCommerceConformanceVector(tricky)).failures).toEqual([]);
+    const [result] = await runCommerceConformanceVectors([tricky], {
+      createProvider: fakeProviderWith(ownerProfiles.client, 'app-store'),
+    });
+    expect(result?.failures).toEqual([]);
+    expect(result?.status).toBe('passed');
+    expect(Object.keys(result?.adaptive?.expect.journal ?? {})).toEqual([
+      `store:app-store:${encodeURIComponent(transactionId)}`,
+    ]);
+    expect(result?.adaptive?.expect.verifyRequests?.[0]?.transactionId).toBe(transactionId);
+  });
+
+  it('keeps a derived key that does not carry the fixture store prefix', async () => {
+    const vector = vectorNamed('event-before-listener');
+    const derived = await deriveAdaptiveCommerceConformanceExpectation(
+      { ...vector, expect: { journal: { 'apps-in-toss:purchase:tx-1': ['purchased', 'finished'] } } },
+      {
+        store: 'app-store',
+        journal: { 'apps-in-toss:purchase:tx-1': ['purchased', 'finished'] },
+        verifyRequests: [],
+        finishCalls: [],
+        available: [],
+      },
+    );
+    expect(derived.reason).toBeUndefined();
+    expect(Object.keys(derived.expect?.journal ?? {})).toEqual(['apps-in-toss:purchase:tx-1']);
+  });
+});
+
+describe('commerce conformance adaptive review follow-ups', () => {
+  it('keeps a game key that starts with the fixture store id', async () => {
+    // With a global substitution a fixture store `op` would rewrite the game key `op-1`.
+    const vector = vectorNamed('purchase-client-finish');
+    const opStore: CommerceConformanceVector = {
+      ...vector,
+      profile: { ...vector.profile, store: 'op' },
+      expect: {
+        ...vector.expect,
+        verifyRequests: (vector.expect.verifyRequests ?? []).map((request) => ({
+          ...request,
+          store: 'op',
+        })),
+      },
+    };
+    expect((await runCommerceConformanceVector(opStore)).failures).toEqual([]);
+    const [result] = await runCommerceConformanceVectors([opStore], {
+      createProvider: fakeProviderWith(ownerProfiles.client, 'app-store'),
+    });
+    expect(result?.failures).toEqual([]);
+    expect(result?.status).toBe('passed');
+    expect(Object.keys(result?.adaptive?.expect.journal ?? {})).toEqual(['op-1']);
+    expect(adaptDerivedPurchaseKeyStore('op-1', 'op', 'app-store')).toBe('op-1');
+    expect(adaptDerivedPurchaseKeyStore('store:op:op-1', 'op', 'app-store'))
+      .toBe('store:app-store:op-1');
+  });
+
+  it('polls an event-less provider and skips completions nothing would poll', async () => {
+    const eventless = fakeProviderWith({
+      ...ownerProfiles.client,
+      lifecycle: { ...ownerProfiles.client.lifecycle, events: false },
+    });
+    const results = await runCommerceConformanceVectors(adaptiveVectors, {
+      createProvider: eventless,
+    });
+    const unpolled = (index: number, action: string): string =>
+      `store.${action} at steps[${String(index)}] needs lifecycle.events; the provider declares `
+      + 'events: false and no reconcile or start follows it to poll the purchase';
+    const intervened = (index: number, step: string, at: number): string =>
+      `store.complete at steps[${String(index)}] needs lifecycle.events; the provider declares `
+      + `events: false and ${step} at steps[${String(at)}] runs before the reconcile or start that `
+      + 'would poll the purchase';
+    expect(summarize(results)).toEqual([
+      {
+        vector: 'cancelled-and-failed',
+        status: 'skipped',
+        reason: 'purchaseError event needs lifecycle.events; the provider declares events: false',
+      },
+      { vector: 'event-before-listener', status: 'passed' },
+      {
+        vector: 'finish-failure-retry',
+        status: 'skipped',
+        reason: intervened(4, 'store.queueFinish', 5),
+      },
+      { vector: 'purchase-client-finish', status: 'skipped', reason: unpolled(3, 'complete') },
+      { vector: 'purchase-host-finish', status: 'skipped', reason: unpolled(3, 'complete') },
+      { vector: 'purchase-pending-then-purchased', status: 'skipped', reason: unpolled(5, 'update') },
+      // The member named after the owner cannot be polled, so the runnable
+      // member of the family is the canonical one here.
+      { vector: 'purchase-server-finish', status: 'passed' },
+      { vector: 'restart-before-verify', status: 'passed' },
+      {
+        vector: 'revoked-after-grant',
+        status: 'skipped',
+        reason: intervened(3, 'backend.revoke', 4),
+      },
+    ]);
+    // The passing vectors were really driven by polling: the reference store
+    // emitted nothing, and the journal still reached finished once per key.
+    const restarted = adaptiveResult(results, 'restart-before-verify');
+    expect(restarted.expect.journal).toEqual({
+      'op-1': ['requested', 'launched', 'purchased', 'verifying', 'granted', 'finishing', 'finished'],
+    });
+    expect(restarted.expect.verifyRequests).toHaveLength(1);
+    expect(restarted.expect.purchaseUiOpened).toBe(1);
+    // A completion followed by a reconcile runs even though the vector was
+    // written for an event-driven store.
+    const vector = vectorNamed('purchase-client-finish');
+    const reconciled: CommerceConformanceVector = {
+      ...vector,
+      steps: [...vector.steps, { actor: 'runtime', action: 'reconcile' }],
+    };
+    const [result] = await runCommerceConformanceVectors([reconciled], { createProvider: eventless });
+    expect(result?.failures).toEqual([]);
+    expect(result?.status).toBe('passed');
+  });
+
+  it('keeps the event-less fake store silent and the reconciler polling it', async () => {
+    const { store, runtime, backend, journal } = createStoreFixture({
+      ...clientTokenProfile,
+      lifecycle: { availablePurchases: true, pending: false, restore: true, events: false, finish: 'client' },
+    });
+    const seen: string[] = [];
+    store.provider.subscribe((event) => {
+      seen.push(event.type);
+    });
+    store.complete({ transactionId: 'tx-1', storeSku: 'gems.small', token: 'token-1', state: 'purchased' });
+    expect(seen).toEqual([]);
+    backend.queueVerify({ status: 'granted', ledgerEntryId: 'le-1' });
+    await runtime.reconcile();
+    expect(journal.history('store:fixture.client-token:tx-1')).toEqual([
+      'purchased', 'verifying', 'granted', 'finishing', 'finished',
+    ]);
+  });
+
+  it('skips a purchase of a product kind or quantity the provider does not sell', async () => {
+    const noConsumables = fakeProviderWith({
+      ...ownerProfiles.client,
+      purchase: { consumable: false, durable: true, subscription: false, quantity: false },
+    });
+    const results = await runCommerceConformanceVectors(
+      [vectorNamed('purchase-client-finish'), vectorNamed('revoked-after-grant')],
+      { createProvider: noConsumables },
+    );
+    expect(summarize(results)).toEqual([
+      {
+        vector: 'purchase-client-finish',
+        status: 'skipped',
+        reason: 'requestPurchase of gems_small needs purchase.consumable; the provider declares '
+          + 'consumable: false',
+      },
+      { vector: 'revoked-after-grant', status: 'passed' },
+    ]);
+    const vector = vectorNamed('purchase-client-finish');
+    const two: CommerceConformanceVector = {
+      ...vector,
+      steps: vector.steps.map((step) =>
+        step.actor === 'game' && step.action === 'requestPurchase'
+          ? { ...step, input: { ...step.input, quantity: 2 } }
+          : step),
+    };
+    const [quantity] = await runCommerceConformanceVectors([two], {
+      createProvider: fakeProviderWith(ownerProfiles.client),
+    });
+    expect(quantity?.status).toBe('skipped');
+    expect(quantity?.reason).toBe(
+      'requestPurchase of gems_small with quantity 2 needs purchase.quantity; the provider '
+        + 'declares quantity: false',
+    );
+    const capabilities = createCommerceConformanceCapabilities({
+      store: 'x',
+      ...ownerProfiles.client,
+      purchase: { consumable: true, durable: false, subscription: false, quantity: false },
+    });
+    expect(commerceConformanceAdaptiveSkipReason(vectorNamed('revoked-after-grant'), capabilities))
+      .toBe('requestPurchase of remove_ads needs purchase.durable; the provider declares durable: false');
+  });
+
+  it('derives available from what the reference store still lists', async () => {
+    // A finish that fails with no retry leaves the purchase listed and the record finishing.
+    const vector = vectorNamed('finish-failure-retry');
+    const steps = vector.steps.filter((step, index) =>
+      !(step.actor === 'store' && step.action === 'queueFinish' && index > 2)
+      && !(step.actor === 'runtime' && step.action === 'reconcile'));
+    const unfinished: CommerceConformanceVector = {
+      ...vector,
+      steps,
+      expect: {
+        ...vector.expect,
+        journal: {
+          'op-1': ['requested', 'launched', 'purchased', 'verifying', 'granted', 'finishing'],
+        },
+        finishCalls: (vector.expect.finishCalls ?? []).slice(0, 1),
+        available: [{ transactionId: 'tx-1', storeSku: 'gems.small', state: 'purchased' }],
+      },
+    };
+    expect((await runCommerceConformanceVector(unfinished)).failures).toEqual([]);
+    const [result] = await runCommerceConformanceVectors([unfinished], {
+      createProvider: fakeProviderWith(ownerProfiles.host),
+    });
+    expect(result?.failures).toEqual([]);
+    expect(result?.status).toBe('passed');
+    expect(result?.adaptive?.expect.available).toEqual([
+      { transactionId: 'tx-1', storeSku: 'gems.small', state: 'purchased' },
+    ]);
+    expect(result?.adaptive?.expect.finishCalls?.map((call) => [call.by, call.result]))
+      .toEqual([['host', 'NETWORK']]);
+  });
+
+  it('reports a harness that cannot be built as a failed result', async () => {
+    const [result] = await runCommerceConformanceVectors([vectorNamed('purchase-client-finish')], {
+      createProvider() {
+        throw new Error('no plugin');
+      },
+    });
+    expect(result).toEqual({
+      vector: 'purchase-client-finish',
+      status: 'failed',
+      passed: false,
+      failures: [{ path: 'harness', expected: 'createProvider resolves', actual: 'Error: no plugin' }],
+    });
+  });
+
+  it('answers a server finalization re-read from the grant, never from another record', async () => {
+    const vector = vectorNamed('purchase-client-finish');
+    const catalog = [
+      ...(vector.catalog ?? []),
+      { logicalId: 'remove_ads', kind: 'durable' as const, storeSku: 'remove.ads' },
+    ];
+    const finished = [
+      'requested', 'launched', 'purchased', 'verifying', 'granted', 'finishing', 'finished',
+    ] as const;
+    const twoRecords: CommerceConformanceVector = {
+      ...vector,
+      vector: 'two-records-one-pass',
+      catalog,
+      steps: [
+        { actor: 'runtime', action: 'start' },
+        { actor: 'backend', action: 'queueVerify', decision: { status: 'granted', ledgerEntryId: 'le-1' } },
+        { actor: 'backend', action: 'queueVerify', decision: { status: 'granted', ledgerEntryId: 'le-2' } },
+        {
+          actor: 'game',
+          action: 'requestPurchase',
+          input: { logicalId: 'gems_small', idempotencyKey: 'op-1' },
+          returns: { outcome: 'launched' },
+        },
+        {
+          actor: 'game',
+          action: 'requestPurchase',
+          input: { logicalId: 'remove_ads', idempotencyKey: 'op-2' },
+          returns: { outcome: 'launched' },
+        },
+        { actor: 'runtime', action: 'stop' },
+        {
+          actor: 'store',
+          action: 'complete',
+          purchase: { transactionId: 'tx-1', storeSku: 'gems.small', token: 'token-1', state: 'purchased' },
+        },
+        {
+          actor: 'store',
+          action: 'complete',
+          purchase: { transactionId: 'tx-2', storeSku: 'remove.ads', token: 'token-2', state: 'purchased' },
+        },
+        { actor: 'runtime', action: 'start' },
+      ],
+      expect: {
+        journal: { 'op-1': [...finished], 'op-2': [...finished] },
+        verifyRequests: [
+          { idempotencyKey: 'op-1', store: vector.profile.store, transactionId: 'tx-1', token: 'token-1' },
+          { idempotencyKey: 'op-2', store: vector.profile.store, transactionId: 'tx-2', token: 'token-2' },
+        ],
+        ledger: [
+          { entryId: 'le-1', type: 'grant', logicalId: 'gems_small' },
+          { entryId: 'le-2', type: 'grant', logicalId: 'remove_ads' },
+        ],
+        finishCalls: [
+          { by: 'client', transactionId: 'tx-1', ledgerEntryId: 'le-1', isConsumable: true, result: 'finished' },
+          {
+            by: 'client', transactionId: 'tx-2', ledgerEntryId: 'le-2', isConsumable: false, result: 'finished',
+          },
+        ],
+        available: [],
+      },
+    };
+    expect((await runCommerceConformanceVector(twoRecords)).failures).toEqual([]);
+    const [result] = await runCommerceConformanceVectors([twoRecords], {
+      createProvider: fakeProviderWith(ownerProfiles.server),
+    });
+    expect(result?.failures).toEqual([]);
+    expect(result?.status).toBe('passed');
+    // Each record's re-read is answered by its own grant, so the second
+    // record's scripted decision is still there when its first verify runs.
+    expect(result?.adaptive?.expect.verifyRequests?.map((request) => request.idempotencyKey))
+      .toEqual(['op-1', 'op-1', 'op-2', 'op-2']);
+    expect(result?.adaptive?.expect.finishCalls).toEqual([]);
+    expect(result?.adaptive?.expect.ledger).toEqual(twoRecords.expect.ledger);
+  });
+
+  it('answers a replayed granted key as finalized only when asked to', async () => {
+    let reread = false;
+    const finalized: string[] = [];
+    const backend = createCommerceConformanceBackend({
+      finalize: (request) => {
+        finalized.push(request.ledgerEntryId);
+      },
+      finalizeOnReread: () => reread,
+    });
+    const request = {
+      idempotencyKey: 'op-1',
+      playerId: 'player-1',
+      store: 'fixture.client-token',
+      transactionId: 'tx-1',
+      token: 'token-1',
+      logicalId: 'gems_small',
+      quantity: 1,
+      evidence: { schema: 'fixture.v1', payload: {} },
+    };
+    backend.queueVerify({ status: 'granted', ledgerEntryId: 'le-1' });
+    backend.queueVerify({ status: 'granted', ledgerEntryId: 'le-2' });
+    expect(await backend.verifyPurchase(request)).toEqual({ status: 'granted', ledgerEntryId: 'le-1' });
+    reread = true;
+    expect(await backend.verifyPurchase(request)).toEqual({
+      status: 'granted', ledgerEntryId: 'le-1', finalization: 'completed', alreadyProcessed: true,
+    });
+    expect(finalized).toEqual(['le-1']);
+    // The le-2 decision is still queued for the next key.
+    expect(await backend.verifyPurchase({ ...request, idempotencyKey: 'op-2', transactionId: 'tx-2' }))
+      .toEqual({ status: 'granted', ledgerEntryId: 'le-2' });
+    reread = false;
+    await expect(backend.verifyPurchase(request)).rejects.toThrow('Unscripted verify for op-1');
+  });
+});
+
+describe('commerce conformance adaptive local review follow-ups', () => {
+  it('re-derives a fixture key through the provider store key form', async () => {
+    // Play derives token keys; the generic prefix swap would never find them.
+    const vector = vectorNamed('event-before-listener');
+    const expectedKey = await createDerivedPurchaseIdempotencyKey({
+      store: 'google-play',
+      transactionId: 'tx-1',
+      token: 'token-1',
+    });
+    expect(expectedKey.startsWith('store:')).toBe(false);
+    expect(await adaptDerivedPurchaseKey(vector, 'store:fixture.client-token:tx-1', 'google-play'))
+      .toBe(expectedKey);
+    expect(await adaptDerivedPurchaseKey(vector, 'op-1', 'google-play')).toBe('op-1');
+    const [result] = await runCommerceConformanceVectors([vector], {
+      createProvider: fakeProviderWith(ownerProfiles.server, 'google-play'),
+    });
+    expect(result?.failures).toEqual([]);
+    expect(result?.status).toBe('passed');
+    expect(Object.keys(result?.adaptive?.expect.journal ?? {})).toEqual([expectedKey]);
+  });
+
+  it('picks a runnable canonical family member for an event-less provider', async () => {
+    // `purchase-client-finish` ends on an unpolled completion, so the family
+    // falls through to `purchase-server-finish`, whose completion is reconciled.
+    const results = await runCommerceConformanceVectors(adaptiveVectors, {
+      createProvider: fakeProviderWith({
+        ...ownerProfiles.client,
+        lifecycle: { ...ownerProfiles.client.lifecycle, events: false },
+      }),
+    });
+    const family = summarize(results).filter((result) => result.vector.startsWith('purchase-')
+      && result.vector.endsWith('-finish'));
+    expect(family).toEqual([
+      {
+        vector: 'purchase-client-finish',
+        status: 'skipped',
+        reason: 'store.complete at steps[3] needs lifecycle.events; the provider declares events: '
+          + 'false and no reconcile or start follows it to poll the purchase',
+      },
+      {
+        vector: 'purchase-host-finish',
+        status: 'skipped',
+        reason: 'store.complete at steps[3] needs lifecycle.events; the provider declares events: '
+          + 'false and no reconcile or start follows it to poll the purchase',
+      },
+      { vector: 'purchase-server-finish', status: 'passed' },
+    ]);
+    expect(adaptiveResult(results, 'purchase-server-finish').expect.finishCalls?.map((c) => c.by))
+      .toEqual(['client']);
+  });
+
+  it('skips a completion nothing can poll when the provider lists no purchases either', () => {
+    const capabilities = createCommerceConformanceCapabilities({
+      store: 'x',
+      ...ownerProfiles.client,
+      lifecycle: { ...ownerProfiles.client.lifecycle, events: false, availablePurchases: false },
+    });
+    expect(commerceConformanceAdaptiveSkipReason(vectorNamed('event-before-listener'), capabilities))
+      .toBe('store.complete at steps[0] needs lifecycle.events; the provider declares events: '
+        + 'false and lifecycle.availablePurchases: false, so nothing can poll the purchase');
+  });
+
+  it('reports a reference run that cannot play the scenario as a skip, not a failure', async () => {
+    const vector = vectorNamed('purchase-client-finish');
+    const unknownSku: CommerceConformanceVector = {
+      ...vector,
+      steps: vector.steps.map((step) =>
+        step.actor === 'store' && step.action === 'complete'
+          ? { ...step, purchase: { ...step.purchase, storeSku: 'gems.unknown' } }
+          : step),
+    };
+    const [result] = await runCommerceConformanceVectors([unknownSku], {
+      createProvider: fakeProviderWith(ownerProfiles.client),
+    });
+    expect(result?.status).toBe('skipped');
+    expect(result?.failures).toEqual([]);
+    expect(result?.reason).toMatch(
+      /^the reference run under the provider capabilities failed at steps\[3\]: expected store\.complete completes, got CommerceConformanceScriptError: /u,
+    );
+  });
+
+  it('reports a provider read that throws while matching as a failed run', async () => {
+    const [result] = await runCommerceConformanceVectors([vectorNamed('purchase-client-finish')], {
+      createProvider(context) {
+        const fake = createCommerceConformanceStore({
+          ...context,
+          profile: { ...context.profile, store: 'test.store', ...ownerProfiles.client },
+        });
+        let reads = 0;
+        const provider: CommerceProvider = {
+          ...fake.provider,
+          async getAvailablePurchases(request) {
+            reads += 1;
+            if (reads > 1) {
+              throw new Error('store went away');
+            }
+            return fake.provider.getAvailablePurchases(request);
+          },
+        };
+        return { provider, store: fake };
+      },
+    });
+    expect(result?.status).toBe('failed');
+    expect(result?.failures).toEqual([
+      { path: 'expect', expected: 'expectations evaluate', actual: 'Error: store went away' },
+    ]);
+  });
+
+  it('does not finalize a re-read of a reversed grant', async () => {
+    let reread = true;
+    const backend = createCommerceConformanceBackend({ finalizeOnReread: () => reread });
+    const request = {
+      idempotencyKey: 'op-1',
+      playerId: 'player-1',
+      store: 'fixture.client-token',
+      transactionId: 'tx-1',
+      token: 'token-1',
+      logicalId: 'gems_small',
+      quantity: 1,
+      evidence: { schema: 'fixture.v1', payload: {} },
+    };
+    backend.queueVerify({ status: 'granted', ledgerEntryId: 'le-1' });
+    expect(await backend.verifyPurchase(request)).toEqual({ status: 'granted', ledgerEntryId: 'le-1' });
+    backend.revoke({ ledgerEntryId: 'le-1', entryId: 'le-2', reason: 'refunded' });
+    await expect(backend.verifyPurchase(request)).rejects.toThrow('Unscripted verify for op-1');
+    reread = false;
+  });
+
+  it('reads an event-less store once on start', async () => {
+    const { store, runtime, backend, journal } = createStoreFixture({
+      ...clientTokenProfile,
+      lifecycle: { availablePurchases: true, pending: false, restore: true, events: false, finish: 'client' },
+    });
+    let reads = 0;
+    const provider = store.provider;
+    const original = provider.getAvailablePurchases.bind(provider);
+    Object.assign(provider, {
+      async getAvailablePurchases(request: GetAvailablePurchasesInput | undefined) {
+        reads += 1;
+        return original(request);
+      },
+    });
+    store.complete({ transactionId: 'tx-1', storeSku: 'gems.small', token: 'token-1', state: 'purchased' });
+    backend.queueVerify({ status: 'granted', ledgerEntryId: 'le-1' });
+    await runtime.start();
+    expect(reads).toBe(1);
+    expect(journal.history('store:fixture.client-token:tx-1')).toEqual([
+      'purchased', 'verifying', 'granted', 'finishing', 'finished',
+    ]);
   });
 });

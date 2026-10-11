@@ -35,6 +35,14 @@ export interface CommerceConformanceProfile {
   readonly purchase?: CommercePurchaseCapabilities;
   readonly lifecycle?: CommerceLifecycleCapabilities;
   readonly authority?: CommerceAuthorityCapabilities;
+  /**
+   * The scenario is finish-owner independent: when a caller-supplied provider
+   * runs the vector, the runner derives `journal`, `finishCalls`,
+   * `verifyRequests`, and `available` from the provider's declared
+   * capabilities instead of this fixture profile (RFC "Conformance vectors",
+   * adaptive vectors). The reference harness ignores the flag.
+   */
+  readonly adaptive?: boolean;
 }
 
 export interface CommerceConformanceCatalogEntry {

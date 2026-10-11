@@ -568,6 +568,11 @@
           "authority": {
             "$ref": "#/components/schemas/CommerceAuthorityCapabilities",
             "readOnly": true
+          },
+          "adaptive": {
+            "type": "boolean",
+            "description": "The scenario is finish-owner independent: when a caller-supplied provider\nruns the vector, the runner derives `journal`, `finishCalls`,\n`verifyRequests`, and `available` from the provider's declared\ncapabilities instead of this fixture profile (RFC \"Conformance vectors\",\nadaptive vectors). The reference harness ignores the flag.",
+            "readOnly": true
           }
         },
         "required": [
