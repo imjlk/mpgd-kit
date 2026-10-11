@@ -1,3 +1,5 @@
+import { createGooglePlayTokenPurchaseKey } from '@mpgd/platform/commerce';
+
 import type {
   FinalizePurchaseGrantInput,
   GameServicesEvidenceVerifier,
@@ -147,7 +149,7 @@ export function createGooglePlayProductPurchaseBoundary(
         expectedProductType: verificationInput.product.type,
         orderMatch: createGooglePlayObservedOrderMatch(
           verificationInput.request.platformTransactionId,
-          await createGooglePlayTokenTransactionId(purchaseToken),
+          await createGooglePlayTokenPurchaseKey(purchaseToken),
         ),
         accountBinding,
         allowConsumed: false,
@@ -289,7 +291,7 @@ async function finalizeGooglePlayPurchase(
       orderMatch: createGooglePlayFinalizationOrderMatch(
         verifiedContext,
         finalizationInput.request.platformTransactionId,
-        await createGooglePlayTokenTransactionId(purchaseToken),
+        await createGooglePlayTokenPurchaseKey(purchaseToken),
       ),
       accountBinding,
       allowConsumed: true,
@@ -626,20 +628,16 @@ function createGooglePlayObservedOrderMatch(
     : { mode: 'if-present', orderId: observedTransactionId };
 }
 
-/** A non-secret transaction ID for purchases whose Google order ID is absent or delayed. */
-export async function createGooglePlayTokenTransactionId(purchaseToken: string): Promise<string> {
-  if (readOptionalIdentifier(purchaseToken, 4096) === undefined) {
-    throw new TypeError('Google Play purchase token is invalid.');
-  }
-  const subtle = globalThis.crypto?.subtle;
-  if (subtle === undefined) {
-    throw new Error('Web Crypto is required to hash Google Play purchase tokens.');
-  }
-  const digest = new Uint8Array(await subtle.digest(
-    'SHA-256', new TextEncoder().encode(purchaseToken),
-  ));
-  return `play-token-sha256:${[...digest].map((value) => value.toString(16).padStart(2, '0')).join('')}`;
-}
+/**
+ * A non-secret transaction ID for purchases whose Google order ID is absent or
+ * delayed: `play-token-sha256:<hex>` of the purchase token.
+ *
+ * @deprecated Use `createGooglePlayTokenPurchaseKey` from `@mpgd/platform/commerce`;
+ * this alias is byte-for-byte the same helper (same key, same `TypeError` for
+ * an invalid token) and will be removed in the next major version.
+ */
+export const createGooglePlayTokenTransactionId: (purchaseToken: string) => Promise<string> =
+  createGooglePlayTokenPurchaseKey;
 
 function readGooglePlayVerifiedContext(
   payload: EntitlementLedgerPayload | undefined,

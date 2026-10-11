@@ -4,6 +4,22 @@ Client, contract, backend, and store helpers for authoritative game services.
 See [backend integration](../../docs/GAME_SERVICES_BACKEND.md) for the existing
 verification and ledger boundaries.
 
+## App Store server-side transaction signatures
+
+`@mpgd/game-services/app-store-server` exports
+`createAppleSignedTransactionVerifier`, an `AppStoreSignedTransactionVerifier`
+over the optional `@apple/app-store-server-library@3.1.0` peer. It verifies the
+App Store JWS certificate chain and signature before exposing any decoded
+one-time purchase field, keeps Apple's retryable certificate-status failures
+pending (`AppStoreDependencyUnavailableError`), and rejects invalid signatures,
+subscription payloads, and oversized transactions. Supply DER-encoded Apple
+root certificates, the bundle ID, environment, and production App Apple ID,
+and pass the result as `signedTransactionVerifier` to
+`createAppStoreGameServicesEvidenceVerifier`. Backend only: the peer is not
+installed by game clients, and no other subpath imports it. It moved here from
+`@mpgd/adapter-capacitor/app-store-server`, which stays as a deprecated
+re-export for one release.
+
 ## Registered rewarded-ad evidence
 
 `createGameServicesClient`, `createRecoverableMonetizationClient`, and

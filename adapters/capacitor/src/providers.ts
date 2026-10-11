@@ -1,4 +1,10 @@
-import type { BridgeMethod, BridgeRequest, BridgeResponse } from '@mpgd/bridge';
+import {
+  isBridgeCommerceV2Method,
+  type BridgeEvent,
+  type BridgeMethod,
+  type BridgeRequest,
+  type BridgeResponse,
+} from '@mpgd/bridge';
 import type { AdProvider } from '@mpgd/platform/ads';
 import { isAdMobClientRewardEvidence } from '@mpgd/game-services/admob-client-reward';
 import {
@@ -10,6 +16,11 @@ import {
 
 export interface NativeBridge {
   request(input: BridgeRequest): Promise<BridgeResponse>;
+  /**
+   * Optional commerce v2 event delivery (`{ protocol: 'mpgd.commerce.v2', sequence, event }`).
+   * B1 wires it for store providers; the base gateway works without it.
+   */
+  subscribe?(listener: (event: BridgeEvent) => void): () => void;
 }
 
 /**
@@ -103,6 +114,14 @@ export function createCapacitorProviderRegistry(
       throw new Error(`Capacitor provider ${provider.id} repeats a bridge method.`);
     }
     for (const method of methods) {
+      if (isBridgeCommerceV2Method(method)) {
+        // v1 providers own the v1 commerce methods only; a v2 provider arrives
+        // with B1 and is registered through its own surface.
+        throw new Error(
+          `Capacitor provider ${provider.id} cannot declare commerce v2 method ${method}; `
+            + 'commerce v2 is unavailable through the provider registry.',
+        );
+      }
       if (!providerMethodSet.has(method)) {
         throw new Error(`Capacitor provider ${provider.id} cannot replace base method ${method}.`);
       }

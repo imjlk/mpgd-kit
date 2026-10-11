@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge';
+import { bridgeCommerceV2Methods, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
 import { adProtocol, adProtocolVersion } from '@mpgd/platform/ads';
 
 import { createAitPlatformGateway, createAitSandboxBridge, type GamePlatformBridge } from './index';
@@ -393,5 +393,33 @@ describe('adapter-ait', () => {
     await expect(gateway.storage.load({ key: 'tutorial:v1' })).resolves.toBeNull();
     await expect(gateway.storage.load({ key: 'tutorial:v1' })).resolves.toBeNull();
     expect(reads).toBe(1);
+  });
+
+  it('fails closed for commerce v2 methods until an Apps in Toss v2 provider exists', async () => {
+    const bridge = createAitSandboxBridge({ storage: null });
+
+    for (const method of bridgeCommerceV2Methods) {
+      const response = await bridge.request({
+        id: `v2-${method}`,
+        method,
+        payload: { protocol: 'mpgd.commerce.v2' },
+        meta: {
+          target: 'ait',
+          appVersion: '1.2.3',
+          buildId: 'build-ait',
+          sentAt: '2026-10-11T00:00:00.000Z',
+        },
+      });
+
+      expect(response).toEqual({
+        id: `v2-${method}`,
+        ok: false,
+        error: {
+          code: 'COMMERCE_V2_UNAVAILABLE',
+          message: expect.stringContaining(method),
+          retryable: false,
+        },
+      });
+    }
   });
 });

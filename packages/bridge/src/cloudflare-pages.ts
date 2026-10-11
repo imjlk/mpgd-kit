@@ -2,6 +2,7 @@ import {
   assertBridgeRequest,
   bridgeStorageLoadProtocol,
   createBridgeError,
+  createCommerceV2UnavailableBridgeError,
   type BridgeRequest,
   type BridgeResponse,
   type BridgeStorageLoadData,
@@ -265,6 +266,16 @@ export function createMpgdCloudflarePagesBridgeHandler<
         return ok(input.bridgeRequest, {
           saved: false,
         });
+
+      // Commerce v2 providers arrive with the B-phase PRs; until then the host
+      // answers the dedicated code so a client can route around it.
+      case 'commerce.v2.getCapabilities':
+      case 'commerce.v2.fetchProducts':
+      case 'commerce.v2.requestPurchase':
+      case 'commerce.v2.getAvailablePurchases':
+      case 'commerce.v2.finishTransaction':
+      case 'commerce.v2.restorePurchases':
+        return createCommerceV2UnavailableBridgeError(input.bridgeRequest, 'Cloudflare Pages host');
 
       default:
         return createBridgeError(

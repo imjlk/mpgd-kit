@@ -1,6 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge';
 import type { ProductInfo, PurchaseResult } from '@mpgd/platform';
+import { createGooglePlayTokenPurchaseKey } from '@mpgd/platform/commerce';
 
 import { CapacitorPlayBilling } from './plugin.js';
 import type {
@@ -126,7 +127,7 @@ export async function recoverOwnedPlayPurchases(input: {
         playerId: input.playerId,
         productId,
         platformTransactionId: result.transactionId,
-        idempotencyKey: await createGooglePlayTokenTransactionId(token),
+        idempotencyKey: await createGooglePlayTokenPurchaseKey(token),
         purchasedAt: purchasedAt ?? input.now?.() ?? new Date().toISOString(),
         evidence: result.evidence,
       });
@@ -374,7 +375,7 @@ async function convertPurchase(purchase: PlayPurchase): Promise<PurchaseResult> 
     return { status: 'pending', entitlementIds: [], evidence };
   }
   const transactionId = purchase.orderId?.trim()
-    || await createGooglePlayTokenTransactionId(purchase.purchaseToken);
+    || await createGooglePlayTokenPurchaseKey(purchase.purchaseToken);
   return {
     status: 'completed',
     transactionId,
@@ -383,20 +384,16 @@ async function convertPurchase(purchase: PlayPurchase): Promise<PurchaseResult> 
   };
 }
 
-/** Must remain byte-for-byte compatible with the server's token transaction ID. */
-export async function createGooglePlayTokenTransactionId(purchaseToken: string): Promise<string> {
-  if (!isValidPurchaseToken(purchaseToken)) {
-    throw new TypeError('Google Play purchase token is invalid.');
-  }
-  const subtle = globalThis.crypto?.subtle;
-  if (subtle === undefined) {
-    throw new Error('Web Crypto is required to hash Google Play purchase tokens.');
-  }
-  const digest = new Uint8Array(await subtle.digest(
-    'SHA-256', new TextEncoder().encode(purchaseToken),
-  ));
-  return `play-token-sha256:${[...digest].map((value) => value.toString(16).padStart(2, '0')).join('')}`;
-}
+/**
+ * The server's token transaction ID, computed by the one shared helper so the
+ * plugin and `@mpgd/game-services` can never drift.
+ *
+ * @deprecated Use `createGooglePlayTokenPurchaseKey` from `@mpgd/platform/commerce`;
+ * this alias is the same function (same key, same `TypeError` for an invalid
+ * token) and will be removed in the next major version.
+ */
+export const createGooglePlayTokenTransactionId: (purchaseToken: string) => Promise<string> =
+  createGooglePlayTokenPurchaseKey;
 
 function success(id: string, data: unknown): BridgeResponse {
   return { id, ok: true, data };

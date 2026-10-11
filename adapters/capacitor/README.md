@@ -66,15 +66,19 @@ SDK works on a physical device or that a store/ad setup is release-ready.
 
 ## App Store server-side transaction signatures
 
-For an iOS game backend, install the optional
-`@apple/app-store-server-library@3.1.0` peer and import
-`createAppleSignedTransactionVerifier` from
-`@mpgd/adapter-capacitor/app-store-server`. Supply DER-encoded Apple root
-certificates from the [Apple PKI](https://www.apple.com/certificateauthority/),
-the game's bundle ID, environment, and production App Apple ID. Use the
-result as `signedTransactionVerifier` in
-`createAppStoreGameServicesEvidenceVerifier`. Keep App Store API credentials,
-trust roots, and this verifier on the backend, not in the Capacitor game.
+The server-side verifier moved to `@mpgd/game-services/app-store-server`
+(see the [game-services README](../../packages/game-services/README.md)):
+install the optional `@apple/app-store-server-library@3.1.0` peer next to
+`@mpgd/game-services` and import `createAppleSignedTransactionVerifier` from
+there. `@mpgd/adapter-capacitor/app-store-server` is deprecated: it re-exports
+the same function and options type for one release and is removed in the next
+major version. Supply DER-encoded Apple root certificates from the
+[Apple PKI](https://www.apple.com/certificateauthority/), the game's bundle
+ID, environment, and production App Apple ID. Use the result as
+`signedTransactionVerifier` in `createAppStoreGameServicesEvidenceVerifier`.
+Keep App Store API credentials, trust roots, and this verifier on the backend,
+not in the Capacitor game; the adapter itself no longer peers on Apple's
+library.
 
 The server fetches the transaction from Apple's API, verifies its JWS, checks
 the product, bundle, environment, account token and transaction ID, then

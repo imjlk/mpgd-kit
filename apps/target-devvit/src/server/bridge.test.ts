@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge';
+import { bridgeCommerceV2Methods, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
 
 import {
   createDevvitBridgeHandler,
@@ -260,6 +260,19 @@ test('missing and corrupted values load with the storage protocol envelope', asy
 
   redis.strings.set(storageValueKey(playerId, 'broken'), '{not json');
   assertError(await handler(request('storage.load', { key: 'broken' })), 'CORRUPTED_STORAGE_VALUE');
+});
+
+test('commerce v2 methods fail closed with COMMERCE_V2_UNAVAILABLE', async () => {
+  const handler = createHandler(new FakeDevvitRedis(), playerId);
+
+  for (const method of bridgeCommerceV2Methods) {
+    const response = await handler(request(method, { protocol: 'mpgd.commerce.v2' }));
+    assertError(response, 'COMMERCE_V2_UNAVAILABLE');
+    if (response.ok === false) {
+      assert.equal(response.error.retryable, false);
+      assert.match(response.error.message, new RegExp(method.replaceAll('.', '\\.')));
+    }
+  }
 });
 
 function createHandler(redis: FakeDevvitRedis, currentPlayerId: string | undefined) {

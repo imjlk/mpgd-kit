@@ -1,11 +1,43 @@
 import { describe, expect, it } from 'vitest';
 
-import { bridgeStorageLoadProtocol, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
+import {
+  bridgeStorageLoadProtocol,
+  type BridgeEvent,
+  type BridgeRequest,
+  type BridgeResponse,
+} from '@mpgd/bridge';
 import { PlatformOperationError } from '@mpgd/platform';
 
 import { createCapacitorPlatformGateway, type NativeBridge } from './index';
 
 describe('adapter-capacitor', () => {
+  it('accepts a bridge with an optional event subscription without using it', async () => {
+    const requests: BridgeRequest[] = [];
+    let subscriptions = 0;
+    const bridge: NativeBridge = {
+      async request(input) {
+        requests.push(input);
+        return { id: input.id, ok: true, data: [] } satisfies BridgeResponse;
+      },
+      subscribe(_listener: (event: BridgeEvent) => void) {
+        subscriptions += 1;
+        return () => undefined;
+      },
+    };
+
+    const gateway = createCapacitorPlatformGateway({
+      target: 'ios',
+      appVersion: '1.2.3',
+      buildId: 'build-ios',
+      bridge,
+    });
+
+    await expect(gateway.commerce.getProducts()).resolves.toEqual([]);
+    expect(requests.map((request) => request.method)).toEqual(['commerce.getProducts']);
+    // A4 only declares the event surface; nothing in the v1 gateway subscribes.
+    expect(subscriptions).toBe(0);
+  });
+
   it('sends typed requests through the native Capacitor bridge', async () => {
     const requests: BridgeRequest[] = [];
     const bridge: NativeBridge = {

@@ -6,7 +6,12 @@ import {
   type CloudflarePagesServiceBinding,
   type MpgdCloudflarePagesHostEnv,
 } from './cloudflare-pages';
-import { bridgeStorageLoadProtocol, type BridgeRequest, type BridgeResponse } from './index';
+import {
+  bridgeCommerceV2Methods,
+  bridgeStorageLoadProtocol,
+  type BridgeRequest,
+  type BridgeResponse,
+} from './index';
 import { createBridgeOrpcClient, defaultBridgeRpcEndpoint } from './orpc';
 
 const baseUrl = 'https://pages-host.test';
@@ -177,6 +182,25 @@ for (const [index, fallback] of platformFlowFallbacks.entries()) {
     fallback.expected,
     `${fallback.method} should return its conservative Pages fallback`,
   );
+}
+
+for (const method of bridgeCommerceV2Methods) {
+  const response = await postBridge({
+    id: `commerce-v2-${method}`,
+    method,
+    payload: { protocol: 'mpgd.commerce.v2' },
+    meta: requestMeta(),
+  });
+
+  assertEqual(response.ok, false, `${method} should fail closed on the Pages host`);
+  if (!response.ok) {
+    assertEqual(
+      response.error.code,
+      'COMMERCE_V2_UNAVAILABLE',
+      `${method} should answer COMMERCE_V2_UNAVAILABLE`,
+    );
+    assertEqual(response.error.retryable, false, `${method} should not be retryable`);
+  }
 }
 
 const gameServicesResponse = await fetchHandler(

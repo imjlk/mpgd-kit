@@ -671,12 +671,23 @@ not in the catalog. The kit adds no wallet currency literal.
 
 - `@mpgd/platform` exports `commerceProtocolVersion = '2.0.0-draft.1'` until
   the contract is released as `2.0.0`.
-- The bridge adds `commerce.v2.getCapabilities`, `commerce.v2.fetchProducts`,
+- A4 landed the bridge side in `@mpgd/bridge`: `BridgeMethod` includes
+  `commerce.v2.getCapabilities`, `commerce.v2.fetchProducts`,
   `commerce.v2.requestPurchase`, `commerce.v2.getAvailablePurchases`,
-  `commerce.v2.finishTransaction`, and `commerce.v2.restorePurchases`, and an
-  optional `NativeBridge.subscribe` for events. Events use the envelope
+  `commerce.v2.finishTransaction`, and `commerce.v2.restorePurchases`
+  (`bridgeCommerceV2Methods`, kept equal to `commerceBridgeMethods` from
+  `@mpgd/platform/commerce` by a type check and a test), and the event side
+  exports `BridgeEvent` (the `CommerceEventEnvelope`
   `{ protocol: 'mpgd.commerce.v2', sequence, event }` with a per-session
-  sequence number.
+  sequence number), `assertBridgeEvent`, and the `BridgeEventSource`
+  interface (`subscribe(listener): () => void`) that transports may
+  implement; `@mpgd/adapter-capacitor` declares the matching optional
+  `NativeBridge.subscribe`. No transport implements v2 yet: a v2 method that
+  reaches the Cloudflare Pages stub, the Devvit server bridge, or the Devvit
+  and Apps in Toss sandbox bridges answers the non-retryable bridge error
+  `COMMERCE_V2_UNAVAILABLE` (`createCommerceV2UnavailableBridgeError`), and
+  the Capacitor provider registry rejects a v1 provider that declares a v2
+  method. The B-phase PRs wire providers behind these methods.
 - Payloads are validated with typia on both sides. A2 generates JSON Schemas
   for the bridge payloads and the vector format into
   `docs/specs/commerce/schemas/`, and `validate:commerce-alignment` checks that
@@ -799,7 +810,7 @@ package carries a Sampo changeset.
 | A1 | This RFC and the vectors | |
 | A2 | `@mpgd/platform` `commerce/` module: types, `CommerceError`, capabilities, state machine, typia validators, JSON Schemas, `validate:commerce-alignment`; catalog currency list | Closed currencies |
 | A3 | Conformance runner and in-memory reference provider passing every vector | |
-| A4 | Bridge v2 methods and event envelope; move `app-store-server` into `@mpgd/game-services`; one `createGooglePlayTokenTransactionId` | Duplicated helper, server code in client package |
+| A4 | Bridge v2 methods, event envelope, and `COMMERCE_V2_UNAVAILABLE` fail-closed answers; `app-store-server` moved into `@mpgd/game-services` (deprecated re-export kept); `createGooglePlayTokenTransactionId` aliases `createGooglePlayTokenPurchaseKey` | Duplicated helper, server code in client package |
 | B1 | `@mpgd/adapter-capacitor`: `StoreSdk` interface, `createStoreCommerceProvider`, registry wiring, v1 wrapper | |
 | B2 | Play Billing provider: available purchases, `purchaseUpdated` subscription, acknowledged flag from the plugin | Unused native events |
 | B3 | StoreKit provider: JWS as `token` and evidence; server verifies offline with Server API fallback | JWS dropped |

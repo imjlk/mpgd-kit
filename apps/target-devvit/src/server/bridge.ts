@@ -1,6 +1,7 @@
 import {
   bridgeStorageLoadProtocol,
   createBridgeError,
+  createCommerceV2UnavailableBridgeError,
   type BridgeRequest,
   type BridgeResponse,
   type BridgeStorageLoadData,
@@ -195,6 +196,15 @@ export function createDevvitBridgeHandler(
 
       case 'storage.save':
         return saveStorage(input, dependencies, storageKeyNamespace, warn);
+
+      // Commerce v2 providers arrive with the B-phase PRs (B6 for Devvit).
+      case 'commerce.v2.getCapabilities':
+      case 'commerce.v2.fetchProducts':
+      case 'commerce.v2.requestPurchase':
+      case 'commerce.v2.getAvailablePurchases':
+      case 'commerce.v2.finishTransaction':
+      case 'commerce.v2.restorePurchases':
+        return createCommerceV2UnavailableBridgeError(input, 'Devvit server bridge');
 
       default:
         return createBridgeError(

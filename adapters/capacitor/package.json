@@ -58,21 +58,16 @@
     "@mpgd/target-config": "workspace:*"
   },
   "peerDependencies": {
-    "@apple/app-store-server-library": "^3.1.0",
     "@capacitor-community/admob": "^8.1.0",
     "@capacitor/core": "^8.5.1"
   },
   "peerDependenciesMeta": {
-    "@apple/app-store-server-library": {
-      "optional": true
-    },
     "@capacitor-community/admob": {
       "optional": true
     }
   },
   "devDependencies": {
     "@mpgd/game-runtime": "workspace:*",
-    "@apple/app-store-server-library": "3.1.0",
     "@capacitor-community/admob": "8.1.0",
     "@capacitor/core": "8.5.2",
     "ttsc": "0.30.4",
