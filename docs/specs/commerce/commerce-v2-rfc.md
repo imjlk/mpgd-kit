@@ -688,6 +688,18 @@ not in the catalog. The kit adds no wallet currency literal.
   `COMMERCE_V2_UNAVAILABLE` (`createCommerceV2UnavailableBridgeError`), and
   the Capacitor provider registry rejects a v1 provider that declares a v2
   method. The B-phase PRs wire providers behind these methods.
+- B1 landed the first transport in `@mpgd/adapter-capacitor` (status: draft,
+  no store plugin adapted yet): `StoreSdk` is the in-process surface a store
+  plugin exposes, `createStoreCommerceProvider` turns it into a
+  `CommerceProvider`, and `createCommerceServiceProvider` registers that
+  provider so the registry serves the six `commerce.v2.*` methods through
+  `createCommerceProviderBridge` (payloads and results validated with the A2
+  asserts, events in the envelope with a per-bridge sequence) and the four v1
+  `commerce.*` methods through `toCommerceAdapter`. The gateway exposes the
+  provider as the transitional `PlatformGateway.commerceV2` and derives
+  `nativeIap` and `subscriptionIap` from its `commerce` capability block. A
+  thrown failure crosses the bridge as `{ code, message, retryable }`; a
+  `cancelled` or `failed` purchase result keeps its `storeCode`.
 - Payloads are validated with typia on both sides. A2 generates JSON Schemas
   for the bridge payloads and the vector format into
   `docs/specs/commerce/schemas/`, and `validate:commerce-alignment` checks that
@@ -811,7 +823,7 @@ package carries a Sampo changeset.
 | A2 | `@mpgd/platform` `commerce/` module: types, `CommerceError`, capabilities, state machine, typia validators, JSON Schemas, `validate:commerce-alignment`; catalog currency list | Closed currencies |
 | A3 | Conformance runner and in-memory reference provider passing every vector | |
 | A4 | Bridge v2 methods, event envelope, and `COMMERCE_V2_UNAVAILABLE` fail-closed answers; `app-store-server` moved into `@mpgd/game-services` (deprecated re-export kept); `createGooglePlayTokenTransactionId` aliases `createGooglePlayTokenPurchaseKey` | Duplicated helper, server code in client package |
-| B1 | `@mpgd/adapter-capacitor`: `StoreSdk` interface, `createStoreCommerceProvider`, registry wiring, v1 wrapper | |
+| B1 (landed, draft) | `@mpgd/adapter-capacitor`: `StoreSdk` interface, `createStoreCommerceProvider`, registry wiring, v1 wrapper; every store vector passes directly and through the gateway bridge path | |
 | B2 | Play Billing provider: available purchases, `purchaseUpdated` subscription, acknowledged flag from the plugin | Unused native events |
 | B3 | StoreKit provider: JWS as `token` and evidence; server verifies offline with Server API fallback | JWS dropped |
 | B4 | Microsoft Store provider | Target-name settlement check |

@@ -1,4 +1,5 @@
 import type { AdProvider } from './ads.js';
+import type { CommerceProvider } from './commerce.js';
 
 export type PlatformTarget =
   | 'browser'
@@ -662,6 +663,13 @@ export interface PlatformGateway {
   getCapabilities(): Promise<PlatformCapabilities>;
   readonly identity: IdentityAdapter;
   readonly commerce: CommerceAdapter;
+  /**
+   * Optional commerce v2 provider (`@mpgd/platform/commerce`). Transitional:
+   * adapters expose it next to the v1 `commerce` adapter until C4 removes v1,
+   * and the game-services reconciler (C1) prefers it when present. Absent on
+   * gateways whose target has no v2 provider.
+   */
+  readonly commerceV2?: CommerceProvider;
   readonly ads: AdAdapter;
   readonly leaderboard: LeaderboardAdapter;
   readonly lifecycle: LifecycleAdapter;

@@ -21,15 +21,18 @@ import {
   type ShareResult,
   type ViewportAdapter,
 } from '@mpgd/platform';
+import { deriveLegacyCommerceCapabilities } from '@mpgd/platform/commerce';
 import {
   createCapacitorAppEvents,
   type CapacitorAppEventsApi,
   type CapacitorIncomingUrlKind,
   type CapacitorVisibilitySource,
 } from './app-events.js';
+import { createBridgeCommerceProvider } from './commerce-bridge.js';
 import {
   assertProviderResponseData,
   createCapacitorProviderRegistry,
+  type CapacitorCommerceServiceProvider,
   type CapacitorServiceProvider,
   type NativeBridge,
 } from './providers.js';
@@ -37,9 +40,51 @@ import { createCapacitorViewport } from './viewport.js';
 
 export {
   createCapacitorProviderRegistry,
+  deriveCommerceFeatureStates,
+  type CapacitorCommerceServiceProvider,
+  type CapacitorProviderRegistry,
   type CapacitorServiceProvider,
   type NativeBridge,
 } from './providers.js';
+export {
+  assertCommerceBridgeResult,
+  commerceV2InvalidPayloadBridgeErrorCode,
+  commerceV2MethodUnsupportedBridgeErrorCode,
+  createBridgeCommerceProvider,
+  createCommerceProviderBridge,
+  createCommerceServiceProvider,
+  type CapacitorCommerceFeature,
+  type CommerceProviderBridge,
+  type CreateBridgeCommerceProviderInput,
+  type CreateCommerceProviderBridgeInput,
+  type CreateCommerceServiceProviderInput,
+} from './commerce-bridge.js';
+export {
+  createStoreCommerceProvider,
+  type CreateStoreCommerceProviderInput,
+  type StoreCommerceCapabilityOverrides,
+  type StoreCommerceProductMapping,
+  type StoreCommerceProvider,
+} from './store-commerce-provider.js';
+export {
+  defaultStoreSdkErrorCodeMap,
+  normalizeStoreSdkError,
+  type StoreSdk,
+  type StoreSdkCapabilities,
+  type StoreSdkError,
+  type StoreSdkErrorCodeMap,
+  type StoreSdkEvent,
+  type StoreSdkEventName,
+  type StoreSdkEventOf,
+  type StoreSdkFetchProductsInput,
+  type StoreSdkFinishTransactionInput,
+  type StoreSdkFinishTransactionResult,
+  type StoreSdkGetAvailablePurchasesInput,
+  type StoreSdkProduct,
+  type StoreSdkPurchase,
+  type StoreSdkRequestPurchaseInput,
+  type StoreSdkRequestPurchaseResult,
+} from './store-sdk.js';
 export {
   createCapacitorAppEvents,
   type CapacitorAppEventsApi,
@@ -65,6 +110,7 @@ export {
 
 const externalActivityMethods = new Set<BridgeMethod>([
   'commerce.purchase',
+  'commerce.v2.requestPurchase',
   'ads.showRewarded',
   'ads.showInterstitial',
   'identity.requestUpgrade',
@@ -119,6 +165,17 @@ export function createCapacitorPlatformGateway(input: {
   const providers = createCapacitorProviderRegistry(input.providers ?? []);
   const adProvider = providers.byMethod.get('ads.showRewarded')?.adProvider
     ?? providers.byMethod.get('ads.showInterstitial')?.adProvider;
+  const commerceProvider: CapacitorCommerceServiceProvider | undefined = providers.commerce;
+  // The v2 surface is served through the same request path as every other
+  // provider method, so the bridge envelope, response validation, and external
+  // activity bookkeeping are exercised in process exactly as over a transport.
+  const commerceV2 = commerceProvider === undefined
+    ? undefined
+    : createBridgeCommerceProvider({
+        store: commerceProvider.commerce.store,
+        request: (method, payload) => request(method, payload),
+        subscribe: (listener) => commerceProvider.bridge.subscribe(listener),
+      });
   const lifecycle = createCapacitorAppEvents({
     target: input.target,
     ...(input.app === undefined ? {} : { app: input.app }),
@@ -252,18 +309,24 @@ export function createCapacitorPlatformGateway(input: {
       const rewardedAds = states.rewardedAds === 'available';
       const interstitialAds = states.interstitialAds === 'available';
       const bannerAds = states.bannerAds === 'available';
+      // The v2 block is read fresh and the boolean flags follow it, so the
+      // snapshot cannot claim a store the provider no longer reports.
+      const commerce = commerceV2 === undefined ? undefined : await commerceV2.getCapabilities();
+      const legacy = commerce === undefined ? undefined : deriveLegacyCommerceCapabilities(commerce);
       return {
         ...base,
-        nativeIap: states.nativeIap === 'available',
-        subscriptionIap: states.subscriptionIap === 'available',
+        nativeIap: legacy?.nativeIap ?? states.nativeIap === 'available',
+        subscriptionIap: legacy?.subscriptionIap ?? states.subscriptionIap === 'available',
         nativeAds: rewardedAds || interstitialAds || bannerAds,
         rewardedAds,
         interstitialAds,
         bannerAds,
         nativeLeaderboard: states.nativeLeaderboard === 'available',
         providerAvailability: states,
+        ...(commerce === undefined ? {} : { commerce }),
       };
     },
+    ...(commerceV2 === undefined ? {} : { commerceV2 }),
     identity: {
       getPlayer: () => request('identity.getPlayer', {}),
       getSession: () => request<IdentitySession>('identity.getSession', {}),
