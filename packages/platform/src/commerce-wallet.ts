@@ -345,6 +345,12 @@ export interface CreditLotEligibility {
   readonly scope?: CreditMembershipScope;
   /** ISO-8601 timestamp or epoch milliseconds; a lot whose `expiresAt` is not after it is excluded. */
   readonly now: string | number;
+  /**
+   * When set, a lot created after this instant is excluded. A catch-up
+   * renewal passes the boundary of the period it pays for, so credits granted
+   * after that period ended cannot fund it retroactively.
+   */
+  readonly createdBy?: string | number;
 }
 
 /** Whether a lot may fund a spend: same currency, credit left, not expired, and in scope. */
@@ -358,6 +364,17 @@ export function isCreditLotEligible(lot: CreditLot, criteria: CreditLotEligibili
   }
   if (lot.expiresAt !== undefined && !(Date.parse(lot.expiresAt) > now)) {
     return false;
+  }
+  if (criteria.createdBy !== undefined) {
+    const createdBy = typeof criteria.createdBy === 'number'
+      ? criteria.createdBy
+      : Date.parse(criteria.createdBy);
+    if (Number.isNaN(createdBy)) {
+      throw new TypeError(`Invalid ISO-8601 timestamp: ${String(criteria.createdBy)}`);
+    }
+    if (!(Date.parse(lot.createdAt) <= createdBy)) {
+      return false;
+    }
   }
   if (lot.spendScope.kind === 'cross-title') {
     return true;
@@ -626,7 +643,7 @@ export const creditWalletSpendEvidenceSchema = 'credit-wallet.spend.v1' as const
 export interface CreditWalletSpendEvidence {
   readonly store: StoreId;
   readonly titleId: string;
-  /** The wallet's settlement id for the spend; also the purchase's `settlement.ledgerEntryId`. */
+  /** The wallet's own id for the settled spend (its entitlement id); not a backend ledger entry. */
   readonly entitlementId: string;
   readonly amount: number;
   readonly debits: readonly CreditDebit[];
@@ -718,7 +735,8 @@ export interface CreditCommerceProvider extends CommerceProvider {
 /**
  * The RFC profile row of a project-owned wallet, before overrides.
  * `purchase.subscription` is true only where the billing authority is `host`
- * and the client can report active subscriptions (`client.subscriptions`).
+ * and the caller states that the client reports active subscriptions
+ * (`client.subscriptions: true`); with no client description it is `false`.
  */
 export function createCreditCommerceCapabilities(
   billingAuthority: CommerceBillingAuthority,
@@ -739,7 +757,7 @@ export function createCreditCommerceCapabilities(
     purchase: {
       ...purchase,
       subscription:
-        purchase.subscription && billingAuthority === 'host' && client.subscriptions !== false,
+        purchase.subscription && billingAuthority === 'host' && client.subscriptions === true,
     },
     catalog: { products: true, offers: false, localizedPrice: false, ...overrides.catalog },
     lifecycle: {
@@ -761,8 +779,10 @@ export function createCreditCommerceCapabilities(
  * wallet"): `fetchProducts` lists the wallet's offers (memberships omitted
  * where the billing authority is `store`), `requestPurchase` spends the offer
  * price times the quantity under the game's idempotency key and answers
- * `purchased` with `adapter-settled` evidence (`credit-wallet.spend.v1`) and
- * the wallet's settlement id once the wallet's debits add up to that price,
+ * `purchased` with `adapter-settled` evidence (`credit-wallet.spend.v1`)
+ * once the wallet's debits add up to that price, without a `settlement`
+ * pointer: the backend ledger entry exists only after the reconciler verifies
+ * that evidence, so there is nothing to point at yet,
  * `getAvailablePurchases` lists the title's unredeemed entitlements,
  * `finishTransaction` redeems one with the ledger entry id of its grant and
  * refuses to run without it, `restorePurchases` re-reads the unredeemed
@@ -806,13 +826,35 @@ export function createCreditCommerceProvider(
   const buffer = createCommerceEventBuffer();
   /** Transaction ids of restore events held in the buffer, so repeated restores do not duplicate them. */
   const bufferedRestores = new Set<string>();
+  /** First fallback `purchasedAt` per entitlement, for wallets that report no settlement time. */
+  const fallbackPurchasedAt = new Map<string, string>();
+  const purchasedAtOf = (entitlementId: string, createdAt: string | undefined): string => {
+    if (createdAt !== undefined) {
+      return normalizeIsoTimestamp(createdAt);
+    }
+    const remembered = fallbackPurchasedAt.get(entitlementId);
+    if (remembered !== undefined) {
+      return remembered;
+    }
+    const stamped = now();
+    fallbackPurchasedAt.set(entitlementId, stamped);
+    return stamped;
+  };
+  /** One listener must not stop the others, the client's callback, a restore, or a buffer drain. */
+  const deliver = (listener: (event: CommerceEvent) => void, event: CommerceEvent): void => {
+    try {
+      listener(event);
+    } catch (error) {
+      console.warn('Credit wallet commerce listener failed.', describeError(error));
+    }
+  };
   const emit = (event: CommerceEvent): void => {
     if (listeners.size === 0) {
       buffer.push(event);
       return;
     }
-    for (const listener of listeners) {
-      listener(event);
+    for (const listener of [...listeners]) {
+      deliver(listener, event);
     }
   };
   // The client is subscribed once, up front, so wallet events emitted before the
@@ -910,18 +952,57 @@ export function createCreditCommerceProvider(
       debits: input.debits,
     }),
     accountBinding: { kind: 'host-identity' },
-    settlement: { ledgerEntryId: input.entitlementId },
   });
-  /** An entitlement's quantity is the spent amount over the offer price; unknown prices count as one. */
-  const quantityOf = (offer: CreditOffer | undefined, debits: readonly CreditDebit[]): number => {
+  /**
+   * The quantity recorded at spend time; the price-based derivation is a
+   * fallback for wallets that record none. Either way it is advisory: the
+   * backend prices a wallet purchase from the evidence's `amount` and
+   * `debits`, never from this number.
+   */
+  const quantityOf = (entitlement: CreditEntitlement, offer: CreditOffer | undefined): number => {
+    if (entitlement.quantity !== undefined) {
+      return entitlement.quantity;
+    }
     if (offer === undefined || offer.membership !== undefined) {
       return 1;
     }
-    return creditPriceMultiple(sumCreditDebits(debits), offer.price.amount) ?? 1;
+    return creditPriceMultiple(sumCreditDebits(entitlement.debits), offer.price.amount) ?? 1;
   };
-  /** The title's unredeemed entitlements; one listed for another title is the wallet's mistake and is dropped. */
+  /**
+   * Offers for recovery reads. They only supply `storeSku` and the quantity
+   * fallback, so a recovery read never fails because of them: a `listOffers`
+   * failure counts as no offers, and a malformed or undeclared-currency offer
+   * is skipped. A purchase without a valid offer is listed under its logical
+   * id.
+   */
+  const listRecoveryOffers = async (): Promise<readonly CreditOffer[]> => {
+    let offers: unknown;
+    try {
+      offers = await client.listOffers({ titleId });
+    } catch (error) {
+      console.warn('Credit wallet offers unavailable during recovery.', describeError(error));
+      return [];
+    }
+    if (!Array.isArray(offers)) {
+      console.warn('Credit wallet offers unreadable during recovery.');
+      return [];
+    }
+    return (offers as readonly unknown[]).flatMap((candidate) => {
+      try {
+        const offer = assertCreditWalletOffer(candidate);
+        return currencies === undefined || currencies.has(offer.price.currency) ? [offer] : [];
+      } catch {
+        return [];
+      }
+    });
+  };
+  /**
+   * The title's unredeemed entitlements. One listed for another title, or one
+   * the wallet reports malformed, is the wallet's mistake and is dropped with
+   * a warning so the others still recover.
+   */
   const unredeemedPurchases = async (): Promise<readonly StorePurchase[]> => {
-    const offers = await listAllOffers();
+    const offers = await listRecoveryOffers();
     let entitlements: readonly CreditEntitlement[];
     try {
       entitlements = await client.listUnredeemed({ titleId });
@@ -936,7 +1017,8 @@ export function createCreditCommerceProvider(
       try {
         entitlement = assertCreditEntitlement(candidate);
       } catch (error) {
-        throw invalidResponse('listUnredeemed', error);
+        console.warn('Credit wallet entitlement skipped during recovery.', describeError(error));
+        return [];
       }
       if (entitlement.titleId !== titleId) {
         return [];
@@ -949,7 +1031,7 @@ export function createCreditCommerceProvider(
           entitlementId: entitlement.entitlementId,
           debits: entitlement.debits,
           purchasedAt: normalizeIsoTimestamp(entitlement.createdAt),
-          quantity: quantityOf(offer, entitlement.debits),
+          quantity: quantityOf(entitlement, offer),
         }),
       ];
     });
@@ -1031,7 +1113,7 @@ export function createCreditCommerceProvider(
           logicalId: offer.logicalId,
           entitlementId: spend.entitlementId,
           debits: spend.debits,
-          purchasedAt: spend.createdAt === undefined ? now() : normalizeIsoTimestamp(spend.createdAt),
+          purchasedAt: purchasedAtOf(spend.entitlementId, spend.createdAt),
           quantity,
         }),
       };
@@ -1081,7 +1163,7 @@ export function createCreditCommerceProvider(
       listeners.add(listener);
       if (first) {
         bufferedRestores.clear();
-        buffer.drain(listener);
+        buffer.drain((event) => deliver(listener, event));
       }
       return () => {
         listeners.delete(listener);
@@ -1117,6 +1199,10 @@ export function createCreditCommerceProvider(
     };
   }
   return provider;
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function matchesFetchProducts(offer: CreditOffer, request: FetchProductsInput): boolean {
@@ -1294,6 +1380,7 @@ export function createInMemoryCreditWallet(
     idempotencyKey: entitlement.idempotencyKey,
     createdAt: entitlement.createdAt,
     debits: entitlement.debits.map((debit) => ({ ...debit })),
+    ...(entitlement.quantity === undefined ? {} : { quantity: entitlement.quantity }),
   });
   const toActiveSubscription = (subscription: WalletSubscription): ActiveSubscription => ({
     store,
@@ -1305,6 +1392,13 @@ export function createInMemoryCreditWallet(
     expiresAt: subscription.expiresAt,
     autoRenew: subscription.state === 'active',
   });
+  const deliverTo = (target: WalletListener, event: CommerceEvent): void => {
+    try {
+      target.listener(event);
+    } catch (error) {
+      console.warn('Credit wallet listener failed.', describeError(error));
+    }
+  };
   const reaches = (entry: BufferedWalletEvent, target: WalletListener): boolean =>
     entry.titleId === undefined || target.titleId === undefined || entry.titleId === target.titleId;
   const emit = (entry: BufferedWalletEvent): void => {
@@ -1317,7 +1411,7 @@ export function createInMemoryCreditWallet(
       return;
     }
     for (const target of audience) {
-      target.listener(entry.event);
+      deliverTo(target, entry.event);
     }
   };
   const emitSubscription = (
@@ -1377,13 +1471,20 @@ export function createInMemoryCreditWallet(
   /**
    * The one debit path. `scope` is `platform` for platform memberships and
    * `title` otherwise; `at` is when the spend takes effect, which decides lot
-   * expiry and the entitlement's `createdAt` (a renewal uses its period start).
+   * expiry and the entitlement's `createdAt` (a renewal uses the boundary of
+   * the period it pays for and, through `createdBy`, ignores lots granted
+   * after it); `quantity` is recorded on the entitlement.
    */
   const spendScoped = (
     request: CreditSpendInput,
-    scope: CreditMembershipScope,
-    at: string,
+    options: {
+      readonly scope: CreditMembershipScope;
+      readonly at: string;
+      readonly quantity?: number;
+      readonly createdBy?: string;
+    },
   ): CreditSpendResult => {
+    const { scope, at, quantity } = options;
     if (typeof request.idempotencyKey !== 'string' || request.idempotencyKey.length === 0) {
       return rejected('INVALID_RESPONSE', 'A spend requires an idempotency key.');
     }
@@ -1406,6 +1507,7 @@ export function createInMemoryCreditWallet(
         currency: request.currency,
         scope,
         now: at,
+        ...(options.createdBy === undefined ? {} : { createdBy: options.createdBy }),
       }),
       request.amount,
     );
@@ -1439,6 +1541,8 @@ export function createInMemoryCreditWallet(
         idempotencyKey: request.idempotencyKey,
         createdAt: at,
         debits: plan.debits.map((debit) => ({ ...debit })),
+        // Recorded only within the contract's uint32 range; a wider count falls back to the price derivation.
+        ...(quantity === undefined || quantity > 0xff_ff_ff_ff ? {} : { quantity }),
         redeemedBy: undefined,
       });
     }
@@ -1498,6 +1602,13 @@ export function createInMemoryCreditWallet(
         alreadyProcessed: true,
       };
     }
+    if (spends.has(validated.subscriptionId)) {
+      // The id namespace is shared with client spend keys in both directions.
+      return rejectedStart(
+        'INVALID_RESPONSE',
+        `Subscription id ${validated.subscriptionId} was already used as a spend key.`,
+      );
+    }
     // The terms are validated before any credit moves, so malformed terms never charge.
     if (!isIsoDuration(validated.terms.period)) {
       return rejectedStart(
@@ -1515,8 +1626,7 @@ export function createInMemoryCreditWallet(
         idempotencyKey: periodZeroKey,
         logicalId: validated.logicalId,
       },
-      validated.terms.scope,
-      startedAt,
+      { scope: validated.terms.scope, at: startedAt, quantity: 1 },
     );
     if (result.status === 'rejected') {
       return result;
@@ -1563,8 +1673,7 @@ export function createInMemoryCreditWallet(
           amount: subscription.terms.price.amount,
           idempotencyKey: createMembershipRenewalKey(subscription.subscriptionId, nextPeriod),
         },
-        subscription.terms.scope,
-        boundary,
+        { scope: subscription.terms.scope, at: boundary, createdBy: boundary },
       );
       if (result.status === 'rejected') {
         // The membership lapses at the end of the paid period; `expiresAt` is unchanged.
@@ -1677,10 +1786,17 @@ export function createInMemoryCreditWallet(
       if (replay !== undefined) {
         return replay;
       }
-      if (request.logicalId === undefined) {
-        return spendScoped(request, 'title', now());
+      const offer = request.logicalId === undefined ? undefined : offers.get(request.logicalId);
+      if (offer?.membership === undefined && subscriptions.has(request.idempotencyKey)) {
+        // A membership the owner started under this id already consumed the key.
+        return rejected(
+          'INVALID_RESPONSE',
+          `Idempotency key ${request.idempotencyKey} is the id of a started membership.`,
+        );
       }
-      const offer = offers.get(request.logicalId);
+      if (request.logicalId === undefined) {
+        return spendScoped(request, { scope: 'title', at: now() });
+      }
       if (offer === undefined) {
         return rejected('ITEM_UNAVAILABLE', `The wallet offers no product ${request.logicalId}.`);
       }
@@ -1699,7 +1815,7 @@ export function createInMemoryCreditWallet(
         );
       }
       if (offer.membership === undefined) {
-        return spendScoped(request, 'title', now());
+        return spendScoped(request, { scope: 'title', at: now(), quantity: multiple });
       }
       if (multiple !== 1) {
         return rejected('ITEM_UNAVAILABLE', 'A membership is purchased one period at a time.');
@@ -1781,7 +1897,7 @@ export function createInMemoryCreditWallet(
       // Buffered events this listener can see are delivered now; the rest wait for their title.
       for (const entry of buffered.splice(0, buffered.length)) {
         if (reaches(entry, target)) {
-          listener(entry.event);
+          deliverTo(target, entry.event);
         } else {
           buffered.push(entry);
         }

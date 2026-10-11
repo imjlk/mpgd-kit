@@ -379,7 +379,7 @@ describe('commerce conformance runtime', () => {
     });
     expect(result).toMatchObject({
       outcome: 'purchased',
-      purchase: { state: 'purchased', settlement: { ledgerEntryId: 'op-1' }, transactionId: 'op-1' },
+      purchase: { state: 'purchased', transactionId: 'op-1' },
     });
     expect(journal.history('op-1')).toEqual([
       'requested', 'launched', 'purchased', 'verifying', 'granted', 'finishing', 'finished',
@@ -563,7 +563,7 @@ describe('commerce conformance wallet', () => {
     wallet.creditFromGrant({
       ledgerEntryId: 'le-expiring', currency: 'credits', amount: 5,
       origin: { channel: 'store', store: 'fixture.client-token', titleId: 'title-a' },
-      createdAt: '2026-10-05T00:00:00Z', expiresAt: '2026-11-01T00:00:00Z',
+      createdAt: '2026-09-05T00:00:00Z', expiresAt: '2026-11-01T00:00:00Z',
     });
     wallet.creditFromGrant({
       ledgerEntryId: 'le-title', currency: 'credits', amount: 10,
@@ -607,7 +607,7 @@ describe('commerce conformance wallet', () => {
     wallet.creditFromGrant({
       ledgerEntryId: 'le-expiring', currency: 'credits', amount: 5,
       origin: { channel: 'store', store: 'fixture.client-token', titleId: 'title-a' },
-      createdAt: '2026-10-05T00:00:00Z', expiresAt: '2026-11-01T00:00:00Z',
+      createdAt: '2026-09-05T00:00:00Z', expiresAt: '2026-11-01T00:00:00Z',
     });
     expect(wallet.lots).toHaveLength(4);
     expect(await wallet.getBalance({ titleId: 'title-a' })).toEqual({ titleId: 'title-a', balances: { credits: 10 } });
@@ -704,7 +704,7 @@ describe('commerce conformance wallet', () => {
     const purchased = await hostBilling.provider.requestPurchase({ logicalId: 'membership_plus', idempotencyKey: 'op-1', source: 'shop' });
     expect(purchased).toMatchObject({
       outcome: 'purchased',
-      purchase: { transactionId: 'membership:op-1:0', logicalId: 'membership_plus', settlement: { ledgerEntryId: 'membership:op-1:0' } },
+      purchase: { transactionId: 'membership:op-1:0', logicalId: 'membership_plus' },
     });
     expect(await hostBilling.provider.getActiveSubscriptions?.()).toMatchObject([{ logicalId: 'membership_plus' }]);
     expect(await hostBilling.provider.getAvailablePurchases()).toMatchObject([{ transactionId: 'membership:op-1:0' }]);

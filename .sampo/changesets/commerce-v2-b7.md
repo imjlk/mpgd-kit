@@ -13,14 +13,18 @@ Commerce v2, PR B7: the credit wallet contract.
   billing authority is `store`), `requestPurchase` spends the offer price
   times the quantity under the game's idempotency key and answers `purchased`
   with `adapter-settled` evidence `credit-wallet.spend.v1` carrying the debits
-  and the wallet's settlement id (`settlement.ledgerEntryId`), a membership
+  and the wallet's entitlement id and no `settlement` pointer (the backend
+  ledger entry exists only after that evidence is verified), a membership
   under `store` authority fails with `ITEM_UNAVAILABLE`, a wallet
   `INSUFFICIENT_BALANCE` is a `failed` outcome with that code,
   `getAvailablePurchases` lists unredeemed entitlements, `finishTransaction`
   redeems one and refuses to run without the ledger entry id of its grant,
   `restorePurchases` re-reads the unredeemed entitlements as `purchaseUpdated`
-  events (buffered once per transaction before the first listener),
-  `getActiveSubscriptions` exists when the client has it, the client's events
+  events (buffered once per transaction before the first listener; recovery
+  reads skip a malformed offer or entitlement and treat an offers outage as
+  no offers rather than hiding purchases), `getActiveSubscriptions` exists
+  when the client has it, a listener that throws is logged and never stops
+  the others, the client's events
   for the title pass through the standard pre-listener buffer, and
   `dispose()` releases the client subscription. A `purchased` answer requires
   the wallet's debits to add up to the price; `purchasedAt` is the wallet's
@@ -30,7 +34,10 @@ Commerce v2, PR B7: the credit wallet contract.
   (`purchase.subscription` only under `host` and only when the client has
   `getActiveSubscriptions`, `lifecycle.events: true`,
   `lifecycle.finish: 'server'`, `authority.evidence: 'adapter-settled'`,
-  `accountBinding: 'host'`); malformed client answers, including a
+  `accountBinding: 'host'`; `createCreditCommerceCapabilities` reports
+  subscriptions only when told `{ subscriptions: true }`); a wallet that
+  reports no settlement time gets one fallback `purchasedAt` per entitlement
+  that every replay repeats; malformed client answers, including a
   `subscription`-kind offer without membership terms, are `INVALID_RESPONSE`
   and an offer priced in an undeclared catalog currency is
   `CONFIGURATION_REQUIRED`.
@@ -60,7 +67,8 @@ Commerce v2, PR B7: the credit wallet contract.
   client's key as well as `membership:<key>:0` so every replay of that key
   returns the original debits even after the membership lapsed, refuses a
   subscription id reused with other terms, judges renewal lot eligibility at
-  the period boundary it pays for, charges at most `maxRenewalsPerTick`
+  the period boundary it pays for and ignores lots granted after it
+  (`CreditLotEligibility.createdBy`), charges at most `maxRenewalsPerTick`
   periods per tick (12 by default), rejects a conflicting grant replay
   (different amount, currency, origin, timestamps, or scope), reserves the
   `membership:` key prefix, and rejects a key reused for a different spend.
@@ -77,7 +85,9 @@ Commerce v2, PR B7: the credit wallet contract.
 `getActiveSubscriptions({ titleId })` and an optional second `subscribe`
 argument `CreditWalletSubscribeInput` (`{ titleId? }`); a `debited`
 `CreditSpendResult` may carry `createdAt`, the wallet's settlement time, which
-the provider uses as `purchasedAt`.
+the provider uses as `purchasedAt`; a `CreditEntitlement` may carry
+`quantity`, the units bought at spend time, which the provider reports instead
+of deriving one from the current price (the derivation stays as a fallback).
 
 `@mpgd/platform/commerce-conformance`: `createCommerceConformanceWallet` and
 `createCommerceConformanceWalletProvider` now delegate to the wallet module
@@ -106,5 +116,8 @@ provider. Behaviour changes a caller of the conformance wallet sees:
   state; a subscription id reused with other terms is `INVALID_RESPONSE`.
 - The wallet provider surfaces unredeemed entitlements whose offer is gone
   (under their logical id), carries `credit-wallet.spend.v1` evidence instead
-  of the fixture schema, and omits memberships whenever
-  `purchase.subscription` is false.
+  of the fixture schema, no longer sets `settlement` on wallet purchases, and
+  omits memberships whenever `purchase.subscription` is false.
+- A client key that equals the id of a membership the owner started is
+  rejected on `spend` unless it replays that membership's start, and
+  `startMembership` refuses a subscription id already used as a spend key.

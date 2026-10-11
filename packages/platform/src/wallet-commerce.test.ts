@@ -35,6 +35,7 @@ import {
   readCreditWalletSpendEvidence,
   resolveCommerceBillingAuthority,
   selectEligibleCreditLots,
+  type CreditEntitlement,
   type CreditLot,
   type CreditOffer,
   type CreditWalletClient,
@@ -181,6 +182,13 @@ describe('credit lot rules', () => {
       .map((entry) => entry.lotId)).toEqual(['cross']);
     expect(isCreditLotEligible(lots[2] as CreditLot, { titleId: 'title-a', currency, now: Date.parse(now) - 1 }))
       .toBe(true);
+    // At a historical boundary, a lot that did not exist yet cannot fund the spend.
+    expect(isCreditLotEligible(lots[6] as CreditLot, { titleId: 'title-a', currency, now, createdBy: now })).toBe(true);
+    expect(isCreditLotEligible(lots[6] as CreditLot, {
+      titleId: 'title-a', currency, now, createdBy: '2026-09-30T23:59:59Z',
+    })).toBe(false);
+    expect(() => isCreditLotEligible(lots[6] as CreditLot, { titleId: 'title-a', currency, now, createdBy: 'later' }))
+      .toThrow(TypeError);
     expect(() => isCreditLotEligible(lots[0] as CreditLot, { titleId: 'title-a', currency, now: 'soon' }))
       .toThrow(TypeError);
     expect([...lots].sort(compareCreditLotSpendOrder)[0]?.lotId).toBe('expired');
@@ -473,11 +481,36 @@ describe('in-memory credit wallet', () => {
     expect(await wallet.getBalance({ titleId: 'title-a' })).toEqual({ titleId: 'title-a', balances: { [currency]: 105 } });
   });
 
+  it('refuses a client key that an owner-started membership already uses', async () => {
+    const wallet = createWallet();
+    wallet.creditFromGrant(grant('le-web', 100, 'off-store'));
+    expect(await wallet.startMembership({
+      subscriptionId: 'owner-1', titleId: 'title-a', logicalId: 'membership_plus', terms: membershipTerms,
+    })).toMatchObject({ status: 'started' });
+    for (const reuse of [
+      { titleId: 'title-a', currency, amount: 1, idempotencyKey: 'owner-1' },
+      { titleId: 'title-a', currency, amount: 4, idempotencyKey: 'owner-1', logicalId: 'booster' },
+    ]) {
+      expect(await wallet.spend(reuse)).toMatchObject({ status: 'rejected', error: { code: 'INVALID_RESPONSE' } });
+    }
+    // The same membership through the client key replays the owner's start without charging.
+    expect(await wallet.spend({
+      titleId: 'title-a', currency, amount: 30, idempotencyKey: 'owner-1', logicalId: 'membership_plus',
+    })).toMatchObject({ status: 'debited', entitlementId: 'membership:owner-1:0', alreadyProcessed: true });
+    expect(wallet.debits).toEqual([{ idempotencyKey: 'membership:owner-1:0', lotId: 'le-web', amount: 30 }]);
+    // And a client spend key cannot become a subscription id afterwards.
+    await wallet.spend({ titleId: 'title-a', currency, amount: 4, idempotencyKey: 'client-1', logicalId: 'booster' });
+    expect(await wallet.startMembership({
+      subscriptionId: 'client-1', titleId: 'title-a', logicalId: 'membership_plus', terms: membershipTerms,
+    })).toMatchObject({ status: 'rejected', error: { code: 'INVALID_RESPONSE' } });
+    expect(wallet.debits).toHaveLength(2);
+  });
+
   it('judges renewal eligibility at each period boundary and caps the periods per tick', async () => {
     let at = '2026-01-01T00:00:00Z';
     const wallet = createWallet({ now: () => at, maxRenewalsPerTick: 2 });
-    wallet.creditFromGrant(grant('g1', 100, 'off-store', { expiresAt: '2026-01-20T00:00:00Z' }));
-    wallet.creditFromGrant(grant('g2', 5, 'off-store'));
+    wallet.creditFromGrant(grant('g1', 100, 'off-store', { expiresAt: '2026-01-20T00:00:00Z', createdAt: at }));
+    wallet.creditFromGrant(grant('g2', 5, 'off-store', { createdAt: at }));
     const terms = { scope: 'platform' as const, price: { currency, amount: 10 }, period: 'P30D' };
     expect(await wallet.startMembership({
       subscriptionId: 's-1', titleId: 'title-a', logicalId: 'membership_plus', terms,
@@ -505,12 +538,33 @@ describe('in-memory credit wallet', () => {
     expect(await wallet.getActiveSubscriptions()).toMatchObject([
       { subscriptionId: 's-2', periodIndex: 5, expiresAt: '2026-08-28T00:00:00Z' },
     ]);
-    expect(wallet.debits.filter((debit) => debit.idempotencyKey.startsWith('membership:s-2:'))).toHaveLength(6);
+    expect(new Set(
+      wallet.debits.filter((debit) => debit.idempotencyKey.startsWith('membership:s-2:')).map((debit) => debit.idempotencyKey),
+    ).size).toBe(6);
+  });
+
+  it('does not charge a period with credits granted after it ended', async () => {
+    let at = '2026-01-01T00:00:00Z';
+    const wallet = createWallet({ now: () => at });
+    wallet.creditFromGrant(grant('g1', 10, 'off-store', { createdAt: at }));
+    const terms = { scope: 'platform' as const, price: { currency, amount: 10 }, period: 'P30D' };
+    await wallet.startMembership({ subscriptionId: 's-1', titleId: 'title-a', logicalId: 'membership_plus', terms });
+    at = '2026-02-05T00:00:00Z';
+    wallet.creditFromGrant(grant('g2', 100, 'off-store', { createdAt: '2026-02-01T00:00:00Z' }));
+    // Period 1 ended on 01-31; g2 arrived on 02-01 and cannot fund it, so the membership lapsed.
+    await wallet.renewDue();
+    expect(wallet.subscriptionEvents.map((event) => event.eventId)).toEqual([
+      's-1:0:subscriptionStarted', 's-1:1:subscriptionLapsed',
+    ]);
+    expect(wallet.lots.map((entry) => entry.remaining)).toEqual([0, 100]);
+    // A present-time spend may use it.
+    expect(await wallet.spend({ titleId: 'title-a', currency, amount: 1, idempotencyKey: 'op-1' }))
+      .toMatchObject({ status: 'debited', debits: [{ lotId: 'g2', amount: 1 }] });
   });
 
   it('anchors renewals on the start date', async () => {
     const wallet = createWallet({ now: () => '2026-01-31T00:00:00Z' });
-    wallet.creditFromGrant(grant('g1', 100, 'off-store'));
+    wallet.creditFromGrant(grant('g1', 100, 'off-store', { createdAt: '2026-01-31T00:00:00Z' }));
     await wallet.startMembership({
       subscriptionId: 's-1', titleId: 'title-a', logicalId: 'membership_plus',
       terms: { scope: 'platform', price: { currency, amount: 10 }, period: 'P1M' },
@@ -663,6 +717,8 @@ describe('createCreditCommerceProvider', () => {
       purchase: { subscription: false, quantity: true }, lifecycle: { finish: 'client' },
     });
     expect(createCreditCommerceCapabilities('host', {}, { subscriptions: false }).purchase.subscription).toBe(false);
+    expect(createCreditCommerceCapabilities('host').purchase.subscription).toBe(false);
+    expect(createCreditCommerceCapabilities('host', {}, { subscriptions: true }).purchase.subscription).toBe(true);
     // A client that cannot report active subscriptions cannot sell memberships either.
     const unreported = createCreditCommerceProvider(createClientFixture({ activeSubscriptions: false }).client, {
       titleId: 'title-a', billingAuthority: 'host',
@@ -739,13 +795,14 @@ describe('createCreditCommerceProvider', () => {
           },
         },
         accountBinding: { kind: 'host-identity' },
-        settlement: { ledgerEntryId: 'op-1' },
       },
     });
+    expect((result as { readonly purchase: { readonly settlement?: unknown } }).purchase.settlement)
+      .toBeUndefined();
     const membership = await provider.requestPurchase({ logicalId: 'membership_plus', idempotencyKey: 'op-2', source: 'shop' });
     expect(membership).toMatchObject({
       outcome: 'purchased',
-      purchase: { transactionId: 'membership:op-2:0', quantity: 1, settlement: { ledgerEntryId: 'membership:op-2:0' } },
+      purchase: { transactionId: 'membership:op-2:0', quantity: 1 },
     });
     expect(await provider.requestPurchase({ logicalId: 'membership_plus', idempotencyKey: 'op-3', source: 'shop', quantity: 2 }))
       .toMatchObject({ outcome: 'failed', error: { code: 'ITEM_UNAVAILABLE' } });
@@ -763,7 +820,9 @@ describe('createCreditCommerceProvider', () => {
       debits: [{ lotId: 'le-1', amount: 5 }, { lotId: 'le-2', amount: 3 }],
     });
     expect(wallet.lots.map((entry) => entry.remaining)).toEqual([0, 7]);
-    // Without a settlement time from the wallet, the provider clock stamps the purchase.
+    // Without a settlement time from the wallet, the provider clock stamps the
+    // purchase once and keeps that stamp for every replay.
+    let providerNow = '2026-12-24T00:00:00Z';
     const bare = createCreditCommerceProvider({
       ...client,
       async spend(request) {
@@ -772,7 +831,10 @@ describe('createCreditCommerceProvider', () => {
           ? { status: 'debited', entitlementId: answer.entitlementId, debits: answer.debits }
           : answer;
       },
-    }, { titleId: 'title-a', billingAuthority: 'host', now: () => '2026-12-24T00:00:00Z' });
+    }, { titleId: 'title-a', billingAuthority: 'host', now: () => providerNow });
+    expect(await bare.requestPurchase({ logicalId: 'booster', idempotencyKey: 'op-5', source: 'shop' }))
+      .toMatchObject({ outcome: 'purchased', purchase: { purchasedAt: '2026-12-24T00:00:00Z' } });
+    providerNow = '2026-12-25T00:00:00Z';
     expect(await bare.requestPurchase({ logicalId: 'booster', idempotencyKey: 'op-5', source: 'shop' }))
       .toMatchObject({ outcome: 'purchased', purchase: { purchasedAt: '2026-12-24T00:00:00Z' } });
   });
@@ -845,6 +907,67 @@ describe('createCreditCommerceProvider', () => {
     expect(seen).toHaveLength(4);
   });
 
+  it('keeps delivering when a listener throws', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { client, wallet, emit } = createClientFixture();
+      const provider = createCreditCommerceProvider(client, { titleId: 'title-a', billingAuthority: 'host' });
+      wallet.creditFromGrant(grant('le-web', 100, 'off-store'));
+      const seen: string[] = [];
+      provider.subscribe(() => {
+        throw new Error('listener boom');
+      });
+      provider.subscribe((event) => seen.push(event.type));
+      wallet.subscribe(() => {
+        throw new Error('wallet listener boom');
+      });
+      emit({ type: 'purchaseError', error: { code: 'NETWORK', retryable: true } });
+      await provider.requestPurchase({ logicalId: 'membership_plus', idempotencyKey: 'op-1', source: 'shop' });
+      await provider.requestPurchase({ logicalId: 'booster', idempotencyKey: 'op-2', source: 'shop' });
+      await expect(provider.restorePurchases?.()).resolves.toBeUndefined();
+      expect(seen).toEqual(['purchaseError', 'subscriptionUpdated', 'purchaseUpdated', 'purchaseUpdated']);
+      expect(warn).toHaveBeenCalledWith('Credit wallet commerce listener failed.', 'listener boom');
+      expect(warn).toHaveBeenCalledWith('Credit wallet listener failed.', 'wallet listener boom');
+
+      // A first subscriber that throws while the buffer drains still receives
+      // every buffered event and still gets its unsubscribe handle.
+      const late = createCreditCommerceProvider(client, { titleId: 'title-a', billingAuthority: 'host' });
+      await late.restorePurchases?.();
+      const drained: string[] = [];
+      const stop = late.subscribe((event) => {
+        drained.push(event.type);
+        if (drained.length === 1) {
+          throw new Error('drain boom');
+        }
+      });
+      expect(typeof stop).toBe('function');
+      expect(drained).toEqual(['purchaseUpdated', 'purchaseUpdated']);
+      const lateWallet = createInMemoryCreditWallet({
+        store: 'wallet', currencies: [currency], now: () => '2026-10-01T00:00:00Z', offers: [membershipOffer],
+      });
+      lateWallet.creditFromGrant(grant('le-web', 100, 'off-store'));
+      await lateWallet.startMembership({
+        subscriptionId: 's-a', titleId: 'title-a', logicalId: 'membership_plus',
+        terms: { ...membershipTerms, scope: 'title' },
+      });
+      await lateWallet.startMembership({
+        subscriptionId: 's-b', titleId: 'title-b', logicalId: 'membership_plus',
+        terms: { ...membershipTerms, scope: 'title' },
+      });
+      const seenA: string[] = [];
+      lateWallet.subscribe((event) => {
+        seenA.push(describeEvent(event));
+        throw new Error('title-a boom');
+      }, { titleId: 'title-a' });
+      const seenB: string[] = [];
+      lateWallet.subscribe((event) => seenB.push(describeEvent(event)), { titleId: 'title-b' });
+      expect(seenA).toEqual(['s-a:active:0']);
+      expect(seenB).toEqual(['s-b:active:0']);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('turns client failures and malformed answers into normalized errors without granting', async () => {
     const failing: CreditWalletClient = {
       store: 'wallet',
@@ -872,7 +995,14 @@ describe('createCreditCommerceProvider', () => {
     const provider = createCreditCommerceProvider(failing, { titleId: 'title-a', billingAuthority: 'host' });
     expect(await provider.requestPurchase({ logicalId: 'booster', idempotencyKey: 'op-1', source: 'shop' }))
       .toMatchObject({ outcome: 'failed', error: { code: 'NETWORK', retryable: true } });
-    await expect(provider.getAvailablePurchases()).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+    // Recovery skips a malformed entitlement with a warning instead of hiding every purchase.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(await provider.getAvailablePurchases()).toEqual([]);
+      expect(warn).toHaveBeenCalledWith('Credit wallet entitlement skipped during recovery.', expect.any(String));
+    } finally {
+      warn.mockRestore();
+    }
     await expect(provider.getActiveSubscriptions!()).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
     await expect(provider.finishTransaction!({ transactionId: 'e-1', ledgerEntryId: 'le-1', isConsumable: true }))
       .rejects.toMatchObject({ code: 'UNKNOWN', message: 'wallet offline' });
@@ -938,6 +1068,60 @@ describe('createCreditCommerceProvider', () => {
       { transactionId: 'op-2', storeSku: 'retired', logicalId: 'retired', quantity: 1 },
     ]);
     expect(await provider.getAvailablePurchases()).toHaveLength(2);
+  });
+
+  it('reports the quantity bought at spend time and recovers past a bad offer', async () => {
+    const { client, wallet } = createClientFixture();
+    const provider = createCreditCommerceProvider(client, {
+      titleId: 'title-a', billingAuthority: 'host', currencies: [currency], capabilities: { purchase: { quantity: true } },
+    });
+    wallet.creditFromGrant(grant('le-1', 20));
+    await provider.requestPurchase({ logicalId: 'booster', idempotencyKey: 'op-1', source: 'shop', quantity: 2 });
+    expect(await wallet.listUnredeemed({ titleId: 'title-a' })).toMatchObject([{ entitlementId: 'op-1', quantity: 2 }]);
+    // A later price change does not rewrite what was bought.
+    wallet.addOffers([{ ...packOffer, price: { currency, amount: 2 } }]);
+    expect(await provider.getAvailablePurchases()).toMatchObject([{ transactionId: 'op-1', quantity: 2 }]);
+    wallet.addOffers([{ ...packOffer, price: { currency, amount: 16 } }]);
+    expect(await provider.getAvailablePurchases()).toMatchObject([{ transactionId: 'op-1', quantity: 2 }]);
+    // A wallet that records no quantity falls back to the current price.
+    const unrecorded = createCreditCommerceProvider({
+      ...client,
+      async listUnredeemed(request) {
+        return (await wallet.listUnredeemed(request)).map((entitlement) =>
+          Object.fromEntries(
+            Object.entries(entitlement).filter(([key]) => key !== 'quantity'),
+          ) as unknown as CreditEntitlement);
+      },
+    }, { titleId: 'title-a', billingAuthority: 'host' });
+    expect(await unrecorded.getAvailablePurchases()).toMatchObject([{ transactionId: 'op-1', quantity: 1 }]);
+    // One malformed or undeclared offer does not hide unredeemed purchases.
+    const degraded = createCreditCommerceProvider({
+      ...client,
+      async listOffers() {
+        return [
+          { ...packOffer, kind: 'subscription' },
+          { ...membershipOffer, logicalId: 'foreign_currency', price: { currency: 'other', amount: 1 } },
+          packOffer,
+        ] as readonly CreditOffer[];
+      },
+    }, { titleId: 'title-a', billingAuthority: 'host', currencies: [currency] });
+    await expect(degraded.fetchProducts({})).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+    expect(await degraded.getAvailablePurchases()).toMatchObject([{ transactionId: 'op-1', storeSku: 'booster.1', quantity: 2 }]);
+    await expect(degraded.restorePurchases?.()).resolves.toBeUndefined();
+    // An offers outage does not hide unredeemed purchases either; they list under their logical id.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const offline = createCreditCommerceProvider({
+        ...client,
+        async listOffers() {
+          throw new CommerceError('NETWORK');
+        },
+      }, { titleId: 'title-a', billingAuthority: 'host' });
+      expect(await offline.getAvailablePurchases()).toMatchObject([{ transactionId: 'op-1', storeSku: 'booster', quantity: 2 }]);
+      expect(warn).toHaveBeenCalledWith('Credit wallet offers unavailable during recovery.', expect.any(String));
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

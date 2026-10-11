@@ -30,6 +30,7 @@ import type {
   IsoTimestamp,
   NonEmptyString,
   NonNegativeInteger,
+  PositiveQuantity,
   PurchaseKind,
   RequestPurchaseInput,
   RequestPurchaseResult,
@@ -152,6 +153,12 @@ export interface CreditSpendInput {
   readonly currency: NonEmptyString;
   readonly amount: number & tags.ExclusiveMinimum<0>;
   readonly idempotencyKey: NonEmptyString;
+  /**
+   * The offer being bought; the wallet prices the spend against it and issues
+   * an entitlement. Without it the spend is a plain debit of `amount` with no
+   * entitlement, an owner-side form the conformance vectors use; a wallet
+   * service should require it from game clients.
+   */
   readonly logicalId?: CommerceLogicalProductId;
 }
 
@@ -179,6 +186,8 @@ export interface CreditEntitlement {
   readonly idempotencyKey: NonEmptyString;
   readonly createdAt: IsoTimestamp;
   readonly debits: readonly CreditDebit[];
+  /** Units bought at spend time; the provider reports it rather than deriving one from today's price. */
+  readonly quantity?: PositiveQuantity;
 }
 
 export interface CreditBalance {

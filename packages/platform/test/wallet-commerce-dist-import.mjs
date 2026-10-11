@@ -68,14 +68,14 @@ wallet.creditFromGrant({
   currency,
   amount: 60,
   origin: { channel: 'off-store', store: 'fixture.web', titleId: 'title-a' },
-  createdAt: '2026-10-02T00:00:00Z',
+  createdAt: '2026-10-01T00:00:00Z',
 });
 assert.equal(wallet.creditFromGrant({
   ledgerEntryId: 'le-web',
   currency,
   amount: 60,
   origin: { channel: 'off-store', store: 'fixture.web', titleId: 'title-a' },
-  createdAt: '2026-10-02T00:00:00Z',
+  createdAt: '2026-10-01T00:00:00Z',
 }).lotId, 'le-web');
 assert.equal(wallet.lots.length, 2);
 const eligible = selectEligibleCreditLots(wallet.lots, { titleId: 'title-a', currency, now: at });
@@ -100,7 +100,7 @@ assert.equal(capabilities.authority.accountBinding, 'host');
 const purchased = await provider.requestPurchase({ logicalId: 'booster', idempotencyKey: 'op-1', source: 'shop' });
 assert.equal(purchased.outcome, 'purchased');
 assert.equal(purchased.purchase.evidence.schema, creditWalletSpendEvidenceSchema);
-assert.deepEqual(purchased.purchase.settlement, { ledgerEntryId: 'op-1' });
+assert.equal(purchased.purchase.settlement, undefined);
 assert.deepEqual(readCreditWalletSpendEvidence(purchased.purchase.evidence).debits, [{ lotId: 'le-store', amount: 4 }]);
 const replay = await provider.requestPurchase({ logicalId: 'booster', idempotencyKey: 'op-1', source: 'shop' });
 assert.equal(replay.outcome, 'purchased');

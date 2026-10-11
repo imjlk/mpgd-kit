@@ -33,15 +33,23 @@ client** against its own wallet service, under its own open `StoreId`:
   subscriptions), `requestPurchase` spends the offer price times the quantity
   and answers `purchased` only when the wallet's debits add up to that price,
   with `adapter-settled` evidence (`credit-wallet.spend.v1`, carrying the
-  debits and the wallet's settlement id, which is also
-  `settlement.ledgerEntryId`) and the wallet's `createdAt` as `purchasedAt`,
+  debits and the wallet's entitlement id) and no `settlement` pointer (see the
+  C1 note below), and the wallet's `createdAt` as `purchasedAt`,
   so a replay and a later `getAvailablePurchases` read show the same
   purchase; `getAvailablePurchases` lists the title's unredeemed entitlements
   (one the wallet lists for another title is dropped), `finishTransaction`
   redeems one and refuses to run without the ledger entry id of its grant,
   `restorePurchases` re-reads the unredeemed entitlements as `purchaseUpdated`
   events (buffered once per transaction before the first listener), and the
-  client's events for the title pass through the standard pre-listener buffer.
+  client's events for the title pass through the standard pre-listener buffer;
+  a listener that throws is logged and never stops the others. Recovery reads
+  (`getAvailablePurchases`, `restorePurchases`) never fail because of the
+  offer list: an offers outage or a malformed offer only means a purchase is
+  listed under its logical id, and a malformed entitlement is skipped with a
+  warning. A purchase's `quantity` is the one the wallet recorded at spend
+  time (`CreditEntitlement.quantity`), falling back to the spent amount over
+  the current price; it is advisory, because the backend prices a wallet
+  purchase from the evidence's `amount` and `debits`.
   The capability block is the RFC profile row (`finish: 'server'`,
   `authority.evidence: 'adapter-settled'`, `accountBinding: 'host'`,
   `lifecycle.events: true`, `purchase.subscription` only under `host`
@@ -67,7 +75,9 @@ client** against its own wallet service, under its own open `StoreId`:
   only; months are anchored on the start date with the day clamped, so period
   `n` ends at `startedAt + (n + 1) × period`). A `platform`-scoped membership
   debits `cross-title` lots only; a renewal judges lot eligibility at the
-  period boundary it pays for, not at the time the scheduler runs; a
+  period boundary it pays for, not at the time the scheduler runs, and
+  ignores lots granted after that boundary (`CreditLotEligibility.createdBy`);
+  a
   membership the eligible balance cannot renew lapses at the end of the paid
   period with reason `INSUFFICIENT_BALANCE`; a lapsed id cannot be restarted
   by replaying its period-0 key, and a subscription id started with other
@@ -93,26 +103,29 @@ client** against its own wallet service, under its own open `StoreId`:
   billing authority: `google-play` and `app-store` are always `store` and reject
   a `host` override, `web` and `web-preview` default to `host`, every other
   profile defaults to `store`. `TargetReleaseConfig.billingAuthority` in
-  `@mpgd/target-config` is the per-target override and `validate:target-config`
-  rejects `host` on the two store-billed profiles.
+  `@mpgd/target-config` is the per-target override, the starter and template
+  runtime loaders accept only `store` or `host` for it, and
+  `validate:target-config` rejects `host` on the two store-billed profiles.
 
 The provider never credits a lot or unlocks an entitlement: lots are credited
-by the wallet owner from ledger grants, the `settlement` pointer is verified by
-the reconciler through the backend like any other adapter-settled purchase,
-and memberships renew, lapse, and expire on the wallet service alone
-(`subscriptionUpdated` events and `getActiveSubscriptions` are how a client
-learns about them). Policy constraints come from
+by the wallet owner from ledger grants, a wallet purchase is verified by the
+reconciler through the backend from its `credit-wallet.spend.v1` evidence like
+any other purchase, and memberships renew, lapse, and expire on the wallet
+service alone (`subscriptionUpdated` events and `getActiveSubscriptions` are
+how a client learns about them). Policy constraints come from
 [D-02](SUBSCRIPTION_COMMERCE_DECISION.md).
 
-Note for C1 (the single reconciler): `@mpgd/game-services` grants a v1
-`completed` result carrying `authoritativeGrant` from a provider that declares
+Note for C1 (the single reconciler): a wallet purchase carries no
+`settlement` pointer. The contract defines `settlement.ledgerEntryId` as the
+authority's ledger entry, which for a wallet spend exists only after the
+backend verifies the evidence, and the wallet's own id (the entitlement id,
+derived by the reference wallet from the client-chosen idempotency key) is not
+one. `@mpgd/game-services` grants a v1 `completed` result carrying
+`authoritativeGrant` from a provider that declares
 `authority.evidence: 'adapter-settled'` without a second verification
-(`findAdapterSettledGrant`, B4). That shortcut assumes the adapter already
-wrote the ledger grant, as the Microsoft Store authority does. A wallet
-purchase's `settlement.ledgerEntryId` is the wallet's own entitlement id, not
-a game-services ledger entry, and the reference wallet derives it from the
-client-chosen idempotency key. No bridge maps wallet settlements to
-`authoritativeGrant` today; one that did would mark wallet purchases granted
-without a ledger entry. C1 must either verify wallet settlements through the
-backend (`credit-wallet.spend.v1` evidence) or key the shortcut on the store,
-never on the evidence declaration alone.
+(`findAdapterSettledGrant`, B4) because the Microsoft Store authority has
+already written the ledger grant; `toCommerceAdapter` builds
+`authoritativeGrant` only from `settlement`, so a wallet purchase takes the
+verified path and is never granted on the declaration alone. C1 keeps it that
+way: wallet purchases are granted from the backend's verification of the
+evidence, never from a settlement pointer the wallet could supply.

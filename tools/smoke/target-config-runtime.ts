@@ -42,6 +42,15 @@ for (const validate of [assertStarterMatrix, assertTemplateMatrix]) {
     android.features[field] = 'false';
     assert.throws(() => validate(invalid), new RegExp(`features\\.${field} must be a boolean`));
   }
+  const badAuthority = structuredClone(targetConfigMatrix) as unknown as {
+    targets: Record<string, { release: Record<string, unknown> }>;
+  };
+  const web = badAuthority.targets['web-preview'];
+  assert.ok(web);
+  web.release.billingAuthority = 'bank';
+  assert.throws(() => validate(badAuthority), /release\.billingAuthority has unsupported value/u);
+  web.release.billingAuthority = 'host';
+  assert.ok(validate(badAuthority));
 }
 
 const configTargets = [
