@@ -31,11 +31,7 @@ worked example of how to ask the graph about that subsystem.
   "tsconfig": "tsconfig.graph.json",
   "question": "What are the central target build, validation, smoke, and release manifest flows?",
   "draft": { "reason": "Use a tour because the target pipeline crosses several tool modules.", "type": "tour" },
-  "request": {
-    "type": "tour",
-    "includeTests": true,
-    "reinterpretations": ["executeNativeTargetBuild", "verifyTargetArtifacts"]
-  }
+  "request": { "type": "tour", "includeTests": true }
 }
 ```
 
@@ -46,7 +42,10 @@ to that `cwd`, exactly as the graph reports them.
 ## The named-entrypoint rule
 
 Every preset declares `namedEntrypoints`: the `{ name, file }` pairs its
-question is actually about. The preflight passes a preset when
+question is actually about. For a tour the runtime derives
+`request.reinterpretations` from that list, so the names the tour seeds and
+the names the preflight asserts are one list. The preflight passes a preset
+when
 
 1. the envelope's `next.action` is `answer`,
 2. the result has at least one anchor, and
@@ -63,7 +62,15 @@ not resolve, and edge anchors such as `calls foo` carry the call-site file and
 no id at all. A symbol with the same name in another file does not match, a
 member must be named as `Owner.member`, and an entry may pin `kind`
 (`function`, `method`, `variable`, ...) to exclude a same-named declaration of
-another kind in the same file.
+another kind in the same file. Named entrypoints point at the declaring file;
+a barrel re-export is a different node and is not where the graph cites the
+symbol.
+
+Test files are not asserted. A tour cites tests through the `tests` anchors it
+derives from the seeds (test coverage of the cited symbols), and test variable
+names are neither stable nor seedable, so a preset that cares about test
+coverage says so in its `description` and relies on the tour's own test
+anchoring rather than on a named entrypoint.
 
 The preflight does not check which directories the ranked anchors land in. A
 tour ranks the whole graph by centrality, and the ranking shifts when unrelated
@@ -87,14 +94,15 @@ preset supplied rather than across the whole graph.
 
 Consequences for preset authors:
 
-- Every named entrypoint must be listed in `request.reinterpretations`; the
-  runtime refuses a tour preset that forgets one.
-- Extra reinterpretation hints compete with the named entrypoints for the
-  named seeds: with the old 14-22 item hint lists, `bootstrapStarter`,
+- `request.reinterpretations` is derived from `namedEntrypoints` and is not
+  written in checked-in presets. An explicit field is accepted only when it is
+  exactly the derived list; anything else is rejected. Only ad-hoc request
+  files without `namedEntrypoints` spell the list out themselves.
+- Extra reinterpretation hints would compete with the named entrypoints for
+  the named seeds: with the old 14-22 item hint lists, `bootstrapStarter`,
   `createGameServicesBackend`, and `withTargetAvailability` were displaced by
-  higher-scoring hints and dropped out of their tours. Checked-in tour presets
-  therefore list exactly their named entrypoints, and
-  `tools/graph/run-graph-presets.test.mjs` enforces that.
+  higher-scoring hints and dropped out of their tours. That is why the list is
+  derived rather than hand-maintained.
 - Pick names that are declared once in the graph project. If a name is
   declared more than once, name the method or variable the question is about
   (`Owner.member`) or pick a different symbol.
@@ -109,7 +117,8 @@ Details presets (`request.type: "details"`) pin exact `file#name:kind` handles
 and derive their named entrypoints (kind included) from them automatically, so
 they only need `namedEntrypoints` if the asserted set should differ from the
 handles. Ad-hoc request files passed to `pnpm graph:inspect --request` do not
-need `namedEntrypoints` at all; only checked-in presets are asserted.
+need `namedEntrypoints` at all, and bare-name details handles in them are
+simply not asserted; only checked-in presets are asserted.
 
 ## Adding a preset
 
@@ -118,8 +127,8 @@ need `namedEntrypoints` at all; only checked-in presets are asserted.
    handles).
 2. Choose the named entrypoints from the modules the question is about and
    confirm each name is unique with `pnpm graph:dump` or `pnpm graph:inspect`.
-3. Add `tools/graph/requests/<name>.json` with `namedEntrypoints` and, for a
-   tour, the same names in `request.reinterpretations`.
+3. Add `tools/graph/requests/<name>.json` with `namedEntrypoints`; a tour
+   needs no `request.reinterpretations`, the runtime derives it.
 4. Run `pnpm test:tooling` (schema, on-disk existence, and drift tests) and
    `pnpm graph:preflight` (the real graph).
 5. Optionally add a `graph:<name>` script in the root `package.json` for
@@ -131,8 +140,8 @@ Feature PRs must not edit presets to make `pnpm graph:preflight` pass. If the
 preflight fails on a PR, one of these is true:
 
 - The PR renamed, moved, or removed a named entrypoint. Update the preset's
-  `namedEntrypoints` and `reinterpretations` to the new name or file in the
-  same PR; that is a contract change the preset exists to surface.
+  `namedEntrypoints` to the new name or file in the same PR; that is a
+  contract change the preset exists to surface.
 - The PR introduced a second declaration of a named entrypoint's name, so the
   graph can no longer resolve the hint. Either rename the new symbol or qualify
   the preset entry (`Owner.member`).

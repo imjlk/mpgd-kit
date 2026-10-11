@@ -32,11 +32,7 @@ function tourPreset(overrides = {}) {
     namedEntrypoints,
     question: 'What are the central target build, smoke, and release manifest flows?',
     draft: { reason: 'Tour the target pipeline.', type: 'tour' },
-    request: {
-      type: 'tour',
-      includeTests: true,
-      reinterpretations: namedEntrypoints.map((entry) => entry.name),
-    },
+    request: { type: 'tour', includeTests: true },
     ...overrides,
   }, 'synthetic-tour.json');
 }
@@ -259,14 +255,81 @@ test('keeps the answer-ready and non-empty anchor requirements', () => {
   assert.throws(() => assertGraphPresetResponse('synthetic-tour', preset, { next: { action: 'answer' } }), /no graph result/);
 });
 
-test('rejects presets that still use expectedFiles or forget to seed a named entrypoint', () => {
+test('rejects presets that still use expectedFiles or declare malformed named entrypoints', () => {
   assert.throws(() => tourPreset({ expectedFiles: ['tools/target/'] }), /declares expectedFiles; declare namedEntrypoints/);
   assert.throws(() => tourPreset({ namedEntrypoints: undefined }), /non-empty namedEntrypoints/);
   assert.throws(() => tourPreset({ namedEntrypoints: [] }), /non-empty namedEntrypoints/);
   assert.throws(() => tourPreset({ namedEntrypoints: [{ name: 'executeNativeTargetBuild' }] }), /needs name and file strings/);
+});
+
+test('tour reinterpretations are derived from the named entrypoints', () => {
+  const names = namedEntrypoints.map((entry) => entry.name);
+  assert.deepEqual(tourPreset().props.request.reinterpretations, names);
+  // An explicit list is tolerated only when it is the derived list.
+  assert.deepEqual(
+    tourPreset({ request: { type: 'tour', reinterpretations: [...names] } }).props.request.reinterpretations,
+    names,
+  );
   assert.throws(
     () => tourPreset({ request: { type: 'tour', reinterpretations: ['executeNativeTargetBuild'] } }),
-    /named entrypoint generateReleaseManifest must also be listed in request\.reinterpretations/,
+    /request\.reinterpretations is derived from namedEntrypoints; omit it or list exactly executeNativeTargetBuild, generateReleaseManifest, verifyTargetArtifacts/,
+  );
+  assert.throws(
+    () => tourPreset({ request: { type: 'tour', reinterpretations: [...names, 'extraHint'] } }),
+    /is derived from namedEntrypoints/,
+  );
+  // Without named entrypoints (ad-hoc), the list must be spelled out.
+  assert.throws(
+    () => normalizeRequest({
+      question: 'What runs?', draft: { reason: 'Look.', type: 'tour' }, request: { type: 'tour' },
+    }, 'adhoc.json', { requireNamedEntrypoints: false }),
+    /needs a reinterpretations array of non-empty strings or namedEntrypoints/,
+  );
+  // Ad-hoc explicit lists are trimmed; duplicate named entrypoints seed once.
+  assert.deepEqual(
+    normalizeRequest({
+      question: 'What runs?', draft: { reason: 'Look.', type: 'tour' },
+      request: { type: 'tour', reinterpretations: [' bootstrapStarter '] },
+    }, 'adhoc.json', { requireNamedEntrypoints: false }).props.request.reinterpretations,
+    ['bootstrapStarter'],
+  );
+  assert.deepEqual(
+    tourPreset({
+      namedEntrypoints: [
+        { name: 'verifyTargetArtifacts', file: 'tools/smoke/verify-target-artifacts.ts', kind: 'function' },
+        { name: 'verifyTargetArtifacts', file: 'tools/smoke/verify-target-artifacts.test.ts' },
+      ],
+    }).props.request.reinterpretations,
+    ['verifyTargetArtifacts'],
+  );
+});
+
+test('ad-hoc details requests may use bare-name handles, which are not asserted', () => {
+  const adHoc = normalizeRequest({
+    question: 'What does the router call?',
+    draft: { reason: 'Pin by name.', type: 'details' },
+    request: {
+      type: 'details',
+      handles: ['createGameServicesRouter', 'packages/game-services/src/contract.ts#gameServicesContract:variable'],
+    },
+  }, 'adhoc-details.json', { requireNamedEntrypoints: false });
+  assert.deepEqual(adHoc.namedEntrypoints, [
+    { name: 'gameServicesContract', file: 'packages/game-services/src/contract.ts', kind: 'variable' },
+  ]);
+  const bareOnly = normalizeRequest({
+    question: 'What does the router call?',
+    draft: { reason: 'Pin by name.', type: 'details' },
+    request: { type: 'details', handles: ['createGameServicesRouter'] },
+  }, 'adhoc-details.json', { requireNamedEntrypoints: false });
+  assert.deepEqual(bareOnly.namedEntrypoints, []);
+  // A checked-in preset must pin ids.
+  assert.throws(
+    () => normalizeRequest({
+      question: 'What does the router call?',
+      draft: { reason: 'Pin by name.', type: 'details' },
+      request: { type: 'details', handles: ['createGameServicesRouter'] },
+    }, 'preset-details.json'),
+    /not a file#name:kind node id: createGameServicesRouter/,
   );
 });
 
@@ -293,18 +356,27 @@ test('every checked-in preset names entrypoints that are declared on disk', () =
       assert.ok(existsSync(path), `${name}: ${entry.file} exists`);
       const source = readFileSync(path, 'utf8');
       const [owner, ...members] = entry.name.split('.');
-      const declaration = new RegExp(`\\b(?:function|const|let|var|class|enum|interface|type)\\s+${owner}\\b`);
+      // The declaring file names the symbol either in a declaration or in a
+      // local export list (`export { owner }`, `export type { owner }`). A
+      // re-export (`export { owner } from`) or an alias target (`x as owner`)
+      // is not a declaration the graph cites under that file, and anonymous
+      // `export default` declarations have no name the graph could cite.
+      const declaration = new RegExp(
+        `\\b(?:function\\*?|const|let|var|class|enum|interface|type)\\s+${owner}\\b` +
+          `|export\\s*(?:type\\s+)?\\{[^}]*(?<!\\bas\\s+)\\b${owner}\\b[^}]*\\}(?!\\s*from\\b)`,
+      );
       assert.match(source, declaration, `${name}: ${entry.file} declares ${owner}`);
       for (const member of members) {
         assert.ok(source.includes(member), `${name}: ${entry.file} mentions ${member}`);
       }
     }
     if (preset.props.request.type === 'tour') {
-      const names = preset.namedEntrypoints.map((entry) => entry.name);
+      const raw = JSON.parse(readFileSync(join(repoRoot, 'tools/graph/requests', `${name}.json`), 'utf8'));
+      assert.equal(raw.request.reinterpretations, undefined, `${name}: reinterpretations are derived, not checked in`);
       assert.deepEqual(
         preset.props.request.reinterpretations,
-        names,
-        `${name}: tour reinterpretations are exactly its named entrypoints`,
+        preset.namedEntrypoints.map((entry) => entry.name),
+        `${name}: tour seeds exactly its named entrypoints`,
       );
     }
   }

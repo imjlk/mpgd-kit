@@ -29,12 +29,6 @@
   "request": {
     "type": "tour",
     "includeTests": true,
-    "limit": 60,
-    "reinterpretations": [
-      "executeNativeTargetBuild",
-      "validatePlatformTargetsFile",
-      "generateReleaseManifest",
-      "verifyTargetArtifacts"
-    ]
+    "limit": 60
   }
 }

@@ -29,12 +29,6 @@
   "request": {
     "type": "tour",
     "includeTests": true,
-    "limit": 90,
-    "reinterpretations": [
-      "createGameServicesRouter",
-      "createGameServicesBackend",
-      "createWorkerFetchHandler",
-      "createD1GameServicesStore"
-    ]
+    "limit": 90
   }
 }

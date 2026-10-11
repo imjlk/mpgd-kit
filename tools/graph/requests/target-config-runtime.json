@@ -33,13 +33,6 @@
   "request": {
     "type": "tour",
     "includeTests": true,
-    "limit": 90,
-    "reinterpretations": [
-      "withTargetAvailability",
-      "createTargetRuntimeSnapshot",
-      "createEffectiveTargetConfigMatrix",
-      "validateEffectiveTargetConfigMatrix",
-      "generateEffectiveTargetConfigArtifacts"
-    ]
+    "limit": 90
   }
 }

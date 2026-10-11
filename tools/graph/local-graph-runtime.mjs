@@ -9,6 +9,8 @@ const require = createRequire(import.meta.url);
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 export const requestDir = join(repoRoot, 'tools/graph/requests');
 
+// These are internal @ttsc/graph module paths, not public exports. Re-check them
+// whenever the pinned @ttsc/graph version changes (pnpm validate:toolchain pins it).
 const graphRoot = dirname(require.resolve('@ttsc/graph/package.json'));
 const { resolveGraphBinary } = require(join(graphRoot, 'lib/resolveGraphBinary.js'));
 const { TtscGraphApplication } = require(join(graphRoot, 'lib/TtscGraphApplication.js'));
@@ -66,19 +68,24 @@ export function normalizeRequest(request, source, { requireNamedEntrypoints = tr
     throw new Error(`Graph request needs a draft with reason and type: ${source}`);
   }
 
-  if (props.request.type === 'tour' && !Array.isArray(props.request.reinterpretations)) {
-    throw new Error(`Graph tour needs a reinterpretations array: ${source}`);
+  const normalizedEntrypoints = normalizeNamedEntrypoints(
+    namedEntrypoints,
+    props.request,
+    source,
+    requireNamedEntrypoints,
+  );
+
+  if (props.request.type === 'tour') {
+    props.request = {
+      ...props.request,
+      reinterpretations: tourReinterpretationsOf(props.request, normalizedEntrypoints, source),
+    };
   }
 
   return {
     name,
     description,
-    namedEntrypoints: normalizeNamedEntrypoints(
-      namedEntrypoints,
-      props.request,
-      source,
-      requireNamedEntrypoints,
-    ),
+    namedEntrypoints: normalizedEntrypoints,
     tsconfig,
     cwd,
     props,
@@ -86,20 +93,59 @@ export function normalizeRequest(request, source, { requireNamedEntrypoints = tr
 }
 
 /**
+ * The symbol names a tour seeds. They are the named entrypoints, in order:
+ * the tour resolves each name as a handle and gives the resolved names half of
+ * its seeds, so the list the preflight asserts and the list the tour seeds are
+ * one list. An explicit `request.reinterpretations` is accepted only when it
+ * is that same list; a request without named entrypoints (an ad-hoc file) must
+ * spell it out.
+ */
+function tourReinterpretationsOf(graphRequest, namedEntrypoints, source) {
+  const explicit = graphRequest.reinterpretations;
+
+  if (namedEntrypoints.length === 0) {
+    if (!Array.isArray(explicit) || explicit.some((value) => typeof value !== 'string' || value.trim() === '')) {
+      throw new Error(
+        `Graph tour needs a reinterpretations array of non-empty strings or namedEntrypoints: ${source}`,
+      );
+    }
+    return explicit.map((value) => value.trim());
+  }
+
+  // Two entries may share a name (different files, or one pinning kind); the
+  // tour resolves a name once, so it is seeded once.
+  const derived = [...new Set(namedEntrypoints.map((entry) => entry.name))];
+  if (explicit !== undefined) {
+    const given = Array.isArray(explicit) ? explicit.map((value) => String(value).trim()) : undefined;
+    if (given === undefined || given.length !== derived.length || given.some((value, index) => value !== derived[index])) {
+      throw new Error(
+        `Graph tour request.reinterpretations is derived from namedEntrypoints; omit it or list exactly ${derived.join(', ')}: ${source}`,
+      );
+    }
+  }
+  return derived;
+}
+
+/**
  * The symbols a preset asserts the graph answer is made of.
  *
- * A tour must list them explicitly, and every listed name must also be a
- * `reinterpretations` entry so the tour seeds it instead of hoping the
- * centrality ranking finds it. A details request already pins exact handles,
- * so its named entrypoints default to those handles, kind included. An entry
- * may carry an optional `kind` to pin the node kind as well.
+ * A tour lists them explicitly and seeds the same names (see
+ * `tourReinterpretationsOf`). A details request already pins exact handles,
+ * so its named entrypoints default to those handles, kind included; an ad-hoc
+ * details request may use bare-name handles, which are simply not asserted.
+ * An entry may carry an optional `kind` to pin the node kind as well.
  */
 function normalizeNamedEntrypoints(namedEntrypoints, graphRequest, source, required) {
-  const declared = namedEntrypoints === undefined && graphRequest.type === 'details'
-    ? namedEntrypointsFromHandles(graphRequest.handles, source)
-    : namedEntrypoints;
+  let declared = namedEntrypoints;
 
-  if (declared === undefined && !required) {
+  if (declared === undefined && graphRequest.type === 'details') {
+    declared = namedEntrypointsFromHandles(graphRequest.handles, source, required);
+    if (declared.length === 0 && !required) {
+      return [];
+    }
+  }
+
+  if (!required && (declared === undefined || (Array.isArray(declared) && declared.length === 0))) {
     return [];
   }
 
@@ -107,7 +153,7 @@ function normalizeNamedEntrypoints(namedEntrypoints, graphRequest, source, requi
     throw new Error(`Graph request needs a non-empty namedEntrypoints array: ${source}`);
   }
 
-  const normalized = declared.map((entry, index) => {
+  return declared.map((entry, index) => {
     if (
       typeof entry !== 'object' || entry === null ||
       typeof entry.name !== 'string' || entry.name.trim() === '' ||
@@ -124,33 +170,33 @@ function normalizeNamedEntrypoints(namedEntrypoints, graphRequest, source, requi
       ...(entry.kind === undefined ? {} : { kind: entry.kind.trim() }),
     };
   });
-
-  if (graphRequest.type === 'tour') {
-    const reinterpretations = new Set(graphRequest.reinterpretations.map((value) => String(value).trim()));
-    for (const entry of normalized) {
-      if (!reinterpretations.has(entry.name)) {
-        throw new Error(
-          `Graph tour named entrypoint ${entry.name} must also be listed in request.reinterpretations: ${source}`,
-        );
-      }
-    }
-  }
-
-  return normalized;
 }
 
-function namedEntrypointsFromHandles(handles, source) {
-  if (!Array.isArray(handles)) {
-    throw new Error(`Graph details request needs a handles array: ${source}`);
+/**
+ * Named entrypoints from a details request's handles. A checked-in preset
+ * (`required`) must pin `file#name:kind` ids; an ad-hoc request may also use
+ * bare names, which are skipped here because there is no file to assert.
+ */
+function namedEntrypointsFromHandles(handles, source, required) {
+  if (!Array.isArray(handles) || (required && handles.length === 0)) {
+    if (required) {
+      throw new Error(`Graph details request needs at least one handle: ${source}`);
+    }
+    return [];
   }
 
-  return handles.map((handle) => {
+  const entries = [];
+  for (const handle of handles) {
     const parsed = typeof handle === 'string' ? parseTtscGraphNodeId(handle) : undefined;
     if (parsed === undefined) {
-      throw new Error(`Graph details handle is not a file#name:kind node id: ${String(handle)} (${source})`);
+      if (required) {
+        throw new Error(`Graph details handle is not a file#name:kind node id: ${String(handle)} (${source})`);
+      }
+      continue;
     }
-    return { name: parsed.name, file: parsed.path, ...(parsed.kind === undefined ? {} : { kind: parsed.kind }) };
-  });
+    entries.push({ name: parsed.name, file: parsed.path, ...(parsed.kind === undefined ? {} : { kind: parsed.kind }) });
+  }
+  return entries;
 }
 
 export function dumpGraph({ cwd, tsconfig }) {
@@ -278,14 +324,15 @@ function answerSurfaceOf(result) {
 }
 
 /**
- * True when a cited symbol is the named entrypoint: same normalized file, the
- * same symbol name as the id's symbol part (`Owner.member` for members), and
- * the same kind when the entrypoint pins one.
+ * True when a cited symbol is the named entrypoint: same file, the same symbol
+ * name as the id's symbol part (`Owner.member` for members), and the same kind
+ * when the entrypoint pins one. Both sides are already normalized: symbols by
+ * `graphResultSymbols`, entrypoints by `normalizeRequest`.
  */
 export function matchesNamedEntrypoint(symbol, entrypoint) {
   return (
-    symbol.file === normalizeGraphFile(entrypoint.file) &&
-    symbol.symbol === entrypoint.name.trim() &&
+    symbol.file === entrypoint.file &&
+    symbol.symbol === entrypoint.name &&
     (entrypoint.kind === undefined || symbol.kind === entrypoint.kind)
   );
 }
@@ -300,11 +347,15 @@ export function missingNamedEntrypoints(result, namedEntrypoints) {
 
 export function formatNamedEntrypoint(entrypoint) {
   const kind = entrypoint.kind === undefined ? '' : `:${entrypoint.kind}`;
-  return `${entrypoint.name}${kind} (${normalizeGraphFile(entrypoint.file)})`;
+  return `${entrypoint.name}${kind} (${entrypoint.file})`;
 }
 
 /**
  * Validate one preset's graph response envelope and return its result.
+ *
+ * `preset` is `normalizeRequest` output (`readPreset`/`readRequestFile`): its
+ * named entrypoints are already trimmed and path-normalized, and the matcher
+ * relies on that.
  *
  * Throws when the envelope is malformed, when the graph did not produce an
  * answer-ready result, when the result has no anchors, when the preset

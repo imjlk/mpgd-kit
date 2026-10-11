@@ -1,6 +1,6 @@
 {
   "name": "i18n-locale-resolution",
-  "description": "Public target-aware locale resolution and injectable browser or WebView language collection.",
+  "description": "Public target-aware locale resolution and injectable browser or WebView language collection. Test anchoring (packages/i18n/test/i18n-smoke.ts) is not asserted; the tour cites it through test coverage only.",
   "namedEntrypoints": [
     {
       "name": "readMpgdPreferredLocales",
@@ -25,11 +25,6 @@
   "request": {
     "type": "tour",
     "includeTests": true,
-    "limit": 20,
-    "reinterpretations": [
-      "readMpgdPreferredLocales",
-      "resolveTargetMpgdLocale",
-      "normalizeMpgdLocale"
-    ]
+    "limit": 20
   }
 }

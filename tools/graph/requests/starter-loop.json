@@ -30,12 +30,6 @@
   "request": {
     "type": "tour",
     "includeTests": true,
-    "limit": 70,
-    "reinterpretations": [
-      "bootstrapStarter",
-      "installStarterPlatform",
-      "createStarterGame",
-      "createStarterGameServices"
-    ]
+    "limit": 70
   }
 }

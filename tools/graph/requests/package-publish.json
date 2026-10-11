@@ -29,12 +29,6 @@
   "request": {
     "type": "tour",
     "includeTests": true,
-    "limit": 60,
-    "reinterpretations": [
-      "discoverBuildablePackages",
-      "sortByWorkspaceDependencies",
-      "selectBuildablePackages",
-      "npmPackDryRun"
-    ]
+    "limit": 60
   }
 }
