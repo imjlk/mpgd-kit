@@ -16,6 +16,28 @@ import {
   type StarterLogicalProductId,
 } from './index.js';
 
+import type {
+  ActiveSubscription,
+  CommerceErrorCode,
+  CommerceErrorInfo,
+  CommerceEvent,
+  CommerceLogicalProductId,
+  CommerceProvider,
+  FetchProductsInput,
+  FinishTransactionInput,
+  FinishTransactionResult,
+  GetAvailablePurchasesInput,
+  IsoTimestamp,
+  NonEmptyString,
+  NonNegativeInteger,
+  PurchaseKind,
+  RequestPurchaseInput,
+  RequestPurchaseResult,
+  StoreId,
+  StoreProduct,
+  StorePurchase,
+} from './commerce-contract.js';
+
 export {
   createUnsupportedCommerceCapabilities,
   deriveLegacyCommerceCapabilities,
@@ -41,109 +63,34 @@ export type {
 export const commerceProtocolVersion = '2.0.0-draft.1' as const;
 export const commerceProtocol = 'mpgd.commerce.v2' as const;
 
-type NonEmptyString = string & tags.MinLength<1>;
-type IsoTimestamp = string & tags.Format<'date-time'>;
-type PositiveQuantity = number & tags.Type<'uint32'> & tags.Minimum<1>;
-type NonNegativeInteger = number & tags.Type<'uint32'>;
-
-/**
- * Open store identifier. Reference providers use 'google-play', 'app-store',
- * 'microsoft-store', 'apps-in-toss', 'devvit', and 'verse8'; a consuming
- * project adds its own, for example a credit wallet id.
- */
-export type StoreId = NonEmptyString;
-
-export type PurchaseKind = 'consumable' | 'durable' | 'subscription';
-
-/**
- * `LogicalProductId` narrowed to its open string branch and tagged non-empty,
- * so validators and the generated schemas carry `minLength: 1`. Starter ids and
- * plain `LogicalProductId` values remain assignable.
- */
-export type CommerceLogicalProductId = Exclude<LogicalProductId, StarterLogicalProductId>
-  & tags.MinLength<1>;
-
-export interface StorePrice {
-  readonly formatted: string;
-  /** ISO 4217 code or a project-declared code such as a wallet currency. */
-  readonly currencyCode: NonEmptyString;
-  readonly amountMicros?: number & tags.Type<'int64'>;
-}
-
-export interface StoreOffer {
-  readonly offerId: NonEmptyString;
-  readonly price: StorePrice;
-  readonly title?: string;
-  readonly description?: string;
-}
-
-export interface StoreProduct {
-  readonly logicalId: CommerceLogicalProductId;
-  readonly store: StoreId;
-  readonly storeSku: NonEmptyString;
-  readonly kind: PurchaseKind;
-  readonly title: string;
-  readonly description: string;
-  readonly price: StorePrice;
-  readonly offers?: readonly StoreOffer[];
-}
-
-export type StorePurchaseState = 'pending' | 'purchased' | 'revoked';
-
-export interface StorePurchaseAccountBinding {
-  readonly kind: 'obfuscated-account-id' | 'app-account-token' | 'host-identity';
-  readonly value?: string;
-}
-
-export interface StorePurchase {
-  readonly store: StoreId;
-  /** Store transaction id; a provider derives one when the store has none. */
-  readonly transactionId: NonEmptyString;
-  readonly originalTransactionId?: NonEmptyString;
-  readonly storeSku: NonEmptyString;
-  readonly logicalId?: CommerceLogicalProductId;
-  readonly quantity: PositiveQuantity;
-  readonly state: StorePurchaseState;
-  readonly purchasedAt?: IsoTimestamp;
-  /** Play purchase token, App Store signed transaction (JWS), or host order id. */
-  readonly token: NonEmptyString;
-  readonly evidence: PlatformEvidenceEnvelope;
-  readonly accountBinding?: StorePurchaseAccountBinding;
-  /** Present only for `authority.evidence: 'adapter-settled'`; a reconciler pointer, not a grant. */
-  readonly settlement?: { readonly ledgerEntryId: NonEmptyString };
-}
-
-export type PurchaseSource = 'shop' | 'stage_fail' | 'result' | 'event';
-
-export interface RequestPurchaseInput {
-  readonly logicalId: CommerceLogicalProductId;
-  readonly idempotencyKey: NonEmptyString;
-  readonly source: PurchaseSource;
-  readonly offerId?: NonEmptyString;
-  /** Integer >= 1. Rejected with ITEM_UNAVAILABLE when the provider does not declare `purchase.quantity`. */
-  readonly quantity?: PositiveQuantity;
-}
-
-export type RequestPurchaseResult =
-  | { readonly outcome: 'launched' }
-  | { readonly outcome: 'purchased'; readonly purchase: StorePurchase }
-  | { readonly outcome: 'cancelled' | 'failed'; readonly error: CommerceErrorInfo };
-
-export type CommerceErrorCode =
-  | 'USER_CANCELLED'
-  | 'OUTCOME_UNKNOWN'
-  | 'ALREADY_OWNED'
-  | 'IN_PROGRESS'
-  | 'ITEM_UNAVAILABLE'
-  | 'NOT_PREPARED'
-  | 'NETWORK'
-  | 'STORE_UNAVAILABLE'
-  | 'CONFIGURATION_REQUIRED'
-  | 'ACTION_REQUIRED'
-  | 'ACCOUNT_BINDING_REQUIRED'
-  | 'INSUFFICIENT_BALANCE'
-  | 'INVALID_RESPONSE'
-  | 'UNKNOWN';
+// The client contract types live in the typia-free `./commerce-contract` so
+// `./index` can reference `CommerceProvider` without loading typia; they are
+// re-exported here so `@mpgd/platform/commerce` stays the one import site.
+export type {
+  ActiveSubscription,
+  ActiveSubscriptionState,
+  CommerceErrorCode,
+  CommerceErrorInfo,
+  CommerceEvent,
+  CommerceLogicalProductId,
+  CommerceProvider,
+  FetchProductsInput,
+  FetchProductsType,
+  FinishTransactionInput,
+  FinishTransactionResult,
+  GetAvailablePurchasesInput,
+  PurchaseKind,
+  PurchaseSource,
+  RequestPurchaseInput,
+  RequestPurchaseResult,
+  StoreId,
+  StoreOffer,
+  StorePrice,
+  StoreProduct,
+  StorePurchase,
+  StorePurchaseAccountBinding,
+  StorePurchaseState,
+} from './commerce-contract.js';
 
 export const commerceErrorCodes = Object.freeze([
   'USER_CANCELLED',
@@ -162,80 +109,11 @@ export const commerceErrorCodes = Object.freeze([
   'UNKNOWN',
 ] as const satisfies readonly CommerceErrorCode[]);
 
-export interface CommerceErrorInfo {
-  readonly code: CommerceErrorCode;
-  readonly retryable: boolean;
-  /** The store's original code, for example PLAY_BILLING_SERVICE_UNAVAILABLE. */
-  readonly storeCode?: string;
-  readonly message?: string;
-}
-
-export type CommerceEvent =
-  | { readonly type: 'purchaseUpdated'; readonly purchase: StorePurchase }
-  | {
-      readonly type: 'purchaseError';
-      readonly logicalId?: CommerceLogicalProductId;
-      readonly error: CommerceErrorInfo;
-    }
-  | { readonly type: 'subscriptionUpdated'; readonly subscription: ActiveSubscription };
-
 /** Bridge event envelope; `sequence` is per session and starts at 0. */
 export interface CommerceEventEnvelope {
   readonly protocol: typeof commerceProtocol;
   readonly sequence: NonNegativeInteger;
   readonly event: CommerceEvent;
-}
-
-export type FetchProductsType = 'in-app' | 'subscription' | 'all';
-
-export interface FetchProductsInput {
-  readonly logicalIds?: readonly CommerceLogicalProductId[];
-  readonly type?: FetchProductsType;
-}
-
-export interface GetAvailablePurchasesInput {
-  readonly includePending?: boolean;
-}
-
-export interface FinishTransactionInput {
-  readonly transactionId: NonEmptyString;
-  readonly ledgerEntryId: NonEmptyString;
-  readonly isConsumable: boolean;
-}
-
-export interface FinishTransactionResult {
-  readonly finished: boolean;
-}
-
-export interface CommerceProvider {
-  readonly store: StoreId;
-  getCapabilities(): Promise<CommerceCapabilities>;
-  fetchProducts(input: FetchProductsInput): Promise<readonly StoreProduct[]>;
-  /** Returns `launched` when the result arrives later as a `purchaseUpdated` event. */
-  requestPurchase(input: RequestPurchaseInput): Promise<RequestPurchaseResult>;
-  /** Purchases the store still reports as unfinished. */
-  getAvailablePurchases(input?: GetAvailablePurchasesInput): Promise<readonly StorePurchase[]>;
-  /** Required when `lifecycle.finish` is 'client' or 'host'. */
-  finishTransaction?(input: FinishTransactionInput): Promise<FinishTransactionResult>;
-  /** Asks the store to resynchronize, for example `AppStore.sync`. */
-  restorePurchases?(): Promise<void>;
-  /** Designed, not implemented by any reference store provider. */
-  getActiveSubscriptions?(): Promise<readonly ActiveSubscription[]>;
-  /** Events emitted before the first listener are delivered to that listener. */
-  subscribe(listener: (event: CommerceEvent) => void): () => void;
-}
-
-export type ActiveSubscriptionState = 'active' | 'lapsed' | 'revoked';
-
-export interface ActiveSubscription {
-  readonly store: StoreId;
-  readonly logicalId: CommerceLogicalProductId;
-  readonly subscriptionId: NonEmptyString;
-  readonly periodIndex: NonNegativeInteger;
-  readonly state: ActiveSubscriptionState;
-  readonly startedAt: IsoTimestamp;
-  readonly expiresAt: IsoTimestamp;
-  readonly autoRenew: boolean;
 }
 
 // Credit wallet types. The wallet rules, `createCreditCommerceProvider`, and a

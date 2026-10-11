@@ -26,6 +26,7 @@ import {
 import { createCapacitorPlatformGateway } from './index.js';
 import {
   createCapacitorProviderRegistry,
+  createDegradedCommerceCapabilities,
   deriveCommerceFeatureStates,
   type CapacitorServiceProvider,
   type NativeBridge,
@@ -484,5 +485,91 @@ describe('gateway with a commerce v2 provider', () => {
     });
     expect(gateway.commerceV2).toBeUndefined();
     expect('commerce' in (await gateway.getCapabilities())).toBe(false);
+  });
+
+  it('degrades the commerce block instead of rejecting the capability read', async () => {
+    const degraded = createDegradedCommerceCapabilities();
+    const cases: readonly (readonly [string, CommerceProvider['getCapabilities']])[] = [
+      ['rejecting', async () => { throw new Error('sdk'); }],
+      ['throwing', () => { throw new Error('sync'); }],
+      ['invalid', async () => ({ purchase: { consumable: 'yes' } }) as never],
+      ['extra keys', async () => ({
+        ...(await createStoreProvider().provider.getCapabilities()), extra: true,
+      }) as never],
+    ];
+    for (const [name, getCapabilities] of cases) {
+      const gateway = createCapacitorPlatformGateway({
+        target: 'android', appVersion: '1', buildId: name, bridge: baseBridge(),
+        providers: [createCommerceServiceProvider({
+          id: 'store', commerce: { ...createStoreProvider().provider, getCapabilities },
+        })],
+      });
+      const capabilities = await gateway.getCapabilities();
+      expect(capabilities, name).toMatchObject({
+        nativeIap: false,
+        subscriptionIap: false,
+        providerAvailability: { nativeIap: 'temporarily-unavailable' },
+        commerce: degraded,
+      });
+      const again = await gateway.getCapabilities();
+      expect(again.commerce, name).not.toBe(capabilities.commerce);
+    }
+  });
+
+  it('bounds a stalled provider in the registry snapshot the gateway reads', async () => {
+    vi.useFakeTimers();
+    const registry = createCapacitorProviderRegistry([
+      createCommerceServiceProvider({
+        id: 'store',
+        commerce: {
+          ...createStoreProvider().provider,
+          getCapabilities: () => new Promise(() => undefined),
+        },
+      }),
+    ]);
+    const pending = registry.getCapabilitySnapshot();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(await pending).toEqual({
+      availability: expect.objectContaining({ nativeIap: 'temporarily-unavailable' }),
+      commerce: createDegradedCommerceCapabilities(),
+    });
+  });
+
+  it('serves the block from one bounded read and never hands out the provider object', async () => {
+    let reads = 0;
+    const { provider } = createStoreProvider();
+    const shared = await provider.getCapabilities();
+    const gateway = createCapacitorPlatformGateway({
+      target: 'ios', appVersion: '1', buildId: 'single-read', bridge: baseBridge(),
+      providers: [createCommerceServiceProvider({
+        id: 'store',
+        commerce: {
+          ...provider,
+          async getCapabilities() {
+            reads += 1;
+            return shared;
+          },
+        },
+      })],
+    });
+    const capabilities = await gateway.getCapabilities();
+    expect(reads).toBe(1);
+    expect(capabilities.commerce).toEqual(shared);
+    expect(capabilities.commerce).not.toBe(shared);
+    expect(capabilities.commerce?.purchase).not.toBe(shared.purchase);
+  });
+});
+
+describe('commerce v2 payload validation', () => {
+  it('rejects a null available-purchases payload instead of defaulting it', async () => {
+    const { provider } = createStoreProvider();
+    const bridge = createCommerceProviderBridge({ provider });
+    expect(await bridge.request(request('commerce.v2.getAvailablePurchases', null)))
+      .toMatchObject({ ok: false, error: { code: 'COMMERCE_V2_INVALID_PAYLOAD' } });
+    expect(await bridge.request({
+      ...request('commerce.v2.getAvailablePurchases'), payload: undefined,
+    })).toMatchObject({ ok: false, error: { code: 'COMMERCE_V2_INVALID_PAYLOAD' } });
+    expect(await bridge.request(request('commerce.v2.getAvailablePurchases', {})))
+      .toMatchObject({ ok: true, data: { purchases: [] } });
   });
 });

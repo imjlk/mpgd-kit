@@ -32,5 +32,21 @@ block from which `nativeIap` and `subscriptionIap` are derived. The
 conformance test runs every store vector against a fake `StoreSdk` directly
 and through the gateway bridge path. Without a v2 provider nothing changes.
 
+Two provider rules follow the RFC "Errors" section: a store failure that
+normalizes to `OUTCOME_UNKNOWN` or `ALREADY_OWNED` answers `launched` (the
+attempt stays recoverable; `recoverableErrorCodes`) and such `purchaseError`
+events are not forwarded, and a `lifecycle.restore` override without
+`sdk.restorePurchases` is rejected at construction. The gateway reads the
+commerce block through the registry's bounded `getCapabilitySnapshot()` (a
+stalled or invalid provider yields `createDegradedCommerceCapabilities()`
+instead of a rejected read) and keeps a `launched` purchase's external
+activity open until the product's event, `launchedPurchaseActivityTimeoutMs`,
+or dispose.
+
 `@mpgd/platform` adds the optional `PlatformGateway.commerceV2?:
-CommerceProvider` field, transitional until C4 removes the v1 adapter.
+CommerceProvider` field, transitional until C4 removes the v1 adapter. The
+client contract types (`StoreProduct`, `StorePurchase`, `CommerceProvider`,
+and the rest of the RFC "Client contract") now live in the typia-free
+`commerce-contract` module and are re-exported unchanged by
+`@mpgd/platform/commerce`; validators and the committed JSON Schemas are
+identical.

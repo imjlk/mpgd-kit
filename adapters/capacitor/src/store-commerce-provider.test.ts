@@ -392,7 +392,9 @@ describe('createStoreCommerceProvider', () => {
     const sdk = createFakeStoreSdk();
     const provider = createProvider(sdk);
     sdk.report(fakePurchase({ transactionId: 'tx-1' }));
-    sdk.emit({ type: 'purchaseError', sku: 'gems.small', error: { code: 'PLAY_BILLING_TIMEOUT' } });
+    sdk.emit({
+      type: 'purchaseError', sku: 'gems.small', error: { code: 'PLAY_BILLING_NETWORK_ERROR' },
+    });
     sdk.emit({ type: 'purchaseError', error: { code: 'USER_CANCELLED', storeCode: '1' } });
     sdk.emit({
       type: 'purchaseUpdated',
@@ -408,7 +410,7 @@ describe('createStoreCommerceProvider', () => {
       {
         type: 'purchaseError', logicalId: 'gems_small',
         error: expect.objectContaining({
-          code: 'OUTCOME_UNKNOWN', storeCode: 'PLAY_BILLING_TIMEOUT', retryable: false,
+          code: 'NETWORK', storeCode: 'PLAY_BILLING_NETWORK_ERROR', retryable: true,
         }),
       },
       {
@@ -519,6 +521,60 @@ describe('createStoreCommerceProvider', () => {
       .toThrow(/mapped twice/);
     expect(() => createProvider(sdk, { evidenceSchema: '' })).toThrow(/evidence schema/);
     expect(() => createProvider(sdk, { store: '' })).toThrow(/store id/);
+  });
+});
+
+describe('recoverable purchase failures', () => {
+  const request = { logicalId: 'gems_small', idempotencyKey: 'op', source: 'shop' } as const;
+
+  it('keeps an uncertain or already-owned attempt launched instead of failed', async () => {
+    const sdk = createFakeStoreSdk();
+    const provider = createProvider(sdk);
+    for (const code of ['PLAY_BILLING_TIMEOUT', 'PLAY_BILLING_INTERRUPTED',
+      'STOREKIT_PURCHASE_UNCERTAIN', 'PLAY_BILLING_ALREADY_OWNED', 'OUTCOME_UNKNOWN',
+      'ALREADY_OWNED']) {
+      sdk.queueRequest({ throws: { code } });
+      await expect(provider.requestPurchase(request)).resolves.toEqual({ outcome: 'launched' });
+    }
+    sdk.queueRequest({
+      outcome: 'failed', error: { code: 'ALREADY_OWNED', retryable: false, storeCode: '7' },
+    });
+    await expect(provider.requestPurchase(request)).resolves.toEqual({ outcome: 'launched' });
+    // The attempt reaches the store once per call; nothing reopens the UI.
+    expect(sdk.requestCalls).toHaveLength(7);
+    // A cancel reported as `failed` is still a cancel, and other failures stay terminal.
+    sdk.queueRequest({ outcome: 'failed', error: { code: 'USER_CANCELLED', storeCode: '1' } });
+    await expect(provider.requestPurchase(request)).resolves.toMatchObject({
+      outcome: 'cancelled', error: { storeCode: '1' },
+    });
+    sdk.queueRequest({ throws: { code: 'PLAY_BILLING_PRODUCT_UNKNOWN' } });
+    await expect(provider.requestPurchase(request)).resolves.toMatchObject({
+      outcome: 'failed', error: { code: 'ITEM_UNAVAILABLE' },
+    });
+  });
+
+  it('does not forward purchaseError events with recoverable codes', () => {
+    const sdk = createFakeStoreSdk();
+    const provider = createProvider(sdk);
+    const events: CommerceEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    sdk.emit({ type: 'purchaseError', sku: 'gems.small', error: { code: 'PLAY_BILLING_TIMEOUT' } });
+    sdk.emit({ type: 'purchaseError', error: { code: 'ALREADY_OWNED' } });
+    expect(events).toEqual([]);
+    sdk.emit({ type: 'purchaseError', sku: 'gems.small', error: { code: 'PLAY_BILLING_NETWORK_ERROR' } });
+    expect(events).toEqual([
+      { type: 'purchaseError', logicalId: 'gems_small', error: expect.objectContaining({ code: 'NETWORK' }) },
+    ]);
+  });
+
+  it('rejects a restore override the SDK cannot serve', async () => {
+    const sdk = createFakeStoreSdk({ restore: false });
+    expect(() => createProvider(sdk, { capabilities: { lifecycle: { restore: true } } }))
+      .toThrow(/no restorePurchases/);
+    const hidden = createProvider(createFakeStoreSdk(), {
+      capabilities: { lifecycle: { restore: false } },
+    });
+    expect((await hidden.getCapabilities()).lifecycle.restore).toBe(false);
   });
 });
 

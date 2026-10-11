@@ -1,5 +1,7 @@
 import type { AdProvider } from './ads.js';
-import type { CommerceProvider } from './commerce.js';
+// Only the typia-free contract module may be imported here: headless
+// consumers type-check this entry with `skipLibCheck: false` and no DOM lib.
+import type { CommerceProvider } from './commerce-contract.js';
 
 export type PlatformTarget =
   | 'browser'

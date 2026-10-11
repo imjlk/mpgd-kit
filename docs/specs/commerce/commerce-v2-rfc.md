@@ -331,6 +331,14 @@ Backend error codes such as `IDEMPOTENCY_KEY_CONFLICT` or
 `EVIDENCE_VERIFIER_UNAVAILABLE` are not client commerce errors. They surface
 as journal states, as described in [lifecycle](#lifecycle).
 
+`OUTCOME_UNKNOWN` and `ALREADY_OWNED` are not terminal for a purchase
+attempt. A provider whose store call throws or returns one of them answers
+`requestPurchase` with `launched` rather than `failed`, and it does not emit
+a `purchaseError` for them: an unfinished purchase may exist, so the attempt
+stays open and the [reconciler](#reconciler) resolves it from
+`getAvailablePurchases` without reopening the store UI (B1 implements this
+rule in `createStoreCommerceProvider`).
+
 ## Purchase lifecycle {#lifecycle}
 
 Every purchase, whether started by the game or discovered by the reconciler,
@@ -697,9 +705,17 @@ not in the catalog. The kit adds no wallet currency literal.
   asserts, events in the envelope with a per-bridge sequence) and the four v1
   `commerce.*` methods through `toCommerceAdapter`. The gateway exposes the
   provider as the transitional `PlatformGateway.commerceV2` and derives
-  `nativeIap` and `subscriptionIap` from its `commerce` capability block. A
-  thrown failure crosses the bridge as `{ code, message, retryable }`; a
-  `cancelled` or `failed` purchase result keeps its `storeCode`.
+  `nativeIap` and `subscriptionIap` from its `commerce` capability block,
+  read once per snapshot with the registry's three-second bound (a stalled or
+  invalid provider yields a degraded block, never a rejected read). A
+  `launched` purchase keeps the gateway's external activity open until the
+  product's purchase event, a two-minute safety timeout, or dispose. A thrown
+  failure crosses the bridge as `{ code, message, retryable }`; a `cancelled`
+  or `failed` purchase result keeps its `storeCode`. The contract types that
+  `PlatformGateway` references live in the typia-free
+  `@mpgd/platform` module `commerce-contract` (re-exported by
+  `@mpgd/platform/commerce`), so headless consumers can type-check the main
+  entry without typia's declarations.
 - Payloads are validated with typia on both sides. A2 generates JSON Schemas
   for the bridge payloads and the vector format into
   `docs/specs/commerce/schemas/`, and `validate:commerce-alignment` checks that

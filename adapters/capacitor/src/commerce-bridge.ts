@@ -115,7 +115,8 @@ export function createCommerceProviderBridge(
         );
       case 'commerce.v2.getAvailablePurchases': {
         const purchases = await provider.getAvailablePurchases(
-          assertCommerceBridgeGetAvailablePurchasesPayload(payload ?? {}),
+          // The payload is asserted as sent; a caller meaning the default sends `{}`.
+          assertCommerceBridgeGetAvailablePurchasesPayload(payload),
         );
         return assertResult('commerce.v2.getAvailablePurchases', { purchases });
       }

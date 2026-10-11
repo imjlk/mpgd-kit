@@ -15,7 +15,11 @@ import {
   type PlatformProviderFeature,
   type ProductType,
 } from '@mpgd/platform';
-import type { CommerceProvider } from '@mpgd/platform/commerce';
+import {
+  createUnsupportedCommerceCapabilities,
+  isCommerceCapabilities,
+  type CommerceProvider,
+} from '@mpgd/platform/commerce';
 
 import { assertCommerceBridgeResult } from './commerce-bridge.js';
 
@@ -107,10 +111,24 @@ const availabilitySet = new Set<PlatformProviderAvailability>([
 ]);
 const availabilityTimeoutMs = 3_000;
 
+export interface CapacitorProviderCapabilitySnapshot {
+  readonly availability: Readonly<Record<PlatformProviderFeature, PlatformProviderAvailability>>;
+  /**
+   * Present when a commerce v2 provider is registered: its validated
+   * `getCapabilities()` answer from the same bounded read that produced the
+   * `nativeIap` and `subscriptionIap` states, or a degraded block
+   * (`availability: 'temporarily-unavailable'`, nothing sold) when that read
+   * stalled, failed, or returned a shape the contract rejects.
+   */
+  readonly commerce?: CommerceCapabilities;
+}
+
 export interface CapacitorProviderRegistry {
   readonly byMethod: ReadonlyMap<BridgeMethod, CapacitorServiceProvider>;
   /** The provider that serves commerce v2, when one is registered. */
   readonly commerce?: CapacitorCommerceServiceProvider;
+  /** Feature readiness plus the commerce block, from one bounded read per provider. */
+  getCapabilitySnapshot(): Promise<CapacitorProviderCapabilitySnapshot>;
   assertMethodReady(
     method: BridgeMethod,
     payload?: unknown,
@@ -215,52 +233,71 @@ export function createCapacitorProviderRegistry(
     }
   }
 
+  interface ProviderStates {
+    readonly states: Partial<Record<PlatformProviderFeature, PlatformProviderAvailability>>;
+    /** The validated commerce v2 block, when this provider serves commerce and the read succeeded. */
+    readonly commerce?: CommerceCapabilities;
+  }
+
   const readProviderStates = async (
     provider: CapacitorServiceProvider,
-  ): Promise<Partial<Record<PlatformProviderFeature, PlatformProviderAvailability>>> => {
+  ): Promise<ProviderStates> => {
     const states: Partial<Record<PlatformProviderFeature, PlatformProviderAvailability>> = {};
     const commerceOwned = provider.commerce === undefined
       ? []
       : provider.features.filter((feature) => commerceFeatures.includes(feature));
     const bridged = provider.features.filter((feature) => !commerceOwned.includes(feature));
+    let commerceBlock: CommerceCapabilities | undefined;
     if (provider.commerce !== undefined && commerceOwned.length > 0) {
-      const capabilities = await readWithTimeout(provider.commerce.getCapabilities());
-      Object.assign(states, deriveCommerceFeatureStates(capabilities, commerceOwned));
+      commerceBlock = await readCommerceCapabilities(provider.commerce);
+      Object.assign(states, deriveCommerceFeatureStates(commerceBlock, commerceOwned));
     }
-    if (bridged.length === 0) {
-      return states;
+    if (bridged.length > 0) {
+      const reported = await readWithTimeout(
+        Promise.resolve().then(() => provider.getAvailability()),
+      );
+      for (const feature of bridged) {
+        const state: unknown = isRecord(reported) ? reported[feature] : undefined;
+        states[feature] = availabilitySet.has(state as PlatformProviderAvailability)
+          ? state as PlatformProviderAvailability
+          : 'temporarily-unavailable';
+      }
     }
-    const reported = await readWithTimeout(
-      Promise.resolve().then(() => provider.getAvailability()),
-    );
-    for (const feature of bridged) {
-      const state: unknown = isRecord(reported) ? reported[feature] : undefined;
-      states[feature] = availabilitySet.has(state as PlatformProviderAvailability)
-        ? state as PlatformProviderAvailability
-        : 'temporarily-unavailable';
+    return { states, ...(commerceBlock === undefined ? {} : { commerce: commerceBlock }) };
+  };
+
+  const getCapabilitySnapshot = async (): Promise<CapacitorProviderCapabilitySnapshot> => {
+    const states = {} as Record<PlatformProviderFeature, PlatformProviderAvailability>;
+    for (const feature of providerFeatures) {
+      states[feature] = 'unsupported';
     }
-    return states;
+    let commerceBlock: CommerceCapabilities | undefined;
+    const snapshots = await Promise.all(providers.map(readProviderStates));
+    for (const snapshot of snapshots) {
+      Object.assign(states, snapshot.states);
+      commerceBlock = snapshot.commerce ?? commerceBlock;
+    }
+    if (commerce !== undefined && commerceBlock === undefined) {
+      // One bounded read serves the feature states and the block, so a stalled,
+      // failed, or invalid provider degrades both the same way.
+      commerceBlock = createDegradedCommerceCapabilities();
+    }
+    return {
+      availability: states,
+      ...(commerceBlock === undefined ? {} : { commerce: commerceBlock }),
+    };
   };
 
   const getAvailability = async (): Promise<Readonly<Record<
     PlatformProviderFeature,
     PlatformProviderAvailability
-  >>> => {
-    const states = {} as Record<PlatformProviderFeature, PlatformProviderAvailability>;
-    for (const feature of providerFeatures) {
-      states[feature] = 'unsupported';
-    }
-    const snapshots = await Promise.all(providers.map(readProviderStates));
-    for (const snapshot of snapshots) {
-      Object.assign(states, snapshot);
-    }
-    return states;
-  };
+  >>> => (await getCapabilitySnapshot()).availability;
 
   return {
     byMethod,
     ...(commerce === undefined ? {} : { commerce }),
     getAvailability,
+    getCapabilitySnapshot,
     async assertMethodReady(method, payload, productType) {
       const provider = byMethod.get(method);
       if (provider === undefined) {
@@ -277,7 +314,7 @@ export function createCapacitorProviderRegistry(
         return;
       }
       // An unrelated provider must not delay a purchase, ad, or identity call.
-      const states = await readProviderStates(provider);
+      const { states } = await readProviderStates(provider);
       let relevant = provider.features.filter((feature) =>
         (featureMethods[feature] as readonly BridgeMethod[]).includes(method),
       );
@@ -350,6 +387,32 @@ export function assertProviderResponseData(method: BridgeMethod, data: unknown):
       message: `Capacitor provider returned invalid data for ${method}.`,
     });
   }
+}
+
+/**
+ * One bounded, validated capability read. A stalled, throwing, or invalid
+ * provider yields `undefined`; the block is copied so the gateway never hands
+ * out a provider-owned object.
+ */
+async function readCommerceCapabilities(
+  provider: CommerceProvider,
+): Promise<CommerceCapabilities | undefined> {
+  const reported = await readWithTimeout(Promise.resolve().then(() => provider.getCapabilities()));
+  if (!isCommerceCapabilities(reported)) {
+    return undefined;
+  }
+  return {
+    purchase: { ...reported.purchase },
+    catalog: { ...reported.catalog },
+    lifecycle: { ...reported.lifecycle },
+    authority: { ...reported.authority },
+    availability: reported.availability,
+  };
+}
+
+/** The commerce block a gateway reports while its provider cannot be read. */
+export function createDegradedCommerceCapabilities(): CommerceCapabilities {
+  return { ...createUnsupportedCommerceCapabilities(), availability: 'temporarily-unavailable' };
 }
 
 async function readWithTimeout<T>(read: Promise<T>): Promise<T | undefined> {

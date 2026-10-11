@@ -10,6 +10,7 @@ import {
   type CommerceAuthorityCapabilities,
   type CommerceCapabilities,
   type CommerceCatalogCapabilities,
+  type CommerceErrorCode,
   type CommerceErrorInfo,
   type CommerceEvent,
   type CommerceLifecycleCapabilities,
@@ -107,10 +108,17 @@ export function createStoreCommerceProvider(
   if (typeof input.evidenceSchema !== 'string' || input.evidenceSchema.length === 0) {
     throw new TypeError('A store commerce provider requires a non-empty evidence schema.');
   }
-  const finishOwner = overrideLifecycle(sdk, input.capabilities).finish;
+  const lifecycle = overrideLifecycle(sdk, input.capabilities);
+  const finishOwner = lifecycle.finish;
   if ((finishOwner === 'client' || finishOwner === 'host') && sdk.finishTransaction === undefined) {
     throw new TypeError(
       `Store ${store} declares finish '${finishOwner}' but the SDK has no finishTransaction.`,
+    );
+  }
+  if (lifecycle.restore && sdk.restorePurchases === undefined) {
+    // A capability the provider cannot serve is never advertised.
+    throw new TypeError(
+      `Store ${store} declares lifecycle.restore but the SDK has no restorePurchases.`,
     );
   }
   const bySku = new Map<string, StoreCommerceProductMapping>();
@@ -205,10 +213,16 @@ export function createStoreCommerceProvider(
     }),
     sdk.addListener('purchaseError', (event) => {
       const mapping = typeof event.sku === 'string' ? bySku.get(event.sku) : undefined;
+      const error = normalize(event.error).toCommerceErrorInfo();
+      if (recoverableErrorCodes.has(error.code)) {
+        // An uncertain or already-owned attempt is not terminal: the reconciler
+        // resolves it from `getAvailablePurchases`, so the open record stays open.
+        return;
+      }
       emit({
         type: 'purchaseError',
         ...(mapping === undefined ? {} : { logicalId: mapping.logicalId }),
-        error: normalize(event.error).toCommerceErrorInfo(),
+        error,
       });
     }),
   ];
@@ -343,7 +357,7 @@ export function createStoreCommerceProvider(
           ...(accountBinding === undefined ? {} : { accountBinding }),
         });
       } catch (error) {
-        return failedOutcome(normalize(error).toCommerceErrorInfo());
+        return failureOutcome(undefined, normalize(error).toCommerceErrorInfo());
       }
       if (!isRecord(result)) {
         throw invalidRequestResult(store);
@@ -355,7 +369,7 @@ export function createStoreCommerceProvider(
           return { outcome: 'purchased', purchase: toStorePurchase(result.purchase) };
         case 'cancelled':
         case 'failed':
-          return { outcome: result.outcome, error: normalize(result.error).toCommerceErrorInfo() };
+          return failureOutcome(result.outcome, normalize(result.error).toCommerceErrorInfo());
         default:
           throw invalidRequestResult(store);
       }
@@ -494,8 +508,28 @@ function assertAvailable(availability: PlatformProviderAvailability, store: stri
   }
 }
 
-function failedOutcome(error: CommerceErrorInfo): RequestPurchaseResult {
-  return { outcome: error.code === 'USER_CANCELLED' ? 'cancelled' : 'failed', error };
+/**
+ * Codes that mean an unfinished purchase may exist (RFC "Errors": reconcile,
+ * never reopen the store UI blindly). The attempt stays `launched` so the
+ * reconciler resolves it from `getAvailablePurchases`; a terminal `failed`
+ * would exclude it from recovery.
+ */
+export const recoverableErrorCodes: ReadonlySet<CommerceErrorCode> = new Set<CommerceErrorCode>([
+  'OUTCOME_UNKNOWN',
+  'ALREADY_OWNED',
+]);
+
+function failureOutcome(
+  outcome: 'cancelled' | 'failed' | undefined,
+  error: CommerceErrorInfo,
+): RequestPurchaseResult {
+  if (error.code === 'USER_CANCELLED') {
+    return { outcome: 'cancelled', error };
+  }
+  if (recoverableErrorCodes.has(error.code)) {
+    return { outcome: 'launched' };
+  }
+  return { outcome: outcome ?? 'failed', error };
 }
 
 function invalidRequestResult(store: string): CommerceError {

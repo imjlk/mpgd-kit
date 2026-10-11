@@ -130,6 +130,19 @@ normalizes every SDK failure through `mapError` into a `CommerceError` whose
 `storeCode` keeps the store's own code. It never grants and never sets
 `settlement`; the backend ledger decides.
 
+Two failure classes are not terminal. When `requestPurchase` throws or
+returns a code that normalizes to `OUTCOME_UNKNOWN` (for example
+`PLAY_BILLING_TIMEOUT`, `PLAY_BILLING_INTERRUPTED`,
+`STOREKIT_PURCHASE_UNCERTAIN`) or `ALREADY_OWNED`, an unfinished purchase may
+exist, so the provider answers `{ outcome: 'launched' }` instead of `failed`
+and does not forward a `purchaseError` event carrying those codes
+(`recoverableErrorCodes`). The attempt stays open and the reconciler resolves
+it from `getAvailablePurchases`; the store UI is never reopened blindly. A
+`capabilities.lifecycle` override may hide `restore` or `finish`, but it
+cannot advertise one the SDK lacks: `restore: true` without
+`sdk.restorePurchases`, like `finish: 'client' | 'host'` without
+`sdk.finishTransaction`, is rejected when the provider is created.
+
 `createCommerceServiceProvider` wraps the provider as a `CapacitorServiceProvider`
 whose `commerce` field the registry recognizes: the ten commerce bridge
 methods are implied (declaring a v1 `commerce.*` method alongside is an
@@ -143,9 +156,20 @@ synchronous purchase is `completed` with evidence and no entitlements, and
 `gateway.commerceV2` (served through the same validated bridge path, which
 the conformance test exercises for every store vector) and adds a `commerce`
 block to `getCapabilities()` from which `nativeIap` and `subscriptionIap` are
-derived. Without a v2 provider nothing changes: `commerceV2` is absent and a
-`commerce.v2.*` request still answers `COMMERCE_V2_UNAVAILABLE` as the
-transport left it.
+derived. The block comes from the registry's one bounded read per snapshot
+(`getCapabilitySnapshot`, three-second timeout, shape validated): a stalled,
+failing, or invalid provider yields a degraded block
+(`createDegradedCommerceCapabilities`: `availability:
+'temporarily-unavailable'`, nothing sold, `nativeIap: false`) and never
+rejects the capability read. A `launched` v2 purchase keeps
+`beginExternalActivity()` open after the request returns, since the store UI
+is still up: the gateway releases it when the provider reports that product
+(`purchaseUpdated` or `purchaseError`), after
+`launchedPurchaseActivityTimeoutMs` (two minutes), or on `lifecycle.dispose`;
+the v1 `commerce.purchase` path has no event to wait for and releases when
+its request returns. Without a v2 provider nothing changes: `commerceV2` is
+absent and a `commerce.v2.*` request still answers `COMMERCE_V2_UNAVAILABLE`
+as the transport left it.
 
 ## App Store server-side transaction signatures
 
