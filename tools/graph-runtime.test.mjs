@@ -24,10 +24,16 @@ test('rejects legacy tour requests before invoking the graph application', () =>
   assert.throws(() => normalizeRequest({
     question: 'What runs?', draft: 'Use a tour.', request: { type: 'tour', query: 'run' },
   }, 'legacy.json'), /draft with reason and type/);
+  // A checked-in preset must declare namedEntrypoints (the tour seeds derive
+  // from them); an ad-hoc request without them must spell reinterpretations out.
   assert.throws(() => normalizeRequest({
     question: 'What runs?', draft: { reason: 'Use a tour.', type: 'tour' },
     request: { type: 'tour', query: 'run' },
-  }, 'legacy.json'), /reinterpretations array/);
+  }, 'legacy.json'), /non-empty namedEntrypoints array/);
+  assert.throws(() => normalizeRequest({
+    question: 'What runs?', draft: { reason: 'Use a tour.', type: 'tour' },
+    request: { type: 'tour', query: 'run' },
+  }, 'legacy.json', { requireNamedEntrypoints: false }), /reinterpretations array/);
 });
 
 test('uses the envelope next action and counts trace anchors only after resolving the start', () => {

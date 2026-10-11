@@ -1,8 +1,23 @@
 {
   "name": "package-publish",
   "description": "Package build, workspace dependency ordering, and npm pack smoke flow.",
-  "expectedFiles": [
-    "tools/package/"
+  "namedEntrypoints": [
+    {
+      "name": "discoverBuildablePackages",
+      "file": "tools/package/workspace.ts"
+    },
+    {
+      "name": "sortByWorkspaceDependencies",
+      "file": "tools/package/workspace.ts"
+    },
+    {
+      "name": "selectBuildablePackages",
+      "file": "tools/package/build-packages.ts"
+    },
+    {
+      "name": "npmPackDryRun",
+      "file": "tools/package/pack-packages.ts"
+    }
   ],
   "tsconfig": "tsconfig.graph.json",
   "question": "What are the central package publish readiness flows for building dist artifacts and validating npm pack payloads?",
@@ -14,11 +29,6 @@
   "request": {
     "type": "tour",
     "includeTests": true,
-    "limit": 60,
-    "reinterpretations": [
-      "discoverBuildablePackages",
-      "sortByWorkspaceDependencies",
-      "selectBuildablePackages"
-    ]
+    "limit": 60
   }
 }

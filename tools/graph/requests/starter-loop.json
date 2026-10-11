@@ -1,8 +1,23 @@
 {
   "name": "starter-loop",
   "description": "Phaser starter loop, platform install, target runtime, and optional game-services wiring.",
-  "expectedFiles": [
-    "src/"
+  "namedEntrypoints": [
+    {
+      "name": "bootstrapStarter",
+      "file": "src/bootstrap.ts"
+    },
+    {
+      "name": "installStarterPlatform",
+      "file": "src/platform/installStarterPlatform.ts"
+    },
+    {
+      "name": "createStarterGame",
+      "file": "src/runtime/createGame.ts"
+    },
+    {
+      "name": "createStarterGameServices",
+      "file": "src/platform/gameServices.ts"
+    }
   ],
   "cwd": "examples/phaser-starter",
   "tsconfig": "tsconfig.json",
@@ -15,22 +30,6 @@
   "request": {
     "type": "tour",
     "includeTests": true,
-    "limit": 70,
-    "reinterpretations": [
-      "bootstrapStarter",
-      "createStarterGame",
-      "installStarterPlatform",
-      "detectRuntime",
-      "installMicrosoftStorePwa",
-      "resolveIdentitySession",
-      "resolveLaunchIntent",
-      "createGuestSession",
-      "createStarterGameServices",
-      "StarterContext",
-      "sceneRegistry",
-      "BootScene",
-      "StarterScene",
-      "PlayScene"
-    ]
+    "limit": 70
   }
 }

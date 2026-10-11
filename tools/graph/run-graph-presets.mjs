@@ -1,10 +1,23 @@
 #!/usr/bin/env node
+// Graph preflight: run every checked-in preset under tools/graph/requests/ and
+// assert that the ttsc graph answer cites each preset's named entrypoints.
+//
+// Why named entrypoints and not directory prefixes: a tour ranks the whole graph
+// heuristically, so an unrelated feature PR can shift which files its anchors
+// land in. The old `expectedFiles` prefix check failed on that drift and pushed
+// feature PRs into editing presets or folding modules to keep a directory
+// anchored. A named entrypoint is a `{ name, file }` pair the preset's question
+// is actually about; it is seeded into the tour through `reinterpretations`
+// and matched against the result by file and symbol name, so it does not move
+// when centrality moves. `expectedFiles` was removed rather than kept as a
+// secondary check: every named entrypoint already carries its file, and the
+// prefix check only reintroduced the heuristic failure mode. See
+// tools/graph/README.md.
 import { resolve } from 'node:path';
 
 import {
+  assertGraphPresetResponse,
   dumpGraph,
-  graphResultAnchorCount,
-  graphResultFiles,
   inspectWithDump,
   listPresetNames,
   readPreset,
@@ -29,33 +42,10 @@ for (const presetName of requestedPresets) {
   }
 
   const response = await inspectWithDump(dump, preset.props);
-  if (typeof response !== 'object' || response === null || Array.isArray(response)) {
-    throw new Error(`Graph preset ${presetName} returned an invalid response envelope.`);
-  }
+  const { result, nextAction } = assertGraphPresetResponse(presetName, preset, response);
 
-  const { result } = response;
-  if (typeof result !== 'object' || result === null || Array.isArray(result)) {
-    throw new Error(`Graph preset ${presetName} returned no graph result.`);
-  }
-
-  const nextAction = response.next?.action;
-  const anchorCount = graphResultAnchorCount(result);
-
-  if (nextAction !== 'answer') {
-    throw new Error(`Graph preset ${presetName} did not produce answer-ready evidence.`);
-  }
-
-  if (anchorCount === 0) {
-    throw new Error(`Graph preset ${presetName} produced no answer anchors.`);
-  }
-
-  const resultFiles = graphResultFiles(result);
-
-  for (const expectedFile of preset.expectedFiles) {
-    if (![...resultFiles].some((file) => file.startsWith(expectedFile))) {
-      throw new Error(`Graph preset ${presetName} did not anchor expected file ${expectedFile}.`);
-    }
-  }
-
-  console.log(`Graph preset passed ${presetName}: ${summarizeGraphResult(result, nextAction)}`);
+  console.log(
+    `Graph preset passed ${presetName}: ${summarizeGraphResult(result, nextAction)}, ` +
+      `named entrypoints ${preset.namedEntrypoints.map((entry) => entry.name).join(', ')}`,
+  );
 }

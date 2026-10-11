@@ -1,9 +1,27 @@
 {
   "name": "target-config-runtime",
   "description": "Target config runtime feature availability, effective config bundles, diagnostics, localization, and starter action flow.",
-  "expectedFiles": [
-    "packages/target-config/",
-    "tools/target/"
+  "namedEntrypoints": [
+    {
+      "name": "withTargetAvailability",
+      "file": "packages/target-config/src/runtime.ts"
+    },
+    {
+      "name": "createTargetRuntimeSnapshot",
+      "file": "packages/target-config/src/runtime.ts"
+    },
+    {
+      "name": "createEffectiveTargetConfigMatrix",
+      "file": "packages/target-config/src/effective.ts"
+    },
+    {
+      "name": "validateEffectiveTargetConfigMatrix",
+      "file": "tools/target/effective-config.ts"
+    },
+    {
+      "name": "generateEffectiveTargetConfigArtifacts",
+      "file": "tools/target/generate-effective-target-config.ts"
+    }
   ],
   "tsconfig": "tsconfig.graph.json",
   "question": "What are the central target config runtime and effective config flows that gate capabilities, localization, products, ads, leaderboard, and starter game actions?",
@@ -15,30 +33,6 @@
   "request": {
     "type": "tour",
     "includeTests": true,
-    "limit": 90,
-    "reinterpretations": [
-      "withTargetAvailability",
-      "createTargetRuntimeSnapshot",
-      "getTargetRuntime",
-      "applyTargetConfigToCapabilities",
-      "targetConfigKeyForPlatform",
-      "getTargetConfig",
-      "createEffectiveTargetConfig",
-      "createEffectiveTargetConfigMatrix",
-      "getEffectiveProductConfig",
-      "getEffectiveAdPlacementConfig",
-      "validateEffectiveTargetConfigMatrix",
-      "writeEffectiveTargetConfigs",
-      "generateEffectiveTargetConfigArtifacts",
-      "resolveMpgdLocale",
-      "installStarterPlatform",
-      "StarterContext",
-      "StarterScene",
-      "localizedContent",
-      "nativeIap",
-      "rewardedAds",
-      "targetConfig",
-      "effectiveConfig"
-    ]
+    "limit": 90
   }
 }
