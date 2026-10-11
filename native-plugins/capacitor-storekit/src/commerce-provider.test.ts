@@ -14,6 +14,7 @@ import {
   createCapacitorStoreKitCommerceProvider,
   createCapacitorStoreKitServiceProvider,
 } from './commerce-provider.js';
+import type { CapacitorStoreKitDiagnostic } from './store-sdk.js';
 
 const products = [
   { logicalId: 'COINS_100', storeSku: 'com.example.game.coins100', kind: 'consumable' },
@@ -189,6 +190,10 @@ function expectThrows(operation: () => unknown, message: string): void {
       revokedAt: '2026-07-18T00:00:00Z',
     }),
   );
+  // Events are admitted after the active account token resolves.
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
   assertEqual(
     events.map((event) =>
       event.type === 'purchaseUpdated'
@@ -417,6 +422,88 @@ function expectThrows(operation: () => unknown, message: string): void {
     isIos: () => true,
   });
   assertEqual(custom.id, 'storekit-custom', 'the registry id can be overridden');
+}
+
+// Transactions outside the catalog or bound to another account never reach the reconciler.
+{
+  const plugin = createPlugin();
+  const otherAccount = crypto.randomUUID();
+  const retired = fakeTransaction({
+    transactionId: '2000000123456900',
+    productId: 'com.example.game.retired',
+    unfinished: true,
+  });
+  const previousPlayer = fakeTransaction({
+    transactionId: '2000000123456901',
+    appAccountToken: otherAccount,
+    unfinished: true,
+  });
+  const valid = fakeTransaction({ transactionId: '2000000123456902', unfinished: true });
+  plugin.upsert(retired);
+  plugin.upsert(previousPlayer);
+  plugin.upsert(valid);
+  const diagnostics: CapacitorStoreKitDiagnostic[] = [];
+  const provider = createCapacitorStoreKitCommerceProvider({
+    products,
+    getAppAccountToken: () => fakeAccountToken,
+    sdk: plugin,
+    isIos: () => true,
+    onDiagnostic: (diagnostic) => {
+      diagnostics.push(diagnostic);
+    },
+  });
+  const events: CommerceEvent[] = [];
+  provider.subscribe((event) => {
+    events.push(event);
+  });
+  assertEqual(
+    (await provider.getAvailablePurchases()).map((purchase) => [
+      purchase.transactionId,
+      purchase.logicalId,
+    ]),
+    [['2000000123456902', 'COINS_100']],
+    "a retired SKU and another player's transaction do not block the valid sibling, "
+      + 'and every listed purchase resolves to a logical id',
+  );
+  plugin.emit(retired);
+  plugin.emit(previousPlayer);
+  plugin.emit(valid);
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  assertEqual(
+    events.map((event) =>
+      event.type === 'purchaseUpdated'
+        ? [event.purchase.transactionId, event.purchase.logicalId]
+        : [event.type],
+    ),
+    [['2000000123456902', 'COINS_100']],
+    'the event path applies the same catalog and account filters',
+  );
+  assertEqual(
+    diagnostics.map((diagnostic) => [diagnostic.type, diagnostic.transactionId]),
+    [
+      ['unmapped-sku', '2000000123456900'],
+      ['account-mismatch', '2000000123456901'],
+      ['unmapped-sku', '2000000123456900'],
+      ['account-mismatch', '2000000123456901'],
+    ],
+    'excluded transactions are surfaced through onDiagnostic on both paths',
+  );
+  // Account switch: the previous player's purchase is listed for that player only.
+  const switched = createCapacitorStoreKitCommerceProvider({
+    products,
+    getAppAccountToken: () => otherAccount,
+    sdk: plugin,
+    isIos: () => true,
+  });
+  assertEqual(
+    (await switched.getAvailablePurchases()).map((purchase) => purchase.transactionId),
+    ['2000000123456901'],
+    'after an account switch the other player sees only their own unfinished purchase',
+  );
+  provider.dispose();
+  switched.dispose();
 }
 
 console.info('StoreKit commerce v2 provider passed.');

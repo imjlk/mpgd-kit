@@ -16,23 +16,46 @@ import {
   storeKitStoreSdkCapabilities,
   storeKitStoreSdkErrorCodeMap,
   toSdkPurchase,
+  type CapacitorStoreKitDiagnostic,
+  type CapacitorStoreKitStoreSdkProduct,
 } from './store-sdk.js';
 
 const sku = 'com.example.game.coins100';
+const removeAdsSku = 'com.example.game.remove_ads';
 const binding = { kind: 'app-account-token', value: fakeAccountToken.toUpperCase() } as const;
+const catalog: readonly CapacitorStoreKitStoreSdkProduct[] = [
+  { sku, kind: 'consumable' },
+  { sku: removeAdsSku, kind: 'durable' },
+];
 
 function createSdk(input: {
   readonly plugin?: ReturnType<typeof createFakeStoreKitPlugin>;
   readonly isIos?: () => boolean;
-  readonly productIds?: readonly string[];
+  readonly products?: readonly CapacitorStoreKitStoreSdkProduct[];
+  readonly getAppAccountToken?: () => string | Promise<string>;
 } = {}) {
-  const plugin = input.plugin ?? createFakeStoreKitPlugin();
+  const plugin = input.plugin ?? createFakeStoreKitPlugin({
+    products: [fakeProduct(), fakeProduct({ productId: removeAdsSku, type: 'non_consumable' })],
+  });
+  const diagnostics: CapacitorStoreKitDiagnostic[] = [];
   const sdk = createCapacitorStoreKitStoreSdk({
-    productIds: input.productIds ?? [sku, 'com.example.game.remove_ads'],
+    products: input.products ?? catalog,
+    getAppAccountToken: input.getAppAccountToken ?? (() => fakeAccountToken),
     sdk: plugin,
     isIos: input.isIos ?? (() => true),
+    onDiagnostic: (diagnostic) => {
+      diagnostics.push(diagnostic);
+    },
   });
-  return { plugin, sdk };
+  return { plugin, sdk, diagnostics };
+}
+
+async function settled(): Promise<void> {
+  // Native events are filtered after the account token resolves; a macrotask
+  // lets every chained admission finish.
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 // Identity and capabilities.
@@ -55,13 +78,29 @@ function createSdk(input: {
     },
     'the App Store profile matches the RFC capabilities table',
   );
-  let threw = false;
-  try {
-    createCapacitorStoreKitStoreSdk({ productIds: ['bad sku'], sdk: createFakeStoreKitPlugin() });
-  } catch {
-    threw = true;
+  for (const [products, message] of [
+    [[{ sku: 'bad sku', kind: 'consumable' }], 'an invalid product id is rejected'],
+    [[{ sku, kind: 'subscription' }], 'a non one-time kind is rejected'],
+    [
+      [
+        { sku, kind: 'consumable' },
+        { sku, kind: 'durable' },
+      ],
+      'a duplicate SKU is rejected',
+    ],
+  ] as const) {
+    let threw = false;
+    try {
+      createCapacitorStoreKitStoreSdk({
+        products: products as readonly CapacitorStoreKitStoreSdkProduct[],
+        getAppAccountToken: () => fakeAccountToken,
+        sdk: createFakeStoreKitPlugin(),
+      });
+    } catch {
+      threw = true;
+    }
+    assertEqual(threw, true, `${message} at construction`);
   }
-  assertEqual(threw, true, 'an invalid product id is rejected at construction');
 }
 
 // fetchProducts maps StoreKit products to SDK products.
@@ -69,19 +108,12 @@ function createSdk(input: {
   const plugin = createFakeStoreKitPlugin({
     products: [
       fakeProduct(),
-      fakeProduct({
-        productId: 'com.example.game.remove_ads',
-        type: 'non_consumable',
-        title: 'No ads',
-      }),
+      fakeProduct({ productId: removeAdsSku, type: 'non_consumable', title: 'No ads' }),
       fakeProduct({ productId: 'com.example.game.unlisted' }),
     ],
   });
   const { sdk } = createSdk({ plugin });
-  const products = await sdk.fetchProducts({
-    skus: [sku, 'com.example.game.remove_ads'],
-    type: 'all',
-  });
+  const products = await sdk.fetchProducts({ skus: [sku, removeAdsSku], type: 'all' });
   assertEqual(
     products,
     [
@@ -93,7 +125,7 @@ function createSdk(input: {
         price: { formatted: '$1.00', currencyCode: 'USD' },
       },
       {
-        sku: 'com.example.game.remove_ads',
+        sku: removeAdsSku,
         kind: 'durable',
         title: 'No ads',
         description: 'Game currency',
@@ -102,7 +134,7 @@ function createSdk(input: {
     ],
     'consumable and non_consumable map to consumable and durable with the localized price',
   );
-  assertEqual(plugin.calls, [`getProducts:${sku},com.example.game.remove_ads`], 'one lookup');
+  assertEqual(plugin.calls, [`getProducts:${sku},${removeAdsSku}`], 'one lookup');
   assertEqual(
     await sdk.fetchProducts({ skus: [sku], type: 'subscription' }),
     [],
@@ -121,7 +153,7 @@ function createSdk(input: {
   );
 }
 
-// requestPurchase: account binding, outcomes, and the JWS token.
+// requestPurchase: account binding, product kind, outcomes, and the JWS token.
 {
   const { plugin, sdk } = createSdk();
   await assertThrowsCode(
@@ -177,8 +209,15 @@ function createSdk(input: {
   );
   assertEqual(
     plugin.calls,
-    [`purchase:${sku}:${fakeAccountToken}`],
-    'the purchase opens with the lowercase UUID app account token',
+    [`getProducts:${sku}`, `purchase:${sku}:${fakeAccountToken}`],
+    'the product kind is checked once, then the purchase opens with the lowercase UUID token',
+  );
+  plugin.queuePurchase({ status: 'purchased', transaction });
+  await sdk.requestPurchase({ sku, accountBinding: binding });
+  assertEqual(
+    plugin.calls.filter((call) => call.startsWith('getProducts:')).length,
+    1,
+    'a product already seen is not looked up again before the next purchase',
   );
 
   assertEqual(
@@ -215,7 +254,16 @@ function createSdk(input: {
   );
   plugin.queuePurchase({
     status: 'purchased',
-    transaction: fakeTransaction({ transactionId: '5', signedTransaction: '' }),
+    transaction: fakeTransaction({ transactionId: '5', type: 'non_consumable' }),
+  });
+  await assertThrowsCode(
+    () => sdk.requestPurchase({ sku, accountBinding: binding }),
+    'STOREKIT_EVIDENCE_INVALID',
+    'a transaction whose type disagrees with the catalog kind is invalid evidence',
+  );
+  plugin.queuePurchase({
+    status: 'purchased',
+    transaction: fakeTransaction({ transactionId: '6', signedTransaction: '' }),
   });
   await assertThrowsCode(
     () => sdk.requestPurchase({ sku, accountBinding: binding }),
@@ -242,14 +290,69 @@ function createSdk(input: {
   );
 }
 
-// getAvailablePurchases: unfinished only, revoked mapped, malformed reported.
+// The declared kind is verified before the purchase sheet opens.
 {
+  const plugin = createFakeStoreKitPlugin({
+    products: [fakeProduct({ productId: removeAdsSku, type: 'consumable' })],
+  });
+  const { sdk } = createSdk({ plugin });
+  const mismatch = await assertThrowsCode(
+    () => sdk.requestPurchase({ sku: removeAdsSku, accountBinding: binding }),
+    'STOREKIT_CONFIGURATION_ERROR',
+    'a mapping that declares durable for a store consumable fails before the sheet opens',
+  );
+  assertEqual(
+    normalizeStoreSdkError(mismatch, capacitorStoreKitErrorCodeMap).code,
+    'CONFIGURATION_REQUIRED',
+    'the kind mismatch normalizes to CONFIGURATION_REQUIRED',
+  );
+  const missing = await assertThrowsCode(
+    () => sdk.requestPurchase({ sku, accountBinding: binding }),
+    'STOREKIT_PRODUCT_UNAVAILABLE',
+    'a configured SKU the store does not sell fails before the sheet opens',
+  );
+  assertEqual(
+    normalizeStoreSdkError(missing, capacitorStoreKitErrorCodeMap).code,
+    'ITEM_UNAVAILABLE',
+    'a missing store product normalizes to ITEM_UNAVAILABLE',
+  );
+  const unknown = await assertThrowsCode(
+    () => sdk.requestPurchase({ sku: 'com.example.game.retired', accountBinding: binding }),
+    'STOREKIT_PRODUCT_UNKNOWN',
+    'a SKU outside the catalog fails before the sheet opens',
+  );
+  assertEqual(
+    normalizeStoreSdkError(unknown, capacitorStoreKitErrorCodeMap).code,
+    'ITEM_UNAVAILABLE',
+    'an unmapped SKU normalizes to ITEM_UNAVAILABLE',
+  );
+  assertEqual(
+    plugin.calls.filter((call) => call.startsWith('purchase:')),
+    [],
+    'no purchase sheet opened for a mismatched, missing, or unmapped product',
+  );
+  plugin.productsError = Object.assign(new Error('offline'), {
+    code: 'STOREKIT_PRODUCT_LOOKUP_FAILED',
+  });
+  const fresh = createSdk({ plugin }).sdk;
+  await assertThrowsCode(
+    () => fresh.requestPurchase({ sku: removeAdsSku, accountBinding: binding }),
+    'STOREKIT_PRODUCT_LOOKUP_FAILED',
+    'a lookup failure before the sheet keeps its store code',
+  );
+  plugin.productsError = undefined;
+}
+
+// getAvailablePurchases: unfinished only, the active account, the catalog, revoked mapped,
+// malformed reported.
+{
+  const otherAccount = crypto.randomUUID();
   const unfinished = fakeTransaction({ transactionId: '10', unfinished: true });
   const legacy = fakeTransaction({ transactionId: '11' });
   const finishedEntitlement = fakeTransaction({
     transactionId: '12',
     type: 'non_consumable',
-    productId: 'com.example.game.remove_ads',
+    productId: removeAdsSku,
     unfinished: false,
   });
   const revoked = fakeTransaction({
@@ -258,10 +361,46 @@ function createSdk(input: {
     revokedAt: '2026-07-17T12:00:00Z',
   });
   const malformed = { ...fakeTransaction({ transactionId: '14' }), signedTransaction: '' };
-  const plugin = createFakeStoreKitPlugin({
-    transactions: [unfinished, legacy, finishedEntitlement, revoked, malformed, unfinished],
+  const retired = fakeTransaction({
+    transactionId: '15',
+    productId: 'com.example.game.retired',
+    unfinished: true,
   });
-  const { sdk } = createSdk({ plugin });
+  const previousPlayer = fakeTransaction({
+    transactionId: '16',
+    appAccountToken: otherAccount,
+    unfinished: true,
+  });
+  const unbound = {
+    transactionId: '17',
+    originalTransactionId: '17',
+    productId: sku,
+    type: 'consumable',
+    purchasedAt: '2026-07-16T12:00:00Z',
+    signedTransaction: 'header.payload.signature-17',
+    unfinished: true,
+  } as const;
+  const wrongKind = fakeTransaction({
+    transactionId: '18',
+    productId: removeAdsSku,
+    type: 'consumable',
+    unfinished: true,
+  });
+  const plugin = createFakeStoreKitPlugin({
+    transactions: [
+      unfinished,
+      legacy,
+      finishedEntitlement,
+      revoked,
+      malformed,
+      unfinished,
+      retired,
+      previousPlayer,
+      unbound,
+      wrongKind,
+    ],
+  });
+  const { sdk, diagnostics } = createSdk({ plugin });
   const events: StoreSdkEvent[] = [];
   sdk.addListener('purchaseError', (event) => {
     events.push(event);
@@ -274,22 +413,58 @@ function createSdk(input: {
       ['11', 'purchased', legacy.signedTransaction],
       ['13', 'revoked', revoked.signedTransaction],
     ],
-    'unfinished transactions are listed once with the JWS, a finished entitlement is not, '
-      + 'a transaction without the flag is listed, and revokedAt maps to state revoked',
+    'unfinished transactions of the active account and catalog are listed once with the JWS; '
+      + "a finished entitlement, a retired SKU, another player's or an unbound transaction, "
+      + 'and a kind mismatch are not; revokedAt maps to state revoked',
   );
   assertEqual(
     purchases[2]?.raw,
-    {
-      type: 'consumable',
-      revokedAt: '2026-07-17T12:00:00Z',
-      unfinished: true,
-    },
+    { type: 'consumable', revokedAt: '2026-07-17T12:00:00Z', unfinished: true },
     'raw keeps the native type, revocation, and flag for diagnostics',
   );
   assertEqual(
     events.map((event) => event.type === 'purchaseError' ? [event.sku, event.error.code] : []),
     [[sku, 'STOREKIT_EVIDENCE_INVALID']],
     'one malformed transaction is reported as a purchaseError and never blocks its siblings',
+  );
+  assertEqual(
+    diagnostics,
+    [
+      { type: 'unmapped-sku', sku: 'com.example.game.retired', transactionId: '15' },
+      { type: 'account-mismatch', sku, transactionId: '16', appAccountToken: otherAccount },
+      { type: 'account-mismatch', sku, transactionId: '17' },
+      {
+        type: 'kind-mismatch',
+        sku: removeAdsSku,
+        transactionId: '18',
+        expected: 'durable',
+        reported: 'consumable',
+      },
+    ],
+    'excluded transactions are surfaced as diagnostics, never as purchases',
+  );
+
+  // Account switch: the previous player's purchase waits for that player.
+  const switched = createSdk({ plugin, getAppAccountToken: () => otherAccount });
+  assertEqual(
+    (await switched.sdk.getAvailablePurchases({})).map((purchase) => purchase.transactionId),
+    ['16'],
+    'after an account switch only the transactions bound to the new token are listed',
+  );
+  await assertThrowsCode(
+    () => createSdk({
+      plugin,
+      getAppAccountToken: () => {
+        throw new Error('signed out');
+      },
+    }).sdk.getAvailablePurchases({}),
+    'ACCOUNT_BINDING_REQUIRED',
+    'without a resolvable account token nothing is listed',
+  );
+  await assertThrowsCode(
+    () => createSdk({ plugin, getAppAccountToken: () => 'nope' }).sdk.getAvailablePurchases({}),
+    'STOREKIT_CONFIGURATION_ERROR',
+    'a non-UUID account token is a configuration failure',
   );
 }
 
@@ -367,9 +542,10 @@ function createSdk(input: {
   );
 }
 
-// transactionUpdated becomes purchaseUpdated; the native listener follows the subscribers.
+// transactionUpdated becomes purchaseUpdated for the active account and catalog only; the
+// native listener follows the subscribers of either derived event.
 {
-  const { plugin, sdk } = createSdk();
+  const { plugin, sdk, diagnostics } = createSdk();
   const events: StoreSdkEvent[] = [];
   assertEqual(plugin.listenerCount, 0, 'no native listener before a subscriber');
   const detachFirst = sdk.addListener('purchaseUpdated', (event) => {
@@ -381,6 +557,7 @@ function createSdk(input: {
   assertEqual(plugin.listenerCount, 1, 'one native listener serves every subscriber');
   const transaction = fakeTransaction({ transactionId: '30', revokedAt: '2026-07-18T00:00:00Z' });
   plugin.emit(transaction);
+  await settled();
   assertEqual(
     events.map((event) =>
       event.type === 'purchaseUpdated'
@@ -398,16 +575,66 @@ function createSdk(input: {
     errors.push(event);
   });
   plugin.emit({ productId: sku, transactionId: '31' });
+  const otherAccount = crypto.randomUUID();
+  plugin.emit(fakeTransaction({ transactionId: '32', appAccountToken: otherAccount }));
+  plugin.emit(fakeTransaction({ transactionId: '33', productId: 'com.example.game.retired' }));
+  plugin.emit(fakeTransaction({ transactionId: '34', productId: removeAdsSku }));
+  plugin.emit(fakeTransaction({ transactionId: '35' }));
+  await settled();
   assertEqual(
     errors.map((event) => event.type === 'purchaseError' ? [event.sku, event.error.code] : []),
     [[sku, 'STOREKIT_EVIDENCE_INVALID']],
     'a malformed native event is a purchaseError, never a purchase',
   );
+  assertEqual(
+    events.slice(2).map((event) =>
+      event.type === 'purchaseUpdated' ? event.purchase.transactionId : event.type),
+    ['35', '35'],
+    'events for another account, a retired SKU, or a kind mismatch never become purchases, '
+      + 'and a later valid event still arrives in order',
+  );
+  assertEqual(
+    diagnostics,
+    [
+      { type: 'account-mismatch', sku, transactionId: '32', appAccountToken: otherAccount },
+      { type: 'unmapped-sku', sku: 'com.example.game.retired', transactionId: '33' },
+      {
+        type: 'kind-mismatch',
+        sku: removeAdsSku,
+        transactionId: '34',
+        expected: 'durable',
+        reported: 'consumable',
+      },
+    ],
+    'excluded events are surfaced as diagnostics',
+  );
   detachFirst();
   assertEqual(plugin.listenerCount, 1, 'the native listener stays while a subscriber remains');
   detachSecond();
-  await Promise.resolve();
-  await Promise.resolve();
+  assertEqual(
+    plugin.listenerCount,
+    1,
+    'the native listener stays while a purchaseError subscriber remains',
+  );
+}
+
+// A purchaseError-only subscriber attaches the native listener too.
+{
+  const { plugin, sdk } = createSdk();
+  const errors: StoreSdkEvent[] = [];
+  const detach = sdk.addListener('purchaseError', (event) => {
+    errors.push(event);
+  });
+  assertEqual(plugin.listenerCount, 1, 'a purchaseError subscriber attaches the native listener');
+  plugin.emit({ productId: sku });
+  await settled();
+  assertEqual(
+    errors.map((event) => event.type === 'purchaseError' ? event.error.code : event.type),
+    ['STOREKIT_EVIDENCE_INVALID'],
+    'a malformed update reaches a purchaseError-only subscriber',
+  );
+  detach();
+  await settled();
   assertEqual(plugin.listenerCount, 0, 'the native listener is removed with the last subscriber');
   assertEqual(
     plugin.calls,
@@ -416,7 +643,30 @@ function createSdk(input: {
   );
 }
 
-// Availability follows the v1 probe.
+// An event whose account token cannot be resolved is a purchaseError, not a purchase.
+{
+  const { plugin, sdk } = createSdk({
+    getAppAccountToken: () => {
+      throw new Error('signed out');
+    },
+  });
+  const seen: StoreSdkEvent[] = [];
+  sdk.addListener('purchaseUpdated', (event) => {
+    seen.push(event);
+  });
+  sdk.addListener('purchaseError', (event) => {
+    seen.push(event);
+  });
+  plugin.emit(fakeTransaction({ transactionId: '40' }));
+  await settled();
+  assertEqual(
+    seen.map((event) => event.type === 'purchaseError' ? event.error.code : event.type),
+    ['ACCOUNT_BINDING_REQUIRED'],
+    'without an account token a native update is reported, never admitted',
+  );
+}
+
+// Availability probes every configured batch.
 {
   const plugin = createFakeStoreKitPlugin();
   const { sdk } = createSdk({ plugin });
@@ -430,14 +680,34 @@ function createSdk(input: {
     'a mapped product makes the store available',
   );
   assertEqual(
-    await createSdk({ plugin, productIds: ['com.example.game.missing'] }).sdk.getAvailability?.(),
+    await createSdk({
+      plugin,
+      products: [{ sku: 'com.example.game.missing', kind: 'consumable' }],
+    }).sdk.getAvailability?.(),
     'configuration-required',
     'no mapped product is a configuration problem',
   );
   assertEqual(
-    await createSdk({ plugin, productIds: [] }).sdk.getAvailability?.(),
+    await createSdk({ plugin, products: [] }).sdk.getAvailability?.(),
     'configuration-required',
     'no product ids at all is a configuration problem',
+  );
+  const manyProducts: CapacitorStoreKitStoreSdkProduct[] = Array.from(
+    { length: 150 },
+    (_, index) => ({ sku: `com.example.game.p${index}`, kind: 'consumable' }),
+  );
+  manyProducts.push({ sku, kind: 'consumable' });
+  const batched = createSdk({ plugin, products: manyProducts });
+  const lookupsBefore = plugin.calls.filter((call) => call.startsWith('getProducts:')).length;
+  assertEqual(
+    await batched.sdk.getAvailability?.(),
+    'available',
+    'a sellable product after the first 100 SKUs still makes the store available',
+  );
+  assertEqual(
+    plugin.calls.filter((call) => call.startsWith('getProducts:')).length - lookupsBefore,
+    2,
+    'successive batches are probed until a configured product is found',
   );
   plugin.productsError = Object.assign(new Error('bad'), { code: 'STOREKIT_INVALID_PRODUCTS' });
   assertEqual(

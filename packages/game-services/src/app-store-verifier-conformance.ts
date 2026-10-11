@@ -21,8 +21,10 @@ export interface CreateAppStoreSignedTransactionEvidenceFixtureInput {
  * Builds the `app-store.signed-transaction.v1` evidence envelope a commerce v2
  * StoreKit client submits, with a placeholder JWS by default. Pair it with a
  * fake `AppStoreSignedTransactionVerifier` that answers
- * `createAppStoreTransactionConformanceFixture` for that string; the fixture
- * is not signed evidence and contains no Apple credentials.
+ * `createAppStoreTransactionConformanceFixture` for that string and, under the
+ * default `server-api` policy, a fake Server API whose `signedTransactionInfo`
+ * decodes to the transaction's current status; the fixture is not signed
+ * evidence and contains no Apple credentials.
  */
 export function createAppStoreSignedTransactionEvidenceFixture(
   input: CreateAppStoreSignedTransactionEvidenceFixtureInput = {},

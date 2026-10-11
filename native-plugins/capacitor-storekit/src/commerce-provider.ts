@@ -13,6 +13,7 @@ import {
   capacitorStoreKitErrorCodeMap,
   createCapacitorStoreKitStoreSdk,
   readAppAccountToken,
+  type CapacitorStoreKitDiagnostic,
   type CapacitorStoreKitStoreSdkPlugin,
 } from './store-sdk.js';
 
@@ -45,6 +46,12 @@ export interface CreateCapacitorStoreKitCommerceProviderInput {
   readonly isIos?: () => boolean;
   /** Extra store codes merged over the StoreKit table. */
   readonly mapError?: StoreSdkErrorCodeMap;
+  /**
+   * Observes transactions the SDK keeps away from the reconciler: unmapped
+   * SKUs, transactions bound to another app account token, and StoreKit
+   * types that disagree with the catalog kind. Diagnostics only.
+   */
+  readonly onDiagnostic?: (diagnostic: CapacitorStoreKitDiagnostic) => void;
 }
 
 /**
@@ -78,9 +85,14 @@ export function createCapacitorStoreKitCommerceProvider(
   }
   const bundleId = input.bundleId;
   const sdk = createCapacitorStoreKitStoreSdk({
-    productIds: input.products.map((product) => product.storeSku),
+    products: input.products.map((product) => ({
+      sku: product.storeSku,
+      kind: product.kind === 'consumable' ? 'consumable' : 'durable',
+    })),
+    getAppAccountToken: input.getAppAccountToken,
     ...(input.sdk === undefined ? {} : { sdk: input.sdk }),
     ...(input.isIos === undefined ? {} : { isIos: input.isIos }),
+    ...(input.onDiagnostic === undefined ? {} : { onDiagnostic: input.onDiagnostic }),
   });
   return createStoreCommerceProvider({
     sdk,

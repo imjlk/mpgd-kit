@@ -32,11 +32,50 @@ export type CapacitorStoreKitStoreSdkPlugin = Pick<
   'getProducts' | 'purchase' | 'getTransactions' | 'sync' | 'finishTransaction' | 'addListener'
 >;
 
+/** One-time kinds the App Store sells; `durable` is a StoreKit non-consumable. */
+export type StoreKitOneTimeKind = 'consumable' | 'durable';
+
+/** A store SKU the SDK is configured to sell and the kind the catalog declares for it. */
+export interface CapacitorStoreKitStoreSdkProduct {
+  readonly sku: string;
+  readonly kind: StoreKitOneTimeKind;
+}
+
+/**
+ * A transaction the SDK saw and deliberately kept away from the reconciler:
+ * one for a SKU outside the configured catalog, one bound to another app
+ * account token (shared device or in-game account switch), or one whose
+ * StoreKit type disagrees with the catalog kind. Diagnostics only; nothing
+ * here is a purchase the game may act on.
+ */
+export type CapacitorStoreKitDiagnostic =
+  | { readonly type: 'unmapped-sku'; readonly sku: string; readonly transactionId: string }
+  | {
+      readonly type: 'account-mismatch';
+      readonly sku: string;
+      readonly transactionId: string;
+      readonly appAccountToken?: string;
+    }
+  | {
+      readonly type: 'kind-mismatch';
+      readonly sku: string;
+      readonly transactionId: string;
+      readonly expected: StoreKitOneTimeKind;
+      readonly reported: StoreKitOneTimeKind;
+    };
+
 export interface CreateCapacitorStoreKitStoreSdkInput {
-  /** Store product ids the availability probe looks up; the provider passes its catalog SKUs. */
-  readonly productIds: readonly string[];
+  /** The SKUs the catalog sells through the App Store, with their declared kinds. */
+  readonly products: readonly CapacitorStoreKitStoreSdkProduct[];
+  /**
+   * The active player's app account token (a UUID). Transactions bound to any
+   * other token are never listed or emitted; the backend binds the same value.
+   */
+  readonly getAppAccountToken: () => string | Promise<string>;
   readonly sdk?: CapacitorStoreKitStoreSdkPlugin;
   readonly isIos?: () => boolean;
+  /** Observes transactions the SDK excludes; never a grant signal. */
+  readonly onDiagnostic?: (diagnostic: CapacitorStoreKitDiagnostic) => void;
 }
 
 /**
@@ -46,18 +85,113 @@ export interface CreateCapacitorStoreKitStoreSdkInput {
  * (`AppStore.sync`), and `finish: 'client'` after the ledger grant. Every
  * purchase carries the StoreKit-verified `signedTransaction` JWS as its
  * `token`; the backend verifies that JWS itself and nothing here grants.
+ *
+ * The SDK answers only for the configured catalog and the active account: a
+ * transaction for an unmapped SKU, for another app account token, or whose
+ * StoreKit type disagrees with the catalog kind is reported through
+ * `onDiagnostic` and never reaches `getAvailablePurchases` or an event, so
+ * the reconciler never journals a purchase it cannot resolve or that belongs
+ * to another player.
  */
 export function createCapacitorStoreKitStoreSdk(
   input: CreateCapacitorStoreKitStoreSdkInput,
 ): StoreSdk {
   const sdk = input.sdk ?? CapacitorStoreKit;
   const isIos = input.isIos ?? (() => Capacitor.getPlatform() === 'ios');
-  const productIds = [...input.productIds];
-  for (const productId of productIds) {
-    if (!productPattern.test(productId)) {
-      throw new TypeError(`StoreKit product id ${productId} is invalid.`);
-    }
+  const onDiagnostic = input.onDiagnostic ?? (() => undefined);
+  if (typeof input.getAppAccountToken !== 'function') {
+    throw new TypeError('StoreKit requires getAppAccountToken.');
   }
+  const kinds = new Map<string, StoreKitOneTimeKind>();
+  for (const product of input.products) {
+    if (!isRecord(product) || !productPattern.test(String(product.sku))) {
+      throw new TypeError(`StoreKit product id ${String(product?.sku)} is invalid.`);
+    }
+    if (product.kind !== 'consumable' && product.kind !== 'durable') {
+      throw new TypeError(`StoreKit product ${product.sku} must be consumable or durable.`);
+    }
+    if (kinds.has(product.sku)) {
+      throw new TypeError(`StoreKit product ${product.sku} is configured twice.`);
+    }
+    kinds.set(product.sku, product.kind);
+  }
+  const productIds = [...kinds.keys()];
+  // Store products seen by `fetchProducts` or the availability probe; the
+  // pre-purchase kind check reads them instead of a second lookup.
+  const knownProducts = new Map<string, StoreKitProduct>();
+
+  const unresolvedAccountToken = (error: unknown): StoreSdkError & Error =>
+    Object.assign(
+      storeKitError(
+        'ACCOUNT_BINDING_REQUIRED',
+        'The StoreKit app account token could not be resolved.',
+        false,
+      ),
+      { cause: error },
+    );
+  const normalizeAccountToken = (value: unknown): string =>
+    readAppAccountToken({
+      kind: 'app-account-token',
+      ...(typeof value === 'string' ? { value } : {}),
+    });
+  /**
+   * The active account token; a synchronous resolver answers synchronously so
+   * native events are admitted in the same tick they arrive, an asynchronous
+   * one defers the admission.
+   */
+  const resolveAppAccountToken = (): string | Promise<string> => {
+    let value: unknown;
+    try {
+      value = input.getAppAccountToken();
+    } catch (error) {
+      throw unresolvedAccountToken(error);
+    }
+    if (isPromiseLike(value)) {
+      return Promise.resolve(value).then(normalizeAccountToken, (error: unknown) => {
+        throw unresolvedAccountToken(error);
+      });
+    }
+    return normalizeAccountToken(value);
+  };
+
+  /**
+   * Keeps a verified transaction only when it is sellable to the active
+   * player: configured SKU, declared kind, and the active account token.
+   */
+  const admit = (transaction: StoreKitTransaction, appAccountToken: string): boolean => {
+    const expected = kinds.get(transaction.productId);
+    if (expected === undefined) {
+      onDiagnostic({
+        type: 'unmapped-sku',
+        sku: transaction.productId,
+        transactionId: transaction.transactionId,
+      });
+      return false;
+    }
+    if (transaction.appAccountToken?.toLowerCase() !== appAccountToken) {
+      onDiagnostic({
+        type: 'account-mismatch',
+        sku: transaction.productId,
+        transactionId: transaction.transactionId,
+        ...(transaction.appAccountToken === undefined
+          ? {}
+          : { appAccountToken: transaction.appAccountToken.toLowerCase() }),
+      });
+      return false;
+    }
+    const reported = kindOf(transaction.type);
+    if (reported !== expected) {
+      onDiagnostic({
+        type: 'kind-mismatch',
+        sku: transaction.productId,
+        transactionId: transaction.transactionId,
+        expected,
+        reported,
+      });
+      return false;
+    }
+    return true;
+  };
 
   const listeners = new Map<StoreSdkEventName, Set<(event: never) => void>>();
   let nativeHandle: Promise<PluginListenerHandle> | undefined;
@@ -66,19 +200,67 @@ export function createCapacitorStoreKitStoreSdk(
       (listener as (value: StoreSdkEvent) => void)(event);
     }
   };
+  const malformed = (transaction: unknown): void => {
+    emit({
+      type: 'purchaseError',
+      ...(isRecord(transaction) && typeof transaction.productId === 'string'
+        ? { sku: transaction.productId }
+        : {}),
+      error: evidenceInvalid(),
+    });
+  };
+  // Native events are filtered against the active account token. A deferred
+  // admission (asynchronous resolver) queues later events behind it so the
+  // delivery order is kept.
+  let pendingAdmissions: Promise<void> = Promise.resolve();
+  let pendingAdmissionCount = 0;
+  const admitEvent = (transaction: StoreKitTransaction, appAccountToken: string): void => {
+    if (admit(transaction, appAccountToken)) {
+      emit({ type: 'purchaseUpdated', purchase: toSdkPurchase(transaction) });
+    }
+  };
+  const reportUnresolved = (transaction: StoreKitTransaction, error: unknown): void => {
+    emit({ type: 'purchaseError', sku: transaction.productId, error: error as StoreSdkError });
+  };
   const onTransactionUpdated = (transaction: unknown): void => {
     if (!isValidStoreKitTransaction(transaction)) {
-      emit({
-        type: 'purchaseError',
-        ...(isRecord(transaction) && typeof transaction.productId === 'string'
-          ? { sku: transaction.productId }
-          : {}),
-        error: evidenceInvalid(),
-      });
+      malformed(transaction);
       return;
     }
-    emit({ type: 'purchaseUpdated', purchase: toSdkPurchase(transaction) });
+    if (kinds.get(transaction.productId) === undefined) {
+      // Unmapped before the token is read: no account lookup for a SKU the
+      // catalog does not sell.
+      admit(transaction, '');
+      return;
+    }
+    let token: string | Promise<string>;
+    try {
+      token = resolveAppAccountToken();
+    } catch (error) {
+      reportUnresolved(transaction, error);
+      return;
+    }
+    if (typeof token === 'string' && pendingAdmissionCount === 0) {
+      admitEvent(transaction, token);
+      return;
+    }
+    pendingAdmissionCount += 1;
+    pendingAdmissions = pendingAdmissions
+      .then(() => token)
+      .then(
+        (resolved) => {
+          admitEvent(transaction, resolved);
+        },
+        (error: unknown) => {
+          reportUnresolved(transaction, error);
+        },
+      )
+      .finally(() => {
+        pendingAdmissionCount -= 1;
+      });
   };
+  const transactionSubscribers = (): number =>
+    (listeners.get('purchaseUpdated')?.size ?? 0) + (listeners.get('purchaseError')?.size ?? 0);
   const attachNative = (): void => {
     if (nativeHandle !== undefined || !isIos()) {
       return;
@@ -111,6 +293,61 @@ export function createCapacitorStoreKitStoreSdk(
     }
   };
 
+  const lookupProducts = async (skus: readonly string[]): Promise<StoreKitProduct[]> => {
+    const products: StoreKitProduct[] = [];
+    for (let index = 0; index < skus.length; index += maxProductIdsPerLookup) {
+      const response: unknown = await sdk.getProducts({
+        productIds: skus.slice(index, index + maxProductIdsPerLookup),
+      });
+      if (!isRecord(response) || !Array.isArray(response.products)) {
+        throw evidenceInvalid('StoreKit returned an invalid product list.');
+      }
+      for (const product of response.products as readonly unknown[]) {
+        if (!isValidStoreKitProduct(product)) {
+          throw evidenceInvalid('StoreKit returned an invalid product.');
+        }
+        knownProducts.set(product.productId, product);
+        products.push(product);
+      }
+    }
+    return products;
+  };
+
+  /**
+   * The store product for a configured SKU, checked against the declared
+   * kind before any purchase sheet opens: a catalog that declares the wrong
+   * one-time kind fails here instead of charging the player for a purchase
+   * the backend would reject with `APP_STORE_PRODUCT_TYPE_MISMATCH`.
+   */
+  const assertSellable = async (sku: string): Promise<StoreKitOneTimeKind> => {
+    const expected = kinds.get(sku);
+    if (expected === undefined) {
+      throw storeKitError(
+        'STOREKIT_PRODUCT_UNKNOWN',
+        `StoreKit product ${sku} is not in the configured catalog.`,
+        false,
+      );
+    }
+    const product = knownProducts.get(sku)
+      ?? (await lookupProducts([sku])).find((candidate) => candidate.productId === sku);
+    if (product === undefined) {
+      throw storeKitError(
+        'STOREKIT_PRODUCT_UNAVAILABLE',
+        `StoreKit product ${sku} is not available in the store.`,
+        false,
+      );
+    }
+    const reported = kindOf(product.type);
+    if (reported !== expected) {
+      throw storeKitError(
+        'STOREKIT_CONFIGURATION_ERROR',
+        `StoreKit product ${sku} is ${product.type}; the catalog declares ${expected}.`,
+        false,
+      );
+    }
+    return expected;
+  };
+
   // Overlapping finishes for the same transaction and ledger entry share one
   // native call; the v2 reconciler is the gate that authorizes the call.
   const inFlightFinishes = new Map<
@@ -127,25 +364,14 @@ export function createCapacitorStoreKitStoreSdk(
         return [];
       }
       const products: StoreSdkProduct[] = [];
-      for (let index = 0; index < request.skus.length; index += maxProductIdsPerLookup) {
-        const response = await sdk.getProducts({
-          productIds: request.skus.slice(index, index + maxProductIdsPerLookup),
+      for (const product of await lookupProducts(request.skus)) {
+        products.push({
+          sku: product.productId,
+          kind: kindOf(product.type),
+          title: product.title,
+          description: product.description,
+          price: { formatted: product.formattedPrice, currencyCode: product.currencyCode },
         });
-        if (!isRecord(response) || !Array.isArray(response.products)) {
-          throw evidenceInvalid('StoreKit returned an invalid product list.');
-        }
-        for (const product of response.products as readonly unknown[]) {
-          if (!isValidStoreKitProduct(product)) {
-            throw evidenceInvalid('StoreKit returned an invalid product.');
-          }
-          products.push({
-            sku: product.productId,
-            kind: product.type === 'consumable' ? 'consumable' : 'durable',
-            title: product.title,
-            description: product.description,
-            price: { formatted: product.formattedPrice, currencyCode: product.currencyCode },
-          });
-        }
       }
       return products;
     },
@@ -154,6 +380,7 @@ export function createCapacitorStoreKitStoreSdk(
     ): Promise<StoreSdkRequestPurchaseResult> {
       requireIos();
       const appAccountToken = readAppAccountToken(request.accountBinding);
+      const expected = await assertSellable(request.sku);
       const outcome: unknown = await sdk.purchase({ productId: request.sku, appAccountToken });
       if (!isRecord(outcome)) {
         throw evidenceInvalid('StoreKit returned an invalid purchase result.');
@@ -164,6 +391,7 @@ export function createCapacitorStoreKitStoreSdk(
           if (
             !isValidStoreKitTransaction(transaction)
             || transaction.productId !== request.sku
+            || kindOf(transaction.type) !== expected
             || transaction.appAccountToken?.toLowerCase() !== appAccountToken
           ) {
             throw evidenceInvalid('StoreKit purchase evidence is invalid.');
@@ -186,6 +414,7 @@ export function createCapacitorStoreKitStoreSdk(
       // Pending (Ask to Buy) transactions never appear in `Transaction.unfinished`
       // before approval, so `includePending` has nothing to filter here.
       requireIos();
+      const appAccountToken = await resolveAppAccountToken();
       const response: unknown = await sdk.getTransactions();
       if (!isRecord(response) || !Array.isArray(response.transactions)) {
         throw evidenceInvalid('StoreKit returned an invalid transaction list.');
@@ -196,13 +425,7 @@ export function createCapacitorStoreKitStoreSdk(
         if (!isValidStoreKitTransaction(transaction)) {
           // One malformed transaction is reported on its own and never blocks
           // a valid sibling.
-          emit({
-            type: 'purchaseError',
-            ...(isRecord(transaction) && typeof transaction.productId === 'string'
-              ? { sku: transaction.productId }
-              : {}),
-            error: evidenceInvalid(),
-          });
+          malformed(transaction);
           continue;
         }
         // Available means unfinished: a current entitlement the native side
@@ -212,7 +435,9 @@ export function createCapacitorStoreKitStoreSdk(
           continue;
         }
         seen.add(transaction.transactionId);
-        purchases.push(toSdkPurchase(transaction));
+        if (admit(transaction, appAccountToken)) {
+          purchases.push(toSdkPurchase(transaction));
+        }
       }
       return purchases;
     },
@@ -269,12 +494,14 @@ export function createCapacitorStoreKitStoreSdk(
       const set = listeners.get(eventName) ?? new Set<(event: never) => void>();
       listeners.set(eventName, set);
       set.add(listener as (event: never) => void);
-      if (eventName === 'purchaseUpdated') {
+      // Both events derive from native transaction updates (a malformed update
+      // is a purchaseError), so either subscriber needs the native listener.
+      if (transactionSubscribers() > 0) {
         attachNative();
       }
       return () => {
         set.delete(listener as (event: never) => void);
-        if (eventName === 'purchaseUpdated' && set.size === 0) {
+        if (transactionSubscribers() === 0) {
           detachNative();
         }
       };
@@ -287,16 +514,17 @@ export function createCapacitorStoreKitStoreSdk(
         return 'configuration-required';
       }
       try {
-        const response: unknown = await sdk.getProducts({
-          productIds: productIds.slice(0, maxProductIdsPerLookup),
-        });
-        const products = isRecord(response) && Array.isArray(response.products)
-          ? response.products as readonly unknown[]
-          : [];
-        return products.some((product) =>
-          isValidStoreKitProduct(product) && productIds.includes(product.productId))
-          ? 'available'
-          : 'configuration-required';
+        // Probe batch by batch until one configured product is sold; only a
+        // catalog with no sellable product at all is a configuration problem.
+        for (let index = 0; index < productIds.length; index += maxProductIdsPerLookup) {
+          const products = await lookupProducts(
+            productIds.slice(index, index + maxProductIdsPerLookup),
+          );
+          if (products.some((product) => kinds.has(product.productId))) {
+            return 'available';
+          }
+        }
+        return 'configuration-required';
       } catch (error) {
         const code = isRecord(error) ? error.code : undefined;
         return code === 'STOREKIT_INVALID_PRODUCTS' || code === 'STOREKIT_PRODUCT_UNAVAILABLE'
@@ -435,6 +663,10 @@ export function isValidStoreKitTransaction(value: unknown): value is StoreKitTra
     && (value.unfinished === undefined || typeof value.unfinished === 'boolean');
 }
 
+function kindOf(type: StoreKitProduct['type']): StoreKitOneTimeKind {
+  return type === 'consumable' ? 'consumable' : 'durable';
+}
+
 function isValidStoreKitProduct(value: unknown): value is StoreKitProduct {
   return isRecord(value)
     && typeof value.productId === 'string' && productPattern.test(value.productId)
@@ -449,8 +681,16 @@ function storeKitError(code: string, message: string, retryable: boolean): Store
   return Object.assign(new Error(message), { code, retryable });
 }
 
-function evidenceInvalid(message = 'StoreKit transaction evidence is invalid.'): StoreSdkError & Error {
+function evidenceInvalid(
+  message = 'StoreKit transaction evidence is invalid.',
+): StoreSdkError & Error {
   return storeKitError('STOREKIT_EVIDENCE_INVALID', message, false);
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (typeof value === 'object' || typeof value === 'function')
+    && value !== null
+    && typeof (value as { readonly then?: unknown }).then === 'function';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
