@@ -1,5 +1,6 @@
 import {
   bridgeStorageLoadProtocol,
+  commerceV2UnavailableBridgeErrorCode,
   createBridgeError,
   createCommerceV2UnavailableBridgeError,
   decodeBridgeStorageLoadData,
@@ -14,23 +15,46 @@ import {
   type BridgeRpcClient,
   type BridgeRpcEndpoint,
 } from '@mpgd/bridge/orpc';
-import type {
-  IdentitySession,
-  IdentityUpgradeResult,
-  InboundShare,
-  LaunchIntent,
-  NotificationSubscriptionResult,
-  NotificationSubscriptionStatus,
-  PlatformCapabilities,
-  PlatformGateway,
-  PlayerIdentity,
-  PresentationResult,
-  ShareResult,
+import {
+  PlatformOperationError,
+  type IdentitySession,
+  type IdentityUpgradeResult,
+  type InboundShare,
+  type LaunchIntent,
+  type NotificationSubscriptionResult,
+  type NotificationSubscriptionStatus,
+  type PlatformCapabilities,
+  type PlatformGateway,
+  type PlatformProviderAvailability,
+  type PlayerIdentity,
+  type PresentationResult,
+  type ShareResult,
 } from '@mpgd/platform';
+import {
+  assertCommerceBridgeGetAvailablePurchasesResult,
+  assertCommerceBridgeGetCapabilitiesResult,
+  CommerceError,
+  commerceProtocol,
+  deriveLegacyCommerceCapabilities,
+  isCommerceErrorCode,
+  type CommerceErrorCode,
+  type CommerceProvider,
+} from '@mpgd/platform/commerce';
 
+import { assertDevvitOrderEvidence, type DevvitPaidOrder } from './commerce-contract.js';
+import {
+  createDevvitCommerceProvider,
+  type CreateDevvitCommerceProviderInput,
+  type DevvitOrderSource,
+} from './commerce-provider.js';
+
+export * from './commerce-contract.js';
+export * from './commerce-provider.js';
 export * from './payments.js';
 
 export const defaultDevvitRpcEndpoint = defaultBridgeRpcEndpoint;
+/** Bridge error of `createDevvitOrpcBridge` when the oRPC request itself failed. */
+export const devvitBridgeNetworkErrorCode = 'DEVVIT_BRIDGE_NETWORK_ERROR' as const;
 
 type BridgeErrorResponse = Extract<BridgeResponse, { readonly ok: false }>;
 type DevvitStorageSaveResponse = {
@@ -55,12 +79,33 @@ export class DevvitBridgeError extends Error {
   }
 }
 
+/**
+ * Webview side of commerce v2: the checkout client and the product catalog.
+ * The paid-order list and the capability availability come from the server
+ * bridge (`commerce.v2.getAvailablePurchases`, `commerce.v2.getCapabilities`),
+ * which the server serves through `createDevvitCommerceV2BridgeHandler` from
+ * `@mpgd/adapter-devvit/server`.
+ */
+export type DevvitGatewayCommerceOptions = Omit<CreateDevvitCommerceProviderInput, 'orders'>;
+
 export interface DevvitPlatformGatewayOptions {
   readonly appVersion: string;
   readonly buildId: string;
   readonly bridge?: DevvitBridge;
   readonly fallbackBridge?: DevvitBridge;
   readonly rpcEndpoint?: BridgeRpcEndpoint;
+  /**
+   * Installs the commerce v2 provider (`createDevvitCommerceProvider`) as
+   * `commerceV2`, with the `commerce` capability block and `nativeIap` and
+   * `subscriptionIap` derived from it. Absent, the gateway offers no
+   * `commerceV2`; the v1 `commerce` surface is the bridge's either way.
+   *
+   * Not yet usable in production before C2: the backend lookup verifier for
+   * `devvit.order.v1` does not exist yet, so a verify request for a Devvit
+   * purchase is refused today instead of answering `pending`, and no journal
+   * record can reach `granted`. Enable it once the backend can answer.
+   */
+  readonly commerce?: DevvitGatewayCommerceOptions;
 }
 
 export function createDevvitPlatformGateway(
@@ -92,10 +137,24 @@ export function createDevvitPlatformGateway(
     return response.data as TData;
   }
 
+  const commerceV2: CommerceProvider | undefined = input.commerce === undefined
+    ? undefined
+    : createDevvitCommerceProvider({
+        ...input.commerce,
+        orders: createDevvitBridgeOrderSource(request),
+      });
+
   return {
     target: 'reddit',
     async getCapabilities() {
-      return { ...await request<PlatformCapabilities>('runtime.getCapabilities', {}) };
+      const capabilities = { ...await request<PlatformCapabilities>('runtime.getCapabilities', {}) };
+      if (commerceV2 === undefined) {
+        return capabilities;
+      }
+      // The webview provider owns the block: the server snapshot stays honest
+      // about the server, and the flags derive from the block it reports.
+      const commerce = await commerceV2.getCapabilities();
+      return { ...capabilities, ...deriveLegacyCommerceCapabilities(commerce), commerce };
     },
     identity: {
       getPlayer: () => request<PlayerIdentity | null>('identity.getPlayer', {}),
@@ -124,6 +183,7 @@ export function createDevvitPlatformGateway(
       restore: () => request('commerce.restore', {}),
       getEntitlements: () => request('commerce.getEntitlements', {}),
     },
+    ...(commerceV2 === undefined ? {} : { commerceV2 }),
     ads: {
       preload: (payload) => request('ads.preload', payload),
       showRewarded: (payload) => request('ads.showRewarded', payload),
@@ -156,6 +216,138 @@ export function createDevvitPlatformGateway(
   };
 }
 
+/**
+ * The webview provider's order source over the server bridge: the paid orders
+ * the server lists as available purchases, mapped back to orders (the
+ * provider rebuilds the purchases under its own store id), and the
+ * availability the server reports. `COMMERCE_V2_UNAVAILABLE` from a bridge
+ * without the commerce handler is `configuration-required`; another bridge
+ * failure that is retryable (or the transport failing) keeps the availability
+ * the server last answered for the capability read (`temporarily-unavailable`
+ * before any answer; a non-retryable failure or an invalid answer fails
+ * closed) and is
+ * a `CommerceError` for a list read (`NETWORK` for a transport failure,
+ * otherwise `UNKNOWN` with the bridge code as `storeCode`).
+ */
+export function createDevvitBridgeOrderSource(
+  request: <TData>(method: BridgeMethod, payload: unknown) => Promise<TData>,
+): DevvitOrderSource {
+  /** The availability the server last answered; kept across transient read failures. */
+  let lastAvailability: PlatformProviderAvailability | undefined;
+  return {
+    async listPaidOrders(): Promise<readonly DevvitPaidOrder[]> {
+      let data: unknown;
+      try {
+        data = await request<unknown>('commerce.v2.getAvailablePurchases', {});
+      } catch (error) {
+        throw toCommerceError(error);
+      }
+      let purchases;
+      try {
+        purchases = assertCommerceBridgeGetAvailablePurchasesResult(data).purchases;
+      } catch (error) {
+        throw new CommerceError('INVALID_RESPONSE', {
+          message:
+            'Devvit server bridge returned invalid data for commerce.v2.getAvailablePurchases.',
+          cause: error,
+        });
+      }
+      const orders: DevvitPaidOrder[] = [];
+      for (const purchase of purchases) {
+        let environment: DevvitPaidOrder['environment'];
+        let delivered: boolean | undefined;
+        try {
+          const evidence = assertDevvitOrderEvidence(purchase.evidence);
+          environment = evidence.environment;
+          delivered = evidence.status === undefined ? undefined : evidence.status === 'DELIVERED';
+        } catch {
+          // The server listed an order under another evidence schema; the
+          // order itself is still the server's word.
+          environment = undefined;
+        }
+        orders.push({
+          orderId: purchase.transactionId,
+          sku: purchase.storeSku,
+          ...(purchase.purchasedAt === undefined ? {} : { paidAt: purchase.purchasedAt }),
+          ...(environment === undefined ? {} : { environment }),
+          ...(delivered === undefined ? {} : { delivered }),
+        });
+      }
+      return orders;
+    },
+    async getAvailability(): Promise<PlatformProviderAvailability> {
+      let data: unknown;
+      try {
+        data = await request<unknown>('commerce.v2.getCapabilities', { protocol: commerceProtocol });
+      } catch (error) {
+        if (
+          error instanceof DevvitBridgeError
+          && error.code === commerceV2UnavailableBridgeErrorCode
+        ) {
+          // The server does not serve commerce v2: fail closed, whatever it answered before.
+          lastAvailability = undefined;
+          return 'configuration-required';
+        }
+        if (isTransientBridgeFailure(error)) {
+          // A retryable failure keeps the last answer the server gave, so one
+          // timed-out read does not hide the shop; the first read fails closed.
+          return lastAvailability ?? 'temporarily-unavailable';
+        }
+        // Anything else is not transient: fail closed and forget the old answer.
+        lastAvailability = undefined;
+        return 'temporarily-unavailable';
+      }
+      try {
+        lastAvailability = assertCommerceBridgeGetCapabilitiesResult(data).capabilities.availability;
+        return lastAvailability;
+      } catch {
+        // The server answered something the contract rejects: fail closed.
+        lastAvailability = undefined;
+        return 'temporarily-unavailable';
+      }
+    },
+  };
+}
+
+/**
+ * A bridge failure as a commerce error: a closed server
+ * (`COMMERCE_V2_UNAVAILABLE`) is `CONFIGURATION_REQUIRED`, a transport failure
+ * (`DEVVIT_BRIDGE_NETWORK_ERROR`) is `NETWORK`, a v2 code is kept, and any
+ * other bridge code is `UNKNOWN` with the code as `storeCode`.
+ */
+/** A retryable bridge error, or the oRPC transport failing: the server may answer again shortly. */
+function isTransientBridgeFailure(error: unknown): boolean {
+  if (error instanceof DevvitBridgeError) {
+    return error.retryable || error.code === devvitBridgeNetworkErrorCode;
+  }
+  return error instanceof PlatformOperationError && error.retryable;
+}
+
+function toCommerceError(error: unknown): CommerceError {
+  if (error instanceof CommerceError) {
+    return error;
+  }
+  if (error instanceof DevvitBridgeError || error instanceof PlatformOperationError) {
+    const code: CommerceErrorCode = error.code === commerceV2UnavailableBridgeErrorCode
+      ? 'CONFIGURATION_REQUIRED'
+      : error.code === devvitBridgeNetworkErrorCode
+        ? 'NETWORK'
+        : isCommerceErrorCode(error.code)
+          ? error.code
+          : 'UNKNOWN';
+    return new CommerceError(code, {
+      message: error.message,
+      retryable: code === 'NETWORK' ? true : error.retryable,
+      ...(code === error.code ? {} : { storeCode: error.code }),
+      cause: error,
+    });
+  }
+  return new CommerceError('UNKNOWN', {
+    message: `Devvit server bridge request failed: ${errorMessage(error)}`,
+    cause: error,
+  });
+}
+
 export function createDevvitOrpcBridge(input: {
   readonly endpoint?: BridgeRpcEndpoint | undefined;
   readonly fetch?: typeof fetch | undefined;
@@ -173,7 +365,7 @@ export function createDevvitOrpcBridge(input: {
       } catch (error) {
         return createBridgeError(
           bridgeRequest.id,
-          'DEVVIT_BRIDGE_NETWORK_ERROR',
+          devvitBridgeNetworkErrorCode,
           `Devvit oRPC bridge request failed: ${errorMessage(error)}`,
           true,
         );

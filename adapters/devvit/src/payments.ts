@@ -7,10 +7,26 @@ import type {
   PurchaseResult,
 } from '@mpgd/platform';
 
+/**
+ * Why a Devvit checkout ended without an order (`OrderResultEvent` with
+ * `STATUS_ERROR` or `STATUS_CANCELLED`). `code` is a commerce v2 error code
+ * when the client could classify the failure, otherwise the platform's own
+ * code (`String(errorCode)`), which the v2 provider keeps as `storeCode`.
+ */
+export interface DevvitCheckoutFailure {
+  readonly code: string;
+  readonly storeCode?: string;
+  readonly message?: string;
+  readonly retryable?: boolean;
+}
+
 export interface DevvitCheckoutResult {
   readonly status: PurchaseResult['status'];
+  /** `OrderResultEvent.orderId`: present once Reddit created the order. */
   readonly orderId?: string;
   readonly evidence?: PlatformEvidenceEnvelope;
+  /** Read by the commerce v2 provider for a `cancelled` or `failed` checkout. */
+  readonly error?: DevvitCheckoutFailure;
 }
 
 export interface DevvitPaymentsClient {
@@ -32,7 +48,7 @@ export interface CreateDevvitCommerceAdapterInput {
 export function createDevvitCommerceAdapter(
   input: CreateDevvitCommerceAdapterInput,
 ): CommerceAdapter {
-  const products = normalizeProducts(input.products);
+  const products = normalizeDevvitCommerceProducts(input.products);
   const productsById = new Map(products.map((product) => [product.info.id, product]));
 
   return {
@@ -94,7 +110,8 @@ export function withDevvitCommerceAdapter(
   };
 }
 
-function normalizeProducts(
+/** Frozen copies of the configured products; duplicate ids or SKUs and blank SKUs are rejected. */
+export function normalizeDevvitCommerceProducts(
   input: readonly DevvitCommerceProduct[],
 ): readonly DevvitCommerceProduct[] {
   const productIds = new Set<string>();

@@ -48,6 +48,14 @@ export interface DevvitBridgeRedisLike {
   watch(...keys: readonly string[]): Promise<DevvitBridgeRedisTransactionLike>;
 }
 
+/**
+ * Serves the six `commerce.v2.*` bridge methods: `createDevvitCommerceV2BridgeHandler`
+ * from `@mpgd/adapter-devvit/server` over the Devvit `payments` plugin.
+ */
+export interface DevvitBridgeCommerceHandler {
+  request(input: BridgeRequest): Promise<BridgeResponse>;
+}
+
 export interface DevvitBridgeHandlerDependencies {
   readonly redis: DevvitBridgeRedisLike;
   /** Authenticated Reddit user ID from the Devvit request context, never from the payload. */
@@ -58,6 +66,12 @@ export interface DevvitBridgeHandlerDependencies {
    * game name so saves stay namespaced per game inside the shared Redis.
    */
   readonly storageKeyNamespace?: string | undefined;
+  /**
+   * Commerce v2 over the payments plugin. Absent, every `commerce.v2.*` method
+   * fails closed with `COMMERCE_V2_UNAVAILABLE`, so a server without the
+   * plugin wired never lists orders or products.
+   */
+  readonly commerce?: DevvitBridgeCommerceHandler | undefined;
   readonly warn?: ((message: string) => void) | undefined;
 }
 
@@ -197,14 +211,17 @@ export function createDevvitBridgeHandler(
       case 'storage.save':
         return saveStorage(input, dependencies, storageKeyNamespace, warn);
 
-      // Commerce v2 providers arrive with the B-phase PRs (B6 for Devvit).
+      // Commerce v2 (B6): served by the configured handler over the payments
+      // plugin; the checkout itself opens in the webview.
       case 'commerce.v2.getCapabilities':
       case 'commerce.v2.fetchProducts':
       case 'commerce.v2.requestPurchase':
       case 'commerce.v2.getAvailablePurchases':
       case 'commerce.v2.finishTransaction':
       case 'commerce.v2.restorePurchases':
-        return createCommerceV2UnavailableBridgeError(input, 'Devvit server bridge');
+        return dependencies.commerce === undefined
+          ? createCommerceV2UnavailableBridgeError(input, 'Devvit server bridge')
+          : dependencies.commerce.request(input);
 
       default:
         return createBridgeError(

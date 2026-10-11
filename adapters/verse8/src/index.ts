@@ -21,10 +21,19 @@ import {
 
 import { createVerse8AdProvider, type Verse8AdPresentationSource } from './ad-provider.js';
 import { toAdAdapter } from '@mpgd/platform/ads';
+import { deriveLegacyCommerceCapabilities, type CommerceProvider } from '@mpgd/platform/commerce';
 import { defaultVerse8CatalogTarget } from './catalog-target.js';
+import {
+  createVerse8CommerceProvider,
+  type Verse8CommerceDialogClosedPayload,
+  type Verse8PurchasesChangeListener,
+  type Verse8PurchaseSource,
+} from './commerce-provider.js';
 
 export { verse8AdsRewardEvidenceSchema } from './ads-contract.js';
 export type { Verse8AdPresentationEvent, Verse8AdPresentationSource } from './ad-provider.js';
+export * from './commerce-contract.js';
+export * from './commerce-provider.js';
 
 export interface Verse8Credential {
   readonly account: `0x${string}`;
@@ -87,6 +96,8 @@ export interface Verse8VXShopClient {
   getItems(): readonly Verse8VXShopItem[];
   buyItem(productId: string): void;
   refresh(): Promise<void>;
+  /** The dialog closing; the commerce v2 provider treats `purchased` as a signal to re-read the server. */
+  onClose?(callback: (payload: Verse8CommerceDialogClosedPayload) => void): () => void;
 }
 
 export interface Verse8CommerceProduct {
@@ -110,6 +121,22 @@ export interface Verse8CommerceOptions {
     readonly autoRefresh?: boolean;
   };
   readonly canOpenShop?: () => boolean;
+  /**
+   * Commerce v2 (RFC profile `verse8`): the purchases the Agent8 server
+   * recorded, read through a game-owned authenticated method
+   * (`listPurchases` of `createVerse8Agent8CommerceService`). With it the
+   * gateway exposes `commerceV2` (`createVerse8CommerceProvider`) and the
+   * `commerce` capability block; without it only the v1 adapter is offered.
+   *
+   * Not yet usable in production before C2: the backend lookup verifier for
+   * `verse8.agent8-event.v1` does not exist yet, so a verify request for a
+   * Verse8 purchase is refused today instead of answering `pending`, and no
+   * journal record can reach `granted`. Configure it once the backend can
+   * answer.
+   */
+  readonly purchases?: Verse8PurchaseSource;
+  /** Signal that the recorded purchases may have changed; defaults to the VXShop dialog closing after a purchase. */
+  readonly onPurchasesChanged?: (listener: Verse8PurchasesChangeListener) => () => void;
 }
 
 export function createVerse8CommerceProducts(
@@ -166,6 +193,7 @@ export function createVerse8PlatformGateway(
     }),
   );
   const commerce = createVerse8Commerce(options.vxShop);
+  const commerceV2 = createVerse8CommerceV2(options.vxShop);
   const pauseListeners = new Set<() => void>();
   const resumeListeners = new Set<() => void>();
   const visibility = options.visibility ?? resolveVisibilitySource();
@@ -182,7 +210,7 @@ export function createVerse8PlatformGateway(
   return {
     target: 'verse8',
     async getCapabilities() {
-      return {
+      const capabilities = {
         ...createUnsupportedCapabilities(),
         nativeIap: commerce !== undefined,
         nativeAds: adsAvailable,
@@ -190,6 +218,16 @@ export function createVerse8PlatformGateway(
         interstitialAds: adsAvailable,
         cloudSave: options.agent8Storage !== undefined,
         localizedContent: true,
+      };
+      if (commerceV2 === undefined) {
+        return capabilities;
+      }
+      // The flags derive from the block the provider reports (fresh on every read).
+      const commerceBlock = await commerceV2.getCapabilities();
+      return {
+        ...capabilities,
+        ...deriveLegacyCommerceCapabilities(commerceBlock),
+        commerce: commerceBlock,
       };
     },
     identity: {
@@ -201,6 +239,7 @@ export function createVerse8PlatformGateway(
       },
     },
     commerce: commerce ?? createUnavailableVerse8Commerce(),
+    ...(commerceV2 === undefined ? {} : { commerceV2 }),
     ads,
     leaderboard: {
       async submitScore() {
@@ -362,6 +401,33 @@ function createVerse8Commerce(
     },
     getEntitlements: loadEntitlements,
   };
+}
+
+/**
+ * The commerce v2 provider over the same VXShop client and products as the
+ * v1 adapter, offered only when the Agent8 purchase source is configured.
+ */
+function createVerse8CommerceV2(
+  options: Verse8CommerceOptions | undefined,
+): CommerceProvider | undefined {
+  if (
+    options === undefined
+    || options.purchaseEventAuthority !== 'agent8-server'
+    || options.products.length === 0
+    || options.purchases === undefined
+  ) {
+    return undefined;
+  }
+  return createVerse8CommerceProvider({
+    products: options.products,
+    client: options.client ?? VXShop,
+    purchases: options.purchases,
+    ...(options.init === undefined ? {} : { init: options.init }),
+    ...(options.canOpenShop === undefined ? {} : { canOpenShop: options.canOpenShop }),
+    ...(options.onPurchasesChanged === undefined
+      ? {}
+      : { onPurchasesChanged: options.onPurchasesChanged }),
+  });
 }
 
 function normalizeCommerceProducts(
