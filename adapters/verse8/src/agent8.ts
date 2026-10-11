@@ -7,8 +7,17 @@ import {
 import type { Entitlement, LogicalProductId } from '@mpgd/platform';
 
 import { defaultVerse8CatalogTarget } from './catalog-target.js';
+import type { Verse8RecordedPurchase } from './commerce-contract.js';
 
 export * from './agent8-services.js';
+export {
+  assertVerse8Agent8EventEvidence,
+  createVerse8Agent8EventEvidence,
+  verse8Agent8EventEvidenceSchema,
+  verse8CommerceStoreId,
+  type Verse8Agent8EventEvidencePayload,
+  type Verse8RecordedPurchase,
+} from './commerce-contract.js';
 
 const defaultStateNamespace = 'mpgdVerse8Commerce';
 
@@ -58,6 +67,16 @@ export interface Verse8Agent8CommerceService {
     account: string,
     context: Pick<Verse8Agent8Context, 'getUserState'>,
   ): Promise<readonly Entitlement[]>;
+  /**
+   * The purchases `$onItemPurchased` recorded for the account, oldest first:
+   * the server-push lookup of the commerce v2 provider
+   * (`createVerse8CommerceProvider` reads it through a game-owned
+   * authenticated method). Expose it for the sender's own account only.
+   */
+  listPurchases(
+    account: string,
+    context: Pick<Verse8Agent8Context, 'getUserState'>,
+  ): Promise<readonly Verse8RecordedPurchase[]>;
   getSnapshot(
     account: string,
     context: Pick<Verse8Agent8Context, 'getUserState'>,
@@ -158,6 +177,19 @@ export function createVerse8Agent8CommerceService(
     },
     async getSnapshot(account, context) {
       return readSnapshot(account, context, namespace);
+    },
+    async listPurchases(account, context) {
+      assertNonEmptyString(account, 'account');
+      const userState = await context.getUserState(account);
+      const state = readCommerceState(userState[namespace]);
+      return Object.values(state.purchasesById)
+        .sort((left, right) => Number(left.purchaseId) - Number(right.purchaseId))
+        .map((purchase): Verse8RecordedPurchase => ({
+          purchaseId: purchase.purchaseId,
+          productId: purchase.platformProductId,
+          quantity: purchase.quantity,
+          grantedAt: purchase.grantedAt,
+        }));
     },
   };
 }

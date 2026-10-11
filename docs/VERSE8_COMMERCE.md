@@ -123,3 +123,107 @@ authority.
 Use `getMpgdCommerceSnapshot` (or an equivalent authenticated read method) to
 refresh server-owned balances and entitlements after the platform purchase
 event has arrived. Do not poll `VXShop.onClose` as proof of completion.
+
+## Commerce v2 provider
+
+`createVerse8CommerceProvider(input)` from `@mpgd/adapter-verse8` is the
+commerce v2 `CommerceProvider` (RFC:
+[docs/specs/commerce/commerce-v2-rfc.md](specs/commerce/commerce-v2-rfc.md))
+with `store: 'verse8'`. It drives the same VXShop client as the v1 adapter
+(`products`, `client`, `init`, `canOpenShop`) and takes a `purchases` source:
+the purchases the Agent8 server recorded, read through a game-owned
+authenticated method. `createVerse8Agent8CommerceService` now exposes
+`listPurchases(account, context)` for that read; expose it for the sender's
+own account only, like `getMpgdCommerceSnapshot` above:
+
+```ts
+export class Server {
+  async $onItemPurchased(event: Verse8Agent8PurchaseEvent) {
+    return commerce.handleItemPurchased(event, context);
+  }
+
+  async listMpgdPurchases() {
+    return commerce.listPurchases($sender.account, context);
+  }
+}
+```
+
+```ts
+const gateway = createVerse8PlatformGateway({
+  vxShop: {
+    purchaseEventAuthority: 'agent8-server',
+    products: createVerse8CommerceProducts(catalogJson as ProductCatalog),
+    loadEntitlements: () => gameOwnedAgent8Client.call('getMpgdCommerceSnapshot')
+      .then((snapshot) => snapshot.entitlements),
+    purchases: {
+      listPurchases: () => gameOwnedAgent8Client.call('listMpgdPurchases'),
+    },
+  },
+});
+```
+
+With `purchases` configured the gateway exposes the provider as `commerceV2`
+and adds the `commerce` capability block to `getCapabilities()` (with
+`nativeIap` and `subscriptionIap` derived from it); without it only the v1
+adapter is offered, exactly as before.
+
+Capability block (`createVerse8CommerceCapabilities`), the RFC profile row:
+
+- `purchase`: consumable and durable; no subscription, no quantity (VXShop
+  buys one unit per dialog).
+- `catalog`: products, no offers, no localized price (VX amounts).
+- `lifecycle`: no `availablePurchases` (VXShop lists nothing a client could
+  finish; the Agent8 record is the only list), `pending`, `restore`,
+  `events`, `finish: 'none'`. The Agent8 event settles on the server, so the
+  provider has no `finishTransaction`; a `granted` journal record moves
+  straight to `finished`. `pending` is the server-side pending of a
+  server-push store: the backend's lookup verifier answers `pending` until
+  the Agent8 event wrote the record.
+- `authority`: `evidence: 'server-push'`, `accountBinding: 'host'` (the
+  account comes from the Agent8 event, never from the iframe).
+- `availability`: `available` with products, `configuration-required`
+  without.
+
+Methods:
+
+- `fetchProducts` refreshes VXShop and lists the configured products it
+  offers, priced in VX (`storeSku` is the VXShop product id).
+- `requestPurchase` refreshes the shop, checks the live item, and opens the
+  dialog with `buyItem`; the answer is always `launched` because the dialog
+  reports no result the client could trust. Outside the Verse8 iframe it
+  fails with `CONFIGURATION_REQUIRED` (`VERSE8_SHOP_UNAVAILABLE`); an
+  unlisted, unpurchasable, or limit-reached item with `ITEM_UNAVAILABLE`
+  (`VERSE8_PRODUCT_NOT_LISTED`, `VERSE8_PRODUCT_NOT_PURCHASABLE`,
+  `VERSE8_PURCHASE_LIMIT_REACHED`); a failed refresh with a retryable
+  `STORE_UNAVAILABLE`. An unconfigured product fails before the dialog opens;
+  a quantity above one is rejected by `assertRequestPurchaseSupported`.
+- `getAvailablePurchases` is empty.
+- `restorePurchases` re-reads the purchase source and emits `purchaseUpdated`
+  once per recorded purchase not reported before: the Agent8 purchase id is
+  `transactionId` and `token`, the evidence is `verse8.agent8-event.v1`
+  `{ purchaseId, productId, quantity }`, and the account binding is
+  `host-identity`. The `onPurchasesChanged` signal does the same and may carry
+  the purchases it already knows (`Verse8PurchasesChange`); by default it is
+  the VXShop dialog closing after a purchase (`VXShop.onClose` with
+  `purchased: true`), which is a signal to re-read the server and never
+  evidence. The signal is observed from creation until `dispose()`, so a
+  purchase signalled while nobody listens is buffered for the next listener.
+  The provider emits no `purchaseError`.
+
+The backend side of the lookup is the server-push verifier the RFC describes
+for C2: a verify request carrying `verse8.agent8-event.v1` evidence
+(`assertVerse8Agent8EventEvidence` validates the envelope) is `granted` when
+the Agent8 record for that purchase id exists and `pending` otherwise. The
+client never grants: the reconciler moves a purchase to `granted` only on
+that answer.
+
+`adapters/verse8/src/verse8-commerce-provider.conformance.test.ts` runs the
+RFC vectors through `runCommerceConformanceVectors` with a fake VXShop and
+Agent8 record, directly and through the gateway. `server-push-settlement`
+passes with its fixture expectations; `event-before-listener`,
+`purchase-client-finish`, `restart-before-verify`, and `revoked-after-grant`
+run with expectations derived for the `verse8` id. `finish-failure-retry` is
+skipped by the runner, `cancelled-and-failed` (no later `store.error` event)
+and `purchase-pending-then-purchased` (store-side pending) are listed as not
+applicable, and `adapter-settled` and the wallet vectors belong to other
+profiles.

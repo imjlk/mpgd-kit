@@ -10,11 +10,13 @@ import {
 import { createBridgeRpcFetchHandler, createBridgeRpcRouter } from '@mpgd/bridge/orpc';
 
 import {
+  createDevvitCommerceCapabilities,
   createDevvitOrpcBridge,
   createDevvitPlatformGateway,
   createDevvitSandboxBridge,
   defaultDevvitRpcEndpoint,
   DevvitBridgeError,
+  devvitOrderEvidenceSchema,
   type DevvitBridge,
 } from './index';
 
@@ -883,5 +885,161 @@ describe('adapter-devvit', () => {
         },
       });
     }
+  });
+});
+
+describe('adapter-devvit commerce v2 gateway', () => {
+  const products = [{
+    info: {
+      id: 'COINS_100',
+      type: 'consumable' as const,
+      title: '100 Coins',
+      description: 'Adds 100 coins.',
+      price: { formatted: '5 Gold', currencyCode: 'GOLD' },
+    },
+    sku: 'coins_100',
+  }];
+  const snapshot = {
+    nativeIap: false,
+    nativeAds: false,
+    rewardedAds: false,
+    interstitialAds: false,
+    nativeLeaderboard: false,
+    remoteLeaderboard: false,
+    achievements: false,
+    cloudSave: true,
+    socialShare: false,
+    haptics: false,
+    localizedContent: true,
+  };
+  const listedPurchase = {
+    store: 'devvit',
+    transactionId: 'order-1',
+    storeSku: 'coins_100',
+    logicalId: 'COINS_100',
+    quantity: 1,
+    state: 'purchased',
+    purchasedAt: '2026-10-12T00:00:00.000Z',
+    token: 'order-1',
+    evidence: {
+      schema: devvitOrderEvidenceSchema,
+      payload: { orderId: 'order-1', sku: 'coins_100', source: 'order-list', environment: 'sandbox' },
+    },
+    accountBinding: { kind: 'host-identity' },
+  };
+
+  function createServerBridge(input: { readonly served: boolean }): {
+    readonly bridge: DevvitBridge;
+    readonly requests: BridgeRequest[];
+  } {
+    const requests: BridgeRequest[] = [];
+    return {
+      requests,
+      bridge: {
+        async request(request) {
+          requests.push(request);
+          switch (request.method) {
+            case 'runtime.getCapabilities':
+              return { id: request.id, ok: true, data: snapshot };
+            case 'commerce.v2.getCapabilities':
+              return input.served
+                ? {
+                    id: request.id,
+                    ok: true,
+                    data: {
+                      protocolVersion: '2.0.0-draft.1',
+                      store: 'devvit',
+                      capabilities: createDevvitCommerceCapabilities('available'),
+                    },
+                  }
+                : createBridgeError(request.id, 'COMMERCE_V2_UNAVAILABLE', 'closed');
+            case 'commerce.v2.getAvailablePurchases':
+              return input.served
+                ? { id: request.id, ok: true, data: { purchases: [listedPurchase] } }
+                : createBridgeError(request.id, 'COMMERCE_V2_UNAVAILABLE', 'closed');
+            default:
+              return createBridgeError(request.id, 'UNSUPPORTED_METHOD', request.method);
+          }
+        },
+      },
+    };
+  }
+
+  it('offers no commerceV2 and the server snapshot as is without the commerce option', async () => {
+    const { bridge } = createServerBridge({ served: true });
+    const gateway = createDevvitPlatformGateway({ appVersion: '1.0.0', buildId: 'b', bridge });
+    expect(gateway.commerceV2).toBeUndefined();
+    await expect(gateway.getCapabilities()).resolves.toEqual(snapshot);
+  });
+
+  it('installs the webview provider with the capability block derived from it', async () => {
+    const { bridge, requests } = createServerBridge({ served: true });
+    const purchase = vi.fn(async () => ({ status: 'completed' as const, orderId: 'order-2' }));
+    const gateway = createDevvitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'b',
+      bridge,
+      commerce: { products, client: { purchase } },
+    });
+    expect(gateway.commerceV2?.store).toBe('devvit');
+    await expect(gateway.getCapabilities()).resolves.toEqual({
+      ...snapshot,
+      nativeIap: true,
+      subscriptionIap: false,
+      commerce: createDevvitCommerceCapabilities('available'),
+    });
+    // The paid orders come from the server bridge, rebuilt under the provider's store id.
+    await expect(gateway.commerceV2?.getAvailablePurchases()).resolves.toEqual([listedPurchase]);
+    expect(requests.map((request) => request.method)).toEqual([
+      'runtime.getCapabilities',
+      'commerce.v2.getCapabilities',
+      'commerce.v2.getAvailablePurchases',
+    ]);
+    // The checkout never crosses the bridge.
+    await expect(gateway.commerceV2?.requestPurchase({
+      logicalId: 'COINS_100',
+      idempotencyKey: 'op-1',
+      source: 'shop',
+    })).resolves.toMatchObject({ outcome: 'purchased', purchase: { transactionId: 'order-2' } });
+    expect(purchase).toHaveBeenCalledWith('coins_100');
+    expect(requests.filter((request) => request.method === 'commerce.v2.requestPurchase')).toEqual([]);
+  });
+
+  it('reports configuration-required and a closed order list when the server bridge is closed', async () => {
+    const { bridge } = createServerBridge({ served: false });
+    const gateway = createDevvitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'b',
+      bridge,
+      commerce: { products, client: { purchase: async () => ({ status: 'pending' as const }) } },
+    });
+    await expect(gateway.getCapabilities()).resolves.toMatchObject({
+      nativeIap: false,
+      commerce: { availability: 'configuration-required' },
+    });
+    await expect(gateway.commerceV2?.getAvailablePurchases()).rejects.toMatchObject({
+      code: 'CONFIGURATION_REQUIRED',
+      storeCode: 'COMMERCE_V2_UNAVAILABLE',
+    });
+  });
+
+  it('maps a transport failure of the order list to a retryable NETWORK error', async () => {
+    const bridge = createDevvitOrpcBridge({
+      fetch: async () => {
+        throw new Error('offline');
+      },
+    });
+    const gateway = createDevvitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'b',
+      bridge,
+      commerce: { products, client: { purchase: async () => ({ status: 'pending' as const }) } },
+    });
+    await expect(gateway.commerceV2?.getAvailablePurchases()).rejects.toMatchObject({
+      code: 'NETWORK',
+      retryable: true,
+      storeCode: 'DEVVIT_BRIDGE_NETWORK_ERROR',
+    });
+    await expect(gateway.getCapabilities()).rejects.toThrow();
   });
 });

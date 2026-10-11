@@ -1,0 +1,167 @@
+# Devvit Payments and Commerce v2
+
+Reddit settles a Devvit purchase on the server: the payment handler your app
+registers (`fulfillOrder`) runs when an order is `PAID`, and only the backend
+ledger that handler writes grants anything. The webview never grants, never
+finishes, and never trusts its own checkout result. `@mpgd/adapter-devvit`
+ships two client surfaces over that rule:
+
+- the v1 `CommerceAdapter` (`createDevvitCommerceAdapter`, installed with
+  `withDevvitCommerceAdapter`), which returns the checkout result and no
+  entitlements;
+- the commerce v2 `CommerceProvider` described below.
+
+Both run over a game-owned `DevvitPaymentsClient`, a thin wrapper around
+`purchase()` from `@devvit/payments/client`
+(`import { purchase } from '@devvit/payments/client'`; `@devvit/web/client`
+re-exports it). The wrapper maps the `OrderResultEvent` it returns:
+`STATUS_SUCCESS` with `orderId` to `completed`, `STATUS_CANCELLED` to
+`cancelled`, and `STATUS_ERROR` to `failed` with `{ error: { code:
+String(errorCode), message: errorMessage } }`. The order id is Reddit's; do
+not attach client metadata that identifies the attempt.
+
+The server side normalizes the handler request with
+`normalizeDevvitFulfillmentOrder` and `normalizeDevvitRefundOrder` from
+`@mpgd/adapter-devvit/server` (evidence `devvit.payment-order.v1`) and writes
+the ledger through `@mpgd/game-services` platform orders
+(`createPlatformOrderIdempotencyKey`, key `reddit:<orderId>`). That path is
+unchanged by commerce v2.
+
+## Commerce v2 provider
+
+`createDevvitCommerceProvider(input)` from `@mpgd/adapter-devvit` is the
+commerce v2 `CommerceProvider` (RFC:
+[docs/specs/commerce/commerce-v2-rfc.md](specs/commerce/commerce-v2-rfc.md))
+with `store: 'devvit'`. It takes the v1 `products` and `client`, plus an
+`orders` source (the server-push lookup, see below), an optional `store` id
+(conformance vectors name their fixture store), an optional `onOrdersChanged`
+signal, and the v1 `onCheckoutError` hook.
+
+Capability block (`createDevvitCommerceCapabilities`), the RFC profile row:
+
+- `purchase`: consumable and durable (Reddit `INSTANT`, `CONSUMABLE`, and
+  `DURABLE` accounting types); no subscription, no quantity.
+- `catalog`: products, no offers, no localized price (prices are Reddit Gold
+  amounts, formatted by the adapter).
+- `lifecycle`: `availablePurchases`, `pending`, `restore`, `events`,
+  `finish: 'none'`. The fulfillment handler settles on the server, so the
+  provider has no `finishTransaction`; a `granted` journal record moves
+  straight to `finished`. `pending` is the server-side pending of a
+  server-push store: the backend's lookup verifier answers `pending` until the
+  fulfillment push wrote the ledger. Reddit reports no store-side pending
+  order.
+- `authority`: `evidence: 'server-push'`, `accountBinding: 'host'` (the
+  purchasing Reddit account is the server request context, never a payload).
+- `availability`: `available` when products are configured and the order
+  source reports the server serves commerce v2; `configuration-required`
+  without products or when the server bridge answers
+  `COMMERCE_V2_UNAVAILABLE`; `temporarily-unavailable` when the read fails.
+
+Methods:
+
+- `fetchProducts` lists the configured products (`ProductInfo` as
+  `StoreProduct`, `storeSku` is the Devvit SKU); subscriptions never list.
+- `requestPurchase` opens the Reddit checkout through `client.purchase(sku)`.
+  A `completed` result that carries the order id answers `purchased`: the
+  order id is `transactionId` and `token`, the evidence is
+  `devvit.order.v1` `{ orderId, sku, source: 'checkout' }`, the account
+  binding is `host-identity`, and no `settlement` is attached because the
+  backend verify is what grants. A `completed` result without an order id or
+  a `pending` result is `launched`: an order may exist, and the reconciler
+  resolves it from `getAvailablePurchases`. `cancelled` is `USER_CANCELLED`;
+  `failed` keeps the platform code as `storeCode` (a v2 code the wrapper
+  already classified is kept as is; `OUTCOME_UNKNOWN` and `ALREADY_OWNED`
+  classes stay open as `launched`). A `purchase()` call that rejects (the
+  checkout effect produced no usable response, which does not prove that no
+  order was created) also stays open as `launched`, after `onCheckoutError`,
+  and the paid-order list is re-read. An
+  unconfigured product fails with `ITEM_UNAVAILABLE` before any checkout; a
+  quantity above one is rejected by `assertRequestPurchaseSupported`.
+- `getAvailablePurchases` lists the paid orders whose delivery Reddit has not
+  acknowledged, as `purchased` with `devvit.order.v1` `{ source: 'order-list'
+  }` evidence, bounded by `maximumDevvitAvailableOrders` (64). Orders for
+  SKUs this build does not sell are not listed. `includePending` adds nothing.
+- `restorePurchases` re-reads the order source and emits `purchaseUpdated`
+  once per paid order not reported before. The `onOrdersChanged` signal does
+  the same and may carry the orders it already knows (`DevvitOrdersChange`),
+  which are reported before the read; it is observed only while a listener
+  exists. Events before the first `subscribe` are buffered
+  (`createCommerceEventBuffer`). The provider emits no `purchaseError`.
+
+### The server-push lookup
+
+Devvit lists orders on the server only (`payments.getOrders` from
+`@devvit/payments/server`), so the webview reads the paid-order list through
+the server bridge. `createDevvitCommerceV2BridgeHandler({ payments, products
+})` from `@mpgd/adapter-devvit/server` serves the six `commerce.v2.*` bridge
+methods over the plugin:
+
+- `getCapabilities` answers the profile above (`available` with products,
+  `configuration-required` without).
+- `fetchProducts` lists the configured SKUs from `payments.getProducts`,
+  priced in Reddit Gold (`{ formatted: '<amount> Gold', currencyCode: 'GOLD'
+  }`); time-limited goods (`VALID_FOR_*`) are not listed.
+- `getAvailablePurchases` pages `payments.getOrders` (64 per page, eight pages
+  at most) and lists the `PAID` orders of configured SKUs with exactly one
+  product, each as `purchased` with order evidence; a `DELIVERED`, `NEW`,
+  `CANCELED`, or `REVERTED` order is not listed. The plugin runs in the
+  request context of the authenticated Reddit user, and Reddit documents
+  server-side `payments.getOrders()` as that user's orders in reverse
+  chronological order (Devvit docs, "Manage Payments", "Check orders", whose
+  example exposes "orders for the current user" with a `sku` filter only); the
+  `buyer` and `status` filters of `getOrders` do nothing in `@devvit/payments`
+  0.14, which is why the handler filters the status itself. Even if a foreign
+  order were ever listed, nothing would be granted for it: the backend lookup
+  answers from the ledger entry the fulfillment handler wrote for the
+  purchasing player.
+- `requestPurchase` is refused with `DEVVIT_COMMERCE_CHECKOUT_CLIENT_ONLY`:
+  the checkout is a webview effect. `finishTransaction` is refused with
+  `COMMERCE_V2_METHOD_UNSUPPORTED`. `restorePurchases` answers `{ restored:
+  false }`; the webview provider re-reads the list itself.
+- Payloads and results are validated with the `@mpgd/platform/commerce`
+  asserts (`COMMERCE_V2_INVALID_PAYLOAD` on a rejected payload); a plugin
+  failure crosses the bridge as the retryable `DEVVIT_PAYMENTS_UNAVAILABLE`.
+
+The Devvit server bridge (`createDevvitBridgeHandler` in
+`apps/target-devvit/src/server/bridge.ts`, byte-identical in the CLI template)
+takes that handler as its optional `commerce` dependency. Without it every
+`commerce.v2.*` method keeps failing closed with `COMMERCE_V2_UNAVAILABLE`,
+and the sandbox bridge (`createDevvitSandboxBridge`) always does: it has no
+payments plugin and no order list. Wiring `payments` from
+`@devvit/web/server` and the catalog SKUs into the generated server entry is
+C3 work.
+
+On the webview, `createDevvitPlatformGateway({ ..., commerce: { products,
+client, onOrdersChanged?, onCheckoutError?, store? } })` installs the provider
+as `commerceV2` over the gateway's own bridge: the order source is
+`createDevvitBridgeOrderSource(request)` (`commerce.v2.getAvailablePurchases`
+and `commerce.v2.getCapabilities`), `getCapabilities()` adds the `commerce`
+block with `nativeIap` and `subscriptionIap` derived from it, and the v1
+`commerce` surface stays the bridge's (`withDevvitCommerceAdapter` still
+installs the v1 adapter next to it). Without the option the gateway offers
+no `commerceV2` and the server snapshot is returned as is.
+
+The backend side of the lookup is the server-push verifier the RFC describes
+for C2: a verify request carrying `devvit.order.v1` evidence
+(`assertDevvitOrderEvidence` validates the envelope) is `granted` when the
+ledger holds the grant the fulfillment handler wrote for that order and
+`pending` otherwise. A purchase discovered without a journal record derives
+the key `store:devvit:<encodeURIComponent(orderId)>`; the fulfillment handler keeps writing under
+`reddit:<orderId>`, and the platform-evidence unique index remains the
+backstop between the two.
+
+### Conformance
+
+`adapters/devvit/src/devvit-commerce-provider.conformance.test.ts` runs the
+RFC vectors through `runCommerceConformanceVectors` with a fake Reddit,
+directly and through the server bridge handler and gateway path.
+`server-push-settlement` passes with its fixture expectations (the provider
+runs under the fixture store id); `event-before-listener`,
+`purchase-client-finish` (the canonical `purchase-<owner>-finish` member for
+`finish: 'none'`), `restart-before-verify`, and `revoked-after-grant` run with
+expectations derived for the `devvit` id. `finish-failure-retry` is skipped by
+the runner (it scripts a client finish), `cancelled-and-failed` (a later
+`store.error` event; a Devvit checkout outcome is the result of the purchase
+call) and `purchase-pending-then-purchased` (store-side pending) are listed as
+not applicable, and `adapter-settled` and the wallet vectors belong to other
+profiles.

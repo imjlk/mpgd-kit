@@ -72,7 +72,10 @@ test('storage keys are namespaced per player and URI-encoded', async () => {
 
   const response = await handler(request('storage.save', { key: 'profile:main/é', value: true }));
   assert.equal(response.ok, true);
-  assert.equal(storageValueKey('t2_a:b/c', 'profile:main/é'), 'mpgd:save:t2_a%3Ab%2Fc:profile%3Amain%2F%C3%A9');
+  assert.equal(
+    storageValueKey('t2_a:b/c', 'profile:main/é'),
+    'mpgd:save:t2_a%3Ab%2Fc:profile%3Amain%2F%C3%A9',
+  );
   assert.equal(storageIndexKey('t2_a:b/c'), 'mpgd:save-keys:t2_a%3Ab%2Fc');
   assert.deepEqual([...redis.strings.keys()], ['mpgd:save:t2_a%3Ab%2Fc:profile%3Amain%2F%C3%A9']);
   assert.deepEqual(
@@ -153,7 +156,10 @@ test('values written before the index existed are backfilled instead of counted 
   const handler = createHandler(redis, playerId);
 
   for (let index = 0; index < maxStorageKeysPerPlayer; index += 1) {
-    assert.equal((await handler(request('storage.save', { key: `slot-${String(index)}`, value: index }))).ok, true);
+    assert.equal(
+      (await handler(request('storage.save', { key: `slot-${String(index)}`, value: index }))).ok,
+      true,
+    );
   }
 
   assert.equal((await handler(request('storage.save', { key: 'legacy', value: 'new' }))).ok, true);
@@ -238,12 +244,13 @@ test('the storage key namespace is injectable for generated games', async () => 
   assert.deepEqual([...redis.hashes.keys()], ['my-game:save-keys:t2_player']);
   assert.equal(redis.strings.has(storageValueKey(playerId, 'slot')), false);
   assert.throws(
-    () => createDevvitBridgeHandler({
-      redis,
-      currentPlayerId: () => playerId,
-      currentDisplayName: async (id) => `u/${id}`,
-      storageKeyNamespace: '',
-    }),
+    () =>
+      createDevvitBridgeHandler({
+        redis,
+        currentPlayerId: () => playerId,
+        currentDisplayName: async (id) => `u/${id}`,
+        storageKeyNamespace: '',
+      }),
     TypeError,
   );
 });
@@ -273,6 +280,37 @@ test('commerce v2 methods fail closed with COMMERCE_V2_UNAVAILABLE', async () =>
       assert.match(response.error.message, new RegExp(method.replaceAll('.', '\\.')));
     }
   }
+});
+
+test('commerce v2 methods are served by the configured commerce handler only', async () => {
+  const served: string[] = [];
+  const handler = createDevvitBridgeHandler({
+    redis: new FakeDevvitRedis(),
+    currentPlayerId: () => playerId,
+    currentDisplayName: async (id) => `u/${id}`,
+    warn: () => {},
+    commerce: {
+      async request(input) {
+        served.push(input.method);
+        return { id: input.id, ok: true, data: { served: input.method } };
+      },
+    },
+  });
+
+  for (const method of bridgeCommerceV2Methods) {
+    assert.deepEqual(await handler(request(method, { protocol: 'mpgd.commerce.v2' })), {
+      id: 'req',
+      ok: true,
+      data: { served: method },
+    });
+  }
+  assert.deepEqual(served, [...bridgeCommerceV2Methods]);
+  // The handler serves commerce only; storage stays with the bridge.
+  assert.deepEqual(await handler(request('storage.load', { key: 'missing' })), {
+    id: 'req',
+    ok: true,
+    data: { __mpgdBridgeProtocol: 'mpgd.storage.load.v1', found: false },
+  });
 });
 
 function createHandler(redis: FakeDevvitRedis, currentPlayerId: string | undefined) {
