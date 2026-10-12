@@ -2,7 +2,11 @@ import typia from 'typia';
 
 import { extractAitIapProductConfig } from '@mpgd/adapter-ait/iap-config';
 import { createDevvitCommerceBridgeProducts } from '@mpgd/adapter-devvit/server';
-import { resolveCatalogCurrencies, resolveProductPlatformId, type ProductCatalog } from '@mpgd/catalog';
+import {
+  resolveCatalogCurrencies,
+  resolveProductPlatformId,
+  type ProductCatalog,
+} from '@mpgd/catalog';
 
 import { productCatalogFilePath } from './catalog-paths';
 import { isCliEntrypoint, readJsonFile } from './io';
