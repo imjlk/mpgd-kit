@@ -354,7 +354,11 @@ const withTransaction = (
   await journal.reserve(
     padded(
       withTransaction(
-        purchaseRecord({ key: 'rejected', state: 'rejected', updatedAt: new Date(clock + 5_000).toISOString() }),
+        purchaseRecord({
+          key: 'rejected',
+          state: 'rejected',
+          updatedAt: new Date(clock + 5_000).toISOString(),
+        }),
         'GPA.rejected',
       ),
     ),

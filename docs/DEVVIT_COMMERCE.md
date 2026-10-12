@@ -225,7 +225,8 @@ and no payments wiring is installed.
   `createDevvitCommerceV2BridgeHandler({ payments, products })` with
   `createDevvitCommerceBridgeProducts(catalog)` (`{ productId, sku }`, from
   `@mpgd/adapter-devvit/server`) and hands it to the bridge as `commerce`
-  only when `devvit.json` sets `permissions.payments: true` **and** the
+  only when `devvit.json` sets `permissions.payments: true`, declares a
+  fulfillment endpoint (`payments.endpoints.fulfillOrder`), **and** the
   catalog names at least one Reddit SKU. The shipped `devvit.json` keeps
   `permissions.payments: false`, so every `commerce.v2.*` method keeps
   failing closed with `COMMERCE_V2_UNAVAILABLE` until the game opts in; the

@@ -16,14 +16,23 @@ import { createDevvitBridgeHandler } from './bridge.js';
 
 const maxRequestBodySize = 1_048_576;
 /**
- * Commerce v2 opt-in: the catalog's Reddit SKUs (`platformProductIds.reddit`)
- * and the `payments` plugin (`permissions.payments` in devvit.json) must both
- * be present. Otherwise the bridge keeps every `commerce.v2.*` method failing
- * closed with `COMMERCE_V2_UNAVAILABLE`. The handler only lists orders and
- * products; the grant stays with the fulfillment handler's ledger entry.
+ * Commerce v2 opt-in: the catalog's Reddit SKUs (`platformProductIds.reddit`),
+ * the `payments` plugin (`permissions.payments` in devvit.json), and a
+ * fulfillment endpoint (`payments.endpoints.fulfillOrder`, the handler that
+ * writes the backend ledger entry) must all be present. Otherwise the bridge
+ * keeps every `commerce.v2.*` method failing closed with
+ * `COMMERCE_V2_UNAVAILABLE`, so no checkout opens for an order nothing could
+ * grant. The handler only lists orders and products; the grant stays with the
+ * fulfillment handler's ledger entry.
  */
 const commerceProducts = createDevvitCommerceBridgeProducts(productCatalogJson as ProductCatalog);
-const commerceEnabled = devvitManifest.permissions.payments === true && commerceProducts.length > 0;
+const fulfillOrderEndpoint = (devvitManifest as {
+  readonly payments?: { readonly endpoints?: { readonly fulfillOrder?: unknown } };
+}).payments?.endpoints?.fulfillOrder;
+const commerceEnabled = devvitManifest.permissions.payments === true
+  && typeof fulfillOrderEndpoint === 'string'
+  && fulfillOrderEndpoint.trim().length > 0
+  && commerceProducts.length > 0;
 const commerce = commerceEnabled
   ? createDevvitCommerceV2BridgeHandler({ payments, products: commerceProducts })
   : undefined;
@@ -142,7 +151,7 @@ server.listen(port, () => {
   console.log(
     commerceEnabled
       ? `devvit commerce v2 serving ${commerceProducts.length} catalog product(s) over the payments plugin`
-      : 'devvit commerce v2 disabled: enable permissions.payments and add reddit SKUs to the catalog',
+      : 'devvit commerce v2 disabled: needs permissions.payments, payments.endpoints.fulfillOrder, and reddit SKUs in the catalog',
   );
 });
 

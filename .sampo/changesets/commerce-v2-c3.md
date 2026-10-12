@@ -22,8 +22,8 @@ store plugins.
   `withMicrosoftStoreCommerceProvider` with the catalog's consumables. The
   Apps in Toss wrapper installs `iapProducts` from the catalog, and the
   Devvit server serves `createDevvitCommerceV2BridgeHandler` only when
-  `devvit.json` sets `permissions.payments` and the catalog names a Reddit
-  SKU (the shipped `devvit.json` keeps it off). New games depend on
+  `devvit.json` sets `permissions.payments` and `payments.endpoints.fulfillOrder`
+  and the catalog names a Reddit SKU (the shipped `devvit.json` keeps it off). New games depend on
   `@mpgd/capacitor-play-billing` and `@mpgd/capacitor-storekit`.
 - Game services. `createStarterGameServices` runs the commerce v2 reconciler
   over `createStorageMonetizationOperationStore`

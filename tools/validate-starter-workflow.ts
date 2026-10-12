@@ -862,7 +862,9 @@ function validatePhaserTemplateCommerceWiring(): void {
     const devvitServer = readText(`${appsRoot}/target-devvit/src/server/index.ts`);
     for (const requiredText of [
       'createDevvitCommerceBridgeProducts(productCatalogJson as ProductCatalog)',
-      'devvitManifest.permissions.payments === true && commerceProducts.length > 0',
+      'const commerceEnabled = devvitManifest.permissions.payments === true',
+      "&& typeof fulfillOrderEndpoint === 'string'",
+      '&& commerceProducts.length > 0;',
       'createDevvitCommerceV2BridgeHandler({ payments, products: commerceProducts })',
       '...(commerce === undefined ? {} : { commerce }),',
     ]) {

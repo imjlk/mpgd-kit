@@ -128,9 +128,6 @@ export const capacitorShellProviderSupportFiles: readonly string[] = Object.free
   'src/platform/commerceAccountBinding.ts',
 ]);
 
-/** Peer packages a store plugin needs at a compatible version in the game. */
-const providerPeerPackages = ['@mpgd/adapter-capacitor', '@mpgd/platform'] as const;
-
 /** A plugin the plan installs, with the exact version the shell and the game pin. */
 export interface CapacitorShellPlannedProviderPlugin extends CapacitorShellProviderPlugin {
   readonly version: string;
@@ -2856,9 +2853,12 @@ function resolveProviderPlugin(
     throw new Error(`${plugin.packageName} must resolve to a concrete version, not ${version}.`);
   }
   if (typeof peerDependencies === 'object' && peerDependencies !== null) {
-    const peers = peerDependencies as Readonly<Record<string, unknown>>;
-    for (const peer of providerPeerPackages) {
-      const range = peers[peer];
+    // Every declared peer the game has installed must satisfy the plugin's
+    // range (Capacitor core, the bridge, the adapter, and the platform alike),
+    // so an incompatible host is refused before the shell or gateway is written.
+    for (const [peer, range] of Object.entries(
+      peerDependencies as Readonly<Record<string, unknown>>,
+    )) {
       const peerFile = path.join(gameRoot, 'node_modules', peer, 'package.json');
       if (typeof range !== 'string' || !existsSync(peerFile)) {
         continue;
@@ -2894,7 +2894,9 @@ function planProviderGatewayWiring(
   const planned = new Map<string, string>();
   for (const plugin of plugins) {
     const current = readExisting(safeDestination(gameRoot, plugin.gatewayFile));
-    if (current?.includes(plugin.packageName) === true) {
+    // Wired means the gateway calls the plugin's service-provider factory; a
+    // type-only or unused import of the package does not register anything.
+    if (current !== undefined && new RegExp(`\\b${plugin.gatewayFactory}\\s*\\(`, 'u').test(current)) {
       continue;
     }
     const register = `register ${plugin.gatewayFactory} from ${plugin.packageName} there so the `
@@ -2905,7 +2907,7 @@ function planProviderGatewayWiring(
     }
     const legacy = plugin.legacyGatewaySources.includes(current.replace(/\r\n/gu, '\n'));
     if (!legacy || templateRoot === undefined) {
-      warnings.push(`${plugin.gatewayFile} does not import ${plugin.packageName}; ${register}.`);
+      warnings.push(`${plugin.gatewayFile} does not call ${plugin.gatewayFactory}; ${register}.`);
       continue;
     }
     const support = new Map<string, string>();

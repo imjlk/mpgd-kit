@@ -282,7 +282,7 @@ try {
     assert.equal(plan.warnings.length, 2);
     assert.match(
       plan.warnings[0] ?? '',
-      /capacitorAndroid\.ts does not import @mpgd\/capacitor-play-billing; register createCapacitorPlayBillingServiceProvider/u,
+      /capacitorAndroid\.ts does not call createCapacitorPlayBillingServiceProvider; register createCapacitorPlayBillingServiceProvider/u,
     );
     assert.match(
       plan.warnings[1] ?? '',
@@ -309,7 +309,28 @@ try {
       providerIds: ['play-billing'],
     });
     assert.equal(unguided.changedFiles.includes(androidGateway), false);
-    assert.match(unguided.warnings[0] ?? '', /does not import @mpgd\/capacitor-play-billing/u);
+    assert.match(
+      unguided.warnings[0] ?? '',
+      /does not call createCapacitorPlayBillingServiceProvider/u,
+    );
+  }
+
+  // A gateway that only mentions the package (a type-only import) is not wired.
+  {
+    const root = createGame();
+    roots.push(root);
+    mkdirSync(path.dirname(path.join(root, androidGateway)), { recursive: true });
+    writeFileSync(
+      path.join(root, androidGateway),
+      "import type { PlayBillingCommerceProductMapping } from '@mpgd/capacitor-play-billing';\n"
+        + 'export const unused: readonly PlayBillingCommerceProductMapping[] = [];\n',
+    );
+    const plan = planCapacitorShellStarter({ ...baseInput(root), providerIds: ['play-billing'] });
+    assert.equal(plan.changedFiles.includes(androidGateway), false);
+    assert.match(
+      plan.warnings[0] ?? '',
+      /does not call createCapacitorPlayBillingServiceProvider/u,
+    );
   }
 
   // Declared but not installed, or installed against older kit packages.
@@ -336,6 +357,22 @@ try {
     assert.throws(
       () => planCapacitorShellStarter({ ...baseInput(root), providerIds: ['play-billing'] }),
       /needs @mpgd\/adapter-capacitor \^99\.0\.0, but the game has .*mpgd kit upgrade/u,
+    );
+    // Every declared peer is checked, Capacitor core included.
+    const capacitorCoreFile = path.join(root, 'node_modules/@capacitor/core/package.json');
+    mkdirSync(path.dirname(capacitorCoreFile), { recursive: true });
+    writeFileSync(capacitorCoreFile, JSON.stringify({ name: '@capacitor/core', version: '8.0.0' }));
+    writeFileSync(
+      pluginFile,
+      JSON.stringify({
+        name: '@mpgd/capacitor-play-billing',
+        version: '0.2.1',
+        peerDependencies: { '@capacitor/core': '^8.5.1' },
+      }),
+    );
+    assert.throws(
+      () => planCapacitorShellStarter({ ...baseInput(root), providerIds: ['play-billing'] }),
+      /needs @capacitor\/core \^8\.5\.1, but the game has 8\.0\.0/u,
     );
     writeFileSync(
       pluginFile,

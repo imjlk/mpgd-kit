@@ -388,7 +388,8 @@ whose effective products or SKUs differ from its host list. Derivation never
 enables selling: the Apps in Toss wrapper still needs its server hooks
 (`prepareIap`, `verifyIapProductGrant`, `readIapEntitlements`), the Devvit
 server needs `permissions.payments` and a `payments` block whose SKUs match
-the `reddit` keys, and every store needs the backend evidence entries.
+the `reddit` keys and whose `endpoints.fulfillOrder` names the handler that
+writes the ledger grant, and every store needs the backend evidence entries.
 
 The starter journals every purchase and rewarded ad in
 `createStorageMonetizationOperationStore` (`src/platform/monetizationJournal.ts`),
