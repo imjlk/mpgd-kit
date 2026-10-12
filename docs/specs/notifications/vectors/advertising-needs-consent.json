@@ -1,7 +1,7 @@
 {
   "vector": "advertising-needs-consent",
   "protocol": "2.0.0-draft.1",
-  "summary": "An advertising topic is suppressed without advertising consent even with OS permission; after consent it is delivered with the (광고) label and an opt-out route, and the result and re-confirmation notices become due.",
+  "summary": "Under the Korean rules an advertising topic is suppressed without advertising consent even with OS permission. After consent it is delivered with the (광고) label, the sender line, a free opt-out line, a direct opt-out action, and an expiry before the night window; the result and re-confirmation notices become due.",
   "appliesTo": [
     {
       "path": "remote.purposes",
@@ -38,8 +38,7 @@
       },
       "local": {
         "supported": true,
-        "maxPending": 64,
-        "timing": "inexact"
+        "maxPending": 64
       },
       "open": "payload"
     }
@@ -74,6 +73,7 @@
     "timeZone": "Asia/Seoul"
   },
   "deployment": {
+    "advertisingRules": "kr",
     "advertisingSender": {
       "contact": "080-1234-5678"
     }
@@ -162,23 +162,33 @@
         "topic": "weekend-event",
         "content": {
           "title": "(광고) 주말 이벤트",
-          "body": "(광고) 주말 이벤트가 시작됐어요.",
-          "optOutRoute": "/settings/notifications",
-          "sender": {
-            "contact": "080-1234-5678"
-          }
-        }
+          "body": "(광고) 080-1234-5678\n주말 이벤트가 시작됐어요.\n무료 수신거부: 수신거부 버튼",
+          "actions": [
+            {
+              "id": "advertising-opt-out",
+              "title": "수신거부",
+              "route": "/settings/notifications"
+            }
+          ]
+        },
+        "expiresAt": "2026-10-12T12:00:00Z"
       }
     ],
     "notices": [
       {
         "kind": "consent-result",
-        "record": "advertising",
+        "record": {
+          "kind": "advertising",
+          "state": "granted"
+        },
         "dueBy": "2026-10-26"
       },
       {
         "kind": "reconfirmation",
-        "record": "advertising",
+        "record": {
+          "kind": "advertising",
+          "state": "granted"
+        },
         "dueBy": "2028-10-11"
       }
     ]

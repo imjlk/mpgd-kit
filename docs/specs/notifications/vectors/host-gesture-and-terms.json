@@ -1,7 +1,7 @@
 {
   "vector": "host-gesture-and-terms",
   "protocol": "2.0.0-draft.1",
-  "summary": "A host that requires a user gesture refuses a request made without one before reaching the prompt; a host-terms refusal is blocked and is not prompted again.",
+  "summary": "A host that requires a user gesture refuses a request made without one before reaching the prompt. A refusal of the host's own terms answers action-required with host-settings and is not recorded, so the next request reaches the host again and can be granted.",
   "appliesTo": [
     {
       "path": "permission.prompt",
@@ -35,8 +35,7 @@
         "content": "host-template"
       },
       "local": {
-        "supported": false,
-        "timing": "none"
+        "supported": false
       },
       "open": "landing-url"
     }
@@ -61,7 +60,8 @@
         }
       },
       "mapping": {
-        "templateSetCode": "fixture-energy-full"
+        "templateSetCode": "fixture-energy-full",
+        "agreement": "required"
       }
     }
   ],
@@ -109,14 +109,15 @@
       },
       "returns": {
         "outcomes": {
-          "energy-full": "blocked"
+          "energy-full": "action-required"
         },
-        "snapshot": {
-          "topics": {
-            "energy-full": "blocked"
-          }
-        }
+        "requiredAction": "host-settings"
       }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
     },
     {
       "actor": "game",
@@ -129,19 +130,25 @@
       },
       "returns": {
         "outcomes": {
-          "energy-full": "blocked"
+          "energy-full": "granted"
         }
       }
     }
   ],
   "expect": {
-    "prompts": 1,
+    "prompts": 2,
     "consent": [
       {
         "kind": "host-agreement",
         "topic": "energy-full",
-        "state": "blocked",
+        "state": "granted",
         "source": "client-report"
+      },
+      {
+        "kind": "topic-preference",
+        "topic": "energy-full",
+        "state": "granted",
+        "source": "player"
       }
     ]
   }

@@ -1,7 +1,7 @@
 {
   "vector": "open-before-listener",
   "protocol": "2.0.0-draft.1",
-  "summary": "A cold-start open emitted before any listener reaches the first subscriber exactly once; a later warm open reaches every current subscriber; neither grants anything.",
+  "summary": "A cold-start open emitted before any listener reaches the game's first subscriber exactly once; a later warm open reaches every current subscriber; neither grants anything.",
   "appliesTo": [
     {
       "path": "open",
@@ -34,8 +34,7 @@
       },
       "local": {
         "supported": true,
-        "maxPending": 64,
-        "timing": "inexact"
+        "maxPending": 64
       },
       "open": "payload"
     }

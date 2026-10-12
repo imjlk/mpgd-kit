@@ -35,8 +35,7 @@
         "content": "free-form"
       },
       "local": {
-        "supported": false,
-        "timing": "none"
+        "supported": false
       },
       "open": "host-link"
     }
@@ -61,7 +60,8 @@
       },
       "mapping": {
         "title": "New challenge",
-        "body": "{{friend}} sent you a challenge."
+        "body": "{{friend}} sent you a challenge.",
+        "link": "t3_fixture"
       }
     }
   ],
@@ -167,6 +167,7 @@
     "providerCalls": [
       {
         "topic": "friend-challenge",
+        "link": "t3_fixture",
         "content": {
           "title": "New challenge",
           "body": "Mina sent you a challenge."

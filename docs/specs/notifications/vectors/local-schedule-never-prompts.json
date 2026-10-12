@@ -38,8 +38,7 @@
       },
       "local": {
         "supported": true,
-        "maxPending": 64,
-        "timing": "inexact"
+        "maxPending": 64
       },
       "open": "payload"
     }

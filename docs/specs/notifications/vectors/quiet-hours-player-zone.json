@@ -1,0 +1,138 @@
+{
+  "vector": "quiet-hours-player-zone",
+  "protocol": "2.0.0-draft.1",
+  "summary": "Quiet hours use the player's registered time zone, which a platform-user provider sends at authentication: a send at 23:00 in New York is held until 08:00 there although it is noon in the deployment's zone.",
+  "appliesTo": [
+    {
+      "path": "remote.addressing",
+      "equals": "platform-user"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.game-opt-in",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "game",
+        "readable": true,
+        "serverReadable": true,
+        "allowance": "persistent",
+        "userGesture": true,
+        "settings": false
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested"
+        ],
+        "addressing": "platform-user",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": false
+      },
+      "open": "host-link"
+    }
+  },
+  "catalog": [
+    {
+      "id": "match-ready",
+      "purpose": "service",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=match",
+      "quietHours": {
+        "start": "22:00",
+        "end": "08:00"
+      },
+      "copy": {
+        "ko": {
+          "title": "대전 준비 완료",
+          "body": "대전 상대를 찾았어요."
+        },
+        "en": {
+          "title": "Match ready",
+          "body": "Your opponent is ready."
+        }
+      },
+      "mapping": {
+        "title": "Match ready",
+        "body": "Your opponent is ready.",
+        "link": "t3_fixture"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "America/New_York"
+  },
+  "deployment": {
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "match-ready"
+        ],
+        "gesture": true
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "match-ready",
+        "idempotencyKey": "q-1"
+      },
+      "returns": {
+        "status": "deferred",
+        "reason": "quiet-hours",
+        "until": "2026-10-12T12:00:00Z"
+      }
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-12T12:00:00Z"
+    },
+    {
+      "actor": "backend",
+      "action": "runScheduler"
+    }
+  ],
+  "expect": {
+    "deliveries": [
+      {
+        "idempotencyKey": "q-1",
+        "status": "deferred",
+        "reason": "quiet-hours",
+        "until": "2026-10-12T12:00:00Z"
+      },
+      {
+        "idempotencyKey": "q-1",
+        "status": "delivered"
+      }
+    ]
+  }
+}

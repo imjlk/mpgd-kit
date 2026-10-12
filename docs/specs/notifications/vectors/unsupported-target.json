@@ -28,8 +28,7 @@
         "content": "free-form"
       },
       "local": {
-        "supported": false,
-        "timing": "none"
+        "supported": false
       },
       "open": "none"
     }

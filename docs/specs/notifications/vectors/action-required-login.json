@@ -1,7 +1,7 @@
 {
   "vector": "action-required-login",
   "protocol": "2.0.0-draft.1",
-  "summary": "A host that needs the player to log in answers action-required for reads, requests and reminders without reaching a prompt; after the action completes the normal prompt runs.",
+  "summary": "A host that needs the player to log in answers action-required with the login action for reads, requests and reminders without reaching a prompt; after the action completes the normal prompt runs.",
   "appliesTo": [
     {
       "path": "permission.prompt",
@@ -31,8 +31,7 @@
         "content": "free-form"
       },
       "local": {
-        "supported": false,
-        "timing": "none"
+        "supported": false
       },
       "open": "host-link"
     }
@@ -57,7 +56,8 @@
       },
       "mapping": {
         "title": "Daily puzzle",
-        "body": "A new puzzle is open."
+        "body": "A new puzzle is open.",
+        "link": "t3_fixture"
       }
     }
   ],
@@ -86,7 +86,8 @@
         "app": "action-required",
         "topics": {
           "daily-puzzle": "action-required"
-        }
+        },
+        "requiredAction": "login"
       }
     },
     {
@@ -101,7 +102,8 @@
       "returns": {
         "outcomes": {
           "daily-puzzle": "action-required"
-        }
+        },
+        "requiredAction": "login"
       }
     },
     {
@@ -161,6 +163,13 @@
   ],
   "expect": {
     "prompts": 1,
-    "reminders": []
+    "reminders": [],
+    "consent": [
+      {
+        "kind": "delivery-permission",
+        "state": "granted",
+        "source": "client-report"
+      }
+    ]
   }
 }

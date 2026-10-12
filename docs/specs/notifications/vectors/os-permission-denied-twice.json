@@ -38,8 +38,7 @@
       },
       "local": {
         "supported": true,
-        "maxPending": 64,
-        "timing": "inexact"
+        "maxPending": 64
       },
       "open": "payload"
     }
@@ -82,6 +81,14 @@
       "actor": "backend",
       "action": "authenticate",
       "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "issueEndpoint",
+      "endpoint": {
+        "kind": "fcm-token",
+        "value": "tok-1"
+      }
     },
     {
       "actor": "host",
@@ -155,16 +162,13 @@
   ],
   "expect": {
     "prompts": 2,
-    "consent": [
+    "consent": [],
+    "endpoints": [
       {
-        "kind": "delivery-permission",
-        "state": "prompt-with-rationale",
-        "source": "client-report"
-      },
-      {
-        "kind": "delivery-permission",
-        "state": "blocked",
-        "source": "client-report"
+        "provider": "fixture.os-fcm",
+        "value": "tok-1",
+        "permission": "blocked",
+        "status": "valid"
       }
     ]
   }

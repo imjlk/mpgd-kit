@@ -1,7 +1,7 @@
 {
   "vector": "reminder-server-route",
   "protocol": "2.0.0-draft.1",
-  "summary": "A target without local notifications stores the reminder on the server; cancel and re-set work by key, and the scheduler sends it through the policy gate at the due time.",
+  "summary": "A target without local notifications stores the reminder on the server once the agreement is in place; cancel and re-set work by key, and the scheduler sends it through the policy gate at the due time.",
   "appliesTo": [
     {
       "path": "local.supported",
@@ -39,8 +39,7 @@
         "content": "host-template"
       },
       "local": {
-        "supported": false,
-        "timing": "none"
+        "supported": false
       },
       "open": "landing-url"
     }
@@ -65,7 +64,8 @@
         }
       },
       "mapping": {
-        "templateSetCode": "fixture-energy-full"
+        "templateSetCode": "fixture-energy-full",
+        "agreement": "required"
       }
     }
   ],
@@ -150,7 +150,7 @@
     "reminders": [],
     "deliveries": [
       {
-        "idempotencyKey": "reminder:p-1:energy:2026-10-12T06:00:00.000Z",
+        "idempotencyKey": "reminder:p-1:energy:2026-10-12T06:00:00Z",
         "topic": "energy-full",
         "status": "delivered"
       }
@@ -159,7 +159,8 @@
       {
         "topic": "energy-full",
         "mapping": {
-          "templateSetCode": "fixture-energy-full"
+          "templateSetCode": "fixture-energy-full",
+          "agreement": "required"
         }
       }
     ],

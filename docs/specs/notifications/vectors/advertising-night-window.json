@@ -1,7 +1,7 @@
 {
   "vector": "advertising-night-window",
   "protocol": "2.0.0-draft.1",
-  "summary": "Advertising that would arrive between 21:00 and 08:00 KST is deferred to 08:00 without night consent and delivered by the scheduler then; with night consent it goes out immediately.",
+  "summary": "Under the Korean rules advertising that would arrive between 21:00 and 08:00 KST is deferred to 08:00 without night consent and delivered by the scheduler then, with an expiry at the next 21:00; with night consent it goes out at night with no expiry.",
   "appliesTo": [
     {
       "path": "remote.purposes",
@@ -38,8 +38,7 @@
       },
       "local": {
         "supported": true,
-        "maxPending": 64,
-        "timing": "inexact"
+        "maxPending": 64
       },
       "open": "payload"
     }
@@ -74,6 +73,7 @@
     "timeZone": "Asia/Seoul"
   },
   "deployment": {
+    "advertisingRules": "kr",
     "advertisingSender": {
       "contact": "080-1234-5678"
     }
@@ -129,6 +129,7 @@
       },
       "returns": {
         "status": "deferred",
+        "reason": "night-window",
         "until": "2026-10-12T23:00:00Z"
       }
     },
@@ -172,6 +173,7 @@
       {
         "idempotencyKey": "n-1",
         "status": "deferred",
+        "reason": "night-window",
         "until": "2026-10-12T23:00:00Z"
       },
       {
@@ -181,6 +183,16 @@
       {
         "idempotencyKey": "n-2",
         "status": "delivered"
+      }
+    ],
+    "providerCalls": [
+      {
+        "topic": "weekend-event",
+        "expiresAt": "2026-10-13T12:00:00Z"
+      },
+      {
+        "topic": "weekend-event",
+        "expiresAt": null
       }
     ]
   }

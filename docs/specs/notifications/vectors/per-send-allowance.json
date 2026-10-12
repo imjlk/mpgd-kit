@@ -1,7 +1,7 @@
 {
   "vector": "per-send-allowance",
   "protocol": "2.0.0-draft.1",
-  "summary": "On a per-send host one acceptance allows exactly one delivery; the next send is suppressed until the player accepts again.",
+  "summary": "On a per-send host one acceptance allows exactly one delivery; the next send is suppressed until the player accepts again, and retrying the delivered key answers the stored result.",
   "appliesTo": [
     {
       "path": "permission.allowance",
@@ -32,8 +32,7 @@
         "content": "host-template"
       },
       "local": {
-        "supported": false,
-        "timing": "none"
+        "supported": false
       },
       "open": "landing-url"
     }
@@ -47,7 +46,8 @@
       ],
       "route": "/?entry=daily",
       "mapping": {
-        "templateSetCode": "fixture-daily-puzzle"
+        "templateSetCode": "fixture-daily-puzzle",
+        "agreement": "required"
       }
     }
   ],
@@ -146,7 +146,8 @@
       {
         "topic": "daily-puzzle",
         "mapping": {
-          "templateSetCode": "fixture-daily-puzzle"
+          "templateSetCode": "fixture-daily-puzzle",
+          "agreement": "required"
         }
       }
     ]

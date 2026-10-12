@@ -1,7 +1,7 @@
 {
   "vector": "host-agreement-recorded",
   "protocol": "2.0.0-draft.1",
-  "summary": "A per-template host that cannot be read back: the agreement is reported with evidence and recorded once, and after a restart the runtime answers granted from the server record.",
+  "summary": "A per-template host that cannot be read back: the agreement is reported with evidence and recorded once, together with the topic preference that accepting a requested topic's sheet implies, and after a restart the runtime answers granted from the server record.",
   "appliesTo": [
     {
       "path": "permission.scope",
@@ -39,8 +39,7 @@
         "content": "host-template"
       },
       "local": {
-        "supported": false,
-        "timing": "none"
+        "supported": false
       },
       "open": "landing-url"
     }
@@ -65,7 +64,8 @@
         }
       },
       "mapping": {
-        "templateSetCode": "fixture-energy-full"
+        "templateSetCode": "fixture-energy-full",
+        "agreement": "required"
       }
     }
   ],
@@ -174,6 +174,12 @@
         "evidence": {
           "schema": "fixture.host-agreement.v1"
         }
+      },
+      {
+        "kind": "topic-preference",
+        "topic": "energy-full",
+        "state": "granted",
+        "source": "player"
       }
     ]
   }

@@ -1,7 +1,7 @@
 {
   "vector": "advertising-sender-required",
   "protocol": "2.0.0-draft.1",
-  "summary": "Advertising consent alone does not deliver an advertising topic: without the deployment's advertising sender the send is suppressed before any provider call.",
+  "summary": "Under the Korean rules advertising consent alone does not deliver an advertising topic: without the deployment's advertising sender the send is suppressed before any provider call.",
   "appliesTo": [
     {
       "path": "remote.purposes",
@@ -34,8 +34,7 @@
       },
       "local": {
         "supported": true,
-        "maxPending": 64,
-        "timing": "inexact"
+        "maxPending": 64
       },
       "open": "payload"
     }
@@ -68,6 +67,9 @@
     "player": "p-1",
     "now": "2026-10-12T03:00:00Z",
     "timeZone": "Asia/Seoul"
+  },
+  "deployment": {
+    "advertisingRules": "kr"
   },
   "steps": [
     {

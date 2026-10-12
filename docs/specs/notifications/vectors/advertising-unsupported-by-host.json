@@ -35,8 +35,7 @@
         "content": "host-template"
       },
       "local": {
-        "supported": false,
-        "timing": "none"
+        "supported": false
       },
       "open": "landing-url"
     }
@@ -51,7 +50,8 @@
       "route": "/events/weekend",
       "optOutRoute": "/settings/notifications",
       "mapping": {
-        "templateSetCode": "fixture-weekend-event"
+        "templateSetCode": "fixture-weekend-event",
+        "agreement": "required"
       }
     }
   ],
@@ -59,6 +59,12 @@
     "player": "p-1",
     "now": "2026-10-12T03:00:00Z",
     "timeZone": "Asia/Seoul"
+  },
+  "deployment": {
+    "advertisingRules": "kr",
+    "advertisingSender": {
+      "contact": "080-1234-5678"
+    }
   },
   "steps": [
     {
