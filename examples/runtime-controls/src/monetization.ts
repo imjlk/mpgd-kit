@@ -2,9 +2,75 @@ import type { GameExecutionController } from '@mpgd/game-runtime';
 import { createGameActionCoordinator, type GameActionKind } from '@mpgd/game-runtime/actions';
 import { createGameUiBridge } from '@mpgd/game-runtime/ui';
 import { createGameServicesClient, type GameServicesBackendApi } from '@mpgd/game-services/client';
-import type { PlatformGateway, PurchaseResult, RewardedAdResult } from '@mpgd/platform';
+import type { PlatformGateway, RewardedAdResult } from '@mpgd/platform';
 
 type Mode = 'granted' | 'pending' | 'rejected' | 'exception';
+type FixtureCommerceProvider = NonNullable<PlatformGateway['commerce']>;
+
+const fixtureStore = 'fixture-store';
+const fixtureProductId = 'fixture-product';
+
+/**
+ * A commerce provider that answers from memory: one consumable, no store UI,
+ * and nothing finished on the client, so the backend ledger stays the only
+ * grant authority.
+ */
+function createFixtureCommerceProvider(input: {
+  readonly mode: () => Mode;
+  readonly onPurchase: () => void;
+}): FixtureCommerceProvider {
+  return {
+    store: fixtureStore,
+    async getCapabilities() {
+      return {
+        purchase: { consumable: true, durable: false, subscription: false, quantity: false },
+        catalog: { products: true, offers: false, localizedPrice: false },
+        lifecycle: {
+          availablePurchases: false,
+          pending: true,
+          restore: false,
+          events: false,
+          finish: 'none',
+        },
+        authority: { evidence: 'client-token', accountBinding: 'optional' },
+        availability: 'available',
+      };
+    },
+    async fetchProducts() {
+      return [{
+        logicalId: fixtureProductId,
+        store: fixtureStore,
+        storeSku: fixtureProductId,
+        kind: 'consumable',
+        title: 'Fixture product',
+        description: '',
+        price: { formatted: '$0.99', currencyCode: 'USD', amountMicros: 990_000 },
+      }];
+    },
+    async requestPurchase(request) {
+      input.onPurchase();
+      return {
+        outcome: 'purchased',
+        purchase: {
+          store: fixtureStore,
+          transactionId: `fixture-transaction-${request.idempotencyKey}`,
+          storeSku: fixtureProductId,
+          logicalId: fixtureProductId,
+          quantity: 1,
+          state: input.mode() === 'pending' ? 'pending' : 'purchased',
+          token: `fixture-token-${request.idempotencyKey}`,
+          evidence: { schema: 'fixture.purchase.v1', payload: { idempotencyKey: request.idempotencyKey } },
+        },
+      };
+    },
+    async getAvailablePurchases() {
+      return [];
+    },
+    subscribe() {
+      return () => {};
+    },
+  };
+}
 
 /** Deterministic local fixture: never opens an SDK UI or contacts a server. */
 export function createMonetizationFixture(execution: GameExecutionController) {
@@ -15,15 +81,12 @@ export function createMonetizationFixture(execution: GameExecutionController) {
     serverRelease = resolve;
   });
   const gateway = {
-    commerce: {
-      async purchase(): Promise<PurchaseResult> {
+    commerce: createFixtureCommerceProvider({
+      mode: () => mode,
+      onPurchase: () => {
         calls.purchase += 1;
-        if (mode === 'pending') {
-          return { status: 'pending', entitlementIds: [] };
-        }
-        return { status: 'completed', transactionId: 'fixture-transaction', entitlementIds: [] };
       },
-    },
+    }),
     ads: {
       async showRewarded(): Promise<RewardedAdResult> {
         calls.ad += 1;
@@ -157,7 +220,7 @@ export function createMonetizationFixture(execution: GameExecutionController) {
   function execute(kind: GameActionKind): void {
     const promise = kind === 'purchase'
       ? bound.purchase.execute({
-          productId: 'fixture-product',
+          productId: fixtureProductId,
           source: 'shop',
           idempotencyKey: `purchase-${key}`,
         })
