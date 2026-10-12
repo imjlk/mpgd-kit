@@ -876,9 +876,9 @@ function validateMcpConfig(path: string): void {
   const servers = config.mcpServers as Record<string, McpServerConfig>;
 
   assertMcpServerCommand(servers['ttsc-graph'], '@ttsc/graph', `${path}: ttsc-graph`);
-  // @devvit/mcp pins better-sqlite3 11.9.1, which cannot compile against Node 26;
-  // `mise exec` runs it on the Node version pinned in .mise.toml instead of
-  // whatever Node the agent host puts first on PATH.
+  // @devvit/mcp pins better-sqlite3 11.9.1, which cannot compile against Node 26.
+  // `mise exec node@<major>` runs it on the .mise.toml Node major regardless of
+  // the working directory or the Node an agent host puts first on PATH.
   assertMcpServerCommand(servers.devvit, '@devvit/mcp', `${path}: devvit`, {
     repoPinnedNode: true,
   });
@@ -2315,16 +2315,36 @@ function assertMcpServerCommand(
   let npxArgs: readonly unknown[] = server.args;
 
   if (options.repoPinnedNode === true) {
-    if (server.args[0] !== 'exec' || server.args[1] !== '--' || server.args[2] !== 'npx') {
-      failures.push(`${label}.args must start with exec, --, npx to use the .mise.toml Node.`);
+    const pinnedNode = `node@${readMiseNodeMajor()}`;
+
+    if (
+      server.args[0] !== 'exec'
+      || server.args[1] !== pinnedNode
+      || server.args[2] !== '--'
+      || server.args[3] !== 'npx'
+    ) {
+      failures.push(
+        `${label}.args must start with exec, ${pinnedNode}, --, npx to match .mise.toml.`,
+      );
       return;
     }
 
-    npxArgs = server.args.slice(3);
+    npxArgs = server.args.slice(4);
   }
 
   assertIncludes(npxArgs, '-y', `${label}.args`);
   assertIncludes(npxArgs, packageName, `${label}.args`);
+}
+
+function readMiseNodeMajor(): string {
+  const major = /^node\s*=\s*"(\d+)[.\d]*"/mu.exec(readText('.mise.toml'))?.[1];
+
+  if (major === undefined) {
+    failures.push('.mise.toml: tools.node must pin a Node version.');
+    return 'unknown';
+  }
+
+  return major;
 }
 
 function assertMcpRequirements(input: unknown, label: string): void {

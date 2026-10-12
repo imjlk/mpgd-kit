@@ -88,20 +88,19 @@ codex mcp add devvit -- mise exec node@24 -- npx -y @devvit/mcp
   has no prebuilt binary for Node 24 (it compiles from source) and fails to
   compile against Node 26, so a server started on whatever Node an agent host
   puts first on `PATH` loses `devvit_search`. The checked-in `.mcp.json` runs
-  `mise exec -- npx -y @devvit/mcp`, which takes the Node pinned in
-  `.mise.toml` because agent hosts start project servers from the repository
-  root; a global registration names the version because it can start
-  anywhere. Both need `mise` on the host `PATH`, and on a fresh machine
-  `mise exec` first installs the `.mise.toml` toolchain.
+  the same `mise exec node@24 -- npx -y @devvit/mcp`, naming the version
+  because an MCP client may start the server outside the repository, where
+  `.mise.toml` is not discovered; `pnpm validate:starter-workflow` keeps that
+  major equal to the `.mise.toml` pin. Both need `mise` on the host `PATH`.
 - Every launcher on a machine shares one npx cache directory and one native
   build, so keep them on the same Node major: replace an older registration
   that runs plain `npx` (`codex mcp remove devvit`) instead of adding a second
   one.
 - The first start compiles the native module, which can outlast an MCP
-  client's startup timeout. Warm the cache once from the repository root with
-  `mise exec -- npx -y -p @devvit/mcp -c true`. If a start on another Node left
-  a broken build, rebuild it from the repository root with
-  `mise exec -- npm rebuild better-sqlite3 --prefix ~/.npm/_npx/<hash>`.
+  client's startup timeout. Warm the cache once with
+  `mise exec node@24 -- npx -y -p @devvit/mcp -c true`. If a start on another
+  Node left a broken build, rebuild it with
+  `mise exec node@24 -- npm rebuild better-sqlite3 --prefix ~/.npm/_npx/<hash>`.
 - Use `devvit_search` before broad web searches or loading large Devvit
   documentation pages into context.
 - Use the experimental `devvit_logs` tool when investigating an app deployed to
