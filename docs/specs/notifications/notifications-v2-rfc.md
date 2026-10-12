@@ -869,10 +869,11 @@ the backend only the name, with the record's time in the
 
 - **Retries.** The backend records a notice only while that notice is listed.
   Recording a notice that is not listed (already recorded, not yet listed, or
-  unknown) changes nothing, so a retried call is safe. A name that does not
-  match a listed notice exactly, such as one whose record time was cut to
-  seconds, records nothing too, so a game passes the listed notice or its
-  fields unchanged.
+  unknown) changes nothing, so a retried call is safe. Record times compare
+  as instants, so another spelling of the same instant matches, but a name
+  that names another instant or date records nothing: for example, a record
+  time cut to seconds. A game passes the listed notice or its fields
+  unchanged.
 - **Malformed input.** A missing field, an unknown key, or a time or date
   that does not parse throws `NOTIFICATIONS_INVALID_INPUT`.
 
