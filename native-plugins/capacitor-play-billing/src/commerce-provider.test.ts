@@ -32,7 +32,6 @@ import {
   playBillingCommerceServiceProviderId,
   type CreateCapacitorPlayBillingCommerceProviderInput,
 } from './commerce-provider.js';
-import { createCapacitorPlayBillingProvider } from './provider.js';
 
 const accountBinding = { kind: 'obfuscated-account-id', value: 'player-hash-1' } as const;
 const products: CreateCapacitorPlayBillingCommerceProviderInput['products'] = [
@@ -137,45 +136,29 @@ describe('createCapacitorPlayBillingCommerceProvider', () => {
     })).toThrow(/one-time products only/u);
   });
 
-  it('emits exactly the evidence the v1 provider emits for the same purchase', async () => {
+  it('emits the purchase-token evidence the Google Play verifier routes on', async () => {
     const purchase = fakePlayPurchase({
       products: ['gems.small'],
       purchaseToken: 'private-play-token',
       orderId: 'GPA.1111-2222',
       obfuscatedAccountId: 'player-hash-1',
     });
-    const v2Plugin = createPlugin();
-    v2Plugin.queuePurchase({ status: 'purchased', purchase });
-    const { provider } = createProvider(v2Plugin);
-    const v2 = await provider.requestPurchase({
+    const plugin = createPlugin();
+    plugin.queuePurchase({ status: 'purchased', purchase });
+    const { provider } = createProvider(plugin);
+    const result = await provider.requestPurchase({
       logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop',
     });
-    expect(v2.outcome).toBe('purchased');
-    if (v2.outcome !== 'purchased') {
+    expect(result.outcome).toBe('purchased');
+    if (result.outcome !== 'purchased') {
       throw new Error('expected purchased');
     }
-
-    const v1Plugin = createPlugin();
-    v1Plugin.queuePurchase({ status: 'purchased', purchase });
-    const v1 = createCapacitorPlayBillingProvider({
-      products: [{ id: 'gems_small', type: 'consumable', storeId: 'gems.small' }],
-      getObfuscatedAccountId: () => 'player-hash-1',
-      isAndroid: () => true,
-      sdk: v1Plugin,
-    });
-    const v1Response = await v1.bridge.request(request('commerce.purchase', { productId: 'gems_small' }));
-    expect(v1Response.ok).toBe(true);
-    if (!v1Response.ok) {
-      throw new Error('expected v1 success');
-    }
-    const v1Result = v1Response.data as { transactionId: string; evidence: StorePurchase['evidence'] };
-    expect(v1Result.evidence).toEqual({
+    const evidence: StorePurchase['evidence'] = {
       schema: 'google-play.product-purchase.v2',
       payload: { purchaseToken: 'private-play-token' },
-    });
-    expect(v2.purchase.evidence).toEqual(v1Result.evidence);
-    expect(v2.purchase.transactionId).toBe(v1Result.transactionId);
-    expect(v2.purchase).toEqual({
+    };
+    expect(result.purchase.evidence).toEqual(evidence);
+    expect(result.purchase).toEqual({
       store: 'google-play',
       transactionId: 'GPA.1111-2222',
       storeSku: 'gems.small',
@@ -184,22 +167,19 @@ describe('createCapacitorPlayBillingCommerceProvider', () => {
       state: 'purchased',
       purchasedAt: new Date(1_790_000_000_000).toISOString(),
       token: 'private-play-token',
-      evidence: v1Result.evidence,
+      evidence,
       accountBinding,
     });
-    expect(JSON.stringify(v2)).not.toContain('settlement');
+    expect(JSON.stringify(result)).not.toContain('settlement');
 
-    // Without an order id both sides fall back to the shared token key.
+    // Without an order id the transaction id falls back to the shared token key.
     const orderless = fakePlayPurchase({ products: ['gems.small'], purchaseToken: 'no-order-yet' });
-    v2Plugin.queuePurchase({ status: 'purchased', purchase: orderless });
-    v1Plugin.queuePurchase({ status: 'purchased', purchase: orderless });
-    const v2Orderless = await provider.requestPurchase({
+    plugin.queuePurchase({ status: 'purchased', purchase: orderless });
+    const orderlessResult = await provider.requestPurchase({
       logicalId: 'gems_small', idempotencyKey: 'op-2', source: 'shop',
     });
-    const v1Orderless = await v1.bridge.request(request('commerce.purchase', { productId: 'gems_small' }));
     const key = await createGooglePlayTokenPurchaseKey('no-order-yet');
-    expect(v2Orderless).toMatchObject({ purchase: { transactionId: key } });
-    expect(v1Orderless).toMatchObject({ data: { transactionId: key } });
+    expect(orderlessResult).toMatchObject({ purchase: { transactionId: key } });
   });
 
   it('resolves the account binding before the store opens and keeps a lookup failure recoverable', async () => {
@@ -435,7 +415,7 @@ describe('createCapacitorPlayBillingCommerceProvider with the reference reconcil
 });
 
 describe('createCapacitorPlayBillingServiceProvider', () => {
-  it('registers with the gateway and serves commerce v2 and v1 through the bridge', async () => {
+  it('registers with the gateway and serves commerce v2 through the bridge', async () => {
     const plugin = createPlugin();
     const service = createCapacitorPlayBillingServiceProvider({
       plugin,
@@ -444,7 +424,7 @@ describe('createCapacitorPlayBillingServiceProvider', () => {
       accountBinding: () => accountBinding,
     });
     expect(service.id).toBe(playBillingCommerceServiceProviderId);
-    expect(service.features).toEqual(['nativeIap']);
+    expect(service.features).toEqual([]);
     expect(service.methods).toEqual([]);
     expect(service.commerce.store).toBe('google-play');
 
@@ -452,19 +432,19 @@ describe('createCapacitorPlayBillingServiceProvider', () => {
       target: 'android', appVersion: '1', buildId: 'play', bridge: baseBridge(),
       providers: [service],
     });
-    const commerceV2 = gateway.commerceV2;
-    if (commerceV2 === undefined) {
-      throw new Error('expected commerceV2');
+    const commerce = gateway.commerce;
+    if (commerce === undefined) {
+      throw new Error('expected a commerce provider');
     }
-    expect(commerceV2.store).toBe('google-play');
-    expect((await commerceV2.fetchProducts({})).map((product) => [
+    expect(commerce.store).toBe('google-play');
+    expect((await commerce.fetchProducts({})).map((product) => [
       product.logicalId, product.storeSku, product.price.formatted,
     ])).toEqual([['gems_small', 'gems.small', '$0.99'], ['remove_ads', 'remove.ads', '$1.99']]);
 
     const events: CommerceEvent[] = [];
-    const unsubscribe = commerceV2.subscribe((event) => events.push(event));
+    const unsubscribe = commerce.subscribe((event) => events.push(event));
     plugin.queuePurchase({ throws: Object.assign(new Error('t'), { code: 'PLAY_BILLING_TIMEOUT' }) });
-    await expect(commerceV2.requestPurchase({
+    await expect(commerce.requestPurchase({
       logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop',
     })).resolves.toEqual({ outcome: 'launched' });
     plugin.report(fakePlayPurchase({ products: ['gems.small'], purchaseToken: 'late', orderId: 'GPA.l' }));
@@ -476,17 +456,17 @@ describe('createCapacitorPlayBillingServiceProvider', () => {
         evidence: { schema: 'google-play.product-purchase.v2', payload: { purchaseToken: 'late' } },
       }),
     }]);
-    expect((await commerceV2.getAvailablePurchases()).map((purchase) => purchase.transactionId))
+    expect((await commerce.getAvailablePurchases()).map((purchase) => purchase.transactionId))
       .toEqual(['GPA.l']);
-    await expect(commerceV2.finishTransaction?.({
+    await expect(commerce.finishTransaction?.({
       transactionId: 'GPA.l', ledgerEntryId: 'le-1', isConsumable: true,
     })).rejects.toMatchObject({ storeCode: 'COMMERCE_V2_METHOD_UNSUPPORTED' });
-    await expect(commerceV2.restorePurchases?.()).resolves.toBeUndefined();
+    await expect(commerce.restorePurchases?.()).resolves.toBeUndefined();
     unsubscribe();
 
     const capabilities = await gateway.getCapabilities();
-    expect(capabilities.nativeIap).toBe(true);
-    expect(capabilities.subscriptionIap).toBe(false);
+    expect(Object.hasOwn(capabilities, 'nativeIap')).toBe(false);
+    expect(Object.hasOwn(capabilities, 'subscriptionIap')).toBe(false);
     expect(capabilities.commerce).toEqual({
       purchase: { consumable: true, durable: true, subscription: false, quantity: false },
       catalog: { products: true, offers: true, localizedPrice: true },
@@ -497,26 +477,7 @@ describe('createCapacitorPlayBillingServiceProvider', () => {
       availability: 'available',
     });
 
-    expect(await gateway.commerce.getProducts()).toMatchObject([
-      { id: 'gems_small', type: 'consumable', price: { formatted: '$0.99', currencyCode: 'USD' } },
-      { id: 'remove_ads', type: 'non_consumable', price: { formatted: '$1.99' } },
-    ]);
-    plugin.queuePurchase({
-      status: 'purchased',
-      purchase: fakePlayPurchase({ products: ['gems.small'], purchaseToken: 'sync', orderId: 'GPA.s' }),
-    });
-    await expect(gateway.commerce.purchase({
-      productId: 'gems_small', idempotencyKey: 'op-2', source: 'shop',
-    })).resolves.toEqual({
-      status: 'completed',
-      transactionId: 'GPA.s',
-      entitlementIds: [],
-      evidence: { schema: 'google-play.product-purchase.v2', payload: { purchaseToken: 'sync' } },
-    });
-    await expect(gateway.commerce.restore?.()).resolves.toEqual({
-      restoredEntitlements: [], settledPurchases: [],
-    });
-    expect(plugin.purchaseCalls).toHaveLength(2);
+    expect(plugin.purchaseCalls).toHaveLength(1);
   });
 
   it('answers the commerce.v2.* bridge methods on the registry entry with the envelope sequence', async () => {
@@ -562,8 +523,10 @@ describe('createCapacitorPlayBillingServiceProvider', () => {
     expect(await service.bridge.request(request('commerce.v2.restorePurchases', {
       protocol: commerceProtocol,
     }))).toMatchObject({ ok: true, data: { restored: false } });
-    expect(await service.bridge.request(request('commerce.getEntitlements')))
-      .toMatchObject({ ok: true, data: [] });
+    // The retired v1 commerce methods are not served any more.
+    expect(await service.bridge.request(request(
+      'commerce.getEntitlements' as BridgeMethod,
+    ))).toMatchObject({ ok: false, error: { code: 'UNSUPPORTED_METHOD' } });
     detach();
   });
 });

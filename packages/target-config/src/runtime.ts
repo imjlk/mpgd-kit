@@ -1,5 +1,6 @@
 import type { MpgdLocale } from '@mpgd/i18n';
 import type {
+  CommerceCapabilities,
   PlatformCapabilities,
   PlatformGateway,
   PlatformProviderAvailability,
@@ -462,10 +463,7 @@ export function applyTargetConfigToCapabilities(
 
   return {
     ...capabilities,
-    nativeIap: capabilities.nativeIap && config.features.iap,
-    ...(capabilities.subscriptionIap === undefined
-      ? {}
-      : { subscriptionIap: capabilities.subscriptionIap && isPlatformFeatureEnabled(config, 'subscriptions') }),
+    commerce: applyTargetConfigToCommerceCapabilities(requireCommerce(capabilities), config),
     nativeAds:
       capabilities.nativeAds &&
       (bannerAds || rewardedAds || interstitialAds),
@@ -476,6 +474,86 @@ export function applyTargetConfigToCapabilities(
     remoteLeaderboard: capabilities.remoteLeaderboard && isPlatformFeatureEnabled(config, 'remoteLeaderboard'),
     localizedContent: capabilities.localizedContent && config.features.localization,
   };
+}
+
+/**
+ * The commerce block as the target configuration allows it: one-time products
+ * need `features.iap`, subscriptions need `features.subscriptions`, and a
+ * target that allows neither reports the store as `unsupported`. The block is
+ * the only source: there are no boolean `nativeIap` or `subscriptionIap` flags
+ * to keep in step. A fresh object on every call.
+ */
+export function applyTargetConfigToCommerceCapabilities(
+  commerce: CommerceCapabilities,
+  config: TargetConfig,
+): CommerceCapabilities {
+  const oneTime = config.features.iap;
+  const subscriptions = isPlatformFeatureEnabled(config, 'subscriptions');
+  const sellable = oneTime || subscriptions;
+  return {
+    purchase: {
+      consumable: commerce.purchase.consumable && oneTime,
+      durable: commerce.purchase.durable && oneTime,
+      subscription: commerce.purchase.subscription && subscriptions,
+      quantity: commerce.purchase.quantity && oneTime,
+    },
+    catalog: {
+      products: commerce.catalog.products && sellable,
+      offers: commerce.catalog.offers && sellable,
+      localizedPrice: commerce.catalog.localizedPrice && sellable,
+    },
+    lifecycle: { ...commerce.lifecycle },
+    authority: { ...commerce.authority },
+    availability: sellable ? commerce.availability : 'unsupported',
+  };
+}
+
+/**
+ * The required commerce block of a capability snapshot. A gateway that sells
+ * nothing reports `createUnsupportedCommerceCapabilities()`; a snapshot
+ * without the block is a gateway built before the block was required, and
+ * it fails here with that reason rather than as a bare property error.
+ */
+function requireCommerce(capabilities: PlatformCapabilities): CommerceCapabilities {
+  const commerce = (capabilities as { readonly commerce?: CommerceCapabilities }).commerce;
+  if (commerce === undefined) {
+    throw new TypeError(
+      'PlatformCapabilities.commerce is required: report createUnsupportedCommerceCapabilities() '
+        + 'for a gateway that sells nothing.',
+    );
+  }
+  return commerce;
+}
+
+/**
+ * The error a masked provider answers when it refuses a purchase before it
+ * reaches the store. A purchase the target configuration or the catalog does
+ * not sell is `ITEM_UNAVAILABLE`. A purchase the configuration allows but the
+ * provider cannot take yet answers the provider's own class of error, as the
+ * provider itself would: `CONFIGURATION_REQUIRED`, `ACTION_REQUIRED`, or the
+ * retryable `STORE_UNAVAILABLE`, so the reconciler does not journal a
+ * temporary outage as a terminal, non-retryable failure.
+ */
+function purchaseRefusal(readiness: PlatformProviderAvailability | undefined): {
+  readonly code: 'ITEM_UNAVAILABLE' | 'CONFIGURATION_REQUIRED' | 'ACTION_REQUIRED' | 'STORE_UNAVAILABLE';
+  readonly retryable: boolean;
+} {
+  switch (readiness) {
+    case 'configuration-required':
+      return { code: 'CONFIGURATION_REQUIRED', retryable: false };
+    case 'action-required':
+      return { code: 'ACTION_REQUIRED', retryable: false };
+    case 'temporarily-unavailable':
+      return { code: 'STORE_UNAVAILABLE', retryable: true };
+    default:
+      return { code: 'ITEM_UNAVAILABLE', retryable: false };
+  }
+}
+
+/** One-time products are sold when the provider is available and declares a one-time kind. */
+function commerceSellsOneTime(commerce: CommerceCapabilities): boolean {
+  return commerce.availability === 'available'
+    && (commerce.purchase.consumable || commerce.purchase.durable);
 }
 
 export function getFeatureAvailability(
@@ -659,12 +737,24 @@ export function withTargetAvailability(
     const oneTimeEnabled = availabilityConfig.features.iap;
     const subscriptionsEnabled = isPlatformFeatureEnabled(availabilityConfig, 'subscriptions');
     if (!oneTimeEnabled && !subscriptionsEnabled) {
-      return { oneTime: false, subscriptions: false };
+      return {
+        oneTime: false,
+        subscriptions: false,
+        oneTimeEnabled,
+        subscriptionsEnabled,
+        readiness: undefined,
+      };
     }
-    const capabilities = await getGatewayCapabilities();
+    const commerce = requireCommerce(await getGatewayCapabilities());
     return {
-      oneTime: oneTimeEnabled && capabilities.nativeIap,
-      subscriptions: subscriptionsEnabled && capabilities.subscriptionIap === true,
+      oneTime: oneTimeEnabled && commerceSellsOneTime(commerce),
+      subscriptions: subscriptionsEnabled && commerce.purchase.subscription,
+      // What the target configuration allows, apart from what the provider can
+      // sell right now: a refusal names the provider's readiness only when the
+      // configuration would have allowed the purchase.
+      oneTimeEnabled,
+      subscriptionsEnabled,
+      readiness: commerce.availability,
     };
   };
   const getLeaderboardRoute = async (): Promise<'native' | 'remote' | null> => {
@@ -718,6 +808,101 @@ export function withTargetAvailability(
     );
   };
 
+  const commerceSource = gateway.commerce;
+  // Recovery reads (`getAvailablePurchases`, `finishTransaction`, `subscribe`)
+  // always pass through: an already paid purchase must stay recoverable and
+  // finishable even when the target stops selling. Catalog reads, new
+  // purchases, and a store resync obey the target configuration.
+  const commerce: PlatformGateway['commerce'] = commerceSource === undefined
+    ? undefined
+    : {
+        store: commerceSource.store,
+        ...(commerceSource.presentation === undefined
+          ? {}
+          : { presentation: commerceSource.presentation }),
+        async getCapabilities() {
+          return applyTargetConfigToCommerceCapabilities(
+            await commerceSource.getCapabilities(),
+            availabilityConfig,
+          );
+        },
+        async fetchProducts(input) {
+          const available = await getIapAvailability();
+          if (!available.oneTime && !available.subscriptions) {
+            return [];
+          }
+          return (await commerceSource.fetchProducts(input)).filter((product) =>
+            product.kind === 'subscription' ? available.subscriptions : available.oneTime,
+          );
+        },
+        async requestPurchase(input) {
+          const available = await getIapAvailability();
+          const configuredProduct = options.effectiveConfig?.monetization.products.find(
+            (product) => product.id === input.logicalId,
+          );
+          let isSubscription: boolean | undefined = configuredProduct === undefined
+            ? undefined
+            : configuredProduct.type === 'subscription';
+          if (
+            isSubscription === undefined
+            && options.effectiveConfig === undefined
+            && available.oneTime !== available.subscriptions
+          ) {
+            const kind = (await commerceSource.fetchProducts({
+              logicalIds: [input.logicalId],
+              type: 'all',
+            })).find((product) => product.logicalId === input.logicalId)?.kind;
+            isSubscription = kind === undefined ? undefined : kind === 'subscription';
+          }
+          // When only one purchase route is available, unknown product kinds
+          // must not fall through to that route. An effective catalog is binding.
+          const allowed = isSubscription === true
+            ? available.subscriptions
+            : isSubscription === undefined
+              ? available.oneTime && available.subscriptions
+              : available.oneTime;
+          const catalogRefused =
+            options.effectiveConfig !== undefined && configuredProduct?.enabled !== true;
+          if (!allowed || catalogRefused) {
+            const routeEnabled = isSubscription === true
+              ? available.subscriptionsEnabled
+              : isSubscription === undefined
+                ? available.oneTimeEnabled && available.subscriptionsEnabled
+                : available.oneTimeEnabled;
+            return {
+              outcome: 'failed',
+              error: purchaseRefusal(routeEnabled && !catalogRefused ? available.readiness : undefined),
+            };
+          }
+
+          return commerceSource.requestPurchase(input);
+        },
+        getAvailablePurchases: (input) => commerceSource.getAvailablePurchases(input),
+        ...(commerceSource.finishTransaction === undefined
+          ? {}
+          : { finishTransaction: (input) => commerceSource.finishTransaction!(input) }),
+        ...(commerceSource.restorePurchases === undefined
+          ? {}
+          : {
+              async restorePurchases() {
+                const available = await getIapAvailability();
+                if (available.oneTime || available.subscriptions) {
+                  await commerceSource.restorePurchases!();
+                }
+              },
+            }),
+        ...(commerceSource.getActiveSubscriptions === undefined
+          ? {}
+          : {
+              async getActiveSubscriptions() {
+                return (await getIapAvailability()).subscriptions
+                  ? commerceSource.getActiveSubscriptions!()
+                  : [];
+              },
+            }),
+        subscribe: (listener) => commerceSource.subscribe(listener),
+      };
+
   return {
     ...gatewayWithoutIntegrations,
     identity,
@@ -751,64 +936,7 @@ export function withTargetAvailability(
         availabilityConfig,
       );
     },
-    commerce: {
-      async getProducts() {
-        const available = await getIapAvailability();
-        if (!available.oneTime && !available.subscriptions) {
-          return [];
-        }
-        return (await gateway.commerce.getProducts()).filter((product) =>
-          product.type === 'subscription' ? available.subscriptions : available.oneTime,
-        );
-      },
-      async purchase(input) {
-        const available = await getIapAvailability();
-        const configuredProduct = options.effectiveConfig?.monetization.products.find(
-          (product) => product.id === input.productId,
-        );
-        let productType = configuredProduct?.type;
-        if (
-          productType === undefined
-          && options.effectiveConfig === undefined
-          && available.oneTime !== available.subscriptions
-        ) {
-          productType = (await gateway.commerce.getProducts()).find(
-            (product) => product.id === input.productId,
-          )?.type;
-        }
-        // When only one purchase route is available, unknown product types
-        // must not fall through to that route. An effective catalog is binding.
-        const allowed = productType === 'subscription'
-          ? available.subscriptions
-          : productType === undefined
-            ? available.oneTime && available.subscriptions
-            : available.oneTime;
-        if (!allowed || (options.effectiveConfig !== undefined && configuredProduct?.enabled !== true)) {
-          return {
-            status: 'cancelled',
-            entitlementIds: [],
-          };
-        }
-
-        return gateway.commerce.purchase(input);
-      },
-      async restore() {
-        const available = await getIapAvailability();
-        if ((!available.oneTime && !available.subscriptions) || gateway.commerce.restore === undefined) {
-          return {
-            restoredEntitlements: [],
-          };
-        }
-
-        return gateway.commerce.restore();
-      },
-      async getEntitlements() {
-        const available = await getIapAvailability();
-        return available.oneTime || available.subscriptions
-          ? gateway.commerce.getEntitlements()
-          : [];
-      },
-    },
+    ...(commerce === undefined ? {} : { commerce }),
     ads: {
       async preload(input) {
         if (canPreloadAdPlacement(input.placementId, input.format)) {
@@ -908,9 +1036,9 @@ function isFeatureCapabilitySupported(
 ): boolean {
   switch (feature) {
     case 'iap':
-      return capabilities.nativeIap;
+      return commerceSellsOneTime(requireCommerce(capabilities));
     case 'subscriptions':
-      return capabilities.subscriptionIap === true;
+      return requireCommerce(capabilities).purchase.subscription;
     case 'bannerAds':
       return capabilities.bannerAds === true;
     case 'rewardedAds':
@@ -937,16 +1065,27 @@ function getFeatureProviderAvailability(
   capabilities: PlatformCapabilities,
   config: TargetConfig,
 ): PlatformProviderAvailability | undefined {
+  const commerce = requireCommerce(capabilities);
+  // The commerce block carries its own readiness. A feature the provider does
+  // not sell reads as `unsupported`, as a state the provider never reported
+  // would, so the reason stays `capability-unsupported`.
+  switch (feature) {
+    case 'iap':
+      return commerce.purchase.consumable || commerce.purchase.durable
+        ? commerce.availability
+        : 'unsupported';
+    case 'subscriptions':
+      return commerce.purchase.subscription ? commerce.availability : 'unsupported';
+    default:
+      break;
+  }
+
   const states = capabilities.providerAvailability;
   if (states === undefined) {
     return undefined;
   }
 
   switch (feature) {
-    case 'iap':
-      return states.nativeIap;
-    case 'subscriptions':
-      return states.subscriptionIap;
     case 'rewardedAds':
       return states.rewardedAds;
     case 'interstitialAds':

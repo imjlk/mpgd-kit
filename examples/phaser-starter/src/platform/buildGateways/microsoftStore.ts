@@ -41,8 +41,8 @@ function resolveMicrosoftStoreProducts(target: string): readonly MicrosoftStoreC
 }
 
 /**
- * Commerce v2 over the Digital Goods path (`createMicrosoftStoreCommerceProvider`)
- * installed as `commerceV2` with the v1 wrapper. The purchase authority stays
+ * Commerce over the Digital Goods path (`createMicrosoftStoreCommerceProvider`)
+ * installed as `gateway.commerce` with its capability block. The purchase authority stays
  * `configuration-required` until the game points it at its backend: the
  * authority's ledger entry is the only settlement, and the reconciler still
  * verifies it through game-services before anything is granted.
@@ -63,9 +63,6 @@ export async function createBuildGateway(runtime: RuntimeConfig): Promise<Platfo
       },
       async verifyAndGrant() {
         return { status: 'failed' };
-      },
-      async getEntitlements() {
-        return [];
       },
     },
   });

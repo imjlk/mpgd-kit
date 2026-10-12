@@ -299,17 +299,16 @@ function createGatewayVectorProvider(context: CommerceConformanceContext): Comme
     vxShop: {
       purchaseEventAuthority: 'agent8-server',
       products: verse8.products,
-      loadEntitlements: async () => [],
       client: verse8.client,
       canOpenShop: () => true,
       purchases: { listPurchases: verse8.listPurchases },
       onPurchasesChanged: (listener) => verse8.onPurchasesChanged(listener),
     },
   });
-  if (gateway.commerceV2 === undefined) {
-    throw new Error('The gateway must expose the commerce v2 provider.');
+  if (gateway.commerce === undefined) {
+    throw new Error('The gateway must expose the commerce provider.');
   }
-  return { provider: gateway.commerceV2, store: verse8.actor };
+  return { provider: gateway.commerce, store: verse8.actor };
 }
 
 function summarize(results: readonly CommerceConformanceVectorResult[]) {

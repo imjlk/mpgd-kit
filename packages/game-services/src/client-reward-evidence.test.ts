@@ -147,11 +147,6 @@ const gateway: PlatformGateway = {
   target: 'android',
   getCapabilities: async () => createUnsupportedCapabilities(),
   identity: { getPlayer: async () => ({ playerId: 'player' }) },
-  commerce: {
-    getProducts: async () => [],
-    purchase: async () => ({ status: 'failed', entitlementIds: [] }),
-    getEntitlements: async () => [],
-  },
   ads: {
     preload: async () => {},
     showRewarded: async () => {

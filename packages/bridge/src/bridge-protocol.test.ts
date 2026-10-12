@@ -81,7 +81,19 @@ assertEqual(
 for (const method of commerceBridgeMethods) {
   assertEqual(isBridgeCommerceV2Method(method), true, `${method} should be a v2 method`);
 }
-assertEqual(isBridgeCommerceV2Method('commerce.purchase'), false, 'v1 methods are not v2');
+// The v1 commerce methods were removed in C4: they are neither v2 methods nor bridge methods.
+for (const removed of [
+  'commerce.getProducts',
+  'commerce.purchase',
+  'commerce.restore',
+  'commerce.getEntitlements',
+]) {
+  assertEqual(isBridgeCommerceV2Method(removed), false, `${removed} was removed in C4`);
+  assertThrows(
+    () => assertBridgeRequest({ ...validCommerceV2BridgeRequests[0], method: removed }),
+    `${removed} is no longer a bridge method`,
+  );
+}
 assertEqual(isBridgeCommerceV2Method('commerce.v2.unknown'), false, 'unknown v2 names fail closed');
 assertEqual(
   validCommerceV2BridgeRequests.length,

@@ -1,6 +1,5 @@
 import type { PlatformEvidenceEnvelope, PurchaseResult, RewardedAdResult } from '@mpgd/platform';
 
-import { isAuthoritativeMicrosoftStoreCompletion } from './authoritative-purchase.js';
 import {
   createGameServicesClient,
   type CreateGameServicesClientInput,
@@ -9,11 +8,11 @@ import {
 import { resolveClientRewardClaim } from './client-reward-evidence.js';
 import {
   summarizeCommercePurchaseOperation,
-  toGameServicesPurchaseResult,
   type CommercePurchaseOperationRecord,
   type CommerceReconciler,
 } from './commerce-reconciler.js';
 import { createDefaultClientRewardEvidenceRegistry } from './default-client-reward-evidence.js';
+import { isRetiredPurchaseOpen } from './monetization-operation-store.js';
 import type {
   GameServicesOperationClient,
   GameServicesPurchaseInput,
@@ -47,30 +46,47 @@ interface OperationIdentity {
   readonly platformCompletedAt?: string;
 }
 
-/** The v1 purchase and rewarded-ad journal records. */
+/**
+ * The v1 purchase journal record. Releases before commerce v2 C4 wrote them;
+ * the reconciler is now the only purchase path, so nothing starts, reopens, or
+ * grants from one. A durable journal still parses it, and the one thing
+ * `reconcile()` still does with it is finish an in-flight verification: a
+ * record that holds a completed platform result and no terminal result sends
+ * its saved verify request (or the one its own fields describe) to the
+ * backend once more, through the ledger and under the same idempotency key,
+ * then closes the record with what the backend answered. A record without a
+ * completed platform result is closed without a request: whatever the store
+ * still holds is found again from the store's own unfinished list.
+ */
+export type RetiredPurchaseOperationRecord = OperationIdentity & {
+  readonly kind: 'purchase';
+  readonly input: GameServicesPurchaseInput;
+  readonly platform?: PurchaseResult;
+  readonly request?: VerifyPurchaseRequest;
+  readonly response?: VerifyPurchaseResponse;
+  readonly result?: GameServicesPurchaseResult;
+};
+
+/** The rewarded-ad journal record. */
+export type RewardedAdOperationRecord = OperationIdentity & {
+  readonly kind: 'rewarded-ad';
+  readonly input: GameServicesRewardedAdInput;
+  readonly platform?: RewardedAdResult;
+  readonly request?: ClaimAdRewardRequest;
+  readonly response?: ClaimAdRewardResponse;
+  readonly result?: GameServicesRewardedAdResult;
+};
+
+/** The pre-reconciler journal records: a retired purchase record and the live rewarded-ad record. */
 export type LegacyMonetizationOperationRecord =
-  | (OperationIdentity & {
-      readonly kind: 'purchase';
-      readonly input: GameServicesPurchaseInput;
-      readonly platform?: PurchaseResult;
-      readonly request?: VerifyPurchaseRequest;
-      readonly response?: VerifyPurchaseResponse;
-      readonly result?: GameServicesPurchaseResult;
-    })
-  | (OperationIdentity & {
-      readonly kind: 'rewarded-ad';
-      readonly input: GameServicesRewardedAdInput;
-      readonly platform?: RewardedAdResult;
-      readonly request?: ClaimAdRewardRequest;
-      readonly response?: ClaimAdRewardResponse;
-      readonly result?: GameServicesRewardedAdResult;
-    });
+  | RetiredPurchaseOperationRecord
+  | RewardedAdOperationRecord;
 
 /**
  * Every record kind the journal holds. `commerce-purchase` records are the
- * commerce v2 reconciler's (`./commerce-reconciler`); their open state is
- * `state`, not `result`, and `isMonetizationOperationRecoverable` applies the
- * rule for every kind.
+ * reconciler's (`./commerce-reconciler`); their open state is `state`, not
+ * `result`, and `isMonetizationOperationRecoverable` applies the rule for
+ * every kind.
  */
 export type MonetizationOperationRecord =
   | LegacyMonetizationOperationRecord
@@ -92,13 +108,13 @@ export interface MonetizationOperationStore {
   /** Return only unresolved operations; keep terminal records addressable by read for deduplication. */
   listRecoverable(playerId: string): Promise<readonly MonetizationOperationRecord[]>;
   /**
-   * Commerce v2 records in `granted`, `finishing`, or `finished` kept within
+   * Reconciler records in `granted`, `finishing`, or `finished` kept within
    * the journal retention window, for the reconciler's revocation pass. A
    * store without it only reports reversals of grants seen in this session.
    */
   listGranted?(playerId: string): Promise<readonly MonetizationOperationRecord[]>;
   /**
-   * The commerce v2 record, terminal or not, whose `purchase.transactionId`
+   * The reconciler record, terminal or not, whose `purchase.transactionId`
    * is this store transaction. With it a transaction the store lists again
    * after a restart (an owned durable, a rejected or finished purchase) meets
    * its own record instead of being verified again under a derived key.
@@ -120,7 +136,7 @@ export interface MonetizationOperationSummary {
   readonly kind: MonetizationOperationRecord['kind'];
   readonly idempotencyKey: string;
   /**
-   * RFC "Purchase lifecycle" mapping for a commerce v2 record: `granted`
+   * RFC "Purchase lifecycle" mapping for a reconciler record: `granted`
    * covers `granted`, `finishing`, and `finished`; `pending` covers
    * `launched`, `pending`, `purchased`, and `verifying`; `revoked` is a
    * reversed grant.
@@ -131,35 +147,22 @@ export interface MonetizationOperationSummary {
 }
 
 export interface RecoverableMonetizationClient extends GameServicesOperationClient {
-  /**
-   * Replays a platform purchase callback into a v1 journal record.
-   *
-   * @deprecated For a gateway with a commerce v2 provider the reconciler
-   * learns the result from the provider itself: this call then runs one
-   * reconcile pass and returns the journaled result for the key, ignoring
-   * `platform`. Removed with the v1 adapter in C4.
-   */
-  recoverPurchaseResult(
-    idempotencyKey: string,
-    platform: PurchaseResult,
-  ): Promise<GameServicesPurchaseResult>;
   recoverRewardResult(
     idempotencyKey: string,
     platform: RewardedAdResult,
   ): Promise<GameServicesRewardedAdResult>;
   /**
-   * Startup and app-resume recovery: resumes v1 records and, with a commerce
-   * v2 provider, starts or runs the reconciler (subscribe, read available
+   * Startup and app-resume recovery: resumes rewarded-ad records and, with a
+   * commerce provider, starts or runs the reconciler (subscribe, read available
    * purchases, send saved verify requests, finish granted purchases).
    */
   reconcile(): Promise<readonly MonetizationOperationSummary[]>;
   /**
-   * The manual restore trigger of the commerce v2 reconciler
-   * (`provider.restorePurchases` when offered, then a pass). Without a v2
-   * provider it is `reconcile()`.
+   * The manual restore trigger of the reconciler (`provider.restorePurchases`
+   * when offered, then a pass). Without a commerce provider it is `reconcile()`.
    */
   restorePurchases(): Promise<readonly MonetizationOperationSummary[]>;
-  /** Present when the gateway exposes `commerceV2`. */
+  /** Present when the gateway exposes `commerce`. */
   readonly commerceReconciler?: CommerceReconciler;
 }
 
@@ -176,28 +179,23 @@ export function createRecoverableMonetizationClient(
   const allowLegacyRewardCompletion = input.rewardEvidenceRegistry === undefined && input.gateway.ads.provider === undefined;
   const observedAt = (): string => input.now?.() ?? new Date().toISOString();
   const inFlight = new Map<string, Promise<unknown>>();
-  const unjournaledPurchases = new Map<string, {
-    readonly platform: PurchaseResult;
-    readonly completedAt: string;
-  }>();
   const unjournaledRewards = new Map<string, {
     readonly platform: RewardedAdResult;
     readonly completedAt: string;
   }>();
-  const unjournaledPurchaseResponses = new Map<string, VerifyPurchaseResponse>();
   const unjournaledRewardResponses = new Map<string, ClaimAdRewardResponse>();
-  const unjournaledPurchaseResults = new Map<string, GameServicesPurchaseResult>();
   const unjournaledRewardResults = new Map<string, GameServicesRewardedAdResult>();
-  // One commerce v2 client over the durable journal: its reconciler is the
-  // purchase path for a gateway with a v2 provider, and v1 records keep the
-  // per-operation client below.
-  const commerceClient: GameServicesClient | undefined = input.gateway.commerceV2 === undefined
-    ? undefined
-    : createGameServicesClient({ ...input, operationStore: store });
-  const commerceReconciler = commerceClient?.commerceReconciler;
-  // The per-operation clients below resume v1 records only: they see a gateway
-  // without the v2 provider, so they never build a second reconciler over the
-  // journal or reopen the store UI for a platform result already recorded.
+  // One purchase client over the durable journal: its reconciler is the only
+  // purchase path. A gateway without a commerce provider gets a client whose
+  // `purchase` answers `rejected`; rewarded ads keep the per-operation client
+  // below.
+  const commerceClient: GameServicesClient = createGameServicesClient({
+    ...input,
+    operationStore: store,
+  });
+  const commerceReconciler = commerceClient.commerceReconciler;
+  // The per-operation rewarded-ad clients see a gateway without the commerce
+  // provider, so they never build a second reconciler over the journal.
   const {
     commerceReconciler: _sharedReconciler,
     operationStore: _journal,
@@ -205,7 +203,7 @@ export function createRecoverableMonetizationClient(
     commerceProducts: _commerceProducts,
     ...legacyClientInput
   } = input;
-  const { commerceV2: _commerceV2, ...legacyGateway } = input.gateway;
+  const { commerce: _commerce, ...legacyGateway } = input.gateway;
 
   async function serializeOperation<T>(key: string, task: () => Promise<T>): Promise<T> {
     const previous = inFlight.get(key) ?? Promise.resolve();
@@ -230,8 +228,8 @@ export function createRecoverableMonetizationClient(
   }
 
   function assertOwner(
-    record: LegacyMonetizationOperationRecord,
-    kind: LegacyMonetizationOperationRecord['kind'],
+    record: RewardedAdOperationRecord,
+    kind: 'rewarded-ad',
     idempotencyKey: string,
     subjectId: string,
   ): void {
@@ -240,39 +238,16 @@ export function createRecoverableMonetizationClient(
       || record.target !== input.target
       || record.deploymentTarget !== (input.deploymentTarget ?? input.target)
       || record.input.idempotencyKey !== idempotencyKey
-      || (record.kind === 'purchase' ? record.input.productId : record.input.placementId)
-        !== subjectId) {
+      || record.input.placementId !== subjectId) {
       throw new Error('Monetization operation key is bound to another player or subject.');
     }
   }
 
-  async function purchase(
+  function purchase(
     operation: GameServicesPurchaseInput,
     options?: GameServicesOperationOptions<GameServicesPurchaseProgress>,
   ): Promise<GameServicesPurchaseResult> {
-    if (commerceClient !== undefined) {
-      return commerceClient.purchase(operation, options);
-    }
-    const key = operationKey(input.target, 'purchase', operation.idempotencyKey);
-    return serializeOperation(key, async () => {
-      const reserved = await store.reserve({
-        key,
-        kind: 'purchase',
-        playerId: input.playerId,
-        target: input.target,
-        deploymentTarget: input.deploymentTarget ?? input.target,
-        revision: 0,
-        input: operation,
-      });
-      if (reserved.record.kind !== 'purchase') {
-        throw new Error('Monetization operation kind conflicts with its journal key.');
-      }
-      assertOwner(reserved.record, 'purchase', operation.idempotencyKey, operation.productId);
-      if (reserved.record.input.source !== operation.source) {
-        throw new Error('Purchase idempotency key was reused for another source.');
-      }
-      return resumePurchase(reserved.record, reserved.created, options);
-    });
+    return commerceClient.purchase(operation, options);
   }
 
   async function claimRewardedAd(
@@ -298,165 +273,8 @@ export function createRecoverableMonetizationClient(
     });
   }
 
-  async function resumePurchase(
-    initial: Extract<MonetizationOperationRecord, { kind: 'purchase' }>,
-    mayOpenPlatform = false,
-    options?: GameServicesOperationOptions<GameServicesPurchaseProgress>,
-  ): Promise<GameServicesPurchaseResult> {
-    // Observe recovery once, so a journal failure resolved into a result still completes.
-    return observeGameServicesOperation('purchase', options, (progress) => {
-      return settlePurchase(initial, mayOpenPlatform, progress);
-    });
-  }
-
-  async function settlePurchase(
-    initial: Extract<MonetizationOperationRecord, { kind: 'purchase' }>,
-    mayOpenPlatform: boolean,
-    progress: OperationReporter<'purchase'>,
-  ): Promise<GameServicesPurchaseResult> {
-    let record = initial;
-    const unsavedResponse = unjournaledPurchaseResponses.get(record.key);
-    if (unsavedResponse !== undefined && record.response?.verified !== true) {
-      // A result beside the non-grant response is stale, such as another runtime's rejection.
-      // Drop it in the same write so the client path derives this grant again.
-      const { result: staleResult, ...current } = record;
-      try {
-        record = await save(current, { response: unsavedResponse });
-        unjournaledPurchaseResponses.delete(record.key);
-      } catch {
-        return recordedPurchaseGrant({ ...current, response: unsavedResponse })
-          ?? pendingPurchase(record.platform);
-      }
-    } else if (record.response?.verified === true) {
-      unjournaledPurchaseResponses.delete(record.key);
-    }
-    const unsavedResult = unjournaledPurchaseResults.get(record.key);
-    if (unsavedResult !== undefined && record.result?.status !== 'granted') {
-      try {
-        record = await save(record, { result: unsavedResult });
-        unjournaledPurchaseResults.delete(record.key);
-      } catch {
-        return unsavedResult;
-      }
-    } else if (record.result?.status === 'granted') {
-      unjournaledPurchaseResults.delete(record.key);
-    }
-    const unjournaled = unjournaledPurchases.get(record.key);
-    if (unjournaled !== undefined && (record.platform === undefined
-      || record.platform.status === 'pending' && unjournaled.platform.status !== 'pending')) {
-      try {
-        record = await save(record, {
-          platform: unjournaled.platform,
-          platformCompletedAt: unjournaled.completedAt,
-        });
-        unjournaledPurchases.delete(record.key);
-      } catch {
-        return recordedPurchaseGrant({ ...record, platform: unjournaled.platform })
-          ?? pendingPurchase(unjournaled.platform);
-      }
-    } else if (record.platform !== undefined) {
-      if (unjournaled !== undefined && !samePlatformResult(record.platform, unjournaled.platform)) {
-        throw new Error('A platform purchase callback conflicts with the recorded operation.');
-      }
-      unjournaledPurchases.delete(record.key);
-    }
-    const completed = record.result;
-    if (completed !== undefined && !purchaseNeedsRetry(record)) {
-      return completed;
-    }
-    if (record.request !== undefined) {
-      assertPurchaseRequest(record, input);
-    }
-    if (record.platform === undefined && !mayOpenPlatform) {
-      return pendingPurchase();
-    }
-    const client = createGameServicesClient({
-      ...legacyClientInput,
-      requestNow: () => record.platformCompletedAt ?? observedAt(),
-      gateway: {
-        ...legacyGateway,
-        commerce: {
-          ...input.gateway.commerce,
-          async purchase(request) {
-            if (record.platform !== undefined) {
-              return record.platform;
-            }
-            const platform = await input.gateway.commerce.purchase(request);
-            const completedAt = observedAt();
-            const prior = record;
-            record = { ...record, platform, platformCompletedAt: completedAt };
-            try {
-              record = await save(prior, { platform, platformCompletedAt: completedAt });
-            } catch (error) {
-              unjournaledPurchases.set(record.key, { platform, completedAt });
-              throw error;
-            }
-            return platform;
-          },
-        },
-      },
-      backend: {
-        ...input.backend,
-        purchases: {
-          async verifyPurchase(request) {
-            if (record.request === undefined) {
-              record = await save(record, { request });
-            }
-            const recordedRequest = record.request;
-            if (recordedRequest === undefined) {
-              throw new Error('Purchase request was not journaled before backend dispatch.');
-            }
-            let response: VerifyPurchaseResponse;
-            try {
-              response = await input.backend.purchases.verifyPurchase(recordedRequest);
-            } catch {
-              if (record.response?.verified === true) {
-                return record.response;
-              }
-              return {
-                verified: false,
-                alreadyProcessed: false,
-                disposition: 'pending',
-                reason: 'BACKEND_UNAVAILABLE',
-              };
-            }
-            if (record.response?.verified === true && !response.verified) {
-              return record.response;
-            }
-            const prior = record;
-            record = { ...record, response };
-            try {
-              record = await save(prior, { response });
-              unjournaledPurchaseResponses.delete(record.key);
-            } catch (error) {
-              if (response.verified) {
-                unjournaledPurchaseResponses.set(record.key, response);
-              }
-              throw error;
-            }
-            return response;
-          },
-        },
-      },
-    });
-    try {
-      const result = await client.purchase(record.input, forwardGameServicesProgress(progress));
-      if (result.status === 'granted') {
-        unjournaledPurchaseResults.set(record.key, result);
-      }
-      record = await save(record, { result });
-      unjournaledPurchaseResults.delete(record.key);
-      return result;
-    } catch {
-      // No UI retry is safe after a possibly completed platform callback.
-      return recordedPurchaseGrant(record)
-        ?? unjournaledPurchaseResults.get(record.key)
-        ?? pendingPurchase(record.platform);
-    }
-  }
-
   async function resumeReward(
-    initial: Extract<MonetizationOperationRecord, { kind: 'rewarded-ad' }>,
+    initial: RewardedAdOperationRecord,
     mayOpenPlatform = false,
     options?: GameServicesOperationOptions<GameServicesRewardedAdProgress>,
   ): Promise<GameServicesRewardedAdResult> {
@@ -466,7 +284,7 @@ export function createRecoverableMonetizationClient(
   }
 
   async function settleReward(
-    initial: Extract<MonetizationOperationRecord, { kind: 'rewarded-ad' }>,
+    initial: RewardedAdOperationRecord,
     mayOpenPlatform: boolean,
     progress: OperationReporter<'rewarded-ad'>,
   ): Promise<GameServicesRewardedAdResult> {
@@ -612,53 +430,6 @@ export function createRecoverableMonetizationClient(
     }
   }
 
-  async function recoverPurchaseResult(
-    idempotencyKey: string,
-    platform: PurchaseResult,
-  ): Promise<GameServicesPurchaseResult> {
-    const key = operationKey(input.target, 'purchase', idempotencyKey);
-    return serializeOperation(key, async () => {
-      const found = await store.read(key);
-      if (found?.kind !== 'purchase') {
-        if (commerceReconciler !== undefined) {
-          // Deprecated thin wrapper: the v2 reconciler learns the result from
-          // the provider, so the platform callback is not replayed.
-          await commerceReconciler.reconcile();
-          const journaled = await commerceReconciler.read(idempotencyKey);
-          if (journaled === undefined) {
-            throw new Error('No reserved purchase operation matches this platform callback.');
-          }
-          return toGameServicesPurchaseResult(journaled);
-        }
-        throw new Error('No reserved purchase operation matches this platform callback.');
-      }
-      assertOwner(found, 'purchase', idempotencyKey, found.input.productId);
-      const transient = unjournaledPurchases.get(key);
-      if (transient !== undefined && !samePlatformResult(transient.platform, platform)
-        && !(transient.platform.status === 'pending' && platform.status !== 'pending')) {
-        throw new Error('A platform purchase callback conflicts with the unjournaled result.');
-      }
-      const canAdvance = found.platform?.status === 'pending'
-        && platform.status !== 'pending' && found.request === undefined;
-      if (found.platform !== undefined && !samePlatformResult(found.platform, platform)
-        && !canAdvance) {
-        throw new Error('A platform purchase callback conflicts with the recorded operation.');
-      }
-      let record = found;
-      if (found.platform === undefined || canAdvance) {
-        const completedAt = observedAt();
-        try {
-          record = await save(found, { platform, platformCompletedAt: completedAt });
-        } catch {
-          unjournaledPurchases.set(key, { platform, completedAt });
-          return recordedPurchaseGrant({ ...found, platform }) ?? pendingPurchase(platform);
-        }
-      }
-      unjournaledPurchases.delete(key);
-      return resumePurchase(record);
-    });
-  }
-
   async function recoverRewardResult(
     idempotencyKey: string,
     platform: RewardedAdResult,
@@ -797,6 +568,92 @@ export function createRecoverableMonetizationClient(
     ];
   }
 
+  /**
+   * Finishes the backend verification a retired v1 purchase record was in the
+   * middle of. The grant is the backend's answer, never a local decision, and
+   * the store UI is never reopened. Backend or journal trouble leaves the
+   * record open for the next pass.
+   */
+  async function drainRetiredPurchase(
+    initial: RetiredPurchaseOperationRecord,
+  ): Promise<MonetizationOperationSummary | undefined> {
+    const summarize = (
+      latest: RetiredPurchaseOperationRecord,
+      status: MonetizationOperationSummary['status'],
+    ): MonetizationOperationSummary => ({
+      kind: 'purchase',
+      idempotencyKey: latest.input.idempotencyKey,
+      status,
+      finalizationPending: false,
+    });
+    try {
+      return await serializeOperation(initial.key, async () => {
+        const latest = await store.read(initial.key) ?? initial;
+        if (latest.kind !== 'purchase' || !isRetiredPurchaseOpen(latest)) {
+          return undefined;
+        }
+        if (latest.key !== operationKey(input.target, 'purchase', latest.input.idempotencyKey)
+          || !ownsRecord(latest)) {
+          return summarize(latest, 'action-required');
+        }
+        const platform = latest.platform;
+        if (platform?.status !== 'completed' || platform.transactionId === undefined) {
+          return undefined;
+        }
+        const request: VerifyPurchaseRequest = latest.request ?? {
+          target: latest.target,
+          ...(latest.deploymentTarget === latest.target
+            ? {}
+            : { deploymentTarget: latest.deploymentTarget }),
+          playerId: latest.playerId,
+          productId: latest.input.productId,
+          platformTransactionId: platform.transactionId,
+          idempotencyKey: latest.input.idempotencyKey,
+          purchasedAt: latest.platformCompletedAt ?? observedAt(),
+          ...(platform.evidence === undefined ? {} : { evidence: platform.evidence }),
+        };
+        if (request.playerId !== input.playerId
+          || request.target !== latest.target
+          || request.productId !== latest.input.productId
+          || request.idempotencyKey !== latest.input.idempotencyKey
+          || request.platformTransactionId !== platform.transactionId) {
+          return summarize(latest, 'action-required');
+        }
+        let response = latest.response;
+        if (response?.verified !== true) {
+          try {
+            response = await input.backend.purchases.verifyPurchase(request);
+          } catch {
+            // Transport trouble stays retryable; nothing is decided here.
+            return summarize(latest, 'pending');
+          }
+        }
+        const result: GameServicesPurchaseResult = response.verified
+          ? {
+              status: 'granted',
+              purchase: platform,
+              verification: response,
+              ...(response.ledgerEntryId === undefined
+                ? {}
+                : { ledgerEntryId: response.ledgerEntryId }),
+            }
+          : {
+              status: response.disposition === 'pending' ? 'pending' : 'rejected',
+              purchase: platform,
+              verification: response,
+            };
+        try {
+          await save(latest, { request, response, result });
+        } catch {
+          return summarize(latest, result.status === 'granted' ? 'granted' : 'pending');
+        }
+        return summarize(latest, result.status === 'granted' ? 'granted' : result.status);
+      });
+    } catch {
+      return summarize(initial, 'pending');
+    }
+  }
+
   async function reconcileLegacy(): Promise<readonly MonetizationOperationSummary[]> {
     const pending = await store.listRecoverable(input.playerId);
     const summaries: MonetizationOperationSummary[] = [];
@@ -804,7 +661,14 @@ export function createRecoverableMonetizationClient(
       if (!ownsRecord(record)) {
         continue;
       }
-      if (record.kind !== 'purchase' && record.kind !== 'rewarded-ad') {
+      if (record.kind === 'purchase') {
+        const summary = await drainRetiredPurchase(record);
+        if (summary !== undefined) {
+          summaries.push(summary);
+        }
+        continue;
+      }
+      if (record.kind !== 'rewarded-ad') {
         continue;
       }
       const idempotencyKey = typeof record.input?.idempotencyKey === 'string'
@@ -821,24 +685,10 @@ export function createRecoverableMonetizationClient(
           } catch {
             throw new OperationReadError();
           }
-          if (latest.kind === 'commerce-purchase') {
+          if (latest.kind !== 'rewarded-ad') {
             throw new Error('Monetization operation kind conflicts with its journal key.');
           }
-          assertOwner(
-            latest,
-            latest.kind,
-            latest.input.idempotencyKey,
-            latest.kind === 'purchase' ? latest.input.productId : latest.input.placementId,
-          );
-          if (latest.kind === 'purchase') {
-            const result = await resumePurchase(latest);
-            return {
-              kind: latest.kind,
-              idempotencyKey: latest.input.idempotencyKey,
-              status: result.status,
-              finalizationPending: result.verification?.finalization?.status === 'pending',
-            } satisfies MonetizationOperationSummary;
-          }
+          assertOwner(latest, latest.kind, latest.input.idempotencyKey, latest.input.placementId);
           const result = await resumeReward(latest);
           return {
             kind: latest.kind,
@@ -863,7 +713,6 @@ export function createRecoverableMonetizationClient(
   return {
     purchase,
     claimRewardedAd,
-    recoverPurchaseResult,
     recoverRewardResult,
     reconcile,
     restorePurchases,
@@ -898,13 +747,6 @@ function canonicalJson(value: unknown): unknown {
   return value;
 }
 
-function pendingPurchase(platform?: PurchaseResult): GameServicesPurchaseResult {
-  return {
-    status: 'pending',
-    purchase: platform ?? { status: 'pending', entitlementIds: [] },
-  };
-}
-
 function pendingReward(platform?: RewardedAdResult): GameServicesRewardedAdResult {
   return {
     status: 'pending',
@@ -912,35 +754,8 @@ function pendingReward(platform?: RewardedAdResult): GameServicesRewardedAdResul
   };
 }
 
-function recordedPurchaseGrant(
-  record: Extract<MonetizationOperationRecord, { kind: 'purchase' }>,
-): GameServicesPurchaseResult | undefined {
-  if (record.result?.status === 'granted') {
-    return record.result;
-  }
-  if (record.platform !== undefined
-    && isAuthoritativeMicrosoftStoreCompletion(record.target, record.platform)) {
-    // The adapter completed this ledger grant before returning, as the client path reports it.
-    return {
-      status: 'granted',
-      purchase: record.platform,
-      ledgerEntryId: record.platform.transactionId,
-    };
-  }
-  if (record.response?.verified !== true || record.platform === undefined) {
-    return undefined;
-  }
-  return {
-    status: 'granted',
-    purchase: record.platform,
-    verification: record.response,
-    ...(record.response.ledgerEntryId === undefined
-      ? {} : { ledgerEntryId: record.response.ledgerEntryId }),
-  };
-}
-
 function recordedRewardGrant(
-  record: Extract<MonetizationOperationRecord, { kind: 'rewarded-ad' }>,
+  record: RewardedAdOperationRecord,
 ): GameServicesRewardedAdResult | undefined {
   if (record.result?.status === 'granted') {
     return record.result;
@@ -957,31 +772,8 @@ function recordedRewardGrant(
   };
 }
 
-function purchaseNeedsRetry(
-  record: Extract<MonetizationOperationRecord, { kind: 'purchase' }>,
-): boolean {
-  return record.result?.status === 'pending'
-    || record.response?.finalization?.status === 'pending';
-}
-
-function assertPurchaseRequest(
-  record: Extract<MonetizationOperationRecord, { kind: 'purchase' }>,
-  input: CreateRecoverableMonetizationClientInput,
-): void {
-  const request = record.request;
-  if (request === undefined || record.platform?.status !== 'completed'
-    || request.playerId !== record.playerId || request.playerId !== input.playerId
-    || request.target !== record.target || request.productId !== record.input.productId
-    || request.idempotencyKey !== record.input.idempotencyKey
-    || request.platformTransactionId !== record.platform.transactionId
-    || request.deploymentTarget !== (input.deploymentTarget === input.target
-      ? undefined : input.deploymentTarget)) {
-    throw new Error('Journaled purchase verification is not bound to its platform result.');
-  }
-}
-
 function assertRewardRequest(
-  record: Extract<MonetizationOperationRecord, { kind: 'rewarded-ad' }>,
+  record: RewardedAdOperationRecord,
   input: CreateRecoverableMonetizationClientInput,
 ): void {
   const request = record.request;

@@ -1,10 +1,12 @@
 import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge';
-import type {
-  PlatformCapabilities,
-  PlatformGateway,
-  PlatformProviderAvailability,
-  PlatformProviderFeature,
-  PlatformTarget,
+import {
+  createUnsupportedCommerceCapabilities,
+  type CommerceCapabilities,
+  type PlatformCapabilities,
+  type PlatformGateway,
+  type PlatformProviderAvailability,
+  type PlatformProviderFeature,
+  type PlatformTarget,
 } from '@mpgd/platform';
 import {
   platformCapabilityKeys,
@@ -23,9 +25,8 @@ import {
 import { createAitPlatformGateway } from '../../adapters/ait/src/index';
 import { createBrowserPlatformGateway } from '../../adapters/browser/src/index';
 import {
-  createMicrosoftStoreCommerceAdapter,
+  createMicrosoftStoreCommerceCapabilities,
   createMicrosoftStoreCommerceProvider,
-  withMicrosoftStoreCommerceAdapter,
   withMicrosoftStoreCommerceProvider,
   type MicrosoftStoreCommerceAvailability,
 } from '../../adapters/browser/src/microsoft-store';
@@ -78,8 +79,26 @@ const targetSpecs = [
   { configTarget: 'reddit', expectedTarget: 'reddit' },
 ] as const satisfies readonly TargetSpec[];
 
+/**
+ * A selling block a bridged host may still claim. A gateway without a commerce
+ * provider sells nothing whatever the host says, so every bridge fixture below
+ * expects the unsupported block; only the provider fixtures expect a real one.
+ */
+const hostClaimedCommerce = {
+  purchase: { consumable: true, durable: true, subscription: false, quantity: false },
+  catalog: { products: true, offers: false, localizedPrice: false },
+  lifecycle: {
+    availablePurchases: true,
+    pending: true,
+    restore: false,
+    events: true,
+    finish: 'server',
+  },
+  authority: { evidence: 'client-token', accountBinding: 'required' },
+  availability: 'available',
+} as const satisfies CommerceCapabilities;
+
 const initialBridgeCapabilities = {
-  nativeIap: true,
   nativeAds: true,
   bannerAds: true,
   rewardedAds: true,
@@ -91,10 +110,10 @@ const initialBridgeCapabilities = {
   socialShare: true,
   haptics: true,
   localizedContent: true,
+  commerce: hostClaimedCommerce,
 } as const satisfies PlatformCapabilities;
 
 const updatedBridgeCapabilities = {
-  nativeIap: false,
   nativeAds: false,
   bannerAds: false,
   rewardedAds: false,
@@ -106,6 +125,7 @@ const updatedBridgeCapabilities = {
   socialShare: false,
   haptics: false,
   localizedContent: false,
+  commerce: createUnsupportedCommerceCapabilities(),
 } as const satisfies PlatformCapabilities;
 
 const targetConfigMatrix = readJsonFile(
@@ -121,11 +141,11 @@ for (const spec of targetSpecs) {
   fixtures.push(configured.fixture);
   runtimeMirrorChecks.push(configured.runtimeMirrorCheck);
 }
-// A Capacitor gateway with a commerce v2 provider reports the optional
-// `commerce` block; the booleans must follow it and every read must be fresh.
+// A Capacitor gateway with a commerce provider reports that provider's block
+// (the only commerce source) and every read must be fresh.
 fixtures.push(createCommerceV2Fixture());
-// The Microsoft Store commerce v2 provider wiring reports the same block over
-// the browser base gateway, with `nativeIap` derived from its availability.
+// The Microsoft Store commerce provider wiring reports its block over the
+// browser base gateway.
 fixtures.push(createMicrosoftStoreCommerceV2Fixture());
 
 const report = await runPlatformGatewayCapabilityConformance({ fixtures });
@@ -225,7 +245,6 @@ function createBrowserGateway(): CreatedGateway {
       },
     }),
     expectedCapabilities: {
-      nativeIap: false,
       nativeAds: false,
       rewardedAds: false,
       interstitialAds: false,
@@ -236,6 +255,7 @@ function createBrowserGateway(): CreatedGateway {
       socialShare: true,
       haptics: false,
       localizedContent: true,
+      commerce: createUnsupportedCommerceCapabilities(),
     },
   };
 }
@@ -243,7 +263,7 @@ function createBrowserGateway(): CreatedGateway {
 function createMicrosoftStoreGateway(): CreatedGateway {
   const browser = createBrowserGateway();
   const base: PlatformGateway = { ...browser.gateway, target: 'microsoft-store' };
-  const commerce = createMicrosoftStoreCommerceAdapter({
+  const commerce = createMicrosoftStoreCommerceProvider({
     getRecoveryScope: () => 'configuration-required',
     products: [],
     authority: {
@@ -259,15 +279,15 @@ function createMicrosoftStoreGateway(): CreatedGateway {
       async verifyAndGrant() {
         return { status: 'failed' };
       },
-      async getEntitlements() {
-        return [];
-      },
     },
   });
 
   return {
-    gateway: withMicrosoftStoreCommerceAdapter(base, commerce),
-    expectedCapabilities: browser.expectedCapabilities,
+    gateway: withMicrosoftStoreCommerceProvider(base, commerce),
+    expectedCapabilities: {
+      ...browser.expectedCapabilities,
+      commerce: createMicrosoftStoreCommerceCapabilities('configuration-required'),
+    },
   };
 }
 
@@ -285,7 +305,6 @@ function createVerse8Gateway(): CreatedGateway {
       },
     }),
     expectedCapabilities: {
-      nativeIap: false,
       nativeAds: true,
       rewardedAds: true,
       interstitialAds: true,
@@ -296,6 +315,7 @@ function createVerse8Gateway(): CreatedGateway {
       socialShare: false,
       haptics: false,
       localizedContent: true,
+      commerce: createUnsupportedCommerceCapabilities(),
     },
   };
 }
@@ -317,10 +337,10 @@ function createBridgeGateway(
 
   const expectedInitial = configTarget === 'android' || configTarget === 'ios'
     ? withoutCapacitorProviders(initialBridgeCapabilities)
-    : initialBridgeCapabilities;
+    : withoutCommerceProvider(initialBridgeCapabilities);
   const expectedUpdated = configTarget === 'android' || configTarget === 'ios'
     ? withoutCapacitorProviders(updatedBridgeCapabilities)
-    : updatedBridgeCapabilities;
+    : withoutCommerceProvider(updatedBridgeCapabilities);
 
   return {
     gateway,
@@ -379,8 +399,6 @@ function createCommerceV2Fixture(): PlatformGatewayCapabilityConformanceFixture 
     const base = withoutCapacitorProviders(initialBridgeCapabilities);
     return {
       ...base,
-      nativeIap: state === 'available',
-      providerAvailability: { ...base.providerAvailability, nativeIap: state },
       commerce: {
         purchase: { consumable: true, durable: true, subscription: false, quantity: false },
         catalog: { products: true, offers: false, localizedPrice: true },
@@ -431,9 +449,6 @@ function createMicrosoftStoreCommerceV2Fixture(): PlatformGatewayCapabilityConfo
       async verifyAndGrant() {
         return { status: 'failed' };
       },
-      async getEntitlements() {
-        return [];
-      },
     },
     async getDigitalGoodsService() {
       return {
@@ -448,8 +463,6 @@ function createMicrosoftStoreCommerceV2Fixture(): PlatformGatewayCapabilityConfo
   });
   const expected = (state: MicrosoftStoreCommerceAvailability): PlatformCapabilities => ({
     ...browser.expectedCapabilities,
-    nativeIap: state === 'available',
-    subscriptionIap: false,
     commerce: {
       purchase: { consumable: true, durable: false, subscription: false, quantity: false },
       catalog: { products: true, offers: false, localizedPrice: true },
@@ -479,19 +492,21 @@ function createMicrosoftStoreCommerceV2Fixture(): PlatformGatewayCapabilityConfo
   };
 }
 
+/** What a gateway without a commerce provider reports, whatever its host claims. */
+function withoutCommerceProvider(base: PlatformCapabilities): PlatformCapabilities {
+  return { ...base, commerce: createUnsupportedCommerceCapabilities() };
+}
+
 function withoutCapacitorProviders(base: PlatformCapabilities): PlatformCapabilities {
   return {
     ...base,
-    nativeIap: false,
-    subscriptionIap: false,
+    commerce: createUnsupportedCommerceCapabilities(),
     nativeAds: false,
     rewardedAds: false,
     interstitialAds: false,
     bannerAds: false,
     nativeLeaderboard: false,
     providerAvailability: {
-      nativeIap: 'unsupported',
-      subscriptionIap: 'unsupported',
       rewardedAds: 'unsupported',
       interstitialAds: 'unsupported',
       bannerAds: 'unsupported',
@@ -549,4 +564,19 @@ function assertCapabilitiesEqual(
       );
     }
   }
+  if (JSON.stringify(sortedCommerce(actual.commerce)) !== JSON.stringify(sortedCommerce(expected.commerce))) {
+    throw new Error(
+      `${label} commerce capabilities mismatch. Expected ${JSON.stringify(expected.commerce)}, received ${JSON.stringify(actual.commerce)}.`,
+    );
+  }
+}
+
+function sortedCommerce(commerce: CommerceCapabilities): unknown {
+  return [
+    ['purchase', Object.entries(commerce.purchase).sort()],
+    ['catalog', Object.entries(commerce.catalog).sort()],
+    ['lifecycle', Object.entries(commerce.lifecycle).sort()],
+    ['authority', Object.entries(commerce.authority).sort()],
+    ['availability', commerce.availability],
+  ];
 }

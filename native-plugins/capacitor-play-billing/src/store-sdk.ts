@@ -24,29 +24,12 @@ import type {
   PlayPurchase,
   PlayPurchaseOutcome,
 } from './definitions.js';
+import { googlePlayStoreId, playBillingStoreSdkCapabilities } from './commerce-profile.js';
 import { CapacitorPlayBilling } from './plugin.js';
 
-/** The store id of the Play Billing `StoreSdk` (RFC "Capabilities", `google-play`). */
-export const googlePlayStoreId = 'google-play' as const;
-
-/**
- * What the Play Billing plugin supports (RFC "Capabilities" profile row for
- * `google-play`): one-time consumables and durables, no subscriptions, no
- * multi-quantity, pending purchases, no restore call, one-time offers, and a
- * server-owned finish (the backend acknowledges or consumes after the grant).
- */
-export const playBillingStoreSdkCapabilities: StoreSdkCapabilities = Object.freeze({
-  purchase: Object.freeze({
-    consumable: true,
-    durable: true,
-    subscription: false,
-    quantity: false,
-  }),
-  offers: true,
-  pending: true,
-  restore: false,
-  finish: 'server',
-});
+// The profile constants live in the SDK-free `commerce-profile.ts` so a tools
+// project can read them without loading Capacitor; they stay exported here.
+export { googlePlayStoreId, playBillingStoreSdkCapabilities };
 
 /**
  * `defaultStoreSdkErrorCodeMap` plus every `PLAY_BILLING_*` code the plugin or
@@ -153,7 +136,7 @@ export class PlayBillingStoreSdkError extends Error implements StoreSdkError {
  * provider normalizes (`PLAY_BILLING_TIMEOUT`, `PLAY_BILLING_INTERRUPTED`, and
  * `PLAY_BILLING_EMPTY_PURCHASE` become `OUTCOME_UNKNOWN` and stay recoverable).
  * `transactionId` is the order id or, until Play assigns one, the token key
- * `play-token-sha256:<hex>` v1 ledgers already use. Nothing here grants, and
+ * `play-token-sha256:<hex>` existing ledgers already use. Nothing here grants, and
  * nothing here acknowledges or consumes: the backend finalizer owns both.
  */
 export function createCapacitorPlayBillingStoreSdk(
@@ -510,7 +493,7 @@ export function createCapacitorPlayBillingStoreSdk(
   return sdk;
 }
 
-/** Validates a purchase token exactly as the v1 provider does. */
+/** Validates a Play purchase token: non-empty, at most 4096 characters, no padding or control characters. */
 export function isValidPlayPurchaseToken(value: unknown): value is string {
   return typeof value === 'string'
     && value.length > 0
@@ -522,7 +505,7 @@ export function isValidPlayPurchaseToken(value: unknown): value is string {
 /**
  * `StoreSdkPurchase` of one plugin purchase: `token` is the purchase token,
  * `transactionId` is the order id or the token key when Play has not assigned
- * one yet (the v1 rule, so ledgers written by v1 deduplicate), `purchasedAt`
+ * one yet (so a purchase deduplicates in the ledger before and after Play assigns an order), `purchasedAt`
  * is `purchaseTime` as ISO 8601 when it is a valid instant, and the account
  * binding is the obfuscated account id the purchase flow recorded. Throws
  * `PLAY_BILLING_EVIDENCE_INVALID` for a shape the plugin never produces.
@@ -543,7 +526,7 @@ function convertPurchase(purchase: unknown): StoreSdkPurchase | Promise<StoreSdk
   if (!isRecord(purchase)) {
     throw evidenceInvalid('Play purchase is not an object.');
   }
-  const state = purchase.purchaseState ?? purchase.state;
+  const state = purchase.purchaseState;
   if (state !== 'pending' && state !== 'purchased') {
     throw evidenceInvalid('Play purchase state is invalid.');
   }
@@ -574,9 +557,7 @@ function buildSdkPurchase(
   },
 ): StoreSdkPurchase {
   const { sku, state, token, transactionId } = parsed;
-  const purchaseTime = typeof purchase.purchaseTime === 'number'
-    ? purchase.purchaseTime
-    : purchase.purchaseTimeMillis;
+  const purchaseTime = purchase.purchaseTime;
   const purchasedAt = typeof purchaseTime === 'number'
     && Number.isSafeInteger(purchaseTime)
     && purchaseTime > 0
@@ -606,16 +587,16 @@ function skuOf(purchase: unknown): string | undefined {
   if (!isRecord(purchase)) {
     return undefined;
   }
-  const products = purchase.products ?? purchase.productIds;
+  const products = purchase.products;
   const sku = Array.isArray(products) && products.length === 1 ? products[0] : undefined;
   return typeof sku === 'string' && productIdPattern.test(sku) ? sku : undefined;
 }
 
 function isUnfinished(purchase: Readonly<Record<string, unknown>>, includePending: boolean): boolean {
-  const state = purchase.purchaseState ?? purchase.state;
+  const state = purchase.purchaseState;
   if (state === 'purchased') {
-    // A 0.1 native build reports no flag; an absent flag is unfinished so a
-    // paid purchase is never dropped from recovery during a staged upgrade.
+    // An absent flag is unfinished so a paid purchase is never dropped from
+    // recovery.
     return purchase.isAcknowledged !== true;
   }
   return state === 'pending' && includePending;
@@ -633,7 +614,7 @@ function assertOutcomePurchase(
   if (skuOf(purchase) !== expectedSku) {
     throw evidenceInvalid('Play purchase did not match the requested product.');
   }
-  if ((purchase.purchaseState ?? purchase.state) !== expectedState) {
+  if (purchase.purchaseState !== expectedState) {
     throw evidenceInvalid('Play purchase state is inconsistent.');
   }
   return purchase;

@@ -75,7 +75,7 @@ test('a directory project stands for its tsconfig.json, as with tsc -p', (t) => 
   assert.doesNotThrow(() => assertEntryInProject({
     tsgoBinary,
     project: storekit,
-    entry: join(storekit, 'src', 'provider.test.ts'),
+    entry: join(storekit, 'src', 'commerce-provider.test.ts'),
     cwd: repoRoot,
   }));
 });

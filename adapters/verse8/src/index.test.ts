@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { createUnsupportedCommerceCapabilities } from '@mpgd/platform';
+
 import {
   createVerse8CommerceProducts,
   createVerse8PlatformGateway,
@@ -68,8 +70,8 @@ describe('adapter-verse8', () => {
       },
     });
 
-    await expect(gateway.getCapabilities()).resolves.toMatchObject({
-      nativeIap: false,
+    const capabilities = await gateway.getCapabilities();
+    expect(capabilities).toMatchObject({
       nativeAds: true,
       rewardedAds: true,
       interstitialAds: true,
@@ -77,7 +79,11 @@ describe('adapter-verse8', () => {
       remoteLeaderboard: false,
       cloudSave: false,
       localizedContent: true,
+      commerce: createUnsupportedCommerceCapabilities(),
     });
+    expect(capabilities).not.toHaveProperty('nativeIap');
+    expect(capabilities).not.toHaveProperty('subscriptionIap');
+    expect(gateway.commerce).toBeUndefined();
     expect(gateway.target).toBe('verse8');
     expect(gateway.sharing).toBeUndefined();
     expect(gateway.notifications).toBeUndefined();
@@ -189,22 +195,19 @@ describe('adapter-verse8', () => {
     });
   });
 
-  it('keeps commerce, unmapped ads, and leaderboard unavailable', async () => {
+  it('sells nothing without VXShop and keeps unmapped ads and leaderboard unavailable', async () => {
     const gateway = createVerse8PlatformGateway({ authClient: authenticatedClient() });
 
-    await expect(gateway.getCapabilities()).resolves.toMatchObject({
+    const capabilities = await gateway.getCapabilities();
+    expect(capabilities).toMatchObject({
       nativeAds: false,
       rewardedAds: false,
       interstitialAds: false,
     });
-
-    await expect(
-      gateway.commerce.purchase({
-        productId: 'COINS_100',
-        source: 'shop',
-        idempotencyKey: 'purchase-1',
-      }),
-    ).resolves.toEqual({ status: 'failed', entitlementIds: [] });
+    expect(gateway.commerce).toBeUndefined();
+    expect(capabilities.commerce).toEqual(createUnsupportedCommerceCapabilities());
+    // A fresh block on every read, never shared between snapshots.
+    expect((await gateway.getCapabilities()).commerce).not.toBe(capabilities.commerce);
     await expect(
       gateway.ads.showRewarded({
         placementId: 'CONTINUE_AFTER_FAIL',
@@ -221,7 +224,45 @@ describe('adapter-verse8', () => {
     ).resolves.toEqual({ submitted: false });
   });
 
-  it('opens VXShop as pending while entitlements remain Agent8-server authoritative', async () => {
+  it('sells nothing when VXShop lacks the authority acknowledgement, products, or purchase source', async () => {
+    const purchases = { listPurchases: async () => [] };
+    const products = [{
+      id: 'REMOVE_ADS',
+      type: 'non_consumable' as const,
+      platformProductId: 'remove-ads',
+    }];
+    const gateways = [
+      createVerse8PlatformGateway({
+        authClient: authenticatedClient(),
+        vxShop: {
+          purchaseEventAuthority: 'client' as unknown as 'agent8-server',
+          products,
+          purchases,
+        },
+      }),
+      createVerse8PlatformGateway({
+        authClient: authenticatedClient(),
+        vxShop: { purchaseEventAuthority: 'agent8-server', products: [], purchases },
+      }),
+      createVerse8PlatformGateway({
+        authClient: authenticatedClient(),
+        vxShop: {
+          purchaseEventAuthority: 'agent8-server',
+          products,
+          purchases: undefined as unknown as typeof purchases,
+        },
+      }),
+    ];
+
+    for (const gateway of gateways) {
+      expect(gateway.commerce).toBeUndefined();
+      await expect(gateway.getCapabilities()).resolves.toMatchObject({
+        commerce: createUnsupportedCommerceCapabilities(),
+      });
+    }
+  });
+
+  it('opens VXShop as launched while the Agent8 server stays authoritative', async () => {
     const shopCalls: unknown[] = [];
     const shop = createShopClient(shopCalls);
     const gateway = createVerse8PlatformGateway({
@@ -233,42 +274,34 @@ describe('adapter-verse8', () => {
           type: 'non_consumable',
           platformProductId: 'remove-ads',
         }],
-        async loadEntitlements() {
-          return [{
-            id: 'remove_ads',
-            source: 'purchase',
-            grantedAt: '2026-07-16T00:00:00.000Z',
-          }];
-        },
+        purchases: { listPurchases: async () => [] },
         client: shop,
         canOpenShop: () => true,
       },
     });
 
-    await expect(gateway.getCapabilities()).resolves.toMatchObject({ nativeIap: true });
-    await expect(gateway.commerce.getProducts()).resolves.toEqual([{
-      id: 'REMOVE_ADS',
-      type: 'non_consumable',
+    const capabilities = await gateway.getCapabilities();
+    expect(capabilities).toMatchObject({
+      commerce: { availability: 'available', lifecycle: { finish: 'none' } },
+    });
+    expect(capabilities).not.toHaveProperty('nativeIap');
+    expect(capabilities).not.toHaveProperty('subscriptionIap');
+    expect(gateway.commerce?.store).toBe('verse8');
+    await expect(gateway.commerce?.fetchProducts({})).resolves.toMatchObject([{
+      logicalId: 'REMOVE_ADS',
+      store: 'verse8',
+      storeSku: 'remove-ads',
+      kind: 'durable',
       title: 'Remove Ads',
       description: 'Remove advertisements.',
-      price: {
-        formatted: '100 VX',
-        currencyCode: 'VX',
-      },
+      price: { formatted: '100 VX' },
     }]);
-    await expect(gateway.commerce.purchase({
-      productId: 'REMOVE_ADS',
+    // The dialog reports no result a client could trust: nothing is granted here.
+    await expect(gateway.commerce?.requestPurchase({
+      logicalId: 'REMOVE_ADS',
       source: 'shop',
       idempotencyKey: 'purchase-1',
-    })).resolves.toEqual({
-      status: 'pending',
-      entitlementIds: [],
-    });
-    await expect(gateway.commerce.getEntitlements()).resolves.toEqual([{
-      id: 'remove_ads',
-      source: 'purchase',
-      grantedAt: '2026-07-16T00:00:00.000Z',
-    }]);
+    })).resolves.toEqual({ outcome: 'launched' });
     expect(shopCalls).toEqual([
       ['init', { autoRefresh: false }],
       ['refresh'],
@@ -278,7 +311,6 @@ describe('adapter-verse8', () => {
   });
 
   it('fails closed when VXShop cannot open or the configured product is unavailable', async () => {
-    const shop = createShopClient([]);
     const baseOptions = {
       purchaseEventAuthority: 'agent8-server' as const,
       products: [{
@@ -286,41 +318,49 @@ describe('adapter-verse8', () => {
         type: 'non_consumable' as const,
         platformProductId: 'remove-ads',
       }],
-      async loadEntitlements() {
-        return [];
-      },
-      client: shop,
+      purchases: { listPurchases: async () => [] },
     };
+    const request = {
+      logicalId: 'REMOVE_ADS',
+      source: 'shop' as const,
+    };
+    const standaloneCalls: unknown[] = [];
     const standaloneGateway = createVerse8PlatformGateway({
       authClient: authenticatedClient(),
       vxShop: {
         ...baseOptions,
+        client: createShopClient(standaloneCalls),
         canOpenShop: () => false,
       },
     });
 
-    await expect(standaloneGateway.commerce.purchase({
-      productId: 'REMOVE_ADS',
-      source: 'shop',
+    await expect(standaloneGateway.commerce?.requestPurchase({
+      ...request,
       idempotencyKey: 'purchase-standalone',
-    })).resolves.toEqual({ status: 'failed', entitlementIds: [] });
+    })).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'CONFIGURATION_REQUIRED', storeCode: 'VERSE8_SHOP_UNAVAILABLE' },
+    });
 
+    const throwingCalls: unknown[] = [];
     const throwingAvailabilityGateway = createVerse8PlatformGateway({
       authClient: authenticatedClient(),
       vxShop: {
         ...baseOptions,
+        client: createShopClient(throwingCalls),
         canOpenShop() {
           throw new Error('host inspection failed');
         },
       },
     });
 
-    await expect(throwingAvailabilityGateway.commerce.purchase({
-      productId: 'REMOVE_ADS',
-      source: 'shop',
+    // The reconciler turns a provider throw into a failed outcome; no shop opens either way.
+    await expect(throwingAvailabilityGateway.commerce?.requestPurchase({
+      ...request,
       idempotencyKey: 'purchase-host-error',
-    })).resolves.toEqual({ status: 'failed', entitlementIds: [] });
+    })).rejects.toThrow('host inspection failed');
 
+    const missingProductCalls: unknown[] = [];
     const missingProductGateway = createVerse8PlatformGateway({
       authClient: authenticatedClient(),
       vxShop: {
@@ -330,15 +370,22 @@ describe('adapter-verse8', () => {
           type: 'consumable',
           platformProductId: 'missing-product',
         }],
+        client: createShopClient(missingProductCalls),
         canOpenShop: () => true,
       },
     });
 
-    await expect(missingProductGateway.commerce.purchase({
-      productId: 'COINS_100',
+    await expect(missingProductGateway.commerce?.requestPurchase({
+      logicalId: 'COINS_100',
       source: 'shop',
       idempotencyKey: 'purchase-missing',
-    })).resolves.toEqual({ status: 'failed', entitlementIds: [] });
+    })).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'ITEM_UNAVAILABLE', storeCode: 'VERSE8_PRODUCT_NOT_LISTED' },
+    });
+    for (const calls of [standaloneCalls, throwingCalls, missingProductCalls]) {
+      expect(calls).not.toContainEqual(['buyItem', expect.anything()]);
+    }
   });
 
   it('turns rewarded callbacks into evidence candidates without trusting reward values', async () => {

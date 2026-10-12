@@ -4,11 +4,7 @@ import {
   runPlatformGatewayCapabilityConformance,
   type PlatformGatewayCapabilityConformanceFixture,
 } from './capability-conformance';
-import {
-  createUnsupportedCommerceCapabilities,
-  deriveLegacyCommerceCapabilities,
-  type CommerceCapabilities,
-} from './commerce';
+import { createUnsupportedCommerceCapabilities, type CommerceCapabilities } from './commerce';
 import {
   createUnsupportedCapabilities,
   type PlatformCapabilities,
@@ -27,7 +23,7 @@ describe('platform gateway capability conformance', () => {
     '',
     null,
     { unknownFeature: 'available' },
-    { nativeIap: 'ready' },
+    { rewardedAds: 'ready' },
   ])('rejects malformed provider availability %j', async (providerAvailability) => {
     const fixture = createFixture(() => ({
       ...createUnsupportedCapabilities(),
@@ -58,18 +54,18 @@ describe('platform gateway capability conformance', () => {
     const base = createUnsupportedCapabilities();
     const fixture = {
       ...createFixture(() => ({
-        ...base,
-        providerAvailability: { nativeIap: readiness },
+        ...fresh(base),
+        providerAvailability: { rewardedAds: readiness },
       }), {
         update() { readiness = 'temporarily-unavailable'; },
         expectedCapabilities: {
           ...base,
-          providerAvailability: { nativeIap: 'temporarily-unavailable' },
+          providerAvailability: { rewardedAds: 'temporarily-unavailable' },
         },
       }),
       expectedCapabilities: {
         ...base,
-        providerAvailability: { nativeIap: 'configuration-required' as const },
+        providerAvailability: { rewardedAds: 'configuration-required' as const },
       },
     };
     await expect(runPlatformGatewayCapabilityConformance({ fixtures: [fixture] }))
@@ -77,13 +73,13 @@ describe('platform gateway capability conformance', () => {
   });
 
   it('rejects a provider-owned readiness record shared across snapshots', async () => {
-    const readiness = { nativeIap: 'unsupported' as const };
+    const readiness = { rewardedAds: 'unsupported' as const };
     const base = createUnsupportedCapabilities();
     const fixture = {
-      ...createFixture(() => ({ ...base, providerAvailability: readiness })),
+      ...createFixture(() => ({ ...fresh(base), providerAvailability: readiness })),
       expectedCapabilities: {
         ...base,
-        providerAvailability: { nativeIap: 'unsupported' as const },
+        providerAvailability: { rewardedAds: 'unsupported' as const },
       },
     };
     await expect(runPlatformGatewayCapabilityConformance({ fixtures: [fixture] }))
@@ -101,7 +97,7 @@ describe('platform gateway capability conformance', () => {
     ).rejects.toThrow('Platform capability conformance fixture names must not be empty.');
   });
 
-  it('accepts a fresh commerce block that agrees with the legacy flags', async () => {
+  it('accepts a fresh commerce block that matches the expected provider state', async () => {
     const expected = withCommerce(createAvailableCommerce());
     const fixture = createFixture(() => withCommerce(createAvailableCommerce()));
     await expect(runPlatformGatewayCapabilityConformance({
@@ -170,33 +166,27 @@ describe('platform gateway capability conformance', () => {
     })).rejects.toThrow('Platform gateway capability conformance failed: test-gateway.');
   });
 
-  it('rejects legacy flags that disagree with the commerce block', async () => {
-    const fixture = createFixture(() => ({
-      ...withCommerce(createAvailableCommerce()),
-      nativeIap: false,
-    }));
-    await expect(runPlatformGatewayCapabilityConformance({
-      fixtures: [{
-        ...fixture,
-        expectedCapabilities: { ...withCommerce(createAvailableCommerce()), nativeIap: false },
-      }],
-    })).rejects.toThrow('Platform gateway capability conformance failed: test-gateway.');
+  it('requires the commerce block: a snapshot without it fails, never defaults to unsupported', async () => {
+    const withoutBlock = (): PlatformCapabilities => {
+      const snapshot = { ...createUnsupportedCapabilities() };
+      Reflect.deleteProperty(snapshot, 'commerce');
+      return snapshot;
+    };
+    const fixture = createFixture(withoutBlock);
+    await expect(runPlatformGatewayCapabilityConformance({ fixtures: [fixture] }))
+      .rejects.toMatchObject({
+        cause: { message: expect.stringContaining('commerce capabilities are required') },
+      });
   });
 
-  it('rejects a commerce block the fixture does not expect, and the reverse', async () => {
+  it('rejects a commerce block that differs from the one the fixture expects', async () => {
     const present = createFixture(() => withCommerce(createAvailableCommerce()));
     await expect(runPlatformGatewayCapabilityConformance({
       fixtures: [{ ...present, expectedCapabilities: createUnsupportedCapabilities() }],
     })).rejects.toThrow('Platform gateway capability conformance failed: test-gateway.');
     const absent = createFixture(() => createUnsupportedCapabilities());
     await expect(runPlatformGatewayCapabilityConformance({
-      fixtures: [{
-        ...absent,
-        expectedCapabilities: {
-          ...createUnsupportedCapabilities(),
-          commerce: createUnsupportedCommerceCapabilities(),
-        },
-      }],
+      fixtures: [{ ...absent, expectedCapabilities: withCommerce(createAvailableCommerce()) }],
     })).rejects.toThrow('Platform gateway capability conformance failed: test-gateway.');
   });
 });
@@ -223,10 +213,26 @@ function createAvailableCommerce(): CommerceCapabilities {
   };
 }
 
+/** A copy that shares no nested record, as a conforming gateway returns on every read. */
+function fresh(value: PlatformCapabilities): PlatformCapabilities {
+  return {
+    ...value,
+    ...(value.providerAvailability === undefined
+      ? {}
+      : { providerAvailability: { ...value.providerAvailability } }),
+    commerce: {
+      purchase: { ...value.commerce.purchase },
+      catalog: { ...value.commerce.catalog },
+      lifecycle: { ...value.commerce.lifecycle },
+      authority: { ...value.commerce.authority },
+      availability: value.commerce.availability,
+    },
+  };
+}
+
 function withCommerce(commerce: CommerceCapabilities): PlatformCapabilities {
   return {
     ...createUnsupportedCapabilities(),
-    ...deriveLegacyCommerceCapabilities(commerce),
     commerce,
   };
 }
@@ -245,13 +251,13 @@ export async function rejectsEmptyFixtureSet(): Promise<void> {
 
 /**
  * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Exercises fresh boolean snapshots against expected values.
- * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #a1834db Verified that the fixture returns a new object on every read, including optional readiness handling.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f566c58 Verified that the fixture returns a new object on every read, including optional readiness handling.
  * @evidence docs/specs/platform-capability-snapshots.md#provider-transitions Exercises a provider update and the expected post-update snapshot.
  * @evidenceReview docs/specs/platform-capability-snapshots.md#provider-transitions #839c0c8 Verified that the fixture changes cloudSave and the runner rereads it.
  */
 export async function acceptsFreshSnapshotsAndTransitions(): Promise<void> {
   let capabilities = createUnsupportedCapabilities();
-  const fixture = createFixture(() => ({ ...capabilities }), {
+  const fixture = createFixture(() => fresh(capabilities), {
     update() {
       capabilities = {
         ...capabilities,
@@ -271,7 +277,7 @@ export async function acceptsFreshSnapshotsAndTransitions(): Promise<void> {
 
 /**
  * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Rejects a provider that returns the same snapshot object twice.
- * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #a1834db Confirmed the runner rejects object reuse after its attempted mutation, including nested readiness records.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f566c58 Confirmed the runner rejects object reuse after its attempted mutation, including nested readiness records.
  */
 export async function rejectsSharedSnapshot(): Promise<void> {
   const capabilities = Object.freeze(createUnsupportedCapabilities());
@@ -286,7 +292,7 @@ export async function rejectsSharedSnapshot(): Promise<void> {
 
 /**
  * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Ensures the expected state cannot move with a provider-owned snapshot.
- * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #a1834db Compared first and second reads against a detached expectation after mutation.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f566c58 Compared first and second reads against a detached expectation after mutation.
  */
 export async function rejectsAliasedExpectation(): Promise<void> {
   const expected = { ...createUnsupportedCapabilities() };
@@ -294,7 +300,7 @@ export async function rejectsAliasedExpectation(): Promise<void> {
   const fixture = {
     ...createFixture(() => {
       reads += 1;
-      return reads === 1 ? expected : { ...expected };
+      return reads === 1 ? expected : fresh(expected);
     }),
     expectedCapabilities: expected,
   };
@@ -303,14 +309,14 @@ export async function rejectsAliasedExpectation(): Promise<void> {
     runPlatformGatewayCapabilityConformance({ fixtures: [fixture] }),
   ).rejects.toMatchObject({
     cause: {
-      message: expect.stringContaining('capability nativeIap must match the expected provider state'),
+      message: expect.stringContaining('capability nativeAds must match the expected provider state'),
     },
   });
 }
 
 /**
  * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Rejects reuse of a non-adjacent snapshot object.
- * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #a1834db Verified reuse of the first top-level object after a transition remains invalid.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f566c58 Verified reuse of the first top-level object after a transition remains invalid.
  * @evidence docs/specs/platform-capability-snapshots.md#provider-transitions Covers identity reuse after an otherwise valid provider transition.
  * @evidenceReview docs/specs/platform-capability-snapshots.md#provider-transitions #839c0c8 Checked the update changes cloudSave before the third read.
  */
@@ -325,7 +331,7 @@ export async function rejectsEarlierSnapshotAfterTransition(): Promise<void> {
     },
     {
       update() {
-        Object.assign(first, { nativeIap: false, cloudSave: true });
+        Object.assign(first, { cloudSave: true });
       },
       expectedCapabilities: { ...createUnsupportedCapabilities(), cloudSave: true },
     },
@@ -342,11 +348,11 @@ export async function rejectsEarlierSnapshotAfterTransition(): Promise<void> {
 
 /**
  * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Rejects a missing required key and an unknown key.
- * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #a1834db Checked missing and unknown top-level fields against the runner's shape guard.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f566c58 Checked missing and unknown top-level fields against the runner's shape guard.
  */
 export async function rejectsMalformedSnapshots(): Promise<void> {
   const missing = { ...createUnsupportedCapabilities() };
-  Reflect.deleteProperty(missing, 'nativeIap');
+  Reflect.deleteProperty(missing, 'nativeAds');
   const unknown = { ...createUnsupportedCapabilities(), unknownCapability: true };
 
   for (const capabilities of [missing, unknown]) {
@@ -375,17 +381,6 @@ function createFixture(
     identity: {
       async getPlayer() {
         return null;
-      },
-    },
-    commerce: {
-      async getProducts() {
-        return [];
-      },
-      async purchase() {
-        return { status: 'cancelled', entitlementIds: [] };
-      },
-      async getEntitlements() {
-        return [];
       },
     },
     ads: {

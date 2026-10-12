@@ -1,6 +1,11 @@
-import type { CommerceCapabilities, PlatformGateway, ProductInfo } from '@mpgd/platform';
+import type { CommerceCapabilities, PlatformGateway } from '@mpgd/platform';
 import type { CommerceProvider } from '@mpgd/platform/commerce';
 
+import {
+  createTestCommerceProvider,
+  createTestGateway,
+  createTestStorePurchase,
+} from './commerce-test-provider.test.js';
 import {
   createGameServicesClient,
   createGameServicesFetchBackendTransport,
@@ -31,7 +36,8 @@ let rewardEvidenceSchema: string | undefined;
 let rewardDeploymentTarget: string | undefined;
 let rewardPlatformImpressionId: string | undefined;
 const playerId = 'player-game-services';
-const gateway = createMockGateway();
+const provider = createTestCommerceProvider();
+const gateway = createMockGateway(provider);
 const backend = {
   purchases: {
     async verifyPurchase(input) {
@@ -78,6 +84,7 @@ const client = createGameServicesClient({
   target: 'android',
   now: () => '2026-07-03T00:00:00.000Z',
   backend,
+  warn: () => {},
 });
 
 const purchaseKey = createGameServicesIdempotencyKey({
@@ -92,13 +99,40 @@ const purchase = await client.purchase({
   source: 'result',
   idempotencyKey: purchaseKey,
 });
-const duplicatePurchase = await client.purchase({
+const replayedPurchase = await client.purchase({
   productId: 'COINS_100',
   source: 'result',
   idempotencyKey: purchaseKey,
 });
 
 assertEqual(purchase.status, 'granted', 'purchase should be granted after verifier');
+assertEqual(
+  purchase.ledgerEntryId,
+  `purchase-ledger-${purchaseKey}`,
+  'the ledger entry comes from the backend answer',
+);
+assertEqual(
+  replayedPurchase.status,
+  'granted',
+  'a replayed key answers from the reconciler journal',
+);
+assertEqual(provider.purchaseUiOpened, 1, 'a replayed key never reopens the store UI');
+assertEqual(purchaseClaims, 1, 'a replayed key is not verified again');
+
+// A second runtime with a fresh journal replays the key: the backend ledger is the duplicate backstop.
+const freshJournalClient = createGameServicesClient({
+  gateway: createMockGateway(createTestCommerceProvider()),
+  playerId,
+  target: 'android',
+  now: () => '2026-07-03T00:00:00.000Z',
+  backend,
+  warn: () => {},
+});
+const duplicatePurchase = await freshJournalClient.purchase({
+  productId: 'COINS_100',
+  source: 'result',
+  idempotencyKey: purchaseKey,
+});
 assertEqual(
   duplicatePurchase.verification?.alreadyProcessed,
   true,
@@ -143,11 +177,12 @@ const customPurchaseBackend = {
   },
 } satisfies GameServicesBackendApi;
 const customPurchaseClient = createGameServicesClient({
-  gateway: createMockGateway(),
+  gateway: createMockGateway(createTestCommerceProvider()),
   backend: customPurchaseBackend,
   playerId,
   target: 'android',
   deploymentTarget: 'android-staging',
+  warn: () => {},
 });
 const customPurchase = await customPurchaseClient.purchase({
   productId: 'COINS_100',
@@ -171,16 +206,17 @@ const leaderboard = await client.submitLeaderboardScore({
 
 assertEqual(leaderboard.submitted, true, 'leaderboard should be recorded');
 assertEqual(leaderboard.platformSubmitted, true, 'leaderboard should submit to platform first');
-assertEqual(purchaseClaims, 2, 'purchase backend should be called for both attempts');
+assertEqual(purchaseClaims, 2, 'purchase backend should be called for both journals');
 assertEqual(rewardClaims, 1, 'reward backend should be called after platform reward');
 assertEqual(scoreRecords, 1, 'leaderboard backend should be called after platform submit');
 
 const analyticsFailureClient = createGameServicesClient({
-  gateway: createMockGateway(),
+  gateway: createMockGateway(createTestCommerceProvider()),
   playerId,
   target: 'android',
   now: () => '2026-07-03T00:00:00.000Z',
   backend,
+  warn: () => {},
   analytics: {
     track() {
       throw new Error('analytics unavailable');
@@ -200,20 +236,15 @@ assertEqual(
 );
 
 const rejectedEvents: string[] = [];
-const baseRejectedGateway = createMockGateway();
 const rejectedGateway = {
-  ...baseRejectedGateway,
-  commerce: {
-    ...baseRejectedGateway.commerce,
-    async purchase() {
-      return {
-        status: 'cancelled',
-        entitlementIds: [],
-      };
-    },
-  },
+  ...createMockGateway(createTestCommerceProvider({
+    answer: () => ({
+      outcome: 'cancelled',
+      error: { code: 'USER_CANCELLED', retryable: false },
+    }),
+  })),
   ads: {
-    ...baseRejectedGateway.ads,
+    ...createMockGateway().ads,
     async showRewarded() {
       return {
         status: 'skipped',
@@ -228,12 +259,14 @@ const rejectedClient = createGameServicesClient({
   target: 'android',
   now: () => '2026-07-03T00:00:00.000Z',
   backend,
+  warn: () => {},
   analytics: {
     track(event) {
       rejectedEvents.push(event.name);
     },
   },
 });
+const purchaseClaimsBeforeCancelled = purchaseClaims;
 const rejectedPurchase = await rejectedClient.purchase({
   productId: 'COINS_100',
   source: 'result',
@@ -245,36 +278,41 @@ const rejectedReward = await rejectedClient.claimRewardedAd({
 });
 
 assertEqual(rejectedPurchase.status, 'cancelled', 'cancelled purchase should pass through');
+assertEqual(
+  rejectedPurchase.purchase.diagnostic?.code,
+  'USER_CANCELLED',
+  'the cancel keeps the store error code as the diagnostic',
+);
 assertEqual(rejectedReward.status, 'skipped', 'skipped rewarded ad should pass through');
 assertEqual(
   rejectedEvents.join(','),
   'purchase_rejected,rewarded_ad_rejected',
   'non-completed platform flows should emit rejected analytics',
 );
+assertEqual(
+  purchaseClaims,
+  purchaseClaimsBeforeCancelled,
+  'a cancelled purchase is never sent to purchase verification',
+);
 
 const pendingReasons: unknown[] = [];
-const pendingBaseGateway = createMockGateway();
-const pendingGateway = {
-  ...pendingBaseGateway,
-  target: 'android',
-  commerce: {
-    ...pendingBaseGateway.commerce,
-    async purchase() {
-      return {
-        status: 'pending',
-        entitlementIds: [],
-        evidence: { schema: 'platform.pending.v1', payload: { receipt: 'pending' } },
-      };
-    },
-  },
-} satisfies PlatformGateway;
+const pendingProvider = createTestCommerceProvider({
+  answer: (request) => ({
+    outcome: 'purchased',
+    purchase: createTestStorePurchase(request, {
+      state: 'pending',
+      evidence: { schema: 'platform.pending.v1', payload: { receipt: 'pending' } },
+    }),
+  }),
+});
 const purchaseClaimsBeforePending = purchaseClaims;
 const pendingClient = createGameServicesClient({
-  gateway: pendingGateway,
+  gateway: createMockGateway(pendingProvider),
   playerId,
   target: 'android',
   now: () => '2026-07-03T00:00:00.000Z',
   backend,
+  warn: () => {},
   analytics: {
     track(event) {
       pendingReasons.push(event.properties.reason);
@@ -301,10 +339,11 @@ assertEqual(
 
 const pendingServerEvents: string[] = [];
 const pendingServerClient = createGameServicesClient({
-  gateway,
+  gateway: createMockGateway(createTestCommerceProvider()),
   playerId,
   target: 'android',
   now: () => '2026-07-03T00:00:00.000Z',
+  warn: () => {},
   backend: {
     ...backend,
     purchases: {
@@ -357,30 +396,77 @@ assertEqual(
   'pending outcomes should be reported as pending analytics',
 );
 
-let unsupportedPurchaseCalls = 0;
-let unsupportedRewardCalls = 0;
-const purchaseClaimsBeforeUnsupported = purchaseClaims;
-const rewardClaimsBeforeUnsupported = rewardClaims;
-const unsupportedBaseGateway = createMockGateway();
-const unsupportedGateway = {
-  ...unsupportedBaseGateway,
-  target: 'reddit',
-  commerce: {
-    ...unsupportedBaseGateway.commerce,
-    async purchase() {
-      unsupportedPurchaseCalls += 1;
-
-      return {
-        status: 'completed',
-        transactionId: 'unexpected-unsupported-transaction',
-        entitlementIds: [],
-      };
+// A store answer is never a grant: a backend that rejects or cannot answer leaves the purchase ungranted.
+const rejectingProvider = createTestCommerceProvider();
+const rejectingClient = createGameServicesClient({
+  gateway: createMockGateway(rejectingProvider),
+  playerId,
+  target: 'android',
+  warn: () => {},
+  backend: {
+    ...backend,
+    purchases: {
+      async verifyPurchase() {
+        return {
+          verified: false,
+          alreadyProcessed: false,
+          disposition: 'rejected',
+          reason: 'EVIDENCE_INVALID',
+        };
+      },
     },
   },
+});
+const rejectedByBackend = await rejectingClient.purchase({
+  productId: 'COINS_100',
+  source: 'shop',
+  idempotencyKey: 'backend-rejected-purchase',
+});
+assertEqual(
+  rejectedByBackend.status,
+  'rejected',
+  'a completed store answer the backend rejects must not grant',
+);
+assertEqual(rejectedByBackend.ledgerEntryId, undefined, 'a rejected purchase has no ledger entry');
+
+const unreachableClient = createGameServicesClient({
+  gateway: createMockGateway(createTestCommerceProvider()),
+  playerId,
+  target: 'android',
+  warn: () => {},
+  backend: {
+    ...backend,
+    purchases: {
+      async verifyPurchase() {
+        throw new Error('backend unreachable');
+      },
+    },
+  },
+});
+const unreachablePurchase = await unreachableClient.purchase({
+  productId: 'COINS_100',
+  source: 'shop',
+  idempotencyKey: 'unreachable-backend-purchase',
+});
+assertEqual(
+  unreachablePurchase.status,
+  'pending',
+  'a completed store answer without a backend response must not grant',
+);
+
+// A gateway without a commerce provider sells nothing: the purchase is rejected
+// without any store UI, any backend call, or any grant.
+let noProviderRewardCalls = 0;
+const purchaseClaimsBeforeNoProvider = purchaseClaims;
+const rewardClaimsBeforeNoProvider = rewardClaims;
+const noProviderEvents: string[] = [];
+const noProviderGateway = {
+  ...createMockGateway(),
+  target: 'reddit',
   ads: {
-    ...unsupportedBaseGateway.ads,
+    ...createMockGateway().ads,
     async showRewarded() {
-      unsupportedRewardCalls += 1;
+      noProviderRewardCalls += 1;
 
       return {
         status: 'unavailable',
@@ -389,150 +475,79 @@ const unsupportedGateway = {
     },
   },
 } satisfies PlatformGateway;
-const unsupportedClient = createGameServicesClient({
-  gateway: unsupportedGateway,
+const noProviderClient = createGameServicesClient({
+  gateway: noProviderGateway,
   playerId,
   target: 'reddit',
   now: () => '2026-07-03T00:00:00.000Z',
   backend,
+  analytics: {
+    track(event) {
+      noProviderEvents.push(`${event.name}:${String(event.properties.reason)}`);
+    },
+  },
 });
-const unsupportedPurchase = await unsupportedClient.purchase({
+const noProviderPurchase = await noProviderClient.purchase({
   productId: 'COINS_100',
   source: 'result',
-  idempotencyKey: 'unsupported-purchase',
+  idempotencyKey: 'no-provider-purchase',
 });
-const unsupportedReward = await unsupportedClient.claimRewardedAd({
+const noProviderReward = await noProviderClient.claimRewardedAd({
   placementId: 'CONTINUE_AFTER_FAIL',
-  idempotencyKey: 'unsupported-reward',
+  idempotencyKey: 'no-provider-reward',
 });
 
-assertEqual(unsupportedPurchase.status, 'rejected', 'unsupported target purchase should reject');
+assertEqual(noProviderPurchase.status, 'rejected', 'a gateway without commerce rejects purchases');
 assertEqual(
-  unsupportedPurchase.purchase.status,
+  noProviderPurchase.purchase.status,
   'failed',
-  'unsupported target purchase should return a failed platform result without a platform call',
+  'a gateway without commerce returns a failed platform result without a platform call',
 );
 assertEqual(
-  unsupportedReward.status,
-  'unavailable',
-  'unsupported provider should remain unavailable',
-);
-assertEqual(
-  unsupportedReward.reward.status,
-  'unavailable',
-  'a supported build target uses the adapter availability result',
-);
-assertEqual(
-  unsupportedPurchaseCalls,
+  noProviderPurchase.purchase.entitlementIds.length,
   0,
-  'unsupported target purchase should not call platform commerce',
+  'a gateway without commerce grants no entitlement',
 );
 assertEqual(
-  unsupportedRewardCalls,
-  1,
-  'reward eligibility is selected by the provider rather than a target allow-list',
+  noProviderEvents[0],
+  'purchase_rejected:commerce_unavailable',
+  'the rejection names commerce_unavailable',
 );
+assertEqual(
+  noProviderClient.commerceReconciler,
+  undefined,
+  'a gateway without a commerce provider has no reconciler',
+);
+assertEqual(
+  noProviderReward.status,
+  'unavailable',
+  'rewarded ads stay selected by the ad provider rather than by commerce',
+);
+assertEqual(noProviderRewardCalls, 1, 'the ad provider answers for the ad');
 assertEqual(
   purchaseClaims,
-  purchaseClaimsBeforeUnsupported,
-  'unsupported target purchase should not call purchase backend',
+  purchaseClaimsBeforeNoProvider,
+  'a purchase without a provider should not call purchase backend',
 );
 assertEqual(
   rewardClaims,
-  rewardClaimsBeforeUnsupported,
-  'unsupported target rewarded ad should not call ad reward backend',
+  rewardClaimsBeforeNoProvider,
+  'an unavailable rewarded ad should not call ad reward backend',
 );
 
-let microsoftStoreVerificationCalls = 0;
-const microsoftStoreBaseGateway = createMockGateway();
-const microsoftStoreGateway = {
-  ...microsoftStoreBaseGateway,
-  target: 'microsoft-store',
-  commerce: {
-    ...microsoftStoreBaseGateway.commerce,
-    async purchase() {
-      return {
-        status: 'completed',
-        transactionId: 'microsoft-store-ledger',
-        authoritativeGrant: { ledgerEntryId: 'microsoft-store-ledger' },
-        entitlementIds: [],
-        evidence: {
-          schema: 'mpgd.microsoft-store.digital-goods.v1',
-          payload: {
-            itemId: 'coins_100',
-            purchaseToken: 'coins_100',
-          },
-        },
-      } as const;
-    },
-  },
-} satisfies PlatformGateway;
-const microsoftStoreClient = createGameServicesClient({
-  gateway: microsoftStoreGateway,
-  playerId,
-  target: 'microsoft-store',
-  backend: {
-    ...backend,
-    purchases: {
-      async verifyPurchase() {
-        microsoftStoreVerificationCalls += 1;
-        throw new Error('authoritative Store completion must not be reverified');
-      },
-    },
-  },
-});
-const microsoftStorePurchase = await microsoftStoreClient.purchase({
-  productId: 'COINS_100',
-  source: 'shop',
-  idempotencyKey: 'microsoft-store-purchase',
-});
-const microsoftStoreLeaderboard = await microsoftStoreClient.submitLeaderboardScore({
-  leaderboardId: 'daily',
-  score: 987,
-  runId: 'microsoft-store-run',
-  submittedAt: '2026-07-03T00:00:04.000Z',
-});
-
-assertEqual(
-  microsoftStorePurchase.status,
-  'granted',
-  'Microsoft Store should use the authoritative purchase client',
-);
-assertEqual(
-  microsoftStorePurchase.ledgerEntryId,
-  'microsoft-store-ledger',
-  'Microsoft Store should preserve the authority ledger ID',
-);
-assertEqual(
-  microsoftStoreVerificationCalls,
-  0,
-  'Microsoft Store authority completions should not be sent through verification twice',
-);
-assertEqual(
-  microsoftStoreLeaderboard.submitted,
-  true,
-  'Microsoft Store should use the generic leaderboard flow',
-);
-assertEqual(
-  microsoftStoreLeaderboard.platformSubmitted,
-  true,
-  'Microsoft Store should submit the score through its browser gateway',
-);
-
-// Commerce v2: a gateway with a commerce v2 provider purchases through the
+// Commerce: a gateway with a commerce provider purchases through the
 // reconciler (`createCommerceReconciler`). Settlement is declared by the
 // provider's capability block, and a settled purchase is still confirmed
 // through one verify request the ledger answers from its existing entry (RFC
-// vector `adapter-settled`); the v1 target-name rule applies only to gateways
-// without a v2 provider.
-interface MockCommerceV2 extends CommerceProvider {
+// vector `adapter-settled`).
+interface MockCommerce extends CommerceProvider {
   readonly purchaseUiOpened: number;
 }
 
-function createMockCommerceV2(
+function createMockCommerce(
   evidence: CommerceCapabilities['authority']['evidence'],
   options: { readonly getCapabilities?: () => Promise<CommerceCapabilities> } = {},
-): MockCommerceV2 {
+): MockCommerce {
   let purchaseUiOpened = 0;
   const capabilities = async (): Promise<CommerceCapabilities> => ({
     purchase: { consumable: true, durable: false, subscription: false, quantity: false },
@@ -568,8 +583,7 @@ function createMockCommerceV2(
     },
     async requestPurchase(request) {
       purchaseUiOpened += 1;
-      // The store answered synchronously: the v1 wrapper of this provider
-      // reports the Store purchase token as transactionId.
+      // The store answered synchronously.
       return {
         outcome: 'purchased',
         purchase: {
@@ -600,29 +614,9 @@ function createMockCommerceV2(
 
 function createSettledCommerceGateway(
   target: PlatformGateway['target'],
-  provider: CommerceProvider | undefined,
+  commerce: CommerceProvider,
 ): PlatformGateway {
-  const base = createMockGateway();
-  return {
-    ...base,
-    target,
-    ...(provider === undefined ? {} : { commerceV2: provider }),
-    commerce: {
-      ...base.commerce,
-      async purchase() {
-        return {
-          status: 'completed',
-          transactionId: 'coins_100',
-          authoritativeGrant: { ledgerEntryId: 'ledger-v2', alreadyProcessed: true },
-          entitlementIds: [],
-          evidence: {
-            schema: 'mpgd.microsoft-store.digital-goods.v1',
-            payload: { itemId: 'coins_100', purchaseToken: 'coins_100' },
-          },
-        } as const;
-      },
-    },
-  };
+  return createTestGateway({ target, playerId, provider: commerce });
 }
 
 /** A backend whose verify answers a finalized grant, so a server-finish record ends `finished` in one call. */
@@ -648,7 +642,7 @@ function createVerifyingBackend(
 const adapterSettledRequests: VerifyPurchaseRequest[] = [];
 const adapterSettledEvents: string[] = [];
 const adapterSettledStates: string[] = [];
-const adapterSettledProvider = createMockCommerceV2('adapter-settled');
+const adapterSettledProvider = createMockCommerce('adapter-settled');
 const adapterSettledClient = createGameServicesClient({
   gateway: createSettledCommerceGateway('microsoft-store', adapterSettledProvider),
   playerId,
@@ -677,7 +671,7 @@ const adapterSettledPurchase = await adapterSettledClient.purchase({
 assertEqual(
   adapterSettledPurchase.status,
   'granted',
-  'a commerce v2 adapter-settled completion is granted once the backend confirms the ledger entry',
+  'an adapter-settled completion is granted once the backend confirms the ledger entry',
 );
 assertEqual(
   adapterSettledPurchase.ledgerEntryId,
@@ -740,7 +734,7 @@ assertEqual(adapterSettledRequests.length, 1, 'a replayed key is not verified ag
 
 let clientTokenVerificationCalls = 0;
 const clientTokenClient = createGameServicesClient({
-  gateway: createSettledCommerceGateway('microsoft-store', createMockCommerceV2('client-token')),
+  gateway: createSettledCommerceGateway('microsoft-store', createMockCommerce('client-token')),
   playerId,
   target: 'microsoft-store',
   warn: () => {},
@@ -767,17 +761,17 @@ assertEqual(
 assertEqual(
   clientTokenVerificationCalls,
   1,
-  'a v2 provider without adapter settlement must still be verified, even on the microsoft-store target',
+  'a provider without adapter settlement must still be verified, even on the microsoft-store target',
 );
 
 let capabilityReads = 0;
 const cachedCapabilityClient = createGameServicesClient({
   gateway: createSettledCommerceGateway(
     'microsoft-store',
-    createMockCommerceV2('adapter-settled', {
+    createMockCommerce('adapter-settled', {
       async getCapabilities() {
         capabilityReads += 1;
-        return createMockCommerceV2('adapter-settled').getCapabilities();
+        return createMockCommerce('adapter-settled').getCapabilities();
       },
     }),
   ),
@@ -805,13 +799,13 @@ let retriedVerificationCalls = 0;
 const retriedCapabilityClient = createGameServicesClient({
   gateway: createSettledCommerceGateway(
     'microsoft-store',
-    createMockCommerceV2('adapter-settled', {
+    createMockCommerce('adapter-settled', {
       async getCapabilities() {
         retriedCapabilityReads += 1;
         if (retriedCapabilityReads === 1) {
           throw new Error('capability probe failed once');
         }
-        return createMockCommerceV2('adapter-settled').getCapabilities();
+        return createMockCommerce('adapter-settled').getCapabilities();
       },
     }),
   ),
@@ -851,7 +845,7 @@ assertEqual(
 assertEqual(retriedVerificationCalls, 2, 'every checkout is verified');
 
 let unreadableCapabilityVerificationCalls = 0;
-const unreadableCapabilityProvider = createMockCommerceV2('adapter-settled', {
+const unreadableCapabilityProvider = createMockCommerce('adapter-settled', {
   async getCapabilities() {
     throw new Error('capability probe failed');
   },
@@ -874,7 +868,7 @@ const unreadableCapabilityPurchase = await unreadableCapabilityClient.purchase({
 assertEqual(
   unreadableCapabilityPurchase.status,
   'failed',
-  'a v2 provider whose capabilities cannot be read fails closed before the store UI opens',
+  'a provider whose capabilities cannot be read fails closed before the store UI opens',
 );
 assertEqual(
   unreadableCapabilityPurchase.purchase.diagnostic?.code,
@@ -884,65 +878,12 @@ assertEqual(
 assertEqual(unreadableCapabilityProvider.purchaseUiOpened, 0, 'no store UI opened');
 assertEqual(unreadableCapabilityVerificationCalls, 0, 'nothing was verified');
 
-let wrappedLegacyVerificationCalls = 0;
-const wrappedLegacyClient = createGameServicesClient({
-  gateway: createSettledCommerceGateway('microsoft-store', undefined),
-  playerId,
-  target: 'microsoft-store',
-  backend: {
-    ...backend,
-    purchases: {
-      async verifyPurchase(input) {
-        wrappedLegacyVerificationCalls += 1;
-        return {
-          verified: true,
-          ledgerEntryId: `verified-${input.platformTransactionId}`,
-          alreadyProcessed: false,
-        };
-      },
-    },
-  },
-});
-const wrappedLegacyPurchase = await wrappedLegacyClient.purchase({
-  productId: 'COINS_100',
-  source: 'shop',
-  idempotencyKey: 'wrapped-legacy-purchase',
-});
-
-assertEqual(
-  wrappedLegacyVerificationCalls,
-  1,
-  'without commerceV2 the legacy target-name rule applies, which does not match a token transaction id',
-);
-assertEqual(
-  wrappedLegacyPurchase.status,
-  'granted',
-  'the legacy path still grants through the backend verifier',
-);
-assertEqual(
-  wrappedLegacyClient.commerceReconciler,
-  undefined,
-  'a gateway without a v2 provider has no reconciler',
-);
-
-let verse8PurchaseCalls = 0;
 let verse8RewardCalls = 0;
 let verse8LeaderboardCalls = 0;
 const verse8BaseGateway = createMockGateway();
 const verse8Gateway = {
   ...verse8BaseGateway,
   target: 'verse8',
-  commerce: {
-    ...verse8BaseGateway.commerce,
-    async purchase() {
-      verse8PurchaseCalls += 1;
-
-      return {
-        status: 'pending',
-        entitlementIds: [],
-      };
-    },
-  },
   ads: {
     ...verse8BaseGateway.ads,
     async showRewarded() {
@@ -995,10 +936,13 @@ const verse8Leaderboard = await verse8Client.submitLeaderboardScore({
   submittedAt: '2026-07-03T00:00:00.000Z',
 });
 
-assertEqual(verse8Purchase.status, 'pending', 'Verse8 purchases should await Agent8 server events');
+assertEqual(
+  verse8Purchase.status,
+  'rejected',
+  'a Verse8 gateway without a commerce provider (no VXShop) rejects purchases',
+);
 assertEqual(verse8Reward.status, 'granted', 'Verse8 rewarded ads should reach the backend');
 assertEqual(verse8Leaderboard.submitted, false, 'Verse8 leaderboards should stay unsupported');
-assertEqual(verse8PurchaseCalls, 1, 'Verse8 purchases should open platform commerce');
 assertEqual(
   purchaseClaims,
   purchaseClaimsBeforeVerse8,
@@ -1058,42 +1002,6 @@ assertEqual(
   rewardClaims,
   rewardClaimsBeforeUntrustedVerse8,
   'Unknown evidence schemas should never reach the backend claim',
-);
-
-const verse8CompletedGateway = {
-  ...verse8Gateway,
-  commerce: {
-    ...verse8Gateway.commerce,
-    async purchase() {
-      return {
-        status: 'completed',
-        transactionId: 'untrusted-client-transaction',
-        entitlementIds: ['untrusted-entitlement'],
-      } as const;
-    },
-  },
-} satisfies PlatformGateway;
-const verse8CompletedClient = createGameServicesClient({
-  gateway: verse8CompletedGateway,
-  playerId,
-  target: 'verse8',
-  backend,
-});
-const verse8CompletedPurchase = await verse8CompletedClient.purchase({
-  productId: 'REMOVE_ADS',
-  source: 'shop',
-  idempotencyKey: 'verse8-untrusted-completion',
-});
-
-assertEqual(
-  verse8CompletedPurchase.status,
-  'rejected',
-  'Verse8 client-side completion should never grant a purchase',
-);
-assertEqual(
-  purchaseClaims,
-  purchaseClaimsBeforeVerse8,
-  'Verse8 client-side completion should not reach the external verifier',
 );
 
 const transportCalls: string[] = [];
@@ -1209,102 +1117,11 @@ assertEqual(
 
 console.log('GameServices client vertical slice smoke test passed.');
 
-function createMockGateway(): PlatformGateway {
-  const product = {
-    id: 'COINS_100',
-    type: 'consumable',
-    title: '100 Coins',
-    description: 'Adds 100 coins.',
-    price: {
-      formatted: '$0.99',
-      currencyCode: 'USD',
-    },
-  } as const satisfies ProductInfo;
-
-  return {
-    target: 'android',
-    async getCapabilities() {
-      return {
-        nativeIap: true,
-        nativeAds: true,
-        rewardedAds: true,
-        interstitialAds: true,
-        nativeLeaderboard: true,
-        remoteLeaderboard: false,
-        achievements: false,
-        cloudSave: false,
-        socialShare: false,
-        haptics: false,
-        localizedContent: true,
-      };
-    },
-    identity: {
-      async getPlayer() {
-        return {
-          playerId,
-        };
-      },
-    },
-    commerce: {
-      async getProducts() {
-        return [product];
-      },
-      async purchase(input) {
-        return {
-          status: 'completed',
-          transactionId: `txn-${input.productId}-${input.idempotencyKey}`,
-          entitlementIds: [],
-          evidence: {
-            schema: 'test.purchase.v1',
-            payload: {
-              signedTransaction: 'test-signed-transaction',
-            },
-          },
-        };
-      },
-      async getEntitlements() {
-        return [];
-      },
-    },
-    ads: {
-      async preload() {},
-      async showRewarded(input) {
-        return {
-          status: 'completed',
-          rewardGranted: true,
-          ledgerEntryId: `impression-${input.idempotencyKey}`,
-          evidence: {
-            schema: 'test.reward.v1',
-            payload: {
-              signedCallback: 'test-signed-callback',
-            },
-          },
-        };
-      },
-    },
-    leaderboard: {
-      async submitScore() {
-        return {
-          submitted: true,
-        };
-      },
-      async open() {},
-    },
-    lifecycle: {
-      onPause() {
-        return () => {};
-      },
-      onResume() {
-        return () => {};
-      },
-    },
-    storage: {
-      async load() {
-        return null;
-      },
-      async save() {},
-    },
-  };
+function createMockGateway(commerce?: CommerceProvider): PlatformGateway {
+  return createTestGateway({
+    playerId,
+    ...(commerce === undefined ? {} : { provider: commerce }),
+  });
 }
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {

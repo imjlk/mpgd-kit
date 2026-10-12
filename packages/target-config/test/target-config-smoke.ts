@@ -1,6 +1,7 @@
 import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
-import type { PlatformGateway } from '@mpgd/platform';
+import { createUnsupportedCapabilities, type PlatformGateway } from '@mpgd/platform';
 
+import { createCommerceBlock, createRecordingCommerceProvider } from './commerce-fixtures';
 import {
   createEffectiveTargetConfig,
   getEffectiveAdPlacementConfig,
@@ -347,7 +348,12 @@ assertDeepEqual(
     },
   ],
 );
-assertEqual(webCapabilities.nativeIap, false);
+assertEqual(webCapabilities.commerce.availability, 'unsupported');
+assertEqual(webCapabilities.commerce.purchase.consumable, false);
+assertEqual(webCapabilities.commerce.purchase.durable, false);
+assertEqual(webCapabilities.commerce.catalog.products, false);
+assertEqual('nativeIap' in webCapabilities, false);
+assertEqual('subscriptionIap' in webCapabilities, false);
 assertEqual(webCapabilities.nativeAds, false);
 assertEqual(webCapabilities.rewardedAds, false);
 assertEqual(webCapabilities.interstitialAds, false);
@@ -372,18 +378,24 @@ assertEqual(
   ).nativeAds,
   false,
 );
-assertDeepEqual(await webGateway.commerce.getProducts(), []);
+const webCommerce = webGateway.commerce;
+if (webCommerce === undefined) {
+  throw new Error('A gateway with a commerce provider keeps its provider behind the target mask.');
+}
+assertDeepEqual(await webCommerce.fetchProducts({}), []);
 assertDeepEqual(
-  await webGateway.commerce.purchase({
-    productId: 'COINS_100',
+  await webCommerce.requestPurchase({
+    logicalId: 'COINS_100',
     source: 'shop',
     idempotencyKey: 'web-purchase',
   }),
   {
-    status: 'cancelled',
-    entitlementIds: [],
+    outcome: 'failed',
+    error: { code: 'ITEM_UNAVAILABLE', retryable: false },
   },
 );
+// The masked provider reports the same commerce block as the masked snapshot.
+assertDeepEqual(await webCommerce.getCapabilities(), webCapabilities.commerce);
 assertDeepEqual(
   await webGateway.ads.showRewarded({
     placementId: 'CONTINUE_AFTER_FAIL',
@@ -952,8 +964,8 @@ assertDeepEqual(
 );
 assertEqual(delegatedCalls.length, delegatedCallsBeforeUnavailableLeaderboard);
 
-await androidGateway.commerce.purchase({
-  productId: 'COINS_100',
+await androidGateway.commerce?.requestPurchase({
+  logicalId: 'COINS_100',
   source: 'shop',
   idempotencyKey: 'android-purchase',
 });
@@ -1012,7 +1024,7 @@ function createGateway(): PlatformGateway {
     target: 'browser',
     async getCapabilities() {
       return {
-        nativeIap: true,
+        ...createUnsupportedCapabilities(),
         nativeAds: true,
         rewardedAds: true,
         interstitialAds: true,
@@ -1023,6 +1035,7 @@ function createGateway(): PlatformGateway {
         socialShare: true,
         haptics: true,
         localizedContent: true,
+        commerce: createCommerceBlock(),
       };
     },
     identity: {
@@ -1045,21 +1058,14 @@ function createGateway(): PlatformGateway {
         };
       },
     },
-    commerce: {
-      async getProducts() {
-        return [];
+    commerce: createRecordingCommerceProvider({
+      // The calls a game makes through the masked provider are what this smoke tracks.
+      onCall: (name) => {
+        if (name.startsWith('requestPurchase:')) {
+          delegatedCalls.push('purchase');
+        }
       },
-      async purchase() {
-        delegatedCalls.push('purchase');
-        return {
-          status: 'completed',
-          entitlementIds: [],
-        };
-      },
-      async getEntitlements() {
-        return [];
-      },
-    },
+    }),
     ads: {
       async preload(input) {
         delegatedCalls.push(`preload:${input.placementId}`);

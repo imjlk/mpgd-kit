@@ -1,15 +1,24 @@
 import type { BridgeMethod, BridgeRequest, BridgeResponse } from '@mpgd/bridge';
 import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
-import type { PlatformCapabilities, PlatformGateway } from '@mpgd/platform';
+import {
+  createUnsupportedCommerceCapabilities,
+  type CommerceCapabilities,
+  type PlatformCapabilities,
+  type PlatformGateway,
+} from '@mpgd/platform';
+import type { CommerceProvider } from '@mpgd/platform/commerce';
 
 import { createAitPlatformGateway } from '../../adapters/ait/src/index';
 import { createBrowserPlatformGateway } from '../../adapters/browser/src/index';
 import {
-  createMicrosoftStoreCommerceAdapter,
+  createMicrosoftStoreCommerceProvider,
   microsoftStoreDigitalGoodsEvidenceSchema,
-  withMicrosoftStoreCommerceAdapter,
+  withMicrosoftStoreCommerceProvider,
 } from '../../adapters/browser/src/microsoft-store';
-import { createCapacitorPlatformGateway } from '../../adapters/capacitor/src/index';
+import {
+  createCapacitorPlatformGateway,
+  createCommerceServiceProvider,
+} from '../../adapters/capacitor/src/index';
 import { createDevvitPlatformGateway } from '../../adapters/devvit/src/index';
 import { createVerse8PlatformGateway } from '../../adapters/verse8/src/index';
 import {
@@ -44,9 +53,17 @@ const adPlacementTypes = new Map<string, AdPlacementType>(
 );
 type AdapterBridgeTarget = 'android' | 'ios' | 'ait' | 'reddit';
 type CapacitorBridgeTarget = Extract<AdapterBridgeTarget, 'android' | 'ios'>;
-const enabledActionMethods = [
+// Capacitor serves the commerce provider in process, so its purchase never
+// reaches the native bridge; Apps in Toss sends every commerce.v2 method there.
+const capacitorEnabledActionMethods = [
   'runtime.getCapabilities',
-  'commerce.purchase',
+  'ads.showRewarded',
+  'runtime.getCapabilities',
+  'leaderboard.submitScore',
+] as const;
+const aitEnabledActionMethods = [
+  'runtime.getCapabilities',
+  'commerce.v2.requestPurchase',
   'ads.showRewarded',
   'runtime.getCapabilities',
   'leaderboard.submitScore',
@@ -80,17 +97,15 @@ async function verifyBrowserAdapter(): Promise<void> {
     false,
     'browser rewarded placement should be disabled',
   );
+  assertEqual(
+    gateway.commerce,
+    undefined,
+    'browser sells nothing, so the gateway has no commerce provider to purchase through',
+  );
   assertDeepEqual(
-    await gateway.commerce.purchase({
-      productId: 'COINS_100',
-      source: 'shop',
-      idempotencyKey: 'browser-parity-purchase',
-    }),
-    {
-      status: 'cancelled',
-      entitlementIds: [],
-    },
-    'browser purchase should be target-disabled',
+    runtime.capabilities.commerce,
+    createUnsupportedCommerceCapabilities(),
+    'browser should report the unsupported commerce block',
   );
 }
 
@@ -111,7 +126,7 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
     },
   });
   const createCommerce = (authorityResult: 'completed' | 'failed') => {
-    return createMicrosoftStoreCommerceAdapter({
+    return createMicrosoftStoreCommerceProvider({
       getRecoveryScope: () => 'smoke-player',
       products: [
         {
@@ -149,9 +164,6 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
                 transactionId: 'microsoft-store-ledger',
               };
         },
-        async getEntitlements() {
-          return [];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -181,7 +193,7 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
   };
   const gateway = wrapGateway(
     'microsoft-store',
-    withMicrosoftStoreCommerceAdapter(storeBase, createCommerce('completed'), {
+    withMicrosoftStoreCommerceProvider(storeBase, createCommerce('completed'), {
       remoteLeaderboard: true,
     }),
     authoritativeEffectiveConfig,
@@ -215,28 +227,37 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
     false,
     'microsoft-store rewarded placement should be disabled',
   );
-  await gateway.commerce.getProducts();
-  assertDeepEqual(
-    await gateway.commerce.purchase({
-      productId: 'COINS_100',
-      source: 'shop',
-      idempotencyKey: 'microsoft-store-parity-purchase',
-    }),
-    {
-      status: 'completed',
-      transactionId: 'microsoft-store-ledger',
-      authoritativeGrant: { ledgerEntryId: 'microsoft-store-ledger' },
-      entitlementIds: [],
-      evidence: {
+  await gateway.commerce?.fetchProducts({ type: 'all' });
+  const settled = await gateway.commerce?.requestPurchase({
+    logicalId: 'COINS_100',
+    source: 'shop',
+    idempotencyKey: 'microsoft-store-parity-purchase',
+  });
+  assertEqual(
+    settled?.outcome,
+    'purchased',
+    'microsoft-store purchase should report the authority-settled checkout',
+  );
+  if (settled?.outcome === 'purchased') {
+    // The provider only points at the authority's ledger entry; the
+    // reconciler still verifies it through the backend before any grant.
+    assertDeepEqual(
+      settled.purchase.evidence,
+      {
         schema: microsoftStoreDigitalGoodsEvidenceSchema,
         payload: { itemId: 'coins_100', purchaseToken: 'coins_100' },
       },
-    },
-    'microsoft-store purchase should require authoritative completion',
-  );
+      'microsoft-store purchase should carry the Digital Goods evidence',
+    );
+    assertEqual(
+      settled.purchase.settlement?.ledgerEntryId,
+      'microsoft-store-ledger',
+      'microsoft-store purchase should point at the authority ledger entry',
+    );
+  }
   const rejectedGateway = wrapGateway(
     'microsoft-store',
-    withMicrosoftStoreCommerceAdapter(storeBase, createCommerce('failed'), {
+    withMicrosoftStoreCommerceProvider(storeBase, createCommerce('failed'), {
       remoteLeaderboard: true,
     }),
     authoritativeEffectiveConfig,
@@ -244,23 +265,15 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
   // Microsoft currently returns the add-on product ID as purchaseToken, so both independent
   // authority scenarios intentionally exercise the same token without treating it as a
   // transaction identity.
-  await rejectedGateway.commerce.getProducts();
-  assertDeepEqual(
-    await rejectedGateway.commerce.purchase({
-      productId: 'COINS_100',
-      source: 'shop',
-      idempotencyKey: 'microsoft-store-rejected-purchase',
-    }),
-    {
-      status: 'failed',
-      entitlementIds: [],
-      evidence: {
-        schema: microsoftStoreDigitalGoodsEvidenceSchema,
-        payload: { itemId: 'coins_100', purchaseToken: 'coins_100' },
-      },
-    },
-    'microsoft-store purchase must fail closed when authority does not grant',
-  );
+  await rejectedGateway.commerce?.fetchProducts({ type: 'all' });
+  const rejected = await rejectedGateway.commerce?.requestPurchase({
+    logicalId: 'COINS_100',
+    source: 'shop',
+    idempotencyKey: 'microsoft-store-rejected-purchase',
+  });
+  if (rejected?.outcome === 'purchased' && rejected.purchase.settlement !== undefined) {
+    throw new Error('microsoft-store purchase must fail closed when authority does not grant.');
+  }
 }
 
 async function verifyVerse8Adapter(): Promise<void> {
@@ -294,9 +307,14 @@ async function verifyVerse8Adapter(): Promise<void> {
     'verse8 products should be enabled in the target catalog',
   );
   assertEqual(
-    (await gateway.getCapabilities()).nativeIap,
-    false,
-    'verse8 IAP capability should remain unavailable until VXShop is configured',
+    gateway.commerce,
+    undefined,
+    'verse8 has no commerce provider until VXShop is configured',
+  );
+  assertDeepEqual(
+    (await gateway.getCapabilities()).commerce,
+    createUnsupportedCommerceCapabilities(),
+    'verse8 commerce capability should remain unsupported until VXShop is configured',
   );
   assertEqual(
     getEffectiveAdPlacementConfig(effectiveConfig, 'CONTINUE_AFTER_FAIL')?.enabled,
@@ -316,6 +334,7 @@ async function verifyVerse8Adapter(): Promise<void> {
 
 async function verifyCapacitorAdapter(target: CapacitorBridgeTarget): Promise<void> {
   const bridge = createRecordingBridge(target);
+  const store = createRecordingCommerceProvider(`${target}-store`);
   const gateway = wrapGateway(
     target,
     createCapacitorPlatformGateway({
@@ -324,20 +343,7 @@ async function verifyCapacitorAdapter(target: CapacitorBridgeTarget): Promise<vo
       buildId: `build-${target}`,
       bridge,
       providers: [
-        {
-          id: 'store',
-          bridge,
-          features: ['nativeIap'],
-          methods: [
-            'commerce.getProducts',
-            'commerce.purchase',
-            'commerce.restore',
-            'commerce.getEntitlements',
-          ],
-          async getAvailability() {
-            return { nativeIap: 'available' };
-          },
-        },
+        createCommerceServiceProvider({ id: 'store', commerce: store.provider }),
         {
           id: 'rewarded',
           bridge,
@@ -374,8 +380,8 @@ async function verifyCapacitorAdapter(target: CapacitorBridgeTarget): Promise<vo
     `${target} rewarded placement should be enabled`,
   );
 
-  await gateway.commerce.purchase({
-    productId: 'COINS_100',
+  await gateway.commerce?.requestPurchase({
+    logicalId: 'COINS_100',
     source: 'shop',
     idempotencyKey: `${target}-parity-purchase`,
   });
@@ -392,8 +398,13 @@ async function verifyCapacitorAdapter(target: CapacitorBridgeTarget): Promise<vo
 
   assertDeepEqual(
     bridge.methods.slice(1),
-    enabledActionMethods,
+    capacitorEnabledActionMethods,
     `${target} adapter should delegate enabled actions`,
+  );
+  assertDeepEqual(
+    store.calls,
+    ['requestPurchase'],
+    `${target} enabled purchase should reach the commerce provider`,
   );
 }
 
@@ -423,14 +434,14 @@ async function verifyAitAdapter(): Promise<void> {
   );
 
   assertDeepEqual(
-    await gateway.commerce.purchase({
-      productId: 'COINS_100',
+    await gateway.commerce?.requestPurchase({
+      logicalId: 'COINS_100',
       source: 'shop',
       idempotencyKey: 'ait-disabled-purchase',
     }),
     {
-      status: 'cancelled',
-      entitlementIds: [],
+      outcome: 'failed',
+      error: { code: 'ITEM_UNAVAILABLE', retryable: false },
     },
     'ait purchase should fail closed without authoritative game services',
   );
@@ -505,8 +516,8 @@ async function verifyAitAdapter(): Promise<void> {
     'authoritative ait rewarded placement should be enabled',
   );
 
-  await authoritativeGateway.commerce.purchase({
-    productId: 'COINS_100',
+  await authoritativeGateway.commerce?.requestPurchase({
+    logicalId: 'COINS_100',
     source: 'shop',
     idempotencyKey: 'ait-authoritative-purchase',
   });
@@ -523,7 +534,7 @@ async function verifyAitAdapter(): Promise<void> {
 
   assertDeepEqual(
     authoritativeBridge.methods.slice(1),
-    enabledActionMethods,
+    aitEnabledActionMethods,
     'authoritative ait adapter should delegate enabled actions',
   );
 }
@@ -622,11 +633,62 @@ function wrapGateway(
   });
 }
 
+/** A one-time store that is ready to sell: the block a real provider reports. */
+function sellingCommerce(): CommerceCapabilities {
+  return {
+    purchase: { consumable: true, durable: true, subscription: false, quantity: false },
+    catalog: { products: true, offers: false, localizedPrice: false },
+    lifecycle: {
+      availablePurchases: true,
+      pending: true,
+      restore: false,
+      events: true,
+      finish: 'server',
+    },
+    authority: { evidence: 'client-token', accountBinding: 'required' },
+    availability: 'available',
+  };
+}
+
+/** A provider that records the calls reaching it and never grants. */
+function createRecordingCommerceProvider(store: string): {
+  readonly provider: CommerceProvider;
+  readonly calls: string[];
+} {
+  const calls: string[] = [];
+  return {
+    calls,
+    provider: {
+      store,
+      async getCapabilities() {
+        return sellingCommerce();
+      },
+      async fetchProducts() {
+        return [];
+      },
+      async requestPurchase() {
+        calls.push('requestPurchase');
+        return { outcome: 'launched' };
+      },
+      async getAvailablePurchases() {
+        return [];
+      },
+      subscribe() {
+        return () => {};
+      },
+    },
+  };
+}
+
 function createRecordingBridge(target: AdapterBridgeTarget) {
   const methods: BridgeMethod[] = [];
 
   return {
     methods,
+    // Apps in Toss offers its commerce provider when the host bridge has the
+    // commerce event channel; the other targets get theirs from a registered
+    // provider (Capacitor) or none (Devvit).
+    ...(target === 'ait' ? { commerceV2: { subscribe: () => () => {} } } : {}),
     async request(input: BridgeRequest): Promise<BridgeResponse> {
       methods.push(input.method);
 
@@ -651,19 +713,9 @@ function responseDataForMethod(
         playerId: `${target}-player`,
         displayName: `${target} Player`,
       };
-    case 'commerce.getProducts':
-      return [];
-    case 'commerce.purchase':
-      return {
-        status: 'completed',
-        entitlementIds: ['COINS_100'],
-      };
-    case 'commerce.restore':
-      return {
-        restoredEntitlements: [],
-      };
-    case 'commerce.getEntitlements':
-      return [];
+    case 'commerce.v2.requestPurchase':
+      // The store UI opened; nothing is granted from a provider answer.
+      return { outcome: 'launched' };
     case 'ads.preload':
     case 'leaderboard.open':
       return undefined;
@@ -690,7 +742,7 @@ function responseDataForMethod(
 
 function enabledCapabilities(target: AdapterBridgeTarget): PlatformCapabilities {
   return {
-    nativeIap: target !== 'reddit',
+    commerce: target === 'reddit' ? createUnsupportedCommerceCapabilities() : sellingCommerce(),
     nativeAds: target !== 'reddit',
     rewardedAds: target !== 'reddit',
     interstitialAds: target !== 'reddit',

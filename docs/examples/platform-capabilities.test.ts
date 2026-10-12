@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { createUnsupportedCapabilities, type PlatformGateway } from '@mpgd/platform';
+import {
+  createUnsupportedCapabilities,
+  type CommerceCapabilities,
+  type PlatformGateway,
+} from '@mpgd/platform';
 
 import {
   readCloudSaveTransition,
   readRewardedAdAvailability,
+  readStoreAvailability,
   verifyCapabilityFixture,
 } from './platform-capabilities';
 
@@ -31,6 +36,53 @@ describe('published platform capability examples', () => {
     } satisfies Pick<PlatformGateway, 'getCapabilities'>;
 
     await expect(readRewardedAdAvailability(gateway)).resolves.toEqual({
+      status: 'unknown',
+      error: failure,
+    });
+  });
+
+  it('reads the store from the required commerce block', async () => {
+    let commerce: CommerceCapabilities = createUnsupportedCapabilities().commerce;
+    const gateway = {
+      async getCapabilities() {
+        return { ...createUnsupportedCapabilities(), commerce };
+      },
+    } satisfies Pick<PlatformGateway, 'getCapabilities'>;
+
+    await expect(readStoreAvailability(gateway)).resolves.toEqual({
+      status: 'unavailable',
+      availability: 'unsupported',
+    });
+    commerce = {
+      ...commerce,
+      purchase: { ...commerce.purchase, consumable: true },
+      availability: 'configuration-required',
+    };
+    await expect(readStoreAvailability(gateway)).resolves.toEqual({
+      status: 'unavailable',
+      availability: 'configuration-required',
+    });
+    commerce = { ...commerce, availability: 'available' };
+    await expect(readStoreAvailability(gateway)).resolves.toEqual({
+      status: 'sellable',
+      subscriptions: false,
+    });
+    commerce = { ...commerce, purchase: { ...commerce.purchase, consumable: false } };
+    await expect(readStoreAvailability(gateway)).resolves.toEqual({
+      status: 'unavailable',
+      availability: 'unsupported',
+    });
+  });
+
+  it('keeps a rejected store read distinct from an unsupported store', async () => {
+    const failure = new Error('bridge unavailable');
+    const gateway = {
+      async getCapabilities(): Promise<never> {
+        throw failure;
+      },
+    } satisfies Pick<PlatformGateway, 'getCapabilities'>;
+
+    await expect(readStoreAvailability(gateway)).resolves.toEqual({
       status: 'unknown',
       error: failure,
     });

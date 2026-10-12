@@ -8,11 +8,7 @@ import {
   type BridgeRequest,
   type BridgeResponse,
 } from '@mpgd/bridge';
-import {
-  PlatformOperationError,
-  type CommerceAdapter,
-  type PlatformProviderFeature,
-} from '@mpgd/platform';
+import { PlatformOperationError } from '@mpgd/platform';
 import {
   assertCommerceBridgeFetchProductsPayload,
   assertCommerceBridgeFetchProductsResult,
@@ -30,7 +26,6 @@ import {
   commerceErrorInfoOf,
   commerceProtocol,
   commerceProtocolVersion,
-  toCommerceAdapter,
   type CommerceBridgeMethods,
   type CommerceEvent,
   type CommerceProvider,
@@ -58,19 +53,12 @@ export interface CreateCommerceProviderBridgeInput {
   readonly fallback?: { request(input: BridgeRequest): Promise<BridgeResponse> };
 }
 
-const v1CommerceMethods = Object.freeze([
-  'commerce.getProducts',
-  'commerce.purchase',
-  'commerce.restore',
-  'commerce.getEntitlements',
-] as const);
-
 /**
  * In-process `NativeBridge` over a commerce v2 provider: the six
  * `commerce.v2.*` methods validate their payload and result with the
- * `@mpgd/platform/commerce` asserts, the four v1 `commerce.*` methods are
- * served by `toCommerceAdapter(provider)`, and events carry the bridge envelope
- * with a per-session sequence. A thrown failure crosses the bridge as
+ * `@mpgd/platform/commerce` asserts, and events carry the bridge envelope
+ * with a per-session sequence. Any other method goes to `fallback`, or answers
+ * `UNSUPPORTED_METHOD` without one. A thrown failure crosses the bridge as
  * `{ code, message, retryable }`; a `cancelled` or `failed` purchase result
  * keeps its `storeCode` because it is data, not an error.
  */
@@ -78,7 +66,6 @@ export function createCommerceProviderBridge(
   input: CreateCommerceProviderBridgeInput,
 ): CommerceProviderBridge {
   const { provider } = input;
-  const adapter: CommerceAdapter = toCommerceAdapter(provider);
   const listeners = new Set<(event: BridgeEvent) => void>();
   let sequence = 0;
   let detach: (() => void) | undefined;
@@ -141,17 +128,6 @@ export function createCommerceProviderBridge(
         await provider.restorePurchases();
         return assertResult('commerce.v2.restorePurchases', { restored: true });
       }
-      case 'commerce.getProducts':
-        return adapter.getProducts();
-      case 'commerce.purchase':
-        return adapter.purchase(payload as Parameters<CommerceAdapter['purchase']>[0]);
-      case 'commerce.restore':
-        if (adapter.restore === undefined) {
-          return { restoredEntitlements: [] };
-        }
-        return adapter.restore();
-      case 'commerce.getEntitlements':
-        return adapter.getEntitlements();
       default:
         throw new PlatformOperationError({
           code: 'UNSUPPORTED_METHOD',
@@ -162,9 +138,7 @@ export function createCommerceProviderBridge(
 
   return {
     async request(request) {
-      const isCommerce = isBridgeCommerceV2Method(request.method)
-        || (v1CommerceMethods as readonly string[]).includes(request.method);
-      if (!isCommerce && input.fallback !== undefined) {
+      if (!isBridgeCommerceV2Method(request.method) && input.fallback !== undefined) {
         return input.fallback.request(request);
       }
       try {
@@ -189,30 +163,23 @@ export function createCommerceProviderBridge(
   };
 }
 
-export type CapacitorCommerceFeature = Extract<
-  PlatformProviderFeature,
-  'nativeIap' | 'subscriptionIap'
->;
-
 export interface CreateCommerceServiceProviderInput {
   readonly id: string;
   readonly commerce: CommerceProvider;
-  /** Commerce features the provider serves. Defaults to `['nativeIap']`. */
-  readonly features?: readonly CapacitorCommerceFeature[];
 }
 
 /**
- * Registry entry for a commerce v2 provider: the implied commerce bridge
- * methods are served in process by `createCommerceProviderBridge`, and the
- * registry derives `nativeIap` and `subscriptionIap` readiness from
- * `commerce.getCapabilities()`.
+ * Registry entry for a commerce provider: it declares no feature and no
+ * method, the six `commerce.v2.*` methods are implied and served in process by
+ * `createCommerceProviderBridge`, and the gateway's `commerce` capability block
+ * is the provider's own `getCapabilities()` answer.
  */
 export function createCommerceServiceProvider(
   input: CreateCommerceServiceProviderInput,
 ): CapacitorCommerceServiceProvider {
   return {
     id: input.id,
-    features: input.features ?? ['nativeIap'],
+    features: [],
     methods: [],
     commerce: input.commerce,
     bridge: createCommerceProviderBridge({ provider: input.commerce }),

@@ -232,9 +232,17 @@ const gateway = createCapacitorPlatformGateway({
   app, visibility: null, bridge,
 });
 const capabilities = await gateway.getCapabilities();
-for (const feature of ['nativeIap', 'subscriptionIap', 'rewardedAds', 'bannerAds', 'nativeLeaderboard']) {
+for (const feature of ['rewardedAds', 'bannerAds', 'nativeLeaderboard']) {
   assert.equal(capabilities.providerAvailability[feature], 'unsupported', feature);
 }
+// Commerce is the capability block alone: no provider, no IAP flags, nothing sold.
+for (const retired of ['nativeIap', 'subscriptionIap']) {
+  assert.equal(retired in capabilities, false, retired + ' is retired');
+  assert.equal(retired in capabilities.providerAvailability, false, retired + ' is not a provider feature');
+}
+assert.equal(capabilities.commerce.availability, 'unsupported');
+assert.equal(capabilities.commerce.purchase.consumable, false);
+assert.equal(gateway.commerce, undefined);
 const unconfiguredGateway = createCapacitorPlatformGateway({
   target: 'android', appVersion: '1.0.0', buildId: 'packed',
   app, visibility: null, bridge,

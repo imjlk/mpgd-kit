@@ -1,5 +1,5 @@
 import type { AnalyticsEvent } from '@mpgd/analytics';
-import type { PlatformGateway } from '@mpgd/platform';
+import { createUnsupportedCapabilities, type PlatformGateway } from '@mpgd/platform';
 import {
   createCommerceEventBuffer,
   createGooglePlayTokenPurchaseKey,
@@ -1372,14 +1372,19 @@ const fullClientHistory = [
   await h.reconciler.runUntilIdle();
   assertEqual(h.failures, ['match'], 'a purchase of another store is reported and ignored');
   assertEqual(
-    (await store.listRecoverable('player-1')).map((record) => record.key).length,
-    2,
-    'both foreign records remain untouched',
+    (await store.listRecoverable('player-1')).length,
+    1,
+    "the other store's record stays open and untouched; the retired v1 record is not listed",
   );
   assertEqual(
     isMonetizationOperationRecoverable((await store.read('legacy')) as never),
-    true,
-    'a v1 record without a result is recoverable',
+    false,
+    'a v1 purchase record whose platform never completed has nothing to verify',
+  );
+  assertEqual(
+    (await store.read('legacy'))?.revision,
+    0,
+    'the retired record is read but never rewritten by the reconciler',
   );
   await h.reconciler.stop();
 }
@@ -1476,17 +1481,9 @@ function createGateway(provider: CommerceProvider): PlatformGateway {
     target: 'android',
     async getCapabilities() {
       return {
-        nativeIap: true,
-        nativeAds: false,
-        rewardedAds: false,
-        interstitialAds: false,
-        nativeLeaderboard: false,
-        remoteLeaderboard: false,
-        achievements: false,
-        cloudSave: false,
-        socialShare: false,
-        haptics: false,
+        ...createUnsupportedCapabilities(),
         localizedContent: true,
+        commerce: await provider.getCapabilities(),
       };
     },
     identity: {
@@ -1494,18 +1491,7 @@ function createGateway(provider: CommerceProvider): PlatformGateway {
         return { playerId: 'player-1' };
       },
     },
-    commerce: {
-      async getProducts() {
-        return [];
-      },
-      async purchase() {
-        throw new Error('the v1 commerce adapter must not be used with a v2 provider');
-      },
-      async getEntitlements() {
-        return [];
-      },
-    },
-    commerceV2: provider,
+    commerce: provider,
     ads: {
       async preload() {},
       async showRewarded() {
@@ -1567,7 +1553,7 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   });
   const reconciler = client.commerceReconciler;
   if (reconciler === undefined) {
-    throw new Error('A gateway with commerceV2 exposes the reconciler.');
+    throw new Error('A gateway with a commerce provider exposes the reconciler.');
   }
   const pending = await client.purchase(
     { productId: 'gems_small', source: 'shop', idempotencyKey: 'op-21' },
@@ -1637,7 +1623,7 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   await reconciler.stop();
 }
 
-// 22. createRecoverableMonetizationClient: v2 purchases, reconcile summaries, restore, and the deprecated callback wrapper.
+// 22. createRecoverableMonetizationClient: purchases, reconcile summaries, and restore.
 {
   const provider = createFakeProvider({ withRestore: true });
   const backend = createFakeBackend({ withLedgerStatus: true });
@@ -1702,21 +1688,14 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
     'finished after the retried finish',
   );
   assertEqual(await recovery.reconcile(), [], 'a finished record is no longer reported');
-  const replayed = await recovery.recoverPurchaseResult('op-22', {
-    status: 'completed',
-    transactionId: 'tx-22',
-    entitlementIds: [],
+  const replayed = await recovery.purchase({
+    productId: 'gems_small',
+    source: 'shop',
+    idempotencyKey: 'op-22',
   });
-  assertEqual(
-    replayed.status,
-    'granted',
-    'the deprecated callback wrapper answers from the journal',
-  );
-  await assertRejects(
-    () => recovery.recoverPurchaseResult('missing', { status: 'pending', entitlementIds: [] }),
-    /No reserved purchase operation/u,
-    'an unknown key',
-  );
+  assertEqual(replayed.status, 'granted', 'a replayed key answers from the journal');
+  assertEqual(replayed.ledgerEntryId, 'le-22', 'with the journaled ledger entry');
+  assertEqual(provider.purchaseUiOpened, 1, 'a replayed key never reopens the store UI');
   backend.reverse('le-22', 'le-22-refund');
   assertEqual(await recovery.reconcile(), [], 'revoked records are reported only while open');
   assertEqual((await reconciler.read('op-22'))?.state, 'revoked', 'the refund revoked the grant');
@@ -1775,13 +1754,16 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
 
 // Review fixes.
 
-// 24. A leftover v1 purchase record is resumed by the v1 path even when the gateway has a v2 provider.
+// 24. A leftover v1 purchase record is retired: nothing resumes it through the reconciler, but it
+// stays readable so a durable journal still parses it, and the recoverable client finishes the
+// verification it was in the middle of (one backend request, never a local grant).
 {
   const provider = createFakeProvider();
   const store = createInMemoryMonetizationOperationStore();
-  const legacyRequests: VerifyPurchaseRequest[] = [];
+  const requests: VerifyPurchaseRequest[] = [];
+  const legacyKey = JSON.stringify(['android', 'purchase', 'legacy-1']);
   await store.reserve({
-    key: JSON.stringify(['android', 'purchase', 'legacy-1']),
+    key: legacyKey,
     kind: 'purchase',
     playerId: 'player-1',
     target: 'android',
@@ -1796,11 +1778,23 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
     },
     platformCompletedAt: '2026-10-01T00:00:00.000Z',
   });
+  const legacyRecord = await store.read(legacyKey);
+  assertEqual(legacyRecord?.kind, 'purchase', 'the retired record is still readable');
+  assertEqual(
+    legacyRecord !== undefined && isMonetizationOperationRecoverable(legacyRecord),
+    true,
+    'a retired v1 purchase record with a completed platform result and no result is still open',
+  );
+  assertEqual(
+    (await store.listRecoverable('player-1')).length,
+    1,
+    'the journal lists it so the recoverable client can finish the verification',
+  );
   const recovery = createRecoverableMonetizationClient({
     gateway: createGateway(provider),
     backend: createBackendApi({
       async verifyPurchase(request) {
-        legacyRequests.push(request);
+        requests.push(request);
         return { verified: true, alreadyProcessed: false, ledgerEntryId: 'ledger-legacy' };
       },
     }),
@@ -1808,26 +1802,142 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
     target: 'android',
     operationStore: store,
   });
-  const summaries = await recovery.reconcile();
   assertEqual(
-    summaries.map((summary) => `${summary.kind}:${summary.idempotencyKey}:${summary.status}`),
-    ['purchase:legacy-1:granted'],
-    'the v1 record is resumed and granted',
+    (await recovery.reconcile()).filter((entry) => entry.kind === 'purchase').map(
+      (entry) => entry.status,
+    ),
+    ['granted'],
+    'reconcile finishes the retired v1 purchase record through the backend',
+  );
+  assertEqual(requests.length, 1, 'the recorded platform result is verified once');
+  assertEqual(requests[0]?.idempotencyKey, 'legacy-1', 'under the key the v1 purchase used');
+  assertEqual(requests[0]?.platformTransactionId, 'legacy-tx-1', 'for the recorded transaction');
+  assertEqual(provider.purchaseUiOpened, 0, 'the provider never opened the store UI');
+  const closed = await store.read(legacyKey);
+  assertEqual(
+    closed?.kind === 'purchase' && closed.result?.status === 'granted',
+    true,
+    'the backend answer closes the record',
   );
   assertEqual(
-    legacyRequests.map((request) => request.platformTransactionId),
-    ['legacy-tx-1'],
-    'the recorded platform result is verified',
+    closed !== undefined && isMonetizationOperationRecoverable(closed),
+    false,
+    'a closed retired record is not open again',
   );
   assertEqual(
-    provider.purchaseUiOpened,
+    (await recovery.reconcile()).filter((entry) => entry.kind === 'purchase').length,
     0,
-    'the v2 provider never opened the store UI for a v1 record',
+    'a closed retired record is not reported or sent again',
+  );
+  assertEqual(requests.length, 1, 'no second request');
+  // The store-side purchase it covered is found again from the store's own list.
+  const backendQueue = createFakeBackend();
+  backendQueue.queue({ status: 'granted', ledgerEntryId: 'le-legacy-rediscovered' });
+  const rediscovery = createHarness({ backend: backendQueue });
+  rediscovery.provider.available.push(purchaseOf({ transactionId: 'legacy-tx-1' }));
+  await rediscovery.reconciler.start();
+  assertEqual(
+    (await rediscovery.reconciler.listRecoverable()).length,
+    0,
+    'the rediscovered purchase is granted through the reconciler, not left open',
+  );
+  assertEqual(backendQueue.requests.length, 1, 'the store-side purchase is verified once');
+  await rediscovery.reconciler.stop();
+  await recovery.commerceReconciler?.stop();
+}
+
+// 24b. The retired-record drain keeps the backend in charge: an outage leaves the record open, the
+// saved request is sent unchanged, a definitive non-grant closes it as rejected, and another
+// player's record is left alone.
+{
+  const store = createInMemoryMonetizationOperationStore();
+  const requests: VerifyPurchaseRequest[] = [];
+  let mode: 'outage' | 'granted' | 'rejected' = 'outage';
+  const retired = (idempotencyKey: string, playerId = 'player-1') => ({
+    key: JSON.stringify(['android', 'purchase', idempotencyKey]),
+    kind: 'purchase' as const,
+    playerId,
+    target: 'android',
+    deploymentTarget: 'android',
+    revision: 0,
+    input: { productId: 'gems_small', source: 'shop' as const, idempotencyKey },
+    platform: {
+      status: 'completed' as const,
+      transactionId: `${idempotencyKey}-tx`,
+      entitlementIds: [],
+      evidence: { schema: 'fixture.fake-store.v1', payload: { token: `${idempotencyKey}-token` } },
+    },
+    platformCompletedAt: '2026-10-01T00:00:00.000Z',
+    request: {
+      target: 'android',
+      playerId,
+      productId: 'gems_small',
+      platformTransactionId: `${idempotencyKey}-tx`,
+      idempotencyKey,
+      purchasedAt: '2026-10-01T00:00:00.000Z',
+      evidence: { schema: 'fixture.fake-store.v1', payload: { token: `${idempotencyKey}-token` } },
+    },
+  });
+  await store.reserve(retired('saved-1'));
+  await store.reserve(retired('foreign-1', 'player-2'));
+  const recovery = createRecoverableMonetizationClient({
+    gateway: createGateway(createFakeProvider()),
+    backend: createBackendApi({
+      async verifyPurchase(request) {
+        requests.push(request);
+        if (mode === 'outage') {
+          throw new Error('backend unavailable');
+        }
+        return mode === 'granted'
+          ? { verified: true, alreadyProcessed: false, ledgerEntryId: 'ledger-saved' }
+          : {
+              verified: false,
+              alreadyProcessed: false,
+              disposition: 'rejected',
+              reason: 'DECLINED',
+            };
+      },
+    }),
+    playerId: 'player-1',
+    target: 'android',
+    operationStore: store,
+  });
+  assertEqual(
+    (await recovery.reconcile()).filter((entry) => entry.kind === 'purchase').map(
+      (entry) => entry.status,
+    ),
+    ['pending'],
+    'a backend outage leaves the retired record open and pending',
   );
   assertEqual(
-    (await store.listRecoverable('player-1')).length,
+    (await store.listRecoverable('player-1')).filter((record) => record.kind === 'purchase').length,
+    1,
+    'the record is retried on the next pass',
+  );
+  mode = 'rejected';
+  assertEqual(
+    (await recovery.reconcile()).filter((entry) => entry.kind === 'purchase').map(
+      (entry) => entry.status,
+    ),
+    ['rejected'],
+    'a definitive non-grant closes the retired record as rejected',
+  );
+  assertEqual(
+    requests.every(
+      (request) => JSON.stringify(request) === JSON.stringify(retired('saved-1').request),
+    ),
+    true,
+    'the saved verify request is sent unchanged every time',
+  );
+  assertEqual(
+    (await store.listRecoverable('player-1')).filter((record) => record.kind === 'purchase').length,
     0,
-    'no v2 record was created for the v1 key',
+    'a rejected retired record is closed',
+  );
+  assertEqual(
+    requests.filter((request) => request.playerId === 'player-2').length,
+    0,
+    "another player's retired record is never verified by this client",
   );
   await recovery.commerceReconciler?.stop();
 }

@@ -20,6 +20,8 @@ export function createWechatPlatformGateway(
   const api = resolveWechatMiniGameApi({ wx: options.api });
   const sharing = createWechatSharingAdapter(api);
 
+  // WeChat sells nothing: the gateway omits `commerce` and reports the
+  // unsupported commerce block from createUnsupportedCapabilities().
   return {
     target: 'wechat',
     async getCapabilities() {
@@ -58,17 +60,6 @@ export function createWechatPlatformGateway(
       },
       async requestSubscription() {
         return 'unavailable';
-      },
-    },
-    commerce: {
-      async getProducts() {
-        return [];
-      },
-      async purchase() {
-        return { status: 'failed', entitlementIds: [] };
-      },
-      async getEntitlements() {
-        return [];
       },
     },
     ads: {

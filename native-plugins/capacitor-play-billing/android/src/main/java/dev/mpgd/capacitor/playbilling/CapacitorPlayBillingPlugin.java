@@ -340,20 +340,14 @@ public class CapacitorPlayBillingPlugin extends Plugin {
             products.put(productId);
         }
         String purchaseState = state == Purchase.PurchaseState.PURCHASED ? "purchased" : "pending";
-        // Billing 9.1.0 Purchase getters under their own names, plus the 0.1 names
-        // (productIds, state, purchaseTimeMillis) until the next major version.
+        // Billing 9.1.0 Purchase getters under their own names.
         JSObject encoded = new JSObject()
             .put("products", products)
-            .put("productIds", products)
             .put("purchaseToken", token)
             .put("purchaseState", purchaseState)
-            .put("state", purchaseState)
             .put("purchaseTime", purchase.getPurchaseTime())
             .put("quantity", purchase.getQuantity())
             .put("isAcknowledged", purchase.isAcknowledged());
-        if (purchase.getPurchaseTime() > 0) {
-            encoded.put("purchaseTimeMillis", purchase.getPurchaseTime());
-        }
         if (purchase.getOrderId() != null) {
             encoded.put("orderId", purchase.getOrderId());
         }

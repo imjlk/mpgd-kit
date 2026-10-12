@@ -25,14 +25,12 @@ import type {
   BannerAdMountResult,
   LaunchEntry,
   LaunchIntent,
-  LogicalProductId,
   NotificationTopic,
   PromotionRewardResult,
   ShareResult,
 } from '@mpgd/platform';
 
 import { assertAdShowInput, toAdAdapter } from '@mpgd/platform/ads';
-import { deriveLegacyCommerceCapabilities } from '@mpgd/platform/commerce';
 import { createAitAdProvider } from './ad-provider.js';
 
 import type { AitAdPlacementType } from './ad-config.js';
@@ -41,11 +39,8 @@ import {
   createAitCommerceProviderFromController,
   type CreateAitCommerceProviderInput,
 } from './commerce-provider.js';
-import { aitIapDiagnosticCodes } from './iap-diagnostics.js';
 import {
-  aitIapDiagnostic,
   createAitIapController,
-  createAitIapDiagnosticError,
   errorMessage,
   isAbortError,
   isAitNativeMethodSupported,
@@ -54,7 +49,6 @@ import {
   normalizePendingSince,
   normalizePositiveTimeout,
   type AitIapDependencies,
-  type AitIapEntitlementReader,
   type AitIapPreparer,
   type AitIapProductConfig,
   type AitIapProductGrantVerifier,
@@ -72,7 +66,6 @@ export {
 export type {
   AitCapabilityProbe,
   AitIapDependencies,
-  AitIapEntitlementReader,
   AitIapPreparationInput,
   AitIapPreparer,
   AitIapProductConfig,
@@ -228,8 +221,6 @@ export interface InstallAitHostBridgeOptions {
   readonly iapProducts?: readonly AitIapProductConfig[];
   readonly prepareIap?: AitIapPreparer;
   readonly verifyIapProductGrant?: AitIapProductGrantVerifier;
-  /** Required to expose native IAP so ownership survives a wrapper restart. */
-  readonly readIapEntitlements?: AitIapEntitlementReader;
   /** May be shortened, but never extended beyond the native callback-safe default. */
   readonly iapProductGrantTimeoutMs?: number;
   /**
@@ -295,16 +286,15 @@ export function createAitHostBridge(
     options.notificationTemplateCodes,
   );
   /**
-   * One IAP controller serves the v1 `commerce.*` methods and the commerce v2
-   * provider, so both share the single IAP lock, the in-flight purchase map,
-   * the durable attempt markers and the acknowledgement barriers.
+   * One IAP controller serves the commerce provider: the single IAP lock, the
+   * in-flight purchase map, the durable attempt markers and the
+   * acknowledgement barriers all live in it.
    */
   const iap = createAitIapController({
     dependencies,
     iapProducts: options.iapProducts,
     prepareIap: options.prepareIap,
     verifyIapProductGrant: options.verifyIapProductGrant,
-    readIapEntitlements: options.readIapEntitlements,
     iapProductGrantTimeoutMs: options.iapProductGrantTimeoutMs,
   });
   const commerceProvider = createAitCommerceProviderFromController(
@@ -397,14 +387,10 @@ export function createAitHostBridge(
           && hasConfiguredAdType(adGroupIds, adPlacementTypes, 'interstitial');
         const bannerAds = areBannerAdsSupported(dependencies)
           && hasConfiguredAdType(adGroupIds, adPlacementTypes, 'banner');
-        // The v2 block is the source: `nativeIap` is derived from it, so the
-        // boolean flag and the block can never disagree.
+        // The commerce block is the only commerce capability source.
         const commerce = await commerceProvider.getCapabilities();
-        const legacyCommerce = deriveLegacyCommerceCapabilities(commerce);
 
         return ok(request, {
-          nativeIap: legacyCommerce.nativeIap,
-          subscriptionIap: legacyCommerce.subscriptionIap,
           nativeAds: rewardedAds || interstitialAds || bannerAds,
           bannerAds,
           rewardedAds,
@@ -553,51 +539,9 @@ export function createAitHostBridge(
         }
       }
 
-      // IAP is opt-in and server-authoritative. Never return demo grants.
-      case 'commerce.getProducts': {
-        const catalog = await iap.listProducts();
-        return catalog.status === 'ok'
-          ? ok(request, catalog.products)
-          : createAitIapDiagnosticError(
-              request.id,
-              catalog.diagnostic,
-              'Apps in Toss IAP catalog is unavailable',
-            );
-      }
-
-      case 'commerce.purchase': {
-        const purchase = readCommercePurchase(request.payload);
-        return ok(request, await iap.purchase(purchase.productId, purchase.idempotencyKey));
-      }
-
-      case 'commerce.restore': {
-        const restored = await iap.restore();
-        return restored.status === 'ok'
-          ? ok(request, restored.result)
-          : createAitIapDiagnosticError(
-              request.id,
-              restored.diagnostic,
-              'Apps in Toss purchase restore did not complete',
-            );
-      }
-
-      case 'commerce.getEntitlements': {
-        const entitlements = await iap.readEntitlements();
-        if (entitlements.status === 'unconfigured') {
-          return ok(request, []);
-        }
-        // A failed or timed-out authority read is not proof of no ownership.
-        return entitlements.status === 'failed'
-          ? createAitIapDiagnosticError(
-              request.id,
-              aitIapDiagnostic(aitIapDiagnosticCodes.entitlementReadFailed, true),
-              'Apps in Toss purchase entitlements are unavailable',
-            )
-          : ok(request, entitlements.entitlements);
-      }
-
-      // Commerce v2 (B5): served by the Apps in Toss provider over the same
-      // IAP controller; payloads and results are validated by the handler.
+      // IAP is opt-in and server-authoritative; it never returns demo grants.
+      // The Apps in Toss provider serves the six `commerce.v2.*` methods over
+      // the IAP controller; payloads and results are validated by the handler.
       case 'commerce.v2.getCapabilities':
       case 'commerce.v2.fetchProducts':
       case 'commerce.v2.requestPurchase':
@@ -1745,32 +1689,6 @@ function readRewardedAdCorrelationId(payload: unknown, fallback: string): string
     throw new TypeError('AIT rewarded ad idempotencyKey must contain 1 to 256 visible characters.');
   }
   return value;
-}
-
-function readCommercePurchase(payload: unknown): {
-  readonly productId: LogicalProductId;
-  readonly idempotencyKey: string;
-} {
-  const value = readPayloadRecord(payload);
-  const productId = value.productId;
-  const idempotencyKey = value.idempotencyKey;
-  if (
-    typeof productId !== 'string'
-    || productId.length === 0
-    || productId.length > 128
-    || /[\p{Cc}\p{Cf}]/u.test(productId)
-  ) {
-    throw new TypeError('AIT IAP productId must contain 1 to 128 visible characters.');
-  }
-  if (
-    typeof idempotencyKey !== 'string'
-    || idempotencyKey.length === 0
-    || idempotencyKey.length > 256
-    || /[\p{Cc}\p{Cf}]/u.test(idempotencyKey)
-  ) {
-    throw new TypeError('AIT IAP idempotencyKey must contain 1 to 256 visible characters.');
-  }
-  return { productId: productId as LogicalProductId, idempotencyKey };
 }
 
 function readRequiredIdempotencyKey(payload: unknown): string {

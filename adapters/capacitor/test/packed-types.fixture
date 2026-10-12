@@ -19,15 +19,10 @@ import {
   createCapacitorAdMobRewardedProvider,
   type CapacitorAdMobRewardedProvider,
 } from '@mpgd/adapter-capacitor/admob';
-import {
-  createAppleSignedTransactionVerifier,
-  type CreateAppleSignedTransactionVerifierOptions,
-} from '@mpgd/adapter-capacitor/app-store-server';
-import {
-  createAppleSignedTransactionVerifier as createGameServicesAppleVerifier,
-  type CreateAppleSignedTransactionVerifierOptions as GameServicesAppleVerifierOptions,
-} from '@mpgd/game-services/app-store-server';
+// @ts-expect-error The deprecated App Store verifier subpath is removed.
+import type * as removedAppStoreServer from '@mpgd/adapter-capacitor/app-store-server';
 import type {
+  CommerceCapabilities,
   PlatformProviderAvailability,
   PlatformProviderFeature,
   PlatformViewportState,
@@ -35,14 +30,14 @@ import type {
 } from '@mpgd/platform';
 import type { FeatureAvailabilityReason, PlatformFeature } from '@mpgd/target-config';
 
-const feature: PlatformProviderFeature = 'subscriptionIap';
+const feature: PlatformProviderFeature = 'pushNotifications';
 const readiness: PlatformProviderAvailability = 'configuration-required';
 const targetFeature: PlatformFeature = 'subscriptions';
 const reason: FeatureAvailabilityReason = 'temporarily-unavailable';
 const provider: CapacitorServiceProvider = {
   id: 'packed-store',
   features: [feature],
-  methods: ['commerce.purchase'],
+  methods: ['notifications.getStatus', 'notifications.requestSubscription'],
   bridge: {
     async request(input) {
       return {
@@ -69,12 +64,6 @@ const admob: CapacitorAdMobRewardedProvider = createCapacitorAdMobRewardedProvid
   getPlayerId: () => 'player-1',
 });
 void admob;
-declare const appStoreOptions: CreateAppleSignedTransactionVerifierOptions;
-const appStoreVerifier = createAppleSignedTransactionVerifier(appStoreOptions);
-void appStoreVerifier;
-const gameServicesAppleOptions: GameServicesAppleVerifierOptions = appStoreOptions;
-const gameServicesAppleVerifier = createGameServicesAppleVerifier(gameServicesAppleOptions);
-void gameServicesAppleVerifier;
 
 const nativeJson: CapacitorNativeJsonTransport = createCapacitorNativeJsonTransport({
   target: 'ios',
@@ -92,8 +81,11 @@ void hostState;
 declare const packedGateway: import('@mpgd/platform').PlatformGateway;
 const secureCredentials: SecureCredentialStore | undefined = packedGateway.secureCredentials;
 void secureCredentials;
-const commerceV2: CommerceProvider | undefined = packedGateway.commerceV2;
-void commerceV2;
+const commerce: CommerceProvider | undefined = packedGateway.commerce;
+void commerce;
+export async function readCommerceBlock(): Promise<CommerceCapabilities> {
+  return (await packedGateway.getCapabilities()).commerce;
+}
 
 declare const storeSdk: StoreSdk;
 const storeEvent: StoreSdkEvent = { type: 'purchaseError', error: { code: 'E_X' } };

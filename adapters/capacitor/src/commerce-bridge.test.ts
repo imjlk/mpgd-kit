@@ -13,6 +13,7 @@ import {
   CommerceError,
   commerceProtocol,
   commerceProtocolVersion,
+  createUnsupportedCommerceCapabilities,
   type CommerceEvent,
   type CommerceProvider,
 } from '@mpgd/platform/commerce';
@@ -27,18 +28,18 @@ import { createCapacitorPlatformGateway } from './index.js';
 import {
   createCapacitorProviderRegistry,
   createDegradedCommerceCapabilities,
-  deriveCommerceFeatureStates,
   type CapacitorServiceProvider,
   type NativeBridge,
 } from './providers.js';
 import { createStoreCommerceProvider } from './store-commerce-provider.js';
 
-const v1CommerceMethods = [
+// The retired v1 names; `BridgeMethod` no longer lists them.
+const retiredV1CommerceMethods = [
   'commerce.getProducts',
   'commerce.purchase',
   'commerce.restore',
   'commerce.getEntitlements',
-] as const;
+] as unknown as readonly BridgeMethod[];
 
 function request(method: BridgeMethod, payload: unknown = {}): BridgeRequest {
   return {
@@ -181,33 +182,25 @@ describe('createCommerceProviderBridge', () => {
     }
   });
 
-  it('serves v1 callers through toCommerceAdapter without granting', async () => {
+  it('does not serve the retired v1 commerce methods', async () => {
     const { sdk, provider } = createStoreProvider();
     const bridge = createCommerceProviderBridge({ provider });
-    expect(await bridge.request(request('commerce.getProducts'))).toMatchObject({
-      ok: true,
-      data: [{ id: 'gems_small', type: 'consumable', price: { currencyCode: 'USD' } }],
-    });
-    sdk.queueRequest({ outcome: 'purchased', purchase: fakePurchase({ transactionId: 'tx-1' }) });
-    expect(await bridge.request(request('commerce.purchase', {
-      productId: 'gems_small', idempotencyKey: 'op-1', source: 'shop',
-    }))).toMatchObject({
-      ok: true,
-      data: {
-        status: 'completed', transactionId: 'tx-1', entitlementIds: [],
-        evidence: { schema: 'fixture.store.v1' },
-      },
-    });
-    const purchase = await bridge.request(request('commerce.purchase', {
-      productId: 'gems_small', idempotencyKey: 'op-2', source: 'shop',
+    for (const method of retiredV1CommerceMethods) {
+      expect(await bridge.request(request(method, { productId: 'gems_small' })))
+        .toMatchObject({ ok: false, error: { code: 'UNSUPPORTED_METHOD', retryable: false } });
+    }
+    expect(sdk.requestCalls).toHaveLength(0);
+
+    // A retired name is not a commerce method, so a fallback bridge owns the answer.
+    const fallback = vi.fn(async (input: BridgeRequest) => ({
+      id: input.id,
+      ok: false as const,
+      error: { code: 'UNSUPPORTED_METHOD', message: 'Fallback.', retryable: false },
     }));
-    expect(purchase.ok && 'authoritativeGrant' in (purchase.data as object)).toBe(false);
-    expect(await bridge.request(request('commerce.restore'))).toMatchObject({
-      ok: true, data: { restoredEntitlements: [], settledPurchases: [] },
-    });
-    expect(await bridge.request(request('commerce.getEntitlements'))).toMatchObject({
-      ok: true, data: [],
-    });
+    const withFallback = createCommerceProviderBridge({ provider, fallback: { request: fallback } });
+    await withFallback.request(request(retiredV1CommerceMethods[1] as BridgeMethod));
+    expect(fallback).toHaveBeenCalledTimes(1);
+    expect(sdk.requestCalls).toHaveLength(0);
   });
 
   it('delivers events in the envelope with one per-session sequence', () => {
@@ -311,45 +304,75 @@ describe('createBridgeCommerceProvider', () => {
   });
 });
 
-describe('provider registry with a commerce v2 provider', () => {
-  it('implies the ten commerce methods and exposes the provider', async () => {
+describe('provider registry with a commerce provider', () => {
+  it('implies the six commerce v2 methods and exposes the provider', async () => {
     const { provider } = createStoreProvider();
     const service = createCommerceServiceProvider({ id: 'store', commerce: provider });
+    expect(service.features).toEqual([]);
+    expect(service.methods).toEqual([]);
     const registry = createCapacitorProviderRegistry([service]);
-    for (const method of [...v1CommerceMethods, ...bridgeCommerceV2Methods]) {
+    for (const method of bridgeCommerceV2Methods) {
       expect(registry.byMethod.get(method)?.id).toBe('store');
     }
+    for (const method of retiredV1CommerceMethods) {
+      expect(registry.byMethod.has(method)).toBe(false);
+    }
     expect(registry.commerce?.commerce).toBe(provider);
-    expect(registry.byMethod.size).toBe(10);
+    expect(registry.byMethod.size).toBe(6);
     await expect(registry.assertMethodReady('commerce.v2.requestPurchase')).resolves.toBeUndefined();
   });
 
-  it('derives commerce readiness from the provider capabilities', async () => {
+  it('reports the provider capability block next to the feature states', async () => {
     let availability: PlatformProviderAvailability = 'available';
     const sdk = createFakeStoreSdk({ availability: async () => availability });
     const { provider } = createStoreProvider(sdk);
     const registry = createCapacitorProviderRegistry([
-      createCommerceServiceProvider({
-        id: 'store', commerce: provider, features: ['nativeIap', 'subscriptionIap'],
-      }),
+      createCommerceServiceProvider({ id: 'store', commerce: provider }),
     ]);
-    expect(await registry.getAvailability()).toMatchObject({
-      nativeIap: 'available', subscriptionIap: 'unsupported', rewardedAds: 'unsupported',
-    });
+    const first = await registry.getCapabilitySnapshot();
+    expect(first.commerce).toEqual(await provider.getCapabilities());
+    expect(first.commerce.availability).toBe('available');
+    // Commerce readiness is the block, not a feature: nothing else is available.
+    expect(Object.values(first.availability).every((state) => state === 'unsupported')).toBe(true);
+    expect(Object.keys(first.availability)).not.toContain('nativeIap');
     availability = 'configuration-required';
-    expect((await registry.getAvailability()).nativeIap).toBe('configuration-required');
-    await expect(registry.assertMethodReady('commerce.purchase', {}, 'consumable'))
-      .rejects.toMatchObject({ code: 'NATIVE_PROVIDER_CONFIGURATION_REQUIRED' });
+    const second = await registry.getCapabilitySnapshot();
+    expect(second.commerce.availability).toBe('configuration-required');
+    expect(second.commerce).not.toBe(first.commerce);
+    expect(second.commerce.purchase).not.toBe(first.commerce.purchase);
+    // The v2 provider fails closed itself before any store UI opens.
+    await expect(registry.assertMethodReady('commerce.v2.requestPurchase')).resolves.toBeUndefined();
+    await expect(provider.requestPurchase({
+      logicalId: 'gems_small', idempotencyKey: 'op', source: 'shop',
+    })).rejects.toMatchObject({ code: 'CONFIGURATION_REQUIRED' });
+  });
 
-    expect(deriveCommerceFeatureStates(undefined, ['nativeIap', 'subscriptionIap'])).toEqual({
-      nativeIap: 'temporarily-unavailable', subscriptionIap: 'temporarily-unavailable',
-    });
-    expect(deriveCommerceFeatureStates({
-      ...(await provider.getCapabilities()),
-      purchase: { consumable: false, durable: false, subscription: true, quantity: false },
-    }, ['nativeIap', 'subscriptionIap', 'rewardedAds'])).toEqual({
-      nativeIap: 'unsupported', subscriptionIap: 'configuration-required',
-    });
+  it('reports the unsupported block when no commerce provider is registered', async () => {
+    const registry = createCapacitorProviderRegistry([]);
+    const first = await registry.getCapabilitySnapshot();
+    expect(first.commerce).toEqual(createUnsupportedCommerceCapabilities());
+    expect(registry.commerce).toBeUndefined();
+    const second = await registry.getCapabilitySnapshot();
+    expect(second.commerce).not.toBe(first.commerce);
+    expect(second.commerce.purchase).not.toBe(first.commerce.purchase);
+  });
+
+  it('serves commerce and feature providers together', async () => {
+    const { provider } = createStoreProvider();
+    const banner: CapacitorServiceProvider = {
+      id: 'banner',
+      features: ['bannerAds'],
+      methods: ['ads.mountBanner', 'ads.unmountBanner'],
+      async getAvailability() { return { bannerAds: 'available' }; },
+      bridge: { async request(input) { return { id: input.id, ok: true, data: null }; } },
+    };
+    const registry = createCapacitorProviderRegistry([
+      createCommerceServiceProvider({ id: 'store', commerce: provider }),
+      banner,
+    ]);
+    const snapshot = await registry.getCapabilitySnapshot();
+    expect(snapshot.availability.bannerAds).toBe('available');
+    expect(snapshot.commerce.availability).toBe('available');
   });
 
   it('bounds a stalled capability read like a stalled availability read', async () => {
@@ -361,81 +384,80 @@ describe('provider registry with a commerce v2 provider', () => {
     const registry = createCapacitorProviderRegistry([
       createCommerceServiceProvider({ id: 'store', commerce: stalled }),
     ]);
-    const pending = registry.getAvailability();
+    const pending = registry.getCapabilitySnapshot();
     await vi.advanceTimersByTimeAsync(3_000);
-    expect((await pending).nativeIap).toBe('temporarily-unavailable');
+    expect((await pending).commerce).toEqual(createDegradedCommerceCapabilities());
   });
 
-  it('rejects providers that mix v1 and v2 commerce or lack the event surface', () => {
+  it('rejects providers that declare retired or implied methods or lack the event surface', () => {
     const { provider } = createStoreProvider();
     const service = createCommerceServiceProvider({ id: 'store', commerce: provider });
-    expect(() => createCapacitorProviderRegistry([{
-      ...service, methods: ['commerce.purchase'],
-    }])).toThrow(/cannot declare both/);
+    for (const method of retiredV1CommerceMethods) {
+      expect(() => createCapacitorProviderRegistry([{ ...service, methods: [method] }]))
+        .toThrow(/cannot replace base method/);
+    }
     for (const method of bridgeCommerceV2Methods) {
       expect(() => createCapacitorProviderRegistry([{ ...service, methods: [method] }]))
         .toThrow(/commerce v2 is unavailable/);
     }
+    // A feature the commerce bridge does not own needs its methods declared.
     expect(() => createCapacitorProviderRegistry([{
       ...service, features: ['rewardedAds'],
-    }])).toThrow(/no commerce feature/);
+    }])).toThrow(/lacks methods/);
     expect(() => createCapacitorProviderRegistry([{
       ...service, bridge: { request: service.bridge.request },
     }])).toThrow(/no subscribe/);
     expect(() => createCapacitorProviderRegistry([
       service, { ...service, id: 'second' },
     ])).toThrow(/multiple providers/);
-    const v1: CapacitorServiceProvider = {
-      id: 'v1', features: ['nativeIap'], methods: v1CommerceMethods,
-      bridge: { async request(input) { return { id: input.id, ok: true, data: [] }; } },
-      async getAvailability() { return { nativeIap: 'available' }; },
+    // Without a commerce provider a registration still needs features and methods.
+    const { commerce: _commerce, ...plain } = service;
+    expect(() => createCapacitorProviderRegistry([plain])).toThrow(/must declare features/);
+    const rewarded: CapacitorServiceProvider = {
+      id: 'rewarded',
+      features: ['rewardedAds'],
+      methods: ['ads.preload', 'ads.showRewarded'],
+      bridge: { async request(input) { return { id: input.id, ok: true, data: null }; } },
+      async getAvailability() { return { rewardedAds: 'available' }; },
     };
-    expect(() => createCapacitorProviderRegistry([service, v1])).toThrow(/multiple providers/);
-    expect(createCapacitorProviderRegistry([v1]).commerce).toBeUndefined();
+    expect(createCapacitorProviderRegistry([service, rewarded]).commerce?.id).toBe('store');
+    expect(createCapacitorProviderRegistry([rewarded]).commerce).toBeUndefined();
   });
 });
 
-describe('gateway with a commerce v2 provider', () => {
-  it('exposes commerceV2 over the bridge path and serves v1 callers', async () => {
+describe('gateway with a commerce provider', () => {
+  it('exposes the provider over the bridge path', async () => {
     const { sdk, provider } = createStoreProvider();
     const gateway = createCapacitorPlatformGateway({
       target: 'android', appVersion: '3', buildId: 'v2', bridge: baseBridge(),
       providers: [createCommerceServiceProvider({ id: 'store', commerce: provider })],
     });
-    const commerceV2 = gateway.commerceV2;
-    expect(commerceV2?.store).toBe('fixture.store');
-    if (commerceV2 === undefined) {
-      throw new Error('expected commerceV2');
+    const commerce = gateway.commerce;
+    expect(commerce?.store).toBe('fixture.store');
+    if (commerce === undefined) {
+      throw new Error('expected a commerce provider');
     }
-    expect((await commerceV2.fetchProducts({})).map((product) => product.logicalId))
+    expect((await commerce.fetchProducts({})).map((product) => product.logicalId))
       .toEqual(['gems_small']);
     const events: CommerceEvent[] = [];
-    const unsubscribe = commerceV2.subscribe((event) => events.push(event));
-    await expect(commerceV2.requestPurchase({
+    const unsubscribe = commerce.subscribe((event) => events.push(event));
+    await expect(commerce.requestPurchase({
       logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop',
     })).resolves.toEqual({ outcome: 'launched' });
     sdk.report(fakePurchase({ transactionId: 'tx-1' }));
     expect(events).toEqual([
       { type: 'purchaseUpdated', purchase: expect.objectContaining({ logicalId: 'gems_small' }) },
     ]);
-    expect((await commerceV2.getAvailablePurchases()).map((purchase) => purchase.transactionId))
+    expect((await commerce.getAvailablePurchases()).map((purchase) => purchase.transactionId))
       .toEqual(['tx-1']);
-    await expect(commerceV2.finishTransaction?.({
+    await expect(commerce.finishTransaction?.({
       transactionId: 'tx-1', ledgerEntryId: 'le-1', isConsumable: true,
     })).resolves.toEqual({ finished: true });
-    await expect(commerceV2.requestPurchase({
+    await expect(commerce.requestPurchase({
       logicalId: 'nope', idempotencyKey: 'op-2', source: 'shop',
     })).rejects.toMatchObject({ code: 'ITEM_UNAVAILABLE' });
     unsubscribe();
-
-    expect(await gateway.commerce.getProducts()).toMatchObject([{ id: 'gems_small' }]);
-    await expect(gateway.commerce.purchase({
-      productId: 'gems_small', idempotencyKey: 'op-3', source: 'shop',
-    })).resolves.toEqual({ status: 'pending', entitlementIds: [] });
-    await expect(gateway.commerce.restore?.()).resolves.toEqual({
-      restoredEntitlements: [], settledPurchases: [],
-    });
-    expect(sdk.requestCalls).toHaveLength(2);
+    expect(sdk.requestCalls).toHaveLength(1);
   });
 
   it('reports the commerce capability block and passes capability conformance', async () => {
@@ -448,43 +470,70 @@ describe('gateway with a commerce v2 provider', () => {
     });
     const base = {
       ...createUnsupportedCapabilities(),
-      subscriptionIap: false,
       bannerAds: false,
     };
     const providerAvailability = {
-      nativeIap: 'available', subscriptionIap: 'unsupported', rewardedAds: 'unsupported',
+      rewardedAds: 'unsupported',
       interstitialAds: 'unsupported', bannerAds: 'unsupported', nativeLeaderboard: 'unsupported',
       identityUpgrade: 'unsupported', pushNotifications: 'unsupported',
     } as const;
     const commerce = await provider.getCapabilities();
     const report = await runPlatformGatewayCapabilityConformance({
       fixtures: [{
-        name: 'ios:commerce-v2',
+        name: 'ios:commerce',
         gateway,
         expectedTarget: 'ios',
-        expectedCapabilities: { ...base, nativeIap: true, providerAvailability, commerce },
+        expectedCapabilities: { ...base, providerAvailability, commerce },
         transition: {
           update() {
             availability = 'configuration-required';
           },
           expectedCapabilities: {
             ...base,
-            nativeIap: false,
-            providerAvailability: { ...providerAvailability, nativeIap: 'configuration-required' },
+            providerAvailability,
             commerce: { ...commerce, availability: 'configuration-required' },
           },
         },
       }],
     });
-    expect(report.passedFixtures).toEqual(['ios:commerce-v2']);
+    expect(report.passedFixtures).toEqual(['ios:commerce']);
   });
 
-  it('changes nothing without a v2 provider', async () => {
+  it('omits the provider and reports the unsupported block without one', async () => {
     const gateway = createCapacitorPlatformGateway({
-      target: 'android', appVersion: '1', buildId: 'v1', bridge: baseBridge(),
+      target: 'android', appVersion: '1', buildId: 'none', bridge: baseBridge(),
     });
-    expect(gateway.commerceV2).toBeUndefined();
-    expect('commerce' in (await gateway.getCapabilities())).toBe(false);
+    expect(gateway.commerce).toBeUndefined();
+    expect('commerce' in gateway).toBe(false);
+    const capabilities = await gateway.getCapabilities();
+    expect(capabilities.commerce).toEqual(createUnsupportedCommerceCapabilities());
+    expect((await gateway.getCapabilities()).commerce).not.toBe(capabilities.commerce);
+  });
+
+  it('never carries the retired boolean flags, whatever the native shell sends', async () => {
+    const { provider } = createStoreProvider();
+    const gateway = createCapacitorPlatformGateway({
+      target: 'ios', appVersion: '1', buildId: 'stale-shell',
+      bridge: {
+        async request(input) {
+          return {
+            id: input.id,
+            ok: true,
+            data: {
+              ...createUnsupportedCapabilities(),
+              nativeIap: true,
+              subscriptionIap: true,
+              commerce: { availability: 'available' },
+            },
+          };
+        },
+      },
+      providers: [createCommerceServiceProvider({ id: 'store', commerce: provider })],
+    });
+    const capabilities = await gateway.getCapabilities();
+    expect(Object.hasOwn(capabilities, 'nativeIap')).toBe(false);
+    expect(Object.hasOwn(capabilities, 'subscriptionIap')).toBe(false);
+    expect(capabilities.commerce).toEqual(await provider.getCapabilities());
   });
 
   it('degrades the commerce block instead of rejecting the capability read', async () => {
@@ -505,12 +554,9 @@ describe('gateway with a commerce v2 provider', () => {
         })],
       });
       const capabilities = await gateway.getCapabilities();
-      expect(capabilities, name).toMatchObject({
-        nativeIap: false,
-        subscriptionIap: false,
-        providerAvailability: { nativeIap: 'temporarily-unavailable' },
-        commerce: degraded,
-      });
+      expect(capabilities.commerce, name).toEqual(degraded);
+      expect(Object.hasOwn(capabilities, 'nativeIap'), name).toBe(false);
+      expect(Object.hasOwn(capabilities.providerAvailability ?? {}, 'nativeIap'), name).toBe(false);
       const again = await gateway.getCapabilities();
       expect(again.commerce, name).not.toBe(capabilities.commerce);
     }
@@ -530,7 +576,7 @@ describe('gateway with a commerce v2 provider', () => {
     const pending = registry.getCapabilitySnapshot();
     await vi.advanceTimersByTimeAsync(3_000);
     expect(await pending).toEqual({
-      availability: expect.objectContaining({ nativeIap: 'temporarily-unavailable' }),
+      availability: expect.objectContaining({ rewardedAds: 'unsupported' }),
       commerce: createDegradedCommerceCapabilities(),
     });
   });
@@ -556,7 +602,7 @@ describe('gateway with a commerce v2 provider', () => {
     expect(reads).toBe(1);
     expect(capabilities.commerce).toEqual(shared);
     expect(capabilities.commerce).not.toBe(shared);
-    expect(capabilities.commerce?.purchase).not.toBe(shared.purchase);
+    expect(capabilities.commerce.purchase).not.toBe(shared.purchase);
   });
 });
 

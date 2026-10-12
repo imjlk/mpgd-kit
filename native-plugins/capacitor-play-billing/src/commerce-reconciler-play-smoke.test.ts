@@ -16,17 +16,15 @@ import {
   type FakePlayBillingPlugin,
 } from '../test/play-billing-plugin-fixture.js';
 import { createCapacitorPlayBillingCommerceProvider } from './commerce-provider.js';
-import { createCapacitorPlayBillingProvider, recoverOwnedPlayPurchases } from './provider.js';
 
 /**
- * The deprecated v1 recovery driver (`recoverOwnedPlayPurchases`) and the
- * commerce v2 reconciler (`createCommerceReconciler` over
- * `createCapacitorPlayBillingCommerceProvider`) resubmit the same owned
- * purchases from the same fake plugin to a backend answering the same
- * decisions, and must agree: a purchased token is verified once under the
- * `play-token-sha256` key v1 ledgers already hold, a pending purchase is
- * never sent, a rejection is terminal, and an outage stays retryable. Play
- * finishes on the server, so neither path finishes on the client.
+ * The commerce reconciler (`createCommerceReconciler` over
+ * `createCapacitorPlayBillingCommerceProvider`) resubmits the owned purchases
+ * of a fake plugin to a backend answering scripted decisions: a purchased
+ * token is verified once under the `play-token-sha256` key ledgers already
+ * hold, a pending purchase is never sent, a rejection is terminal, and an
+ * outage stays retryable. Play finishes on the server, so the reconciler never
+ * finishes on the client.
  */
 
 const token = 'private-play-token';
@@ -76,27 +74,6 @@ function answer(decision: Decision, requests: VerifyPurchaseRequest[]): Purchase
 interface Outcome {
   readonly status: 'granted' | 'pending' | 'rejected';
   readonly keys: readonly string[];
-}
-
-async function runLegacy(decision: Decision, state: 'purchased' | 'pending'): Promise<Outcome> {
-  const plugin = createPlugin(state);
-  const provider = createCapacitorPlayBillingProvider({
-    products: [{ id: 'COINS_100', type: 'consumable', storeId: 'coins_100' }],
-    getObfuscatedAccountId: () => accountId,
-    sdk: plugin,
-    isAndroid: () => true,
-  });
-  const requests: VerifyPurchaseRequest[] = [];
-  const recovered = await recoverOwnedPlayPurchases({
-    provider,
-    playerId: accountId,
-    backend: answer(decision, requests),
-  });
-  const first = recovered[0];
-  if (first === undefined) {
-    throw new Error('The owned purchase was not recovered.');
-  }
-  return { status: first.status, keys: requests.map((request) => request.idempotencyKey) };
 }
 
 async function runReconciler(
@@ -151,41 +128,38 @@ async function runReconciler(
   };
 }
 
-describe('Play Billing v1 recovery driver and commerce v2 reconciler', () => {
-  it('verify a purchased token once under the same play-token-sha256 key and grant', async () => {
+describe('Play Billing commerce reconciler', () => {
+  it('verifies a purchased token once under the play-token-sha256 key and grants', async () => {
     const grant: Decision = { verified: true, ledgerEntryId: 'ledger-1' };
-    const legacy = await runLegacy(grant, 'purchased');
-    const v2 = await runReconciler(grant, 'purchased');
+    const outcome = await runReconciler(grant, 'purchased');
     const expectedKey = await createGooglePlayTokenPurchaseKey(token);
-    expect(legacy).toEqual({ status: 'granted', keys: [expectedKey] });
-    expect({ status: v2.status, keys: v2.keys }).toEqual(legacy);
-    expect(v2.history).toEqual(['purchased', 'verifying', 'granted', 'finishing', 'finished']);
+    expect({ status: outcome.status, keys: outcome.keys })
+      .toEqual({ status: 'granted', keys: [expectedKey] });
+    expect(outcome.history).toEqual(['purchased', 'verifying', 'granted', 'finishing', 'finished']);
   });
 
-  it('never send a pending purchase', async () => {
+  it('never sends a pending purchase', async () => {
     const grant: Decision = { verified: true, ledgerEntryId: 'ledger-1' };
-    const legacy = await runLegacy(grant, 'pending');
-    const v2 = await runReconciler(grant, 'pending');
-    expect(legacy).toEqual({ status: 'pending', keys: [] });
-    expect({ status: v2.status, keys: v2.keys }).toEqual(legacy);
-    expect(v2.history).toEqual(['pending']);
+    const outcome = await runReconciler(grant, 'pending');
+    expect({ status: outcome.status, keys: outcome.keys }).toEqual({ status: 'pending', keys: [] });
+    expect(outcome.history).toEqual(['pending']);
   });
 
-  it('treat a rejection as terminal', async () => {
+  it('treats a rejection as terminal', async () => {
     const rejected: Decision = { verified: false, disposition: 'rejected' };
-    const legacy = await runLegacy(rejected, 'purchased');
-    const v2 = await runReconciler(rejected, 'purchased');
-    expect(legacy.status).toBe('rejected');
-    expect({ status: v2.status, keys: v2.keys }).toEqual(legacy);
-    expect(v2.history).toEqual(['purchased', 'verifying', 'rejected']);
+    const outcome = await runReconciler(rejected, 'purchased');
+    const expectedKey = await createGooglePlayTokenPurchaseKey(token);
+    expect({ status: outcome.status, keys: outcome.keys })
+      .toEqual({ status: 'rejected', keys: [expectedKey] });
+    expect(outcome.history).toEqual(['purchased', 'verifying', 'rejected']);
   });
 
-  it('keep a backend outage retryable', async () => {
+  it('keeps a backend outage retryable', async () => {
     const outage: Decision = { throws: true };
-    const legacy = await runLegacy(outage, 'purchased');
-    const v2 = await runReconciler(outage, 'purchased');
-    expect(legacy.status).toBe('pending');
-    expect({ status: v2.status, keys: v2.keys }).toEqual(legacy);
-    expect(v2.history).toEqual(['purchased', 'verifying']);
+    const outcome = await runReconciler(outage, 'purchased');
+    const expectedKey = await createGooglePlayTokenPurchaseKey(token);
+    expect({ status: outcome.status, keys: outcome.keys })
+      .toEqual({ status: 'pending', keys: [expectedKey] });
+    expect(outcome.history).toEqual(['purchased', 'verifying']);
   });
 });

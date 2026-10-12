@@ -350,17 +350,14 @@ describe('Capacitor App event ownership', () => {
     expect(fake.listenerCount()).toBe(0);
   });
 
-  it('keeps a native purchase UI pause until the provider settles', async () => {
+  it('keeps a native external UI pause until the provider settles', async () => {
     const fake = new FakeApp();
     let finish: ((response: BridgeResponse) => void) | undefined;
     const provider: CapacitorServiceProvider = {
-      id: 'purchase-ui',
-      features: ['nativeIap'],
-      methods: [
-        'commerce.getProducts', 'commerce.purchase', 'commerce.restore',
-        'commerce.getEntitlements',
-      ],
-      async getAvailability() { return { nativeIap: 'available' }; },
+      id: 'rewarded-ui',
+      features: ['rewardedAds'],
+      methods: ['ads.preload', 'ads.showRewarded'],
+      async getAvailability() { return { rewardedAds: 'available' }; },
       bridge: {
         async request(input) {
           return await new Promise<BridgeResponse>((resolve) => {
@@ -370,7 +367,7 @@ describe('Capacitor App event ownership', () => {
       },
     };
     const gateway = createCapacitorPlatformGateway({
-      target: 'android', appVersion: '1', buildId: 'purchase-ui',
+      target: 'android', appVersion: '1', buildId: 'rewarded-ui',
       app: asApp(fake), visibility: null, providers: [provider],
       bridge: { async request(input) { return { id: input.id, ok: true, data: null }; } },
     });
@@ -379,8 +376,8 @@ describe('Capacitor App event ownership', () => {
     gateway.lifecycle.onPause(() => { pauses += 1; });
     gateway.lifecycle.onResume(() => { resumes += 1; });
     await settle();
-    const purchase = gateway.commerce.purchase({
-      productId: 'COINS_100', source: 'shop', idempotencyKey: 'purchase-ui',
+    const shown = gateway.ads.showRewarded({
+      placementId: 'CONTINUE', idempotencyKey: 'rewarded-ui',
     });
     await settle();
     expect(pauses).toBe(1);
@@ -388,8 +385,8 @@ describe('Capacitor App event ownership', () => {
     fake.emit('appStateChange', { isActive: true });
     expect(resumes).toBe(0);
     expect(finish).toBeDefined();
-    finish?.({ id: '', ok: true, data: { status: 'pending', entitlementIds: [] } });
-    await expect(purchase).resolves.toMatchObject({ status: 'pending' });
+    finish?.({ id: '', ok: true, data: { status: 'unavailable', rewardGranted: false } });
+    await expect(shown).resolves.toMatchObject({ status: 'unavailable' });
     expect(resumes).toBe(1);
     await gateway.lifecycle.dispose?.();
   });
@@ -427,12 +424,12 @@ describe('commerce v2 launched purchase activity', () => {
     const fake = new FakeApp();
     const { sdk, gateway, counts } = createLaunchedGateway(fake);
     await settle();
-    const commerceV2 = gateway.commerceV2;
-    if (commerceV2 === undefined) {
-      throw new Error('expected commerceV2');
+    const commerce = gateway.commerce;
+    if (commerce === undefined) {
+      throw new Error('expected a commerce provider');
     }
-    commerceV2.subscribe(() => undefined);
-    await expect(commerceV2.requestPurchase({
+    commerce.subscribe(() => undefined);
+    await expect(commerce.requestPurchase({
       logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop',
     })).resolves.toEqual({ outcome: 'launched' });
     await settle();
@@ -456,26 +453,26 @@ describe('commerce v2 launched purchase activity', () => {
     const fake = new FakeApp();
     const { sdk, gateway, counts } = createLaunchedGateway(fake);
     await vi.advanceTimersByTimeAsync(0);
-    const commerceV2 = gateway.commerceV2;
-    if (commerceV2 === undefined) {
-      throw new Error('expected commerceV2');
+    const commerce = gateway.commerce;
+    if (commerce === undefined) {
+      throw new Error('expected a commerce provider');
     }
-    commerceV2.subscribe(() => undefined);
+    commerce.subscribe(() => undefined);
     const request = { logicalId: 'gems_small', idempotencyKey: 'op', source: 'shop' } as const;
 
-    await commerceV2.requestPurchase(request);
+    await commerce.requestPurchase(request);
     expect(counts).toEqual({ pauses: 1, resumes: 0 });
     sdk.emit({ type: 'purchaseError', sku: 'gems.small', error: { code: 'NETWORK' } });
     expect(counts).toEqual({ pauses: 1, resumes: 1 });
 
-    await commerceV2.requestPurchase(request);
+    await commerce.requestPurchase(request);
     expect(counts).toEqual({ pauses: 2, resumes: 1 });
     await vi.advanceTimersByTimeAsync(launchedPurchaseActivityTimeoutMs - 1);
     expect(counts.resumes).toBe(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(counts).toEqual({ pauses: 2, resumes: 2 });
 
-    await commerceV2.requestPurchase(request);
+    await commerce.requestPurchase(request);
     expect(counts).toEqual({ pauses: 3, resumes: 2 });
     await gateway.lifecycle.dispose?.();
     expect(counts.resumes).toBe(3);
@@ -488,7 +485,7 @@ describe('commerce v2 launched purchase activity', () => {
     const { sdk, gateway, counts } = createLaunchedGateway(fake);
     await settle();
     sdk.queueRequest({ outcome: 'purchased', purchase: fakePurchase({ transactionId: 'tx-1' }) });
-    await gateway.commerceV2?.requestPurchase({
+    await gateway.commerce?.requestPurchase({
       logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop',
     });
     expect(counts).toEqual({ pauses: 1, resumes: 1 });

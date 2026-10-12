@@ -7,6 +7,7 @@ import {
   type CrazyGamesSdk,
 } from './crazygames.js';
 import type { AdPresentationEvent } from '@mpgd/platform/ads';
+import { createUnsupportedCommerceCapabilities } from '@mpgd/platform/commerce';
 
 function fixture(environment: CrazyGamesSdk['environment'] = 'crazygames') {
   let callbacks: CrazyGamesAdCallbacks | undefined;
@@ -89,7 +90,14 @@ describe('CrazyGames interstitial adapter', () => {
     expect(f.sdk.init).toHaveBeenCalledTimes(1);
     await expect(basic.ads.provider?.show(input)).resolves.toMatchObject({ outcome: 'unavailable', reason: 'policy-disabled', presentation: 'not-started' });
     await expect(full.ads.showRewarded({ placementId: input.placementId, idempotencyKey: 'reward' })).resolves.toMatchObject({ rewardGranted: false });
-    await expect(full.getCapabilities()).resolves.toMatchObject({ interstitialAds: true, rewardedAds: false, nativeIap: false, cloudSave: false });
+    const fullCapabilities = await full.getCapabilities();
+    expect(fullCapabilities).toMatchObject({ interstitialAds: true, rewardedAds: false, cloudSave: false });
+    // CrazyGames sells nothing: no commerce provider and the unsupported commerce block, never boolean IAP flags.
+    expect(full.commerce).toBeUndefined();
+    expect(basic.commerce).toBeUndefined();
+    expect(fullCapabilities.commerce).toEqual(createUnsupportedCommerceCapabilities());
+    expect(fullCapabilities).not.toHaveProperty('nativeIap');
+    expect(fullCapabilities).not.toHaveProperty('subscriptionIap');
     await expect(full.presentation?.getLaunchIntent()).resolves.toEqual({ entry: 'free-play' });
     expect(f.sdk.ad.requestAd).not.toHaveBeenCalled();
     full.gameActivity?.setLoading(true);

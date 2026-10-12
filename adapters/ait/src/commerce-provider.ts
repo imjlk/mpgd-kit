@@ -73,7 +73,6 @@ export const aitIapCommerceErrorCodeMap: Readonly<Record<AitIapDiagnosticCode, C
     AIT_IAP_NATIVE_PURCHASE_FAILED: 'OUTCOME_UNKNOWN',
     AIT_IAP_GRANT_PENDING: 'OUTCOME_UNKNOWN',
     AIT_IAP_GRANT_COMPLETION_FAILED: 'OUTCOME_UNKNOWN',
-    AIT_IAP_ENTITLEMENT_READ_FAILED: 'NETWORK',
     AIT_IAP_RESTORE_TIMEOUT: 'STORE_UNAVAILABLE',
   });
 
@@ -116,20 +115,19 @@ export interface AitCommerceProvider extends CommerceProvider {
 }
 
 /**
- * Commerce v2 provider for Apps in Toss (RFC profile `apps-in-toss`):
+ * Commerce provider for Apps in Toss (RFC profile `apps-in-toss`):
  * consumable and durable one-time products, no subscription, no quantity,
  * `lifecycle.finish: 'host'`, `authority.evidence: 'host-callback'`, and
- * `accountBinding: 'host'`. It runs the host bridge's own IAP machinery, so a
- * v1 `commerce.purchase` and a v2 `requestPurchase` share one IAP lock, the
- * same durable attempt markers, the same pre-checkout pending-order barrier
- * and the same acknowledgement barriers.
+ * `accountBinding: 'host'`. It runs the host bridge's IAP machinery (one IAP
+ * lock, durable attempt markers, the pre-checkout pending-order barrier and
+ * the acknowledgement barriers).
  *
  * - `requestPurchase` opens `createOneTimePurchaseOrder()`. The game-owned
  *   `verifyIapProductGrant` hook inside the SDK's grant callback is the only
  *   server confirmation; a `purchased` result is produced only after that
  *   hook confirmed the grant, with the order id as `transactionId` and
  *   `token` and the `apps-in-toss.iap.callback.v1` envelope as evidence.
- *   Every other non-terminal v1 outcome (grant pending, acknowledgement
+ *   Every other non-terminal outcome (grant pending, acknowledgement
  *   unconfirmed, checkout timeout) is `launched`: the attempt stays open and
  *   the reconciler resolves it from `getAvailablePurchases`.
  * - `getAvailablePurchases` lists the provider's paid, ungranted orders
@@ -158,8 +156,8 @@ export function createAitCommerceProvider(
 }
 
 /**
- * Builds the provider over an existing controller so the v1 host bridge and
- * the v2 provider share one in-flight purchase map. Internal to the package.
+ * Builds the provider over an existing controller so the host bridge owns the
+ * controller its provider runs on. Internal to the package.
  */
 export function createAitCommerceProviderFromController(
   controller: AitIapController,
@@ -435,7 +433,7 @@ export function createAitCommerceProviderFromController(
 
   // The pending-order signal is observed only while a listener exists: with
   // nobody to deliver to, the reconciler's own reads find every paid order,
-  // and a v1-only host does not read pending orders on every resume.
+  // and a host with no game listening does not read pending orders on every resume.
   const subscribeToPendingOrderChanges = input.onPendingOrdersChanged
     ?? subscribeToAitLifecycleResume;
   let detachPendingOrderChanges: (() => void) | undefined;
@@ -500,7 +498,7 @@ export function createAitCommerceProviderFromController(
         return { outcome: 'purchased', purchase };
       }
       case 'pending':
-        // The v1 outcome is not known yet (grant pending, acknowledgement
+        // The outcome is not known yet (grant pending, acknowledgement
         // unconfirmed, checkout timeout): the attempt stays open.
         return { outcome: 'launched' };
       case 'cancelled':

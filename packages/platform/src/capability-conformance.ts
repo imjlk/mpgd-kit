@@ -1,4 +1,3 @@
-import { deriveLegacyCommerceCapabilities } from './commerce-capabilities.js';
 import type {
   CommerceCapabilities,
   PlatformCapabilities,
@@ -9,7 +8,6 @@ import type {
 } from './index.js';
 
 export const platformCapabilityKeys = Object.freeze([
-  'nativeIap',
   'nativeAds',
   'rewardedAds',
   'interstitialAds',
@@ -24,7 +22,6 @@ export const platformCapabilityKeys = Object.freeze([
 
 export const optionalPlatformCapabilityKeys = Object.freeze([
   'bannerAds',
-  'subscriptionIap',
 ] as const satisfies readonly (keyof PlatformCapabilities)[]);
 const allowedPlatformCapabilityKeys = Object.freeze([
   ...platformCapabilityKeys,
@@ -39,8 +36,6 @@ const optionalPlatformCapabilityKeySet = new Set<keyof PlatformCapabilities>(
   optionalPlatformCapabilityKeys,
 );
 const providerFeatureSet = new Set<PlatformProviderFeature>([
-  'nativeIap',
-  'subscriptionIap',
   'rewardedAds',
   'interstitialAds',
   'bannerAds',
@@ -55,8 +50,8 @@ const providerAvailabilitySet = new Set<PlatformProviderAvailability>([
   'temporarily-unavailable',
   'available',
 ]);
-// The optional commerce v2 block follows the same rules as the boolean
-// snapshot: exact keys, typed values, and a fresh object on every read.
+// The commerce block follows the same rules as the boolean snapshot: exact
+// keys, typed values, and a fresh object on every read.
 const commerceCapabilityBlockKeys = Object.freeze({
   purchase: ['consumable', 'durable', 'subscription', 'quantity'],
   catalog: ['products', 'offers', 'localizedPrice'],
@@ -99,7 +94,7 @@ export interface PlatformGatewayCapabilityConformanceReport {
  * target-configured wrappers. Every read must return a complete boolean
  * snapshot, a fresh object, and the provider's latest state.
  * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Checks each gateway read against the required boolean keys and expected provider state.
- * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #a1834db Reviewed required booleans, optional banner/subscription defaults, ordered readiness comparison, and fresh nested rereads.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f566c58 Reviewed required booleans, the required commerce block, the optional banner default, ordered readiness comparison, and fresh nested rereads.
  * @evidence docs/specs/platform-capability-snapshots.md#provider-transitions Checks a fresh provider read after the optional transition update.
  * @evidenceReview docs/specs/platform-capability-snapshots.md#provider-transitions #839c0c8 Reviewed the changed-state guard and post-update snapshot assertion.
  * @evidence docs/specs/platform-capability-snapshots.md#fixture-validation Rejects invalid fixture sets and returns the names of passing fixtures.
@@ -225,19 +220,12 @@ function assertCapabilitySnapshot(
 
 function assertCommerceCapabilityBlock(
   snapshot: PlatformCapabilities,
-  expected: CommerceCapabilities | undefined,
+  expected: CommerceCapabilities,
 ): void {
   const actual: unknown = snapshot.commerce;
-  if (actual === undefined) {
-    assert(
-      expected === undefined,
-      'commerce capabilities must be present when the fixture expects them',
-    );
-    return;
-  }
   assert(
-    expected !== undefined,
-    'commerce capabilities must be absent when the fixture omits them',
+    actual !== undefined,
+    'commerce capabilities are required: a gateway without a commerce provider reports createUnsupportedCommerceCapabilities()',
   );
   assert(
     typeof actual === 'object' && actual !== null && !Array.isArray(actual),
@@ -284,17 +272,6 @@ function assertCommerceCapabilityBlock(
     normalizedCommerce(expected),
     'commerce capabilities must match the expected provider state',
   );
-  const legacy = deriveLegacyCommerceCapabilities(block as unknown as CommerceCapabilities);
-  assertEqual(
-    snapshot.nativeIap,
-    legacy.nativeIap,
-    'nativeIap must equal the value derived from the commerce capabilities',
-  );
-  assertEqual(
-    snapshot.subscriptionIap ?? false,
-    legacy.subscriptionIap,
-    'subscriptionIap must equal the value derived from the commerce capabilities',
-  );
 }
 
 function normalizedCommerce(value: CommerceCapabilities | undefined): string {
@@ -337,17 +314,13 @@ function cloneExpectedCapabilities(value: PlatformCapabilities): PlatformCapabil
     ...(value.providerAvailability === undefined
       ? {}
       : { providerAvailability: { ...value.providerAvailability } }),
-    ...(value.commerce === undefined
-      ? {}
-      : {
-          commerce: {
-            purchase: { ...value.commerce.purchase },
-            catalog: { ...value.commerce.catalog },
-            lifecycle: { ...value.commerce.lifecycle },
-            authority: { ...value.commerce.authority },
-            availability: value.commerce.availability,
-          },
-        }),
+    commerce: {
+      purchase: { ...value.commerce.purchase },
+      catalog: { ...value.commerce.catalog },
+      lifecycle: { ...value.commerce.lifecycle },
+      authority: { ...value.commerce.authority },
+      availability: value.commerce.availability,
+    },
   };
 }
 
@@ -357,23 +330,21 @@ function normalizedAvailability(value: PlatformCapabilities['providerAvailabilit
 
 function tryMutateSnapshot(snapshot: PlatformCapabilities): void {
   try {
-    Reflect.set(snapshot, 'nativeIap', !snapshot.nativeIap);
+    Reflect.set(snapshot, 'nativeAds', !snapshot.nativeAds);
   } catch {
     // Frozen snapshots already satisfy the isolation requirement.
   }
   if (snapshot.providerAvailability !== undefined) {
     try {
-      const next = snapshot.providerAvailability.nativeIap === 'available'
+      const next = snapshot.providerAvailability.rewardedAds === 'available'
         ? 'unsupported'
         : 'available';
-      Reflect.set(snapshot.providerAvailability, 'nativeIap', next);
+      Reflect.set(snapshot.providerAvailability, 'rewardedAds', next);
     } catch {
       // A frozen nested readiness record already satisfies isolation.
     }
   }
-  if (snapshot.commerce !== undefined) {
-    tryMutateCommerceSnapshot(snapshot.commerce);
-  }
+  tryMutateCommerceSnapshot(snapshot.commerce);
 }
 
 // Every nested block is probed: a gateway may rebuild the outer object while

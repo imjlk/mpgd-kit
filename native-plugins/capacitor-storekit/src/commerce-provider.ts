@@ -10,6 +10,11 @@ import type { PlatformEvidenceEnvelope } from '@mpgd/platform';
 import { CommerceError, type StorePurchaseAccountBinding } from '@mpgd/platform/commerce';
 
 import {
+  appStoreSignedTransactionEvidenceSchema,
+  appStoreStoreId,
+  storeKitCommerceAuthority,
+} from './commerce-profile.js';
+import {
   capacitorStoreKitErrorCodeMap,
   createCapacitorStoreKitStoreSdk,
   readAppAccountToken,
@@ -17,12 +22,9 @@ import {
   type CapacitorStoreKitStoreSdkPlugin,
 } from './store-sdk.js';
 
-/**
- * Evidence schema of a commerce v2 App Store purchase. The payload carries
- * the StoreKit-verified JWS so `@mpgd/game-services/app-store-verifier`
- * verifies it offline and falls back to the Server API only without it.
- */
-export const appStoreSignedTransactionEvidenceSchema = 'app-store.signed-transaction.v1';
+// The profile constants live in the SDK-free `commerce-profile.ts` so a tools
+// project can read them without loading Capacitor; they stay exported here.
+export { appStoreSignedTransactionEvidenceSchema };
 
 /** Payload of an `app-store.signed-transaction.v1` envelope. */
 export interface AppStoreSignedTransactionEvidencePayload {
@@ -96,7 +98,7 @@ export function createCapacitorStoreKitCommerceProvider(
   });
   return createStoreCommerceProvider({
     sdk,
-    store: 'app-store',
+    store: appStoreStoreId,
     products: input.products,
     evidenceSchema: appStoreSignedTransactionEvidenceSchema,
     evidencePayload: (purchase): PlatformEvidenceEnvelope['payload'] => {
@@ -137,23 +139,22 @@ export function createCapacitorStoreKitCommerceProvider(
         });
       }
     },
-    authority: { evidence: 'client-token', accountBinding: 'required' },
+    authority: storeKitCommerceAuthority,
     mapError: { ...capacitorStoreKitErrorCodeMap, ...input.mapError },
   });
 }
 
 export interface CreateCapacitorStoreKitServiceProviderInput
   extends CreateCapacitorStoreKitCommerceProviderInput {
-  /** Registry id. Defaults to `apple-storekit`, the v1 provider id. */
+  /** Registry id. Defaults to `apple-storekit`. */
   readonly id?: string;
 }
 
 /**
- * The commerce v2 provider wrapped as a `CapacitorServiceProvider` for
- * `createCapacitorPlatformGateway({ providers })`: the registry serves the
- * `commerce.v2.*` and v1 `commerce.*` bridge methods from it and exposes it
- * as `gateway.commerceV2`. Register either this or the v1
- * `createCapacitorStoreKitProvider`, never both.
+ * The commerce provider wrapped as a `CapacitorServiceProvider` for
+ * `createCapacitorPlatformGateway({ providers })`: the registry serves the six
+ * `commerce.v2.*` bridge methods from it, exposes it as `gateway.commerce`, and
+ * reports its capability block in `getCapabilities()`.
  */
 export function createCapacitorStoreKitServiceProvider(
   input: CreateCapacitorStoreKitServiceProviderInput,

@@ -78,7 +78,7 @@ export type DevvitOrdersChangeListener = (change?: DevvitOrdersChange) => void;
 export interface CreateDevvitCommerceProviderInput {
   readonly products: readonly DevvitCommerceProduct[];
   /** Opens the Reddit checkout (`purchase()` from `@devvit/payments/client`). */
-  readonly client: Pick<DevvitPaymentsClient, 'purchase'>;
+  readonly client: DevvitPaymentsClient;
   readonly orders: DevvitOrderSource;
   /** Defaults to `devvit`; conformance vectors name their fixture store. */
   readonly store?: StoreId;

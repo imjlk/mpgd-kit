@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { bridgeCommerceV2Methods, type BridgeEvent, type BridgeRequest } from '@mpgd/bridge';
-import { deriveLegacyCommerceCapabilities, type CommerceEvent } from '@mpgd/platform/commerce';
+import { createUnsupportedCommerceCapabilities, type CommerceEvent } from '@mpgd/platform/commerce';
 
 import {
   createFakeAitHostDependencies,
@@ -25,7 +25,6 @@ function setup(options: { readonly configured?: boolean } = {}) {
           iapProducts: products,
           prepareIap: async () => true,
           verifyIapProductGrant: async () => true,
-          readIapEntitlements: async () => [],
         }),
     onPendingOrdersChanged: (listener) => host.onPendingOrdersChanged(listener),
     dependencies: createFakeAitHostDependencies(host),
@@ -49,34 +48,92 @@ function request(method: BridgeRequest['method'], payload: unknown, id = `${meth
 }
 
 describe('Apps in Toss commerce v2 bridge', () => {
-  it('serves the capability block with the boolean flags derived from it', async () => {
-    const { gateway } = setup();
+  it('serves the capability block as the only commerce capability source', async () => {
+    const { gateway, bridge } = setup();
     const capabilities = await gateway.getCapabilities();
-    if (capabilities.commerce === undefined) {
-      throw new Error('The host must answer with the commerce capability block.');
-    }
     expect(capabilities.commerce).toMatchObject({
       lifecycle: { finish: 'host' },
       authority: { evidence: 'host-callback', accountBinding: 'host' },
       availability: 'available',
     });
-    const legacy = deriveLegacyCommerceCapabilities(capabilities.commerce);
-    expect(capabilities.nativeIap).toBe(legacy.nativeIap);
-    expect(capabilities.subscriptionIap).toBe(legacy.subscriptionIap);
-    expect(capabilities.nativeIap).toBe(true);
+    // The removed boolean flags are neither sent by the host nor in the snapshot.
+    expect(capabilities).not.toHaveProperty('nativeIap');
+    expect(capabilities).not.toHaveProperty('subscriptionIap');
+    const hostAnswer = await bridge.request(request('runtime.getCapabilities', {}));
+    expect(hostAnswer).toMatchObject({ ok: true });
+    expect(hostAnswer.ok ? hostAnswer.data : undefined).not.toHaveProperty('nativeIap');
+    expect(hostAnswer.ok ? hostAnswer.data : undefined).not.toHaveProperty('subscriptionIap');
     expect((await gateway.getCapabilities()).commerce).not.toBe(capabilities.commerce);
 
     const unconfigured = setup({ configured: false });
     const degraded = await unconfigured.gateway.getCapabilities();
-    expect(degraded.nativeIap).toBe(false);
-    expect(degraded.commerce?.availability).toBe('configuration-required');
+    expect(degraded.commerce.availability).toBe('configuration-required');
+  });
+
+  it('replaces a host capability answer that carries the removed flags or no valid commerce block', async () => {
+    const answers: Record<string, unknown>[] = [];
+    const validBlock = (await setup().gateway.getCapabilities()).commerce;
+    const bridge: GamePlatformBridge = {
+      commerceV2: { subscribe: () => () => {} },
+      async request(input) {
+        const data = answers.shift();
+        return data === undefined
+          ? { id: input.id, ok: false, error: { code: 'NO_ANSWER', message: input.method, retryable: false } }
+          : { id: input.id, ok: true, data };
+      },
+    };
+    const gateway = createAitPlatformGateway({ appVersion: '1.0.0', buildId: 'build-ait', bridge });
+
+    // A host from before the C4 removal still sends the flags: they are dropped.
+    answers.push({ nativeIap: true, subscriptionIap: false, nativeAds: false, commerce: validBlock });
+    const stripped = await gateway.getCapabilities();
+    expect(stripped).not.toHaveProperty('nativeIap');
+    expect(stripped).not.toHaveProperty('subscriptionIap');
+    expect(stripped.commerce).toEqual(validBlock);
+    expect(stripped.commerce).not.toBe(validBlock);
+    expect(stripped.commerce.purchase).not.toBe(validBlock.purchase);
+
+    // A missing, malformed or over-keyed block is replaced, never passed on: the
+    // gateway has a provider, so the store reads as temporarily unavailable
+    // (nothing sold) rather than as permanently unsupported.
+    for (const commerce of [
+      undefined,
+      null,
+      'available',
+      { ...validBlock, availability: 'nope' },
+      { ...validBlock, extra: true },
+      { ...validBlock, purchase: { consumable: true } },
+    ]) {
+      answers.push({ nativeAds: false, ...(commerce === undefined ? {} : { commerce }) });
+      await expect(gateway.getCapabilities()).resolves.toMatchObject({
+        commerce: {
+          ...createUnsupportedCommerceCapabilities(),
+          availability: 'temporarily-unavailable',
+        },
+      });
+    }
+  });
+
+  it('reports the unsupported block when the gateway has no commerce provider, whatever the host claims', async () => {
+    const { gateway: hosted } = setup();
+    const validBlock = (await hosted.getCapabilities()).commerce;
+    const bridge: GamePlatformBridge = {
+      async request(input) {
+        return { id: input.id, ok: true, data: { nativeAds: false, commerce: validBlock } };
+      },
+    };
+    const gateway = createAitPlatformGateway({ appVersion: '1.0.0', buildId: 'build-ait', bridge });
+    expect(gateway.commerce).toBeUndefined();
+    const capabilities = await gateway.getCapabilities();
+    expect(capabilities.commerce).toEqual(createUnsupportedCommerceCapabilities());
+    expect((await gateway.getCapabilities()).commerce).not.toBe(capabilities.commerce);
   });
 
   it('round-trips the six commerce.v2 methods through the host bridge and the gateway', async () => {
     const { host, gateway } = setup();
-    const provider = gateway.commerceV2;
+    const provider = gateway.commerce;
     if (provider === undefined) {
-      throw new Error('The gateway must expose commerceV2 over a host that serves it.');
+      throw new Error('The gateway must expose commerce over a host that serves it.');
     }
     expect(provider.store).toBe('apps-in-toss');
     expect((await provider.getCapabilities()).lifecycle.finish).toBe('host');
@@ -115,7 +172,7 @@ describe('Apps in Toss commerce v2 bridge', () => {
       envelopes.push(event);
     });
     const events: CommerceEvent[] = [];
-    gateway.commerceV2?.subscribe((event) => {
+    gateway.commerce?.subscribe((event) => {
       events.push(event);
     });
     host.addPendingOrder({ orderId: 'order-2', sku: 'gems.small', paymentCompletedDate: '' });
@@ -206,7 +263,7 @@ describe('Apps in Toss commerce v2 bridge', () => {
     }
   });
 
-  it('offers no commerceV2 over a bridge without the event channel and answers its methods fail-closed', async () => {
+  it('offers no commerce provider over a bridge without the event channel', async () => {
     const bridge: GamePlatformBridge = {
       async request(input) {
         return {
@@ -217,7 +274,7 @@ describe('Apps in Toss commerce v2 bridge', () => {
       },
     };
     const gateway = createAitPlatformGateway({ appVersion: '1.0.0', buildId: 'build-ait', bridge });
-    expect(gateway.commerceV2).toBeUndefined();
+    expect(gateway.commerce).toBeUndefined();
     expect(bridgeCommerceV2Methods).toHaveLength(6);
   });
 });

@@ -24,6 +24,7 @@ import type {
   StoreKitProduct,
   StoreKitTransaction,
 } from './definitions.js';
+import { appStoreStoreId, storeKitStoreSdkCapabilities } from './commerce-profile.js';
 import { CapacitorStoreKit } from './plugin.js';
 
 /** The plugin surface the commerce v2 SDK drives; `CapacitorStoreKit` by default. */
@@ -356,7 +357,7 @@ export function createCapacitorStoreKitStoreSdk(
   >();
 
   return {
-    store: 'app-store',
+    store: appStoreStoreId,
     capabilities: storeKitStoreSdkCapabilities,
     async fetchProducts(request: StoreSdkFetchProductsInput): Promise<readonly StoreSdkProduct[]> {
       requireIos();
@@ -538,19 +539,10 @@ export function createCapacitorStoreKitStoreSdk(
   };
 }
 
-/** The App Store profile from the RFC "Capabilities" table. */
-export const storeKitStoreSdkCapabilities: StoreSdkCapabilities = Object.freeze({
-  purchase: Object.freeze({
-    consumable: true,
-    durable: true,
-    subscription: false,
-    quantity: false,
-  }),
-  offers: false,
-  pending: true,
-  restore: true,
-  finish: 'client',
-});
+// The App Store profile (RFC "Capabilities") lives in the SDK-free
+// `commerce-profile.ts` so a tools project can read it without loading
+// Capacitor; it stays exported here.
+export { storeKitStoreSdkCapabilities };
 
 /**
  * StoreKit plugin codes merged over `defaultStoreSdkErrorCodeMap`. Codes the

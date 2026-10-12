@@ -3,9 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   bridgeCommerceV2Methods,
   bridgeStorageLoadProtocol,
+  type BridgeMethod,
   type BridgeRequest,
 } from '@mpgd/bridge';
 import { createUnsupportedCapabilities } from '@mpgd/platform';
+import { createUnsupportedCommerceCapabilities } from '@mpgd/platform/commerce';
 
 import { createCapacitorPlatformGateway } from './index.js';
 import {
@@ -14,12 +16,13 @@ import {
   type NativeBridge,
 } from './providers.js';
 
-const commerceMethods = [
+// The retired v1 names; `BridgeMethod` no longer lists them.
+const retiredV1CommerceMethods = [
   'commerce.getProducts',
   'commerce.purchase',
   'commerce.restore',
   'commerce.getEntitlements',
-] as const;
+] as unknown as readonly BridgeMethod[];
 
 function baseBridge(requests: BridgeRequest[]): NativeBridge {
   return {
@@ -37,25 +40,24 @@ function baseBridge(requests: BridgeRequest[]): NativeBridge {
   };
 }
 
-function commerceProvider(
+function rewardedProvider(
   requests: BridgeRequest[],
   availability: () => Promise<'available' | 'configuration-required' | 'temporarily-unavailable'>,
-  purchaseData: unknown = {
+  showData: unknown = {
     status: 'completed',
-    transactionId: 'order-1',
-    entitlementIds: [],
-    authoritativeGrant: { ledgerEntryId: 'ledger-1' },
+    rewardGranted: true,
+    ledgerEntryId: 'ledger-1',
   },
 ): CapacitorServiceProvider {
   return {
-    id: 'store-provider',
-    features: ['nativeIap'],
-    methods: commerceMethods,
-    getAvailability: async () => ({ nativeIap: await availability() }),
+    id: 'rewarded-provider',
+    features: ['rewardedAds'],
+    methods: ['ads.preload', 'ads.showRewarded'],
+    getAvailability: async () => ({ rewardedAds: await availability() }),
     bridge: {
       async request(input) {
         requests.push(input);
-        const data = input.method === 'commerce.purchase' ? purchaseData : [];
+        const data = input.method === 'ads.showRewarded' ? showData : undefined;
         return { id: input.id, ok: true, data };
       },
     },
@@ -69,9 +71,11 @@ describe('Capacitor optional provider composition', () => {
       target: 'android', appVersion: '1', buildId: 'base', bridge: baseBridge(baseRequests),
     });
     const capabilities = await gateway.getCapabilities();
-    expect(capabilities.nativeIap).toBe(false);
-    expect(capabilities.subscriptionIap).toBe(false);
-    expect(capabilities.providerAvailability?.nativeIap).toBe('unsupported');
+    expect(capabilities.commerce).toEqual(createUnsupportedCommerceCapabilities());
+    expect(Object.hasOwn(capabilities, 'nativeIap')).toBe(false);
+    expect(Object.hasOwn(capabilities, 'subscriptionIap')).toBe(false);
+    expect(capabilities.providerAvailability).not.toHaveProperty('nativeIap');
+    expect(gateway.commerce).toBeUndefined();
     await expect(gateway.storage.load({ key: 'save' })).resolves.toBeNull();
     await expect(gateway.identity.getSession?.()).resolves.toMatchObject({
       identityLevel: 'guest', trustLevel: 'local',
@@ -86,16 +90,16 @@ describe('Capacitor optional provider composition', () => {
     const providerRequests: BridgeRequest[] = [];
     const gateway = createCapacitorPlatformGateway({
       target: 'ios', appVersion: '2', buildId: 'native', bridge: baseBridge(baseRequests),
-      providers: [commerceProvider(providerRequests, async () => 'available')],
+      providers: [rewardedProvider(providerRequests, async () => 'available')],
     });
-    expect((await gateway.getCapabilities()).nativeIap).toBe(true);
-    await expect(gateway.commerce.purchase({
-      productId: 'COINS_100', source: 'shop', idempotencyKey: 'op-1',
+    expect((await gateway.getCapabilities()).rewardedAds).toBe(true);
+    await expect(gateway.ads.showRewarded({
+      placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'op-1',
     })).resolves.toMatchObject({
-      status: 'completed', authoritativeGrant: { ledgerEntryId: 'ledger-1' },
+      status: 'completed', rewardGranted: true, ledgerEntryId: 'ledger-1',
     });
     await gateway.storage.load({ key: 'save' });
-    expect(providerRequests.map((request) => request.method)).toEqual(['commerce.purchase']);
+    expect(providerRequests.map((request) => request.method)).toEqual(['ads.showRewarded']);
     expect(providerRequests[0]?.meta).toMatchObject({ target: 'ios', appVersion: '2' });
     expect(baseRequests.map((request) => request.method)).toEqual([
       'runtime.getCapabilities', 'storage.load',
@@ -116,78 +120,31 @@ describe('Capacitor optional provider composition', () => {
     };
     const gateway = createCapacitorPlatformGateway({
       target: 'ios', appVersion: '1', buildId: 'scoped', bridge: baseBridge([]),
-      providers: [commerceProvider([], async () => 'available'), unrelated],
+      providers: [rewardedProvider([], async () => 'available'), unrelated],
     });
-    await gateway.commerce.purchase({
-      productId: 'COINS_100', source: 'shop', idempotencyKey: 'scoped-order',
+    await gateway.ads.showRewarded({
+      placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'scoped-order',
     });
     expect(unrelatedReads).toBe(0);
   });
 
-  it('does not invoke an unconfigured purchase provider', async () => {
+  it('does not invoke an unconfigured provider', async () => {
     const providerRequests: BridgeRequest[] = [];
     const gateway = createCapacitorPlatformGateway({
       target: 'android', appVersion: '1', buildId: 'base', bridge: baseBridge([]),
-      providers: [commerceProvider(providerRequests, async () => 'configuration-required')],
+      providers: [rewardedProvider(providerRequests, async () => 'configuration-required')],
     });
-    expect((await gateway.getCapabilities()).providerAvailability?.nativeIap).toBe(
+    expect((await gateway.getCapabilities()).providerAvailability?.rewardedAds).toBe(
       'configuration-required',
     );
-    await expect(gateway.commerce.purchase({
-      productId: 'COINS_100', source: 'shop', idempotencyKey: 'op-1',
+    await expect(gateway.ads.showRewarded({
+      placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'op-1',
     })).rejects.toMatchObject({ code: 'NATIVE_PROVIDER_CONFIGURATION_REQUIRED' });
     expect(providerRequests).toHaveLength(0);
   });
 
-  it('resolves product type before purchasing through a mixed-readiness store', async () => {
-    const requests: BridgeRequest[] = [];
-    const provider: CapacitorServiceProvider = {
-      id: 'mixed-store',
-      features: ['nativeIap', 'subscriptionIap'],
-      methods: commerceMethods,
-      async getAvailability() {
-        return { nativeIap: 'available', subscriptionIap: 'configuration-required' };
-      },
-      bridge: {
-        async request(input) {
-          requests.push(input);
-          const product = (id: string, type: 'consumable' | 'subscription') => ({
-            id, type, title: id, description: id,
-            price: { formatted: '$1', currencyCode: 'USD' },
-          });
-          return { id: input.id, ok: true, data: input.method === 'commerce.getProducts'
-            ? [product('COINS_100', 'consumable'), product('PASS_MONTHLY', 'subscription')]
-            : { status: 'pending', entitlementIds: [] } };
-        },
-      },
-    };
-    const gateway = createCapacitorPlatformGateway({
-      target: 'android', appVersion: '1', buildId: 'mixed', bridge: baseBridge([]),
-      providers: [provider],
-    });
-    await expect(gateway.commerce.purchase({
-      productId: 'PASS_MONTHLY', source: 'shop', idempotencyKey: 'sub',
-    })).rejects.toMatchObject({ code: 'NATIVE_PROVIDER_CONFIGURATION_REQUIRED' });
-    await expect(gateway.commerce.purchase({
-      productId: 'UNKNOWN', source: 'shop', idempotencyKey: 'unknown',
-    })).rejects.toMatchObject({ code: 'NATIVE_PROVIDER_PRODUCT_UNKNOWN' });
-    await expect(gateway.commerce.purchase({
-      productId: 'COINS_100', source: 'shop', idempotencyKey: 'coins',
-    })).resolves.toMatchObject({ status: 'pending' });
-    await expect(gateway.commerce.restore?.()).rejects.toMatchObject({
-      code: 'NATIVE_PROVIDER_CONFIGURATION_REQUIRED',
-    });
-    expect(requests.filter((request) => request.method === 'commerce.purchase')).toHaveLength(1);
-  });
-
-  it('keeps subscription, rewarded, and interstitial readiness independent', async () => {
+  it('keeps rewarded and interstitial readiness independent', async () => {
     const adRequests: BridgeRequest[] = [];
-    const subscription: CapacitorServiceProvider = {
-      ...commerceProvider([], async () => 'available'),
-      id: 'subscription-provider',
-      features: ['subscriptionIap'],
-      async getAvailability() { return { subscriptionIap: 'available' }; },
-    };
     const ads: CapacitorServiceProvider = {
       id: 'ads-provider',
       features: ['rewardedAds', 'interstitialAds'],
@@ -207,11 +164,9 @@ describe('Capacitor optional provider composition', () => {
     };
     const gateway = createCapacitorPlatformGateway({
       target: 'ios', appVersion: '1', buildId: 'base', bridge: baseBridge([]),
-      providers: [subscription, ads],
+      providers: [ads],
     });
     const capabilities = await gateway.getCapabilities();
-    expect(capabilities.nativeIap).toBe(false);
-    expect(capabilities.subscriptionIap).toBe(true);
     expect(capabilities.rewardedAds).toBe(false);
     expect(capabilities.interstitialAds).toBe(true);
     expect(capabilities.bannerAds).toBe(false);
@@ -528,116 +483,40 @@ describe('Capacitor optional provider composition', () => {
   });
 
   it.each([
-    { name: 'unknown purchase state', data: { status: 'granted', entitlementIds: [] } },
-    { name: 'missing entitlement list', data: { status: 'completed' } },
-    { name: 'malformed authoritative grant', data: {
-      status: 'completed', entitlementIds: [], authoritativeGrant: { ledgerEntryId: 42 },
+    { name: 'unknown rewarded state', data: { status: 'granted', rewardGranted: false } },
+    { name: 'missing reward flag', data: { status: 'pending' } },
+    { name: 'malformed ledger entry', data: {
+      status: 'completed', rewardGranted: true, ledgerEntryId: 42,
     } },
-    { name: 'grant on a pending order', data: {
-      status: 'pending', entitlementIds: [], transactionId: 'order-1',
-      authoritativeGrant: { ledgerEntryId: 'ledger-1' },
-    } },
+    { name: 'a retired v1 purchase result', data: { status: 'completed', entitlementIds: [] } },
   ])('rejects $name from an optional provider', async ({ data }) => {
     const gateway = createCapacitorPlatformGateway({
       target: 'ios', appVersion: '1', buildId: 'base', bridge: baseBridge([]),
-      providers: [commerceProvider([], async () => 'available', data)],
+      providers: [rewardedProvider([], async () => 'available', data)],
     });
-    await expect(gateway.commerce.purchase({
-      productId: 'COINS_100', source: 'shop', idempotencyKey: 'op-1',
+    await expect(gateway.ads.showRewarded({
+      placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'op-1',
     })).rejects.toMatchObject({ code: 'NATIVE_PROVIDER_INVALID_RESPONSE' });
-  });
-
-  it.each([
-    { name: 'a non-object diagnostic', diagnostic: 'invalid' },
-    { name: 'a lower-case diagnostic code', diagnostic: { code: 'not granted', retryable: true } },
-    { name: 'a non-boolean retry hint', diagnostic: { code: 'STORE_PENDING', retryable: 'yes' } },
-    { name: 'an unsafe provider code', diagnostic: {
-      code: 'STORE_PENDING', retryable: true, providerCode: 'user 1234 failed',
-    } },
-  ])('rejects $name on a purchase result', async ({ diagnostic }) => {
-    const gateway = createCapacitorPlatformGateway({
-      target: 'ios', appVersion: '1', buildId: 'base', bridge: baseBridge([]),
-      providers: [commerceProvider([], async () => 'available', {
-        status: 'pending', entitlementIds: [], diagnostic,
-      })],
-    });
-    await expect(gateway.commerce.purchase({
-      productId: 'COINS_100', source: 'shop', idempotencyKey: 'op-1',
-    })).rejects.toMatchObject({ code: 'NATIVE_PROVIDER_INVALID_RESPONSE' });
-  });
-
-  it('accepts a well-formed purchase diagnostic', async () => {
-    const data = {
-      status: 'pending',
-      entitlementIds: [],
-      diagnostic: { code: 'STORE_PENDING', retryable: true, providerCode: 'ITEM_PENDING' },
-    };
-    const gateway = createCapacitorPlatformGateway({
-      target: 'ios', appVersion: '1', buildId: 'base', bridge: baseBridge([]),
-      providers: [commerceProvider([], async () => 'available', data)],
-    });
-    await expect(gateway.commerce.purchase({
-      productId: 'COINS_100', source: 'shop', idempotencyKey: 'op-1',
-    })).resolves.toEqual(data);
-  });
-
-  it.each([
-    { name: 'a numeric settlement key', valid: false, data: {
-      restoredEntitlements: [],
-      settledPurchases: [{
-        transactionId: 'order-1', productId: 'COINS_100', status: 'granted', idempotencyKey: 42,
-      }],
-    } },
-    { name: 'an empty settlement key', valid: false, data: {
-      restoredEntitlements: [],
-      settledPurchases: [{
-        transactionId: 'order-1', productId: 'COINS_100', status: 'granted', idempotencyKey: '',
-      }],
-    } },
-    { name: 'a malformed restore diagnostic', valid: false, data: {
-      restoredEntitlements: [], diagnostic: { code: 'STORE_PENDING' },
-    } },
-    { name: 'well-formed restore metadata', valid: true, data: {
-      restoredEntitlements: [],
-      settledPurchases: [{
-        transactionId: 'order-1', productId: 'COINS_100', status: 'granted', idempotencyKey: 'op-1',
-      }],
-      diagnostic: { code: 'STORE_PENDING_ORDER_UNRESOLVED', retryable: true },
-    } },
-  ])('validates restore results with $name', async ({ valid, data }) => {
-    const provider: CapacitorServiceProvider = {
-      ...commerceProvider([], async () => 'available'),
-      bridge: {
-        async request(input) {
-          return { id: input.id, ok: true, data: input.method === 'commerce.restore' ? data : [] };
-        },
-      },
-    };
-    const gateway = createCapacitorPlatformGateway({
-      target: 'ios', appVersion: '1', buildId: 'base', bridge: baseBridge([]),
-      providers: [provider],
-    });
-    const restore = gateway.commerce.restore?.();
-    if (valid) {
-      await expect(restore).resolves.toEqual(data);
-    } else {
-      await expect(restore).rejects.toMatchObject({ code: 'NATIVE_PROVIDER_INVALID_RESPONSE' });
-    }
   });
 
   it('rejects duplicate and base-method registrations', () => {
-    const provider = commerceProvider([], async () => 'available');
+    const provider = rewardedProvider([], async () => 'available');
     expect(() => createCapacitorProviderRegistry([provider, provider])).toThrow(/registered twice/);
     expect(() => createCapacitorProviderRegistry([{
       ...provider, id: 'other', methods: ['storage.save'],
     }])).toThrow(/cannot replace base method/);
     for (const method of bridgeCommerceV2Methods) {
       expect(() => createCapacitorProviderRegistry([{
-        ...provider, id: 'v2', methods: [...commerceMethods, method],
+        ...provider, id: 'v2', methods: [...provider.methods, method],
       }])).toThrow(/commerce v2 is unavailable/);
     }
+    for (const method of retiredV1CommerceMethods) {
+      expect(() => createCapacitorProviderRegistry([{
+        ...provider, id: 'v1', methods: [method],
+      }])).toThrow(/cannot replace base method/);
+    }
     expect(() => createCapacitorProviderRegistry([{
-      ...provider, methods: ['commerce.purchase'],
-    }])).toThrow(/lacks methods/);
+      ...provider, id: 'idle', features: [],
+    }])).toThrow(/must declare features and methods/);
   });
 });

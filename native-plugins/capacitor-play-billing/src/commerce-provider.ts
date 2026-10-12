@@ -10,11 +10,14 @@ import {
 import type { PlatformEvidenceEnvelope } from '@mpgd/platform';
 import {
   CommerceError,
-  type CommerceAuthorityCapabilities,
   type StoreId,
   type StorePurchaseAccountBinding,
 } from '@mpgd/platform/commerce';
 
+import {
+  googlePlayProductPurchaseEvidenceSchema,
+  playBillingCommerceAuthority,
+} from './commerce-profile.js';
 import type { CapacitorPlayBillingPlugin, PlayPurchase } from './definitions.js';
 import {
   createCapacitorPlayBillingStoreSdk,
@@ -23,22 +26,16 @@ import {
   type PlayBillingStoreSdkProduct,
 } from './store-sdk.js';
 
-/** The evidence schema the Google Play verifier in `@mpgd/game-services` routes on. */
-export const googlePlayProductPurchaseEvidenceSchema = 'google-play.product-purchase.v2' as const;
-
-/** RFC "Capabilities" profile row for `google-play`: the purchase token is the proof, bound to an obfuscated account id. */
-export const playBillingCommerceAuthority: CommerceAuthorityCapabilities = Object.freeze({
-  evidence: 'client-token',
-  accountBinding: 'required',
-});
+// The profile constants live in the SDK-free `commerce-profile.ts` so a tools
+// project can read them without loading Capacitor; they stay exported here.
+export { googlePlayProductPurchaseEvidenceSchema, playBillingCommerceAuthority };
 
 /** The default registry id of the Play Billing commerce v2 service provider. */
 export const playBillingCommerceServiceProviderId = 'google-play-billing' as const;
 
 /**
  * Evidence payload of a Play purchase: exactly `{ purchaseToken }`, which is
- * what `createGooglePlayProductPurchaseBoundary` reads and what the v1
- * provider emits, so v1 and v2 evidence verify through the same code path.
+ * what `createGooglePlayProductPurchaseBoundary` reads.
  */
 export function createPlayBillingEvidencePayload(
   purchase: Pick<StoreSdkPurchase, 'token'>,
@@ -69,8 +66,8 @@ export interface CreateCapacitorPlayBillingCommerceProviderInput {
   readonly isAndroid?: () => boolean;
   /**
    * Store id on purchases and in derived idempotency keys. Defaults to
-   * `google-play`, which keeps the `play-token-sha256:<hex>` key v1 ledgers
-   * use; a conformance harness sets the vector's fixture store id.
+   * `google-play`, which keeps the `play-token-sha256:<hex>` key existing ledgers
+   * hold; a conformance harness sets the vector's fixture store id.
    */
   readonly store?: StoreId;
   /** Extra plugin codes merged over `playBillingStoreSdkErrorCodeMap`. */
@@ -143,10 +140,9 @@ export interface CreateCapacitorPlayBillingServiceProviderInput
 
 /**
  * Registry entry for `createCapacitorPlatformGateway({ providers })`: the
- * gateway serves the six `commerce.v2.*` bridge methods and exposes
- * `gateway.commerceV2`, and v1 callers keep working through
- * `toCommerceAdapter`. Only `nativeIap` is declared; Play sells no
- * subscriptions in this release.
+ * gateway serves the six `commerce.v2.*` bridge methods, exposes the provider
+ * as `gateway.commerce`, and reports its capability block (Play sells no
+ * subscriptions in this release).
  */
 export function createCapacitorPlayBillingServiceProvider(
   input: CreateCapacitorPlayBillingServiceProviderInput,
@@ -157,7 +153,6 @@ export function createCapacitorPlayBillingServiceProvider(
     ...createCommerceServiceProvider({
       id: id ?? playBillingCommerceServiceProviderId,
       commerce,
-      features: ['nativeIap'],
     }),
     commerce,
   };

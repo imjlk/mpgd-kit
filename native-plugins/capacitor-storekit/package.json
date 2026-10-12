@@ -30,7 +30,7 @@
   "scripts": {
     "check": "ttsc --noEmit",
     "lint": "ttsc --noEmit",
-    "test": "cd ../.. && node tools/run-ttsx.mjs --project native-plugins/capacitor-storekit/tsconfig.json native-plugins/capacitor-storekit/src/provider.test.ts && node tools/run-ttsx.mjs --project native-plugins/capacitor-storekit/tsconfig.json native-plugins/capacitor-storekit/src/store-sdk.test.ts && node tools/run-ttsx.mjs --project native-plugins/capacitor-storekit/tsconfig.json native-plugins/capacitor-storekit/src/commerce-provider.test.ts && node tools/run-ttsx.mjs --project native-plugins/capacitor-storekit/tsconfig.json native-plugins/capacitor-storekit/src/commerce-provider.conformance.test.ts && node tools/run-ttsx.mjs --project native-plugins/capacitor-storekit/tsconfig.json native-plugins/capacitor-storekit/src/commerce-reconciler-storekit-smoke.test.ts"
+    "test": "cd ../.. && node tools/run-ttsx.mjs --project native-plugins/capacitor-storekit/tsconfig.json native-plugins/capacitor-storekit/src/store-sdk.test.ts && node tools/run-ttsx.mjs --project native-plugins/capacitor-storekit/tsconfig.json native-plugins/capacitor-storekit/src/commerce-profile.test.ts && node tools/run-ttsx.mjs --project native-plugins/capacitor-storekit/tsconfig.json native-plugins/capacitor-storekit/src/commerce-provider.test.ts && node tools/run-ttsx.mjs --project native-plugins/capacitor-storekit/tsconfig.json native-plugins/capacitor-storekit/src/commerce-provider.conformance.test.ts && node tools/run-ttsx.mjs --project native-plugins/capacitor-storekit/tsconfig.json native-plugins/capacitor-storekit/src/commerce-reconciler-storekit-smoke.test.ts"
   },
   "peerDependencies": {
     "@capacitor/core": "^8.5.1",

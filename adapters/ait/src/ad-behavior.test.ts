@@ -73,7 +73,7 @@ describe('AIT SDK to real host, proxy and coordinated gateway', () => {
     await flush();
     f.callbacks[0]?.onEvent({ type: 'show' });
     await expect(f.ads.show({ placementId: 'BREAK', format: 'interstitial', invocationId: 'b', idempotencyKey: 'b' })).resolves.toMatchObject({ outcome: 'unavailable', reason: 'busy' });
-    await expect(f.gateway.commerce.purchase({ productId: 'hints', source: 'shop', idempotencyKey: 'purchase' })).rejects.toMatchObject({ code: 'busy' });
+    await expect(f.gateway.commerce?.requestPurchase({ logicalId: 'hints', source: 'shop', idempotencyKey: 'purchase' })).rejects.toMatchObject({ code: 'busy' });
     expect(f.show).toHaveBeenCalledOnce();
     f.callbacks[0]?.onEvent({ type: 'failedToShow' });
     await first;

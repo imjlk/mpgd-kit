@@ -1,3 +1,5 @@
+import { createUnsupportedCommerceCapabilities } from '@mpgd/platform/commerce';
+
 import {
   createMpgdCloudflarePagesHostFetchHandler,
   defaultCloudflarePagesBridgeEndpoint,
@@ -64,6 +66,43 @@ assertEqual(
   false,
   'default capabilities should not advertise unavailable server-side sharing',
 );
+
+// The Pages host sells nothing: its snapshot carries the unsupported commerce block and none of the
+// removed boolean flags, and a v1 commerce method is not a bridge method any more.
+const pagesCapabilities = (capabilities as { readonly data: Record<string, unknown> }).data;
+assertDeepEqual(
+  pagesCapabilities['commerce'],
+  createUnsupportedCommerceCapabilities(),
+  'the Pages host should report the unsupported commerce block',
+);
+assertEqual('nativeIap' in pagesCapabilities, false, 'the removed nativeIap flag is not reported');
+assertEqual(
+  'subscriptionIap' in pagesCapabilities,
+  false,
+  'the removed subscriptionIap flag is not reported',
+);
+for (const removed of [
+  'commerce.getProducts',
+  'commerce.purchase',
+  'commerce.restore',
+  'commerce.getEntitlements',
+]) {
+  const rejected = await fetchHandler(
+    new Request(`${baseUrl}${defaultCloudflarePagesBridgeEndpoint}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        id: `removed-${removed}`,
+        method: removed,
+        payload: {},
+        meta: requestMeta(),
+      }),
+    }),
+    env,
+  );
+  const body = await rejected.json() as { readonly ok?: boolean };
+  assertEqual(body.ok === true, false, `${removed} should not be answered by the Pages host`);
+}
 
 const client = createBridgeOrpcClient({
   fetch: (url, init) => fetchHandler(new Request(new URL(String(url), baseUrl), init), env),

@@ -8,6 +8,7 @@ import {
   type BridgeResponse,
 } from '@mpgd/bridge';
 import { createBridgeRpcFetchHandler, createBridgeRpcRouter } from '@mpgd/bridge/orpc';
+import { createUnsupportedCommerceCapabilities } from '@mpgd/platform';
 
 import {
   createDevvitCommerceCapabilities,
@@ -309,7 +310,12 @@ describe('adapter-devvit', () => {
       remoteLeaderboard: false,
       cloudSave: true,
       socialShare: false,
+      commerce: createUnsupportedCommerceCapabilities(),
     });
+    const sandboxCapabilities = await gateway.getCapabilities();
+    expect(sandboxCapabilities).not.toHaveProperty('nativeIap');
+    expect(sandboxCapabilities).not.toHaveProperty('subscriptionIap');
+    expect(gateway.commerce).toBeUndefined();
     const savedValue = {
       progress: { coins: 7 },
       inventory: ['seed'],
@@ -859,7 +865,36 @@ describe('adapter-devvit', () => {
     }
   });
 
-  it('fails closed for commerce v2 methods until a Devvit v2 provider exists', async () => {
+  it('answers the removed v1 commerce methods as unsupported', async () => {
+    const bridge = createDevvitSandboxBridge();
+
+    for (const method of [
+      'commerce.getProducts',
+      'commerce.purchase',
+      'commerce.restore',
+      'commerce.getEntitlements',
+    ]) {
+      const response = await bridge.request({
+        id: `v1-${method}`,
+        method,
+        payload: {},
+        meta: {
+          target: 'reddit',
+          appVersion: '1.2.3',
+          buildId: 'build-reddit',
+          sentAt: '2026-10-12T00:00:00.000Z',
+        },
+      } as unknown as BridgeRequest);
+
+      expect(response).toMatchObject({
+        id: `v1-${method}`,
+        ok: false,
+        error: { code: 'UNSUPPORTED_METHOD', retryable: false },
+      });
+    }
+  });
+
+  it('fails closed for commerce v2 methods in the sandbox, which sells nothing', async () => {
     const bridge = createDevvitSandboxBridge();
 
     for (const method of bridgeCommerceV2Methods) {
@@ -900,7 +935,6 @@ describe('adapter-devvit commerce v2 gateway', () => {
     sku: 'coins_100',
   }];
   const snapshot = {
-    nativeIap: false,
     nativeAds: false,
     rewardedAds: false,
     interstitialAds: false,
@@ -911,6 +945,7 @@ describe('adapter-devvit commerce v2 gateway', () => {
     socialShare: false,
     haptics: false,
     localizedContent: true,
+    commerce: createUnsupportedCommerceCapabilities(),
   };
   const listedPurchase = {
     store: 'devvit',
@@ -965,14 +1000,41 @@ describe('adapter-devvit commerce v2 gateway', () => {
     };
   }
 
-  it('offers no commerceV2 and the server snapshot as is without the commerce option', async () => {
+  it('sells nothing without the commerce option, whatever the server snapshot says', async () => {
     const { bridge } = createServerBridge({ served: true });
     const gateway = createDevvitPlatformGateway({ appVersion: '1.0.0', buildId: 'b', bridge });
-    expect(gateway.commerceV2).toBeUndefined();
-    await expect(gateway.getCapabilities()).resolves.toEqual(snapshot);
+    expect(gateway.commerce).toBeUndefined();
+    const capabilities = await gateway.getCapabilities();
+    expect(capabilities).toEqual(snapshot);
+    // A fresh block on every read, never shared between snapshots.
+    const again = await gateway.getCapabilities();
+    expect(again.commerce).toEqual(createUnsupportedCommerceCapabilities());
+    expect(again.commerce).not.toBe(capabilities.commerce);
   });
 
-  it('installs the webview provider with the capability block derived from it', async () => {
+  it('replaces a server commerce block and drops the removed boolean flags', async () => {
+    const bridge: DevvitBridge = {
+      async request(request) {
+        return {
+          id: request.id,
+          ok: true,
+          data: {
+            ...snapshot,
+            nativeIap: true,
+            subscriptionIap: true,
+            commerce: createDevvitCommerceCapabilities('available'),
+          },
+        };
+      },
+    };
+    const gateway = createDevvitPlatformGateway({ appVersion: '1.0.0', buildId: 'b', bridge });
+    const capabilities = await gateway.getCapabilities();
+    expect(capabilities).toEqual(snapshot);
+    expect(capabilities).not.toHaveProperty('nativeIap');
+    expect(capabilities).not.toHaveProperty('subscriptionIap');
+  });
+
+  it('installs the webview provider as the gateway commerce with its capability block', async () => {
     const { bridge, requests } = createServerBridge({ served: true });
     const purchase = vi.fn(async () => ({ status: 'completed' as const, orderId: 'order-2' }));
     const gateway = createDevvitPlatformGateway({
@@ -981,22 +1043,23 @@ describe('adapter-devvit commerce v2 gateway', () => {
       bridge,
       commerce: { products, client: { purchase } },
     });
-    expect(gateway.commerceV2?.store).toBe('devvit');
-    await expect(gateway.getCapabilities()).resolves.toEqual({
+    expect(gateway.commerce?.store).toBe('devvit');
+    const capabilities = await gateway.getCapabilities();
+    expect(capabilities).toEqual({
       ...snapshot,
-      nativeIap: true,
-      subscriptionIap: false,
       commerce: createDevvitCommerceCapabilities('available'),
     });
+    expect(capabilities).not.toHaveProperty('nativeIap');
+    expect(capabilities).not.toHaveProperty('subscriptionIap');
     // The paid orders come from the server bridge, rebuilt under the provider's store id.
-    await expect(gateway.commerceV2?.getAvailablePurchases()).resolves.toEqual([listedPurchase]);
+    await expect(gateway.commerce?.getAvailablePurchases()).resolves.toEqual([listedPurchase]);
     expect(requests.map((request) => request.method)).toEqual([
       'runtime.getCapabilities',
       'commerce.v2.getCapabilities',
       'commerce.v2.getAvailablePurchases',
     ]);
     // The checkout never crosses the bridge.
-    await expect(gateway.commerceV2?.requestPurchase({
+    await expect(gateway.commerce?.requestPurchase({
       logicalId: 'COINS_100',
       idempotencyKey: 'op-1',
       source: 'shop',
@@ -1014,10 +1077,9 @@ describe('adapter-devvit commerce v2 gateway', () => {
       commerce: { products, client: { purchase: async () => ({ status: 'pending' as const }) } },
     });
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
-      nativeIap: false,
       commerce: { availability: 'configuration-required' },
     });
-    await expect(gateway.commerceV2?.getAvailablePurchases()).rejects.toMatchObject({
+    await expect(gateway.commerce?.getAvailablePurchases()).rejects.toMatchObject({
       code: 'CONFIGURATION_REQUIRED',
       storeCode: 'COMMERCE_V2_UNAVAILABLE',
     });
@@ -1055,20 +1117,17 @@ describe('adapter-devvit commerce v2 gateway', () => {
       commerce: { products, client: { purchase: async () => ({ status: 'pending' as const }) } },
     });
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
-      nativeIap: true,
       commerce: { availability: 'available' },
     });
     failing = true;
     // One timed-out read must not hide the shop the server served a moment ago.
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
-      nativeIap: true,
       commerce: { availability: 'available' },
     });
     failing = false;
     // A non-retryable failure and an invalid answer fail closed and forget the old answer.
     broken = true;
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
-      nativeIap: false,
       commerce: { availability: 'temporarily-unavailable' },
     });
     broken = false;
@@ -1090,14 +1149,12 @@ describe('adapter-devvit commerce v2 gateway', () => {
     });
     closed = true;
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
-      nativeIap: false,
       commerce: { availability: 'configuration-required' },
     });
     // After the server closed, a retryable failure fails closed again.
     closed = false;
     failing = true;
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
-      nativeIap: false,
       commerce: { availability: 'temporarily-unavailable' },
     });
   });
@@ -1114,7 +1171,7 @@ describe('adapter-devvit commerce v2 gateway', () => {
       bridge,
       commerce: { products, client: { purchase: async () => ({ status: 'pending' as const }) } },
     });
-    await expect(gateway.commerceV2?.getAvailablePurchases()).rejects.toMatchObject({
+    await expect(gateway.commerce?.getAvailablePurchases()).rejects.toMatchObject({
       code: 'NETWORK',
       retryable: true,
       storeCode: 'DEVVIT_BRIDGE_NETWORK_ERROR',

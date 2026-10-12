@@ -3,16 +3,9 @@ import typia, { type tags } from 'typia';
 import {
   PlatformOperationError,
   readPlatformOperationFailure,
-  type CommerceAdapter,
   type CommerceCapabilities,
-  type CommerceDiagnostic,
   type LogicalProductId,
   type PlatformEvidenceEnvelope,
-  type ProductInfo,
-  type ProductType,
-  type PurchaseRestoreResult,
-  type PurchaseResult,
-  type PurchaseSettlement,
   type StarterLogicalProductId,
 } from './index.js';
 
@@ -40,11 +33,7 @@ import type {
   StorePurchase,
 } from './commerce-contract.js';
 
-export {
-  createUnsupportedCommerceCapabilities,
-  deriveLegacyCommerceCapabilities,
-  type LegacyCommerceCapabilities,
-} from './commerce-capabilities.js';
+export { createUnsupportedCommerceCapabilities } from './commerce-capabilities.js';
 export type {
   CommerceAccountBindingPolicy,
   CommerceAuthorityCapabilities,
@@ -334,6 +323,12 @@ export const commerceBridgeMethods = Object.freeze([
   'commerce.v2.restorePurchases',
 ] as const satisfies readonly CommerceBridgeMethod[]);
 
+// `satisfies` only rejects an unknown name; this rejects a missing one, so a
+// method added to `CommerceBridgeMethods` cannot be left out of the list.
+const commerceBridgeMethodListIsExhaustive: [CommerceBridgeMethod] extends
+  [(typeof commerceBridgeMethods)[number]] ? true : never = true;
+void commerceBridgeMethodListIsExhaustive;
+
 // Errors.
 
 const retryableCommerceErrorCodes: ReadonlySet<CommerceErrorCode> = new Set<CommerceErrorCode>([
@@ -595,7 +590,11 @@ export async function createDerivedPurchaseIdempotencyKey(
   return `store:${encodeURIComponent(store)}:${encodeURIComponent(transactionId)}`;
 }
 
-/** Byte-for-byte the v1 `createGooglePlayTokenTransactionId` form; A4 replaces the two copies with this helper. */
+/**
+ * The `play-token-sha256:<hex>` idempotency key of a Google Play purchase
+ * token. The one shared helper: the plugin and `@mpgd/game-services` use it,
+ * and ledgers written by v1 releases keep deduplicating against it.
+ */
 export async function createGooglePlayTokenPurchaseKey(purchaseToken: string): Promise<string> {
   if (readIdentifier(purchaseToken, 4096) === undefined) {
     throw new TypeError('Google Play purchase token is invalid.');
@@ -743,111 +742,3 @@ export const assertCommerceBridgeRestorePurchasesPayload =
   typia.createAssertEquals<CommerceBridgeRestorePurchasesPayload>();
 export const assertCommerceBridgeRestorePurchasesResult =
   typia.createAssertEquals<CommerceBridgeRestorePurchasesResult>();
-
-// v1 compatibility wrapper.
-
-export interface ToCommerceAdapterOptions {
-  /** Forwarded to `getAvailablePurchases` during `restore`. Defaults to false. */
-  readonly includePending?: boolean;
-}
-
-const purchaseKindToProductType: Readonly<Record<PurchaseKind, ProductType>> = Object.freeze({
-  consumable: 'consumable',
-  durable: 'non_consumable',
-  subscription: 'subscription',
-});
-
-/**
- * Serves v1 `CommerceAdapter` callers from a v2 provider. The wrapper never
- * grants: a `purchased` outcome becomes a `completed` result with no
- * entitlements, and `authoritativeGrant` appears only when the provider reports
- * an adapter settlement that already points at a ledger entry. `restore`
- * returns settled purchases from `getAvailablePurchases` and no entitlements;
- * entitlements come from the ledger, not from the provider.
- */
-export function toCommerceAdapter(
-  provider: CommerceProvider,
-  options: ToCommerceAdapterOptions = {},
-): CommerceAdapter {
-  const includePending = options.includePending ?? false;
-  return {
-    async getProducts(): Promise<readonly ProductInfo[]> {
-      const products = await provider.fetchProducts({ type: 'all' });
-      return products.map((product) => ({
-        id: product.logicalId,
-        type: purchaseKindToProductType[product.kind],
-        title: product.title,
-        description: product.description,
-        price: { formatted: product.price.formatted, currencyCode: product.price.currencyCode },
-      }));
-    },
-    async purchase(input): Promise<PurchaseResult> {
-      const result = await provider.requestPurchase({
-        logicalId: input.productId,
-        idempotencyKey: input.idempotencyKey,
-        source: input.source,
-      });
-      return toPurchaseResult(result);
-    },
-    async restore(): Promise<PurchaseRestoreResult> {
-      await provider.restorePurchases?.();
-      const purchases = await provider.getAvailablePurchases({ includePending });
-      const settledPurchases: PurchaseSettlement[] = [];
-      for (const purchase of purchases) {
-        // A pending purchase is never a settled outcome, even when the adapter
-        // already attached a ledger pointer to it.
-        if (
-          purchase.settlement === undefined
-          || purchase.logicalId === undefined
-          || purchase.state === 'pending'
-        ) {
-          continue;
-        }
-        settledPurchases.push({
-          transactionId: purchase.transactionId,
-          productId: purchase.logicalId,
-          status: purchase.state === 'revoked' ? 'refunded' : 'granted',
-          ledgerEntryId: purchase.settlement.ledgerEntryId,
-        });
-      }
-      return { restoredEntitlements: [], settledPurchases };
-    },
-    async getEntitlements() {
-      return [];
-    },
-  };
-}
-
-function toPurchaseResult(result: RequestPurchaseResult): PurchaseResult {
-  if (result.outcome === 'launched') {
-    return { status: 'pending', entitlementIds: [] };
-  }
-  if (result.outcome === 'purchased') {
-    const { purchase } = result;
-    return {
-      status: purchase.state === 'purchased' ? 'completed' : 'pending',
-      transactionId: purchase.transactionId,
-      entitlementIds: [],
-      evidence: purchase.evidence,
-      ...(purchase.settlement === undefined || purchase.state !== 'purchased'
-        ? {}
-        : { authoritativeGrant: { ledgerEntryId: purchase.settlement.ledgerEntryId } }),
-    };
-  }
-  return {
-    status: result.outcome,
-    entitlementIds: [],
-    diagnostic: toCommerceDiagnostic(result.error),
-  };
-}
-
-function toCommerceDiagnostic(error: CommerceErrorInfo): CommerceDiagnostic {
-  const providerCode = error.storeCode;
-  return {
-    code: error.code,
-    retryable: error.retryable,
-    ...(providerCode !== undefined && /^[A-Za-z0-9_.:-]{1,128}$/u.test(providerCode)
-      ? { providerCode }
-      : {}),
-  };
-}

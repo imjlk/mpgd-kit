@@ -1,8 +1,16 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { createUnsupportedCapabilities } from '@mpgd/platform';
+import {
+  assertStoreProduct,
+  assertStorePurchase,
+  createUnsupportedCommerceCapabilities,
+  isCommerceCapabilities,
+} from '@mpgd/platform/commerce';
 import { rootRelativeRouteVectors } from '@mpgd/platform/route-vectors';
 
 import {
+  browserMockCommerceStoreId,
   browserMockPurchaseEvidenceSchema,
   browserMockRewardEvidenceSchema,
   createBrowserPlatformGateway,
@@ -23,8 +31,8 @@ describe('adapter-browser', () => {
       },
     });
 
-    await expect(gateway.getCapabilities()).resolves.toMatchObject({
-      nativeIap: false,
+    const capabilities = await gateway.getCapabilities();
+    expect(capabilities).toMatchObject({
       nativeAds: false,
       rewardedAds: false,
       interstitialAds: false,
@@ -32,6 +40,9 @@ describe('adapter-browser', () => {
       socialShare: false,
       localizedContent: true,
     });
+    // The v1 boolean flags are gone; the commerce block is the only source.
+    expect(capabilities).not.toHaveProperty('nativeIap');
+    expect(capabilities).not.toHaveProperty('subscriptionIap');
     expect(gateway.sharing?.share).toBeUndefined();
     expect(gateway.sharing?.readInboundShare).toBeTypeOf('function');
     await expect(gateway.identity.getPlayer()).resolves.toEqual({
@@ -217,18 +228,23 @@ describe('adapter-browser', () => {
     });
   });
 
-  it('never returns a completed purchase or a granted reward by default', async () => {
+  it('sells nothing by default: no commerce provider and the unsupported block', async () => {
     const gateway = createBrowserPlatformGateway();
 
-    await expect(gateway.commerce.getProducts()).resolves.toEqual([]);
-    const purchase = await gateway.commerce.purchase({
-      productId: 'COINS_100',
-      source: 'shop',
-      idempotencyKey: 'browser-purchase',
-    });
-    expect(purchase).toEqual({ status: 'failed', entitlementIds: [] });
-    expect(purchase).not.toHaveProperty('transactionId');
-    expect(purchase).not.toHaveProperty('authoritativeGrant');
+    expect(gateway.commerce).toBeUndefined();
+    const capabilities = await gateway.getCapabilities();
+    expect(capabilities.commerce).toEqual(createUnsupportedCommerceCapabilities());
+    expect(capabilities.commerce.availability).toBe('unsupported');
+    expect(capabilities.commerce).toEqual(createUnsupportedCapabilities().commerce);
+    // A fresh block on every read: mutating one snapshot cannot leak into the next.
+    (capabilities.commerce.purchase as { consumable: boolean }).consumable = true;
+    expect((await gateway.getCapabilities()).commerce).toEqual(
+      createUnsupportedCommerceCapabilities(),
+    );
+  });
+
+  it('never returns a granted reward by default', async () => {
+    const gateway = createBrowserPlatformGateway();
 
     const reward = await gateway.ads.showRewarded({
       placementId: 'CONTINUE_AFTER_FAIL',
@@ -245,30 +261,73 @@ describe('adapter-browser', () => {
     const gateway = createBrowserPlatformGateway({ mockCommerce: true });
 
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
-      nativeIap: false,
       nativeAds: false,
       rewardedAds: true,
       interstitialAds: true,
     });
-    await expect(gateway.commerce.getProducts()).resolves.toMatchObject([{ id: 'COINS_100' }]);
+    const provider = gateway.commerce;
+    if (provider === undefined) {
+      throw new Error('The mockCommerce opt-in must install a commerce provider.');
+    }
+    expect(provider.store).toBe(browserMockCommerceStoreId);
+    expect(provider.store).toBe('browser-mock');
+    expect(provider.finishTransaction).toBeUndefined();
+    expect(provider.restorePurchases).toBeUndefined();
 
-    const purchase = await gateway.commerce.purchase({
-      productId: 'COINS_100',
+    const products = await provider.fetchProducts({});
+    expect(products).toHaveLength(1);
+    expect(assertStoreProduct(products[0])).toMatchObject({
+      logicalId: 'COINS_100',
+      store: 'browser-mock',
+      storeSku: 'COINS_100',
+      kind: 'consumable',
+      price: { formatted: '$0.99', currencyCode: 'USD' },
+    });
+    await expect(provider.fetchProducts({ type: 'subscription' })).resolves.toEqual([]);
+    await expect(provider.fetchProducts({ logicalIds: ['REMOVE_ADS'] })).resolves.toEqual([]);
+
+    const result = await provider.requestPurchase({
+      logicalId: 'COINS_100',
       source: 'shop',
       idempotencyKey: 'mock-purchase',
     });
+    if (result.outcome !== 'purchased') {
+      throw new Error(`Expected a purchased mock outcome, got ${result.outcome}.`);
+    }
+    const purchase = assertStorePurchase(result.purchase);
     expect(purchase).toEqual({
-      status: 'completed',
+      store: 'browser-mock',
       transactionId: expect.stringMatching(/^browser-purchase-/),
-      entitlementIds: [],
+      storeSku: 'COINS_100',
+      logicalId: 'COINS_100',
+      quantity: 1,
+      state: 'purchased',
+      token: purchase.transactionId,
       evidence: {
         schema: browserMockPurchaseEvidenceSchema,
         payload: { productId: 'COINS_100' },
       },
     });
-    expect(purchase.entitlementIds).toHaveLength(0);
-    expect(purchase).not.toHaveProperty('authoritativeGrant');
-    await expect(gateway.commerce.getEntitlements()).resolves.toEqual([]);
+    // The mock can never be mistaken for a ledger-settled purchase.
+    expect(purchase).not.toHaveProperty('settlement');
+    expect(purchase).not.toHaveProperty('accountBinding');
+    await expect(provider.getAvailablePurchases()).resolves.toEqual([]);
+    expect(provider.subscribe(() => {})).toBeTypeOf('function');
+
+    await expect(provider.requestPurchase({
+      logicalId: 'REMOVE_ADS',
+      source: 'shop',
+      idempotencyKey: 'mock-unknown',
+    })).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'ITEM_UNAVAILABLE', retryable: false },
+    });
+    await expect(provider.requestPurchase({
+      logicalId: 'COINS_100',
+      source: 'shop',
+      idempotencyKey: 'mock-quantity',
+      quantity: 2,
+    })).resolves.toMatchObject({ outcome: 'failed', error: { code: 'ITEM_UNAVAILABLE' } });
 
     const reward = await gateway.ads.showRewarded({
       placementId: 'CONTINUE_AFTER_FAIL',
@@ -287,6 +346,32 @@ describe('adapter-browser', () => {
     await expect(
       gateway.ads.showInterstitial?.({ placementId: 'STAGE_END_INTERSTITIAL' }),
     ).resolves.toEqual({ status: 'unavailable' });
+  });
+
+  it('reports the mock provider block as a validated fresh copy per read', async () => {
+    const gateway = createBrowserPlatformGateway({ mockCommerce: true });
+    const first = await gateway.getCapabilities();
+    const second = await gateway.getCapabilities();
+
+    expect(isCommerceCapabilities(first.commerce)).toBe(true);
+    expect(first.commerce).toEqual({
+      purchase: { consumable: true, durable: false, subscription: false, quantity: false },
+      catalog: { products: true, offers: false, localizedPrice: false },
+      lifecycle: {
+        availablePurchases: false,
+        pending: false,
+        restore: false,
+        events: false,
+        finish: 'none',
+      },
+      authority: { evidence: 'client-token', accountBinding: 'optional' },
+      availability: 'available',
+    });
+    expect(first.commerce).not.toBe(second.commerce);
+    expect(first.commerce.purchase).not.toBe(second.commerce.purchase);
+    expect(await gateway.commerce?.getCapabilities()).toEqual(first.commerce);
+    expect(first).not.toHaveProperty('nativeIap');
+    expect(first).not.toHaveProperty('subscriptionIap');
   });
 
   it('fails closed when browser storage is unavailable', async () => {

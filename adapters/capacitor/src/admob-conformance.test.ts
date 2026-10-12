@@ -4,7 +4,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { createGameExecutionController, type ExecutionBlock } from '@mpgd/game-runtime';
 import { createFullScreenPresentationScope } from '@mpgd/game-runtime/presentation';
 import { createCoordinatedPlatformGateway } from '@mpgd/game-runtime/ads';
+import { createUnsupportedCapabilities } from '@mpgd/platform';
 import { createAdSession, reduceAdSession, type AdSessionSnapshot } from '@mpgd/platform/ads';
+import {
+  createUnsupportedCommerceCapabilities,
+  type CommerceProvider,
+} from '@mpgd/platform/commerce';
 import {
   runAdConformance,
   type AdConformanceFixture,
@@ -12,6 +17,7 @@ import {
 } from '@mpgd/platform/ads-conformance';
 
 import { createCapacitorAdMobRewardedProvider } from './admob.js';
+import { createCommerceServiceProvider } from './commerce-bridge.js';
 import { createCapacitorPlatformGateway } from './index.js';
 import { createAdMobSdkFixture } from '../test/admob-sdk-fixture.js';
 import { decodeAdMobSsvCustomData } from '@mpgd/game-services/admob-ssv';
@@ -54,12 +60,26 @@ const fixture: AdConformanceFixture = {
     const presentation = createFullScreenPresentationScope({ execution });
     const observerErrors: unknown[] = [];
     let purchaseUiOpened = 0;
+    // A store that would open its purchase UI on any call that reaches it.
+    const store: CommerceProvider = {
+      store: 'fixture-store',
+      getCapabilities: async () => createUnsupportedCommerceCapabilities(),
+      fetchProducts: async () => [],
+      async requestPurchase() {
+        purchaseUiOpened += 1;
+        return { outcome: 'cancelled', error: { code: 'USER_CANCELLED', retryable: false } };
+      },
+      getAvailablePurchases: async () => [],
+      subscribe: () => () => {},
+    };
     const original = createCapacitorPlatformGateway({
-      target: 'android', appVersion: 'test', buildId: 'test', providers: [provider], visibility: null,
+      target: 'android', appVersion: 'test', buildId: 'test',
+      providers: [provider, createCommerceServiceProvider({ id: 'fixture-store', commerce: store })],
+      visibility: null,
       app: { addListener: async () => ({ remove: async () => {} }), getState: async () => ({ isActive: true }), getLaunchUrl: async () => undefined, exitApp: async () => {} },
-      bridge: { async request(request) { purchaseUiOpened += 1; return { id: request.id, ok: true, data: { status: 'cancelled', entitlementIds: [] } }; } },
+      bridge: { async request(request) { return { id: request.id, ok: true, data: createUnsupportedCapabilities() }; } },
     });
-    const gateway = createCoordinatedPlatformGateway({ gateway: original, provider: provider.adProvider, presentation, onObserverError: (error) => { observerErrors.push(error); }, canShow: () => profile.policyEnabled !== false, deadline: { milliseconds: 30000, schedule(callback, milliseconds) { const timer = setTimeout(callback, milliseconds); return () => clearTimeout(timer); } } });
+    const gateway = createCoordinatedPlatformGateway({ gateway: original, provider: provider.adProvider, presentation, classifyPurchasePresentation: () => 'closed', onObserverError: (error) => { observerErrors.push(error); }, canShow: () => profile.policyEnabled !== false, deadline: { milliseconds: 30000, schedule(callback, milliseconds) { const timer = setTimeout(callback, milliseconds); return () => clearTimeout(timer); } } });
     const ads = gateway.ads.provider;
     if (ads === undefined) { throw new Error('Installed AdMob event surface is missing.'); }
     const sessions = new Map<string, AdSessionSnapshot>();
@@ -82,7 +102,8 @@ const fixture: AdConformanceFixture = {
             const id = String(step.invocationId);
             last = id;
             if (step.format === 'purchase') {
-              void gateway.commerce.purchase({ productId: String(step.placementId), source: 'shop', idempotencyKey: id }).then(() => { outcomes.set(id, 'shown'); }, (error: unknown) => {
+              if (gateway.commerce === undefined) { throw new Error('Installed commerce provider is missing.'); }
+              void gateway.commerce.requestPurchase({ logicalId: String(step.placementId), source: 'shop', idempotencyKey: id }).then(() => { outcomes.set(id, 'shown'); }, (error: unknown) => {
                 if (!(error instanceof Error) || !('code' in error)) { throw error; }
                 outcomes.set(id, 'unavailable');
                 reasons.set(id, String(error.code));

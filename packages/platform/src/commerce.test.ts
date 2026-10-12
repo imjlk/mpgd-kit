@@ -32,13 +32,11 @@ import {
   createGooglePlayTokenPurchaseKey,
   createUnsupportedCommerceCapabilities,
   defaultCommerceErrorRetryable,
-  deriveLegacyCommerceCapabilities,
   isCommerceCapabilities,
   isStorePurchase,
   isTerminalCommercePurchaseState,
   summarizeCommercePurchaseState,
   terminalCommercePurchaseStates,
-  toCommerceAdapter,
   type CommerceCapabilities,
   type CommerceEvent,
   type CommerceProvider,
@@ -280,16 +278,6 @@ describe('CommerceError', () => {
 });
 
 describe('capabilities', () => {
-  it('derives the legacy boolean flags per the transition rule', () => {
-    expect(deriveLegacyCommerceCapabilities(capabilities()))
-      .toEqual({ nativeIap: true, subscriptionIap: false });
-    expect(deriveLegacyCommerceCapabilities(capabilities({ availability: 'configuration-required' })))
-      .toEqual({ nativeIap: false, subscriptionIap: false });
-    expect(deriveLegacyCommerceCapabilities(capabilities({
-      purchase: { consumable: false, durable: false, subscription: true, quantity: false },
-    }))).toEqual({ nativeIap: false, subscriptionIap: true });
-  });
-
   it('returns a fresh unsupported snapshot on every call', () => {
     const first = createUnsupportedCommerceCapabilities();
     const second = createUnsupportedCommerceCapabilities();
@@ -298,7 +286,6 @@ describe('capabilities', () => {
     expect(first.purchase).not.toBe(second.purchase);
     expect(first.lifecycle).not.toBe(second.lifecycle);
     expect(first.availability).toBe('unsupported');
-    expect(deriveLegacyCommerceCapabilities(first)).toEqual({ nativeIap: false, subscriptionIap: false });
     expect(isCommerceCapabilities(first)).toBe(true);
   });
 
@@ -460,136 +447,6 @@ describe('derived idempotency keys', () => {
       .rejects.toThrow(TypeError);
     await expect(createDerivedPurchaseIdempotencyKey({ store: 'x', transactionId: ' ', token: 't' }))
       .rejects.toThrow(TypeError);
-  });
-});
-
-describe('toCommerceAdapter', () => {
-  it('maps products to v1 product types', async () => {
-    const adapter = toCommerceAdapter(provider());
-    const products = await adapter.getProducts();
-    expect(products.map((product) => [product.id, product.type])).toEqual([
-      ['gems_small', 'consumable'],
-      ['remove_ads', 'non_consumable'],
-      ['membership_plus', 'subscription'],
-    ]);
-    expect(products[0]?.price).toEqual({ formatted: '$0.99', currencyCode: 'USD' });
-    await expect(adapter.getEntitlements()).resolves.toEqual([]);
-  });
-
-  it('maps outcomes and never grants without a settlement', async () => {
-    const results: RequestPurchaseResult[] = [
-      { outcome: 'launched' },
-      { outcome: 'purchased', purchase: purchase() },
-      { outcome: 'purchased', purchase: purchase({ settlement: { ledgerEntryId: 'le-1' } }) },
-      {
-        outcome: 'purchased',
-        purchase: purchase({ state: 'pending', settlement: { ledgerEntryId: 'le-1' } }),
-      },
-      { outcome: 'cancelled', error: { code: 'USER_CANCELLED', retryable: false, storeCode: '1' } },
-      {
-        outcome: 'failed',
-        error: { code: 'STORE_UNAVAILABLE', retryable: true, storeCode: 'bad code!' },
-      },
-    ];
-    const seen: Parameters<CommerceProvider['requestPurchase']>[0][] = [];
-    const adapter = toCommerceAdapter(
-      provider({
-        async requestPurchase(input) {
-          seen.push(input);
-          return results.shift() ?? { outcome: 'launched' };
-        },
-      }),
-    );
-    const request = { productId: 'gems_small', source: 'shop', idempotencyKey: 'op-1' } as const;
-
-    expect(await adapter.purchase(request)).toEqual({ status: 'pending', entitlementIds: [] });
-    expect(seen[0]).toEqual({ logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop' });
-
-    const completed = await adapter.purchase(request);
-    expect(completed).toEqual({
-      status: 'completed',
-      transactionId: 'tx-1',
-      entitlementIds: [],
-      evidence,
-    });
-    expect(completed.authoritativeGrant).toBeUndefined();
-
-    expect(await adapter.purchase(request)).toEqual({
-      status: 'completed',
-      transactionId: 'tx-1',
-      entitlementIds: [],
-      evidence,
-      authoritativeGrant: { ledgerEntryId: 'le-1' },
-    });
-
-    const deferred = await adapter.purchase(request);
-    expect(deferred.status).toBe('pending');
-    expect(deferred.authoritativeGrant).toBeUndefined();
-
-    expect(await adapter.purchase(request)).toEqual({
-      status: 'cancelled',
-      entitlementIds: [],
-      diagnostic: { code: 'USER_CANCELLED', retryable: false, providerCode: '1' },
-    });
-    expect(await adapter.purchase(request)).toEqual({
-      status: 'failed',
-      entitlementIds: [],
-      diagnostic: { code: 'STORE_UNAVAILABLE', retryable: true },
-    });
-  });
-
-  it('restores settled purchases only and never returns entitlements', async () => {
-    let restored = 0;
-    let includePending: boolean | undefined;
-    const adapter = toCommerceAdapter(
-      provider({
-        async restorePurchases() {
-          restored += 1;
-        },
-        async getAvailablePurchases(input) {
-          includePending = input?.includePending;
-          return [
-            purchase(),
-            purchase({ transactionId: 'tx-2', settlement: { ledgerEntryId: 'le-2' } }),
-            withoutLogicalId(
-              purchase({ transactionId: 'tx-3', settlement: { ledgerEntryId: 'le-3' } }),
-            ),
-            purchase({
-              transactionId: 'tx-4',
-              state: 'revoked',
-              settlement: { ledgerEntryId: 'le-4' },
-            }),
-            // Pending with a settlement pointer is still not a settled outcome.
-            purchase({
-              transactionId: 'tx-5',
-              state: 'pending',
-              settlement: { ledgerEntryId: 'le-5' },
-            }),
-          ];
-        },
-      }),
-      { includePending: true },
-    );
-    const result = await adapter.restore?.();
-    expect(restored).toBe(1);
-    expect(includePending).toBe(true);
-    expect(result).toEqual({
-      restoredEntitlements: [],
-      settledPurchases: [
-        { transactionId: 'tx-2', productId: 'gems_small', status: 'granted', ledgerEntryId: 'le-2' },
-        {
-          transactionId: 'tx-4',
-          productId: 'gems_small',
-          status: 'refunded',
-          ledgerEntryId: 'le-4',
-        },
-      ],
-    });
-  });
-
-  it('restores through getAvailablePurchases when the provider cannot resync', async () => {
-    const adapter = toCommerceAdapter(provider());
-    await expect(adapter.restore?.()).resolves.toEqual({ restoredEntitlements: [], settledPurchases: [] });
   });
 });
 

@@ -1,11 +1,4 @@
-import type {
-  CommerceAdapter,
-  Entitlement,
-  PlatformEvidenceEnvelope,
-  PlatformGateway,
-  ProductInfo,
-  PurchaseResult,
-} from '@mpgd/platform';
+import type { PlatformEvidenceEnvelope, ProductInfo, PurchaseResult } from '@mpgd/platform';
 
 /**
  * Why a Devvit checkout ended without an order (`OrderResultEvent` with
@@ -29,85 +22,19 @@ export interface DevvitCheckoutResult {
   readonly error?: DevvitCheckoutFailure;
 }
 
+/**
+ * The checkout half of the Reddit payments client: the commerce v2 provider
+ * opens the checkout through it and needs nothing else. Owned entitlements are
+ * not read from the client; the backend ledger answers them through
+ * `@mpgd/game-services`, and the paid orders come from the server bridge.
+ */
 export interface DevvitPaymentsClient {
   purchase(sku: string): Promise<DevvitCheckoutResult>;
-  getEntitlements(): Promise<readonly Entitlement[]>;
 }
 
 export interface DevvitCommerceProduct {
   readonly info: ProductInfo;
   readonly sku: string;
-}
-
-export interface CreateDevvitCommerceAdapterInput {
-  readonly products: readonly DevvitCommerceProduct[];
-  readonly client: DevvitPaymentsClient;
-  readonly onCheckoutError?: (error: unknown) => void;
-}
-
-export function createDevvitCommerceAdapter(
-  input: CreateDevvitCommerceAdapterInput,
-): CommerceAdapter {
-  const products = normalizeDevvitCommerceProducts(input.products);
-  const productsById = new Map(products.map((product) => [product.info.id, product]));
-
-  return {
-    async getProducts() {
-      return products.map((product) => product.info);
-    },
-    async purchase(request) {
-      const product = productsById.get(request.productId);
-      if (product === undefined) {
-        return failedPurchase();
-      }
-
-      try {
-        // Reddit's platform order ID is authoritative. Do not attach client operation
-        // metadata whose identifiers can exceed Devvit's metadata constraints.
-        const result = await input.client.purchase(product.sku);
-
-        return {
-          status: result.status,
-          ...(result.orderId === undefined ? {} : { transactionId: result.orderId }),
-          // Devvit server fulfillment and a subsequent entitlement read are authoritative.
-          entitlementIds: [],
-          ...(result.evidence === undefined ? {} : { evidence: result.evidence }),
-        };
-      } catch (error) {
-        input.onCheckoutError?.(error);
-        return failedPurchase();
-      }
-    },
-    async restore() {
-      return { restoredEntitlements: await input.client.getEntitlements() };
-    },
-    async getEntitlements() {
-      return input.client.getEntitlements();
-    },
-  };
-}
-
-export function withDevvitCommerceAdapter(
-  gateway: PlatformGateway,
-  commerce: CommerceAdapter,
-): PlatformGateway {
-  if (gateway.target !== 'reddit') {
-    throw new TypeError('Devvit commerce can only be installed on a reddit gateway.');
-  }
-  if ('getTargetRuntime' in gateway && typeof gateway.getTargetRuntime === 'function') {
-    throw new TypeError('Devvit commerce must be installed before target availability is applied.');
-  }
-
-  return {
-    ...gateway,
-    async getCapabilities() {
-      return {
-        ...await gateway.getCapabilities(),
-        nativeIap: true,
-      };
-    },
-    commerce,
-  };
 }
 
 /** Frozen copies of the configured products; duplicate ids or SKUs and blank SKUs are rejected. */
@@ -138,11 +65,4 @@ export function normalizeDevvitCommerceProducts(
       });
     }),
   );
-}
-
-function failedPurchase(): PurchaseResult {
-  return Object.freeze({
-    status: 'failed',
-    entitlementIds: [],
-  });
 }

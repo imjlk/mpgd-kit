@@ -57,8 +57,9 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
             call.resolve(okResponse(id: id, data: "configuration-required"))
         case "notifications.requestSubscription":
             call.resolve(okResponse(id: id, data: "unavailable"))
-        case "commerce.getProducts", "commerce.purchase", "commerce.restore", "commerce.getEntitlements":
-            call.resolve(errorResponse(id: id, code: "NATIVE_IAP_UNAVAILABLE", message: "No native store provider is installed."))
+        case "commerce.v2.getCapabilities", "commerce.v2.fetchProducts", "commerce.v2.requestPurchase",
+             "commerce.v2.getAvailablePurchases", "commerce.v2.finishTransaction", "commerce.v2.restorePurchases":
+            call.resolve(errorResponse(id: id, code: "COMMERCE_V2_UNAVAILABLE", message: "No native store provider is installed."))
         case "ads.preload", "ads.showRewarded", "ads.showInterstitial", "ads.mountBanner", "ads.unmountBanner":
             call.resolve(errorResponse(id: id, code: "NATIVE_ADS_UNAVAILABLE", message: "No native ads provider is installed."))
         case "leaderboard.submitScore", "leaderboard.open":
@@ -275,7 +276,6 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func capabilities() -> [String: Any] {
         return [
-            "nativeIap": false,
             "nativeAds": false,
             "rewardedAds": false,
             "interstitialAds": false,

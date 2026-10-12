@@ -32,10 +32,6 @@
     "./admob": {
       "types": "./dist/admob.d.ts",
       "default": "./dist/admob.js"
-    },
-    "./app-store-server": {
-      "types": "./dist/app-store-server.d.ts",
-      "default": "./dist/app-store-server.js"
     }
   },
   "files": [

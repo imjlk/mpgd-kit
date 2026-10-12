@@ -3,7 +3,6 @@ import { createGooglePlayTokenPurchaseKey } from '@mpgd/platform/commerce';
 
 import {
   createGooglePlayProductPurchaseBoundary,
-  createGooglePlayTokenTransactionId,
   type GooglePlayProductPurchaseClient,
 } from './google-play-purchase';
 import {
@@ -647,9 +646,6 @@ const tokenTransaction = createHarness({
   response: createGooglePlayProductPurchaseConformanceFixture({ orderId: 'GPA.late' }),
 });
 const tokenTransactionId = await createGooglePlayTokenPurchaseKey('token-with-late-order');
-if (createGooglePlayTokenTransactionId !== createGooglePlayTokenPurchaseKey) {
-  throw new Error('The deprecated token transaction ID alias must be the platform helper.');
-}
 const tokenTransactionResult = await tokenTransaction.backend.purchases.verifyPurchase(
   createRequest({ token: 'token-with-late-order', orderId: tokenTransactionId }),
 );
