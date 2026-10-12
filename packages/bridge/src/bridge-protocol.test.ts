@@ -38,8 +38,6 @@ import {
 } from './fixtures';
 import {
   assertBridgeEvent,
-  assertBridgeNotificationsV2Payload,
-  assertBridgeNotificationsV2Result,
   assertBridgeRequest,
   assertBridgeResponse,
   bridgeCommerceEventProtocol,
@@ -63,6 +61,10 @@ import {
   type BridgeMethod,
   type BridgeNotificationsV2Method,
 } from './index';
+import {
+  assertBridgeNotificationsV2Payload,
+  assertBridgeNotificationsV2Result,
+} from './notifications';
 
 assertDoesNotThrow(() => assertBridgeRequest(validBridgeRequest), 'valid request should pass');
 assertDoesNotThrow(() => assertBridgeResponse(validBridgeOkResponse), 'ok response should pass');

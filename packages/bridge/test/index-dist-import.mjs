@@ -1,12 +1,11 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { commerceBridgeMethods } from '@mpgd/platform/commerce';
-import { notificationBridgeMethods } from '@mpgd/platform/notifications';
+import { notificationBridgeMethods, notificationsProtocol } from '@mpgd/platform/notifications';
 
 import {
   assertBridgeEvent,
-  assertBridgeNotificationsV2Payload,
-  assertBridgeNotificationsV2Result,
   bridgeCommerceEventProtocol,
   bridgeCommerceV2Methods,
   bridgeEventProtocol,
@@ -18,6 +17,16 @@ import {
   isBridgeCommerceV2Method,
   isBridgeNotificationsV2Method,
 } from '../dist/index.js';
+import {
+  assertBridgeNotificationsV2Payload,
+  assertBridgeNotificationsV2Result,
+} from '../dist/notifications.js';
+
+// The main entry loads no notifications code; only `./notifications` does.
+const mainEntry = readFileSync(new URL('../dist/index.js', import.meta.url), 'utf8');
+assert.doesNotMatch(mainEntry, /(?:from|import)\s*\(?\s*['"]@mpgd\/platform\/notifications['"]/u);
+const notificationsEntry = readFileSync(new URL('../dist/notifications.js', import.meta.url), 'utf8');
+assert.match(notificationsEntry, /from\s*['"]@mpgd\/platform\/notifications['"]/u);
 
 assert.deepEqual([...bridgeCommerceV2Methods], [...commerceBridgeMethods]);
 assert.equal(bridgeEventProtocol, 'mpgd.commerce.v2');
@@ -42,7 +51,7 @@ assert.doesNotThrow(() => assertBridgeEvent({
 }));
 
 assert.deepEqual([...bridgeNotificationsV2Methods], [...notificationBridgeMethods]);
-assert.equal(bridgeNotificationsEventProtocol, 'mpgd.notifications.v2');
+assert.equal(bridgeNotificationsEventProtocol, notificationsProtocol);
 assert.equal(isBridgeNotificationsV2Method('notifications.v2.requestPermission'), true);
 assert.equal(isBridgeNotificationsV2Method('notifications.requestSubscription'), false);
 const notificationsUnavailable = createNotificationsV2UnavailableBridgeError(

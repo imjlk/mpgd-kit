@@ -220,6 +220,23 @@ for (const state of ['available', 'action-required'] as const) {
   assert.deepEqual(osCapabilities.remote.purposes, ['service', 'requested', 'advertising']);
 }
 
+// An optional count present as `undefined` stays out of the copy, so the
+// snapshot keeps exact keys.
+{
+  const fake = createProvider();
+  fake.answer(async () => ({
+    ...osCapabilities,
+    permission: { ...osCapabilities.permission, maxTopicsPerPrompt: undefined },
+    local: { supported: true, maxPending: undefined },
+  }));
+  const gateway = withTargetAvailability(createGateway(fake.provider), configWith('available'));
+  const block = (await gateway.getCapabilities()).notifications;
+  assert.equal(block?.availability, 'available');
+  assert.equal(block !== undefined && Object.hasOwn(block.permission, 'maxTopicsPerPrompt'), false);
+  assert.equal(block !== undefined && Object.hasOwn(block.local, 'maxPending'), false);
+  assert.equal(block?.permission.promptLimit, 2, 'a present count is kept');
+}
+
 // The integration state follows the v2 availability.
 for (const availability of [
   'available',

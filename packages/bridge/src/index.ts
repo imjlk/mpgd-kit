@@ -6,31 +6,14 @@ import {
   type CommerceBridgeMethod,
   type CommerceEventEnvelope,
 } from '@mpgd/platform/commerce';
-import {
-  assertNotificationBridgeCancelLocalPayload,
-  assertNotificationBridgeCancelLocalResult,
-  assertNotificationBridgeGetCapabilitiesPayload,
-  assertNotificationBridgeGetCapabilitiesResult,
-  assertNotificationBridgeGetPermissionPayload,
-  assertNotificationBridgeGetPermissionResult,
-  assertNotificationBridgeListLocalPayload,
-  assertNotificationBridgeListLocalResult,
-  assertNotificationBridgeOpenSettingsPayload,
-  assertNotificationBridgeOpenSettingsResult,
-  assertNotificationBridgeRegisterPayload,
-  assertNotificationBridgeRegisterResult,
-  assertNotificationBridgeRequestPermissionPayload,
-  assertNotificationBridgeRequestPermissionResult,
-  assertNotificationBridgeRevokePermissionPayload,
-  assertNotificationBridgeRevokePermissionResult,
-  assertNotificationBridgeScheduleLocalPayload,
-  assertNotificationBridgeScheduleLocalResult,
-  notificationBridgeMethods,
-  notificationsProtocol,
-  type NotificationBridgeMethod,
-  type NotificationBridgeMethods,
-  type NotificationErrorCode,
-  type NotificationEventEnvelope,
+// Types only: the main entry loads no `@mpgd/platform/notifications` code,
+// so a game bundle that uses the bridge does not carry the notifications
+// validators until it calls `@mpgd/bridge/notifications`.
+import type {
+  NotificationBridgeMethod,
+  NotificationBridgeMethods,
+  NotificationErrorCode,
+  NotificationEventEnvelope,
 } from '@mpgd/platform/notifications';
 
 /**
@@ -49,9 +32,9 @@ export type BridgeCommerceV2Method =
 
 /**
  * Notifications v2 request methods (notifications RFC "Bridge and
- * versioning"). Spelled out like the commerce union; `bridgeNotificationsV2Methods`
- * and the type check under it keep the list equal to `notificationBridgeMethods`
- * from `@mpgd/platform/notifications`.
+ * versioning"). Spelled out like the commerce union; the type check under
+ * `bridgeNotificationsV2Methods` and the bridge tests keep the list equal to
+ * `notificationBridgeMethods` from `@mpgd/platform/notifications`.
  */
 export type BridgeNotificationsV2Method =
   | 'notifications.v2.getCapabilities'
@@ -161,8 +144,19 @@ export function createCommerceV2UnavailableBridgeError(
   );
 }
 
-export const bridgeNotificationsV2Methods: readonly BridgeNotificationsV2Method[] =
-  notificationBridgeMethods;
+// Listed here rather than imported, so the main entry stays free of
+// `@mpgd/platform/notifications` code.
+export const bridgeNotificationsV2Methods: readonly BridgeNotificationsV2Method[] = Object.freeze([
+  'notifications.v2.getCapabilities',
+  'notifications.v2.getPermission',
+  'notifications.v2.requestPermission',
+  'notifications.v2.revokePermission',
+  'notifications.v2.register',
+  'notifications.v2.scheduleLocal',
+  'notifications.v2.cancelLocal',
+  'notifications.v2.listLocal',
+  'notifications.v2.openSettings',
+] as const);
 const bridgeNotificationsV2MethodsAgree: MethodsAgree<
   BridgeNotificationsV2Method,
   NotificationBridgeMethod
@@ -205,71 +199,6 @@ export type BridgeNotificationsV2Payload<TMethod extends BridgeNotificationsV2Me
 export type BridgeNotificationsV2Result<TMethod extends BridgeNotificationsV2Method> =
   NotificationBridgeMethods[TMethod]['result'];
 
-// Each entry is the `@mpgd/platform/notifications` validator of that
-// method's shape; the lookups below are typed by the method.
-const notificationsV2PayloadAsserts: Readonly<
-  Record<BridgeNotificationsV2Method, (input: unknown) => unknown>
-> = {
-  'notifications.v2.getCapabilities': assertNotificationBridgeGetCapabilitiesPayload,
-  'notifications.v2.getPermission': assertNotificationBridgeGetPermissionPayload,
-  'notifications.v2.requestPermission': assertNotificationBridgeRequestPermissionPayload,
-  'notifications.v2.revokePermission': assertNotificationBridgeRevokePermissionPayload,
-  'notifications.v2.register': assertNotificationBridgeRegisterPayload,
-  'notifications.v2.scheduleLocal': assertNotificationBridgeScheduleLocalPayload,
-  'notifications.v2.cancelLocal': assertNotificationBridgeCancelLocalPayload,
-  'notifications.v2.listLocal': assertNotificationBridgeListLocalPayload,
-  'notifications.v2.openSettings': assertNotificationBridgeOpenSettingsPayload,
-};
-
-const notificationsV2ResultAsserts: Readonly<
-  Record<BridgeNotificationsV2Method, (input: unknown) => unknown>
-> = {
-  'notifications.v2.getCapabilities': assertNotificationBridgeGetCapabilitiesResult,
-  'notifications.v2.getPermission': assertNotificationBridgeGetPermissionResult,
-  'notifications.v2.requestPermission': assertNotificationBridgeRequestPermissionResult,
-  'notifications.v2.revokePermission': assertNotificationBridgeRevokePermissionResult,
-  'notifications.v2.register': assertNotificationBridgeRegisterResult,
-  'notifications.v2.scheduleLocal': assertNotificationBridgeScheduleLocalResult,
-  'notifications.v2.cancelLocal': assertNotificationBridgeCancelLocalResult,
-  'notifications.v2.listLocal': assertNotificationBridgeListLocalResult,
-  'notifications.v2.openSettings': assertNotificationBridgeOpenSettingsResult,
-};
-
-/**
- * Validates the payload of a notifications v2 request with the
- * `@mpgd/platform/notifications` validator for its method: unknown keys,
- * timestamps without an offset or on a date that does not exist, and routes
- * that are not root-relative are rejected. Throws what that validator throws,
- * and a `TypeError` for a method that is not a notifications v2 method.
- */
-export function assertBridgeNotificationsV2Payload<TMethod extends BridgeNotificationsV2Method>(
-  method: TMethod,
-  payload: unknown,
-): BridgeNotificationsV2Payload<TMethod> {
-  assertNotificationsV2Method(method);
-  return notificationsV2PayloadAsserts[method](payload) as BridgeNotificationsV2Payload<TMethod>;
-}
-
-/**
- * Validates the data a transport answered a notifications v2 request with,
- * as `assertBridgeNotificationsV2Payload` validates the payload.
- */
-export function assertBridgeNotificationsV2Result<TMethod extends BridgeNotificationsV2Method>(
-  method: TMethod,
-  data: unknown,
-): BridgeNotificationsV2Result<TMethod> {
-  assertNotificationsV2Method(method);
-  return notificationsV2ResultAsserts[method](data) as BridgeNotificationsV2Result<TMethod>;
-}
-
-function assertNotificationsV2Method(method: string): void {
-  // A caller outside TypeScript may pass any string; an inherited key such as
-  // `constructor` must not reach a lookup that would call it.
-  if (!isBridgeNotificationsV2Method(method)) {
-    throw new TypeError(`${method} is not a notifications v2 bridge method.`);
-  }
-}
-
 /**
  * Event side of the bridge: every protocol shares one event channel, and each
  * envelope names its protocol. A transport numbers each protocol's events per
@@ -292,7 +221,8 @@ export type BridgeEventOf<TProtocol extends BridgeEventProtocol> = Extract<
 >['event'];
 
 export const bridgeCommerceEventProtocol = commerceProtocol;
-export const bridgeNotificationsEventProtocol = notificationsProtocol;
+export const bridgeNotificationsEventProtocol =
+  'mpgd.notifications.v2' as const satisfies NotificationEventEnvelope['protocol'];
 
 /**
  * The commerce v2 event protocol, named when commerce was the only protocol

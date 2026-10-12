@@ -11,12 +11,14 @@ fail-closed answer.
   and `openSettings`), exported as `bridgeNotificationsV2Methods` and kept
   equal to `notificationBridgeMethods` from `@mpgd/platform/notifications`.
   `isBridgeNotificationsV2Method` tells them apart.
-- `assertBridgeNotificationsV2Payload(method, payload)` and
-  `assertBridgeNotificationsV2Result(method, data)` validate a method's
-  payload and answer with the `@mpgd/platform/notifications` validators, so
-  unknown keys, timestamps without an offset, and routes that are not
-  root-relative are rejected. `BridgeNotificationsV2Payload` and
-  `BridgeNotificationsV2Result` name the shapes.
+- The new `@mpgd/bridge/notifications` entry exports
+  `assertBridgeNotificationsV2Payload(method, payload)` and
+  `assertBridgeNotificationsV2Result(method, data)`, which validate a
+  method's payload and answer with the `@mpgd/platform/notifications`
+  validators, so unknown keys, timestamps without an offset, and routes that
+  are not root-relative are rejected. `BridgeNotificationsV2Payload` and
+  `BridgeNotificationsV2Result` name the shapes. The main entry loads no
+  notifications code, so bundles that only use the bridge do not grow.
 - `createNotificationsV2UnavailableBridgeError` answers a notifications v2
   request with `NOTIFICATIONS_V2_UNAVAILABLE`
   (`notificationsV2UnavailableBridgeErrorCode`), which is not retryable. The

@@ -1446,9 +1446,10 @@ Other rules the profiles encode:
 - **What N3 landed.** No transport serves v2 yet; P1–P3 add the providers.
   - `@mpgd/bridge` adds the nine methods to `BridgeMethod`
     (`bridgeNotificationsV2Methods`, kept equal to `notificationBridgeMethods`
-    by a type check and a test) and validates each method's payload and answer
-    with the N2 validators (`assertBridgeNotificationsV2Payload`,
-    `assertBridgeNotificationsV2Result`).
+    by a type check and a test). `@mpgd/bridge/notifications` validates each
+    method's payload and answer with the N2 validators
+    (`assertBridgeNotificationsV2Payload`, `assertBridgeNotificationsV2Result`);
+    the main entry loads no notifications code.
   - `BridgeEvent` is the union above. `createBridgeEventSource` numbers one
     protocol's events from 0 for each session and attaches to the provider only
     for the first listener, so events the provider buffered reach it.

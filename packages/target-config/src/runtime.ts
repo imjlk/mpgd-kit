@@ -1063,13 +1063,23 @@ function isNotificationCapabilities(value: unknown): value is NotificationCapabi
 function copyNotificationCapabilities(
   capabilities: NotificationCapabilities,
 ): NotificationCapabilities {
-  // The validated block has exactly the declared keys, so shallow copies of
-  // its records keep them exact and share nothing with the provider.
+  // The validated block has only the declared keys, but the validator lets
+  // an optional count be present as `undefined`; the copy leaves such a key
+  // out, so the snapshot keeps exact keys and shares nothing with the provider.
+  const { promptLimit, maxTopicsPerPrompt, ...permission } = capabilities.permission;
+  const { maxPending } = capabilities.local;
   return {
     availability: capabilities.availability,
-    permission: { ...capabilities.permission },
+    permission: {
+      ...permission,
+      ...(promptLimit === undefined ? {} : { promptLimit }),
+      ...(maxTopicsPerPrompt === undefined ? {} : { maxTopicsPerPrompt }),
+    },
     remote: { ...capabilities.remote, purposes: [...capabilities.remote.purposes] },
-    local: { ...capabilities.local },
+    local: {
+      supported: capabilities.local.supported,
+      ...(maxPending === undefined ? {} : { maxPending }),
+    },
     open: capabilities.open,
   };
 }
