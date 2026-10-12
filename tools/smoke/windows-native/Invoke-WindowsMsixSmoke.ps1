@@ -10,6 +10,15 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'WindowsMsixSmoke.psm1') -Force
+function Read-StarterState {
+    param([string]$Path)
+    # Permit the host's atomic rename while this sample reads the previous file.
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+        ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    $reader = [IO.StreamReader]::new($stream)
+    try { return ($reader.ReadToEnd() | ConvertFrom-Json) }
+    finally { $reader.Dispose() }
+}
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:OS -ne 'Windows_NT') {
     throw 'Native MSIX acceptance runs on an isolated GitHub Windows runner.'
 }
@@ -128,7 +137,7 @@ try {
         $receipt.webViewRendererObserved = $renderers.Count -gt 0
         $receipt.generatedGameLoaded = $false
         if (Test-Path -LiteralPath $readyLog) {
-            $gameState = Get-Content -LiteralPath $readyLog -Raw | ConvertFrom-Json
+            $gameState = Read-StarterState $readyLog
             $receipt.generatedGameLoaded = Test-StarterReadiness $gameState $source.gameBundleSha256
             if ($receipt.generatedGameLoaded) { $receipt.generatedGame = $gameState }
         }
