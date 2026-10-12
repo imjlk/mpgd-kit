@@ -5364,6 +5364,30 @@ describe('AIT sharing', () => {
       },
     )).resolves.toEqual({ status: 'cancelled' });
   });
+
+  it('answers unavailable for root-relative links that name a host', async () => {
+    const getTossShareLink = vi.fn(async () => 'https://toss.im/_ul/daily');
+    const dependencies = { appName: 'ttokdoku', getTossShareLink, share: async () => {} };
+
+    for (const deepLink of [
+      // A backslash after the leading slash parses as an authority.
+      '/\\ x',
+      '/\\mpgd.invalid/daily',
+      '/\\user:pw@mpgd.invalid:443/daily',
+      '/\\game.example/daily',
+      // URL parsing drops tabs and newlines, which would leave an authority.
+      '/\t/ x',
+      '/\n/mpgd.invalid/daily',
+    ]) {
+      await expect(shareIntent({ text: 'Unsafe', deepLink }, dependencies))
+        .resolves.toEqual({ status: 'unavailable' });
+    }
+
+    expect(getTossShareLink).not.toHaveBeenCalled();
+    await expect(shareIntent({ text: 'Daily', deepLink: '/daily' }, dependencies))
+      .resolves.toEqual({ status: 'shared', completion: 'presented' });
+    expect(getTossShareLink).toHaveBeenCalledWith('intoss://ttokdoku/daily', undefined);
+  });
 });
 
 type LoadAdCallbacks = Parameters<AitHostDependencies['loadFullScreenAd']>[0];

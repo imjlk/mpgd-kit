@@ -1423,11 +1423,19 @@ function inboundSearchParams(): URLSearchParams {
 }
 
 function toAitDeepLink(input: string, appName: string): string | undefined {
-  if (input.startsWith('//')) {
+  // No share link needs a control character, and URL parsing drops tabs and
+  // newlines, which can turn `/<tab>/host` into an authority.
+  if (input.startsWith('//') || /[\x00-\x1F\x7F]/u.test(input)) {
     return undefined;
   }
 
   if (input.startsWith('/')) {
+    // A backslash after the leading slash also parses as an authority
+    // (`/\host`), so the link names a host, not a path in this mini-app.
+    if (input.startsWith('/\\')) {
+      return undefined;
+    }
+
     const baseUrl = new URL('https://mpgd.invalid');
     const parsed = new URL(input, baseUrl);
     return parsed.origin === baseUrl.origin
