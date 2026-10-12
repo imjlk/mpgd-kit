@@ -153,3 +153,11 @@ head_sampling_rate = 1
 # Apply migration 0006_entitlement_revocations.sql for the revoke entries the
 # ledger status read reports.
 # MPGD_COMMERCE_LOOKUP_STORES = ["devvit", "verse8"]
+#
+# Optional: let the Devvit fulfillment handler verify its own order through
+# this Worker (devvit.payment-order.v1) instead of writing the ledger
+# directly. The service reads the order from the Devvit payments plugin.
+#
+# [[services]]
+# binding = "GAME_SERVICES_DEVVIT_PAYMENT_ORDER_AUTHORITY"
+# service = "game-devvit-payments-authority"

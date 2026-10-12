@@ -6,6 +6,7 @@ import {
   createCommerceEvidenceRegistry,
   createDevelopmentGameServicesEvidenceVerifier,
   createDevvitOrderLookupCommerceEvidenceEntry,
+  createDevvitPaymentOrderCommerceEvidenceEntry,
   createGameServicesBackend,
   createGameServicesBackendApiHandler,
   createGameServicesHttpFetchHandler,
@@ -19,6 +20,7 @@ import {
   createMicrosoftStoreCommerceEvidenceEntry,
   createVerifiedLeaderboardSnapshotFetchHandler,
   createVerse8Agent8EventLookupCommerceEvidenceEntry,
+  devvitPaymentOrderEvidenceSchema,
   gameServicesBackendEndpoints,
   microsoftStoreDigitalGoodsEvidenceSchema,
   type AdRewardEvidenceVerifierRegistry,
@@ -28,6 +30,8 @@ import {
   type CommerceEvidenceFallbackStore,
   type CommerceEvidenceRegistry,
   type CommerceEvidenceRegistryEntry,
+  type DevvitPaymentOrderAuthorityInput,
+  type DevvitPaymentOrderAuthorityResult,
   type EvidenceVerificationDecision,
   type FinalizePurchaseGrantInput,
   type GameServicesBackendApi,
@@ -130,6 +134,15 @@ export interface GameServicesWorkerEnv {
    * path must write that ledger; the lookup never grants from the envelope.
    */
   readonly MPGD_COMMERCE_LOOKUP_STORES?: readonly ('devvit' | 'verse8')[];
+  /**
+   * The Devvit payments authority the `devvit.payment-order.v1` entry binds a
+   * fulfillment handler's order through (`createPlatformOrderVerifyRequest`):
+   * a private service over the Devvit `payments` plugin's order read. Without
+   * it the fulfillment path writes the ledger directly
+   * (`createPlatformOrderLedgerGrant`), and a `devvit.payment-order.v1`
+   * verify request is refused with `DEVVIT_PAYMENT_ORDER_AUTHORITY_REQUIRED`.
+   */
+  readonly GAME_SERVICES_DEVVIT_PAYMENT_ORDER_AUTHORITY?: DevvitPaymentOrderAuthorityBinding;
   readonly GAME_SERVICES_ANDROID_DEPLOYMENT_TARGET?: string;
   readonly GAME_SERVICES_IOS_DEPLOYMENT_TARGET?: string;
   readonly GAME_SERVICES_AIT_DEPLOYMENT_TARGET?: string;
@@ -154,6 +167,13 @@ export interface GameServicesPurchaseGrantFinalizerBinding {
   finalizePurchaseGrant(
     input: Omit<FinalizePurchaseGrantInput, 'signal'>,
   ): Promise<PurchaseGrantFinalization>;
+}
+
+/** Reads a Reddit order for the `devvit.payment-order.v1` entry; the AbortSignal stays local. */
+export interface DevvitPaymentOrderAuthorityBinding {
+  getOrder(
+    input: Omit<DevvitPaymentOrderAuthorityInput, 'signal'>,
+  ): Promise<DevvitPaymentOrderAuthorityResult>;
 }
 
 /** Mints an access token for the Android Publisher scope from the game-owned service account. */
@@ -235,6 +255,7 @@ const productCatalog = {
         'microsoft-store': 'coins_100',
         reddit: 'coins_100',
         verse8: 'coins_100',
+        browser: 'coins_100',
       },
     },
   ],
@@ -266,7 +287,40 @@ const adPlacements = {
 const fallbackMemoryStore = createInMemoryGameServicesStore();
 const fallbackVerifiedLeaderboardService = createInMemoryVerifiedLeaderboardService();
 
+// The Worker entrypoint calls these factories per request with the same env
+// object, so the store, registry (and its Play boundary), backend, and
+// handlers are built once per env and reused. The shared Play boundary keeps
+// one in-flight finalization lease per purchase across requests of the
+// isolate, which is the intended same-process dedupe: a second request for a
+// purchase whose acknowledge or consume is still running waits for that
+// call instead of issuing another.
+const fetchHandlersByEnv = new WeakMap<GameServicesWorkerEnv, (request: Request) => Promise<Response>>();
+const servicesByEnv = new WeakMap<GameServicesWorkerEnv, GameServicesWorkerService>();
+const backendsByEnv = new WeakMap<GameServicesWorkerEnv, GameServicesBackendApi>();
+const storesByEnv = new WeakMap<GameServicesWorkerEnv, GameServicesStore>();
+const registriesByEnv = new WeakMap<GameServicesWorkerEnv, WorkerCommerceEvidenceRegistry>();
+
+function cachedByEnv<T extends object>(
+  cache: WeakMap<GameServicesWorkerEnv, T>,
+  env: GameServicesWorkerEnv,
+  build: () => T,
+): T {
+  const cached = cache.get(env);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const built = build();
+  cache.set(env, built);
+  return built;
+}
+
 export function createWorkerFetchHandler(
+  env: GameServicesWorkerEnv,
+): (request: Request) => Promise<Response> {
+  return cachedByEnv(fetchHandlersByEnv, env, () => buildWorkerFetchHandler(env));
+}
+
+function buildWorkerFetchHandler(
   env: GameServicesWorkerEnv,
 ): (request: Request) => Promise<Response> {
   const admobConfig = resolveWorkerAdMobSsvConfig(env);
@@ -577,6 +631,10 @@ function createWorkerVerifiedLeaderboardSnapshotFetchHandler(
 }
 
 export function createWorkerService(env: GameServicesWorkerEnv): GameServicesWorkerService {
+  return cachedByEnv(servicesByEnv, env, () => buildWorkerService(env));
+}
+
+function buildWorkerService(env: GameServicesWorkerEnv): GameServicesWorkerService {
   const admobConfig = resolveWorkerAdMobSsvConfig(env);
   const backend = createWorkerBackend(env, resolveWorkerEvidenceVerifier(env, admobConfig));
   const verifiedLeaderboard = createWorkerVerifiedLeaderboardService(env);
@@ -611,6 +669,13 @@ export function createWorkerService(env: GameServicesWorkerEnv): GameServicesWor
 }
 
 function createWorkerBackend(
+  env: GameServicesWorkerEnv,
+  evidenceVerifier: GameServicesEvidenceVerifier | undefined,
+): GameServicesBackendApi {
+  return cachedByEnv(backendsByEnv, env, () => buildWorkerBackend(env, evidenceVerifier));
+}
+
+function buildWorkerBackend(
   env: GameServicesWorkerEnv,
   evidenceVerifier: GameServicesEvidenceVerifier | undefined,
 ): GameServicesBackendApi {
@@ -657,6 +722,13 @@ const reportedRegistryErrors = new WeakSet<GameServicesWorkerEnv>();
  * deployment sees it at startup while ads and leaderboards keep serving.
  */
 function resolveWorkerCommerceEvidenceRegistry(
+  env: GameServicesWorkerEnv,
+  store: GameServicesStore,
+): WorkerCommerceEvidenceRegistry {
+  return cachedByEnv(registriesByEnv, env, () => buildWorkerCommerceEvidenceRegistry(env, store));
+}
+
+function buildWorkerCommerceEvidenceRegistry(
   env: GameServicesWorkerEnv,
   store: GameServicesStore,
 ): WorkerCommerceEvidenceRegistry {
@@ -803,12 +875,54 @@ function createWorkerCommerceEvidenceRegistry(
     }));
   }
 
-  for (const lookupStore of resolveWorkerLookupStores(env)) {
-    entries.push(
-      lookupStore === 'devvit'
-        ? createDevvitOrderLookupCommerceEvidenceEntry({ ledger: store })
-        : createVerse8Agent8EventLookupCommerceEvidenceEntry({ ledger: store }),
-    );
+  const lookupStores = resolveWorkerLookupStores(env);
+  const devvitAuthority = env.GAME_SERVICES_DEVVIT_PAYMENT_ORDER_AUTHORITY;
+  for (const lookupStore of lookupStores) {
+    if (lookupStore === 'verse8') {
+      entries.push(createVerse8Agent8EventLookupCommerceEvidenceEntry({ ledger: store }));
+      continue;
+    }
+    const lookup = createDevvitOrderLookupCommerceEvidenceEntry({ ledger: store });
+    if (devvitAuthority !== undefined) {
+      entries.push(lookup);
+      continue;
+    }
+    // The devvit store now has an entry, so its other schemas never reach the
+    // aggregate: a fulfillment verify (`devvit.payment-order.v1`) is refused
+    // with the reason it needs the authority binding rather than an
+    // anonymous EVIDENCE_SCHEMA_UNSUPPORTED. The fulfillment path writes the
+    // ledger directly (createPlatformOrderLedgerGrant) in this setup.
+    entries.push({
+      ...lookup,
+      acceptsUnclaimedSchemas: true,
+      verifier: {
+        verifyPurchase(input) {
+          const schema = input.request.evidence?.schema;
+          if (schema === devvitPaymentOrderEvidenceSchema) {
+            return Promise.resolve({
+              status: 'rejected',
+              reason: 'DEVVIT_PAYMENT_ORDER_AUTHORITY_REQUIRED',
+            });
+          }
+          if (schema !== lookup.schema) {
+            return Promise.resolve({ status: 'rejected', reason: 'EVIDENCE_SCHEMA_UNSUPPORTED' });
+          }
+          return lookup.verifier.verifyPurchase(input);
+        },
+      },
+    });
+  }
+  if (devvitAuthority !== undefined) {
+    // The fulfillment handler's own record, bound through the payments authority.
+    entries.push(createDevvitPaymentOrderCommerceEvidenceEntry({
+      authority: {
+        getOrder({ signal, ...bindingInput }) {
+          // AbortSignal is not structured-cloneable across a Worker Service Binding.
+          void signal;
+          return devvitAuthority.getOrder(bindingInput);
+        },
+      },
+    }));
   }
 
   if (entries.length === 0) {
@@ -829,7 +943,11 @@ function createWorkerCommerceEvidenceRegistry(
   return createCommerceEvidenceRegistry(entries, {
     unregistered: {
       verifier: fallback.verifier,
-      ...(fallbackStores === undefined ? {} : { stores: fallbackStores }),
+      // The declared stores are published; every other store without an
+      // entry keeps reaching the aggregate as it did before the registry.
+      ...(fallbackStores === undefined
+        ? {}
+        : { stores: fallbackStores, servesUndeclaredStores: true }),
     },
   });
 }
@@ -845,7 +963,8 @@ const aggregateFallbackStores: readonly CommerceEvidenceFallbackStore[] = [
   { store: 'google-play', finish: 'client', targets: ['android'] },
   { store: 'app-store', finish: 'client', targets: ['ios'] },
   { store: 'apps-in-toss', finish: 'host', targets: ['ait'] },
-  { store: 'oneplay', finish: 'server', targets: ['oneplay'] },
+  // `oneplay` is server-finished and the Worker binds no OnePlay finalizer,
+  // so it is served (undeclared) but not published.
 ];
 
 function resolveWorkerUnregisteredPurchaseVerifier(
@@ -1298,8 +1417,10 @@ function unavailableEvidenceVerificationDecision(): EvidenceVerificationDecision
 }
 
 function createWorkerStore(env: GameServicesWorkerEnv): GameServicesStore {
-  const db = resolveD1Database(env);
-  return db === undefined ? fallbackMemoryStore : createD1GameServicesStore(db);
+  return cachedByEnv(storesByEnv, env, () => {
+    const db = resolveD1Database(env);
+    return db === undefined ? fallbackMemoryStore : createD1GameServicesStore(db);
+  });
 }
 
 function createWorkerVerifiedLeaderboardService(

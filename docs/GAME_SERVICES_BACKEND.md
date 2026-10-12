@@ -349,9 +349,9 @@ retry finalizes through the entry that verified the grant.
 
 The server-push stores register lookup verifiers (`devvit.order.v1`,
 `verse8.agent8-event.v1`): the client envelope only names the purchase, and
-the verifier answers `granted` (with the existing ledger entry and
-`alreadyProcessed: true`) once the host's fulfillment path wrote the grant for
-the same store and transaction id, `pending` (`LEDGER_GRANT_PENDING`) before
+the verifier answers `settled` (the backend answers `verified` with the
+existing ledger entry and `alreadyProcessed: true`) once the host's
+fulfillment path wrote the grant for the same store and transaction id, `pending` (`LEDGER_GRANT_PENDING`) before
 that, and `rejected` for a transaction, product, or player mismatch. The
 fulfillment path writes that grant with `createPlatformOrderLedgerGrant`
 (Devvit, key `reddit:<orderId>`) or `createServerPushLedgerGrant` (the Verse8
@@ -582,7 +582,7 @@ in-Worker Play boundary (`GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME` with the
 access tokens from the game-owned service account, plus
 `GAME_SERVICES_GOOGLE_PLAY_ACCOUNT_BINDING` or the explicit
 `GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER = "true"` opt-in), finalized by
-that boundary or by a `GAME_SERVICES_ANDROID_PURCHASE_FINALIZER` service, and
+that boundary or by a `GAME_SERVICES_ANDROID_PURCHASE_FINALIZER` service,
 or, when the binding acknowledges purchases itself,
 `GAME_SERVICES_ANDROID_VERIFIER_FINALIZES = "true"` (the entry is published
 with the client finish owner, so a commerce v2 Play provider is told
@@ -593,17 +593,28 @@ serving; `app-store` from `GAME_SERVICES_IOS_EVIDENCE_VERIFIER`;
 `apps-in-toss` from `GAME_SERVICES_AIT_EVIDENCE_VERIFIER`; `microsoft-store`
 from the verifier and finalizer pair; and the `devvit.order.v1` and
 `verse8.agent8-event.v1` lookups from `MPGD_COMMERCE_LOOKUP_STORES` (for
-example `["devvit", "verse8"]`), reading the Worker's own ledger. Binding
-entries keep their v1 contract: a request without an envelope and a schema
-no entry claims still reach the binding of their store. Stores without an
-entry keep the aggregate `GAME_SERVICES_EVIDENCE_VERIFIER` (or the local
-development verifier) as the v1 fallback, which is published for `app-store`,
-`apps-in-toss`, `oneplay`, and `google-play` with the client finish owner
-(the aggregate cannot finish Android purchases; bind a Play finalizer to
-publish `google-play` as server-finished); in strict target-specific mode a
-store without its binding keeps answering `EVIDENCE_VERIFIER_UNAVAILABLE` and
-is not published. A Worker without any entry runs without a registry and
-publishes no capabilities.
+example `["devvit", "verse8"]`), reading the Worker's own ledger; with
+`GAME_SERVICES_DEVVIT_PAYMENT_ORDER_AUTHORITY` bound (a private service over
+the Devvit `payments` order read) the `devvit.payment-order.v1` entry serves
+the fulfillment handler's `createPlatformOrderVerifyRequest`, and without it
+such a request is refused with `DEVVIT_PAYMENT_ORDER_AUTHORITY_REQUIRED` and
+the fulfillment path writes the ledger directly with
+`createPlatformOrderLedgerGrant`. Binding entries keep their v1 contract: a
+request without an envelope and a schema no entry claims still reach the
+binding of their store. Stores without an entry keep the aggregate
+`GAME_SERVICES_EVIDENCE_VERIFIER` (or the local development verifier) as the
+v1 fallback for every ledger target it served before, and it is published
+for `app-store`, `apps-in-toss`, and `google-play` with the client finish
+owner (the aggregate cannot finish Android purchases; bind a Play finalizer
+to publish `google-play` as server-finished; `oneplay` is served but not
+published, since the Worker binds no OnePlay finalizer); an undeclared
+`store` label on a target whose v1 store has an entry (`{ target: 'reddit',
+store: 'verse8' }`) is a 400 rather than a way around that entry; in strict
+target-specific mode a store without its binding keeps answering
+`EVIDENCE_VERIFIER_UNAVAILABLE` and is not published. A Worker without any
+entry runs without a registry and publishes no capabilities. The store,
+registry (with its Play boundary), backend, and handlers are built once per
+`env` object and reused across requests.
 
 Use public HTTP/oRPC for external game clients and service binding RPC for
 internal Cloudflare Worker-to-Worker calls. `recordVerifiedAttempt()` is a

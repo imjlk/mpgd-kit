@@ -54,6 +54,7 @@ export {
   type GameServicesIngressAuthBinding,
   type GameServicesIngressAuthBindingRequest,
   type GameServicesIngressPrincipal,
+  type DevvitPaymentOrderAuthorityBinding,
   type GameServicesWorkerEnv,
   type GooglePlayAccountBinding,
   type GooglePlayPublisherAuthBinding,

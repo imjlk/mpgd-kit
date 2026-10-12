@@ -168,11 +168,12 @@ try {
   await applyMigration(db, '0006_entitlement_revocations.sql');
   const activeBefore = await readPurchaseLedgerStatuses(store, {
     ledgerEntryIds: [recorded.ledgerEntryId, 'ledger-historical-purchase', 'missing'],
+    playerId: grant.playerId,
   });
   assertEqual(
     JSON.stringify(activeBefore.statuses.map((status) => status.status)),
-    JSON.stringify(['active', 'active', 'unknown']),
-    'D1 should answer active for grants without a revoke entry',
+    JSON.stringify(['active', 'unknown', 'unknown']),
+    "D1 should answer active for the player's grants without a revoke entry",
   );
   const revocation = {
     playerId: grant.playerId,
@@ -255,12 +256,13 @@ try {
   );
   const statusAfter = await readPurchaseLedgerStatuses(store, {
     ledgerEntryIds: [recorded.ledgerEntryId, 'ledger-historical-purchase'],
+    playerId: grant.playerId,
   });
   assertEqual(
     JSON.stringify(statusAfter.statuses),
     JSON.stringify([
       { ledgerEntryId: recorded.ledgerEntryId, status: 'reversed', reversedBy: revokeEntryId },
-      { ledgerEntryId: 'ledger-historical-purchase', status: 'active' },
+      { ledgerEntryId: 'ledger-historical-purchase', status: 'unknown' },
     ]),
     'D1 ledger status should name the reversing entry',
   );

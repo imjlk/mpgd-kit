@@ -101,13 +101,19 @@ export interface CreateCommerceEvidenceRegistryOptions {
     readonly verifier: Pick<GameServicesEvidenceVerifier, 'verifyPurchase'>;
     readonly finalizer?: GameServicesPurchaseGrantFinalizer;
     /**
-     * The stores the fallback serves; they are published by the capabilities
-     * endpoint (with no schemas) so a client of such a store is not told
-     * `configuration-required`, and a request for a store neither an entry
-     * nor this list names is rejected. Absent, the fallback serves any store
-     * without entries and publishes nothing for them.
+     * The stores the fallback publishes through the capabilities endpoint
+     * (with no schemas), so a client of such a store is not told
+     * `configuration-required`. Absent, nothing is published for the
+     * fallback.
      */
     readonly stores?: readonly CommerceEvidenceFallbackStore[];
+    /**
+     * Whether the fallback also serves stores it did not declare (a v1
+     * aggregate verifier that served every target). Defaults to true when
+     * `stores` is absent and to false when it is given: a declared list is
+     * then also the list of served stores, and any other store is rejected.
+     */
+    readonly servesUndeclaredStores?: boolean;
   };
 }
 
@@ -132,8 +138,20 @@ export interface CommerceEvidenceRegistry {
   readonly entries: readonly CommerceEvidenceRegistryEntry[];
   /** Every store the registry serves: the entries' stores and the fallback's declared ones. */
   readonly stores: ReadonlySet<StoreId>;
-  /** Whether the fallback serves stores it did not declare (no `unregistered.stores`). */
+  /**
+   * Whether a request is served at all: a served store, or (with
+   * `servesUndeclaredStores`) an undeclared store whose target's v1 store is
+   * not itself served. The backend answers a 400 otherwise.
+   */
+  serves(request: Pick<VerifyPurchaseRequest, 'target' | 'store'>): boolean;
+  /** Whether the fallback serves stores it did not declare. */
   readonly servesUndeclaredStores: boolean;
+  /**
+   * The ledger targets requests of a served store may name: the union of the
+   * store's entries' `targets` (or the declared fallback store's), or
+   * undefined when any target is accepted or the store is not served.
+   */
+  allowedTargets(store: StoreId): ReadonlySet<string> | undefined;
   /** The store a request names: `store`, or the v1 mapping of its `target`. */
   resolveStore(request: Pick<VerifyPurchaseRequest, 'target' | 'store'>): StoreId;
   /** Where a request's evidence is routed, without running a verifier. */
@@ -211,6 +229,14 @@ export function createCommerceEvidenceRegistry(
           + `and ${entry.finish} for ${entry.schema}; one store has one finish owner.`,
       );
     }
+    if (sibling !== undefined && !samePurchaseCapabilities(sibling.purchase, entry.purchase)) {
+      // What a store sells is one profile; two entries of one store must
+      // declare it identically (or both leave the default), never be merged.
+      throw new TypeError(
+        `Commerce store ${entry.store} declares different purchase kinds for ${sibling.schema} `
+          + `and ${entry.schema}; every entry of a store declares the same purchase profile.`,
+      );
+    }
     if (entry.acceptsMissingEvidence === true) {
       if (missingEvidenceByStore.has(entry.store)) {
         throw new TypeError(
@@ -238,6 +264,12 @@ export function createCommerceEvidenceRegistry(
     if (fallbackStores.has(declared.store)) {
       throw new TypeError(`Commerce store ${declared.store} is declared twice for the fallback.`);
     }
+    if (declared.finish === 'server' && fallback?.finalizer === undefined) {
+      throw new TypeError(
+        `Commerce store ${declared.store} is declared for the fallback with finish: server and `
+          + 'needs unregistered.finalizer; without one its grants would never be acknowledged.',
+      );
+    }
     fallbackStores.set(declared.store, declared);
   }
   const unclaimedByStore = new Map<StoreId, CommerceEvidenceRegistryEntry>();
@@ -251,8 +283,21 @@ export function createCommerceEvidenceRegistry(
       unclaimedByStore.set(entry.store, entry);
     }
   }
-  const servesUndeclaredStores = fallback !== undefined && fallback.stores === undefined;
+  const servesUndeclaredStores = fallback !== undefined
+    && (fallback.servesUndeclaredStores ?? fallback.stores === undefined);
   const stores: ReadonlySet<StoreId> = new Set([...byStore.keys(), ...fallbackStores.keys()]);
+
+  const allowedTargets = (store: StoreId): ReadonlySet<string> | undefined => {
+    const storeEntries = byStore.get(store);
+    if (storeEntries !== undefined) {
+      if (storeEntries.some((entry) => entry.targets === undefined)) {
+        return undefined;
+      }
+      return new Set(storeEntries.flatMap((entry) => entry.targets ?? []));
+    }
+    const declared = fallbackStores.get(store);
+    return declared?.targets === undefined ? undefined : new Set(declared.targets);
+  };
 
   const resolveStore = (request: Pick<VerifyPurchaseRequest, 'target' | 'store'>): StoreId =>
     resolveCommerceStoreId(request);
@@ -301,9 +346,25 @@ export function createCommerceEvidenceRegistry(
         ? { status: 'unregistered', store }
         : { status: 'rejected', store, reason: 'EVIDENCE_SCHEMA_TARGET_MISMATCH' };
     }
-    return servesUndeclaredStores
-      ? { status: 'unregistered', store }
-      : { status: 'rejected', store, reason: 'EVIDENCE_SCHEMA_UNSUPPORTED' };
+    if (!servesUndeclaredStores) {
+      return { status: 'rejected', store, reason: 'EVIDENCE_SCHEMA_UNSUPPORTED' };
+    }
+    if (dodgesServedStore(request)) {
+      return { status: 'rejected', store, reason: 'EVIDENCE_SCHEMA_STORE_MISMATCH' };
+    }
+    return { status: 'unregistered', store };
+  };
+
+  /**
+   * An undeclared `store` label on a target whose v1 store is served by an
+   * entry or a declared fallback store (`{ target: 'android', store: 'x' }`)
+   * would route the target's purchase around that entry; it is refused.
+   */
+  const dodgesServedStore = (
+    request: Pick<VerifyPurchaseRequest, 'target' | 'store'>,
+  ): boolean => {
+    const legacy = resolveLegacyCommerceStoreId(request.target);
+    return request.store !== undefined && request.store !== legacy && stores.has(legacy);
   };
 
   type FinalizationOwner =
@@ -390,20 +451,9 @@ export function createCommerceEvidenceRegistry(
     },
   };
 
-  const mergePurchase = (
-    declared: readonly (CommerceServicePurchaseCapabilities | undefined)[],
-  ): CommerceServicePurchaseCapabilities =>
-    declared.reduce<CommerceServicePurchaseCapabilities>(
-      (merged, purchase) => {
-        const flags = purchase ?? defaultPurchaseCapabilities;
-        return {
-          consumable: merged.consumable || flags.consumable,
-          durable: merged.durable || flags.durable,
-          subscription: merged.subscription || flags.subscription,
-        };
-      },
-      { consumable: false, durable: false, subscription: false },
-    );
+  const purchaseProfileOf = (
+    declared: CommerceServicePurchaseCapabilities | undefined,
+  ): CommerceServicePurchaseCapabilities => ({ ...(declared ?? defaultPurchaseCapabilities) });
 
   const describeStore = (
     store: StoreId,
@@ -417,7 +467,7 @@ export function createCommerceEvidenceRegistry(
       store,
       schemas: storeEntries.map((entry) => entry.schema),
       finish: first.finish,
-      purchase: mergePurchase(storeEntries.map((entry) => entry.purchase)),
+      purchase: purchaseProfileOf(first.purchase),
     };
   };
 
@@ -431,16 +481,26 @@ export function createCommerceEvidenceRegistry(
         store: declared.store,
         schemas: [],
         finish: declared.finish,
-        purchase: mergePurchase([declared.purchase]),
+        purchase: purchaseProfileOf(declared.purchase),
       });
     }
     return { commerceProtocolVersion, stores: published };
   };
 
+  const serves = (request: Pick<VerifyPurchaseRequest, 'target' | 'store'>): boolean => {
+    const store = resolveStore(request);
+    if (stores.has(store)) {
+      return true;
+    }
+    return servesUndeclaredStores && !dodgesServedStore(request);
+  };
+
   const registry: CommerceEvidenceRegistry = {
     entries: Object.freeze(frozenEntries),
     stores,
+    serves,
     servesUndeclaredStores,
+    allowedTargets,
     resolveStore,
     route,
     async verifyPurchase(input: VerifyPurchaseEvidenceInput): Promise<EvidenceVerificationDecision> {
@@ -460,6 +520,17 @@ export function createCommerceEvidenceRegistry(
     getCapabilities,
   };
   return Object.freeze(registry);
+}
+
+function samePurchaseCapabilities(
+  left: CommerceServicePurchaseCapabilities | undefined,
+  right: CommerceServicePurchaseCapabilities | undefined,
+): boolean {
+  const a = left ?? defaultPurchaseCapabilities;
+  const b = right ?? defaultPurchaseCapabilities;
+  return a.consumable === b.consumable
+    && a.durable === b.durable
+    && a.subscription === b.subscription;
 }
 
 function assertRegistryEntry(entry: CommerceEvidenceRegistryEntry): void {

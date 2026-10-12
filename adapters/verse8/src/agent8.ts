@@ -6,6 +6,7 @@ import {
 } from '@mpgd/catalog';
 import {
   createServerPushLedgerGrant,
+  findPurchaseGrantByPlatformEvidence,
   verse8Agent8EventEvidenceSchema as verse8Agent8EventLedgerSchema,
   verse8CommerceStoreId as verse8LedgerStoreId,
 } from '@mpgd/game-services/commerce-evidence-registry';
@@ -190,6 +191,21 @@ export function createVerse8Agent8CommerceService(
               // A redelivery after a ledger write that failed: the user-state
               // grant stands and the ledger write is retried idempotently.
               await recordLedgerGrant(normalized, product, existing.grantedAt);
+            } else if (ledger !== undefined) {
+              // A retired product cannot be backfilled: the event stays
+              // visible unless the ledger already holds the grant (a normal
+              // redelivery after the product was retired), which is answered
+              // as processed like any other replay.
+              const recorded = await findPurchaseGrantByPlatformEvidence(ledger, {
+                target: ledgerTarget,
+                platformEvidenceId: purchaseId,
+              });
+              if (recorded === undefined) {
+                throw new Error(
+                  `Verse8 purchase ${purchaseId} cannot be recorded in the ledger: product `
+                    + `${normalized.productId} is no longer in the catalog.`,
+                );
+              }
             }
 
             return {

@@ -183,8 +183,50 @@ await assert.rejects(
 );
 await assert.rejects(
   backend.purchases.verifyPurchase(playRequest({ target: 'smart-fridge', store: 'google-play' })),
-  /target smart-fridge is not a ledger target this backend serves/u,
+  /target smart-fridge is not a ledger target of store google-play/u,
 );
+await assert.rejects(
+  backend.purchases.verifyPurchase(playRequest({ target: 'ios', store: 'google-play' })),
+  /target ios is not a ledger target of store google-play/u,
+  'a served store with a foreign ledger target is a 400, not a journaled rejection',
+);
+// A custom store names its own ledger target through its entry's `targets`.
+const walletCalls: string[] = [];
+const walletBackend = createGameServicesBackend({
+  catalog: {
+    ...catalog,
+    products: [{ ...catalog.products[0], platformProductIds: { 'wallet-host': 'coins-100' } }],
+  },
+  placements,
+  store: createInMemoryGameServicesStore(),
+  commerceEvidenceRegistry: createCommerceEvidenceRegistry([
+    {
+      schema: 'credit-wallet.spend.v1',
+      store: 'credit-wallet',
+      finish: 'none',
+      targets: ['wallet-host'],
+      verifier: {
+        async verifyPurchase({ request }) {
+          walletCalls.push(request.idempotencyKey);
+          return verified(`wallet:${request.platformTransactionId}`);
+        },
+      },
+    },
+  ]),
+  now: () => verifiedAt,
+});
+const walletPurchase = await walletBackend.purchases.verifyPurchase({
+  target: 'wallet-host',
+  store: 'credit-wallet',
+  playerId: 'player-1',
+  productId: 'COINS_100',
+  platformTransactionId: 'spend-1',
+  idempotencyKey: 'store:credit-wallet:spend-1',
+  purchasedAt: verifiedAt,
+  evidence: { schema: 'credit-wallet.spend.v1', payload: {} },
+});
+assert.equal(walletPurchase.verified, true, 'an entry-declared custom ledger target is served');
+assert.deepEqual(walletCalls, ['store:credit-wallet:spend-1']);
 // A registry next to the v1 finalizer is a configuration error, not a silent loss.
 assert.throws(
   () =>
@@ -317,11 +359,76 @@ assert.deepEqual(forged, {
   disposition: 'rejected',
   reason: 'LEDGER_GRANT_IDENTITY_MISMATCH',
 });
+// A settled entry that a revoke entry reversed never settles, whichever verifier named it.
+const refundedGrant = createPlatformOrderLedgerGrant({
+  order: {
+    target: 'reddit',
+    orderId: 'order-2',
+    playerId: 'reddit-player',
+    platformSku: 'coins-100',
+    paidAt: verifiedAt,
+    evidence: {
+      schema: 'devvit.payment-order.v1',
+      payload: { orderId: 'order-2', status: 'PAID' },
+    },
+  },
+  product: catalog.products[0],
+  grantedAt: verifiedAt,
+});
+const refundedFulfillment = await store.recordEntitlementGrant(refundedGrant);
+await store.recordEntitlementRevocation({
+  playerId: 'reddit-player',
+  revokesLedgerEntryId: refundedFulfillment.ledgerEntryId,
+  idempotencyKey: 'reddit:order-2:refund',
+  reason: 'refund',
+  revokedAt: verifiedAt,
+  payload: {},
+});
+const reversedBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store,
+  commerceEvidenceRegistry: createCommerceEvidenceRegistry([
+    {
+      schema: 'forged.v1',
+      store: 'devvit',
+      finish: 'none',
+      verifier: {
+        async verifyPurchase() {
+          return { status: 'settled', ledgerEntryId: refundedFulfillment.ledgerEntryId };
+        },
+      },
+    },
+  ]),
+});
+const order2Evidence = {
+  schema: 'devvit.order.v1',
+  payload: { orderId: 'order-2', sku: 'coins-100', source: 'checkout' },
+};
+const order2 = (patch: Partial<VerifyPurchaseRequest>): VerifyPurchaseRequest =>
+  devvitRequest({
+    platformTransactionId: 'order-2',
+    idempotencyKey: 'store:devvit:order-2',
+    evidence: order2Evidence,
+    ...patch,
+  });
+const settledReversed = await reversedBackend.purchases.verifyPurchase(
+  order2({ idempotencyKey: 'forged-reversed', evidence: { schema: 'forged.v1', payload: {} } }),
+);
+assert.deepEqual(settledReversed, {
+  verified: false,
+  alreadyProcessed: false,
+  disposition: 'rejected',
+  reason: 'LEDGER_GRANT_REVERSED',
+});
+const lookupReversed = await backend.purchases.verifyPurchase(order2({}));
+assert.equal(lookupReversed.reason, 'LEDGER_GRANT_REVERSED', 'the lookup path agrees');
 
 // Ledger status: one answer per requested id in request order, active until
 // a revoke entry references the grant, and scoped to the player when named.
 const status = await backend.purchases.getPurchaseLedgerStatus?.({
   ledgerEntryIds: [fulfillment.ledgerEntryId, 'missing', fulfillment.ledgerEntryId],
+  playerId: 'reddit-player',
 });
 assert.deepEqual(status, {
   statuses: [
@@ -341,8 +448,15 @@ assert.deepEqual(
 const readStatus = backend.purchases.getPurchaseLedgerStatus;
 assert.notEqual(readStatus, undefined);
 await assert.rejects(
-  readStatus?.call(backend.purchases, { ledgerEntryIds: [''] }) ?? Promise.reject(new Error('')),
+  readStatus?.call(backend.purchases, { ledgerEntryIds: [''], playerId: 'p' })
+    ?? Promise.reject(new Error('')),
   /ledgerEntryIds\[\] must be a non-empty string/u,
+);
+await assert.rejects(
+  readStatus?.call(backend.purchases, { ledgerEntryIds: ['x'] } as never)
+    ?? Promise.reject(new Error('')),
+  /playerId must be a non-empty string/u,
+  'the read names the player whose grants it reads',
 );
 
 // Without a registry the v1 path is unchanged: one verifier, one finalizer, no capabilities.
@@ -370,6 +484,30 @@ await assert.rejects(
   /not a ledger target this backend serves/u,
   'a v1 backend keeps answering 400 for an unknown target',
 );
+// A key reused with another store for the same player, product, and target is a conflict.
+const otherStoreRetry = await v1Backend.purchases.verifyPurchase(
+  playRequest({ platformTransactionId: 'GPA.9', store: 'other-store' }),
+);
+assert.equal(otherStoreRetry.verified, false);
+assert.equal(otherStoreRetry.reason, 'IDEMPOTENCY_KEY_CONFLICT', 'two stores never share a grant');
+// A refunded grant's evidence replayed under another key is not a grant either.
+await v1Store.recordEntitlementRevocation?.({
+  playerId: 'player-1',
+  revokesLedgerEntryId: v1Only.ledgerEntryId ?? '',
+  idempotencyKey: 'GPA.9:refund',
+  reason: 'refund',
+  revokedAt: verifiedAt,
+  payload: {},
+});
+const refundedReplay = await v1Backend.purchases.verifyPurchase(
+  playRequest({ platformTransactionId: 'GPA.9', idempotencyKey: 'another-key' }),
+);
+assert.deepEqual(refundedReplay, {
+  verified: false,
+  alreadyProcessed: false,
+  disposition: 'rejected',
+  reason: 'LEDGER_GRANT_REVERSED',
+});
 assert.equal(
   (await v1Store.getEntitlementTransaction(v1Reddit.ledgerEntryId ?? ''))?.payload.store,
   'devvit',
@@ -390,6 +528,7 @@ assert.deepEqual(await httpApi.purchases.getCommerceCapabilities?.(), capabiliti
 assert.deepEqual(
   await httpApi.purchases.getPurchaseLedgerStatus?.({
     ledgerEntryIds: [fulfillment.ledgerEntryId],
+    playerId: 'reddit-player',
   }),
   { statuses: [{ ledgerEntryId: fulfillment.ledgerEntryId, status: 'active' }] },
 );
@@ -418,7 +557,9 @@ const rpcStatus = await rpcFetch(
   new Request('https://backend.test/rpc/commerce/getPurchaseLedgerStatus', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ json: { ledgerEntryIds: [fulfillment.ledgerEntryId] } }),
+    body: JSON.stringify({
+      json: { ledgerEntryIds: [fulfillment.ledgerEntryId], playerId: 'reddit-player' },
+    }),
   }),
 );
 assert.equal(rpcStatus.status, 200);

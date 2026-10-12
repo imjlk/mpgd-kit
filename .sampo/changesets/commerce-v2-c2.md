@@ -33,12 +33,24 @@ and the lookup verifiers for the server-push stores.
   theirs) and `acceptsUnclaimedSchemas` (one per store: a verifier binding
   that keeps its own schema list). The optional `unregistered` fallback keeps
   a deployment's aggregate v1 verifier for stores without an entry (never for
-  a store that has one) and declares the stores it serves (`stores`, published
-  by the capabilities endpoint without schemas; absent, it serves any store
-  without entries and publishes nothing for them). `registry.stores` and
-  `registry.servesUndeclaredStores` expose that, and the backend answers a
-  400 for a store it does not serve or a target that is neither a ledger
-  target nor a served store, as an unknown v1 target was a 400. Reference
+  a store that has one), publishes the stores it declares (`stores`, through
+  the capabilities endpoint without schemas), and serves undeclared stores
+  when `servesUndeclaredStores` is true (the default without `stores`).
+  `registry.stores`, `registry.servesUndeclaredStores`,
+  `registry.serves(request)`, and `registry.allowedTargets(store)` expose
+  that; every entry of a store must declare the same purchase profile
+  (construction fails otherwise; the capabilities row is that profile, never
+  a merge); a fallback store declared with `finish: 'server'` needs
+  `unregistered.finalizer`; an undeclared `store` label on a target whose v1
+  store is served (`{ target: 'android', store: 'x' }`) cannot route around
+  that entry (`EVIDENCE_SCHEMA_STORE_MISMATCH`, a 400 from the backend); and
+  the backend answers a 400 for a store it does not serve, a served store
+  with a target its entries do not declare (a custom entry's `targets` are
+  honoured, so a custom ledger target works), or otherwise a target that is
+  neither a ledger target nor a served store, as an unknown v1 target was a
+  400. A key reused for the same player, product, and target under another
+  `store` is `IDEMPOTENCY_KEY_CONFLICT`; a grant recorded before `store` was
+  written meets any store. Reference
   entries:
   `createGooglePlayCommerceEvidenceEntry` (`google-play.product-purchase.v2`,
   `finish: 'server'`), `createAppStoreCommerceEvidenceEntry`
@@ -69,8 +81,9 @@ and the lookup verifiers for the server-push stores.
   (`LEDGER_GRANT_IDENTITY_MISMATCH` otherwise) and writes nothing; a
   rewarded-ad verifier answering it is a verifier error. An exhaustive switch
   over the decision must handle it. A same-key retry of a grant a `revoke`
-  entry reversed answers `rejected` with `LEDGER_GRANT_REVERSED`, as the
-  lookup path does, and a grant written without a deployment target (a host
+  entry reversed, a different-key replay of its evidence, and a `settled`
+  answer naming such a grant, answer `rejected` with `LEDGER_GRANT_REVERSED`,
+  as the lookup path does, and a grant written without a deployment target (a host
   fulfillment path) meets a request bound to one.
 - Provider capabilities endpoint (RFC "Provider capabilities endpoint"):
   `PurchaseVerificationApi.getCommerceCapabilities?()` answers
@@ -87,8 +100,11 @@ and the lookup verifiers for the server-push stores.
   `requestPurchase` refuses with `CONFIGURATION_REQUIRED` before any store UI
   opens; a purchase before `start()` attempts the comparison first, the read
   is bounded by `serviceCapabilitiesTimeoutMs` (default ten seconds) and a
-  timed-out read keeps the last comparison, and a backend that answers 404 /
-  `NOT_FOUND` is remembered as `unpublished` rather than read again. The
+  timed-out read keeps the last comparison (`serviceCapabilitiesTimeoutMs`
+  must be a positive finite duration), and a backend that answers 404 /
+  `NOT_FOUND` is remembered as `unpublished` rather than read again; the
+  ledger status read is likewise remembered as absent after a 404 /
+  `NOT_FOUND`, so a client adapter against a pre-C2 backend stays quiet. The
   reconciler's verify requests now carry `store`, and its revocation pass
   reads ledger status in chunks of at most 100 ids scoped to its player.
 - Revocation and expiry entries (RFC "Revocation and expiry entries"):
@@ -106,8 +122,9 @@ and the lookup verifiers for the server-push stores.
   notification handlers' write path, answering `key_conflict` and
   `evidence_already_processed` next to `grant_not_found` and
   `grant_mismatch`), `readPurchaseLedgerStatuses` (one status per requested
-  id in request order, batched reads in chunks of `ledgerReadChunkSize`, and
-  scoped to `PurchaseLedgerStatusRequest.playerId` when named: another
+  id in request order, batched reads in chunks of `ledgerReadChunkSize`
+  through `chunkLedgerEntryIds`, which refuses a non-positive size, and
+  scoped to the required `PurchaseLedgerStatusRequest.playerId`: another
   player's entry answers `unknown`), `listActiveEntitlementTransactions`
   (entitlement reads subtract reversed grants), and `isEntitlementGrantReversed`.
   `PurchaseVerificationApi.getPurchaseLedgerStatus` is served by the reference

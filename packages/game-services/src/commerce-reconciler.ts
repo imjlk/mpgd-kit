@@ -350,6 +350,9 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   const inFlightTimeoutMs = input.inFlightTimeoutMs ?? defaultInFlightTimeoutMs;
   const serviceCapabilitiesTimeoutMs = input.serviceCapabilitiesTimeoutMs
     ?? defaultServiceCapabilitiesTimeoutMs;
+  if (!Number.isFinite(serviceCapabilitiesTimeoutMs) || serviceCapabilitiesTimeoutMs <= 0) {
+    throw new RangeError('serviceCapabilitiesTimeoutMs must be a positive finite duration.');
+  }
   if (typeof playerId !== 'string' || playerId.trim() === '') {
     throw new TypeError('The commerce reconciler requires an authenticated player id.');
   }
@@ -447,6 +450,8 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   const productCache = new Map<string, CommerceReconcilerProduct>();
   let capabilities: CommerceCapabilities | undefined;
   let serviceAlignment: CommerceReconcilerServiceAlignment | undefined;
+  /** A backend that answered 404 / NOT_FOUND for the ledger status read: not asked again. */
+  let ledgerStatusUnpublished = false;
   /** Serializes the backend capabilities read so overlapping triggers share one. */
   let serviceAlignmentRead: Promise<void> | undefined;
   let unsubscribe: (() => void) | undefined;
@@ -1131,7 +1136,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   // ledger status read (C2); without it the hook is inert.
   const revokeReversed = async (): Promise<void> => {
     const ledgerStatus = backend.getPurchaseLedgerStatus;
-    if (ledgerStatus === undefined) {
+    if (ledgerStatus === undefined || ledgerStatusUnpublished) {
       return;
     }
     const granted = await listGranted();
@@ -1148,6 +1153,12 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         statuses.push(...response.statuses);
       }
     } catch (error) {
+      if (isNotFoundError(error)) {
+        // A pre-C2 backend behind a transport adapter that always exposes the
+        // read: the hook stays inert, as it is for a backend without it.
+        ledgerStatusUnpublished = true;
+        return;
+      }
       fail('ledger-status', error);
       return;
     }

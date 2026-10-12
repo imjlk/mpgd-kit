@@ -15,4 +15,6 @@ store `verse8`, the purchase id as the platform transaction id, the event's
 binds `verse8` to a deployment target), after the Agent8 user state committed
 and idempotently on redelivery, so a verify request carrying
 `verse8.agent8-event.v1` evidence answers `granted` once the event ran and
-`pending` before it. Without a ledger the service is unchanged.
+`pending` before it; a redelivery for a product that left the catalog before
+the ledger write landed throws instead of acknowledging the event. Without a
+ledger the service is unchanged.

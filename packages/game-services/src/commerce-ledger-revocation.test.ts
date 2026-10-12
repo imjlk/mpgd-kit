@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import type { ProductCatalog } from '@mpgd/catalog';
 
 import {
+  chunkLedgerEntryIds,
   listActiveEntitlementTransactions,
   readPurchaseLedgerStatuses,
   revokeEntitlementGrant,
@@ -87,13 +88,22 @@ const second = await store.recordEntitlementGrant({
 assert.deepEqual(
   await readPurchaseLedgerStatuses(store, {
     ledgerEntryIds: [recorded.ledgerEntryId, second.ledgerEntryId],
+    playerId: 'player-1',
   }),
   {
     statuses: [
       { ledgerEntryId: recorded.ledgerEntryId, status: 'active' },
-      { ledgerEntryId: second.ledgerEntryId, status: 'active' },
+      { ledgerEntryId: second.ledgerEntryId, status: 'unknown' },
     ],
   },
+  "the read is scoped to the player: another player's grant is unknown",
+);
+assert.deepEqual(
+  await readPurchaseLedgerStatuses(store, {
+    ledgerEntryIds: [second.ledgerEntryId],
+    playerId: 'player-2',
+  }),
+  { statuses: [{ ledgerEntryId: second.ledgerEntryId, status: 'active' }] },
 );
 
 // A refund of another player's order is a mismatch, never a revocation.
@@ -169,11 +179,12 @@ assert.equal((await store.listEntitlementTransactions()).length, 3);
 assert.deepEqual(
   await readPurchaseLedgerStatuses(store, {
     ledgerEntryIds: [recorded.ledgerEntryId, second.ledgerEntryId, 'missing'],
+    playerId: 'player-1',
   }),
   {
     statuses: [
       { ledgerEntryId: recorded.ledgerEntryId, status: 'reversed', reversedBy: revokeEntryId },
-      { ledgerEntryId: second.ledgerEntryId, status: 'active' },
+      { ledgerEntryId: second.ledgerEntryId, status: 'unknown' },
       { ledgerEntryId: 'missing', status: 'unknown' },
     ],
   },
@@ -190,9 +201,13 @@ const countingStore: GameServicesStore = {
   },
   findEntitlementRevocations: (input) => store.findEntitlementRevocations(input),
 };
-const many = await readPurchaseLedgerStatuses(countingStore, { ledgerEntryIds: manyIds });
+const many = await readPurchaseLedgerStatuses(countingStore, {
+  ledgerEntryIds: manyIds,
+  playerId: 'player-1',
+});
 assert.equal(many.statuses.length, 205);
 assert.deepEqual(batchedReads, [100, 3], 'unique ids are read in chunks of at most 100');
+assert.throws(() => chunkLedgerEntryIds(['a'], 0), /positive integer/u);
 assert.equal(many.statuses[0]?.status, 'reversed');
 assert.equal(many.statuses[1]?.status, 'unknown');
 assert.deepEqual(
@@ -227,7 +242,10 @@ await assert.rejects(
   /does not record entitlement revocations/u,
 );
 assert.deepEqual(
-  await readPurchaseLedgerStatuses(legacyStore, { ledgerEntryIds: [recorded.ledgerEntryId] }),
+  await readPurchaseLedgerStatuses(legacyStore, {
+    ledgerEntryIds: [recorded.ledgerEntryId],
+    playerId: 'player-1',
+  }),
   { statuses: [{ ledgerEntryId: recorded.ledgerEntryId, status: 'active' }] },
   'a store without revocations answers active for the grants it holds',
 );

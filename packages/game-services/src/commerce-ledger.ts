@@ -25,6 +25,9 @@ export function chunkLedgerEntryIds(
   ledgerEntryIds: readonly string[],
   size = ledgerReadChunkSize,
 ): readonly (readonly string[])[] {
+  if (!Number.isSafeInteger(size) || size <= 0) {
+    throw new RangeError('Ledger read chunk size must be a positive integer.');
+  }
   const chunks: (readonly string[])[] = [];
   for (let index = 0; index < ledgerEntryIds.length; index += size) {
     chunks.push(ledgerEntryIds.slice(index, index + size));
@@ -76,9 +79,9 @@ export async function getEntitlementTransactionsChunked(
 /**
  * Whether each grant is still active or which `revoke` entry reversed it
  * (RFC "Revocation and expiry entries"): one status per requested id, in
- * request order. A store without revocation support answers `active` for
- * every grant it holds; an id that names no grant, or a grant of another
- * player than `playerId`, is `unknown`.
+ * request order, for the grants of `playerId`. A store without revocation
+ * support answers `active` for every grant it holds; an id that names no
+ * grant, or a grant of another player, is `unknown`.
  */
 export async function readPurchaseLedgerStatuses(
   store: GameServicesStore,
@@ -87,7 +90,7 @@ export async function readPurchaseLedgerStatuses(
   const request = assertPurchaseLedgerStatusRequest(input);
   const grants = await getEntitlementTransactionsChunked(store, request.ledgerEntryIds);
   const owned = [...grants.values()]
-    .filter((grant) => request.playerId === undefined || grant.playerId === request.playerId)
+    .filter((grant) => grant.playerId === request.playerId)
     .map((grant) => grant.ledgerEntryId);
   const reversedBy = new Map<string, string>();
   for (const revocation of await findEntitlementRevocationsChunked(store, owned)) {

@@ -288,6 +288,8 @@ function createFakeBackend(options: {
   readonly capabilitiesNotFound?: boolean;
   /** The capabilities read never answers. */
   readonly capabilitiesHang?: boolean;
+  /** The ledger status read answers like a pre-C2 server: 404. */
+  readonly ledgerStatusNotFound?: boolean;
 } = {}): FakeBackend {
   const serviceCapabilities = options.serviceCapabilities;
   const ledgerStatusRequests: PurchaseLedgerStatusRequest[] = [];
@@ -360,6 +362,9 @@ function createFakeBackend(options: {
       ? {
           async getPurchaseLedgerStatus(input: PurchaseLedgerStatusRequest) {
             ledgerStatusRequests.push(input);
+            if (options.ledgerStatusNotFound === true) {
+              throw Object.assign(new Error('not found'), { status: 404 });
+            }
             return {
               statuses: input.ledgerEntryIds.map((ledgerEntryId): PurchaseLedgerStatus => {
                 const by = reversed.get(ledgerEntryId);
@@ -2969,6 +2974,34 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
     'every chunk names the player whose grants it reads',
   );
   await h.reconciler.stop();
+
+  // A pre-C2 backend behind an adapter that always exposes the read: asked once, then inert.
+  const legacy = createFakeBackend({ withLedgerStatus: true, ledgerStatusNotFound: true });
+  const quiet = createHarness({ backend: legacy });
+  legacy.queue({ status: 'granted', ledgerEntryId: 'le-legacy' });
+  await quiet.reconciler.start();
+  quiet.provider.report(purchaseOf({ transactionId: 'tx-legacy' }));
+  await quiet.reconciler.runUntilIdle();
+  await quiet.reconciler.reconcile();
+  assertEqual(legacy.ledgerStatusRequests.length, 1, 'the 404 is remembered');
+  assertEqual(quiet.failures, [], 'a missing ledger status read is not a failure');
+  await quiet.reconciler.stop();
+  assertThrowsSync(
+    () => createHarness({ overrides: { serviceCapabilitiesTimeoutMs: 0 } }),
+    /positive finite duration/u,
+  );
+}
+
+function assertThrowsSync(run: () => unknown, pattern: RegExp): void {
+  let thrown: unknown;
+  try {
+    run();
+  } catch (error) {
+    thrown = error;
+  }
+  if (!(thrown instanceof Error) || !pattern.test(thrown.message)) {
+    throw new Error(`Expected ${String(pattern)}, received ${String(thrown)}.`);
+  }
 }
 
 console.info('commerce reconciler tests passed');

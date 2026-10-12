@@ -130,6 +130,26 @@ describe('Verse8 Agent8 commerce service', () => {
         platformEvidenceId: '7',
       }),
     ).toBeDefined();
+
+    // A redelivery for a product that left the catalog cannot be backfilled:
+    // the event stays visible instead of acknowledged with a pending lookup.
+    const retired = createVerse8Agent8CommerceService({
+      catalog: { ...catalog, products: catalog.products.filter((p) => p.id !== 'COINS_100') },
+      ledger: createInMemoryGameServicesStore(),
+      now: () => '2026-07-16T00:00:00.000Z',
+    });
+    await expect(retired.handleItemPurchased(event, fixture.context)).rejects.toThrow(
+      /no longer in the catalog/u,
+    );
+    // Recorded, then retired: the ledger already holds the grant, so the
+    // redelivery is a replay like any other.
+    const recordedThenRetired = createVerse8Agent8CommerceService({
+      catalog: { ...catalog, products: catalog.products.filter((p) => p.id !== 'COINS_100') },
+      ledger,
+      now: () => '2026-07-16T00:00:00.000Z',
+    });
+    await expect(recordedThenRetired.handleItemPurchased(event, fixture.context)).resolves
+      .toMatchObject({ success: true, alreadyProcessed: true, purchaseId: '7' });
   });
 
   it('stores an entitlement and its purchase marker in the same state update', async () => {

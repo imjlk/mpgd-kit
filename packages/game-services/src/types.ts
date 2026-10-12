@@ -256,7 +256,7 @@ export function assertPurchaseLedgerStatusRequest(
     for (const ledgerEntryId of input.ledgerEntryIds) {
       assertRequestString(ledgerEntryId, 'ledgerEntryIds[]');
     }
-    assertOptionalRequestString(input.playerId, 'playerId');
+    assertRequestString(input.playerId, 'playerId');
     return input;
   });
 }

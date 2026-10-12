@@ -975,10 +975,22 @@ function assertServedPurchaseRequest(
     return;
   }
   const store = resolveCommerceStoreId(request);
-  if (!registry.stores.has(store) && !registry.servesUndeclaredStores) {
+  if (!registry.serves(request)) {
     throw new GameServicesRequestValidationError(
-      `store ${store} is not a store this backend serves.`,
+      `store ${store} is not a store this backend serves for target ${request.target}.`,
     );
+  }
+  // A served store's declared targets are the contract (a custom store may
+  // name a custom ledger target); a store without declared targets keeps the
+  // ledger target set and the served store ids.
+  const allowed = registry.allowedTargets(store);
+  if (allowed !== undefined) {
+    if (!allowed.has(request.target)) {
+      throw new GameServicesRequestValidationError(
+        `target ${request.target} is not a ledger target of store ${store}.`,
+      );
+    }
+    return;
   }
   if (!gameServicesLedgerTargets.has(request.target) && !registry.stores.has(request.target)) {
     throw new GameServicesRequestValidationError(
@@ -1003,6 +1015,7 @@ async function verifyPurchaseWithStore(
     idempotencyKey: request.idempotencyKey,
     grantId: request.productId,
     target: request.target,
+    store: resolveCommerceStoreId(request),
     ...(request.deploymentTarget === undefined
       ? {}
       : { deploymentTarget: request.deploymentTarget }),
@@ -1166,12 +1179,22 @@ async function verifyPurchaseForRetry(
         playerId: request.playerId,
         grantId: request.productId,
         target: request.target,
+        store: verifiedStore,
         ...(request.deploymentTarget === undefined
           ? {}
           : { deploymentTarget: request.deploymentTarget }),
         evidenceVerificationId: verification.verificationId,
       })
     ) {
+      if (await isEntitlementGrantReversed(context.store, existingEvidence.ledgerEntryId)) {
+        // A refunded grant's evidence replayed under another key is not a grant.
+        return assertVerifyPurchaseResponse({
+          verified: false,
+          alreadyProcessed: false,
+          disposition: 'rejected',
+          reason: 'LEDGER_GRANT_REVERSED',
+        });
+      }
       const finalization = await finalizeExistingPurchaseGrant(request, existingEvidence, context);
       // A different idempotency key is evidence replay unless a configured finalizer can resume
       // the provider operation. Keep generic stores fail-closed while allowing Store consume
@@ -1264,6 +1287,16 @@ async function completeSettledPurchase(
       reason: 'LEDGER_GRANT_IDENTITY_MISMATCH',
     });
   }
+  if (await isEntitlementGrantReversed(context.store, settled.ledgerEntryId)) {
+    // `settled` is an open verifier contract; a reversed grant never settles
+    // a purchase, whichever verifier named it.
+    return assertVerifyPurchaseResponse({
+      verified: false,
+      alreadyProcessed: false,
+      disposition: 'rejected',
+      reason: 'LEDGER_GRANT_REVERSED',
+    });
+  }
 
   const finalization = await finalizeExistingPurchaseGrant(request, settled, context);
 
@@ -1282,6 +1315,7 @@ async function finalizeExistingPurchaseGrant(
     readonly catalog: ProductCatalog;
     readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
     readonly purchaseGrantFinalizationTimeoutMs: number;
+    readonly registry?: CommerceEvidenceRegistry;
   },
 ): Promise<PurchaseGrantFinalization | undefined> {
   if (context.purchaseGrantFinalizer === undefined) {
@@ -1303,29 +1337,34 @@ async function finalizeExistingPurchaseGrant(
     || typeof evidenceVerificationId !== 'string'
     || evidenceVerificationId.length === 0
   ) {
-    // A store nothing finalizes on the server (client, host, or none finish)
-    // has no pending finalization to report; the owner decides on the grant's
-    // recorded evidence, with a stand-in product for the missing context.
-    const probeProduct = product ?? {
-      id: request.productId,
-      type: 'consumable' as const,
-      grant: transaction.grant ?? { type: 'entitlement' as const, entitlement: request.productId },
-      platformProductIds: {},
-    };
-    const supported = context.purchaseGrantFinalizer.supportsPurchaseGrant?.({
-      request: finalizationRequest,
-      product: probeProduct,
-      platformProductId: platformProductId ?? '',
-      evidenceVerificationId: typeof evidenceVerificationId === 'string'
-        ? evidenceVerificationId
-        : '',
-      evidencePayload: transaction.payload,
-      ledgerEntryId: transaction.ledgerEntryId,
-      alreadyProcessed: true,
-      timeoutMs: context.purchaseGrantFinalizationTimeoutMs,
-    });
-    if (supported === false) {
-      return undefined;
+    // With a registry, a store nothing finalizes on the server (client,
+    // host, or none finish) has no pending finalization to report: the
+    // registry decides from the grant's recorded store and schema, never from
+    // the stand-in product. The v1 single finalizer keeps answering pending.
+    if (context.registry !== undefined) {
+      const recordedSchema = transaction.payload.evidenceSchema;
+      const supported = context.registry.finalizer.supportsPurchaseGrant?.({
+        request: typeof recordedSchema === 'string' && recordedSchema.length > 0
+          ? { ...finalizationRequest, evidence: { schema: recordedSchema, payload: {} } }
+          : finalizationRequest,
+        product: product ?? {
+          id: request.productId,
+          type: 'consumable' as const,
+          grant: transaction.grant ?? { type: 'entitlement' as const, entitlement: request.productId },
+          platformProductIds: {},
+        },
+        platformProductId: platformProductId ?? '',
+        evidenceVerificationId: typeof evidenceVerificationId === 'string'
+          ? evidenceVerificationId
+          : '',
+        evidencePayload: transaction.payload,
+        ledgerEntryId: transaction.ledgerEntryId,
+        alreadyProcessed: true,
+        timeoutMs: context.purchaseGrantFinalizationTimeoutMs,
+      });
+      if (supported === false) {
+        return undefined;
+      }
     }
     return assertPurchaseGrantFinalization({
       status: 'pending',
@@ -1919,6 +1958,8 @@ interface EntitlementTransactionIdentity {
   readonly playerId: string;
   readonly grantId: string;
   readonly target: string;
+  /** The purchase's store; a grant recorded without one (pre-C2) matches any. */
+  readonly store?: string;
   readonly deploymentTarget?: string;
 }
 
@@ -2032,6 +2073,7 @@ function matchesPurchaseEvidenceRecovery(
     readonly playerId: string;
     readonly grantId: string;
     readonly target: string;
+    readonly store?: string;
     readonly deploymentTarget?: string;
     readonly evidenceVerificationId: string;
   },
@@ -2054,6 +2096,12 @@ function matchesEntitlementTransactionIdentity(
     && transaction.playerId === identity.playerId
     && transaction.grantId === identity.grantId
     && transaction.payload.target === identity.target
+    // Two stores sharing one ledger target never share a grant: a key reused
+    // with another store is a conflict, while a grant recorded before the
+    // store was written meets any store.
+    && (identity.store === undefined
+      || transaction.payload.store === undefined
+      || transaction.payload.store === identity.store)
     // A grant written without a deployment target (a host fulfillment path)
     // meets the request bound to one; two bound targets must agree.
     && (transaction.payload.deploymentTarget === undefined

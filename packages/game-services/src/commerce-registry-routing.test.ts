@@ -414,6 +414,17 @@ assert.throws(
   /one or the other serves it/u,
   'a store cannot be both registered and declared for the fallback',
 );
+assert.throws(
+  () =>
+    createCommerceEvidenceRegistry(playOnly, {
+      unregistered: {
+        verifier: verifier('a', []),
+        stores: [{ store: 'oneplay', finish: 'server' }],
+      },
+    }),
+  /needs unregistered.finalizer/u,
+  'a server-finished fallback store needs the fallback finalizer',
+);
 const unclaimedEntry = (schema: string): CommerceEvidenceRegistryEntry => ({
   schema,
   store: 'x',
@@ -425,6 +436,55 @@ assert.throws(
   () => createCommerceEvidenceRegistry([unclaimedEntry('x.v1'), unclaimedEntry('x.v2')]),
   /two entries that accept unclaimed schemas/u,
 );
+assert.throws(
+  () =>
+    createCommerceEvidenceRegistry([
+      { ...unclaimedEntry('x.v1'), acceptsUnclaimedSchemas: false },
+      {
+        ...unclaimedEntry('x.v2'),
+        acceptsUnclaimedSchemas: false,
+        purchase: { consumable: true, durable: false, subscription: false },
+      },
+    ]),
+  /declares different purchase kinds/u,
+  'every entry of a store declares the same purchase profile',
+);
+
+// A fallback may publish declared stores and still serve the undeclared ones.
+const publishedAndOpen = createCommerceEvidenceRegistry(playOnly, {
+  unregistered: {
+    verifier: verifier('aggregate', fallbackCalls),
+    stores: [{ store: 'app-store', finish: 'client', targets: ['ios'] }],
+    servesUndeclaredStores: true,
+  },
+});
+assert.equal(publishedAndOpen.servesUndeclaredStores, true);
+assert.deepEqual(
+  publishedAndOpen.getCapabilities().stores.map((entry) => entry.store),
+  ['google-play', 'app-store'],
+);
+assert.deepEqual(
+  await publishedAndOpen.verifyPurchase(
+    verificationInput({ target: 'ait', evidence: { schema: 'legacy.v1', payload: {} } }),
+  ),
+  verified('aggregate:verified'),
+  'an undeclared store still reaches the fallback',
+);
+assert.deepEqual([...(publishedAndOpen.allowedTargets('google-play') ?? [])], ['android']);
+// An undeclared store label cannot route a served target's purchase around its entry.
+assert.deepEqual(
+  await publishedAndOpen.verifyPurchase(
+    verificationInput({ store: 'x', evidence: { schema: 'legacy.v1', payload: {} } }),
+  ),
+  { status: 'rejected', reason: 'EVIDENCE_SCHEMA_STORE_MISMATCH' },
+  'an android purchase under a foreign store label does not reach the fallback',
+);
+assert.equal(publishedAndOpen.serves({ target: 'android', store: 'x' }), false);
+assert.equal(publishedAndOpen.serves({ target: 'ios', store: 'x' }), false);
+assert.equal(publishedAndOpen.serves({ target: 'ait', store: 'x' }), true);
+assert.equal(publishedAndOpen.serves({ target: 'android' }), true);
+assert.deepEqual([...(publishedAndOpen.allowedTargets('app-store') ?? [])], ['ios']);
+assert.equal(publishedAndOpen.allowedTargets('ait'), undefined);
 
 // Server-push lookups never grant from the envelope.
 const ledger = createInMemoryGameServicesStore();

@@ -1,6 +1,7 @@
 import {
   createGameServicesOrpcBackendApi,
   createGameServicesOrpcClient,
+  createPlatformOrderVerifyRequest,
   microsoftStoreDigitalGoodsEvidenceSchema,
 } from '@mpgd/game-services';
 
@@ -542,7 +543,7 @@ const verse8Lookup = await targetVerifierService.verifyPurchase({
 assertEqual(verse8Lookup.verified, false, 'a Verse8 Agent8 envelope never grants by itself');
 assertEqual(verse8Lookup.reason, 'LEDGER_GRANT_PENDING', 'the Verse8 lookup is pending too');
 const mismatchedStore = await targetVerifierService.verifyPurchase({
-  target: 'android',
+  target: 'ios',
   store: 'app-store',
   playerId: 'target-binding-player',
   productId: 'COINS_100',
@@ -583,7 +584,7 @@ const aggregateCapabilities = await aggregateLookupService.getCommerceCapabiliti
 };
 assertDeepEqual(
   aggregateCapabilities.stores.map((entry) => `${entry.store}:${entry.finish}`),
-  ['devvit:none', 'google-play:client', 'app-store:client', 'apps-in-toss:host', 'oneplay:server'],
+  ['devvit:none', 'google-play:client', 'app-store:client', 'apps-in-toss:host'],
   'the aggregate fallback publishes the stores it serves next to the lookup entry',
 );
 const aggregateIosPurchase = await aggregateLookupService.verifyPurchase({
@@ -607,6 +608,138 @@ assertEqual(
   aggregateAndroidPurchase.verified,
   true,
   'Android purchases without a Play finalizer still reach the aggregate as in v1',
+);
+const aggregateBrowserPurchase = await aggregateLookupService.verifyPurchase({
+  target: 'browser',
+  playerId: 'aggregate-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'aggregate-browser-txn',
+  idempotencyKey: 'aggregate-browser-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+}) as { readonly verified: boolean };
+assertEqual(
+  aggregateBrowserPurchase.verified,
+  true,
+  'a ledger target the aggregate served before (no entry, not declared) still reaches it',
+);
+// A client cannot dodge the devvit lookup by labelling a reddit purchase with another store.
+const dodgedLookup = await createWorkerFetchHandler({
+  MPGD_STORE: 'memory',
+  GAME_SERVICES_EVIDENCE_VERIFIER: {
+    async verifyPurchase(input) {
+      return verifiedDecision(`aggregate-dodge:${input.request.idempotencyKey}`);
+    },
+    async verifyAdReward() {
+      return verifiedDecision('aggregate-dodge:ad-reward');
+    },
+  },
+  MPGD_COMMERCE_LOOKUP_STORES: ['devvit'],
+})(
+  new Request(`${baseUrl}/game-services/purchases/verify`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      target: 'reddit',
+      store: 'verse8',
+      playerId: 'dodging-player',
+      productId: 'COINS_100',
+      platformTransactionId: 'order-dodge',
+      idempotencyKey: 'order-dodge',
+      purchasedAt: '2026-07-04T00:00:00.000Z',
+      evidence: { schema: 'devvit.order.v1', payload: { orderId: 'order-dodge', sku: 'coins_100', source: 'checkout' } },
+    }),
+  }),
+);
+assertEqual(dodgedLookup.status, 400, 'a reddit purchase under another store label is refused');
+// Without a payments authority the fulfillment verify is refused with a
+// clear reason; the fulfillment path writes the ledger directly instead.
+const paidOrder = {
+  target: 'reddit' as const,
+  orderId: 'order-fulfilled-1',
+  playerId: 'reddit-player',
+  platformSku: 'coins_100',
+  paidAt: '2026-07-04T00:00:00.000Z',
+  evidence: {
+    schema: 'devvit.payment-order.v1',
+    payload: { orderId: 'order-fulfilled-1', status: 'PAID', playerIdSource: 'devvit-context' },
+  },
+};
+const fulfillmentVerify = createPlatformOrderVerifyRequest({
+  order: paidOrder,
+  productId: 'COINS_100',
+});
+const unboundFulfillment = await aggregateLookupService.verifyPurchase(fulfillmentVerify) as {
+  readonly verified: boolean;
+  readonly reason?: string;
+};
+assertEqual(unboundFulfillment.verified, false, 'no authority, no fulfillment grant');
+assertEqual(
+  unboundFulfillment.reason,
+  'DEVVIT_PAYMENT_ORDER_AUTHORITY_REQUIRED',
+  'the refusal names the missing binding',
+);
+// With the authority bound, the fulfillment verify grants and the client lookup settles.
+const authorityCalls: string[] = [];
+const devvitAuthorityService = createWorkerService({
+  MPGD_STORE: 'memory',
+  GAME_SERVICES_EVIDENCE_VERIFIER: {
+    async verifyPurchase(input) {
+      return verifiedDecision(`aggregate-devvit:${input.request.idempotencyKey}`);
+    },
+    async verifyAdReward() {
+      return verifiedDecision('aggregate-devvit:ad-reward');
+    },
+  },
+  MPGD_COMMERCE_LOOKUP_STORES: ['devvit'],
+  GAME_SERVICES_DEVVIT_PAYMENT_ORDER_AUTHORITY: {
+    async getOrder(input) {
+      authorityCalls.push(`${input.orderId}:${input.playerId}:${input.platformSku}`);
+      return {
+        decision: 'resolved',
+        order: {
+          orderId: input.orderId,
+          playerId: input.playerId,
+          sku: input.platformSku,
+          status: 'PAID',
+        },
+      };
+    },
+  },
+});
+const fulfilled = await devvitAuthorityService.verifyPurchase(fulfillmentVerify) as {
+  readonly verified: boolean;
+  readonly ledgerEntryId?: string;
+};
+assertEqual(
+  fulfilled.verified,
+  true,
+  "the fulfillment handler's record grants through the authority",
+);
+assertDeepEqual(
+  authorityCalls,
+  ['order-fulfilled-1:reddit-player:coins_100'],
+  'the authority was asked once',
+);
+const settledLookup = await devvitAuthorityService.verifyPurchase({
+  target: 'reddit',
+  store: 'devvit',
+  playerId: 'reddit-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'order-fulfilled-1',
+  idempotencyKey: 'store:devvit:order-fulfilled-1',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+  evidence: {
+    schema: 'devvit.order.v1',
+    payload: { orderId: 'order-fulfilled-1', sku: 'coins_100', source: 'checkout' },
+  },
+}) as { readonly verified: boolean; readonly ledgerEntryId?: string; readonly alreadyProcessed: boolean };
+assertEqual(settledLookup.verified, true, 'the client envelope settles on the fulfillment grant');
+assertEqual(settledLookup.alreadyProcessed, true, 'nothing new was granted');
+assertEqual(settledLookup.ledgerEntryId, fulfilled.ledgerEntryId, 'the same ledger entry');
+assertEqual(
+  createWorkerService(workerEnv),
+  workerService,
+  'the service is built once per env object',
 );
 const aggregateWithFinalizer = await createWorkerService({
   MPGD_STORE: 'memory',
@@ -632,6 +765,7 @@ const ledgerStatus = await targetVerifierService.getPurchaseLedgerStatus({
     (targetAndroidPurchase as { readonly ledgerEntryId: string }).ledgerEntryId,
     'missing',
   ],
+  playerId: 'target-binding-player',
 }) as { readonly statuses: readonly { readonly status: string }[] };
 assertDeepEqual(
   ledgerStatus.statuses.map((status) => status.status),
