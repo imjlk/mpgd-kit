@@ -61,6 +61,28 @@
       "mapping": {
         "channelId": "reminders"
       }
+    },
+    {
+      "id": "energy-full",
+      "purpose": "requested",
+      "channels": [
+        "local",
+        "remote"
+      ],
+      "route": "/?entry=continue",
+      "copy": {
+        "ko": {
+          "title": "에너지 충전 완료",
+          "body": "에너지가 가득 찼어요."
+        },
+        "en": {
+          "title": "Energy full",
+          "body": "Your energy is full."
+        }
+      },
+      "mapping": {
+        "channelId": "reminders"
+      }
     }
   ],
   "context": {
@@ -100,8 +122,8 @@
       "action": "tap",
       "input": {
         "channel": "local",
-        "topic": "friend-challenge",
-        "route": "/?entry=friend-challenge"
+        "topic": "energy-full",
+        "route": "/?entry=continue"
       }
     }
   ],
@@ -122,8 +144,8 @@
           "type": "opened",
           "channel": "local",
           "source": "warm",
-          "topic": "friend-challenge",
-          "route": "/?entry=friend-challenge"
+          "topic": "energy-full",
+          "route": "/?entry=continue"
         }
       ],
       "b": [
@@ -131,8 +153,8 @@
           "type": "opened",
           "channel": "local",
           "source": "warm",
-          "topic": "friend-challenge",
-          "route": "/?entry=friend-challenge"
+          "topic": "energy-full",
+          "route": "/?entry=continue"
         }
       ]
     },

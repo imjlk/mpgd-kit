@@ -73,6 +73,11 @@
     "now": "2026-10-12T13:00:00Z",
     "timeZone": "Asia/Seoul"
   },
+  "deployment": {
+    "advertisingSender": {
+      "contact": "080-1234-5678"
+    }
+  },
   "steps": [
     {
       "actor": "runtime",

@@ -502,7 +502,10 @@ products and ad placements.
   a target enables: Apps in Toss needs `templateSetCode`; Devvit needs
   `title` ≤ 60 and `body` ≤ 100 characters.
 - An `advertising` topic must not map to a provider whose
-  `remote.purposes` excludes it; the validator reports that before release.
+  `remote.purposes` excludes it, and it may not declare the `local` channel:
+  a device-scheduled advertisement could not be withdrawn, labelled, or held
+  for the night window by the server. The validator reports both before
+  release.
 - Optional `quietHours` (`{ "start": "22:00", "end": "08:00" }`) holds a
   non-advertising topic during those hours in the endpoint's `timeZone`, else
   the deployment's default zone, the same way the night window holds
@@ -532,12 +535,17 @@ would take with `status: 'action-required'` and stores nothing.
 
 Before scheduling locally, the runtime applies, in this order, the parts of
 the [policy gate](#policy-gate) it can evaluate on the client, with the same
-reasons as statuses: delivery permission (`permission-required`), the topic
-preference (`request-missing`, `preference-off`), and advertising consent
-(`advertising-consent-missing`). A local `fireAt` inside the night window or
-the topic's quiet hours moves to the window's end, as a server send would be
-deferred. Server reminders are accepted without these checks, because the
-gate runs again at send time.
+reasons as statuses: delivery permission (`permission-required`) and the
+topic preference (`request-missing`, `preference-off`). Advertising topics
+never take the local route (see the [topic catalog](#topic-catalog)). A local
+`fireAt` inside the topic's `quietHours` moves to their end, as a server send
+would be deferred; without `quietHours` it is kept. Server reminders are
+accepted without these checks, because the gate runs again at send time.
+
+Pending local reminders follow later changes: when a topic's preference
+becomes `withdrawn`, or the device's delivery permission stops being
+`granted`, the runtime cancels that topic's (or every) pending local
+reminder, because the device would otherwise still show them.
 
 Local reminders use inexact timing. Android 14 denies `SCHEDULE_EXACT_ALARM`
 by default to new installs, Play restricts `USE_EXACT_ALARM` to alarm and
@@ -652,15 +660,23 @@ when it comes due. The steps run in order and the first failure decides:
    `suppressed: frequency-capped | provider-limit`. Provider limits come from
    the provider's registry entry (Devvit: 2 per user per day; Apps in Toss:
    10 per user per minute).
-8. `advertising` content is labelled: the title and the body start with
-   `(광고)`, followed by the deployment's configured sender name and contact
-   when set, then one space and the text, and the payload carries the topic's
-   `optOutRoute`. Host-template providers cannot carry advertising, so step 1
-   already refused them.
+8. `advertising` sends need the deployment's advertising sender:
+   `{ name?, contact }`, where `name` may be omitted only when it equals the
+   app's name, and `contact` is the phone number or address the law requires.
+   Without it the send is `suppressed: advertising-sender-missing`. The
+   content is then labelled: the title and the body start with `(광고)` and
+   one space, and the payload carries the sender (`name` when set,
+   `contact`) and the topic's `optOutRoute`, which providers render in their
+   notification format. Host-template providers cannot carry advertising, so
+   step 1 already refused them.
 
 Statuses are `delivered`, `suppressed`, `deferred`, `unavailable`, and
-`in-flight`. A deferred send is stored with its idempotency key and replayed
-through the gate by the [scheduler](#scheduler) at `until`. Delivery then goes
+`in-flight`. A deferred send is stored with its idempotency key. Until
+`until`, a send with that key answers the stored `deferred` result; when it
+comes due, the [scheduler](#scheduler) takes the stored entry (a lease on the
+deferred row, so one worker replays it), runs the gate again without the key
+lookup, and replaces the stored entry with the new outcome, which may be
+`deferred` again. Delivery then goes
 through the claim/lease ledger and the provider's `deliverIdempotently`. On a
 `per-send` provider the backend reserves the acceptance in the same atomic
 step that claims the delivery key, a compare-and-set on the acceptance, so two
@@ -709,7 +725,8 @@ topic ids.
 ### Reminder scheduler {#scheduler}
 
 Server reminders and deferred sends (night window, quiet hours, provider
-rate limits) are stored with a lease and processed when due: a D1 table plus a Cron trigger on the game-services Worker, and the
+rate limits) are stored with a lease and processed when due: a D1 table plus
+a Cron trigger on the game-services Worker, and the
 Devvit scheduler in the Devvit server. A due item becomes a normal send
 through the policy gate. A reminder's idempotency key is
 `reminder:<player>:<key>:<fireAt as ISO 8601 with milliseconds>`; a deferred
@@ -737,7 +754,10 @@ send keeps its own key.
 - Permission mapping: Capacitor reports `prompt-with-rationale` after the
   first Android denial and `denied` after the second, which is permanent, so
   the provider maps that to `blocked` and declares `promptLimit: 2`; iOS
-  `denied` is `blocked` and the iOS provider declares `promptLimit: 1`. Android 12
+  `denied` is `blocked` and the iOS provider declares `promptLimit: 1`. The
+  Android value assumes a target SDK of 33 or later, which Capacitor 8 projects
+  use (36); an app targeting 32 or lower gets the system prompt once, so its
+  provider must declare `promptLimit: 1`. Android 12
   and below have no runtime permission, and push plugins can report `granted`
   while the player has turned notifications off (`@capacitor/push-notifications`
   does); the provider reads `LocalNotifications.checkPermissions`, which
@@ -871,6 +891,7 @@ them with fixture providers.
 | `catalog` | Topic entries as in the [topic catalog](#topic-catalog), with the provider mapping for this one profile under `mapping` instead of `targets` |
 | `context` | `player`, `now`, and the player's default `timeZone` |
 | `host` | Fake host settings: `actionRequired: true` starts the host in `action-required` until `completeAction` |
+| `deployment` | Backend deployment settings: `advertisingSender` (`{ name?, contact }`); absent means none is configured |
 | `steps` | Actor actions in order; a step may carry `returns` (matched as a subset) or `throws` (`{ code }`) |
 | `expect` | Final assertions; a key that is absent is not asserted |
 
@@ -901,7 +922,7 @@ listed fields of each item asserted:
 | `consent` | [Consent records](#runtime) without `at` |
 | `endpoints` | Final endpoints: `provider`, `kind`, `value`, `installationId`, `permission`, `player`, `status` (`valid` or `invalid`) |
 | `deliveries` | Every gate, ledger, or scheduler outcome: `idempotencyKey`, `topic`, `status`, `reason`, `until`, `alreadyProcessed` |
-| `providerCalls` | Every provider attempt, including one answered `rate-limited`: `topic`, `address` (the device address value), `mapping`, `content` (`title`, `body`, `optOutRoute`) |
+| `providerCalls` | Every provider attempt, including one answered `rate-limited`: `topic`, `address` (the device address value), `mapping`, `content` (`title`, `body`, `optOutRoute`, `sender`) |
 | `local` | `operations` (`op`: `schedule`, `replace`, `cancel`, with `key`, `topic`, `fireAt`, `exact`) and the final `pending` list |
 | `reminders` | Pending server reminders |
 | `events` | An object keyed by listener name, each a list of events |
@@ -921,7 +942,9 @@ listed fields of each item asserted:
 | `advertising-needs-consent` | Suppressed without consent; labelled after consent; result and re-confirmation notices due |
 | `advertising-night-window` | Deferred to 08:00 KST without night consent; immediate with it |
 | `advertising-unsupported-by-host` | A host-template provider refuses an advertising topic |
+| `advertising-sender-required` | Advertising consent without a configured advertising sender is suppressed |
 | `reminder-local-route` | A `requested` topic without opt-in is refused; local route, replace by key, cancel; no server reminder |
+| `local-reminder-cancelled-on-withdrawal` | Turning a topic off cancels its pending local reminder |
 | `reminder-server-route` | Server route, cancel, re-set, delivery at the due time through the gate |
 | `open-before-listener` | A cold-start open reaches the first subscriber once |
 | `endpoint-lifecycle` | A device address moves to the newly authenticated player; `UNREGISTERED` invalidates it |
