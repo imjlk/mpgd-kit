@@ -205,7 +205,20 @@ describe('notifications contract', () => {
       provider: 'fcm',
       capabilities: osCapabilities,
     }).provider).toBe('fcm');
+    // A capability block crossing the bridge follows the same addressing rule.
+    expect(() => assertNotificationBridgeGetCapabilitiesResult({
+      protocolVersion: notificationsProtocolVersion,
+      provider: 'fcm',
+      capabilities: { ...osCapabilities, remote: { ...osCapabilities.remote, addressing: 'none' } },
+    })).toThrow(/addressing 'none' exactly when remote.supported is false/u);
     expect(assertNotificationBridgeRegisterResult({ registration: null })).toEqual({ registration: null });
+    expect(assertNotificationBridgeRegisterResult({
+      registration: { provider: 'devvit', address: { kind: 'platform-user' }, timeZone: 'Asia/Seoul' },
+    }).registration?.timeZone).toBe('Asia/Seoul');
+    // So does a registration: quiet hours read its zone.
+    expect(() => assertNotificationBridgeRegisterResult({
+      registration: { provider: 'devvit', address: { kind: 'platform-user' }, timeZone: 'Mars/Olympus_Mons' },
+    })).toThrow(/Unknown time zone/u);
     expect(assertNotificationBridgeCancelLocalResult({ cancelled: true })).toEqual({ cancelled: true });
     expect(assertNotificationBridgeListLocalResult({
       pending: [{ key: 'energy', topic: 'energy-full', fireAt: '2026-10-12T06:00:00Z' }],

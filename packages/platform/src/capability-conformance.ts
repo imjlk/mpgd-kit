@@ -7,6 +7,7 @@ import type {
   PlatformProviderFeature,
   PlatformTarget,
 } from './index.js';
+import type { NotificationCapabilities } from './notifications-contract.js';
 
 export const platformCapabilityKeys = Object.freeze([
   'nativeIap',
@@ -34,6 +35,7 @@ const allowedPlatformCapabilityKeySet = new Set<keyof PlatformCapabilities>([
   ...allowedPlatformCapabilityKeys,
   'providerAvailability',
   'commerce',
+  'notifications',
 ]);
 const optionalPlatformCapabilityKeySet = new Set<keyof PlatformCapabilities>(
   optionalPlatformCapabilityKeys,
@@ -68,6 +70,42 @@ const commerceCapabilityEnums = Object.freeze({
   'authority.evidence': ['client-token', 'host-callback', 'adapter-settled', 'server-push'],
   'authority.accountBinding': ['required', 'optional', 'host'],
 } as const);
+// The optional notifications v2 block follows the same rules. Each nested
+// field is a boolean, one of the listed values, or an optional positive
+// integer; `remote.purposes` is a list of known purposes.
+type NotificationCapabilityField =
+  | { readonly kind: 'boolean' }
+  | { readonly kind: 'enum'; readonly values: readonly string[] }
+  | { readonly kind: 'count' }
+  | { readonly kind: 'purposes' };
+const notificationCapabilityFields: Readonly<Record<
+  'permission' | 'remote' | 'local',
+  Readonly<Record<string, NotificationCapabilityField & { readonly optional?: true }>>
+>> = Object.freeze({
+  permission: {
+    scope: { kind: 'enum', values: ['app', 'topic'] },
+    prompt: { kind: 'enum', values: ['os', 'host', 'game'] },
+    readable: { kind: 'boolean' },
+    serverReadable: { kind: 'boolean' },
+    allowance: { kind: 'enum', values: ['persistent', 'per-send'] },
+    userGesture: { kind: 'boolean' },
+    promptLimit: { kind: 'count', optional: true },
+    maxTopicsPerPrompt: { kind: 'count', optional: true },
+    settings: { kind: 'boolean' },
+  },
+  remote: {
+    supported: { kind: 'boolean' },
+    purposes: { kind: 'purposes' },
+    addressing: { kind: 'enum', values: ['device', 'platform-user', 'none'] },
+    content: { kind: 'enum', values: ['free-form', 'host-template'] },
+  },
+  local: {
+    supported: { kind: 'boolean' },
+    maxPending: { kind: 'count', optional: true },
+  },
+});
+const notificationPurposes: readonly string[] = ['service', 'requested', 'advertising'];
+const notificationOpenPaths: readonly string[] = ['payload', 'landing-url', 'host-link', 'none'];
 
 export interface PlatformGatewayCapabilityConformanceTransition {
   readonly update: () => Promise<void> | void;
@@ -221,6 +259,121 @@ function assertCapabilitySnapshot(
     'provider availability must match the expected provider state',
   );
   assertCommerceCapabilityBlock(actual, expected.commerce);
+  assertNotificationCapabilityBlock(actual, expected.notifications);
+}
+
+function assertNotificationCapabilityBlock(
+  snapshot: PlatformCapabilities,
+  expected: NotificationCapabilities | undefined,
+): void {
+  const actual: unknown = snapshot.notifications;
+  if (actual === undefined) {
+    assert(
+      expected === undefined,
+      'notification capabilities must be present when the fixture expects them',
+    );
+    return;
+  }
+  assert(
+    expected !== undefined,
+    'notification capabilities must be absent when the fixture omits them',
+  );
+  assert(isPlainRecord(actual), 'notification capabilities must be a non-array record');
+  assertEqual(
+    JSON.stringify(Object.keys(actual).sort()),
+    JSON.stringify(['availability', 'local', 'open', 'permission', 'remote']),
+    'notification capabilities must contain exactly availability, permission, remote, local, and open',
+  );
+  for (const [group, fields] of Object.entries(notificationCapabilityFields)) {
+    const nested = actual[group];
+    assert(isPlainRecord(nested), `notification ${group} capabilities must be a non-array record`);
+    const unknownKeys = Object.keys(nested).filter((key) => !Object.hasOwn(fields, key));
+    assertEqual(
+      JSON.stringify(unknownKeys),
+      '[]',
+      `notification ${group} capabilities must contain no unknown keys`,
+    );
+    for (const [key, field] of Object.entries(fields)) {
+      const path = `${group}.${key}`;
+      if (!Object.hasOwn(nested, key)) {
+        assert(field.optional === true, `notification capability ${path} is required`);
+        continue;
+      }
+      assertNotificationCapabilityField(path, field, nested[key]);
+    }
+  }
+  assert(
+    providerAvailabilitySet.has(actual.availability as PlatformProviderAvailability),
+    'notification availability must be a known readiness state',
+  );
+  assert(
+    notificationOpenPaths.includes(actual.open as string),
+    `notification open must be one of ${notificationOpenPaths.join(', ')}`,
+  );
+  const block = actual as unknown as NotificationCapabilities;
+  assertEqual(
+    block.remote.supported,
+    block.remote.addressing !== 'none',
+    "notification remote.addressing must be 'none' exactly when remote.supported is false",
+  );
+  assertEqual(
+    normalizedNotifications(block),
+    normalizedNotifications(expected),
+    'notification capabilities must match the expected provider state',
+  );
+  assertEqual(
+    snapshot.providerAvailability?.pushNotifications,
+    block.availability,
+    'providerAvailability.pushNotifications must equal the notification capabilities availability',
+  );
+}
+
+function assertNotificationCapabilityField(
+  path: string,
+  field: NotificationCapabilityField,
+  value: unknown,
+): void {
+  switch (field.kind) {
+    case 'boolean':
+      assertEqual(typeof value, 'boolean', `notification capability ${path} must be a boolean`);
+      return;
+    case 'enum':
+      assert(
+        field.values.includes(value as string),
+        `notification capability ${path} must be one of ${field.values.join(', ')}`,
+      );
+      return;
+    case 'count':
+      assert(
+        Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 0xffff_ffff,
+        `notification capability ${path} must be a positive integer`,
+      );
+      return;
+    case 'purposes':
+      assert(
+        Array.isArray(value)
+          && value.every((purpose) => notificationPurposes.includes(purpose as string)),
+        `notification capability ${path} must list only ${notificationPurposes.join(', ')}`,
+      );
+      return;
+  }
+}
+
+function normalizedNotifications(value: NotificationCapabilities | undefined): string {
+  if (value === undefined) {
+    return 'undefined';
+  }
+  return JSON.stringify([
+    ['availability', value.availability],
+    ['permission', sortedEntries(value.permission)],
+    ['remote', sortedEntries({ ...value.remote, purposes: [...value.remote.purposes].sort() })],
+    ['local', sortedEntries(value.local)],
+    ['open', value.open],
+  ]);
+}
+
+function isPlainRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function assertCommerceCapabilityBlock(
@@ -348,6 +501,20 @@ function cloneExpectedCapabilities(value: PlatformCapabilities): PlatformCapabil
             availability: value.commerce.availability,
           },
         }),
+    ...(value.notifications === undefined
+      ? {}
+      : {
+          notifications: {
+            availability: value.notifications.availability,
+            permission: { ...value.notifications.permission },
+            remote: {
+              ...value.notifications.remote,
+              purposes: [...value.notifications.remote.purposes],
+            },
+            local: { ...value.notifications.local },
+            open: value.notifications.open,
+          },
+        }),
   };
 }
 
@@ -373,6 +540,37 @@ function tryMutateSnapshot(snapshot: PlatformCapabilities): void {
   }
   if (snapshot.commerce !== undefined) {
     tryMutateCommerceSnapshot(snapshot.commerce);
+  }
+  if (snapshot.notifications !== undefined) {
+    tryMutateNotificationSnapshot(snapshot.notifications);
+  }
+}
+
+// Every nested record and the purposes list are probed, as for commerce.
+function tryMutateNotificationSnapshot(notifications: NotificationCapabilities): void {
+  const probes: readonly (readonly [object, string, unknown])[] = [
+    [notifications.permission, 'readable', !notifications.permission.readable],
+    [
+      notifications.remote,
+      'content',
+      notifications.remote.content === 'free-form' ? 'host-template' : 'free-form',
+    ],
+    // Emptying the list shows a reused array once a later read lists none.
+    [notifications.remote.purposes, 'length', 0],
+    [notifications.local, 'supported', !notifications.local.supported],
+    [
+      notifications,
+      'availability',
+      notifications.availability === 'available' ? 'unsupported' : 'available',
+    ],
+    [notifications, 'open', notifications.open === 'none' ? 'payload' : 'none'],
+  ];
+  for (const [target, key, next] of probes) {
+    try {
+      Reflect.set(target, key, next);
+    } catch {
+      // A frozen nested notifications block already satisfies isolation.
+    }
   }
 }
 
@@ -407,7 +605,9 @@ function hasCapabilityDifference(
     .some((key) => (first[key] ?? false) !== (second[key] ?? false))
     || normalizedAvailability(first.providerAvailability)
       !== normalizedAvailability(second.providerAvailability)
-    || normalizedCommerce(first.commerce) !== normalizedCommerce(second.commerce);
+    || normalizedCommerce(first.commerce) !== normalizedCommerce(second.commerce)
+    || normalizedNotifications(first.notifications)
+      !== normalizedNotifications(second.notifications);
 }
 
 function assert(condition: unknown, message: string): asserts condition {

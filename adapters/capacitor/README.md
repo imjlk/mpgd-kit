@@ -171,6 +171,23 @@ its request returns. Without a v2 provider nothing changes: `commerceV2` is
 absent and a `commerce.v2.*` request still answers `COMMERCE_V2_UNAVAILABLE`
 as the transport left it.
 
+## Notifications v2
+
+The notifications v2 provider arrives in PR P2 of the
+[notifications RFC](../../docs/specs/notifications/notifications-v2-rfc.md).
+Until then the gateway exposes no `notificationsV2`, and a
+`notifications.v2.*` request answers `NOTIFICATIONS_V2_UNAVAILABLE`, which is
+not retryable, without pausing the game or reaching the base plugin. The
+request path is ready for the provider:
+
+- `notifications.v2.requestPermission` and `notifications.v2.openSettings`
+  pause the game while they run, like `notifications.requestSubscription` and
+  `commerce.v2.requestPurchase`.
+- The provider registry passes `notifications.v2.*` through `assertMethodReady`
+  without a readiness check, as it does `commerce.v2.*`, so the provider's own
+  `unsupported` or `action-required` answers reach the game as answers.
+- A provider cannot declare a `notifications.v2.*` method in `methods`.
+
 ## App Store server-side transaction signatures
 
 The server-side verifier moved to `@mpgd/game-services/app-store-server`

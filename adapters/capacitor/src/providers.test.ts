@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   bridgeCommerceV2Methods,
+  bridgeNotificationsV2Methods,
   bridgeStorageLoadProtocol,
   type BridgeRequest,
 } from '@mpgd/bridge';
@@ -639,5 +640,30 @@ describe('Capacitor optional provider composition', () => {
     expect(() => createCapacitorProviderRegistry([{
       ...provider, methods: ['commerce.purchase'],
     }])).toThrow(/lacks methods/);
+  });
+
+  it('keeps notifications v2 off declared methods and passes it through readiness', async () => {
+    const push: CapacitorServiceProvider = {
+      id: 'push',
+      features: ['pushNotifications'],
+      methods: ['notifications.getStatus', 'notifications.requestSubscription'],
+      async getAvailability() { return { pushNotifications: 'configuration-required' }; },
+      bridge: { async request() { throw new Error('must not be invoked'); } },
+    };
+    for (const method of bridgeNotificationsV2Methods) {
+      expect(() => createCapacitorProviderRegistry([{
+        ...push, methods: [...push.methods, method],
+      }])).toThrow(/notifications v2 is unavailable/);
+    }
+    const registry = createCapacitorProviderRegistry([push]);
+    // A v1 provider that is not ready refuses its own methods ...
+    await expect(registry.assertMethodReady('notifications.requestSubscription', { topic: 'daily' }))
+      .rejects.toMatchObject({ code: 'NATIVE_PROVIDER_CONFIGURATION_REQUIRED' });
+    // ... but readiness never turns a notifications v2 answer into an error:
+    // the v2 provider reports its own state.
+    for (const method of bridgeNotificationsV2Methods) {
+      expect(registry.byMethod.has(method)).toBe(false);
+      await expect(registry.assertMethodReady(method, { topics: ['daily'] })).resolves.toBeUndefined();
+    }
   });
 });

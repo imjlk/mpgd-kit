@@ -14,6 +14,7 @@ import {
   type PlatformCapabilities,
   type PlatformGateway,
 } from './index';
+import type { NotificationCapabilities } from './notifications-contract';
 
 describe('platform gateway capability conformance', () => {
   it('rejects an empty fixture set', rejectsEmptyFixtureSet);
@@ -199,7 +200,214 @@ describe('platform gateway capability conformance', () => {
       }],
     })).rejects.toThrow('Platform gateway capability conformance failed: test-gateway.');
   });
+
+  it('accepts a fresh notifications block whose availability is the push readiness', async () => {
+    const fixture = createFixture(() => withNotifications(createDeviceNotifications()));
+    await expect(runPlatformGatewayCapabilityConformance({
+      fixtures: [{ ...fixture, expectedCapabilities: withNotifications(createDeviceNotifications()) }],
+    })).resolves.toEqual({ passedFixtures: ['test-gateway'] });
+    // Optional counts may be left out, and purposes may come in any order.
+    const minimal: NotificationCapabilities = {
+      ...createDeviceNotifications(),
+      permission: {
+        scope: 'topic',
+        prompt: 'host',
+        readable: false,
+        serverReadable: false,
+        allowance: 'persistent',
+        userGesture: true,
+        settings: false,
+      },
+      remote: {
+        supported: true,
+        purposes: ['requested', 'service'],
+        addressing: 'platform-user',
+        content: 'host-template',
+      },
+      local: { supported: false },
+      open: 'landing-url',
+    };
+    const reordered = createFixture(() => withNotifications({
+      ...copyNotifications(minimal),
+      remote: { ...minimal.remote, purposes: ['service', 'requested'] },
+    }));
+    await expect(runPlatformGatewayCapabilityConformance({
+      fixtures: [{ ...reordered, expectedCapabilities: withNotifications(minimal) }],
+    })).resolves.toEqual({ passedFixtures: ['test-gateway'] });
+  });
+
+  it('observes a transition that only changes the notifications block', async () => {
+    let availability: NotificationCapabilities['availability'] = 'available';
+    const snapshot = () => withNotifications({ ...createDeviceNotifications(), availability });
+    const fixture = createFixture(snapshot, {
+      update() {
+        availability = 'action-required';
+      },
+      expectedCapabilities: withNotifications({
+        ...createDeviceNotifications(),
+        availability: 'action-required',
+      }),
+    });
+    await expect(runPlatformGatewayCapabilityConformance({
+      fixtures: [{ ...fixture, expectedCapabilities: snapshot() }],
+    })).resolves.toEqual({ passedFixtures: ['test-gateway'] });
+  });
+
+  it.each([
+    ['the whole block', (shared: NotificationCapabilities) => shared],
+    ['the permission record', (shared: NotificationCapabilities) => ({
+      ...copyNotifications(shared),
+      permission: shared.permission,
+    })],
+    ['the remote record', (shared: NotificationCapabilities) => ({
+      ...copyNotifications(shared),
+      remote: shared.remote,
+    })],
+    ['the purposes list', (shared: NotificationCapabilities) => ({
+      ...copyNotifications(shared),
+      remote: { ...shared.remote, purposes: shared.remote.purposes },
+    })],
+    ['the local record', (shared: NotificationCapabilities) => ({
+      ...copyNotifications(shared),
+      local: shared.local,
+    })],
+  ])('rejects a notifications block that shares %s across reads', async (_name, read) => {
+    const shared = createDeviceNotifications();
+    const fixture = createFixture(() => withNotifications(read(shared)));
+    await expect(runPlatformGatewayCapabilityConformance({
+      fixtures: [{ ...fixture, expectedCapabilities: withNotifications(createDeviceNotifications()) }],
+    })).rejects.toThrow('Platform gateway capability conformance failed: test-gateway.');
+  });
+
+  it.each([
+    ['an unknown key', { ...createDeviceNotifications(), timing: 'exact' }],
+    ['an unknown permission key', {
+      ...createDeviceNotifications(),
+      permission: { ...createDeviceNotifications().permission, exactAlarms: true },
+    }],
+    ['a missing permission key', {
+      ...createDeviceNotifications(),
+      permission: { scope: 'app', prompt: 'os', readable: true, allowance: 'persistent' },
+    }],
+    ['an unknown prompt owner', {
+      ...createDeviceNotifications(),
+      permission: { ...createDeviceNotifications().permission, prompt: 'browser' },
+    }],
+    ['a zero prompt limit', {
+      ...createDeviceNotifications(),
+      permission: { ...createDeviceNotifications().permission, promptLimit: 0 },
+    }],
+    ['a fractional pending ceiling', {
+      ...createDeviceNotifications(),
+      local: { supported: true, maxPending: 1.5 },
+    }],
+    ['an unknown purpose', {
+      ...createDeviceNotifications(),
+      remote: { ...createDeviceNotifications().remote, purposes: ['marketing'] },
+    }],
+    ["addressing 'none' with remote delivery", {
+      ...createDeviceNotifications(),
+      remote: { ...createDeviceNotifications().remote, addressing: 'none' },
+    }],
+    ['remote delivery off with an address', {
+      ...createDeviceNotifications(),
+      remote: { ...createDeviceNotifications().remote, supported: false },
+    }],
+    ['an unknown open path', { ...createDeviceNotifications(), open: 'deep-link' }],
+    ['an unknown readiness state', { ...createDeviceNotifications(), availability: 'ready' }],
+    ['an array', []],
+  ])('rejects %s in the notifications block', async (_name, notifications) => {
+    const fixture = createFixture(() => ({
+      ...createUnsupportedCapabilities(),
+      providerAvailability: { pushNotifications: 'available' },
+      notifications: notifications as NotificationCapabilities,
+    }));
+    await expect(runPlatformGatewayCapabilityConformance({
+      fixtures: [{ ...fixture, expectedCapabilities: withNotifications(createDeviceNotifications()) }],
+    })).rejects.toThrow('Platform gateway capability conformance failed: test-gateway.');
+  });
+
+  it('rejects a push readiness that disagrees with the notifications block', async () => {
+    const readiness: readonly (PlatformCapabilities['providerAvailability'] | undefined)[] = [
+      { pushNotifications: 'configuration-required' },
+      undefined,
+    ];
+    for (const providerAvailability of readiness) {
+      const capabilities = (): PlatformCapabilities => ({
+        ...createUnsupportedCapabilities(),
+        ...(providerAvailability === undefined ? {} : { providerAvailability }),
+        notifications: createDeviceNotifications(),
+      });
+      const fixture = createFixture(capabilities);
+      await expect(runPlatformGatewayCapabilityConformance({
+        fixtures: [{ ...fixture, expectedCapabilities: capabilities() }],
+      })).rejects.toThrow('Platform gateway capability conformance failed: test-gateway.');
+    }
+  });
+
+  it('rejects a notifications block the fixture does not expect, and the reverse', async () => {
+    const present = createFixture(() => withNotifications(createDeviceNotifications()));
+    await expect(runPlatformGatewayCapabilityConformance({
+      fixtures: [{
+        ...present,
+        expectedCapabilities: {
+          ...createUnsupportedCapabilities(),
+          providerAvailability: { pushNotifications: 'available' },
+        },
+      }],
+    })).rejects.toThrow('Platform gateway capability conformance failed: test-gateway.');
+    const absent = createFixture(() => ({
+      ...createUnsupportedCapabilities(),
+      providerAvailability: { pushNotifications: 'available' },
+    }));
+    await expect(runPlatformGatewayCapabilityConformance({
+      fixtures: [{ ...absent, expectedCapabilities: withNotifications(createDeviceNotifications()) }],
+    })).rejects.toThrow('Platform gateway capability conformance failed: test-gateway.');
+  });
 });
+
+/** The Capacitor + FCM profile (notifications RFC "Provider profiles"). */
+function createDeviceNotifications(): NotificationCapabilities {
+  return {
+    availability: 'available',
+    permission: {
+      scope: 'app',
+      prompt: 'os',
+      readable: true,
+      serverReadable: false,
+      allowance: 'persistent',
+      userGesture: false,
+      promptLimit: 2,
+      settings: true,
+    },
+    remote: {
+      supported: true,
+      purposes: ['service', 'requested', 'advertising'],
+      addressing: 'device',
+      content: 'free-form',
+    },
+    local: { supported: true, maxPending: 64 },
+    open: 'payload',
+  };
+}
+
+function copyNotifications(value: NotificationCapabilities): NotificationCapabilities {
+  return {
+    availability: value.availability,
+    permission: { ...value.permission },
+    remote: { ...value.remote, purposes: [...value.remote.purposes] },
+    local: { ...value.local },
+    open: value.open,
+  };
+}
+
+function withNotifications(notifications: NotificationCapabilities): PlatformCapabilities {
+  return {
+    ...createUnsupportedCapabilities(),
+    providerAvailability: { pushNotifications: notifications.availability },
+    notifications,
+  };
+}
 
 /** A fresh commerce block that reuses exactly one nested record from `shared`. */
 function sharingOnly(

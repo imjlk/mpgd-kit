@@ -22,6 +22,12 @@ optional integration contracts:
 - `sharing.share()` and `sharing.readInboundShare()` separate outbound viral
   behavior from inbound routing.
 - `notifications` manages user subscription state only. It never sends a push.
+- `notificationsV2` is the notifications v2 provider
+  ([RFC](specs/notifications/notifications-v2-rfc.md)), reached through the
+  game-services notifications runtime rather than called by the game.
+  `withTargetAvailability()` exposes it under the same `integrations.notifications`
+  state as `notifications` and then adds its capability block to
+  `getCapabilities()`. No adapter provides it yet.
 
 These groups are optional so existing adapters remain source compatible.
 Callers must read the target runtime integration state before showing a CTA and

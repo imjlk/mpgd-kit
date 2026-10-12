@@ -1,6 +1,5 @@
 import {
-  assertBridgeEvent,
-  bridgeEventProtocol,
+  bridgeCommerceEventProtocol,
   createBridgeError,
   type BridgeCommerceV2Method,
   type BridgeEvent,
@@ -22,6 +21,7 @@ import {
   assertCommerceBridgeRequestPurchaseResult,
   assertCommerceBridgeRestorePurchasesPayload,
   assertCommerceBridgeRestorePurchasesResult,
+  assertCommerceEventEnvelope,
   CommerceError,
   commerceErrorInfoOf,
   commerceProtocol,
@@ -29,6 +29,7 @@ import {
   isCommerceErrorCode,
   type CommerceBridgeMethods,
   type CommerceEvent,
+  type CommerceEventEnvelope,
   type CommerceProvider,
   type StoreId,
 } from '@mpgd/platform/commerce';
@@ -288,12 +289,12 @@ export function createAitBridgeCommerceProvider(
         const protocol: unknown = typeof envelope === 'object' && envelope !== null
           ? (envelope as { readonly protocol?: unknown }).protocol
           : undefined;
-        if (typeof protocol === 'string' && protocol !== bridgeEventProtocol) {
+        if (typeof protocol === 'string' && protocol !== bridgeCommerceEventProtocol) {
           return;
         }
-        let event: BridgeEvent;
+        let event: CommerceEventEnvelope;
         try {
-          event = assertBridgeEvent(envelope);
+          event = assertCommerceEventEnvelope(envelope);
         } catch (error) {
           listener({
             type: 'purchaseError',

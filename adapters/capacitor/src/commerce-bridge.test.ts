@@ -270,9 +270,22 @@ describe('createBridgeCommerceProvider', () => {
       },
     });
     deliver?.({ protocol: 'mpgd.other.v1', sequence: 1, event: { type: 'nope' } } as never);
+    // Notifications v2 envelopes share the channel and are not commerce's to judge.
+    deliver?.({
+      protocol: 'mpgd.notifications.v2',
+      sequence: 0,
+      event: { type: 'opened', channel: 'remote', source: 'warm', topic: 'energy-full' },
+    });
     deliver?.({ protocol: commerceProtocol, sequence: 'x', event: {} } as never);
+    // A notifications event under the commerce protocol is a malformed commerce envelope.
+    deliver?.({
+      protocol: commerceProtocol,
+      sequence: 1,
+      event: { type: 'received', channel: 'local' },
+    } as never);
     expect(events).toEqual([
       { type: 'purchaseUpdated', purchase: expect.objectContaining({ transactionId: 'tx-1' }) },
+      { type: 'purchaseError', error: expect.objectContaining({ code: 'INVALID_RESPONSE' }) },
       { type: 'purchaseError', error: expect.objectContaining({ code: 'INVALID_RESPONSE' }) },
     ]);
   });

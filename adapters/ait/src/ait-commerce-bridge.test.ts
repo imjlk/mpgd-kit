@@ -156,11 +156,17 @@ describe('Apps in Toss commerce v2 bridge', () => {
       }
     };
     deliver({ protocol: 'mpgd.ads.v1', sequence: 0, event: { type: 'shown' } });
+    // Notifications v2 envelopes share the channel and are not commerce's to judge.
+    const opened = { type: 'opened', channel: 'local', source: 'cold', topic: 'energy-full' };
+    deliver({ protocol: 'mpgd.notifications.v2', sequence: 0, event: opened });
     expect(events).toEqual([]);
     deliver({ sequence: 0, event: { type: 'purchaseUpdated' } });
     deliver({ protocol: 7, sequence: 1, event: { type: 'purchaseUpdated' } });
     deliver(null);
+    // A notifications event under the commerce protocol is a malformed commerce envelope.
+    deliver({ protocol: 'mpgd.commerce.v2', sequence: 2, event: opened });
     expect(events.map((event) => event.type)).toEqual([
+      'purchaseError',
       'purchaseError',
       'purchaseError',
       'purchaseError',

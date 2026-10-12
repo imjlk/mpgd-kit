@@ -1,4 +1,5 @@
 import {
+  bridgeCommerceEventProtocol,
   decodeBridgeCredentialLoadData,
   decodeBridgeStorageLoadData,
   type BridgeMethod,
@@ -36,6 +37,7 @@ import {
   type CapacitorServiceProvider,
   type NativeBridge,
 } from './providers.js';
+import { assertNotificationsV2Served, externalActivityMethods } from './request-policy.js';
 import { createCapacitorViewport } from './viewport.js';
 
 export {
@@ -110,15 +112,6 @@ export {
   type CapacitorViewportController,
   type CapacitorViewportHost,
 } from './viewport.js';
-
-const externalActivityMethods = new Set<BridgeMethod>([
-  'commerce.purchase',
-  'commerce.v2.requestPurchase',
-  'ads.showRewarded',
-  'ads.showInterstitial',
-  'identity.requestUpgrade',
-  'notifications.requestSubscription',
-]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -221,6 +214,9 @@ export function createCapacitorPlatformGateway(input: {
     payload: unknown,
     leaderboardRoute?: 'native' | 'remote',
   ): Promise<TData> {
+    // Before any pause: an unserved notifications v2 method never reaches the
+    // base plugin, which speaks no v2.
+    assertNotificationsV2Served(method, providers.byMethod.has(method));
     const releaseExternalActivity = externalActivityMethods.has(method)
       ? lifecycle.beginExternalActivity?.()
       : undefined;
@@ -302,7 +298,13 @@ export function createCapacitorPlatformGateway(input: {
     if (commerceProvider === undefined) {
       return;
     }
-    const subscription = commerceProvider.bridge.subscribe(({ event }) => {
+    const subscription = commerceProvider.bridge.subscribe((envelope) => {
+      // Only this purchase's commerce events end the hold; the channel may
+      // carry other protocols.
+      if (envelope.protocol !== bridgeCommerceEventProtocol) {
+        return;
+      }
+      const { event } = envelope;
       if (event.type === 'subscriptionUpdated') {
         return;
       }

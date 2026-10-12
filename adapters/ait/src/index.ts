@@ -2,6 +2,7 @@ import {
   assertBridgeResponse,
   bridgeStorageLoadProtocol,
   createCommerceV2UnavailableBridgeError,
+  createNotificationsV2UnavailableBridgeError,
   decodeBridgeStorageLoadData,
   type BridgeEventSource,
   type BridgeMethod,
@@ -533,6 +534,19 @@ export function createAitSandboxBridge(
           return commerceV2Served
             ? ok(input, answerSandboxCommerceV2(input))
             : createCommerceV2UnavailableBridgeError(input, 'Apps in Toss sandbox bridge');
+
+        // Notifications v2 arrives with the Apps in Toss provider (P1). Every
+        // build answers the dedicated code, the sandbox build included.
+        case 'notifications.v2.getCapabilities':
+        case 'notifications.v2.getPermission':
+        case 'notifications.v2.requestPermission':
+        case 'notifications.v2.revokePermission':
+        case 'notifications.v2.register':
+        case 'notifications.v2.scheduleLocal':
+        case 'notifications.v2.cancelLocal':
+        case 'notifications.v2.listLocal':
+        case 'notifications.v2.openSettings':
+          return createNotificationsV2UnavailableBridgeError(input, 'Apps in Toss sandbox bridge');
 
         default:
           return createSandboxBridgeError(

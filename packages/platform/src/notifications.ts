@@ -591,8 +591,17 @@ export function assertNotificationTopicDefinition(input: unknown): NotificationT
 }
 export const assertNotificationBridgeGetCapabilitiesPayload =
   typia.createAssertEquals<NotificationBridgeGetCapabilitiesPayload>();
-export const assertNotificationBridgeGetCapabilitiesResult =
+const assertNotificationBridgeGetCapabilitiesResultShape =
   typia.createAssertEquals<NotificationBridgeGetCapabilitiesResult>();
+
+/** Validates a `getCapabilities` answer, whose block follows `assertNotificationCapabilities`. */
+export function assertNotificationBridgeGetCapabilitiesResult(
+  input: unknown,
+): NotificationBridgeGetCapabilitiesResult {
+  const result = assertNotificationBridgeGetCapabilitiesResultShape(input);
+  assertNotificationCapabilities(result.capabilities);
+  return result;
+}
 export const assertNotificationBridgeGetPermissionPayload =
   typia.createAssertEquals<NotificationBridgeGetPermissionPayload>();
 export const assertNotificationBridgeGetPermissionResult = assertNotificationPermissionSnapshot;
@@ -604,8 +613,19 @@ export const assertNotificationBridgeRevokePermissionPayload =
 export const assertNotificationBridgeRevokePermissionResult = assertNotificationPermissionResult;
 export const assertNotificationBridgeRegisterPayload =
   typia.createAssertEquals<NotificationBridgeRegisterPayload>();
-export const assertNotificationBridgeRegisterResult =
+const assertNotificationBridgeRegisterResultShape =
   typia.createAssertEquals<NotificationBridgeRegisterResult>();
+
+/** Validates a `register` answer, whose registration follows `assertNotificationEndpointRegistration`. */
+export function assertNotificationBridgeRegisterResult(
+  input: unknown,
+): NotificationBridgeRegisterResult {
+  const result = assertNotificationBridgeRegisterResultShape(input);
+  if (result.registration !== null) {
+    assertNotificationEndpointRegistration(result.registration);
+  }
+  return result;
+}
 export const assertNotificationBridgeScheduleLocalPayload = assertLocalNotificationRequest;
 export const assertNotificationBridgeScheduleLocalResult = assertLocalScheduleResult;
 export const assertNotificationBridgeCancelLocalPayload =

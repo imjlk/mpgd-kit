@@ -6,6 +6,32 @@ import {
   type CommerceBridgeMethod,
   type CommerceEventEnvelope,
 } from '@mpgd/platform/commerce';
+import {
+  assertNotificationBridgeCancelLocalPayload,
+  assertNotificationBridgeCancelLocalResult,
+  assertNotificationBridgeGetCapabilitiesPayload,
+  assertNotificationBridgeGetCapabilitiesResult,
+  assertNotificationBridgeGetPermissionPayload,
+  assertNotificationBridgeGetPermissionResult,
+  assertNotificationBridgeListLocalPayload,
+  assertNotificationBridgeListLocalResult,
+  assertNotificationBridgeOpenSettingsPayload,
+  assertNotificationBridgeOpenSettingsResult,
+  assertNotificationBridgeRegisterPayload,
+  assertNotificationBridgeRegisterResult,
+  assertNotificationBridgeRequestPermissionPayload,
+  assertNotificationBridgeRequestPermissionResult,
+  assertNotificationBridgeRevokePermissionPayload,
+  assertNotificationBridgeRevokePermissionResult,
+  assertNotificationBridgeScheduleLocalPayload,
+  assertNotificationBridgeScheduleLocalResult,
+  notificationBridgeMethods,
+  notificationsProtocol,
+  type NotificationBridgeMethod,
+  type NotificationBridgeMethods,
+  type NotificationErrorCode,
+  type NotificationEventEnvelope,
+} from '@mpgd/platform/notifications';
 
 /**
  * Commerce v2 request methods (RFC "Bridge and versioning"). The literal
@@ -21,6 +47,23 @@ export type BridgeCommerceV2Method =
   | 'commerce.v2.finishTransaction'
   | 'commerce.v2.restorePurchases';
 
+/**
+ * Notifications v2 request methods (notifications RFC "Bridge and
+ * versioning"). Spelled out like the commerce union; `bridgeNotificationsV2Methods`
+ * and the type check under it keep the list equal to `notificationBridgeMethods`
+ * from `@mpgd/platform/notifications`.
+ */
+export type BridgeNotificationsV2Method =
+  | 'notifications.v2.getCapabilities'
+  | 'notifications.v2.getPermission'
+  | 'notifications.v2.requestPermission'
+  | 'notifications.v2.revokePermission'
+  | 'notifications.v2.register'
+  | 'notifications.v2.scheduleLocal'
+  | 'notifications.v2.cancelLocal'
+  | 'notifications.v2.listLocal'
+  | 'notifications.v2.openSettings';
+
 export type BridgeMethod =
   | 'runtime.getCapabilities'
   | 'identity.getPlayer'
@@ -32,6 +75,7 @@ export type BridgeMethod =
   | 'share.readInboundShare'
   | 'notifications.getStatus'
   | 'notifications.requestSubscription'
+  | BridgeNotificationsV2Method
   | 'promotions.getAvailability'
   | 'promotions.grantReward'
   | 'commerce.getProducts'
@@ -117,20 +161,232 @@ export function createCommerceV2UnavailableBridgeError(
   );
 }
 
+export const bridgeNotificationsV2Methods: readonly BridgeNotificationsV2Method[] =
+  notificationBridgeMethods;
+const bridgeNotificationsV2MethodsAgree: MethodsAgree<
+  BridgeNotificationsV2Method,
+  NotificationBridgeMethod
+> = true;
+void bridgeNotificationsV2MethodsAgree;
+
+const bridgeNotificationsV2MethodSet: ReadonlySet<string> = new Set(bridgeNotificationsV2Methods);
+
+export function isBridgeNotificationsV2Method(
+  method: string,
+): method is BridgeNotificationsV2Method {
+  return bridgeNotificationsV2MethodSet.has(method);
+}
+
 /**
- * Event side of the bridge. Transports push commerce v2 events in the
- * envelope `{ protocol: 'mpgd.commerce.v2', sequence, event }`; `sequence` is
- * per session and starts at 0.
+ * Answer for a notifications v2 request that reaches a transport without v2
+ * (notifications RFC "Bridge and versioning"). Not retryable: the same
+ * transport answers the same way again, so the caller keeps the v1
+ * `notifications` adapter instead of retrying.
+ */
+export const notificationsV2UnavailableBridgeErrorCode =
+  'NOTIFICATIONS_V2_UNAVAILABLE' as const satisfies NotificationErrorCode;
+
+export function createNotificationsV2UnavailableBridgeError(
+  request: Pick<BridgeRequest, 'id' | 'method'>,
+  transport: string,
+): BridgeResponse {
+  return createBridgeError(
+    request.id,
+    notificationsV2UnavailableBridgeErrorCode,
+    `${transport} does not provide notifications v2; ${request.method} is unavailable.`,
+  );
+}
+
+/** The payload a notifications v2 method takes. */
+export type BridgeNotificationsV2Payload<TMethod extends BridgeNotificationsV2Method> =
+  NotificationBridgeMethods[TMethod]['payload'];
+
+/** The data a notifications v2 method answers with. */
+export type BridgeNotificationsV2Result<TMethod extends BridgeNotificationsV2Method> =
+  NotificationBridgeMethods[TMethod]['result'];
+
+// Each entry is the `@mpgd/platform/notifications` validator of that
+// method's shape; the lookups below are typed by the method.
+const notificationsV2PayloadAsserts: Readonly<
+  Record<BridgeNotificationsV2Method, (input: unknown) => unknown>
+> = {
+  'notifications.v2.getCapabilities': assertNotificationBridgeGetCapabilitiesPayload,
+  'notifications.v2.getPermission': assertNotificationBridgeGetPermissionPayload,
+  'notifications.v2.requestPermission': assertNotificationBridgeRequestPermissionPayload,
+  'notifications.v2.revokePermission': assertNotificationBridgeRevokePermissionPayload,
+  'notifications.v2.register': assertNotificationBridgeRegisterPayload,
+  'notifications.v2.scheduleLocal': assertNotificationBridgeScheduleLocalPayload,
+  'notifications.v2.cancelLocal': assertNotificationBridgeCancelLocalPayload,
+  'notifications.v2.listLocal': assertNotificationBridgeListLocalPayload,
+  'notifications.v2.openSettings': assertNotificationBridgeOpenSettingsPayload,
+};
+
+const notificationsV2ResultAsserts: Readonly<
+  Record<BridgeNotificationsV2Method, (input: unknown) => unknown>
+> = {
+  'notifications.v2.getCapabilities': assertNotificationBridgeGetCapabilitiesResult,
+  'notifications.v2.getPermission': assertNotificationBridgeGetPermissionResult,
+  'notifications.v2.requestPermission': assertNotificationBridgeRequestPermissionResult,
+  'notifications.v2.revokePermission': assertNotificationBridgeRevokePermissionResult,
+  'notifications.v2.register': assertNotificationBridgeRegisterResult,
+  'notifications.v2.scheduleLocal': assertNotificationBridgeScheduleLocalResult,
+  'notifications.v2.cancelLocal': assertNotificationBridgeCancelLocalResult,
+  'notifications.v2.listLocal': assertNotificationBridgeListLocalResult,
+  'notifications.v2.openSettings': assertNotificationBridgeOpenSettingsResult,
+};
+
+/**
+ * Validates the payload of a notifications v2 request with the
+ * `@mpgd/platform/notifications` validator for its method: unknown keys,
+ * timestamps without an offset or on a date that does not exist, and routes
+ * that are not root-relative are rejected. Throws what that validator throws,
+ * and a `TypeError` for a method that is not a notifications v2 method.
+ */
+export function assertBridgeNotificationsV2Payload<TMethod extends BridgeNotificationsV2Method>(
+  method: TMethod,
+  payload: unknown,
+): BridgeNotificationsV2Payload<TMethod> {
+  assertNotificationsV2Method(method);
+  return notificationsV2PayloadAsserts[method](payload) as BridgeNotificationsV2Payload<TMethod>;
+}
+
+/**
+ * Validates the data a transport answered a notifications v2 request with,
+ * as `assertBridgeNotificationsV2Payload` validates the payload.
+ */
+export function assertBridgeNotificationsV2Result<TMethod extends BridgeNotificationsV2Method>(
+  method: TMethod,
+  data: unknown,
+): BridgeNotificationsV2Result<TMethod> {
+  assertNotificationsV2Method(method);
+  return notificationsV2ResultAsserts[method](data) as BridgeNotificationsV2Result<TMethod>;
+}
+
+function assertNotificationsV2Method(method: string): void {
+  // A caller outside TypeScript may pass any string; an inherited key such as
+  // `constructor` must not reach a lookup that would call it.
+  if (!isBridgeNotificationsV2Method(method)) {
+    throw new TypeError(`${method} is not a notifications v2 bridge method.`);
+  }
+}
+
+/**
+ * Event side of the bridge: every protocol shares one event channel, and each
+ * envelope names its protocol. A transport numbers each protocol's events per
+ * session from 0 (`createBridgeEventSource` does).
+ */
+export type BridgeEvent = BridgeCommerceEvent | BridgeNotificationsEvent;
+
+/** `{ protocol: 'mpgd.commerce.v2', sequence, event }` */
+export type BridgeCommerceEvent = CommerceEventEnvelope;
+
+/** `{ protocol: 'mpgd.notifications.v2', sequence, event }` */
+export type BridgeNotificationsEvent = NotificationEventEnvelope;
+
+export type BridgeEventProtocol = BridgeEvent['protocol'];
+
+/** The event an envelope of `TProtocol` carries. */
+export type BridgeEventOf<TProtocol extends BridgeEventProtocol> = Extract<
+  BridgeEvent,
+  { readonly protocol: TProtocol }
+>['event'];
+
+export const bridgeCommerceEventProtocol = commerceProtocol;
+export const bridgeNotificationsEventProtocol = notificationsProtocol;
+
+/**
+ * The commerce v2 event protocol, named when commerce was the only protocol
+ * on the event channel.
+ * @deprecated Use `bridgeCommerceEventProtocol`; a listener tells the
+ * protocols apart by each envelope's `protocol`.
  */
 export const bridgeEventProtocol = commerceProtocol;
 
-export type BridgeEvent = CommerceEventEnvelope;
-
 export type BridgeEventListener = (event: BridgeEvent) => void;
 
-/** Implemented by transports that can deliver events; the unsubscribe stops delivery. */
+/**
+ * Implemented by transports that can deliver events; the unsubscribe stops
+ * delivery. A listener receives every protocol on the channel and ignores the
+ * ones it does not handle.
+ */
 export interface BridgeEventSource {
   subscribe(listener: BridgeEventListener): () => void;
+}
+
+/** Where a host's events of one protocol come from, such as a provider's `subscribe`. */
+export interface BridgeEventStream<TEvent> {
+  subscribe(listener: (event: TEvent) => void): () => void;
+}
+
+/**
+ * The host side of one protocol's events for one bridge session; create one
+ * per session. It subscribes to `stream` when the first bridge listener
+ * attaches, so events the stream buffered until its first subscriber reach
+ * that listener, and unsubscribes when the last one leaves. Each event goes
+ * out as `{ protocol, sequence, event }`, where `sequence` starts at 0 and
+ * counts this session's events of that protocol, including across a detach.
+ * A listener that throws does not keep the event from the others.
+ */
+export function createBridgeEventSource<TProtocol extends BridgeEventProtocol>(
+  protocol: TProtocol,
+  stream: BridgeEventStream<BridgeEventOf<TProtocol>>,
+): BridgeEventSource {
+  // One entry per subscribe call, so the same listener subscribed twice is
+  // two subscriptions with their own unsubscribe.
+  const subscriptions = new Set<{ readonly listener: BridgeEventListener }>();
+  let sequence = 0;
+  let detach: (() => void) | undefined;
+  let attaching = false;
+
+  const deliver = (event: BridgeEventOf<TProtocol>): void => {
+    // `TProtocol` names one member of the union, whose event `event` is.
+    const envelope = { protocol, sequence, event } as BridgeEvent;
+    sequence += 1;
+    for (const subscription of [...subscriptions]) {
+      // A listener another one removed during this delivery gets nothing more.
+      if (!subscriptions.has(subscription)) {
+        continue;
+      }
+      try {
+        subscription.listener(envelope);
+      } catch (error) {
+        console.warn(`A ${protocol} bridge event listener failed.`, error);
+      }
+    }
+  };
+  const detachWhenIdle = (): void => {
+    if (subscriptions.size > 0 || detach === undefined) {
+      return;
+    }
+    const unsubscribe = detach;
+    detach = undefined;
+    unsubscribe();
+  };
+
+  return {
+    subscribe(listener) {
+      const subscription = { listener };
+      subscriptions.add(subscription);
+      // A listener may subscribe another while the stream delivers what it
+      // buffered; the stream is attached once.
+      if (detach === undefined && !attaching) {
+        attaching = true;
+        try {
+          detach = stream.subscribe(deliver);
+        } catch (error) {
+          subscriptions.delete(subscription);
+          throw error;
+        } finally {
+          attaching = false;
+        }
+      }
+      return () => {
+        if (subscriptions.delete(subscription)) {
+          detachWhenIdle();
+        }
+      };
+    },
+  };
 }
 
 export const bridgeStorageLoadProtocol = 'mpgd.storage.load.v1' as const;

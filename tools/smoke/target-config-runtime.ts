@@ -650,7 +650,7 @@ function supportsIntegration(
       return (
         typeof gateway.notifications?.getStatus === 'function'
         && typeof gateway.notifications?.requestSubscription === 'function'
-      );
+      ) || gateway.notificationsV2 !== undefined;
   }
 }
 

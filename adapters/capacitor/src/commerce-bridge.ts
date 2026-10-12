@@ -1,6 +1,5 @@
 import {
-  assertBridgeEvent,
-  bridgeEventProtocol,
+  bridgeCommerceEventProtocol,
   createBridgeError,
   isBridgeCommerceV2Method,
   type BridgeCommerceV2Method,
@@ -26,6 +25,7 @@ import {
   assertCommerceBridgeRequestPurchaseResult,
   assertCommerceBridgeRestorePurchasesPayload,
   assertCommerceBridgeRestorePurchasesResult,
+  assertCommerceEventEnvelope,
   CommerceError,
   commerceErrorInfoOf,
   commerceProtocol,
@@ -33,6 +33,7 @@ import {
   toCommerceAdapter,
   type CommerceBridgeMethods,
   type CommerceEvent,
+  type CommerceEventEnvelope,
   type CommerceProvider,
   type StoreId,
 } from '@mpgd/platform/commerce';
@@ -343,12 +344,12 @@ export function createBridgeCommerceProvider(
       return input.subscribe((envelope) => {
         // Another protocol on a shared event channel is not ours to judge.
         if (typeof envelope === 'object' && envelope !== null
-          && (envelope as { readonly protocol?: unknown }).protocol !== bridgeEventProtocol) {
+          && (envelope as { readonly protocol?: unknown }).protocol !== bridgeCommerceEventProtocol) {
           return;
         }
-        let event: BridgeEvent;
+        let event: CommerceEventEnvelope;
         try {
-          event = assertBridgeEvent(envelope);
+          event = assertCommerceEventEnvelope(envelope);
         } catch (error) {
           listener({
             type: 'purchaseError',

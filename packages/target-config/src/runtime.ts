@@ -1,3 +1,5 @@
+import typia from 'typia';
+
 import type { MpgdLocale } from '@mpgd/i18n';
 import type {
   PlatformCapabilities,
@@ -7,6 +9,10 @@ import type {
 import type { CommerceBillingAuthority } from '@mpgd/platform/commerce-wallet';
 
 import type { EffectiveTargetConfig } from './effective.js';
+
+/** The notifications v2 capability block (`@mpgd/platform/notifications`). */
+type NotificationCapabilities = NonNullable<PlatformCapabilities['notifications']>;
+type NotificationProvider = NonNullable<PlatformGateway['notificationsV2']>;
 
 export type PlatformFeature =
   | 'iap'
@@ -612,6 +618,7 @@ export function withTargetAvailability(
     presentation: gatewayPresentation,
     sharing: gatewaySharing,
     notifications: gatewayNotifications,
+    notificationsV2: gatewayNotificationsV2,
     ...gatewayWithoutIntegrations
   } = gateway;
   const integrations = normalizeTargetIntegrationConfig(
@@ -654,7 +661,25 @@ export function withTargetAvailability(
           ...(exposeOutboundShare ? { share: shareOutbound } : {}),
           ...(exposeInboundShare ? { readInboundShare } : {}),
         };
-  const notifications = notificationsAvailable ? gatewayNotifications : undefined;
+  const notifications = notificationsAvailable && hasNotificationSubscriptionAdapter(gateway)
+    ? gatewayNotifications
+    : undefined;
+  // Notifications v2 passes the same gate as the v1 adapter: a release gate
+  // such as Devvit's `approval-required` stays in `integrations.notifications`
+  // (notifications RFC "Capabilities").
+  const notificationsV2 = notificationsAvailable ? gatewayNotificationsV2 : undefined;
+  // The capability snapshot describes what the game can reach: the v2 block
+  // comes from the exposed provider and is left out while it is hidden.
+  const readCapabilities = async (): Promise<PlatformCapabilities> => {
+    const [capabilities, notificationCapabilities] = await Promise.all([
+      getGatewayCapabilities(),
+      notificationsV2 === undefined ? undefined : readNotificationCapabilities(notificationsV2),
+    ]);
+    return withNotificationCapabilities(
+      applyTargetConfigToCapabilities(capabilities, availabilityConfig),
+      notificationCapabilities,
+    );
+  };
   const getIapAvailability = async () => {
     const oneTimeEnabled = availabilityConfig.features.iap;
     const subscriptionsEnabled = isPlatformFeatureEnabled(availabilityConfig, 'subscriptions');
@@ -724,6 +749,7 @@ export function withTargetAvailability(
     ...(presentation === undefined ? {} : { presentation }),
     ...(sharing === undefined ? {} : { sharing }),
     ...(notifications === undefined ? {} : { notifications }),
+    ...(notificationsV2 === undefined ? {} : { notificationsV2 }),
     configTarget,
     targetConfig: config,
     ...(options.effectiveConfig === undefined
@@ -737,20 +763,12 @@ export function withTargetAvailability(
         ...(options.effectiveConfig === undefined
           ? {}
           : { effectiveConfig: options.effectiveConfig }),
-        capabilities: applyTargetConfigToCapabilities(
-          await getGatewayCapabilities(),
-          availabilityConfig,
-        ),
+        capabilities: await readCapabilities(),
         adPlacements: options.adPlacements ?? [],
         gateway,
       });
     },
-    async getCapabilities() {
-      return applyTargetConfigToCapabilities(
-        await getGatewayCapabilities(),
-        availabilityConfig,
-      );
-    },
+    getCapabilities: readCapabilities,
     commerce: {
       async getProducts() {
         const available = await getIapAvailability();
@@ -989,11 +1007,137 @@ function isIntegrationAdapterSupported(
     case 'inboundShare':
       return typeof gateway.sharing?.readInboundShare === 'function';
     case 'notifications':
-      return (
-        typeof gateway.notifications?.getStatus === 'function'
-        && typeof gateway.notifications?.requestSubscription === 'function'
-      );
+      return hasNotificationSubscriptionAdapter(gateway) || gateway.notificationsV2 !== undefined;
   }
+}
+
+function hasNotificationSubscriptionAdapter(gateway: PlatformGateway): boolean {
+  return (
+    typeof gateway.notifications?.getStatus === 'function'
+    && typeof gateway.notifications?.requestSubscription === 'function'
+  );
+}
+
+/** Bound on one notifications v2 capability read, as the Capacitor registry bounds commerce. */
+const notificationCapabilityReadTimeoutMs = 3_000;
+const isNotificationCapabilitiesShape = typia.createEquals<NotificationCapabilities>();
+
+/**
+ * One bounded read of the exposed provider's capabilities, copied into a
+ * fresh block with exactly the declared keys. A provider that stalls, throws,
+ * or answers a block the contract rejects yields a degraded block instead of
+ * a stalled or rejected capability read.
+ */
+async function readNotificationCapabilities(
+  provider: NotificationProvider,
+): Promise<NotificationCapabilities> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const reported: unknown = await Promise.race([
+      Promise.resolve().then(() => provider.getCapabilities()),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('Notification capabilities read timed out.')),
+          notificationCapabilityReadTimeoutMs,
+        );
+      }),
+    ]);
+    return isNotificationCapabilities(reported)
+      ? copyNotificationCapabilities(reported)
+      : createDegradedNotificationCapabilities('temporarily-unavailable');
+  } catch (error) {
+    return createDegradedNotificationCapabilities(degradedNotificationAvailability(error));
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+function isNotificationCapabilities(value: unknown): value is NotificationCapabilities {
+  // The shape, plus `remote.addressing: 'none'` exactly when remote delivery is unsupported.
+  return isNotificationCapabilitiesShape(value)
+    && value.remote.supported !== (value.remote.addressing === 'none');
+}
+
+function copyNotificationCapabilities(
+  capabilities: NotificationCapabilities,
+): NotificationCapabilities {
+  // The validated block has exactly the declared keys, so shallow copies of
+  // its records keep them exact and share nothing with the provider.
+  return {
+    availability: capabilities.availability,
+    permission: { ...capabilities.permission },
+    remote: { ...capabilities.remote, purposes: [...capabilities.remote.purposes] },
+    local: { ...capabilities.local },
+    open: capabilities.open,
+  };
+}
+
+/**
+ * The availability a failed read reports: a transport without notifications
+ * v2 and an unimplemented method are `unsupported`, a missing configuration is
+ * `configuration-required`, and anything else may pass.
+ */
+function degradedNotificationAvailability(error: unknown): PlatformProviderAvailability {
+  const code: unknown = typeof error === 'object' && error !== null
+    ? (error as { readonly code?: unknown }).code
+    : undefined;
+  switch (code) {
+    case 'NOTIFICATIONS_V2_UNAVAILABLE':
+    case 'NOTIFICATIONS_UNSUPPORTED':
+      return 'unsupported';
+    case 'NOTIFICATIONS_CONFIGURATION_REQUIRED':
+      return 'configuration-required';
+    default:
+      return 'temporarily-unavailable';
+  }
+}
+
+/** A block that offers nothing, with the availability that explains why. */
+function createDegradedNotificationCapabilities(
+  availability: PlatformProviderAvailability,
+): NotificationCapabilities {
+  return {
+    availability,
+    permission: {
+      scope: 'app',
+      prompt: 'os',
+      readable: true,
+      serverReadable: false,
+      allowance: 'persistent',
+      userGesture: false,
+      settings: false,
+    },
+    remote: { supported: false, purposes: [], addressing: 'none', content: 'free-form' },
+    local: { supported: false },
+    open: 'none',
+  };
+}
+
+/**
+ * Adds the exposed provider's block, with `providerAvailability.pushNotifications`
+ * equal to its availability, or leaves any block out when no provider is exposed.
+ */
+function withNotificationCapabilities(
+  capabilities: PlatformCapabilities,
+  notifications: NotificationCapabilities | undefined,
+): PlatformCapabilities {
+  if (notifications === undefined) {
+    if (!Object.hasOwn(capabilities, 'notifications')) {
+      return capabilities;
+    }
+    const { notifications: _hidden, ...withoutNotifications } = capabilities;
+    return withoutNotifications;
+  }
+  return {
+    ...capabilities,
+    providerAvailability: {
+      ...capabilities.providerAvailability,
+      pushNotifications: notifications.availability,
+    },
+    notifications,
+  };
 }
 
 function createIntegrationAvailability(
