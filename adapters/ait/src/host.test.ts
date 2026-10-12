@@ -5365,28 +5365,84 @@ describe('AIT sharing', () => {
     )).resolves.toEqual({ status: 'cancelled' });
   });
 
-  it('answers unavailable for root-relative links that name a host', async () => {
+  it('answers unavailable for share links that could name another host', async () => {
     const getTossShareLink = vi.fn(async () => 'https://toss.im/_ul/daily');
     const dependencies = { appName: 'ttokdoku', getTossShareLink, share: async () => {} };
 
     for (const deepLink of [
-      // A backslash after the leading slash parses as an authority.
+      // A second slash or a backslash after the leading slash parses as an authority.
+      '//mpgd.invalid/daily',
       '/\\ x',
       '/\\mpgd.invalid/daily',
       '/\\user:pw@mpgd.invalid:443/daily',
-      '/\\game.example/daily',
       // URL parsing drops tabs and newlines, which would leave an authority.
       '/\t/ x',
       '/\n/mpgd.invalid/daily',
+      // Dot segments collapse into a leading `//`.
+      '/.//evil.example/daily',
+      '/levels/..//evil.example/daily',
+      '/%2e//evil.example/daily',
+      '/./\\evil.example/daily',
+      // One percent-decode turns these into the shapes above.
+      '/%2F%2Fevil.example/daily',
+      '/%5Cevil.example/daily',
+      '/%09/evil.example/daily',
+      '/%09.//evil.example/daily',
+      '/.%2F/evil.example/daily',
+      // The same rules apply to the path of an absolute link.
+      'https://game.example//evil.example/daily',
+      'https://game.example/.//evil.example/daily',
+      'https://game.example/%2F%2Fevil.example/daily',
+      'https://game.example/daily\n',
+      // An app link must start with exactly `intoss://<app>`, and its path follows the same rules.
+      'intoss://ttokdoku/\\evil.example/daily',
+      'intoss://ttokdoku//evil.example/daily',
+      'intoss://evil-app\\@ttokdoku/daily',
+      'intoss://ttokdoku@evil-app/daily',
+      'intoss://ttokdoku:1/daily',
+      'intoss://ttokdokuevil/daily',
+      ' intoss://ttokdoku/daily',
     ]) {
-      await expect(shareIntent({ text: 'Unsafe', deepLink }, dependencies))
+      await expect(shareIntent({ text: 'Unsafe', deepLink }, dependencies), deepLink)
         .resolves.toEqual({ status: 'unavailable' });
     }
 
     expect(getTossShareLink).not.toHaveBeenCalled();
-    await expect(shareIntent({ text: 'Daily', deepLink: '/daily' }, dependencies))
-      .resolves.toEqual({ status: 'shared', completion: 'presented' });
-    expect(getTossShareLink).toHaveBeenCalledWith('intoss://ttokdoku/daily', undefined);
+  });
+
+  it('shares app links whose path stays in the mini-app', async () => {
+    const paths: string[] = [];
+    const dependencies = {
+      appName: 'ttokdoku',
+      getTossShareLink: async (path: string) => {
+        paths.push(path);
+        return 'https://toss.im/_ul/daily';
+      },
+      share: async () => {},
+    };
+
+    for (const deepLink of [
+      '/daily',
+      '/levels//3?from=share#start',
+      '/levels/../daily',
+      '/a/%2Fb',
+      'intoss://ttokdoku/daily?x=1#y',
+      'intoss://ttokdoku',
+      'https://game.example/levels//3',
+    ]) {
+      await expect(shareIntent({ text: 'Share', deepLink }, dependencies), deepLink)
+        .resolves.toEqual({ status: 'shared', completion: 'presented' });
+    }
+
+    expect(paths).toEqual([
+      'intoss://ttokdoku/daily',
+      'intoss://ttokdoku/levels//3?from=share#start',
+      'intoss://ttokdoku/daily',
+      'intoss://ttokdoku/a/%2Fb',
+      'intoss://ttokdoku/daily?x=1#y',
+      'intoss://ttokdoku/',
+      'intoss://ttokdoku/levels//3',
+    ]);
   });
 });
 

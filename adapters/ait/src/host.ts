@@ -1425,35 +1425,75 @@ function inboundSearchParams(): URLSearchParams {
 function toAitDeepLink(input: string, appName: string): string | undefined {
   // No share link needs a control character, and URL parsing drops tabs and
   // newlines, which can turn `/<tab>/host` into an authority.
-  if (input.startsWith('//') || /[\x00-\x1F\x7F]/u.test(input)) {
+  if (/[\x00-\x1F\x7F]/u.test(input)) {
     return undefined;
   }
 
-  if (input.startsWith('/')) {
-    // A backslash after the leading slash also parses as an authority
-    // (`/\host`), so the link names a host, not a path in this mini-app.
-    if (input.startsWith('/\\')) {
+  // An app link is read as the path it carries. Matching the prefix as text
+  // avoids a parser differential: `intoss:` is not a special scheme, so
+  // `intoss://other\@app/x` has the host `app` for WHATWG URL parsing but
+  // `other` for Android's `Uri`.
+  const appPrefix = `intoss://${appName}`;
+
+  if (input.startsWith(appPrefix)) {
+    const rest = input.slice(appPrefix.length);
+
+    if (rest !== '' && !/^[/?#]/u.test(rest)) {
       return undefined;
     }
 
-    const baseUrl = new URL('https://mpgd.invalid');
-    const parsed = new URL(input, baseUrl);
-    return parsed.origin === baseUrl.origin
-      ? `intoss://${appName}${parsed.pathname}${parsed.search}${parsed.hash}`
-      : undefined;
+    return toAppLink(rest.startsWith('/') ? rest : `/${rest}`, appName);
   }
 
+  if (input.startsWith('/')) {
+    return toAppLink(input, appName);
+  }
+
+  let parsed: URL;
+
   try {
-    const parsed = new URL(input);
-    if (parsed.protocol === 'intoss:') {
-      return parsed.hostname === appName ? input : undefined;
-    }
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
-      ? `intoss://${appName}${parsed.pathname}${parsed.search}${parsed.hash}`
-      : undefined;
+    parsed = new URL(input);
   } catch {
     return undefined;
   }
+
+  return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+    ? toAppLink(`${parsed.pathname}${parsed.search}${parsed.hash}`, appName)
+    : undefined;
+}
+
+/**
+ * Builds the app-owned link for a root-relative path, or answers `undefined`
+ * when a client could read the path as another host. A backslash after the
+ * leading slash parses as an authority (`/\host`), and so does a path whose
+ * normalized form begins with an empty segment: directly, after dot segments
+ * collapse (`/.//host`), or once percent-decoded and parsed again
+ * (`/%2F/host`, `/%09/host`). Notification deep links in
+ * `@mpgd/game-services` follow the same rules.
+ */
+function toAppLink(path: string, appName: string): string | undefined {
+  if (path.startsWith('//') || path.startsWith('/\\')) {
+    return undefined;
+  }
+
+  // Without control characters or a second slash, this is a plain path and
+  // cannot fail to parse.
+  const { pathname, search, hash } = new URL(path, 'https://mpgd.invalid');
+
+  return hasNetworkPathPrefix(pathname)
+    ? undefined
+    : `intoss://${appName}${pathname}${search}${hash}`;
+}
+
+function hasNetworkPathPrefix(pathname: string): boolean {
+  const decoded = pathname
+    .replace(/%([0-7][0-9a-f])/giu, (_escape, hex: string) =>
+      String.fromCharCode(Number.parseInt(hex, 16)),
+    )
+    .replace(/[\t\n\r]/gu, '');
+
+  return /^[/\\]{2}/u.test(decoded)
+    || new URL(decoded, 'https://mpgd.invalid').pathname.startsWith('//');
 }
 
 function isGameCenterSupported(dependencies: AitHostDependencies): boolean {
