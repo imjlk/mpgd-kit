@@ -2066,6 +2066,68 @@ export function isSameNotificationNotice(
     && parseInstant(left.record.at) === parseInstant(right.record.at);
 }
 
+/**
+ * The copy a notice is given in: its kind, its record's kind, and for a
+ * result notice the record's state, so the text can say what the player did
+ * (decree art. 62-3). A re-confirmation always reports on a consent.
+ */
+export type NotificationNoticeVariant =
+  | 'consent-result.advertising.granted'
+  | 'consent-result.advertising.withdrawn'
+  | 'consent-result.night.granted'
+  | 'consent-result.night.withdrawn'
+  | 'reconfirmation.advertising'
+  | 'reconfirmation.night';
+
+export const notificationNoticeVariants = Object.freeze([
+  'consent-result.advertising.granted',
+  'consent-result.advertising.withdrawn',
+  'consent-result.night.granted',
+  'consent-result.night.withdrawn',
+  'reconfirmation.advertising',
+  'reconfirmation.night',
+] as const satisfies readonly NotificationNoticeVariant[]);
+
+/**
+ * The catalog's `notices.copy`: per locale, a title and a body for every
+ * notice variant. `{{consentDate}}`, the record's Asia/Seoul date, is the
+ * only placeholder the server fills.
+ */
+export type NotificationNoticeCopy = Readonly<
+  Record<string, Readonly<Record<NotificationNoticeVariant, NotificationTopicCopy>>>
+>;
+
+/** The variant a notice is given in, from its kind, its record's kind, and the record's state. */
+export function notificationNoticeVariant(notice: {
+  readonly kind: NotificationNoticeKind;
+  readonly record: {
+    readonly kind: 'advertising' | 'night';
+    readonly state: 'granted' | 'withdrawn';
+  };
+}): NotificationNoticeVariant {
+  return notice.kind === 'reconfirmation'
+    ? `reconfirmation.${notice.record.kind}`
+    : `consent-result.${notice.record.kind}.${notice.record.state}`;
+}
+
+/**
+ * One variant's copy per locale, shaped as a topic's `copy`, so the notice
+ * topic sends it with the lookup and default-locale fallback of any topic
+ * (`findNotificationCopy`). A locale without the variant, which a validated
+ * catalog never has, is left out rather than found empty.
+ */
+export function notificationNoticeVariantCopy(
+  copy: NotificationNoticeCopy,
+  variant: NotificationNoticeVariant,
+): Readonly<Record<string, NotificationTopicCopy>> {
+  return Object.fromEntries(
+    Object.entries(copy).flatMap(([locale, variants]) => {
+      const text: NotificationTopicCopy | undefined = variants[variant];
+      return text === undefined ? [] : [[locale, text] as const];
+    }),
+  );
+}
+
 /** Result notice: 14 days after the record's Asia/Seoul date, counted from the next day. */
 export function notificationConsentResultDueBy(at: string): string {
   return consentResultDueByOf(parseInstant(at));

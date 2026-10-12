@@ -1,7 +1,63 @@
 {
   "version": "2026-10-12",
   "defaultLocale": "ko",
-  "notices": { "topic": "consent-notice" },
+  "notices": {
+    "topic": "consent-notice",
+    "copy": {
+      "ko": {
+        "consent-result.advertising.granted": {
+          "title": "광고성 알림 수신 동의 안내",
+          "body": "{{consentDate}}에 광고성 알림 수신에 동의하셨어요. 알림 설정에서 언제든 철회할 수 있어요."
+        },
+        "consent-result.advertising.withdrawn": {
+          "title": "광고성 알림 수신 철회 안내",
+          "body": "{{consentDate}}에 광고성 알림 수신 동의를 철회하셨어요."
+        },
+        "consent-result.night.granted": {
+          "title": "야간 광고성 알림 수신 동의 안내",
+          "body": "{{consentDate}}에 야간(21시~8시) 광고성 알림 수신에 동의하셨어요. 알림 설정에서 언제든 철회할 수 있어요."
+        },
+        "consent-result.night.withdrawn": {
+          "title": "야간 광고성 알림 수신 철회 안내",
+          "body": "{{consentDate}}에 야간(21시~8시) 광고성 알림 수신 동의를 철회하셨어요."
+        },
+        "reconfirmation.advertising": {
+          "title": "광고성 알림 수신 동의 확인",
+          "body": "{{consentDate}}에 동의하신 광고성 알림을 계속 받고 있어요. 알림 설정에서 언제든 철회할 수 있어요."
+        },
+        "reconfirmation.night": {
+          "title": "야간 광고성 알림 수신 동의 확인",
+          "body": "{{consentDate}}에 동의하신 야간(21시~8시) 광고성 알림을 계속 받고 있어요. 알림 설정에서 언제든 철회할 수 있어요."
+        }
+      },
+      "en": {
+        "consent-result.advertising.granted": {
+          "title": "Promotional notifications",
+          "body": "You agreed to promotional notifications on {{consentDate}}. You can withdraw any time in notification settings."
+        },
+        "consent-result.advertising.withdrawn": {
+          "title": "Promotional notifications",
+          "body": "You withdrew from promotional notifications on {{consentDate}}."
+        },
+        "consent-result.night.granted": {
+          "title": "Night-time promotional notifications",
+          "body": "You agreed to promotional notifications between 21:00 and 08:00 on {{consentDate}}. You can withdraw any time in notification settings."
+        },
+        "consent-result.night.withdrawn": {
+          "title": "Night-time promotional notifications",
+          "body": "You withdrew from promotional notifications between 21:00 and 08:00 on {{consentDate}}."
+        },
+        "reconfirmation.advertising": {
+          "title": "Promotional notifications",
+          "body": "You still receive the promotional notifications you agreed to on {{consentDate}}. You can withdraw any time in notification settings."
+        },
+        "reconfirmation.night": {
+          "title": "Night-time promotional notifications",
+          "body": "You still receive the promotional notifications between 21:00 and 08:00 you agreed to on {{consentDate}}. You can withdraw any time in notification settings."
+        }
+      }
+    }
+  },
   "topics": [
     {
       "id": "energy-full",
@@ -51,12 +107,6 @@
       "purpose": "service",
       "channels": ["remote"],
       "route": "/settings/notifications",
-      "copy": {
-        "ko": {
-          "title": "광고성 알림 수신 동의 안내",
-          "body": "{{consentDate}}에 광고성 알림 수신에 동의하셨어요. 알림 설정에서 언제든 철회할 수 있어요."
-        }
-      },
       "targets": {
         "android": { "channelId": "notices" },
         "ios": {}

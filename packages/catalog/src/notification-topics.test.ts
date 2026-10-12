@@ -1,6 +1,9 @@
 import {
+  notificationNoticeVariants,
   referenceNotificationProviders,
   type NotificationDeployment,
+  type NotificationNoticeCopy,
+  type NotificationNoticeVariant,
   type NotificationProviderRegistryEntry,
 } from '@mpgd/platform/notifications';
 
@@ -108,12 +111,21 @@ function assertIssue(
   );
 }
 
+/** The catalog's notice copy: a title and a body for each notice variant. */
+const koNotices = Object.fromEntries(
+  notificationNoticeVariants.map((variant) => [
+    variant,
+    { title: '수신 동의 안내', body: `{{consentDate}} ${variant}` },
+  ]),
+) as Readonly<Record<NotificationNoticeVariant, { readonly title: string; readonly body: string }>>;
+const noticeCopy: NotificationNoticeCopy = { ko: koNotices };
+
 // A catalog that exercises every field passes against the reference providers.
 const valid = assertNotificationTopicCatalog(
   {
     version: '2026-10-12',
     defaultLocale: 'ko',
-    notices: { topic: 'consent-notice' },
+    notices: { topic: 'consent-notice', copy: noticeCopy },
     topics: [
       {
         ...baseTopic,
@@ -143,7 +155,6 @@ const valid = assertNotificationTopicCatalog(
         purpose: 'service',
         channels: ['remote'],
         route: '/settings/notifications',
-        copy: { ko: { title: '수신 동의 안내', body: '{{consentDate}}에 동의하셨어요.' } },
         targets: { android: { channelId: 'notices' }, ios: {} },
       },
       {
@@ -518,20 +529,27 @@ assert.equal(
   true,
 );
 
-// The notice topic is a declared service topic the server can send.
+// The notice topic is a declared service topic the server can send. It keeps
+// only the delivery settings: no copy of its own, which the free-form rule
+// does not ask for either, because a notice's text is notices.copy.
 const noticeTopic = {
   id: 'consent-notice',
   purpose: 'service',
   channels: ['remote'],
   route: '/settings/notifications',
-  copy: { ko: { title: '안내', body: '{{consentDate}}' } },
   targets: { android: { channelId: 'notices' } },
 } as const satisfies NotificationTopicCatalogEntry;
 const withNotices = (topic: string, ...topics: readonly unknown[]): unknown => ({
   version: 'test',
   defaultLocale: 'ko',
-  notices: { topic },
+  notices: { topic, copy: noticeCopy },
   topics,
+});
+const withNoticeCopy = (copy: unknown): unknown => ({
+  version: 'test',
+  defaultLocale: 'ko',
+  notices: copy === undefined ? { topic: 'consent-notice' } : { topic: 'consent-notice', copy },
+  topics: [noticeTopic],
 });
 assert.deepEqual(issuesOf(withNotices('consent-notice', noticeTopic)), []);
 assertIssue(
@@ -552,31 +570,103 @@ assertIssue(
   /must be a service topic with the remote channel/u,
   'the server sends a notice remotely',
 );
-// The server fills a notice only with the consent date.
+// A notice says what the player did, in notices.copy: the notice topic's own
+// copy, a title or body in its mapping, or a host template would replace it.
 assertIssue(
   withNotices('consent-notice', {
     ...noticeTopic,
-    copy: { ko: { title: '{{playerName}}님', body: '{{ consentDate }}' } },
+    copy: { ko: { title: '안내', body: '{{consentDate}}' } },
   }),
-  'topics[0].copy.ko.title',
-  /filled only with \{\{consentDate\}\}; \{\{playerName\}\} would have no value/u,
-  'a notice placeholder other than consentDate',
+  'topics[0].copy',
+  /the notice topic's text is notices\.copy, one per notice variant; consent-notice declares no copy/u,
+  'a notice topic with its own copy',
 );
 assertIssue(
   withNotices('consent-notice', {
     ...noticeTopic,
-    targets: { reddit: { title: 'Notice', body: 'Agreed on {{date}}' } },
+    targets: { android: { channelId: 'notices', title: 'Notice', body: 'You agreed.' } },
   }),
-  'topics[0].targets.reddit.body',
-  /\{\{date\}\} would have no value/u,
-  'a mapped notice text is filled the same way',
+  'topics[0].targets.android.body',
+  /a body in its mapping would replace it/u,
+  'a notice topic mapping with its own text',
+);
+assertIssue(
+  withNotices('consent-notice', {
+    ...noticeTopic,
+    targets: { ait: { templateSetCode: 'notice', agreement: 'none' } },
+  }),
+  'topics[0].targets.ait',
+  /apps-in-toss sends its own template, which cannot state what the player did/u,
+  'a notice topic on a host-template provider',
+);
+// notices.copy gives every locale, the default one included, a title and a
+// body for each variant, filled only with the consent date.
+assertIssue(
+  withNoticeCopy(undefined),
+  'notices.copy',
+  /declare notices\.copy with a title and a body for each notice variant/u,
+  'notices without copy',
+);
+assertIssue(
+  withNoticeCopy({ en: koNotices }),
+  'notices.copy',
+  /must include the default locale ko/u,
+  'notice copy without the default locale',
+);
+assert.deepEqual(
+  issuesOf(withNoticeCopy({ KO: koNotices })),
+  [],
+  'the locale matches without regard to case',
+);
+const { 'reconfirmation.night': _night, ...withoutNight } = koNotices;
+assertIssue(
+  withNoticeCopy({ ko: withoutNight }),
+  'notices.copy.ko["reconfirmation.night"]',
+  /ko lacks reconfirmation\.night/u,
+  'a locale without a variant',
+);
+assertIssue(
+  withNoticeCopy({ ko: { ...koNotices, 'reconfirmation.later': { title: '안내', body: '안내' } } }),
+  'notices.copy.ko["reconfirmation.later"]',
+  /is not a notice variant/u,
+  'an unknown variant',
+);
+for (const [field, text] of [
+  ['title', ' '],
+  ['body', ''],
+] as const) {
+  assertIssue(
+    withNoticeCopy({
+      ko: {
+        ...koNotices,
+        'consent-result.night.granted': { title: '안내', body: '안내', [field]: text },
+      },
+    }),
+    `notices.copy.ko["consent-result.night.granted"].${field}`,
+    new RegExp(`a notice's ${field} must not be blank`, 'u'),
+    `a blank notice ${field}`,
+  );
+}
+assertIssue(
+  withNoticeCopy({
+    ko: {
+      ...koNotices,
+      'consent-result.advertising.withdrawn': {
+        title: '{{playerName}}님',
+        body: '{{ consentDate }}',
+      },
+    },
+  }),
+  'notices.copy.ko["consent-result.advertising.withdrawn"].title',
+  /filled only with \{\{consentDate\}\}; \{\{playerName\}\} would have no value/u,
+  'a notice placeholder other than consentDate',
 );
 
 // An advertising topic needs the deployment's rules, and under the Korean
 // rules the sender and the notice topic; a provider without an expiry or the
 // opt-out action cannot carry it then.
 const advertisingTopic = { ...advertising, targets: { android: {} } };
-const advertisingCatalog = catalogWith(advertisingTopic, noticeTopic);
+const advertisingCatalog = catalogWith(advertisingTopic);
 assert.deepEqual(
   validateNotificationTopicCatalog(advertisingCatalog, { targetProviders }).issues.map(
     (issue) => issue.path,

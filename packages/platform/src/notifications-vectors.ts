@@ -11,6 +11,7 @@ import {
   type NotificationDeferralReason,
   type NotificationDeliveryStatus,
   type NotificationDeployment,
+  type NotificationNoticeCopy,
   type NotificationNoticeKind,
   type NotificationPermissionOutcome,
   type NotificationPermissionState,
@@ -68,6 +69,12 @@ export interface NotificationConformanceContextFixture {
   readonly now: IsoTimestamp;
   /** The device's zone, which the runtime registers. */
   readonly timeZone: NonEmptyString;
+}
+
+/** The catalog's `notices` block, without the topic the deployment's `noticeTopic` names. */
+export interface NotificationConformanceNoticesFixture {
+  /** Per locale, the title and body of every notice variant. */
+  readonly copy: NotificationNoticeCopy;
 }
 
 export interface NotificationConformanceHostFixture {
@@ -444,6 +451,11 @@ export interface NotificationConformanceVector {
    * the scenario needs; the catalog validator does not check them.
    */
   readonly catalog: readonly NotificationTopicDeclaration[];
+  /**
+   * The catalog's `notices.copy`, which the scheduler's notice pushes are
+   * given in; the notice topic in `catalog` declares no copy of its own.
+   */
+  readonly notices?: NotificationConformanceNoticesFixture;
   readonly context: NotificationConformanceContextFixture;
   readonly host?: NotificationConformanceHostFixture;
   /** Backend deployment settings; Asia/Seoul is the zone when `timeZone` is absent. */

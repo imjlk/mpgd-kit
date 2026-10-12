@@ -770,6 +770,21 @@
         "required": [],
         "additionalProperties": false
       },
+      "NotificationConformanceNoticesFixture": {
+        "type": "object",
+        "properties": {
+          "copy": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringReadonlyRecordNotificationNoticeVariantNotificationTopicCopy",
+            "description": "Per locale, the title and body of every notice variant.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "copy"
+        ],
+        "additionalProperties": false,
+        "description": "The catalog's `notices` block, without the topic the deployment's `noticeTopic` names."
+      },
       "NotificationConformanceOutcomeExpectation": {
         "type": "object",
         "properties": {
@@ -2061,6 +2076,11 @@
             "description": "Topic entries with this profile's mapping under `mapping`. Only the topics\nthe scenario needs; the catalog validator does not check them.",
             "readOnly": true
           },
+          "notices": {
+            "$ref": "#/components/schemas/NotificationConformanceNoticesFixture",
+            "description": "The catalog's `notices.copy`, which the scheduler's notice pushes are\ngiven in; the notice topic in `catalog` declares no copy of its own.",
+            "readOnly": true
+          },
           "context": {
             "$ref": "#/components/schemas/NotificationConformanceContextFixture",
             "readOnly": true
@@ -2784,6 +2804,38 @@
         "type": "integer",
         "minimum": 1
       },
+      "ReadonlyRecordNotificationNoticeVariantNotificationTopicCopy": {
+        "type": "object",
+        "properties": {
+          "consent-result.advertising.granted": {
+            "$ref": "#/components/schemas/NotificationTopicCopy"
+          },
+          "consent-result.advertising.withdrawn": {
+            "$ref": "#/components/schemas/NotificationTopicCopy"
+          },
+          "consent-result.night.granted": {
+            "$ref": "#/components/schemas/NotificationTopicCopy"
+          },
+          "consent-result.night.withdrawn": {
+            "$ref": "#/components/schemas/NotificationTopicCopy"
+          },
+          "reconfirmation.advertising": {
+            "$ref": "#/components/schemas/NotificationTopicCopy"
+          },
+          "reconfirmation.night": {
+            "$ref": "#/components/schemas/NotificationTopicCopy"
+          }
+        },
+        "required": [
+          "consent-result.advertising.granted",
+          "consent-result.advertising.withdrawn",
+          "consent-result.night.granted",
+          "consent-result.night.withdrawn",
+          "reconfirmation.advertising",
+          "reconfirmation.night"
+        ],
+        "additionalProperties": false
+      },
       "ReadonlyRecordstringNotificationPermissionOutcome": {
         "type": "object",
         "additionalProperties": {
@@ -2800,6 +2852,12 @@
         "type": "object",
         "additionalProperties": {
           "$ref": "#/components/schemas/NotificationTopicCopy"
+        }
+      },
+      "ReadonlyRecordstringReadonlyRecordNotificationNoticeVariantNotificationTopicCopy": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/ReadonlyRecordNotificationNoticeVariantNotificationTopicCopy"
         }
       },
       "ReadonlyRecordstringhostrecord": {

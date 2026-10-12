@@ -19,6 +19,8 @@ import {
   NotificationError,
   notificationKeyIssue,
   notificationNoticeSendFrom,
+  notificationNoticeVariant,
+  notificationNoticeVariantCopy,
   notificationPermissionConsentKind,
   notificationPermissionStateOf,
   notificationRegistryMismatch,
@@ -47,7 +49,9 @@ import {
   type NotificationEndpointRegistration,
   type NotificationEvent,
   type NotificationNotice,
+  type NotificationNoticeCopy,
   type NotificationNoticeIdentity,
+  type NotificationNoticeVariant,
   type NotificationPermissionOutcome,
   type NotificationPermissionResult,
   type NotificationPermissionSnapshot,
@@ -857,6 +861,12 @@ export interface CreateNotificationConformanceBackendInput {
   readonly catalog: readonly NotificationTopicDeclaration[];
   readonly clock: Pick<NotificationConformanceClock, 'now'>;
   readonly deployment?: NotificationDeployment;
+  /**
+   * The catalog's `notices.copy`, which consent notice pushes are given in;
+   * required where the deployment's notice topic is declared under the
+   * Korean rules.
+   */
+  readonly noticeCopy?: NotificationNoticeCopy;
   readonly defaultLocale: string;
   /** The recipient of a `deliver` without a `player`, and the owner of `registerInstallation`. */
   readonly defaultPlayer: string;
@@ -881,8 +891,12 @@ interface SendRequest {
 type SendOrigin =
   | { readonly kind: 'send' }
   | { readonly kind: 'reminder'; readonly key: string }
-  /** The notice the send gives, which names its place in the series. */
-  | { readonly kind: 'notice'; readonly notice: NotificationNoticeIdentity };
+  /** The notice the send gives, which names its place in the series, and its copy variant. */
+  | {
+      readonly kind: 'notice';
+      readonly notice: NotificationNoticeIdentity;
+      readonly variant: NotificationNoticeVariant;
+    };
 
 type RowState =
   | { readonly status: 'delivered' }
@@ -984,10 +998,11 @@ function noEndpoint(): NotificationDeliveryRefusal {
  *   device endpoints after the lease, replayed through the gate without the
  *   key lookup), and, under the Korean rules, every unrecorded notice from the
  *   Asia/Seoul date seven days before it is due (as a `notice:` send of the
- *   notice topic, recorded with channel `push` once delivered), earliest first
- *   and within the registry entry's `rate`. A direct caller replays its own
- *   in-flight platform send after the lease. Keys are kept for 30 days after
- *   their last change.
+ *   notice topic in the notice's variant of `noticeCopy`, filled with
+ *   `{{consentDate}}`, and recorded with channel `push` once delivered),
+ *   earliest first and within the registry entry's `rate`. A direct caller
+ *   replays its own in-flight platform send after the lease. Keys are kept for
+ *   30 days after their last change.
  * - Setting or cancelling a reminder drops its sends' rows that still wait
  *   (deferred) or are in flight, so neither is replayed; a send the provider
  *   may already have accepted cannot be recalled. A send's limits count the
@@ -1004,6 +1019,25 @@ export function createNotificationConformanceBackend(
   const rules = input.deployment?.advertisingRules ?? 'none';
   const topicOf = (id: string): NotificationTopicDeclaration | undefined =>
     input.catalog.find((topic) => topic.id === id);
+  /**
+   * The topic a send is rendered from. A consent notice goes out through the
+   * notice topic with its variant's `notices.copy` as the topic's copy, so the
+   * gate resolves the locale as for any topic; the notice topic's own copy
+   * is never sent.
+   */
+  const topicFor = (
+    request: SendRequest,
+    origin: SendOrigin,
+  ): NotificationTopicDeclaration | undefined => {
+    const topic = topicOf(request.topic);
+    if (topic === undefined || origin.kind !== 'notice') {
+      return topic;
+    }
+    const { copy: _own, ...delivery } = topic;
+    return input.noticeCopy === undefined
+      ? delivery
+      : { ...delivery, copy: notificationNoticeVariantCopy(input.noticeCopy, origin.variant) };
+  };
   if (input.deployment !== undefined) {
     assertNotificationDeployment(input.deployment);
   }
@@ -1028,6 +1062,13 @@ export function createNotificationConformanceBackend(
   ) {
     throw new TypeError(
       `The deployment's notice topic ${noticeTopic} is not declared for a target that delivers advertising.`,
+    );
+  }
+  // The notice topic sends only `notices.copy`: its own copy cannot say what
+  // the player did.
+  if (rules === 'kr' && noticeTopicHere !== undefined && input.noticeCopy === undefined) {
+    throw new TypeError(
+      `The deployment's notice topic ${noticeTopicHere.id} needs the catalog's notices.copy to send notices.`,
     );
   }
   let current: NotificationConformanceSession | undefined;
@@ -1271,12 +1312,13 @@ export function createNotificationConformanceBackend(
    */
   const processRecipients = (
     request: SendRequest,
+    origin: SendOrigin,
     recipients: readonly Recipient[],
     serverPermission: NotificationPermissionState | undefined,
     previous: ReadonlyMap<string, LedgerRow>,
   ): { readonly rows: LedgerRow[]; readonly refusals: NotificationDeliveryRefusal[] } => {
     const provider = requireEntry('A send');
-    const topic = topicOf(request.topic);
+    const topic = topicFor(request, origin);
     const at = clock.now();
     const consent = recordsOf(request.player);
     const sent = historyFor(request.player, request.idempotencyKey);
@@ -1445,7 +1487,7 @@ export function createNotificationConformanceBackend(
       const reaches = entry !== undefined
         && (request.provider === undefined || request.provider === entry.provider);
       const { rows, refusals } = reaches
-        ? processRecipients(request, recipientsOf(request), serverPermission, new Map())
+        ? processRecipients(request, origin, recipientsOf(request), serverPermission, new Map())
         : { rows: [], refusals: [noEndpoint()] };
       const stored = bestOutcome(rows.map(rowOutcome));
       if (stored !== undefined) {
@@ -1490,6 +1532,7 @@ export function createNotificationConformanceBackend(
       }
       const { rows, refusals } = processRecipients(
         held.request,
+        held.origin,
         due.map((row) => recipientOfRow(held.request, row)),
         serverPermission,
         new Map(due.map((row) => [row.key, row])),
@@ -1666,6 +1709,7 @@ export function createNotificationConformanceBackend(
     topic: string,
   ): Promise<void> => {
     const notice = noticeIdentityOf(listed);
+    const variant = notificationNoticeVariant(listed);
     const request: SendRequest = {
       idempotencyKey: createNotificationNoticeIdempotencyKey({ ...notice, player }),
       player,
@@ -1684,7 +1728,7 @@ export function createNotificationConformanceBackend(
       await sendNew(
         request,
         notificationSendFingerprint(request),
-        { kind: 'notice', notice },
+        { kind: 'notice', notice, variant },
         true,
       );
     } catch (error) {
@@ -3884,6 +3928,7 @@ export async function runNotificationConformanceVector(
       catalog: vector.catalog,
       clock,
       ...(vector.deployment === undefined ? {} : { deployment: vector.deployment }),
+      ...(vector.notices === undefined ? {} : { noticeCopy: vector.notices.copy }),
       defaultLocale,
       defaultPlayer: vector.context.player,
       ...(host === undefined || readServerPermission === undefined

@@ -21,6 +21,9 @@ import {
   notificationConsentResultDueBy,
   notificationKeyIssue,
   notificationNoticeSendFrom,
+  notificationNoticeVariant,
+  notificationNoticeVariantCopy,
+  notificationNoticeVariants,
   notificationPermissionConsentKind,
   notificationPermissionStateOf,
   notificationReconfirmationDueBy,
@@ -1034,6 +1037,60 @@ describe('notification consent notices', () => {
     expect(notificationReconfirmationDueBy(at)).toBe('2026-02-27');
     expect(listed('2025-12-28T14:59:59Z')).toEqual([]);
     expect(listed('2025-12-28T15:00:00Z')).toEqual([['reconfirmation', '2026-02-27']]);
+  });
+
+  it('gives each notice the copy variant of its kind, record kind, and record state', () => {
+    expect(notificationNoticeVariants).toEqual([
+      'consent-result.advertising.granted',
+      'consent-result.advertising.withdrawn',
+      'consent-result.night.granted',
+      'consent-result.night.withdrawn',
+      'reconfirmation.advertising',
+      'reconfirmation.night',
+    ]);
+    const pick = (
+      kind: 'consent-result' | 'reconfirmation',
+      recordKind: 'advertising' | 'night',
+      state: 'granted' | 'withdrawn',
+    ) => notificationNoticeVariant({ kind, record: { kind: recordKind, state } });
+    expect([
+      pick('consent-result', 'advertising', 'granted'),
+      pick('consent-result', 'advertising', 'withdrawn'),
+      pick('consent-result', 'night', 'granted'),
+      pick('consent-result', 'night', 'withdrawn'),
+      pick('reconfirmation', 'advertising', 'granted'),
+      pick('reconfirmation', 'night', 'granted'),
+    ]).toEqual(notificationNoticeVariants);
+    // A listed notice picks its own variant.
+    const [withdrawal] = listNotificationNotices(
+      [record('advertising', 'withdrawn', { at: noon })],
+      [],
+      noon,
+    );
+    expect(withdrawal === undefined ? undefined : notificationNoticeVariant(withdrawal))
+      .toBe('consent-result.advertising.withdrawn');
+  });
+
+  it("reads one variant's copy per locale as a topic's copy, with the same locale lookup", () => {
+    const text = (title: string) => ({ title, body: '{{consentDate}}' });
+    const variants = (prefix: string) => Object.fromEntries(
+      notificationNoticeVariants.map((variant) => [variant, text(`${prefix} ${variant}`)]),
+    ) as Readonly<Record<(typeof notificationNoticeVariants)[number], { title: string; body: string }>>;
+    const copy = { ko: variants('ko'), en: variants('en') };
+    const night = notificationNoticeVariantCopy(copy, 'consent-result.night.granted');
+    expect(night).toEqual({
+      ko: text('ko consent-result.night.granted'),
+      en: text('en consent-result.night.granted'),
+    });
+    expect(findNotificationCopy({ copy: night }, 'en-US', 'ko')).toEqual(text('en consent-result.night.granted'));
+    expect(findNotificationCopy({ copy: night }, 'fr', 'ko')).toEqual(text('ko consent-result.night.granted'));
+    // A locale without the variant is left out, so the lookup falls back to the default locale.
+    const partial = { ...copy, en: {} } as unknown as typeof copy;
+    expect(findNotificationCopy(
+      { copy: notificationNoticeVariantCopy(partial, 'reconfirmation.night') },
+      'en',
+      'ko',
+    )).toEqual(text('ko reconfirmation.night'));
   });
 
   it('keys a scheduled notice by player, kind, record kind, record time, and due date', () => {

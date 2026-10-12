@@ -102,6 +102,14 @@ assert.throws(
         'topics[1].targets.ait: apps-in-toss does not deliver advertising as free-form content; '
           + 'an advertising topic must not map to it',
         'topics[2].id: duplicates the id of topics[0]: energy-full',
+        "topics[3].copy: the notice topic's text is notices.copy, one per notice variant; "
+          + 'consent-notice declares no copy of its own',
+        'notices.copy: notices.copy must include the default locale ko',
+        'notices.copy.en["consent-result.night.withdrawn"]: every locale needs a title and a body '
+          + 'for each notice variant; en lacks consent-result.night.withdrawn',
+        'notices.copy.en["consent-result.advertising.granted"].body: notices are filled only with '
+          + '{{consentDate}}; {{playerName}} would have no value',
+        'notices.copy.en["reconfirmation.night"].body: a notice\'s body must not be blank',
         "deployment.advertisingRules: a catalog with an advertising topic needs the deployment's "
           + "advertisingRules: 'kr' or 'none'",
       ],

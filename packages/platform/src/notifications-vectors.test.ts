@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createUnsupportedNotificationCapabilities,
+  notificationNoticeVariants,
   notificationsProtocolVersion,
 } from './notifications.js';
 import {
@@ -32,11 +33,12 @@ function readVector(file: string): unknown {
 }
 
 describe('notifications conformance vectors', () => {
-  it('ships the thirty-nine RFC vectors', () => {
+  it('ships the forty RFC vectors', () => {
     expect(vectorFiles).toEqual([
       'action-required-login.json',
       'advertising-needs-consent.json',
       'advertising-night-window.json',
+      'advertising-notice-variants.json',
       'advertising-notices.json',
       'advertising-rules-none.json',
       'advertising-sender-required.json',
@@ -251,6 +253,18 @@ describe('notifications conformance vectors', () => {
     expect(authentications).toHaveLength(2);
     expect(vector.steps.slice(authentications.at(-1)).some((step) => step.action === 'register'))
       .toBe(false);
+  });
+
+  it("reads a vector's catalog notice copy, every variant in every locale", () => {
+    const base = assertNotificationConformanceVector(readVector('advertising-notices.json'));
+    const ko = base.notices?.copy['ko'];
+    expect(ko === undefined ? [] : Object.keys(ko).sort()).toEqual([...notificationNoticeVariants].sort());
+    if (ko !== undefined) {
+      const { 'reconfirmation.night': _night, ...withoutNight } = ko;
+      expect(isNotificationConformanceVector({ ...base, notices: { copy: { ko: withoutNight } } })).toBe(false);
+      expect(isNotificationConformanceVector({ ...base, notices: { copy: { ko }, topic: 'consent-notice' } }))
+        .toBe(false);
+    }
   });
 
   it('explains why a provider does not satisfy appliesTo', () => {

@@ -1,6 +1,30 @@
 {
   "version": "2026-10-12",
   "defaultLocale": "ko",
+  "notices": {
+    "topic": "consent-notice",
+    "copy": {
+      "en": {
+        "consent-result.advertising.granted": {
+          "title": "Promotional notifications",
+          "body": "{{playerName}}, you agreed to promotional notifications on {{consentDate}}."
+        },
+        "consent-result.advertising.withdrawn": {
+          "title": "Promotional notifications",
+          "body": "You withdrew from promotional notifications on {{consentDate}}."
+        },
+        "consent-result.night.granted": {
+          "title": "Night-time promotional notifications",
+          "body": "You agreed to promotional notifications between 21:00 and 08:00 on {{consentDate}}."
+        },
+        "reconfirmation.advertising": {
+          "title": "Promotional notifications",
+          "body": "You still receive the promotional notifications you agreed to on {{consentDate}}."
+        },
+        "reconfirmation.night": { "title": "Night-time promotional notifications", "body": " " }
+      }
+    }
+  },
   "topics": [
     {
       "id": "energy-full",
@@ -36,6 +60,18 @@
       "purpose": "service",
       "channels": ["remote"],
       "route": "/?entry=continue"
+    },
+    {
+      "id": "consent-notice",
+      "purpose": "service",
+      "channels": ["remote"],
+      "route": "/settings/notifications",
+      "copy": {
+        "ko": { "title": "수신 동의 안내", "body": "{{consentDate}}에 동의하셨어요." }
+      },
+      "targets": {
+        "android": { "channelId": "notices" }
+      }
     }
   ]
 }
