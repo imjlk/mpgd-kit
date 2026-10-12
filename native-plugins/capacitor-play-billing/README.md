@@ -132,9 +132,13 @@ into an `accountBinding` resolver returning `{ kind: 'obfuscated-account-id',
 value }`, rename `id`/`storeId`/`type` to `logicalId`/`storeSku`/`kind`
 (`non_consumable` becomes `durable`) and `offerToken` to `offerId`, and stop
 calling `recoverOwnedPlayPurchases`: it is deprecated in favour of the single
-reconciler landing in `@mpgd/game-services` (PR C1), which reads
-`getAvailablePurchases` and `purchaseUpdated` from `gateway.commerceV2`. The
-backend contract is unchanged, since the evidence payload is the same.
+reconciler in `@mpgd/game-services` (`createCommerceReconciler`, behind
+`createGameServicesClient` and `monetizationRecovery.reconcile()` whenever
+`gateway.commerceV2` exists), which reads `getAvailablePurchases` and
+`purchaseUpdated` from the provider and verifies each purchase under the same
+`play-token-sha256` key. The backend contract is unchanged, since the
+evidence payload is the same; `src/commerce-reconciler-play-smoke.test.ts`
+shows both paths reaching the same outcomes over the fake plugin.
 
 ## v1 provider
 

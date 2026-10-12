@@ -111,14 +111,19 @@ default) so the gateway serves the `commerce.v2.*` and v1 `commerce.*`
 bridge methods from it and exposes it as `gateway.commerceV2`.
 
 Finishing never grants. The v2 SDK finishes any transaction it is given a
-`ledgerEntryId` for: the commerce v2 reconciler is the gate, and it calls
-`finishTransaction` only after the backend ledger granted the purchase. The
-v1 `finishGrantedTransaction` allow-list guard is not reproduced; the real
-control stays server-side, in the verifier that checks the JWS before the
-ledger grant, and in the native plugin never granting anything on finish.
-The v1 recovery helpers (`recoverStoreKitPurchases`,
-`getRecoverableTransactions`, `finishGrantedTransaction`) are deprecated in
-favor of the single reconciler (RFC C1) and are removed in C4.
+`ledgerEntryId` for: the commerce v2 reconciler
+(`createCommerceReconciler` in `@mpgd/game-services`) is the gate, and it
+calls `finishTransaction` only for a journal record in `granted` or
+`finishing` that holds the ledger entry id the backend grant wrote
+(`assertCommerceFinishAllowed`). The v1 `finishGrantedTransaction`
+allow-list guard is not reproduced in the SDK: the journal revision the grant
+wrote is the pairing, and the real control stays server-side, in the verifier
+that checks the JWS before the ledger grant, and in the native plugin never
+granting anything on finish. The v1 recovery helpers
+(`recoverStoreKitPurchases`, `getRecoverableTransactions`,
+`finishGrantedTransaction`) are deprecated in favor of that reconciler (RFC
+C1) and are removed in C4; `src/commerce-reconciler-storekit-smoke.test.ts`
+shows both paths reaching the same outcomes over the fake plugin.
 
 The conformance test runs every store vector whose profile the App Store
 supports against a fake plugin, directly and through the gateway bridge path,

@@ -20,6 +20,19 @@ installed by game clients, and no other subpath imports it. It moved here from
 `@mpgd/adapter-capacitor/app-store-server`, which stays as a deprecated
 re-export for one release.
 
+## Commerce v2 reconciler
+
+`createCommerceReconciler` from `@mpgd/game-services/commerce-reconciler` is
+the RFC "Reconciler" over any commerce v2 `CommerceProvider`: it journals every
+purchase as a `commerce-purchase` record of the `MonetizationOperationStore`,
+sends the saved verify request to the backend, finishes a purchase only after
+the ledger grant, and never grants on the client. `createGameServicesClient`
+purchases through it whenever `gateway.commerceV2` exists and exposes it as
+`commerceReconciler`; `createRecoverableMonetizationClient` and
+`createGameServicesRuntime` run it from `monetizationRecovery.reconcile()` and
+`restorePurchases()` over the durable journal. See
+[docs/MONETIZATION_RECOVERY.md](../../docs/MONETIZATION_RECOVERY.md).
+
 ## Registered rewarded-ad evidence
 
 `createGameServicesClient`, `createRecoverableMonetizationClient`, and

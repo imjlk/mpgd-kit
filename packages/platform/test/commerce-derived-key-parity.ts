@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 
+import { createAppsInTossPurchaseIdempotencyKey } from '@mpgd/game-services/apps-in-toss-evidence-verification';
 import { createGooglePlayTokenTransactionId } from '@mpgd/game-services/google-play-purchase';
 import {
   createDerivedPurchaseIdempotencyKey,
@@ -47,6 +48,22 @@ for (const invalid of [
 ]) {
   await assert.rejects(createGooglePlayTokenTransactionId(invalid), TypeError);
   await assert.rejects(createGooglePlayTokenPurchaseKey(invalid), TypeError);
+}
+
+// C1: the Apps in Toss form must match the v1 helper byte for byte, reserved
+// characters included, so a purchase the reconciler discovers deduplicates
+// against ledger entries the v1 adapter wrote.
+for (const orderId of ['ait-order-1', 'order:with/reserved?chars&more', 'unicode-한글']) {
+  const expected = createAppsInTossPurchaseIdempotencyKey(orderId);
+  assert.equal(expected, `apps-in-toss:purchase:${encodeURIComponent(orderId)}`);
+  assert.equal(
+    await createDerivedPurchaseIdempotencyKey({
+      store: 'apps-in-toss',
+      transactionId: orderId,
+      token: orderId,
+    }),
+    expected,
+  );
 }
 
 console.info('Commerce derived purchase key parity passed.');

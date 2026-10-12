@@ -39,7 +39,8 @@ export interface GameServicesPurchaseInput {
 }
 
 export interface GameServicesPurchaseResult {
-  readonly status: 'granted' | 'cancelled' | 'pending' | 'failed' | 'rejected';
+  /** `revoked` is reported only for a journaled commerce v2 purchase whose ledger grant was reversed. */
+  readonly status: 'granted' | 'cancelled' | 'pending' | 'failed' | 'rejected' | 'revoked';
   readonly purchase: PurchaseResult;
   readonly verification?: VerifyPurchaseResponse;
   readonly ledgerEntryId?: string;

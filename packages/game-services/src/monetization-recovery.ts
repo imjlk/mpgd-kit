@@ -1,8 +1,18 @@
 import type { PlatformEvidenceEnvelope, PurchaseResult, RewardedAdResult } from '@mpgd/platform';
 
 import { isAuthoritativeMicrosoftStoreCompletion } from './authoritative-purchase.js';
-import { createGameServicesClient, type CreateGameServicesClientInput } from './client.js';
+import {
+  createGameServicesClient,
+  type CreateGameServicesClientInput,
+  type GameServicesClient,
+} from './client.js';
 import { resolveClientRewardClaim } from './client-reward-evidence.js';
+import {
+  summarizeCommercePurchaseOperation,
+  toGameServicesPurchaseResult,
+  type CommercePurchaseOperationRecord,
+  type CommerceReconciler,
+} from './commerce-reconciler.js';
 import { createDefaultClientRewardEvidenceRegistry } from './default-client-reward-evidence.js';
 import type {
   GameServicesOperationClient,
@@ -37,7 +47,8 @@ interface OperationIdentity {
   readonly platformCompletedAt?: string;
 }
 
-export type MonetizationOperationRecord =
+/** The v1 purchase and rewarded-ad journal records. */
+export type LegacyMonetizationOperationRecord =
   | (OperationIdentity & {
       readonly kind: 'purchase';
       readonly input: GameServicesPurchaseInput;
@@ -55,6 +66,16 @@ export type MonetizationOperationRecord =
       readonly result?: GameServicesRewardedAdResult;
     });
 
+/**
+ * Every record kind the journal holds. `commerce-purchase` records are the
+ * commerce v2 reconciler's (`./commerce-reconciler`); their open state is
+ * `state`, not `result`, and `isMonetizationOperationRecoverable` applies the
+ * rule for every kind.
+ */
+export type MonetizationOperationRecord =
+  | LegacyMonetizationOperationRecord
+  | CommercePurchaseOperationRecord;
+
 /** Games must supply a durable, atomic implementation; an in-memory map is not recovery. */
 export interface MonetizationOperationStore {
   /** Atomically insert or return the existing operation for this global key. */
@@ -70,6 +91,25 @@ export interface MonetizationOperationStore {
   ): Promise<void>;
   /** Return only unresolved operations; keep terminal records addressable by read for deduplication. */
   listRecoverable(playerId: string): Promise<readonly MonetizationOperationRecord[]>;
+  /**
+   * Commerce v2 records in `granted`, `finishing`, or `finished` kept within
+   * the journal retention window, for the reconciler's revocation pass. A
+   * store without it only reports reversals of grants seen in this session.
+   */
+  listGranted?(playerId: string): Promise<readonly MonetizationOperationRecord[]>;
+  /**
+   * The commerce v2 record, terminal or not, whose `purchase.transactionId`
+   * is this store transaction. With it a transaction the store lists again
+   * after a restart (an owned durable, a rejected or finished purchase) meets
+   * its own record instead of being verified again under a derived key.
+   */
+  findByTransaction?(input: {
+    readonly playerId: string;
+    readonly target: string;
+    readonly deploymentTarget: string;
+    readonly store: string;
+    readonly transactionId: string;
+  }): Promise<MonetizationOperationRecord | undefined>;
 }
 
 export interface CreateRecoverableMonetizationClientInput extends CreateGameServicesClientInput {
@@ -79,12 +119,26 @@ export interface CreateRecoverableMonetizationClientInput extends CreateGameServ
 export interface MonetizationOperationSummary {
   readonly kind: MonetizationOperationRecord['kind'];
   readonly idempotencyKey: string;
+  /**
+   * RFC "Purchase lifecycle" mapping for a commerce v2 record: `granted`
+   * covers `granted`, `finishing`, and `finished`; `pending` covers
+   * `launched`, `pending`, `purchased`, and `verifying`; `revoked` is a
+   * reversed grant.
+   */
   readonly status: 'pending' | 'granted' | 'rejected' | 'cancelled' | 'failed'
-    | 'skipped' | 'unavailable' | 'action-required';
+    | 'skipped' | 'unavailable' | 'action-required' | 'revoked';
   readonly finalizationPending: boolean;
 }
 
 export interface RecoverableMonetizationClient extends GameServicesOperationClient {
+  /**
+   * Replays a platform purchase callback into a v1 journal record.
+   *
+   * @deprecated For a gateway with a commerce v2 provider the reconciler
+   * learns the result from the provider itself: this call then runs one
+   * reconcile pass and returns the journaled result for the key, ignoring
+   * `platform`. Removed with the v1 adapter in C4.
+   */
   recoverPurchaseResult(
     idempotencyKey: string,
     platform: PurchaseResult,
@@ -93,7 +147,20 @@ export interface RecoverableMonetizationClient extends GameServicesOperationClie
     idempotencyKey: string,
     platform: RewardedAdResult,
   ): Promise<GameServicesRewardedAdResult>;
+  /**
+   * Startup and app-resume recovery: resumes v1 records and, with a commerce
+   * v2 provider, starts or runs the reconciler (subscribe, read available
+   * purchases, send saved verify requests, finish granted purchases).
+   */
   reconcile(): Promise<readonly MonetizationOperationSummary[]>;
+  /**
+   * The manual restore trigger of the commerce v2 reconciler
+   * (`provider.restorePurchases` when offered, then a pass). Without a v2
+   * provider it is `reconcile()`.
+   */
+  restorePurchases(): Promise<readonly MonetizationOperationSummary[]>;
+  /** Present when the gateway exposes `commerceV2`. */
+  readonly commerceReconciler?: CommerceReconciler;
 }
 
 /**
@@ -121,6 +188,24 @@ export function createRecoverableMonetizationClient(
   const unjournaledRewardResponses = new Map<string, ClaimAdRewardResponse>();
   const unjournaledPurchaseResults = new Map<string, GameServicesPurchaseResult>();
   const unjournaledRewardResults = new Map<string, GameServicesRewardedAdResult>();
+  // One commerce v2 client over the durable journal: its reconciler is the
+  // purchase path for a gateway with a v2 provider, and v1 records keep the
+  // per-operation client below.
+  const commerceClient: GameServicesClient | undefined = input.gateway.commerceV2 === undefined
+    ? undefined
+    : createGameServicesClient({ ...input, operationStore: store });
+  const commerceReconciler = commerceClient?.commerceReconciler;
+  // The per-operation clients below resume v1 records only: they see a gateway
+  // without the v2 provider, so they never build a second reconciler over the
+  // journal or reopen the store UI for a platform result already recorded.
+  const {
+    commerceReconciler: _sharedReconciler,
+    operationStore: _journal,
+    onCommerceEvent: _onCommerceEvent,
+    commerceProducts: _commerceProducts,
+    ...legacyClientInput
+  } = input;
+  const { commerceV2: _commerceV2, ...legacyGateway } = input.gateway;
 
   async function serializeOperation<T>(key: string, task: () => Promise<T>): Promise<T> {
     const previous = inFlight.get(key) ?? Promise.resolve();
@@ -145,8 +230,8 @@ export function createRecoverableMonetizationClient(
   }
 
   function assertOwner(
-    record: MonetizationOperationRecord,
-    kind: MonetizationOperationRecord['kind'],
+    record: LegacyMonetizationOperationRecord,
+    kind: LegacyMonetizationOperationRecord['kind'],
     idempotencyKey: string,
     subjectId: string,
   ): void {
@@ -165,6 +250,9 @@ export function createRecoverableMonetizationClient(
     operation: GameServicesPurchaseInput,
     options?: GameServicesOperationOptions<GameServicesPurchaseProgress>,
   ): Promise<GameServicesPurchaseResult> {
+    if (commerceClient !== undefined) {
+      return commerceClient.purchase(operation, options);
+    }
     const key = operationKey(input.target, 'purchase', operation.idempotencyKey);
     return serializeOperation(key, async () => {
       const reserved = await store.reserve({
@@ -283,10 +371,10 @@ export function createRecoverableMonetizationClient(
       return pendingPurchase();
     }
     const client = createGameServicesClient({
-      ...input,
+      ...legacyClientInput,
       requestNow: () => record.platformCompletedAt ?? observedAt(),
       gateway: {
-        ...input.gateway,
+        ...legacyGateway,
         commerce: {
           ...input.gateway.commerce,
           async purchase(request) {
@@ -438,10 +526,10 @@ export function createRecoverableMonetizationClient(
       return pendingReward();
     }
     const client = createGameServicesClient({
-      ...input,
+      ...legacyClientInput,
       requestNow: () => record.platformCompletedAt ?? observedAt(),
       gateway: {
-        ...input.gateway,
+        ...legacyGateway,
         ads: {
           ...input.gateway.ads,
           async showRewarded(request) {
@@ -532,6 +620,16 @@ export function createRecoverableMonetizationClient(
     return serializeOperation(key, async () => {
       const found = await store.read(key);
       if (found?.kind !== 'purchase') {
+        if (commerceReconciler !== undefined) {
+          // Deprecated thin wrapper: the v2 reconciler learns the result from
+          // the provider, so the platform callback is not replayed.
+          await commerceReconciler.reconcile();
+          const journaled = await commerceReconciler.read(idempotencyKey);
+          if (journaled === undefined) {
+            throw new Error('No reserved purchase operation matches this platform callback.');
+          }
+          return toGameServicesPurchaseResult(journaled);
+        }
         throw new Error('No reserved purchase operation matches this platform callback.');
       }
       assertOwner(found, 'purchase', idempotencyKey, found.input.productId);
@@ -631,12 +729,79 @@ export function createRecoverableMonetizationClient(
     return !hasRequest || prior !== undefined;
   }
 
+  function ownsRecord(record: MonetizationOperationRecord | undefined): boolean {
+    return record?.playerId === input.playerId && record.target === input.target
+      && record.deploymentTarget === (input.deploymentTarget ?? input.target);
+  }
+
+  function summarizeCommerceRecord(
+    record: CommercePurchaseOperationRecord,
+  ): MonetizationOperationSummary {
+    return {
+      kind: record.kind,
+      idempotencyKey: record.idempotencyKey,
+      status: summarizeCommercePurchaseOperation(record),
+      finalizationPending: record.state === 'finishing',
+    };
+  }
+
+  /** Runs the v2 trigger and reports every record it found open before the pass, at its state after it. */
+  async function reconcileCommerce(
+    run: (reconciler: CommerceReconciler) => Promise<void>,
+  ): Promise<readonly MonetizationOperationSummary[]> {
+    if (commerceReconciler === undefined) {
+      return [];
+    }
+    const openBefore = (await commerceReconciler.listRecoverable()).map(
+      (record) => record.idempotencyKey,
+    );
+    await run(commerceReconciler);
+    const seen = new Set<string>();
+    const summaries: MonetizationOperationSummary[] = [];
+    for (const key of [
+      ...openBefore,
+      ...(await commerceReconciler.listRecoverable()).map((record) => record.idempotencyKey),
+    ]) {
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      const latest = await commerceReconciler.read(key);
+      if (latest !== undefined) {
+        summaries.push(summarizeCommerceRecord(latest));
+      }
+    }
+    return summaries;
+  }
+
+  async function restorePurchases(): Promise<readonly MonetizationOperationSummary[]> {
+    if (commerceReconciler === undefined) {
+      return reconcile();
+    }
+    return [
+      ...(await reconcileLegacy()),
+      ...(await reconcileCommerce((reconciler) => reconciler.restorePurchases())),
+    ];
+  }
+
   async function reconcile(): Promise<readonly MonetizationOperationSummary[]> {
+    return [
+      ...(await reconcileLegacy()),
+      ...(await reconcileCommerce(async (reconciler) => {
+        if (reconciler.started) {
+          await reconciler.reconcile();
+        } else {
+          await reconciler.start();
+        }
+      })),
+    ];
+  }
+
+  async function reconcileLegacy(): Promise<readonly MonetizationOperationSummary[]> {
     const pending = await store.listRecoverable(input.playerId);
     const summaries: MonetizationOperationSummary[] = [];
     for (const record of pending) {
-      if (record?.playerId !== input.playerId || record.target !== input.target
-        || record.deploymentTarget !== (input.deploymentTarget ?? input.target)) {
+      if (!ownsRecord(record)) {
         continue;
       }
       if (record.kind !== 'purchase' && record.kind !== 'rewarded-ad') {
@@ -655,6 +820,9 @@ export function createRecoverableMonetizationClient(
             latest = await store.read(record.key) ?? record;
           } catch {
             throw new OperationReadError();
+          }
+          if (latest.kind === 'commerce-purchase') {
+            throw new Error('Monetization operation kind conflicts with its journal key.');
           }
           assertOwner(
             latest,
@@ -692,7 +860,15 @@ export function createRecoverableMonetizationClient(
     return summaries;
   }
 
-  return { purchase, claimRewardedAd, recoverPurchaseResult, recoverRewardResult, reconcile };
+  return {
+    purchase,
+    claimRewardedAd,
+    recoverPurchaseResult,
+    recoverRewardResult,
+    reconcile,
+    restorePurchases,
+    ...(commerceReconciler === undefined ? {} : { commerceReconciler }),
+  };
 }
 
 class OperationReadError extends Error {}

@@ -11,6 +11,7 @@ import {
   type GameServicesBackendTransportRequest,
   type MonetizationOperationRecord,
 } from './index';
+import { isMonetizationOperationRecoverable } from './monetization-operation-store.js';
 
 const playerId = 'runtime-player';
 let purchaseCalls = 0;
@@ -281,9 +282,7 @@ const recoveryRuntime = createGameServicesRuntime({
     },
     async listRecoverable(owner) {
       return [...recoveryRecords.values()].filter((record) => record.playerId === owner
-        && (record.result === undefined || record.result.status === 'pending'
-          || record.kind === 'purchase'
-            && record.response?.finalization?.status === 'pending'));
+        && isMonetizationOperationRecoverable(record));
     },
   },
 });

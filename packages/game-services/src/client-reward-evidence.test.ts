@@ -262,7 +262,7 @@ const operationStore: MonetizationOperationStore = {
     records.set(record.key, structuredClone(record));
   },
   async listRecoverable(playerId) {
-    return [...records.values()].filter((record) => record.playerId === playerId && record.result?.status === 'pending').map(
+    return [...records.values()].filter((record) => record.playerId === playerId && record.kind !== 'commerce-purchase' && record.result?.status === 'pending').map(
       (record) => structuredClone(record),
     );
   },

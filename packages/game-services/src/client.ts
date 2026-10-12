@@ -15,7 +15,16 @@ import {
   resolveClientRewardClaim,
   type ClientRewardEvidenceRegistry,
 } from './client-reward-evidence.js';
+import {
+  createCommerceReconciler,
+  toGameServicesPurchaseResult,
+  type CommerceReconciler,
+  type CommerceReconcilerEvent,
+  type CommerceReconcilerProduct,
+} from './commerce-reconciler.js';
 import { createDefaultClientRewardEvidenceRegistry } from './default-client-reward-evidence.js';
+import { createInMemoryMonetizationOperationStore } from './monetization-operation-store.js';
+import type { MonetizationOperationStore } from './monetization-recovery.js';
 import type {
   GameServicesOperationClient,
   GameServicesPurchaseResult,
@@ -38,6 +47,8 @@ import type {
   GameServicesLeaderboardTarget,
   GameServicesLedgerTarget,
   GameServicesStoreTarget,
+  PurchaseLedgerStatusRequest,
+  PurchaseLedgerStatusResponse,
   RecordLeaderboardScoreRequest,
   RecordLeaderboardScoreResponse,
   VerifyPurchaseRequest,
@@ -55,6 +66,12 @@ export type {
 
 export interface PurchaseVerificationApi {
   verifyPurchase(input: VerifyPurchaseRequest): Promise<VerifyPurchaseResponse>;
+  /**
+   * Whether earlier ledger grants are still active (RFC "Revocation and
+   * expiry entries"). The commerce reconciler runs its revocation pass only
+   * when a backend offers this read; the reference server gains it in C2.
+   */
+  getPurchaseLedgerStatus?(input: PurchaseLedgerStatusRequest): Promise<PurchaseLedgerStatusResponse>;
 }
 
 export interface AdRewardClaimApi {
@@ -192,6 +209,12 @@ export interface GameServicesClient extends GameServicesOperationClient {
   submitLeaderboardScore(
     input: GameServicesLeaderboardInput,
   ): Promise<GameServicesLeaderboardResult>;
+  /**
+   * The commerce v2 reconciler behind `purchase` when the gateway exposes
+   * `commerceV2`. Call `start()` at runtime start and `reconcile()` on app
+   * resume; `purchase` starts it on first use.
+   */
+  readonly commerceReconciler?: CommerceReconciler;
 }
 
 export interface CreateGameServicesClientInput {
@@ -207,6 +230,19 @@ export interface CreateGameServicesClientInput {
   readonly requestNow?: () => string;
   /** Explicit client decoders only; server verification is configured independently. */
   readonly rewardEvidenceRegistry?: ClientRewardEvidenceRegistry;
+  /**
+   * Journal of the commerce v2 reconciler used when `gateway.commerceV2`
+   * exists. Without one the journal lives in memory for this session only:
+   * duplicates are then caught by the backend ledger, not by the client.
+   */
+  readonly operationStore?: MonetizationOperationStore;
+  /** A reconciler shared with another client, for example the recovery client's. */
+  readonly commerceReconciler?: CommerceReconciler;
+  /** Receives the one-time warning about a session-only commerce journal; defaults to `console.warn`. */
+  readonly warn?: (message: string) => void;
+  /** Catalog kinds and SKUs the reconciler resolves without a store read. */
+  readonly commerceProducts?: readonly CommerceReconcilerProduct[];
+  readonly onCommerceEvent?: (event: CommerceReconcilerEvent) => void;
 }
 
 export interface GameServicesLeaderboardInput extends LeaderboardScoreInput {}
@@ -231,8 +267,187 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
     ...(input.analytics === undefined ? {} : { sink: input.analytics }),
   });
 
+  const commerceProvider = input.gateway.commerceV2;
+  let commerceReconciler: CommerceReconciler | undefined;
+  if (commerceProvider !== undefined) {
+    if (input.commerceReconciler === undefined && input.operationStore === undefined) {
+      (input.warn ?? console.warn)(
+        '@mpgd/game-services: the commerce v2 reconciler is journaling in memory for this session '
+          + 'because no operationStore was given; purchases are not recoverable across restarts and '
+          + 'the backend ledger is the only duplicate backstop. Pass a durable MonetizationOperationStore.',
+      );
+    }
+    commerceReconciler = input.commerceReconciler ?? createCommerceReconciler({
+      provider: commerceProvider,
+      backend: input.backend.purchases,
+      store: input.operationStore ?? createInMemoryMonetizationOperationStore(),
+      playerId: input.playerId,
+      target: input.target,
+      ...(input.deploymentTarget === undefined ? {} : { deploymentTarget: input.deploymentTarget }),
+      ...(input.commerceProducts === undefined ? {} : { products: input.commerceProducts }),
+      now: requestNow,
+    });
+    if (input.onCommerceEvent !== undefined) {
+      commerceReconciler.subscribe(input.onCommerceEvent);
+    }
+  }
+  /** Keys of purchase calls in flight, and those whose backend verdict the observer tracked meanwhile. */
+  const inFlightKeys = new Set<string>();
+  const trackedVerdicts = new Set<string>();
+  const markTracked = (key: string): void => {
+    if (inFlightKeys.has(key)) {
+      trackedVerdicts.add(key);
+    }
+  };
+  if (commerceReconciler !== undefined && input.commerceReconciler === undefined) {
+    // Verdicts arrive as events, inside or after a purchase call; each is tracked once.
+    commerceReconciler.subscribe((event) => {
+      if (event.type !== 'transition' || event.previous === undefined) {
+        return;
+      }
+      const { record } = event;
+      const productId = record.logicalId;
+      if (event.previous === 'verifying' && record.state === 'granted') {
+        markTracked(record.idempotencyKey);
+        analytics.track({
+          name: 'purchase_granted',
+          properties: {
+            productId,
+            status: 'granted',
+            ledgerEntryId: record.ledgerEntryId,
+            alreadyProcessed: record.response?.alreadyProcessed,
+          },
+        }).catch(() => {});
+      } else if (event.previous === 'verifying' && record.state === 'rejected') {
+        markTracked(record.idempotencyKey);
+        analytics.track({
+          name: 'purchase_rejected',
+          properties: { productId, status: 'rejected', reason: record.response?.reason },
+        }).catch(() => {});
+      } else if (event.previous === 'verifying' && record.state === 'pending') {
+        markTracked(record.idempotencyKey);
+        analytics.track({
+          name: 'purchase_pending',
+          properties: {
+            productId,
+            status: 'pending',
+            reason: record.response?.reason ?? 'purchase_pending',
+          },
+        }).catch(() => {});
+      } else if (record.state === 'cancelled' || record.state === 'failed') {
+        markTracked(record.idempotencyKey);
+        analytics.track({
+          name: 'purchase_rejected',
+          properties: { productId, status: record.state, reason: record.error?.code },
+        }).catch(() => {});
+      }
+    });
+  }
+
   return {
+    ...(commerceReconciler === undefined ? {} : { commerceReconciler }),
     async purchase(purchaseInput, options) {
+      const reconciler = commerceReconciler;
+      if (reconciler !== undefined) {
+        return observeGameServicesOperation('purchase', options, async (progress): Promise<GameServicesPurchaseResult> => {
+          const key = purchaseInput.idempotencyKey;
+          trackedVerdicts.delete(key);
+          inFlightKeys.add(key);
+          if (!reconciler.started) {
+            await reconciler.start();
+          }
+          // The store phase ends when the journal records what the store answered;
+          // the reconcile pass inside requestPurchase then reports the server phases.
+          let platformReported = false;
+          let serverRequested = false;
+          let serverResulted = false;
+          const reportPlatform = (status: PurchaseResult['status']): void => {
+            if (!platformReported) {
+              platformReported = true;
+              progress.platformResult(status);
+            }
+          };
+          const unsubscribe = reconciler.subscribe((event) => {
+            if (event.type === 'failure' || event.record.idempotencyKey !== key) {
+              return;
+            }
+            if (event.type === 'transition') {
+              const { state } = event.record;
+              if (state === 'purchased') {
+                reportPlatform('completed');
+              } else if (state === 'pending' && event.previous === 'launched') {
+                reportPlatform('pending');
+              } else if ((state === 'cancelled' || state === 'failed') && event.previous !== 'verifying') {
+                reportPlatform(state);
+              }
+            } else if (event.type === 'verify-requested') {
+              reportPlatform('completed');
+              // A server-owned finish may re-read finalization in the same
+              // pass; the server phase is reported once per call.
+              if (!serverRequested) {
+                serverRequested = true;
+                progress.serverRequested();
+              }
+            } else if (!serverResulted) {
+              serverResulted = true;
+              progress.serverResult(event.response.verified);
+            }
+          });
+          try {
+            progress.platformRequested();
+            const outcome = await reconciler.requestPurchase({
+              logicalId: purchaseInput.productId,
+              idempotencyKey: key,
+              source: purchaseInput.source,
+            });
+            reportPlatform(
+              outcome.outcome === 'launched'
+                ? 'pending'
+                : outcome.outcome === 'purchased'
+                  ? (outcome.purchase.state === 'purchased' ? 'completed' : 'pending')
+                  : outcome.outcome,
+            );
+            const record = await reconciler.read(key);
+            const result: GameServicesPurchaseResult = record === undefined
+              ? {
+                  status: 'failed',
+                  purchase: {
+                    status: 'failed',
+                    entitlementIds: [],
+                    ...(outcome.outcome === 'cancelled' || outcome.outcome === 'failed'
+                      ? { diagnostic: { code: outcome.error.code, retryable: outcome.error.retryable } }
+                      : {}),
+                  },
+                }
+              : toGameServicesPurchaseResult(record);
+            if (!trackedVerdicts.has(key)) {
+              // The call ended without a backend verdict (the store answers later,
+              // or a journaled attempt was replayed); report the status it returns.
+              await analytics.track({
+                name: result.status === 'granted'
+                  ? 'purchase_granted'
+                  : result.status === 'pending'
+                    ? 'purchase_pending'
+                    : 'purchase_rejected',
+                properties: {
+                  productId: purchaseInput.productId,
+                  status: result.status,
+                  ledgerEntryId: result.ledgerEntryId,
+                  alreadyProcessed: result.verification?.alreadyProcessed,
+                  reason: result.status === 'pending'
+                    ? 'purchase_pending'
+                    : (result.verification?.reason ?? record?.error?.code),
+                },
+              });
+            }
+            return result;
+          } finally {
+            unsubscribe();
+            inFlightKeys.delete(key);
+            trackedVerdicts.delete(key);
+          }
+        });
+      }
       return observeGameServicesOperation('purchase', options, async (progress): Promise<GameServicesPurchaseResult> => {
         const target = input.target;
 
