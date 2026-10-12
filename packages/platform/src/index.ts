@@ -554,14 +554,15 @@ export interface NativeOpenUrlEvent {
   readonly url: string;
   readonly source: 'cold' | 'warm';
   /**
-   * For a game link, the route it opens on the game's origin: the URL's path,
-   * query, and fragment, normalized with `normalizeRootRelativeRoute` from
-   * `@mpgd/platform/routes`. Adapters do not deliver a game link whose path
-   * that rule refuses, so a router opens this route as is. It is absent when
-   * the URL has no path to check, such as `mygame:daily` or `mygame://daily`;
-   * a router that maps such a URL to a route, or reads a route from any other
-   * part of it, checks that route with `normalizeRootRelativeRoute` and opens
-   * only what it returns.
+   * For a game link, the URL's path, query, and fragment, normalized with
+   * `normalizeRootRelativeRoute` from `@mpgd/platform/routes`. The host is not
+   * part of it: `mygame://game/daily` and `https://game.example/daily` give
+   * `/daily`, and `mygame://level/3` gives `/3`. Adapters do not deliver a game
+   * link whose path that rule refuses, so a router that routes by path opens
+   * this route as is. It is absent when the URL has no path to check, such as
+   * `mygame:daily` or `mygame://daily`. A router that builds its route from
+   * anything else in the URL, such as a custom-scheme host, checks that route
+   * with `normalizeRootRelativeRoute` and opens only what it returns.
    */
   readonly route?: string;
 }
@@ -631,8 +632,8 @@ export interface LifecycleAdapter {
   ): () => void;
   /**
    * Game links and OAuth redirects use separate callbacks. A game link is
-   * untrusted input: route from its checked `route`, never from `url` as is
-   * (see `NativeOpenUrlEvent.route`).
+   * untrusted input: open its checked `route`, or check any route built from
+   * `url` with `normalizeRootRelativeRoute` (see `NativeOpenUrlEvent.route`).
    */
   onGameUrlOpen?(callback: (event: NativeOpenUrlEvent) => void): () => void;
   onOAuthRedirect?(callback: (event: NativeOpenUrlEvent) => void): () => void;

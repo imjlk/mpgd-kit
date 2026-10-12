@@ -245,6 +245,8 @@ describe('Capacitor App event ownership', () => {
     expect(game).toEqual([]);
     fake.emit('appUrlOpen', { url: 'mpgd://game/levels/../daily?from=push#top' });
     fake.emit('appUrlOpen', { url: 'https://game.example/a%20b/%C3%A9' });
+    // The host is not part of the route.
+    fake.emit('appUrlOpen', { url: 'mpgd://level/3' });
     // No path to check: the router maps these itself and checks what it derives.
     fake.emit('appUrlOpen', { url: 'mpgd://daily' });
     fake.emit('appUrlOpen', { url: 'mpgd:daily' });
@@ -255,6 +257,7 @@ describe('Capacitor App event ownership', () => {
         route: '/daily?from=push#top',
       },
       { url: 'https://game.example/a%20b/%C3%A9', source: 'warm', route: '/a%20b/%C3%A9' },
+      { url: 'mpgd://level/3', source: 'warm', route: '/3' },
       { url: 'mpgd://daily', source: 'warm' },
       { url: 'mpgd:daily', source: 'warm' },
     ]);

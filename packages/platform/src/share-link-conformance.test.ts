@@ -94,6 +94,27 @@ describe('share intents', () => {
     expect(Object.keys(withShareIntentCheck({ readInboundShare: async () => null })))
       .toEqual(['readInboundShare']);
   });
+
+  it('keeps other members and methods on a prototype', async () => {
+    class ClassAdapter {
+      readonly shared: string[] = [];
+
+      async share(shareIntent: ShareIntent): Promise<ShareResult> {
+        this.shared.push(shareIntent.deepLink);
+        return presented;
+      }
+
+      async readInboundShare() {
+        return { challengeToken: String(this.shared.length) };
+      }
+    }
+    const adapter = new ClassAdapter();
+    const checked = withShareIntentCheck(adapter) as ShareAdapter & { readonly shared?: unknown };
+
+    await expect(checked.share?.({ ...intent, deepLink: '/daily' })).resolves.toEqual(presented);
+    await expect(checked.readInboundShare?.()).resolves.toEqual({ challengeToken: '1' });
+    expect(checked.shared).toBe(adapter.shared);
+  });
 });
 
 describe('share link conformance', () => {

@@ -411,29 +411,37 @@ async function shareFromBrowser(
 /**
  * The URL the clipboard fallback copies. An absolute link is copied as is. A
  * root-relative route is resolved against `document.baseURI`, as Web Share
- * resolves it, or against the page URL when there is no document; without an
- * HTTP(S) page to resolve it against, there is no link worth pasting.
+ * resolves it. When the document has no HTTP(S) base, as in an embedded or
+ * `file:` page, the page URL the gateway was given (`locationHref`) or the
+ * location is tried next; without any HTTP(S) page, there is no link worth
+ * pasting.
  */
 function toClipboardUrl(link: string, options: BrowserPlatformGatewayOptions): string | undefined {
   if (!link.startsWith('/')) {
     return link;
   }
 
-  const base = globalThis.document?.baseURI ?? options.locationHref ?? globalThis.location?.href;
+  for (const base of [
+    globalThis.document?.baseURI,
+    options.locationHref,
+    globalThis.location?.href,
+  ]) {
+    if (base === undefined) {
+      continue;
+    }
 
-  if (base === undefined) {
-    return undefined;
+    try {
+      const url = new URL(link, base);
+
+      if (url.protocol === 'https:' || url.protocol === 'http:') {
+        return url.href;
+      }
+    } catch {
+      // A base that cannot resolve a path, such as `about:blank`, is skipped.
+    }
   }
 
-  let url: URL;
-
-  try {
-    url = new URL(link, base);
-  } catch {
-    return undefined;
-  }
-
-  return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : undefined;
+  return undefined;
 }
 
 function canShare(options: BrowserPlatformGatewayOptions): boolean {

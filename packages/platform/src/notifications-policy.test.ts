@@ -817,6 +817,13 @@ describe('notification content', () => {
       topic: { ...advertising, optOutRoute: '/%2e//evil.example/y' },
       consent: [record('advertising', 'granted')],
     }))).toThrow(/optOutRoute that is not root-relative/u);
+    expect(() => resolveNotificationContent({
+      topic: { ...service, route: '/é' },
+      content: 'host-template',
+      defaultLocale: 'ko',
+    })).toThrow(
+      'Topic rival-challenge has a route that is not in normalized form: "/é"; write "/%C3%A9"',
+    );
   });
 });
 

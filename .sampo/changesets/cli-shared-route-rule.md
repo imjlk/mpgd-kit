@@ -1,5 +1,5 @@
 ---
-npm/@mpgd/cli: patch
+npm/@mpgd/cli: minor
 ---
 
 - The Microsoft Store submission preflight now checks the manifest's

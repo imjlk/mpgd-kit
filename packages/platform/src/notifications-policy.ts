@@ -124,6 +124,24 @@ export function isRootRelativeNotificationRoute(route: string): boolean {
 }
 
 /**
+ * The error for a route `isRootRelativeNotificationRoute` refuses, about
+ * `subject` (`The local reminder route`), or `undefined` when it passes. A
+ * route with another normalized form names that form, so the caller can
+ * write it instead.
+ */
+export function notificationRouteError(subject: string, route: string): string | undefined {
+  if (isRootRelativeNotificationRoute(route)) {
+    return undefined;
+  }
+  const normalized = route.length <= maxNotificationRouteLength
+    ? normalizeRootRelativeRoute(route)
+    : undefined;
+  return normalized === undefined
+    ? `${subject} is not root-relative: ${JSON.stringify(route)}`
+    : `${subject} is not in normalized form: ${JSON.stringify(route)}; write ${JSON.stringify(normalized)}`;
+}
+
+/**
  * The rules a topic definition must meet on its own (RFC "Topic catalog"):
  * a trimmed id that is not `__proto__`, channels that do not repeat, no
  * `local` channel for advertising, root-relative `route` and `optOutRoute`, an
@@ -1274,10 +1292,9 @@ export function renderNotificationAdvertisement(
 }
 
 function assertRootRelativeRoute(topic: string, field: 'route' | 'optOutRoute', route: string): void {
-  if (!isRootRelativeNotificationRoute(route)) {
-    throw new TypeError(
-      `Topic ${topic} has a ${field} that is not root-relative: ${JSON.stringify(route)}`,
-    );
+  const error = notificationRouteError(`Topic ${topic} has a ${field} that`, route);
+  if (error !== undefined) {
+    throw new TypeError(error);
   }
 }
 

@@ -8,10 +8,21 @@ import { fileURLToPath } from 'node:url';
 // finds adapters whose sources define a `share` method or property and whose
 // tests never run it, so a new adapter cannot skip the check.
 
-// `share(`, `async share(`, and `share:`, but not `options.share`, `share?:`,
-// or `shareAppMessage(`.
-const sharePattern = /(?:^|[^\w$.])(?:async\s+)?share\s*[(:]/mu;
-const runnerPattern = /\brunShareLinkConformance\s*\(/u;
+// The ways a source defines `share`: a method or property (`share(`,
+// `async share(`, `share:`), shorthand (`{ share }`), a quoted or computed key
+// (`'share':`, `['share']`), or a class field (`share = ...`). They skip
+// `options.share`, `share?:`, `const share =`, and `shareAppMessage(`, and a
+// plain call such as `await share(` counts too, which only ever asks more.
+const sharePatterns = [
+  /(?:^|[^\w$.])(?:async\s+)?share\s*[(:]/mu,
+  /[{,]\s*share\s*[,}]/u,
+  /\[?\s*(['"`])share\1\s*\]?\s*[(:]/u,
+  /^\s*(?:(?:public|protected|private|readonly|static|override)\s+)*share\s*=(?!=)/mu,
+];
+const runnerImportPattern = /from\s+(['"])@mpgd\/platform\/share-link-conformance\1/u;
+const runnerCallPattern = /\brunShareLinkConformance\s*\(/u;
+// A conformance run in a skipped or pending test runs nothing.
+const skippedTestPattern = /\b(?:(?:describe|it|test)\s*\.\s*(?:skip|skipIf|todo)|xit|xdescribe)\b/u;
 const skippedDirectories = new Set(['node_modules', 'dist']);
 
 /**
@@ -44,17 +55,25 @@ export function findShareLinkConformanceGaps(
 
     const adapterRoot = join(adaptersRoot, entry.name);
     const files = listTypeScriptFiles(adapterRoot);
-    const sharingFiles = files.filter(
-      (file) => !isTestFile(adapterRoot, file) && sharePattern.test(readFileSync(file, 'utf8')),
-    );
+    const sharingFiles = files.filter((file) => {
+      const source = withoutComments(readFileSync(file, 'utf8'));
+
+      return !isTestFile(adapterRoot, file)
+        && sharePatterns.some((pattern) => pattern.test(source));
+    });
 
     if (sharingFiles.length === 0) {
       continue;
     }
 
-    const runsConformance = files.some(
-      (file) => isTestFile(adapterRoot, file) && runnerPattern.test(readFileSync(file, 'utf8')),
-    );
+    const runsConformance = files.some((file) => {
+      const source = withoutComments(readFileSync(file, 'utf8'));
+
+      return isTestFile(adapterRoot, file)
+        && runnerImportPattern.test(source)
+        && runnerCallPattern.test(source)
+        && !skippedTestPattern.test(source);
+    });
 
     if (!runsConformance) {
       gaps.push({
@@ -83,6 +102,11 @@ function listTypeScriptFiles(directory) {
   }
 
   return files;
+}
+
+// Drops block and line comments; `://` in a URL is not a comment.
+function withoutComments(source) {
+  return source.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/(^|[^:])\/\/.*$/gmu, '$1');
 }
 
 function isTestFile(adapterRoot, file) {

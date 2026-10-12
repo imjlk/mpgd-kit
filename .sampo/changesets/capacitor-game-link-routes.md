@@ -8,9 +8,11 @@ any router sees them.
 
 - `NativeOpenUrlEvent` gains an optional `route`: for a game link, the path,
   query, and fragment of its URL, normalized with `normalizeRootRelativeRoute`
-  from `@mpgd/platform/routes`. The `LifecycleAdapter.onGameUrlOpen` and
-  `NativeOpenUrlEvent` docs say where a router must check a route it reads
-  from the URL itself.
+  from `@mpgd/platform/routes`. The URL's host is not part of it
+  (`mygame://level/3` gives `/3`). The `LifecycleAdapter.onGameUrlOpen` and
+  `NativeOpenUrlEvent` docs say a router that builds its route from anything
+  else in the URL, such as a custom-scheme host, must check it with
+  `normalizeRootRelativeRoute`.
 - The Capacitor adapter discards a game link, cold or warm, whose path that
   rule refuses, such as `mygame://game//evil.example/x` or
   `https://game.example/%2F%2Fevil.example/x`. It also discards one with a

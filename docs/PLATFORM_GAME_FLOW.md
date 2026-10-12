@@ -136,9 +136,10 @@ state instead of pretending an unwired SDK call is available.
 Links a native app opens are untrusted too. The Capacitor adapter discards a
 game link whose path `normalizeRootRelativeRoute` refuses, and its
 `lifecycle.onGameUrlOpen` and `getInitialGameUrl` events carry the checked
-`route`. A router opens that route; one that reads a route from anywhere else
-in the URL, such as a custom-scheme host, checks it with
-`normalizeRootRelativeRoute` and opens only what that returns.
+path as `route`, without the URL's host. A router that routes by path opens
+that route; one that builds its route from anything else in the URL, such as a
+custom-scheme host, checks it with `normalizeRootRelativeRoute` and opens only
+what that returns.
 
 `presentDevvitShareSheet()` in `@mpgd/adapter-devvit/web` wraps Devvit's
 `showShareSheet()` effect and returns `shared + presented`; Devvit does not

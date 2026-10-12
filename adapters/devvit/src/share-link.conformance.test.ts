@@ -46,18 +46,29 @@ describe('Devvit share links', () => {
     })).resolves.toMatchObject({ name: 'devvit' });
   });
 
-  it('keeps the sandbox bridge answering unavailable for an accepted link', async () => {
+  it('lets only an accepted link reach the sandbox bridge, which still answers unavailable', async () => {
+    const sandbox = createDevvitSandboxBridge();
+    const reached: unknown[] = [];
     const gateway = createDevvitPlatformGateway({
       appVersion: '1.0.0',
       buildId: 'share-links',
-      bridge: createDevvitSandboxBridge(),
-    });
+      bridge: {
+        request(input) {
+          if (input.method === 'share.share') {
+            reached.push((input.payload as { readonly deepLink?: unknown }).deepLink);
+          }
 
-    await expect(gateway.sharing?.share?.({
-      kind: 'invite',
-      title: 'Join',
-      text: 'Join me',
-      deepLink: '/daily',
-    })).resolves.toEqual({ status: 'unavailable' });
+          return sandbox.request(input);
+        },
+      },
+    });
+    const intent = { kind: 'invite', title: 'Join', text: 'Join me' } as const;
+
+    for (const deepLink of ['//evil.example/daily', '/levels/../daily']) {
+      await expect(gateway.sharing?.share?.({ ...intent, deepLink }))
+        .resolves.toEqual({ status: 'unavailable' });
+    }
+
+    expect(reached).toEqual(['/daily']);
   });
 });

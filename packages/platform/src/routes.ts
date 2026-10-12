@@ -169,9 +169,9 @@ export function readShareIntent(intent: unknown): ShareIntent | undefined {
 /**
  * Puts `readShareIntent` in front of an adapter's `share`: the adapter and its
  * host see only intents the contract accepts, with the link normalized, and
- * any other intent answers `unavailable` without reaching them. Adapters wrap
- * their `sharing` with it, and their tests run
- * `@mpgd/platform/share-link-conformance`.
+ * any other intent answers `unavailable` without reaching them. Every other
+ * member is kept as is. Adapters wrap their `sharing` with it, and their tests
+ * run `@mpgd/platform/share-link-conformance`.
  */
 export function withShareIntentCheck(sharing: ShareAdapter): ShareAdapter {
   const share = sharing.share?.bind(sharing);
@@ -184,7 +184,10 @@ export function withShareIntentCheck(sharing: ShareAdapter): ShareAdapter {
         return checked === undefined ? { status: 'unavailable' } : share(checked);
       };
 
+  // The bound methods also cover an adapter whose methods live on a prototype,
+  // which the spread does not copy.
   return {
+    ...sharing,
     ...(checkedShare === undefined ? {} : { share: checkedShare }),
     ...(readInboundShare === undefined ? {} : { readInboundShare }),
   };
