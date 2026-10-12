@@ -555,6 +555,9 @@ describe('createCapacitorPlayBillingStoreSdk', () => {
     expect(await sdk.getAvailability()).toBe('temporarily-unavailable');
     await expect(sdk.getAvailablePurchases({}))
       .rejects.toMatchObject({ code: 'PLAY_BILLING_NETWORK_ERROR' });
+    // A shell built without the native plugin answers Capacitor's UNIMPLEMENTED.
+    plugin.failure = () => Object.assign(new Error('not implemented'), { code: 'UNIMPLEMENTED' });
+    expect(await sdk.getAvailability()).toBe('configuration-required');
     plugin.failure = undefined;
 
     const unsold = createCapacitorPlayBillingStoreSdk({

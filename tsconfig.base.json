@@ -30,6 +30,7 @@
       "@mpgd/adapter-browser/microsoft-store-native": ["./adapters/browser/src/microsoft-store-native.ts"],
       "@mpgd/adapter-ait/package.json": ["./adapters/ait/package.json"],
       "@mpgd/adapter-ait/ad-config": ["./adapters/ait/src/ad-config.ts"],
+      "@mpgd/adapter-ait/iap-config": ["./adapters/ait/src/iap-config.ts"],
       "@mpgd/adapter-ait/authority-fetch": ["./adapters/ait/src/authority-fetch.ts"],
       "@mpgd/adapter-ait/host": ["./adapters/ait/src/host.ts"],
       "@mpgd/adapter-ait/safe-area": ["./adapters/ait/src/safe-area.ts"],
@@ -71,6 +72,8 @@
       "@mpgd/adapter-*": ["./adapters/*/src"],
       "@mpgd/backend-*": ["./backend/*/src"],
       "@mpgd/capacitor-game-services": ["./native-plugins/capacitor-game-services/src"],
+      "@mpgd/capacitor-play-billing": ["./native-plugins/capacitor-play-billing/src"],
+      "@mpgd/capacitor-storekit": ["./native-plugins/capacitor-storekit/src"],
       "@mpgd/*": ["./packages/*/src"]
     }
   }

@@ -656,6 +656,16 @@ that set BillingClient's profile identifier must also provide
 when no expected profile is available, and both identifiers are matched when
 the response carries both.
 
+Generated games bind purchases with the reference module
+`src/platform/commerceAccountBinding.ts` (commerce v2 PR C3): Play's
+obfuscated account id is the lowercase hex SHA-256 of
+`mpgd-commerce-account:<playerId>`, and StoreKit's `appAccountToken` is the
+first 16 bytes of the same digest laid out as a version 5 UUID (version
+nibble `5`, variant bits `10`). A backend serving those games derives the
+same values in `resolveObfuscatedAccountId` and `resolveAppAccountToken`
+from the authenticated player id; a game with its own account scheme
+replaces the module and both resolvers together.
+
 The boundary checks the ProductPurchaseV2 purchase state, line-item product id,
 single quantity, remaining refundable quantity, optional order id, provider
 completion timestamp, and configured obfuscated account id before returning

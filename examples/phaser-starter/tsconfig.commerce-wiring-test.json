@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "../..",
+    "types": ["node"]
+  },
+  "include": [
+    "src/platform/commerceAccountBinding.ts",
+    "src/platform/commerceProducts.ts",
+    "src/platform/monetizationJournal.ts",
+    "src/platform/commerceWiring.test.ts"
+  ]
+}

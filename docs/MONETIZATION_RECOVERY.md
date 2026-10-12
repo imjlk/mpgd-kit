@@ -109,12 +109,28 @@ This contract and its mock tests do not prove that a native Billing, StoreKit, o
 The private starter and newly generated games construct one game-owned runtime
 above their scenes. Supply `bootstrapStarter({ monetization: { operationStore,
 reconciliation, purchasePresentation } })` in the private example, or provide
-those bootstrap options in a generated game's entrypoint. The operation store
-is application-owned and must satisfy the durability, encryption and CAS
-requirements above. No in-memory production fallback is installed. Without a
-recovery journal, versioned rewarded display remains policy-disabled before
-the SDK call. Backend URL/auth and independent server authorities are still
-required; a journal is not grant authority.
+those bootstrap options in a generated game's entrypoint.
+
+Without an `operationStore` the starter installs its reference journal,
+`createStorageMonetizationOperationStore({ storage: gateway.storage })` from
+`src/platform/monetizationJournal.ts` (commerce v2 PR C3), so the reconciler
+and the rewarded-ad recovery always have a durable journal and versioned
+rewarded display is no longer policy-disabled for want of one. It keeps one
+JSON document under `mpgd:monetization-journal` in the platform storage,
+serializes every call so `replace` is a real compare-and-swap inside the
+WebView (the expected revision, the next revision, and the record's player,
+targets, and kind must match), and implements `listRecoverable`,
+`listGranted`, and `findByTransaction`. Open records are never dropped;
+terminal records leave on the next write after 30 days or beyond the 100
+most recently settled (`retentionMs`, `maxTerminalRecords`), which keeps the
+document inside per-value storage limits such as the Devvit bridge's
+256 KiB. A document it cannot parse fails every call instead of being
+replaced, since starting over could verify a purchase twice. The journal is
+durable on the host, but platform storage is not encrypted: a game whose
+host cannot keep that storage private, or that must keep purchase receipts
+encrypted at rest, passes its own encrypted, access-controlled store, which
+must satisfy the rules above. Backend URL/auth and independent server
+authorities are still required; a journal is not grant authority.
 
 The scene receives the coordinated gateway, services and action coordinator.
 It disposes its action view on shutdown, while the game retains late evidence

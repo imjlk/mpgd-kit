@@ -285,7 +285,7 @@ pnpm exec mpgd target init capacitor --game . \
   --app-id dev.example.mygame --display-name "My Game" \
   --icon-source public/icon.png \
   --backend-url https://api.example.com \
-  --providers identity,game-platform
+  --providers play-billing,storekit,identity
 ```
 
 Run with `--dry-run` first to see managed file changes without installing or
@@ -302,9 +302,34 @@ native project whose app ID differs, or a dynamic Capacitor config whose
 identity and web directory cannot be checked safely. Existing file permissions
 are retained when managed content changes. If `cap add` created an
 incomplete `android` or `ios` directory, repair or remove only that game-owned
-directory before retrying; the initializer refuses to replace it. `--providers` records selection
-metadata only; it neither installs provider SDKs nor declares a capability
-available. Backend and provider implementations still belong to the game.
+directory before retrying; the initializer refuses to replace it.
+
+`--providers` takes comma-separated ids and records all of them in
+`mpgd.native-shell.json`. Two ids also install a kit store plugin:
+`play-billing` (`@mpgd/capacitor-play-billing`, Android) and `storekit`
+(`@mpgd/capacitor-storekit`, iOS). For each, the initializer pins one exact
+version in the shell package and the game package (the game's installed copy
+when it has one, otherwise the version this CLI release ships with), lets the
+shell install and `cap add` or `cap sync` register the native code, and
+records the pin under `providers` in the manifest. It refuses a store id
+when the game has no matching `android` or `ios` target, a plugin the game
+declares but has not installed, a shell that pins another version than the
+game, and an installed plugin whose `@mpgd/adapter-capacitor` or
+`@mpgd/platform` peer the game's kit packages do not satisfy (run
+`mpgd kit upgrade` first). The gateway files are wired only when they are
+still the unwired gateway earlier templates generated: the initializer then
+writes the template's `capacitorAndroid.ts` or `capacitorIos.ts` and the
+`commerceProducts.ts` and `commerceAccountBinding.ts` modules they import
+(when the game has none). A gateway the game changed is never rewritten; the
+initializer prints a warning naming the factory to register instead, and
+likewise warns when the shell keeps a store plugin that is no longer
+requested (it never uninstalls one). The dry run lists every file it would
+write, including game sources, and the plugins it would install. Other ids
+(`identity`, `game-platform`, ...) stay selection metadata: nothing installs
+or enables them. `--providers` is rejected for every target other than
+`capacitor`. A store plugin never grants anything: purchases are verified by
+the game-owned backend through the commerce v2 reconciler, so a production
+build still needs the backend's evidence entries and account binding.
 For a newly added iOS project, the initializer also writes a shared App archive
 scheme tied to the generated App target. Preserved iOS projects must already
 have a matching shared scheme and Release plist identity placeholders; the
@@ -333,6 +358,44 @@ alias continue to select `web-preview`. A configured `web` target, or any other
 explicitly configured target with `kind: "web"`, is passed to `target build`,
 `target smoke`, and their matrix variants unchanged. This supports independent
 browser deployments without adding deployment-specific names to the kit.
+
+### Store products from the catalog
+
+Commerce v2 (RFC PR C3) wires every store target from one catalog:
+`platformProductIds[<key>]` of each product in the game's `catalog.json`
+(`MPGD_PRODUCT_CATALOG_FILE`, or the `@mpgd/catalog` default) is that
+product's SKU for the store, and a product without a key is not sold there.
+
+| Key | Read by | Shape |
+| --- | --- | --- |
+| `android` | `buildGateways/capacitorAndroid.ts`: `createCapacitorPlayBillingServiceProvider({ products })` | `{ logicalId, storeSku, kind }`; subscriptions skipped |
+| `ios` | `buildGateways/capacitorIos.ts`: `createCapacitorStoreKitServiceProvider({ products })` | `{ logicalId, storeSku, kind }`; subscriptions skipped |
+| `ait` | the Apps in Toss wrapper (`apps/target-ait/vite.config.ts`): `extractAitIapProductConfig` from `@mpgd/adapter-ait/iap-config` | `AitIapProductConfig` `{ productId, sku }` for `installAitHostBridge({ iapProducts })` |
+| `reddit` | the Devvit server: `createDevvitCommerceBridgeProducts`; the webview: `createDevvitCommerceProducts` (both `@mpgd/adapter-devvit`) | `{ productId, sku }` for `createDevvitCommerceV2BridgeHandler`; `DevvitCommerceProduct` for the gateway |
+| `microsoft-store` | `buildGateways/microsoftStore.ts`: `createMicrosoftStoreCommerceProvider({ products })` | Partner Center add-on id as `inAppOfferToken`; consumables only |
+| `verse8` | `buildGateways/verse8.ts`: `createVerse8CommerceProducts` | VXShop product ids |
+
+`gameServices.ts` also hands every product, with its kind and the SKU for the
+build's target, to the reconciler (`createGameServicesRuntime({
+commerceProducts })`), so a store purchase resolves its catalog kind without
+a store read. The Apps in Toss and Devvit host lists always read the `ait`
+and `reddit` keys, whatever the deployment target is called; the webview's
+Devvit products read `reddit` too, so both sides agree. `pnpm
+validate:catalog` derives both host lists and rejects a subscription with an
+`ait` or `reddit` SKU and a blank, padded, or duplicate SKU, and `pnpm
+validate:effective-config` rejects an IAP-enabled `ait` or `reddit` target
+whose effective products or SKUs differ from its host list. Derivation never
+enables selling: the Apps in Toss wrapper still needs its server hooks
+(`prepareIap`, `verifyIapProductGrant`, `readIapEntitlements`), the Devvit
+server needs `permissions.payments` and a `payments` block whose SKUs match
+the `reddit` keys and whose `endpoints.fulfillOrder` names the handler that
+writes the ledger grant, and every store needs the backend evidence entries.
+
+The starter journals every purchase and rewarded ad in
+`createStorageMonetizationOperationStore` (`src/platform/monetizationJournal.ts`),
+the reference durable journal over `gateway.storage`, unless the game passes
+its own `operationStore`. See [Recovering purchases and rewarded
+ads](MONETIZATION_RECOVERY.md#phaser-starter-assembly).
 
 ### Direct-file offline test play
 

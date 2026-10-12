@@ -721,6 +721,12 @@ async function settled(): Promise<void> {
     'temporarily-unavailable',
     'a lookup outage is temporary',
   );
+  plugin.productsError = Object.assign(new Error('not implemented'), { code: 'UNIMPLEMENTED' });
+  assertEqual(
+    await availability.call(sdk),
+    'configuration-required',
+    'a shell without the native plugin is a configuration problem',
+  );
   plugin.productsError = undefined;
   const web = createSdk({ plugin, isIos: () => false }).sdk;
   assertEqual(await web.getAvailability?.(), 'unsupported', 'StoreKit is iOS only');

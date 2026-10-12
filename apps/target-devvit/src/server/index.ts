@@ -1,17 +1,46 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import { context, createServer, getServerPort, reddit, redis } from '@devvit/web/server';
+import { context, createServer, getServerPort, payments, reddit, redis } from '@devvit/web/server';
 import type { UiResponse } from '@devvit/web/shared';
+import {
+  createDevvitCommerceBridgeProducts,
+  createDevvitCommerceV2BridgeHandler,
+} from '@mpgd/adapter-devvit/server';
 import { createBridgeRpcRouter, defaultBridgeRpcEndpoint } from '@mpgd/bridge/orpc';
 import { createBridgeRpcNodeHandler } from '@mpgd/bridge/orpc/node';
+import type { ProductCatalog } from '@mpgd/catalog';
+import productCatalogJson from '@mpgd/catalog/catalog.json';
 
+import devvitManifest from '../../devvit.json';
 import { createDevvitBridgeHandler } from './bridge.js';
 
 const maxRequestBodySize = 1_048_576;
+/**
+ * Commerce v2 opt-in: the catalog's Reddit SKUs (`platformProductIds.reddit`),
+ * the `payments` plugin (`permissions.payments` in devvit.json), and a
+ * fulfillment endpoint (`payments.endpoints.fulfillOrder`, the handler that
+ * writes the backend ledger entry) must all be present. Otherwise the bridge
+ * keeps every `commerce.v2.*` method failing closed with
+ * `COMMERCE_V2_UNAVAILABLE`, so no checkout opens for an order nothing could
+ * grant. The handler only lists orders and products; the grant stays with the
+ * fulfillment handler's ledger entry.
+ */
+const commerceProducts = createDevvitCommerceBridgeProducts(productCatalogJson as ProductCatalog);
+const fulfillOrderEndpoint = (devvitManifest as {
+  readonly payments?: { readonly endpoints?: { readonly fulfillOrder?: unknown } };
+}).payments?.endpoints?.fulfillOrder;
+const commerceEnabled = devvitManifest.permissions.payments === true
+  && typeof fulfillOrderEndpoint === 'string'
+  && fulfillOrderEndpoint.trim().length > 0
+  && commerceProducts.length > 0;
+const commerce = commerceEnabled
+  ? createDevvitCommerceV2BridgeHandler({ payments, products: commerceProducts })
+  : undefined;
 const handleBridgeRequest = createDevvitBridgeHandler({
   redis,
   currentPlayerId,
   currentDisplayName,
+  ...(commerce === undefined ? {} : { commerce }),
 });
 const bridgeRpcHandler = createBridgeRpcNodeHandler(createBridgeRpcRouter(handleBridgeRequest), {
   maxBodySize: maxRequestBodySize,
@@ -119,6 +148,11 @@ server.on('error', (error) => {
 
 server.listen(port, () => {
   console.log(`devvit server listening on ${port}`);
+  console.log(
+    commerceEnabled
+      ? `devvit commerce v2 serving ${commerceProducts.length} catalog product(s) over the payments plugin`
+      : 'devvit commerce v2 disabled: needs permissions.payments, payments.endpoints.fulfillOrder, and reddit SKUs in the catalog',
+  );
 });
 
 function errorMessage(error: unknown): string {

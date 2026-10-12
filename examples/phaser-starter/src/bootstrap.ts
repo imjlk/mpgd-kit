@@ -98,7 +98,14 @@ export async function bootstrapStarter(options: { readonly monetization?: Starte
     });
     gameRuntime = ownedRuntime;
     const gameServices = ownedRuntime.services;
-    await ownedRuntime.reconcile();
+    try {
+      await ownedRuntime.reconcile();
+    } catch (error) {
+      // A journal the platform storage cannot read must not stop the game:
+      // recovery runs again on resume, and purchases and rewarded ads fail
+      // closed until the journal is readable.
+      console.error('[game-services] startup recovery failed', error);
+    }
 
     createStarterGame({
       mountId: 'game',

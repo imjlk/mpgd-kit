@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { DOMParser, type Document, type Element } from '@xmldom/xmldom';
+import { satisfies, valid } from 'semver';
 
 import { isNonPublicServiceHostname } from './production-target-readiness.js';
 import {
@@ -53,14 +54,105 @@ interface PlannedFile {
   readonly content: string;
 }
 
+/**
+ * A provider id that names a kit native store plugin. `--providers` installs
+ * the plugin package into the game-owned shell (where `cap add` or `cap sync`
+ * registers its native code), declares it in the game (where the Vite bundle
+ * imports it from the gateway file), and wires the gateway when the game still
+ * has the unwired template gateway; any other id stays selection metadata.
+ */
+export interface CapacitorShellProviderPlugin {
+  readonly id: string;
+  readonly packageName: string;
+  /** The plugin's directory in a kit checkout, read when the game has not installed it yet. */
+  readonly packageDir: string;
+  /** The native platform, which is also the canonical `mpgd.targets.json` target name. */
+  readonly platform: 'android' | 'ios';
+  /** The game gateway file expected to register the plugin's service provider. */
+  readonly gatewayFile: string;
+  readonly gatewayFactory: string;
+  /**
+   * Gateway sources the initializer may replace with the template's wired
+   * gateway: the unwired gateway earlier templates generated. Any other
+   * source is game-owned and only checked.
+   */
+  readonly legacyGatewaySources: readonly string[];
+}
+
+const unwiredCapacitorGateway = (target: 'android' | 'ios'): string => [
+  "import { createCapacitorPlatformGateway } from '@mpgd/adapter-capacitor';",
+  "import type { PlatformGateway } from '@mpgd/platform';",
+  '',
+  "import type { RuntimeConfig } from '../runtimeDetector';",
+  '',
+  'export async function createBuildGateway(runtime: RuntimeConfig): Promise<PlatformGateway> {',
+  '  return createCapacitorPlatformGateway({',
+  `    target: '${target}',`,
+  '    appVersion: runtime.appVersion,',
+  '    buildId: runtime.buildId,',
+  '  });',
+  '}',
+  '',
+].join('\n');
+
+export const capacitorShellProviderPlugins: readonly CapacitorShellProviderPlugin[] = Object.freeze(
+  [
+    {
+      id: 'play-billing',
+      packageName: '@mpgd/capacitor-play-billing',
+      packageDir: 'native-plugins/capacitor-play-billing',
+      platform: 'android',
+      gatewayFile: 'src/platform/buildGateways/capacitorAndroid.ts',
+      gatewayFactory: 'createCapacitorPlayBillingServiceProvider',
+      legacyGatewaySources: [unwiredCapacitorGateway('android')],
+    },
+    {
+      id: 'storekit',
+      packageName: '@mpgd/capacitor-storekit',
+      packageDir: 'native-plugins/capacitor-storekit',
+      platform: 'ios',
+      gatewayFile: 'src/platform/buildGateways/capacitorIos.ts',
+      gatewayFactory: 'createCapacitorStoreKitServiceProvider',
+      legacyGatewaySources: [unwiredCapacitorGateway('ios')],
+    },
+  ],
+);
+
+/**
+ * Game modules the wired template gateways import. They are written next to a
+ * replaced legacy gateway when missing; a game-owned copy that differs from
+ * the template keeps the legacy gateway in place.
+ */
+export const capacitorShellProviderSupportFiles: readonly string[] = Object.freeze([
+  'src/platform/commerceProducts.ts',
+  'src/platform/commerceAccountBinding.ts',
+]);
+
+/** A plugin the plan installs, with the exact version the shell and the game pin. */
+export interface CapacitorShellPlannedProviderPlugin extends CapacitorShellProviderPlugin {
+  readonly version: string;
+  /** `installed`: the game's copy; `kit`: the version this CLI release ships with. */
+  readonly versionSource: 'installed' | 'kit';
+}
+
 export interface CapacitorShellStarterInput {
   readonly gameRoot: string;
   readonly appId: string;
   readonly displayName: string;
   readonly iconSource?: string;
   readonly backendUrl?: string;
-  /** Selection metadata only; a provider SDK is not installed or enabled here. */
+  /**
+   * Requested provider ids. The ids in `capacitorShellProviderPlugins`
+   * (`play-billing`, `storekit`) install their native plugin package into the
+   * shell and the game; other ids are recorded as selection metadata only.
+   */
   readonly providerIds?: readonly string[];
+  /**
+   * The CLI's game template. With it a legacy, unwired Android or iOS gateway
+   * is replaced by the template's store-provider wiring; without it the plan
+   * only checks the gateway and warns.
+   */
+  readonly templateRoot?: string;
 }
 
 export interface CapacitorShellStarterPlan {
@@ -69,6 +161,15 @@ export interface CapacitorShellStarterPlan {
   readonly changedFiles: readonly string[];
   readonly nativePlatformsToAdd: readonly ('android' | 'ios')[];
   readonly files: readonly PlannedFile[];
+  /** Native store plugins the plan installs into the shell and declares in the game. */
+  readonly providerPlugins: readonly CapacitorShellPlannedProviderPlugin[];
+  /**
+   * Store wiring the plan could not write or confirm: a missing or game-owned
+   * gateway that does not register the plugin, or a store plugin the shell
+   * keeps although it is no longer requested. Printed; game source is never
+   * rewritten for these.
+   */
+  readonly warnings: readonly string[];
 }
 
 /**
@@ -170,6 +271,15 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     'CLI TypeScript version',
   );
   const targetMap = requireObject(targets.targets, 'targets');
+  for (const plugin of capacitorShellProviderPlugins) {
+    if (providerIds.includes(plugin.id) && targetMap[plugin.platform] === undefined) {
+      throw new Error(
+        `--providers ${plugin.id} installs the ${plugin.platform} store plugin into the native `
+          + `shell, but mpgd.targets.json has no ${plugin.platform} target. Add the `
+          + `capacitor-${plugin.platform} target before requesting store providers.`,
+      );
+    }
+  }
   for (const [targetName, kind, identityKey] of [
     ['android', 'capacitor-android', 'packageId'],
     ['ios', 'capacitor-ios', 'bundleId'],
@@ -239,17 +349,60 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
       || existingManifest.displayName !== input.displayName)) {
     throw new Error('Existing native shell identity differs; refusing to overwrite it.');
   }
-  const requestedProviderIds = input.providerIds === undefined
+  const requestedProviderIds: readonly string[] = input.providerIds === undefined
     && Array.isArray(existingManifest?.requestedProviderIds)
-    ? existingManifest.requestedProviderIds : providerIds;
+    ? existingManifest.requestedProviderIds.filter(
+        (id): id is string => typeof id === 'string',
+      )
+    : providerIds;
   const requestedBackendUrl = backendUrl ?? (typeof existingManifest?.backendUrl === 'string'
     ? existingManifest.backendUrl : undefined);
+  // Store plugins are pinned to one exact version in the shell and the game:
+  // the game's installed copy when it has one, otherwise the version this CLI
+  // release ships with, which the plan adds to the game as well. The Vite
+  // bundle imports the plugin from the gateway file, and its native code must
+  // match that JavaScript.
+  const providerPlugins: CapacitorShellPlannedProviderPlugin[] = capacitorShellProviderPlugins
+    .filter((plugin) => requestedProviderIds.includes(plugin.id))
+    .map((plugin) => resolveProviderPlugin(gameRoot, gameDependencies, cliDevelopmentDependencies, plugin));
+  const warnings: string[] = [];
+  const gatewayFiles = planProviderGatewayWiring(
+    gameRoot,
+    input.templateRoot,
+    providerPlugins,
+    warnings,
+  );
+  if (packageContent !== undefined) {
+    const existingShellDependencies = requireObject(
+      parseJsonObject(packageContent, 'existing shell package').dependencies,
+      'existing shell dependencies',
+    );
+    for (const plugin of capacitorShellProviderPlugins) {
+      if (
+        existingShellDependencies[plugin.packageName] !== undefined
+        && !providerPlugins.some((planned) => planned.id === plugin.id)
+      ) {
+        warnings.push(
+          `The shell still lists ${plugin.packageName} although ${plugin.id} is no longer `
+            + 'requested; the initializer never removes a store plugin, so remove it from the '
+            + 'shell package and resync if the game stopped selling there.',
+        );
+      }
+    }
+  }
+  const shellDependencies: Record<string, string> = {
+    '@capacitor/android': capacitorVersion,
+    '@capacitor/app': appVersion,
+    '@capacitor/core': capacitorVersion,
+    '@capacitor/ios': capacitorVersion,
+    '@mpgd/capacitor-game-services': pluginVersion,
+    ...Object.fromEntries(providerPlugins.map((plugin) => [plugin.packageName, plugin.version])),
+  };
   if (packageContent !== undefined) {
     assertCompatibleExistingPackage(
       packageContent,
+      shellDependencies,
       capacitorVersion,
-      appVersion,
-      pluginVersion,
       typescriptVersion,
     );
   }
@@ -278,28 +431,24 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     { path: 'mpgd.targets.json', content: json(targets) },
     {
       path: `${shellPath}/package.json`,
-      content: packageContent ?? json({
-        name: `${gamePackageName}-native-shell`,
-        private: true,
-        version: '0.0.0',
-        type: 'module',
-        scripts: {
-          cap: 'cap',
-          'sync:android': 'cap sync android',
-          'sync:ios': 'cap sync ios',
-        },
-        dependencies: {
-          '@capacitor/android': capacitorVersion,
-          '@capacitor/app': appVersion,
-          '@capacitor/core': capacitorVersion,
-          '@capacitor/ios': capacitorVersion,
-          '@mpgd/capacitor-game-services': pluginVersion,
-        },
-        devDependencies: {
-          '@capacitor/cli': capacitorVersion,
-          typescript: typescriptVersion,
-        },
-      }),
+      content: packageContent === undefined
+        ? json({
+            name: `${gamePackageName}-native-shell`,
+            private: true,
+            version: '0.0.0',
+            type: 'module',
+            scripts: {
+              cap: 'cap',
+              'sync:android': 'cap sync android',
+              'sync:ios': 'cap sync ios',
+            },
+            dependencies: shellDependencies,
+            devDependencies: {
+              '@capacitor/cli': capacitorVersion,
+              typescript: typescriptVersion,
+            },
+          })
+        : withPackageDependencies(packageContent, providerPlugins),
     },
     {
       path: `${shellPath}/capacitor.config.ts`,
@@ -326,6 +475,18 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
         appId: input.appId,
         displayName: input.displayName,
         requestedProviderIds,
+        ...(providerPlugins.length === 0
+          ? {}
+          : {
+              providers: Object.fromEntries(providerPlugins.map((plugin) => [
+                plugin.id,
+                {
+                  package: plugin.packageName,
+                  version: plugin.version,
+                  platform: plugin.platform,
+                },
+              ])),
+            }),
         ...(requestedBackendUrl === undefined ? {} : { backendUrl: requestedBackendUrl }),
       }),
     },
@@ -342,8 +503,11 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
         'Existing native files, signing settings, and custom',
         'ViewControllers are never replaced by mpgd target init capacitor.',
         '',
-        'requestedProviderIds is selection metadata only: it does not install an',
-        'SDK or report a feature as available. Register provider modules explicitly.',
+        'requestedProviderIds is selection metadata, except play-billing and',
+        'storekit: those install the kit store plugin into this shell and the game',
+        'and register it with cap sync. A plugin never reports a feature as',
+        'available on its own; the gateway registers the store provider, and the',
+        'store answers configuration-required until the plugin and products exist.',
         'Production builds require a real game-owned backend when grants are enabled.',
         '',
       ].join('\n'),
@@ -395,6 +559,28 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
         : current,
     });
   }
+  requestedFiles.push(...gatewayFiles);
+  // The game bundle imports the plugin from its gateway file, so the game
+  // declares it too, at the shell's exact version; the materializer's game
+  // install picks it up.
+  const missingGameDependencies = providerPlugins.filter(
+    (plugin) => gameDependencies[plugin.packageName] === undefined,
+  );
+  if (missingGameDependencies.length > 0) {
+    safeDestination(gameRoot, 'package.json');
+    requestedFiles.push({
+      path: 'package.json',
+      content: json({
+        ...gamePackage,
+        dependencies: {
+          ...gameDependencies,
+          ...Object.fromEntries(
+            missingGameDependencies.map((plugin) => [plugin.packageName, plugin.version]),
+          ),
+        },
+      }),
+    });
+  }
   const nativePlatformsToAdd = (['android', 'ios'] as const).filter((platform) => {
     const nativeDirectory = path.join(gameRoot, shellPath, platform);
     if (!existsSync(nativeDirectory)) {
@@ -421,6 +607,8 @@ export function planCapacitorShellStarter(input: CapacitorShellStarterInput): Ca
     files,
     changedFiles: files.map((file) => file.path),
     nativePlatformsToAdd,
+    providerPlugins,
+    warnings,
   };
 }
 
@@ -571,6 +759,17 @@ export function materializeCapacitorShellStarter(
       requireString(manifest.appId, 'shell app ID'),
       requireString(manifest.displayName, 'shell display name'),
     );
+  }
+  // `cap add` syncs a new project itself; a preserved project needs an explicit
+  // sync so the store plugin's native code joins the shell.
+  for (const platform of ['android', 'ios'] as const) {
+    if (
+      plan.providerPlugins.some((plugin) => plugin.platform === platform)
+      && !plan.nativePlatformsToAdd.includes(platform)
+      && existsSync(path.join(plan.gameRoot, shellPath, platform))
+    ) {
+      runner.run('pnpm', ['--dir', shellPath, 'cap', 'sync', platform], plan.gameRoot);
+    }
   }
   const afterInstall = planCapacitorShellStarter(plan.input);
   if (afterInstall.changedFiles.length > 0 || afterInstall.nativePlatformsToAdd.length > 0) {
@@ -2261,9 +2460,8 @@ function runCommand(command: string, args: readonly string[], cwd: string): void
 
 function assertCompatibleExistingPackage(
   source: string,
+  shellDependencies: Readonly<Record<string, string>>,
   capacitorVersion: string,
-  appVersion: string,
-  pluginVersion: string,
   typescriptVersion: string,
 ): void {
   const value = parseJsonObject(source, 'existing shell package');
@@ -2271,13 +2469,22 @@ function assertCompatibleExistingPackage(
     throw new Error('Existing Capacitor shell package must stay private.');
   }
   const dependencies = requireObject(value.dependencies, 'existing shell dependencies');
-  for (const [name, version] of Object.entries({
-    '@capacitor/android': capacitorVersion,
-    '@capacitor/app': appVersion,
-    '@capacitor/core': capacitorVersion,
-    '@capacitor/ios': capacitorVersion,
-    '@mpgd/capacitor-game-services': pluginVersion,
-  })) {
+  const providerPackages = new Set(
+    capacitorShellProviderPlugins.map((plugin) => plugin.packageName),
+  );
+  for (const [name, version] of Object.entries(shellDependencies)) {
+    // A store plugin the shell does not list yet is added by the plan. One it
+    // lists at another version would compile native code that does not match
+    // the game's JavaScript, so it is refused like any other pinned package.
+    if (providerPackages.has(name) && dependencies[name] === undefined) {
+      continue;
+    }
+    if (providerPackages.has(name) && dependencies[name] !== version) {
+      throw new Error(
+        `Existing shell ${name} is ${String(dependencies[name])} but the game uses ${version}; `
+          + 'align the shell package with the game before rerunning.',
+      );
+    }
     if (dependencies[name] !== version) {
       throw new Error(`Existing shell ${name} differs; refusing to rewrite dependencies.`);
     }
@@ -2567,6 +2774,182 @@ function assertNotSymlink(file: string): void {
       throw error;
     }
   }
+}
+
+/**
+ * Adds the requested store plugins to an existing shell package, keeping every
+ * other field as the game wrote it. The content is unchanged when nothing is
+ * missing, so an untouched shell stays out of the change list.
+ */
+function withPackageDependencies(
+  source: string,
+  plugins: readonly CapacitorShellPlannedProviderPlugin[],
+): string {
+  const value = parseJsonObject(source, 'existing shell package');
+  const dependencies = requireObject(value.dependencies, 'existing shell dependencies');
+  const missing = plugins.filter((plugin) => dependencies[plugin.packageName] === undefined);
+  if (missing.length === 0) {
+    return source;
+  }
+  return json({
+    ...value,
+    dependencies: {
+      ...dependencies,
+      ...Object.fromEntries(missing.map((plugin) => [plugin.packageName, plugin.version])),
+    },
+  });
+}
+
+/**
+ * Resolves one requested store plugin to the exact version the shell and the
+ * game pin: the game's installed copy, or, when the game does not declare the
+ * plugin yet, the version this CLI release ships with (its published dev
+ * dependency, or the plugin package of the kit checkout it runs from). A
+ * declared but uninstalled plugin, or one whose peers the game's installed
+ * kit packages do not satisfy, is refused before anything is written.
+ */
+function resolveProviderPlugin(
+  gameRoot: string,
+  gameDependencies: Readonly<Record<string, unknown>>,
+  cliDevelopmentDependencies: Readonly<Record<string, unknown>>,
+  plugin: CapacitorShellProviderPlugin,
+): CapacitorShellPlannedProviderPlugin {
+  const installedFile = path.join(gameRoot, 'node_modules', plugin.packageName, 'package.json');
+  let version: string;
+  let versionSource: CapacitorShellPlannedProviderPlugin['versionSource'];
+  let peerDependencies: unknown;
+  if (existsSync(installedFile)) {
+    const installed = readJsonObject(installedFile);
+    version = requireString(installed.version, `installed ${plugin.packageName} version`);
+    versionSource = 'installed';
+    peerDependencies = installed.peerDependencies;
+  } else if (gameDependencies[plugin.packageName] !== undefined) {
+    throw new Error(
+      `The game declares ${plugin.packageName} but it is not installed; install game `
+        + 'dependencies before initializing the shell.',
+    );
+  } else {
+    const kitPackageFile = fileURLToPath(
+      new URL(`../../../${plugin.packageDir}/package.json`, import.meta.url),
+    );
+    const kitPackage = existsSync(kitPackageFile) ? readJsonObject(kitPackageFile) : undefined;
+    const published = cliDevelopmentDependencies[plugin.packageName];
+    const known = typeof published === 'string' && valid(published) !== null
+      ? published
+      : kitPackage?.name === plugin.packageName
+        ? kitPackage.version
+        : undefined;
+    if (typeof known !== 'string') {
+      throw new Error(
+        `Provider ${plugin.id} needs ${plugin.packageName}, and this CLI does not know which `
+          + `version to install; add it to the game (pnpm add ${plugin.packageName}) and rerun.`,
+      );
+    }
+    version = known;
+    versionSource = 'kit';
+    peerDependencies = kitPackage?.peerDependencies;
+  }
+  if (valid(version) === null || version.includes('+')) {
+    throw new Error(`${plugin.packageName} must resolve to a concrete version, not ${version}.`);
+  }
+  if (typeof peerDependencies === 'object' && peerDependencies !== null) {
+    // Every declared peer the game has installed must satisfy the plugin's
+    // range (Capacitor core, the bridge, the adapter, and the platform alike),
+    // so an incompatible host is refused before the shell or gateway is written.
+    for (const [peer, range] of Object.entries(
+      peerDependencies as Readonly<Record<string, unknown>>,
+    )) {
+      const peerFile = path.join(gameRoot, 'node_modules', peer, 'package.json');
+      if (typeof range !== 'string' || !existsSync(peerFile)) {
+        continue;
+      }
+      const peerVersion = readJsonObject(peerFile).version;
+      if (typeof peerVersion === 'string' && valid(peerVersion) !== null
+        && !satisfies(peerVersion, range, { includePrerelease: true })) {
+        throw new Error(
+          `Provider ${plugin.id} (${plugin.packageName}@${version}) needs ${peer} ${range}, but `
+            + `the game has ${peerVersion}; upgrade the game's kit packages (mpgd kit upgrade) first.`,
+        );
+      }
+    }
+  }
+  return { ...plugin, version, versionSource };
+}
+
+/**
+ * Plans the gateway wiring for the requested store plugins. A gateway that
+ * already imports the plugin is left alone; a gateway that is still the
+ * unwired template gateway is replaced by the template's wired gateway, with
+ * the support modules it imports written when the game has none; every other
+ * gateway is game-owned, so the plan only warns. Nothing here can enable a
+ * purchase: the wired gateway registers the store provider, and grants still
+ * come from the backend ledger through the reconciler.
+ */
+function planProviderGatewayWiring(
+  gameRoot: string,
+  templateRoot: string | undefined,
+  plugins: readonly CapacitorShellPlannedProviderPlugin[],
+  warnings: string[],
+): PlannedFile[] {
+  const planned = new Map<string, string>();
+  for (const plugin of plugins) {
+    const current = readExisting(safeDestination(gameRoot, plugin.gatewayFile));
+    // Wired means the gateway calls the plugin's service-provider factory; a
+    // type-only or unused import of the package does not register anything.
+    if (current !== undefined && new RegExp(`\\b${plugin.gatewayFactory}\\s*\\(`, 'u').test(current)) {
+      continue;
+    }
+    const register = `register ${plugin.gatewayFactory} from ${plugin.packageName} there so the `
+      + 'shell plugin is used';
+    if (current === undefined) {
+      warnings.push(`${plugin.gatewayFile} is missing; ${register}.`);
+      continue;
+    }
+    const legacy = plugin.legacyGatewaySources.includes(current.replace(/\r\n/gu, '\n'));
+    if (!legacy || templateRoot === undefined) {
+      warnings.push(`${plugin.gatewayFile} does not call ${plugin.gatewayFactory}; ${register}.`);
+      continue;
+    }
+    const support = new Map<string, string>();
+    let kept: string | undefined;
+    for (const file of capacitorShellProviderSupportFiles) {
+      const existing = readExisting(safeDestination(gameRoot, file));
+      const template = readTemplateFile(templateRoot, file);
+      if (existing === undefined) {
+        support.set(file, template);
+      } else if (existing !== template) {
+        kept = file;
+        break;
+      }
+    }
+    if (kept !== undefined) {
+      warnings.push(
+        `${plugin.gatewayFile} was not rewritten because the game-owned ${kept} differs from `
+          + `the template; ${register}.`,
+      );
+      continue;
+    }
+    planned.set(plugin.gatewayFile, readTemplateFile(templateRoot, plugin.gatewayFile));
+    for (const [file, content] of support) {
+      planned.set(file, content);
+    }
+  }
+  return [...planned].map(([file, content]) => ({ path: file, content }));
+}
+
+/** A regular file of the CLI's game template, read without leaving the template root. */
+function readTemplateFile(templateRoot: string, relative: string): string {
+  const root = realpathSync(templateRoot);
+  const file = path.resolve(root, relative);
+  const within = path.relative(root, file);
+  if (within === '' || within.startsWith('..') || path.isAbsolute(within)) {
+    throw new Error(`Game template path escapes the template root: ${relative}`);
+  }
+  if (!existsSync(file) || !lstatSync(file).isFile()
+    || path.relative(root, realpathSync(file)).startsWith('..')) {
+    throw new Error(`Game template file is missing: ${relative}`);
+  }
+  return readFileSync(file, 'utf8');
 }
 
 function resolveInstalledPluginVersion(gameRoot: string, requirement: string): string {

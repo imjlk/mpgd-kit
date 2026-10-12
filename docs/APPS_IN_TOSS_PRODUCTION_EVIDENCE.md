@@ -470,8 +470,30 @@ barriers described above.
   provider emits no `purchaseError`: every checkout outcome is a synchronous
   result.
 
+**Catalog products (commerce v2 PR C3).** The wrapper does not hard-code
+SKUs. `apps/target-ait/vite.config.ts` reads the game catalog named by
+`MPGD_PRODUCT_CATALOG_FILE` (configured with `MPGD_AD_PLACEMENTS_FILE`, as
+for the ad groups; the target build forwards both) with
+`extractAitIapProductConfig` from
+`@mpgd/adapter-ait/iap-config`: one `AitIapProductConfig` `{ productId, sku }`
+per one-time product whose `platformProductIds.ait` names the console SKU,
+with subscriptions skipped and blank, padded, or duplicate SKUs rejected.
+`src/main.ts` passes that list as `installAitHostBridge({ iapProducts })`.
+Products alone sell nothing: until the game supplies `prepareIap`,
+`verifyIapProductGrant`, and `readIapEntitlements`, every purchase and every
+`commerce.v2.*` method fails closed, and the grant callback only confirms
+through the game backend. The generated `buildGateways/ait.ts` needs no
+commerce code, since `createAitPlatformGateway()` exposes `commerceV2` from
+the bridge's event channel, and the game's reconciler gets the same kinds
+and SKUs from `commerceProducts`. `pnpm validate:catalog` derives the list,
+and `pnpm validate:effective-config` rejects an IAP-enabled `ait` target
+whose effective products differ from it. Without a configured catalog file
+the wrapper installs no products, so every purchase fails closed even when
+the game bundle falls back to the `@mpgd/catalog` sample catalog.
+
 The sandbox bridge answers commerce v2 only when it is created with
-`buildId: 'ait-sandbox'` (the starter passes `runtime.buildId`), with an
+`buildId: 'ait-sandbox'` (the starter's `buildGateways/aitSandbox.ts` passes
+`runtime.buildId`, so only `pnpm dev:ait` builds get it), with an
 evidence-only stub for `COINS_100` whose order ids no backend authority knows,
 so a verify request for them fails closed; it exposes the commerce v2 event
 channel only then, so a gateway over any other build has no `commerceV2` and

@@ -1812,6 +1812,56 @@ try {
   unlinkSync(envFile);
   renameSync(backupFile, envFile);
 
+  // A store provider on a preserved shell is installed into the shell and the
+  // game, then registered by `cap sync` for its own platform only.
+  const playBillingFile = path.join(root, 'node_modules/@mpgd/capacitor-play-billing/package.json');
+  const shellPackageFile = path.join(root, 'apps/mobile-capacitor/package.json');
+  const gamePackageBeforeProviders = readFileSync(path.join(root, 'package.json'), 'utf8');
+  const shellPackageBeforeProviders = readFileSync(shellPackageFile, 'utf8');
+  const manifestBeforeProviders = readFileSync(manifestFile, 'utf8');
+  mkdirSync(path.dirname(playBillingFile), { recursive: true });
+  writeFileSync(
+    playBillingFile,
+    JSON.stringify({ name: '@mpgd/capacitor-play-billing', version: '0.2.1' }),
+  );
+  const providerPlan = planCapacitorShellStarter({
+    ...options,
+    providerIds: [...options.providerIds, 'play-billing'],
+  });
+  assert.deepEqual(providerPlan.nativePlatformsToAdd, []);
+  assert.deepEqual([...providerPlan.changedFiles].sort(), [
+    'apps/mobile-capacitor/mpgd.native-shell.json',
+    'apps/mobile-capacitor/package.json',
+    'package.json',
+  ]);
+  assert.match(providerPlan.warnings[0] ?? '', /capacitorAndroid\.ts is missing/u);
+  const providerCommands: string[] = [];
+  materializeCapacitorShellStarter(providerPlan, {
+    run(command, args) {
+      providerCommands.push(`${command} ${args.join(' ')}`);
+    },
+  });
+  assert.deepEqual(providerCommands, [
+    'pnpm install --no-frozen-lockfile',
+    'pnpm --dir apps/mobile-capacitor install --ignore-workspace --no-frozen-lockfile',
+    'pnpm --dir apps/mobile-capacitor cap sync android',
+  ]);
+  assert.equal(
+    (readJson('package.json').dependencies as Record<string, string>)['@mpgd/capacitor-play-billing'],
+    '0.2.1',
+  );
+  assert.equal(
+    (readJson('apps/mobile-capacitor/package.json').dependencies as Record<string, string>)[
+      '@mpgd/capacitor-play-billing'
+    ],
+    '0.2.1',
+  );
+  writeFileSync(path.join(root, 'package.json'), gamePackageBeforeProviders);
+  writeFileSync(shellPackageFile, shellPackageBeforeProviders);
+  writeFileSync(manifestFile, manifestBeforeProviders);
+  unlinkSync(playBillingFile);
+  assert.deepEqual(planCapacitorShellStarter(options).changedFiles, []);
+
   const adapterFile = path.join(root, 'node_modules/@mpgd/adapter-capacitor/package.json');
   renameSync(adapterFile, `${adapterFile}.saved`);
   assert.throws(() => planCapacitorShellStarter(options), /Install game dependencies/u);

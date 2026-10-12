@@ -93,4 +93,57 @@ assert.match(storeKit, /@objc func finishTransaction[\s\S]*?transaction\.finish\
 assert.equal((storeKit.match(/transaction\.finish\(\)/gu) ?? []).length, 1,
   'Only the explicit post-grant method may finish StoreKit transactions');
 
-console.log('Capacitor reference native services fail closed without providers.');
+// Commerce v2 store providers (RFC C3). A shell built without the native
+// plugin answers Capacitor's UNIMPLEMENTED, which both SDKs report as
+// `configuration-required` instead of crashing or offering a purchase.
+for (const [path, label] of [
+  ['native-plugins/capacitor-play-billing/src/store-sdk.ts', 'Play Billing'],
+  ['native-plugins/capacitor-storekit/src/store-sdk.ts', 'StoreKit'],
+]) {
+  const sdk = read(path);
+  assert.match(sdk, /'UNIMPLEMENTED'/u, `${label}: a missing native plugin must map to configuration-required`);
+}
+
+// The reference shell does not bundle a store plugin: `mpgd target init
+// capacitor --providers` installs one into a game-owned shell on request.
+const referenceShell = JSON.parse(read('apps/mobile-capacitor/package.json'));
+for (const name of ['@mpgd/capacitor-play-billing', '@mpgd/capacitor-storekit']) {
+  assert.equal(referenceShell.dependencies?.[name], undefined, `The reference shell must not bundle ${name}`);
+}
+
+// The generated and private starter gateways register the store providers
+// through the plugins' service-provider factories and never finish, consume,
+// or grant on their own; the reconciler does that after the ledger grant.
+const wiredGateways = [
+  ['src/platform/buildGateways/capacitorAndroid.ts', 'createCapacitorPlayBillingServiceProvider', '@mpgd/capacitor-play-billing'],
+  ['src/platform/buildGateways/capacitorIos.ts', 'createCapacitorStoreKitServiceProvider', '@mpgd/capacitor-storekit'],
+];
+for (const root of ['packages/cli/templates/phaser-game', 'examples/phaser-starter']) {
+  for (const [file, factory, packageName] of wiredGateways) {
+    const gateway = read(`${root}/${file}`);
+    assert.ok(gateway.includes(`from '${packageName}'`), `${root}/${file}: must import ${packageName}`);
+    assert.match(gateway, new RegExp(`${factory}\\(\\{`, 'u'), `${root}/${file}: must register ${factory}`);
+    assert.match(gateway, /\n {4}providers,\n/u, `${root}/${file}: must pass the providers to the gateway`);
+    assert.doesNotMatch(
+      gateway,
+      /\b(?:finishTransaction|acknowledgePurchase|consumePurchase|completeProductGrant|grantEntitlement)\s*\(/u,
+      `${root}/${file}: a gateway must never finish or grant a purchase`,
+    );
+  }
+}
+
+// The CLI installs exactly these plugins, each for the platform its native
+// code targets, and wires the same gateway files.
+const shellStarter = read('packages/cli/src/capacitor-shell-starter.ts');
+for (const [file, factory, packageName] of wiredGateways) {
+  const plugin = JSON.parse(read(`native-plugins/${packageName.slice('@mpgd/'.length)}/package.json`));
+  const platform = Object.keys(plugin.capacitor ?? {});
+  assert.equal(platform.length, 1, `${packageName}: must declare exactly one Capacitor platform`);
+  const entry = new RegExp(
+    `packageName: '${packageName}',[\\s\\S]*?platform: '${platform[0]}',\\s*gatewayFile: '${file}',\\s*gatewayFactory: '${factory}'`,
+    'u',
+  );
+  assert.match(shellStarter, entry, `capacitor-shell-starter.ts: ${packageName} must install for ${platform[0]} and wire ${file}`);
+}
+
+console.log('Capacitor reference native services fail closed without providers, and store providers stay opt-in.');

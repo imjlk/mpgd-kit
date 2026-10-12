@@ -310,6 +310,7 @@ validatePhaserTemplateDevvitBridge();
 validatePhaserTemplateDevvitViewModes();
 validatePhaserTemplateDevvitVitePlugin();
 validatePhaserTemplateBuildGateways();
+validatePhaserTemplateCommerceWiring();
 validatePhaserTemplateRuntimeTargets();
 validatePhaserTemplateMicrosoftStorePwa();
 validatePhaserTemplateOrientationPolicy();
@@ -735,6 +736,152 @@ function validatePhaserTemplateBuildGateways(): void {
       "import { createBuildGateway } from '#mpgd-platform-gateway'",
       `${installPath}: build-selected gateway.`,
     );
+  }
+}
+
+/**
+ * Commerce v2 wiring (RFC C3): the modules the gateways and game services
+ * import stay byte-identical between the template and the private starter,
+ * each target registers its provider the way the RFC row describes, no
+ * gateway grants or finishes on its own, and the host sides (the Apps in Toss
+ * wrapper and the Devvit server) read their products from the catalog with a
+ * fail-closed default.
+ */
+function validatePhaserTemplateCommerceWiring(): void {
+  const exampleRoot = 'examples/phaser-starter';
+  const templateRoot = 'packages/cli/templates/phaser-game';
+
+  for (const relativePath of [
+    'src/platform/commerceProducts.ts',
+    'src/platform/commerceAccountBinding.ts',
+    'src/platform/monetizationJournal.ts',
+    'src/platform/verse8Agent8Client.ts',
+  ]) {
+    const examplePath = `${exampleRoot}/${relativePath}`;
+    const templatePath = `${templateRoot}/${relativePath}`;
+    if (!existsSync(examplePath) || !existsSync(templatePath)) {
+      failures.push(`${templatePath}: required next to ${examplePath} for commerce v2 wiring.`);
+      continue;
+    }
+    if (readText(examplePath) !== readText(templatePath)) {
+      failures.push(`${templatePath}: must stay in parity with ${examplePath}.`);
+    }
+  }
+
+  const requiredWiring: Readonly<Record<string, readonly string[]>> = {
+    'src/platform/buildGateways/capacitorAndroid.ts': [
+      'createCapacitorPlayBillingServiceProvider({',
+      'resolveStarterStoreProducts(productCatalog, runtime.configTarget)',
+      'resolvePlayBillingAccountBinding(gateway)',
+      '    providers,\n',
+    ],
+    'src/platform/buildGateways/capacitorIos.ts': [
+      'createCapacitorStoreKitServiceProvider({',
+      'resolveStarterStoreProducts(productCatalog, runtime.configTarget)',
+      'resolveStoreKitAppAccountToken(gateway)',
+      '    providers,\n',
+    ],
+    'src/platform/buildGateways/aitSandbox.ts': [
+      'fallbackBridge: createAitSandboxBridge({ buildId: runtime.buildId })',
+    ],
+    'src/platform/buildGateways/reddit.ts': [
+      'createDevvitCommerceProducts(productCatalog)',
+      'client: createDevvitWebPaymentsClient()',
+      '...(commerce === undefined ? {} : { commerce })',
+    ],
+    'src/platform/buildGateways/verse8.ts': [
+      "purchaseEventAuthority: 'agent8-server'",
+      'listPurchases: () => agent8.listPurchases()',
+    ],
+    'src/platform/buildGateways/microsoftStore.ts': [
+      'createMicrosoftStoreCommerceProvider({',
+      'withMicrosoftStoreCommerceProvider(base, commerce)',
+    ],
+    'src/platform/gameServices.ts': [
+      'createStorageMonetizationOperationStore({ storage: input.gateway.storage })',
+      'commerceProducts: resolveStarterCommerceProducts(productCatalog, input.configTarget)',
+    ],
+  };
+  for (const root of [exampleRoot, templateRoot]) {
+    for (const [relativePath, requiredTexts] of Object.entries(requiredWiring)) {
+      const filePath = `${root}/${relativePath}`;
+      const source = existsSync(filePath) ? readText(filePath) : '';
+      for (const requiredText of requiredTexts) {
+        assertIncludesText(source, requiredText, `${filePath}: commerce v2 wiring.`);
+      }
+      if (relativePath.startsWith('src/platform/buildGateways/')) {
+        for (const forbidden of [
+          /\.finishTransaction\s*\(/u,
+          /\bcompleteProductGrant\s*\(/u,
+          /\bgrantEntitlement\s*\(/u,
+          /\backnowledgePurchase\s*\(/u,
+        ]) {
+          if (forbidden.test(source)) {
+            failures.push(
+              `${filePath}: a gateway must not finish or grant a purchase (${forbidden.source}); the reconciler does after the ledger grant.`,
+            );
+          }
+        }
+      }
+    }
+    const packageJson = readJson(`${root}/package.json`) as {
+      readonly dependencies?: Readonly<Record<string, string>>;
+    };
+    for (const name of ['@mpgd/capacitor-play-billing', '@mpgd/capacitor-storekit']) {
+      if (packageJson.dependencies?.[name] === undefined) {
+        failures.push(
+          `${root}/package.json: must depend on ${name} for the wired native gateways.`,
+        );
+      }
+    }
+  }
+
+  for (const appsRoot of ['apps', `${templateRoot}/apps`]) {
+    const aitMain = readText(`${appsRoot}/target-ait/src/main.ts`);
+    assertIncludesText(
+      aitMain,
+      '...iapBridgeOptions(),',
+      `${appsRoot}/target-ait/src/main.ts: catalog IAP products.`,
+    );
+    assertIncludesText(
+      aitMain,
+      'iapProducts: runtimeConfig.iapProducts',
+      `${appsRoot}/target-ait/src/main.ts: catalog IAP products.`,
+    );
+    const aitVite = readText(`${appsRoot}/target-ait/vite.config.ts`);
+    for (const requiredText of [
+      'readAitIapProducts(process.env.MPGD_PRODUCT_CATALOG_FILE)',
+      'extractAitIapProductConfig(parsed, { sourceLabel: path })',
+    ]) {
+      assertIncludesText(
+        aitVite,
+        requiredText,
+        `${appsRoot}/target-ait/vite.config.ts: catalog IAP products.`,
+      );
+    }
+    const devvitServer = readText(`${appsRoot}/target-devvit/src/server/index.ts`);
+    for (const requiredText of [
+      'createDevvitCommerceBridgeProducts(productCatalogJson as ProductCatalog)',
+      'const commerceEnabled = devvitManifest.permissions.payments === true',
+      "&& typeof fulfillOrderEndpoint === 'string'",
+      '&& commerceProducts.length > 0;',
+      'createDevvitCommerceV2BridgeHandler({ payments, products: commerceProducts })',
+      '...(commerce === undefined ? {} : { commerce }),',
+    ]) {
+      assertIncludesText(
+        devvitServer,
+        requiredText,
+        `${appsRoot}/target-devvit/src/server/index.ts: commerce v2 opt-in.`,
+      );
+    }
+    const devvitManifest = readJson(`${appsRoot}/target-devvit/devvit.json`) as {
+      readonly permissions?: { readonly payments?: unknown };
+    };
+    if (devvitManifest.permissions?.payments !== false) {
+      failures.push(
+        `${appsRoot}/target-devvit/devvit.json: permissions.payments must default to false so Devvit commerce v2 stays an explicit opt-in.`,
+      );
+    }
   }
 }
 

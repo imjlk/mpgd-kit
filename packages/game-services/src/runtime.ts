@@ -15,6 +15,7 @@ import {
 } from './client.js';
 import type { GameServicesLedgerTarget } from './types.js';
 import type { ClientRewardEvidenceRegistry } from './client-reward-evidence.js';
+import type { CommerceReconcilerProduct } from './commerce-reconciler.js';
 import {
   createRecoverableMonetizationClient,
   type MonetizationOperationStore,
@@ -58,6 +59,12 @@ interface CreateGameServicesRuntimeCommonInput {
   /** Durable, compare-and-swap journal for purchase and rewarded-ad recovery. */
   readonly operationStore?: MonetizationOperationStore;
   readonly rewardEvidenceRegistry?: ClientRewardEvidenceRegistry;
+  /**
+   * Catalog kinds and store SKUs the commerce v2 reconciler resolves without a
+   * store read (`CommerceReconcilerProduct`), for example derived from the
+   * product catalog's `platformProductIds` for the gateway target.
+   */
+  readonly commerceProducts?: readonly CommerceReconcilerProduct[];
 }
 
 export type CreateGameServicesRuntimeInput = CreateGameServicesRuntimeCommonInput & (
@@ -149,6 +156,7 @@ export function createGameServicesRuntime(
       : { analyticsSessionId: input.analyticsSessionId }),
     ...(input.now === undefined ? {} : { now: input.now }),
     ...(input.rewardEvidenceRegistry === undefined ? {} : { rewardEvidenceRegistry: input.rewardEvidenceRegistry }),
+    ...(input.commerceProducts === undefined ? {} : { commerceProducts: input.commerceProducts }),
   };
   const monetizationRecovery = input.operationStore === undefined
     ? undefined
