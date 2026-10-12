@@ -248,9 +248,27 @@ export interface CreateCommerceReconcilerInput {
    * without expiry.
    */
   readonly staleLaunchedAfterMs?: number;
+  /**
+   * Minimum time before an event-triggered pass retries a record's backend
+   * or store step: resending a backend-pending request, a verify or finish
+   * that failed in transport, a finalization re-read, or a catalog lookup.
+   * An explicit trigger (`start`, `reconcile`, `restorePurchases`) always
+   * retries. Defaults to one minute; `0` retries on every pass.
+   */
+  readonly retryIntervalMs?: number;
+  /**
+   * How long a running store call keeps its product serialized and its
+   * events waiting. A call that has not answered after this (a store sheet
+   * that never settles) stops deferring: events for the product are
+   * reconciled as they come and a new purchase of it may start. Defaults to
+   * ten minutes.
+   */
+  readonly inFlightTimeoutMs?: number;
 }
 
 export const defaultStaleLaunchedAfterMs = 24 * 60 * 60 * 1000;
+export const defaultRetryIntervalMs = 60 * 1000;
+export const defaultInFlightTimeoutMs = 10 * 60 * 1000;
 
 export interface CommerceReconciler {
   readonly provider: CommerceProvider;
@@ -288,11 +306,19 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   const deploymentTarget = input.deploymentTarget ?? input.target;
   const now = input.now ?? (() => new Date().toISOString());
   const staleLaunchedAfterMs = input.staleLaunchedAfterMs ?? defaultStaleLaunchedAfterMs;
+  const retryIntervalMs = input.retryIntervalMs ?? defaultRetryIntervalMs;
+  const inFlightTimeoutMs = input.inFlightTimeoutMs ?? defaultInFlightTimeoutMs;
   if (typeof playerId !== 'string' || playerId.trim() === '') {
     throw new TypeError('The commerce reconciler requires an authenticated player id.');
   }
   if (!(staleLaunchedAfterMs > 0)) {
     throw new RangeError('staleLaunchedAfterMs must be a positive duration.');
+  }
+  if (!(retryIntervalMs >= 0)) {
+    throw new RangeError('retryIntervalMs must be a non-negative duration.');
+  }
+  if (!(inFlightTimeoutMs > 0)) {
+    throw new RangeError('inFlightTimeoutMs must be a positive duration.');
   }
 
   const listeners = new Set<(event: CommerceReconcilerEvent) => void>();
@@ -324,12 +350,64 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   /** Records seen this session by purchase idempotency key, terminal ones included for matching. */
   const records = new Map<string, CommercePurchaseOperationRecord>();
   const inbox: CommerceEvent[] = [];
-  /** Keys whose `requestPurchase` call is still running; a `requested` record outside it is stale. */
-  const inFlightKeys = new Set<string>();
+  /** The start-time read of the available purchases failed; the next pass retries it. */
+  let initialScanPending = false;
+  /**
+   * Purchase calls whose store call is still running, by key and product; a
+   * `requested` record outside this map is stale, and events for these
+   * products wait until the call journals the store answer.
+   */
+  const inFlightKeys = new Map<string, { readonly logicalId: LogicalProductId; readonly since: number }>();
+  const nowMs = (): number => Date.parse(now());
+  const isInFlight = (idempotencyKey: string): boolean => {
+    const entry = inFlightKeys.get(idempotencyKey);
+    return entry !== undefined && nowMs() - entry.since < inFlightTimeoutMs;
+  };
+  const inFlightProducts = (): Set<LogicalProductId> =>
+    new Set(
+      [...inFlightKeys.entries()]
+        .filter(([key]) => isInFlight(key))
+        .map(([, entry]) => entry.logicalId),
+    );
+  /** Events for an in-flight product, replayed by the pass after the call ends. */
+  const deferred: CommerceEvent[] = [];
+  const defer = (event: CommerceEvent): void => {
+    // A polled provider lists the same purchase on every pass; keep one copy.
+    if (
+      event.type === 'purchaseUpdated'
+      && deferred.some(
+        (waiting) =>
+          waiting.type === 'purchaseUpdated'
+          && waiting.purchase.transactionId === event.purchase.transactionId
+          && waiting.purchase.state === event.purchase.state,
+      )
+    ) {
+      return;
+    }
+    deferred.push(event);
+  };
+  /** Earliest time (ms) an event-triggered pass may retry a record's backend or store step. */
+  const retryAt = new Map<string, number>();
+  const retryLater = (idempotencyKey: string): void => {
+    retryAt.set(idempotencyKey, nowMs() + retryIntervalMs);
+  };
+  /**
+   * The same store purchase: the transaction id, or the token when the store
+   * renames the transaction (Play reports the token key until it assigns an
+   * order id). A store whose ids are unique among unfinished purchases only
+   * (Microsoft Store reuses the add-on id) relies on the provider deriving a
+   * transaction-unique id; until then a repurchase that the store lists under
+   * a finished record's id is journaled only when the game started it.
+   */
+  const samePurchase = (left: StorePurchase, right: StorePurchase): boolean =>
+    left.transactionId === right.transactionId
+    || (left.token !== undefined && left.token === right.token);
   const productCache = new Map<string, CommerceReconcilerProduct>();
   let capabilities: CommerceCapabilities | undefined;
   let unsubscribe: (() => void) | undefined;
   let started = false;
+  /** The start in progress, so overlapping calls share one subscription. */
+  let starting: Promise<void> | undefined;
   let triggerPending = false;
   let running: Promise<void> | undefined;
   let pendingFailure: { readonly error: unknown } | undefined;
@@ -357,8 +435,14 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     return record;
   };
 
-  const readCapabilities = async (): Promise<CommerceCapabilities | undefined> => {
-    if (capabilities !== undefined) {
+  /**
+   * The provider's capability block. Event-triggered passes use the last read;
+   * an explicit trigger (`start`, `reconcile`, `restorePurchases`) reads it
+   * again, since availability can change at runtime. A failed read keeps the
+   * last block.
+   */
+  const readCapabilities = async (refresh = false): Promise<CommerceCapabilities | undefined> => {
+    if (capabilities !== undefined && !refresh) {
       return capabilities;
     }
     try {
@@ -366,7 +450,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       return capabilities;
     } catch (error) {
       fail('capabilities', error);
-      return undefined;
+      return capabilities;
     }
   };
 
@@ -437,6 +521,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     };
     await journal.replace(record.revision, next);
     remember(next);
+    retryAt.delete(next.idempotencyKey);
     emit({ type: 'transition', record: next, previous: record.state });
     return next;
   };
@@ -534,9 +619,9 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     scheduleRun();
   };
 
-  const readAvailable = async (capabilitiesNow: CommerceCapabilities): Promise<void> => {
+  const readAvailable = async (capabilitiesNow: CommerceCapabilities): Promise<boolean> => {
     if (!capabilitiesNow.lifecycle.availablePurchases) {
-      return;
+      return true;
     }
     try {
       const available = await provider.getAvailablePurchases({
@@ -545,8 +630,10 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       for (const purchase of available) {
         inbox.push({ type: 'purchaseUpdated', purchase });
       }
+      return true;
     } catch (error) {
       fail('available', error);
+      return false;
     }
   };
 
@@ -597,8 +684,24 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     let record = [...records.values()].find(
       (candidate) =>
         candidate.store === storeId
-        && candidate.purchase?.transactionId === purchase.transactionId,
+        && candidate.purchase !== undefined
+        && samePurchase(candidate.purchase, purchase),
     );
+    if (record === undefined && journal.findByTransaction !== undefined) {
+      // A terminal record of this transaction (finished, rejected) is not in
+      // memory after a restart; the journal index keeps it from being
+      // verified again under a derived key.
+      const stored = await journal.findByTransaction({
+        playerId,
+        target,
+        deploymentTarget,
+        store: storeId,
+        transactionId: purchase.transactionId,
+      });
+      if (stored !== undefined && isCommercePurchaseOperationRecord(stored) && ownsRecord(stored)) {
+        record = remember(stored);
+      }
+    }
     if (record === undefined) {
       const open = openRecordsFor(product.logicalId);
       if (open.length > 1) {
@@ -612,7 +715,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         return;
       }
       record = open[0];
-      if (record?.purchase !== undefined && record.purchase.transactionId !== purchase.transactionId) {
+      if (record?.purchase !== undefined && !samePurchase(record.purchase, purchase)) {
         // The open attempt already holds another transaction (store-side or
         // backend-side pending): this is a second purchase of the product.
         record = undefined;
@@ -629,6 +732,22 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         token: purchase.token,
       });
       record = await readRecord(idempotencyKey);
+      if (
+        record !== undefined
+        && (record.logicalId !== product.logicalId
+          || (record.purchase !== undefined && !samePurchase(record.purchase, purchase)))
+      ) {
+        // A game key that happens to equal the derived key names another
+        // attempt; the purchase is never attached to it.
+        fail(
+          'match',
+          new Error(
+            `Purchase ${purchase.transactionId} derives key ${idempotencyKey}, which journals another attempt.`,
+          ),
+          idempotencyKey,
+        );
+        return;
+      }
       if (record === undefined) {
         await reserve({
           idempotencyKey,
@@ -661,6 +780,11 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     if (error.code === 'OUTCOME_UNKNOWN' || error.code === 'ALREADY_OWNED') {
       // Not terminal for an attempt: an unfinished purchase may exist, so the
       // record stays open and the available purchases resolve it.
+      return;
+    }
+    if (logicalId === undefined) {
+      // An unattributed error cannot be bound to one attempt; the available
+      // purchases or the launched-attempt expiry decide it.
       return;
     }
     // Only an attempt the store never answered can end on an error event: a
@@ -710,15 +834,22 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   const drive = async (
     initial: CommercePurchaseOperationRecord,
     capabilitiesNow: CommerceCapabilities | undefined,
+    explicit: boolean,
   ): Promise<void> => {
     let record = initial;
     /** Finalization the grant of this drive reported; a later pass re-reads it from the backend. */
     let finalization: 'pending' | 'completed' | undefined;
+    const waitUntil = retryAt.get(record.idempotencyKey);
+    if (!explicit && waitUntil !== undefined && nowMs() < waitUntil) {
+      // An unrelated store event does not retry a backend or store step
+      // inside the interval; an explicit trigger always does.
+      return;
+    }
     try {
       for (;;) {
         switch (record.state) {
           case 'requested':
-            if (inFlightKeys.has(record.idempotencyKey)) {
+            if (isInFlight(record.idempotencyKey)) {
               return;
             }
             // The store answer was never journaled (a crash or a lost write
@@ -732,7 +863,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
             });
             return;
           case 'launched': {
-            if (record.purchase !== undefined || inFlightKeys.has(record.idempotencyKey)) {
+            if (record.purchase !== undefined || isInFlight(record.idempotencyKey)) {
               return;
             }
             const age = Date.parse(now()) - Date.parse(record.updatedAt);
@@ -761,11 +892,13 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
             const request = record.request ?? buildRequest(record);
             const response = await sendVerify(record, request);
             if (response === undefined) {
+              retryLater(record.idempotencyKey);
               return;
             }
             if (!response.verified) {
               if (response.disposition === 'pending') {
                 await write(record, 'pending', { request, response });
+                retryLater(record.idempotencyKey);
               } else {
                 await write(record, 'rejected', { request, response });
               }
@@ -806,16 +939,20 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
               return;
             }
             if (owner === 'server') {
+              let reread: VerifyPurchaseResponse | undefined;
               if (finalization === undefined) {
                 // A pass that did not grant resends the saved request to read
                 // finalization; the backend replays the grant, never a second one.
-                const response = await sendVerify(record, record.request ?? buildRequest(record));
-                finalization = response?.verified === true
-                  ? response.finalization?.status
+                reread = await sendVerify(record, record.request ?? buildRequest(record));
+                finalization = reread?.verified === true
+                  ? reread.finalization?.status
                   : undefined;
               }
               if (finalization === 'completed') {
-                await write(record, 'finished');
+                // The re-read is the last backend answer the record reports.
+                await write(record, 'finished', reread === undefined ? {} : { response: reread });
+              } else {
+                retryLater(record.idempotencyKey);
               }
               return;
             }
@@ -840,6 +977,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
                 ),
                 record.idempotencyKey,
               );
+              retryLater(record.idempotencyKey);
               return;
             }
             let finished = false;
@@ -852,10 +990,13 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
             } catch (error) {
               // Transport-class failure: keep `finishing` for the next pass.
               fail('finish', error, record.idempotencyKey);
+              retryLater(record.idempotencyKey);
               return;
             }
             if (finished) {
               await write(record, 'finished');
+            } else {
+              retryLater(record.idempotencyKey);
             }
             return;
           }
@@ -905,17 +1046,44 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     }
   };
 
-  const pass = async (): Promise<void> => {
-    const capabilitiesNow = await readCapabilities();
-    // A provider without lifecycle.events is polled: every pass reads its available purchases.
-    if (capabilitiesNow !== undefined && !capabilitiesNow.lifecycle.events) {
-      await readAvailable(capabilitiesNow);
+  interface PassOptions {
+    /** A start, reconcile, or restore trigger, as opposed to a store event. */
+    readonly explicit: boolean;
+    readonly refreshCapabilities: boolean;
+  }
+
+  const eventPass: PassOptions = { explicit: false, refreshCapabilities: false };
+
+  const pass = async (options: PassOptions): Promise<void> => {
+    const capabilitiesNow = await readCapabilities(options.refreshCapabilities);
+    // A provider without lifecycle.events is polled: every pass reads its
+    // available purchases. An event provider whose start-time read failed is
+    // read again until it succeeds, so a purchase that predates the
+    // subscription is not missed for the session.
+    if (capabilitiesNow !== undefined && (!capabilitiesNow.lifecycle.events || initialScanPending)) {
+      initialScanPending = !(await readAvailable(capabilitiesNow)) && capabilitiesNow.lifecycle.events;
     }
-    for (const event of inbox.splice(0, inbox.length)) {
+    // An event for a product whose store call is still running waits for that
+    // call to journal the store answer: matched then, it is never journaled
+    // twice, and a cancel event ends the attempt the call launched.
+    const busy = inFlightProducts();
+    for (const event of [
+      ...deferred.splice(0, deferred.length),
+      ...inbox.splice(0, inbox.length),
+    ]) {
       try {
         if (event.type === 'purchaseUpdated') {
+          const product = busy.size === 0 ? undefined : await resolveLogicalId(event.purchase);
+          if (product !== undefined && busy.has(product.logicalId)) {
+            defer(event);
+            continue;
+          }
           await ingestPurchase(event.purchase);
         } else if (event.type === 'purchaseError') {
+          if (event.logicalId !== undefined && busy.has(event.logicalId)) {
+            defer(event);
+            continue;
+          }
           await ingestError(event.logicalId, event.error);
         }
       } catch (error) {
@@ -923,7 +1091,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       }
     }
     for (const record of await listRecoverable()) {
-      await drive(records.get(record.idempotencyKey) ?? record, capabilitiesNow);
+      await drive(records.get(record.idempotencyKey) ?? record, capabilitiesNow, options.explicit);
     }
     await revokeReversed();
   };
@@ -953,7 +1121,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     const loop = (async () => {
       while (started && triggerPending) {
         triggerPending = false;
-        await withLock(pass);
+        await withLock(() => pass(eventPass));
       }
     })();
     running = loop.finally(() => {
@@ -977,130 +1145,233 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     return { outcome: 'launched' };
   };
 
-  const requestPurchase = async (request: RequestPurchaseInput): Promise<RequestPurchaseResult> =>
-    withLock(async (): Promise<RequestPurchaseResult> => {
-      if (!started) {
-        await loadRecords();
-      }
-      // A key is never regenerated on retry: the journaled attempt is the answer,
-      // and the store UI opens once per key however many calls overlap.
-      const existing = await readRecord(request.idempotencyKey);
-      if (existing !== undefined) {
-        if (
-          existing.logicalId !== request.logicalId
-          || (existing.input !== undefined && existing.input.source !== request.source)
-        ) {
-          throw new Error('Purchase idempotency key is bound to another product or source.');
-        }
-        return journaled(existing);
-      }
-      const product = await resolveProduct({ logicalId: request.logicalId });
-      if (product === undefined) {
-        return {
-          outcome: 'failed',
-          error: new CommerceError('ITEM_UNAVAILABLE', {
-            message: `Store ${storeId} does not sell ${request.logicalId}.`,
-          }).toCommerceErrorInfo(),
-        };
-      }
-      inFlightKeys.add(request.idempotencyKey);
-      const { created, record } = await reserve({
-        idempotencyKey: request.idempotencyKey,
-        store: storeId,
-        logicalId: product.logicalId,
-        productKind: product.kind,
-        origin: 'game',
-        state: 'requested',
-        input: {
-          productId: product.logicalId,
-          source: request.source,
-          idempotencyKey: request.idempotencyKey,
-        },
-      });
-      if (!created) {
-        return journaled(record);
-      }
-      const failWith = async (error: unknown): Promise<RequestPurchaseResult> => {
-        const info = commerceErrorInfoOf(error);
-        await write(record, 'failed', { error: info });
-        return { outcome: 'failed', error: info };
+  const failedOutcome = (error: unknown): RequestPurchaseResult => ({
+    outcome: 'failed',
+    error: commerceErrorInfoOf(error),
+  });
+
+  type PreparedRequest =
+    | { readonly kind: 'answered'; readonly result: RequestPurchaseResult }
+    | {
+        readonly kind: 'launch';
+        readonly record: CommercePurchaseOperationRecord;
+        readonly product: CommerceReconcilerProduct;
       };
-      const capabilitiesNow = await readCapabilities();
-      if (capabilitiesNow === undefined) {
-        return failWith(new CommerceError('NOT_PREPARED', {
-          message: `The ${storeId} provider capabilities could not be read.`,
-        }));
+
+  /**
+   * Journal work before the store call, under the lock: a journaled key is
+   * answered, a product the store does not sell or a provider that is not
+   * ready is refused without a record (the key stays usable), an open attempt
+   * for the product refuses with IN_PROGRESS without a record, and only a call
+   * that will open the store reserves its record.
+   */
+  const prepareRequest = async (request: RequestPurchaseInput): Promise<PreparedRequest> => {
+    if (!started) {
+      await loadRecords();
+    }
+    // A key is never regenerated on retry: the journaled attempt is the answer,
+    // and the store UI opens once per key however many calls overlap.
+    const existing = await readRecord(request.idempotencyKey);
+    if (existing !== undefined) {
+      if (
+        existing.logicalId !== request.logicalId
+        || (existing.input !== undefined && existing.input.source !== request.source)
+      ) {
+        throw new Error('Purchase idempotency key is bound to another product or source.');
       }
-      try {
-        assertRequestPurchaseSupported(capabilitiesNow, request, product.kind);
-      } catch (error) {
-        return failWith(error);
-      }
-      // Purchases are serialized per player, store, and logical product: an
-      // open attempt for the same product fails this one with IN_PROGRESS, so
-      // a reported purchase matches at most one open record. Overlapping
-      // calls never both reach here: the lock orders them, and the later one
-      // finds the earlier attempt already launched.
-      const open = (await listRecoverable()).filter(
+      return { kind: 'answered', result: journaled(existing) };
+    }
+    const product = await resolveProduct({ logicalId: request.logicalId });
+    if (product === undefined) {
+      return {
+        kind: 'answered',
+        result: failedOutcome(
+          new CommerceError('ITEM_UNAVAILABLE', {
+            message: `Store ${storeId} does not sell ${request.logicalId}.`,
+          }),
+        ),
+      };
+    }
+    const capabilitiesNow = await readCapabilities();
+    if (capabilitiesNow === undefined) {
+      return {
+        kind: 'answered',
+        result: failedOutcome(
+          new CommerceError('NOT_PREPARED', {
+            message: `The ${storeId} provider capabilities could not be read.`,
+          }),
+        ),
+      };
+    }
+    // Purchases are serialized per player, store, and logical product: an
+    // open attempt for the same product, or one whose store call is still
+    // running, refuses this one with IN_PROGRESS, so a reported purchase
+    // matches at most one open record.
+    const open = (await listRecoverable()).filter(
+      (candidate) =>
+        candidate.logicalId === product.logicalId
+        && (isOpen(candidate.state)
+          || (candidate.state === 'requested' && isInFlight(candidate.idempotencyKey))),
+    );
+    if (open.length > 0) {
+      return {
+        kind: 'answered',
+        result: failedOutcome(new CommerceError('IN_PROGRESS', {
+          message: `A purchase of ${product.logicalId} is already in progress (${open[0]?.idempotencyKey}).`,
+        })),
+      };
+    }
+    const { created, record } = await reserve({
+      idempotencyKey: request.idempotencyKey,
+      store: storeId,
+      logicalId: product.logicalId,
+      productKind: product.kind,
+      origin: 'game',
+      state: 'requested',
+      input: {
+        productId: product.logicalId,
+        source: request.source,
+        idempotencyKey: request.idempotencyKey,
+      },
+    });
+    if (!created) {
+      return { kind: 'answered', result: journaled(record) };
+    }
+    try {
+      assertRequestPurchaseSupported(capabilitiesNow, request, product.kind);
+    } catch (error) {
+      // The store does not sell this kind: a definitive answer the journal keeps.
+      const info = commerceErrorInfoOf(error);
+      await write(record, 'failed', { error: info });
+      return { kind: 'answered', result: { outcome: 'failed', error: info } };
+    }
+    // Only a call that opens the store is in flight; the entry is released by
+    // that call's `finally`, so no refused path can leave a product deferred.
+    inFlightKeys.set(request.idempotencyKey, { logicalId: product.logicalId, since: nowMs() });
+    return { kind: 'launch', record, product };
+  };
+
+  /**
+   * Journals what the store answered, under the lock. A journal write that
+   * fails here (a stale attempt another pass ended after a very long sheet)
+   * is reported; the store answer is still returned to the caller.
+   */
+  const recordAnswer = async (
+    request: RequestPurchaseInput,
+    record: CommercePurchaseOperationRecord,
+    product: CommerceReconcilerProduct,
+    result: RequestPurchaseResult,
+  ): Promise<RequestPurchaseResult> => {
+    try {
+      return await journalAnswer(request, record, product, result);
+    } catch (error) {
+      fail('journal', error, record.idempotencyKey);
+      return result;
+    }
+  };
+
+  const journalAnswer = async (
+    request: RequestPurchaseInput,
+    reserved: CommercePurchaseOperationRecord,
+    product: CommerceReconcilerProduct,
+    result: RequestPurchaseResult,
+  ): Promise<RequestPurchaseResult> => {
+    // A sheet open past inFlightTimeoutMs may have been ended by a pass as a
+    // stale attempt; the journal's answer stands, and a purchase the store
+    // reported meanwhile is journaled under its own record.
+    const record = (await readRecord(reserved.idempotencyKey)) ?? reserved;
+    if (record.state !== 'requested') {
+      return journaled(record);
+    }
+    if (result.outcome === 'launched') {
+      await write(record, 'launched');
+    } else if (result.outcome === 'purchased') {
+      const purchase = result.purchase;
+      const launched = await write(record, 'launched');
+      const reported = await resolveLogicalId(purchase);
+      // A record that journals this transaction and is still open, or that
+      // ended after this attempt was reserved, holds the purchase the store
+      // just answered with (an event that arrived first). A record that ended
+      // before the attempt started is an earlier purchase whose id the store
+      // reused (Microsoft Store add-on ids), so this answer is a new purchase.
+      const reservedAt = Date.parse(record.updatedAt);
+      const holder = [...records.values()].find(
         (candidate) =>
           candidate.idempotencyKey !== record.idempotencyKey
-          && candidate.logicalId === product.logicalId
-          && isOpen(candidate.state),
+          && candidate.store === storeId
+          && candidate.purchase !== undefined
+          && samePurchase(candidate.purchase, purchase)
+          && (!isTerminalCommercePurchaseState(candidate.state)
+            || Date.parse(candidate.updatedAt) > reservedAt),
       );
-      if (open.length > 0) {
-        return failWith(new CommerceError('IN_PROGRESS', {
-          message: `A purchase of ${product.logicalId} is already in progress (${open[0]?.idempotencyKey}).`,
-        }));
+      if (holder !== undefined) {
+        // The transaction is verified once, under the holder's key. This
+        // attempt is superseded so the product is not serialized behind it.
+        const error = staleAttemptError(
+          `Purchase ${purchase.transactionId} is journaled as ${holder.idempotencyKey}; this attempt is superseded.`,
+        );
+        await write(launched, 'failed', { error });
+        return { outcome: 'failed', error };
       }
-      let result: RequestPurchaseResult;
-      try {
-        result = await provider.requestPurchase(request);
-      } catch (error) {
-        return failWith(error);
+      if (purchase.store !== storeId || reported?.logicalId !== product.logicalId) {
+        // A synchronous answer for another product is not this attempt's
+        // purchase; the attempt stays open and the available purchases decide.
+        fail(
+          'match',
+          new Error(
+            `The provider answered ${request.idempotencyKey} with purchase ${purchase.transactionId} for ${purchase.store}/${purchase.storeSku}.`,
+          ),
+          record.idempotencyKey,
+        );
+        return { outcome: 'launched' };
       }
-      if (result.outcome === 'launched') {
-        await write(record, 'launched');
-      } else if (result.outcome === 'purchased') {
-        const purchase = result.purchase;
-        const launched = await write(record, 'launched');
-        const reported = await resolveLogicalId(purchase);
-        if (purchase.store !== storeId || reported?.logicalId !== product.logicalId) {
-          // A synchronous answer for another product is not this attempt's
-          // purchase; the attempt stays open and the available purchases decide.
-          fail(
-            'match',
-            new Error(`The provider answered ${request.idempotencyKey} with purchase ${purchase.transactionId} for ${purchase.store}/${purchase.storeSku}.`),
-            record.idempotencyKey,
-          );
-          return { outcome: 'launched' };
-        }
-        if (purchase.state === 'pending') {
-          await write(launched, 'pending', { purchase });
-        } else if (purchase.state === 'purchased') {
-          await write(launched, 'purchased', { purchase });
-        }
+      if (purchase.state === 'pending') {
+        await write(launched, 'pending', { purchase });
+      } else if (purchase.state === 'purchased') {
+        await write(launched, 'purchased', { purchase });
+      }
+    } else {
+      await write(record, result.outcome, { error: result.error });
+    }
+    return result;
+  };
+
+  const requestPurchase = async (request: RequestPurchaseInput): Promise<RequestPurchaseResult> => {
+    let result: RequestPurchaseResult;
+    // Only the call that reserved the record owns its in-flight entry: a
+    // same-key replay must not release it while the store sheet is open.
+    let owned = false;
+    try {
+      const prepared = await withLock(() => prepareRequest(request));
+      if (prepared.kind === 'answered') {
+        result = prepared.result;
       } else {
-        await write(record, result.outcome, { error: result.error });
-      }
-      return result;
-    }).then(
-      async (result) => {
-        inFlightKeys.delete(request.idempotencyKey);
-        trigger();
+        owned = true;
+        // The store call runs outside the lock: the sheet may stay open for
+        // minutes, and events arriving meanwhile are reconciled right away.
+        let answer: RequestPurchaseResult;
         try {
-          await runUntilIdle();
+          answer = await provider.requestPurchase(request);
         } catch (error) {
-          // The store answer is journaled; a pass that failed meanwhile is
-          // reported, not thrown at the caller of a purchase already made.
-          fail('journal', error, request.idempotencyKey);
+          answer = failedOutcome(error);
         }
-        return result;
-      },
-      (error: unknown) => {
+        result = await withLock(() => recordAnswer(request, prepared.record, prepared.product, answer));
+      }
+    } finally {
+      if (owned) {
         inFlightKeys.delete(request.idempotencyKey);
-        throw error;
-      },
-    );
+      }
+    }
+    trigger();
+    try {
+      await runUntilIdle();
+    } catch (error) {
+      // The store answer is journaled; a pass that failed meanwhile is
+      // reported, not thrown at the caller of a purchase already made.
+      fail('journal', error, request.idempotencyKey);
+    }
+    return result;
+  };
 
   return {
     provider,
@@ -1111,29 +1382,52 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       if (started) {
         return;
       }
-      try {
-        await withLock(async () => {
-          await loadRecords();
-          // Subscribe first, then read: an event delivered before the listener is found either way.
-          unsubscribe = provider.subscribe(listener);
-          started = true;
-          const capabilitiesNow = await readCapabilities();
-          // An event-less provider is polled by the first pass instead, so it is read once.
-          if (capabilitiesNow !== undefined && capabilitiesNow.lifecycle.events) {
-            await readAvailable(capabilitiesNow);
-          }
-          trigger();
-        });
-      } catch (error) {
-        // A failed start is retryable: nothing stays subscribed or started.
-        started = false;
-        unsubscribe?.();
-        unsubscribe = undefined;
-        throw error;
+      if (starting !== undefined) {
+        return starting;
       }
-      await runUntilIdle();
+      starting = (async () => {
+        try {
+          await withLock(async () => {
+            await loadRecords();
+            // Subscribe first, then read: an event delivered before the listener is found either way.
+            unsubscribe = provider.subscribe(listener);
+            started = true;
+            const capabilitiesNow = await readCapabilities(true);
+            // An event-less provider is polled by the first pass instead, so it
+            // is read once; a failed read is retried by the next pass.
+            initialScanPending = capabilitiesNow === undefined
+              || (capabilitiesNow.lifecycle.events && !(await readAvailable(capabilitiesNow)));
+            await pass({ explicit: true, refreshCapabilities: false });
+          });
+          await runUntilIdle();
+        } catch (error) {
+          // A failed start is retryable: nothing stays subscribed or started.
+          started = false;
+          unsubscribe?.();
+          unsubscribe = undefined;
+          triggerPending = false;
+          pendingFailure = undefined;
+          inbox.length = 0;
+          deferred.length = 0;
+          records.clear();
+          retryAt.clear();
+          throw error;
+        } finally {
+          starting = undefined;
+        }
+      })();
+      return starting;
     },
     async stop() {
+      // A start still waiting for the lock subscribes later; let it finish so
+      // the teardown below sees its subscription.
+      if (starting !== undefined) {
+        try {
+          await starting;
+        } catch {
+          // The start cleaned up after itself.
+        }
+      }
       started = false;
       unsubscribe?.();
       unsubscribe = undefined;
@@ -1148,14 +1442,16 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       await tail;
       triggerPending = false;
       inbox.length = 0;
+      deferred.length = 0;
       records.clear();
+      retryAt.clear();
     },
     async reconcile() {
       await withLock(async () => {
         if (!started) {
           await loadRecords();
         }
-        await pass();
+        await pass({ explicit: true, refreshCapabilities: true });
       });
       await runUntilIdle();
     },
@@ -1172,12 +1468,12 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         if (!started) {
           await loadRecords();
         }
-        const capabilitiesNow = await readCapabilities();
+        const capabilitiesNow = await readCapabilities(true);
         // A polled provider is read by the pass itself.
         if (capabilitiesNow !== undefined && capabilitiesNow.lifecycle.events) {
           await readAvailable(capabilitiesNow);
         }
-        await pass();
+        await pass({ explicit: true, refreshCapabilities: false });
       });
       await runUntilIdle();
     },

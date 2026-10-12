@@ -97,6 +97,19 @@ export interface MonetizationOperationStore {
    * store without it only reports reversals of grants seen in this session.
    */
   listGranted?(playerId: string): Promise<readonly MonetizationOperationRecord[]>;
+  /**
+   * The commerce v2 record, terminal or not, whose `purchase.transactionId`
+   * is this store transaction. With it a transaction the store lists again
+   * after a restart (an owned durable, a rejected or finished purchase) meets
+   * its own record instead of being verified again under a derived key.
+   */
+  findByTransaction?(input: {
+    readonly playerId: string;
+    readonly target: string;
+    readonly deploymentTarget: string;
+    readonly store: string;
+    readonly transactionId: string;
+  }): Promise<MonetizationOperationRecord | undefined>;
 }
 
 export interface CreateRecoverableMonetizationClientInput extends CreateGameServicesClientInput {

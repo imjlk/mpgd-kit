@@ -150,10 +150,17 @@ export function createGameServicesRuntime(
     ...(input.now === undefined ? {} : { now: input.now }),
     ...(input.rewardEvidenceRegistry === undefined ? {} : { rewardEvidenceRegistry: input.rewardEvidenceRegistry }),
   };
-  const client = createGameServicesClient(clientInput);
   const monetizationRecovery = input.operationStore === undefined
     ? undefined
     : createRecoverableMonetizationClient({ ...clientInput, operationStore: input.operationStore });
+  // The recovery client owns the reconciler over the durable journal; the
+  // plain client shares it instead of journaling in memory.
+  const client = createGameServicesClient({
+    ...clientInput,
+    ...(monetizationRecovery?.commerceReconciler === undefined
+      ? {}
+      : { commerceReconciler: monetizationRecovery.commerceReconciler }),
+  });
   let routedClient = client;
   if (monetizationRecovery !== undefined) {
     routedClient = {

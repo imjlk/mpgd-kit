@@ -50,7 +50,29 @@ confirmed through verify like any other.
   keep the state and are reported through `onEvent` / `subscribe` as
   `failure` events, then retried on the next pass; a client or host finish
   waits until the catalog says whether the product is consumable rather than
-  guessing.
+  guessing. The store call of `requestPurchase` runs outside the journal
+  lock, so events arriving while the store sheet is open are reconciled at
+  once; a refusal before the store call (`IN_PROGRESS`, `NOT_PREPARED`, an
+  unknown product) leaves no record, so the same key opens the sheet on a
+  retry. A backend-pending resend, a verify or finish that failed in
+  transport, a finalization re-read, and a catalog lookup are retried by
+  event-triggered passes at most once per `retryIntervalMs` (default one
+  minute; explicit `start`, `reconcile`, and `restorePurchases` always
+  retry), and the provider capability block is read again on those explicit
+  triggers. Events for a product whose store call is still running wait for
+  that call to journal the store answer (at most `inFlightTimeoutMs`, default
+  ten minutes, after which a sheet that never settles stops deferring), so a
+  purchase reported while the sheet is open is never journaled twice; a
+  synchronous `purchased` answer for a transaction an open record already
+  journals supersedes the attempt (`failed`, `OUTCOME_UNKNOWN`) instead of
+  leaving it open.
+- A gateway with `commerceV2` but no `operationStore` journals in memory for
+  the session and says so once through `warn` (default `console.warn`).
+  `MonetizationOperationStore` also gains the optional
+  `findByTransaction({ playerId, target, deploymentTarget, store, transactionId })`, which lets a
+  transaction the store lists again after a restart (an owned durable, a
+  rejected purchase) meet its terminal record instead of being verified
+  again under a derived key; the in-memory store implements it.
 - `assertCommerceFinishAllowed(record)` is the finish gate: `finishTransaction`
   is only ever called for a `granted` or `finishing` record that holds the
   backend's ledger entry id and a store transaction. The v2 StoreKit SDK keeps

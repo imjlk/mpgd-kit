@@ -745,7 +745,7 @@ const fullClientHistory = [
     'IN_PROGRESS',
     'a second attempt for the same product is refused while one is open',
   );
-  assertEqual(h.history('op-7b'), ['requested', 'failed'], 'the refused attempt is journaled');
+  assertEqual(await h.reconciler.read('op-7b'), undefined, 'the refused attempt leaves no record');
   assertEqual(h.provider.purchaseUiOpened, 1, 'the store UI did not reopen');
   const other = await h.reconciler.requestPurchase({
     logicalId: 'remove_ads',
@@ -1518,6 +1518,7 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   const client = createGameServicesClient({
     gateway: createGateway(provider),
     backend: createBackendApi(backend),
+    warn: () => {},
     playerId: 'player-1',
     target: 'android',
     analytics: { track: (event) => void events.push(event) },
@@ -2049,7 +2050,6 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   });
   h.provider.report(purchaseOf({ transactionId: 'tx-31' }));
   await h.reconciler.runUntilIdle();
-  h.backend.queue({ status: 'pending' });
   h.backend.queue({ status: 'granted', ledgerEntryId: 'le-31b' });
   h.provider.report(purchaseOf({ transactionId: 'tx-31b' }));
   await h.reconciler.runUntilIdle();
@@ -2077,6 +2077,7 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
     gateway: createGateway(provider),
     backend: createBackendApi(backend),
     playerId: 'player-1',
+    warn: () => {},
     target: 'android',
   });
   backend.queue({ status: 'granted', ledgerEntryId: 'le-32' });
@@ -2095,6 +2096,699 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   );
   assertEqual(backend.requests.length, 2, 'the finalization re-read happened');
   await client.commerceReconciler?.stop();
+}
+
+// Pre-merge review fixes.
+
+// 33. The store call runs outside the lock: an event that arrives while the sheet is open is reconciled first.
+{
+  const h = createHarness();
+  await h.reconciler.start();
+  let answer: ((result: RequestPurchaseResult) => void) | undefined;
+  const sheet = new Promise<RequestPurchaseResult>((resolve) => {
+    answer = resolve;
+  });
+  const slowProvider = h.provider;
+  const requestPurchase = slowProvider.requestPurchase;
+  slowProvider.requestPurchase = async (request) => {
+    await requestPurchase.call(slowProvider, request);
+    return sheet;
+  };
+  const inFlight = h.reconciler.requestPurchase({
+    logicalId: 'remove_ads',
+    idempotencyKey: 'op-33',
+    source: 'shop',
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assertEqual(h.history('op-33'), ['requested'], 'the attempt is reserved while the sheet is open');
+  h.backend.queue({ status: 'granted', ledgerEntryId: 'le-33' });
+  h.provider.report(purchaseOf({ transactionId: 'tx-33' }));
+  await h.reconciler.runUntilIdle();
+  assertEqual(
+    h.history('store:fake-store:tx-33').at(-1),
+    'finished',
+    'an unrelated purchase is verified before the store answers',
+  );
+  const blocked = await h.reconciler.requestPurchase({
+    logicalId: 'remove_ads',
+    idempotencyKey: 'op-33b',
+    source: 'shop',
+  });
+  assertEqual(
+    blocked.outcome === 'failed' && blocked.error.code,
+    'IN_PROGRESS',
+    'the product is serialized behind the open sheet',
+  );
+  assertEqual(await h.reconciler.read('op-33b'), undefined, 'and the refused key is not journaled');
+  answer?.({ outcome: 'launched' });
+  assertEqual(
+    (await inFlight).outcome,
+    'launched',
+    'the sheet answer is journaled after the lock is taken again',
+  );
+  assertEqual(h.history('op-33'), ['requested', 'launched'], 'launched');
+  await h.reconciler.stop();
+}
+
+// 34. Refusals before the store call do not burn the game's key; a retry with the same key opens the sheet.
+{
+  const h = createHarness();
+  await h.reconciler.start();
+  await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-34',
+    source: 'shop',
+  });
+  const refused = await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-34b',
+    source: 'shop',
+  });
+  assertEqual(
+    refused.outcome === 'failed' && refused.error.code,
+    'IN_PROGRESS',
+    'refused while op-34 is launched',
+  );
+  assertEqual(await h.reconciler.read('op-34b'), undefined, 'IN_PROGRESS leaves no record');
+  h.provider.emit({
+    type: 'purchaseError',
+    logicalId: 'gems_small',
+    error: { code: 'USER_CANCELLED', retryable: false },
+  });
+  await h.reconciler.runUntilIdle();
+  const retried = await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-34b',
+    source: 'shop',
+  });
+  assertEqual(retried.outcome, 'launched', 'the same key opens the sheet once the product is free');
+  assertEqual(h.history('op-34b'), ['requested', 'launched'], 'journaled on the retry');
+
+  let reads = 0;
+  const notReady = createHarness({
+    provider: createFakeProvider({
+      async getCapabilities() {
+        reads += 1;
+        if (reads < 4) {
+          throw new Error('not ready');
+        }
+        return capabilitiesOf();
+      },
+    }),
+  });
+  await notReady.reconciler.start();
+  const unprepared = await notReady.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-34c',
+    source: 'shop',
+  });
+  assertEqual(
+    unprepared.outcome === 'failed' && unprepared.error.code,
+    'NOT_PREPARED',
+    'not ready',
+  );
+  assertEqual(await notReady.reconciler.read('op-34c'), undefined, 'NOT_PREPARED leaves no record');
+  const ready = await notReady.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-34c',
+    source: 'shop',
+  });
+  assertEqual(ready.outcome, 'launched', 'the same key works once the provider is ready');
+  await notReady.reconciler.stop();
+  await h.reconciler.stop();
+}
+
+// 35. A backend-pending record is not resent by an unrelated event inside the interval; explicit triggers resend.
+{
+  let clock = '2026-10-02T00:00:00.000Z';
+  const h = createHarness({ overrides: { now: () => clock, retryIntervalMs: 60_000 } });
+  h.backend.queue({ status: 'pending' });
+  await h.reconciler.start();
+  await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-35',
+    source: 'shop',
+  });
+  h.provider.report(purchaseOf({ transactionId: 'tx-35' }));
+  await h.reconciler.runUntilIdle();
+  assertEqual(h.backend.requests.length, 1, 'verified once, answered pending');
+  h.backend.queue({ status: 'granted', ledgerEntryId: 'le-35b' });
+  h.provider.report(
+    purchaseOf({ transactionId: 'tx-35b', storeSku: 'remove.ads', logicalId: 'remove_ads' }),
+  );
+  await h.reconciler.runUntilIdle();
+  assertEqual(
+    h.backend.requests.map((request) => request.idempotencyKey),
+    ['op-35', 'store:fake-store:tx-35b'],
+    'the unrelated event did not resend the pending request',
+  );
+  assertEqual(h.history('op-35').at(-1), 'pending', 'still pending, no extra revisions');
+  h.backend.queue({ status: 'pending' });
+  await h.reconciler.reconcile();
+  assertEqual(h.backend.requests.length, 3, 'an explicit reconcile resends inside the interval');
+  clock = '2026-10-02T00:02:00.000Z';
+  h.backend.queue({ status: 'granted', ledgerEntryId: 'le-35' });
+  h.provider.emit({ type: 'purchaseError', error: { code: 'UNKNOWN', retryable: false } });
+  await h.reconciler.runUntilIdle();
+  assertEqual(
+    h.history('op-35').at(-1),
+    'finished',
+    'after the interval an event pass resends and the grant lands',
+  );
+  await h.reconciler.stop();
+}
+
+// 36. A terminal record is matched by transaction after a restart, so a re-listed transaction is not verified again.
+{
+  const store = createInMemoryMonetizationOperationStore();
+  const first = createHarness({ store });
+  first.backend.queue({ status: 'rejected', reason: 'EVIDENCE_INVALID' });
+  await first.reconciler.start();
+  await first.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-36',
+    source: 'shop',
+  });
+  first.provider.report(purchaseOf({ transactionId: 'tx-36' }));
+  await first.reconciler.runUntilIdle();
+  assertEqual(first.history('op-36').at(-1), 'rejected', 'rejected under the game key');
+  await first.reconciler.stop();
+  const second = createHarness({ store });
+  second.provider.available.push(purchaseOf({ transactionId: 'tx-36' }));
+  await second.reconciler.start();
+  assertEqual(second.backend.requests.length, 0, 'the re-listed transaction is not verified again');
+  assertEqual(
+    await second.reconciler.read('store:fake-store:tx-36'),
+    undefined,
+    'no derived record',
+  );
+  assertEqual(second.transitions, [], 'no journal write');
+  await second.reconciler.stop();
+}
+
+// 37. Capabilities are read again on explicit triggers, not on every event.
+{
+  let reads = 0;
+  let availability: CommerceCapabilities['availability'] = 'configuration-required';
+  const h = createHarness({
+    provider: createFakeProvider({
+      async getCapabilities() {
+        reads += 1;
+        return { ...capabilitiesOf(), availability };
+      },
+    }),
+  });
+  await h.reconciler.start();
+  const afterStart = reads;
+  h.provider.emit({ type: 'purchaseError', error: { code: 'UNKNOWN', retryable: false } });
+  await h.reconciler.runUntilIdle();
+  assertEqual(reads, afterStart, 'an event pass uses the cached block');
+  availability = 'available';
+  await h.reconciler.reconcile();
+  assertEqual(reads, afterStart + 1, 'reconcile reads the block again');
+  await h.reconciler.restorePurchases();
+  assertEqual(reads, afterStart + 2, 'restore reads the block again');
+  await h.reconciler.stop();
+}
+
+// 38. A client without an operation store warns once about the session-only journal.
+{
+  const warnings: string[] = [];
+  const client = createGameServicesClient({
+    gateway: createGateway(createFakeProvider()),
+    backend: createBackendApi(createFakeBackend()),
+    playerId: 'player-1',
+    target: 'android',
+    warn: (message) => void warnings.push(message),
+  });
+  assertEqual(warnings.length, 1, 'one warning');
+  assertEqual(warnings[0]?.includes('operationStore'), true, 'naming the missing store');
+  assertEqual(client.commerceReconciler !== undefined, true, 'the reconciler still exists');
+  const silent: string[] = [];
+  createGameServicesClient({
+    gateway: createGateway(createFakeProvider()),
+    backend: createBackendApi(createFakeBackend()),
+    playerId: 'player-1',
+    target: 'android',
+    operationStore: createInMemoryMonetizationOperationStore(),
+    warn: (message) => void silent.push(message),
+  });
+  assertEqual(silent, [], 'no warning with a store');
+}
+
+// Bot review threads on PR #344.
+
+// 39. An unattributed purchaseError never ends an open attempt (CodeRabbit).
+{
+  const h = createHarness();
+  await h.reconciler.start();
+  await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-39',
+    source: 'shop',
+  });
+  h.provider.emit({ type: 'purchaseError', error: { code: 'USER_CANCELLED', retryable: false } });
+  await h.reconciler.runUntilIdle();
+  assertEqual(
+    h.history('op-39'),
+    ['requested', 'launched'],
+    'an error without a product cannot be bound to the attempt',
+  );
+  h.provider.emit({
+    type: 'purchaseError',
+    logicalId: 'gems_small',
+    error: { code: 'USER_CANCELLED', retryable: false },
+  });
+  await h.reconciler.runUntilIdle();
+  assertEqual(h.history('op-39').at(-1), 'cancelled', 'an attributed error does');
+  await h.reconciler.stop();
+}
+
+// 40. A game key equal to a derived key never adopts another transaction (Codex).
+{
+  const h = createHarness();
+  await h.reconciler.start();
+  // The game chose the derived form of tx-40 as its own key for another product.
+  await h.reconciler.requestPurchase({
+    logicalId: 'remove_ads',
+    idempotencyKey: 'store:fake-store:tx-40',
+    source: 'shop',
+  });
+  h.provider.report(purchaseOf({ transactionId: 'tx-40' }));
+  await h.reconciler.runUntilIdle();
+  assertEqual(
+    h.history('store:fake-store:tx-40'),
+    ['requested', 'launched'],
+    'the colliding record is untouched',
+  );
+  assertEqual(h.failures, ['match(store:fake-store:tx-40)'], 'the collision is reported');
+  assertEqual(h.backend.requests.length, 0, 'nothing is verified under the wrong key');
+  await h.reconciler.stop();
+}
+
+// 41. Concurrent starts share one subscription, and a failing initial pass leaves nothing started (Codex).
+{
+  let subscriptions = 0;
+  const provider = createFakeProvider();
+  const subscribe = provider.subscribe;
+  provider.subscribe = (next) => {
+    subscriptions += 1;
+    return subscribe.call(provider, next);
+  };
+  const h = createHarness({ provider });
+  await Promise.all([h.reconciler.start(), h.reconciler.start()]);
+  assertEqual(subscriptions, 1, 'one subscription for two concurrent starts');
+  await h.reconciler.stop();
+
+  const store = createInMemoryMonetizationOperationStore();
+  let lists = 0;
+  const flaky: MonetizationOperationStore = {
+    ...store,
+    async listRecoverable(playerId) {
+      lists += 1;
+      // The load succeeds; the first pass's list fails.
+      if (lists === 2) {
+        throw new Error('journal unavailable');
+      }
+      return store.listRecoverable(playerId);
+    },
+  };
+  const failing = createHarness({ store: flaky });
+  await assertRejects(
+    () => failing.reconciler.start(),
+    /journal unavailable/u,
+    'the initial pass failure fails the start',
+  );
+  assertEqual(failing.reconciler.started, false, 'nothing stays started');
+  await failing.reconciler.start();
+  assertEqual(failing.reconciler.started, true, 'the retry starts');
+  await failing.reconciler.stop();
+}
+
+// 42. A failed start-time read of the available purchases is retried by the next pass (Codex).
+{
+  const provider = createFakeProvider();
+  let availableDown = true;
+  const getAvailablePurchases = provider.getAvailablePurchases;
+  provider.getAvailablePurchases = async (request) => {
+    if (availableDown) {
+      throw new Error('store unavailable');
+    }
+    return getAvailablePurchases.call(provider, request);
+  };
+  provider.available.push(purchaseOf({ transactionId: 'tx-42' }));
+  const h = createHarness({ provider });
+  await h.reconciler.start();
+  assertEqual(h.failures, ['available', 'available'], 'the start read and its retry failed');
+  assertEqual(
+    await h.reconciler.read('store:fake-store:tx-42'),
+    undefined,
+    'the purchase is not known yet',
+  );
+  availableDown = false;
+  h.backend.queue({ status: 'granted', ledgerEntryId: 'le-42' });
+  h.provider.emit({ type: 'purchaseError', error: { code: 'UNKNOWN', retryable: false } });
+  await h.reconciler.runUntilIdle();
+  assertEqual(
+    h.history('store:fake-store:tx-42').at(-1),
+    'finished',
+    'the next pass read the available purchases',
+  );
+  assertEqual(
+    h.provider.availableReads,
+    1,
+    'one successful read; later passes do not poll an event provider',
+  );
+  h.provider.emit({ type: 'purchaseError', error: { code: 'UNKNOWN', retryable: false } });
+  await h.reconciler.runUntilIdle();
+  assertEqual(h.provider.availableReads, 1, 'the retry stops once the read succeeded');
+  await h.reconciler.stop();
+}
+
+// 43. The finalization re-read that finishes a server-owned record is journaled as its last answer (Codex).
+{
+  const provider = createFakeProvider({
+    capabilities: capabilitiesOf({ lifecycle: { finish: 'server' } }),
+    withFinish: false,
+  });
+  const h = createHarness({ provider });
+  h.backend.queue({ status: 'granted', ledgerEntryId: 'le-43', finalization: 'pending' });
+  await h.reconciler.start();
+  h.provider.queueRequest({
+    outcome: 'purchased',
+    purchase: purchaseOf({ transactionId: 'tx-43' }),
+  });
+  await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-43',
+    source: 'shop',
+  });
+  assertEqual(
+    (await h.reconciler.read('op-43'))?.response?.finalization?.status,
+    'pending',
+    'the grant reported pending finalization',
+  );
+  h.backend.queue({ status: 'granted', ledgerEntryId: 'le-43', finalization: 'completed' });
+  await h.reconciler.reconcile();
+  const finished = await h.reconciler.read('op-43');
+  assertEqual(finished?.state, 'finished', 'finished');
+  assertEqual(
+    finished?.response?.finalization?.status,
+    'completed',
+    'the re-read is the last backend answer',
+  );
+  await h.reconciler.stop();
+}
+
+// Delta review before the second push.
+
+// 44. A same-key replay while the store sheet is open never releases the in-flight attempt.
+{
+  const h = createHarness();
+  await h.reconciler.start();
+  let answer: ((result: RequestPurchaseResult) => void) | undefined;
+  const sheet = new Promise<RequestPurchaseResult>((resolve) => {
+    answer = resolve;
+  });
+  const requestPurchase = h.provider.requestPurchase;
+  h.provider.requestPurchase = async (request) => {
+    await requestPurchase.call(h.provider, request);
+    return sheet;
+  };
+  const inFlight = h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-44',
+    source: 'shop',
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const replay = await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-44',
+    source: 'shop',
+  });
+  assertEqual(replay.outcome, 'launched', 'the replay answers from the journal');
+  await h.reconciler.reconcile();
+  assertEqual(
+    h.history('op-44'),
+    ['requested'],
+    'the open sheet is still in flight; nothing expired it',
+  );
+  answer?.({ outcome: 'launched' });
+  assertEqual((await inFlight).outcome, 'launched', 'the sheet answer is journaled');
+  assertEqual(h.history('op-44'), ['requested', 'launched'], 'launched after the sheet');
+  assertEqual(h.provider.purchaseUiOpened, 1, 'one sheet');
+  await h.reconciler.stop();
+}
+
+// 45. Events for the in-flight product wait for the store answer: one record, one verify; a cancel event ends the attempt.
+{
+  const h = createHarness();
+  await h.reconciler.start();
+  let answer: ((result: RequestPurchaseResult) => void) | undefined;
+  const sheet = new Promise<RequestPurchaseResult>((resolve) => {
+    answer = resolve;
+  });
+  const requestPurchase = h.provider.requestPurchase;
+  h.provider.requestPurchase = async (request) => {
+    await requestPurchase.call(h.provider, request);
+    return sheet;
+  };
+  const inFlight = h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-45',
+    source: 'shop',
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  // The store reports the purchase as an event before the sheet call resolves.
+  h.backend.queue({ status: 'granted', ledgerEntryId: 'le-45' });
+  h.provider.report(purchaseOf({ transactionId: 'tx-45' }));
+  await h.reconciler.runUntilIdle();
+  assertEqual(
+    await h.reconciler.read('store:fake-store:tx-45'),
+    undefined,
+    'the event waited; no derived record',
+  );
+  answer?.({ outcome: 'launched' });
+  await inFlight;
+  await h.reconciler.runUntilIdle();
+  assertEqual(
+    h.history('op-45'),
+    fullClientHistory,
+    'the waiting event matched the launched attempt',
+  );
+  assertEqual(
+    h.backend.requests.map((request) => request.idempotencyKey),
+    ['op-45'],
+    'verified once, under the game key',
+  );
+  assertEqual(h.provider.finishCalls.length, 1, 'finished once');
+
+  // A sheet open past inFlightTimeoutMs stops deferring: an event for the
+  // product is journaled under its derived key, and the late synchronous
+  // answer for the same transaction supersedes the attempt instead of
+  // journaling the purchase twice.
+  let clock = '2026-10-02T00:00:00.000Z';
+  const late = createHarness({ overrides: { now: () => clock, inFlightTimeoutMs: 1_000 } });
+  await late.reconciler.start();
+  let lateAnswer: ((result: RequestPurchaseResult) => void) | undefined;
+  const lateSheet = new Promise<RequestPurchaseResult>((resolve) => {
+    lateAnswer = resolve;
+  });
+  const lateRequest = late.provider.requestPurchase;
+  late.provider.requestPurchase = async (request) => {
+    await lateRequest.call(late.provider, request);
+    return lateSheet;
+  };
+  const lateCall = late.reconciler.requestPurchase({
+    logicalId: 'remove_ads',
+    idempotencyKey: 'op-45b',
+    source: 'shop',
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  clock = '2026-10-02T00:00:02.000Z';
+  late.backend.queue({ status: 'granted', ledgerEntryId: 'le-45b' });
+  late.provider.report(
+    purchaseOf({ transactionId: 'tx-45b', storeSku: 'remove.ads', logicalId: 'remove_ads' }),
+  );
+  await late.reconciler.runUntilIdle();
+  assertEqual(
+    late.history('store:fake-store:tx-45b').at(-1),
+    'finished',
+    'after the timeout the event is journaled under its derived key',
+  );
+  lateAnswer?.({
+    outcome: 'purchased',
+    purchase: purchaseOf({
+      transactionId: 'tx-45b',
+      storeSku: 'remove.ads',
+      logicalId: 'remove_ads',
+    }),
+  });
+  const duplicate = await lateCall;
+  assertEqual(
+    duplicate.outcome === 'failed' && duplicate.error.code,
+    'OUTCOME_UNKNOWN',
+    'the late answer is superseded by the record that journals the transaction',
+  );
+  assertEqual(
+    late.history('op-45b'),
+    ['requested', 'failed'],
+    'the stale attempt was ended by the pass; the late answer did not reopen it',
+  );
+  assertEqual(
+    late.backend.requests.length,
+    1,
+    'the transaction was verified once, under its derived key',
+  );
+  await late.reconciler.stop();
+
+  // A store that reuses an add-on id (Microsoft Store) still journals a
+  // repurchase the game starts after the earlier purchase finished.
+  h.provider.requestPurchase = requestPurchase;
+  h.backend.queue({ status: 'granted', ledgerEntryId: 'le-45c' });
+  h.provider.queueRequest({
+    outcome: 'purchased',
+    purchase: purchaseOf({ transactionId: 'tx-45' }),
+  });
+  const repurchase = await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-45d',
+    source: 'shop',
+  });
+  assertEqual(repurchase.outcome, 'purchased', 'the reused id is a new purchase');
+  assertEqual(h.history('op-45d'), fullClientHistory, 'verified under the game key');
+
+  // A cancel event during the sheet ends the attempt once the sheet reports launched.
+  let cancelAnswer: ((result: RequestPurchaseResult) => void) | undefined;
+  const cancelSheet = new Promise<RequestPurchaseResult>((resolve) => {
+    cancelAnswer = resolve;
+  });
+  h.provider.requestPurchase = async (request) => {
+    await requestPurchase.call(h.provider, request);
+    return cancelSheet;
+  };
+  const cancelled = h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-45c',
+    source: 'shop',
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  h.provider.emit({
+    type: 'purchaseError',
+    logicalId: 'gems_small',
+    error: { code: 'USER_CANCELLED', retryable: false },
+  });
+  await h.reconciler.runUntilIdle();
+  cancelAnswer?.({ outcome: 'launched' });
+  await cancelled;
+  await h.reconciler.runUntilIdle();
+  assertEqual(
+    h.history('op-45c'),
+    ['requested', 'launched', 'cancelled'],
+    'the waiting cancel event ended the launched attempt',
+  );
+  await h.reconciler.stop();
+}
+
+// 46. A store that renames the transaction once it assigns an order id keeps the same record (Play token key to order id).
+{
+  const h = createHarness();
+  await h.reconciler.start();
+  h.provider.report(
+    purchaseOf({ transactionId: 'token-key-46', token: 'token-46', state: 'pending' }),
+  );
+  await h.reconciler.runUntilIdle();
+  assertEqual(
+    h.history('store:fake-store:token-key-46'),
+    ['pending'],
+    'discovered while pending under the token key',
+  );
+  h.backend.queue({ status: 'granted', ledgerEntryId: 'le-46' });
+  h.provider.report(purchaseOf({ transactionId: 'GPA.46', token: 'token-46', state: 'purchased' }));
+  await h.reconciler.runUntilIdle();
+  assertEqual(
+    h.history('store:fake-store:token-key-46'),
+    ['pending', 'purchased', 'verifying', 'granted', 'finishing', 'finished'],
+    'the same token advances the same record',
+  );
+  assertEqual(
+    (await h.reconciler.read('store:fake-store:GPA.46')),
+    undefined,
+    'no second record under the order id',
+  );
+  assertEqual(h.failures, [], 'no collision reported');
+  await h.reconciler.stop();
+}
+
+// 47. stop() during a start that is waiting for the lock tears the subscription down.
+{
+  let subscriptions = 0;
+  let unsubscriptions = 0;
+  const provider = createFakeProvider();
+  const subscribe = provider.subscribe;
+  provider.subscribe = (next) => {
+    subscriptions += 1;
+    const release = subscribe.call(provider, next);
+    return () => {
+      unsubscriptions += 1;
+      release();
+    };
+  };
+  const h = createHarness({ provider });
+  let release: (() => void) | undefined;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  // Hold the lock with a purchase whose preparation waits on the journal.
+  const store = h.store;
+  const slowStore: MonetizationOperationStore = {
+    ...store,
+    async listRecoverable(playerId) {
+      await blocked;
+      return store.listRecoverable(playerId);
+    },
+  };
+  const slow = createHarness({ store: slowStore, provider });
+  const starting = slow.reconciler.start();
+  const stopping = slow.reconciler.stop();
+  release?.();
+  await Promise.all([starting, stopping]);
+  assertEqual(slow.reconciler.started, false, 'stopped');
+  assertEqual(subscriptions, unsubscriptions, 'every subscription the start made was released');
+  await h.reconciler.stop();
+}
+
+// 48. The retry interval covers failed finishes and finalization re-reads; explicit triggers retry at once.
+{
+  let clock = '2026-10-02T00:00:00.000Z';
+  const h = createHarness({ overrides: { now: () => clock } });
+  h.backend.queue({ status: 'granted', ledgerEntryId: 'le-48' });
+  h.provider.queueFinish({
+    throws: Object.assign(new Error('finish failed'), { code: 'NETWORK' }),
+  });
+  await h.reconciler.start();
+  h.provider.queueRequest({
+    outcome: 'purchased',
+    purchase: purchaseOf({ transactionId: 'tx-48' }),
+  });
+  await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-48',
+    source: 'shop',
+  });
+  assertEqual(h.history('op-48').at(-1), 'finishing', 'the finish failed');
+  h.provider.emit({ type: 'purchaseError', error: { code: 'UNKNOWN', retryable: false } });
+  await h.reconciler.runUntilIdle();
+  assertEqual(
+    h.provider.finishCalls.length,
+    1,
+    'an event pass inside the interval does not retry the finish',
+  );
+  await h.reconciler.reconcile();
+  assertEqual(h.provider.finishCalls.length, 2, 'an explicit reconcile retries at once');
+  assertEqual(h.history('op-48').at(-1), 'finished', 'finished');
+  clock = '2026-10-02T00:02:00.000Z';
+  await h.reconciler.stop();
 }
 
 console.info('commerce reconciler tests passed');

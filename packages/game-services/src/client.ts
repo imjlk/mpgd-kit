@@ -238,6 +238,8 @@ export interface CreateGameServicesClientInput {
   readonly operationStore?: MonetizationOperationStore;
   /** A reconciler shared with another client, for example the recovery client's. */
   readonly commerceReconciler?: CommerceReconciler;
+  /** Receives the one-time warning about a session-only commerce journal; defaults to `console.warn`. */
+  readonly warn?: (message: string) => void;
   /** Catalog kinds and SKUs the reconciler resolves without a store read. */
   readonly commerceProducts?: readonly CommerceReconcilerProduct[];
   readonly onCommerceEvent?: (event: CommerceReconcilerEvent) => void;
@@ -268,6 +270,13 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
   const commerceProvider = input.gateway.commerceV2;
   let commerceReconciler: CommerceReconciler | undefined;
   if (commerceProvider !== undefined) {
+    if (input.commerceReconciler === undefined && input.operationStore === undefined) {
+      (input.warn ?? console.warn)(
+        '@mpgd/game-services: the commerce v2 reconciler is journaling in memory for this session '
+          + 'because no operationStore was given; purchases are not recoverable across restarts and '
+          + 'the backend ledger is the only duplicate backstop. Pass a durable MonetizationOperationStore.',
+      );
+    }
     commerceReconciler = input.commerceReconciler ?? createCommerceReconciler({
       provider: commerceProvider,
       backend: input.backend.purchases,

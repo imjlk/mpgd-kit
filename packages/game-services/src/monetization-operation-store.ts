@@ -78,5 +78,17 @@ export function createInMemoryMonetizationOperationStore(): MonetizationOperatio
         .filter((record) => record.playerId === playerId && isMonetizationOperationGranted(record))
         .map(clone);
     },
+    async findByTransaction(input) {
+      const found = [...records.values()].find(
+        (record) =>
+          record.kind === 'commerce-purchase'
+          && record.playerId === input.playerId
+          && record.target === input.target
+          && record.deploymentTarget === input.deploymentTarget
+          && record.store === input.store
+          && record.purchase?.transactionId === input.transactionId,
+      );
+      return found === undefined ? undefined : clone(found);
+    },
   };
 }

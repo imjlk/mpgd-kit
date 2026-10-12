@@ -579,7 +579,8 @@ function createMockCommerceV2(
           logicalId: 'COINS_100',
           quantity: 1,
           state: 'purchased',
-          token: 'coins_100',
+          // One token per purchase, as every real store reports it.
+          token: `token-${request.idempotencyKey}`,
           evidence: {
             schema: 'mpgd.microsoft-store.digital-goods.v1',
             payload: { itemId: 'coins_100', purchaseToken: 'coins_100' },
@@ -652,6 +653,7 @@ const adapterSettledClient = createGameServicesClient({
   gateway: createSettledCommerceGateway('microsoft-store', adapterSettledProvider),
   playerId,
   target: 'microsoft-store',
+  warn: () => {},
   backend: createVerifyingBackend((request) => {
     adapterSettledRequests.push(request);
   }),
@@ -741,6 +743,7 @@ const clientTokenClient = createGameServicesClient({
   gateway: createSettledCommerceGateway('microsoft-store', createMockCommerceV2('client-token')),
   playerId,
   target: 'microsoft-store',
+  warn: () => {},
   backend: createVerifyingBackend(() => {
     clientTokenVerificationCalls += 1;
   }),
@@ -780,6 +783,7 @@ const cachedCapabilityClient = createGameServicesClient({
   ),
   playerId,
   target: 'microsoft-store',
+  warn: () => {},
   backend: createVerifyingBackend(() => {}),
 });
 for (const idempotencyKey of ['cached-capability-1', 'cached-capability-2']) {
@@ -813,6 +817,7 @@ const retriedCapabilityClient = createGameServicesClient({
   ),
   playerId,
   target: 'microsoft-store',
+  warn: () => {},
   backend: createVerifyingBackend(() => {
     retriedVerificationCalls += 1;
   }),
@@ -855,6 +860,7 @@ const unreadableCapabilityClient = createGameServicesClient({
   gateway: createSettledCommerceGateway('microsoft-store', unreadableCapabilityProvider),
   playerId,
   target: 'microsoft-store',
+  warn: () => {},
   backend: createVerifyingBackend(() => {
     unreadableCapabilityVerificationCalls += 1;
   }),

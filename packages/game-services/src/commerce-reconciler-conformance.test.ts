@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { CommerceProvider, StoreId } from '@mpgd/platform/commerce';
@@ -40,16 +40,28 @@ import type { VerifyPurchaseRequest, VerifyPurchaseResponse } from './types.js';
  * illegal transition or a skipped revision fails the vector.
  */
 
-const vectorsDir = join(
-  import.meta.dirname,
-  '..',
-  '..',
-  '..',
-  'docs',
-  'specs',
-  'commerce',
-  'vectors',
-);
+/**
+ * The vectors live in the checkout, not next to the compiled test: the
+ * prepared CI lane runs this entry from its emit root, so the directory is
+ * resolved from the source root the runner names, the working directory
+ * (the package scripts run from the repository root), or the source tree.
+ */
+function resolveVectorsDir(): string {
+  const relative = join('docs', 'specs', 'commerce', 'vectors');
+  const candidates = [
+    process.env.MPGD_TOOLS_EMIT_SOURCE_ROOT,
+    process.cwd(),
+    join(import.meta.dirname, '..', '..', '..'),
+  ];
+  for (const root of candidates) {
+    if (root !== undefined && root.length > 0 && existsSync(join(root, relative))) {
+      return join(root, relative);
+    }
+  }
+  throw new Error(`Cannot locate ${relative} from ${candidates.join(', ')}.`);
+}
+
+const vectorsDir = resolveVectorsDir();
 const vectors: readonly CommerceConformanceVector[] = readdirSync(vectorsDir)
   .filter((file) => file.endsWith('.json'))
   .sort()
@@ -200,6 +212,20 @@ function adaptJournal(
         return [];
       }
       return (await journal.listGranted(owner)).map(fromJournal);
+    },
+    async findByTransaction(input) {
+      for (const key of journal.keys) {
+        const record = await journal.read(key);
+        if (
+          record !== undefined
+          && record.playerId === input.playerId
+          && record.store === input.store
+          && record.purchase?.transactionId === input.transactionId
+        ) {
+          return fromJournal(record);
+        }
+      }
+      return undefined;
     },
   };
 }
