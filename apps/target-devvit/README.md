@@ -86,8 +86,12 @@ deployed-app log inspection. See the official
 register it once in the developer's global Codex configuration:
 
 ```sh
-codex mcp add devvit -- npx -y @devvit/mcp
+codex mcp add devvit -- mise exec node@24 -- npx -y @devvit/mcp
 ```
+
+The server must run on Node 24; the `AGENTS.md` MCP section explains why a
+newer Node breaks its `better-sqlite3` dependency and how to warm or repair
+the npx cache.
 
 Restart Codex or begin a new task after registering it. Use `devvit_search`
 before broad Devvit documentation exploration. Use the experimental

@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "devvit": {
-      "command": "npx",
-      "args": ["-y", "@devvit/mcp"]
+      "command": "mise",
+      "args": ["exec", "--", "npx", "-y", "@devvit/mcp"]
     },
     "ttsc-graph": {
       "command": "npx",

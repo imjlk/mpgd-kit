@@ -876,7 +876,12 @@ function validateMcpConfig(path: string): void {
   const servers = config.mcpServers as Record<string, McpServerConfig>;
 
   assertMcpServerCommand(servers['ttsc-graph'], '@ttsc/graph', `${path}: ttsc-graph`);
-  assertMcpServerCommand(servers.devvit, '@devvit/mcp', `${path}: devvit`);
+  // @devvit/mcp pins better-sqlite3 11.9.1, which cannot compile against Node 26;
+  // `mise exec` runs it on the Node version pinned in .mise.toml instead of
+  // whatever Node the agent host puts first on PATH.
+  assertMcpServerCommand(servers.devvit, '@devvit/mcp', `${path}: devvit`, {
+    repoPinnedNode: true,
+  });
 }
 
 function validatePhaserTemplateAITPolyfill(): void {
@@ -2293,21 +2298,33 @@ function assertMcpServerCommand(
   server: McpServerConfig | undefined,
   packageName: string,
   label: string,
+  options: { readonly repoPinnedNode?: boolean } = {},
 ): void {
   if (server === undefined) {
     failures.push(`${label} MCP server is required.`);
     return;
   }
 
-  assertEqual(server.command, 'npx', `${label}.command`);
+  assertEqual(server.command, options.repoPinnedNode === true ? 'mise' : 'npx', `${label}.command`);
 
   if (!Array.isArray(server.args)) {
     failures.push(`${label}.args must be an array.`);
     return;
   }
 
-  assertIncludes(server.args, '-y', `${label}.args`);
-  assertIncludes(server.args, packageName, `${label}.args`);
+  let npxArgs: readonly unknown[] = server.args;
+
+  if (options.repoPinnedNode === true) {
+    if (server.args[0] !== 'exec' || server.args[1] !== '--' || server.args[2] !== 'npx') {
+      failures.push(`${label}.args must start with exec, --, npx to use the .mise.toml Node.`);
+      return;
+    }
+
+    npxArgs = server.args.slice(3);
+  }
+
+  assertIncludes(npxArgs, '-y', `${label}.args`);
+  assertIncludes(npxArgs, packageName, `${label}.args`);
 }
 
 function assertMcpRequirements(input: unknown, label: string): void {
