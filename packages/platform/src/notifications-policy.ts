@@ -341,7 +341,10 @@ export interface NotificationAdvertisingSender {
 }
 
 export interface NotificationDeployment {
-  /** Required when the catalog has an `advertising` topic; absent reads as `none`. */
+  /**
+   * Required when the catalog has an `advertising` topic: the gate refuses to
+   * evaluate an advertising send without it.
+   */
   readonly advertisingRules?: NotificationAdvertisingRules;
   readonly advertisingSender?: NotificationAdvertisingSender;
   /** The free-of-charge opt-out line; `무료 수신거부: 수신거부 버튼` when absent. */
@@ -700,20 +703,28 @@ export interface EvaluateNotificationDeliveryInput {
  *    line, the opt-out line, and the opt-out action.
  *
  * Caller errors throw a `TypeError` instead of deciding: a missing
- * `serverPermission`, an unknown time zone, missing copy or template data, an
- * advertising topic without `optOutRoute`, and a route or opt-out route that
- * is not root-relative.
+ * `serverPermission`, an advertising topic without the deployment's
+ * `advertisingRules` (the gate fails closed rather than guess them), an
+ * unknown time zone, missing copy or template data, an advertising topic
+ * without `optOutRoute`, and a route or opt-out route that is not
+ * root-relative.
  */
 export function evaluateNotificationDelivery(
   input: EvaluateNotificationDeliveryInput,
 ): NotificationDeliveryDecision {
   const { entry, topic } = input;
-  const rules = input.deployment?.advertisingRules ?? 'none';
   if (topic === undefined) {
     return { status: 'suppressed', reason: 'topic-unknown' };
   }
   if (!topic.channels.includes('remote')) {
     return { status: 'suppressed', reason: 'channel-unsupported' };
+  }
+  const rules = input.deployment?.advertisingRules;
+  if (topic.purpose === 'advertising' && rules === undefined) {
+    // The Korean rules must be chosen on purpose: a deployment that forgot them fails closed.
+    throw new TypeError(
+      `Advertising topic ${topic.id} needs the deployment's advertisingRules ('kr' or 'none').`,
+    );
   }
   if (
     !entry.purposes.includes(topic.purpose)
@@ -747,7 +758,7 @@ export function evaluateNotificationDelivery(
   const timeZone = input.timeZone
     ?? input.deployment?.timeZone
     ?? notificationDefaultDeploymentTimeZone;
-  const windows = resolveTimeWindows(topic, input.consent, input.at, timeZone, rules);
+  const windows = resolveTimeWindows(topic, input.consent, input.at, timeZone, rules ?? 'none');
   if (windows.status === 'suppressed') {
     return { status: 'suppressed', reason: windows.reason };
   }
@@ -952,6 +963,9 @@ function limitDecision(
       return { status: 'suppressed', reason: 'frequency-capped' };
     }
   }
+  // Every limit that is full: one of a day or longer suppresses, whatever the
+  // order of the entry's limits; shorter ones defer until all have room.
+  let until: number | undefined;
   for (const limit of input.entry.limits ?? []) {
     const windowMs = limit.windowSeconds * 1000;
     const sends = counted(windowMs, (sent) => sent.provider === input.entry.provider);
@@ -962,14 +976,12 @@ function limitDecision(
       return { status: 'suppressed', reason: 'provider-limit' };
     }
     // Room opens when enough of the oldest counted sends have left the window.
-    const leaving = sends[sends.length - limit.count] ?? sends[0] ?? at;
-    return {
-      status: 'deferred',
-      reason: 'provider-limit',
-      until: formatNotificationTimestamp(leaving + windowMs),
-    };
+    const leaving = (sends[sends.length - limit.count] ?? sends[0] ?? at) + windowMs;
+    until = until === undefined ? leaving : Math.max(until, leaving);
   }
-  return undefined;
+  return until === undefined
+    ? undefined
+    : { status: 'deferred', reason: 'provider-limit', until: formatNotificationTimestamp(until) };
 }
 
 /** The next start of the night window (21:00 Asia/Seoul) after `at`. */
@@ -1517,14 +1529,56 @@ function formatNotificationTimestamp(millis: number): string {
   return iso.endsWith('.000Z') ? `${iso.slice(0, -5)}Z` : iso;
 }
 
-const isoInstantPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/u;
+const isoInstantPattern =
+  /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(?:[Zz]|([+-])(\d{2}):(\d{2}))$/u;
 
+/**
+ * An RFC 3339 instant with an explicit offset (`T` and `Z` in either case).
+ * A calendar field out of range, such as 31 February or a leap second, is
+ * refused rather than rolled over into the next day.
+ */
 function parseInstant(at: string): number {
-  const millis = isoInstantPattern.test(at) ? Date.parse(at) : Number.NaN;
+  const match = isoInstantPattern.exec(at);
+  const millis = match === null ? Number.NaN : instantOf(match);
   if (Number.isNaN(millis)) {
     throw new TypeError(`Invalid ISO-8601 timestamp (a date, a time, and an offset): ${at}`);
   }
   return millis;
+}
+
+function instantOf(match: RegExpExecArray): number {
+  const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number);
+  const offsetHours = Number(match[9] ?? 0);
+  const offsetMinutes = Number(match[10] ?? 0);
+  if (
+    year === undefined
+    || month === undefined
+    || day === undefined
+    || hour === undefined
+    || minute === undefined
+    || second === undefined
+    || month < 1
+    || month > 12
+    || day < 1
+    || day > daysInMonth(year, month)
+    || hour > 23
+    || minute > 59
+    || second > 59
+    || offsetHours > 23
+    || offsetMinutes > 59
+  ) {
+    return Number.NaN;
+  }
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  date.setUTCHours(hour, minute, second, Number((match[7] ?? '0').slice(0, 3).padEnd(3, '0')));
+  const offsetMs = (offsetHours * 60 + offsetMinutes) * minuteMs;
+  return date.getTime() - (match[8] === '-' ? -offsetMs : offsetMs);
+}
+
+function daysInMonth(year: number, month: number): number {
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  return [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1] ?? 0;
 }
 
 function parseClockTime(value: string): number {

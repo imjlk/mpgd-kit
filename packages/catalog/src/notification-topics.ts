@@ -83,7 +83,7 @@ const validateNotificationTopicCatalogShape = typia.createValidateEquals<Notific
  *   do not start and end at the same time;
  * - topic ids are unique, every `copy` includes `defaultLocale`, and
  *   `notices.topic` names a declared `service` topic with the `remote`
- *   channel;
+ *   channel whose text uses no placeholder but `{{consentDate}}`;
  * - for a target with a provider entry: each mapping field follows its rule
  *   (required, a string within `maxLength` Unicode code points, one of
  *   `values`, matching `pattern`), a mapping that needs no host agreement
@@ -93,8 +93,9 @@ const validateNotificationTopicCatalogShape = typia.createValidateEquals<Notific
  *   topic on a free-form provider has its own text: `copy`, or a `title` and
  *   a `body` in the mapping;
  * - given an `advertising` topic, the deployment settings: `advertisingRules`,
- *   and under `kr` the advertising sender and the catalog's notice topic. A
- *   deployment `noticeTopic` must be the catalog's `notices.topic`.
+ *   and under `kr` the advertising sender and the catalog's notice topic,
+ *   mapped on every target that maps an advertising topic. A deployment
+ *   `noticeTopic` must be the catalog's `notices.topic`.
  */
 export function validateNotificationTopicCatalog(
   input: unknown,
@@ -285,7 +286,32 @@ function noticeIssues(
       message: `consent notices are service notifications the server sends; ${topic.id} must be a service topic with the remote channel`,
     }];
   }
-  return [];
+  // The server fills only the consent date; any other placeholder could never be sent.
+  const at = `topics[${index}]`;
+  const texts: { readonly path: string; readonly text: string }[] = [
+    ...Object.entries(topic.copy ?? {}).flatMap(([locale, copy]) => [
+      { path: `${at}.copy.${locale}.title`, text: copy.title },
+      { path: `${at}.copy.${locale}.body`, text: copy.body },
+    ]),
+    ...Object.entries(topic.targets ?? {}).flatMap(([target, mapping]) =>
+      (['title', 'body'] as const).flatMap((field) => {
+        const value = mapping[field];
+        return typeof value === 'string' ? [{ path: `${at}.targets.${target}.${field}`, text: value }] : [];
+      })),
+  ];
+  return texts.flatMap(({ path, text }) =>
+    placeholdersOf(text)
+      .filter((name) => name !== 'consentDate')
+      .map((name) => ({
+        path,
+        message: `the notice topic is filled only with {{consentDate}}; {{${name}}} would have no value`,
+      })));
+}
+
+const placeholderPattern = /\{\{\s*([A-Za-z_][A-Za-z0-9_-]*)\s*\}\}/gu;
+
+function placeholdersOf(text: string): string[] {
+  return [...text.matchAll(placeholderPattern)].map((match) => match[1] ?? '');
 }
 
 /** The deployment settings an advertising topic needs. */
@@ -311,11 +337,33 @@ function deploymentIssues(
     return issues;
   }
   if (deployment.advertisingRules === 'kr') {
+    const noticeTopic = catalog.notices === undefined
+      ? undefined
+      : catalog.topics.find((topic) => topic.id === catalog.notices?.topic);
     if (catalog.notices === undefined) {
       issues.push({
         path: 'notices.topic',
         message: 'the Korean advertising rules send overdue consent notices through a service topic; declare notices.topic',
       });
+    } else if (noticeTopic !== undefined) {
+      // A target that delivers advertising also delivers its notices.
+      const unmapped = new Set<string>();
+      for (const topic of catalog.topics) {
+        if (topic.purpose !== 'advertising') {
+          continue;
+        }
+        for (const target of Object.keys(topic.targets ?? {})) {
+          if (!Object.prototype.hasOwnProperty.call(noticeTopic.targets ?? {}, target)) {
+            unmapped.add(target);
+          }
+        }
+      }
+      for (const target of unmapped) {
+        issues.push({
+          path: 'notices.topic',
+          message: `${noticeTopic.id} has no mapping for ${target}, which delivers an advertising topic and so its consent notices`,
+        });
+      }
     }
     if (deployment.advertisingSender === undefined) {
       issues.push({

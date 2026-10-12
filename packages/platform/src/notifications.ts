@@ -507,7 +507,16 @@ export const assertNotificationConsentRecord = typia.createAssertEquals<Notifica
 export const assertNotificationNotice = typia.createAssertEquals<NotificationNotice>();
 export const assertNotificationDeliveryProviderEntry =
   typia.createAssertEquals<NotificationDeliveryProviderEntry>();
-export const assertNotificationDeployment = typia.createAssertEquals<NotificationDeployment>();
+const assertNotificationDeploymentShape = typia.createAssertEquals<NotificationDeployment>();
+
+/** Validates deployment settings, including a `timeZone` that `Intl` knows, which quiet hours read. */
+export function assertNotificationDeployment(input: unknown): NotificationDeployment {
+  const deployment = assertNotificationDeploymentShape(input);
+  if (deployment.timeZone !== undefined && !isValidNotificationTimeZone(deployment.timeZone)) {
+    throw new TypeError(`Unknown time zone in the deployment: ${deployment.timeZone}`);
+  }
+  return deployment;
+}
 const assertNotificationTopicDefinitionShape =
   typia.createAssertEquals<NotificationTopicDefinition>();
 

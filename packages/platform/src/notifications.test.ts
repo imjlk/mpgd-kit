@@ -291,6 +291,7 @@ describe('notifications contract', () => {
       noticeTopic: 'consent-notice',
     }).advertisingRules).toBe('kr');
     expect(() => assertNotificationDeployment({ advertisingRules: 'eu' })).toThrow();
+    expect(() => assertNotificationDeployment({ timeZone: 'Mars/Olympus_Mons' })).toThrow(/Unknown time zone/u);
     expect(() => assertNotificationDeployment({ advertisingSender: { name: 'Studio' } })).toThrow();
     const topic = {
       id: 'energy-full',

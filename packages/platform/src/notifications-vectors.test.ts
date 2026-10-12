@@ -183,6 +183,10 @@ describe('notifications conformance vectors', () => {
     expect(isNotificationConformanceVector({ ...base, deployment: { advertisingSender: { name: 'Studio' } } }))
       .toBe(false);
     expect(isNotificationConformanceVector({ ...base, deployment: { advertisingRules: 'eu' } })).toBe(false);
+    // Quiet hours read the zones, so `Intl` must know them.
+    expect(isNotificationConformanceVector({ ...base, deployment: { timeZone: 'Mars/Olympus_Mons' } })).toBe(false);
+    expect(isNotificationConformanceVector({ ...base, context: { ...base.context, timeZone: 'Mars/Olympus_Mons' } }))
+      .toBe(false);
     expect(isNotificationConformanceVector({ ...base, deployment: { sender: {} } })).toBe(false);
     // A catalog topic breaks a topic rule: advertising may not be local.
     const [first] = base.catalog;

@@ -1,5 +1,6 @@
 import {
   assertNotificationConsentRecord,
+  assertNotificationDeployment,
   createNotificationNoticeIdempotencyKey,
   createNotificationReminderIdempotencyKey,
   evaluateLocalNotificationReminder,
@@ -17,6 +18,7 @@ import {
   notificationNoticeSendFrom,
   notificationPermissionConsentKind,
   notificationPermissionStateOf,
+  notificationReconfirmationDueBy,
   notificationRegistryMismatch,
   notificationReservedKeyPrefix,
   notificationSendFingerprint,
@@ -26,6 +28,7 @@ import {
   routeNotificationReminder,
   toSeoulCalendarDate,
   type CancelNotificationReminderInput,
+  type EvaluateNotificationDeliveryInput,
   type LocalNotificationEntry,
   type LocalNotificationRequest,
   type NotificationCapabilities,
@@ -33,6 +36,7 @@ import {
   type NotificationConsentRecord,
   type NotificationDeferralReason,
   type NotificationDeliveryContent,
+  type NotificationDeliveryDecision,
   type NotificationDeliveryHistoryEntry,
   type NotificationDeliveryOutcome,
   type NotificationDeliveryProviderEntry,
@@ -118,6 +122,16 @@ const keyRetentionMs = 30 * dayMs;
 /** An operation the vector did not script; it fails the vector with its message. */
 export class NotificationConformanceScriptError extends Error {
   override readonly name = 'NotificationConformanceScriptError';
+}
+
+/**
+ * A send the gate cannot evaluate as asked, such as one without the template
+ * data or copy it needs. A direct send answers `NOTIFICATIONS_INVALID_INPUT`,
+ * and the scheduler drops the item after one failure; any other failure is
+ * retried.
+ */
+class NotificationSendInputError extends Error {
+  override readonly name = 'NotificationSendInputError';
 }
 
 // Clock.
@@ -301,10 +315,7 @@ export function createNotificationConformanceHost(
   };
   const dispatch = (event: NotificationEvent): void => {
     if (!subscribed) {
-      buffer.push(event);
-      if (buffer.length > eventBufferLimit) {
-        buffer.shift();
-      }
+      bufferEvent(buffer, event);
       return;
     }
     throwFirst(deliverEach([...listeners], [event]));
@@ -587,6 +598,19 @@ export function createNotificationConformanceHost(
       return trueState(keyOf(request.topic));
     },
   };
+}
+
+/**
+ * Buffers an event for the first listener, keeping at most
+ * `eventBufferLimit`: past it the oldest event that is not an open goes first,
+ * so a cold-start open is not lost to later events.
+ */
+function bufferEvent(buffer: NotificationEvent[], event: NotificationEvent): void {
+  buffer.push(event);
+  if (buffer.length > eventBufferLimit) {
+    const evicted = buffer.findIndex((buffered) => buffered.type !== 'opened');
+    buffer.splice(evicted === -1 ? 0 : evicted, 1);
+  }
 }
 
 function isDecidedAnswer(outcome: NotificationPermissionOutcome | undefined): boolean {
@@ -913,8 +937,11 @@ const noEndpoint: NotificationDeliveryRefusal = { status: 'unavailable', reason:
  * - Sessions: each `authenticate` starts a new session on the fake
  *   installation, and `revokeSession` ends it and unbinds the endpoints it
  *   registered. Consent records, registrations, reminders, and notices belong
- *   to the session's player, and the backend stamps each record's `at` with
- *   its own clock.
+ *   to the session's player. The backend stamps each record's `at` with its
+ *   own clock, strictly after the player's previous record, so each record
+ *   names its own instant. It records a notice only while it is owed, and a
+ *   re-confirmation recorded before the previous one's due date has passed
+ *   as a repeat of that one.
  * - Endpoints: a device endpoint is keyed by provider and installation, keeps
  *   the latest address, permission, and `lastRegisteredAt`, and moves with the
  *   installation to a newly authenticated player. An address is unique per
@@ -935,7 +962,8 @@ const noEndpoint: NotificationDeliveryRefusal = { status: 'unavailable', reason:
  * - Provider answers come from `queueProviderResult`, `accepted` when none is
  *   queued: `unregistered` invalidates the endpoint; `rate-limited` defers by
  *   `retryAfterSeconds` (60 when absent), then by doubling delays without
- *   jitter, and gives up after 24 hours; `rejected` is not stored, and with
+ *   jitter, never past 24 hours after the first, and then gives up;
+ *   `rejected` is not stored, and with
  *   `agreement` appends a `host-agreement` record of `denied` from the
  *   provider; `ambiguous` keeps the claim for the 300-second lease.
  * - The scheduler processes due server reminders (as `reminder:` sends), due
@@ -949,9 +977,10 @@ const noEndpoint: NotificationDeliveryRefusal = { status: 'unavailable', reason:
  *   their last change.
  * - Setting or cancelling a reminder drops its sends' rows that still wait
  *   (deferred); an in-flight one settles, because the provider may already
- *   have sent it. A caller error in a scheduled send (such as missing template
- *   data) fails once; any other failure is retried on the next run, and one
- *   failing item never stops the others.
+ *   have sent it. A send the gate cannot evaluate as asked (such as missing
+ *   template data) answers `NOTIFICATIONS_INVALID_INPUT` directly and fails
+ *   once when scheduled; any other failure, such as a host read that throws,
+ *   is retried on the next run, and one failing item never stops the others.
  */
 export function createNotificationConformanceBackend(
   input: CreateNotificationConformanceBackendInput,
@@ -960,6 +989,9 @@ export function createNotificationConformanceBackend(
   const rules = input.deployment?.advertisingRules ?? 'none';
   const topicOf = (id: string): NotificationTopicDeclaration | undefined =>
     input.catalog.find((topic) => topic.id === id);
+  if (input.deployment !== undefined) {
+    assertNotificationDeployment(input.deployment);
+  }
   const noticeTopic = input.deployment?.noticeTopic;
   if (noticeTopic !== undefined && topicOf(noticeTopic)?.purpose !== 'service') {
     throw new TypeError(
@@ -984,6 +1016,8 @@ export function createNotificationConformanceBackend(
   const ledger = new Map<string, LedgerEntry>();
   /** Send keys being evaluated, with their fingerprint: a concurrent send of the key answers `in-flight`. */
   const claims = new Map<string, string>();
+  /** Notice sends that could not be made: they fail once, not on every run. */
+  const failedNotices = new Set<string>();
   const providerResults: NotificationConformanceProviderResult[] = [];
 
   const now = (): number => Date.parse(clock.now());
@@ -1006,10 +1040,20 @@ export function createNotificationConformanceBackend(
   const recordsOf = (player: string): NotificationConsentRecord[] =>
     consentRows.filter((row) => row.player === player).map((row) => row.record);
   const appendConsent = (player: string, record: NotificationConsentRecord): void => {
-    // The backend's clock dates the record: notices and the latest record follow it.
+    // The backend's clock dates the record, strictly after the player's
+    // previous one: notices, their keys, and the latest record follow it, and
+    // two records written in one call still name different instants.
+    let at = now();
+    for (let index = consentRows.length - 1; index >= 0; index -= 1) {
+      const row = consentRows[index];
+      if (row !== undefined && row.player === player) {
+        at = Math.max(at, Date.parse(row.record.at) + 1);
+        break;
+      }
+    }
     consentRows.push({
       player,
-      record: assertNotificationConsentRecord({ ...record, at: clock.now() }),
+      record: assertNotificationConsentRecord({ ...record, at: formatInstant(at) }),
     });
   };
   const noticesOf = (player: string): readonly NotificationNotice[] =>
@@ -1140,31 +1184,40 @@ export function createNotificationConformanceBackend(
         `Provider ${entry.provider} is server-readable but the harness has no readServerPermission.`,
       );
     }
-    return input.readServerPermission({ player: request.player, topic: request.topic });
+    try {
+      return await input.readServerPermission({ player: request.player, topic: request.topic });
+    } catch (error) {
+      // A host that cannot answer now is retried, whatever the error's class.
+      throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
+        message: `The host could not answer the send-time permission read for ${request.player}.`,
+        cause: error,
+      });
+    }
   };
   /**
    * The first `rate-limited` answer defers by `retryAfterSeconds` (60 when
    * absent); later ones double that delay, without jitter so vectors stay
-   * deterministic; 24 hours after the first, the send gives up.
+   * deterministic. No deferral runs past 24 hours after the first, and an
+   * answer at or after that point gives the send up.
    */
   const nextRateLimit = (
     prior: RateLimitState | undefined,
     retryAfterSeconds: number | undefined,
   ): { readonly until: string; readonly state: RateLimitState } | undefined => {
     const at = now();
-    if (prior === undefined) {
-      const delaySeconds = retryAfterSeconds ?? notificationConformanceRetryAfterSeconds;
-      return {
-        until: formatInstant(at + delaySeconds * secondMs),
-        state: { since: at, delaySeconds, attempts: 1 },
-      };
-    }
-    if (at - prior.since >= rateLimitGiveUpMs) {
+    const since = prior?.since ?? at;
+    const deadline = since + rateLimitGiveUpMs;
+    if (at >= deadline) {
       return undefined;
     }
+    const delaySeconds = prior?.delaySeconds
+      ?? (retryAfterSeconds !== undefined && Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+        ? retryAfterSeconds
+        : notificationConformanceRetryAfterSeconds);
+    const attempts = prior?.attempts ?? 0;
     return {
-      until: formatInstant(at + prior.delaySeconds * 2 ** prior.attempts * secondMs),
-      state: { ...prior, attempts: prior.attempts + 1 },
+      until: formatInstant(Math.min(at + delaySeconds * 2 ** attempts * secondMs, deadline)),
+      state: { since, delaySeconds, attempts: attempts + 1 },
     };
   };
 
@@ -1186,7 +1239,7 @@ export function createNotificationConformanceBackend(
     const sent = historyFor(request.player, request.idempotencyKey);
     const evaluated = recipients.map((recipient) => {
       const locale = request.locale ?? recipient.locale;
-      const decision = evaluateNotificationDelivery({
+      const decision = decide({
         entry: provider,
         ...(input.deployment === undefined ? {} : { deployment: input.deployment }),
         topic,
@@ -1481,8 +1534,17 @@ export function createNotificationConformanceBackend(
     if (!reminders.includes(reminder)) {
       return;
     }
+    let idempotencyKey: string;
+    try {
+      idempotencyKey = createNotificationReminderIdempotencyKey(reminder);
+    } catch (error) {
+      removeReminder(reminder);
+      throw new NotificationSendInputError(error instanceof Error ? error.message : String(error), {
+        cause: error,
+      });
+    }
     const request: SendRequest = {
-      idempotencyKey: createNotificationReminderIdempotencyKey(reminder),
+      idempotencyKey,
       player: reminder.player,
       topic: reminder.topic,
       ...(reminder.templateData === undefined ? {} : { templateData: reminder.templateData }),
@@ -1508,7 +1570,7 @@ export function createNotificationConformanceBackend(
       );
     } catch (error) {
       // A send that cannot be made (a caller error) fails once; any other failure is retried.
-      settled = error instanceof TypeError;
+      settled = error instanceof NotificationSendInputError;
       throw error;
     } finally {
       if (settled) {
@@ -1537,7 +1599,7 @@ export function createNotificationConformanceBackend(
         () => ledger.get(key) === held && due.every((row) => held.rows.includes(row)),
       );
     } catch (error) {
-      if (error instanceof TypeError && ledger.get(key) === held) {
+      if (error instanceof NotificationSendInputError && ledger.get(key) === held) {
         // A replay that cannot be made fails once instead of on every run.
         dropRows(key, held, (row) => due.includes(row));
       }
@@ -1564,15 +1626,28 @@ export function createNotificationConformanceBackend(
     };
     const owed = noticesOf(player).some((candidate) =>
       candidate.kind === notice.kind && candidate.record.at === notice.record.at);
-    if (!owed || lookup(request.idempotencyKey) !== undefined || claims.has(request.idempotencyKey)) {
+    if (
+      !owed
+      || failedNotices.has(request.idempotencyKey)
+      || lookup(request.idempotencyKey) !== undefined
+      || claims.has(request.idempotencyKey)
+    ) {
       return;
     }
-    await sendNew(
-      request,
-      notificationSendFingerprint(request),
-      { kind: 'notice', notice: notice.kind, recordAt: notice.record.at },
-      true,
-    );
+    try {
+      await sendNew(
+        request,
+        notificationSendFingerprint(request),
+        { kind: 'notice', notice: notice.kind, recordAt: notice.record.at },
+        true,
+      );
+    } catch (error) {
+      if (error instanceof NotificationSendInputError) {
+        // The notice topic cannot render it (a catalog error): the game still owes it in the game.
+        failedNotices.add(request.idempotencyKey);
+      }
+      throw error;
+    }
   };
 
   return {
@@ -1735,6 +1810,15 @@ export function createNotificationConformanceBackend(
         ...(reminder.templateData === undefined ? {} : { templateData: reminder.templateData }),
         ...(reminder.link === undefined ? {} : { link: reminder.link }),
       };
+      try {
+        // A reminder whose send could not be keyed is refused now, not at every scheduler run.
+        createNotificationReminderIdempotencyKey(stored);
+      } catch (error) {
+        throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
+          message: error instanceof Error ? error.message : String(error),
+          cause: error,
+        });
+      }
       const endpointPermissions = provider.addressing === 'device'
         ? validEndpointsOf(session.player).map((endpoint) => endpoint.permission)
         : [];
@@ -1804,6 +1888,22 @@ export function createNotificationConformanceBackend(
         throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
           message: 'A notice names its kind and the time of an advertising or night record of the player.',
         });
+      }
+      // Only a notice still owed is recorded, so a retried call never skips the next one.
+      const owed = noticesOf(session.player).some((candidate) =>
+        candidate.kind === notice.kind && candidate.record.at === recordAt);
+      if (!owed) {
+        return;
+      }
+      if (notice.kind === 'reconfirmation') {
+        // The next re-confirmation of the same consent has the same record:
+        // before the previous one's due date has passed, a call repeats that one.
+        const given = noticesGiven.filter((entry) =>
+          entry.player === session.player && entry.kind === 'reconfirmation' && entry.recordAt === recordAt)
+          .length;
+        if (given > 0 && toSeoulCalendarDate(clock.now()) <= notificationReconfirmationDueBy(recordAt, given)) {
+          return;
+        }
       }
       noticesGiven.push({
         player: session.player,
@@ -2015,11 +2115,23 @@ async function asInvalidInput<Result>(work: () => Promise<Result>): Promise<Resu
   try {
     return await work();
   } catch (error) {
-    if (error instanceof TypeError) {
+    if (error instanceof NotificationSendInputError) {
       throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
         message: error.message,
         cause: error,
       });
+    }
+    throw error;
+  }
+}
+
+/** The policy gate, with its caller errors as `NotificationSendInputError`. */
+function decide(input: EvaluateNotificationDeliveryInput): NotificationDeliveryDecision {
+  try {
+    return evaluateNotificationDelivery(input);
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new NotificationSendInputError(error.message, { cause: error });
     }
     throw error;
   }
@@ -2196,11 +2308,16 @@ type RuntimeQueue = 'record' | 'register' | 'local';
  *   providers write `delivery-permission`, and topic-scope providers write
  *   `host-agreement` with the host evidence, plus a `topic-preference` of
  *   `granted` when the player accepts a `requested` topic's agreement.
- *   Per-send acceptances are appended every time. A record observed before
- *   authentication waits for it (only the latest per kind and scope), and a
- *   record observed for one player waits for that player's session.
+ *   Per-send acceptances are appended every time. A record belongs to the
+ *   player signed in when the call or event began: one observed before
+ *   authentication waits for it (only the latest per kind and scope), and one
+ *   observed for a player waits for that player's session. A player action
+ *   (`setTopicPreference`, `setAdvertisingConsent`) needs an authenticated
+ *   player and throws `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` without one.
+ *   A record the backend would refuse is dropped and its error surfaces.
  * - Registrations: the provider's registration goes to the backend at
- *   authentication, on `register()`, on `endpoint-changed`, and when a read
+ *   authentication, on `register()`, on `endpoint-changed` (a rotated device
+ *   address, or a platform user's changed locale or zone), and when a read
  *   or request changes the device's decided permission. An identical one for
  *   the same player and session is skipped for 7 days, except on
  *   `register()`. `unregister()` unbinds the installation from the player
@@ -2246,10 +2363,7 @@ export function createNotificationConformanceRuntime(
 
   const emit = (event: NotificationEvent): void => {
     if (!gameSubscribed) {
-      buffer.push(event);
-      if (buffer.length > eventBufferLimit) {
-        buffer.shift();
-      }
+      bufferEvent(buffer, event);
       return;
     }
     failures.push(...deliverEach([...listeners], [event]));
@@ -2371,16 +2485,45 @@ export function createNotificationConformanceRuntime(
       throw error;
     }
   };
-  const queueRecords = (pending: readonly PendingRecord[]): Promise<void> =>
-    pending.length === 0 && waitingRecords.length === 0
+  const queueRecords = (pending: readonly PendingRecord[]): Promise<void> => {
+    // A record the backend would refuse (a provider's malformed evidence) is
+    // dropped, so it never blocks the records after it; its error surfaces.
+    const valid = pending.filter((next) => {
+      try {
+        assertNotificationConsentRecord(next.record);
+        return true;
+      } catch (error) {
+        failures.push(error);
+        return false;
+      }
+    });
+    return valid.length === 0 && waitingRecords.length === 0
       ? Promise.resolve()
-      : enqueue('record', () => writeRecords(pending));
-  /** The records the decided states in `observations` call for. */
+      : enqueue('record', () => writeRecords(valid));
+  };
+  /**
+   * A player action is recorded for the authenticated player, never for
+   * whoever authenticates next.
+   */
+  const requirePlayer = (operation: string): string => {
+    const player = sessionPlayer();
+    if (player === undefined) {
+      throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
+        message: `${operation} records a player action, which needs an authenticated player.`,
+      });
+    }
+    return player;
+  };
+  /**
+   * The records the decided states in `observations` call for, for `player`:
+   * the one authenticated when the call began, or `undefined` before
+   * authentication.
+   */
   const permissionRecords = (
     capabilities: NotificationCapabilities,
     observations: readonly Observation[],
     evidence: NotificationPermissionResult['evidence'],
-    player: string | undefined = sessionPlayer(),
+    player: string | undefined,
   ): PendingRecord[] => {
     const pending: PendingRecord[] = [];
     const proof = evidence === undefined ? {} : { evidence };
@@ -2745,11 +2888,15 @@ export function createNotificationConformanceRuntime(
     if (event.type === 'endpoint-changed') {
       const { registration } = event;
       track(enqueue('register', async () => {
+        const { remote } = await provider.getCapabilities();
+        const platformUser = registration.address.kind === 'platform-user';
         if (
-          isDeviceAddressing(await provider.getCapabilities())
-          && registration.address.kind !== 'platform-user'
+          remote.supported
+          && (remote.addressing === 'platform-user') === platformUser
+          && remote.addressing !== 'none'
         ) {
-          // A rotated address replaces the old one for this installation.
+          // A rotated address replaces the old one for this installation; a
+          // platform user's changed locale or zone reaches the backend too.
           await sendRegistration(registration, false);
         }
       }));
@@ -2790,7 +2937,8 @@ export function createNotificationConformanceRuntime(
       configurationIssue = input.registryEntry === undefined || !capabilities.remote.supported
         ? undefined
         : notificationRegistryMismatch(capabilities, input.registryEntry);
-      await reconcileLocal();
+      // A backend that cannot answer does not fail the start; the next read reconciles.
+      await settle(reconcileLocal());
     },
     stop() {
       unsubscribeProvider?.();
@@ -2812,6 +2960,7 @@ export function createNotificationConformanceRuntime(
     },
     async getPermission(request): Promise<NotificationRuntimePermissionSnapshot> {
       assertTopics(request.topics, false);
+      const player = sessionPlayer();
       const capabilities = await capabilitiesOf();
       const snapshot = await provider.getPermission({ topics: request.topics });
       if (capabilities.availability === 'unsupported') {
@@ -2832,6 +2981,7 @@ export function createNotificationConformanceRuntime(
         capabilities,
         hostObservations(capabilities, states, request.topics),
         undefined,
+        player,
       )));
       await settle(syncRegistration(capabilities, states.app));
       await settle(cancelRevokedLocal(capabilities, states, request.topics));
@@ -2847,6 +2997,8 @@ export function createNotificationConformanceRuntime(
     },
     async requestPermission(request): Promise<NotificationPermissionResult> {
       assertTopics(request.topics, true);
+      // The records belong to the player signed in when the prompt opened.
+      const player = sessionPlayer();
       if (typeof request.gesture !== 'boolean') {
         throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
           message: 'requestPermission needs a boolean gesture.',
@@ -2930,14 +3082,14 @@ export function createNotificationConformanceRuntime(
             state: stateIn(states, topic),
             accepted: isAcceptance(outcomes.get(topic)),
           }));
-      const pending = permissionRecords(capabilities, observations, result?.evidence);
+      const pending = permissionRecords(capabilities, observations, result?.evidence, player);
       if (scope === 'topic') {
         for (const topic of asked) {
           // Accepting a requested topic's agreement is the player's request for it.
           if (isAcceptance(outcomes.get(topic)) && topicOf(topic)?.purpose === 'requested') {
             pending.push({
               mode: 'changed',
-              player: sessionPlayer(),
+              player,
               record: { kind: 'topic-preference', topic, state: 'granted', source: 'player', at: clock.now() },
             });
           }
@@ -2961,6 +3113,7 @@ export function createNotificationConformanceRuntime(
     },
     async revokePermission(request): Promise<NotificationPermissionResult> {
       assertTopics(request.topics, true);
+      const player = sessionPlayer();
       const capabilities = await capabilitiesOf();
       const revoke = provider.revokePermission;
       if (capabilities.permission.prompt !== 'game' || revoke === undefined) {
@@ -2994,7 +3147,7 @@ export function createNotificationConformanceRuntime(
       ) {
         await settle(queueRecords([{
           mode: 'changed',
-          player: sessionPlayer(),
+          player,
           record: { kind: 'delivery-permission', state: states.app, source: 'player', at: clock.now() },
         }]));
       }
@@ -3038,12 +3191,13 @@ export function createNotificationConformanceRuntime(
           message: 'setTopicPreference needs a declared topic and a boolean.',
         });
       }
+      const player = requirePlayer('setTopicPreference');
       await capabilitiesOf();
       // The withdrawal is recorded first, so the server stops sending and no
       // new local reminder passes the gate even if cancelling fails.
       await queueRecords([{
         mode: 'changed',
-        player: sessionPlayer(),
+        player,
         record: {
           kind: 'topic-preference',
           topic: request.topic,
@@ -3068,9 +3222,9 @@ export function createNotificationConformanceRuntime(
           message: 'setAdvertisingConsent needs an advertising or night decision and the consent text version.',
         });
       }
+      const player = requirePlayer('setAdvertisingConsent');
       await capabilitiesOf();
       // Each call is a consent decision the law asks to notify, so each one is appended.
-      const player = sessionPlayer();
       await queueRecords((['advertising', 'night'] as const).flatMap((kind) => {
         const state = request[kind];
         return state === undefined

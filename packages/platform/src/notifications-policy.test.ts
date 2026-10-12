@@ -338,13 +338,18 @@ describe('evaluateNotificationDelivery', () => {
     }))).toEqual({ status: 'suppressed', reason: 'night-consent-missing' });
     // The window holds neither other purposes nor a deployment without the Korean rules.
     expect(evaluateNotificationDelivery(input({ at: tenPm })).status).toBe('allowed');
-    for (const deployment of [{ advertisingRules: 'none' } as const, undefined]) {
-      const decision = evaluateNotificationDelivery({
-        ...input({ topic: advertising, consent, at: tenPm }),
-        ...(deployment === undefined ? { deployment: {} } : { deployment }),
-      });
-      expect(decision.status).toBe('allowed');
-    }
+    expect(evaluateNotificationDelivery(input({
+      topic: advertising,
+      consent,
+      at: tenPm,
+      deployment: { advertisingRules: 'none' },
+    })).status).toBe('allowed');
+    // A deployment that never chose its rules fails closed for advertising, and only for it.
+    expect(() => evaluateNotificationDelivery(input({ topic: advertising, consent, deployment: {} })))
+      .toThrow(/needs the deployment's advertisingRules/u);
+    const { deployment: _deployment, ...undeployed } = input({ topic: advertising, consent });
+    expect(() => evaluateNotificationDelivery(undeployed)).toThrow(/advertisingRules/u);
+    expect(evaluateNotificationDelivery({ ...input(), deployment: {} }).status).toBe('allowed');
   });
 
   it('step 6: quiet hours hold any purpose in the recipient zone', () => {
@@ -415,6 +420,20 @@ describe('evaluateNotificationDelivery', () => {
       entry: minute,
       history: [{ ...sent(noon), provider: 'apps-in-toss' }, { ...sent(noon), provider: 'apps-in-toss' }],
     })).status).toBe('allowed');
+    // A full limit of a day or longer suppresses whatever the order of the limits,
+    // and full shorter limits defer until every one of them has room.
+    const recent = [sent('2026-10-12T02:59:20Z'), sent('2026-10-12T02:59:30Z'), sent('2026-10-12T02:59:40Z')];
+    for (const limits of [
+      [{ count: 2, windowSeconds: 60 }, { count: 3, windowSeconds: 86_400 }],
+      [{ count: 3, windowSeconds: 86_400 }, { count: 2, windowSeconds: 60 }],
+    ]) {
+      expect(evaluateNotificationDelivery(input({ entry: { ...fcm, limits }, history: recent })))
+        .toEqual({ status: 'suppressed', reason: 'provider-limit' });
+    }
+    expect(evaluateNotificationDelivery(input({
+      entry: { ...fcm, limits: [{ count: 3, windowSeconds: 60 }, { count: 1, windowSeconds: 120 }] },
+      history: recent,
+    }))).toEqual({ status: 'deferred', reason: 'provider-limit', until: '2026-10-12T03:01:40Z' });
   });
 
   it('step 8: under the Korean rules renders advertising with the label, sender, opt-out line and action, and expiry', () => {
@@ -693,6 +712,21 @@ describe('notification time windows', () => {
     expect(() => normalizeNotificationTimestamp('soon')).toThrow(/Invalid ISO-8601/u);
     // A time without an offset would depend on the process's zone.
     expect(() => normalizeNotificationTimestamp('2026-10-12T03:00:00')).toThrow();
+    // RFC 3339 allows lower-case separators; calendar fields out of range are refused, not rolled over.
+    expect(normalizeNotificationTimestamp('2026-10-12t03:00:00z')).toBe('2026-10-12T03:00:00Z');
+    expect(normalizeNotificationTimestamp('2028-02-29T23:30:00-01:00')).toBe('2028-03-01T00:30:00Z');
+    expect(normalizeNotificationTimestamp('0050-01-01T00:00:00Z')).toBe('0050-01-01T00:00:00Z');
+    expect(normalizeNotificationTimestamp('2026-10-12T03:00:00.123456789Z')).toBe('2026-10-12T03:00:00.123Z');
+    for (const at of [
+      '2026-02-31T00:00:00Z',
+      '2027-02-29T00:00:00Z',
+      '2026-13-01T00:00:00Z',
+      '2026-10-12T24:00:00Z',
+      '2026-10-12T23:59:60Z',
+      '2026-10-12T03:00:00+24:00',
+    ]) {
+      expect(() => normalizeNotificationTimestamp(at), at).toThrow(/Invalid ISO-8601/u);
+    }
   });
 });
 

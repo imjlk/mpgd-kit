@@ -2186,7 +2186,7 @@
         "properties": {
           "advertisingRules": {
             "$ref": "#/components/schemas/NotificationAdvertisingRules",
-            "description": "Required when the catalog has an `advertising` topic; absent reads as `none`.",
+            "description": "Required when the catalog has an `advertising` topic: the gate refuses to\nevaluate an advertising send without it.",
             "readOnly": true
           },
           "advertisingSender": {

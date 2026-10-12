@@ -208,6 +208,23 @@ const endpointRows = (backend: ReturnType<typeof setup>['backend']) =>
     endpoint.status,
   ]);
 
+/** An authenticated OS player with a granted device endpoint. */
+async function devicePlayer(
+  catalog: readonly NotificationTopicDeclaration[] = [energy, challenge],
+  options: SetupOptions = {},
+) {
+  const context = setup(osProfile, catalog, options);
+  await context.runtime.start();
+  context.backend.authenticate('p-1');
+  context.host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+  context.host.queuePrompt('granted');
+  await context.runtime.requestPermission({
+    topics: [catalog[0]?.id ?? 'energy-full'],
+    gesture: true,
+  });
+  return context;
+}
+
 describe('notifications conformance runner', () => {
   it('passes every RFC vector with the reference runtime and fakes', async () => {
     const results = await runNotificationConformanceVectors(vectors);
@@ -843,17 +860,6 @@ describe('notifications reference runtime: registrations and endpoints', () => {
 });
 
 describe('notifications fake backend: sends and the ledger', () => {
-  /** An authenticated OS player with a granted device endpoint. */
-  async function devicePlayer(catalog: readonly NotificationTopicDeclaration[] = [energy, challenge], options: SetupOptions = {}) {
-    const context = setup(osProfile, catalog, options);
-    await context.runtime.start();
-    context.backend.authenticate('p-1');
-    context.host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
-    context.host.queuePrompt('granted');
-    await context.runtime.requestPermission({ topics: [catalog[0]?.id ?? 'energy-full'], gesture: true });
-    return context;
-  }
-
   it('binds a key to its request and refuses reserved prefixes and invalid data', async () => {
     const { backend } = await devicePlayer();
     const send = { topic: 'rival-challenge', idempotencyKey: 'k-1', data: { challengeId: 'c-1' } } as const;
@@ -1061,7 +1067,7 @@ describe('notifications fake backend: the scheduler and reminders', () => {
     expect(backend.deliveries.map((delivery) => delivery.status)).toEqual(['deferred', 'delivered']);
   });
 
-  it('sends a due reminder once when schedulers overlap, and retries a failed permission read', async () => {
+  it('sends a due reminder once when schedulers overlap, and retries a failed host read of any class', async () => {
     const clock = createNotificationConformanceClock(now);
     let reads = 0;
     const backend = createNotificationConformanceBackend({
@@ -1073,7 +1079,8 @@ describe('notifications fake backend: the scheduler and reminders', () => {
       async readServerPermission(): Promise<'granted'> {
         reads += 1;
         if (reads === 2) {
-          throw new Error('host unreachable');
+          // A fetch runtime reports a network failure as a TypeError.
+          throw new TypeError('fetch failed');
         }
         return 'granted';
       },
@@ -1081,7 +1088,7 @@ describe('notifications fake backend: the scheduler and reminders', () => {
     backend.authenticate('p-1');
     expect(await backend.setReminder({ key: 'k', topic: 'rival-challenge', fireAt: now })).toBe('scheduled');
     // A failed read is not a caller error: the reminder stays for the next run.
-    await expect(backend.runScheduler()).rejects.toThrow(/host unreachable/u);
+    await expect(backend.runScheduler()).rejects.toThrow(/could not answer the send-time permission read/u);
     expect(backend.reminders).toHaveLength(1);
     await Promise.all([backend.runScheduler(), backend.runScheduler()]);
     expect(backend.providerCalls.map((call) => call.idempotencyKey))
@@ -1261,8 +1268,16 @@ describe('notifications fake backend: the scheduler and reminders', () => {
     // A notice must name a record of the player.
     await expect(runtime.notices.recordShown({ kind: 'reconfirmation', recordAt: '2026-10-11T03:00:00Z' }))
       .rejects.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT' });
+    // Before the pushed notice's due date has passed, the game showing it repeats it.
+    const given = backend.noticesGiven.length;
+    await runtime.notices.recordShown({ kind: 'reconfirmation', recordAt: '2026-10-12T12:00:00+09:00' });
+    expect(backend.noticesGiven).toHaveLength(given);
+    // After it, the game gives the next one in the game.
+    clock.set('2031-01-01T03:00:00Z');
     await runtime.notices.recordShown({ kind: 'reconfirmation', recordAt: '2026-10-12T12:00:00+09:00' });
     expect(backend.noticesGiven.at(-1)).toMatchObject({ channel: 'in-game', recordAt: '2026-10-12T03:00:00Z' });
+    expect(await runtime.notices.list())
+      .toEqual([expect.objectContaining({ kind: 'reconfirmation', dueBy: '2034-10-11' })]);
   });
 
   it('lists no notices without the Korean rules', async () => {
@@ -1489,5 +1504,253 @@ describe('notifications reference runtime: local reminders', () => {
     relay.emit({ type: 'permission-changed', snapshot: { app: 'blocked', topics: {} } });
     await runtime.runUntilIdle();
     expect(host.localPending).toEqual([]);
+  });
+});
+
+describe('notifications reference runtime and fakes: attribution, failures, and bounds', () => {
+  it('records a player action only for an authenticated player', async () => {
+    const { backend, runtime } = setup(osProfile, [energy, weekend], { deployment: kr });
+    await runtime.start();
+    await expect(runtime.setTopicPreference({ topic: 'energy-full', enabled: true }))
+      .rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+    await expect(runtime.setAdvertisingConsent({ advertising: 'granted', textVersion: 'ad-v1' }))
+      .rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+    // Nothing waits to be written for whoever signs in next.
+    backend.authenticate('someone-else');
+    await runtime.runUntilIdle();
+    expect(backend.consent).toEqual([]);
+  });
+
+  it('records an answer for the player who opened the prompt, even after an account switch', async () => {
+    const agreement = { ...energy, mapping: { templateSetCode: 'energy', agreement: 'required' } };
+    const { host, backend, createRuntime } = setup(hostProfile, [agreement]);
+    let release: (() => void) | undefined;
+    const sheetOpen = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const runtime = createRuntime({
+      ...host.provider,
+      async requestPermission(input) {
+        await sheetOpen;
+        return host.provider.requestPermission(input);
+      },
+    });
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.queuePrompt('granted');
+    const asking = runtime.requestPermission({ topics: ['energy-full'], gesture: true });
+    // Another player signs in while the agreement sheet is open.
+    backend.authenticate('p-2');
+    release?.();
+    expect(await asking).toMatchObject({ outcomes: { 'energy-full': 'granted' } });
+    await runtime.runUntilIdle();
+    expect(backend.consent).toEqual([]);
+    backend.authenticate('p-1');
+    await runtime.runUntilIdle();
+    expect(backend.consent.map((record) => [record.player, record.kind, record.state])).toEqual([
+      ['p-1', 'host-agreement', 'granted'],
+      ['p-1', 'topic-preference', 'granted'],
+    ]);
+  });
+
+  it('retries a host read that fails with any error class and keeps the waiting send', async () => {
+    const clock = createNotificationConformanceClock(now);
+    let failing = false;
+    const backend = createNotificationConformanceBackend({
+      entry: notificationConformanceRegistryEntry({
+        provider: optInProfile.provider,
+        capabilities: optInProfile.capabilities,
+      }),
+      catalog: [duel],
+      clock,
+      defaultLocale: 'ko',
+      defaultPlayer: 'p-1',
+      readServerPermission: () => {
+        if (failing) {
+          throw new TypeError('fetch failed');
+        }
+        return 'granted';
+      },
+    });
+    backend.authenticate('p-1');
+    backend.queueProviderResult({ status: 'rate-limited' });
+    const send = { topic: 'rival-challenge', idempotencyKey: 'k' } as const;
+    expect(await backend.deliver(send)).toMatchObject({ status: 'deferred' });
+    clock.advance(60);
+    failing = true;
+    await expect(backend.runScheduler()).rejects.toThrow(/could not answer the send-time permission read/u);
+    // The waiting send keeps its stored answer, and a new send is retryable.
+    expect(await backend.deliver(send)).toMatchObject({ status: 'deferred' });
+    await expect(backend.deliver({ ...send, idempotencyKey: 'k-2' }))
+      .rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', retryable: true });
+    failing = false;
+    await backend.runScheduler();
+    expect(await backend.deliver(send)).toEqual({ status: 'delivered', alreadyProcessed: true });
+  });
+
+  it('keeps notices of records written in one call apart, and records a notice only while owed', async () => {
+    const { clock, host, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
+      deployment: { ...kr, noticeTopic: 'consent-notice' },
+    });
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['consent-notice'], gesture: true });
+    await runtime.setAdvertisingConsent({ advertising: 'granted', night: 'granted', textVersion: 'ad-v1' });
+    // Each record names its own instant.
+    expect(backend.consent.map((record) => record.at)).toEqual([now, '2026-10-12T03:00:00.001Z']);
+    await runtime.notices.recordShown({ kind: 'consent-result', recordAt: now });
+    await runtime.notices.recordShown({ kind: 'reconfirmation', recordAt: now });
+    // A retried call records nothing more.
+    await runtime.notices.recordShown({ kind: 'reconfirmation', recordAt: now });
+    expect((await runtime.notices.list()).map((notice) => [notice.kind, notice.record.kind, notice.dueBy]))
+      .toEqual([
+        ['consent-result', 'night', '2026-10-26'],
+        ['reconfirmation', 'night', '2028-10-11'],
+        ['reconfirmation', 'advertising', '2030-10-11'],
+      ]);
+    clock.set('2026-10-18T15:00:00Z');
+    await backend.runScheduler();
+    expect(backend.providerCalls.map((call) => call.sendKey))
+      .toEqual(['notice:p-1:consent-result:2026-10-12T03:00:00.001Z']);
+  });
+
+  it('fails a notice the notice topic cannot render once, and leaves it owed in the game', async () => {
+    const broken = { ...noticeTopic, copy: { ko: { title: '안내', body: '{{playerName}}님, {{consentDate}}' } } };
+    const { clock, host, backend, runtime } = setup(osProfile, [weekend, broken], {
+      deployment: { ...kr, noticeTopic: 'consent-notice' },
+    });
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['consent-notice'], gesture: true });
+    await runtime.setAdvertisingConsent({ advertising: 'granted', textVersion: 'ad-v1' });
+    clock.set('2026-10-19T03:00:00Z');
+    await expect(backend.runScheduler()).rejects.toThrow(/could not process 1 item/u);
+    await expect(backend.runScheduler()).resolves.toBeUndefined();
+    expect(backend.providerCalls).toEqual([]);
+    expect(await runtime.notices.list()).toContainEqual(expect.objectContaining({ kind: 'consent-result' }));
+  });
+
+  it('starts and answers reads while the backend is down', async () => {
+    const { host, backend, createRuntime } = setup(osProfile);
+    backend.authenticate('p-1');
+    const healthy = createRuntime();
+    host.queuePrompt('granted');
+    await healthy.requestPermission({ topics: ['energy-full'], gesture: true });
+    await healthy.setTopicPreference({ topic: 'energy-full', enabled: true });
+    await healthy.reminders.set({ key: 'a', topic: 'energy-full', fireAt: '2026-10-12T06:00:00Z' });
+    const down = createRuntime(host.provider, {
+      ...backend,
+      async listConsent() {
+        throw new Error('backend down');
+      },
+    });
+    await expect(down.start()).resolves.toBeUndefined();
+    expect(await down.getPermission({ topics: ['energy-full'] })).toMatchObject({ app: 'granted' });
+    await expect(down.runUntilIdle()).rejects.toThrow(/backend down/u);
+    expect(host.localPending).toHaveLength(1);
+  });
+
+  it('drops a record the backend would refuse, so later records are still written', async () => {
+    const { host, backend, createRuntime } = setup(hostProfile, [challenge]);
+    const runtime = createRuntime({
+      ...host.provider,
+      async requestPermission(input) {
+        const result = await host.provider.requestPermission(input);
+        // A provider bug: evidence whose payload is not flat.
+        return { ...result, evidence: { schema: 'broken', payload: { nested: { a: 1 } } } as never };
+      },
+    });
+    backend.authenticate('p-1');
+    host.queuePrompt('granted');
+    expect(await runtime.requestPermission({ topics: ['rival-challenge'], gesture: true }))
+      .toMatchObject({ outcomes: { 'rival-challenge': 'granted' } });
+    await expect(runtime.runUntilIdle()).rejects.toThrow();
+    await runtime.setTopicPreference({ topic: 'rival-challenge', enabled: false });
+    expect(backend.consent.map((record) => [record.kind, record.state])).toEqual([
+      ['topic-preference', 'withdrawn'],
+    ]);
+  });
+
+  it('never defers a rate-limited send past a day after the first answer', async () => {
+    const { clock, backend } = await devicePlayer();
+    backend.queueProviderResult({ status: 'rate-limited', retryAfterSeconds: 3600 });
+    await backend.deliver({ topic: 'rival-challenge', idempotencyKey: 'c-1' });
+    for (let run = 0; run < 8; run += 1) {
+      const latest = backend.deliveries.at(-1);
+      if (latest?.status !== 'deferred') {
+        break;
+      }
+      clock.set(latest.until);
+      backend.queueProviderResult({ status: 'rate-limited' });
+      await backend.runScheduler();
+    }
+    expect(backend.deliveries.map((delivery) =>
+      delivery.status === 'deferred'
+        ? delivery.until
+        : `${delivery.status}: ${'reason' in delivery ? delivery.reason : ''}`))
+      .toEqual([
+        '2026-10-12T04:00:00Z',
+        '2026-10-12T06:00:00Z',
+        '2026-10-12T10:00:00Z',
+        '2026-10-12T18:00:00Z',
+        '2026-10-13T03:00:00Z',
+        'unavailable: provider-rate-limited',
+      ]);
+  });
+
+  it('refuses deployment settings with an unknown zone', () => {
+    expect(() => createNotificationConformanceBackend({
+      entry: undefined,
+      catalog: [],
+      clock: createNotificationConformanceClock(now),
+      deployment: { timeZone: 'Mars/Olympus_Mons' },
+      defaultLocale: 'ko',
+      defaultPlayer: 'p-1',
+    })).toThrow(/Unknown time zone/u);
+  });
+
+  it('keeps a cold-start open when more events arrive than the buffer holds', async () => {
+    const { host, runtime } = setup(osProfile);
+    host.tap({ channel: 'remote', route: '/?entry=cold' });
+    await runtime.start();
+    for (let index = 0; index < 70; index += 1) {
+      host.issueEndpoint({ kind: 'fcm-token', value: `tok-${index}` });
+    }
+    const events: NotificationEvent[] = [];
+    runtime.subscribe((event) => events.push(event));
+    expect(events).toHaveLength(64);
+    expect(events[0]).toMatchObject({ type: 'opened', source: 'cold', route: '/?entry=cold' });
+    expect(events.at(-1)).toMatchObject({ type: 'endpoint-changed' });
+  });
+
+  it("sends a platform user's changed zone that the provider announces", async () => {
+    const quietDuel = { ...duel, quietHours: { start: '22:00', end: '08:00' } };
+    const { host, backend, createRuntime } = setup(optInProfile, [quietDuel]);
+    const relay = relayed(host.provider);
+    const runtime = createRuntime(relay.provider);
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['rival-challenge'], gesture: true });
+    await runtime.runUntilIdle();
+    // 12:00 in Seoul: no quiet hours.
+    expect((await backend.deliver({ topic: 'rival-challenge', idempotencyKey: 'seoul' })).status)
+      .toBe('delivered');
+    relay.emit({
+      type: 'endpoint-changed',
+      registration: {
+        provider: optInProfile.provider,
+        address: { kind: 'platform-user' },
+        timeZone: 'America/New_York',
+      },
+    });
+    await runtime.runUntilIdle();
+    // 23:00 in New York: the quiet hours hold the send there.
+    expect(await backend.deliver({ topic: 'rival-challenge', idempotencyKey: 'new-york' }))
+      .toMatchObject({ status: 'deferred', reason: 'quiet-hours' });
   });
 });

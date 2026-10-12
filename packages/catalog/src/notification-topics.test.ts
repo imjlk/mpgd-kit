@@ -422,6 +422,7 @@ const noticeTopic = {
   channels: ['remote'],
   route: '/settings/notifications',
   copy: { ko: { title: '안내', body: '{{consentDate}}' } },
+  targets: { android: { channelId: 'notices' } },
 } as const satisfies NotificationTopicCatalogEntry;
 const withNotices = (topic: string, ...topics: readonly unknown[]): unknown => ({
   version: 'test',
@@ -447,6 +448,25 @@ assertIssue(
   'notices.topic',
   /must be a service topic with the remote channel/u,
   'the server sends a notice remotely',
+);
+// The server fills a notice only with the consent date.
+assertIssue(
+  withNotices('consent-notice', {
+    ...noticeTopic,
+    copy: { ko: { title: '{{playerName}}님', body: '{{ consentDate }}' } },
+  }),
+  'topics[0].copy.ko.title',
+  /filled only with \{\{consentDate\}\}; \{\{playerName\}\} would have no value/u,
+  'a notice placeholder other than consentDate',
+);
+assertIssue(
+  withNotices('consent-notice', {
+    ...noticeTopic,
+    targets: { reddit: { title: 'Notice', body: 'Agreed on {{date}}' } },
+  }),
+  'topics[0].targets.reddit.body',
+  /\{\{date\}\} would have no value/u,
+  'a mapped notice text is filled the same way',
 );
 
 // An advertising topic needs the deployment's rules, and under the Korean
@@ -489,6 +509,14 @@ assert.ok(
   }).issues.some((issue) =>
     issue.path === 'topics[0].targets.android' && /expiry and the opt-out action/u.test(issue.message)),
   'a provider without an expiry cannot carry advertising under the Korean rules',
+);
+// Under the Korean rules, a target that delivers advertising also delivers its notices.
+assertIssue(
+  withNotices('consent-notice', { ...advertising, targets: { android: {}, ios: {} } }, noticeTopic),
+  'notices.topic',
+  /consent-notice has no mapping for ios, which delivers an advertising topic/u,
+  'the notice topic is mapped where advertising is',
+  krDeployment,
 );
 // Without an advertising topic no deployment is needed.
 assert.equal(
