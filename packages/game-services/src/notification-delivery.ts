@@ -557,9 +557,19 @@ function normalizeDeepLink(
 
   if (deepLink.startsWith('/') && !deepLink.startsWith('//')) {
     const baseUrl = new URL('https://mpgd.invalid');
-    const parsed = new URL(deepLink, baseUrl);
+    let parsed: URL;
 
-    if (parsed.origin !== baseUrl.origin) {
+    try {
+      parsed = new URL(deepLink, baseUrl);
+    } catch {
+      // A backslash after the leading slash parses as an authority (`/\ x`).
+      throw new Error('deepLink must stay on the configured game origin.');
+    }
+
+    // Dot segments (also percent-encoded) can collapse `/.//host/path` into
+    // the pathname `//host/path`, which a client resolves as a
+    // protocol-relative link to another host.
+    if (parsed.origin !== baseUrl.origin || parsed.pathname.startsWith('//')) {
       throw new Error('deepLink must stay on the configured game origin.');
     }
 

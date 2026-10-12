@@ -672,6 +672,71 @@ await assertRejects(
   'configured game origin',
   'root-relative links must not escape through URL backslashes',
 );
+for (const [index, deepLink] of [
+  '/.//phishing.example/daily',
+  '/levels/..//phishing.example/daily',
+  '/%2e//phishing.example/daily',
+  '/%2E%2E//phishing.example/daily',
+  '/./\\phishing.example/daily',
+  '/\\mpgd.invalid//phishing.example/daily',
+  '/\\ phishing.example/daily',
+].entries()) {
+  await assertRejects(
+    () =>
+      deliveryService.deliver({
+        ...androidRequest,
+        idempotencyKey: `notification-dot-segment-link-${String(index)}`,
+        deepLink,
+      }),
+    'configured game origin',
+    `root-relative links must not normalize to a protocol-relative link: ${deepLink}`,
+  );
+}
+await assertRejects(
+  () =>
+    deliveryService.deliver({
+      ...androidRequest,
+      idempotencyKey: 'notification-protocol-relative-link',
+      deepLink: '//phishing.example/daily',
+    }),
+  'absolute URL or root-relative path',
+  'protocol-relative links should fail validation',
+);
+assertEqual(
+  normalizeNotificationDeliveryRequest(
+    {
+      ...androidRequest,
+      idempotencyKey: 'notification-inner-double-slash-link',
+      deepLink: '/levels//3?from=push#start',
+    },
+    gameDeepLinkPolicy,
+  ).deepLink,
+  '/levels//3?from=push#start',
+  'an inner double slash in a root-relative link should stay a same-origin path',
+);
+assertEqual(
+  normalizeNotificationDeliveryRequest(
+    {
+      ...androidRequest,
+      idempotencyKey: 'notification-dot-segment-same-origin-link',
+      deepLink: '/levels/../daily',
+    },
+    gameDeepLinkPolicy,
+  ).deepLink,
+  '/daily',
+  'dot segments that stay on the game origin should still normalize',
+);
+for (const deepLink of ['/levels//3?from=push#start', '/levels/../daily', '/?//x', '/#//x']) {
+  const once = normalizeNotificationDeliveryRequest(
+    { ...androidRequest, idempotencyKey: 'notification-idempotent-link', deepLink },
+    gameDeepLinkPolicy,
+  );
+  assertEqual(
+    normalizeNotificationDeliveryRequest(once, gameDeepLinkPolicy).deepLink,
+    once.deepLink,
+    `normalizing an accepted deep link twice should not change it: ${deepLink}`,
+  );
+}
 await assertRejects(
   () =>
     deliveryService.deliver({
