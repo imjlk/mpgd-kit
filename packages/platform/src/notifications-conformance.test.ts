@@ -1454,6 +1454,46 @@ describe('notifications reference runtime: local reminders', () => {
     expect(host.localPending).toEqual([]);
   });
 
+  it('cancels pending local reminders whose topic an app update took off the local route', async () => {
+    const daily = { ...energy, id: 'daily-puzzle' };
+    const chest = { ...energy, id: 'chest-ready', channels: ['local'] } as const;
+    const { clock, host, backend, runtime, storage, entry } = setup(osProfile, [energy, daily, chest]);
+    backend.authenticate('p-1');
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['energy-full'], gesture: true });
+    for (const topic of ['energy-full', 'daily-puzzle', 'chest-ready']) {
+      await runtime.setTopicPreference({ topic, enabled: true });
+    }
+    await runtime.reminders.set({ key: 'a', topic: 'energy-full', fireAt: '2026-10-12T06:00:00Z' });
+    await runtime.reminders.set({ key: 'b', topic: 'daily-puzzle', fireAt: '2026-10-12T07:00:00Z' });
+    await runtime.reminders.set({ key: 'c', topic: 'chest-ready', fireAt: '2026-10-12T08:00:00Z' });
+    expect(host.localPending.map((pending) => pending.key)).toEqual(['a', 'b', 'c']);
+    // The update removes energy-full and leaves daily-puzzle remote only. The
+    // backend is down at start, so only the catalog decides.
+    runtime.stop();
+    host.restart();
+    const updated = createNotificationConformanceRuntime({
+      provider: host.provider,
+      backend: {
+        ...backend,
+        async listConsent() {
+          throw new Error('backend down');
+        },
+      },
+      catalog: [{ ...daily, channels: ['remote'] }, chest],
+      clock,
+      timeZone: 'Asia/Seoul',
+      defaultLocale: 'ko',
+      storage,
+      ...(entry === undefined ? {} : { registryEntry: entry }),
+    });
+    await updated.start();
+    await expect(updated.runUntilIdle()).rejects.toThrow(/backend down/u);
+    expect(host.localPending.map((pending) => pending.key)).toEqual(['c']);
+    expect(host.localOperations.filter((operation) => operation.op === 'cancel').map((operation) => operation.key))
+      .toEqual(['a', 'b']);
+  });
+
   it('cancels the reminders it scheduled when the provider cannot list them', async () => {
     const { host, backend, createRuntime } = setup(osProfile);
     const { listLocal: _listLocal, ...unlisted } = host.provider;

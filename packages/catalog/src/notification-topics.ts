@@ -1,8 +1,10 @@
 import typia, { type tags } from 'typia';
 
 import {
+  findNotificationCopy,
   notificationTopicDefinitionIssues,
   notificationTopicNeedsNoAgreement,
+  resolveNotificationAdvertisingSettings,
   type NotificationDeployment,
   type NotificationProviderRegistryEntry,
   type NotificationTopicDeclaration,
@@ -33,7 +35,10 @@ export interface NotificationTopicCatalogNotices {
 
 export interface NotificationTopicCatalog {
   readonly version: string & tags.MinLength<1>;
-  /** The locale every topic's `copy` must include, used when no other locale fits. */
+  /**
+   * The locale every topic's `copy` must include, matched without regard to
+   * case, and used when no other locale fits.
+   */
   readonly defaultLocale: string & tags.MinLength<1>;
   readonly notices?: NotificationTopicCatalogNotices;
   readonly topics: readonly NotificationTopicCatalogEntry[];
@@ -81,21 +86,26 @@ const validateNotificationTopicCatalogShape = typia.createValidateEquals<Notific
  *   prefix, backslash, control character, or dot segment, percent-encoded
  *   dots included), an `optOutRoute` for `advertising`, and quiet hours that
  *   do not start and end at the same time;
- * - topic ids are unique, every `copy` includes `defaultLocale`, and
+ * - topic ids are unique, every `copy` includes `defaultLocale` (matched
+ *   without regard to case, as `findNotificationCopy` matches it), and
  *   `notices.topic` names a declared `service` topic with the `remote`
  *   channel whose text uses no placeholder but `{{consentDate}}`;
  * - for a target with a provider entry: each mapping field follows its rule
  *   (required, a string within `maxLength` Unicode code points, one of
  *   `values`, matching `pattern`), a mapping that needs no host agreement
- *   (`agreement: 'none'`) belongs to a `service` topic, an `advertising`
- *   topic maps only to a provider that delivers advertising as free-form
- *   content (under the Korean rules, also with an expiry and actions), and a
- *   topic on a free-form provider has its own text: `copy`, or a `title` and
- *   a `body` in the mapping;
+ *   (`agreement: 'none'`) belongs to a `service` topic, a topic with the
+ *   `remote` channel maps only to a provider whose `purposes` include its
+ *   purpose, an `advertising` topic maps only to a provider that delivers
+ *   advertising as free-form content (under the Korean rules, also with an
+ *   expiry and actions), and a topic on a free-form provider has its own
+ *   text: `copy`, or a `title` and a `body` in the mapping;
  * - given an `advertising` topic, the deployment settings: `advertisingRules`,
- *   and under `kr` the advertising sender and the catalog's notice topic,
- *   mapped on every target that maps an advertising topic. A deployment
- *   `noticeTopic` must be the catalog's `notices.topic`.
+ *   and under `kr` the catalog's notice topic, mapped on every target that
+ *   maps an advertising topic and named by the deployment's `noticeTopic`,
+ *   and the advertising sender and opt-out line as gate step 8 reads them
+ *   (`resolveNotificationAdvertisingSettings`): a contact, and no blank
+ *   contact, name, or opt-out line. A deployment `noticeTopic` must be the
+ *   catalog's `notices.topic`.
  */
 export function validateNotificationTopicCatalog(
   input: unknown,
@@ -124,7 +134,8 @@ export function validateNotificationTopicCatalog(
     } else {
       ids.set(topic.id, index);
     }
-    if (topic.copy !== undefined && !Object.prototype.hasOwnProperty.call(topic.copy, catalog.defaultLocale)) {
+    // The same lookup a send makes: a locale matches a copy key without regard to case.
+    if (topic.copy !== undefined && findNotificationCopy(topic, undefined, catalog.defaultLocale) === undefined) {
       issues.push({
         path: `${at}.copy`,
         message: `copy must include the default locale ${catalog.defaultLocale}`,
@@ -233,9 +244,10 @@ function mappingIssues(
       message: `only a service topic's template may need no agreement; ${topic.id} is ${topic.purpose}`,
     });
   }
-  // Gate step 1 refuses advertising unless the provider delivers it as
-  // free-form content, which can carry the label and the sender, and under the
-  // Korean rules with an expiry and the opt-out action.
+  // Gate step 1 refuses a send whose purpose the provider does not deliver,
+  // and advertising unless the provider delivers it as free-form content,
+  // which can carry the label and the sender, and under the Korean rules with
+  // an expiry and the opt-out action.
   if (topic.purpose === 'advertising') {
     if (!provider.purposes.includes('advertising') || provider.content !== 'free-form') {
       issues.push({
@@ -248,6 +260,12 @@ function mappingIssues(
         message: `${provider.provider} cannot carry the expiry and the opt-out action the Korean advertising rules need`,
       });
     }
+  } else if (topic.channels.includes('remote') && !provider.purposes.includes(topic.purpose)) {
+    // A local-only topic is never sent remotely, so the remote purposes do not apply to it.
+    issues.push({
+      path: at,
+      message: `${provider.provider} does not deliver ${topic.purpose} topics; a ${topic.purpose} topic with the remote channel must not map to it`,
+    });
   }
   // A free-form provider sends, and a local notification shows, the topic's
   // own text: the mapping's title and body, else the copy. Without either a
@@ -365,12 +383,16 @@ function deploymentIssues(
         });
       }
     }
-    if (deployment.advertisingSender === undefined) {
+    // The scheduler sends overdue notices through the deployment's noticeTopic only.
+    if (deployment.noticeTopic === undefined) {
       issues.push({
-        path: 'deployment.advertisingSender',
-        message: 'the Korean advertising rules need the advertising sender; without it every advertising send is suppressed',
+        path: 'deployment.noticeTopic',
+        message: "the Korean advertising rules send overdue consent notices only through the deployment's noticeTopic; "
+          + `set it to the catalog's notices.topic (${catalog.notices?.topic ?? 'none declared'})`,
       });
     }
+    // The sender and the opt-out line as gate step 8 reads them.
+    issues.push(...resolveNotificationAdvertisingSettings(deployment).issues);
   }
   return issues;
 }

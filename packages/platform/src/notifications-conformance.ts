@@ -2335,8 +2335,9 @@ type RuntimeQueue = 'record' | 'register' | 'local';
  *   topic's daily cap), and quiet hours move them; server ones are checked
  *   and stored by the backend. Turning a topic off cancels its local
  *   reminders, a known permission other than granted cancels them, and start,
- *   authentication, and every backend read reconcile them with the latest
- *   preference and permission.
+ *   authentication, and every backend read reconcile them with the catalog
+ *   (a topic that no longer takes the local route loses its reminders), the
+ *   latest preference, and permission.
  * - Game listeners run after the runtime's own handling of an event; a
  *   listener that throws stops neither the others nor the runtime, and its
  *   error surfaces from `runUntilIdle`, as do failures of background work.
@@ -2767,10 +2768,13 @@ export function createNotificationConformanceRuntime(
     }
   };
   /**
-   * Cancels the pending local reminders that no longer pass: every one whose
-   * permission is known and not granted and, with the backend's records, every
-   * one whose topic preference refuses it, because a preference changed on
-   * another device never reaches this one as an event.
+   * Cancels the pending local reminders that no longer pass. First, without
+   * the backend, every one whose topic no longer takes the local route: an app
+   * update removed the topic from the catalog or took away its `local`
+   * channel. Then every one whose permission is known and not granted and,
+   * with the backend's records, every one whose topic preference refuses it,
+   * because a preference changed on another device never reaches this one as
+   * an event.
    */
   const reconcileLocal = (): Promise<void> =>
     enqueue('local', async () => {
@@ -2778,6 +2782,13 @@ export function createNotificationConformanceRuntime(
       if (!capabilities.local.supported || provider.cancelLocal === undefined) {
         return;
       }
+      const localTopicOf = (entry: LocalEntry): NotificationTopicDeclaration | undefined => {
+        const topic = topicOf(entry.topic);
+        return topic !== undefined && routeNotificationReminder(topic, capabilities) === 'local'
+          ? topic
+          : undefined;
+      };
+      await cancelLocalNow((entry) => localTopicOf(entry) === undefined);
       const pending = await listLocalEntries();
       if (pending.length === 0) {
         return;
@@ -2791,11 +2802,8 @@ export function createNotificationConformanceRuntime(
         records,
       );
       await cancelLocalNow((entry) => {
-        const topic = topicOf(entry.topic);
-        if (topic === undefined) {
-          return false;
-        }
-        if (revokesLocalReminders(stateIn(states, entry.topic))) {
+        const topic = localTopicOf(entry);
+        if (topic === undefined || revokesLocalReminders(stateIn(states, entry.topic))) {
           return true;
         }
         return records !== undefined && preferenceRefuses(topic, records, clock.now());

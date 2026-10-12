@@ -568,6 +568,9 @@ Runtime rules:
   read, the runtime compares `listLocal()` with the latest backend preference
   and permission and cancels the reminders that no longer pass, because a
   preference changed on another device never reaches this one as an event.
+  It also cancels, without waiting for the backend, every pending reminder
+  whose topic no longer takes the local route: an app update removed the
+  topic from the catalog or took away its `local` channel.
 - **Restarts.** A restart drops runtime memory and listeners. Host state,
   backend records, the persisted registration, and the backend
   authentication persist.
@@ -634,20 +637,25 @@ products and ad placements.
     agreement statement.
   - **Devvit** needs `title` ≤ 60 and `body` ≤ 100 characters and may carry a
     default `link`, a `t3_` or `t1_` id.
-- An `advertising` topic must not map to a provider whose
-  `remote.purposes` excludes it, and it may not declare the `local` channel:
-  a device-scheduled advertisement could not be withdrawn, labelled, or held
-  for the night window by the server. The validator reports both before
-  release.
+- A topic with the `remote` channel must not map to a provider whose
+  `remote.purposes` excludes its purpose, because gate step 1 would refuse
+  every send (`purpose-unsupported`). An `advertising` topic also needs a
+  provider that delivers it as free-form content and, under the Korean rules,
+  can carry an expiry and the opt-out action. It may not declare the `local`
+  channel: a device-scheduled advertisement could not be withdrawn,
+  labelled, or held for the night window by the server. The validator
+  reports each of these before release.
 - Optional `frequency` (`{ "maxPerDay": n }`), `quietHours`
   (`{ "start": "22:00", "end": "08:00" }`), and `deferrable` (default
   `true`) are applied by the [policy gate](#policy-gate), steps 6 and 7, and
   by the local route in [Reminders](#reminders).
 - `notices.topic` names a `service` topic. When the deployment enables the
   Korean rules, the server sends overdue consent notices through it (see
-  [Consent records](#consent-records)). Given the deployment settings, the
-  validator reports a catalog that has an `advertising` topic but no notice
-  topic under those rules.
+  [Consent records](#consent-records)); the deployment's `noticeTopic` names
+  the same topic for the scheduler. Given the deployment settings, the
+  validator reports a `noticeTopic` that names another topic and, under the
+  Korean rules with an `advertising` topic, a missing notice topic or
+  `noticeTopic`.
 
 ## Reminders {#reminders}
 
@@ -712,7 +720,8 @@ Pending local reminders follow later changes. When a topic's preference
 becomes `withdrawn`, or the device's delivery permission stops being
 `granted`, the runtime cancels that topic's (or every) pending local
 reminder, because the device would otherwise still show them. The
-[runtime's reconciliation](#runtime) catches changes made on another device.
+[runtime's reconciliation](#runtime) catches changes made on another device,
+and topics an app update took off the local route.
 
 Local reminders use inexact timing:
 
@@ -968,7 +977,9 @@ client's declaration. The steps run in order and the first failure decides:
    deployment's advertising sender, `{ name?, contact }`, or it is
    `suppressed: advertising-sender-missing`. `name` may be omitted only when it
    equals the app's name, and `contact` is the phone number or address the law
-   requires. The rendered content is:
+   requires. The gate trims these texts and the opt-out line: a blank
+   `contact` counts as missing, a blank `name` as omitted, and a blank opt-out
+   line as absent. The rendered content is:
    - the title starts with `(광고) `;
    - the body starts with `(광고) ` and the sender line (`name`, a space, and
      `contact`, or `contact` alone when `name` is omitted), then the copy on
@@ -1277,7 +1288,10 @@ A deployment sets `advertisingRules`:
   line, expiry, or notices.
 
 Given the deployment settings, `validate:notifications` requires this setting
-when the catalog has an `advertising` topic.
+when the catalog has an `advertising` topic. Under `kr` it also requires the
+notice topic and the advertising sender, and it reports a blank sender
+contact, sender name, or opt-out line, which [gate step 8](#policy-gate)
+would read as missing or absent.
 
 What the kit enforces for `advertising` topics under `kr`:
 

@@ -272,6 +272,23 @@ assertIssue(
 );
 const { copy: _copy, ...withoutCopy } = baseTopic;
 assert.deepEqual(issuesOf(catalogWith(withoutCopy)), []);
+// The default locale matches a copy key without regard to case, as every
+// locale match does; a language alone is not the default locale.
+const usCopy = { title: 'Energy full', body: 'Your energy is full.' };
+assert.deepEqual(
+  issuesOf({
+    version: 'test',
+    defaultLocale: 'en-US',
+    topics: [{ ...baseTopic, copy: { 'en-us': usCopy } }],
+  }),
+  [],
+);
+assertIssue(
+  { version: 'test', defaultLocale: 'en-US', topics: [{ ...baseTopic, copy: { en: usCopy } }] },
+  'topics[0].copy',
+  /default locale en-US/u,
+  'a copy with only the language of the default locale is refused',
+);
 
 // Apps in Toss mappings need a non-empty templateSetCode and the agreement the template states.
 assertIssue(
@@ -404,6 +421,42 @@ assert.equal(
 );
 assert.deepEqual(issuesOf(catalogWith({ ...advertising, targets: { android: {} } })), []);
 
+// Any topic with the remote channel maps only to a provider whose purposes
+// include its purpose, or gate step 1 refuses every send (`purpose-unsupported`).
+const withPurposes = (purposes: NotificationProviderRegistryEntry['purposes']): NotificationProviderRegistryEntry => ({
+  ...referenceNotificationProviders.fcm,
+  provider: `fixture.${purposes.join('-')}`,
+  purposes,
+});
+const kioskIssues = (topic: unknown, provider: NotificationProviderRegistryEntry) =>
+  validateNotificationTopicCatalog(catalogWith(topic), {
+    targetProviders: { kiosk: provider },
+    deployment: plainDeployment,
+  }).issues.map((issue) => `${issue.path}: ${issue.message}`);
+assert.deepEqual(kioskIssues({ ...baseTopic, targets: { kiosk: {} } }, withPurposes(['service'])), [
+  'topics[0].targets.kiosk: fixture.service does not deliver requested topics; '
+    + 'a requested topic with the remote channel must not map to it',
+]);
+assert.deepEqual(
+  kioskIssues({ ...baseTopic, purpose: 'service', targets: { kiosk: {} } }, withPurposes(['requested'])),
+  [
+    'topics[0].targets.kiosk: fixture.requested does not deliver service topics; '
+      + 'a service topic with the remote channel must not map to it',
+  ],
+);
+assert.deepEqual(
+  kioskIssues({ ...baseTopic, targets: { kiosk: {} } }, withPurposes(['service', 'requested'])),
+  [],
+);
+// A local-only topic is never sent remotely, so remote purposes do not apply to it.
+assert.deepEqual(
+  kioskIssues(
+    { ...baseTopic, channels: ['local'], targets: { kiosk: {} } },
+    withPurposes(['service']),
+  ),
+  [],
+);
+
 // Open target names without a provider entry stay unchecked.
 assert.deepEqual(
   issuesOf(catalogWith({ ...advertising, targets: { 'storefront-web': { anything: true } } })),
@@ -485,7 +538,7 @@ assert.deepEqual(
     targetProviders,
     deployment: { advertisingRules: 'kr' },
   }).issues.map((issue) => issue.path),
-  ['notices.topic', 'deployment.advertisingSender'],
+  ['notices.topic', 'deployment.noticeTopic', 'deployment.advertisingSender'],
 );
 assert.deepEqual(
   issuesOf(withNotices('consent-notice', advertisingTopic, noticeTopic), krDeployment),
@@ -497,6 +550,48 @@ assertIssue(
   /must be the catalog's notices.topic \(consent-notice\)/u,
   'the deployment names the catalog notice topic',
   { ...krDeployment, noticeTopic: 'other' },
+);
+// The scheduler sends overdue notices only through the deployment's
+// noticeTopic, so under the Korean rules an advertising catalog needs it.
+const { noticeTopic: _noticeTopic, ...krWithoutNoticeTopic } = krDeployment;
+assert.deepEqual(
+  issuesOf(withNotices('consent-notice', advertisingTopic, noticeTopic), krWithoutNoticeTopic),
+  [
+    'deployment.noticeTopic: the Korean advertising rules send overdue consent notices only '
+      + "through the deployment's noticeTopic; set it to the catalog's notices.topic (consent-notice)",
+  ],
+);
+// Without an advertising topic, or under 'none', no notice topic is needed.
+assert.deepEqual(issuesOf(catalogWith(baseTopic), krWithoutNoticeTopic), []);
+assert.deepEqual(issuesOf(catalogWith(advertisingTopic), { advertisingRules: 'none' }), []);
+// The validator reads the sender and the opt-out line as gate step 8 does: a
+// blank contact suppresses every advertising send, and a blank name or opt-out
+// line is left out of the message.
+for (const [deployment, path] of [
+  [{ ...krDeployment, advertisingSender: { contact: ' ' } }, 'deployment.advertisingSender.contact'],
+  [
+    { ...krDeployment, advertisingSender: { name: '\t', contact: '080-1234-5678' } },
+    'deployment.advertisingSender.name',
+  ],
+  [{ ...krDeployment, advertisingOptOutLine: '  ' }, 'deployment.advertisingOptOutLine'],
+] as const) {
+  assert.deepEqual(
+    validateNotificationTopicCatalog(withNotices('consent-notice', advertisingTopic, noticeTopic), {
+      targetProviders,
+      deployment,
+    }).issues.map((issue) => issue.path),
+    [path],
+    `${path} is blank`,
+  );
+}
+// Under 'none' the gate reads neither.
+assert.deepEqual(
+  issuesOf(catalogWith(advertisingTopic), {
+    advertisingRules: 'none',
+    advertisingSender: { contact: ' ' },
+    advertisingOptOutLine: ' ',
+  }),
+  [],
 );
 const noExpiry: NotificationProviderRegistryEntry = {
   ...referenceNotificationProviders.fcm,

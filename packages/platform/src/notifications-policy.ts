@@ -347,7 +347,7 @@ export interface NotificationDeployment {
    */
   readonly advertisingRules?: NotificationAdvertisingRules;
   readonly advertisingSender?: NotificationAdvertisingSender;
-  /** The free-of-charge opt-out line; `무료 수신거부: 수신거부 버튼` when absent. */
+  /** The free-of-charge opt-out line; `무료 수신거부: 수신거부 버튼` when absent or blank. */
   readonly advertisingOptOutLine?: NonEmptyString;
   /** The catalog's `notices.topic`, which overdue consent notices are sent through under `kr`. */
   readonly noticeTopic?: NonEmptyString;
@@ -357,6 +357,70 @@ export interface NotificationDeployment {
 
 export const notificationDefaultOptOutLine = '무료 수신거부: 수신거부 버튼';
 export const notificationDefaultDeploymentTimeZone = 'Asia/Seoul';
+
+/** The deployment's advertising settings as gate step 8 reads them under `kr`. */
+export interface NotificationAdvertisingSettings {
+  /** The sender, trimmed, without a blank name; absent when there is no contact to send. */
+  readonly sender?: NotificationAdvertisingSender;
+  /** The opt-out line, trimmed; the default when it is absent or blank. */
+  readonly optOutLine: string;
+  /** Each field the gate cannot use as written. */
+  readonly issues: readonly NotificationTopicIssue[];
+}
+
+/**
+ * How gate step 8 reads the deployment under `kr`; the catalog validator
+ * reports its `issues`, so both read the settings the same way. The sender's
+ * contact and name and the opt-out line are trimmed. A missing sender or a
+ * blank contact leaves `sender` absent, which suppresses every advertisement
+ * as `advertising-sender-missing`; a blank name is left out of the sender
+ * line, and a blank opt-out line gives way to the default. `path` prefixes
+ * each issue's path.
+ */
+export function resolveNotificationAdvertisingSettings(
+  deployment: NotificationDeployment | undefined,
+  path = 'deployment',
+): NotificationAdvertisingSettings {
+  const issues: NotificationTopicIssue[] = [];
+  const declared = deployment?.advertisingSender;
+  const contact = deploymentText(declared?.contact);
+  const name = deploymentText(declared?.name);
+  const optOutLine = deploymentText(deployment?.advertisingOptOutLine);
+  if (declared === undefined) {
+    issues.push({
+      path: `${path}.advertisingSender`,
+      message: 'the Korean advertising rules need the advertising sender; without it every advertising send is suppressed',
+    });
+  } else if (contact === undefined) {
+    issues.push({
+      path: `${path}.advertisingSender.contact`,
+      message: 'the advertising sender contact is blank, so every advertising send is suppressed',
+    });
+  }
+  if (declared?.name !== undefined && name === undefined) {
+    issues.push({
+      path: `${path}.advertisingSender.name`,
+      message: 'the advertising sender name is blank, so the sender line leaves it out; omit name only when the sender is the app',
+    });
+  }
+  if (deployment?.advertisingOptOutLine !== undefined && optOutLine === undefined) {
+    issues.push({
+      path: `${path}.advertisingOptOutLine`,
+      message: 'the opt-out line is blank, so advertising carries the default line; leave it out to use the default',
+    });
+  }
+  return {
+    ...(contact === undefined ? {} : { sender: name === undefined ? { contact } : { name, contact } }),
+    optOutLine: optOutLine ?? notificationDefaultOptOutLine,
+    issues,
+  };
+}
+
+/** A deployment text trimmed, or `undefined` when it is absent or blank. */
+function deploymentText(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed === undefined || trimmed === '' ? undefined : trimmed;
+}
 
 // Provider registry (RFC "Provider registry").
 
@@ -698,9 +762,10 @@ export interface EvaluateNotificationDeliveryInput {
  * 7. the topic frequency cap and the entry's limits over rolling windows
  *    (`frequency-capped`, `provider-limit`; a limit window shorter than a day
  *    defers instead);
- * 8. under `kr`, advertising needs the deployment's sender
- *    (`advertising-sender-missing`) and is rendered with the label, the sender
- *    line, the opt-out line, and the opt-out action.
+ * 8. under `kr`, advertising needs the deployment's sender with a contact
+ *    that is not blank (`advertising-sender-missing`) and is rendered with the
+ *    label, the sender line, the opt-out line, and the opt-out action, the
+ *    settings read by `resolveNotificationAdvertisingSettings`.
  *
  * Caller errors throw a `TypeError` instead of deciding: a missing
  * `serverPermission`, an advertising topic without the deployment's
@@ -769,9 +834,10 @@ export function evaluateNotificationDelivery(
   if (limit !== undefined) {
     return limit;
   }
-  const advertisingUnderKr = topic.purpose === 'advertising' && rules === 'kr';
-  const sender = input.deployment?.advertisingSender;
-  if (advertisingUnderKr && (sender === undefined || sender.contact.trim() === '')) {
+  const advertising = topic.purpose === 'advertising' && rules === 'kr'
+    ? resolveNotificationAdvertisingSettings(input.deployment)
+    : undefined;
+  if (advertising !== undefined && advertising.sender === undefined) {
     return { status: 'suppressed', reason: 'advertising-sender-missing' };
   }
   const content = resolveNotificationContent({
@@ -781,7 +847,7 @@ export function evaluateNotificationDelivery(
     ...(input.locale === undefined ? {} : { locale: input.locale }),
     ...(input.templateData === undefined ? {} : { templateData: input.templateData }),
   });
-  if (!advertisingUnderKr || sender === undefined) {
+  if (advertising?.sender === undefined) {
     return { status: 'allowed', content };
   }
   const nightConsent = latestNotificationConsent(input.consent, 'night')?.state === 'granted';
@@ -790,8 +856,8 @@ export function evaluateNotificationDelivery(
     content: renderNotificationAdvertisement(
       topic,
       content,
-      sender,
-      input.deployment?.advertisingOptOutLine ?? notificationDefaultOptOutLine,
+      advertising.sender,
+      advertising.optOutLine,
     ),
     ...(nightConsent ? {} : { expiresAt: nextNightWindowStart(input.at) }),
   };
@@ -1109,6 +1175,9 @@ export function applyNotificationAdvertisingLabel(text: string): string {
  * `(광고) ` and the sender line (`name contact`, or `contact` alone), then the
  * copy on the next line, then the opt-out line on the last line; and the
  * message carries the opt-out action that opens the topic's `optOutRoute`.
+ * The sender and the opt-out line are read as
+ * `resolveNotificationAdvertisingSettings` reads them; a blank contact is a
+ * caller error.
  */
 export function renderNotificationAdvertisement(
   topic: NotificationTopicDefinition,
@@ -1120,10 +1189,15 @@ export function renderNotificationAdvertisement(
     throw new TypeError(`Advertising topic ${topic.id} declares no optOutRoute.`);
   }
   assertRootRelativeRoute(topic.id, 'optOutRoute', topic.optOutRoute);
-  const name = sender.name?.trim();
-  const senderLine = name === undefined || name === ''
-    ? sender.contact.trim()
-    : `${name} ${sender.contact.trim()}`;
+  const settings = resolveNotificationAdvertisingSettings({
+    advertisingSender: sender,
+    advertisingOptOutLine: optOutLine,
+  });
+  if (settings.sender === undefined) {
+    throw new TypeError(`Advertising topic ${topic.id} needs a sender contact that is not blank.`);
+  }
+  const { name, contact } = settings.sender;
+  const senderLine = name === undefined ? contact : `${name} ${contact}`;
   return {
     ...content,
     ...(content.title === undefined
@@ -1132,7 +1206,7 @@ export function renderNotificationAdvertisement(
     ...(content.body === undefined
       ? {}
       : {
-          body: `${notificationAdvertisingPrefix} ${senderLine}\n${content.body}\n${optOutLine}`,
+          body: `${notificationAdvertisingPrefix} ${senderLine}\n${content.body}\n${settings.optOutLine}`,
         }),
     actions: [
       {

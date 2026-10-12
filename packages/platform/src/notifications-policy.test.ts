@@ -34,6 +34,7 @@ import {
   referenceNotificationProviders,
   referenceNotificationTargetProviders,
   renderNotificationAdvertisement,
+  resolveNotificationAdvertisingSettings,
   resolveNotificationContent,
   routeNotificationReminder,
   toSeoulCalendarDate,
@@ -477,6 +478,15 @@ describe('evaluateNotificationDelivery', () => {
       expect(evaluateNotificationDelivery(input({ topic: advertising, consent, deployment })))
         .toEqual({ status: 'suppressed', reason: 'advertising-sender-missing' });
     }
+    // A blank name is left out of the sender line, and a blank opt-out line gives way to the default.
+    expect(evaluateNotificationDelivery(input({
+      topic: advertising,
+      consent,
+      deployment: { ...kr, advertisingSender: { name: ' ', contact: '080-1234-5678' }, advertisingOptOutLine: ' \t' },
+    }))).toMatchObject({
+      status: 'allowed',
+      content: { body: '(광고) 080-1234-5678\n주말 이벤트가 시작됐어요.\n무료 수신거부: 수신거부 버튼' },
+    });
     // Step 7 decides before step 8.
     expect(evaluateNotificationDelivery(input({
       topic: { ...advertising, frequency: { maxPerDay: 1 } },
@@ -653,6 +663,39 @@ describe('notification content', () => {
       actions: [{ id: 'advertising-opt-out', title: '수신거부', route: '/settings/notifications' }],
       source: 'host-template',
     });
+    expect(() => renderNotificationAdvertisement(advertising, content, { contact: '  ' }))
+      .toThrow(/sender contact that is not blank/u);
+  });
+
+  it('reads the advertising settings the way gate step 8 does, and names each field it cannot use', () => {
+    expect(resolveNotificationAdvertisingSettings(kr)).toEqual({
+      sender: { contact: '080-1234-5678' },
+      optOutLine: '무료 수신거부: 수신거부 버튼',
+      issues: [],
+    });
+    expect(resolveNotificationAdvertisingSettings({
+      advertisingRules: 'kr',
+      advertisingSender: { name: ' Studio ', contact: ' 080 ' },
+      advertisingOptOutLine: ' 무료 수신거부: 설정 > 알림 ',
+    })).toEqual({
+      sender: { name: 'Studio', contact: '080' },
+      optOutLine: '무료 수신거부: 설정 > 알림',
+      issues: [],
+    });
+    const blank = resolveNotificationAdvertisingSettings({
+      advertisingRules: 'kr',
+      advertisingSender: { name: '\t', contact: ' ' },
+      advertisingOptOutLine: ' ',
+    }, 'settings');
+    expect(blank.sender).toBeUndefined();
+    expect(blank.optOutLine).toBe('무료 수신거부: 수신거부 버튼');
+    expect(blank.issues.map((issue) => issue.path)).toEqual([
+      'settings.advertisingSender.contact',
+      'settings.advertisingSender.name',
+      'settings.advertisingOptOutLine',
+    ]);
+    expect(resolveNotificationAdvertisingSettings(undefined).issues.map((issue) => issue.path))
+      .toEqual(['deployment.advertisingSender']);
   });
 
   it('refuses to send a route or opt-out route that is not root-relative', () => {
