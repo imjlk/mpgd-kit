@@ -81,9 +81,16 @@ For Reddit Devvit work, register the official Devvit MCP server once in the
 developer's global Codex configuration:
 
 ```sh
-codex mcp add devvit -- npx -y @devvit/mcp
+codex mcp add devvit -- mise --no-config exec node@22 -- npx -y @devvit/mcp@0.0.27
 ```
 
+- The checked-in `.mcp.json` uses the same command, and
+  `pnpm validate:starter-workflow` keeps every copy identical. `@devvit/mcp`
+  0.0.27 depends on `better-sqlite3` 11.9.1, which ships prebuilt binaries for
+  Node 22 but not 24 and does not build on 26. `--no-config` keeps mise from
+  loading project or global config, so the server receives no mise-managed
+  secrets and does not depend on this repository's toolchain. See
+  `apps/target-devvit/README.md` for repairs and for hosts without mise.
 - Use `devvit_search` before broad web searches or loading large Devvit
   documentation pages into context.
 - Use the experimental `devvit_logs` tool when investigating an app deployed to

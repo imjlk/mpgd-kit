@@ -86,8 +86,38 @@ deployed-app log inspection. See the official
 register it once in the developer's global Codex configuration:
 
 ```sh
-codex mcp add devvit -- npx -y @devvit/mcp
+codex mcp add devvit -- mise --no-config exec node@22 -- npx -y @devvit/mcp@0.0.27
 ```
+
+The repository's `.mcp.json` runs the same command for Claude Code. Why it
+looks like this:
+
+- `@devvit/mcp` 0.0.27 depends on `better-sqlite3` 11.9.1. Its prebuilt
+  binaries cover Node 22 but not 24, where it compiles from source and can
+  outlast an MCP client's startup timeout, and it does not build on Node 26.
+- `--no-config` keeps mise from loading project or global config: the server
+  gets no mise-managed secrets, never evaluates another project's config, and
+  does not need this repository's Go toolchain.
+- The versioned spec gets its own npx directory, so a plain
+  `npx -y @devvit/mcp` started on another Node cannot overwrite its native
+  build, and a new upstream release is adopted deliberately.
+
+The command needs `mise` on the MCP client's `PATH`; a client launched from the
+Dock may need mise's absolute path. Without mise, register
+`npx -y @devvit/mcp@0.0.27` only if the client's `PATH` resolves `npx` from
+Node 22, because the client's environment, not the shell you register from,
+picks the Node. Running `codex mcp add devvit` again replaces an older
+registration. The first start may download Node 22 and install the server's
+dependencies, which can outlast a client's startup timeout; start it again if
+it does. If `devvit_search` fails with a native-module error after a start on
+another Node, delete that npx directory and start the server again:
+
+```sh
+rm -rf "$(npm config get cache)/_npx/fb3672217c090d4a"
+```
+
+Drop the Node pin once `@devvit/mcp` depends on `better-sqlite3` 12.10 or
+later, which ships prebuilt binaries for Node 22, 24, and 26.
 
 Restart Codex or begin a new task after registering it. Use `devvit_search`
 before broad Devvit documentation exploration. Use the experimental

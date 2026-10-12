@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 
 import {
@@ -123,6 +124,27 @@ const requiredDevvitQueries = [
   'payments',
 ] as const;
 const expectedDevvitVersion = '0.14.1';
+// @devvit/mcp 0.0.27 depends on better-sqlite3 11.9.1, which ships prebuilt
+// binaries for Node 22 but not 24 and does not build on 26. `--no-config` keeps
+// mise from loading project or global config, so the server gets no
+// mise-managed secrets and does not depend on the repository toolchain. Drop
+// the Node pin once @devvit/mcp depends on better-sqlite3 >=12.10.
+const devvitMcpPackage = '@devvit/mcp@0.0.27';
+const devvitMcpLaunch = [
+  'mise',
+  '--no-config',
+  'exec',
+  'node@22',
+  '--',
+  'npx',
+  '-y',
+  devvitMcpPackage,
+] as const;
+const devvitMcpLaunchDocs = [
+  'AGENTS.md',
+  'apps/target-devvit/README.md',
+  'packages/cli/templates/phaser-game/apps/target-devvit/README.md',
+] as const;
 /** Verified Vite baseline for generated games and kit targets. */
 const expectedViteVersion = '8.1.3';
 /** Devvit 0.14.x targets pin Vite 7 for compatibility with @devvit/start. */
@@ -876,7 +898,25 @@ function validateMcpConfig(path: string): void {
   const servers = config.mcpServers as Record<string, McpServerConfig>;
 
   assertMcpServerCommand(servers['ttsc-graph'], '@ttsc/graph', `${path}: ttsc-graph`);
-  assertMcpServerCommand(servers.devvit, '@devvit/mcp', `${path}: devvit`);
+  assertExactMcpLaunch(servers.devvit, devvitMcpLaunch, `${path}: devvit`);
+
+  // Registration commands people copy into global configs must match .mcp.json
+  // as a whole line, not as a prefix of a longer or different command.
+  const registration = `codex mcp add devvit -- ${devvitMcpLaunch.join(' ')}`;
+  for (const doc of devvitMcpLaunchDocs) {
+    const lines = readText(doc).split('\n').map((line) => line.trim());
+    if (!lines.includes(registration)) {
+      failures.push(`${doc}: Devvit MCP registration must be the line: ${registration}`);
+    }
+  }
+
+  // The repair step deletes the npx directory npx derives from the package spec.
+  const npxDirectory = createHash('sha512').update(devvitMcpPackage).digest('hex').slice(0, 16);
+  assertIncludesText(
+    readText('apps/target-devvit/README.md'),
+    `_npx/${npxDirectory}`,
+    'apps/target-devvit/README.md: Devvit MCP npx directory',
+  );
 }
 
 function validatePhaserTemplateAITPolyfill(): void {
@@ -2308,6 +2348,24 @@ function assertMcpServerCommand(
 
   assertIncludes(server.args, '-y', `${label}.args`);
   assertIncludes(server.args, packageName, `${label}.args`);
+}
+
+function assertExactMcpLaunch(
+  server: McpServerConfig | undefined,
+  expected: readonly string[],
+  label: string,
+): void {
+  if (server === undefined) {
+    failures.push(`${label} MCP server is required.`);
+    return;
+  }
+
+  const actual = [server.command, ...(Array.isArray(server.args) ? server.args : [])];
+  const extraKeys = Object.keys(server).filter((key) => key !== 'command' && key !== 'args');
+
+  if (JSON.stringify(actual) !== JSON.stringify(expected) || extraKeys.length > 0) {
+    failures.push(`${label} must launch exactly: ${expected.join(' ')} (no other keys).`);
+  }
 }
 
 function assertMcpRequirements(input: unknown, label: string): void {
