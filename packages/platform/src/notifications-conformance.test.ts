@@ -2209,6 +2209,27 @@ describe('notifications reference runtime and fakes: routes, registrations, and 
     expect(endpointRows(backend)).toEqual([['installation-1', 'tok-1', 'granted', 'p-1', 'valid']]);
   });
 
+  it('unregister() cancels the local reminders even when the unbind fails, then throws', async () => {
+    const { host, backend, createRuntime } = setup(osProfile);
+    // An offline logout: the unbind never reaches the backend.
+    const runtime = createRuntime(host.provider, {
+      ...backend,
+      async unregisterEndpoint() {
+        throw new Error('offline');
+      },
+    });
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['energy-full'], gesture: true });
+    await runtime.setTopicPreference({ topic: 'energy-full', enabled: true });
+    await runtime.reminders.set({ key: 'a', topic: 'energy-full', fireAt: '2026-10-12T06:00:00Z' });
+    await expect(runtime.unregister()).rejects.toThrow(/^offline$/u);
+    // Nothing is left to fire for the next player on this device.
+    expect(host.localPending).toEqual([]);
+  });
+
   it('re-sends the registration after a revocation, so a game-rendered device endpoint stops', async () => {
     const deviceGame = {
       provider: 'fixture.device-game',

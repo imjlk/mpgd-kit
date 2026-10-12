@@ -91,8 +91,10 @@ export interface NotificationTopicIssue {
 /**
  * Whether a topic's mapping declares that the host needs no agreement for it
  * (an Apps in Toss `service` template without an agreement statement): it
- * reads `granted`, never prompts, is never recorded, and passes gate step 3
- * until a provider answers that the recipient has not agreed.
+ * reads `granted`, never prompts, is never recorded, and passes gate step 3.
+ * A provider's answer that the recipient has not agreed is still recorded,
+ * but it does not stop sends, because nothing could ask the player again:
+ * the host decides each send.
  */
 export function notificationTopicNeedsNoAgreement(
   topic: Pick<NotificationTopicDeclaration, 'mapping'>,
@@ -718,11 +720,12 @@ export interface EvaluateNotificationDeliveryInput {
    */
   readonly endpointPermission?: NotificationPermissionState;
   /**
-   * Sends delivered to the recipient, oldest first (the gate reads them from
-   * the newest and stops at the longest window): at least those within the
-   * longest limit window and, for a per-send provider, every send of the topic
-   * since the first recorded acceptance. A backend that reserves acceptances
-   * atomically with the delivery claim also passes its in-flight sends.
+   * Sends delivered to the recipient, oldest first (the gate sorts a copy of
+   * a history out of order, so the order never changes the answer): at least
+   * those within the longest limit window and, for a per-send provider, every
+   * send of the topic since the first recorded acceptance. A backend that
+   * reserves acceptances atomically with the delivery claim also passes its
+   * in-flight sends.
    */
   readonly history: readonly NotificationDeliveryHistoryEntry[];
   /** The time of the provider call, RFC 3339 with an offset. */
@@ -752,8 +755,8 @@ export interface EvaluateNotificationDeliveryInput {
  *    device addressing, or a latest `delivery-permission` record of `granted`
  *    for an app-scope platform-user provider; a topic-scope provider also
  *    needs a latest `host-agreement` of `granted` unless the topic needs no
- *    agreement (a provider's answer that the recipient has not agreed still
- *    stops such a topic), and a per-send provider an unreserved acceptance
+ *    agreement (then the host decides each send, after a provider's denial
+ *    too), and a per-send provider an unreserved acceptance
  *    (`permission-denied`, `agreement-missing`, `allowance-exhausted`);
  * 4. the topic preference, only `topic-preference` records, the latest winning
  *    (`request-missing`, `preference-off`);
@@ -890,15 +893,10 @@ function deliveryPermissionRefusal(
   ) {
     return 'permission-denied';
   }
-  if (entry.permission.scope === 'topic') {
-    const agreement = latestNotificationConsent(input.consent, 'host-agreement', topic.id);
-    if (notificationTopicNeedsNoAgreement(topic)) {
-      // Nothing records an agreement for such a topic but a provider's answer
-      // that the recipient has not agreed after all, which stops sends.
-      if (agreement?.source === 'provider' && agreement.state !== 'granted') {
-        return 'agreement-missing';
-      }
-    } else if (agreement?.state !== 'granted') {
+  // A topic that needs no agreement goes on even after a provider's denial:
+  // nothing could ask the player again, and the host decides each send.
+  if (entry.permission.scope === 'topic' && !notificationTopicNeedsNoAgreement(topic)) {
+    if (latestNotificationConsent(input.consent, 'host-agreement', topic.id)?.state !== 'granted') {
       return 'agreement-missing';
     }
   }
@@ -1017,43 +1015,47 @@ function resolveTimeWindows(
 /**
  * Gate step 7. A send at `s` counts for a send at `t` when `t − window < s ≤
  * t`. The topic's daily cap and limits of a day or longer suppress; a shorter
- * provider limit defers until the oldest counted send leaves the window. The
- * history is oldest first, so one walk from the newest send stops at the
- * longest window.
+ * provider limit defers until the oldest counted send leaves the window.
+ * `at` reads strictly even when nothing is counted. Each counted send is read
+ * once, and the count walks from the newest one to the longest window.
  */
 function limitDecision(
   input: EvaluateNotificationDeliveryInput,
   topic: NotificationTopicDefinition,
 ): NotificationDeliveryRefusal | undefined {
+  const at = parseInstant(input.at);
   const limits = input.entry.limits ?? [];
-  if (topic.frequency === undefined && limits.length === 0) {
+  const capped = topic.frequency !== undefined;
+  if (!capped && limits.length === 0) {
     return undefined;
   }
-  const at = parseInstant(input.at);
   const longest = Math.max(
-    topic.frequency === undefined ? 0 : dayMs,
+    capped ? dayMs : 0,
     ...limits.map((limit) => limit.windowSeconds * 1000),
   );
+  const sends = countedSends(input.history, {
+    topic: capped ? topic.id : undefined,
+    provider: limits.length > 0 ? input.entry.provider : undefined,
+  });
   // The topic's and the provider's sends inside the longest window.
   const topicSends: number[] = [];
   const providerSends: number[] = [];
-  for (let index = input.history.length - 1; index >= 0; index -= 1) {
-    const sent = input.history[index];
+  for (let index = sends.length - 1; index >= 0; index -= 1) {
+    const sent = sends[index];
     if (sent === undefined) {
       continue;
     }
-    const sentAt = parseInstant(sent.at);
-    if (sentAt <= at - longest) {
+    if (sent.at <= at - longest) {
       break;
     }
-    if (sentAt > at) {
+    if (sent.at > at) {
       continue;
     }
-    if (sent.topic === topic.id) {
-      topicSends.push(sentAt);
+    if (sent.topic) {
+      topicSends.push(sent.at);
     }
-    if (sent.provider === input.entry.provider) {
-      providerSends.push(sentAt);
+    if (sent.provider) {
+      providerSends.push(sent.at);
     }
   }
   // Oldest first again, as the deferral below reads them.
@@ -1086,6 +1088,42 @@ function limitDecision(
   return until === undefined
     ? undefined
     : { status: 'deferred', reason: 'provider-limit', until: formatNotificationTimestamp(until) };
+}
+
+interface CountedSend {
+  readonly at: number;
+  /** Counts toward the topic's daily cap. */
+  readonly topic: boolean;
+  /** Counts toward the provider's limits. */
+  readonly provider: boolean;
+}
+
+/**
+ * The sends step 7 counts, oldest first: the topic's when it has a daily cap,
+ * and the provider's when it has limits, each read once. The history comes
+ * oldest first; the same pass finds one that does not, and its copy is sorted.
+ */
+function countedSends(
+  history: readonly NotificationDeliveryHistoryEntry[],
+  counted: { readonly topic: string | undefined; readonly provider: string | undefined },
+): readonly CountedSend[] {
+  const sends: CountedSend[] = [];
+  let ordered = true;
+  for (const sent of history) {
+    const topic = counted.topic !== undefined && sent.topic === counted.topic;
+    const provider = counted.provider !== undefined && sent.provider === counted.provider;
+    if (!topic && !provider) {
+      continue;
+    }
+    const at = parseInstant(sent.at);
+    const previous = sends[sends.length - 1];
+    if (previous !== undefined && at < previous.at) {
+      ordered = false;
+    }
+    sends.push({ at, topic, provider });
+  }
+  // `sends` is a copy already, so it sorts in place.
+  return ordered ? sends : sends.sort((left, right) => left.at - right.at);
 }
 
 /** The next start of the night window (21:00 Asia/Seoul) after `at`. */
@@ -2116,7 +2154,8 @@ export function listNotificationNotices(
     parsed.set(record, { instant, record: noticeRecord });
     const dueBy = consentResultDueByOf(instant);
     if (!givenNames.has(noticeNameOf('consent-result', record.kind, instant, dueBy))) {
-      notices.push({ kind: 'consent-result', record: noticeRecord, dueBy });
+      // Each notice gets its own copy, so changing one never changes another.
+      notices.push({ kind: 'consent-result', record: { ...noticeRecord }, dueBy });
     }
   }
   for (const kind of ['advertising', 'night'] as const) {
@@ -2133,7 +2172,7 @@ export function listNotificationNotices(
       dueBy = reconfirmationDueByOf(consent.instant, ordinal);
     }
     if (calendarDaysBefore(dueBy, notificationReconfirmationListDays) <= today) {
-      notices.push({ kind: 'reconfirmation', record: consent.record, dueBy });
+      notices.push({ kind: 'reconfirmation', record: { ...consent.record }, dueBy });
     }
   }
   return notices.sort((left, right) =>

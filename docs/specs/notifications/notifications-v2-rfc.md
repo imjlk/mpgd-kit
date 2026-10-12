@@ -577,7 +577,9 @@ Runtime rules:
     receiving the previous player's notifications even when an unbind never
     arrives.
     - `unregister()` also cancels the device's pending local reminders, which
-      belong to the player leaving.
+      belong to the player leaving. It cancels them even when the unbind
+      fails, such as on an offline logout, and then throws the unbind's
+      error.
     - The installation stays unbound, across restarts, until `register()` or
       the next authentication.
 - **Local reminders.** On start, on authentication, and after each backend
@@ -980,10 +982,12 @@ client's declaration. The steps run in order and the first failure decides:
      a latest `delivery-permission` record of `granted`.
    - **`scope: 'topic'` provider.** It needs a latest `host-agreement` of
      `granted` for the topic (or `suppressed: agreement-missing`), unless the
-     topic's mapping declares that the host needs no agreement. Even then, a
-     latest `host-agreement` that is a provider's answer
-     (`source: 'provider'`) stops sends: the host says the recipient has not
-     agreed after all.
+     topic's mapping declares that the host needs no agreement.
+     - For such a topic, a provider answer that the recipient has not agreed
+       is recorded but does not stop sends. The host decides on each send.
+     - The rule that sends stop until the player agrees again applies only
+       to topics that need an agreement. Nothing could ask the player again
+       for a topic that needs none: it reads `granted` and never prompts.
    - **`per-send` provider.** It needs an acceptance that no delivery has
      reserved (or `suppressed: allowance-exhausted`).
 4. **Topic preference.** A `requested` topic needs a latest `topic-preference`
@@ -1018,8 +1022,8 @@ client's declaration. The steps run in order and the first failure decides:
    delivered sends in the rolling window before the send: a send at `s`
    counts for a send at `t` when `t − window < s ≤ t`. A send's earlier
    delivery to another endpoint is the same send and does not count. The
-   gate reads the history, oldest first, from the newest send and stops at
-   the longest window.
+   history comes oldest first; the gate sorts a copy of one that does not,
+   so the order never changes the answer.
    - A topic `frequency` cap or a provider limit whose window is a day or
      longer answers `suppressed: frequency-capped` or `suppressed:
      provider-limit`.
@@ -1126,8 +1130,10 @@ Every provider answer maps to one of five kinds:
     `unavailable: provider-rejected`, which is not stored.
   - `agreement`, when the host says the recipient has not agreed to the
     template, also appends a `host-agreement` record of `denied` with
-    `source: 'provider'`. The gate then stops sending until the player agrees
-    again, even for a topic whose mapping needs no agreement.
+    `source: 'provider'`. For a topic that needs an agreement, the gate then
+    stops sending until the player agrees again. For a topic whose mapping
+    needs no agreement, the record does not stop sends, and the host decides
+    on each send.
 - **`ambiguous`**: the provider cannot say whether it sent (a timeout, a 5xx
   answer, a crash after the claim).
   - The claim is kept, as the delivery ledger requires, and the send answers
@@ -1305,7 +1311,8 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   one. Messages a player needs to use the service (payment, refund, and
   similar) are sent without agreement. Their mapping declares `agreement:
   'none'`, reads `granted`, and never prompts. A `rejected` answer with reason
-  `agreement` still records the denial and stops later sends.
+  `agreement` still records the denial, but later sends go on and the host
+  decides each one.
 - **No read.** Neither the client nor the server can read the agreement, and
   revocation in Toss settings raises no event. So `readable` is false, and the
   server record is what the gate uses. A send to a user who revoked comes back

@@ -263,20 +263,26 @@ describe('evaluateNotificationDelivery', () => {
       .toEqual({ status: 'allowed', content: { route: '/?entry=challenge', source: 'host-template' } });
   });
 
-  it('step 3: a provider answer that the recipient has not agreed stops a topic that needs no agreement', () => {
+  it('step 3: a provider answer that the recipient has not agreed leaves a topic that needs none to the host', () => {
     const { copy: _copy, ...withoutCopy } = service;
     const receipt: NotificationTopicDeclaration = {
       ...withoutCopy,
       mapping: { templateSetCode: 'receipt', agreement: 'none' },
     };
-    const send = (consent: readonly NotificationConsentRecord[]) =>
-      evaluateNotificationDelivery(input({ entry: hostTemplate, topic: receipt, consent }));
     const providerDenial = record('host-agreement', 'denied', { topic: 'rival-challenge', source: 'provider' });
-    expect(send([providerDenial])).toEqual({ status: 'suppressed', reason: 'agreement-missing' });
-    // Only a provider's answer decides such a topic, and the latest record wins.
-    expect(send([record('host-agreement', 'denied', { topic: 'rival-challenge' })]).status).toBe('allowed');
-    expect(send([providerDenial, record('host-agreement', 'granted', { topic: 'rival-challenge' })]).status)
-      .toBe('allowed');
+    // Nothing could ask the player again, so the host decides each send.
+    expect(evaluateNotificationDelivery(input({ entry: hostTemplate, topic: receipt, consent: [providerDenial] })))
+      .toEqual({ status: 'allowed', content: { route: '/?entry=challenge', source: 'host-template' } });
+    // A topic that needs an agreement stops until the player agrees again.
+    const required: NotificationTopicDeclaration = {
+      ...withoutCopy,
+      mapping: { templateSetCode: 'challenge', agreement: 'required' },
+    };
+    expect(evaluateNotificationDelivery(input({
+      entry: hostTemplate,
+      topic: required,
+      consent: [record('host-agreement', 'granted', { topic: 'rival-challenge' }), providerDenial],
+    }))).toEqual({ status: 'suppressed', reason: 'agreement-missing' });
   });
 
   it('step 3: a per-send provider allows one delivery per acceptance', () => {
@@ -457,34 +463,60 @@ describe('evaluateNotificationDelivery', () => {
     }))).toEqual({ status: 'deferred', reason: 'provider-limit', until: '2026-10-12T03:01:40Z' });
   });
 
-  it('step 7: reads the history from the newest send and stops at the longest window', () => {
+  it('step 7: reads each counted send once, and no other', () => {
     let reads = 0;
-    const sent = (at: string) => ({
-      provider: 'fcm',
-      topic: 'rival-challenge',
+    const sent = (at: string, topic = 'rival-challenge', provider = 'fcm') => ({
+      provider,
+      topic,
       get at(): string {
         reads += 1;
         return at;
       },
     });
-    // A thousand sends from a week ago, then one an hour ago.
+    // A thousand sends from a week ago, then one an hour ago, and sends the step never counts.
     const history = [
       ...Array.from({ length: 1000 }, () => sent('2026-10-05T03:00:00Z')),
       sent('2026-10-12T02:00:00Z'),
+      ...Array.from({ length: 10 }, () => sent('2026-10-12T02:30:00Z', 'other', 'apps-in-toss')),
     ];
     expect(evaluateNotificationDelivery(input({
       topic: { ...service, frequency: { maxPerDay: 2 } },
       entry: { ...fcm, limits: [{ count: 5, windowSeconds: 3_600 }] },
       history,
     })).status).toBe('allowed');
-    // The newest send, and the first one outside the day, which ends the walk.
-    expect(reads).toBe(2);
+    expect(reads).toBe(1001);
     reads = 0;
     expect(evaluateNotificationDelivery(input({
       topic: { ...service, frequency: { maxPerDay: 1 } },
       history,
     }))).toEqual({ status: 'suppressed', reason: 'frequency-capped' });
-    expect(reads).toBe(2);
+    expect(reads).toBe(1001);
+  });
+
+  it('step 7: answers a history out of order as the same history sorted', () => {
+    const sent = (at: string, topic = 'rival-challenge') => ({ provider: 'fcm', topic, at });
+    const capped = { ...service, frequency: { maxPerDay: 1 } };
+    // The send an hour ago comes first, before one from a week ago.
+    expect(evaluateNotificationDelivery(input({
+      topic: capped,
+      history: [sent('2026-10-12T02:00:00Z'), sent('2026-10-05T03:00:00Z')],
+    }))).toEqual({ status: 'suppressed', reason: 'frequency-capped' });
+    const minute = { ...fcm, limits: [{ count: 2, windowSeconds: 60 }] };
+    const dayAgo = sent('2026-10-11T03:00:00Z', 'other');
+    const first = sent('2026-10-12T02:59:10Z', 'other');
+    const second = sent('2026-10-12T02:59:40Z', 'other');
+    const decided = evaluateNotificationDelivery(input({ entry: minute, history: [dayAgo, first, second] }));
+    expect(decided).toEqual({ status: 'deferred', reason: 'provider-limit', until: '2026-10-12T03:00:10Z' });
+    for (const history of [[second, dayAgo, first], [first, second, dayAgo], [second, first, dayAgo]]) {
+      expect(evaluateNotificationDelivery(input({ entry: minute, history }))).toEqual(decided);
+    }
+  });
+
+  it('step 7: reads `at` strictly even when nothing is counted', () => {
+    // No cap, no limit, and no quiet hours: only step 7 reads the time.
+    for (const at of ['not a time', '2026-02-31T00:00:00Z']) {
+      expect(() => evaluateNotificationDelivery(input({ at }))).toThrow(/Invalid ISO-8601/u);
+    }
   });
 
   it('step 8: under the Korean rules renders advertising with the label, sender, opt-out line and action, and expiry', () => {
@@ -923,6 +955,19 @@ describe('notification consent notices', () => {
     expect(isSameNotificationNotice(resultOf('advertising'), resultOf('night'))).toBe(false);
     expect(isSameNotificationNotice(resultOf('advertising'), { ...resultOf('advertising'), dueBy: '2026-10-27' }))
       .toBe(false);
+  });
+
+  it('gives each listed notice its own record', () => {
+    const records = [record('advertising', 'granted', { at: noon })];
+    // The result notice is still owed when the first re-confirmation is listed.
+    const notices = listNotificationNotices(records, [], '2028-09-01T03:00:00Z');
+    expect(notices.map((notice) => notice.kind)).toEqual(['consent-result', 'reconfirmation']);
+    const [result, reconfirmation] = notices;
+    expect(result?.record).not.toBe(reconfirmation?.record);
+    if (result !== undefined) {
+      Object.assign(result.record, { state: 'withdrawn' });
+    }
+    expect(reconfirmation?.record.state).toBe('granted');
   });
 
   it('reads each record and each given notice once', () => {

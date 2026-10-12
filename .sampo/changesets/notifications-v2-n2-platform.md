@@ -23,8 +23,8 @@ deployment settings (`advertisingRules`, the advertising sender and opt-out
 line, the notice topic, the zone), and the pure policy gate
 `evaluateNotificationDelivery`: an unknown topic, channel, and purpose;
 recipients and the Devvit link; positively granted permission per provider
-kind, host agreements unless a topic needs none (a provider's answer that the
-recipient has not agreed still stops it), and per-send acceptances; the topic
+kind, host agreements unless a topic needs none (then the host decides each
+send, after a provider's denial too), and per-send acceptances; the topic
 preference; advertising consent; the Korean night window with an expiry at the
 next 21:00 and quiet hours in the recipient's zone; frequency caps and
 provider limits over rolling windows, deferring short ones; and, under the

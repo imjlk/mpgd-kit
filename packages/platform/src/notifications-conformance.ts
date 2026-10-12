@@ -2378,8 +2378,8 @@ type RuntimeQueue = 'record' | 'register' | 'local';
  *   than 7 days. An identical one for the same player and session is skipped
  *   for 7 days, except on `register()`. `unregister()` unbinds the
  *   installation from the player signed in when it was called and cancels the
- *   pending local reminders, and nothing binds it again, across restarts,
- *   until `register()` or the next authentication.
+ *   pending local reminders, even when the unbind fails, and nothing binds it
+ *   again, across restarts, until `register()` or the next authentication.
  * - Reminders: one key across both routes, and `cancel` removes it from each
  *   route that has it. Local ones pass the client gate steps (permission,
  *   then the topic preference from the backend, then quiet hours, which move
@@ -3359,10 +3359,11 @@ export function createNotificationConformanceRuntime(
       await registerCurrent(true, true);
     },
     async unregister() {
-      // The player signing out, captured before any wait, so an
-      // authentication that follows is never the one unbound.
+      // The player signing out, captured before any wait, and the unbind
+      // queued at once, so an authentication that follows is never the one
+      // unbound.
       const session = backend.session();
-      await enqueue('register', async () => {
+      const unbinding = enqueue('register', async () => {
         // Persisted: a restart before the next authentication binds nothing.
         storage.unbound = true;
         if (session === undefined || !isDeviceAddressing(await provider.getCapabilities())) {
@@ -3374,7 +3375,17 @@ export function createNotificationConformanceRuntime(
         }
       });
       // The device's pending local reminders belong to the player leaving.
-      await cancelLocalWhere(() => true);
+      // They are cancelled whether or not the unbind reaches the backend (an
+      // offline logout), and either failure is thrown once both have run.
+      const outcomes = await Promise.allSettled([unbinding, cancelLocalWhere(() => true)]);
+      const failures = outcomes.flatMap((outcome) =>
+        outcome.status === 'rejected' ? [outcome.reason as unknown] : []);
+      if (failures.length > 1) {
+        throw new AggregateError(failures, 'unregister() could neither unbind nor cancel the local reminders.');
+      }
+      if (failures.length === 1) {
+        throw failures[0];
+      }
     },
     async setTopicPreference(request) {
       if (
