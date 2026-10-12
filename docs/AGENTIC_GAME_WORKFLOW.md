@@ -97,7 +97,8 @@ Games may skip TDS, but non-game mini-apps must use TDS.
 Reddit Devvit is introduced as a target adapter and wrapper, not as a scene dependency.
 
 For Devvit work, enable the official Devvit MCP server from `.mcp.json` and use
-`devvit_search` before implementation. Useful searches include:
+`devvit_search` before implementation. The server runs through `mise` on Node
+22; `apps/target-devvit/README.md` explains why and covers hosts without mise. Useful searches include:
 
 - `Devvit Web`
 - `devvit.json`

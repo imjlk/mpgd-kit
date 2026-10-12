@@ -113,13 +113,14 @@ deployed-app log inspection. See the official
 register it once in the developer's global Codex configuration:
 
 ```sh
-codex mcp add devvit -- mise exec node@24 -- npx -y @devvit/mcp
+codex mcp add devvit -- mise --no-config exec node@22 -- npx -y @devvit/mcp@0.0.27
 ```
 
-The server must run on Node 22 or 24: `@devvit/mcp` 0.0.27 pins
-`better-sqlite3` 11.9.1, whose native build fails on Node 26. Every launcher on
-a machine shares one npx cache and native build, so register it the same way
-everywhere. Without mise, use any launcher that starts `npx` on Node 22 or 24.
+The server needs Node 22: `@devvit/mcp` 0.0.27 depends on `better-sqlite3`
+11.9.1, which ships prebuilt binaries for Node 22 but not 24 and does not
+build on 26. `--no-config` keeps mise from passing your mise-managed
+environment to the server. Without mise, register `npx -y @devvit/mcp@0.0.27`
+from a shell whose default Node is 22.
 
 Restart Codex or begin a new task after registering it. Use `devvit_search`
 before broad Devvit documentation exploration. Use the experimental

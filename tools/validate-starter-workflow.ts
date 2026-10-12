@@ -123,6 +123,26 @@ const requiredDevvitQueries = [
   'payments',
 ] as const;
 const expectedDevvitVersion = '0.14.1';
+// @devvit/mcp 0.0.27 depends on better-sqlite3 11.9.1, which ships prebuilt
+// binaries for Node 22 but not 24 and does not build on 26. `--no-config` keeps
+// mise from loading project or global config, so the server gets no
+// mise-managed secrets and does not depend on the repository toolchain. Drop
+// the Node pin once @devvit/mcp depends on better-sqlite3 >=12.10.
+const devvitMcpLaunch = [
+  'mise',
+  '--no-config',
+  'exec',
+  'node@22',
+  '--',
+  'npx',
+  '-y',
+  '@devvit/mcp@0.0.27',
+] as const;
+const devvitMcpLaunchDocs = [
+  'AGENTS.md',
+  'apps/target-devvit/README.md',
+  'packages/cli/templates/phaser-game/apps/target-devvit/README.md',
+] as const;
 /** Verified Vite baseline for generated games and kit targets. */
 const expectedViteVersion = '8.1.3';
 /** Devvit 0.14.x targets pin Vite 7 for compatibility with @devvit/start. */
@@ -876,12 +896,16 @@ function validateMcpConfig(path: string): void {
   const servers = config.mcpServers as Record<string, McpServerConfig>;
 
   assertMcpServerCommand(servers['ttsc-graph'], '@ttsc/graph', `${path}: ttsc-graph`);
-  // @devvit/mcp pins better-sqlite3 11.9.1, which cannot compile against Node 26.
-  // `mise exec node@<major>` runs it on the .mise.toml Node major regardless of
-  // the working directory or the Node an agent host puts first on PATH.
-  assertMcpServerCommand(servers.devvit, '@devvit/mcp', `${path}: devvit`, {
-    repoPinnedNode: true,
-  });
+  assertExactMcpLaunch(servers.devvit, devvitMcpLaunch, `${path}: devvit`);
+
+  // Registration commands people copy into global configs must match .mcp.json.
+  for (const doc of devvitMcpLaunchDocs) {
+    assertIncludesText(
+      readText(doc),
+      devvitMcpLaunch.join(' '),
+      `${doc}: Devvit MCP registration command`,
+    );
+  }
 }
 
 function validatePhaserTemplateAITPolyfill(): void {
@@ -2298,53 +2322,38 @@ function assertMcpServerCommand(
   server: McpServerConfig | undefined,
   packageName: string,
   label: string,
-  options: { readonly repoPinnedNode?: boolean } = {},
 ): void {
   if (server === undefined) {
     failures.push(`${label} MCP server is required.`);
     return;
   }
 
-  assertEqual(server.command, options.repoPinnedNode === true ? 'mise' : 'npx', `${label}.command`);
+  assertEqual(server.command, 'npx', `${label}.command`);
 
   if (!Array.isArray(server.args)) {
     failures.push(`${label}.args must be an array.`);
     return;
   }
 
-  let npxArgs: readonly unknown[] = server.args;
-
-  if (options.repoPinnedNode === true) {
-    const pinnedNode = `node@${readMiseNodeMajor()}`;
-
-    if (
-      server.args[0] !== 'exec'
-      || server.args[1] !== pinnedNode
-      || server.args[2] !== '--'
-      || server.args[3] !== 'npx'
-    ) {
-      failures.push(
-        `${label}.args must start with exec, ${pinnedNode}, --, npx to match .mise.toml.`,
-      );
-      return;
-    }
-
-    npxArgs = server.args.slice(4);
-  }
-
-  assertIncludes(npxArgs, '-y', `${label}.args`);
-  assertIncludes(npxArgs, packageName, `${label}.args`);
+  assertIncludes(server.args, '-y', `${label}.args`);
+  assertIncludes(server.args, packageName, `${label}.args`);
 }
 
-function readMiseNodeMajor(): string {
-  const major = /^node\s*=\s*"(\d+)[.\d]*"/mu.exec(readText('.mise.toml'))?.[1];
-
-  if (major === undefined) {
-    failures.push('.mise.toml: tools.node must pin a Node version.');
-    return 'unknown';
+function assertExactMcpLaunch(
+  server: McpServerConfig | undefined,
+  expected: readonly string[],
+  label: string,
+): void {
+  if (server === undefined) {
+    failures.push(`${label} MCP server is required.`);
+    return;
   }
 
-  return major;
+  const actual = [server.command, ...(Array.isArray(server.args) ? server.args : [])];
+
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    failures.push(`${label} must launch exactly: ${expected.join(' ')}.`);
+  }
 }
 
 function assertMcpRequirements(input: unknown, label: string): void {

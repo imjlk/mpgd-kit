@@ -2,7 +2,9 @@
 npm/@mpgd/cli: patch
 ---
 
-The generated Devvit target README now says to run the optional Devvit MCP
-server on Node 22 or 24. `@devvit/mcp` 0.0.27 pins `better-sqlite3` 11.9.1,
-whose native build fails on Node 26, and every launcher on a machine shares one
-npx cache, so the README shows a Node-pinned registration through mise.
+The generated Devvit target README now registers the optional Devvit MCP
+server with `mise --no-config exec node@22 -- npx -y @devvit/mcp@0.0.27`.
+`@devvit/mcp` 0.0.27 depends on `better-sqlite3` 11.9.1, which ships prebuilt
+binaries for Node 22 but not 24 and does not build on 26, and `--no-config`
+keeps mise-managed environment out of the server. The README also gives the
+plain `npx` form for hosts without mise.
