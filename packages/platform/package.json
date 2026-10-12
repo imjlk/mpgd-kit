@@ -72,6 +72,14 @@
     "./notifications-conformance": {
       "types": "./dist/notifications-conformance.d.ts",
       "default": "./dist/notifications-conformance.js"
+    },
+    "./routes": {
+      "types": "./dist/routes.d.ts",
+      "default": "./dist/routes.js"
+    },
+    "./route-vectors": {
+      "types": "./dist/route-vectors.d.ts",
+      "default": "./dist/route-vectors.js"
     }
   },
   "files": [
@@ -82,7 +90,7 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "vitest run && node test/capability-conformance-dist-import.mjs && node test/storage-conformance-dist-import.mjs && node test/ads-dist-import.mjs && node test/commerce-dist-import.mjs && node test/commerce-conformance-dist-import.mjs && node test/wallet-commerce-dist-import.mjs && node test/notifications-dist-import.mjs && node test/notifications-conformance-dist-import.mjs && cd ../.. && node tools/run-ttsx.mjs packages/platform/test/commerce-derived-key-parity.ts"
+    "test": "vitest run && node test/capability-conformance-dist-import.mjs && node test/storage-conformance-dist-import.mjs && node test/ads-dist-import.mjs && node test/commerce-dist-import.mjs && node test/commerce-conformance-dist-import.mjs && node test/wallet-commerce-dist-import.mjs && node test/notifications-dist-import.mjs && node test/notifications-conformance-dist-import.mjs && node test/routes-dist-import.mjs && cd ../.. && node tools/run-ttsx.mjs packages/platform/test/commerce-derived-key-parity.ts"
   },
   "dependencies": {
     "typia": "13.0.2"

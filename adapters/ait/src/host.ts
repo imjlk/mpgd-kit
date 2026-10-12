@@ -62,6 +62,7 @@ import {
 } from './iap.js';
 import type { GamePlatformBridge } from './index.js';
 import { dispatchAitLifecycleEvent } from './lifecycle.js';
+import { normalizeAitAppName, readAitShareRequest } from './share-link.js';
 
 export {
   aitIapDiagnosticCodes,
@@ -284,7 +285,7 @@ export function createAitHostBridge(
     ...configuredDependencies,
     identityProvider: createAitSessionIdentityProvider(configuredDependencies.identityProvider),
   };
-  const appName = normalizeAppName(options.appName ?? 'mpgd-kit');
+  const appName = normalizeAitAppName(options.appName ?? 'mpgd-kit');
   const adGroupIds = normalizeAdGroupIds(options.adGroupIds);
   const adPlacementTypes = normalizeAdPlacementTypes(options.adPlacementTypes);
   const promotionRewards = normalizePromotionRewards(options.promotionRewards);
@@ -1112,26 +1113,15 @@ export async function shareIntent(
   payload: unknown,
   dependencies: AitShareDependencies,
 ): Promise<ShareResult> {
-  const intent = readPayloadRecord(payload);
+  const request = readAitShareRequest(payload, dependencies.appName);
 
-  if (typeof intent.text !== 'string' || typeof intent.deepLink !== 'string') {
-    return { status: 'unavailable' };
-  }
-
-  const deepLink = toAitDeepLink(intent.deepLink, dependencies.appName);
-
-  if (deepLink === undefined) {
+  if (request === undefined) {
     return { status: 'unavailable' };
   }
 
   try {
-    const tossLink = await dependencies.getTossShareLink(
-      deepLink,
-      typeof intent.previewImageUrl === 'string' && intent.previewImageUrl.startsWith('https://')
-        ? intent.previewImageUrl
-        : undefined,
-    );
-    await dependencies.share({ message: `${intent.text}\n${tossLink}` });
+    const tossLink = await dependencies.getTossShareLink(request.link, request.previewImageUrl);
+    await dependencies.share({ message: `${request.text}\n${tossLink}` });
     return { status: 'shared', completion: 'presented' };
   } catch (error) {
     return isAbortError(error) ? { status: 'cancelled' } : { status: 'unavailable' };
@@ -1422,80 +1412,6 @@ function inboundSearchParams(): URLSearchParams {
   return params;
 }
 
-function toAitDeepLink(input: string, appName: string): string | undefined {
-  // No share link needs a control character, and URL parsing drops tabs and
-  // newlines, which can turn `/<tab>/host` into an authority.
-  if (/[\x00-\x1F\x7F]/u.test(input)) {
-    return undefined;
-  }
-
-  // An app link is read as the path it carries. Matching the prefix as text
-  // avoids a parser differential: `intoss:` is not a special scheme, so
-  // `intoss://other\@app/x` has the host `app` for WHATWG URL parsing but
-  // `other` for Android's `Uri`.
-  const appPrefix = `intoss://${appName}`;
-
-  if (input.startsWith(appPrefix)) {
-    const rest = input.slice(appPrefix.length);
-
-    if (rest !== '' && !/^[/?#]/u.test(rest)) {
-      return undefined;
-    }
-
-    return toAppLink(rest.startsWith('/') ? rest : `/${rest}`, appName);
-  }
-
-  if (input.startsWith('/')) {
-    return toAppLink(input, appName);
-  }
-
-  let parsed: URL;
-
-  try {
-    parsed = new URL(input);
-  } catch {
-    return undefined;
-  }
-
-  return parsed.protocol === 'http:' || parsed.protocol === 'https:'
-    ? toAppLink(`${parsed.pathname}${parsed.search}${parsed.hash}`, appName)
-    : undefined;
-}
-
-/**
- * Builds the app-owned link for a root-relative path, or answers `undefined`
- * when a client could read the path as another host. A backslash after the
- * leading slash parses as an authority (`/\host`), and so does a path whose
- * normalized form begins with an empty segment: directly, after dot segments
- * collapse (`/.//host`), or once percent-decoded and parsed again
- * (`/%2F/host`, `/%09/host`). Notification deep links in
- * `@mpgd/game-services` follow the same rules.
- */
-function toAppLink(path: string, appName: string): string | undefined {
-  if (path.startsWith('//') || path.startsWith('/\\')) {
-    return undefined;
-  }
-
-  // Without control characters or a second slash, this is a plain path and
-  // cannot fail to parse.
-  const { pathname, search, hash } = new URL(path, 'https://mpgd.invalid');
-
-  return hasNetworkPathPrefix(pathname)
-    ? undefined
-    : `intoss://${appName}${pathname}${search}${hash}`;
-}
-
-function hasNetworkPathPrefix(pathname: string): boolean {
-  const decoded = pathname
-    .replace(/%([0-7][0-9a-f])/giu, (_escape, hex: string) =>
-      String.fromCharCode(Number.parseInt(hex, 16)),
-    )
-    .replace(/[\t\n\r]/gu, '');
-
-  return /^[/\\]{2}/u.test(decoded)
-    || new URL(decoded, 'https://mpgd.invalid').pathname.startsWith('//');
-}
-
 function isGameCenterSupported(dependencies: AitHostDependencies): boolean {
   return isCapabilitySupported(() =>
     dependencies.isMinVersionSupported({
@@ -1738,14 +1654,6 @@ function normalizeNotificationTemplateCodes(
     }
   }
   return templateCodes;
-}
-
-function normalizeAppName(value: string): string {
-  const normalized = value.trim();
-  if (!/^[A-Za-z0-9-]+$/u.test(normalized)) {
-    throw new Error('AIT appName must contain only letters, numbers, and hyphens.');
-  }
-  return normalized;
 }
 
 function normalizeTimeout(value: number | undefined): number {
