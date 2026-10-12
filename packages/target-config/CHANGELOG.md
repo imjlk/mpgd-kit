@@ -1,5 +1,21 @@
 # @mpgd/target-config
 
+## 0.22.0 — 2026-10-12
+
+### Minor changes
+
+- [1c340264](https://github.com/imjlk/mpgd-kit/commit/1c34026433f01f432b57d7c9530a3f30dcb3570e) Commerce v2, PR B7: `TargetReleaseConfig.billingAuthority` is the optional
+  per-target commerce billing authority override (`store` or `host`, RFC
+  "Billing authority and memberships"). Absent, the RFC default applies
+  (`resolveCommerceBillingAuthority` from `@mpgd/platform/commerce-wallet`:
+  `web` and `web-preview` are `host`, every other profile `store`).
+  `validate:target-config` rejects `host` for the `google-play` and `app-store`
+  profiles. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: catalog@0.9.2, i18n@0.6.12, platform@0.21.0
+
 ## 0.21.3 — 2026-10-12
 
 ### Patch changes
