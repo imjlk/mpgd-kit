@@ -111,10 +111,34 @@ must not grant rewards, assert a player identity, or establish an authoritative
 score. Challenge tokens should be signed and checked by the game server before
 use.
 
-The browser adapter uses Web Share and then a clipboard fallback. Apps in Toss
+`ShareIntent.deepLink` is a root-relative route on the game's origin or an
+absolute `https://` (or `http://`) link. Every adapter whose host builds or
+receives a share URL checks it with `normalizeShareLink` from
+`@mpgd/platform/routes`, most through `withShareIntentCheck` from the same
+module, before the host sees the intent. A link that could name another host,
+carries a control character, or has another form, such as `./daily`, answers
+`unavailable`, and the host gets the normalized link. Each of these adapters'
+tests run `runShareLinkConformance` from `@mpgd/platform/share-link-conformance`
+over the shared route vectors, and `pnpm validate:share-link-conformance`, part
+of `pnpm check`, fails for an adapter that defines a share without running it.
+WeChat is the listed exception: its share card reopens the game with `query`
+and carries no link, and mini-game runtimes have no `URL` global, so the adapter
+drops `deepLink`.
+
+The browser adapter uses Web Share and then a clipboard fallback. Web Share
+receives a root-relative link as is and resolves it against the document; the
+clipboard fallback copies it resolved against `document.baseURI`, and answers
+`unavailable` without an HTTP(S) page to resolve it against. Apps in Toss
 uses a Toss share link before opening its native share sheet. Mobile and Reddit
 bridge contracts are present, but target config exposes their current setup
 state instead of pretending an unwired SDK call is available.
+
+Links a native app opens are untrusted too. The Capacitor adapter discards a
+game link whose path `normalizeRootRelativeRoute` refuses, and its
+`lifecycle.onGameUrlOpen` and `getInitialGameUrl` events carry the checked
+`route`. A router opens that route; one that reads a route from anywhere else
+in the URL, such as a custom-scheme host, checks it with
+`normalizeRootRelativeRoute` and opens only what that returns.
 
 `presentDevvitShareSheet()` in `@mpgd/adapter-devvit/web` wraps Devvit's
 `showShareSheet()` effect and returns `shared + presented`; Devvit does not

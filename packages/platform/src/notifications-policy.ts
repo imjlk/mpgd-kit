@@ -13,6 +13,7 @@ import type {
   NotificationRemoteContent,
   NotificationTopicId,
 } from './notifications-contract.js';
+import { normalizeRootRelativeRoute } from './routes.js';
 
 /**
  * Notifications v2 pure policy (RFC "Topic catalog", "Reminders", "Server",
@@ -102,52 +103,24 @@ export function notificationTopicNeedsNoAgreement(
   return topic.mapping?.['agreement'] === 'none';
 }
 
+/** The longest route a topic or a local reminder may name. */
+const maxNotificationRouteLength = 2048;
+
 /**
- * Whether `route` is a root-relative path that stays on the game's origin: at
- * most 2048 characters, no surrounding whitespace, no backslash or control
- * character anywhere, and a path (before `?` or `#`) that resolves to itself
- * both as written and once percent-decoded: one leading `/` and no backslash,
- * control character, or dot segment (`.` or `..`, percent-encoded dots
- * included). A URL parser treats `\` as `/`, drops tabs and newlines, and
- * resolves dot segments, so any of them could make the path protocol-relative:
- * `/%2e//evil.example/x` resolves to `//evil.example/x`, which a client opens
- * as a link to another host. The decoded check covers a client that decodes
- * the path before routing (`/%2F%2Fevil.example`). A path that cannot be
- * decoded is refused.
+ * Whether `route` is a root-relative route on the game's origin, at most 2048
+ * characters, and already in the form `normalizeRootRelativeRoute` from
+ * `@mpgd/platform/routes` returns. That is the rule share links and v1
+ * notification deep links follow, so neither a URL parser nor a client that
+ * percent-decodes the path once reads the route as another host
+ * (`//evil.example/x`, `/%2e//evil.example/x`, `/%2F%2Fevil.example/x`).
+ * A route with another normalized form is refused rather than rewritten, so
+ * the route a topic declares is the route a player opens: dot segments
+ * (`/a/../b`), a backslash in the path, an empty `?` or `#`, and characters a
+ * URL serializes percent-encoded (`/é`, `/a b`) all change the form.
  */
 export function isRootRelativeNotificationRoute(route: string): boolean {
-  if (
-    route.length === 0
-    || route.length > 2048
-    || route.trim() !== route
-    || route.includes('\\')
-    || hasControlCharacter(route)
-  ) {
-    return false;
-  }
-  const path = route.split(/[?#]/u, 1)[0] ?? '';
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(path);
-  } catch {
-    return false;
-  }
-  return resolvesToItself(path) && resolvesToItself(decoded);
-}
-
-/** One leading `/`, then no backslash, control character, or dot segment. */
-function resolvesToItself(path: string): boolean {
-  return path.startsWith('/')
-    && !path.startsWith('//')
-    && !path.includes('\\')
-    && !hasControlCharacter(path)
-    && path.split('/').every((segment) => !isDotSegment(segment));
-}
-
-/** `.` or `..`, with any dot percent-encoded, as a URL parser decodes it for dot segments. */
-function isDotSegment(segment: string): boolean {
-  const decoded = segment.replace(/%2e/giu, '.');
-  return decoded === '.' || decoded === '..';
+  return route.length <= maxNotificationRouteLength
+    && normalizeRootRelativeRoute(route) === route;
 }
 
 /**
@@ -205,7 +178,13 @@ export function notificationTopicDefinitionIssues(
 }
 
 function rootRelativeMessage(route: string): string {
-  return `${JSON.stringify(route)} must be a root-relative path on the game's origin, such as /?entry=continue`;
+  const normalized = route.length <= maxNotificationRouteLength
+    ? normalizeRootRelativeRoute(route)
+    : undefined;
+
+  return normalized === undefined
+    ? `${JSON.stringify(route)} must be a root-relative path on the game's origin, such as /?entry=continue`
+    : `${JSON.stringify(route)} must be written in its normalized form, ${JSON.stringify(normalized)}`;
 }
 
 function hasControlCharacter(value: string): boolean {

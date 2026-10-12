@@ -200,6 +200,7 @@ describe('Capacitor App event ownership', () => {
     expect(await events.getInitialGameUrl?.()).toEqual({
       url: 'mpgd://game/daily',
       source: 'cold',
+      route: '/daily',
     });
     expect(await events.getInitialOAuthRedirect?.()).toBeNull();
     fake.emit('appUrlOpen', { url: 'mpgd://game/daily' });
@@ -210,6 +211,56 @@ describe('Capacitor App event ownership', () => {
     expect(oauth).toEqual(['mpgd://oauth/callback?code=secret']);
     fake.emit('appUrlOpen', { url: 'mpgd://game/daily' });
     expect(game).toEqual(['mpgd://game/daily']);
+    await events.dispose?.();
+  });
+
+  it('delivers a game link only with a route the shared route rule accepts', async () => {
+    const fake = new FakeApp();
+    fake.launchUrl = 'mpgd://game//evil.example/x';
+    const events = createCapacitorAppEvents({
+      target: 'android',
+      app: asApp(fake),
+      visibility: null,
+      classifyIncomingUrl: (url) => (url.includes('oauth') ? 'oauth' : 'game'),
+    });
+    const game: unknown[] = [];
+    const oauth: string[] = [];
+    events.onGameUrlOpen?.((event) => game.push(event));
+    events.onOAuthRedirect?.((event) => oauth.push(event.url));
+    // A cold link whose path names another host is not delivered either.
+    await expect(events.getInitialGameUrl?.()).resolves.toBeNull();
+    await settle();
+    for (const url of [
+      'mpgd://game//evil.example/x',
+      'mpgd://game/.//evil.example/x',
+      'mpgd://game/%2F%2Fevil.example/x',
+      'mpgd://game/.%2F/evil.example/x',
+      'https://game.example/%5Cevil.example/x',
+      'https://game.example/%3F%2F..%2F%2Fevil.example/x',
+      'mpgd://game/daily\u0000',
+      'not a url',
+    ]) {
+      fake.emit('appUrlOpen', { url });
+    }
+    expect(game).toEqual([]);
+    fake.emit('appUrlOpen', { url: 'mpgd://game/levels/../daily?from=push#top' });
+    fake.emit('appUrlOpen', { url: 'https://game.example/a%20b/%C3%A9' });
+    // No path to check: the router maps these itself and checks what it derives.
+    fake.emit('appUrlOpen', { url: 'mpgd://daily' });
+    fake.emit('appUrlOpen', { url: 'mpgd:daily' });
+    expect(game).toEqual([
+      {
+        url: 'mpgd://game/levels/../daily?from=push#top',
+        source: 'warm',
+        route: '/daily?from=push#top',
+      },
+      { url: 'https://game.example/a%20b/%C3%A9', source: 'warm', route: '/a%20b/%C3%A9' },
+      { url: 'mpgd://daily', source: 'warm' },
+      { url: 'mpgd:daily', source: 'warm' },
+    ]);
+    // OAuth redirects are not routes and keep their own path.
+    fake.emit('appUrlOpen', { url: 'mpgd://oauth//callback?code=secret' });
+    expect(oauth).toEqual(['mpgd://oauth//callback?code=secret']);
     await events.dispose?.();
   });
 
@@ -224,7 +275,9 @@ describe('Capacitor App event ownership', () => {
     const cold = events.getInitialGameUrl?.();
     fake.emit('appUrlOpen', { url: 'mpgd://game/unread' });
     finishLaunch?.({ url: 'mpgd://game/unread' });
-    await expect(cold).resolves.toEqual({ url: 'mpgd://game/unread', source: 'cold' });
+    await expect(cold).resolves.toEqual({
+      url: 'mpgd://game/unread', source: 'cold', route: '/unread',
+    });
     await events.dispose?.();
   });
 
@@ -276,7 +329,7 @@ describe('Capacitor App event ownership', () => {
       classifyIncomingUrl: () => 'game',
     });
     await expect(events.getInitialGameUrl?.()).resolves.toEqual({
-      url: 'mpgd://game/first', source: 'cold',
+      url: 'mpgd://game/first', source: 'cold', route: '/first',
     });
     await events.dispose?.();
     fake.releaseRegistrations();

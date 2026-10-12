@@ -675,6 +675,41 @@ try {
       }),
     /artifact-relative URL/u,
   );
+  // Artifact-relative URLs follow the shared route rule, also once a client
+  // percent-decodes the path, and are written in their normalized form.
+  for (const manifest of [
+    { ...validManifest, start_url: './%2F%2Fevil.example/' },
+    { ...validManifest, start_url: './%3F%2F..%2F%2Fevil.example/' },
+    { ...validManifest, start_url: './game/../' },
+    { ...validManifest, scope: './%5Cevil.example/' },
+    { ...validManifest, scope: './/evil.example/' },
+    {
+      ...validManifest,
+      icons: [
+        ...validManifest.icons,
+        {
+          src: './%2F%2Fevil.example/icon.png',
+          sizes: '512x512',
+          type: 'image/png',
+          purpose: 'any',
+        },
+      ],
+    },
+  ]) {
+    writeJson(manifestFile, manifest);
+    assert.throws(
+      () =>
+        runMicrosoftStoreSubmissionPreflight({
+          gameRoot,
+          artifactRoot,
+          configFile: submissionFile,
+          jsonFile: join(outputDir, 'decoded-host-url.json'),
+          markdownFile: join(outputDir, 'decoded-host-url.md'),
+        }),
+      /artifact-relative URL/u,
+      JSON.stringify({ start_url: manifest.start_url, scope: manifest.scope }),
+    );
+  }
   writeJson(manifestFile, { ...validManifest, start_url: './', scope: './game/' });
   assert.throws(
     () =>

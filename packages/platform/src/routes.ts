@@ -1,3 +1,5 @@
+import type { ShareAdapter, ShareIntent, ShareResult } from './index.js';
+
 /**
  * Route safety for links a game hands to the kit, such as notification deep
  * links and share links. A URL parser treats `\` as `/`, drops tabs and
@@ -103,4 +105,87 @@ export function normalizeRootRelativeRoute(input: string): string | undefined {
   const { pathname, search, hash } = new URL(input, placeholderOrigin);
 
   return hasNetworkPathPrefix(pathname) ? undefined : `${pathname}${search}${hash}`;
+}
+
+/**
+ * Normalizes a `ShareIntent.deepLink`, or answers `undefined` for a link
+ * outside its contract. A root-relative link becomes the route
+ * `normalizeRootRelativeRoute` returns. An absolute link must spell out
+ * `https://` or `http://`, carry no credentials, and keep a path no client
+ * can read as another host; it comes back serialized. Anything else is
+ * refused: a page-relative link (`./daily`, `?x=1`), another scheme
+ * (`javascript:`, `intoss:`), and any link with a control character.
+ */
+export function normalizeShareLink(deepLink: string): string | undefined {
+  if (hasRouteControlCharacter(deepLink)) {
+    return undefined;
+  }
+
+  if (deepLink.startsWith('/')) {
+    return normalizeRootRelativeRoute(deepLink);
+  }
+
+  // `https:/daily` and `https:host/x` parse as absolute links to another host
+  // without a base but resolve on the page with one, so only the full form counts.
+  if (!/^https?:\/\//iu.test(deepLink)) {
+    return undefined;
+  }
+
+  let parsed: URL;
+
+  try {
+    parsed = new URL(deepLink);
+  } catch {
+    return undefined;
+  }
+
+  return parsed.username === ''
+    && parsed.password === ''
+    && !hasNetworkPathPrefix(parsed.pathname)
+    ? parsed.href
+    : undefined;
+}
+
+/**
+ * Reads a `share` intent under the `ShareIntent` contract: the intent with its
+ * `deepLink` normalized by `normalizeShareLink`, or `undefined` when it is not
+ * an object, its `text` is not a string, or its `deepLink` is not a link that
+ * rule accepts. The intent may come from untyped game code, so none of this
+ * is assumed.
+ */
+export function readShareIntent(intent: unknown): ShareIntent | undefined {
+  if (typeof intent !== 'object' || intent === null || Array.isArray(intent)) {
+    return undefined;
+  }
+
+  const { text, deepLink } = intent as Readonly<Record<string, unknown>>;
+  const link = typeof deepLink === 'string' ? normalizeShareLink(deepLink) : undefined;
+
+  return typeof text === 'string' && link !== undefined
+    ? { ...(intent as ShareIntent), deepLink: link }
+    : undefined;
+}
+
+/**
+ * Puts `readShareIntent` in front of an adapter's `share`: the adapter and its
+ * host see only intents the contract accepts, with the link normalized, and
+ * any other intent answers `unavailable` without reaching them. Adapters wrap
+ * their `sharing` with it, and their tests run
+ * `@mpgd/platform/share-link-conformance`.
+ */
+export function withShareIntentCheck(sharing: ShareAdapter): ShareAdapter {
+  const share = sharing.share?.bind(sharing);
+  const readInboundShare = sharing.readInboundShare?.bind(sharing);
+  const checkedShare = share === undefined
+    ? undefined
+    : async (intent: ShareIntent): Promise<ShareResult> => {
+        const checked = readShareIntent(intent);
+
+        return checked === undefined ? { status: 'unavailable' } : share(checked);
+      };
+
+  return {
+    ...(checkedShare === undefined ? {} : { share: checkedShare }),
+    ...(readInboundShare === undefined ? {} : { readInboundShare }),
+  };
 }

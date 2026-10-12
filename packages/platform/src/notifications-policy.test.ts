@@ -47,6 +47,8 @@ import {
 } from './notifications-policy.js';
 
 import type { NotificationCapabilities } from './notifications-contract.js';
+import { rootRelativeRouteVectors } from './route-vectors.js';
+import { normalizeRootRelativeRoute } from './routes.js';
 
 const noon = '2026-10-12T03:00:00Z'; // 12:00 Asia/Seoul
 const tenPm = '2026-10-12T13:00:00Z'; // 22:00 Asia/Seoul
@@ -620,10 +622,39 @@ describe('notification topic routes', () => {
       expect(new URL(decoded, base).origin === base && !decoded.includes('\\')).toBe(false);
       expect(isRootRelativeNotificationRoute(route), route).toBe(false);
     }
-    // Decoded dot segments and paths that cannot be decoded are refused too.
-    for (const route of ['/levels/%252e%252e', '/50%', '/%E0%A4%A']) {
-      expect(isRootRelativeNotificationRoute(route), route).toBe(false);
+  });
+
+  it('follows the shared route rule and accepts only routes already in normalized form', () => {
+    for (const route of rootRelativeRouteVectors.rejected) {
+      expect(isRootRelativeNotificationRoute(route), JSON.stringify(route)).toBe(false);
     }
+    for (const [input, route] of rootRelativeRouteVectors.normalized) {
+      expect(isRootRelativeNotificationRoute(route), route).toBe(true);
+      expect(isRootRelativeNotificationRoute(input), input).toBe(input === route);
+    }
+    // Not URL-serialized yet, or carrying an empty `?` or `#`: the declared
+    // route would differ from the one a player opens, so the issue names it.
+    for (const [route, normalized] of [
+      ['/é', '/%C3%A9'],
+      ['/a b', '/a%20b'],
+      ['/?q=a b', '/?q=a%20b'],
+      ['/a\\b', '/a/b'],
+      ['/a?', '/a'],
+      ['/a#', '/a'],
+    ] as const) {
+      expect(isRootRelativeNotificationRoute(route), route).toBe(false);
+      expect(normalizeRootRelativeRoute(route)).toBe(normalized);
+      expect(notificationTopicDefinitionIssues({ ...service, route })).toEqual([{
+        path: 'topic.route',
+        message: `${JSON.stringify(route)} must be written in its normalized form, ${JSON.stringify(normalized)}`,
+      }]);
+    }
+    // Encoded dot segments or escapes that stay on the origin once decoded are
+    // left to the router, as the shared rule leaves them.
+    for (const route of ['/levels/%252e%252e', '/a/%2E%2E%2Fb', '/50%', '/a/%09b']) {
+      expect(isRootRelativeNotificationRoute(route), route).toBe(true);
+    }
+    expect(isRootRelativeNotificationRoute(`/${'a'.repeat(2047)}`)).toBe(true);
   });
 
   it('accepts root-relative routes that resolve to themselves on the game origin', () => {

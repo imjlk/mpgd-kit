@@ -224,12 +224,21 @@ describe('adapter-capacitor', () => {
     await expect(
       gateway.presentation?.requestGameSurface({ entry: 'daily' }),
     ).resolves.toBe('already-fullscreen');
+    // An app-scheme link is outside the ShareIntent contract: refused before the bridge.
     await expect(
       gateway.sharing?.share?.({
         kind: 'invite',
         title: 'Invite',
         text: 'Play with me',
         deepLink: 'mpgd://invite',
+      }),
+    ).resolves.toEqual({ status: 'unavailable' });
+    await expect(
+      gateway.sharing?.share?.({
+        kind: 'invite',
+        title: 'Invite',
+        text: 'Play with me',
+        deepLink: '/invite',
       }),
     ).resolves.toEqual({ status: 'unavailable' });
     await expect(gateway.sharing?.readInboundShare?.()).resolves.toBeNull();

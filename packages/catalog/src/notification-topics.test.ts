@@ -182,14 +182,25 @@ for (const route of [
   assert.equal(isRootRelativeNotificationRoute(route), true, `${route} is root-relative`);
 }
 // A client that decodes the path before routing would open these on another host.
-for (const route of [
-  '/%2F%2Fevil.example/x',
-  '/%5Cevil.example',
-  '/%09/evil.example',
-  '/levels/%252e%252e',
-  '/50%',
-]) {
+for (const route of ['/%2F%2Fevil.example/x', '/%5Cevil.example', '/%09/evil.example']) {
   assert.equal(isRootRelativeNotificationRoute(route), false, `${route} is refused once decoded`);
+}
+// A route is declared in the form a player opens: anything else names its normalized form.
+for (const [route, normalized] of [
+  ['/é', '/%C3%A9'],
+  ['/a b', '/a%20b'],
+  ['/a/../b', '/b'],
+] as const) {
+  assert.equal(isRootRelativeNotificationRoute(route), false, `${route} is not in normalized form`);
+  const { issues } = validateNotificationTopicCatalog(catalogWith({ ...baseTopic, route }), {
+    targetProviders,
+    deployment: plainDeployment,
+  });
+  assert.ok(
+    issues.some((issue) => issue.path === 'topics[0].route'
+      && issue.message.endsWith(`must be written in its normalized form, ${JSON.stringify(normalized)}`)),
+    `${route} names its normalized form: ${JSON.stringify(issues)}`,
+  );
 }
 // Each of these passes a same-origin check against a placeholder base, yet a
 // URL parser resolves it to a protocol-relative path such as //evil.example/x.

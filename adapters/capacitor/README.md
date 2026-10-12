@@ -316,6 +316,17 @@ app. Cold URLs are read through `getInitialGameUrl` or
 callback. Call `lifecycle.dispose()` when the host tears down this gateway;
 the adapter removes only its own listener handles, never every App listener.
 
+A game link is untrusted input. The adapter checks the link's path, query, and
+fragment with `normalizeRootRelativeRoute` from `@mpgd/platform/routes` and
+discards a link that rule refuses, such as `mygame://game//evil.example/x` or
+`https://game.example/%2F%2Fevil.example/x`, because a client could read its
+path as another host. A delivered event carries the checked `route` (`/daily`
+for `mygame://game/daily`), so a router opens `event.route` rather than
+parsing `event.url`. A link with no path to check, such as `mygame://daily`,
+arrives without `route`; a router that maps it, or reads a route from any
+other part of the URL, checks that route with `normalizeRootRelativeRoute` and
+opens only what it returns.
+
 Save progress at checkpoints and transaction boundaries. A pause callback can
 request a best-effort save, but neither pause nor back is guaranteed to run
 before the operating system terminates a process. The lifecycle tests use an

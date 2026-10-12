@@ -22,6 +22,7 @@ import {
   type ViewportAdapter,
 } from '@mpgd/platform';
 import { deriveLegacyCommerceCapabilities } from '@mpgd/platform/commerce';
+import { withShareIntentCheck } from '@mpgd/platform/routes';
 import {
   createCapacitorAppEvents,
   type CapacitorAppEventsApi,
@@ -412,10 +413,12 @@ export function createCapacitorPlatformGateway(input: {
       requestGameSurface: (payload) =>
         request<PresentationResult>('presentation.requestGameSurface', payload),
     },
-    sharing: {
+    // The bridge's host may build a share URL from the link, so it only ever
+    // sees an intent the ShareIntent contract accepts, with the link normalized.
+    sharing: withShareIntentCheck({
       share: (payload) => request<ShareResult>('share.share', payload),
       readInboundShare: () => request<InboundShare | null>('share.readInboundShare', {}),
-    },
+    }),
     notifications: {
       getStatus: (topic) =>
         request<NotificationSubscriptionStatus>('notifications.getStatus', { topic }),

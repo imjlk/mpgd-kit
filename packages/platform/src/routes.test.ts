@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { rootRelativeRouteVectors } from './route-vectors.js';
+import { rootRelativeRouteVectors, shareLinkVectors } from './route-vectors.js';
 import {
   hasNetworkPathPrefix,
   hasRouteControlCharacter,
   normalizeRootRelativeRoute,
+  normalizeShareLink,
 } from './routes.js';
 
 const base = 'https://game.example/';
@@ -210,5 +211,33 @@ describe('root-relative routes', () => {
     }
 
     expect(problems.slice(0, 10)).toEqual([]);
+  });
+});
+
+describe('share links', () => {
+  it('normalizes root-relative routes and absolute HTTP(S) links', () => {
+    for (const [input, route] of rootRelativeRouteVectors.normalized) {
+      expect(normalizeShareLink(input), input).toBe(route);
+    }
+
+    for (const [input, link] of shareLinkVectors.normalized) {
+      expect(normalizeShareLink(input), input).toBe(link);
+      expect(normalizeShareLink(link), link).toBe(link);
+    }
+  });
+
+  it('refuses route escapes and links outside the ShareIntent contract', () => {
+    for (const input of [...rootRelativeRouteVectors.rejected, ...shareLinkVectors.rejected]) {
+      expect(normalizeShareLink(input), JSON.stringify(input)).toBeUndefined();
+    }
+  });
+
+  it('keeps an absolute link on the host it names, with a path that stays there', () => {
+    for (const [, link] of shareLinkVectors.normalized) {
+      const url = new URL(link);
+
+      expect(url.username + url.password, link).toBe('');
+      expect(hasNetworkPathPrefix(url.pathname), link).toBe(false);
+    }
   });
 });
