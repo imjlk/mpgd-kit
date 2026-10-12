@@ -1,0 +1,6 @@
+# Keep source and configuration files consistent with @ttsc/lint on every OS.
+* text=auto eol=lf
+
+# Windows batch scripts use CRLF when checked out.
+*.bat text eol=crlf
+*.cmd text eol=crlf

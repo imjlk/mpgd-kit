@@ -1,6 +1,7 @@
 [tools]
 go = "1.26.5"
 node = "24.11.0"
+pnpm = "11.7.0"
 
 [env]
 # ttsc bundles its own Go toolchain, but source-plugin compilation must use the

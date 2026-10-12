@@ -204,7 +204,7 @@ function buildPlayPublisherAdapter(distDir: string): void {
     packages: 'external',
     metafile: true,
   });
-  if (result.metafile.outputs[output] === undefined) {
+  if (result.metafile.outputs[toPosix(output)] === undefined) {
     throw new Error('Packaged Google Play adapter is missing.');
   }
 }
@@ -219,7 +219,7 @@ function buildPackagedIosInspection(distDir: string): void {
     format: 'esm',
     metafile: true,
   });
-  if (result.metafile.outputs[output] === undefined) {
+  if (result.metafile.outputs[toPosix(output)] === undefined) {
     throw new Error('Packaged iOS IPA inspector is missing.');
   }
 }
@@ -240,7 +240,7 @@ function buildPackagedNativeTarget(workspacePackage: WorkspacePackage, distDir: 
     packages: 'external',
     metafile: true,
   });
-  const emitted = result.metafile.outputs[output];
+  const emitted = result.metafile.outputs[toPosix(output)];
   if (emitted === undefined) {
     throw new Error('Native build bundle output is missing from esbuild metadata.');
   }
