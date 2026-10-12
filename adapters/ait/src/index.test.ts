@@ -166,7 +166,7 @@ describe('adapter-ait', () => {
         kind: 'daily-result',
         title: 'Daily result',
         text: "I finished today's puzzle.",
-        deepLink: 'intoss://game/daily',
+        deepLink: '/daily',
       }),
     ).resolves.toEqual({
       status: 'shared',
@@ -283,10 +283,10 @@ describe('adapter-ait', () => {
     await expect(named.sharing?.share?.({ ...intent, deepLink: '/daily' }))
       .resolves.toEqual({ status: 'shared', completion: 'presented' });
 
-    // Without one, the sandbox accepts the plain app name a link names.
-    await expect(derived.sharing?.share?.({ ...intent, deepLink: 'intoss://other/daily' }))
+    // Without one, the sandbox uses the host's default app name.
+    await expect(derived.sharing?.share?.({ ...intent, deepLink: 'intoss://mpgd-kit/daily' }))
       .resolves.toEqual({ status: 'shared', completion: 'presented' });
-    await expect(derived.sharing?.share?.({ ...intent, deepLink: 'intoss://other\\@game/daily' }))
+    await expect(derived.sharing?.share?.({ ...intent, deepLink: 'intoss://other/daily' }))
       .resolves.toEqual({ status: 'unavailable' });
     await expect(derived.sharing?.share?.({ ...intent, deepLink: '/\\evil.example/daily' }))
       .resolves.toEqual({ status: 'unavailable' });

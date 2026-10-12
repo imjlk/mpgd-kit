@@ -62,7 +62,7 @@ import {
 } from './iap.js';
 import type { GamePlatformBridge } from './index.js';
 import { dispatchAitLifecycleEvent } from './lifecycle.js';
-import { normalizeAitAppName, toAitShareLink } from './share-link.js';
+import { normalizeAitAppName, readAitShareRequest } from './share-link.js';
 
 export {
   aitIapDiagnosticCodes,
@@ -1113,26 +1113,15 @@ export async function shareIntent(
   payload: unknown,
   dependencies: AitShareDependencies,
 ): Promise<ShareResult> {
-  const intent = readPayloadRecord(payload);
+  const request = readAitShareRequest(payload, dependencies.appName);
 
-  if (typeof intent.text !== 'string' || typeof intent.deepLink !== 'string') {
-    return { status: 'unavailable' };
-  }
-
-  const deepLink = toAitShareLink(intent.deepLink, dependencies.appName);
-
-  if (deepLink === undefined) {
+  if (request === undefined) {
     return { status: 'unavailable' };
   }
 
   try {
-    const tossLink = await dependencies.getTossShareLink(
-      deepLink,
-      typeof intent.previewImageUrl === 'string' && intent.previewImageUrl.startsWith('https://')
-        ? intent.previewImageUrl
-        : undefined,
-    );
-    await dependencies.share({ message: `${intent.text}\n${tossLink}` });
+    const tossLink = await dependencies.getTossShareLink(request.link, request.previewImageUrl);
+    await dependencies.share({ message: `${request.text}\n${tossLink}` });
     return { status: 'shared', completion: 'presented' };
   } catch (error) {
     return isAbortError(error) ? { status: 'cancelled' } : { status: 'unavailable' };

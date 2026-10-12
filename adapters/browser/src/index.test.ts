@@ -135,7 +135,7 @@ describe('adapter-browser', () => {
     }
   });
 
-  it('resolves page-relative share links against the page', async () => {
+  it('refuses share links outside the ShareIntent contract', async () => {
     const shares: ShareData[] = [];
     const gateway = createBrowserPlatformGateway({
       locationHref: 'https://game.example/play/index.html?from=menu',
@@ -145,23 +145,35 @@ describe('adapter-browser', () => {
     });
     const intent = { kind: 'invite', title: 'Join', text: 'Join me' } as const;
 
-    for (const [deepLink, url] of [
-      ['?challengeToken=x', 'https://game.example/play/index.html?challengeToken=x'],
-      ['#top', 'https://game.example/play/index.html?from=menu#top'],
-      ['./daily', 'https://game.example/play/daily'],
-      ['daily?x=1', 'https://game.example/play/daily?x=1'],
-      ['/levels/../daily', 'https://game.example/daily'],
-      ['https://other.example/page', 'https://other.example/page'],
-    ] as const) {
-      await expect(gateway.sharing?.share?.({ ...intent, deepLink }), deepLink)
-        .resolves.toEqual({ status: 'shared' });
-      expect(shares.at(-1)?.url, deepLink).toBe(url);
-    }
-
-    for (const deepLink of ['../..//evil.example/x', '/.//evil.example/x', '\\\\evil.example/x']) {
-      await expect(gateway.sharing?.share?.({ ...intent, deepLink }), deepLink)
+    for (const deepLink of [
+      // Page-relative or empty links, which the other targets refuse too.
+      '',
+      ' /daily',
+      './daily',
+      'daily?x=1',
+      '?challengeToken=x',
+      '#top',
+      // Absolute links that are not spelled out as HTTP(S), or that could name another host.
+      'https:/daily',
+      'https:evil.example/x',
+      'https://user:pw@game.example/daily',
+      'https://game.example//evil.example/x',
+      'https://game.example/.//evil.example/x',
+      'https://game.example/%2F%2Fevil.example/x',
+    ]) {
+      await expect(gateway.sharing?.share?.({ ...intent, deepLink }), JSON.stringify(deepLink))
         .resolves.toEqual({ status: 'unavailable' });
     }
+
+    await expect(gateway.sharing?.share?.({ ...intent, text: 1 } as never))
+      .resolves.toEqual({ status: 'unavailable' });
+    await expect(gateway.sharing?.share?.(null as never))
+      .resolves.toEqual({ status: 'unavailable' });
+    expect(shares).toEqual([]);
+
+    await expect(gateway.sharing?.share?.({ ...intent, deepLink: 'https://other.example/page' }))
+      .resolves.toEqual({ status: 'shared' });
+    expect(shares.at(-1)?.url).toBe('https://other.example/page');
   });
 
   it('ignores malformed nested inbound share data and reports notifications unsupported', async () => {

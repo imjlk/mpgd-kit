@@ -11,7 +11,11 @@ import {
   type ProductInfo,
   type ShareIntent,
 } from '@mpgd/platform';
-import { hasNetworkPathPrefix, hasRouteControlCharacter } from '@mpgd/platform/routes';
+import {
+  hasNetworkPathPrefix,
+  hasRouteControlCharacter,
+  normalizeRootRelativeRoute,
+} from '@mpgd/platform/routes';
 
 import { createUnavailableAdAdapter } from './unavailable-ads.js';
 
@@ -365,9 +369,12 @@ async function shareFromBrowser(
   intent: ShareIntent,
   options: BrowserPlatformGatewayOptions,
 ) {
-  const url = toShareableUrl(intent.deepLink, resolveBrowserUrl(options.locationHref));
+  // The intent may come from untyped game code; answer like the other adapters.
+  const candidate: unknown = intent;
+  const text = isRecord(candidate) ? candidate['text'] : undefined;
+  const url = isRecord(candidate) ? toShareableUrl(candidate['deepLink']) : undefined;
 
-  if (url === undefined) {
+  if (typeof text !== 'string' || url === undefined) {
     return { status: 'unavailable' } as const;
   }
 
@@ -377,7 +384,7 @@ async function shareFromBrowser(
     try {
       await share({
         title: intent.title,
-        text: intent.text,
+        text,
         url,
       });
 
@@ -400,7 +407,7 @@ async function shareFromBrowser(
   }
 
   try {
-    await writeClipboardText(`${intent.text}\n${url}`);
+    await writeClipboardText(`${text}\n${url}`);
     return { status: 'shared' } as const;
   } catch {
     return { status: 'unavailable' } as const;
@@ -409,54 +416,46 @@ async function shareFromBrowser(
 
 /**
  * The link a browser share passes on, or `undefined` when it could reach
- * another host or is not a web link. An absolute link must use HTTP(S). A
- * relative link (`/daily`, `?challengeToken=…`, `./daily`) resolves against
- * the page, as Web Share does, and must stay on the page's origin with a path
- * no client can read as another host (`hasNetworkPathPrefix` from
- * `@mpgd/platform/routes`). It is shared as an absolute URL when the page URL
- * is known, so the clipboard fallback copies a usable link.
+ * another host or is not a web link, following the `ShareIntent.deepLink`
+ * contract. A root-relative link is normalized with `normalizeRootRelativeRoute`
+ * from `@mpgd/platform/routes` and stays relative, so Web Share resolves it
+ * against the document as before. An absolute link must spell out `http://` or
+ * `https://`, carry no credentials, and keep a path no client can read as
+ * another host. Page-relative links (`./daily`, `?x=1`) are refused, as on the
+ * other targets.
  */
-function toShareableUrl(deepLink: unknown, page: URL | undefined): string | undefined {
+function toShareableUrl(deepLink: unknown): string | undefined {
   if (typeof deepLink !== 'string' || hasRouteControlCharacter(deepLink)) {
     return undefined;
   }
 
-  let absolute: URL | undefined;
-
-  try {
-    absolute = new URL(deepLink);
-  } catch {
-    absolute = undefined;
+  if (deepLink.startsWith('/')) {
+    return normalizeRootRelativeRoute(deepLink);
   }
 
-  if (absolute !== undefined) {
-    return absolute.protocol === 'https:' || absolute.protocol === 'http:'
-      ? absolute.href
-      : undefined;
-  }
-
-  // Two leading slashes or backslashes, in any mix, make a relative link name
-  // a host (`//host`, `/\host`, `\\host`), whatever the base is.
-  if (/^[/\\]{2}/u.test(deepLink)) {
+  // `https:/daily` and `https:host/x` parse as absolute links to another host
+  // without a base but resolve on the page with one, so only the full form counts.
+  if (!/^https?:\/\//iu.test(deepLink)) {
     return undefined;
   }
 
-  const base = page ?? new URL('https://mpgd.invalid/');
-  let resolved: URL;
+  let parsed: URL;
 
   try {
-    resolved = new URL(deepLink, base);
+    parsed = new URL(deepLink);
   } catch {
     return undefined;
   }
 
-  if (resolved.origin !== base.origin || hasNetworkPathPrefix(resolved.pathname)) {
-    return undefined;
-  }
+  return parsed.username === ''
+    && parsed.password === ''
+    && !hasNetworkPathPrefix(parsed.pathname)
+    ? parsed.href
+    : undefined;
+}
 
-  return page === undefined
-    ? `${resolved.pathname}${resolved.search}${resolved.hash}`
-    : resolved.href;
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function canShare(options: BrowserPlatformGatewayOptions): boolean {

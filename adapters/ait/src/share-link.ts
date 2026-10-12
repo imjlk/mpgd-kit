@@ -58,9 +58,37 @@ export function normalizeAitAppName(value: string): string {
   return normalized;
 }
 
-/** The app name an `intoss://` link names, when it is a plain name. */
-export function readAitShareLinkAppName(input: string): string | undefined {
-  return /^intoss:\/\/([A-Za-z0-9-]+)(?:[/?#]|$)/u.exec(input)?.[1];
+export interface AitShareRequest {
+  readonly text: string;
+  /** The app-owned `intoss://<app>` link to share. */
+  readonly link: string;
+  readonly previewImageUrl?: string;
+}
+
+/**
+ * Reads a `share.share` payload the way the Apps in Toss host does, or answers
+ * `undefined` when it has no `text` or no link the host would share. The host
+ * and the sandbox bridge both use it, so they accept the same requests.
+ */
+export function readAitShareRequest(payload: unknown, appName: string): AitShareRequest | undefined {
+  const intent = typeof payload === 'object' && payload !== null && !Array.isArray(payload)
+    ? payload as Readonly<Record<string, unknown>>
+    : {};
+  const { text, deepLink, previewImageUrl } = intent;
+
+  if (typeof text !== 'string' || typeof deepLink !== 'string') {
+    return undefined;
+  }
+
+  const link = toAitShareLink(deepLink, appName);
+
+  if (link === undefined) {
+    return undefined;
+  }
+
+  return typeof previewImageUrl === 'string' && previewImageUrl.startsWith('https://')
+    ? { text, link, previewImageUrl }
+    : { text, link };
 }
 
 function toAppLink(path: string, appName: string): string | undefined {

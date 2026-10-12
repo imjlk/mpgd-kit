@@ -1,4 +1,5 @@
 import { rootRelativeRouteVectors } from '@mpgd/platform/route-vectors';
+import { hasRouteControlCharacter } from '@mpgd/platform/routes';
 
 import {
   createInMemoryNotificationDeliveryLedger,
@@ -664,51 +665,6 @@ await assertRejects(
   'origin is not allowed',
   'absolute notification links should require a configured trusted origin',
 );
-await assertRejects(
-  () =>
-    deliveryService.deliver({
-      ...androidRequest,
-      idempotencyKey: 'notification-backslash-link',
-      deepLink: '/\\phishing.example/daily',
-    }),
-  'configured game origin',
-  'root-relative links must not escape through URL backslashes',
-);
-const offOriginRootRelativeLinks = [
-  // Dot segments, plain or percent-encoded, collapse into a leading `//`.
-  '/.//phishing.example/daily',
-  '/levels/..//phishing.example/daily',
-  '/%2e//phishing.example/daily',
-  '/%2E%2E//phishing.example/daily',
-  '/./\\phishing.example/daily',
-  // A backslash after the leading slash names a host, whatever it parses to.
-  '/\\mpgd.invalid//phishing.example/daily',
-  '/\\mpgd.invalid/daily',
-  '/\\user:pw@mpgd.invalid:443/daily',
-  '/\\ phishing.example/daily',
-  // One percent-decode turns these into the shapes above: URL parsing then
-  // drops the decoded tabs and newlines and removes the dot segments.
-  '/%2F%2Fphishing.example/daily',
-  '/%5cphishing.example/daily',
-  '/%09/phishing.example/daily',
-  '/%0A%0d/phishing.example/daily',
-  '/%09%5Cphishing.example/daily',
-  '/%09.//phishing.example/daily',
-  '/.%2F/phishing.example/daily',
-  '/levels/..%2F%2Fphishing.example/daily',
-];
-for (const [index, deepLink] of offOriginRootRelativeLinks.entries()) {
-  await assertRejects(
-    () =>
-      deliveryService.deliver({
-        ...androidRequest,
-        idempotencyKey: `notification-off-origin-link-${String(index)}`,
-        deepLink,
-      }),
-    'configured game origin',
-    `root-relative links must stay a path on the game origin: ${deepLink}`,
-  );
-}
 for (const [index, deepLink] of [
   'https://game.example/.//phishing.example/daily',
   'https://game.example//phishing.example/daily',
@@ -788,9 +744,13 @@ for (const [deepLink, expected] of rootRelativeRouteVectors.normalized) {
   );
 }
 for (const [index, deepLink] of rootRelativeRouteVectors.rejected.entries()) {
-  if (!deepLink.startsWith('/') || deepLink.startsWith('//') || /[\x00-\x1F\x7F]/u.test(deepLink)) {
-    continue;
-  }
+  // A link with a control character, or one that starts with `//`, fails an
+  // earlier check with its own message; every other one names the game origin.
+  const expected = hasRouteControlCharacter(deepLink)
+    ? 'control characters'
+    : deepLink.startsWith('//')
+      ? 'absolute URL or root-relative path'
+      : 'configured game origin';
 
   await assertRejects(
     () =>
@@ -799,8 +759,8 @@ for (const [index, deepLink] of rootRelativeRouteVectors.rejected.entries()) {
         idempotencyKey: `notification-shared-route-${String(index)}`,
         deepLink,
       }),
-    'configured game origin',
-    `a shared route vector should stay off the delivery path: ${deepLink}`,
+    expected,
+    `a shared route vector should stay off the delivery path: ${JSON.stringify(deepLink)}`,
   );
 }
 await assertRejects(

@@ -478,10 +478,12 @@ export interface ShareIntent {
   readonly text: string;
   /**
    * A root-relative link on the game's origin (`/daily?challengeToken=…`) or an
-   * absolute HTTP(S) link. Adapters normalize a root-relative link with
-   * `normalizeRootRelativeRoute` from `@mpgd/platform/routes` and answer
-   * `unavailable` when it could name another host or contains a control
-   * character; Apps in Toss also accepts its own `intoss://<app>` links.
+   * absolute `https://` (or `http://`) link. Adapters that build a share URL
+   * from it (Apps in Toss and web) check it with `@mpgd/platform/routes` and
+   * answer `unavailable` when it could name another host, contains a control
+   * character, or has another form, such as a page-relative link. Apps in Toss
+   * also accepts its own `intoss://<app>` links. Adapters whose host shares no
+   * link ignore it.
    */
   readonly deepLink: string;
   readonly payload?: SharePayload;

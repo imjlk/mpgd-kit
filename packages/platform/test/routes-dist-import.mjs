@@ -4,7 +4,6 @@ import { rootRelativeRouteVectors } from '@mpgd/platform/route-vectors';
 import {
   hasNetworkPathPrefix,
   hasRouteControlCharacter,
-  isCanonicalRootRelativeRoute,
   normalizeRootRelativeRoute,
 } from '@mpgd/platform/routes';
 
@@ -18,5 +17,3 @@ for (const input of rootRelativeRouteVectors.rejected) {
 
 assert.equal(hasNetworkPathPrefix('/%2F/evil.example'), true);
 assert.equal(hasRouteControlCharacter('/a\u0000'), true);
-assert.equal(isCanonicalRootRelativeRoute('/settings/notifications'), true);
-assert.equal(isCanonicalRootRelativeRoute('/levels/../daily'), false);

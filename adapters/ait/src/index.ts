@@ -38,7 +38,7 @@ import { commerceProtocolVersion, type CommerceProvider } from '@mpgd/platform/c
 import { createAitBridgeCommerceProvider } from './commerce-bridge.js';
 import { aitCommerceStoreId, createAitCommerceCapabilities } from './commerce-provider.js';
 import { createAitLifecycleAdapter } from './lifecycle.js';
-import { normalizeAitAppName, readAitShareLinkAppName, toAitShareLink } from './share-link.js';
+import { normalizeAitAppName, readAitShareRequest } from './share-link.js';
 
 export interface GamePlatformBridge {
   request(input: BridgeRequest): Promise<BridgeResponse>;
@@ -73,8 +73,8 @@ export interface CreateAitSandboxBridgeOptions {
   readonly buildId?: string;
   /**
    * The app name `intoss://` share links must carry, as the host bridge's
-   * `appName`. Without it, the sandbox accepts the plain app name a link
-   * names; every link still follows the host's share-link rules.
+   * `appName`; both default to `mpgd-kit`. Root-relative and `https://` share
+   * links do not depend on it.
    */
   readonly appName?: string;
 }
@@ -302,9 +302,9 @@ export function createAitSandboxBridge(
   // fails closed. Every other build keeps the fail-closed bridge error and
   // no event channel, so its gateway offers no `commerceV2` at all.
   const commerceV2Enabled = options.buildId === aitSandboxBuildId;
-  const sandboxAppName = options.appName === undefined
-    ? undefined
-    : normalizeAitAppName(options.appName);
+  // The same default as the host bridge, so an unconfigured sandbox refuses
+  // what an unconfigured host refuses.
+  const sandboxAppName = normalizeAitAppName(options.appName ?? 'mpgd-kit');
 
   return {
     // The sandbox emits no commerce events; the channel exists so the gateway
@@ -363,24 +363,15 @@ export function createAitSandboxBridge(
         case 'presentation.requestGameSurface':
           return ok(input, 'already-fullscreen');
 
-        case 'share.share': {
-          // The sandbox applies the host's share-link rules, so a link the
-          // host would refuse is not reported as shared here.
-          const intent = isRecord(input.payload) ? input.payload : {};
-          const deepLink = typeof intent.text === 'string' && typeof intent.deepLink === 'string'
-            ? intent.deepLink
-            : undefined;
-          const appName = sandboxAppName
-            ?? (deepLink === undefined ? undefined : readAitShareLinkAppName(deepLink))
-            ?? 'mpgd-kit';
-
+        case 'share.share':
+          // The sandbox reads share requests exactly as the host does, so a
+          // request the host would refuse is not reported as shared here.
           return ok(
             input,
-            deepLink !== undefined && toAitShareLink(deepLink, appName) !== undefined
-              ? { status: 'shared', completion: 'presented' }
-              : { status: 'unavailable' },
+            readAitShareRequest(input.payload, sandboxAppName) === undefined
+              ? { status: 'unavailable' }
+              : { status: 'shared', completion: 'presented' },
           );
-        }
 
         case 'share.readInboundShare':
           return ok(input, null);
