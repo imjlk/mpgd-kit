@@ -483,8 +483,11 @@ Runtime rules:
 - **Start.** The runtime subscribes to the provider before `start` resolves
   and buffers every provider event until the game's first `subscribe`. That
   subscriber receives them once, in order; later subscribers receive only
-  later events. The runtime itself acts on `endpoint-changed` and
+  later events. After `stop()`, the next `start` buffers again for its first
+  subscriber. The runtime itself acts on `endpoint-changed` and
   `permission-changed` as they arrive.
+- **Topics.** A read, request, or revocation takes each topic once, however
+  often the call lists it, so one prompt never writes two acceptances.
 - **Reads.** `getPermission` returns the provider snapshot. A topic the host
   reports as `unknown` takes the latest backend record when one exists, and
   `sources` says which answered. A game-rendered consent is one boolean at the
@@ -540,14 +543,23 @@ Runtime rules:
     action (`source: 'player'`).
   - **Before authentication.** A record observed before authentication is sent
     at authentication; only the latest per kind and scope is kept.
+- **Backend calls.** A call that reaches the backend (a player action, a
+  server reminder, `reminders.cancel`'s server part, and `notices`) belongs to
+  the player signed in when it began.
+  - Before sign-in it throws `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`.
+  - It is refused the same way when another player signed in since it began,
+    so it never reads or changes the next player's state.
 - **Registration.** For `remote.addressing: 'device'`, the runtime sends the
   provider's registration, with the device's current permission, to the
   backend for the authenticated player.
   - **When it sends.** After a grant; whenever an `endpoint-changed` event
     arrives (a rotated FCM token replaces the old address for that
-    installation); whenever a read or request changes the device's decided
-    permission; when a player authenticates (an account switch moves the
-    installation to the new player); and on `register()`.
+    installation); whenever a read, a request, or a revocation changes the
+    device's decided permission; when a player authenticates (an account
+    switch moves the installation to the new player); at start and on each
+    read, once the registration the backend last acknowledged is older than
+    7 days, so the endpoint of a device in use never goes stale; and on
+    `register()`.
   - **Before authentication.** A registration needs an authenticated player;
     one that arrives earlier is sent at authentication.
   - **Skipping repeats.** The runtime persists the last registration the
@@ -564,6 +576,10 @@ Runtime rules:
     installation is revoked, logged out, or expires, so a shared device stops
     receiving the previous player's notifications even when an unbind never
     arrives.
+    - `unregister()` also cancels the device's pending local reminders, which
+      belong to the player leaving.
+    - The installation stays unbound, across restarts, until `register()` or
+      the next authentication.
 - **Local reminders.** On start, on authentication, and after each backend
   read, the runtime compares `listLocal()` with the latest backend preference
   and permission and cancels the reminders that no longer pass, because a
@@ -572,8 +588,8 @@ Runtime rules:
   whose topic no longer takes the local route: an app update removed the
   topic from the catalog or took away its `local` channel.
 - **Restarts.** A restart drops runtime memory and listeners. Host state,
-  backend records, the persisted registration, and the backend
-  authentication persist.
+  backend records, the persisted registration, the unbound state after
+  `unregister()`, and the backend authentication persist.
 
 ## Topic catalog {#topic-catalog}
 
@@ -682,6 +698,11 @@ A reminder `key` names one reminder per player across both routes:
 - `cancel` removes the key from each route that has it and answers the route
   where it was found, or `{ route: 'none', status: 'cancelled' }` when neither
   had it.
+  - Both routes have it only when a local reminder was set while signed out,
+    which cannot remove the server one. `cancel` then removes both and answers
+    `local`, the route of the latest `set`.
+  - Signed out, `cancel` still removes a local reminder, then throws
+    `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` for the server part.
 - While the provider is `action-required`, `set` answers the route it would
   take with `status: 'action-required'` and stores nothing. `cancel` still
   removes a local reminder and answers `action-required` for the server part.
@@ -735,6 +756,11 @@ Local reminders use inexact timing:
 
 Server reminders are keyed by player and `key`: setting the same key replaces
 the pending reminder, and cancelling removes it.
+
+- Replacing or cancelling also stops a send of the reminder that waits
+  (`deferred`) or whose provider answer was `ambiguous` (`in-flight`); the
+  scheduler replays neither, and `cancel` answers `remote`.
+- A send the provider may already have accepted cannot be recalled.
 
 ## Opens {#opens}
 
@@ -968,9 +994,10 @@ client's declaration. The steps run in order and the first failure decides:
    - **No time left.** A send whose windows leave no time to send, such as
      quiet hours that close where the night window opens, is `suppressed:
      night-consent-missing` instead of being deferred forever.
-7. **Frequency and provider limits.** They count the recipient's delivered
-   sends in the rolling window before the send: a send at `s` counts for a
-   send at `t` when `t − window < s ≤ t`.
+7. **Frequency and provider limits.** They count the recipient's other
+   delivered sends in the rolling window before the send: a send at `s`
+   counts for a send at `t` when `t − window < s ≤ t`. A send's earlier
+   delivery to another endpoint is the same send and does not count.
    - A topic `frequency` cap or a provider limit whose window is a day or
      longer answers `suppressed: frequency-capped` or `suppressed:
      provider-limit`.

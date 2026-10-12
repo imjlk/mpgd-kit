@@ -2035,3 +2035,341 @@ describe('notifications reference runtime and fakes: series and ownership', () =
     expect(result).toMatchObject({ status: 'failed', failures: [{ path: 'context.now' }] });
   });
 });
+
+/** A gate that holds the next call it is armed for until `release`. */
+function gate(): {
+  readonly arm: () => Promise<void>;
+  readonly wait: () => Promise<void>;
+  readonly release: () => void;
+} {
+  let armed = false;
+  let reached: () => void = () => {};
+  let release: () => void = () => {};
+  let held = Promise.resolve();
+  return {
+    arm() {
+      armed = true;
+      held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+    },
+    async wait() {
+      if (armed) {
+        armed = false;
+        reached();
+        await held;
+      }
+    },
+    release: () => release(),
+  };
+}
+
+describe('notifications reference runtime and fakes: routes, registrations, and attribution', () => {
+  it('cancels a key on each route that has it, and the local reminder answers', async () => {
+    const daily = { ...challenge, id: 'daily-puzzle' };
+    const gift = { ...energy, id: 'gift', purpose: 'service' } as const;
+    const { clock, host, backend, runtime } = setup(osProfile, [gift, daily]);
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['daily-puzzle'], gesture: true });
+    expect(await runtime.reminders.set({ key: 'k', topic: 'daily-puzzle', fireAt: '2026-10-12T06:00:00Z' }))
+      .toEqual({ route: 'remote', status: 'scheduled' });
+    // Signed out, a local reminder under the key cannot remove the server one.
+    backend.revokeSession();
+    const local = { key: 'k', topic: 'gift', fireAt: '2026-10-12T05:00:00Z' } as const;
+    expect(await runtime.reminders.set(local)).toEqual({ route: 'local', status: 'scheduled' });
+    // Signed out, cancel removes the local reminder and refuses the server part.
+    await expect(runtime.reminders.cancel({ key: 'k' }))
+      .rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+    expect(host.localPending).toEqual([]);
+    expect(await runtime.reminders.set(local)).toEqual({ route: 'local', status: 'scheduled' });
+    backend.authenticate('p-1');
+    await runtime.runUntilIdle();
+    // Signed in, both go; the local reminder, the latest set, answers.
+    expect(await runtime.reminders.cancel({ key: 'k' })).toEqual({ route: 'local', status: 'cancelled' });
+    expect(backend.reminders).toEqual([]);
+    expect(host.localPending).toEqual([]);
+    clock.set('2026-10-12T06:00:00Z');
+    await backend.runScheduler();
+    expect(backend.providerCalls).toEqual([]);
+  });
+
+  it('re-sends a registration older than 7 days at start and on reads, so a device in use stays reachable', async () => {
+    for (const launch of ['restart', 'read'] as const) {
+      const { clock, host, backend, createRuntime } = setup(osProfile, [challenge]);
+      let runtime = createRuntime();
+      await runtime.start();
+      backend.authenticate('p-1');
+      host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+      host.queuePrompt('granted');
+      await runtime.requestPermission({ topics: ['rival-challenge'], gesture: true });
+      await runtime.runUntilIdle();
+      // 61 daily launches, or reads in one process, with nothing else changing.
+      for (let day = 1; day <= 61; day += 1) {
+        clock.advance(24 * 60 * 60);
+        if (launch === 'restart') {
+          runtime.stop();
+          host.restart();
+          runtime = createRuntime();
+          await runtime.start();
+        } else {
+          await runtime.getPermission({ topics: ['rival-challenge'] });
+        }
+        await runtime.runUntilIdle();
+      }
+      expect(await backend.deliver({ topic: 'rival-challenge', idempotencyKey: `day-61-${launch}` }), launch)
+        .toMatchObject({ status: 'delivered' });
+    }
+  });
+
+  it('stops replaying a cancelled reminder whose send was in flight; a sent one cannot be recalled', async () => {
+    const { clock, backend, runtime } = setup(hostProfile, [receipt]);
+    backend.authenticate('p-1');
+    expect(await runtime.reminders.set({ key: 'r', topic: 'purchase-result', fireAt: now }))
+      .toEqual({ route: 'remote', status: 'scheduled' });
+    backend.queueProviderResult({ status: 'ambiguous' });
+    await backend.runScheduler();
+    expect(backend.deliveries.map((delivery) => delivery.status)).toEqual(['in-flight']);
+    clock.advance(60);
+    expect(await runtime.reminders.cancel({ key: 'r' })).toEqual({ route: 'remote', status: 'cancelled' });
+    clock.advance(600);
+    await backend.runScheduler();
+    // Only the ambiguous attempt: the scheduler does not replay it.
+    expect(backend.providerCalls).toHaveLength(1);
+  });
+
+  it('counts a fan-out send once against its own limits when a replay reaches another endpoint', async () => {
+    const capped = { ...challenge, frequency: { maxPerDay: 1 }, quietHours: { start: '22:00', end: '08:00' } };
+    const { clock, host, backend, runtime } = setup(osProfile, [capped], {
+      deployment: { timeZone: 'America/Los_Angeles' },
+    });
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['rival-challenge'], gesture: true });
+    // Another installation registered no zone, so it reads the deployment's.
+    backend.registerInstallation({ installationId: 'installation-2', kind: 'fcm-token', value: 'tok-2', permission: 'granted' });
+    clock.set('2026-10-12T06:00:00Z'); // 15:00 in Seoul, 23:00 in Los Angeles
+    expect(await backend.deliver({ topic: 'rival-challenge', idempotencyKey: 'f-1' }))
+      .toEqual({ status: 'delivered', alreadyProcessed: false });
+    clock.set('2026-10-12T15:00:00Z'); // 08:00 in Los Angeles
+    await backend.runScheduler();
+    expect(backend.providerCalls.map((call) => call.idempotencyKey))
+      .toEqual(['f-1:installation-1', 'f-1:installation-2']);
+    // Another send within the day still counts.
+    clock.set('2026-10-13T00:00:00Z'); // 09:00 in Seoul, 17:00 in Los Angeles
+    expect(await backend.deliver({ topic: 'rival-challenge', idempotencyKey: 'f-2' }))
+      .toEqual({ status: 'suppressed', reason: 'frequency-capped' });
+  });
+
+  it('unregister() cancels the local reminders and keeps the installation unbound across restarts', async () => {
+    const { host, backend, runtime, createRuntime } = setup(osProfile);
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['energy-full'], gesture: true });
+    await runtime.setTopicPreference({ topic: 'energy-full', enabled: true });
+    await runtime.reminders.set({ key: 'a', topic: 'energy-full', fireAt: '2026-10-12T06:00:00Z' });
+    await runtime.unregister();
+    expect(host.localPending).toEqual([]);
+    expect(backend.endpoints).toEqual([]);
+    // A restart in the same session binds nothing, even after a read.
+    runtime.stop();
+    host.restart();
+    const restarted = createRuntime();
+    await restarted.start();
+    await restarted.getPermission({ topics: ['energy-full'] });
+    await restarted.runUntilIdle();
+    expect(backend.endpoints).toEqual([]);
+    await restarted.register();
+    expect(endpointRows(backend)).toEqual([['installation-1', 'tok-1', 'granted', 'p-1', 'valid']]);
+  });
+
+  it('re-sends the registration after a revocation, so a game-rendered device endpoint stops', async () => {
+    const deviceGame = {
+      provider: 'fixture.device-game',
+      capabilities: {
+        ...osProfile.capabilities,
+        permission: {
+          scope: 'app',
+          prompt: 'game',
+          readable: true,
+          serverReadable: false,
+          allowance: 'persistent',
+          userGesture: true,
+          settings: false,
+        },
+      },
+    } satisfies NotificationConformanceProfile;
+    const { host, backend, runtime } = setup(deviceGame, [challenge]);
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['rival-challenge'], gesture: true });
+    expect(await backend.deliver({ topic: 'rival-challenge', idempotencyKey: 'before' }))
+      .toMatchObject({ status: 'delivered' });
+    await runtime.revokePermission({ topics: ['rival-challenge'] });
+    await runtime.runUntilIdle();
+    expect(endpointRows(backend)).toEqual([['installation-1', 'tok-1', 'denied', 'p-1', 'valid']]);
+    expect(await backend.deliver({ topic: 'rival-challenge', idempotencyKey: 'after' }))
+      .toEqual({ status: 'suppressed', reason: 'permission-denied' });
+  });
+
+  it('asks, records, and reads a topic listed twice once', async () => {
+    const vector = vectorNamed('per-send-allowance');
+    const { host, backend, runtime } = setup(perSendProfile, vector.catalog);
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.queuePrompt('granted');
+    const result = await runtime.requestPermission({ topics: ['daily-puzzle', 'daily-puzzle'], gesture: true });
+    await runtime.runUntilIdle();
+    expect(result.outcomes).toEqual({ 'daily-puzzle': 'granted' });
+    expect(host.prompts).toBe(1);
+    expect(backend.consent.map((record) => [record.kind, record.state])).toEqual([
+      ['host-agreement', 'granted'],
+      ['topic-preference', 'granted'],
+    ]);
+    expect(await backend.deliver({ topic: 'daily-puzzle', idempotencyKey: 'd-1' })).toMatchObject({ status: 'delivered' });
+    expect(await backend.deliver({ topic: 'daily-puzzle', idempotencyKey: 'd-2' }))
+      .toEqual({ status: 'suppressed', reason: 'allowance-exhausted' });
+    expect(Object.keys((await runtime.getPermission({ topics: ['daily-puzzle', 'daily-puzzle'] })).sources))
+      .toEqual(['daily-puzzle']);
+  });
+
+  it("cancels the server reminder of the player who began a local set, never the next player's", async () => {
+    const daily = { ...challenge, id: 'daily-puzzle' };
+    const gift = { ...energy, id: 'gift', purpose: 'service' } as const;
+    const { host, backend, createRuntime } = setup(osProfile, [gift, daily]);
+    const hostRead = gate();
+    const runtime = createRuntime({
+      ...host.provider,
+      async getPermission(input) {
+        await hostRead.wait();
+        return host.provider.getPermission(input);
+      },
+    });
+    await runtime.start();
+    backend.authenticate('B');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['gift', 'daily-puzzle'], gesture: true });
+    await runtime.reminders.set({ key: 'k', topic: 'daily-puzzle', fireAt: '2026-10-13T06:00:00Z' });
+    backend.authenticate('A');
+    await runtime.runUntilIdle();
+    // A's local set waits on the host read while B signs in again.
+    const reached = hostRead.arm();
+    const setting = runtime.reminders.set({ key: 'k', topic: 'gift', fireAt: '2026-10-13T07:00:00Z' });
+    await reached;
+    backend.authenticate('B');
+    hostRead.release();
+    expect(await setting).toEqual({ route: 'local', status: 'scheduled' });
+    await runtime.runUntilIdle();
+    expect(backend.reminders.map((reminder) => [reminder.player, reminder.key])).toEqual([['B', 'k']]);
+  });
+
+  it('answers notices for the player who began the call, and refuses after an account switch', async () => {
+    const { host, backend, createRuntime } = setup(osProfile, [weekend, noticeTopic], {
+      deployment: { ...kr, noticeTopic: 'consent-notice' },
+    });
+    const capabilitiesRead = gate();
+    const runtime = createRuntime({
+      ...host.provider,
+      async getCapabilities() {
+        await capabilitiesRead.wait();
+        return host.provider.getCapabilities();
+      },
+    });
+    backend.authenticate('A');
+    await runtime.setAdvertisingConsent({ advertising: 'granted', textVersion: 'ad-v1' });
+    const [listed] = await runtime.notices.list();
+    for (const call of [() => runtime.notices.list(), () => runtime.notices.recordShown(listed ?? {
+      kind: 'consent-result',
+      record: { kind: 'advertising', at: now },
+      dueBy: '2026-10-26',
+    })]) {
+      backend.authenticate('A');
+      const reached = capabilitiesRead.arm();
+      const running = call();
+      await reached;
+      backend.authenticate('B');
+      capabilitiesRead.release();
+      await expect(running).rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+    }
+    expect(backend.noticesGiven).toEqual([]);
+  });
+
+  it('answers server calls before sign-in as temporarily unavailable', async () => {
+    const daily = { ...challenge, id: 'daily-puzzle' };
+    const { runtime } = setup(osProfile, [energy, daily], { deployment: kr });
+    await runtime.start();
+    for (const call of [
+      () => runtime.reminders.set({ key: 'k', topic: 'daily-puzzle', fireAt: '2026-10-13T06:00:00Z' }),
+      () => runtime.reminders.cancel({ key: 'k' }),
+      () => runtime.notices.list(),
+      () => runtime.notices.recordShown({
+        kind: 'consent-result',
+        record: { kind: 'advertising', at: now },
+        dueBy: '2026-10-26',
+      }),
+    ]) {
+      await expect(call()).rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+    }
+  });
+
+  it('buffers events for the first subscriber after stop() and a later start()', async () => {
+    const { host, runtime } = setup(osProfile, [challenge]);
+    await runtime.start();
+    runtime.subscribe(() => {});
+    runtime.stop();
+    host.restart();
+    host.tap({ channel: 'remote', topic: 'rival-challenge', route: '/?entry=challenge' });
+    await runtime.start();
+    const seen: NotificationEvent[] = [];
+    runtime.subscribe((event) => {
+      seen.push(event);
+    });
+    expect(seen).toEqual([expect.objectContaining({ type: 'opened', source: 'cold' })]);
+  });
+
+  it('answers a fresh no-endpoint result and counts background failures without keeping them', async () => {
+    const { backend, createRuntime, host } = setup(osProfile, [challenge]);
+    backend.authenticate('p-1');
+    const first = await backend.deliver({ topic: 'rival-challenge', idempotencyKey: 'x', provider: 'other' });
+    expect(first).toEqual({ status: 'unavailable', reason: 'no-endpoint' });
+    (first as { reason: string }).reason = 'changed-by-the-caller';
+    expect(await backend.deliver({ topic: 'rival-challenge', idempotencyKey: 'y', provider: 'other' }))
+      .toEqual({ status: 'unavailable', reason: 'no-endpoint' });
+    const offline = createRuntime(host.provider, {
+      ...backend,
+      async listConsent() {
+        throw new Error('backend down');
+      },
+    });
+    for (let read = 0; read < 3; read += 1) {
+      await offline.getPermission({ topics: ['rival-challenge'] });
+    }
+    await expect(offline.runUntilIdle()).rejects.toThrow(/^3 background failures since the last runUntilIdle; the first: Error: backend down$/u);
+    await expect(offline.runUntilIdle()).resolves.toBeUndefined();
+  });
+
+  it('requires the notice topic only on a target that delivers advertising, as the validator does', () => {
+    const clock = createNotificationConformanceClock(now);
+    const entry = notificationConformanceRegistryEntry(osProfile);
+    const deployment = { ...kr, noticeTopic: 'consent-notice' };
+    // A target that maps no advertising topic need not declare the notice topic.
+    expect(() => createNotificationConformanceBackend({
+      entry, catalog: [challenge], clock, deployment, defaultLocale: 'ko', defaultPlayer: 'p-1',
+    })).not.toThrow();
+    expect(() => createNotificationConformanceBackend({
+      entry, catalog: [challenge, weekend], clock, deployment, defaultLocale: 'ko', defaultPlayer: 'p-1',
+    })).toThrow(/not declared for a target that delivers advertising/u);
+  });
+});

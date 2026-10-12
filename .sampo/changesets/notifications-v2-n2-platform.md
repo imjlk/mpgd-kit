@@ -40,12 +40,15 @@ protocol-relative path, and the v1 `toNotificationSubscriptionAdapter` wrapper
 over the runtime. `./notifications-vectors` fixes the conformance vector
 format, and `./notifications-conformance` runs the vectors with a reference
 runtime (which also cancels a pending local reminder whose topic an app update
-took off the local route), fake host, fake backend (sessions, an idempotency
-ledger with fingerprints and leases, device fan-out under derived keys, the
-five provider answers, deferred replay with backoff, a paced scheduler, and
-notices), and clock, substituting the fixture provider id and evidence schema
-for a provider under test and skipping a vector whose `appliesTo` its
-capabilities do not satisfy; all thirty-nine vectors pass. `PlatformGateway`
-gains an optional `notificationsV2` provider, declared through a typia-free
-contract module so the main entry stays free of typia. This is additive: no
-provider implements v2 yet, and the protocol version stays `2.0.0-draft.1`.
+took off the local route, cancels a reminder key on both routes, re-sends a
+registration older than 7 days at start and on reads, and keeps an
+unregistered installation unbound across restarts), fake host, fake backend
+(sessions, an idempotency ledger with fingerprints and leases, device fan-out
+under derived keys, the five provider answers, deferred replay with backoff, a
+paced scheduler, and notices), and clock, substituting the fixture provider id
+and evidence schema for a provider under test and skipping a vector whose
+`appliesTo` its capabilities do not satisfy; all thirty-nine vectors pass.
+`PlatformGateway` gains an optional `notificationsV2` provider, declared
+through a typia-free contract module so the main entry stays free of typia.
+This is additive: no provider implements v2 yet, and the protocol version
+stays `2.0.0-draft.1`.
