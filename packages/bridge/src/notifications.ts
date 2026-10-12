@@ -32,10 +32,33 @@ import {
 // only answers `NOTIFICATIONS_V2_UNAVAILABLE` does not need.
 
 // Each entry is the `@mpgd/platform/notifications` validator of that
-// method's shape; the lookups below are typed by the method.
-const notificationsV2PayloadAsserts: Readonly<
-  Record<BridgeNotificationsV2Method, (input: unknown) => unknown>
-> = {
+// method's shape, and the interfaces check that every entry returns its own
+// method's shape (a mapped type would trip the lint rule on type parameters).
+interface NotificationsV2PayloadAsserts {
+  readonly 'notifications.v2.getCapabilities': (input: unknown) => BridgeNotificationsV2Payload<'notifications.v2.getCapabilities'>;
+  readonly 'notifications.v2.getPermission': (input: unknown) => BridgeNotificationsV2Payload<'notifications.v2.getPermission'>;
+  readonly 'notifications.v2.requestPermission': (input: unknown) => BridgeNotificationsV2Payload<'notifications.v2.requestPermission'>;
+  readonly 'notifications.v2.revokePermission': (input: unknown) => BridgeNotificationsV2Payload<'notifications.v2.revokePermission'>;
+  readonly 'notifications.v2.register': (input: unknown) => BridgeNotificationsV2Payload<'notifications.v2.register'>;
+  readonly 'notifications.v2.scheduleLocal': (input: unknown) => BridgeNotificationsV2Payload<'notifications.v2.scheduleLocal'>;
+  readonly 'notifications.v2.cancelLocal': (input: unknown) => BridgeNotificationsV2Payload<'notifications.v2.cancelLocal'>;
+  readonly 'notifications.v2.listLocal': (input: unknown) => BridgeNotificationsV2Payload<'notifications.v2.listLocal'>;
+  readonly 'notifications.v2.openSettings': (input: unknown) => BridgeNotificationsV2Payload<'notifications.v2.openSettings'>;
+}
+
+interface NotificationsV2ResultAsserts {
+  readonly 'notifications.v2.getCapabilities': (input: unknown) => BridgeNotificationsV2Result<'notifications.v2.getCapabilities'>;
+  readonly 'notifications.v2.getPermission': (input: unknown) => BridgeNotificationsV2Result<'notifications.v2.getPermission'>;
+  readonly 'notifications.v2.requestPermission': (input: unknown) => BridgeNotificationsV2Result<'notifications.v2.requestPermission'>;
+  readonly 'notifications.v2.revokePermission': (input: unknown) => BridgeNotificationsV2Result<'notifications.v2.revokePermission'>;
+  readonly 'notifications.v2.register': (input: unknown) => BridgeNotificationsV2Result<'notifications.v2.register'>;
+  readonly 'notifications.v2.scheduleLocal': (input: unknown) => BridgeNotificationsV2Result<'notifications.v2.scheduleLocal'>;
+  readonly 'notifications.v2.cancelLocal': (input: unknown) => BridgeNotificationsV2Result<'notifications.v2.cancelLocal'>;
+  readonly 'notifications.v2.listLocal': (input: unknown) => BridgeNotificationsV2Result<'notifications.v2.listLocal'>;
+  readonly 'notifications.v2.openSettings': (input: unknown) => BridgeNotificationsV2Result<'notifications.v2.openSettings'>;
+}
+
+const notificationsV2PayloadAsserts: NotificationsV2PayloadAsserts = {
   'notifications.v2.getCapabilities': assertNotificationBridgeGetCapabilitiesPayload,
   'notifications.v2.getPermission': assertNotificationBridgeGetPermissionPayload,
   'notifications.v2.requestPermission': assertNotificationBridgeRequestPermissionPayload,
@@ -47,9 +70,7 @@ const notificationsV2PayloadAsserts: Readonly<
   'notifications.v2.openSettings': assertNotificationBridgeOpenSettingsPayload,
 };
 
-const notificationsV2ResultAsserts: Readonly<
-  Record<BridgeNotificationsV2Method, (input: unknown) => unknown>
-> = {
+const notificationsV2ResultAsserts: NotificationsV2ResultAsserts = {
   'notifications.v2.getCapabilities': assertNotificationBridgeGetCapabilitiesResult,
   'notifications.v2.getPermission': assertNotificationBridgeGetPermissionResult,
   'notifications.v2.requestPermission': assertNotificationBridgeRequestPermissionResult,

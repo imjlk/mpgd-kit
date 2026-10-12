@@ -145,8 +145,10 @@ export function createCommerceV2UnavailableBridgeError(
 }
 
 // Listed here rather than imported, so the main entry stays free of
-// `@mpgd/platform/notifications` code.
-export const bridgeNotificationsV2Methods: readonly BridgeNotificationsV2Method[] = Object.freeze([
+// `@mpgd/platform/notifications` code. The checks below keep both the union
+// and this list equal to the platform contract's methods; the bridge tests
+// also compare the order.
+const notificationsV2MethodList = [
   'notifications.v2.getCapabilities',
   'notifications.v2.getPermission',
   'notifications.v2.requestPermission',
@@ -156,12 +158,19 @@ export const bridgeNotificationsV2Methods: readonly BridgeNotificationsV2Method[
   'notifications.v2.cancelLocal',
   'notifications.v2.listLocal',
   'notifications.v2.openSettings',
-] as const);
+] as const;
+export const bridgeNotificationsV2Methods: readonly BridgeNotificationsV2Method[] =
+  Object.freeze(notificationsV2MethodList);
 const bridgeNotificationsV2MethodsAgree: MethodsAgree<
   BridgeNotificationsV2Method,
   NotificationBridgeMethod
 > = true;
 void bridgeNotificationsV2MethodsAgree;
+const bridgeNotificationsV2MethodListAgrees: MethodsAgree<
+  (typeof notificationsV2MethodList)[number],
+  NotificationBridgeMethod
+> = true;
+void bridgeNotificationsV2MethodListAgrees;
 
 const bridgeNotificationsV2MethodSet: ReadonlySet<string> = new Set(bridgeNotificationsV2Methods);
 
@@ -255,33 +264,59 @@ export interface BridgeEventStream<TEvent> {
  * that listener, and unsubscribes when the last one leaves. Each event goes
  * out as `{ protocol, sequence, event }`, where `sequence` starts at 0 and
  * counts this session's events of that protocol, including across a detach.
- * A listener that throws does not keep the event from the others.
+ *
+ * - A listener that throws does not keep the event from the others.
+ * - An event the stream emits during a delivery (a listener can make it emit)
+ *   waits for that delivery, so every listener sees the sequence in order.
+ * - An event emitted while no bridge listener is attached never reaches the
+ *   bridge. A provider buffers only until its first subscriber, so a session
+ *   should keep one listener for its life.
  */
-export function createBridgeEventSource<TProtocol extends BridgeEventProtocol>(
-  protocol: TProtocol,
-  stream: BridgeEventStream<BridgeEventOf<TProtocol>>,
+export function createBridgeEventSource(
+  protocol: typeof bridgeCommerceEventProtocol,
+  stream: BridgeEventStream<BridgeEventOf<typeof bridgeCommerceEventProtocol>>,
+): BridgeEventSource;
+export function createBridgeEventSource(
+  protocol: typeof bridgeNotificationsEventProtocol,
+  stream: BridgeEventStream<BridgeEventOf<typeof bridgeNotificationsEventProtocol>>,
+): BridgeEventSource;
+export function createBridgeEventSource(
+  protocol: BridgeEventProtocol,
+  stream: BridgeEventStream<BridgeEventOf<BridgeEventProtocol>>,
 ): BridgeEventSource {
   // One entry per subscribe call, so the same listener subscribed twice is
   // two subscriptions with their own unsubscribe.
   const subscriptions = new Set<{ readonly listener: BridgeEventListener }>();
+  const pending: BridgeEvent[] = [];
   let sequence = 0;
+  let delivering = false;
   let detach: (() => void) | undefined;
   let attaching = false;
 
-  const deliver = (event: BridgeEventOf<TProtocol>): void => {
-    // `TProtocol` names one member of the union, whose event `event` is.
-    const envelope = { protocol, sequence, event } as BridgeEvent;
+  const deliver = (event: BridgeEventOf<BridgeEventProtocol>): void => {
+    // The overloads pair each protocol with its own events.
+    pending.push({ protocol, sequence, event } as BridgeEvent);
     sequence += 1;
-    for (const subscription of [...subscriptions]) {
-      // A listener another one removed during this delivery gets nothing more.
-      if (!subscriptions.has(subscription)) {
-        continue;
+    if (delivering) {
+      return;
+    }
+    delivering = true;
+    try {
+      for (let envelope = pending.shift(); envelope !== undefined; envelope = pending.shift()) {
+        for (const subscription of [...subscriptions]) {
+          // A listener another one removed during this delivery gets nothing more.
+          if (!subscriptions.has(subscription)) {
+            continue;
+          }
+          try {
+            subscription.listener(envelope);
+          } catch (error) {
+            console.warn(`A ${protocol} bridge event listener failed.`, error);
+          }
+        }
       }
-      try {
-        subscription.listener(envelope);
-      } catch (error) {
-        console.warn(`A ${protocol} bridge event listener failed.`, error);
-      }
+    } finally {
+      delivering = false;
     }
   };
   const detachWhenIdle = (): void => {

@@ -57,6 +57,7 @@ import {
   notificationsV2UnavailableBridgeErrorCode,
   type BridgeEvent,
   type BridgeEventOf,
+  type BridgeEventProtocol,
   type BridgeEventSource,
   type BridgeMethod,
   type BridgeNotificationsV2Method,
@@ -590,6 +591,35 @@ assertThrows(() => refusing.subscribe(() => undefined), 'a failed attach reaches
 assertThrows(() => refusing.subscribe(() => undefined), 'the next listener tries to attach again');
 assertEqual(refusals, 2, 'each failed attach was one attempt');
 
+// An event the stream emits during a delivery waits for that delivery, so
+// every listener sees the sequence in order.
+const reentrantStream = createFakeStream<NotificationEvent>();
+const reentrant = createBridgeEventSource('mpgd.notifications.v2', reentrantStream);
+const firstSeen: number[] = [];
+const secondSeen: number[] = [];
+reentrant.subscribe((event) => {
+  firstSeen.push(event.sequence);
+  if (event.sequence === 0) {
+    // A listener whose work makes the provider emit again.
+    reentrantStream.emit(received);
+  }
+});
+reentrant.subscribe((event) => secondSeen.push(event.sequence));
+reentrantStream.emit(opened);
+assertEqual(JSON.stringify(firstSeen), JSON.stringify([0, 1]), 'the first listener sees 0, then 1');
+assertEqual(
+  JSON.stringify(secondSeen),
+  JSON.stringify([0, 1]),
+  'the second listener sees 0, then 1',
+);
+
+// The overloads pair each protocol with its own events.
+const commerceOnly = createFakeStream<CommerceEvent>();
+// @ts-expect-error A commerce stream cannot feed the notifications protocol.
+createBridgeEventSource('mpgd.notifications.v2', commerceOnly);
+// @ts-expect-error A protocol that may be either one cannot pick the events.
+createBridgeEventSource(eitherProtocol(), createFakeStream<NotificationEvent>());
+
 const delivered: BridgeEvent[] = [];
 const listeners = new Set<(event: BridgeEvent) => void>();
 const source: BridgeEventSource = {
@@ -676,6 +706,10 @@ assertThrows(
 );
 
 console.log('Bridge protocol fixture validation passed.');
+
+function eitherProtocol(): BridgeEventProtocol {
+  return 'mpgd.notifications.v2';
+}
 
 function assertDoesNotThrow(callback: () => unknown, message: string): void {
   try {

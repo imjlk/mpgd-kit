@@ -1458,10 +1458,10 @@ Other rules the profiles encode:
     answer every method with `NOTIFICATIONS_V2_UNAVAILABLE`
     (`createNotificationsV2UnavailableBridgeError`).
   - The Capacitor gateway answers the same code for a method no registered
-    provider serves, before it pauses the game or reaches the base plugin.
-    `requestPermission` and `openSettings` pause the game. The registry passes
-    the methods through `assertMethodReady` and refuses them as methods a v1
-    provider declares.
+    provider serves, before it pauses the game or reaches the base plugin, and
+    its registry refuses the methods as methods a v1 provider declares. For the
+    provider P2 adds, `requestPermission` and `openSettings` pause the game,
+    and the registry passes the methods through `assertMethodReady`.
   - `withTargetAvailability` exposes `notificationsV2` only while
     `integrations.notifications` lets the game call notifications, as it does
     the v1 adapter. It then adds `PlatformCapabilities.notifications` from one

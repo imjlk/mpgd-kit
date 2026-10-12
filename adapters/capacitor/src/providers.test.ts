@@ -4,6 +4,7 @@ import {
   bridgeCommerceV2Methods,
   bridgeNotificationsV2Methods,
   bridgeStorageLoadProtocol,
+  type BridgeMethod,
   type BridgeRequest,
 } from '@mpgd/bridge';
 import { createUnsupportedCapabilities } from '@mpgd/platform';
@@ -665,5 +666,16 @@ describe('Capacitor optional provider composition', () => {
       expect(registry.byMethod.has(method)).toBe(false);
       await expect(registry.assertMethodReady(method, { topics: ['daily'] })).resolves.toBeUndefined();
     }
+    // No provider can own a v2 method until P2 adds the registry surface for
+    // one, so put the unready push provider in charge of them directly: the
+    // registry passes them through instead of refusing them as unsupported or
+    // not configured.
+    const owned = createCapacitorProviderRegistry([push]);
+    for (const method of bridgeNotificationsV2Methods) {
+      (owned.byMethod as Map<BridgeMethod, CapacitorServiceProvider>).set(method, push);
+      await expect(owned.assertMethodReady(method, { topics: ['daily'] })).resolves.toBeUndefined();
+    }
+    await expect(owned.assertMethodReady('notifications.requestSubscription', { topic: 'daily' }))
+      .rejects.toMatchObject({ code: 'NATIVE_PROVIDER_CONFIGURATION_REQUIRED' });
   });
 });

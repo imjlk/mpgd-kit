@@ -237,6 +237,33 @@ for (const state of ['available', 'action-required'] as const) {
   assert.equal(block?.permission.promptLimit, 2, 'a present count is kept');
 }
 
+// An unknown key whose value is `undefined` passes the validator but stays
+// out of the copy too.
+{
+  const fake = createProvider();
+  fake.answer(async () => ({
+    ...osCapabilities,
+    permission: { ...osCapabilities.permission, exactAlarms: undefined },
+    remote: { ...osCapabilities.remote, campaign: undefined },
+    local: { ...osCapabilities.local, timing: undefined },
+    extra: undefined,
+  }));
+  const gateway = withTargetAvailability(createGateway(fake.provider), configWith('available'));
+  const block = (await gateway.getCapabilities()).notifications;
+  assert.deepEqual(block, osCapabilities, 'the copy carries only the declared keys');
+  assert.ok(block !== undefined);
+  assert.deepEqual(Object.keys(block).sort(), [
+    'availability',
+    'local',
+    'open',
+    'permission',
+    'remote',
+  ]);
+  assert.equal(Object.hasOwn(block.permission, 'exactAlarms'), false);
+  assert.equal(Object.hasOwn(block.remote, 'campaign'), false);
+  assert.equal(Object.hasOwn(block.local, 'timing'), false);
+}
+
 // The integration state follows the v2 availability.
 for (const availability of [
   'available',

@@ -35,5 +35,11 @@ fail-closed answer.
 - `createBridgeEventSource(protocol, stream)` is the host side of one
   protocol's events for one bridge session. It subscribes to the stream for
   the first listener, so events a provider buffered reach that listener,
-  numbers the events from 0 for the session, and keeps one failing listener
-  from stopping the others.
+  numbers the events from 0 for the session, delivers an event emitted during
+  a delivery after it, and keeps one failing listener from stopping the
+  others. Its overloads pair each protocol with its own events.
+  `BridgeEventStream` types the stream, `BridgeEventProtocol` names the
+  protocols, and `BridgeEventOf<protocol>` names a protocol's events.
+- `assertBridgeEvent` is now a function that builds its validator on the
+  first call, so a bundle that never validates a bridge event leaves the
+  validator out. Its signature and errors are unchanged.

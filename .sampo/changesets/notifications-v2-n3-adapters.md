@@ -15,13 +15,13 @@ yet; P1–P3 add the providers.
   answer the code without reaching the host's agreement API. The commerce v2
   provider over the bridge validates events with the commerce envelope and
   ignores notifications envelopes on the shared channel.
-- `@mpgd/adapter-capacitor`: the gateway answers the code for a method no
-  registered provider serves, before it pauses the game or reaches the base
-  plugin. `notifications.v2.requestPermission` and
-  `notifications.v2.openSettings` pause the game once a provider serves them,
-  the registry passes `notifications.v2.*` through `assertMethodReady` as it
-  does `commerce.v2.*`, and a provider cannot declare those methods. A
-  launched commerce v2 purchase ends its pause on commerce events only.
+- `@mpgd/adapter-capacitor`: the gateway's request path answers the code for
+  a method no registered provider serves, before it pauses the game or
+  reaches the base plugin, and a provider cannot declare those methods. For
+  the provider P2 adds, `notifications.v2.requestPermission` and
+  `notifications.v2.openSettings` pause the game, and the registry passes
+  `notifications.v2.*` through `assertMethodReady` as it does `commerce.v2.*`.
+  A launched commerce v2 purchase ends its pause on commerce events only.
 - `@mpgd/adapter-devvit`: the sandbox bridge answers the code.
 - `@mpgd/cli` and `@mpgd/create-game`: the generated Devvit server bridge
   answers the code, and the Apps in Toss sandbox gateway says so.

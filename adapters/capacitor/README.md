@@ -174,11 +174,15 @@ as the transport left it.
 ## Notifications v2
 
 The notifications v2 provider arrives in PR P2 of the
-[notifications RFC](../../docs/specs/notifications/notifications-v2-rfc.md).
-Until then the gateway exposes no `notificationsV2`, and a
-`notifications.v2.*` request answers `NOTIFICATIONS_V2_UNAVAILABLE`, which is
-not retryable, without pausing the game or reaching the base plugin. The
-request path is ready for the provider:
+[notifications RFC](../../docs/specs/notifications/notifications-v2-rfc.md),
+together with the registry surface through which a provider serves the
+`notifications.v2.*` methods. Until then the gateway exposes no
+`notificationsV2`, and its request path never forwards a `notifications.v2.*`
+method to the base plugin: it answers `NOTIFICATIONS_V2_UNAVAILABLE`, which is
+not retryable, before it pauses the game. A provider cannot declare those
+methods in `methods`.
+
+Two rules already apply to a provider that serves them:
 
 - `notifications.v2.requestPermission` and `notifications.v2.openSettings`
   pause the game while they run, like `notifications.requestSubscription` and
@@ -186,7 +190,6 @@ request path is ready for the provider:
 - The provider registry passes `notifications.v2.*` through `assertMethodReady`
   without a readiness check, as it does `commerce.v2.*`, so the provider's own
   `unsupported` or `action-required` answers reach the game as answers.
-- A provider cannot declare a `notifications.v2.*` method in `methods`.
 
 ## App Store server-side transaction signatures
 

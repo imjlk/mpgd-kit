@@ -1020,6 +1020,9 @@ function hasNotificationSubscriptionAdapter(gateway: PlatformGateway): boolean {
 
 /** Bound on one notifications v2 capability read, as the Capacitor registry bounds commerce. */
 const notificationCapabilityReadTimeoutMs = 3_000;
+// A local check of the same shape as `isNotificationCapabilities` from
+// `@mpgd/platform/notifications`: importing that module would put every
+// notifications validator and the delivery policy into each game bundle.
 const isNotificationCapabilitiesShape = typia.createEquals<NotificationCapabilities>();
 
 /**
@@ -1063,22 +1066,35 @@ function isNotificationCapabilities(value: unknown): value is NotificationCapabi
 function copyNotificationCapabilities(
   capabilities: NotificationCapabilities,
 ): NotificationCapabilities {
-  // The validated block has only the declared keys, but the validator lets
-  // an optional count be present as `undefined`; the copy leaves such a key
-  // out, so the snapshot keeps exact keys and shares nothing with the provider.
-  const { promptLimit, maxTopicsPerPrompt, ...permission } = capabilities.permission;
-  const { maxPending } = capabilities.local;
+  // Copied field by field: the validator lets an unknown key through when its
+  // value is `undefined`, and an optional count may be present as `undefined`.
+  // Neither reaches the snapshot, which keeps exact keys and shares nothing
+  // with the provider.
+  const { permission, remote, local } = capabilities;
   return {
     availability: capabilities.availability,
     permission: {
-      ...permission,
-      ...(promptLimit === undefined ? {} : { promptLimit }),
-      ...(maxTopicsPerPrompt === undefined ? {} : { maxTopicsPerPrompt }),
+      scope: permission.scope,
+      prompt: permission.prompt,
+      readable: permission.readable,
+      serverReadable: permission.serverReadable,
+      allowance: permission.allowance,
+      userGesture: permission.userGesture,
+      ...(permission.promptLimit === undefined ? {} : { promptLimit: permission.promptLimit }),
+      ...(permission.maxTopicsPerPrompt === undefined
+        ? {}
+        : { maxTopicsPerPrompt: permission.maxTopicsPerPrompt }),
+      settings: permission.settings,
     },
-    remote: { ...capabilities.remote, purposes: [...capabilities.remote.purposes] },
+    remote: {
+      supported: remote.supported,
+      purposes: [...remote.purposes],
+      addressing: remote.addressing,
+      content: remote.content,
+    },
     local: {
-      supported: capabilities.local.supported,
-      ...(maxPending === undefined ? {} : { maxPending }),
+      supported: local.supported,
+      ...(local.maxPending === undefined ? {} : { maxPending: local.maxPending }),
     },
     open: capabilities.open,
   };
@@ -1087,7 +1103,11 @@ function copyNotificationCapabilities(
 /**
  * The availability a failed read reports: a transport without notifications
  * v2 and an unimplemented method are `unsupported`, a missing configuration is
- * `configuration-required`, and anything else may pass.
+ * `configuration-required`, and anything else may pass. The block's
+ * availability is also the push readiness (RFC "Capabilities"), so a gateway
+ * must not expose `notificationsV2` over a transport without v2, as no adapter
+ * exposes `commerceV2` over one; if it does, the integration reads
+ * `unsupported`.
  */
 function degradedNotificationAvailability(error: unknown): PlatformProviderAvailability {
   const code: unknown = typeof error === 'object' && error !== null
