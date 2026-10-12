@@ -1,5 +1,11 @@
 # @mpgd/cli
 
+## 0.46.0 — 2026-10-12
+
+### Patch changes
+
+- Updated dependencies: adapter-ait@0.15.2, adapter-browser@0.10.2, adapter-capacitor@0.9.2, adapter-devvit@0.10.1, adapter-verse8@0.6.0, analytics@0.4.8, bridge@0.12.3, catalog@0.9.3, game-runtime@0.6.5, game-services@0.22.0, i18n@0.6.13, platform@0.22.0, target-config@0.22.1
+
 ## 0.45.0 — 2026-10-12
 
 ### Patch changes

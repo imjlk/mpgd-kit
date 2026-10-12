@@ -1,5 +1,39 @@
 # @mpgd/platform
 
+## 0.22.0 — 2026-10-12
+
+### Minor changes
+
+- [8c870580](https://github.com/imjlk/mpgd-kit/commit/8c87058002249260d63dbffe8a305417aa1db6ad) Commerce v2, PR C2: the provider capabilities endpoint shape.
+  
+  `@mpgd/platform/commerce` adds `CommerceServiceCapabilities` and
+  `CommerceServiceStoreCapabilities` (RFC "Provider capabilities endpoint"): the
+  protocol version a backend speaks and, per store its evidence registry
+  accepts, the evidence schemas, the finish owner, and the purchase kinds. They
+  are typia-validated (`assertCommerceServiceCapabilities`,
+  `isCommerceServiceCapabilities`) and published as
+  `docs/specs/commerce/schemas/commerce-service-capabilities.schema.json`, which
+  `validate:commerce-alignment` keeps in step with the types. — Thanks @imjlk!
+- [e7fb9c54](https://github.com/imjlk/mpgd-kit/commit/e7fb9c548f1057715bf39c3b4baf95589cdd68db) Commerce v2, PR C1: the conformance runner accepts the runtime under test.
+  
+  `runCommerceConformanceVector` and `runCommerceConformanceVectors` gain
+  `options.createRuntime(input, context)`, which builds the runtime a vector
+  drives (`CommerceConformanceRuntime`) over the harness provider, the fake
+  backend, and the reference journal in place of the reference reconciler
+  (`createCommerceConformanceRuntime`). `@mpgd/game-services` uses it to run
+  the fourteen vectors through its `createCommerceReconciler`. The reference
+  run an adaptive vector's expectations are derived from keeps using the
+  reference reconciler, so a derived expectation never depends on the runtime
+  under test.
+  
+  `createDerivedPurchaseIdempotencyKey` percent-encodes the Apps in Toss order
+  id (`apps-in-toss:purchase:<encodeURIComponent(orderId)>`), which is the
+  byte-for-byte form of the v1 `createAppsInTossPurchaseIdempotencyKey` helper
+  in `@mpgd/game-services`; ids without reserved characters are unchanged.
+  `CommerceProvider.finishTransaction` documents that it is called again after
+  a crash between a successful finish and its journal write, so it must be
+  idempotent per transaction. — Thanks @imjlk!
+
 ## 0.21.0 — 2026-10-12
 
 ### Minor changes

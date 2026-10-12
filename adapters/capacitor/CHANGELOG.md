@@ -1,5 +1,11 @@
 # @mpgd/adapter-capacitor
 
+## 0.9.2 — 2026-10-12
+
+### Patch changes
+
+- Updated dependencies: bridge@0.12.3, capacitor-game-services@0.6.5, game-runtime@0.6.5, game-services@0.22.0, platform@0.22.0, target-config@0.22.1
+
 ## 0.9.1 — 2026-10-12
 
 ### Patch changes

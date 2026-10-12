@@ -1,5 +1,287 @@
 # @mpgd/game-services
 
+## 0.22.0 — 2026-10-12
+
+### Minor changes
+
+- [e7fb9c54](https://github.com/imjlk/mpgd-kit/commit/e7fb9c548f1057715bf39c3b4baf95589cdd68db) Commerce v2, PR C1: one reconciler in the game-services client replaces the
+  four recovery drivers.
+  
+  `@mpgd/game-services/commerce-reconciler` adds `createCommerceReconciler({
+  provider, backend, store, playerId, target, deploymentTarget?, products?,
+  now?, onEvent? })`, the RFC "Reconciler" over any `CommerceProvider`. It
+  journals every purchase the game starts or the store reports as one
+  `commerce-purchase` record moving through the RFC lifecycle (`requested`,
+  `launched`, `pending`, `purchased`, `verifying`, `granted`, `finishing`,
+  `finished`, `cancelled`, `failed`, `rejected`, `revoked`), each transition its
+  own revision through `MonetizationOperationStore.replace`, and never grants:
+  only the backend's verify answer moves a record to `granted`, only the
+  backend ledger moves it to `revoked`, and an adapter-settled or wallet
+  purchase (`credit-wallet.spend.v1` without a `settlement` pointer included) is
+  confirmed through verify like any other.
+  
+  - Triggers: `start()` (subscribe first, then `getAvailablePurchases` when
+    declared; a provider without `lifecycle.events` is polled on every pass),
+    `reconcile()` on app resume, every `purchaseUpdated` and `purchaseError`
+    event, `restorePurchases()`, and the end of every `requestPurchase`.
+  - One pass matches each reported purchase by store and transaction id, then
+    to the single open (`launched` or `pending`) record for the player, store,
+    and product, otherwise under a derived key (`store:<store>:<transactionId>`,
+    with the v1 forms `play-token-sha256:<hex>` for `google-play` and
+    `apps-in-toss:purchase:<orderId>` for `apps-in-toss` kept byte for byte);
+    builds and saves the `VerifyPurchaseRequest` once and resends it unchanged
+    while `purchased`, `verifying`, or server-side `pending`; acts on
+    `lifecycle.finish` for `granted` and `finishing` records (`client` and
+    `host` call `finishTransaction` with the ledger entry id, `server` resends
+    the saved request until the backend reports `finalization: 'completed'`,
+    `none` marks `finished`); and, when the backend offers
+    `PurchaseVerificationApi.getPurchaseLedgerStatus` (new, optional; the
+    reference server gains it in C2), moves reversed grants to `revoked`.
+  - Purchases are serialized per player, store, and product: a second
+    `requestPurchase` while one is `launched` or `pending` fails with
+    `IN_PROGRESS`; a replayed key answers from the journal and never reopens
+    the store UI, and a key reused for another product or source rejects;
+    `OUTCOME_UNKNOWN` and `ALREADY_OWNED` keep an attempt open. A `requested`
+    record left behind by a crash before the store answer was journaled, and a
+    `launched` record with no store purchase after `staleLaunchedAfterMs`
+    (default 24 hours; `Infinity` keeps the RFC rule without expiry), end as
+    `failed` with the `OUTCOME_UNKNOWN` class so the product is not serialized
+    behind them; a purchase the store reports later is journaled under its
+    derived key. An error event never ends a record that already holds a store
+    purchase or a saved verify request. Transport failures on verify or finish
+    keep the state and are reported through `onEvent` / `subscribe` as
+    `failure` events, then retried on the next pass; a client or host finish
+    waits until the catalog says whether the product is consumable rather than
+    guessing. The store call of `requestPurchase` runs outside the journal
+    lock, so events arriving while the store sheet is open are reconciled at
+    once; a refusal before the store call (`IN_PROGRESS`, `NOT_PREPARED`, an
+    unknown product) leaves no record, so the same key opens the sheet on a
+    retry. A backend-pending resend, a verify or finish that failed in
+    transport, a finalization re-read, and a catalog lookup are retried by
+    event-triggered passes at most once per `retryIntervalMs` (default one
+    minute; explicit `start`, `reconcile`, and `restorePurchases` always
+    retry), and the provider capability block is read again on those explicit
+    triggers. Events for a product whose store call is still running wait for
+    that call to journal the store answer (at most `inFlightTimeoutMs`, default
+    ten minutes, after which a sheet that never settles stops deferring), so a
+    purchase reported while the sheet is open is never journaled twice; a
+    synchronous `purchased` answer for a transaction an open record already
+    journals supersedes the attempt (`failed`, `OUTCOME_UNKNOWN`) instead of
+    leaving it open.
+  - A gateway with `commerceV2` but no `operationStore` journals in memory for
+    the session and says so once through `warn` (default `console.warn`).
+    `MonetizationOperationStore` also gains the optional
+    `findByTransaction({ playerId, target, deploymentTarget, store, transactionId })`, which lets a
+    transaction the store lists again after a restart (an owned durable, a
+    rejected purchase) meet its terminal record instead of being verified
+    again under a derived key; the in-memory store implements it.
+  - `assertCommerceFinishAllowed(record)` is the finish gate: `finishTransaction`
+    is only ever called for a `granted` or `finishing` record that holds the
+    backend's ledger entry id and a store transaction. The v2 StoreKit SDK keeps
+    no allow-list of its own (the v1 `finishGrantedTransaction` pairing is not
+    reproduced); the journal revision the backend grant wrote is the pairing.
+  
+  `createGameServicesClient` purchases through the reconciler whenever
+  `gateway.commerceV2` exists and keeps the v1 path otherwise; the client
+  exposes it as `commerceReconciler`, and `CreateGameServicesClientInput`
+  gains `operationStore?` (without one the journal is in memory for the
+  session and the backend ledger is the duplicate backstop),
+  `commerceReconciler?`, `commerceProducts?`, and `onCommerceEvent?`. The
+  `purchase_granted`, `purchase_pending`, and `purchase_rejected` analytics
+  events and the operation progress phases are reported as before, grants that
+  arrive after the call included; the rewarded-ad path is untouched.
+  `GameServicesPurchaseResult.status` gains `revoked` for a journaled purchase
+  whose grant was reversed.
+  
+  `createRecoverableMonetizationClient` routes v2 purchases through the same
+  reconciler over the durable journal, exposes it as `commerceReconciler`,
+  runs it from `reconcile()` (start on the first call, a pass afterwards) next
+  to the v1 records, adds `restorePurchases()`, and keeps
+  `recoverPurchaseResult` as a deprecated thin wrapper that reconciles and
+  answers from the journal for a v2 key (removed in C4).
+  `MonetizationOperationSummary.status` gains `revoked`, and
+  `finalizationPending` is true while a v2 record is `finishing`.
+  `createGameServicesRuntime` wires the recovery client's reconciler into
+  `runtime.client.commerceReconciler`.
+  
+  `MonetizationOperationRecord` gains the `commerce-purchase` kind
+  (`CommercePurchaseOperationRecord`; the v1 kinds are
+  `LegacyMonetizationOperationRecord`), `MonetizationOperationStore` gains the
+  optional `listGranted(playerId)` read (granted, finishing, and finished
+  records within the retention window) that the revocation pass and the
+  transaction match after a restart use, and
+  `@mpgd/game-services/monetization-operation-store` exports
+  `isMonetizationOperationRecoverable` (the `listRecoverable` rule for every
+  kind), `isMonetizationOperationGranted`, and
+  `createInMemoryMonetizationOperationStore` (session-only, for tests and
+  clients without a durable store).
+  
+  Type-level changes a consumer may have to follow, kept to a minor release
+  because the kit is at 0.x and every one of them is additive at runtime: code
+  that reads `result`, `platform`, or `input` on a `MonetizationOperationRecord`
+  must narrow on `kind` first (the v1 kinds are unchanged);
+  `GameServicesPurchaseResult.status` and `MonetizationOperationSummary.status`
+  gain the `revoked` member, which an exhaustive switch must handle;
+  `RecoverableMonetizationClient` gains `restorePurchases()` and
+  `commerceReconciler?`, which an implementation of that interface must add; a
+  store whose `listRecoverable` keeps the old inline rule (`result ===
+  undefined`) lists terminal commerce records as well, which the reconciler
+  filters out, and a store without `listGranted` reports reversals only for
+  grants seen in the session and relies on the backend's platform-evidence
+  unique index for a purchase re-listed after a restart.
+  
+  Tests: every transition and the match order in
+  `commerce-reconciler.test.ts`; the fourteen RFC vectors run through the real
+  reconciler in `commerce-reconciler-conformance.test.ts` via the runner's new
+  `createRuntime` hook; and the Play and StoreKit plugins carry smoke tests
+  showing the deprecated v1 drivers and the reconciler reach the same outcomes
+  over their fake SDKs. — Thanks @imjlk!
+- [8c870580](https://github.com/imjlk/mpgd-kit/commit/8c87058002249260d63dbffe8a305417aa1db6ad) Commerce v2, PR C2: the server side of the protocol. Open store ids, the
+  evidence registry, the provider capabilities endpoint, revocation entries,
+  and the lookup verifiers for the server-push stores.
+  
+  - Open store ids (RFC "Open store ids"): `VerifyPurchaseRequest.store?:
+    StoreId` names the store a purchase was made in; `target` stays the ledger
+    (deployment) target. `GameServicesStoreTarget` is now `StoreId` and the
+    request validator accepts any bounded kebab-case identifier for `target`
+    and `store` (`assertCommerceStoreId`); the closed v1 list lives on as the
+    deprecated `GameServicesLegacyStoreTarget` until C4. A request without
+    `store` keeps its v1 meaning through `resolveLegacyCommerceStoreId`:
+    `android` is `google-play`, `ios` is `app-store`, `ait` is `apps-in-toss`,
+    `reddit` is `devvit`, and every other target is its own store id. Every
+    grant payload now records `store` and `evidenceSchema`.
+  - Evidence registry (`@mpgd/game-services/commerce-evidence-registry`):
+    `createCommerceEvidenceRegistry(entries, { unregistered? })` routes verify
+    requests by `evidence.schema` to the entry that claims it, answers
+    `EVIDENCE_SCHEMA_UNSUPPORTED` for an unknown schema and
+    `EVIDENCE_SCHEMA_STORE_MISMATCH` for a schema registered to another store
+    before any verifier runs, fails construction when a `finish: 'server'` entry
+    has no finalizer, when two entries claim one schema, when one store declares
+    two finish owners, or when two entries of a store accept a missing envelope,
+    and finalizes grants through the owning entry (the schema and store the
+    grant recorded first, then the request schema, then the store's single
+    finalizing entry; a grant recorded under another store than its schema
+    stays `pending` with `PURCHASE_FINALIZER_STORE_MISMATCH`). Entries may
+    declare `targets` (the ledger targets their requests name;
+    `EVIDENCE_SCHEMA_TARGET_MISMATCH` otherwise; the reference entries pin
+    theirs) and `acceptsUnclaimedSchemas` (one per store: a verifier binding
+    that keeps its own schema list). The optional `unregistered` fallback keeps
+    a deployment's aggregate v1 verifier for stores without an entry (never for
+    a store that has one), publishes the stores it declares (`stores`, through
+    the capabilities endpoint without schemas), and serves undeclared stores
+    when `servesUndeclaredStores` is true (the default without `stores`).
+    `registry.stores`, `registry.servesUndeclaredStores`,
+    `registry.serves(request)`, and `registry.allowedTargets(store)` expose
+    that; every entry of a store must declare the same purchase profile
+    (construction fails otherwise; the capabilities row is that profile, never
+    a merge); a fallback store declared with `finish: 'server'` needs
+    `unregistered.finalizer`; an undeclared `store` label on a target whose v1
+    store is served (`{ target: 'android', store: 'x' }`) cannot route around
+    that entry (`EVIDENCE_SCHEMA_STORE_MISMATCH`, a 400 from the backend); and
+    the backend answers a 400 for a store it does not serve, a served store
+    with a target its entries do not declare (a custom entry's `targets` are
+    honoured, so a custom ledger target works), or otherwise a target that is
+    neither a ledger target nor a served store, as an unknown v1 target was a
+    400. A key reused for the same player, product, and target under another
+    `store` is `IDEMPOTENCY_KEY_CONFLICT`; a grant recorded before `store` was
+    written meets any store. Reference
+    entries:
+    `createGooglePlayCommerceEvidenceEntry` (`google-play.product-purchase.v2`,
+    `finish: 'server'`), `createAppStoreCommerceEvidenceEntry`
+    (`app-store.signed-transaction.v1`, `finish: 'client'`, accepts a missing
+    envelope for the Server API lookup), `createMicrosoftStoreCommerceEvidenceEntry`
+    (`mpgd.microsoft-store.digital-goods.v1`, `finish: 'server'`),
+    `createAppsInTossCommerceEvidenceEntry` (`apps-in-toss.iap.callback.v1`,
+    `finish: 'host'`), `createDevvitPaymentOrderCommerceEvidenceEntry`
+    (`devvit.payment-order.v1`, the fulfillment handler's own record, bound
+    through a `DevvitPaymentOrderAuthority` port), and the server-push lookups
+    `createDevvitOrderLookupCommerceEvidenceEntry` (`devvit.order.v1`) and
+    `createVerse8Agent8EventLookupCommerceEvidenceEntry`
+    (`verse8.agent8-event.v1`) over `createCommerceLedgerLookupVerifier`, which
+    never grants from the client envelope: it answers the grant the host's
+    fulfillment path wrote for the same store and transaction id when it belongs
+    to the requesting player and product and is not reversed (`settled`),
+    `pending` (`LEDGER_GRANT_PENDING`) before that write, and `rejected` for a
+    transaction, product, or player mismatch. `createServerPushLedgerGrant`
+    builds the grant those lookups read (`quantity` scales a currency or
+    resource grant and is recorded in the payload); `createGameServicesBackend`
+    takes `commerceEvidenceRegistry` and, without one, keeps the v1 single
+    verifier and finalizer unchanged; passing `purchaseGrantFinalizer` next to a
+    registry throws (pass it as `unregistered.finalizer`).
+  - `EvidenceVerificationDecision` gains the `settled` member
+    (`{ status: 'settled', ledgerEntryId, ledgerTarget? }`): the backend
+    answers `verified` with that entry and `alreadyProcessed: true` after
+    checking it belongs to the requesting player, product, and ledger target
+    (`LEDGER_GRANT_IDENTITY_MISMATCH` otherwise) and writes nothing; a
+    rewarded-ad verifier answering it is a verifier error. An exhaustive switch
+    over the decision must handle it. A same-key retry of a grant a `revoke`
+    entry reversed, a different-key replay of its evidence, and a `settled`
+    answer naming such a grant, answer `rejected` with `LEDGER_GRANT_REVERSED`,
+    as the lookup path does, and a grant written without a deployment target (a host
+    fulfillment path) meets a request bound to one.
+  - Provider capabilities endpoint (RFC "Provider capabilities endpoint"):
+    `PurchaseVerificationApi.getCommerceCapabilities?()` answers
+    `CommerceServiceCapabilities` derived from the registry (one row per store
+    with its schemas, finish owner, and purchase kinds); the reference backend
+    offers it only with a registry, through `POST
+    /game-services/purchases/capabilities` and oRPC `commerce.getCapabilities`
+    (`NOT_FOUND` otherwise). `compareCommerceServiceCapabilities` is the client
+    comparison, and the reconciler applies it at start and on explicit passes:
+    a store the backend does not accept, a finish owner that disagrees, or
+    another protocol major sets the provider's availability to
+    `configuration-required` (`CommerceReconciler.getCapabilities()`,
+    `serviceAlignment`), reports a `capabilities` failure, and
+    `requestPurchase` refuses with `CONFIGURATION_REQUIRED` before any store UI
+    opens; a purchase before `start()` attempts the comparison first, the read
+    is bounded by `serviceCapabilitiesTimeoutMs` (default ten seconds) and a
+    timed-out read keeps the last comparison (`serviceCapabilitiesTimeoutMs`
+    must be a positive finite duration), and a backend that answers 404 /
+    `NOT_FOUND` is remembered as `unpublished` rather than read again; the
+    ledger status read is likewise remembered as absent after a 404 /
+    `NOT_FOUND`, so a client adapter against a pre-C2 backend stays quiet. The
+    reconciler's verify requests now carry `store`, and its revocation pass
+    reads ledger status in chunks of at most 100 ids scoped to its player.
+  - Revocation and expiry entries (RFC "Revocation and expiry entries"):
+    `GameServicesStore` gains the optional `recordEntitlementRevocation`,
+    `findEntitlementRevocations`, and the batched `getEntitlementTransactions`
+    (the in-memory store implements all three; a grant is reversed once, a
+    replayed notification key answers the first entry, a key reused for another
+    grant throws `RevocationKeyConflictError`, a reused authority identity
+    throws `EvidenceAlreadyProcessedError`, and an unknown grant is refused, as
+    the D1 store does),
+    `EntitlementLedgerRevocation` / `EntitlementRevocationTransaction` with
+    `reason: refund | chargeback | voided | admin`, and the subscription
+    `EntitlementLedgerPeriod` shape (validator only; no writer yet).
+    `@mpgd/game-services/commerce-ledger` adds `revokeEntitlementGrant` (the
+    notification handlers' write path, answering `key_conflict` and
+    `evidence_already_processed` next to `grant_not_found` and
+    `grant_mismatch`), `readPurchaseLedgerStatuses` (one status per requested
+    id in request order, batched reads in chunks of `ledgerReadChunkSize`
+    through `chunkLedgerEntryIds`, which refuses a non-positive size, and
+    scoped to the required `PurchaseLedgerStatusRequest.playerId`: another
+    player's entry answers `unknown`), `listActiveEntitlementTransactions`
+    (entitlement reads subtract reversed grants), and `isEntitlementGrantReversed`.
+    `PurchaseVerificationApi.getPurchaseLedgerStatus` is served by the reference
+    backend over `POST /game-services/purchases/ledger-status` and oRPC
+    `commerce.getPurchaseLedgerStatus` (bounded by
+    `maxPurchaseLedgerStatusEntries`), so the C1 reconciler's revocation pass is
+    live. A refund that arrives before its fulfillment answers
+    `grant_not_found` and leaves no tombstone: the handler must retry it, or
+    the fulfillment path must check the refund feed before granting. `@mpgd/game-services/platform-order` adds
+    `createPlatformOrderLedgerGrant`, `createPlatformOrderVerifyRequest`, and
+    `revokePlatformOrder` (a `normalizeDevvitRefundOrder` result writes the
+    `revoke` entry for the order's grant under `reddit:<orderId>:refund`).
+  - `gameServicesBackendEndpoints` gains `getPurchaseLedgerStatus` and
+    `getCommerceCapabilities`; the HTTP and oRPC backend adapters implement
+    both reads.
+  
+  Tests: `commerce-registry-routing.test.ts`, `commerce-registry-server.test.ts`,
+  and `commerce-ledger-revocation.test.ts`, plus the reconciler alignment case. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: analytics@0.4.8, catalog@0.9.3, platform@0.22.0
+
 ## 0.21.1 — 2026-10-12
 
 ### Patch changes
