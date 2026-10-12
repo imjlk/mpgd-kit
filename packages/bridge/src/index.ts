@@ -363,7 +363,18 @@ export type BridgeStorageLoadData =
 
 export const assertBridgeRequest = typia.createAssert<BridgeRequest>();
 export const assertBridgeResponse = typia.createAssert<BridgeResponse>();
-export const assertBridgeEvent = typia.createAssertEquals<BridgeEvent>();
+
+let bridgeEventAssert: ((input: unknown) => BridgeEvent) | undefined;
+
+/**
+ * Validates an event envelope of either protocol and rejects unknown keys.
+ * The validator covers every event of both protocols, so it is built on the
+ * first call: a bundle that never validates a bridge event leaves it out.
+ */
+export function assertBridgeEvent(input: unknown): BridgeEvent {
+  bridgeEventAssert ??= typia.createAssertEquals<BridgeEvent>();
+  return bridgeEventAssert(input);
+}
 
 export function decodeBridgeStorageLoadData(
   input: unknown,
