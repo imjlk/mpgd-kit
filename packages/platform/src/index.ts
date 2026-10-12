@@ -685,11 +685,13 @@ export interface PlatformGateway {
   readonly notifications?: NotificationSubscriptionAdapter;
   /**
    * Optional notifications v2 provider (`@mpgd/platform/notifications`).
-   * Transitional: adapters expose it next to the v1 `notifications` adapter,
-   * which `toNotificationSubscriptionAdapter` can serve from it, until the
-   * major release that removes v1. Absent on gateways whose target has no v2
-   * provider; N3 gates it on `integrations.notifications` in the target-config
-   * runtime.
+   * Transitional: adapters expose it next to the v1 `notifications` adapter
+   * until the major release that removes v1. Games do not call it directly:
+   * the game-services client composes it with the backend into the
+   * notifications runtime, and `toNotificationSubscriptionAdapter` serves v1
+   * callers from that runtime with the topics resolved for the target. Absent
+   * on gateways whose target has no v2 provider; N3 gates it on
+   * `integrations.notifications` in the target-config runtime.
    */
   readonly notificationsV2?: NotificationProvider;
   readonly promotions?: PromotionRewardAdapter;

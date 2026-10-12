@@ -2047,7 +2047,7 @@ describe('notifications reference runtime and fakes: series and ownership', () =
   it('fails, rather than rejects, a vector whose clock cannot start', async () => {
     const vector = vectorNamed('unsupported-target');
     const broken = { ...vector, context: { ...vector.context, now: '2026-02-31T00:00:00Z' } };
-    expect(() => assertNotificationConformanceVector(broken)).toThrow(/Invalid ISO-8601/u);
+    expect(() => assertNotificationConformanceVector(broken)).toThrow(/context\.now must be RFC 3339/u);
     const result = await runNotificationConformanceVector(broken);
     expect(result).toMatchObject({ status: 'failed', failures: [{ path: 'context.now' }] });
   });
@@ -2388,5 +2388,90 @@ describe('notifications reference runtime and fakes: routes, registrations, and 
     expect(() => createNotificationConformanceBackend({
       entry, catalog: [challenge, weekend], clock, deployment, defaultLocale: 'ko', defaultPlayer: 'p-1',
     })).toThrow(/not declared for a target that delivers advertising/u);
+  });
+});
+
+describe('notifications conformance runner: hosts, identifiers, and timestamps', () => {
+  it('fails prompt and local expectations without a host actor instead of reading zero', async () => {
+    const result = await runNotificationConformanceVector(vectorNamed('unsupported-target'), {
+      createProvider: (context) => ({ provider: createNotificationConformanceHarness(context).provider }),
+    });
+    // The unsupported fixture provider has no listLocal either.
+    expect(result.failures).toEqual([
+      { path: 'prompts', expected: 0, actual: 'the harness has no host actor to observe it' },
+      { path: 'local.operations', expected: [], actual: 'the harness has no host actor to observe it' },
+      { path: 'local.pending', expected: [], actual: 'the harness has no host actor to observe it' },
+    ]);
+  });
+
+  it('substitutes the fixture provider id only where a field names the provider', async () => {
+    const vector = vectorNamed('endpoint-lifecycle');
+    // The device address happens to spell the fixture provider id.
+    const spelled = JSON.parse(
+      JSON.stringify(vector).replaceAll('"tok-1"', JSON.stringify(vector.profile.provider)),
+    ) as NotificationConformanceVector;
+    const result = await runNotificationConformanceVector(spelled, {
+      createProvider: (context) => {
+        const harness = createNotificationConformanceHarness(context);
+        const inner = harness.provider;
+        const provider: NotificationProvider = {
+          ...inner,
+          provider: 'acme.fcm',
+          async register() {
+            const registration = await inner.register?.();
+            return registration === null || registration === undefined
+              ? null
+              : { ...registration, provider: 'acme.fcm' };
+          },
+        };
+        return { ...harness, provider };
+      },
+    });
+    expect(result.failures).toEqual([]);
+  });
+
+  it('compares timestamps as strict instants, so a rolled-over date never matches', async () => {
+    // provider-rate-limited on 1 October, which 31 September would roll over to.
+    const moved = JSON.parse(
+      JSON.stringify(vectorNamed('provider-rate-limited')).replaceAll('2026-10-12', '2026-10-01'),
+    ) as NotificationConformanceVector;
+    expect((await runNotificationConformanceVector(moved)).failures).toEqual([]);
+    const deliver = moved.steps.findIndex((step) => step.actor === 'backend' && step.action === 'deliver');
+    // The first `until` in the file is that send's answer.
+    const rolled = JSON.parse(
+      JSON.stringify(moved).replace('"until":"2026-10-01T03:00:30Z"', '"until":"2026-09-31T03:00:30Z"'),
+    ) as NotificationConformanceVector;
+    expect((await runNotificationConformanceVector(rolled)).failures).toEqual([{
+      path: `steps[${deliver}].returns.until`,
+      expected: '2026-09-31T03:00:30Z',
+      actual: '2026-10-01T03:00:30Z',
+    }]);
+  });
+
+  it('answers NOTIFICATIONS_CONFIGURATION_REQUIRED when the daily cap reads an unreadable listed fireAt', async () => {
+    const capped = { ...energy, frequency: { maxPerDay: 2 } };
+    const uncapped = { ...energy, id: 'energy-half' };
+    const { host, backend, createRuntime } = setup(osProfile, [capped, uncapped]);
+    const runtime = createRuntime({
+      ...host.provider,
+      async listLocal() {
+        return [
+          { key: 'other', topic: 'energy-full', fireAt: '2026-02-30T09:00:00Z' },
+          { key: 'half', topic: 'energy-half', fireAt: '2026-02-30T09:00:00Z' },
+        ];
+      },
+    });
+    backend.authenticate('p-1');
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['energy-full'], gesture: true });
+    await runtime.setTopicPreference({ topic: 'energy-full', enabled: true });
+    await runtime.setTopicPreference({ topic: 'energy-half', enabled: true });
+    await expect(runtime.reminders.set({ key: 'e', topic: 'energy-full', fireAt: '2026-10-12T05:00:00Z' }))
+      .rejects.toMatchObject({ code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED' });
+    expect(host.localPending).toEqual([]);
+    // Only the daily cap reads the listed times: a topic without one still schedules.
+    expect(await runtime.reminders.set({ key: 'h', topic: 'energy-half', fireAt: '2026-10-12T05:00:00Z' }))
+      .toEqual({ route: 'local', status: 'scheduled' });
+    expect(host.localPending).toEqual([{ key: 'h', topic: 'energy-half', fireAt: '2026-10-12T05:00:00Z' }]);
   });
 });

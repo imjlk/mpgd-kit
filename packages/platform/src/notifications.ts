@@ -26,11 +26,11 @@ import type {
   NotificationTopicsInput,
 } from './notifications-contract.js';
 import {
-  isNotificationCalendarDate,
   isRootRelativeNotificationRoute,
   isValidNotificationTimeZone,
-  normalizeNotificationTimestamp,
   notificationPermissionStateOf,
+  notificationTimeFieldIssue,
+  notificationTimeFields,
   notificationTopicDefinitionIssues,
   type NotificationConsentRecord,
   type NotificationDeliveryProviderEntry,
@@ -38,6 +38,7 @@ import {
   type NotificationNotice,
   type NotificationNoticeIdentity,
   type NotificationTemplateData,
+  type NotificationTimeFields,
   type NotificationTopicDefinition,
   type ReminderResult,
 } from './notifications-policy.js';
@@ -98,6 +99,7 @@ export {
   fillNotificationTemplate,
   findNotificationCopy,
   isNotificationCalendarDate,
+  isNotificationTimestamp,
   isRecordableNotificationPermissionState,
   isRootRelativeNotificationRoute,
   isSameNotificationNotice,
@@ -454,7 +456,25 @@ export function createUnsupportedNotificationCapabilities(): NotificationCapabil
   };
 }
 
-// Validators. typia checks the shape and the tags and rejects unknown keys.
+// Validators. typia checks the shape and the tags and rejects unknown keys;
+// its date-time and date formats accept 31 April and a space for `T`, so a
+// type with such fields also reads them strictly (RFC "Timestamps").
+
+/** `assert`, then the strict check of the type's time fields (`notificationTimeFieldIssue`). */
+function withStrictTimes<Value>(
+  what: string,
+  assert: (input: unknown) => Value,
+  fields: NotificationTimeFields,
+): (input: unknown) => Value {
+  return (input) => {
+    const value = assert(input);
+    const issue = notificationTimeFieldIssue(value, fields);
+    if (issue !== undefined) {
+      throw new TypeError(`Invalid ${what}: ${issue}.`);
+    }
+    return value;
+  };
+}
 
 const assertNotificationCapabilitiesShape = typia.createAssertEquals<NotificationCapabilities>();
 const isNotificationCapabilitiesShape = typia.createEquals<NotificationCapabilities>();
@@ -493,7 +513,11 @@ export function assertNotificationEndpointRegistration(
   }
   return registration;
 }
-const assertLocalNotificationRequestShape = typia.createAssertEquals<LocalNotificationRequest>();
+const assertLocalNotificationRequestShape = withStrictTimes(
+  'local reminder request',
+  typia.createAssertEquals<LocalNotificationRequest>(),
+  notificationTimeFields.LocalNotificationRequest,
+);
 
 /** Validates a local reminder request, including a root-relative `route`. */
 export function assertLocalNotificationRequest(input: unknown): LocalNotificationRequest {
@@ -506,15 +530,25 @@ export function assertLocalNotificationRequest(input: unknown): LocalNotificatio
   return request;
 }
 export const assertLocalScheduleResult = typia.createAssertEquals<LocalScheduleResult>();
-export const assertLocalNotificationEntry = typia.createAssertEquals<LocalNotificationEntry>();
+export const assertLocalNotificationEntry = withStrictTimes(
+  'local reminder entry',
+  typia.createAssertEquals<LocalNotificationEntry>(),
+  notificationTimeFields.LocalNotificationEntry,
+);
 export const assertNotificationEvent = typia.createAssertEquals<NotificationEvent>();
 export const isNotificationEvent = typia.createEquals<NotificationEvent>();
 export const assertNotificationEventEnvelope = typia.createAssertEquals<NotificationEventEnvelope>();
 export const isNotificationEventEnvelope = typia.createEquals<NotificationEventEnvelope>();
-export const assertNotificationConsentRecord = typia.createAssertEquals<NotificationConsentRecord>();
-export const assertNotificationNotice = typia.createAssertEquals<NotificationNotice>();
-const assertRecordNotificationNoticeInputShape =
-  typia.createAssertEquals<RecordNotificationNoticeInput>();
+export const assertNotificationConsentRecord = withStrictTimes(
+  'consent record',
+  typia.createAssertEquals<NotificationConsentRecord>(),
+  notificationTimeFields.NotificationConsentRecord,
+);
+export const assertNotificationNotice = withStrictTimes(
+  'notice',
+  typia.createAssertEquals<NotificationNotice>(),
+  notificationTimeFields.NotificationNotice,
+);
 
 /**
  * Validates a `notices.recordShown` input: a listed notice as is, or exactly
@@ -522,14 +556,11 @@ const assertRecordNotificationNoticeInputShape =
  * form. The time parses strictly with an offset, and `dueBy` is a date that
  * exists.
  */
-export function assertRecordNotificationNoticeInput(input: unknown): RecordNotificationNoticeInput {
-  const notice = assertRecordNotificationNoticeInputShape(input);
-  normalizeNotificationTimestamp(notice.record.at);
-  if (!isNotificationCalendarDate(notice.dueBy)) {
-    throw new TypeError(`A notice's dueBy must be a date that exists: ${notice.dueBy}`);
-  }
-  return notice;
-}
+export const assertRecordNotificationNoticeInput = withStrictTimes(
+  'notice to record',
+  typia.createAssertEquals<RecordNotificationNoticeInput>(),
+  notificationTimeFields.RecordNotificationNoticeInput,
+);
 export const assertNotificationDeliveryProviderEntry =
   typia.createAssertEquals<NotificationDeliveryProviderEntry>();
 const assertNotificationDeploymentShape = typia.createAssertEquals<NotificationDeployment>();
@@ -583,8 +614,11 @@ export const assertNotificationBridgeCancelLocalResult =
   typia.createAssertEquals<NotificationBridgeCancelLocalResult>();
 export const assertNotificationBridgeListLocalPayload =
   typia.createAssertEquals<NotificationBridgeListLocalPayload>();
-export const assertNotificationBridgeListLocalResult =
-  typia.createAssertEquals<NotificationBridgeListLocalResult>();
+export const assertNotificationBridgeListLocalResult = withStrictTimes(
+  'listLocal result',
+  typia.createAssertEquals<NotificationBridgeListLocalResult>(),
+  notificationTimeFields.NotificationBridgeListLocalResult,
+);
 export const assertNotificationBridgeOpenSettingsPayload =
   typia.createAssertEquals<NotificationBridgeOpenSettingsPayload>();
 export const assertNotificationBridgeOpenSettingsResult =
@@ -635,19 +669,28 @@ export function toNotificationSubscriptionResult(
 
 /**
  * Serves v1 `NotificationSubscriptionAdapter` callers from the v2 runtime, so
- * reads see backend records (RFC "Migration and PR plan" table). A v1 topic the
- * catalog does not declare reads `configuration-required` and requests
- * `unavailable`. Reads map `NOTIFICATIONS_CONFIGURATION_REQUIRED` to
- * `configuration-required` and rethrow other failures; requests run with
- * `gesture: true`, as v1 callers ask from a player action, and any thrown error
- * answers `unavailable`.
+ * reads see backend records (RFC "Migration and PR plan" table).
+ *
+ * - `catalog` holds the topics resolved for the runtime's target, as the
+ *   runtime reads them (`resolveNotificationTopicsForTarget` in
+ *   `@mpgd/catalog`). A v1 topic that is not among them, because the catalog
+ *   does not declare it or the target does not map it, reads
+ *   `configuration-required` and requests `unavailable`. So does an entry
+ *   that still carries a catalog's `targets`, which names no single target.
+ * - Reads map a failure whose code is `NOTIFICATIONS_CONFIGURATION_REQUIRED`
+ *   to `configuration-required`, whether it is a `NotificationError`, another
+ *   `PlatformOperationError`, or a bridge error with that `code`, and rethrow
+ *   other failures.
+ * - Requests run with `gesture: true`, as v1 callers ask from a player
+ *   action, and any thrown error answers `unavailable`.
  */
 export function toNotificationSubscriptionAdapter(
   runtime: Pick<NotificationRuntime, 'getPermission' | 'requestPermission'>,
   catalog: readonly Pick<NotificationTopicDefinition, 'id'>[],
 ): NotificationSubscriptionAdapter {
   const declares = (topic: NotificationTopic): boolean =>
-    catalog.some((entry) => entry.id === topic);
+    catalog.some((entry) =>
+      entry.id === topic && !Object.prototype.hasOwnProperty.call(entry, 'targets'));
   return {
     async getStatus(topic) {
       if (!declares(topic)) {
@@ -657,7 +700,7 @@ export function toNotificationSubscriptionAdapter(
         const snapshot = await runtime.getPermission({ topics: [topic] });
         return toNotificationSubscriptionStatus(notificationPermissionStateOf(snapshot, topic));
       } catch (error) {
-        if (error instanceof NotificationError && error.code === 'NOTIFICATIONS_CONFIGURATION_REQUIRED') {
+        if (notificationFailureCode(error) === 'NOTIFICATIONS_CONFIGURATION_REQUIRED') {
           return 'configuration-required';
         }
         throw error;
@@ -679,4 +722,15 @@ export function toNotificationSubscriptionAdapter(
       }
     },
   };
+}
+
+/**
+ * The notifications code a failure carries: a `NotificationError`, another
+ * `PlatformOperationError`, or a bridge error that kept only its `code`.
+ */
+function notificationFailureCode(error: unknown): NotificationErrorCode | undefined {
+  const code: unknown = typeof error === 'object' && error !== null
+    ? (error as { readonly code?: unknown }).code
+    : undefined;
+  return isNotificationErrorCode(code) ? code : undefined;
 }

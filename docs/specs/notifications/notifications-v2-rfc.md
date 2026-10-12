@@ -1208,6 +1208,16 @@ normalizes commerce timestamps. Keys use it, and runners compare timestamps
 as instants. A notice's `dueBy` is an Asia/Seoul calendar date
 (`YYYY-MM-DD`).
 
+- **Strict reading.** Every validator reads each timestamp and date after
+  the shape check. A date that does not exist, such as 31 April, and a space
+  instead of `T` are refused, never rolled over.
+- **Runners.** Two timestamps that read strictly compare as instants. Any
+  other text compares as written.
+- **Provider answers.** When a topic's daily cap reads the provider's pending
+  local reminders, one listed with a `fireAt` that does not read strictly
+  throws `NOTIFICATIONS_CONFIGURATION_REQUIRED`: the provider broke the
+  contract.
+
 ## Provider profiles {#profiles}
 
 | Profile | `permission` | `remote` | `local` | `open` |
@@ -1439,6 +1449,12 @@ How a real provider is judged:
   schema (`fixture.host-agreement.v1`) matches the provider's own id and the
   evidence schema its harness declares. This applies in both `returns` and
   `expect`, as commerce substitutes store ids.
+  - Only a `provider` field and an evidence `schema` change. An address or a
+    topic that happens to hold the same text stays as written.
+- **Host observations.** Only a host actor in the harness counts prompts and
+  local operations. Without one, a vector that expects `prompts` or
+  `local.operations` fails rather than reading zero, and so does one that
+  expects `local.pending` from a provider without `listLocal`.
 - **Local `permission-required`.** A `setReminder` step that expects it also
   calls the provider's `scheduleLocal` directly. That call must answer
   `permission-required` without prompting or scheduling, because the runtime
@@ -1511,9 +1527,9 @@ listed fields of each item asserted:
 | Vector | Checks |
 | --- | --- |
 | `os-permission-granted` | One app-scope prompt grants every topic; endpoint registration with the device permission; no consent record |
-| `os-permission-denied-twice` | `promptLimit` 2: `prompt-with-rationale` then `blocked`; no third dialog; the endpoint holds `blocked` |
-| `os-permission-denied-once` | `promptLimit` 1: the first denial is `blocked`; no second dialog |
-| `os-permission-dismissed` | A dismissed dialog leaves the state and counts no denial |
+| `os-permission-denied-twice` | `promptLimit` 2 on a device-addressed provider: `prompt-with-rationale` then `blocked`; no third dialog; the endpoint holds `blocked`; no consent record |
+| `os-permission-denied-once` | `promptLimit` 1 on a device-addressed provider: the first denial is `blocked`; no second dialog; no consent record |
+| `os-permission-dismissed` | On a device-addressed provider, a dismissed dialog leaves the state and counts no denial; no consent record |
 | `local-schedule-never-prompts` | Scheduling without permission returns `permission-required` and shows nothing |
 | `host-agreement-recorded` | Unreadable host: agreement recorded with its evidence and the implied topic preference, read back as granted after a restart; `already-granted` adds no record |
 | `host-agreement-then-withdrawn` | A withdrawn preference suppresses despite the agreement; accepting the sheet again re-enables the topic |
@@ -1526,7 +1542,7 @@ listed fields of each item asserted:
 | `advertising-needs-consent` | Suppressed without consent; rendered with label, sender line, free opt-out line, opt-out action, and expiry; the result notice is listed, the first re-confirmation not yet |
 | `advertising-notices` | An unrecorded result notice is sent through the notice topic; a re-confirmation is listed 60 days before its `dueBy`; recording it before then, recording a name that matches nothing, and recording it again after its `dueBy` change nothing; the next one is listed two years later |
 | `advertising-night-window` | Deferred to 08:00 KST without night consent and sent with an expiry; immediate without expiry with it |
-| `advertising-rules-none` | Without the Korean rules: consent still needed, no window, label, or expiry |
+| `advertising-rules-none` | Without the Korean rules: a send before consent is `suppressed: advertising-consent-missing`; after consent, no window, label, or expiry |
 | `advertising-unsupported-by-host` | A host-template provider refuses an advertising topic |
 | `advertising-sender-required` | Advertising consent without a configured advertising sender is suppressed |
 | `reminder-local-route` | A `requested` topic without opt-in is refused; local route, replace by key, cancel; no server reminder |
@@ -1534,7 +1550,7 @@ listed fields of each item asserted:
 | `reminder-server-route` | Server route after the agreement, cancel, re-set, delivery at the due time through the gate |
 | `reminder-cancel-across-routes` | A key names one reminder across routes; cancel after a restart finds the server reminder |
 | `open-before-listener` | A cold-start open reaches the game's first subscriber once |
-| `endpoint-lifecycle` | A device address moves to the newly authenticated player; `UNREGISTERED` invalidates it |
+| `endpoint-lifecycle` | Authentication alone moves a device address to the newly authenticated player; `UNREGISTERED` invalidates it |
 | `endpoint-fan-out` | Every granted installation receives the send; a dead one is invalidated alone; a retry sends nothing |
 | `endpoint-rotation` | A rotated device address replaces the old one without an explicit `register()` |
 | `endpoint-unbind-on-logout` | `unregister()` removes the installation from the player; later sends find no endpoint |
@@ -1557,6 +1573,16 @@ The v1 `NotificationSubscriptionAdapter` stays. N2 adds
 reads see backend records. v1 callers request with `gesture: true`, and
 `approval-required` stays with the target config, which keeps the v1 adapter
 when v2 is not exposed.
+
+- `catalog` holds the topics resolved for the runtime's target
+  (`resolveNotificationTopicsForTarget`), as the runtime reads them.
+- A topic outside them reads `configuration-required` and requests
+  `unavailable`: the catalog does not declare it, or the target does not map
+  it. An entry that still carries `targets` names no single target, so it
+  counts as outside.
+- Any failure with the `NOTIFICATIONS_CONFIGURATION_REQUIRED` code maps to
+  `configuration-required`, including a bridge error that kept only its
+  `code`.
 
 | v2 answer | v1 `getStatus` | v1 `requestSubscription` |
 | --- | --- | --- |

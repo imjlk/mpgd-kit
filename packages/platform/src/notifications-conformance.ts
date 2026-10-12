@@ -8,6 +8,7 @@ import {
   evaluateNotificationDelivery,
   evaluateNotificationReminderConsent,
   findNotificationCopy,
+  isNotificationTimestamp,
   isRecordableNotificationPermissionState,
   isSameNotificationNotice,
   isValidNotificationTimeZone,
@@ -2980,11 +2981,16 @@ export function createNotificationConformanceRuntime(
       consent: records ?? [],
       fireAt: request.fireAt,
       timeZone: localZone(),
-      // The topic's other pending reminders; replacing one does not count it against itself.
-      pending: (await listLocalEntries()).flatMap((entry) =>
-        entry.topic === topic.id && entry.key !== request.key && entry.fireAt !== undefined
-          ? [{ fireAt: entry.fireAt }]
-          : []),
+      // The topic's other pending reminders, which only its daily cap reads;
+      // replacing one does not count it against itself.
+      ...(topic.frequency === undefined
+        ? {}
+        : {
+            pending: (await listLocalEntries()).flatMap((entry) =>
+              entry.topic === topic.id && entry.key !== request.key && entry.fireAt !== undefined
+                ? [{ fireAt: providerFireAt(entry.fireAt) }]
+                : []),
+          }),
     });
     if (decision.status !== 'schedule') {
       return { route: 'local', status: decision.status };
@@ -3667,6 +3673,20 @@ function latestRecordState(
   return state === undefined || state === 'withdrawn' ? undefined : state;
 }
 
+/**
+ * A pending reminder's `fireAt` as the provider listed it, which the daily cap
+ * reads: one that does not parse strictly is the provider breaking the
+ * contract, not the game's input.
+ */
+function providerFireAt(fireAt: string): string {
+  if (!isNotificationTimestamp(fireAt)) {
+    throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
+      message: `The provider listed a local reminder whose fireAt is not RFC 3339 with a date that exists: ${JSON.stringify(fireAt)}.`,
+    });
+  }
+  return fireAt;
+}
+
 /** Whether the topic preference alone refuses a reminder of `topic` now. */
 function preferenceRefuses(
   topic: NotificationTopicDeclaration,
@@ -3700,7 +3720,11 @@ function sameJson(left: unknown, right: unknown): boolean {
 
 export interface NotificationConformanceHarness {
   readonly provider: NotificationProvider;
-  /** Handles `host` steps; required by vectors that script the host. */
+  /**
+   * Handles `host` steps and counts prompts and local operations. A vector
+   * that scripts the host, or expects `prompts` or `local.operations` (or
+   * `local.pending` from a provider without `listLocal`), fails without it.
+   */
   readonly host?: NotificationConformanceHostActor;
   /**
    * The evidence schema this provider attaches to a host agreement. Vector
@@ -4147,8 +4171,11 @@ async function probeLocalPermission(
   if (harness.provider.scheduleLocal === undefined) {
     return;
   }
-  const prompts = harness.host?.prompts ?? 0;
-  const operations = harness.host?.localOperations.length ?? 0;
+  // Prompts and operations are counted only where a host actor counts them.
+  const { host } = harness;
+  const counts = (): { readonly prompts?: number; readonly operations?: number } =>
+    host === undefined ? {} : { prompts: host.prompts, operations: host.localOperations.length };
+  const before = counts();
   const result = await harness.provider.scheduleLocal({
     key: step.input.key,
     topic: step.input.topic,
@@ -4157,12 +4184,8 @@ async function probeLocalPermission(
     body: 'probe',
   });
   matchPartial(
-    { status: 'permission-required', prompts, operations },
-    {
-      status: result.status,
-      prompts: harness.host?.prompts ?? 0,
-      operations: harness.host?.localOperations.length ?? 0,
-    },
+    { status: 'permission-required', ...before },
+    { status: result.status, ...counts() },
     `${path}.provider.scheduleLocal`,
     execution.failures,
   );
@@ -4175,9 +4198,12 @@ function errorCodeOf(error: unknown): unknown {
 }
 
 /**
- * The vector with the fixture provider id and agreement evidence schema
- * replaced by the provider under test's in every step's `returns`, a send's
- * `provider`, and `expect`.
+ * The vector with the fixture provider id replaced by the provider under
+ * test's where a field names a provider (`provider` in every step's
+ * `returns`, a send's input, and `expect`), and the fixture agreement
+ * evidence schema by the provider's own where an evidence `schema` names it.
+ * Any other field that holds the same text, such as an address or a topic,
+ * stays as written.
  */
 function adaptVector(
   vector: NotificationConformanceVector,
@@ -4188,19 +4214,22 @@ function adaptVector(
   if (providerId === vector.profile.provider && schema === notificationConformanceAgreementSchema) {
     return vector;
   }
-  const substitute = (value: unknown): unknown => {
-    if (value === vector.profile.provider) {
+  const substitute = (value: unknown, key?: string): unknown => {
+    if (key === 'provider' && value === vector.profile.provider) {
       return providerId;
     }
-    if (value === notificationConformanceAgreementSchema) {
+    if (key === 'schema' && value === notificationConformanceAgreementSchema) {
       return schema;
     }
     if (Array.isArray(value)) {
-      return value.map(substitute);
+      return value.map((item) => substitute(item));
     }
     if (typeof value === 'object' && value !== null) {
       return Object.fromEntries(
-        Object.entries(value).map(([key, nested]) => [key, substitute(nested)]),
+        Object.entries(value).map(([nestedKey, nested]) => [
+          nestedKey,
+          substitute(nested, nestedKey),
+        ]),
       );
     }
     return value;
@@ -4227,8 +4256,18 @@ async function matchExpectations(
   execution: Execution,
 ): Promise<void> {
   const { backend, failures, harness } = execution;
+  // Only a host actor counts prompts and local operations; without one these
+  // expectations fail rather than read zero or nothing.
+  const { host } = harness;
+  const hostless = (path: string, expected: unknown): void => {
+    failures.push({ path, expected, actual: 'the harness has no host actor to observe it' });
+  };
   if (expect.prompts !== undefined) {
-    matchPartial(expect.prompts, harness.host?.prompts ?? 0, 'prompts', failures);
+    if (host === undefined) {
+      hostless('prompts', expect.prompts);
+    } else {
+      matchPartial(expect.prompts, host.prompts, 'prompts', failures);
+    }
   }
   if (expect.consent !== undefined) {
     matchPartial(expect.consent, backend.consent, 'consent', failures);
@@ -4244,18 +4283,25 @@ async function matchExpectations(
   }
   if (expect.local !== undefined) {
     if (expect.local.operations !== undefined) {
-      matchPartial(
-        expect.local.operations,
-        harness.host?.localOperations ?? [],
-        'local.operations',
-        failures,
-      );
+      if (host === undefined) {
+        hostless('local.operations', expect.local.operations);
+      } else {
+        matchPartial(expect.local.operations, host.localOperations, 'local.operations', failures);
+      }
     }
     if (expect.local.pending !== undefined) {
-      const pending = harness.provider.listLocal === undefined
-        ? (harness.host?.localPending ?? [])
-        : await harness.provider.listLocal();
-      matchPartial(expect.local.pending, pending, 'local.pending', failures);
+      if (harness.provider.listLocal !== undefined) {
+        matchPartial(
+          expect.local.pending,
+          await harness.provider.listLocal(),
+          'local.pending',
+          failures,
+        );
+      } else if (host === undefined) {
+        hostless('local.pending', expect.local.pending);
+      } else {
+        matchPartial(expect.local.pending, host.localPending, 'local.pending', failures);
+      }
     }
   }
   if (expect.reminders !== undefined) {
@@ -4270,8 +4316,6 @@ async function matchExpectations(
     matchPartial(expect.notices, backend.notices, 'notices', failures);
   }
 }
-
-const timestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/iu;
 
 /**
  * Partial match: an expected object asserts only its listed keys, `null`
@@ -4321,13 +4365,15 @@ function matchPartial(
     }
     return;
   }
+  // Two strict timestamps compare as instants; a spelling that does not parse
+  // strictly, such as 31 September, is compared as text and never rolls over.
   if (
     typeof expected === 'string'
     && typeof actual === 'string'
-    && timestampPattern.test(expected)
-    && timestampPattern.test(actual)
+    && isNotificationTimestamp(expected)
+    && isNotificationTimestamp(actual)
   ) {
-    if (Date.parse(expected) !== Date.parse(actual)) {
+    if (normalizeNotificationTimestamp(expected) !== normalizeNotificationTimestamp(actual)) {
       failures.push({ path, expected, actual });
     }
     return;

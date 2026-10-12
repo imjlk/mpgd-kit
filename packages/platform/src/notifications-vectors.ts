@@ -2,7 +2,6 @@ import typia, { type tags } from 'typia';
 
 import {
   isValidNotificationTimeZone,
-  normalizeNotificationTimestamp,
   notificationTopicDefinitionIssues,
   type NotificationCapabilities,
   type NotificationChannel,
@@ -23,6 +22,7 @@ import {
   type NotificationUnavailableReason,
   type RecordNotificationNoticeInput,
 } from './notifications.js';
+import { notificationTimeFieldIssue, notificationTimeFields } from './notifications-policy.js';
 
 /**
  * Conformance vector format for docs/specs/notifications/vectors/*.json (RFC
@@ -459,10 +459,10 @@ const assertNotificationConformanceVectorShape =
  * Validates one vector file: the shape, steps that expect either an answer or
  * an error, provider answers whose fields fit them (`retryAfterSeconds` only
  * with `rate-limited`, a `reason` exactly with `rejected`), time zones that
- * `Intl` knows, clock instants that parse strictly (`context.now` and
- * `clock.set`), unique catalog topic ids that meet the topic definition rules,
- * and that the vector's own fixture profile satisfies its `appliesTo`
- * predicates.
+ * `Intl` knows, every timestamp and date read strictly (a date that exists,
+ * `T`, and an offset), unique catalog topic ids that meet the topic
+ * definition rules, and that the vector's own fixture profile satisfies its
+ * `appliesTo` predicates.
  */
 export function assertNotificationConformanceVector(input: unknown): NotificationConformanceVector {
   const vector = assertNotificationConformanceVectorShape(input);
@@ -471,12 +471,13 @@ export function assertNotificationConformanceVector(input: unknown): Notificatio
       throw new TypeError(`Vector ${vector.vector} names an unknown time zone: ${zone}`);
     }
   }
-  // The instants that drive the clock parse strictly: no calendar rollover.
-  for (const at of [
-    vector.context.now,
-    ...vector.steps.flatMap((step) => (step.actor === 'clock' && step.action === 'set' ? [step.at] : [])),
-  ]) {
-    normalizeNotificationTimestamp(at);
+  // Every timestamp and date reads strictly: no calendar rollover, no space for `T`.
+  const timeIssue = notificationTimeFieldIssue(
+    vector,
+    notificationTimeFields.NotificationConformanceVector,
+  );
+  if (timeIssue !== undefined) {
+    throw new TypeError(`Vector ${vector.vector}: ${timeIssue}`);
   }
   for (const [index, step] of vector.steps.entries()) {
     const issue = stepIssue(step);

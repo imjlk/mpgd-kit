@@ -1,7 +1,11 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { PlatformOperationError, readPlatformOperationFailure } from './index.js';
 import {
+  assertLocalNotificationEntry,
   assertLocalNotificationRequest,
   assertLocalScheduleResult,
   assertNotificationBridgeCancelLocalResult,
@@ -28,6 +32,7 @@ import {
   isNotificationCapabilities,
   isNotificationErrorCode,
   isNotificationEvent,
+  isNotificationTimestamp,
   notificationBridgeMethods,
   NotificationError,
   notificationErrorCodes,
@@ -43,6 +48,7 @@ import {
   type NotificationRuntime,
   type NotificationRuntimePermissionSnapshot,
 } from './notifications.js';
+import { notificationTimeFields, type NotificationTimeFields } from './notifications-policy.js';
 
 const osCapabilities: NotificationCapabilities = {
   availability: 'available',
@@ -480,5 +486,174 @@ describe('toNotificationSubscriptionAdapter', () => {
       'unavailable',
       'unavailable',
     ]);
+  });
+});
+
+describe('toNotificationSubscriptionAdapter: codes and resolved topics', () => {
+  const granted: Pick<NotificationRuntime, 'getPermission' | 'requestPermission'> = {
+    async getPermission() {
+      return { app: 'granted', topics: { 'daily-ready': 'granted' }, sources: { 'daily-ready': 'host' } };
+    },
+    async requestPermission() {
+      return { snapshot: { app: 'granted', topics: {} }, outcomes: { 'daily-ready': 'granted' } };
+    },
+  };
+  const failingWith = (error: unknown) =>
+    toNotificationSubscriptionAdapter({
+      ...granted,
+      async getPermission() {
+        throw error;
+      },
+    }, [{ id: 'daily-ready' }]);
+
+  it('reads configuration-required from any failure with that code', async () => {
+    for (const error of [
+      new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED'),
+      new PlatformOperationError({ code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED', retryable: false }),
+      // A bridge error that kept only its code across the boundary.
+      Object.assign(new Error('bridge'), { code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED' }),
+      { code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED' },
+    ]) {
+      expect(await failingWith(error).getStatus('daily-ready')).toBe('configuration-required');
+    }
+    const offline = Object.assign(new Error('offline'), { code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+    await expect(failingWith(offline).getStatus('daily-ready')).rejects.toBe(offline);
+  });
+
+  it('answers configuration-required for a topic that is not resolved for the target', async () => {
+    expect(await toNotificationSubscriptionAdapter(granted, [{ id: 'daily-ready' }]).getStatus('daily-ready'))
+      .toBe('subscribed');
+    // A catalog entry with `targets` names no single target, so it declares nothing here.
+    const unresolved = toNotificationSubscriptionAdapter(granted, [
+      { id: 'daily-ready', targets: { android: { channelId: 'daily' } } } as { readonly id: string },
+    ]);
+    expect(await unresolved.getStatus('daily-ready')).toBe('configuration-required');
+    expect(await unresolved.requestSubscription('daily-ready')).toBe('unavailable');
+  });
+});
+
+describe('strict notification timestamps', () => {
+  const loose = ['2026-04-31T09:00:00Z', '2026-04-30 09:00:00Z', '2026-04-30\t09:00:00Z'];
+
+  it('reads a timestamp only when its date exists and T separates the time', () => {
+    for (const at of loose) {
+      expect(isNotificationTimestamp(at), at).toBe(false);
+    }
+    expect(isNotificationTimestamp('2026-04-30T09:00:00Z')).toBe(true);
+    expect(isNotificationTimestamp('2026-04-30t09:00:00.123456+09:00')).toBe(true);
+  });
+
+  it('refuses in every validator what typia alone accepts', () => {
+    for (const at of loose) {
+      expect(() => assertNotificationConsentRecord({
+        kind: 'advertising',
+        state: 'granted',
+        source: 'player',
+        at,
+        textVersion: 'ads-v1',
+      })).toThrow(/Invalid consent record: at must be RFC 3339/u);
+      expect(() => assertLocalNotificationEntry({ key: 'k', topic: 'energy-full', fireAt: at }))
+        .toThrow(/fireAt must be RFC 3339/u);
+      expect(() => assertLocalNotificationRequest({
+        key: 'k',
+        topic: 'energy-full',
+        fireAt: at,
+        title: 'Energy',
+        body: 'Full.',
+      })).toThrow(/fireAt must be RFC 3339/u);
+      expect(() => assertNotificationBridgeListLocalResult({
+        pending: [{ key: 'k', topic: 'energy-full', fireAt: at }],
+      })).toThrow(/pending\[0\]\.fireAt must be RFC 3339/u);
+      expect(() => assertNotificationNotice({
+        kind: 'consent-result',
+        record: { kind: 'advertising', state: 'granted', at, textVersion: 'ads-v1' },
+        dueBy: '2026-10-26',
+      })).toThrow(/record\.at must be RFC 3339/u);
+      expect(() => assertRecordNotificationNoticeInput({
+        kind: 'consent-result',
+        record: { kind: 'advertising', at },
+        dueBy: '2026-10-26',
+      })).toThrow(/record\.at must be RFC 3339/u);
+    }
+    expect(() => assertNotificationNotice({
+      kind: 'consent-result',
+      record: { kind: 'advertising', state: 'granted', at: '2026-10-12T03:00:00Z', textVersion: 'ads-v1' },
+      dueBy: '2026-02-30',
+    })).toThrow(/dueBy must be a date that exists/u);
+  });
+
+  it('reads strictly every date-time and date field the published JSON Schemas declare', () => {
+    interface JsonSchema {
+      readonly $ref?: string;
+      readonly title?: string;
+      readonly format?: string;
+      readonly properties?: Readonly<Record<string, JsonSchema>>;
+      readonly items?: JsonSchema;
+      readonly additionalProperties?: JsonSchema | boolean;
+      readonly oneOf?: readonly JsonSchema[];
+      readonly anyOf?: readonly JsonSchema[];
+      readonly components?: { readonly schemas: Readonly<Record<string, JsonSchema>> };
+    }
+    const schemasDir = join(import.meta.dirname, '..', '..', '..', 'docs', 'specs', 'notifications', 'schemas');
+    const schemaPaths = (
+      schema: JsonSchema,
+      components: Readonly<Record<string, JsonSchema>>,
+      path: string,
+      seen: ReadonlySet<string>,
+    ): string[] => {
+      if (schema.$ref !== undefined) {
+        const name = schema.$ref.replace('#/components/schemas/', '');
+        const target = components[name];
+        return target === undefined || seen.has(name)
+          ? []
+          : schemaPaths(target, components, path, new Set([...seen, name]));
+      }
+      if (schema.format === 'date-time' || schema.format === 'date') {
+        return [`${path} ${schema.format}`];
+      }
+      return [
+        ...[...(schema.oneOf ?? []), ...(schema.anyOf ?? [])]
+          .flatMap((branch) => schemaPaths(branch, components, path, seen)),
+        ...Object.entries(schema.properties ?? {}).flatMap(([key, property]) =>
+          schemaPaths(property, components, path === '' ? key : `${path}.${key}`, seen)),
+        ...(schema.items === undefined ? [] : schemaPaths(schema.items, components, path, seen)),
+        ...(typeof schema.additionalProperties === 'object'
+          ? schemaPaths(schema.additionalProperties, components, `${path}.*`, seen)
+          : []),
+      ];
+    };
+    const specPaths = (fields: NotificationTimeFields, path = ''): string[] =>
+      Object.entries(fields).flatMap(([key, format]) => {
+        const at = path === '' ? key : `${path}.${key}`;
+        return typeof format === 'string' ? [`${at} ${format}`] : specPaths(format, at);
+      });
+    const specs: Readonly<Record<string, NotificationTimeFields>> = notificationTimeFields;
+    // The bridge's scheduleLocal payload is the local reminder request.
+    const aliases: Readonly<Record<string, string>> = {
+      NotificationBridgeScheduleLocalPayload: 'LocalNotificationRequest',
+    };
+    const covered: string[] = [];
+    for (const file of readdirSync(schemasDir).filter((name) => name.endsWith('.schema.json'))) {
+      const schema = JSON.parse(readFileSync(join(schemasDir, file), 'utf8')) as JsonSchema;
+      const title = schema.title ?? file;
+      const declared = [...new Set(schemaPaths(schema, schema.components?.schemas ?? {}, '', new Set()))].sort();
+      const spec = specs[aliases[title] ?? title];
+      expect(spec === undefined ? [] : [...new Set(specPaths(spec))].sort(), title).toEqual(declared);
+      if (declared.length > 0) {
+        covered.push(title);
+      }
+    }
+    expect(covered.sort()).toEqual([
+      'LocalNotificationRequest',
+      'NotificationBridgeListLocalResult',
+      'NotificationBridgeScheduleLocalPayload',
+      'NotificationConformanceVector',
+      'NotificationConsentRecord',
+      'NotificationNotice',
+    ]);
+    // The types without a schema file of their own are parts of those above.
+    expect(notificationTimeFields.LocalNotificationEntry)
+      .toEqual(notificationTimeFields.NotificationBridgeListLocalResult.pending);
+    expect(notificationTimeFields.RecordNotificationNoticeInput).toEqual(notificationTimeFields.NotificationNotice);
   });
 });

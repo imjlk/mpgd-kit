@@ -104,7 +104,6 @@ describe('notifications conformance vectors', () => {
       'game.getPermission',
       'game.requestPermission',
       'game.revokePermission',
-      'game.register',
       'game.unregister',
       'game.setTopicPreference',
       'game.setAdvertisingConsent',
@@ -121,7 +120,8 @@ describe('notifications conformance vectors', () => {
       'backend.revokeSession',
       'backend.runScheduler',
     ];
-    // `clock.advance` is part of the format; no committed vector uses it yet.
+    // `clock.advance` and `game.register` are part of the format; no committed
+    // vector uses them, since authentication registers on its own.
     expect([...seen].sort()).toEqual([...named].sort());
   });
 
@@ -206,6 +206,51 @@ describe('notifications conformance vectors', () => {
       ...base,
       appliesTo: [{ path: 'permission prompt', equals: 'os' }],
     })).toBe(false);
+  });
+
+  it('reads every timestamp and date in a vector strictly', () => {
+    const base = assertNotificationConformanceVector(readVector('reminder-local-route.json'));
+    const steps = base.steps.map((step) =>
+      step.actor === 'game' && step.action === 'setReminder'
+        ? { ...step, input: { ...step.input, fireAt: '2026-04-31T06:00:00Z' } }
+        : step);
+    expect(() => assertNotificationConformanceVector({ ...base, steps }))
+      .toThrow(/steps\[\d+\]\.input\.fireAt must be RFC 3339/u);
+    expect(() => assertNotificationConformanceVector({
+      ...base,
+      expect: { ...base.expect, reminders: [{ fireAt: '2026-10-12 06:00:00Z' }] },
+    })).toThrow(/expect\.reminders\[0\]\.fireAt must be RFC 3339/u);
+    expect(() => assertNotificationConformanceVector({
+      ...base,
+      expect: { ...base.expect, notices: [{ dueBy: '2026-02-30' }] },
+    })).toThrow(/expect\.notices\[0\]\.dueBy must be a date that exists/u);
+  });
+
+  it('runs the OS denial vectors only where the endpoint, not a record, holds the permission', () => {
+    for (const name of ['os-permission-denied-once', 'os-permission-denied-twice', 'os-permission-dismissed']) {
+      const vector = assertNotificationConformanceVector(readVector(`${name}.json`));
+      // An app-scope platform-user provider would write delivery-permission records.
+      expect(vector.expect.consent, name).toEqual([]);
+      expect(vector.appliesTo, name).toContainEqual({ path: 'remote.addressing', equals: 'device' });
+    }
+  });
+
+  it('sends advertising before consent under advertisingRules none', () => {
+    const vector = assertNotificationConformanceVector(readVector('advertising-rules-none.json'));
+    expect(vector.deployment).toEqual({ advertisingRules: 'none' });
+    const consent = vector.steps.findIndex((step) => step.action === 'setAdvertisingConsent');
+    expect(vector.steps.slice(0, consent).find((step) => step.action === 'deliver')).toMatchObject({
+      returns: { status: 'suppressed', reason: 'advertising-consent-missing' },
+    });
+  });
+
+  it('moves the endpoint in endpoint-lifecycle on authentication alone', () => {
+    const vector = assertNotificationConformanceVector(readVector('endpoint-lifecycle.json'));
+    const authentications = vector.steps.flatMap((step, index) =>
+      step.actor === 'backend' && step.action === 'authenticate' ? [index] : []);
+    expect(authentications).toHaveLength(2);
+    expect(vector.steps.slice(authentications.at(-1)).some((step) => step.action === 'register'))
+      .toBe(false);
   });
 
   it('explains why a provider does not satisfy appliesTo', () => {

@@ -1664,13 +1664,117 @@ const isoInstantPattern =
  * refused rather than rolled over into the next day.
  */
 function parseInstant(at: string): number {
-  const match = isoInstantPattern.exec(at);
-  const millis = match === null ? Number.NaN : instantOf(match);
+  const millis = instantOrNaN(at);
   if (Number.isNaN(millis)) {
     throw new TypeError(`Invalid ISO-8601 timestamp (a date, a time, and an offset): ${at}`);
   }
   return millis;
 }
+
+function instantOrNaN(at: string): number {
+  const match = isoInstantPattern.exec(at);
+  return match === null ? Number.NaN : instantOf(match);
+}
+
+/**
+ * Whether `at` is an RFC 3339 instant as every notifications timestamp must
+ * be: a date that exists, `T` (not a space), a time, and an offset. Fractions
+ * past milliseconds are dropped when it is read.
+ */
+export function isNotificationTimestamp(at: string): boolean {
+  return !Number.isNaN(instantOrNaN(at));
+}
+
+// Strict time fields (RFC "Timestamps").
+
+/** How a validated string field is read: an instant (`date-time`) or a calendar date (`date`). */
+export type NotificationTimeFormat = 'date-time' | 'date';
+
+/**
+ * The `date-time` and `date` fields of a validated type, by key. A nested
+ * spec applies to an object, and to each item of an array.
+ */
+export interface NotificationTimeFields {
+  readonly [key: string]: NotificationTimeFormat | NotificationTimeFields;
+}
+
+/**
+ * The check every notifications validator runs after typia's, whose formats
+ * accept a day the month does not have (31 April) and a space for `T`: each
+ * `date-time` field `fields` names must pass `isNotificationTimestamp`, and
+ * each `date` field `isNotificationCalendarDate`. Answers the first field
+ * that does not, or `undefined`.
+ */
+export function notificationTimeFieldIssue(
+  value: unknown,
+  fields: NotificationTimeFields,
+  path = '',
+): string | undefined {
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      const issue = notificationTimeFieldIssue(item, fields, `${path}[${index}]`);
+      if (issue !== undefined) {
+        return issue;
+      }
+    }
+    return undefined;
+  }
+  if (typeof value !== 'object' || value === null) {
+    return undefined;
+  }
+  for (const [key, format] of Object.entries(fields)) {
+    if (!Object.prototype.hasOwnProperty.call(value, key)) {
+      continue;
+    }
+    const field: unknown = (value as Readonly<Record<string, unknown>>)[key];
+    const at = path === '' ? key : `${path}.${key}`;
+    if (typeof format !== 'string') {
+      const issue = notificationTimeFieldIssue(field, format, at);
+      if (issue !== undefined) {
+        return issue;
+      }
+    } else if (
+      typeof field === 'string'
+      && !(format === 'date' ? isNotificationCalendarDate(field) : isNotificationTimestamp(field))
+    ) {
+      return format === 'date'
+        ? `${at} must be a date that exists, YYYY-MM-DD; got ${JSON.stringify(field)}`
+        : `${at} must be RFC 3339 with a date that exists, T, and an offset; got ${JSON.stringify(field)}`;
+    }
+  }
+  return undefined;
+}
+
+const noticeTimeFields = { record: { at: 'date-time' }, dueBy: 'date' } as const;
+
+/**
+ * The time fields of each validated type with any, for
+ * `notificationTimeFieldIssue`. A test keeps them equal to the formats in the
+ * published JSON Schemas.
+ */
+export const notificationTimeFields = {
+  LocalNotificationRequest: { fireAt: 'date-time' },
+  LocalNotificationEntry: { fireAt: 'date-time' },
+  NotificationBridgeListLocalResult: { pending: { fireAt: 'date-time' } },
+  NotificationConsentRecord: { at: 'date-time' },
+  NotificationNotice: noticeTimeFields,
+  RecordNotificationNoticeInput: noticeTimeFields,
+  NotificationConformanceVector: {
+    context: { now: 'date-time' },
+    steps: {
+      at: 'date-time',
+      input: { fireAt: 'date-time', ...noticeTimeFields },
+      returns: { until: 'date-time', ...noticeTimeFields },
+    },
+    expect: {
+      deliveries: { until: 'date-time' },
+      providerCalls: { expiresAt: 'date-time' },
+      local: { operations: { fireAt: 'date-time' }, pending: { fireAt: 'date-time' } },
+      reminders: { fireAt: 'date-time' },
+      notices: noticeTimeFields,
+    },
+  },
+} as const satisfies Readonly<Record<string, NotificationTimeFields>>;
 
 function instantOf(match: RegExpExecArray): number {
   const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number);
