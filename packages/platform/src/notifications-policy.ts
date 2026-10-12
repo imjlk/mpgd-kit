@@ -91,7 +91,8 @@ export interface NotificationTopicIssue {
 /**
  * Whether a topic's mapping declares that the host needs no agreement for it
  * (an Apps in Toss `service` template without an agreement statement): it
- * reads `granted`, never prompts, is never recorded, and passes gate step 3.
+ * reads `granted`, never prompts, is never recorded, and passes gate step 3
+ * until a provider answers that the recipient has not agreed.
  */
 export function notificationTopicNeedsNoAgreement(
   topic: Pick<NotificationTopicDeclaration, 'mapping'>,
@@ -717,7 +718,8 @@ export interface EvaluateNotificationDeliveryInput {
    */
   readonly endpointPermission?: NotificationPermissionState;
   /**
-   * Sends delivered to the recipient, oldest first: at least those within the
+   * Sends delivered to the recipient, oldest first (the gate reads them from
+   * the newest and stops at the longest window): at least those within the
    * longest limit window and, for a per-send provider, every send of the topic
    * since the first recorded acceptance. A backend that reserves acceptances
    * atomically with the delivery claim also passes its in-flight sends.
@@ -750,7 +752,8 @@ export interface EvaluateNotificationDeliveryInput {
  *    device addressing, or a latest `delivery-permission` record of `granted`
  *    for an app-scope platform-user provider; a topic-scope provider also
  *    needs a latest `host-agreement` of `granted` unless the topic needs no
- *    agreement, and a per-send provider an unreserved acceptance
+ *    agreement (a provider's answer that the recipient has not agreed still
+ *    stops such a topic), and a per-send provider an unreserved acceptance
  *    (`permission-denied`, `agreement-missing`, `allowance-exhausted`);
  * 4. the topic preference, only `topic-preference` records, the latest winning
  *    (`request-missing`, `preference-off`);
@@ -887,8 +890,15 @@ function deliveryPermissionRefusal(
   ) {
     return 'permission-denied';
   }
-  if (entry.permission.scope === 'topic' && !notificationTopicNeedsNoAgreement(topic)) {
-    if (latestNotificationConsent(input.consent, 'host-agreement', topic.id)?.state !== 'granted') {
+  if (entry.permission.scope === 'topic') {
+    const agreement = latestNotificationConsent(input.consent, 'host-agreement', topic.id);
+    if (notificationTopicNeedsNoAgreement(topic)) {
+      // Nothing records an agreement for such a topic but a provider's answer
+      // that the recipient has not agreed after all, which stops sends.
+      if (agreement?.source === 'provider' && agreement.state !== 'granted') {
+        return 'agreement-missing';
+      }
+    } else if (agreement?.state !== 'granted') {
       return 'agreement-missing';
     }
   }
@@ -1007,24 +1017,52 @@ function resolveTimeWindows(
 /**
  * Gate step 7. A send at `s` counts for a send at `t` when `t − window < s ≤
  * t`. The topic's daily cap and limits of a day or longer suppress; a shorter
- * provider limit defers until the oldest counted send leaves the window.
+ * provider limit defers until the oldest counted send leaves the window. The
+ * history is oldest first, so one walk from the newest send stops at the
+ * longest window.
  */
 function limitDecision(
   input: EvaluateNotificationDeliveryInput,
   topic: NotificationTopicDefinition,
 ): NotificationDeliveryRefusal | undefined {
+  const limits = input.entry.limits ?? [];
+  if (topic.frequency === undefined && limits.length === 0) {
+    return undefined;
+  }
   const at = parseInstant(input.at);
-  const counted = (
-    windowMs: number,
-    matches: (sent: NotificationDeliveryHistoryEntry) => boolean,
-  ): number[] =>
-    input.history
-      .filter(matches)
-      .map((sent) => parseInstant(sent.at))
-      .filter((sentAt) => sentAt > at - windowMs && sentAt <= at)
-      .sort((left, right) => left - right);
+  const longest = Math.max(
+    topic.frequency === undefined ? 0 : dayMs,
+    ...limits.map((limit) => limit.windowSeconds * 1000),
+  );
+  // The topic's and the provider's sends inside the longest window.
+  const topicSends: number[] = [];
+  const providerSends: number[] = [];
+  for (let index = input.history.length - 1; index >= 0; index -= 1) {
+    const sent = input.history[index];
+    if (sent === undefined) {
+      continue;
+    }
+    const sentAt = parseInstant(sent.at);
+    if (sentAt <= at - longest) {
+      break;
+    }
+    if (sentAt > at) {
+      continue;
+    }
+    if (sent.topic === topic.id) {
+      topicSends.push(sentAt);
+    }
+    if (sent.provider === input.entry.provider) {
+      providerSends.push(sentAt);
+    }
+  }
+  // Oldest first again, as the deferral below reads them.
+  topicSends.reverse();
+  providerSends.reverse();
+  const counted = (sends: readonly number[], windowMs: number): number[] =>
+    sends.filter((sentAt) => sentAt > at - windowMs);
   if (topic.frequency !== undefined) {
-    const sends = counted(dayMs, (sent) => sent.topic === topic.id);
+    const sends = counted(topicSends, dayMs);
     if (sends.length >= topic.frequency.maxPerDay) {
       return { status: 'suppressed', reason: 'frequency-capped' };
     }
@@ -1032,9 +1070,9 @@ function limitDecision(
   // Every limit that is full: one of a day or longer suppresses, whatever the
   // order of the entry's limits; shorter ones defer until all have room.
   let until: number | undefined;
-  for (const limit of input.entry.limits ?? []) {
+  for (const limit of limits) {
     const windowMs = limit.windowSeconds * 1000;
-    const sends = counted(windowMs, (sent) => sent.provider === input.entry.provider);
+    const sends = counted(providerSends, windowMs);
     if (sends.length < limit.count) {
       continue;
     }
@@ -1350,6 +1388,7 @@ export type NotificationReminderStatus =
   | 'preference-off'
   | 'advertising-consent-missing'
   | 'frequency-capped'
+  | 'quiet-hours'
   | 'capacity-exceeded'
   | 'action-required'
   | 'unavailable';
@@ -1404,17 +1443,20 @@ export type LocalNotificationReminderDecision =
         | 'permission-required'
         | 'request-missing'
         | 'preference-off'
+        | 'quiet-hours'
         | 'frequency-capped';
     };
 
 /**
  * The gate steps a client can evaluate before scheduling a local reminder, in
  * order: delivery permission (`permission-required`), the topic preference,
- * and `frequency.maxPerDay` over the topic's pending local reminders within
- * any 24 hours (`frequency-capped`). A `fireAt` inside the topic's quiet hours
- * moves to their end, as a server send would be deferred; without quiet hours
- * it is kept. The night window does not apply, because advertising never
- * takes the local route.
+ * the topic's quiet hours, and `frequency.maxPerDay` over the topic's pending
+ * local reminders within any 24 hours (`frequency-capped`). As at gate step
+ * 6, a `fireAt` inside the quiet hours moves to the first time outside them,
+ * hopping over a window that a clock change makes end inside another, and a
+ * topic with `deferrable: false` is not scheduled there (`quiet-hours`).
+ * Without quiet hours `fireAt` is kept. The night window does not apply,
+ * because advertising never takes the local route.
  */
 export function evaluateLocalNotificationReminder(
   input: EvaluateLocalNotificationReminderInput,
@@ -1427,10 +1469,20 @@ export function evaluateLocalNotificationReminder(
     return { status: preference };
   }
   let fireAt = normalizeNotificationTimestamp(input.fireAt);
-  if (input.topic.quietHours !== undefined) {
-    const quiet = checkNotificationQuietHours(fireAt, input.topic.quietHours, input.timeZone);
-    if (quiet.inside) {
+  const { quietHours } = input.topic;
+  if (quietHours !== undefined) {
+    let quiet = checkNotificationQuietHours(fireAt, quietHours, input.timeZone);
+    if (quiet.inside && input.topic.deferrable === false) {
+      return { status: 'quiet-hours' };
+    }
+    // As at gate step 6: follow each window's end until a time outside them.
+    for (let hop = 1; quiet.inside; hop += 1) {
+      if (hop >= maxWindowHops) {
+        // No time outside the windows: the gate would never send it either.
+        return { status: 'quiet-hours' };
+      }
       fireAt = quiet.until;
+      quiet = checkNotificationQuietHours(fireAt, quietHours, input.timeZone);
     }
   }
   const maxPerDay = input.topic.frequency?.maxPerDay;
@@ -1712,14 +1764,19 @@ interface DateTimeFormatter {
   formatToParts(date: Date): readonly { readonly type: string; readonly value: string }[];
 }
 
+/** Formatters by zone, least recently used first. */
 const intlFormatters = new Map<string, DateTimeFormatter>();
-/** Zone names come from clients; the cache starts over rather than grow without bound. */
+/** Zone names come from clients; past this many the least recently used zone goes. */
 const intlFormatterLimit = 64;
 
 /** A zone read through `Intl`, which every supported runtime ships with time zone data. */
 function intlZone(timeZone: string): WallZone {
   let formatter = intlFormatters.get(timeZone);
-  if (formatter === undefined) {
+  if (formatter !== undefined) {
+    // Most recently used last.
+    intlFormatters.delete(timeZone);
+    intlFormatters.set(timeZone, formatter);
+  } else {
     try {
       formatter = new Intl.DateTimeFormat('en-US', {
         timeZone,
@@ -1735,7 +1792,10 @@ function intlZone(timeZone: string): WallZone {
       throw new TypeError(`Unknown time zone: ${timeZone}`);
     }
     if (intlFormatters.size >= intlFormatterLimit) {
-      intlFormatters.clear();
+      const oldest = intlFormatters.keys().next();
+      if (oldest.done !== true) {
+        intlFormatters.delete(oldest.value);
+      }
     }
     intlFormatters.set(timeZone, formatter);
   }
@@ -1866,7 +1926,11 @@ export function isSameNotificationNotice(
 
 /** Result notice: 14 days after the record's Asia/Seoul date, counted from the next day. */
 export function notificationConsentResultDueBy(at: string): string {
-  const wall = seoulZone.wall(parseInstant(at));
+  return consentResultDueByOf(parseInstant(at));
+}
+
+function consentResultDueByOf(instant: number): string {
+  const wall = seoulZone.wall(instant);
   return formatCalendarDate(Date.UTC(wall.year, wall.month - 1, wall.day + 14));
 }
 
@@ -1879,7 +1943,11 @@ export function notificationReconfirmationDueBy(at: string, ordinal = 1): string
   if (!Number.isInteger(ordinal) || ordinal < 1) {
     throw new TypeError('A re-confirmation ordinal is a whole number from 1.');
   }
-  const wall = seoulZone.wall(parseInstant(at));
+  return reconfirmationDueByOf(parseInstant(at), ordinal);
+}
+
+function reconfirmationDueByOf(instant: number, ordinal: number): string {
+  const wall = seoulZone.wall(instant);
   const day = wall.month === 2 && wall.day === 29 ? 28 : wall.day;
   return formatCalendarDate(Date.UTC(wall.year + 2 * ordinal, wall.month - 1, day - 1));
 }
@@ -1889,13 +1957,14 @@ export const notificationReconfirmationListDays = 60;
 
 type NoticeRecord = Extract<NotificationConsentRecord, { readonly kind: 'advertising' | 'night' }>;
 
-function noticeRecordOf(record: NoticeRecord): NotificationNotice['record'] {
-  return {
-    kind: record.kind,
-    state: record.state,
-    at: normalizeNotificationTimestamp(record.at),
-    textVersion: record.textVersion,
-  };
+/** A notice's name as one string, with the record time as an instant in milliseconds. */
+function noticeNameOf(
+  kind: NotificationNoticeKind,
+  recordKind: NoticeRecord['kind'],
+  instant: number,
+  dueBy: string,
+): string {
+  return JSON.stringify([kind, recordKind, instant, dueBy]);
 }
 
 /**
@@ -1917,39 +1986,50 @@ export function listNotificationNotices(
   at: string,
 ): readonly NotificationNotice[] {
   const today = toSeoulCalendarDate(at);
-  const owed = (notice: NotificationNotice): boolean =>
-    !given.some((entry) => isSameNotificationNotice(entry, notice));
+  // Given notices by name, each record time parsed once.
+  const givenNames = new Set(
+    given.map(({ kind, record, dueBy }) =>
+      noticeNameOf(kind, record.kind, parseInstant(record.at), dueBy),
+    ),
+  );
+  // Each advertising or night record parsed once.
+  const parsed = new Map<NotificationConsentRecord, {
+    readonly instant: number;
+    readonly record: NotificationNotice['record'];
+  }>();
   const notices: NotificationNotice[] = [];
   for (const record of records) {
-    if (record.kind === 'advertising' || record.kind === 'night') {
-      const notice: NotificationNotice = {
-        kind: 'consent-result',
-        record: noticeRecordOf(record),
-        dueBy: notificationConsentResultDueBy(record.at),
-      };
-      if (owed(notice)) {
-        notices.push(notice);
-      }
+    if (record.kind !== 'advertising' && record.kind !== 'night') {
+      continue;
+    }
+    const instant = parseInstant(record.at);
+    const noticeRecord: NotificationNotice['record'] = {
+      kind: record.kind,
+      state: record.state,
+      at: formatNotificationTimestamp(instant),
+      textVersion: record.textVersion,
+    };
+    parsed.set(record, { instant, record: noticeRecord });
+    const dueBy = consentResultDueByOf(instant);
+    if (!givenNames.has(noticeNameOf('consent-result', record.kind, instant, dueBy))) {
+      notices.push({ kind: 'consent-result', record: noticeRecord, dueBy });
     }
   }
   for (const kind of ['advertising', 'night'] as const) {
     const latest = latestNotificationConsent(records, kind);
-    if (latest === undefined || latest.kind !== kind || latest.state !== 'granted') {
+    const consent = latest === undefined ? undefined : parsed.get(latest);
+    if (consent === undefined || consent.record.state !== 'granted') {
       continue;
     }
     // Each given notice has its own due date, so this ends after the last one given.
-    let next: NotificationNotice;
     let ordinal = 1;
-    do {
-      next = {
-        kind: 'reconfirmation',
-        record: noticeRecordOf(latest),
-        dueBy: notificationReconfirmationDueBy(latest.at, ordinal),
-      };
+    let dueBy = reconfirmationDueByOf(consent.instant, ordinal);
+    while (givenNames.has(noticeNameOf('reconfirmation', kind, consent.instant, dueBy))) {
       ordinal += 1;
-    } while (!owed(next));
-    if (calendarDaysBefore(next.dueBy, notificationReconfirmationListDays) <= today) {
-      notices.push(next);
+      dueBy = reconfirmationDueByOf(consent.instant, ordinal);
+    }
+    if (calendarDaysBefore(dueBy, notificationReconfirmationListDays) <= today) {
+      notices.push({ kind: 'reconfirmation', record: consent.record, dueBy });
     }
   }
   return notices.sort((left, right) =>

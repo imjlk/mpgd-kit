@@ -2380,10 +2380,10 @@ type RuntimeQueue = 'record' | 'register' | 'local';
  *   pending local reminders, and nothing binds it again, across restarts,
  *   until `register()` or the next authentication.
  * - Reminders: one key across both routes, and `cancel` removes it from each
- *   route that has it. Local ones pass the client gate
- *   steps (permission, then the topic preference from the backend, then the
- *   topic's daily cap), and quiet hours move them; server ones are checked
- *   and stored by the backend. Turning a topic off cancels its local
+ *   route that has it. Local ones pass the client gate steps (permission,
+ *   then the topic preference from the backend, then quiet hours, which move
+ *   them or refuse a topic that is not deferrable, then the topic's daily
+ *   cap); server ones are checked and stored by the backend. Turning a topic off cancels its local
  *   reminders, a known permission other than granted cancels them, and start,
  *   authentication, and every backend read reconcile them with the catalog
  *   (a topic that no longer takes the local route loses its reminders), the

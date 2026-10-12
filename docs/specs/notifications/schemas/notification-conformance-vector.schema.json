@@ -2575,6 +2575,9 @@
             "const": "preference-off"
           },
           {
+            "const": "quiet-hours"
+          },
+          {
             "const": "replaced"
           },
           {

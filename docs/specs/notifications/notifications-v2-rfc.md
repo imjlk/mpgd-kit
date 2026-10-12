@@ -433,8 +433,8 @@ export interface ReminderResult {
   readonly status:
     | 'scheduled' | 'replaced' | 'cancelled'
     | 'permission-required' | 'request-missing' | 'preference-off'
-    | 'advertising-consent-missing' | 'frequency-capped' | 'capacity-exceeded'
-    | 'action-required' | 'unavailable';
+    | 'advertising-consent-missing' | 'frequency-capped' | 'quiet-hours'
+    | 'capacity-exceeded' | 'action-required' | 'unavailable';
 }
 
 export interface NotificationRuntime {
@@ -653,6 +653,10 @@ products and ad placements.
     agreement statement.
   - **Devvit** needs `title` ≤ 60 and `body` ≤ 100 characters and may carry a
     default `link`, a `t3_` or `t1_` id.
+  - A field's `pattern` is read with the `u` flag. The validator reports a
+    pattern that does not compile instead of throwing.
+  - `agreement: 'none'` must not map to a `per-send` provider. Such a topic
+    never prompts, so no send would have the acceptance gate step 3 needs.
 - A topic with the `remote` channel must not map to a provider whose
   `remote.purposes` excludes its purpose, because gate step 1 would refuse
   every send (`purpose-unsupported`). An `advertising` topic also needs a
@@ -724,12 +728,18 @@ the [policy gate](#policy-gate) it can evaluate on the client:
 1. delivery permission, whose `permission-denied` the local route reports as
    `permission-required`;
 2. the topic preference (`request-missing`, `preference-off`);
-3. `frequency.maxPerDay`, counted over the topic's pending local reminders
+3. the topic's `quietHours`, as gate step 6 applies them:
+   - a `fireAt` inside them moves to their end, as a server send would be
+     deferred;
+   - a clock change can make that end fall inside the next window, so the
+     move repeats; after six windows the reminder answers `quiet-hours`;
+   - a topic with `deferrable: false` is not scheduled inside them
+     (`quiet-hours`), as the gate would suppress its send;
+4. `frequency.maxPerDay`, counted over the topic's pending local reminders
    whose `fireAt` falls within any 24 hours (`frequency-capped`).
 
 Advertising topics never take the local route (see the
-[topic catalog](#topic-catalog)). A local `fireAt` inside the topic's
-`quietHours` moves to their end, as a server send would be deferred.
+[topic catalog](#topic-catalog)), so the night window does not apply to it.
 
 Server reminders apply gate steps 3 to 5 at set time against the backend's
 records (or the host read for a server-readable provider). They answer
@@ -963,7 +973,10 @@ client's declaration. The steps run in order and the first failure decides:
      a latest `delivery-permission` record of `granted`.
    - **`scope: 'topic'` provider.** It needs a latest `host-agreement` of
      `granted` for the topic (or `suppressed: agreement-missing`), unless the
-     topic's mapping declares that the host needs no agreement.
+     topic's mapping declares that the host needs no agreement. Even then, a
+     latest `host-agreement` that is a provider's answer
+     (`source: 'provider'`) stops sends: the host says the recipient has not
+     agreed after all.
    - **`per-send` provider.** It needs an acceptance that no delivery has
      reserved (or `suppressed: allowance-exhausted`).
 4. **Topic preference.** A `requested` topic needs a latest `topic-preference`
@@ -997,7 +1010,9 @@ client's declaration. The steps run in order and the first failure decides:
 7. **Frequency and provider limits.** They count the recipient's other
    delivered sends in the rolling window before the send: a send at `s`
    counts for a send at `t` when `t − window < s ≤ t`. A send's earlier
-   delivery to another endpoint is the same send and does not count.
+   delivery to another endpoint is the same send and does not count. The
+   gate reads the history, oldest first, from the newest send and stops at
+   the longest window.
    - A topic `frequency` cap or a provider limit whose window is a day or
      longer answers `suppressed: frequency-capped` or `suppressed:
      provider-limit`.
@@ -1105,7 +1120,7 @@ Every provider answer maps to one of five kinds:
   - `agreement`, when the host says the recipient has not agreed to the
     template, also appends a `host-agreement` record of `denied` with
     `source: 'provider'`. The gate then stops sending until the player agrees
-    again.
+    again, even for a topic whose mapping needs no agreement.
 - **`ambiguous`**: the provider cannot say whether it sent (a timeout, a 5xx
   answer, a crash after the claim).
   - The claim is kept, as the delivery ledger requires, and the send answers
@@ -1270,7 +1285,8 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   statement need agreement; the console rejects opt-in style templates without
   one. Messages a player needs to use the service (payment, refund, and
   similar) are sent without agreement. Their mapping declares `agreement:
-  'none'`, reads `granted`, and never prompts.
+  'none'`, reads `granted`, and never prompts. A `rejected` answer with reason
+  `agreement` still records the denial and stops later sends.
 - **No read.** Neither the client nor the server can read the agreement, and
   revocation in Toss settings raises no event. So `readable` is false, and the
   server record is what the gate uses. A send to a user who revoked comes back

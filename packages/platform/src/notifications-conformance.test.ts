@@ -1430,6 +1430,23 @@ describe('notifications reference runtime: local reminders', () => {
       .toEqual({ route: 'none', status: 'unavailable' });
   });
 
+  it('answers quiet-hours for a local reminder of a topic that is not deferrable', async () => {
+    const strict = { ...energy, quietHours: { start: '13:00', end: '16:00' }, deferrable: false };
+    const { host, backend, runtime } = setup(osProfile, [strict]);
+    backend.authenticate('p-1');
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['energy-full'], gesture: true });
+    await runtime.setTopicPreference({ topic: 'energy-full', enabled: true });
+    // 05:00Z is 14:00 in Seoul, inside the quiet hours: the gate would suppress
+    // the send, so the device does not schedule it.
+    expect(await runtime.reminders.set({ key: 'e', topic: 'energy-full', fireAt: '2026-10-12T05:00:00Z' }))
+      .toEqual({ route: 'local', status: 'quiet-hours' });
+    expect(host.localPending).toEqual([]);
+    expect(await runtime.reminders.set({ key: 'e', topic: 'energy-full', fireAt: '2026-10-12T08:00:00Z' }))
+      .toEqual({ route: 'local', status: 'scheduled' });
+    expect(host.localPending).toEqual([{ key: 'e', topic: 'energy-full', fireAt: '2026-10-12T08:00:00Z' }]);
+  });
+
   it('names one reminder per key across both routes', async () => {
     const daily = { ...energy, id: 'daily-puzzle', channels: ['remote'] } as const;
     const { host, backend, runtime } = setup(osProfile, [energy, daily]);

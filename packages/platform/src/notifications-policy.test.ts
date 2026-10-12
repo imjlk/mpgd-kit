@@ -263,6 +263,22 @@ describe('evaluateNotificationDelivery', () => {
       .toEqual({ status: 'allowed', content: { route: '/?entry=challenge', source: 'host-template' } });
   });
 
+  it('step 3: a provider answer that the recipient has not agreed stops a topic that needs no agreement', () => {
+    const { copy: _copy, ...withoutCopy } = service;
+    const receipt: NotificationTopicDeclaration = {
+      ...withoutCopy,
+      mapping: { templateSetCode: 'receipt', agreement: 'none' },
+    };
+    const send = (consent: readonly NotificationConsentRecord[]) =>
+      evaluateNotificationDelivery(input({ entry: hostTemplate, topic: receipt, consent }));
+    const providerDenial = record('host-agreement', 'denied', { topic: 'rival-challenge', source: 'provider' });
+    expect(send([providerDenial])).toEqual({ status: 'suppressed', reason: 'agreement-missing' });
+    // Only a provider's answer decides such a topic, and the latest record wins.
+    expect(send([record('host-agreement', 'denied', { topic: 'rival-challenge' })]).status).toBe('allowed');
+    expect(send([providerDenial, record('host-agreement', 'granted', { topic: 'rival-challenge' })]).status)
+      .toBe('allowed');
+  });
+
   it('step 3: a per-send provider allows one delivery per acceptance', () => {
     const topic = { ...requested, mapping: { templateSetCode: 'energy', agreement: 'required' } };
     const accepted = record('host-agreement', 'granted', { topic: 'energy-full' });
@@ -439,6 +455,36 @@ describe('evaluateNotificationDelivery', () => {
       entry: { ...fcm, limits: [{ count: 3, windowSeconds: 60 }, { count: 1, windowSeconds: 120 }] },
       history: recent,
     }))).toEqual({ status: 'deferred', reason: 'provider-limit', until: '2026-10-12T03:01:40Z' });
+  });
+
+  it('step 7: reads the history from the newest send and stops at the longest window', () => {
+    let reads = 0;
+    const sent = (at: string) => ({
+      provider: 'fcm',
+      topic: 'rival-challenge',
+      get at(): string {
+        reads += 1;
+        return at;
+      },
+    });
+    // A thousand sends from a week ago, then one an hour ago.
+    const history = [
+      ...Array.from({ length: 1000 }, () => sent('2026-10-05T03:00:00Z')),
+      sent('2026-10-12T02:00:00Z'),
+    ];
+    expect(evaluateNotificationDelivery(input({
+      topic: { ...service, frequency: { maxPerDay: 2 } },
+      entry: { ...fcm, limits: [{ count: 5, windowSeconds: 3_600 }] },
+      history,
+    })).status).toBe('allowed');
+    // The newest send, and the first one outside the day, which ends the walk.
+    expect(reads).toBe(2);
+    reads = 0;
+    expect(evaluateNotificationDelivery(input({
+      topic: { ...service, frequency: { maxPerDay: 1 } },
+      history,
+    }))).toEqual({ status: 'suppressed', reason: 'frequency-capped' });
+    expect(reads).toBe(2);
   });
 
   it('step 8: under the Korean rules renders advertising with the label, sender, opt-out line and action, and expiry', () => {
@@ -753,6 +799,34 @@ describe('notification time windows', () => {
       .toEqual({ inside: true, until: '2026-11-01T05:30:00Z' });
   });
 
+  it('keeps the formatter of a zone in use while many other zones come and go', () => {
+    const quiet = { start: '22:00', end: '08:00' };
+    const kept = 'Pacific/Chatham';
+    checkNotificationQuietHours(noon, quiet, kept);
+    const DateTimeFormat = Intl.DateTimeFormat;
+    let rebuilt = 0;
+    const counting = new Proxy(DateTimeFormat, {
+      construct(target, args: unknown[], newTarget: Function): object {
+        const options = args[1];
+        if (typeof options === 'object' && options !== null && 'timeZone' in options && options.timeZone === kept) {
+          rebuilt += 1;
+        }
+        return Reflect.construct(target, args, newTarget) as object;
+      },
+    });
+    Object.defineProperty(Intl, 'DateTimeFormat', { configurable: true, writable: true, value: counting });
+    try {
+      // More zones than the cache holds, with the kept zone read between each.
+      for (const zone of Intl.supportedValuesOf('timeZone').filter((name) => name !== kept).slice(0, 100)) {
+        checkNotificationQuietHours(noon, quiet, zone);
+        checkNotificationQuietHours(noon, quiet, kept);
+      }
+    } finally {
+      Object.defineProperty(Intl, 'DateTimeFormat', { configurable: true, writable: true, value: DateTimeFormat });
+    }
+    expect(rebuilt).toBe(0);
+  });
+
   it('normalizes timestamps to UTC with milliseconds only when they are not zero', () => {
     expect(normalizeNotificationTimestamp('2026-10-12T12:00:00.000+09:00')).toBe('2026-10-12T03:00:00Z');
     expect(normalizeNotificationTimestamp('2026-10-12T03:00:00.250Z')).toBe('2026-10-12T03:00:00.250Z');
@@ -849,6 +923,39 @@ describe('notification consent notices', () => {
     expect(isSameNotificationNotice(resultOf('advertising'), resultOf('night'))).toBe(false);
     expect(isSameNotificationNotice(resultOf('advertising'), { ...resultOf('advertising'), dueBy: '2026-10-27' }))
       .toBe(false);
+  });
+
+  it('reads each record and each given notice once', () => {
+    let recordReads = 0;
+    let givenReads = 0;
+    // Forty records within one second of each other share one due date.
+    const at = (second: number) => `2026-10-12T03:00:${String(second).padStart(2, '0')}Z`;
+    const records = Array.from({ length: 40 }, (_, second): NotificationConsentRecord =>
+      Object.defineProperty(
+        { ...record('advertising', second % 2 === 0 ? 'granted' : 'withdrawn') },
+        'at',
+        {
+          enumerable: true,
+          get: () => {
+            recordReads += 1;
+            return at(second);
+          },
+        },
+      ));
+    const given = Array.from({ length: 40 }, (_, second): NotificationNoticeIdentity => ({
+      kind: 'consent-result',
+      record: Object.defineProperty({ kind: 'advertising' as const, at: '' }, 'at', {
+        enumerable: true,
+        get: () => {
+          givenReads += 1;
+          return at(second);
+        },
+      }),
+      dueBy: '2026-10-26',
+    }));
+    // Every result notice was given, and the latest record withdrew.
+    expect(listNotificationNotices(records, given, '2026-10-13T03:00:00Z')).toEqual([]);
+    expect([recordReads, givenReads]).toEqual([40, 40]);
   });
 
   it('lists a re-confirmation from 60 days before its due date, once the previous one is given', () => {
@@ -986,6 +1093,32 @@ describe('notification reminders', () => {
       topic: { ...service, quietHours: { start: '22:00', end: '09:00' } },
       timeZone: 'Europe/London',
     })).toEqual({ status: 'schedule', fireAt: tenPm });
+  });
+
+  it('does not schedule a topic that is not deferrable inside its quiet hours', () => {
+    const strict = { ...service, quietHours: { start: '22:00', end: '09:00' }, deferrable: false };
+    const base = { topic: strict, permission: 'granted', consent: [], timeZone: 'Asia/Seoul' } as const;
+    // Gate step 6 would suppress it there, so the device does not show it either.
+    expect(evaluateLocalNotificationReminder({ ...base, fireAt: tenPm })).toEqual({ status: 'quiet-hours' });
+    expect(evaluateLocalNotificationReminder({ ...base, fireAt: noon }))
+      .toEqual({ status: 'schedule', fireAt: noon });
+  });
+
+  it('moves a local fireAt past a quiet-hours end that a clock change puts inside the next window', () => {
+    // 2026-03-08 Los Angeles skips 02:00-03:00. A window ending at 02:15 then ends at
+    // 03:15 PDT, inside the next window from 02:30, so the reminder moves on to the end
+    // of that one: 02:15 PDT the next day.
+    const nearlyAllDay = { ...service, quietHours: { start: '02:30', end: '02:15' } };
+    const decision = evaluateLocalNotificationReminder({
+      topic: nearlyAllDay,
+      permission: 'granted',
+      consent: [],
+      fireAt: '2026-03-08T07:00:00Z', // 23:00 PST on 7 March
+      timeZone: 'America/Los_Angeles',
+    });
+    expect(decision).toEqual({ status: 'schedule', fireAt: '2026-03-09T09:15:00Z' });
+    expect(checkNotificationQuietHours('2026-03-09T09:15:00Z', nearlyAllDay.quietHours, 'America/Los_Angeles'))
+      .toEqual({ inside: false });
   });
 
   it('checks gate steps 3 to 5 when a server reminder is set', () => {

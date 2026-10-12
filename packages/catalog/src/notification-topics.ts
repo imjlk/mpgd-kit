@@ -92,13 +92,15 @@ const validateNotificationTopicCatalogShape = typia.createValidateEquals<Notific
  *   channel whose text uses no placeholder but `{{consentDate}}`;
  * - for a target with a provider entry: each mapping field follows its rule
  *   (required, a string within `maxLength` Unicode code points, one of
- *   `values`, matching `pattern`), a mapping that needs no host agreement
- *   (`agreement: 'none'`) belongs to a `service` topic, a topic with the
- *   `remote` channel maps only to a provider whose `purposes` include its
- *   purpose, an `advertising` topic maps only to a provider that delivers
- *   advertising as free-form content (under the Korean rules, also with an
- *   expiry and actions), and a topic on a free-form provider has its own
- *   text: `copy`, or a `title` and a `body` in the mapping;
+ *   `values`, matching `pattern`, which the `u` flag reads; a pattern that
+ *   does not compile is an issue too), a mapping that needs no host agreement
+ *   (`agreement: 'none'`) belongs to a `service` topic and never to a
+ *   `per-send` provider, which needs an acceptance for each send, a topic
+ *   with the `remote` channel maps only to a provider whose `purposes`
+ *   include its purpose, an `advertising` topic maps only to a provider that
+ *   delivers advertising as free-form content (under the Korean rules, also
+ *   with an expiry and actions), and a topic on a free-form provider has its
+ *   own text: `copy`, or a `title` and a `body` in the mapping;
  * - given an `advertising` topic, the deployment settings: `advertisingRules`,
  *   and under `kr` the catalog's notice topic, mapped on every target that
  *   maps an advertising topic and named by the deployment's `noticeTopic`,
@@ -228,11 +230,19 @@ function mappingIssues(
         message: `${provider.provider} accepts ${field} ${rule.values.map((accepted) => JSON.stringify(accepted)).join(' or ')}; got ${JSON.stringify(value)}`,
       });
     }
-    if (rule.pattern !== undefined && !new RegExp(rule.pattern, 'u').test(value)) {
-      issues.push({
-        path,
-        message: `${provider.provider} needs ${field} to match ${rule.pattern}; got ${JSON.stringify(value)}`,
-      });
+    if (rule.pattern !== undefined) {
+      const pattern = compileMappingPattern(rule.pattern);
+      if (pattern === undefined) {
+        issues.push({
+          path,
+          message: `${provider.provider}'s pattern for ${field} does not compile with the u flag: ${rule.pattern}`,
+        });
+      } else if (!pattern.test(value)) {
+        issues.push({
+          path,
+          message: `${provider.provider} needs ${field} to match ${rule.pattern}; got ${JSON.stringify(value)}`,
+        });
+      }
     }
   }
   // Only a service template may skip the host agreement: the console sends
@@ -242,6 +252,14 @@ function mappingIssues(
     issues.push({
       path: `${at}.agreement`,
       message: `only a service topic's template may need no agreement; ${topic.id} is ${topic.purpose}`,
+    });
+  }
+  // Such a topic never prompts, so a per-send provider would never get the
+  // acceptance each send needs, and gate step 3 would refuse every send.
+  if (notificationTopicNeedsNoAgreement({ mapping }) && provider.permission.allowance === 'per-send') {
+    issues.push({
+      path: `${at}.agreement`,
+      message: `${provider.provider} needs the player's acceptance for each send, which a topic that needs no agreement never asks for`,
     });
   }
   // Gate step 1 refuses a send whose purpose the provider does not deliver,
@@ -281,6 +299,15 @@ function mappingIssues(
     });
   }
   return issues;
+}
+
+/** A registry pattern as the `u` flag reads it, or `undefined` when it does not compile. */
+function compileMappingPattern(pattern: string): RegExp | undefined {
+  try {
+    return new RegExp(pattern, 'u');
+  } catch {
+    return undefined;
+  }
 }
 
 /** `notices.topic` names a declared `service` topic the server can send. */

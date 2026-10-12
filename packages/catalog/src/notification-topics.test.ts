@@ -457,6 +457,56 @@ assert.deepEqual(
   [],
 );
 
+// A registry pattern is read with the u flag: one that does not compile there
+// is an issue, not a SyntaxError.
+const loosePattern: NotificationProviderRegistryEntry = {
+  ...referenceNotificationProviders.devvit,
+  provider: 'fixture.loose-pattern',
+  mapping: {
+    ...referenceNotificationProviders.devvit.mapping,
+    link: { required: false, pattern: '^t[13]_[\\w-.]+$' },
+  },
+};
+assert.deepEqual(
+  kioskIssues(
+    { ...baseTopic, targets: { kiosk: { title: 'Energy', body: 'Full.', link: 't3_energy' } } },
+    loosePattern,
+  ),
+  [
+    "topics[0].targets.kiosk.link: fixture.loose-pattern's pattern for link does not compile "
+      + 'with the u flag: ^t[13]_[\\w-.]+$',
+  ],
+);
+
+// A topic that needs no agreement never prompts, so a per-send provider would
+// never get the acceptance each send needs.
+const perSendTemplates: NotificationProviderRegistryEntry = {
+  ...referenceNotificationProviders['apps-in-toss'],
+  provider: 'fixture.per-send',
+  permission: {
+    ...referenceNotificationProviders['apps-in-toss'].permission,
+    allowance: 'per-send',
+  },
+};
+const serviceTemplate = { ...baseTopic, purpose: 'service', channels: ['remote'] };
+assert.deepEqual(
+  kioskIssues(
+    { ...serviceTemplate, targets: { kiosk: { templateSetCode: 'refund', agreement: 'none' } } },
+    perSendTemplates,
+  ),
+  [
+    "topics[0].targets.kiosk.agreement: fixture.per-send needs the player's acceptance for each "
+      + 'send, which a topic that needs no agreement never asks for',
+  ],
+);
+assert.deepEqual(
+  kioskIssues(
+    { ...serviceTemplate, targets: { kiosk: { templateSetCode: 'refund', agreement: 'required' } } },
+    perSendTemplates,
+  ),
+  [],
+);
+
 // Open target names without a provider entry stay unchecked.
 assert.deepEqual(
   issuesOf(catalogWith({ ...advertising, targets: { 'storefront-web': { anything: true } } })),
