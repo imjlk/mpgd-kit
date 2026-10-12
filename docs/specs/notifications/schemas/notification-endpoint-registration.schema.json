@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-endpoint-registration.schema.json",
+  "title": "NotificationEndpointRegistration",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationEndpointRegistration",
+  "components": {
+    "schemas": {
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NotificationEndpointAddress": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "oneOf": [
+                  {
+                    "const": "fcm-installation"
+                  },
+                  {
+                    "const": "fcm-token"
+                  }
+                ],
+                "readOnly": true
+              },
+              "value": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "readOnly": true
+              },
+              "environment": {
+                "oneOf": [
+                  {
+                    "const": "production"
+                  },
+                  {
+                    "const": "sandbox"
+                  }
+                ],
+                "readOnly": true
+              },
+              "permission": {
+                "$ref": "#/components/schemas/NotificationPermissionState",
+                "description": "The device's app-scope permission when this registration was sent.",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "kind",
+              "value",
+              "permission"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "platform-user",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "NotificationEndpointRegistration": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "address": {
+            "$ref": "#/components/schemas/NotificationEndpointAddress",
+            "readOnly": true
+          },
+          "locale": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "timeZone": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "IANA zone, used for a topic's quiet hours.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "provider",
+          "address"
+        ],
+        "additionalProperties": false,
+        "description": "Where the server reaches this installation or player. The installation id\nis the authenticated session's, never a field of the registration."
+      },
+      "NotificationPermissionState": {
+        "oneOf": [
+          {
+            "const": "action-required"
+          },
+          {
+            "const": "blocked"
+          },
+          {
+            "const": "denied"
+          },
+          {
+            "const": "granted"
+          },
+          {
+            "const": "prompt"
+          },
+          {
+            "const": "prompt-with-rationale"
+          },
+          {
+            "const": "unknown"
+          },
+          {
+            "const": "unsupported"
+          }
+        ]
+      }
+    }
+  }
+}

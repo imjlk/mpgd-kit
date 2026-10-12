@@ -106,10 +106,6 @@
       "player": "p-2"
     },
     {
-      "actor": "game",
-      "action": "register"
-    },
-    {
       "actor": "backend",
       "action": "queueProviderResult",
       "result": "unregistered"

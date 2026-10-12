@@ -1,0 +1,331 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-event-envelope.schema.json",
+  "title": "NotificationEventEnvelope",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationEventEnvelope",
+  "components": {
+    "schemas": {
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NonNegativeInteger": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "NotificationChannel": {
+        "oneOf": [
+          {
+            "const": "local"
+          },
+          {
+            "const": "remote"
+          }
+        ],
+        "description": "`remote` is a server-sent push, `local` a device-scheduled notification."
+      },
+      "NotificationEndpointAddress": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "oneOf": [
+                  {
+                    "const": "fcm-installation"
+                  },
+                  {
+                    "const": "fcm-token"
+                  }
+                ],
+                "readOnly": true
+              },
+              "value": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "readOnly": true
+              },
+              "environment": {
+                "oneOf": [
+                  {
+                    "const": "production"
+                  },
+                  {
+                    "const": "sandbox"
+                  }
+                ],
+                "readOnly": true
+              },
+              "permission": {
+                "$ref": "#/components/schemas/NotificationPermissionState",
+                "description": "The device's app-scope permission when this registration was sent.",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "kind",
+              "value",
+              "permission"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "platform-user",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "NotificationEndpointRegistration": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "address": {
+            "$ref": "#/components/schemas/NotificationEndpointAddress",
+            "readOnly": true
+          },
+          "locale": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "timeZone": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "IANA zone, used for a topic's quiet hours.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "provider",
+          "address"
+        ],
+        "additionalProperties": false,
+        "description": "Where the server reaches this installation or player. The installation id\nis the authenticated session's, never a field of the registration."
+      },
+      "NotificationEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "opened",
+                "readOnly": true
+              },
+              "channel": {
+                "$ref": "#/components/schemas/NotificationChannel",
+                "readOnly": true
+              },
+              "source": {
+                "oneOf": [
+                  {
+                    "const": "cold"
+                  },
+                  {
+                    "const": "warm"
+                  }
+                ],
+                "readOnly": true
+              },
+              "topic": {
+                "$ref": "#/components/schemas/NotificationTopicId",
+                "readOnly": true
+              },
+              "route": {
+                "type": "string",
+                "description": "Untrusted, like `data`: the router opens it only when\n`isRootRelativeNotificationRoute` accepts it.",
+                "readOnly": true
+              },
+              "data": {
+                "$ref": "#/components/schemas/ReadonlyRecordstringstring",
+                "description": "Untrusted routing data. Never a grant.",
+                "readOnly": true
+              },
+              "referrer": {
+                "type": "string",
+                "description": "Host referrer when known, for example Apps in Toss 'push' or 'inbox'.",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "type",
+              "channel",
+              "source"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "received",
+                "readOnly": true
+              },
+              "channel": {
+                "$ref": "#/components/schemas/NotificationChannel",
+                "readOnly": true
+              },
+              "topic": {
+                "$ref": "#/components/schemas/NotificationTopicId",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "type",
+              "channel"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "endpoint-changed",
+                "readOnly": true
+              },
+              "registration": {
+                "$ref": "#/components/schemas/NotificationEndpointRegistration",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "type",
+              "registration"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "permission-changed",
+                "readOnly": true
+              },
+              "snapshot": {
+                "$ref": "#/components/schemas/NotificationPermissionSnapshot",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "type",
+              "snapshot"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "NotificationEventEnvelope": {
+        "type": "object",
+        "properties": {
+          "protocol": {
+            "const": "mpgd.notifications.v2",
+            "readOnly": true
+          },
+          "sequence": {
+            "$ref": "#/components/schemas/NonNegativeInteger",
+            "readOnly": true
+          },
+          "event": {
+            "$ref": "#/components/schemas/NotificationEvent",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "protocol",
+          "sequence",
+          "event"
+        ],
+        "additionalProperties": false,
+        "description": "Bridge event envelope; `sequence` is per session and starts at 0."
+      },
+      "NotificationPermissionSnapshot": {
+        "type": "object",
+        "properties": {
+          "app": {
+            "$ref": "#/components/schemas/NotificationPermissionState",
+            "description": "Present when `permission.scope` is 'app'.",
+            "readOnly": true
+          },
+          "topics": {
+            "$ref": "#/components/schemas/ReadonlyRecordNotificationTopicIdNotificationPermissionState",
+            "readOnly": true
+          },
+          "requiredAction": {
+            "$ref": "#/components/schemas/NotificationRequiredAction",
+            "description": "Present with an `action-required` state.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "topics"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationPermissionState": {
+        "oneOf": [
+          {
+            "const": "action-required"
+          },
+          {
+            "const": "blocked"
+          },
+          {
+            "const": "denied"
+          },
+          {
+            "const": "granted"
+          },
+          {
+            "const": "prompt"
+          },
+          {
+            "const": "prompt-with-rationale"
+          },
+          {
+            "const": "unknown"
+          },
+          {
+            "const": "unsupported"
+          }
+        ]
+      },
+      "NotificationRequiredAction": {
+        "oneOf": [
+          {
+            "const": "host-settings"
+          },
+          {
+            "const": "login"
+          }
+        ],
+        "description": "The player action a host needs before it can prompt."
+      },
+      "NotificationTopicId": {
+        "type": "string",
+        "description": "Open topic id declared by the game's topic catalog."
+      },
+      "ReadonlyRecordNotificationTopicIdNotificationPermissionState": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/NotificationPermissionState"
+        }
+      },
+      "ReadonlyRecordstringstring": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

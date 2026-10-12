@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-bridge-list-local-result.schema.json",
+  "title": "NotificationBridgeListLocalResult",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationBridgeListLocalResult",
+  "components": {
+    "schemas": {
+      "IsoTimestamp": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "LocalNotificationEntry": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "topic": {
+            "$ref": "#/components/schemas/NotificationTopicId",
+            "readOnly": true
+          },
+          "fireAt": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "key",
+          "topic",
+          "fireAt"
+        ],
+        "additionalProperties": false,
+        "description": "A pending local notification as `listLocal` reports it."
+      },
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NotificationBridgeListLocalResult": {
+        "type": "object",
+        "properties": {
+          "pending": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LocalNotificationEntry"
+            },
+            "readOnly": true
+          }
+        },
+        "required": [
+          "pending"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationTopicId": {
+        "type": "string",
+        "description": "Open topic id declared by the game's topic catalog."
+      }
+    }
+  }
+}
