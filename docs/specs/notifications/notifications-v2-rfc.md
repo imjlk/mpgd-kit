@@ -886,11 +886,16 @@ day the notice may be given:
 A listed notice stays listed after its `dueBy` until it is recorded.
 
 A notice is named by its kind, the record it reports on (the record's kind
-and time), and its `dueBy`. The backend dates each of a player's records
-strictly after the previous one, so a record's kind and time name it. Every
-re-confirmation of one consent has its own name, and so do the notices of the
-`advertising` and `night` records that one `setAdvertisingConsent` call
-writes.
+and time), and its `dueBy`.
+
+- **Record times.** The backend dates each of a player's records at least
+  1 ms after the previous one, so a record's kind and time name it.
+- **Precision.** A name reads its record's time to the millisecond. Digits
+  past the millisecond are dropped, as in the
+  [canonical form](#timestamps).
+- **Distinct names.** Every re-confirmation of one consent has its own name,
+  and so do the notices of the `advertising` and `night` records that one
+  `setAdvertisingConsent` call writes.
 
 The backend lists notices with the record they report on, including its
 date, because the notice must state it (decree art. 62-3(2)). It also records
@@ -906,10 +911,10 @@ the backend only the name, with the record's time in the
 - **Retries.** The backend records a notice only while that notice is listed.
   Recording a notice that is not listed (already recorded, not yet listed, or
   unknown) changes nothing, so a retried call is safe. Record times compare
-  as instants, so another spelling of the same instant matches, but a name
-  that names another instant or date records nothing: for example, a record
-  time cut to seconds. A game passes the listed notice or its fields
-  unchanged.
+  as instants to the millisecond, so another spelling of the same instant
+  matches, but a name that names another instant or date records nothing:
+  for example, a record time cut to seconds. A game passes the listed notice
+  or its fields unchanged.
 - **Malformed input.** A missing field, an unknown key, or a time or date
   that does not parse throws `NOTIFICATIONS_INVALID_INPUT`.
 
@@ -925,6 +930,8 @@ the validator requires to equal the catalog's `notices.topic`.
   never combined with advertising.
 - **Recording.** Once delivered, the backend records the notice with channel
   `push`.
+- **A waiting push.** A push that waits, deferred or in flight, is dropped
+  once the game records the notice. The player is not told twice.
 
 ### Policy gate {#policy-gate}
 
@@ -1126,9 +1133,10 @@ Every provider answer maps to one of five kinds:
   - The claim is kept, as the delivery ledger requires, and the send answers
     `in-flight`.
   - A direct caller retries after the lease.
-  - A scheduled or deferred row is re-deferred to the lease's expiry and
-    replayed through `deliverIdempotently`; it is never replaced by
-    `in-flight`.
+  - A scheduled or deferred row is `in-flight` too. The scheduler, which owns
+    it, replays it through `deliverIdempotently` once the lease expires.
+  - One rule covers every claimer. `deferred` would also claim that nothing
+    was sent, which an `ambiguous` answer cannot prove.
 
 A response that covers several recipients maps per recipient onto each
 recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
@@ -1182,9 +1190,10 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
 ### Reminder scheduler {#scheduler}
 
 Server reminders, deferred sends (night window, quiet hours, provider limits,
-rate limits, ambiguous answers), and overdue consent notices are stored with
-a lease and processed when due. The default is a D1 table plus a Cron trigger
-on the game-services Worker; the Devvit server uses the Devvit scheduler.
+rate limits), sends in flight after an ambiguous answer, and overdue consent
+notices are stored with a lease and processed when due. The default is a D1
+table plus a Cron trigger on the game-services Worker; the Devvit server uses
+the Devvit scheduler.
 
 - **Each due item** becomes a normal send through the policy gate, and its
   key moves through the [key states](#key-states).
