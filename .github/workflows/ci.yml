@@ -238,6 +238,11 @@ jobs:
 
             if [[ "${EVENT_NAME}" == "pull_request" || "${EVENT_NAME}" == "push" ]]; then
               case "${path}" in
+                .github/workflows/ci.yml|.gitattributes|.mise.toml)
+                  # Workflow and Windows checkout/toolchain edits must exercise
+                  # the consumer job even when no TypeScript source changed.
+                  run_prepared=true
+                  ;;
                 *.md|.github/*|examples/asset-packs/asset-source/*|examples/asset-packs/delivery-configs/*)
                   ;;
                 release.manifest.schema.json)
@@ -944,11 +949,51 @@ jobs:
             apps/target-devvit/dist/**
           retention-days: 7
 
+  build-windows-starter:
+    if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
+    needs: prepare
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Match the developer's pinned Node, pnpm and Go toolchain, including
+      # TTSC_GO_BINARY, instead of the Windows image's preinstalled versions.
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+      - run: mise exec -- pnpm install --frozen-lockfile
+      - run: mise exec -- pnpm test:tooling
+      - name: Cache Windows ttsc plugins
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: node_modules/.cache/ttsc/plugins
+          key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml', '.mise.toml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
+      # Build on Windows: Linux-produced dist would hide path regressions.
+      - run: mise exec -- pnpm build:packages
+      - name: Generate, install, check and build a standalone Store starter
+        run: mise exec -- pnpm smoke:windows-starter
+        env:
+          MPGD_WINDOWS_SMOKE_ROOT: ${{ runner.temp }}/windows-starter
+      - name: Upload Windows consumer diagnostics
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ failure() }}
+        with:
+          name: windows-starter-ci
+          path: |
+            ${{ runner.temp }}/windows-starter/commands.log
+            ${{ runner.temp }}/windows-starter/result.json
+            ${{ runner.temp }}/windows-starter/path with spaces/game/package.json
+            ${{ runner.temp }}/windows-starter/path with spaces/game/pnpm-lock.yaml
+            ${{ runner.temp }}/windows-starter/path with spaces/game/artifacts/**
+            ${{ runner.temp }}/windows-starter/path with spaces/game/release-output/**
+          retention-days: 7
+
   ci-required:
     # Keep one stable required check. An unexpectedly skipped dependency must
     # fail the workflow rather than leave a green-looking partial CI run.
     if: ${{ always() }}
-    needs: [prepare, docs-validation, test-focused, test-browser, compile-tools, test-prepared, build-web-targets, build-android, build-ios, build-ait, build-devvit]
+    needs: [prepare, docs-validation, test-focused, test-browser, compile-tools, test-prepared, build-web-targets, build-windows-starter, build-android, build-ios, build-ait, build-devvit]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -965,6 +1010,7 @@ jobs:
       COMPILE_RESULT: ${{ needs.compile-tools.result }}
       PREPARED_RESULT: ${{ needs.test-prepared.result }}
       WEB_TARGETS_RESULT: ${{ needs.build-web-targets.result }}
+      WINDOWS_STARTER_RESULT: ${{ needs.build-windows-starter.result }}
       ANDROID_RESULT: ${{ needs.build-android.result }}
       IOS_RESULT: ${{ needs.build-ios.result }}
       AIT_RESULT: ${{ needs.build-ait.result }}

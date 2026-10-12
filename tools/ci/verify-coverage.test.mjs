@@ -15,6 +15,7 @@ test('full scope requires every prepared group and target build', () => {
   const expected = expectedCoverage(base);
   assert.equal(expected['test-prepared'], 'success');
   assert.equal(expected['build-ios'], 'success');
+  assert.equal(expected['build-windows-starter'], 'success');
   assert.equal(expected['test-focused'], 'skipped');
   assert.deepEqual(verifyCoverage({ ...base, ...actualResults(expected) }).mismatches, []);
 });
@@ -25,12 +26,20 @@ test('native scope requires focused and both platform builds, not unrelated suit
   assert.equal(expected['test-focused'], 'success');
   assert.equal(expected['build-android'], 'success');
   assert.equal(expected['build-ios'], 'success');
-  for (const name of ['test-browser', 'compile-tools', 'test-prepared', 'build-web-targets', 'build-ait', 'build-devvit']) {
+  for (const name of ['test-browser', 'compile-tools', 'test-prepared', 'build-web-targets', 'build-windows-starter', 'build-ait', 'build-devvit']) {
     assert.equal(expected[name], 'skipped');
   }
   assert.deepEqual(verifyCoverage({ ...flags, ...actualResults(expected) }).mismatches, []);
   const incomplete = verifyCoverage({ ...flags, ...actualResults(expected), IOS_RESULT: 'skipped' });
   assert.match(incomplete.mismatches.join(' '), /build-ios should be success/);
+});
+
+test('a skipped, failed, cancelled or missing Windows check cannot pass full CI', () => {
+  const actual = actualResults(expectedCoverage(base));
+  for (const status of ['skipped', 'failure', 'cancelled', undefined]) {
+    const incomplete = verifyCoverage({ ...base, ...actual, WINDOWS_STARTER_RESULT: status });
+    assert.match(incomplete.mismatches.join(' '), /build-windows-starter should be success/);
+  }
 });
 
 test('focused, docs, release metadata, and attested pushes retain their coverage', () => {
@@ -62,6 +71,7 @@ function actualResults(expected) {
     COMPILE_RESULT: expected['compile-tools'],
     PREPARED_RESULT: expected['test-prepared'],
     WEB_TARGETS_RESULT: expected['build-web-targets'],
+    WINDOWS_STARTER_RESULT: expected['build-windows-starter'],
     ANDROID_RESULT: expected['build-android'],
     IOS_RESULT: expected['build-ios'],
     AIT_RESULT: expected['build-ait'],
