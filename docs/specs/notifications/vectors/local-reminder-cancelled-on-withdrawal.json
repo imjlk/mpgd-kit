@@ -1,0 +1,145 @@
+{
+  "vector": "local-reminder-cancelled-on-withdrawal",
+  "protocol": "2.0.0-draft.1",
+  "summary": "Turning a requested topic off cancels its pending local reminder, because the device would otherwise still show it.",
+  "appliesTo": [
+    {
+      "path": "local.supported",
+      "equals": true
+    }
+  ],
+  "profile": {
+    "provider": "fixture.os-fcm",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "promptLimit": 2,
+        "settings": true
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested",
+          "advertising"
+        ],
+        "addressing": "device",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": true,
+        "maxPending": 64
+      },
+      "open": "payload"
+    }
+  },
+  "catalog": [
+    {
+      "id": "energy-full",
+      "purpose": "requested",
+      "channels": [
+        "local",
+        "remote"
+      ],
+      "route": "/?entry=continue",
+      "copy": {
+        "ko": {
+          "title": "에너지 충전 완료",
+          "body": "에너지가 가득 찼어요."
+        },
+        "en": {
+          "title": "Energy full",
+          "body": "Your energy is full."
+        }
+      },
+      "mapping": {
+        "channelId": "reminders"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "energy-full"
+        ],
+        "gesture": true
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setTopicPreference",
+      "input": {
+        "topic": "energy-full",
+        "enabled": true
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setReminder",
+      "input": {
+        "key": "energy",
+        "topic": "energy-full",
+        "fireAt": "2026-10-12T06:00:00Z"
+      },
+      "returns": {
+        "route": "local",
+        "status": "scheduled"
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setTopicPreference",
+      "input": {
+        "topic": "energy-full",
+        "enabled": false
+      }
+    }
+  ],
+  "expect": {
+    "local": {
+      "operations": [
+        {
+          "op": "schedule",
+          "key": "energy",
+          "topic": "energy-full",
+          "fireAt": "2026-10-12T06:00:00Z",
+          "exact": false
+        },
+        {
+          "op": "cancel",
+          "key": "energy"
+        }
+      ],
+      "pending": []
+    },
+    "reminders": []
+  }
+}

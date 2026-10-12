@@ -1,0 +1,164 @@
+{
+  "vector": "provider-rate-limited",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A provider that proves nothing was sent answers rate-limited; the send is deferred by retryAfterSeconds and the scheduler delivers it with the same key.",
+  "appliesTo": [
+    {
+      "path": "remote.addressing",
+      "equals": "device"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.os-fcm",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "promptLimit": 2,
+        "settings": true
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested",
+          "advertising"
+        ],
+        "addressing": "device",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": true,
+        "maxPending": 64
+      },
+      "open": "payload"
+    }
+  },
+  "catalog": [
+    {
+      "id": "friend-challenge",
+      "purpose": "service",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=friend-challenge",
+      "copy": {
+        "ko": {
+          "title": "새 도전장",
+          "body": "{{friend}}님이 도전장을 보냈어요."
+        },
+        "en": {
+          "title": "New challenge",
+          "body": "{{friend}} sent you a challenge."
+        }
+      },
+      "mapping": {
+        "channelId": "reminders"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "issueEndpoint",
+      "endpoint": {
+        "kind": "fcm-token",
+        "value": "tok-1"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "friend-challenge"
+        ],
+        "gesture": true
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "queueProviderResult",
+      "result": "rate-limited",
+      "retryAfterSeconds": 30
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "friend-challenge",
+        "idempotencyKey": "r-1",
+        "templateData": {
+          "friend": "Mina"
+        },
+        "locale": "en"
+      },
+      "returns": {
+        "status": "deferred",
+        "reason": "provider-rate-limited",
+        "until": "2026-10-12T03:00:30Z"
+      }
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-12T03:00:30Z"
+    },
+    {
+      "actor": "backend",
+      "action": "runScheduler"
+    }
+  ],
+  "expect": {
+    "deliveries": [
+      {
+        "idempotencyKey": "r-1",
+        "status": "deferred",
+        "reason": "provider-rate-limited",
+        "until": "2026-10-12T03:00:30Z"
+      },
+      {
+        "idempotencyKey": "r-1",
+        "status": "delivered"
+      }
+    ],
+    "providerCalls": [
+      {
+        "topic": "friend-challenge",
+        "address": "tok-1"
+      },
+      {
+        "topic": "friend-challenge",
+        "address": "tok-1",
+        "content": {
+          "title": "New challenge",
+          "body": "Mina sent you a challenge."
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,133 @@
+{
+  "vector": "host-service-topic-without-agreement",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A service topic whose host template has no agreement statement reads granted without a prompt and is delivered without any consent record.",
+  "appliesTo": [
+    {
+      "path": "permission.scope",
+      "equals": "topic"
+    },
+    {
+      "path": "remote.content",
+      "equals": "host-template"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.host-template",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "topic",
+        "prompt": "host",
+        "readable": false,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": true,
+        "settings": false
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested"
+        ],
+        "addressing": "platform-user",
+        "content": "host-template"
+      },
+      "local": {
+        "supported": false
+      },
+      "open": "landing-url"
+    }
+  },
+  "catalog": [
+    {
+      "id": "purchase-result",
+      "purpose": "service",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=purchases",
+      "mapping": {
+        "templateSetCode": "fixture-purchase-result",
+        "agreement": "none"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "game",
+      "action": "getPermission",
+      "input": {
+        "topics": [
+          "purchase-result"
+        ]
+      },
+      "returns": {
+        "topics": {
+          "purchase-result": "granted"
+        }
+      }
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "purchase-result"
+        ],
+        "gesture": true
+      },
+      "returns": {
+        "outcomes": {
+          "purchase-result": "already-granted"
+        }
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "purchase-result",
+        "idempotencyKey": "p-1"
+      },
+      "returns": {
+        "status": "delivered"
+      }
+    }
+  ],
+  "expect": {
+    "prompts": 0,
+    "consent": [],
+    "deliveries": [
+      {
+        "idempotencyKey": "p-1",
+        "topic": "purchase-result",
+        "status": "delivered"
+      }
+    ],
+    "providerCalls": [
+      {
+        "topic": "purchase-result",
+        "mapping": {
+          "templateSetCode": "fixture-purchase-result",
+          "agreement": "none"
+        }
+      }
+    ]
+  }
+}

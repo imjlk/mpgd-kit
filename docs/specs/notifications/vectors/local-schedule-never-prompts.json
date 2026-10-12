@@ -1,0 +1,162 @@
+{
+  "vector": "local-schedule-never-prompts",
+  "protocol": "2.0.0-draft.1",
+  "summary": "Setting a local reminder without delivery permission answers permission-required and never opens the OS dialog; after an explicit grant the same reminder is scheduled with inexact timing.",
+  "appliesTo": [
+    {
+      "path": "local.supported",
+      "equals": true
+    },
+    {
+      "path": "permission.prompt",
+      "equals": "os"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.os-fcm",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "promptLimit": 2,
+        "settings": true
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested",
+          "advertising"
+        ],
+        "addressing": "device",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": true,
+        "maxPending": 64
+      },
+      "open": "payload"
+    }
+  },
+  "catalog": [
+    {
+      "id": "energy-full",
+      "purpose": "requested",
+      "channels": [
+        "local",
+        "remote"
+      ],
+      "route": "/?entry=continue",
+      "copy": {
+        "ko": {
+          "title": "에너지 충전 완료",
+          "body": "에너지가 가득 찼어요."
+        },
+        "en": {
+          "title": "Energy full",
+          "body": "Your energy is full."
+        }
+      },
+      "mapping": {
+        "channelId": "reminders"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "game",
+      "action": "setTopicPreference",
+      "input": {
+        "topic": "energy-full",
+        "enabled": true
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setReminder",
+      "input": {
+        "key": "energy",
+        "topic": "energy-full",
+        "fireAt": "2026-10-12T06:00:00Z"
+      },
+      "returns": {
+        "route": "local",
+        "status": "permission-required"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "energy-full"
+        ],
+        "gesture": true
+      },
+      "returns": {
+        "outcomes": {
+          "energy-full": "granted"
+        }
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setReminder",
+      "input": {
+        "key": "energy",
+        "topic": "energy-full",
+        "fireAt": "2026-10-12T06:00:00Z"
+      },
+      "returns": {
+        "route": "local",
+        "status": "scheduled"
+      }
+    }
+  ],
+  "expect": {
+    "prompts": 1,
+    "local": {
+      "operations": [
+        {
+          "op": "schedule",
+          "key": "energy",
+          "topic": "energy-full",
+          "fireAt": "2026-10-12T06:00:00Z",
+          "exact": false
+        }
+      ],
+      "pending": [
+        {
+          "key": "energy",
+          "topic": "energy-full",
+          "fireAt": "2026-10-12T06:00:00Z"
+        }
+      ]
+    },
+    "reminders": []
+  }
+}

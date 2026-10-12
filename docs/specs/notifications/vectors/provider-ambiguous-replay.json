@@ -1,0 +1,153 @@
+{
+  "vector": "provider-ambiguous-replay",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A provider answer that cannot say whether it sent keeps the claim; the scheduler re-defers the reminder past the claim lease instead of losing it, and a later run delivers it once under the same key.",
+  "appliesTo": [
+    {
+      "path": "local.supported",
+      "equals": false
+    },
+    {
+      "path": "remote.supported",
+      "equals": true
+    },
+    {
+      "path": "permission.scope",
+      "equals": "topic"
+    },
+    {
+      "path": "permission.allowance",
+      "equals": "persistent"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.host-template",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "topic",
+        "prompt": "host",
+        "readable": false,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": true,
+        "settings": false
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested"
+        ],
+        "addressing": "platform-user",
+        "content": "host-template"
+      },
+      "local": {
+        "supported": false
+      },
+      "open": "landing-url"
+    }
+  },
+  "catalog": [
+    {
+      "id": "daily-puzzle",
+      "purpose": "requested",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=daily",
+      "mapping": {
+        "templateSetCode": "fixture-daily-puzzle",
+        "agreement": "required"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "daily-puzzle"
+        ],
+        "gesture": true
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setReminder",
+      "input": {
+        "key": "daily",
+        "topic": "daily-puzzle",
+        "fireAt": "2026-10-12T06:00:00Z"
+      },
+      "returns": {
+        "route": "remote",
+        "status": "scheduled"
+      }
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-12T06:00:00Z"
+    },
+    {
+      "actor": "backend",
+      "action": "queueProviderResult",
+      "result": "ambiguous"
+    },
+    {
+      "actor": "backend",
+      "action": "runScheduler"
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-12T06:05:00Z"
+    },
+    {
+      "actor": "backend",
+      "action": "runScheduler"
+    }
+  ],
+  "expect": {
+    "deliveries": [
+      {
+        "idempotencyKey": "reminder:p-1:daily:2026-10-12T06:00:00Z",
+        "status": "in-flight"
+      },
+      {
+        "idempotencyKey": "reminder:p-1:daily:2026-10-12T06:00:00Z",
+        "status": "delivered"
+      }
+    ],
+    "providerCalls": [
+      {
+        "topic": "daily-puzzle"
+      },
+      {
+        "topic": "daily-puzzle"
+      }
+    ],
+    "reminders": []
+  }
+}

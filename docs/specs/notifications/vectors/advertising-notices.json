@@ -1,0 +1,225 @@
+{
+  "vector": "advertising-notices",
+  "protocol": "2.0.0-draft.1",
+  "summary": "Consent notices: the scheduler sends a result notice the game did not record through the notice topic seven days before it is due, and re-confirmation repeats every two years from the consent while the player stays silent.",
+  "appliesTo": [
+    {
+      "path": "remote.purposes",
+      "includes": "advertising"
+    },
+    {
+      "path": "remote.addressing",
+      "equals": "device"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.os-fcm",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "promptLimit": 2,
+        "settings": true
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested",
+          "advertising"
+        ],
+        "addressing": "device",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": true,
+        "maxPending": 64
+      },
+      "open": "payload"
+    }
+  },
+  "catalog": [
+    {
+      "id": "weekend-event",
+      "purpose": "advertising",
+      "channels": [
+        "remote"
+      ],
+      "route": "/events/weekend",
+      "optOutRoute": "/settings/notifications",
+      "copy": {
+        "ko": {
+          "title": "주말 이벤트",
+          "body": "주말 이벤트가 시작됐어요."
+        },
+        "en": {
+          "title": "Weekend event",
+          "body": "The weekend event has started."
+        }
+      },
+      "mapping": {
+        "channelId": "advertising"
+      }
+    },
+    {
+      "id": "consent-notice",
+      "purpose": "service",
+      "channels": [
+        "remote"
+      ],
+      "route": "/settings/notifications",
+      "copy": {
+        "ko": {
+          "title": "광고성 알림 수신 동의 안내",
+          "body": "{{consentDate}}에 광고성 알림 수신에 동의하셨어요. 알림 설정에서 언제든 철회할 수 있어요."
+        },
+        "en": {
+          "title": "Promotional notifications",
+          "body": "You agreed to promotional notifications on {{consentDate}}. You can withdraw any time in notification settings."
+        }
+      },
+      "mapping": {
+        "channelId": "reminders"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "deployment": {
+    "advertisingRules": "kr",
+    "advertisingSender": {
+      "contact": "080-1234-5678"
+    },
+    "noticeTopic": "consent-notice"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "issueEndpoint",
+      "endpoint": {
+        "kind": "fcm-token",
+        "value": "tok-1"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "weekend-event",
+          "consent-notice"
+        ],
+        "gesture": true
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setAdvertisingConsent",
+      "input": {
+        "advertising": "granted",
+        "textVersion": "ad-consent-v1"
+      }
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-19T03:00:00Z"
+    },
+    {
+      "actor": "backend",
+      "action": "runScheduler"
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2028-09-01T03:00:00Z"
+    },
+    {
+      "actor": "game",
+      "action": "listNotices",
+      "returns": [
+        {
+          "kind": "reconfirmation",
+          "record": {
+            "kind": "advertising",
+            "state": "granted",
+            "at": "2026-10-12T03:00:00Z"
+          },
+          "dueBy": "2028-10-11"
+        }
+      ]
+    },
+    {
+      "actor": "game",
+      "action": "recordNotice",
+      "input": {
+        "kind": "reconfirmation",
+        "recordAt": "2026-10-12T03:00:00Z"
+      }
+    },
+    {
+      "actor": "game",
+      "action": "listNotices",
+      "returns": [
+        {
+          "kind": "reconfirmation",
+          "record": {
+            "kind": "advertising",
+            "state": "granted"
+          },
+          "dueBy": "2030-10-11"
+        }
+      ]
+    }
+  ],
+  "expect": {
+    "deliveries": [
+      {
+        "idempotencyKey": "notice:p-1:consent-result:2026-10-12T03:00:00Z",
+        "topic": "consent-notice",
+        "status": "delivered"
+      }
+    ],
+    "providerCalls": [
+      {
+        "topic": "consent-notice",
+        "content": {
+          "title": "광고성 알림 수신 동의 안내",
+          "body": "2026-10-12에 광고성 알림 수신에 동의하셨어요. 알림 설정에서 언제든 철회할 수 있어요."
+        }
+      }
+    ],
+    "notices": [
+      {
+        "kind": "reconfirmation",
+        "record": {
+          "kind": "advertising",
+          "state": "granted"
+        },
+        "dueBy": "2030-10-11"
+      }
+    ]
+  }
+}

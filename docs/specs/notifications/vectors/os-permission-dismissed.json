@@ -1,0 +1,136 @@
+{
+  "vector": "os-permission-dismissed",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A dismissed OS dialog leaves the permission as it was and counts no denial, so after a later denial one more prompt still remains.",
+  "appliesTo": [
+    {
+      "path": "permission.prompt",
+      "equals": "os"
+    },
+    {
+      "path": "permission.promptLimit",
+      "equals": 2
+    }
+  ],
+  "profile": {
+    "provider": "fixture.os-fcm",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "promptLimit": 2,
+        "settings": true
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested",
+          "advertising"
+        ],
+        "addressing": "device",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": true,
+        "maxPending": 64
+      },
+      "open": "payload"
+    }
+  },
+  "catalog": [
+    {
+      "id": "energy-full",
+      "purpose": "requested",
+      "channels": [
+        "local",
+        "remote"
+      ],
+      "route": "/?entry=continue",
+      "copy": {
+        "ko": {
+          "title": "에너지 충전 완료",
+          "body": "에너지가 가득 찼어요."
+        },
+        "en": {
+          "title": "Energy full",
+          "body": "Your energy is full."
+        }
+      },
+      "mapping": {
+        "channelId": "reminders"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "dismissed"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "energy-full"
+        ],
+        "gesture": true
+      },
+      "returns": {
+        "outcomes": {
+          "energy-full": "dismissed"
+        },
+        "snapshot": {
+          "app": "prompt"
+        }
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "denied"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "energy-full"
+        ],
+        "gesture": true
+      },
+      "returns": {
+        "outcomes": {
+          "energy-full": "denied"
+        },
+        "snapshot": {
+          "app": "prompt-with-rationale"
+        }
+      }
+    }
+  ],
+  "expect": {
+    "prompts": 2,
+    "consent": []
+  }
+}

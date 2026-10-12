@@ -1,0 +1,196 @@
+{
+  "vector": "advertising-needs-consent",
+  "protocol": "2.0.0-draft.1",
+  "summary": "Under the Korean rules an advertising topic is suppressed without advertising consent even with OS permission. After consent it is delivered with the (광고) label, the sender line, a free opt-out line, a direct opt-out action, and an expiry before the night window; the result and re-confirmation notices become due.",
+  "appliesTo": [
+    {
+      "path": "remote.purposes",
+      "includes": "advertising"
+    },
+    {
+      "path": "remote.addressing",
+      "equals": "device"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.os-fcm",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "promptLimit": 2,
+        "settings": true
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested",
+          "advertising"
+        ],
+        "addressing": "device",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": true,
+        "maxPending": 64
+      },
+      "open": "payload"
+    }
+  },
+  "catalog": [
+    {
+      "id": "weekend-event",
+      "purpose": "advertising",
+      "channels": [
+        "remote"
+      ],
+      "route": "/events/weekend",
+      "optOutRoute": "/settings/notifications",
+      "copy": {
+        "ko": {
+          "title": "주말 이벤트",
+          "body": "주말 이벤트가 시작됐어요."
+        },
+        "en": {
+          "title": "Weekend event",
+          "body": "The weekend event has started."
+        }
+      },
+      "mapping": {
+        "channelId": "advertising"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "deployment": {
+    "advertisingRules": "kr",
+    "advertisingSender": {
+      "contact": "080-1234-5678"
+    }
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "issueEndpoint",
+      "endpoint": {
+        "kind": "fcm-token",
+        "value": "tok-1"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "weekend-event"
+        ],
+        "gesture": true
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "weekend-event",
+        "idempotencyKey": "a-1",
+        "locale": "ko"
+      },
+      "returns": {
+        "status": "suppressed",
+        "reason": "advertising-consent-missing"
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setAdvertisingConsent",
+      "input": {
+        "advertising": "granted",
+        "textVersion": "ad-consent-v1"
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "weekend-event",
+        "idempotencyKey": "a-2",
+        "locale": "ko"
+      },
+      "returns": {
+        "status": "delivered"
+      }
+    }
+  ],
+  "expect": {
+    "deliveries": [
+      {
+        "idempotencyKey": "a-1",
+        "status": "suppressed",
+        "reason": "advertising-consent-missing"
+      },
+      {
+        "idempotencyKey": "a-2",
+        "status": "delivered"
+      }
+    ],
+    "providerCalls": [
+      {
+        "topic": "weekend-event",
+        "content": {
+          "title": "(광고) 주말 이벤트",
+          "body": "(광고) 080-1234-5678\n주말 이벤트가 시작됐어요.\n무료 수신거부: 수신거부 버튼",
+          "actions": [
+            {
+              "id": "advertising-opt-out",
+              "title": "수신거부",
+              "route": "/settings/notifications"
+            }
+          ]
+        },
+        "expiresAt": "2026-10-12T12:00:00Z"
+      }
+    ],
+    "notices": [
+      {
+        "kind": "consent-result",
+        "record": {
+          "kind": "advertising",
+          "state": "granted"
+        },
+        "dueBy": "2026-10-26"
+      },
+      {
+        "kind": "reconfirmation",
+        "record": {
+          "kind": "advertising",
+          "state": "granted"
+        },
+        "dueBy": "2028-10-11"
+      }
+    ]
+  }
+}

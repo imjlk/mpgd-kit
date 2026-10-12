@@ -1,0 +1,176 @@
+{
+  "vector": "os-permission-granted",
+  "protocol": "2.0.0-draft.1",
+  "summary": "An app-scope OS prompt grants every topic at once; the runtime registers the device address, with the device's permission, for the authenticated player. Device permission lives on the endpoint, so no consent record is written.",
+  "appliesTo": [
+    {
+      "path": "permission.prompt",
+      "equals": "os"
+    },
+    {
+      "path": "permission.scope",
+      "equals": "app"
+    },
+    {
+      "path": "remote.addressing",
+      "equals": "device"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.os-fcm",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "promptLimit": 2,
+        "settings": true
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested",
+          "advertising"
+        ],
+        "addressing": "device",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": true,
+        "maxPending": 64
+      },
+      "open": "payload"
+    }
+  },
+  "catalog": [
+    {
+      "id": "energy-full",
+      "purpose": "requested",
+      "channels": [
+        "local",
+        "remote"
+      ],
+      "route": "/?entry=continue",
+      "copy": {
+        "ko": {
+          "title": "에너지 충전 완료",
+          "body": "에너지가 가득 찼어요."
+        },
+        "en": {
+          "title": "Energy full",
+          "body": "Your energy is full."
+        }
+      },
+      "mapping": {
+        "channelId": "reminders"
+      }
+    },
+    {
+      "id": "friend-challenge",
+      "purpose": "service",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=friend-challenge",
+      "copy": {
+        "ko": {
+          "title": "새 도전장",
+          "body": "{{friend}}님이 도전장을 보냈어요."
+        },
+        "en": {
+          "title": "New challenge",
+          "body": "{{friend}} sent you a challenge."
+        }
+      },
+      "mapping": {
+        "channelId": "reminders"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "issueEndpoint",
+      "endpoint": {
+        "kind": "fcm-token",
+        "value": "tok-1"
+      }
+    },
+    {
+      "actor": "game",
+      "action": "getPermission",
+      "input": {
+        "topics": [
+          "energy-full",
+          "friend-challenge"
+        ]
+      },
+      "returns": {
+        "app": "prompt",
+        "topics": {
+          "energy-full": "prompt",
+          "friend-challenge": "prompt"
+        }
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "energy-full",
+          "friend-challenge"
+        ],
+        "gesture": true
+      },
+      "returns": {
+        "outcomes": {
+          "energy-full": "granted",
+          "friend-challenge": "granted"
+        },
+        "snapshot": {
+          "app": "granted"
+        }
+      }
+    }
+  ],
+  "expect": {
+    "prompts": 1,
+    "consent": [],
+    "endpoints": [
+      {
+        "provider": "fixture.os-fcm",
+        "kind": "fcm-token",
+        "value": "tok-1",
+        "installationId": "installation-1",
+        "permission": "granted",
+        "player": "p-1",
+        "status": "valid"
+      }
+    ]
+  }
+}

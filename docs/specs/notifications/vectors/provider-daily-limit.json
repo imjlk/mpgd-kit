@@ -1,0 +1,162 @@
+{
+  "vector": "provider-daily-limit",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A provider limit of two sends per user per day suppresses the third send even when every consent is in place.",
+  "appliesTo": [
+    {
+      "path": "permission.prompt",
+      "equals": "game"
+    },
+    {
+      "path": "permission.serverReadable",
+      "equals": true
+    }
+  ],
+  "profile": {
+    "provider": "fixture.game-opt-in",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "game",
+        "readable": true,
+        "serverReadable": true,
+        "allowance": "persistent",
+        "userGesture": true,
+        "settings": false
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested"
+        ],
+        "addressing": "platform-user",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": false
+      },
+      "open": "host-link"
+    },
+    "limits": {
+      "perUserPerDay": 2
+    }
+  },
+  "catalog": [
+    {
+      "id": "friend-challenge",
+      "purpose": "service",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=friend-challenge",
+      "copy": {
+        "ko": {
+          "title": "새 도전장",
+          "body": "{{friend}}님이 도전장을 보냈어요."
+        },
+        "en": {
+          "title": "New challenge",
+          "body": "{{friend}} sent you a challenge."
+        }
+      },
+      "mapping": {
+        "title": "New challenge",
+        "body": "{{friend}} sent you a challenge.",
+        "link": "t3_fixture"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "friend-challenge"
+        ],
+        "gesture": true
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "friend-challenge",
+        "idempotencyKey": "l-1",
+        "templateData": {
+          "friend": "Mina"
+        }
+      },
+      "returns": {
+        "status": "delivered"
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "friend-challenge",
+        "idempotencyKey": "l-2",
+        "templateData": {
+          "friend": "Jun"
+        }
+      },
+      "returns": {
+        "status": "delivered"
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "friend-challenge",
+        "idempotencyKey": "l-3",
+        "templateData": {
+          "friend": "Ara"
+        }
+      },
+      "returns": {
+        "status": "suppressed",
+        "reason": "provider-limit"
+      }
+    }
+  ],
+  "expect": {
+    "deliveries": [
+      {
+        "idempotencyKey": "l-1",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "l-2",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "l-3",
+        "status": "suppressed",
+        "reason": "provider-limit"
+      }
+    ]
+  }
+}

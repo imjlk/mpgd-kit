@@ -1,0 +1,191 @@
+{
+  "vector": "requested-topic-needs-opt-in",
+  "protocol": "2.0.0-draft.1",
+  "summary": "OS permission alone does not deliver a requested topic: it is suppressed until the player turns the topic on, and again after they turn it off.",
+  "appliesTo": [
+    {
+      "path": "permission.scope",
+      "equals": "app"
+    },
+    {
+      "path": "remote.addressing",
+      "equals": "device"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.os-fcm",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "promptLimit": 2,
+        "settings": true
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested",
+          "advertising"
+        ],
+        "addressing": "device",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": true,
+        "maxPending": 64
+      },
+      "open": "payload"
+    }
+  },
+  "catalog": [
+    {
+      "id": "daily-puzzle",
+      "purpose": "requested",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=daily",
+      "copy": {
+        "ko": {
+          "title": "오늘의 퍼즐",
+          "body": "새 퍼즐이 열렸어요."
+        },
+        "en": {
+          "title": "Daily puzzle",
+          "body": "A new puzzle is open."
+        }
+      },
+      "mapping": {
+        "channelId": "reminders"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "issueEndpoint",
+      "endpoint": {
+        "kind": "fcm-token",
+        "value": "tok-1"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "daily-puzzle"
+        ],
+        "gesture": true
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "daily-puzzle",
+        "idempotencyKey": "k-1"
+      },
+      "returns": {
+        "status": "suppressed",
+        "reason": "request-missing"
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setTopicPreference",
+      "input": {
+        "topic": "daily-puzzle",
+        "enabled": true
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "daily-puzzle",
+        "idempotencyKey": "k-2"
+      },
+      "returns": {
+        "status": "delivered"
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setTopicPreference",
+      "input": {
+        "topic": "daily-puzzle",
+        "enabled": false
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "daily-puzzle",
+        "idempotencyKey": "k-3"
+      },
+      "returns": {
+        "status": "suppressed",
+        "reason": "preference-off"
+      }
+    }
+  ],
+  "expect": {
+    "deliveries": [
+      {
+        "idempotencyKey": "k-1",
+        "status": "suppressed",
+        "reason": "request-missing"
+      },
+      {
+        "idempotencyKey": "k-2",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "k-3",
+        "status": "suppressed",
+        "reason": "preference-off"
+      }
+    ],
+    "consent": [
+      {
+        "kind": "topic-preference",
+        "topic": "daily-puzzle",
+        "state": "granted",
+        "source": "player"
+      },
+      {
+        "kind": "topic-preference",
+        "topic": "daily-puzzle",
+        "state": "withdrawn",
+        "source": "player"
+      }
+    ]
+  }
+}

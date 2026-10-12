@@ -1,0 +1,178 @@
+{
+  "vector": "game-rendered-opt-in",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A host without a consent screen: the game's own toggle opts the player in on the server, and an opt-out made elsewhere is read at send time.",
+  "appliesTo": [
+    {
+      "path": "permission.prompt",
+      "equals": "game"
+    },
+    {
+      "path": "permission.serverReadable",
+      "equals": true
+    }
+  ],
+  "profile": {
+    "provider": "fixture.game-opt-in",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "game",
+        "readable": true,
+        "serverReadable": true,
+        "allowance": "persistent",
+        "userGesture": true,
+        "settings": false
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested"
+        ],
+        "addressing": "platform-user",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": false
+      },
+      "open": "host-link"
+    }
+  },
+  "catalog": [
+    {
+      "id": "friend-challenge",
+      "purpose": "service",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=friend-challenge",
+      "copy": {
+        "ko": {
+          "title": "새 도전장",
+          "body": "{{friend}}님이 도전장을 보냈어요."
+        },
+        "en": {
+          "title": "New challenge",
+          "body": "{{friend}} sent you a challenge."
+        }
+      },
+      "mapping": {
+        "title": "New challenge",
+        "body": "{{friend}} sent you a challenge.",
+        "link": "t3_fixture"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "game",
+      "action": "getPermission",
+      "input": {
+        "topics": [
+          "friend-challenge"
+        ]
+      },
+      "returns": {
+        "app": "prompt"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "friend-challenge"
+        ],
+        "gesture": true
+      },
+      "returns": {
+        "outcomes": {
+          "friend-challenge": "granted"
+        },
+        "snapshot": {
+          "app": "granted"
+        }
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "friend-challenge",
+        "idempotencyKey": "f-1",
+        "templateData": {
+          "friend": "Mina"
+        }
+      },
+      "returns": {
+        "status": "delivered"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "setPermission",
+      "state": "denied"
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "friend-challenge",
+        "idempotencyKey": "f-2",
+        "templateData": {
+          "friend": "Mina"
+        }
+      },
+      "returns": {
+        "status": "suppressed",
+        "reason": "permission-denied"
+      }
+    }
+  ],
+  "expect": {
+    "deliveries": [
+      {
+        "idempotencyKey": "f-1",
+        "topic": "friend-challenge",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "f-2",
+        "topic": "friend-challenge",
+        "status": "suppressed",
+        "reason": "permission-denied"
+      }
+    ],
+    "providerCalls": [
+      {
+        "topic": "friend-challenge",
+        "link": "t3_fixture",
+        "content": {
+          "title": "New challenge",
+          "body": "Mina sent you a challenge."
+        }
+      }
+    ]
+  }
+}

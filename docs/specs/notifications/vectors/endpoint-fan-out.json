@@ -1,0 +1,208 @@
+{
+  "vector": "endpoint-fan-out",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A send reaches every installation of the player whose registration reported granted, under one key per installation; a dead address is invalidated on its own while the send still counts as delivered, and a retry sends nothing new.",
+  "appliesTo": [
+    {
+      "path": "remote.addressing",
+      "equals": "device"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.os-fcm",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "promptLimit": 2,
+        "settings": true
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested",
+          "advertising"
+        ],
+        "addressing": "device",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": true,
+        "maxPending": 64
+      },
+      "open": "payload"
+    }
+  },
+  "catalog": [
+    {
+      "id": "friend-challenge",
+      "purpose": "service",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=friend-challenge",
+      "copy": {
+        "ko": {
+          "title": "새 도전장",
+          "body": "{{friend}}님이 도전장을 보냈어요."
+        },
+        "en": {
+          "title": "New challenge",
+          "body": "{{friend}} sent you a challenge."
+        }
+      },
+      "mapping": {
+        "channelId": "reminders"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "issueEndpoint",
+      "endpoint": {
+        "kind": "fcm-token",
+        "value": "tok-1"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "friend-challenge"
+        ],
+        "gesture": true
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "registerEndpoint",
+      "input": {
+        "installationId": "installation-2",
+        "kind": "fcm-token",
+        "value": "tok-2",
+        "permission": "blocked"
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "registerEndpoint",
+      "input": {
+        "installationId": "installation-3",
+        "kind": "fcm-token",
+        "value": "tok-3",
+        "permission": "granted"
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "queueProviderResult",
+      "result": "accepted"
+    },
+    {
+      "actor": "backend",
+      "action": "queueProviderResult",
+      "result": "unregistered"
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "friend-challenge",
+        "idempotencyKey": "f-1",
+        "templateData": {
+          "friend": "Mina"
+        },
+        "locale": "en"
+      },
+      "returns": {
+        "status": "delivered"
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "friend-challenge",
+        "idempotencyKey": "f-1",
+        "templateData": {
+          "friend": "Mina"
+        },
+        "locale": "en"
+      },
+      "returns": {
+        "status": "delivered",
+        "alreadyProcessed": true
+      }
+    }
+  ],
+  "expect": {
+    "endpoints": [
+      {
+        "installationId": "installation-1",
+        "value": "tok-1",
+        "permission": "granted",
+        "status": "valid"
+      },
+      {
+        "installationId": "installation-2",
+        "value": "tok-2",
+        "permission": "blocked",
+        "status": "valid"
+      },
+      {
+        "installationId": "installation-3",
+        "value": "tok-3",
+        "permission": "granted",
+        "status": "invalid"
+      }
+    ],
+    "deliveries": [
+      {
+        "idempotencyKey": "f-1",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "f-1",
+        "status": "delivered",
+        "alreadyProcessed": true
+      }
+    ],
+    "providerCalls": [
+      {
+        "topic": "friend-challenge",
+        "address": "tok-1"
+      },
+      {
+        "topic": "friend-challenge",
+        "address": "tok-3"
+      }
+    ]
+  }
+}

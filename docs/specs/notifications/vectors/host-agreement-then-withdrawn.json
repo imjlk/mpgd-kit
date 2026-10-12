@@ -1,0 +1,198 @@
+{
+  "vector": "host-agreement-then-withdrawn",
+  "protocol": "2.0.0-draft.1",
+  "summary": "On a per-template host a withdrawn topic preference suppresses a requested topic even though the host agreement still stands, and accepting the sheet again turns the topic back on.",
+  "appliesTo": [
+    {
+      "path": "permission.scope",
+      "equals": "topic"
+    },
+    {
+      "path": "permission.readable",
+      "equals": false
+    },
+    {
+      "path": "permission.allowance",
+      "equals": "persistent"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.host-template",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "topic",
+        "prompt": "host",
+        "readable": false,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": true,
+        "settings": false
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested"
+        ],
+        "addressing": "platform-user",
+        "content": "host-template"
+      },
+      "local": {
+        "supported": false
+      },
+      "open": "landing-url"
+    }
+  },
+  "catalog": [
+    {
+      "id": "daily-puzzle",
+      "purpose": "requested",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=daily",
+      "mapping": {
+        "templateSetCode": "fixture-daily-puzzle",
+        "agreement": "required"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "daily-puzzle"
+        ],
+        "gesture": true
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "daily-puzzle",
+        "idempotencyKey": "w-1"
+      },
+      "returns": {
+        "status": "delivered"
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setTopicPreference",
+      "input": {
+        "topic": "daily-puzzle",
+        "enabled": false
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "daily-puzzle",
+        "idempotencyKey": "w-2"
+      },
+      "returns": {
+        "status": "suppressed",
+        "reason": "preference-off"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "already-granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "daily-puzzle"
+        ],
+        "gesture": true
+      },
+      "returns": {
+        "outcomes": {
+          "daily-puzzle": "already-granted"
+        }
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "daily-puzzle",
+        "idempotencyKey": "w-3"
+      },
+      "returns": {
+        "status": "delivered"
+      }
+    }
+  ],
+  "expect": {
+    "prompts": 2,
+    "consent": [
+      {
+        "kind": "host-agreement",
+        "topic": "daily-puzzle",
+        "state": "granted",
+        "source": "client-report"
+      },
+      {
+        "kind": "topic-preference",
+        "topic": "daily-puzzle",
+        "state": "granted",
+        "source": "player"
+      },
+      {
+        "kind": "topic-preference",
+        "topic": "daily-puzzle",
+        "state": "withdrawn",
+        "source": "player"
+      },
+      {
+        "kind": "topic-preference",
+        "topic": "daily-puzzle",
+        "state": "granted",
+        "source": "player"
+      }
+    ],
+    "deliveries": [
+      {
+        "idempotencyKey": "w-1",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "w-2",
+        "status": "suppressed",
+        "reason": "preference-off"
+      },
+      {
+        "idempotencyKey": "w-3",
+        "status": "delivered"
+      }
+    ]
+  }
+}

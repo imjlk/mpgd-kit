@@ -1,0 +1,135 @@
+{
+  "vector": "local-only-topic",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A topic whose channels contain only local is never sent remotely, even with every consent in place.",
+  "appliesTo": [
+    {
+      "path": "remote.supported",
+      "equals": true
+    }
+  ],
+  "profile": {
+    "provider": "fixture.os-fcm",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "promptLimit": 2,
+        "settings": true
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested",
+          "advertising"
+        ],
+        "addressing": "device",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": true,
+        "maxPending": 64
+      },
+      "open": "payload"
+    }
+  },
+  "catalog": [
+    {
+      "id": "chest-ready",
+      "purpose": "requested",
+      "channels": [
+        "local"
+      ],
+      "route": "/?entry=chest",
+      "copy": {
+        "ko": {
+          "title": "상자 열기",
+          "body": "상자를 열 수 있어요."
+        },
+        "en": {
+          "title": "Chest ready",
+          "body": "Your chest can be opened."
+        }
+      },
+      "mapping": {
+        "channelId": "reminders"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "issueEndpoint",
+      "endpoint": {
+        "kind": "fcm-token",
+        "value": "tok-1"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "chest-ready"
+        ],
+        "gesture": true
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setTopicPreference",
+      "input": {
+        "topic": "chest-ready",
+        "enabled": true
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "chest-ready",
+        "idempotencyKey": "c-1",
+        "locale": "en"
+      },
+      "returns": {
+        "status": "suppressed",
+        "reason": "channel-unsupported"
+      }
+    }
+  ],
+  "expect": {
+    "deliveries": [
+      {
+        "idempotencyKey": "c-1",
+        "status": "suppressed",
+        "reason": "channel-unsupported"
+      }
+    ],
+    "providerCalls": []
+  }
+}

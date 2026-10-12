@@ -1,0 +1,199 @@
+{
+  "vector": "advertising-night-window",
+  "protocol": "2.0.0-draft.1",
+  "summary": "Under the Korean rules advertising that would arrive between 21:00 and 08:00 KST is deferred to 08:00 without night consent and delivered by the scheduler then, with an expiry at the next 21:00; with night consent it goes out at night with no expiry.",
+  "appliesTo": [
+    {
+      "path": "remote.purposes",
+      "includes": "advertising"
+    },
+    {
+      "path": "remote.addressing",
+      "equals": "device"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.os-fcm",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "promptLimit": 2,
+        "settings": true
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested",
+          "advertising"
+        ],
+        "addressing": "device",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": true,
+        "maxPending": 64
+      },
+      "open": "payload"
+    }
+  },
+  "catalog": [
+    {
+      "id": "weekend-event",
+      "purpose": "advertising",
+      "channels": [
+        "remote"
+      ],
+      "route": "/events/weekend",
+      "optOutRoute": "/settings/notifications",
+      "copy": {
+        "ko": {
+          "title": "주말 이벤트",
+          "body": "주말 이벤트가 시작됐어요."
+        },
+        "en": {
+          "title": "Weekend event",
+          "body": "The weekend event has started."
+        }
+      },
+      "mapping": {
+        "channelId": "advertising"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T13:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "deployment": {
+    "advertisingRules": "kr",
+    "advertisingSender": {
+      "contact": "080-1234-5678"
+    }
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "issueEndpoint",
+      "endpoint": {
+        "kind": "fcm-token",
+        "value": "tok-1"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "weekend-event"
+        ],
+        "gesture": true
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setAdvertisingConsent",
+      "input": {
+        "advertising": "granted",
+        "textVersion": "ad-consent-v1"
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "weekend-event",
+        "idempotencyKey": "n-1",
+        "locale": "ko"
+      },
+      "returns": {
+        "status": "deferred",
+        "reason": "night-window",
+        "until": "2026-10-12T23:00:00Z"
+      }
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-12T23:00:00Z"
+    },
+    {
+      "actor": "backend",
+      "action": "runScheduler"
+    },
+    {
+      "actor": "game",
+      "action": "setAdvertisingConsent",
+      "input": {
+        "night": "granted",
+        "textVersion": "night-consent-v1"
+      }
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-13T13:30:00Z"
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "weekend-event",
+        "idempotencyKey": "n-2",
+        "locale": "ko"
+      },
+      "returns": {
+        "status": "delivered"
+      }
+    }
+  ],
+  "expect": {
+    "deliveries": [
+      {
+        "idempotencyKey": "n-1",
+        "status": "deferred",
+        "reason": "night-window",
+        "until": "2026-10-12T23:00:00Z"
+      },
+      {
+        "idempotencyKey": "n-1",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "n-2",
+        "status": "delivered"
+      }
+    ],
+    "providerCalls": [
+      {
+        "topic": "weekend-event",
+        "expiresAt": "2026-10-13T12:00:00Z"
+      },
+      {
+        "topic": "weekend-event",
+        "expiresAt": null
+      }
+    ]
+  }
+}

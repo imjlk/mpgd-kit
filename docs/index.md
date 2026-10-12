@@ -41,3 +41,9 @@ The [advertising behavior RFC](specs/ads/ads-behavior-rfc.md) proposes common
 rewarded/interstitial semantics, presentation ownership, evidence registration,
 and fake-SDK conformance vectors. It is also a draft; its scenarios do not yet
 certify adapter behavior.
+
+The [notifications v2 RFC](specs/notifications/notifications-v2-rfc.md)
+proposes capability-declared notification providers, server-side consent
+records, one delivery policy gate, reminders, and conformance vectors. It is
+also a draft until its types and conformance runner land; it is not confirmed
+behavior.

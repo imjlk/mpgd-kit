@@ -1,0 +1,127 @@
+{
+  "vector": "provider-minute-limit",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A provider limit with a window shorter than a day defers the send to the end of the rolling window instead of dropping it, and the scheduler delivers it then.",
+  "appliesTo": [
+    {
+      "path": "permission.scope",
+      "equals": "topic"
+    },
+    {
+      "path": "remote.content",
+      "equals": "host-template"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.host-template",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "topic",
+        "prompt": "host",
+        "readable": false,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": true,
+        "settings": false
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested"
+        ],
+        "addressing": "platform-user",
+        "content": "host-template"
+      },
+      "local": {
+        "supported": false
+      },
+      "open": "landing-url"
+    },
+    "limits": {
+      "perUserPerMinute": 1
+    }
+  },
+  "catalog": [
+    {
+      "id": "purchase-result",
+      "purpose": "service",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=purchases",
+      "mapping": {
+        "templateSetCode": "fixture-purchase-result",
+        "agreement": "none"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "purchase-result",
+        "idempotencyKey": "m-1"
+      },
+      "returns": {
+        "status": "delivered"
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "purchase-result",
+        "idempotencyKey": "m-2"
+      },
+      "returns": {
+        "status": "deferred",
+        "reason": "provider-limit",
+        "until": "2026-10-12T03:01:00Z"
+      }
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-12T03:01:00Z"
+    },
+    {
+      "actor": "backend",
+      "action": "runScheduler"
+    }
+  ],
+  "expect": {
+    "deliveries": [
+      {
+        "idempotencyKey": "m-1",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "m-2",
+        "status": "deferred",
+        "reason": "provider-limit",
+        "until": "2026-10-12T03:01:00Z"
+      },
+      {
+        "idempotencyKey": "m-2",
+        "status": "delivered"
+      }
+    ]
+  }
+}

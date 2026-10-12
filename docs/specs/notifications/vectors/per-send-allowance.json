@@ -1,0 +1,155 @@
+{
+  "vector": "per-send-allowance",
+  "protocol": "2.0.0-draft.1",
+  "summary": "On a per-send host one acceptance allows exactly one delivery; the next send is suppressed until the player accepts again, and retrying the delivered key answers the stored result.",
+  "appliesTo": [
+    {
+      "path": "permission.allowance",
+      "equals": "per-send"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.per-send",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "topic",
+        "prompt": "host",
+        "readable": false,
+        "serverReadable": false,
+        "allowance": "per-send",
+        "userGesture": true,
+        "maxTopicsPerPrompt": 3,
+        "settings": false
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested"
+        ],
+        "addressing": "platform-user",
+        "content": "host-template"
+      },
+      "local": {
+        "supported": false
+      },
+      "open": "landing-url"
+    }
+  },
+  "catalog": [
+    {
+      "id": "daily-puzzle",
+      "purpose": "requested",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=daily",
+      "mapping": {
+        "templateSetCode": "fixture-daily-puzzle",
+        "agreement": "required"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "daily-puzzle"
+        ],
+        "gesture": true
+      },
+      "returns": {
+        "outcomes": {
+          "daily-puzzle": "granted"
+        }
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "daily-puzzle",
+        "idempotencyKey": "d-1"
+      },
+      "returns": {
+        "status": "delivered"
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "daily-puzzle",
+        "idempotencyKey": "d-2"
+      },
+      "returns": {
+        "status": "suppressed",
+        "reason": "allowance-exhausted"
+      }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "daily-puzzle",
+        "idempotencyKey": "d-1"
+      },
+      "returns": {
+        "status": "delivered",
+        "alreadyProcessed": true
+      }
+    }
+  ],
+  "expect": {
+    "deliveries": [
+      {
+        "idempotencyKey": "d-1",
+        "topic": "daily-puzzle",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "d-2",
+        "topic": "daily-puzzle",
+        "status": "suppressed",
+        "reason": "allowance-exhausted"
+      },
+      {
+        "idempotencyKey": "d-1",
+        "topic": "daily-puzzle",
+        "status": "delivered",
+        "alreadyProcessed": true
+      }
+    ],
+    "providerCalls": [
+      {
+        "topic": "daily-puzzle",
+        "mapping": {
+          "templateSetCode": "fixture-daily-puzzle",
+          "agreement": "required"
+        }
+      }
+    ]
+  }
+}
