@@ -684,13 +684,16 @@ const offOriginRootRelativeLinks = [
   '/\\mpgd.invalid/daily',
   '/\\user:pw@mpgd.invalid:443/daily',
   '/\\ phishing.example/daily',
-  // One percent-decode turns these into the shapes above, and URL parsing
-  // drops the decoded tabs and newlines.
+  // One percent-decode turns these into the shapes above: URL parsing then
+  // drops the decoded tabs and newlines and removes the dot segments.
   '/%2F%2Fphishing.example/daily',
   '/%5cphishing.example/daily',
   '/%09/phishing.example/daily',
   '/%0A%0d/phishing.example/daily',
   '/%09%5Cphishing.example/daily',
+  '/%09.//phishing.example/daily',
+  '/.%2F/phishing.example/daily',
+  '/levels/..%2F%2Fphishing.example/daily',
 ];
 for (const [index, deepLink] of offOriginRootRelativeLinks.entries()) {
   await assertRejects(
@@ -709,6 +712,7 @@ for (const [index, deepLink] of [
   'https://game.example//phishing.example/daily',
   'https://game.example/%2F%2Fphishing.example/daily',
   'https://game.example/%09/phishing.example/daily',
+  'https://game.example/%09.//phishing.example/daily',
 ].entries()) {
   await assertRejects(
     () =>

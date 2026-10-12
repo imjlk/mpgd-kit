@@ -63,8 +63,9 @@ export interface NotificationDeepLinkPolicy {
    * allowed when they stay a path on the game origin, so one that names a host
    * after a backslash (`/\host`) is rejected. Either kind is rejected when its
    * path would begin with an empty segment after dot segments collapse
-   * (`/.//host`) or once percent-decoded (`/%2F/host`, `/%5Chost`, `/%09/host`),
-   * or when it is longer than 2,048 characters after normalization.
+   * (`/.//host`), or after it is percent-decoded once and parsed again
+   * (`/%2F/host`, `/%5Chost`, `/%09/host`, `/.%2F/host`), or when it is longer
+   * than 2,048 characters after normalization.
    */
   readonly allowedOrigins?: readonly string[];
 }
@@ -621,12 +622,21 @@ function normalizeDeepLink(
 /**
  * Whether a normalized path could be read as a network-path reference to
  * another host. Dot segments (also percent-encoded) can collapse `/.//host`
- * into `//host`. A consumer that percent-decodes once reads `/%2F/host`,
- * `/%5Chost`, and `/%09/host` the same way, because URL parsing treats a
- * backslash as a slash and drops tabs and newlines.
+ * into `//host`. A consumer that percent-decodes the path once and parses it
+ * again can reach the same shape from `/%2F/host`, `/%5Chost`, `/%09/host`,
+ * or `/.%2F/host`: URL parsing drops tabs and newlines, reads a backslash as
+ * a slash, and removes dot segments, so the decoded path is checked after
+ * the same steps.
  */
 function hasNetworkPathPrefix(pathname: string): boolean {
-  return /^\/(?:%0[9ad])*(?:\/|%2f|%5c)/iu.test(pathname);
+  const decoded = pathname
+    .replace(/%([0-7][0-9a-f])/giu, (_escape, hex: string) =>
+      String.fromCharCode(Number.parseInt(hex, 16)),
+    )
+    .replace(/[\t\n\r]/gu, '');
+
+  return /^[/\\]{2}/u.test(decoded)
+    || new URL(decoded, 'https://mpgd.invalid').pathname.startsWith('//');
 }
 
 /** Normalization can grow a link; keep it within the input cap so it normalizes to itself. */
