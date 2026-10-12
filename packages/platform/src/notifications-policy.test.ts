@@ -872,6 +872,18 @@ describe('notification consent notices', () => {
       .toEqual(['2030-10-11']);
   });
 
+  it('lists the re-confirmation of a 29 February consent from 60 days before its due date', () => {
+    const at = '2024-02-29T03:00:00Z';
+    const records = [record('advertising', 'granted', { at })];
+    const result = { kind: 'consent-result', record: { kind: 'advertising', at }, dueBy: '2024-03-14' } as const;
+    const listed = (when: string) =>
+      listNotificationNotices(records, [result], when).map((notice) => [notice.kind, notice.dueBy]);
+    // Due the day before 28 February two years on; listed from 2025-12-29 KST.
+    expect(notificationReconfirmationDueBy(at)).toBe('2026-02-27');
+    expect(listed('2025-12-28T14:59:59Z')).toEqual([]);
+    expect(listed('2025-12-28T15:00:00Z')).toEqual([['reconfirmation', '2026-02-27']]);
+  });
+
   it('keys a scheduled notice by player, kind, record kind, record time, and due date', () => {
     expect(createNotificationNoticeIdempotencyKey({
       player: 'a:b',

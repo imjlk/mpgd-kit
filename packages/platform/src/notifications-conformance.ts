@@ -1895,13 +1895,7 @@ export function createNotificationConformanceBackend(
       if (!noticeListed(session.player, notice)) {
         return;
       }
-      noticesGiven.push({
-        ...notice,
-        record: { ...notice.record, at: normalizeNotificationTimestamp(notice.record.at) },
-        player: session.player,
-        channel,
-        at: clock.now(),
-      });
+      noticesGiven.push({ ...notice, player: session.player, channel, at: clock.now() });
     },
     async deliver(request) {
       const send = sendRequestOf(request, input.defaultPlayer);
@@ -2017,11 +2011,14 @@ function recordNoticeInputOf(input: unknown): RecordNotificationNoticeInput {
   }
 }
 
-/** Only the fields that name a notice; a listed notice's `record.state` and `textVersion` are left out. */
+/**
+ * Only the fields that name a notice, with the record time in the canonical
+ * form; a listed notice's `record.state` and `textVersion` are left out.
+ */
 function noticeIdentityOf(notice: NotificationNoticeIdentity): NotificationNoticeIdentity {
   return {
     kind: notice.kind,
-    record: { kind: notice.record.kind, at: notice.record.at },
+    record: { kind: notice.record.kind, at: normalizeNotificationTimestamp(notice.record.at) },
     dueBy: notice.dueBy,
   };
 }
@@ -2773,13 +2770,15 @@ export function createNotificationConformanceRuntime(
     }
   };
   /**
-   * Cancels the pending local reminders that no longer pass. First, without
-   * the backend, every one whose topic no longer takes the local route: an app
-   * update removed the topic from the catalog or took away its `local`
-   * channel. Then every one whose permission is known and not granted and,
-   * with the backend's records, every one whose topic preference refuses it,
-   * because a preference changed on another device never reaches this one as
-   * an event.
+   * Cancels the pending local reminders that no longer pass, in two sweeps.
+   * The first, without the backend, takes every one whose topic no longer
+   * takes the local route: an app update removed the topic from the catalog or
+   * took away its `local` channel. The second takes the others whose
+   * permission is known and not granted and, with the backend's records,
+   * those whose topic preference refuses them, because a preference changed
+   * on another device never reaches this one as an event. The second sweep
+   * runs even when the first fails, and the first one's error is thrown at
+   * the end (with the second one's, if both fail).
    */
   const reconcileLocal = (): Promise<void> =>
     enqueue('local', async () => {
@@ -2793,27 +2792,59 @@ export function createNotificationConformanceRuntime(
           ? topic
           : undefined;
       };
-      await cancelLocalNow((entry) => localTopicOf(entry) === undefined);
-      const pending = await listLocalEntries();
-      if (pending.length === 0) {
-        return;
+      let offRoute: { readonly error: unknown } | undefined;
+      try {
+        await cancelLocalNow((entry) => localTopicOf(entry) === undefined);
+      } catch (error) {
+        offRoute = { error };
       }
-      const records = await readRecords();
-      const topics = [...new Set(pending.map((entry) => entry.topic))];
-      const states = resolveStates(
-        capabilities,
-        await provider.getPermission({ topics }),
-        topics,
-        records,
-      );
-      await cancelLocalNow((entry) => {
-        const topic = localTopicOf(entry);
-        if (topic === undefined || revokesLocalReminders(stateIn(states, entry.topic))) {
-          return true;
+      try {
+        await cancelRefusedLocal(capabilities, localTopicOf);
+      } catch (error) {
+        if (offRoute === undefined) {
+          throw error;
         }
-        return records !== undefined && preferenceRefuses(topic, records, clock.now());
-      });
+        throw new AggregateError(
+          [offRoute.error, error],
+          'Neither sweep of the local reminders completed. First: ' + describeError(offRoute.error),
+        );
+      }
+      if (offRoute !== undefined) {
+        throw offRoute.error;
+      }
     });
+  /**
+   * Inside the local queue: the second sweep. Reminders whose topic left the
+   * local route belong to the first sweep and are skipped, so a reminder the
+   * host cannot cancel is not tried twice.
+   */
+  const cancelRefusedLocal = async (
+    capabilities: NotificationCapabilities,
+    localTopicOf: (entry: LocalEntry) => NotificationTopicDeclaration | undefined,
+  ): Promise<void> => {
+    const pending = (await listLocalEntries()).filter((entry) => localTopicOf(entry) !== undefined);
+    if (pending.length === 0) {
+      return;
+    }
+    const records = await readRecords();
+    const topics = [...new Set(pending.map((entry) => entry.topic))];
+    const states = resolveStates(
+      capabilities,
+      await provider.getPermission({ topics }),
+      topics,
+      records,
+    );
+    await cancelLocalNow((entry) => {
+      const topic = localTopicOf(entry);
+      if (topic === undefined) {
+        return false;
+      }
+      if (revokesLocalReminders(stateIn(states, entry.topic))) {
+        return true;
+      }
+      return records !== undefined && preferenceRefuses(topic, records, clock.now());
+    });
+  };
   const localZone = (): string => {
     const zone = (latestRegistration ?? storage.registration?.registration)?.timeZone;
     return zone !== undefined && isValidNotificationTimeZone(zone) ? zone : input.timeZone;
@@ -3358,7 +3389,8 @@ export function createNotificationConformanceRuntime(
         return backend.listNotices();
       },
       async recordShown(request) {
-        // A listed notice passed as is reaches the backend by its name only.
+        // The backend gets only the name, with the record time in the canonical
+        // form; a name that matches no listed notice records nothing.
         const notice = noticeIdentityOf(recordNoticeInputOf(request));
         await capabilitiesOf();
         await backend.recordNotice({ ...notice, channel: 'in-game' });

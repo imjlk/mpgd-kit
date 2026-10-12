@@ -1312,10 +1312,16 @@ describe('notifications fake backend: the scheduler and reminders', () => {
     // Not listed yet: recording it early changes nothing.
     await runtime.notices.recordShown(first);
     expect(backend.noticesGiven).toHaveLength(1);
-    // Shown after its due date, it is recorded once.
+    // Shown after its due date, it is recorded once; the backend gets the record time in the canonical form.
     clock.set('2028-10-20T03:00:00Z');
     expect(await runtime.notices.list()).toEqual([expect.objectContaining({ kind: 'reconfirmation', dueBy: '2028-10-11' })]);
     await runtime.notices.recordShown(first);
+    expect(forwarded.at(-1)).toEqual({
+      kind: 'reconfirmation',
+      record: { kind: 'advertising', at: '2026-10-12T03:00:00Z' },
+      dueBy: '2028-10-11',
+      channel: 'in-game',
+    });
     // A retry on a later day changes nothing: the next re-confirmation keeps its place.
     clock.set('2028-10-25T03:00:00Z');
     await runtime.notices.recordShown(first);
@@ -1524,6 +1530,76 @@ describe('notifications reference runtime: local reminders', () => {
       .toEqual(['a', 'b']);
   });
 
+  it('still reconciles the other reminders when the host cannot cancel one whose topic was removed', async () => {
+    const daily = { ...energy, id: 'daily-puzzle' };
+    const chest = { ...energy, id: 'chest-ready' };
+    const { clock, host, backend, runtime, storage, entry } = setup(osProfile, [energy, daily, chest]);
+    backend.authenticate('p-1');
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['energy-full'], gesture: true });
+    for (const topic of ['energy-full', 'daily-puzzle', 'chest-ready']) {
+      await runtime.setTopicPreference({ topic, enabled: true });
+    }
+    await runtime.reminders.set({ key: 'a', topic: 'energy-full', fireAt: '2026-10-12T06:00:00Z' });
+    await runtime.reminders.set({ key: 'b', topic: 'daily-puzzle', fireAt: '2026-10-12T07:00:00Z' });
+    await runtime.reminders.set({ key: 'c', topic: 'chest-ready', fireAt: '2026-10-12T08:00:00Z' });
+    // Another device turns daily-puzzle off: only the backend's record knows.
+    await backend.recordConsent({
+      kind: 'topic-preference',
+      topic: 'daily-puzzle',
+      state: 'withdrawn',
+      source: 'player',
+      at: now,
+    });
+    runtime.stop();
+    host.restart();
+    // An app update removed energy-full, and the host refuses any batch with its reminder.
+    const batches: (readonly string[])[] = [];
+    const updatedRuntime = (client: NotificationConformanceBackendClient = backend) =>
+      createNotificationConformanceRuntime({
+        provider: {
+          ...host.provider,
+          async cancelLocal(input) {
+            batches.push(input.keys);
+            if (input.keys.includes('a')) {
+              throw new Error('the host cannot cancel a');
+            }
+            await host.provider.cancelLocal?.(input);
+          },
+        },
+        backend: client,
+        catalog: [daily, chest],
+        clock,
+        timeZone: 'Asia/Seoul',
+        defaultLocale: 'ko',
+        storage,
+        ...(entry === undefined ? {} : { registryEntry: entry }),
+      });
+    const updated = updatedRuntime();
+    await updated.start();
+    await expect(updated.runUntilIdle()).rejects.toThrow(/the host cannot cancel a/u);
+    // The second sweep ran without trying `a` again.
+    expect(batches).toEqual([['a'], ['b']]);
+    expect(host.localPending.map((pending) => pending.key)).toEqual(['a', 'c']);
+    // When the second sweep fails too, both errors surface, the first sweep's first.
+    updated.stop();
+    host.restart();
+    const offline = updatedRuntime({
+      ...backend,
+      async listConsent() {
+        throw new Error('backend down');
+      },
+    });
+    await offline.start();
+    const failure: unknown = await offline.runUntilIdle().then(() => undefined, (error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors.map((error: unknown) => String(error))).toEqual([
+      'Error: the host cannot cancel a',
+      'Error: backend down',
+    ]);
+    expect(host.localPending.map((pending) => pending.key)).toEqual(['a', 'c']);
+  });
+
   it('cancels the reminders it scheduled when the provider cannot list them', async () => {
     const { host, backend, createRuntime } = setup(osProfile);
     const { listLocal: _listLocal, ...unlisted } = host.provider;
@@ -1729,8 +1805,10 @@ describe('notifications reference runtime and fakes: attribution, failures, and 
       dueBy: '2026-10-26',
     } as const;
     await runtime.notices.recordShown(advertisingResult);
-    // A retried call records nothing more.
+    // A retried call records nothing more, and neither does a name whose
+    // record time was cut to seconds: it matches no listed notice.
     await runtime.notices.recordShown(advertisingResult);
+    await runtime.notices.recordShown({ ...advertisingResult, record: { kind: 'night', at: now } });
     expect(backend.noticesGiven).toHaveLength(1);
     expect((await runtime.notices.list()).map((notice) => [notice.kind, notice.record.kind, notice.dueBy]))
       .toEqual([['consent-result', 'night', '2026-10-26']]);

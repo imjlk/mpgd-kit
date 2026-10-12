@@ -842,9 +842,9 @@ day the notice may be given:
   of the latest consent of that kind:
   - The n-th notice is due by the day before the date 2n years after the
     consent date; a 29 February consent date uses 28 February.
-  - It is listed from 60 days before its `dueBy`, once the previous one in
-    its series is recorded. Silence after a notice keeps the consent, and the
-    series continues.
+  - The first is listed from 60 days before its `dueBy`, and each later one
+    from 60 days before its own `dueBy` once the one before it is recorded.
+    Silence after a notice keeps the consent, and the series continues.
   - A new consent restarts the count, and a withdrawal ends it.
 
 A listed notice stays listed after its `dueBy` until it is recorded.
@@ -864,16 +864,21 @@ each notice given: the notice's name, the channel (`in-game`, `push`, or
 The game shows a notice in the game and records it through
 `notices.recordShown` with the notice as `list()` gave it, or with its name:
 its `kind`, its record's `kind` and `at`, and its `dueBy`. The runtime sends
-the backend only the name.
+the backend only the name, with the record's time in the
+[canonical form](#timestamps).
 
 - **Retries.** The backend records a notice only while that notice is listed.
   Recording a notice that is not listed (already recorded, not yet listed, or
-  unknown) changes nothing, so a retried call is safe.
+  unknown) changes nothing, so a retried call is safe. A name that does not
+  match a listed notice exactly, such as one whose record time was cut to
+  seconds, records nothing too, so a game passes the listed notice or its
+  fields unchanged.
 - **Malformed input.** A missing field, an unknown key, or a time or date
   that does not parse throws `NOTIFICATIONS_INVALID_INPUT`.
 
 If a notice is not recorded by the start of the day seven days before
-`dueBy`, the scheduler sends it through the catalog's notice topic.
+`dueBy`, the scheduler sends it through the deployment's `noticeTopic`, which
+the validator requires to equal the catalog's `notices.topic`.
 
 - **Key.** `notice:<player>:<kind>:<record kind>:<record at>:<dueBy>`, with
   the player percent-encoded, the record's time in the
@@ -1475,7 +1480,7 @@ listed fields of each item asserted:
 | `game-rendered-opt-out` | `revokePermission` opts out at the host; the next send is suppressed |
 | `requested-topic-needs-opt-in` | A `requested` topic is suppressed until the player turns it on |
 | `advertising-needs-consent` | Suppressed without consent; rendered with label, sender line, free opt-out line, opt-out action, and expiry; the result notice is listed, the first re-confirmation not yet |
-| `advertising-notices` | An unrecorded result notice is sent through the notice topic; a re-confirmation is listed 60 days before its `dueBy`; recording it again after that date changes nothing; the next one is listed two years later |
+| `advertising-notices` | An unrecorded result notice is sent through the notice topic; a re-confirmation is listed 60 days before its `dueBy`; recording it before then, recording a name that matches nothing, and recording it again after its `dueBy` change nothing; the next one is listed two years later |
 | `advertising-night-window` | Deferred to 08:00 KST without night consent and sent with an expiry; immediate without expiry with it |
 | `advertising-rules-none` | Without the Korean rules: consent still needed, no window, label, or expiry |
 | `advertising-unsupported-by-host` | A host-template provider refuses an advertising topic |
