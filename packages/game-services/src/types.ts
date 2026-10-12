@@ -23,6 +23,9 @@ export type {
   ClaimAdRewardResponse,
   PurchaseGrantFinalization,
   PurchaseGrantFinalizationAction,
+  PurchaseLedgerStatus,
+  PurchaseLedgerStatusRequest,
+  PurchaseLedgerStatusResponse,
   VerifyPurchaseResponse,
 } from './operation-results.js';
 

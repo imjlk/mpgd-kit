@@ -7,6 +7,7 @@ import {
   createGameServicesBackend,
   createGameServicesRuntime,
   createInMemoryGameServicesStore,
+  isMonetizationOperationRecoverable,
   type MonetizationOperationRecord,
   type MonetizationOperationStore,
 } from '@mpgd/game-services';
@@ -36,7 +37,7 @@ function testJournal() {
       records.set(record.key, structuredClone(record));
     },
     async listRecoverable(playerId) {
-      return [...records.values()].filter((record) => record.playerId === playerId && (record.result === undefined || record.result.status === 'pending')).map(
+      return [...records.values()].filter((record) => record.playerId === playerId && isMonetizationOperationRecoverable(record)).map(
         (record) => structuredClone(record),
       );
     },
@@ -164,7 +165,7 @@ describe('actual AIT SDK host/proxy to registered server verifier and ledger', (
     expect(await ledger.listEntitlementTransactions()).toHaveLength(1);
     expect(runtime.actions?.getAvailability()).toBe('ready');
     const after = [...journal.records.values()][0];
-    expect(after?.platformCompletedAt).toBe(before.platformCompletedAt);
+    expect(after?.kind === 'rewarded-ad' ? after.platformCompletedAt : undefined).toBe(before.platformCompletedAt);
     expect(after?.request).toEqual(before.request);
     const replay = await backend.adRewards.claimAdReward({ ...before.request, idempotencyKey: 'another-key' });
     expect(replay.granted).toBe(false);
@@ -228,7 +229,8 @@ describe('late known non-grant after a caller deadline', () => {
     failLoad();
     await flush();
     expect(runtime.actions?.getAvailability()).toBe('ready');
-    expect([...journal.records.values()][0]?.result?.status).toBe('failed');
+    const failed = [...journal.records.values()][0];
+    expect(failed?.kind === 'rewarded-ad' ? failed.result?.status : undefined).toBe('failed');
     await view.execute({ placementId: 'CONTINUE', idempotencyKey: 'late-load' });
     expect(f.load).toHaveBeenCalledOnce();
     expect(f.show).not.toHaveBeenCalled();

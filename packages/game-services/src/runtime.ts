@@ -160,6 +160,10 @@ export function createGameServicesRuntime(
       ...client,
       purchase: monetizationRecovery.purchase,
       claimRewardedAd: monetizationRecovery.claimRewardedAd,
+      // The recovery client owns the reconciler over the durable journal.
+      ...(monetizationRecovery.commerceReconciler === undefined
+        ? {}
+        : { commerceReconciler: monetizationRecovery.commerceReconciler }),
     };
   }
   return {

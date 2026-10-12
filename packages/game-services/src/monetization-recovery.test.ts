@@ -13,6 +13,7 @@ import type {
   GameServicesOperationProgress,
   GameServicesPurchaseProgress,
 } from './operation-progress.js';
+import { isMonetizationOperationRecoverable } from './monetization-operation-store.js';
 import {
   createRecoverableMonetizationClient,
   type MonetizationOperationRecord,
@@ -65,10 +66,7 @@ function createStore(): MonetizationOperationStore {
     },
     async listRecoverable(playerId) {
       return [...records.values()]
-        .filter((record) => record.playerId === playerId
-          && (record.result === undefined || record.result.status === 'pending'
-            || record.kind === 'purchase'
-              && record.response?.finalization?.status === 'pending'))
+        .filter((record) => record.playerId === playerId && isMonetizationOperationRecoverable(record))
         .map((record) => structuredClone(record));
     },
   };
@@ -915,7 +913,7 @@ function rejectBeforeGrantLands(journal: MonetizationOperationStore): Monetizati
   return {
     ...journal,
     async replace(expectedRevision, record) {
-      if (raced.has(record.key) || record.platform === undefined) {
+      if (raced.has(record.key) || record.kind === 'commerce-purchase' || record.platform === undefined) {
         await journal.replace(expectedRevision, record);
         return;
       }
@@ -987,7 +985,10 @@ assert.equal(purchaseUiCalls, uiBeforeContestedRetry);
 const contestedRecord = await contestedStore.read(
   JSON.stringify(['android', 'purchase', 'contested-purchase']),
 );
-assert.equal(contestedRecord?.result?.status, 'granted');
+assert.equal(
+  contestedRecord?.kind === 'purchase' ? contestedRecord.result?.status : undefined,
+  'granted',
+);
 
 const contestedReward = { placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'contested-reward' };
 assert.equal((await contestedClient.claimRewardedAd(contestedReward)).status, 'granted');
@@ -999,7 +1000,10 @@ assert.equal(rewardUiCalls, rewardUiBeforeContestedRetry);
 const contestedRewardRecord = await contestedStore.read(
   JSON.stringify(['android', 'rewarded-ad', 'contested-reward']),
 );
-assert.equal(contestedRewardRecord?.result?.status, 'granted');
+assert.equal(
+  contestedRewardRecord?.kind === 'rewarded-ad' ? contestedRewardRecord.result?.status : undefined,
+  'granted',
+);
 
 /** Records one invocation's progress; journal recovery must finish it with `completed`. */
 function observeProgress(): {
@@ -1130,7 +1134,7 @@ assert.equal(
   );
   assert.equal(requests.length, 0);
   const recorded = (await lateStore.listRecoverable('late-player'))[0];
-  if (recorded === undefined) {
+  if (recorded === undefined || recorded.kind !== 'rewarded-ad') {
     throw new Error('Reserved ad was not journaled.');
   }
   const restartedLate = createRecoverableMonetizationClient(args);

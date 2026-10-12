@@ -1578,6 +1578,17 @@ export interface CommerceConformanceRunOptions {
   readonly createProvider?: (
     context: CommerceConformanceContext,
   ) => CommerceConformanceHarness | Promise<CommerceConformanceHarness>;
+  /**
+   * Supplies the runtime under test over the harness provider, backend, and
+   * journal; defaults to the reference reconciler
+   * (`createCommerceConformanceRuntime`). The reference run an adaptive
+   * vector is derived from always uses the reference reconciler, so the
+   * derived expectations stay the RFC's regardless of the runtime under test.
+   */
+  readonly createRuntime?: (
+    input: CreateCommerceConformanceRuntimeInput,
+    context: CommerceConformanceContext,
+  ) => CommerceConformanceRuntime | Promise<CommerceConformanceRuntime>;
   readonly playerId?: string;
   readonly titleId?: string;
 }
@@ -1702,6 +1713,7 @@ async function runVectorIn(
       vector,
       options.createProvider ?? createCommerceConformanceHarness,
       ids,
+      options.createRuntime,
     );
   } catch (error) {
     return failed([
@@ -1815,6 +1827,7 @@ async function prepareExecution(
   vector: CommerceConformanceVector,
   createHarness: NonNullable<CommerceConformanceRunOptions['createProvider']>,
   ids: { readonly playerId: string; readonly titleId: string },
+  createRuntime?: CommerceConformanceRunOptions['createRuntime'],
 ): Promise<Execution> {
   const clock = createCommerceConformanceClock();
   const journal = createCommerceConformanceJournal();
@@ -1839,14 +1852,17 @@ async function prepareExecution(
   };
   const harness = await createHarness(context);
   harnessRef.current = harness;
-  const runtime = createCommerceConformanceRuntime({
+  const runtimeInput: CreateCommerceConformanceRuntimeInput = {
     provider: harness.provider,
     backend,
     journal,
     clock,
     catalog: context.catalog,
     playerId: ids.playerId,
-  });
+  };
+  const runtime = createRuntime === undefined
+    ? createCommerceConformanceRuntime(runtimeInput)
+    : await createRuntime(runtimeInput, context);
   return { vector, harness, runtime, backend, journal, clock, adaptation };
 }
 
