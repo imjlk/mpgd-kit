@@ -1,0 +1,82 @@
+{
+  "version": "2026-10-12",
+  "defaultLocale": "ko",
+  "notices": { "topic": "consent-notice" },
+  "topics": [
+    {
+      "id": "energy-full",
+      "purpose": "requested",
+      "channels": ["local", "remote"],
+      "route": "/?entry=continue",
+      "copy": {
+        "ko": { "title": "에너지 충전 완료", "body": "에너지가 가득 찼어요." },
+        "en": { "title": "Energy full", "body": "Your energy is full." }
+      },
+      "frequency": { "maxPerDay": 3 },
+      "quietHours": { "start": "22:00", "end": "08:00" },
+      "targets": {
+        "ait": { "templateSetCode": "fixture-energy-full", "agreement": "required" },
+        "android": { "channelId": "reminders" },
+        "ios": {},
+        "reddit": { "title": "Energy full", "body": "Your energy is full again.", "link": "t3_energy" }
+      }
+    },
+    {
+      "id": "rival-challenge",
+      "purpose": "service",
+      "channels": ["remote"],
+      "route": "/?entry=challenge",
+      "copy": {
+        "ko": { "title": "새 도전장", "body": "{{rival}}님이 도전장을 보냈어요." },
+        "en": { "title": "New challenge", "body": "{{rival}} sent you a challenge." }
+      },
+      "targets": {
+        "ait": { "templateSetCode": "fixture-rival-challenge", "agreement": "required" },
+        "android": { "channelId": "social" },
+        "reddit": { "title": "New challenge", "body": "{{rival}} sent you a challenge." },
+        "storefront-web": { "channel": "open targets stay unchecked" }
+      }
+    },
+    {
+      "id": "purchase-result",
+      "purpose": "service",
+      "channels": ["remote"],
+      "route": "/?entry=purchases",
+      "targets": {
+        "ait": { "templateSetCode": "fixture-purchase-result", "agreement": "none" }
+      }
+    },
+    {
+      "id": "consent-notice",
+      "purpose": "service",
+      "channels": ["remote"],
+      "route": "/settings/notifications",
+      "copy": {
+        "ko": {
+          "title": "광고성 알림 수신 동의 안내",
+          "body": "{{consentDate}}에 광고성 알림 수신에 동의하셨어요. 알림 설정에서 언제든 철회할 수 있어요."
+        }
+      },
+      "targets": {
+        "android": { "channelId": "notices" },
+        "ios": {}
+      }
+    },
+    {
+      "id": "weekend-event",
+      "purpose": "advertising",
+      "channels": ["remote"],
+      "route": "/events/weekend",
+      "optOutRoute": "/settings/notifications",
+      "deferrable": false,
+      "copy": {
+        "ko": { "title": "주말 이벤트", "body": "주말 이벤트가 시작됐어요." },
+        "en": { "title": "Weekend event", "body": "The weekend event has started." }
+      },
+      "targets": {
+        "android": { "channelId": "advertising" },
+        "ios": {}
+      }
+    }
+  ]
+}

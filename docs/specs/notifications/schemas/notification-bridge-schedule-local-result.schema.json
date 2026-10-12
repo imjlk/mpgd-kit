@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-bridge-schedule-local-result.schema.json",
+  "title": "NotificationBridgeScheduleLocalResult",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/LocalScheduleResult",
+  "components": {
+    "schemas": {
+      "LocalScheduleResult": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "oneOf": [
+                  {
+                    "const": "replaced"
+                  },
+                  {
+                    "const": "scheduled"
+                  }
+                ],
+                "readOnly": true
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "status": {
+                "oneOf": [
+                  {
+                    "const": "capacity-exceeded"
+                  },
+                  {
+                    "const": "permission-required"
+                  },
+                  {
+                    "const": "unsupported"
+                  }
+                ],
+                "readOnly": true
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    }
+  }
+}

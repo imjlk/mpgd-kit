@@ -1,0 +1,2777 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-conformance-vector.schema.json",
+  "title": "NotificationConformanceVector",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationConformanceVector",
+  "components": {
+    "schemas": {
+      "CalendarDate": {
+        "type": "string",
+        "format": "date"
+      },
+      "CapabilityPath": {
+        "type": "string",
+        "pattern": "^[a-zA-Z]+(?:\\.[a-zA-Z]+)*$",
+        "description": "A capability path such as `permission.prompt` or `remote.purposes`."
+      },
+      "IsoTimestamp": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NonEmptyString.o1": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NonNegativeInteger": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "NotificationAdvertisingRules": {
+        "oneOf": [
+          {
+            "const": "kr"
+          },
+          {
+            "const": "none"
+          }
+        ],
+        "description": "`kr` applies the Korean advertising rules to every recipient; `none` keeps consent and the opt-out route only."
+      },
+      "NotificationAdvertisingSender": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The sender's name; leave it out only when it equals the app's name.",
+            "readOnly": true
+          },
+          "contact": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The phone number or address the law requires.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "contact"
+        ],
+        "additionalProperties": false,
+        "description": "The deployment's advertising sender, which every advertising send carries under `kr`."
+      },
+      "NotificationCapabilities": {
+        "type": "object",
+        "properties": {
+          "availability": {
+            "$ref": "#/components/schemas/PlatformProviderAvailability",
+            "readOnly": true
+          },
+          "permission": {
+            "$ref": "#/components/schemas/NotificationPermissionCapabilities",
+            "readOnly": true
+          },
+          "remote": {
+            "$ref": "#/components/schemas/NotificationRemoteCapabilities",
+            "readOnly": true
+          },
+          "local": {
+            "$ref": "#/components/schemas/NotificationLocalCapabilities",
+            "readOnly": true
+          },
+          "open": {
+            "$ref": "#/components/schemas/NotificationOpenPath",
+            "description": "How an open reaches the game.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "availability",
+          "permission",
+          "remote",
+          "local",
+          "open"
+        ],
+        "additionalProperties": false,
+        "description": "Notifications v2 capability declaration. A provider returns a fresh object\non every read; code branches on these declarations, never on a provider id\nor target name. Release gates such as Devvit's `approval-required` stay in\nthe target config's `integrations.notifications` state."
+      },
+      "NotificationChannel": {
+        "oneOf": [
+          {
+            "const": "local"
+          },
+          {
+            "const": "remote"
+          }
+        ],
+        "description": "`remote` is a server-sent push, `local` a device-scheduled notification."
+      },
+      "NotificationClockTime": {
+        "type": "string",
+        "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$",
+        "description": "A wall-clock time `HH:MM`, 00:00 to 23:59."
+      },
+      "NotificationConformanceActionExpectation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "title": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "route": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformanceConsentExpectation": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/NotificationConsentKind",
+            "readOnly": true
+          },
+          "topic": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "state": {
+            "$ref": "#/components/schemas/NotificationConsentState",
+            "readOnly": true
+          },
+          "source": {
+            "$ref": "#/components/schemas/NotificationConsentSource",
+            "readOnly": true
+          },
+          "player": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/NotificationConformanceEvidenceExpectation",
+            "readOnly": true
+          },
+          "textVersion": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformanceContentExpectation": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "readOnly": true
+          },
+          "body": {
+            "type": "string",
+            "readOnly": true
+          },
+          "route": {
+            "type": "string",
+            "readOnly": true
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationConformanceActionExpectation"
+            },
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformanceContextFixture": {
+        "type": "object",
+        "properties": {
+          "player": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "now": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "description": "The fake clock's start.",
+            "readOnly": true
+          },
+          "timeZone": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The device's zone, which the runtime registers.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "player",
+          "now",
+          "timeZone"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationConformanceDeliverInput": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "idempotencyKey": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "player": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "Defaults to `context.player`.",
+            "readOnly": true
+          },
+          "provider": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "templateData": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean.o2",
+            "readOnly": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringstring",
+            "description": "Per-send routing context; strings only.",
+            "readOnly": true
+          },
+          "locale": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "link": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "A post or comment id for providers whose sends need a link.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "topic",
+          "idempotencyKey"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationConformanceDeliveryExpectation": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/NotificationDeliveryStatus",
+            "readOnly": true
+          },
+          "alreadyProcessed": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "reason": {
+            "oneOf": [
+              {
+                "const": "advertising-consent-missing"
+              },
+              {
+                "const": "advertising-sender-missing"
+              },
+              {
+                "const": "agreement-missing"
+              },
+              {
+                "const": "allowance-exhausted"
+              },
+              {
+                "const": "channel-unsupported"
+              },
+              {
+                "const": "endpoint-invalid"
+              },
+              {
+                "const": "frequency-capped"
+              },
+              {
+                "const": "link-missing"
+              },
+              {
+                "const": "night-consent-missing"
+              },
+              {
+                "const": "night-window"
+              },
+              {
+                "const": "no-endpoint"
+              },
+              {
+                "const": "permission-denied"
+              },
+              {
+                "const": "preference-off"
+              },
+              {
+                "const": "provider-limit"
+              },
+              {
+                "const": "provider-rate-limited"
+              },
+              {
+                "const": "provider-rejected"
+              },
+              {
+                "const": "purpose-unsupported"
+              },
+              {
+                "const": "quiet-hours"
+              },
+              {
+                "const": "request-missing"
+              },
+              {
+                "const": "topic-unknown"
+              }
+            ],
+            "readOnly": true
+          },
+          "until": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "readOnly": true
+          },
+          "idempotencyKey": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "topic": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "player": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformanceEndpointExpectation": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "const": "fcm-installation"
+              },
+              {
+                "const": "fcm-token"
+              }
+            ],
+            "readOnly": true
+          },
+          "value": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "permission": {
+            "$ref": "#/components/schemas/NotificationPermissionState",
+            "readOnly": true
+          },
+          "player": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "status": {
+            "oneOf": [
+              {
+                "const": "invalid"
+              },
+              {
+                "const": "valid"
+              }
+            ],
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformanceEndpointFixture": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "oneOf": [
+              {
+                "const": "fcm-installation"
+              },
+              {
+                "const": "fcm-token"
+              }
+            ],
+            "readOnly": true
+          },
+          "value": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "environment": {
+            "oneOf": [
+              {
+                "const": "production"
+              },
+              {
+                "const": "sandbox"
+              }
+            ],
+            "readOnly": true
+          }
+        },
+        "required": [
+          "kind",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationConformanceEventExpectation": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "oneOf": [
+              {
+                "const": "endpoint-changed"
+              },
+              {
+                "const": "opened"
+              },
+              {
+                "const": "permission-changed"
+              },
+              {
+                "const": "received"
+              }
+            ],
+            "readOnly": true
+          },
+          "channel": {
+            "$ref": "#/components/schemas/NotificationChannel",
+            "readOnly": true
+          },
+          "source": {
+            "oneOf": [
+              {
+                "const": "cold"
+              },
+              {
+                "const": "warm"
+              }
+            ],
+            "readOnly": true
+          },
+          "topic": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "route": {
+            "type": "string",
+            "readOnly": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringstring",
+            "readOnly": true
+          },
+          "referrer": {
+            "type": "string",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformanceEvidenceExpectation": {
+        "type": "object",
+        "properties": {
+          "schema": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "payload": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean.o1",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformanceExpectation": {
+        "type": "object",
+        "properties": {
+          "prompts": {
+            "$ref": "#/components/schemas/NonNegativeInteger",
+            "description": "Calls that reached the host prompt API.",
+            "readOnly": true
+          },
+          "consent": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationConformanceConsentExpectation"
+            },
+            "description": "Consent records, without `at`.",
+            "readOnly": true
+          },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationConformanceEndpointExpectation"
+            },
+            "description": "Final endpoints.",
+            "readOnly": true
+          },
+          "deliveries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationConformanceDeliveryExpectation"
+            },
+            "description": "Every outcome answered or stored for a send key, in order.",
+            "readOnly": true
+          },
+          "providerCalls": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationConformanceProviderCallExpectation"
+            },
+            "description": "Every provider attempt, including one answered `rate-limited`.",
+            "readOnly": true
+          },
+          "local": {
+            "$ref": "#/components/schemas/NotificationConformanceLocalExpectation",
+            "readOnly": true
+          },
+          "reminders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationConformanceReminderEntryExpectation"
+            },
+            "description": "Pending server reminders.",
+            "readOnly": true
+          },
+          "events": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringreadonlyNotificationConformanceEventExpectation",
+            "description": "Events per listener name.",
+            "readOnly": true
+          },
+          "notices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationConformanceNoticeExpectation"
+            },
+            "description": "The backend's due notices at the end, ordered by `dueBy` and then `kind`.",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformanceHostFixture": {
+        "type": "object",
+        "properties": {
+          "actionRequired": {
+            "type": "boolean",
+            "description": "Starts the fixture provider in `availability: 'action-required'` with\n`requiredAction: 'login'` (a logged-out Devvit player) until `completeAction`.",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformanceInstallationFixture": {
+        "type": "object",
+        "properties": {
+          "installationId": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "kind": {
+            "oneOf": [
+              {
+                "const": "fcm-installation"
+              },
+              {
+                "const": "fcm-token"
+              }
+            ],
+            "readOnly": true
+          },
+          "value": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "permission": {
+            "$ref": "#/components/schemas/NotificationPermissionState",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "installationId",
+          "kind",
+          "value",
+          "permission"
+        ],
+        "additionalProperties": false,
+        "description": "Another installation of the same player, registered directly with the backend."
+      },
+      "NotificationConformanceLocalEntryExpectation": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "topic": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "fireAt": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformanceLocalExpectation": {
+        "type": "object",
+        "properties": {
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationConformanceLocalOperationExpectation"
+            },
+            "readOnly": true
+          },
+          "pending": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationConformanceLocalEntryExpectation"
+            },
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformanceLocalOperationExpectation": {
+        "type": "object",
+        "properties": {
+          "op": {
+            "oneOf": [
+              {
+                "const": "cancel"
+              },
+              {
+                "const": "replace"
+              },
+              {
+                "const": "schedule"
+              }
+            ],
+            "readOnly": true
+          },
+          "key": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "topic": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "fireAt": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "readOnly": true
+          },
+          "exact": {
+            "type": "boolean",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformanceNoticeExpectation": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/NotificationNoticeKind",
+            "readOnly": true
+          },
+          "record": {
+            "$ref": "#/components/schemas/NotificationConformanceNoticeRecordExpectation",
+            "readOnly": true
+          },
+          "dueBy": {
+            "$ref": "#/components/schemas/CalendarDate",
+            "description": "Asia/Seoul calendar date `YYYY-MM-DD`.",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformanceNoticeRecordExpectation": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "oneOf": [
+              {
+                "const": "advertising"
+              },
+              {
+                "const": "night"
+              }
+            ],
+            "readOnly": true
+          },
+          "state": {
+            "oneOf": [
+              {
+                "const": "granted"
+              },
+              {
+                "const": "withdrawn"
+              }
+            ],
+            "readOnly": true
+          },
+          "at": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "readOnly": true
+          },
+          "textVersion": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformanceOutcomeExpectation": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/NotificationDeliveryStatus",
+            "readOnly": true
+          },
+          "alreadyProcessed": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "reason": {
+            "oneOf": [
+              {
+                "const": "advertising-consent-missing"
+              },
+              {
+                "const": "advertising-sender-missing"
+              },
+              {
+                "const": "agreement-missing"
+              },
+              {
+                "const": "allowance-exhausted"
+              },
+              {
+                "const": "channel-unsupported"
+              },
+              {
+                "const": "endpoint-invalid"
+              },
+              {
+                "const": "frequency-capped"
+              },
+              {
+                "const": "link-missing"
+              },
+              {
+                "const": "night-consent-missing"
+              },
+              {
+                "const": "night-window"
+              },
+              {
+                "const": "no-endpoint"
+              },
+              {
+                "const": "permission-denied"
+              },
+              {
+                "const": "preference-off"
+              },
+              {
+                "const": "provider-limit"
+              },
+              {
+                "const": "provider-rate-limited"
+              },
+              {
+                "const": "provider-rejected"
+              },
+              {
+                "const": "purpose-unsupported"
+              },
+              {
+                "const": "quiet-hours"
+              },
+              {
+                "const": "request-missing"
+              },
+              {
+                "const": "topic-unknown"
+              }
+            ],
+            "readOnly": true
+          },
+          "until": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformancePermissionExpectation": {
+        "type": "object",
+        "properties": {
+          "app": {
+            "$ref": "#/components/schemas/NotificationPermissionState",
+            "readOnly": true
+          },
+          "topics": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringNotificationPermissionState",
+            "readOnly": true
+          },
+          "requiredAction": {
+            "$ref": "#/components/schemas/NotificationRequiredAction",
+            "readOnly": true
+          },
+          "sources": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringhostrecord",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformancePredicate": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "path": {
+                "$ref": "#/components/schemas/CapabilityPath",
+                "readOnly": true
+              },
+              "equals": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ],
+                "readOnly": true
+              }
+            },
+            "required": [
+              "path",
+              "equals"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "path": {
+                "$ref": "#/components/schemas/CapabilityPath",
+                "readOnly": true
+              },
+              "includes": {
+                "type": "string",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "path",
+              "includes"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "path": {
+                "$ref": "#/components/schemas/CapabilityPath",
+                "readOnly": true
+              },
+              "excludes": {
+                "type": "string",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "path",
+              "excludes"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "description": "A predicate on the provider's capabilities; every predicate must hold for the vector to run."
+      },
+      "NotificationConformanceProfile": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/NotificationCapabilities",
+            "readOnly": true
+          },
+          "limits": {
+            "$ref": "#/components/schemas/NotificationConformanceProfileLimits",
+            "description": "Server-side limits of the provider's registry entry.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "provider",
+          "capabilities"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationConformanceProfileLimits": {
+        "type": "object",
+        "properties": {
+          "perUserPerDay": {
+            "$ref": "#/components/schemas/PositiveInteger",
+            "description": "Deliveries to one player within any 24 hours.",
+            "readOnly": true
+          },
+          "perUserPerMinute": {
+            "$ref": "#/components/schemas/PositiveInteger",
+            "description": "Deliveries to one player within any 60 seconds.",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false,
+        "description": "Per-recipient limits of the provider's registry entry."
+      },
+      "NotificationConformancePromptResult": {
+        "oneOf": [
+          {
+            "const": "already-granted"
+          },
+          {
+            "const": "denied"
+          },
+          {
+            "const": "dismissed"
+          },
+          {
+            "const": "granted"
+          },
+          {
+            "const": "host-terms-declined"
+          }
+        ]
+      },
+      "NotificationConformanceProviderAnswer": {
+        "oneOf": [
+          {
+            "const": "accepted"
+          },
+          {
+            "const": "ambiguous"
+          },
+          {
+            "const": "rate-limited"
+          },
+          {
+            "const": "rejected"
+          },
+          {
+            "const": "unregistered"
+          }
+        ]
+      },
+      "NotificationConformanceProviderCallExpectation": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "address": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The device address value the attempt went to.",
+            "readOnly": true
+          },
+          "player": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "idempotencyKey": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "mapping": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean.o1",
+            "readOnly": true
+          },
+          "link": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/NonEmptyString"
+              }
+            ],
+            "description": "The send's link; `null` asserts that the call carried none.",
+            "readOnly": true
+          },
+          "content": {
+            "$ref": "#/components/schemas/NotificationConformanceContentExpectation",
+            "readOnly": true
+          },
+          "expiresAt": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/IsoTimestamp"
+              }
+            ],
+            "description": "The expiry the call carried; `null` asserts that it carried none.",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformanceRejectionReason": {
+        "oneOf": [
+          {
+            "const": "agreement"
+          },
+          {
+            "const": "configuration"
+          },
+          {
+            "const": "recipient"
+          }
+        ],
+        "description": "Why a provider rejected a send: the project's setup, the recipient, or a missing agreement."
+      },
+      "NotificationConformanceReminderEntryExpectation": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "topic": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "fireAt": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "readOnly": true
+          },
+          "player": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformanceReminderExpectation": {
+        "type": "object",
+        "properties": {
+          "route": {
+            "$ref": "#/components/schemas/NotificationReminderRoute",
+            "readOnly": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/NotificationReminderStatus",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformanceRequestExpectation": {
+        "type": "object",
+        "properties": {
+          "outcomes": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringNotificationPermissionOutcome",
+            "readOnly": true
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/NotificationConformanceSnapshotExpectation",
+            "readOnly": true
+          },
+          "requiredAction": {
+            "$ref": "#/components/schemas/NotificationRequiredAction",
+            "readOnly": true
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/NotificationConformanceEvidenceExpectation",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformanceSnapshotExpectation": {
+        "type": "object",
+        "properties": {
+          "app": {
+            "$ref": "#/components/schemas/NotificationPermissionState",
+            "readOnly": true
+          },
+          "topics": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringNotificationPermissionState",
+            "readOnly": true
+          },
+          "requiredAction": {
+            "$ref": "#/components/schemas/NotificationRequiredAction",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationConformanceStep": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "runtime",
+                "readOnly": true
+              },
+              "action": {
+                "oneOf": [
+                  {
+                    "const": "restart"
+                  },
+                  {
+                    "const": "start"
+                  }
+                ],
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "clock",
+                "readOnly": true
+              },
+              "action": {
+                "const": "set",
+                "readOnly": true
+              },
+              "at": {
+                "$ref": "#/components/schemas/IsoTimestamp",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "at"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "clock",
+                "readOnly": true
+              },
+              "action": {
+                "const": "advance",
+                "readOnly": true
+              },
+              "seconds": {
+                "$ref": "#/components/schemas/NonNegativeInteger",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "seconds"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "host",
+                "readOnly": true
+              },
+              "action": {
+                "const": "queuePrompt",
+                "readOnly": true
+              },
+              "result": {
+                "$ref": "#/components/schemas/NotificationConformancePromptResult",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "result"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "host",
+                "readOnly": true
+              },
+              "action": {
+                "const": "setPermission",
+                "readOnly": true
+              },
+              "state": {
+                "$ref": "#/components/schemas/NotificationPermissionState",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "state"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "host",
+                "readOnly": true
+              },
+              "action": {
+                "const": "issueEndpoint",
+                "readOnly": true
+              },
+              "endpoint": {
+                "$ref": "#/components/schemas/NotificationConformanceEndpointFixture",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "endpoint"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "host",
+                "readOnly": true
+              },
+              "action": {
+                "const": "tap",
+                "readOnly": true
+              },
+              "input": {
+                "$ref": "#/components/schemas/NotificationConformanceTapInput",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "input"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "host",
+                "readOnly": true
+              },
+              "action": {
+                "const": "completeAction",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "game",
+                "readOnly": true
+              },
+              "action": {
+                "const": "getPermission",
+                "readOnly": true
+              },
+              "input": {
+                "type": "object",
+                "properties": {
+                  "topics": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/NonEmptyString"
+                    },
+                    "readOnly": true
+                  }
+                },
+                "required": [
+                  "topics"
+                ],
+                "additionalProperties": false,
+                "readOnly": true
+              },
+              "returns": {
+                "$ref": "#/components/schemas/NotificationConformancePermissionExpectation",
+                "readOnly": true
+              },
+              "throws": {
+                "$ref": "#/components/schemas/NotificationConformanceThrows",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "input"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "game",
+                "readOnly": true
+              },
+              "action": {
+                "const": "requestPermission",
+                "readOnly": true
+              },
+              "input": {
+                "type": "object",
+                "properties": {
+                  "topics": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/NonEmptyString"
+                    },
+                    "readOnly": true
+                  },
+                  "gesture": {
+                    "type": "boolean",
+                    "readOnly": true
+                  }
+                },
+                "required": [
+                  "topics",
+                  "gesture"
+                ],
+                "additionalProperties": false,
+                "readOnly": true
+              },
+              "returns": {
+                "$ref": "#/components/schemas/NotificationConformanceRequestExpectation",
+                "readOnly": true
+              },
+              "throws": {
+                "$ref": "#/components/schemas/NotificationConformanceThrows",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "input"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "game",
+                "readOnly": true
+              },
+              "action": {
+                "const": "revokePermission",
+                "readOnly": true
+              },
+              "input": {
+                "type": "object",
+                "properties": {
+                  "topics": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/NonEmptyString"
+                    },
+                    "readOnly": true
+                  }
+                },
+                "required": [
+                  "topics"
+                ],
+                "additionalProperties": false,
+                "readOnly": true
+              },
+              "returns": {
+                "$ref": "#/components/schemas/NotificationConformanceRequestExpectation",
+                "readOnly": true
+              },
+              "throws": {
+                "$ref": "#/components/schemas/NotificationConformanceThrows",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "input"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "game",
+                "readOnly": true
+              },
+              "action": {
+                "oneOf": [
+                  {
+                    "const": "register"
+                  },
+                  {
+                    "const": "unregister"
+                  }
+                ],
+                "readOnly": true
+              },
+              "throws": {
+                "$ref": "#/components/schemas/NotificationConformanceThrows",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "game",
+                "readOnly": true
+              },
+              "action": {
+                "const": "setTopicPreference",
+                "readOnly": true
+              },
+              "input": {
+                "type": "object",
+                "properties": {
+                  "topic": {
+                    "$ref": "#/components/schemas/NonEmptyString",
+                    "readOnly": true
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "readOnly": true
+                  }
+                },
+                "required": [
+                  "topic",
+                  "enabled"
+                ],
+                "additionalProperties": false,
+                "readOnly": true
+              },
+              "throws": {
+                "$ref": "#/components/schemas/NotificationConformanceThrows",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "input"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "game",
+                "readOnly": true
+              },
+              "action": {
+                "const": "setAdvertisingConsent",
+                "readOnly": true
+              },
+              "input": {
+                "type": "object",
+                "properties": {
+                  "advertising": {
+                    "oneOf": [
+                      {
+                        "const": "granted"
+                      },
+                      {
+                        "const": "withdrawn"
+                      }
+                    ],
+                    "readOnly": true
+                  },
+                  "night": {
+                    "oneOf": [
+                      {
+                        "const": "granted"
+                      },
+                      {
+                        "const": "withdrawn"
+                      }
+                    ],
+                    "readOnly": true
+                  },
+                  "textVersion": {
+                    "$ref": "#/components/schemas/NonEmptyString",
+                    "readOnly": true
+                  }
+                },
+                "required": [
+                  "textVersion"
+                ],
+                "additionalProperties": false,
+                "readOnly": true
+              },
+              "throws": {
+                "$ref": "#/components/schemas/NotificationConformanceThrows",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "input"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "game",
+                "readOnly": true
+              },
+              "action": {
+                "const": "setReminder",
+                "readOnly": true
+              },
+              "input": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "$ref": "#/components/schemas/NonEmptyString",
+                    "readOnly": true
+                  },
+                  "topic": {
+                    "$ref": "#/components/schemas/NonEmptyString",
+                    "readOnly": true
+                  },
+                  "fireAt": {
+                    "$ref": "#/components/schemas/IsoTimestamp",
+                    "readOnly": true
+                  },
+                  "templateData": {
+                    "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean.o2",
+                    "readOnly": true
+                  },
+                  "link": {
+                    "$ref": "#/components/schemas/NonEmptyString",
+                    "readOnly": true
+                  }
+                },
+                "required": [
+                  "key",
+                  "topic",
+                  "fireAt"
+                ],
+                "additionalProperties": false,
+                "readOnly": true
+              },
+              "returns": {
+                "$ref": "#/components/schemas/NotificationConformanceReminderExpectation",
+                "readOnly": true
+              },
+              "throws": {
+                "$ref": "#/components/schemas/NotificationConformanceThrows",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "input"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "game",
+                "readOnly": true
+              },
+              "action": {
+                "const": "cancelReminder",
+                "readOnly": true
+              },
+              "input": {
+                "type": "object",
+                "properties": {
+                  "key": {
+                    "$ref": "#/components/schemas/NonEmptyString",
+                    "readOnly": true
+                  }
+                },
+                "required": [
+                  "key"
+                ],
+                "additionalProperties": false,
+                "readOnly": true
+              },
+              "returns": {
+                "$ref": "#/components/schemas/NotificationConformanceReminderExpectation",
+                "readOnly": true
+              },
+              "throws": {
+                "$ref": "#/components/schemas/NotificationConformanceThrows",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "input"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "game",
+                "readOnly": true
+              },
+              "action": {
+                "const": "listNotices",
+                "readOnly": true
+              },
+              "returns": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/NotificationConformanceNoticeExpectation"
+                },
+                "readOnly": true
+              },
+              "throws": {
+                "$ref": "#/components/schemas/NotificationConformanceThrows",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "game",
+                "readOnly": true
+              },
+              "action": {
+                "const": "recordNotice",
+                "readOnly": true
+              },
+              "input": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "$ref": "#/components/schemas/NotificationNoticeKind",
+                    "readOnly": true
+                  },
+                  "recordAt": {
+                    "$ref": "#/components/schemas/IsoTimestamp",
+                    "readOnly": true
+                  }
+                },
+                "required": [
+                  "kind",
+                  "recordAt"
+                ],
+                "additionalProperties": false,
+                "readOnly": true
+              },
+              "throws": {
+                "$ref": "#/components/schemas/NotificationConformanceThrows",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "input"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "game",
+                "readOnly": true
+              },
+              "action": {
+                "const": "openSettings",
+                "readOnly": true
+              },
+              "returns": {
+                "oneOf": [
+                  {
+                    "const": "opened"
+                  },
+                  {
+                    "const": "unavailable"
+                  }
+                ],
+                "readOnly": true
+              },
+              "throws": {
+                "$ref": "#/components/schemas/NotificationConformanceThrows",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "game",
+                "readOnly": true
+              },
+              "action": {
+                "const": "subscribe",
+                "readOnly": true
+              },
+              "listener": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "listener"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "backend",
+                "readOnly": true
+              },
+              "action": {
+                "const": "authenticate",
+                "readOnly": true
+              },
+              "player": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "player"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "backend",
+                "readOnly": true
+              },
+              "action": {
+                "const": "deliver",
+                "readOnly": true
+              },
+              "input": {
+                "$ref": "#/components/schemas/NotificationConformanceDeliverInput",
+                "readOnly": true
+              },
+              "returns": {
+                "$ref": "#/components/schemas/NotificationConformanceOutcomeExpectation",
+                "readOnly": true
+              },
+              "throws": {
+                "$ref": "#/components/schemas/NotificationConformanceThrows",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "input"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "backend",
+                "readOnly": true
+              },
+              "action": {
+                "const": "queueProviderResult",
+                "readOnly": true
+              },
+              "result": {
+                "$ref": "#/components/schemas/NotificationConformanceProviderAnswer",
+                "readOnly": true
+              },
+              "retryAfterSeconds": {
+                "$ref": "#/components/schemas/PositiveInteger",
+                "description": "With `rate-limited`: the provider's retry delay (60 seconds when absent).",
+                "readOnly": true
+              },
+              "reason": {
+                "$ref": "#/components/schemas/NotificationConformanceRejectionReason",
+                "description": "With `rejected`: why the provider rejected the send.",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "result"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "backend",
+                "readOnly": true
+              },
+              "action": {
+                "const": "registerEndpoint",
+                "readOnly": true
+              },
+              "input": {
+                "$ref": "#/components/schemas/NotificationConformanceInstallationFixture",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action",
+              "input"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "backend",
+                "readOnly": true
+              },
+              "action": {
+                "const": "revokeSession",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "actor": {
+                "const": "backend",
+                "readOnly": true
+              },
+              "action": {
+                "const": "runScheduler",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "actor",
+              "action"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "NotificationConformanceTapInput": {
+        "type": "object",
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/NotificationChannel",
+            "readOnly": true
+          },
+          "topic": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "route": {
+            "type": "string",
+            "readOnly": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringstring",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "channel"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationConformanceThrows": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationConformanceVector": {
+        "type": "object",
+        "properties": {
+          "vector": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "description": "Equals the file name without `.json`.",
+            "readOnly": true
+          },
+          "protocol": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "summary": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "appliesTo": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationConformancePredicate"
+            },
+            "description": "The capability fields the scenario depends on; a provider runs the vector only when all hold.",
+            "readOnly": true
+          },
+          "profile": {
+            "$ref": "#/components/schemas/NotificationConformanceProfile",
+            "readOnly": true
+          },
+          "catalog": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationTopicDeclaration"
+            },
+            "description": "Topic entries with this profile's mapping under `mapping`. Only the topics\nthe scenario needs; the catalog validator does not check them.",
+            "readOnly": true
+          },
+          "context": {
+            "$ref": "#/components/schemas/NotificationConformanceContextFixture",
+            "readOnly": true
+          },
+          "host": {
+            "$ref": "#/components/schemas/NotificationConformanceHostFixture",
+            "readOnly": true
+          },
+          "deployment": {
+            "$ref": "#/components/schemas/NotificationDeployment",
+            "description": "Backend deployment settings; Asia/Seoul is the zone when `timeZone` is absent.",
+            "readOnly": true
+          },
+          "steps": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/NotificationConformanceStep"
+            },
+            "readOnly": true
+          },
+          "expect": {
+            "$ref": "#/components/schemas/NotificationConformanceExpectation",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "vector",
+          "protocol",
+          "summary",
+          "appliesTo",
+          "profile",
+          "catalog",
+          "context",
+          "steps",
+          "expect"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationConsentKind": {
+        "oneOf": [
+          {
+            "const": "advertising"
+          },
+          {
+            "const": "delivery-permission"
+          },
+          {
+            "const": "host-agreement"
+          },
+          {
+            "const": "night"
+          },
+          {
+            "const": "topic-preference"
+          }
+        ]
+      },
+      "NotificationConsentSource": {
+        "oneOf": [
+          {
+            "const": "client-report"
+          },
+          {
+            "const": "player"
+          },
+          {
+            "const": "provider"
+          }
+        ],
+        "description": "`provider`: a delivery provider's answer that the recipient has not agreed."
+      },
+      "NotificationConsentState": {
+        "oneOf": [
+          {
+            "const": "blocked"
+          },
+          {
+            "const": "denied"
+          },
+          {
+            "const": "granted"
+          },
+          {
+            "const": "prompt-with-rationale"
+          },
+          {
+            "const": "withdrawn"
+          }
+        ]
+      },
+      "NotificationDeliveryStatus": {
+        "oneOf": [
+          {
+            "const": "deferred"
+          },
+          {
+            "const": "delivered"
+          },
+          {
+            "const": "in-flight"
+          },
+          {
+            "const": "suppressed"
+          },
+          {
+            "const": "unavailable"
+          }
+        ]
+      },
+      "NotificationDeployment": {
+        "type": "object",
+        "properties": {
+          "advertisingRules": {
+            "$ref": "#/components/schemas/NotificationAdvertisingRules",
+            "description": "Required when the catalog has an `advertising` topic; absent reads as `none`.",
+            "readOnly": true
+          },
+          "advertisingSender": {
+            "$ref": "#/components/schemas/NotificationAdvertisingSender",
+            "readOnly": true
+          },
+          "advertisingOptOutLine": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The free-of-charge opt-out line; `무료 수신거부: 수신거부 버튼` when absent.",
+            "readOnly": true
+          },
+          "noticeTopic": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The catalog's `notices.topic`, which overdue consent notices are sent through under `kr`.",
+            "readOnly": true
+          },
+          "timeZone": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "IANA zone for recipients that registered none; Asia/Seoul when absent.",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "NotificationLocalCapabilities": {
+        "type": "object",
+        "properties": {
+          "supported": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "maxPending": {
+            "$ref": "#/components/schemas/PositiveQuantity",
+            "description": "Pending-notification ceiling the provider must stay under (iOS: 64).",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "supported"
+        ],
+        "additionalProperties": false,
+        "description": "Local reminders are always inexact, so the capability carries no timing."
+      },
+      "NotificationNoticeKind": {
+        "oneOf": [
+          {
+            "const": "consent-result"
+          },
+          {
+            "const": "reconfirmation"
+          }
+        ]
+      },
+      "NotificationOpenPath": {
+        "oneOf": [
+          {
+            "const": "host-link"
+          },
+          {
+            "const": "landing-url"
+          },
+          {
+            "const": "none"
+          },
+          {
+            "const": "payload"
+          }
+        ]
+      },
+      "NotificationPermissionAllowance": {
+        "oneOf": [
+          {
+            "const": "per-send"
+          },
+          {
+            "const": "persistent"
+          }
+        ]
+      },
+      "NotificationPermissionCapabilities": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/NotificationPermissionScope",
+            "description": "Where delivery permission lives: one for the app, or one per topic.",
+            "readOnly": true
+          },
+          "prompt": {
+            "$ref": "#/components/schemas/NotificationPermissionPrompt",
+            "description": "Who renders the consent UI.",
+            "readOnly": true
+          },
+          "readable": {
+            "type": "boolean",
+            "description": "Whether the client can read the current state without prompting.",
+            "readOnly": true
+          },
+          "serverReadable": {
+            "type": "boolean",
+            "description": "Whether the backend can read the current state at send time (Devvit `isOptedIn`).",
+            "readOnly": true
+          },
+          "allowance": {
+            "$ref": "#/components/schemas/NotificationPermissionAllowance",
+            "description": "'per-send': one acceptance allows one delivery (WeChat one-time subscriptions).",
+            "readOnly": true
+          },
+          "userGesture": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "promptLimit": {
+            "$ref": "#/components/schemas/PositiveQuantity",
+            "description": "How many denials the host accepts before only settings can change the\nanswer: iOS 1, Android 13+ 2. A dismissed dialog is not a denial. Absent\nwhen the host can always ask again (Apps in Toss, Devvit, WeChat).",
+            "readOnly": true
+          },
+          "maxTopicsPerPrompt": {
+            "$ref": "#/components/schemas/PositiveQuantity",
+            "readOnly": true
+          },
+          "settings": {
+            "type": "boolean",
+            "description": "Whether `openSettings` can open the OS or host notification settings.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "scope",
+          "prompt",
+          "readable",
+          "serverReadable",
+          "allowance",
+          "userGesture",
+          "settings"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationPermissionOutcome": {
+        "oneOf": [
+          {
+            "const": "action-required"
+          },
+          {
+            "const": "already-granted"
+          },
+          {
+            "const": "blocked"
+          },
+          {
+            "const": "denied"
+          },
+          {
+            "const": "dismissed"
+          },
+          {
+            "const": "granted"
+          },
+          {
+            "const": "unavailable"
+          }
+        ],
+        "description": "What one `requestPermission` call produced for a topic: the host's answer\nwhen the prompt ran ('granted', 'already-granted', 'denied', and\n'dismissed' when it closed without an answer), 'blocked' when the host\nrefused for good or the call did not reach the prompt because the host read\nwas already blocked, 'action-required' when the host needs a player action\nbefore it can prompt (`requiredAction` names it), and 'unavailable' when the\nprovider is unsupported or the topic has no mapping for it. The snapshot\ncarries the resulting state, so a second Android denial reports outcome\n'denied' with snapshot 'blocked'."
+      },
+      "NotificationPermissionPrompt": {
+        "oneOf": [
+          {
+            "const": "game"
+          },
+          {
+            "const": "host"
+          },
+          {
+            "const": "os"
+          }
+        ]
+      },
+      "NotificationPermissionScope": {
+        "oneOf": [
+          {
+            "const": "app"
+          },
+          {
+            "const": "topic"
+          }
+        ]
+      },
+      "NotificationPermissionState": {
+        "oneOf": [
+          {
+            "const": "action-required"
+          },
+          {
+            "const": "blocked"
+          },
+          {
+            "const": "denied"
+          },
+          {
+            "const": "granted"
+          },
+          {
+            "const": "prompt"
+          },
+          {
+            "const": "prompt-with-rationale"
+          },
+          {
+            "const": "unknown"
+          },
+          {
+            "const": "unsupported"
+          }
+        ]
+      },
+      "NotificationPurpose": {
+        "oneOf": [
+          {
+            "const": "advertising"
+          },
+          {
+            "const": "requested"
+          },
+          {
+            "const": "service"
+          }
+        ],
+        "description": "What a topic is for; it decides the consent a send needs (RFC \"Topics and purposes\")."
+      },
+      "NotificationQuietHours": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "$ref": "#/components/schemas/NotificationClockTime",
+            "readOnly": true
+          },
+          "end": {
+            "$ref": "#/components/schemas/NotificationClockTime",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "additionalProperties": false,
+        "description": "Holds sends from `start` (inclusive) to `end` (exclusive); `start` after `end` spans midnight."
+      },
+      "NotificationReminderRoute": {
+        "oneOf": [
+          {
+            "const": "local"
+          },
+          {
+            "const": "none"
+          },
+          {
+            "const": "remote"
+          }
+        ]
+      },
+      "NotificationReminderStatus": {
+        "oneOf": [
+          {
+            "const": "action-required"
+          },
+          {
+            "const": "advertising-consent-missing"
+          },
+          {
+            "const": "cancelled"
+          },
+          {
+            "const": "capacity-exceeded"
+          },
+          {
+            "const": "frequency-capped"
+          },
+          {
+            "const": "permission-required"
+          },
+          {
+            "const": "preference-off"
+          },
+          {
+            "const": "replaced"
+          },
+          {
+            "const": "request-missing"
+          },
+          {
+            "const": "scheduled"
+          },
+          {
+            "const": "unavailable"
+          }
+        ],
+        "description": "A reminder's answer (RFC `ReminderResult`). The local route reports the\ngate's `permission-denied` as `permission-required`."
+      },
+      "NotificationRemoteAddressing": {
+        "oneOf": [
+          {
+            "const": "device"
+          },
+          {
+            "const": "none"
+          },
+          {
+            "const": "platform-user"
+          }
+        ]
+      },
+      "NotificationRemoteCapabilities": {
+        "type": "object",
+        "properties": {
+          "supported": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "purposes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationPurpose"
+            },
+            "description": "Purposes the host lets the server deliver.",
+            "readOnly": true
+          },
+          "addressing": {
+            "$ref": "#/components/schemas/NotificationRemoteAddressing",
+            "description": "`'none'` exactly when `supported` is false.",
+            "readOnly": true
+          },
+          "content": {
+            "$ref": "#/components/schemas/NotificationRemoteContent",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "supported",
+          "purposes",
+          "addressing",
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationRemoteContent": {
+        "oneOf": [
+          {
+            "const": "free-form"
+          },
+          {
+            "const": "host-template"
+          }
+        ]
+      },
+      "NotificationRequiredAction": {
+        "oneOf": [
+          {
+            "const": "host-settings"
+          },
+          {
+            "const": "login"
+          }
+        ],
+        "description": "The player action a host needs before it can prompt."
+      },
+      "NotificationTopicCopy": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "$ref": "#/components/schemas/NonEmptyString.o1",
+            "readOnly": true
+          },
+          "body": {
+            "$ref": "#/components/schemas/NonEmptyString.o1",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "title",
+          "body"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationTopicDeclaration": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/NonEmptyString.o1",
+            "readOnly": true
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/NotificationPurpose",
+            "readOnly": true
+          },
+          "channels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/NotificationChannel"
+            },
+            "readOnly": true
+          },
+          "route": {
+            "$ref": "#/components/schemas/NonEmptyString.o1",
+            "description": "The route the open leads to; it must pass `isRootRelativeNotificationRoute`.",
+            "readOnly": true
+          },
+          "optOutRoute": {
+            "$ref": "#/components/schemas/NonEmptyString.o1",
+            "description": "Required for `advertising`: the screen where the player withdraws advertising consent.",
+            "readOnly": true
+          },
+          "copy": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringNotificationTopicCopy",
+            "description": "Copy per locale; placeholders use `{{name}}`.",
+            "readOnly": true
+          },
+          "frequency": {
+            "$ref": "#/components/schemas/NotificationTopicFrequency",
+            "readOnly": true
+          },
+          "quietHours": {
+            "$ref": "#/components/schemas/NotificationQuietHours",
+            "readOnly": true
+          },
+          "deferrable": {
+            "type": "boolean",
+            "description": "`false`: a send held by the night window or the topic's quiet hours is\nsuppressed instead of deferred. Default `true`.",
+            "readOnly": true
+          },
+          "mapping": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "id",
+          "purpose",
+          "channels",
+          "route"
+        ],
+        "additionalProperties": false,
+        "description": "A topic resolved for one provider: the definition plus that target's mapping."
+      },
+      "NotificationTopicFrequency": {
+        "type": "object",
+        "properties": {
+          "maxPerDay": {
+            "$ref": "#/components/schemas/PositiveInteger.o1",
+            "description": "Deliveries of the topic to one player within any 24 hours.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "maxPerDay"
+        ],
+        "additionalProperties": false
+      },
+      "PlatformProviderAvailability": {
+        "oneOf": [
+          {
+            "const": "action-required"
+          },
+          {
+            "const": "available"
+          },
+          {
+            "const": "configuration-required"
+          },
+          {
+            "const": "temporarily-unavailable"
+          },
+          {
+            "const": "unsupported"
+          }
+        ],
+        "description": "Readiness of an installed platform provider, independent of target policy."
+      },
+      "PositiveInteger": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "PositiveInteger.o1": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "PositiveQuantity": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "ReadonlyRecordstringNotificationPermissionOutcome": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/NotificationPermissionOutcome"
+        }
+      },
+      "ReadonlyRecordstringNotificationPermissionState": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/NotificationPermissionState"
+        }
+      },
+      "ReadonlyRecordstringNotificationTopicCopy": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/NotificationTopicCopy"
+        }
+      },
+      "ReadonlyRecordstringhostrecord": {
+        "type": "object",
+        "additionalProperties": {
+          "oneOf": [
+            {
+              "const": "host"
+            },
+            {
+              "const": "record"
+            }
+          ]
+        }
+      },
+      "ReadonlyRecordstringreadonlyNotificationConformanceEventExpectation": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "array",
+          "items": {
+            "$ref": "#/components/schemas/NotificationConformanceEventExpectation"
+          }
+        }
+      },
+      "ReadonlyRecordstringstring": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      },
+      "ReadonlyRecordstringstringnumberboolean": {
+        "type": "object",
+        "additionalProperties": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        }
+      },
+      "ReadonlyRecordstringstringnumberboolean.o1": {
+        "type": "object",
+        "additionalProperties": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        }
+      },
+      "ReadonlyRecordstringstringnumberboolean.o2": {
+        "type": "object",
+        "additionalProperties": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

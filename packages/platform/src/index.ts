@@ -1,7 +1,8 @@
 import type { AdProvider } from './ads.js';
-// Only the typia-free contract module may be imported here: headless
+// Only the typia-free contract modules may be imported here: headless
 // consumers type-check this entry with `skipLibCheck: false` and no DOM lib.
 import type { CommerceProvider } from './commerce-contract.js';
+import type { NotificationProvider } from './notifications-contract.js';
 
 export type PlatformTarget =
   | 'browser'
@@ -682,6 +683,15 @@ export interface PlatformGateway {
   readonly presentation?: PresentationAdapter;
   readonly sharing?: ShareAdapter;
   readonly notifications?: NotificationSubscriptionAdapter;
+  /**
+   * Optional notifications v2 provider (`@mpgd/platform/notifications`).
+   * Transitional: adapters expose it next to the v1 `notifications` adapter,
+   * which `toNotificationSubscriptionAdapter` can serve from it, until the
+   * major release that removes v1. Absent on gateways whose target has no v2
+   * provider; N3 gates it on `integrations.notifications` in the target-config
+   * runtime.
+   */
+  readonly notificationsV2?: NotificationProvider;
   readonly promotions?: PromotionRewardAdapter;
   readonly gameActivity?: GameActivityAdapter;
   readonly gameSettings?: GameSettingsAdapter;

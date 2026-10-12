@@ -1,0 +1,41 @@
+{
+  "version": "2026-10-12",
+  "defaultLocale": "ko",
+  "topics": [
+    {
+      "id": "energy-full",
+      "purpose": "requested",
+      "channels": ["local", "remote"],
+      "route": "https://example.com/?entry=continue",
+      "copy": {
+        "en": { "title": "Energy full", "body": "Your energy is full." }
+      },
+      "targets": {
+        "ait": { "agreement": "none" },
+        "reddit": {
+          "title": "Your energy is full again, so come back and keep the streak going",
+          "body": "Your energy is full.",
+          "link": "https://reddit.com/r/game"
+        }
+      }
+    },
+    {
+      "id": "weekend-event",
+      "purpose": "advertising",
+      "channels": ["remote"],
+      "route": "/events/weekend",
+      "copy": {
+        "ko": { "title": "주말 이벤트", "body": "주말 이벤트가 시작됐어요." }
+      },
+      "targets": {
+        "ait": { "templateSetCode": "fixture-weekend-event", "agreement": "required" }
+      }
+    },
+    {
+      "id": "energy-full",
+      "purpose": "service",
+      "channels": ["remote"],
+      "route": "/?entry=continue"
+    }
+  ]
+}

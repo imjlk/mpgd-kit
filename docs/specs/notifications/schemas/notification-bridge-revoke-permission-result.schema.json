@@ -1,0 +1,173 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-bridge-revoke-permission-result.schema.json",
+  "title": "NotificationBridgeRevokePermissionResult",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationPermissionResult",
+  "components": {
+    "schemas": {
+      "NotificationPermissionOutcome": {
+        "oneOf": [
+          {
+            "const": "action-required"
+          },
+          {
+            "const": "already-granted"
+          },
+          {
+            "const": "blocked"
+          },
+          {
+            "const": "denied"
+          },
+          {
+            "const": "dismissed"
+          },
+          {
+            "const": "granted"
+          },
+          {
+            "const": "unavailable"
+          }
+        ],
+        "description": "What one `requestPermission` call produced for a topic: the host's answer\nwhen the prompt ran ('granted', 'already-granted', 'denied', and\n'dismissed' when it closed without an answer), 'blocked' when the host\nrefused for good or the call did not reach the prompt because the host read\nwas already blocked, 'action-required' when the host needs a player action\nbefore it can prompt (`requiredAction` names it), and 'unavailable' when the\nprovider is unsupported or the topic has no mapping for it. The snapshot\ncarries the resulting state, so a second Android denial reports outcome\n'denied' with snapshot 'blocked'."
+      },
+      "NotificationPermissionResult": {
+        "type": "object",
+        "properties": {
+          "snapshot": {
+            "$ref": "#/components/schemas/NotificationPermissionSnapshot",
+            "readOnly": true
+          },
+          "outcomes": {
+            "$ref": "#/components/schemas/ReadonlyRecordNotificationTopicIdNotificationPermissionOutcome",
+            "readOnly": true
+          },
+          "requiredAction": {
+            "$ref": "#/components/schemas/NotificationRequiredAction",
+            "readOnly": true
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/PlatformEvidenceEnvelope",
+            "description": "Host decision for the server record, for example an Apps in Toss agreement event.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "snapshot",
+          "outcomes"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationPermissionSnapshot": {
+        "type": "object",
+        "properties": {
+          "app": {
+            "$ref": "#/components/schemas/NotificationPermissionState",
+            "description": "Present when `permission.scope` is 'app'.",
+            "readOnly": true
+          },
+          "topics": {
+            "$ref": "#/components/schemas/ReadonlyRecordNotificationTopicIdNotificationPermissionState",
+            "readOnly": true
+          },
+          "requiredAction": {
+            "$ref": "#/components/schemas/NotificationRequiredAction",
+            "description": "Present with an `action-required` state.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "topics"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationPermissionState": {
+        "oneOf": [
+          {
+            "const": "action-required"
+          },
+          {
+            "const": "blocked"
+          },
+          {
+            "const": "denied"
+          },
+          {
+            "const": "granted"
+          },
+          {
+            "const": "prompt"
+          },
+          {
+            "const": "prompt-with-rationale"
+          },
+          {
+            "const": "unknown"
+          },
+          {
+            "const": "unsupported"
+          }
+        ]
+      },
+      "NotificationRequiredAction": {
+        "oneOf": [
+          {
+            "const": "host-settings"
+          },
+          {
+            "const": "login"
+          }
+        ],
+        "description": "The player action a host needs before it can prompt."
+      },
+      "PlatformEvidenceEnvelope": {
+        "type": "object",
+        "properties": {
+          "schema": {
+            "type": "string",
+            "readOnly": true
+          },
+          "payload": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringstringnumberboolean",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "schema",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      "ReadonlyRecordNotificationTopicIdNotificationPermissionOutcome": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/NotificationPermissionOutcome"
+        }
+      },
+      "ReadonlyRecordNotificationTopicIdNotificationPermissionState": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/NotificationPermissionState"
+        }
+      },
+      "ReadonlyRecordstringstringnumberboolean": {
+        "type": "object",
+        "additionalProperties": {
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

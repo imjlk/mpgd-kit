@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-deployment.schema.json",
+  "title": "NotificationDeployment",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationDeployment",
+  "components": {
+    "schemas": {
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NotificationAdvertisingRules": {
+        "oneOf": [
+          {
+            "const": "kr"
+          },
+          {
+            "const": "none"
+          }
+        ],
+        "description": "`kr` applies the Korean advertising rules to every recipient; `none` keeps consent and the opt-out route only."
+      },
+      "NotificationAdvertisingSender": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The sender's name; leave it out only when it equals the app's name.",
+            "readOnly": true
+          },
+          "contact": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The phone number or address the law requires.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "contact"
+        ],
+        "additionalProperties": false,
+        "description": "The deployment's advertising sender, which every advertising send carries under `kr`."
+      },
+      "NotificationDeployment": {
+        "type": "object",
+        "properties": {
+          "advertisingRules": {
+            "$ref": "#/components/schemas/NotificationAdvertisingRules",
+            "description": "Required when the catalog has an `advertising` topic; absent reads as `none`.",
+            "readOnly": true
+          },
+          "advertisingSender": {
+            "$ref": "#/components/schemas/NotificationAdvertisingSender",
+            "readOnly": true
+          },
+          "advertisingOptOutLine": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The free-of-charge opt-out line; `무료 수신거부: 수신거부 버튼` when absent.",
+            "readOnly": true
+          },
+          "noticeTopic": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "The catalog's `notices.topic`, which overdue consent notices are sent through under `kr`.",
+            "readOnly": true
+          },
+          "timeZone": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "IANA zone for recipients that registered none; Asia/Seoul when absent.",
+            "readOnly": true
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  }
+}

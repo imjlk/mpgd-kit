@@ -104,8 +104,10 @@ describe('main entry import closure', () => {
   // Headless consumers (`packages/game-runtime` tsconfig.headless.json) type-check
   // this entry with `skipLibCheck: false` and no DOM lib, where typia's root
   // declarations do not compile. The contract types `index.ts` needs live in the
-  // typia-free `commerce-contract.ts`; `commerce.ts` must never be reachable.
-  it('never reaches typia or the commerce validator module', () => {
+  // typia-free `commerce-contract.ts` and `notifications-contract.ts`; the
+  // validator modules `commerce.ts` and `notifications.ts` (and the typia-tagged
+  // `notifications-policy.ts`) must never be reachable.
+  it('never reaches typia or a validator module', () => {
     const root = import.meta.dirname;
     const visited = new Set<string>();
     const pending = [resolve(root, 'index.ts')];
@@ -120,6 +122,8 @@ describe('main entry import closure', () => {
         const specifier = match[1] ?? '';
         expect(specifier, `${file} imports ${specifier}`).not.toBe('typia');
         expect(specifier, `${file} imports ${specifier}`).not.toMatch(/\/commerce(\.js)?$/u);
+        expect(specifier, `${file} imports ${specifier}`)
+          .not.toMatch(/\/notifications(-policy|-vectors|-conformance)?(\.js)?$/u);
         if (specifier.startsWith('.')) {
           pending.push(join(dirname(file), specifier.replace(/\.js$/u, '.ts')));
         }
@@ -129,6 +133,7 @@ describe('main entry import closure', () => {
       'ads.ts',
       'commerce-contract.ts',
       'index.ts',
+      'notifications-contract.ts',
     ]);
   });
 });

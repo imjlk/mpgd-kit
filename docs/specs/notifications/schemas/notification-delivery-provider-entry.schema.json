@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-delivery-provider-entry.schema.json",
+  "title": "NotificationDeliveryProviderEntry",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationDeliveryProviderEntry",
+  "components": {
+    "schemas": {
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NotificationDeliveryProviderEntry": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "purposes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationPurpose"
+            },
+            "readOnly": true
+          },
+          "addressing": {
+            "oneOf": [
+              {
+                "const": "device"
+              },
+              {
+                "const": "platform-user"
+              }
+            ],
+            "readOnly": true
+          },
+          "content": {
+            "$ref": "#/components/schemas/NotificationRemoteContent",
+            "readOnly": true
+          },
+          "permission": {
+            "type": "object",
+            "properties": {
+              "scope": {
+                "$ref": "#/components/schemas/NotificationPermissionScope",
+                "readOnly": true
+              },
+              "serverReadable": {
+                "type": "boolean",
+                "readOnly": true
+              },
+              "allowance": {
+                "$ref": "#/components/schemas/NotificationPermissionAllowance",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "scope",
+              "serverReadable",
+              "allowance"
+            ],
+            "additionalProperties": false,
+            "readOnly": true
+          },
+          "limits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationProviderLimit"
+            },
+            "description": "Per-recipient limits; a window of a day or longer suppresses, a shorter one defers.",
+            "readOnly": true
+          },
+          "rate": {
+            "$ref": "#/components/schemas/NotificationProviderLimit",
+            "description": "App-wide dispatch rate the scheduler keeps to.",
+            "readOnly": true
+          },
+          "expiry": {
+            "type": "boolean",
+            "description": "Whether a send can carry an expiry, which advertising needs under the Korean rules.",
+            "readOnly": true
+          },
+          "actions": {
+            "type": "boolean",
+            "description": "Whether a send can carry the advertising opt-out action.",
+            "readOnly": true
+          },
+          "link": {
+            "type": "boolean",
+            "description": "Whether each send needs a post or comment link (Devvit).",
+            "readOnly": true
+          },
+          "mappingFields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The mapping fields this provider needs in each catalog topic.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "provider",
+          "purposes",
+          "addressing",
+          "content",
+          "permission",
+          "expiry",
+          "actions",
+          "link",
+          "mappingFields"
+        ],
+        "additionalProperties": false,
+        "description": "A delivery provider's server-side registry entry, the gate's only\ncapability input. The runtime compares its provider's capabilities with it\nat start."
+      },
+      "NotificationPermissionAllowance": {
+        "oneOf": [
+          {
+            "const": "per-send"
+          },
+          {
+            "const": "persistent"
+          }
+        ]
+      },
+      "NotificationPermissionScope": {
+        "oneOf": [
+          {
+            "const": "app"
+          },
+          {
+            "const": "topic"
+          }
+        ]
+      },
+      "NotificationProviderLimit": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "$ref": "#/components/schemas/PositiveInteger",
+            "readOnly": true
+          },
+          "windowSeconds": {
+            "$ref": "#/components/schemas/PositiveInteger",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "count",
+          "windowSeconds"
+        ],
+        "additionalProperties": false,
+        "description": "A per-recipient or app-wide count within a rolling window."
+      },
+      "NotificationPurpose": {
+        "oneOf": [
+          {
+            "const": "advertising"
+          },
+          {
+            "const": "requested"
+          },
+          {
+            "const": "service"
+          }
+        ],
+        "description": "What a topic is for; it decides the consent a send needs (RFC \"Topics and purposes\")."
+      },
+      "NotificationRemoteContent": {
+        "oneOf": [
+          {
+            "const": "free-form"
+          },
+          {
+            "const": "host-template"
+          }
+        ]
+      },
+      "PositiveInteger": {
+        "type": "integer",
+        "minimum": 1
+      }
+    }
+  }
+}
