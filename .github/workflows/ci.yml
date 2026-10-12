@@ -975,6 +975,23 @@ jobs:
         run: mise exec -- pnpm smoke:windows-starter
         env:
           MPGD_WINDOWS_SMOKE_ROOT: ${{ runner.temp }}/windows-starter
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: 8.0.425
+      - uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2.0.0
+      - name: Package the generated game in the CI WinUI host
+        shell: powershell
+        env:
+          STARTER_ROOT: ${{ runner.temp }}/windows-starter/path with spaces/game
+          NATIVE_OUTPUT: ${{ runner.temp }}/windows-starter/native
+        run: ./tools/smoke/windows-native/Build-StarterMsix.ps1 -GameDirectory $env:STARTER_ROOT -OutputDirectory $env:NATIVE_OUTPUT
+      - name: Retain unsigned generated starter MSIX packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-starter-native-packages
+          path: ${{ runner.temp }}/windows-starter/native/
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload Windows consumer diagnostics
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ failure() }}
@@ -989,11 +1006,51 @@ jobs:
             ${{ runner.temp }}/windows-starter/path with spaces/game/release-output/**
           retention-days: 7
 
+  test-windows-native-starter:
+    if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
+    needs: [prepare, build-windows-starter]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x64
+            runner: windows-latest
+          - architecture: ARM64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-starter-native-packages
+          path: ${{ runner.temp }}/native-packages
+      - name: Check Windows PowerShell 5.1 acceptance regressions
+        shell: powershell
+        run: ./tools/smoke/windows-native/WindowsMsixSmoke.Tests.ps1
+      - name: Install and activate the generated game MSIX on its native CPU
+        shell: powershell
+        env:
+          NATIVE_ARCH: ${{ matrix.architecture }}
+          PACKAGE_ROOT: ${{ runner.temp }}/native-packages/${{ matrix.architecture }}
+          RECEIPT_ROOT: ${{ runner.temp }}/native-receipts/${{ matrix.architecture }}
+        run: ./tools/smoke/windows-native/Invoke-WindowsMsixSmoke.ps1 -PackageDirectory $env:PACKAGE_ROOT -OutputDirectory $env:RECEIPT_ROOT -SourceMetadata (Join-Path $env:PACKAGE_ROOT 'package-build.json') -Architecture $env:NATIVE_ARCH
+      - name: Retain native startup receipts and failure diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-starter-native-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/native-receipts/${{ matrix.architecture }}/
+          if-no-files-found: warn
+          retention-days: 30
+
   ci-required:
     # Keep one stable required check. An unexpectedly skipped dependency must
     # fail the workflow rather than leave a green-looking partial CI run.
     if: ${{ always() }}
-    needs: [prepare, docs-validation, test-focused, test-browser, compile-tools, test-prepared, build-web-targets, build-windows-starter, build-android, build-ios, build-ait, build-devvit]
+    needs: [prepare, docs-validation, test-focused, test-browser, compile-tools, test-prepared, build-web-targets, build-windows-starter, test-windows-native-starter, build-android, build-ios, build-ait, build-devvit]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
@@ -1011,6 +1068,7 @@ jobs:
       PREPARED_RESULT: ${{ needs.test-prepared.result }}
       WEB_TARGETS_RESULT: ${{ needs.build-web-targets.result }}
       WINDOWS_STARTER_RESULT: ${{ needs.build-windows-starter.result }}
+      WINDOWS_NATIVE_RESULT: ${{ needs.test-windows-native-starter.result }}
       ANDROID_RESULT: ${{ needs.build-android.result }}
       IOS_RESULT: ${{ needs.build-ios.result }}
       AIT_RESULT: ${{ needs.build-ait.result }}

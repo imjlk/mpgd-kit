@@ -79,6 +79,6 @@ writeFileSync(join(outputRoot, 'result.json'), `${JSON.stringify({
   node: process.version,
   checks: ['create', 'packed-install', 'frozen-install', 'typecheck', 'web-build',
     'microsoft-store-pwa-build', 'microsoft-store-pwa-smoke'],
-  scope: 'KIT consumer and Microsoft Store PWA; native WinUI/MSIX launch belongs to mpgd-games CI.',
+  scope: 'KIT packed consumer and Microsoft Store PWA; CI packages this game in a WinUI host for native x64/ARM64 launch checks.',
 }, null, 2)}\n`);
 console.log('Windows starter and Microsoft Store PWA consumer: passed');

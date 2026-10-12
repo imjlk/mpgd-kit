@@ -10,6 +10,7 @@ const resultKeys = [
   ['test-prepared', 'PREPARED_RESULT'],
   ['build-web-targets', 'WEB_TARGETS_RESULT'],
   ['build-windows-starter', 'WINDOWS_STARTER_RESULT'],
+  ['test-windows-native-starter', 'WINDOWS_NATIVE_RESULT'],
   ['build-android', 'ANDROID_RESULT'],
   ['build-ios', 'IOS_RESULT'],
   ['build-ait', 'AIT_RESULT'],
@@ -42,7 +43,7 @@ export function expectedCoverage(env) {
   if (prepared) {
     result['test-browser'] = 'success';
     for (const name of [
-      'compile-tools', 'test-prepared', 'build-web-targets', 'build-windows-starter',
+      'compile-tools', 'test-prepared', 'build-web-targets', 'build-windows-starter', 'test-windows-native-starter',
       'build-android', 'build-ios', 'build-ait', 'build-devvit',
     ]) result[name] = 'success';
   } else if (native) {

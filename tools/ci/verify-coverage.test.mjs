@@ -16,6 +16,7 @@ test('full scope requires every prepared group and target build', () => {
   assert.equal(expected['test-prepared'], 'success');
   assert.equal(expected['build-ios'], 'success');
   assert.equal(expected['build-windows-starter'], 'success');
+  assert.equal(expected['test-windows-native-starter'], 'success');
   assert.equal(expected['test-focused'], 'skipped');
   assert.deepEqual(verifyCoverage({ ...base, ...actualResults(expected) }).mismatches, []);
 });
@@ -26,7 +27,7 @@ test('native scope requires focused and both platform builds, not unrelated suit
   assert.equal(expected['test-focused'], 'success');
   assert.equal(expected['build-android'], 'success');
   assert.equal(expected['build-ios'], 'success');
-  for (const name of ['test-browser', 'compile-tools', 'test-prepared', 'build-web-targets', 'build-windows-starter', 'build-ait', 'build-devvit']) {
+  for (const name of ['test-browser', 'compile-tools', 'test-prepared', 'build-web-targets', 'build-windows-starter', 'test-windows-native-starter', 'build-ait', 'build-devvit']) {
     assert.equal(expected[name], 'skipped');
   }
   assert.deepEqual(verifyCoverage({ ...flags, ...actualResults(expected) }).mismatches, []);
@@ -39,6 +40,8 @@ test('a skipped, failed, cancelled or missing Windows check cannot pass full CI'
   for (const status of ['skipped', 'failure', 'cancelled', undefined]) {
     const incomplete = verifyCoverage({ ...base, ...actual, WINDOWS_STARTER_RESULT: status });
     assert.match(incomplete.mismatches.join(' '), /build-windows-starter should be success/);
+    const nativeIncomplete = verifyCoverage({ ...base, ...actual, WINDOWS_NATIVE_RESULT: status });
+    assert.match(nativeIncomplete.mismatches.join(' '), /test-windows-native-starter should be success/);
   }
 });
 
@@ -72,6 +75,7 @@ function actualResults(expected) {
     PREPARED_RESULT: expected['test-prepared'],
     WEB_TARGETS_RESULT: expected['build-web-targets'],
     WINDOWS_STARTER_RESULT: expected['build-windows-starter'],
+    WINDOWS_NATIVE_RESULT: expected['test-windows-native-starter'],
     ANDROID_RESULT: expected['build-android'],
     IOS_RESULT: expected['build-ios'],
     AIT_RESULT: expected['build-ait'],
