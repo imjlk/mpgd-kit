@@ -476,6 +476,15 @@ export interface ShareIntent {
   readonly kind: 'daily-result' | 'friend-challenge' | 'invite';
   readonly title: string;
   readonly text: string;
+  /**
+   * A root-relative link on the game's origin (`/daily?challengeToken=…`) or an
+   * absolute `https://` (or `http://`) link. Adapters that build a share URL
+   * from it (Apps in Toss and web) check it with `@mpgd/platform/routes` and
+   * answer `unavailable` when it could name another host, contains a control
+   * character, or has another form, such as a page-relative link. Apps in Toss
+   * also accepts its own `intoss://<app>` links. Adapters whose host shares no
+   * link ignore it.
+   */
   readonly deepLink: string;
   readonly payload?: SharePayload;
   readonly previewImageUrl?: string;
