@@ -101,7 +101,7 @@ embeds its exact web bundle in a CI-only WinUI host, and installs x64 and ARM64 
 matching Windows CPUs. It requires packaged .NET/WinUI modules, a native window, WebView2 and the
 generated Phaser canvas to remain ready for 30 seconds without JavaScript/bootstrap errors.
 The native matrix is required by ci-required; unsigned package and startup receipts retain source
-and bundle hashes. See [the CI host and acceptance runbook](../tools/smoke/windows-native/README.md).
+and bundle hashes. See [the CI host and acceptance runbook](https://github.com/imjlk/mpgd-kit/tree/main/tools/smoke/windows-native).
 
 The CI host is not part of the generated game's release output and has no commerce/identity bridge.
 Game-owned WinUI hosts and Store-installed login/purchase behavior still require game acceptance.
