@@ -202,7 +202,12 @@ profiles.
 Commerce v2 PR C3 connects the generated game and the private starter. The
 catalog is the single source of the Devvit SKUs: `platformProductIds.reddit`
 of each one-time product (a subscription with a `reddit` SKU fails
-`pnpm validate:catalog`, since Devvit sells one-time goods only).
+`pnpm validate:catalog`, since Devvit sells one-time goods only). The
+sample `@mpgd/catalog` catalog names no Reddit SKU: Devvit SKUs are
+app-owned, so a game adds `platformProductIds.reddit` together with
+`permissions.payments` and the matching `payments` block in `devvit.json`.
+Until then the Reddit target reports its products as `missing-platform-id`
+and no payments wiring is installed.
 
 - **Webview.** `buildGateways/reddit.ts` passes `commerce` to
   `createDevvitPlatformGateway` when the catalog names any Reddit SKU:

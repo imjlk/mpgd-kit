@@ -395,6 +395,11 @@ function verifyHostProductListValidation(): void {
       },
     });
     validateEffectiveTargetConfigMatrix(withProducts(config.monetization.products), [target]);
+    // Devvit SKUs are app-owned: the sample catalog names none, so the Devvit
+    // server lists nothing and there is no host list to disagree with.
+    if (!config.monetization.products.some((product) => product.platformProductId !== undefined)) {
+      continue;
+    }
     const host = target === 'ait' ? 'Apps in Toss wrapper' : 'Devvit server';
 
     assertThrows(
@@ -555,15 +560,10 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
   }
 
   if (target === 'reddit') {
-    // The kit catalog names a Devvit SKU for every one-time product, so the
-    // effective config lists them as configured; the Devvit server still
-    // decides whether they are sold (commerce v2 opt-in).
     assertEqual(
-      config.monetization.products.every(
-        (product) => product.enabled && product.platformProductId !== undefined,
-      ),
+      config.monetization.products.every((product) => !product.enabled),
       true,
-      'reddit products should be configured from the catalog Devvit SKUs',
+      'reddit products without app-owned Devvit SKUs should be disabled',
     );
     assertEqual(
       config.ads.placements.every((placement) => !placement.enabled),
