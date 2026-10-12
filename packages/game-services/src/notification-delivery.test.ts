@@ -672,24 +672,53 @@ await assertRejects(
   'configured game origin',
   'root-relative links must not escape through URL backslashes',
 );
-for (const [index, deepLink] of [
+const offOriginRootRelativeLinks = [
+  // Dot segments, plain or percent-encoded, collapse into a leading `//`.
   '/.//phishing.example/daily',
   '/levels/..//phishing.example/daily',
   '/%2e//phishing.example/daily',
   '/%2E%2E//phishing.example/daily',
   '/./\\phishing.example/daily',
+  // A backslash after the leading slash names a host, whatever it parses to.
   '/\\mpgd.invalid//phishing.example/daily',
+  '/\\mpgd.invalid/daily',
+  '/\\user:pw@mpgd.invalid:443/daily',
   '/\\ phishing.example/daily',
+  // One percent-decode turns these into the shapes above, and URL parsing
+  // drops the decoded tabs and newlines.
+  '/%2F%2Fphishing.example/daily',
+  '/%5cphishing.example/daily',
+  '/%09/phishing.example/daily',
+  '/%0A%0d/phishing.example/daily',
+  '/%09%5Cphishing.example/daily',
+];
+for (const [index, deepLink] of offOriginRootRelativeLinks.entries()) {
+  await assertRejects(
+    () =>
+      deliveryService.deliver({
+        ...androidRequest,
+        idempotencyKey: `notification-off-origin-link-${String(index)}`,
+        deepLink,
+      }),
+    'configured game origin',
+    `root-relative links must stay a path on the game origin: ${deepLink}`,
+  );
+}
+for (const [index, deepLink] of [
+  'https://game.example/.//phishing.example/daily',
+  'https://game.example//phishing.example/daily',
+  'https://game.example/%2F%2Fphishing.example/daily',
+  'https://game.example/%09/phishing.example/daily',
 ].entries()) {
   await assertRejects(
     () =>
       deliveryService.deliver({
         ...androidRequest,
-        idempotencyKey: `notification-dot-segment-link-${String(index)}`,
+        idempotencyKey: `notification-absolute-network-path-${String(index)}`,
         deepLink,
       }),
-    'configured game origin',
-    `root-relative links must not normalize to a protocol-relative link: ${deepLink}`,
+    'must not begin with an empty segment',
+    `allowed absolute links must not carry a network-path prefix: ${deepLink}`,
   );
 }
 await assertRejects(
@@ -702,38 +731,40 @@ await assertRejects(
   'absolute URL or root-relative path',
   'protocol-relative links should fail validation',
 );
-assertEqual(
-  normalizeNotificationDeliveryRequest(
-    {
-      ...androidRequest,
-      idempotencyKey: 'notification-inner-double-slash-link',
-      deepLink: '/levels//3?from=push#start',
-    },
-    gameDeepLinkPolicy,
-  ).deepLink,
-  '/levels//3?from=push#start',
-  'an inner double slash in a root-relative link should stay a same-origin path',
-);
-assertEqual(
-  normalizeNotificationDeliveryRequest(
-    {
-      ...androidRequest,
-      idempotencyKey: 'notification-dot-segment-same-origin-link',
-      deepLink: '/levels/../daily',
-    },
-    gameDeepLinkPolicy,
-  ).deepLink,
-  '/daily',
-  'dot segments that stay on the game origin should still normalize',
-);
-for (const deepLink of ['/levels//3?from=push#start', '/levels/../daily', '/?//x', '/#//x']) {
+for (const [index, deepLink] of [
+  // 2,049 characters once each é becomes %C3%A9.
+  `/${'é'.repeat(341)}aa`,
+  // 2,049 characters once the empty path becomes `/`.
+  `https://game.example?${'a'.repeat(2_027)}`,
+].entries()) {
+  await assertRejects(
+    () =>
+      deliveryService.deliver({
+        ...androidRequest,
+        idempotencyKey: `notification-overlong-normalized-link-${String(index)}`,
+        deepLink,
+      }),
+    'at most 2048 characters after normalization',
+    'a link that normalizes past the cap should fail before the ledger',
+  );
+}
+for (const [deepLink, expected] of [
+  ['/levels//3?from=push#start', '/levels//3?from=push#start'],
+  ['/levels/../daily', '/daily'],
+  ['/?//x', '/?//x'],
+  ['/#//x', '/#//x'],
+  ['/a/%2Fb', '/a/%2Fb'],
+  [`/${'é'.repeat(341)}a`, `/${'%C3%A9'.repeat(341)}a`],
+  ['https://game.example/levels//3', 'https://game.example/levels//3'],
+] as const) {
   const once = normalizeNotificationDeliveryRequest(
-    { ...androidRequest, idempotencyKey: 'notification-idempotent-link', deepLink },
+    { ...androidRequest, idempotencyKey: 'notification-accepted-link', deepLink },
     gameDeepLinkPolicy,
   );
+  assertEqual(once.deepLink, expected, `an accepted deep link should normalize: ${deepLink}`);
   assertEqual(
     normalizeNotificationDeliveryRequest(once, gameDeepLinkPolicy).deepLink,
-    once.deepLink,
+    expected,
     `normalizing an accepted deep link twice should not change it: ${deepLink}`,
   );
 }
