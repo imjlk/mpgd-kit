@@ -1,5 +1,17 @@
 # @mpgd/capacitor-play-billing
 
+## 0.2.3 — 2026-10-12
+
+### Patch changes
+
+- [5871a314](https://github.com/imjlk/mpgd-kit/commit/5871a31405de4caddd7fbb5d252b452310dd44df) Commerce v2, PR C3: a shell without the native plugin is a configuration
+  problem, not an outage. Capacitor's `UNIMPLEMENTED` answer (the plugin's
+  native code is not in the shell) now makes `getAvailability()` report
+  `configuration-required` instead of `temporarily-unavailable`, so a generated
+  game that registers the store provider before `mpgd target init capacitor
+  --providers` installed the plugin runs and opens no purchase UI. — Thanks @imjlk!
+- Updated dependencies: adapter-capacitor@0.9.3, game-services@0.23.0
+
 ## 0.2.2 — 2026-10-12
 
 ### Patch changes

@@ -1,5 +1,36 @@
 # @mpgd/game-services
 
+## 0.23.0 — 2026-10-12
+
+### Minor changes
+
+- [5871a314](https://github.com/imjlk/mpgd-kit/commit/5871a31405de4caddd7fbb5d252b452310dd44df) Commerce v2, PR C3: `createGameServicesRuntime({ commerceProducts })` passes
+  the catalog kinds and store SKUs (`CommerceReconcilerProduct`) to the
+  commerce v2 reconciler of both the plain and the recoverable client, so a
+  store purchase resolves its catalog kind without a store read. Generated
+  games derive the list from the product catalog's `platformProductIds` for
+  the build's target. — Thanks @imjlk!
+
+### Patch changes
+
+- [a76fc959](https://github.com/imjlk/mpgd-kit/commit/a76fc95900c24419d772bd748f3240998189f551) Notification delivery now rejects deep links that a client could open on
+  another host. Before, a root-relative link whose dot segments collapse into a
+  leading `//`, such as `/.//other.example/path` (also with `%2e` dot segments),
+  passed the same-origin check and normalized to the protocol-relative
+  `//other.example/path`. Delivery now also rejects:
+  
+  - every root-relative link with a backslash right after the leading slash.
+    Most were already rejected, but one naming the internal placeholder host was
+    rewritten to a same-origin path, and `/\ x` threw a raw `TypeError`;
+  - a path that would begin with an empty segment once percent-decoded, such as
+    `/%2F/host`, `/%5Chost`, or `/%09/host`, in root-relative links and in
+    absolute links on an allowed origin. A client that decodes once reads these
+    as `//host`;
+  - an absolute link on an allowed origin whose path starts with `//`, such as
+    `https://game.example//path`, which was accepted before;
+  - a link longer than 2,048 characters after normalization, so a normalized
+    link always normalizes to itself. — Thanks @imjlk!
+
 ## 0.22.0 — 2026-10-12
 
 ### Minor changes

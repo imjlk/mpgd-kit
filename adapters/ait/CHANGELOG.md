@@ -1,5 +1,55 @@
 # @mpgd/adapter-ait
 
+## 0.16.0 — 2026-10-12
+
+### Minor changes
+
+- [5871a314](https://github.com/imjlk/mpgd-kit/commit/5871a31405de4caddd7fbb5d252b452310dd44df) Commerce v2, PR C3: catalog-derived host products for Apps in Toss and Devvit.
+  
+  - `@mpgd/adapter-ait/iap-config` exports `extractAitIapProductConfig(catalog,
+    { target?, sourceLabel? })`: one `AitIapProductConfig` `{ productId, sku }`
+    per one-time product whose `platformProductIds.ait` (or `target`) names the
+    console SKU, for `installAitHostBridge({ iapProducts })`. Subscriptions are
+    skipped; an invalid catalog, a duplicate product id, and a blank, padded,
+    or duplicate SKU throw. It imports no SDK, so a wrapper's build config can
+    call it.
+  - `@mpgd/adapter-devvit` exports `createDevvitCommerceBridgeProducts(catalog,
+    target = 'reddit')` (`{ productId, sku }` for
+    `createDevvitCommerceV2BridgeHandler`, also from
+    `@mpgd/adapter-devvit/server`) and `createDevvitCommerceProducts(catalog,
+    { target?, describe? })` (the `DevvitCommerceProduct` list for
+    `createDevvitPlatformGateway({ commerce })`), both read from
+    `platformProductIds.reddit` so the webview and the server agree on every
+    SKU; subscriptions are skipped and blank, padded, or duplicate SKUs throw.
+  - `@mpgd/adapter-devvit/web` exports `createDevvitWebPaymentsClient()`, the
+    checkout client over `purchase()` from `@devvit/web/client` (one SKU, no
+    client metadata), and `toDevvitCheckoutResult(event)`: `STATUS_SUCCESS`
+    with an order id is `completed`, without one `pending`, `STATUS_CANCELLED`
+    is `cancelled` (`USER_CANCELLED`), `STATUS_ERROR` is `failed` with the
+    platform `errorCode` as `storeCode`, and an unknown status is `pending`, so
+    nothing is granted or dropped on the client. — Thanks @imjlk!
+
+### Patch changes
+
+- [a55cb900](https://github.com/imjlk/mpgd-kit/commit/a55cb9007cca5b0af50fb38df5e8aec1bb452567) Sharing on Apps in Toss now answers `unavailable` for a share link that a
+  client could read as another host, and for any link that contains a control
+  character. A root-relative link with a backslash right after the leading
+  slash used to throw `TypeError: Invalid URL` (`/\ x`), which the bridge
+  reported as a retryable request failure, or was rewritten to an `intoss://`
+  path (`/\` followed by the internal placeholder host). The same rules now
+  apply to the path of root-relative, `https://`, and `intoss://` links, as
+  they do for notification deep links in `@mpgd/game-services`: a path that
+  begins with an empty segment directly (`//host`), after dot segments collapse
+  (`/.//host`), or once percent-decoded (`/%2F/host`, `/%09/host`) is refused.
+  
+  An `intoss://` link is now read as the path it carries and rebuilt, and it
+  must start with exactly `intoss://<app>` followed by `/`, `?`, `#`, or
+  nothing. Before, the raw input was forwarded whenever URL parsing found the
+  app's host, so `intoss://other\@<app>/path`, which Android reads as the host
+  `other`, was shared unchanged. Links with a stray tab or newline, which URL
+  parsing used to drop silently, are now refused rather than shared. — Thanks @imjlk!
+- Updated dependencies: game-runtime@0.6.6
+
 ## 0.15.2 — 2026-10-12
 
 ### Patch changes
