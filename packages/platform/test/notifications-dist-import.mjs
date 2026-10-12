@@ -5,6 +5,7 @@ import {
   assertNotificationCapabilities,
   assertNotificationEventEnvelope,
   checkNotificationNightWindow,
+  createNotificationNoticeIdempotencyKey,
   createNotificationReminderIdempotencyKey,
   createUnsupportedNotificationCapabilities,
   evaluateNotificationDelivery,
@@ -111,8 +112,24 @@ assert.deepEqual(
 );
 assert.deepEqual(checkNotificationNightWindow('2026-10-12T23:00:00Z'), { inside: false });
 assert.deepEqual(
-  listNotificationNotices([advertisingConsent], []).map((notice) => [notice.kind, notice.dueBy]),
+  listNotificationNotices([advertisingConsent], [], '2026-10-12T03:00:00Z')
+    .map((notice) => [notice.kind, notice.dueBy]),
+  [['consent-result', '2026-10-26']],
+);
+// A re-confirmation is listed from 60 days before its due date.
+assert.deepEqual(
+  listNotificationNotices([advertisingConsent], [], '2028-08-11T15:00:00Z')
+    .map((notice) => [notice.kind, notice.dueBy]),
   [['consent-result', '2026-10-26'], ['reconfirmation', '2028-10-11']],
+);
+assert.equal(
+  createNotificationNoticeIdempotencyKey({
+    player: 'p-1',
+    kind: 'reconfirmation',
+    record: { kind: 'advertising', at: '2026-10-12T12:00:00+09:00' },
+    dueBy: '2028-10-11',
+  }),
+  'notice:p-1:reconfirmation:advertising:2026-10-12T03:00:00Z:2028-10-11',
 );
 assert.equal(
   createNotificationReminderIdempotencyKey({ player: 'p-1', key: 'energy', fireAt: '2026-10-12T06:00:00.000Z' }),

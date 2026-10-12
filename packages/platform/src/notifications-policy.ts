@@ -1763,10 +1763,31 @@ export interface NotificationNotice {
   readonly dueBy: string & tags.Format<'date'>;
 }
 
-/** A notice already given: its kind and the time of the record it reported on. */
-export interface NotificationNoticeGiven {
+/**
+ * What names one notice: its kind, the record it reports on (that record's
+ * kind and time), and its `dueBy`. A listed notice carries these fields, and
+ * `notices.recordShown` takes exactly them.
+ */
+export interface NotificationNoticeIdentity {
   readonly kind: NotificationNoticeKind;
-  readonly recordAt: string;
+  readonly record: {
+    readonly kind: 'advertising' | 'night';
+    /** RFC 3339 with an explicit offset; compared as an instant. */
+    readonly at: IsoDateTime;
+  };
+  /** The notice's last Asia/Seoul calendar date, `YYYY-MM-DD`. */
+  readonly dueBy: string & tags.Format<'date'>;
+}
+
+/** Whether two notices are one: the same kind, record kind, record instant, and `dueBy`. */
+export function isSameNotificationNotice(
+  left: NotificationNoticeIdentity,
+  right: NotificationNoticeIdentity,
+): boolean {
+  return left.kind === right.kind
+    && left.record.kind === right.record.kind
+    && left.dueBy === right.dueBy
+    && parseInstant(left.record.at) === parseInstant(right.record.at);
 }
 
 /** Result notice: 14 days after the record's Asia/Seoul date, counted from the next day. */
@@ -1789,51 +1810,72 @@ export function notificationReconfirmationDueBy(at: string, ordinal = 1): string
   return formatCalendarDate(Date.UTC(wall.year + 2 * ordinal, wall.month - 1, day - 1));
 }
 
-/**
- * The notices a player's advertising and night records still owe, ordered by
- * `dueBy` and then `kind`:
- *
- * - a `consent-result` notice for every record that has none given;
- * - per kind whose latest record is a consent, the next `reconfirmation`
- *   notice of that consent: the first one, or the one after the last given,
- *   so silence keeps the series going, a new consent restarts it, and a
- *   withdrawal ends it.
- */
-export function listNotificationNotices(
-  records: readonly NotificationConsentRecord[],
-  given: readonly NotificationNoticeGiven[],
-): readonly NotificationNotice[] {
-  const givenFor = (kind: NotificationNoticeKind, at: string): number => {
-    const instant = parseInstant(at);
-    return given.filter((notice) =>
-      notice.kind === kind && parseInstant(notice.recordAt) === instant).length;
-  };
-  const noticeRecord = (
-    record: Extract<NotificationConsentRecord, { readonly kind: 'advertising' | 'night' }>,
-  ): NotificationNotice['record'] => ({
+/** Days before its `dueBy` from which a re-confirmation is listed. */
+export const notificationReconfirmationListDays = 60;
+
+type NoticeRecord = Extract<NotificationConsentRecord, { readonly kind: 'advertising' | 'night' }>;
+
+function noticeRecordOf(record: NoticeRecord): NotificationNotice['record'] {
+  return {
     kind: record.kind,
     state: record.state,
     at: normalizeNotificationTimestamp(record.at),
     textVersion: record.textVersion,
-  });
+  };
+}
+
+/**
+ * The notices a player's advertising and night records owe at `at`, ordered
+ * by `dueBy` and then `kind`. A notice that `given` names is not listed:
+ *
+ * - a `consent-result` notice for every record;
+ * - per kind whose latest record is a consent, the first re-confirmation of
+ *   that consent not given yet, from `notificationReconfirmationListDays`
+ *   days before its `dueBy`. Each one follows the one before it, so silence
+ *   keeps the series going, a new consent restarts it, and a withdrawal ends
+ *   it.
+ *
+ * A listed notice stays listed after its `dueBy` until it is given.
+ */
+export function listNotificationNotices(
+  records: readonly NotificationConsentRecord[],
+  given: readonly NotificationNoticeIdentity[],
+  at: string,
+): readonly NotificationNotice[] {
+  const today = toSeoulCalendarDate(at);
+  const owed = (notice: NotificationNotice): boolean =>
+    !given.some((entry) => isSameNotificationNotice(entry, notice));
   const notices: NotificationNotice[] = [];
   for (const record of records) {
-    if ((record.kind === 'advertising' || record.kind === 'night') && givenFor('consent-result', record.at) === 0) {
-      notices.push({
+    if (record.kind === 'advertising' || record.kind === 'night') {
+      const notice: NotificationNotice = {
         kind: 'consent-result',
-        record: noticeRecord(record),
+        record: noticeRecordOf(record),
         dueBy: notificationConsentResultDueBy(record.at),
-      });
+      };
+      if (owed(notice)) {
+        notices.push(notice);
+      }
     }
   }
   for (const kind of ['advertising', 'night'] as const) {
     const latest = latestNotificationConsent(records, kind);
-    if (latest !== undefined && latest.kind === kind && latest.state === 'granted') {
-      notices.push({
+    if (latest === undefined || latest.kind !== kind || latest.state !== 'granted') {
+      continue;
+    }
+    // Each given notice has its own due date, so this ends after the last one given.
+    let next: NotificationNotice;
+    let ordinal = 1;
+    do {
+      next = {
         kind: 'reconfirmation',
-        record: noticeRecord(latest),
-        dueBy: notificationReconfirmationDueBy(latest.at, givenFor('reconfirmation', latest.at) + 1),
-      });
+        record: noticeRecordOf(latest),
+        dueBy: notificationReconfirmationDueBy(latest.at, ordinal),
+      };
+      ordinal += 1;
+    } while (!owed(next));
+    if (calendarDaysBefore(next.dueBy, notificationReconfirmationListDays) <= today) {
+      notices.push(next);
     }
   }
   return notices.sort((left, right) =>
@@ -1848,30 +1890,71 @@ export const notificationNoticeLeadDays = 7;
  * `notificationNoticeLeadDays` days before `dueBy`.
  */
 export function notificationNoticeSendFrom(dueBy: string): string {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(dueBy);
+  return calendarDaysBefore(dueBy, notificationNoticeLeadDays);
+}
+
+/** Whether `date` is a calendar date `YYYY-MM-DD` that exists, such as a notice's `dueBy`. */
+export function isNotificationCalendarDate(date: string): boolean {
+  return !Number.isNaN(calendarDateMillis(date));
+}
+
+/** UTC midnight of a `YYYY-MM-DD` date; `NaN` when it does not match or does not exist. */
+function calendarDateMillis(date: string): number {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(date);
   if (match === null) {
-    throw new TypeError(`Invalid calendar date ${dueBy}; expected YYYY-MM-DD.`);
+    return Number.NaN;
   }
-  return formatCalendarDate(
-    Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) - notificationNoticeLeadDays),
-  );
+  const [year, month, day] = match.slice(1, 4).map(Number);
+  if (
+    year === undefined
+    || month === undefined
+    || day === undefined
+    || month < 1
+    || month > 12
+    || day < 1
+    || day > daysInMonth(year, month)
+  ) {
+    return Number.NaN;
+  }
+  const midnight = new Date(0);
+  midnight.setUTCFullYear(year, month - 1, day);
+  return midnight.getTime();
+}
+
+/** The calendar date `days` days before `date`; a date that does not exist is a caller error. */
+function calendarDaysBefore(date: string, days: number): string {
+  const millis = calendarDateMillis(date);
+  if (Number.isNaN(millis)) {
+    throw new TypeError(`Invalid calendar date ${date}; expected YYYY-MM-DD.`);
+  }
+  return formatCalendarDate(millis - days * dayMs);
 }
 
 /**
  * Idempotency key of a scheduled notice:
- * `notice:<player>:<kind>:<record at>`, with the player percent-encoded and
- * the record's time in the canonical form.
+ * `notice:<player>:<kind>:<record kind>:<record at>:<dueBy>`, with the player
+ * percent-encoded, the record's time in the canonical form, and `dueBy` as
+ * `YYYY-MM-DD`. Each notice has its own key: every re-confirmation of one
+ * consent, and the notices of an advertising and a night record written at
+ * one instant.
  */
-export function createNotificationNoticeIdempotencyKey(input: {
-  readonly player: string;
-  readonly kind: NotificationNoticeKind;
-  readonly recordAt: string;
-}): string {
+export function createNotificationNoticeIdempotencyKey(
+  input: NotificationNoticeIdentity & { readonly player: string },
+): string {
   if (input.player.length === 0 || /[\uD800-\uDFFF]/u.test(input.player)) {
     throw new TypeError('Notice idempotency keys need a well-formed, non-empty player.');
   }
-  return `notice:${encodeURIComponent(input.player)}:${input.kind}:`
-    + normalizeNotificationTimestamp(input.recordAt);
+  if (
+    (input.kind !== 'consent-result' && input.kind !== 'reconfirmation')
+    || (input.record.kind !== 'advertising' && input.record.kind !== 'night')
+    || !isNotificationCalendarDate(input.dueBy)
+  ) {
+    throw new TypeError(
+      'Notice idempotency keys need a notice kind, an advertising or night record, and a dueBy date.',
+    );
+  }
+  return `notice:${encodeURIComponent(input.player)}:${input.kind}:${input.record.kind}:`
+    + `${normalizeNotificationTimestamp(input.record.at)}:${input.dueBy}`;
 }
 
 function deepFreeze<Value>(value: Value): Value {

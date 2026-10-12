@@ -23,6 +23,7 @@ import {
   assertNotificationPermissionResult,
   assertNotificationPermissionSnapshot,
   assertNotificationTopicDefinition,
+  assertRecordNotificationNoticeInput,
   createUnsupportedNotificationCapabilities,
   isNotificationCapabilities,
   isNotificationErrorCode,
@@ -280,6 +281,26 @@ describe('notifications contract', () => {
     expect(() => assertNotificationNotice({ ...notice, dueBy: '2028-10-11T00:00:00Z' })).toThrow();
     expect(() => assertNotificationNotice({ ...notice, record: { ...notice.record, kind: 'topic-preference' } }))
       .toThrow();
+    // `recordShown` takes exactly the notice's name: its kind, its record's kind and time, and its dueBy.
+    const named = {
+      kind: 'reconfirmation',
+      record: { kind: 'advertising', at: '2026-10-12T12:00:00+09:00' },
+      dueBy: '2028-10-11',
+    } as const;
+    expect(assertRecordNotificationNoticeInput(named)).toEqual(named);
+    for (const malformed of [
+      notice,
+      { ...named, channel: 'in-game' },
+      { kind: 'reconfirmation', record: named.record },
+      { ...named, recordAt: '2026-10-12T03:00:00Z' },
+      { ...named, record: { ...named.record, kind: 'topic-preference' } },
+      { ...named, record: { ...named.record, at: '2026-10-12T03:00:00' } },
+      { ...named, record: { ...named.record, at: '2026-02-31T03:00:00Z' } },
+      { ...named, dueBy: '2028-02-30' },
+      { ...named, dueBy: '2028-10-11T00:00:00Z' },
+    ]) {
+      expect(() => assertRecordNotificationNoticeInput(malformed), JSON.stringify(malformed)).toThrow();
+    }
     const { mapping: _mapping, ...entry } = referenceNotificationProviders['apps-in-toss'];
     expect(assertNotificationDeliveryProviderEntry(entry)).toEqual(entry);
     expect(() => assertNotificationDeliveryProviderEntry({ ...entry, addressing: 'none' })).toThrow();

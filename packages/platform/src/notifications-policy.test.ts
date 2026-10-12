@@ -11,8 +11,10 @@ import {
   evaluateNotificationReminderConsent,
   fillNotificationTemplate,
   findNotificationCopy,
+  isNotificationCalendarDate,
   isRecordableNotificationPermissionState,
   isRootRelativeNotificationRoute,
+  isSameNotificationNotice,
   latestNotificationConsent,
   listNotificationNotices,
   normalizeNotificationTimestamp,
@@ -22,6 +24,7 @@ import {
   notificationPermissionConsentKind,
   notificationPermissionStateOf,
   notificationReconfirmationDueBy,
+  notificationReconfirmationListDays,
   notificationRegistryMismatch,
   notificationReservedKeyPrefix,
   notificationSendFingerprint,
@@ -38,6 +41,7 @@ import {
   type NotificationConsentRecord,
   type NotificationDeliveryProviderEntry,
   type NotificationDeployment,
+  type NotificationNoticeIdentity,
   type NotificationTopicDeclaration,
 } from './notifications-policy.js';
 
@@ -745,6 +749,12 @@ describe('notification consent notices', () => {
     expect(() => notificationReconfirmationDueBy(noon, 0)).toThrow(/ordinal/u);
     expect(notificationNoticeSendFrom('2026-10-26')).toBe('2026-10-19');
     expect(notificationNoticeSendFrom('2026-11-03')).toBe('2026-10-27');
+    // A date that does not exist is refused rather than rolled over.
+    expect(() => notificationNoticeSendFrom('2026-02-31')).toThrow(/Invalid calendar date/u);
+    expect(isNotificationCalendarDate('2028-02-29')).toBe(true);
+    for (const date of ['2027-02-29', '2026-13-01', '2026-10-1', '2026-10-12T00:00:00Z']) {
+      expect(isNotificationCalendarDate(date), date).toBe(false);
+    }
   });
 
   it('owes a result notice per record and the next re-confirmation per kind whose latest record is a consent', () => {
@@ -756,18 +766,18 @@ describe('notification consent notices', () => {
     ];
     const summary = (notices: ReturnType<typeof listNotificationNotices>) =>
       notices.map((notice) => [notice.kind, notice.record.kind, notice.record.state, notice.dueBy]);
-    expect(summary(listNotificationNotices(records, []))).toEqual([
+    expect(summary(listNotificationNotices(records, [], '2028-09-01T03:00:00Z'))).toEqual([
       ['consent-result', 'advertising', 'granted', '2026-10-26'],
       ['consent-result', 'night', 'granted', '2026-10-27'],
       ['consent-result', 'advertising', 'withdrawn', '2026-11-03'],
       ['reconfirmation', 'night', 'granted', '2028-10-12'],
     ]);
-    // A given notice is matched by its kind and the record's instant, in any spelling.
+    // A given notice is matched by its name, the record's time compared as an instant.
     const given = [
-      { kind: 'consent-result', recordAt: '2026-10-12T12:00:00+09:00' },
-      { kind: 'reconfirmation', recordAt: '2026-10-13T03:00:00Z' },
+      { kind: 'consent-result', record: { kind: 'advertising', at: '2026-10-12T12:00:00+09:00' }, dueBy: '2026-10-26' },
+      { kind: 'reconfirmation', record: { kind: 'night', at: '2026-10-13T03:00:00Z' }, dueBy: '2028-10-12' },
     ] as const;
-    expect(summary(listNotificationNotices(records, given))).toEqual([
+    expect(summary(listNotificationNotices(records, given, '2030-09-01T03:00:00Z'))).toEqual([
       ['consent-result', 'night', 'granted', '2026-10-27'],
       ['consent-result', 'advertising', 'withdrawn', '2026-11-03'],
       ['reconfirmation', 'night', 'granted', '2030-10-12'],
@@ -776,19 +786,81 @@ describe('notification consent notices', () => {
     expect(listNotificationNotices([
       record('advertising', 'granted', { at: noon }),
       record('advertising', 'granted', { at: '2027-01-05T03:00:00Z' }),
-    ], [{ kind: 'reconfirmation', recordAt: noon }])
+    ], [{ kind: 'reconfirmation', record: { kind: 'advertising', at: noon }, dueBy: '2028-10-11' }], '2028-12-01T03:00:00Z')
       .filter((notice) => notice.kind === 'reconfirmation')
       .map((notice) => [notice.record.at, notice.dueBy])).toEqual([['2027-01-05T03:00:00Z', '2029-01-04']]);
   });
 
-  it('keys a scheduled notice by player, kind, and the record time in the canonical form', () => {
+  it('names a notice by its kind, its record kind and time, and its due date', () => {
+    // One call can write an advertising and a night record at one instant.
+    const records = [record('advertising', 'granted', { at: noon }), record('night', 'granted', { at: noon })];
+    const resultOf = (kind: 'advertising' | 'night') =>
+      ({ kind: 'consent-result', record: { kind, at: noon }, dueBy: '2026-10-26' }) as const;
+    // Giving the advertising result notice leaves the night one owed.
+    expect(listNotificationNotices(records, [resultOf('advertising')], noon)
+      .map((notice) => [notice.kind, notice.record.kind])).toEqual([['consent-result', 'night']]);
+    expect(isSameNotificationNotice(resultOf('advertising'), {
+      ...resultOf('advertising'),
+      record: { kind: 'advertising', at: '2026-10-12T12:00:00+09:00' },
+    })).toBe(true);
+    expect(isSameNotificationNotice(resultOf('advertising'), resultOf('night'))).toBe(false);
+    expect(isSameNotificationNotice(resultOf('advertising'), { ...resultOf('advertising'), dueBy: '2026-10-27' }))
+      .toBe(false);
+  });
+
+  it('lists a re-confirmation from 60 days before its due date, once the previous one is given', () => {
+    expect(notificationReconfirmationListDays).toBe(60);
+    const records = [record('advertising', 'granted', { at: noon })];
+    const result = { kind: 'consent-result', record: { kind: 'advertising', at: noon }, dueBy: '2026-10-26' } as const;
+    const first = { kind: 'reconfirmation', record: { kind: 'advertising', at: noon }, dueBy: '2028-10-11' } as const;
+    const listed = (at: string, given: readonly NotificationNoticeIdentity[] = []) =>
+      listNotificationNotices(records, [result, ...given], at).map((notice) => notice.dueBy);
+    // The first one, due 2028-10-11, is listed from 2028-08-12 KST.
+    expect(listed('2028-08-11T14:59:59Z')).toEqual([]);
+    expect(listed('2028-08-11T15:00:00Z')).toEqual(['2028-10-11']);
+    // Overdue, it stays listed until it is given.
+    expect(listed('2029-06-01T03:00:00Z')).toEqual(['2028-10-11']);
+    // Once given, the next one waits for its own window, however late the first was given.
+    expect(listed('2029-06-01T03:00:00Z', [first])).toEqual([]);
+    expect(listed('2030-08-11T14:59:59Z', [first])).toEqual([]);
+    expect(listed('2030-08-11T15:00:00Z', [first])).toEqual(['2030-10-11']);
+    // A notice given twice, or one of another record, does not move the series.
+    expect(listed('2030-08-11T15:00:00Z', [first, first, { ...first, record: { kind: 'night', at: noon } }]))
+      .toEqual(['2030-10-11']);
+  });
+
+  it('keys a scheduled notice by player, kind, record kind, record time, and due date', () => {
     expect(createNotificationNoticeIdempotencyKey({
       player: 'a:b',
       kind: 'consent-result',
-      recordAt: '2026-10-12T12:00:00+09:00',
-    })).toBe('notice:a%3Ab:consent-result:2026-10-12T03:00:00Z');
-    expect(() => createNotificationNoticeIdempotencyKey({ player: '', kind: 'reconfirmation', recordAt: noon }))
-      .toThrow(/non-empty player/u);
+      record: { kind: 'advertising', at: '2026-10-12T12:00:00+09:00' },
+      dueBy: '2026-10-26',
+    })).toBe('notice:a%3Ab:consent-result:advertising:2026-10-12T03:00:00Z:2026-10-26');
+    const result = { player: 'p-1', kind: 'consent-result', record: { kind: 'advertising', at: noon }, dueBy: '2026-10-26' } as const;
+    // The advertising and night notices of records written at one instant have their own keys.
+    expect(createNotificationNoticeIdempotencyKey({ ...result, record: { kind: 'night', at: noon } }))
+      .toBe('notice:p-1:consent-result:night:2026-10-12T03:00:00Z:2026-10-26');
+    expect(createNotificationNoticeIdempotencyKey({ ...result, record: { kind: 'night', at: noon } }))
+      .not.toBe(createNotificationNoticeIdempotencyKey(result));
+    // So does every re-confirmation of one consent.
+    const series = [1, 2, 3].map((ordinal) => createNotificationNoticeIdempotencyKey({
+      ...result,
+      kind: 'reconfirmation',
+      dueBy: notificationReconfirmationDueBy(noon, ordinal),
+    }));
+    expect(series).toEqual([
+      'notice:p-1:reconfirmation:advertising:2026-10-12T03:00:00Z:2028-10-11',
+      'notice:p-1:reconfirmation:advertising:2026-10-12T03:00:00Z:2030-10-11',
+      'notice:p-1:reconfirmation:advertising:2026-10-12T03:00:00Z:2032-10-11',
+    ]);
+    expect(() => createNotificationNoticeIdempotencyKey({ ...result, player: '' })).toThrow(/non-empty player/u);
+    expect(() => createNotificationNoticeIdempotencyKey({ ...result, dueBy: '2026-02-30' })).toThrow(/dueBy date/u);
+    expect(() => createNotificationNoticeIdempotencyKey({
+      ...result,
+      record: { kind: 'topic-preference' as 'night', at: noon },
+    })).toThrow(/advertising or night record/u);
+    expect(() => createNotificationNoticeIdempotencyKey({ ...result, record: { kind: 'night', at: 'today' } }))
+      .toThrow(/Invalid ISO-8601/u);
   });
 });
 

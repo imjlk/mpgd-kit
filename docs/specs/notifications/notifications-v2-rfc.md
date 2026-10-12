@@ -466,7 +466,12 @@ export interface NotificationRuntime {
   };
   readonly notices: {
     list(): Promise<readonly NotificationNotice[]>;
-    recordShown(input: { readonly kind: NotificationNotice['kind']; readonly recordAt: string }): Promise<void>;
+    /** Records a listed notice, named by its kind, its record's kind and time, and its `dueBy`. */
+    recordShown(input: {
+      readonly kind: NotificationNotice['kind'];
+      readonly record: { readonly kind: 'advertising' | 'night'; readonly at: string };
+      readonly dueBy: string;
+    }): Promise<void>;
   };
   openSettings(): Promise<'opened' | 'unavailable'>;
   subscribe(listener: (event: NotificationEvent) => void): () => void;
@@ -822,26 +827,48 @@ functions over Korean calendar dates (Asia/Seoul), and `dueBy` is the last
 day the notice may be given:
 
 - **Result notice.** `dueBy` is 14 days after the record's date, counted from
-  the next day, for every consent, refusal, or withdrawal.
+  the next day, for every consent, refusal, or withdrawal. It is listed as
+  soon as its record exists.
 - **Re-confirmation notice.** It is due every two years, counted from the date
   of the latest consent of that kind:
   - The n-th notice is due by the day before the date 2n years after the
     consent date; a 29 February consent date uses 28 February.
-  - Each one is listed once the previous one is recorded. Silence after a
-    notice keeps the consent, and the series continues.
+  - It is listed from 60 days before its `dueBy`, once the previous one in
+    its series is recorded. Silence after a notice keeps the consent, and the
+    series continues.
   - A new consent restarts the count, and a withdrawal ends it.
 
-The backend lists due notices with the record they report on, including its
+A listed notice stays listed after its `dueBy` until it is recorded.
+
+A notice is named by its kind, the record it reports on (the record's kind
+and time), and its `dueBy`. The backend dates each of a player's records
+strictly after the previous one, so a record's kind and time name it. Every
+re-confirmation of one consent has its own name, and so do the notices of the
+`advertising` and `night` records that one `setAdvertisingConsent` call
+writes.
+
+The backend lists notices with the record they report on, including its
 date, because the notice must state it (decree art. 62-3(2)). It also records
-each notice given: the kind, the record's date, the channel (`in-game`,
-`push`, or `other`), and the time.
+each notice given: the notice's name, the channel (`in-game`, `push`, or
+`other`), and the time.
 
 The game shows a notice in the game and records it through
-`notices.recordShown`. If none is recorded by the start of the day seven days
-before `dueBy`, the scheduler sends it through the catalog's notice topic.
+`notices.recordShown` with the notice's name: its `kind`, its record's `kind`
+and `at`, and its `dueBy`, as `list()` gave them.
 
-- **Key.** `notice:<player>:<kind>:<record at>`, with the player
-  percent-encoded and the record's time in the [canonical form](#timestamps).
+- **Retries.** The backend records a notice only while that notice is listed.
+  Recording a notice that is not listed (already recorded, not yet listed, or
+  unknown) changes nothing, so a retried call is safe.
+- **Malformed input.** A missing field, an unknown key (such as a listed
+  notice's `record.state`), or a time or date that does not parse throws
+  `NOTIFICATIONS_INVALID_INPUT`.
+
+If a notice is not recorded by the start of the day seven days before
+`dueBy`, the scheduler sends it through the catalog's notice topic.
+
+- **Key.** `notice:<player>:<kind>:<record kind>:<record at>:<dueBy>`, with
+  the player percent-encoded, the record's time in the
+  [canonical form](#timestamps), and `dueBy` as `YYYY-MM-DD`.
 - **Template data.** `consentDate`, the record's Asia/Seoul date.
 - **Gate.** The send is a `service` notification through the policy gate,
   never combined with advertising.
@@ -1400,7 +1427,7 @@ Fake defaults:
 | `runtime` | `start`; `restart` (see [Runtime](#runtime)) |
 | `clock` | `set` (`at`), `advance` (`seconds`) |
 | `host` | `queuePrompt` (`result`: `granted`, `already-granted`, `denied`, `dismissed`, `host-terms-declined`); `setPermission` (`state`); `issueEndpoint` (`endpoint`: `{ kind, value }`); `completeAction`; `tap` (`input`: `{ channel, topic?, route?, data? }`) |
-| `game` | The [runtime](#runtime) methods: `getPermission`, `requestPermission` (`topics`, `gesture`), `revokePermission` (`topics`), `register`, `unregister`, `setTopicPreference`, `setAdvertisingConsent`, `setReminder`, `cancelReminder`, `listNotices`, `recordNotice` (`kind`, `recordAt`), `openSettings`, and `subscribe` (`listener` names the listener) |
+| `game` | The [runtime](#runtime) methods: `getPermission`, `requestPermission` (`topics`, `gesture`), `revokePermission` (`topics`), `register`, `unregister`, `setTopicPreference`, `setAdvertisingConsent`, `setReminder`, `cancelReminder`, `listNotices`, `recordNotice` (`kind`, `record` with its `kind` and `at`, and `dueBy`), `openSettings`, and `subscribe` (`listener` names the listener) |
 | `backend` | `authenticate` (`player`); `deliver` (`input`: `topic`, `idempotencyKey`, optional `player` defaulting to `context.player`, `provider`, `templateData`, `data`, `locale`, `link`); `queueProviderResult` (`result`: `accepted`, `unregistered`, `rate-limited` with optional `retryAfterSeconds`, `rejected` with `reason`, or `ambiguous`); `registerEndpoint` (`input`: `installationId`, `kind`, `value`, `permission`; another installation of the same player); `revokeSession` (ends the session that registered the installation); `runScheduler` (process every due reminder, deferred send, and notice) |
 
 `expect` keys; a list is matched exactly in length and order, with only the
@@ -1416,7 +1443,7 @@ listed fields of each item asserted:
 | `local` | `operations` (`op`: `schedule`, `replace`, `cancel`, with `key`, `topic`, `fireAt`, `exact`) and the final `pending` list |
 | `reminders` | Pending server reminders |
 | `events` | An object keyed by listener name, each a list of events |
-| `notices` | The backend's due notices at the end, ordered by `dueBy` and then `kind`: `kind` (`consent-result`, `reconfirmation`), `record` (its `kind` and `state`), `dueBy` (an Asia/Seoul date) |
+| `notices` | The backend's listed notices at the end, ordered by `dueBy` and then `kind`: `kind` (`consent-result`, `reconfirmation`), `record` (its `kind` and `state`), `dueBy` (an Asia/Seoul date) |
 
 | Vector | Checks |
 | --- | --- |
@@ -1433,8 +1460,8 @@ listed fields of each item asserted:
 | `game-rendered-opt-in` | Game prompt, server opt-in, revocation read at send time |
 | `game-rendered-opt-out` | `revokePermission` opts out at the host; the next send is suppressed |
 | `requested-topic-needs-opt-in` | A `requested` topic is suppressed until the player turns it on |
-| `advertising-needs-consent` | Suppressed without consent; rendered with label, sender line, free opt-out line, opt-out action, and expiry; notices due |
-| `advertising-notices` | An unrecorded result notice is sent through the notice topic; re-confirmation repeats every two years |
+| `advertising-needs-consent` | Suppressed without consent; rendered with label, sender line, free opt-out line, opt-out action, and expiry; the result notice is listed, the first re-confirmation not yet |
+| `advertising-notices` | An unrecorded result notice is sent through the notice topic; a re-confirmation is listed 60 days before its `dueBy`; recording it again after that date changes nothing; the next one is listed two years later |
 | `advertising-night-window` | Deferred to 08:00 KST without night consent and sent with an expiry; immediate without expiry with it |
 | `advertising-rules-none` | Without the Korean rules: consent still needed, no window, label, or expiry |
 | `advertising-unsupported-by-host` | A host-template provider refuses an advertising topic |

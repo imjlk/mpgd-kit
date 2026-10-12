@@ -1,7 +1,7 @@
 {
   "vector": "advertising-needs-consent",
   "protocol": "2.0.0-draft.1",
-  "summary": "Under the Korean rules an advertising topic is suppressed without advertising consent even with OS permission. After consent it is delivered with the (광고) label, the sender line, a free opt-out line, a direct opt-out action, and an expiry before the night window; the result and re-confirmation notices become due.",
+  "summary": "Under the Korean rules an advertising topic is suppressed without advertising consent even with OS permission. After consent it is delivered with the (광고) label, the sender line, a free opt-out line, a direct opt-out action, and an expiry before the night window; the consent's result notice is listed, and its first re-confirmation is not listed until 60 days before it is due.",
   "appliesTo": [
     {
       "path": "remote.purposes",
@@ -182,14 +182,6 @@
           "state": "granted"
         },
         "dueBy": "2026-10-26"
-      },
-      {
-        "kind": "reconfirmation",
-        "record": {
-          "kind": "advertising",
-          "state": "granted"
-        },
-        "dueBy": "2028-10-11"
       }
     ]
   }

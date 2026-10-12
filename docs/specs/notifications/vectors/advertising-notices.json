@@ -1,7 +1,7 @@
 {
   "vector": "advertising-notices",
   "protocol": "2.0.0-draft.1",
-  "summary": "Consent notices: the scheduler sends a result notice the game did not record through the notice topic seven days before it is due, and re-confirmation repeats every two years from the consent while the player stays silent.",
+  "summary": "Consent notices: the scheduler sends a result notice the game did not record through the notice topic seven days before it is due. A re-confirmation is listed from 60 days before its due date; once the game records it, recording the same notice again after that date changes nothing, and the next re-confirmation is listed two years later, 60 days before its own due date, while the player stays silent.",
   "appliesTo": [
     {
       "path": "remote.purposes",
@@ -176,8 +176,39 @@
       "action": "recordNotice",
       "input": {
         "kind": "reconfirmation",
-        "recordAt": "2026-10-12T03:00:00Z"
+        "record": {
+          "kind": "advertising",
+          "at": "2026-10-12T03:00:00Z"
+        },
+        "dueBy": "2028-10-11"
       }
+    },
+    {
+      "actor": "game",
+      "action": "listNotices",
+      "returns": []
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2028-11-01T03:00:00Z"
+    },
+    {
+      "actor": "game",
+      "action": "recordNotice",
+      "input": {
+        "kind": "reconfirmation",
+        "record": {
+          "kind": "advertising",
+          "at": "2026-10-12T03:00:00Z"
+        },
+        "dueBy": "2028-10-11"
+      }
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2030-09-01T03:00:00Z"
     },
     {
       "actor": "game",
@@ -187,7 +218,8 @@
           "kind": "reconfirmation",
           "record": {
             "kind": "advertising",
-            "state": "granted"
+            "state": "granted",
+            "at": "2026-10-12T03:00:00Z"
           },
           "dueBy": "2030-10-11"
         }
@@ -197,7 +229,7 @@
   "expect": {
     "deliveries": [
       {
-        "idempotencyKey": "notice:p-1:consent-result:2026-10-12T03:00:00Z",
+        "idempotencyKey": "notice:p-1:consent-result:advertising:2026-10-12T03:00:00Z:2026-10-26",
         "topic": "consent-notice",
         "status": "delivered"
       }

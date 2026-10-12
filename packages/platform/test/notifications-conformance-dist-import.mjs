@@ -38,7 +38,7 @@ const altered = { ...advertisingVector, expect: { ...advertisingVector.expect, n
 const negative = await runNotificationConformanceVector(altered);
 assert.equal(negative.status, 'failed');
 assert.equal(negative.passed, false);
-assert.deepEqual(negative.failures, [{ path: 'notices.length', expected: 0, actual: 2 }]);
+assert.deepEqual(negative.failures, [{ path: 'notices.length', expected: 0, actual: 1 }]);
 
 // A provider without notifications runs only the vector its capabilities satisfy.
 const unsupported = await runNotificationConformanceVectors(vectors, {

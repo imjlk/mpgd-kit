@@ -26,15 +26,17 @@ import type {
   NotificationTopicsInput,
 } from './notifications-contract.js';
 import {
+  isNotificationCalendarDate,
   isRootRelativeNotificationRoute,
   isValidNotificationTimeZone,
+  normalizeNotificationTimestamp,
   notificationPermissionStateOf,
   notificationTopicDefinitionIssues,
   type NotificationConsentRecord,
   type NotificationDeliveryProviderEntry,
   type NotificationDeployment,
   type NotificationNotice,
-  type NotificationNoticeKind,
+  type NotificationNoticeIdentity,
   type NotificationTemplateData,
   type NotificationTopicDefinition,
   type ReminderResult,
@@ -95,8 +97,10 @@ export {
   evaluateNotificationReminderConsent,
   fillNotificationTemplate,
   findNotificationCopy,
+  isNotificationCalendarDate,
   isRecordableNotificationPermissionState,
   isRootRelativeNotificationRoute,
+  isSameNotificationNotice,
   isValidNotificationTimeZone,
   latestNotificationConsent,
   listNotificationNotices,
@@ -114,6 +118,7 @@ export {
   notificationPermissionConsentKind,
   notificationPermissionStateOf,
   notificationReconfirmationDueBy,
+  notificationReconfirmationListDays,
   notificationRegistryMismatch,
   notificationReservedKeyPrefix,
   notificationReservedKeyPrefixes,
@@ -152,7 +157,7 @@ export {
   type NotificationDeployment,
   type NotificationMappingField,
   type NotificationNotice,
-  type NotificationNoticeGiven,
+  type NotificationNoticeIdentity,
   type NotificationNoticeKind,
   type NotificationProviderLimit,
   type NotificationProviderRegistryEntry,
@@ -275,11 +280,11 @@ export interface CancelNotificationReminderInput {
   readonly key: string;
 }
 
-export interface RecordNotificationNoticeInput {
-  readonly kind: NotificationNoticeKind;
-  /** The time of the record the notice reported on. */
-  readonly recordAt: string;
-}
+/**
+ * The notice `notices.recordShown` records: exactly its kind, the kind and time
+ * of the record it reports on, and its `dueBy`, as `notices.list()` gave them.
+ */
+export type RecordNotificationNoticeInput = NotificationNoticeIdentity;
 
 /**
  * The game-facing notifications surface: the provider composed with the
@@ -505,6 +510,23 @@ export const assertNotificationEventEnvelope = typia.createAssertEquals<Notifica
 export const isNotificationEventEnvelope = typia.createEquals<NotificationEventEnvelope>();
 export const assertNotificationConsentRecord = typia.createAssertEquals<NotificationConsentRecord>();
 export const assertNotificationNotice = typia.createAssertEquals<NotificationNotice>();
+const assertRecordNotificationNoticeInputShape =
+  typia.createAssertEquals<RecordNotificationNoticeInput>();
+
+/**
+ * Validates a `notices.recordShown` input: exactly a notice's kind, its
+ * record's kind and time, and its `dueBy`, with no other key (a listed
+ * notice's `record.state` and `record.textVersion` included). The time parses
+ * strictly with an offset, and `dueBy` is a date that exists.
+ */
+export function assertRecordNotificationNoticeInput(input: unknown): RecordNotificationNoticeInput {
+  const notice = assertRecordNotificationNoticeInputShape(input);
+  normalizeNotificationTimestamp(notice.record.at);
+  if (!isNotificationCalendarDate(notice.dueBy)) {
+    throw new TypeError(`A notice's dueBy must be a date that exists: ${notice.dueBy}`);
+  }
+  return notice;
+}
 export const assertNotificationDeliveryProviderEntry =
   typia.createAssertEquals<NotificationDeliveryProviderEntry>();
 const assertNotificationDeploymentShape = typia.createAssertEquals<NotificationDeployment>();

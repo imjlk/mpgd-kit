@@ -21,6 +21,7 @@ import {
   type NotificationSuppressionReason,
   type NotificationTopicDeclaration,
   type NotificationUnavailableReason,
+  type RecordNotificationNoticeInput,
 } from './notifications.js';
 
 /**
@@ -279,7 +280,8 @@ export type NotificationConformanceStep =
   | {
       readonly actor: 'game';
       readonly action: 'recordNotice';
-      readonly input: { readonly kind: NotificationNoticeKind; readonly recordAt: IsoTimestamp };
+      /** The notice's kind, the kind and time of the record it reports on, and its `dueBy`. */
+      readonly input: RecordNotificationNoticeInput;
       readonly throws?: NotificationConformanceThrows;
     }
   | {
@@ -425,7 +427,7 @@ export interface NotificationConformanceExpectation {
   readonly reminders?: readonly NotificationConformanceReminderEntryExpectation[];
   /** Events per listener name. */
   readonly events?: Readonly<Record<string, readonly NotificationConformanceEventExpectation[]>>;
-  /** The backend's due notices at the end, ordered by `dueBy` and then `kind`. */
+  /** The backend's listed notices at the end, ordered by `dueBy` and then `kind`. */
   readonly notices?: readonly NotificationConformanceNoticeExpectation[];
 }
 

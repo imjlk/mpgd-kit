@@ -1,6 +1,7 @@
 import {
   assertNotificationConsentRecord,
   assertNotificationDeployment,
+  assertRecordNotificationNoticeInput,
   createNotificationNoticeIdempotencyKey,
   createNotificationReminderIdempotencyKey,
   evaluateLocalNotificationReminder,
@@ -8,6 +9,7 @@ import {
   evaluateNotificationReminderConsent,
   findNotificationCopy,
   isRecordableNotificationPermissionState,
+  isSameNotificationNotice,
   isValidNotificationTimeZone,
   latestNotificationConsent,
   listNotificationNotices,
@@ -18,7 +20,6 @@ import {
   notificationNoticeSendFrom,
   notificationPermissionConsentKind,
   notificationPermissionStateOf,
-  notificationReconfirmationDueBy,
   notificationRegistryMismatch,
   notificationReservedKeyPrefix,
   notificationSendFingerprint,
@@ -45,7 +46,7 @@ import {
   type NotificationEndpointRegistration,
   type NotificationEvent,
   type NotificationNotice,
-  type NotificationNoticeKind,
+  type NotificationNoticeIdentity,
   type NotificationPermissionOutcome,
   type NotificationPermissionResult,
   type NotificationPermissionSnapshot,
@@ -740,9 +741,12 @@ export interface NotificationConformanceBackendClient {
   setReminder(input: SetNotificationReminderInput): Promise<NotificationConformanceReminderSetStatus>;
   /** Whether a pending reminder with this key, or a waiting send of one, existed. */
   cancelReminder(input: CancelNotificationReminderInput): Promise<boolean>;
-  /** The session player's due notices; none unless the deployment applies the Korean rules. */
+  /** The session player's listed notices; none unless the deployment applies the Korean rules. */
   listNotices(): Promise<readonly NotificationNotice[]>;
-  /** Records a notice given to the session's player. */
+  /**
+   * Records a notice given to the session's player while that notice is
+   * listed; recording one that is not listed changes nothing.
+   */
   recordNotice(
     input: RecordNotificationNoticeInput & { readonly channel: NotificationConformanceNoticeChannel },
   ): Promise<void>;
@@ -805,12 +809,11 @@ export interface NotificationConformanceServerReminder {
   readonly link?: string;
 }
 
-/** A notice given to a player: what it reported on, how, and when. */
-export interface NotificationConformanceNoticeRecord {
+/** A notice given to a player: which notice, how, and when. */
+export interface NotificationConformanceNoticeRecord extends NotificationNoticeIdentity {
   readonly player: string;
-  readonly kind: NotificationNoticeKind;
-  readonly recordAt: string;
   readonly channel: NotificationConformanceNoticeChannel;
+  /** When it was given. */
   readonly at: string;
 }
 
@@ -841,7 +844,7 @@ export interface NotificationConformanceBackend extends NotificationConformanceB
   readonly deliveries: readonly NotificationConformanceDelivery[];
   readonly providerCalls: readonly NotificationConformanceProviderCall[];
   readonly reminders: readonly NotificationConformanceServerReminder[];
-  /** Every player's due notices, ordered by `dueBy` and then `kind`. */
+  /** Every player's listed notices, ordered by `dueBy` and then `kind`. */
   readonly notices: readonly (NotificationNotice & { readonly player: string })[];
   readonly noticesGiven: readonly NotificationConformanceNoticeRecord[];
 }
@@ -876,13 +879,8 @@ interface SendRequest {
 type SendOrigin =
   | { readonly kind: 'send' }
   | { readonly kind: 'reminder'; readonly key: string }
-  | {
-      readonly kind: 'notice';
-      readonly notice: NotificationNoticeKind;
-      readonly recordAt: string;
-      /** Notices of this kind and record given when the send was made: its place in the series. */
-      readonly given: number;
-    };
+  /** The notice the send gives, which names its place in the series. */
+  | { readonly kind: 'notice'; readonly notice: NotificationNoticeIdentity };
 
 type RowState =
   | { readonly status: 'delivered' }
@@ -944,10 +942,10 @@ const noEndpoint: NotificationDeliveryRefusal = { status: 'unavailable', reason:
  *   installation, and `revokeSession` ends it and unbinds the endpoints it
  *   registered. Consent records, registrations, reminders, and notices belong
  *   to the session's player. The backend stamps each record's `at` with its
- *   own clock, strictly after the player's previous record, so each record
- *   names its own instant. It records a notice only while it is owed; a
- *   re-confirmation recorded before the previous one's due date counts as a
- *   repeat of that one, and a pushed notice the game gave while the push
+ *   own clock, strictly after the player's previous record, so a record's
+ *   kind and time name it, and so does each notice that reports on it. It
+ *   records a notice only while that notice is listed, so a retried or early
+ *   call changes nothing, and a pushed notice the game gave while the push
  *   waited is not sent again.
  * - Endpoints: a device endpoint is keyed by provider and installation, keeps
  *   the latest address, permission, and `lastRegisteredAt`, and moves with the
@@ -1048,8 +1046,8 @@ export function createNotificationConformanceBackend(
     consentRows.filter((row) => row.player === player).map((row) => row.record);
   const appendConsent = (player: string, record: NotificationConsentRecord): void => {
     // The backend's clock dates the record, strictly after the player's
-    // previous one: notices, their keys, and the latest record follow it, and
-    // two records written in one call still name different instants.
+    // previous one: a notice names its record by kind and time, so two records
+    // of one kind written while the clock stands still keep their notices apart.
     let at = now();
     for (let index = consentRows.length - 1; index >= 0; index -= 1) {
       const row = consentRows[index];
@@ -1066,23 +1064,14 @@ export function createNotificationConformanceBackend(
   const noticesOf = (player: string): readonly NotificationNotice[] =>
     rules === 'kr'
       ? listNotificationNotices(
-        recordsOf(player),
-        noticesGiven
-          .filter((given) => given.player === player)
-          .map((given) => ({ kind: given.kind, recordAt: given.recordAt })),
-      )
+          recordsOf(player),
+          noticesGiven.filter((given) => given.player === player),
+          clock.now(),
+        )
       : [];
-  const givenCount = (player: string, kind: NotificationNoticeKind, recordAt: string): number =>
-    noticesGiven.filter((given) =>
-      given.player === player && given.kind === kind && given.recordAt === recordAt).length;
-  /** Whether a notice send still has its place in the series: owed, and nothing given since. */
-  const noticeStillOwed = (
-    player: string,
-    origin: Extract<SendOrigin, { readonly kind: 'notice' }>,
-  ): boolean =>
-    givenCount(player, origin.notice, origin.recordAt) === origin.given
-    && noticesOf(player).some((notice) =>
-      notice.kind === origin.notice && notice.record.at === origin.recordAt);
+  /** Whether `notice` is listed for `player` now; only a listed notice is recorded or sent. */
+  const noticeListed = (player: string, notice: NotificationNoticeIdentity): boolean =>
+    noticesOf(player).some((listed) => isSameNotificationNotice(listed, notice));
   const isFresh = (endpoint: NotificationConformanceEndpoint): boolean =>
     now() - Date.parse(endpoint.lastRegisteredAt) < endpointStaleMs;
   const validEndpointsOf = (player: string): NotificationConformanceEndpoint[] =>
@@ -1384,12 +1373,11 @@ export function createNotificationConformanceBackend(
       topic: request.topic,
       at: clock.now(),
     });
-    if (origin.kind === 'notice' && noticeStillOwed(request.player, origin)) {
+    if (origin.kind === 'notice' && noticeListed(request.player, origin.notice)) {
       // A notice the scheduler sent is recorded once it is delivered.
       noticesGiven.push({
+        ...origin.notice,
         player: request.player,
-        kind: origin.notice,
-        recordAt: origin.recordAt,
         channel: 'push',
         at: clock.now(),
       });
@@ -1605,7 +1593,7 @@ export function createNotificationConformanceBackend(
     if (due.length === 0) {
       return;
     }
-    if (held.origin.kind === 'notice' && !noticeStillOwed(held.request.player, held.origin)) {
+    if (held.origin.kind === 'notice' && !noticeListed(held.request.player, held.origin.notice)) {
       // The game gave the notice while the push waited: it is not sent again.
       dropRows(key, held, (row) => due.includes(row));
       return;
@@ -1634,23 +1622,22 @@ export function createNotificationConformanceBackend(
   };
   const sendNotice = async (
     player: string,
-    notice: NotificationNotice,
+    listed: NotificationNotice,
     topic: string,
   ): Promise<void> => {
+    const notice: NotificationNoticeIdentity = {
+      kind: listed.kind,
+      record: { kind: listed.record.kind, at: listed.record.at },
+      dueBy: listed.dueBy,
+    };
     const request: SendRequest = {
-      idempotencyKey: createNotificationNoticeIdempotencyKey({
-        player,
-        kind: notice.kind,
-        recordAt: notice.record.at,
-      }),
+      idempotencyKey: createNotificationNoticeIdempotencyKey({ ...notice, player }),
       player,
       topic,
       templateData: { consentDate: toSeoulCalendarDate(notice.record.at) },
     };
-    const owed = noticesOf(player).some((candidate) =>
-      candidate.kind === notice.kind && candidate.record.at === notice.record.at);
     if (
-      !owed
+      !noticeListed(player, notice)
       || failedNotices.has(request.idempotencyKey)
       || lookup(request.idempotencyKey) !== undefined
       || claims.has(request.idempotencyKey)
@@ -1661,12 +1648,7 @@ export function createNotificationConformanceBackend(
       await sendNew(
         request,
         notificationSendFingerprint(request),
-        {
-          kind: 'notice',
-          notice: notice.kind,
-          recordAt: notice.record.at,
-          given: givenCount(player, notice.kind, notice.record.at),
-        },
+        { kind: 'notice', notice },
         true,
       );
     } catch (error) {
@@ -1907,41 +1889,21 @@ export function createNotificationConformanceBackend(
     async listNotices() {
       return noticesOf(requireSession('listNotices').player);
     },
-    async recordNotice(notice) {
+    async recordNotice(input) {
       const session = requireSession('recordNotice');
-      const recordAt = timestampOrUndefined(notice.recordAt);
-      const reported = recordAt !== undefined
-        && recordsOf(session.player).some((stored) =>
-          (stored.kind === 'advertising' || stored.kind === 'night')
-          && normalizeNotificationTimestamp(stored.at) === recordAt);
-      if (
-        recordAt === undefined
-        || !reported
-        || (notice.kind !== 'consent-result' && notice.kind !== 'reconfirmation')
-      ) {
-        throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
-          message: 'A notice names its kind and the time of an advertising or night record of the player.',
-        });
-      }
-      // Only a notice still owed is recorded, so a retried call never skips the next one.
-      const owed = noticesOf(session.player).some((candidate) =>
-        candidate.kind === notice.kind && candidate.record.at === recordAt);
-      if (!owed) {
+      const { channel, ...named } = input;
+      const notice = recordNoticeInputOf(named);
+      // Only a listed notice is recorded: one already recorded, not listed
+      // yet, or unknown changes nothing, so a retried call is safe.
+      if (!noticeListed(session.player, notice)) {
         return;
       }
-      if (notice.kind === 'reconfirmation') {
-        // The next re-confirmation of the same consent has the same record:
-        // before the previous one's due date has passed, a call repeats that one.
-        const given = givenCount(session.player, 'reconfirmation', recordAt);
-        if (given > 0 && toSeoulCalendarDate(clock.now()) <= notificationReconfirmationDueBy(recordAt, given)) {
-          return;
-        }
-      }
       noticesGiven.push({
-        player: session.player,
         kind: notice.kind,
-        recordAt,
-        channel: notice.channel,
+        record: { kind: notice.record.kind, at: normalizeNotificationTimestamp(notice.record.at) },
+        dueBy: notice.dueBy,
+        player: session.player,
+        channel,
         at: clock.now(),
       });
     },
@@ -2044,6 +2006,19 @@ export function createNotificationConformanceBackend(
       }
     },
   };
+}
+
+/** A well-formed `notices.recordShown` input, or `NOTIFICATIONS_INVALID_INPUT`. */
+function recordNoticeInputOf(input: unknown): RecordNotificationNoticeInput {
+  try {
+    return assertRecordNotificationNoticeInput(input);
+  } catch (error) {
+    throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
+      message: 'A notice is named by its kind, the kind and time of the record it reports on, and '
+        + `its dueBy: ${describeError(error)}`,
+      cause: error,
+    });
+  }
 }
 
 /** Why a reminder's input breaks the RFC bounds, or `undefined`. */
@@ -3370,8 +3345,9 @@ export function createNotificationConformanceRuntime(
         return backend.listNotices();
       },
       async recordShown(request) {
+        const notice = recordNoticeInputOf(request);
         await capabilitiesOf();
-        await backend.recordNotice({ kind: request.kind, recordAt: request.recordAt, channel: 'in-game' });
+        await backend.recordNotice({ ...notice, channel: 'in-game' });
       },
     },
     async openSettings() {

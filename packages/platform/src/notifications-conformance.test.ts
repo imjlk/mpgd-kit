@@ -1242,42 +1242,95 @@ describe('notifications fake backend: the scheduler and reminders', () => {
     clock.set('2026-10-18T15:00:00Z');
     await backend.runScheduler();
     expect(backend.providerCalls.map((call) => [call.sendKey, call.topic, call.content.body])).toEqual([
-      ['notice:p-1:consent-result:2026-10-12T03:00:00Z', 'consent-notice', '2026-10-12에 동의하셨어요.'],
+      ['notice:p-1:consent-result:advertising:2026-10-12T03:00:00Z:2026-10-26', 'consent-notice', '2026-10-12에 동의하셨어요.'],
     ]);
-    expect(backend.noticesGiven.map((given) => [given.kind, given.recordAt, given.channel])).toEqual([
-      ['consent-result', '2026-10-12T03:00:00Z', 'push'],
+    expect(backend.noticesGiven.map((given) => [given.kind, given.record, given.dueBy, given.channel])).toEqual([
+      ['consent-result', { kind: 'advertising', at: '2026-10-12T03:00:00Z' }, '2026-10-26', 'push'],
     ]);
     // Each later run finds it recorded.
     await backend.runScheduler();
     expect(backend.providerCalls).toHaveLength(1);
-    // Two years on, the first re-confirmation goes out; recording it lists the next one.
+    // Two years on, the first re-confirmation goes out; the next one is not listed before its own window.
     for (const [at, dueBy] of [
-      ['2028-10-04T03:00:00Z', '2030-10-11'],
-      ['2030-10-04T03:00:00Z', '2032-10-11'],
+      ['2028-10-04T03:00:00Z', '2028-10-11'],
+      ['2030-10-04T03:00:00Z', '2030-10-11'],
     ] as const) {
       clock.set(at);
       await runtime.register();
-      await backend.runScheduler();
       expect(await runtime.notices.list()).toEqual([expect.objectContaining({ kind: 'reconfirmation', dueBy })]);
+      await backend.runScheduler();
+      expect(await runtime.notices.list()).toEqual([]);
     }
+    // Each notice of the series has its own key.
     expect(backend.providerCalls.map((call) => call.sendKey)).toEqual([
-      'notice:p-1:consent-result:2026-10-12T03:00:00Z',
-      'notice:p-1:reconfirmation:2026-10-12T03:00:00Z',
-      'notice:p-1:reconfirmation:2026-10-12T03:00:00Z',
+      'notice:p-1:consent-result:advertising:2026-10-12T03:00:00Z:2026-10-26',
+      'notice:p-1:reconfirmation:advertising:2026-10-12T03:00:00Z:2028-10-11',
+      'notice:p-1:reconfirmation:advertising:2026-10-12T03:00:00Z:2030-10-11',
     ]);
-    // A notice must name a record of the player.
-    await expect(runtime.notices.recordShown({ kind: 'reconfirmation', recordAt: '2026-10-11T03:00:00Z' }))
-      .rejects.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT' });
-    // Before the pushed notice's due date has passed, the game showing it repeats it.
-    const given = backend.noticesGiven.length;
-    await runtime.notices.recordShown({ kind: 'reconfirmation', recordAt: '2026-10-12T12:00:00+09:00' });
-    expect(backend.noticesGiven).toHaveLength(given);
-    // After it, the game gives the next one in the game.
-    clock.set('2031-01-01T03:00:00Z');
-    await runtime.notices.recordShown({ kind: 'reconfirmation', recordAt: '2026-10-12T12:00:00+09:00' });
-    expect(backend.noticesGiven.at(-1)).toMatchObject({ channel: 'in-game', recordAt: '2026-10-12T03:00:00Z' });
+    expect(backend.noticesGiven.map((given) => [given.kind, given.dueBy, given.channel])).toEqual([
+      ['consent-result', '2026-10-26', 'push'],
+      ['reconfirmation', '2028-10-11', 'push'],
+      ['reconfirmation', '2030-10-11', 'push'],
+    ]);
+    // The game showing a pushed notice again changes nothing.
+    await runtime.notices.recordShown({
+      kind: 'reconfirmation',
+      record: { kind: 'advertising', at: '2026-10-12T12:00:00+09:00' },
+      dueBy: '2030-10-11',
+    });
+    expect(backend.noticesGiven).toHaveLength(3);
+    clock.set('2032-08-11T15:00:00Z');
     expect(await runtime.notices.list())
-      .toEqual([expect.objectContaining({ kind: 'reconfirmation', dueBy: '2034-10-11' })]);
+      .toEqual([expect.objectContaining({ kind: 'reconfirmation', dueBy: '2032-10-11' })]);
+  });
+
+  it('records a notice only while it is listed, so a late retry never skips the next re-confirmation', async () => {
+    const { clock, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
+      deployment: { ...kr, noticeTopic: 'consent-notice' },
+    });
+    backend.authenticate('p-1');
+    await runtime.setAdvertisingConsent({ advertising: 'granted', textVersion: 'ad-v1' });
+    await runtime.notices.recordShown({
+      kind: 'consent-result',
+      record: { kind: 'advertising', at: now },
+      dueBy: '2026-10-26',
+    });
+    const first = {
+      kind: 'reconfirmation',
+      record: { kind: 'advertising', at: '2026-10-12T12:00:00+09:00' },
+      dueBy: '2028-10-11',
+    } as const;
+    // Not listed yet: recording it early changes nothing.
+    await runtime.notices.recordShown(first);
+    expect(backend.noticesGiven).toHaveLength(1);
+    // Shown after its due date, it is recorded once.
+    clock.set('2028-10-20T03:00:00Z');
+    expect(await runtime.notices.list()).toEqual([expect.objectContaining({ kind: 'reconfirmation', dueBy: '2028-10-11' })]);
+    await runtime.notices.recordShown(first);
+    // A retry on a later day changes nothing: the next re-confirmation keeps its place.
+    clock.set('2028-10-25T03:00:00Z');
+    await runtime.notices.recordShown(first);
+    expect(backend.noticesGiven.map((given) => [given.kind, given.dueBy, given.channel])).toEqual([
+      ['consent-result', '2026-10-26', 'in-game'],
+      ['reconfirmation', '2028-10-11', 'in-game'],
+    ]);
+    expect(await runtime.notices.list()).toEqual([]);
+    clock.set('2030-08-11T15:00:00Z');
+    const listed = await runtime.notices.list();
+    expect(listed).toEqual([expect.objectContaining({ kind: 'reconfirmation', dueBy: '2030-10-11' })]);
+    // An unknown notice changes nothing; malformed input throws, a whole listed notice included.
+    await runtime.notices.recordShown({ ...first, record: { kind: 'night', at: now }, dueBy: '2030-10-11' });
+    expect(backend.noticesGiven).toHaveLength(2);
+    for (const malformed of [
+      listed[0],
+      { ...first, dueBy: '2030-02-30' },
+      { ...first, record: { kind: 'advertising', at: '2026-10-12T03:00:00' } },
+      { kind: 'reconfirmation', recordAt: now },
+    ]) {
+      await expect(runtime.notices.recordShown(malformed as typeof first), JSON.stringify(malformed))
+        .rejects.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT' });
+    }
+    expect(backend.noticesGiven).toHaveLength(2);
   });
 
   it('lists no notices without the Korean rules', async () => {
@@ -1588,7 +1641,7 @@ describe('notifications reference runtime and fakes: attribution, failures, and 
     expect(await backend.deliver(send)).toEqual({ status: 'delivered', alreadyProcessed: true });
   });
 
-  it('keeps notices of records written in one call apart, and records a notice only while owed', async () => {
+  it('keeps the notices of records written in one call apart, and records a notice only while listed', async () => {
     const { clock, host, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
       deployment: { ...kr, noticeTopic: 'consent-notice' },
     });
@@ -1598,22 +1651,23 @@ describe('notifications reference runtime and fakes: attribution, failures, and 
     host.queuePrompt('granted');
     await runtime.requestPermission({ topics: ['consent-notice'], gesture: true });
     await runtime.setAdvertisingConsent({ advertising: 'granted', night: 'granted', textVersion: 'ad-v1' });
-    // Each record names its own instant.
+    // Each record has its own time, and each notice names its record's kind too.
     expect(backend.consent.map((record) => record.at)).toEqual([now, '2026-10-12T03:00:00.001Z']);
-    await runtime.notices.recordShown({ kind: 'consent-result', recordAt: now });
-    await runtime.notices.recordShown({ kind: 'reconfirmation', recordAt: now });
+    const advertisingResult = {
+      kind: 'consent-result',
+      record: { kind: 'advertising', at: now },
+      dueBy: '2026-10-26',
+    } as const;
+    await runtime.notices.recordShown(advertisingResult);
     // A retried call records nothing more.
-    await runtime.notices.recordShown({ kind: 'reconfirmation', recordAt: now });
+    await runtime.notices.recordShown(advertisingResult);
+    expect(backend.noticesGiven).toHaveLength(1);
     expect((await runtime.notices.list()).map((notice) => [notice.kind, notice.record.kind, notice.dueBy]))
-      .toEqual([
-        ['consent-result', 'night', '2026-10-26'],
-        ['reconfirmation', 'night', '2028-10-11'],
-        ['reconfirmation', 'advertising', '2030-10-11'],
-      ]);
+      .toEqual([['consent-result', 'night', '2026-10-26']]);
     clock.set('2026-10-18T15:00:00Z');
     await backend.runScheduler();
     expect(backend.providerCalls.map((call) => call.sendKey))
-      .toEqual(['notice:p-1:consent-result:2026-10-12T03:00:00.001Z']);
+      .toEqual(['notice:p-1:consent-result:night:2026-10-12T03:00:00.001Z:2026-10-26']);
   });
 
   it('fails a notice the notice topic cannot render once, and leaves it owed in the game', async () => {
@@ -1771,7 +1825,11 @@ describe('notifications reference runtime and fakes: series and ownership', () =
     await backend.runScheduler();
     expect(backend.deliveries.map((delivery) => delivery.status)).toEqual(['deferred']);
     // The game shows the notice while the push waits.
-    await runtime.notices.recordShown({ kind: 'consent-result', recordAt: now });
+    await runtime.notices.recordShown({
+      kind: 'consent-result',
+      record: { kind: 'advertising', at: now },
+      dueBy: '2026-10-26',
+    });
     clock.advance(3600);
     await backend.runScheduler();
     expect(backend.providerCalls).toHaveLength(1);
