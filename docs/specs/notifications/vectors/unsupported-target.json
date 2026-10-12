@@ -1,0 +1,120 @@
+{
+  "vector": "unsupported-target",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A target without notifications answers unsupported for every read, never reaches a prompt, and treats a reminder as unavailable.",
+  "appliesTo": [
+    {
+      "path": "availability",
+      "equals": "unsupported"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.unsupported",
+    "capabilities": {
+      "availability": "unsupported",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "settings": false
+      },
+      "remote": {
+        "supported": false,
+        "purposes": [],
+        "addressing": "none",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": false,
+        "timing": "none"
+      },
+      "open": "none"
+    }
+  },
+  "catalog": [
+    {
+      "id": "energy-full",
+      "purpose": "requested",
+      "channels": [
+        "local",
+        "remote"
+      ],
+      "route": "/?entry=continue",
+      "copy": {
+        "ko": {
+          "title": "에너지 충전 완료",
+          "body": "에너지가 가득 찼어요."
+        },
+        "en": {
+          "title": "Energy full",
+          "body": "Your energy is full."
+        }
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "game",
+      "action": "getPermission",
+      "input": {
+        "topics": [
+          "energy-full"
+        ]
+      },
+      "returns": {
+        "app": "unsupported",
+        "topics": {
+          "energy-full": "unsupported"
+        }
+      }
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "energy-full"
+        ],
+        "gesture": true
+      },
+      "returns": {
+        "outcomes": {
+          "energy-full": "unavailable"
+        }
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setReminder",
+      "input": {
+        "key": "energy",
+        "topic": "energy-full",
+        "fireAt": "2026-10-12T06:00:00Z"
+      },
+      "returns": {
+        "route": "none",
+        "status": "unavailable"
+      }
+    }
+  ],
+  "expect": {
+    "prompts": 0,
+    "reminders": [],
+    "local": {
+      "operations": [],
+      "pending": []
+    }
+  }
+}

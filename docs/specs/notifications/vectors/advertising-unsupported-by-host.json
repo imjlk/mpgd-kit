@@ -1,0 +1,96 @@
+{
+  "vector": "advertising-unsupported-by-host",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A host-template provider whose remote purposes exclude advertising refuses an advertising topic before any provider call.",
+  "appliesTo": [
+    {
+      "path": "remote.content",
+      "equals": "host-template"
+    },
+    {
+      "path": "remote.purposes",
+      "excludes": "advertising"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.host-template",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "topic",
+        "prompt": "host",
+        "readable": false,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": true,
+        "settings": false
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested"
+        ],
+        "addressing": "platform-user",
+        "content": "host-template"
+      },
+      "local": {
+        "supported": false,
+        "timing": "none"
+      },
+      "open": "landing-url"
+    }
+  },
+  "catalog": [
+    {
+      "id": "weekend-event",
+      "purpose": "advertising",
+      "channels": [
+        "remote"
+      ],
+      "route": "/events/weekend",
+      "optOutRoute": "/settings/notifications",
+      "mapping": {
+        "templateSetCode": "fixture-weekend-event"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "weekend-event",
+        "idempotencyKey": "h-1"
+      },
+      "returns": {
+        "status": "suppressed",
+        "reason": "purpose-unsupported"
+      }
+    }
+  ],
+  "expect": {
+    "deliveries": [
+      {
+        "idempotencyKey": "h-1",
+        "status": "suppressed",
+        "reason": "purpose-unsupported"
+      }
+    ],
+    "providerCalls": []
+  }
+}

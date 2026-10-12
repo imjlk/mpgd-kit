@@ -1,0 +1,173 @@
+{
+  "vector": "os-permission-denied-twice",
+  "protocol": "2.0.0-draft.1",
+  "summary": "The first OS denial leaves one more chance after an explanation; the second is permanent, and later requests only offer settings without reaching the prompt.",
+  "appliesTo": [
+    {
+      "path": "permission.prompt",
+      "equals": "os"
+    },
+    {
+      "path": "permission.scope",
+      "equals": "app"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.os-fcm",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "settings": true
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested",
+          "advertising"
+        ],
+        "addressing": "device",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": true,
+        "maxPending": 64,
+        "timing": "inexact"
+      },
+      "open": "payload"
+    }
+  },
+  "catalog": [
+    {
+      "id": "energy-full",
+      "purpose": "requested",
+      "channels": [
+        "local",
+        "remote"
+      ],
+      "route": "/?entry=continue",
+      "copy": {
+        "ko": {
+          "title": "에너지 충전 완료",
+          "body": "에너지가 가득 찼어요."
+        },
+        "en": {
+          "title": "Energy full",
+          "body": "Your energy is full."
+        }
+      },
+      "mapping": {
+        "channelId": "reminders"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "host": {
+    "deniesBeforeBlocked": 2
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "denied"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "energy-full"
+        ],
+        "gesture": true
+      },
+      "returns": {
+        "outcomes": {
+          "energy-full": "denied"
+        },
+        "snapshot": {
+          "app": "prompt-with-rationale"
+        }
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "denied"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "energy-full"
+        ],
+        "gesture": true
+      },
+      "returns": {
+        "outcomes": {
+          "energy-full": "denied"
+        },
+        "snapshot": {
+          "app": "blocked"
+        }
+      }
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "energy-full"
+        ],
+        "gesture": true
+      },
+      "returns": {
+        "outcomes": {
+          "energy-full": "blocked"
+        },
+        "snapshot": {
+          "app": "blocked"
+        }
+      }
+    },
+    {
+      "actor": "game",
+      "action": "openSettings",
+      "returns": "opened"
+    }
+  ],
+  "expect": {
+    "prompts": 2,
+    "consent": [
+      {
+        "kind": "delivery-permission",
+        "state": "prompt-with-rationale",
+        "source": "client-report"
+      },
+      {
+        "kind": "delivery-permission",
+        "state": "blocked",
+        "source": "client-report"
+      }
+    ]
+  }
+}

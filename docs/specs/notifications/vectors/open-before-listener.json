@@ -1,0 +1,140 @@
+{
+  "vector": "open-before-listener",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A cold-start open emitted before any listener reaches the first subscriber exactly once; a later warm open reaches every current subscriber; neither grants anything.",
+  "appliesTo": [
+    {
+      "path": "open",
+      "equals": "payload"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.os-fcm",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "settings": true
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested",
+          "advertising"
+        ],
+        "addressing": "device",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": true,
+        "maxPending": 64,
+        "timing": "inexact"
+      },
+      "open": "payload"
+    }
+  },
+  "catalog": [
+    {
+      "id": "friend-challenge",
+      "purpose": "service",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=friend-challenge",
+      "copy": {
+        "ko": {
+          "title": "새 도전장",
+          "body": "{{friend}}님이 도전장을 보냈어요."
+        },
+        "en": {
+          "title": "New challenge",
+          "body": "{{friend}} sent you a challenge."
+        }
+      },
+      "mapping": {
+        "channelId": "reminders"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "host",
+      "action": "tap",
+      "input": {
+        "channel": "remote",
+        "topic": "friend-challenge",
+        "route": "/?entry=friend-challenge",
+        "data": {
+          "challengeId": "c-1"
+        }
+      }
+    },
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "game",
+      "action": "subscribe",
+      "listener": "a"
+    },
+    {
+      "actor": "game",
+      "action": "subscribe",
+      "listener": "b"
+    },
+    {
+      "actor": "host",
+      "action": "tap",
+      "input": {
+        "channel": "local",
+        "topic": "friend-challenge",
+        "route": "/?entry=friend-challenge"
+      }
+    }
+  ],
+  "expect": {
+    "events": {
+      "a": [
+        {
+          "type": "opened",
+          "channel": "remote",
+          "source": "cold",
+          "topic": "friend-challenge",
+          "route": "/?entry=friend-challenge",
+          "data": {
+            "challengeId": "c-1"
+          }
+        },
+        {
+          "type": "opened",
+          "channel": "local",
+          "source": "warm",
+          "topic": "friend-challenge",
+          "route": "/?entry=friend-challenge"
+        }
+      ],
+      "b": [
+        {
+          "type": "opened",
+          "channel": "local",
+          "source": "warm",
+          "topic": "friend-challenge",
+          "route": "/?entry=friend-challenge"
+        }
+      ]
+    },
+    "deliveries": []
+  }
+}
