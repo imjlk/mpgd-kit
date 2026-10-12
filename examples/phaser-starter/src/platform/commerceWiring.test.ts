@@ -291,6 +291,82 @@ const withTransaction = (
   }
 }
 
+// A rejected purchase the store still lists stays out of the count bound, so
+// findByTransaction keeps matching it.
+{
+  const memory = createMemoryStorage();
+  const journal = createStorageMonetizationOperationStore({
+    storage: memory.storage,
+    now,
+    maxTerminalRecords: 1,
+  });
+  await journal.reserve(
+    withTransaction(purchaseRecord({ key: 'rejected', state: 'rejected' }), 'GPA.rejected'),
+  );
+  for (const [index, key] of ['cancelled-1', 'cancelled-2', 'cancelled-3'].entries()) {
+    await journal.reserve(
+      purchaseRecord({
+        key,
+        state: 'cancelled',
+        updatedAt: new Date(clock + (index + 1) * 1000).toISOString(),
+      }),
+    );
+  }
+  assert.notEqual(await journal.read('rejected'), undefined, 'a rejected store transaction stays');
+  assert.equal(await journal.read('cancelled-1'), undefined);
+  assert.equal(await journal.read('cancelled-2'), undefined);
+  assert.notEqual(await journal.read('cancelled-3'), undefined);
+}
+
+// The document is bounded in bytes: the oldest terminal records leave, lowest
+// tier first, and open records always stay.
+{
+  const memory = createMemoryStorage();
+  const padding = 'x'.repeat(2_000);
+  const journal = createStorageMonetizationOperationStore({
+    storage: memory.storage,
+    now,
+    maxDocumentBytes: 6_000,
+  });
+  const padded = (record: CommercePurchaseOperationRecord): CommercePurchaseOperationRecord => ({
+    ...record,
+    purchase: {
+      ...record.purchase,
+      evidence: { schema: 'test', payload: { padding } },
+    } as CommercePurchaseOperationRecord['purchase'],
+  }) as CommercePurchaseOperationRecord;
+  await journal.reserve(padded(withTransaction(purchaseRecord({ key: 'open' }), 'GPA.open')));
+  for (const [index, key] of ['granted-old', 'granted-new'].entries()) {
+    await journal.reserve(
+      padded(
+        withTransaction(
+          purchaseRecord({
+            key,
+            state: 'finished',
+            ledgerEntryId: `ledger-${key}`,
+            updatedAt: new Date(clock + index * 1000).toISOString(),
+          }),
+          `GPA.${key}`,
+        ),
+      ),
+    );
+  }
+  await journal.reserve(
+    padded(
+      withTransaction(
+        purchaseRecord({ key: 'rejected', state: 'rejected', updatedAt: new Date(clock + 5_000).toISOString() }),
+        'GPA.rejected',
+      ),
+    ),
+  );
+  const saved = memory.values.get(defaultMonetizationJournalKey);
+  assert.ok(new TextEncoder().encode(JSON.stringify(saved)).length <= 6_000, 'the document fits');
+  assert.notEqual(await journal.read('open'), undefined, 'an open record is never dropped');
+  assert.equal(await journal.read('rejected'), undefined, 'the lower tier leaves first');
+  assert.equal(await journal.read('granted-old'), undefined, 'then the oldest granted purchase');
+  assert.notEqual(await journal.read('granted-new'), undefined);
+}
+
 // Two contexts over the same storage (two tabs, two PWA windows) share the
 // host's Web Locks, so neither loses the other's write.
 {

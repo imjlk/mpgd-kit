@@ -11,15 +11,26 @@ export const defaultMonetizationJournalKey = 'mpgd:monetization-journal';
 /** Terminal records older than this are dropped on the next write (30 days). */
 export const defaultMonetizationJournalRetentionMs = 30 * 24 * 60 * 60 * 1000;
 /**
- * At most this many terminal records without a ledger grant are kept (the
- * most recently settled): finished rewarded ads, cancelled, failed, and
- * rejected attempts. Platform storage bounds one value (the Devvit bridge
- * allows 256 KiB), so the document must not grow with every one of them.
- * Open records are never dropped, and granted purchases (`granted`,
- * `finishing`, `finished` with a ledger entry) leave only by age, so the
- * revocation pass and `findByTransaction` keep them for the whole window.
+ * At most this many terminal records without a ledger grant and without a
+ * store transaction are kept (the most recently settled): finished rewarded
+ * ads and cancelled or failed attempts the store never answered. Platform
+ * storage bounds one value (the Devvit bridge allows 256 KiB), so the
+ * document must not grow with every one of them. Open records are never
+ * dropped; granted purchases (`granted`, `finishing`, `finished` with a
+ * ledger entry) and purchases that still name a store transaction leave by
+ * age, or by the byte budget (`defaultMonetizationJournalMaxDocumentBytes`)
+ * when the document would not fit, so the revocation pass and
+ * `findByTransaction` keep them for the window whenever storage allows.
  */
 export const defaultMonetizationJournalMaxTerminalRecords = 100;
+/**
+ * Upper bound of the serialized document (192 KiB, below the Devvit bridge's
+ * 256 KiB per value). When the records in the window would exceed it, the
+ * oldest terminal records leave first: ungranted ones without a store
+ * transaction, then ungranted ones that still name a store transaction, then
+ * granted purchases. Open records are never dropped.
+ */
+export const defaultMonetizationJournalMaxDocumentBytes = 192 * 1024;
 
 export interface CreateStorageMonetizationOperationStoreInput {
   /** The platform storage adapter (`gateway.storage`); the host owns its durability. */
@@ -30,6 +41,8 @@ export interface CreateStorageMonetizationOperationStoreInput {
   readonly retentionMs?: number;
   /** Defaults to 100 ungranted terminal records; `Infinity` keeps them all within the window. */
   readonly maxTerminalRecords?: number;
+  /** Defaults to 192 KiB of serialized JSON; see `defaultMonetizationJournalMaxDocumentBytes`. */
+  readonly maxDocumentBytes?: number;
   readonly now?: () => number;
   /**
    * Cross-context lock for the read-modify-write of the document; defaults to
@@ -73,6 +86,7 @@ export function createStorageMonetizationOperationStore(
   const retentionMs = input.retentionMs ?? defaultMonetizationJournalRetentionMs;
   const maxTerminalRecords = input.maxTerminalRecords
     ?? defaultMonetizationJournalMaxTerminalRecords;
+  const maxDocumentBytes = input.maxDocumentBytes ?? defaultMonetizationJournalMaxDocumentBytes;
   const now = input.now ?? (() => Date.now());
   const locks = input.locks === undefined ? readHostLockManager() : (input.locks ?? undefined);
   const lockName = `mpgd-monetization-journal:${key}`;
@@ -101,6 +115,8 @@ export function createStorageMonetizationOperationStore(
     const cutoff = now() - retentionMs;
     const terminal: [string, number][] = [];
     const kept: Record<string, MonetizationOperationRecord> = {};
+    /** Terminal records the byte budget may drop, with their drop tier (lower leaves first). */
+    const droppable: [string, number, number][] = [];
     for (const [recordKey, record] of records) {
       const settledAt = terminalSettledAt(record);
       if (settledAt === undefined) {
@@ -109,17 +125,36 @@ export function createStorageMonetizationOperationStore(
         continue;
       } else if (isMonetizationOperationGranted(record)) {
         kept[recordKey] = record;
+        droppable.push([recordKey, settledAt, 2]);
+      } else if (holdsStoreTransaction(record)) {
+        // A rejected or failed purchase the store still lists: the reconciler's
+        // findByTransaction needs it, so the count bound does not drop it.
+        kept[recordKey] = record;
+        droppable.push([recordKey, settledAt, 1]);
       } else {
         terminal.push([recordKey, settledAt]);
       }
     }
     // Newest first; the oldest terminal records beyond the bound are dropped.
     terminal.sort((left, right) => right[1] - left[1]);
-    for (const [recordKey] of terminal.slice(0, Math.max(0, maxTerminalRecords))) {
+    for (const [recordKey, settledAt] of terminal.slice(0, Math.max(0, maxTerminalRecords))) {
       const record = records.get(recordKey);
       if (record !== undefined) {
         kept[recordKey] = record;
+        droppable.push([recordKey, settledAt, 0]);
       }
+    }
+    // The document must fit the host's per-value limit, or every later write
+    // fails and monetization stops: the oldest record of the lowest tier leaves
+    // until it fits. Open records are never dropped.
+    droppable.sort((left, right) => left[2] - right[2] || left[1] - right[1]);
+    let size = documentBytes(kept);
+    for (const [recordKey] of droppable) {
+      if (size <= maxDocumentBytes) {
+        break;
+      }
+      delete kept[recordKey];
+      size = documentBytes(kept);
     }
     const document: JournalDocument = { version: 1, records: kept };
     await input.storage.save({ key, value: document });
@@ -208,6 +243,16 @@ function terminalSettledAt(record: MonetizationOperationRecord): number | undefi
     : record.platformCompletedAt;
   const time = settledAt === undefined ? Number.NaN : Date.parse(settledAt);
   return Number.isFinite(time) ? time : Number.MAX_SAFE_INTEGER;
+}
+
+/** A commerce purchase record that names a store transaction (the store may still list it). */
+function holdsStoreTransaction(record: MonetizationOperationRecord): boolean {
+  return record.kind === 'commerce-purchase' && record.purchase?.transactionId !== undefined;
+}
+
+/** UTF-8 size of the document the records serialize to. */
+function documentBytes(records: Readonly<Record<string, MonetizationOperationRecord>>): number {
+  return new TextEncoder().encode(JSON.stringify({ version: 1, records })).length;
 }
 
 function readHostLockManager(): JournalLockManager | undefined {
