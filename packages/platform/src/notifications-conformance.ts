@@ -876,7 +876,13 @@ interface SendRequest {
 type SendOrigin =
   | { readonly kind: 'send' }
   | { readonly kind: 'reminder'; readonly key: string }
-  | { readonly kind: 'notice'; readonly notice: NotificationNoticeKind; readonly recordAt: string };
+  | {
+      readonly kind: 'notice';
+      readonly notice: NotificationNoticeKind;
+      readonly recordAt: string;
+      /** Notices of this kind and record given when the send was made: its place in the series. */
+      readonly given: number;
+    };
 
 type RowState =
   | { readonly status: 'delivered' }
@@ -939,9 +945,10 @@ const noEndpoint: NotificationDeliveryRefusal = { status: 'unavailable', reason:
  *   registered. Consent records, registrations, reminders, and notices belong
  *   to the session's player. The backend stamps each record's `at` with its
  *   own clock, strictly after the player's previous record, so each record
- *   names its own instant. It records a notice only while it is owed, and a
- *   re-confirmation recorded before the previous one's due date has passed
- *   as a repeat of that one.
+ *   names its own instant. It records a notice only while it is owed; a
+ *   re-confirmation recorded before the previous one's due date counts as a
+ *   repeat of that one, and a pushed notice the game gave while the push
+ *   waited is not sent again.
  * - Endpoints: a device endpoint is keyed by provider and installation, keeps
  *   the latest address, permission, and `lastRegisteredAt`, and moves with the
  *   installation to a newly authenticated player. An address is unique per
@@ -1065,6 +1072,17 @@ export function createNotificationConformanceBackend(
           .map((given) => ({ kind: given.kind, recordAt: given.recordAt })),
       )
       : [];
+  const givenCount = (player: string, kind: NotificationNoticeKind, recordAt: string): number =>
+    noticesGiven.filter((given) =>
+      given.player === player && given.kind === kind && given.recordAt === recordAt).length;
+  /** Whether a notice send still has its place in the series: owed, and nothing given since. */
+  const noticeStillOwed = (
+    player: string,
+    origin: Extract<SendOrigin, { readonly kind: 'notice' }>,
+  ): boolean =>
+    givenCount(player, origin.notice, origin.recordAt) === origin.given
+    && noticesOf(player).some((notice) =>
+      notice.kind === origin.notice && notice.record.at === origin.recordAt);
   const isFresh = (endpoint: NotificationConformanceEndpoint): boolean =>
     now() - Date.parse(endpoint.lastRegisteredAt) < endpointStaleMs;
   const validEndpointsOf = (player: string): NotificationConformanceEndpoint[] =>
@@ -1196,7 +1214,7 @@ export function createNotificationConformanceBackend(
   };
   /**
    * The first `rate-limited` answer defers by `retryAfterSeconds` (60 when
-   * absent); later ones double that delay, without jitter so vectors stay
+   * absent or not positive); later ones double that delay, without jitter so vectors stay
    * deterministic. No deferral runs past 24 hours after the first, and an
    * answer at or after that point gives the send up.
    */
@@ -1366,7 +1384,7 @@ export function createNotificationConformanceBackend(
       topic: request.topic,
       at: clock.now(),
     });
-    if (origin.kind === 'notice') {
+    if (origin.kind === 'notice' && noticeStillOwed(request.player, origin)) {
       // A notice the scheduler sent is recorded once it is delivered.
       noticesGiven.push({
         player: request.player,
@@ -1587,6 +1605,11 @@ export function createNotificationConformanceBackend(
     if (due.length === 0) {
       return;
     }
+    if (held.origin.kind === 'notice' && !noticeStillOwed(held.request.player, held.origin)) {
+      // The game gave the notice while the push waited: it is not sent again.
+      dropRows(key, held, (row) => due.includes(row));
+      return;
+    }
     const previous = held.outcome;
     // From here the scheduler owns the send: an ambiguous answer waits out the lease.
     held.scheduled = true;
@@ -1638,7 +1661,12 @@ export function createNotificationConformanceBackend(
       await sendNew(
         request,
         notificationSendFingerprint(request),
-        { kind: 'notice', notice: notice.kind, recordAt: notice.record.at },
+        {
+          kind: 'notice',
+          notice: notice.kind,
+          recordAt: notice.record.at,
+          given: givenCount(player, notice.kind, notice.record.at),
+        },
         true,
       );
     } catch (error) {
@@ -1802,6 +1830,12 @@ export function createNotificationConformanceBackend(
           message: `Invalid server reminder: ${issue ?? `topic ${reminder.topic} has no remote channel`}.`,
         });
       }
+      if (topic.purpose === 'advertising' && input.deployment?.advertisingRules === undefined) {
+        // The gate would refuse every send of it, so it is refused now.
+        throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
+          message: `Advertising topic ${topic.id} needs the deployment's advertisingRules.`,
+        });
+      }
       const stored: NotificationConformanceServerReminder = {
         player: session.player,
         key: reminder.key,
@@ -1898,9 +1932,7 @@ export function createNotificationConformanceBackend(
       if (notice.kind === 'reconfirmation') {
         // The next re-confirmation of the same consent has the same record:
         // before the previous one's due date has passed, a call repeats that one.
-        const given = noticesGiven.filter((entry) =>
-          entry.player === session.player && entry.kind === 'reconfirmation' && entry.recordAt === recordAt)
-          .length;
+        const given = givenCount(session.player, 'reconfirmation', recordAt);
         if (given > 0 && toSeoulCalendarDate(clock.now()) <= notificationReconfirmationDueBy(recordAt, given)) {
           return;
         }
@@ -2513,6 +2545,14 @@ export function createNotificationConformanceRuntime(
       });
     }
     return player;
+  };
+  /** Refuses a server call when another player signed in after the call began. */
+  const assertSamePlayer = (operation: string, player: string | undefined): void => {
+    if (sessionPlayer() !== player) {
+      throw new NotificationError('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
+        message: `${operation} began for another player; ask again for the player signed in now.`,
+      });
+    }
   };
   /**
    * The records the decided states in `observations` call for, for `player`:
@@ -3191,6 +3231,11 @@ export function createNotificationConformanceRuntime(
           message: 'setTopicPreference needs a declared topic and a boolean.',
         });
       }
+      if (!request.enabled && sessionPlayer() === undefined) {
+        // The device stops showing the topic's reminders even before the
+        // player signs in; the withdrawal itself needs the player.
+        await cancelLocalWhere((entry) => entry.topic === request.topic);
+      }
       const player = requirePlayer('setTopicPreference');
       await capabilitiesOf();
       // The withdrawal is recorded first, so the server stops sending and no
@@ -3251,6 +3296,8 @@ export function createNotificationConformanceRuntime(
             message: `Invalid reminder: ${issue}.`,
           });
         }
+        // A server reminder belongs to the player signed in when the call began.
+        const player = sessionPlayer();
         const capabilities = await capabilitiesOf();
         const topic = topicOf(request.topic);
         if (topic === undefined) {
@@ -3278,6 +3325,7 @@ export function createNotificationConformanceRuntime(
         if (capabilities.local.supported) {
           await enqueue('local', () => removeLocalKey(request.key));
         }
+        assertSamePlayer('reminders.set', player);
         return {
           route,
           status: await backend.setReminder({
@@ -3296,6 +3344,7 @@ export function createNotificationConformanceRuntime(
             message: `Invalid reminder key: ${issue}.`,
           });
         }
+        const player = sessionPlayer();
         const capabilities = await capabilitiesOf();
         const local = capabilities.local.supported
           && (await enqueue('local', () => removeLocalKey(request.key)));
@@ -3306,6 +3355,7 @@ export function createNotificationConformanceRuntime(
           if (capabilities.availability === 'action-required') {
             return { route: 'remote', status: 'action-required' };
           }
+          assertSamePlayer('reminders.cancel', player);
           if (await backend.cancelReminder({ key: request.key })) {
             return { route: 'remote', status: 'cancelled' };
           }
@@ -3579,7 +3629,14 @@ export async function runNotificationConformanceVector(
     passed: false,
     failures,
   });
-  const clock = createNotificationConformanceClock(vector.context.now);
+  let clock: NotificationConformanceClock;
+  try {
+    clock = createNotificationConformanceClock(vector.context.now);
+  } catch (error) {
+    return failed([
+      { path: 'context.now', expected: 'an RFC 3339 instant', actual: describeError(error) },
+    ]);
+  }
   const context: NotificationConformanceContext = {
     vector,
     profile: vector.profile,

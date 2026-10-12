@@ -2,6 +2,7 @@ import typia, { type tags } from 'typia';
 
 import {
   isValidNotificationTimeZone,
+  normalizeNotificationTimestamp,
   notificationTopicDefinitionIssues,
   type NotificationCapabilities,
   type NotificationChannel,
@@ -456,7 +457,8 @@ const assertNotificationConformanceVectorShape =
  * Validates one vector file: the shape, steps that expect either an answer or
  * an error, provider answers whose fields fit them (`retryAfterSeconds` only
  * with `rate-limited`, a `reason` exactly with `rejected`), time zones that
- * `Intl` knows, unique catalog topic ids that meet the topic definition rules,
+ * `Intl` knows, clock instants that parse strictly (`context.now` and
+ * `clock.set`), unique catalog topic ids that meet the topic definition rules,
  * and that the vector's own fixture profile satisfies its `appliesTo`
  * predicates.
  */
@@ -466,6 +468,13 @@ export function assertNotificationConformanceVector(input: unknown): Notificatio
     if (zone !== undefined && !isValidNotificationTimeZone(zone)) {
       throw new TypeError(`Vector ${vector.vector} names an unknown time zone: ${zone}`);
     }
+  }
+  // The instants that drive the clock parse strictly: no calendar rollover.
+  for (const at of [
+    vector.context.now,
+    ...vector.steps.flatMap((step) => (step.actor === 'clock' && step.action === 'set' ? [step.at] : [])),
+  ]) {
+    normalizeNotificationTimestamp(at);
   }
   for (const [index, step] of vector.steps.entries()) {
     const issue = stepIssue(step);

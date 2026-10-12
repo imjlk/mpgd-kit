@@ -1754,3 +1754,78 @@ describe('notifications reference runtime and fakes: attribution, failures, and 
       .toMatchObject({ status: 'deferred', reason: 'quiet-hours' });
   });
 });
+
+describe('notifications reference runtime and fakes: series and ownership', () => {
+  it('does not send a notice again that the game gave while its push waited', async () => {
+    const { clock, host, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
+      deployment: { ...kr, noticeTopic: 'consent-notice' },
+    });
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['consent-notice'], gesture: true });
+    await runtime.setAdvertisingConsent({ advertising: 'granted', textVersion: 'ad-v1' });
+    clock.set('2026-10-19T03:00:00Z');
+    backend.queueProviderResult({ status: 'rate-limited', retryAfterSeconds: 3600 });
+    await backend.runScheduler();
+    expect(backend.deliveries.map((delivery) => delivery.status)).toEqual(['deferred']);
+    // The game shows the notice while the push waits.
+    await runtime.notices.recordShown({ kind: 'consent-result', recordAt: now });
+    clock.advance(3600);
+    await backend.runScheduler();
+    expect(backend.providerCalls).toHaveLength(1);
+    expect(backend.noticesGiven.map((given) => [given.kind, given.channel])).toEqual([
+      ['consent-result', 'in-game'],
+    ]);
+  });
+
+  it('stops showing a turned-off topic before the player signs in', async () => {
+    const { host, backend, runtime } = setup(osProfile);
+    backend.authenticate('p-1');
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['energy-full'], gesture: true });
+    await runtime.setTopicPreference({ topic: 'energy-full', enabled: true });
+    await runtime.reminders.set({ key: 'a', topic: 'energy-full', fireAt: '2026-10-12T06:00:00Z' });
+    backend.revokeSession();
+    await expect(runtime.setTopicPreference({ topic: 'energy-full', enabled: false }))
+      .rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+    expect(host.localPending).toEqual([]);
+  });
+
+  it('keeps a server reminder with the player who set it', async () => {
+    const { host, backend, createRuntime } = setup(hostProfile, [receipt]);
+    let release: (() => void) | undefined;
+    const reading = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const runtime = createRuntime({
+      ...host.provider,
+      async getCapabilities() {
+        await reading;
+        return host.provider.getCapabilities();
+      },
+    });
+    backend.authenticate('p-1');
+    const setting = runtime.reminders.set({ key: 'r', topic: 'purchase-result', fireAt: now });
+    backend.authenticate('p-2');
+    release?.();
+    await expect(setting).rejects.toMatchObject({ code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE' });
+    expect(backend.reminders).toEqual([]);
+  });
+
+  it('refuses an advertising server reminder without the deployment rules', async () => {
+    const { backend } = await devicePlayer([weekend]);
+    await expect(backend.setReminder({ key: 'ad', topic: 'weekend-event', fireAt: now }))
+      .rejects.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT' });
+    expect(backend.reminders).toEqual([]);
+  });
+
+  it('fails, rather than rejects, a vector whose clock cannot start', async () => {
+    const vector = vectorNamed('unsupported-target');
+    const broken = { ...vector, context: { ...vector.context, now: '2026-02-31T00:00:00Z' } };
+    expect(() => assertNotificationConformanceVector(broken)).toThrow(/Invalid ISO-8601/u);
+    const result = await runNotificationConformanceVector(broken);
+    expect(result).toMatchObject({ status: 'failed', failures: [{ path: 'context.now' }] });
+  });
+});
