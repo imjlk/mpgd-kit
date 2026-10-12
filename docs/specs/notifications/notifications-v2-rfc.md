@@ -1390,8 +1390,10 @@ Fake defaults:
   queue is empty.
 - **Ledger and fan-out.** The fake ledger's claim lease is 300 seconds. Device
   fan-out calls endpoints in installation-id order.
-- **Taps.** A `tap` is observed once by the game's first subscriber. It is
-  `cold` when it came before `runtime.start` and `warm` after.
+- **Taps.** A `tap` before the game's first subscriber is buffered and
+  observed once by that subscriber; a later `tap` reaches every current
+  subscriber. It is `cold` when it came before `runtime.start` and `warm`
+  after.
 
 | Actor | Actions |
 | --- | --- |
