@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { rootRelativeRouteVectors } from '@mpgd/platform/route-vectors';
+
 import {
   browserMockPurchaseEvidenceSchema,
   browserMockRewardEvidenceSchema,
@@ -101,6 +103,65 @@ describe('adapter-browser', () => {
     expect(clipboard).toEqual([
       'Can you beat me?\nhttps://game.example/?challengeToken=signed-token',
     ]);
+  });
+
+  it('shares only links that stay on the page origin or use HTTP(S)', async () => {
+    const shares: ShareData[] = [];
+    const gateway = createBrowserPlatformGateway({
+      async share(data) {
+        shares.push(data);
+      },
+    });
+    const intent = { kind: 'invite', title: 'Join', text: 'Join me' } as const;
+
+    for (const deepLink of [
+      ...rootRelativeRouteVectors.rejected,
+      '\\\\evil.example/daily',
+      'javascript:alert(1)',
+      'data:text/html,hi',
+      'intoss://game/daily',
+      'https://game.example/daily\n',
+    ]) {
+      await expect(gateway.sharing?.share?.({ ...intent, deepLink }), JSON.stringify(deepLink))
+        .resolves.toEqual({ status: 'unavailable' });
+    }
+
+    expect(shares).toEqual([]);
+
+    for (const [deepLink, route] of rootRelativeRouteVectors.normalized) {
+      await expect(gateway.sharing?.share?.({ ...intent, deepLink }), deepLink)
+        .resolves.toEqual({ status: 'shared' });
+      expect(shares.at(-1)?.url, deepLink).toBe(route);
+    }
+  });
+
+  it('resolves page-relative share links against the page', async () => {
+    const shares: ShareData[] = [];
+    const gateway = createBrowserPlatformGateway({
+      locationHref: 'https://game.example/play/index.html?from=menu',
+      async share(data) {
+        shares.push(data);
+      },
+    });
+    const intent = { kind: 'invite', title: 'Join', text: 'Join me' } as const;
+
+    for (const [deepLink, url] of [
+      ['?challengeToken=x', 'https://game.example/play/index.html?challengeToken=x'],
+      ['#top', 'https://game.example/play/index.html?from=menu#top'],
+      ['./daily', 'https://game.example/play/daily'],
+      ['daily?x=1', 'https://game.example/play/daily?x=1'],
+      ['/levels/../daily', 'https://game.example/daily'],
+      ['https://other.example/page', 'https://other.example/page'],
+    ] as const) {
+      await expect(gateway.sharing?.share?.({ ...intent, deepLink }), deepLink)
+        .resolves.toEqual({ status: 'shared' });
+      expect(shares.at(-1)?.url, deepLink).toBe(url);
+    }
+
+    for (const deepLink of ['../..//evil.example/x', '/.//evil.example/x', '\\\\evil.example/x']) {
+      await expect(gateway.sharing?.share?.({ ...intent, deepLink }), deepLink)
+        .resolves.toEqual({ status: 'unavailable' });
+    }
   });
 
   it('ignores malformed nested inbound share data and reports notifications unsupported', async () => {

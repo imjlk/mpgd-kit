@@ -1,3 +1,5 @@
+import { rootRelativeRouteVectors } from '@mpgd/platform/route-vectors';
+
 import {
   createInMemoryNotificationDeliveryLedger,
   createNotificationDeliveryService,
@@ -770,6 +772,35 @@ for (const [deepLink, expected] of [
     normalizeNotificationDeliveryRequest(once, gameDeepLinkPolicy).deepLink,
     expected,
     `normalizing an accepted deep link twice should not change it: ${deepLink}`,
+  );
+}
+
+// The shared route vectors from @mpgd/platform/route-vectors hold every
+// root-relative escape found so far, for every package that maps links.
+for (const [deepLink, expected] of rootRelativeRouteVectors.normalized) {
+  assertEqual(
+    normalizeNotificationDeliveryRequest(
+      { ...androidRequest, idempotencyKey: 'notification-shared-route', deepLink },
+      gameDeepLinkPolicy,
+    ).deepLink,
+    expected,
+    `a shared route vector should normalize: ${deepLink}`,
+  );
+}
+for (const [index, deepLink] of rootRelativeRouteVectors.rejected.entries()) {
+  if (!deepLink.startsWith('/') || deepLink.startsWith('//') || /[\x00-\x1F\x7F]/u.test(deepLink)) {
+    continue;
+  }
+
+  await assertRejects(
+    () =>
+      deliveryService.deliver({
+        ...androidRequest,
+        idempotencyKey: `notification-shared-route-${String(index)}`,
+        deepLink,
+      }),
+    'configured game origin',
+    `a shared route vector should stay off the delivery path: ${deepLink}`,
   );
 }
 await assertRejects(

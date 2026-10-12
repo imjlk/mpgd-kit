@@ -1,4 +1,5 @@
 import type { NotificationTopic, PlatformTarget } from '@mpgd/platform';
+import { hasNetworkPathPrefix, normalizeRootRelativeRoute } from '@mpgd/platform/routes';
 
 import { assertOwnEnumerablePropertyLimit } from './validation.js';
 
@@ -559,35 +560,17 @@ function normalizeDeepLink(
   input: unknown,
   allowedOrigins: ReadonlySet<string>,
 ): string {
+  // normalizeIdentifier already refused control characters.
   const deepLink = normalizeIdentifier(input, 'deepLink');
 
-  if (/[\x00-\x1F\x7F]/u.test(deepLink)) {
-    throw new Error('deepLink must not contain control characters.');
-  }
-
   if (deepLink.startsWith('/') && !deepLink.startsWith('//')) {
-    const baseUrl = new URL('https://mpgd.invalid');
-    let parsed: URL | undefined;
+    const route = normalizeRootRelativeRoute(deepLink);
 
-    // A backslash after the leading slash parses as an authority (`/\host`),
-    // so the link names a host, not a path on the game origin.
-    if (!deepLink.startsWith('/\\')) {
-      try {
-        parsed = new URL(deepLink, baseUrl);
-      } catch {
-        // Rejected below.
-      }
-    }
-
-    if (
-      parsed === undefined
-      || parsed.origin !== baseUrl.origin
-      || hasNetworkPathPrefix(parsed.pathname)
-    ) {
+    if (route === undefined) {
       throw new Error('deepLink must stay on the configured game origin.');
     }
 
-    return requireNormalizedDeepLinkLength(`${parsed.pathname}${parsed.search}${parsed.hash}`);
+    return requireNormalizedDeepLinkLength(route);
   }
 
   let parsed: URL;
@@ -617,26 +600,6 @@ function normalizeDeepLink(
   }
 
   return requireNormalizedDeepLinkLength(parsed.toString());
-}
-
-/**
- * Whether a normalized path could be read as a network-path reference to
- * another host. Dot segments (also percent-encoded) can collapse `/.//host`
- * into `//host`. A consumer that percent-decodes the path once and parses it
- * again can reach the same shape from `/%2F/host`, `/%5Chost`, `/%09/host`,
- * or `/.%2F/host`: URL parsing drops tabs and newlines, reads a backslash as
- * a slash, and removes dot segments, so the decoded path is checked after
- * the same steps.
- */
-function hasNetworkPathPrefix(pathname: string): boolean {
-  const decoded = pathname
-    .replace(/%([0-7][0-9a-f])/giu, (_escape, hex: string) =>
-      String.fromCharCode(Number.parseInt(hex, 16)),
-    )
-    .replace(/[\t\n\r]/gu, '');
-
-  return /^[/\\]{2}/u.test(decoded)
-    || new URL(decoded, 'https://mpgd.invalid').pathname.startsWith('//');
 }
 
 /** Normalization can grow a link; keep it within the input cap so it normalizes to itself. */

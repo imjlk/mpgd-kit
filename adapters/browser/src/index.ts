@@ -11,6 +11,7 @@ import {
   type ProductInfo,
   type ShareIntent,
 } from '@mpgd/platform';
+import { hasNetworkPathPrefix, hasRouteControlCharacter } from '@mpgd/platform/routes';
 
 import { createUnavailableAdAdapter } from './unavailable-ads.js';
 
@@ -364,6 +365,12 @@ async function shareFromBrowser(
   intent: ShareIntent,
   options: BrowserPlatformGatewayOptions,
 ) {
+  const url = toShareableUrl(intent.deepLink, resolveBrowserUrl(options.locationHref));
+
+  if (url === undefined) {
+    return { status: 'unavailable' } as const;
+  }
+
   const share = options.share ?? globalThis.navigator?.share?.bind(globalThis.navigator);
 
   if (share !== undefined) {
@@ -371,7 +378,7 @@ async function shareFromBrowser(
       await share({
         title: intent.title,
         text: intent.text,
-        url: intent.deepLink,
+        url,
       });
 
       return { status: 'shared' } as const;
@@ -393,11 +400,63 @@ async function shareFromBrowser(
   }
 
   try {
-    await writeClipboardText(`${intent.text}\n${intent.deepLink}`);
+    await writeClipboardText(`${intent.text}\n${url}`);
     return { status: 'shared' } as const;
   } catch {
     return { status: 'unavailable' } as const;
   }
+}
+
+/**
+ * The link a browser share passes on, or `undefined` when it could reach
+ * another host or is not a web link. An absolute link must use HTTP(S). A
+ * relative link (`/daily`, `?challengeToken=…`, `./daily`) resolves against
+ * the page, as Web Share does, and must stay on the page's origin with a path
+ * no client can read as another host (`hasNetworkPathPrefix` from
+ * `@mpgd/platform/routes`). It is shared as an absolute URL when the page URL
+ * is known, so the clipboard fallback copies a usable link.
+ */
+function toShareableUrl(deepLink: unknown, page: URL | undefined): string | undefined {
+  if (typeof deepLink !== 'string' || hasRouteControlCharacter(deepLink)) {
+    return undefined;
+  }
+
+  let absolute: URL | undefined;
+
+  try {
+    absolute = new URL(deepLink);
+  } catch {
+    absolute = undefined;
+  }
+
+  if (absolute !== undefined) {
+    return absolute.protocol === 'https:' || absolute.protocol === 'http:'
+      ? absolute.href
+      : undefined;
+  }
+
+  // Two leading slashes or backslashes, in any mix, make a relative link name
+  // a host (`//host`, `/\host`, `\\host`), whatever the base is.
+  if (/^[/\\]{2}/u.test(deepLink)) {
+    return undefined;
+  }
+
+  const base = page ?? new URL('https://mpgd.invalid/');
+  let resolved: URL;
+
+  try {
+    resolved = new URL(deepLink, base);
+  } catch {
+    return undefined;
+  }
+
+  if (resolved.origin !== base.origin || hasNetworkPathPrefix(resolved.pathname)) {
+    return undefined;
+  }
+
+  return page === undefined
+    ? `${resolved.pathname}${resolved.search}${resolved.hash}`
+    : resolved.href;
 }
 
 function canShare(options: BrowserPlatformGatewayOptions): boolean {

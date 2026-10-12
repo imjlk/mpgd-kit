@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { rootRelativeRouteVectors } from '@mpgd/platform/route-vectors';
+
 import type { BridgeRequest } from '@mpgd/bridge';
 import type { Entitlement } from '@mpgd/platform';
 
@@ -5408,6 +5410,34 @@ describe('AIT sharing', () => {
     }
 
     expect(getTossShareLink).not.toHaveBeenCalled();
+  });
+
+  it('follows the shared route vectors for root-relative share links', async () => {
+    const paths: string[] = [];
+    const dependencies = {
+      appName: 'ttokdoku',
+      getTossShareLink: async (path: string) => {
+        paths.push(path);
+        return 'https://toss.im/_ul/daily';
+      },
+      share: async () => {},
+    };
+
+    for (const deepLink of rootRelativeRouteVectors.rejected) {
+      await expect(shareIntent({ text: 'Unsafe', deepLink }, dependencies), JSON.stringify(deepLink))
+        .resolves.toEqual({ status: 'unavailable' });
+    }
+
+    expect(paths).toEqual([]);
+
+    for (const [deepLink] of rootRelativeRouteVectors.normalized) {
+      await expect(shareIntent({ text: 'Share', deepLink }, dependencies), deepLink)
+        .resolves.toEqual({ status: 'shared', completion: 'presented' });
+    }
+
+    expect(paths).toEqual(
+      rootRelativeRouteVectors.normalized.map(([, route]) => `intoss://ttokdoku${route}`),
+    );
   });
 
   it('shares app links whose path stays in the mini-app', async () => {
