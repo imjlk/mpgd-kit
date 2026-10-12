@@ -2639,3 +2639,73 @@ describe('notifications conformance runner: hosts, identifiers, and timestamps',
     expect(host.localPending).toEqual([{ key: 'h', topic: 'energy-half', fireAt: '2026-10-12T05:00:00Z' }]);
   });
 });
+
+describe('notifications fake backend: what a notice says, and who sends it', () => {
+  /** A device player who consented to advertising at `now`. */
+  async function consented(catalog: readonly NotificationTopicDeclaration[]) {
+    const ready = setup(osProfile, catalog, { deployment: { ...kr, noticeTopic: 'consent-notice' } });
+    await ready.runtime.start();
+    ready.backend.authenticate('p-1');
+    ready.host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    ready.host.queuePrompt('granted');
+    await ready.runtime.requestPermission({ topics: ['consent-notice'], gesture: true });
+    await ready.runtime.setAdvertisingConsent({ advertising: 'granted', textVersion: 'ad-v1' });
+    return ready;
+  }
+
+  it("sends a notice in its variant's copy, never the text of the topic's mapping", async () => {
+    const mapped = { ...noticeTopic, mapping: { channelId: 'notices', title: 'Notice', body: 'Agreed.' } };
+    const { clock, backend } = await consented([weekend, mapped]);
+    clock.set('2026-10-19T03:00:00Z');
+    await backend.runScheduler();
+    expect(backend.providerCalls.map((call) => [call.content.title, call.content.body, call.mapping])).toEqual([
+      ['수신 동의 안내', '2026-10-12에 동의하셨어요.', { channelId: 'notices' }],
+    ]);
+  });
+
+  it('sends no notice through a provider that is not free-form, so the game still owes it', async () => {
+    const templated = { ...noticeTopic, mapping: { templateSetCode: 'notice', agreement: 'none' } };
+    const { clock, backend, runtime } = setup(hostProfile, [templated], {
+      deployment: { ...kr, noticeTopic: 'consent-notice' },
+    });
+    backend.authenticate('p-1');
+    await runtime.setAdvertisingConsent({ advertising: 'granted', textVersion: 'ad-v1' });
+    clock.set('2026-10-19T03:00:00Z');
+    await backend.runScheduler();
+    expect(backend.providerCalls).toEqual([]);
+    expect(backend.noticesGiven).toEqual([]);
+    expect((await runtime.notices.list()).map((notice) => notice.kind)).toEqual(['consent-result']);
+  });
+
+  it('reserves the notice topic for the scheduler', async () => {
+    const { clock, backend, runtime } = await consented([weekend, noticeTopic]);
+    await expect(backend.deliver({ idempotencyKey: 'k-1', topic: 'consent-notice', templateData: { consentDate: 'x' } }))
+      .rejects.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT', message: expect.stringMatching(/reserved for consent notices/u) });
+    await expect(runtime.reminders.set({ key: 'r-1', topic: 'consent-notice', fireAt: '2026-10-12T06:00:00Z' }))
+      .rejects.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT' });
+    expect(backend.reminders).toEqual([]);
+    // The scheduler still sends through it.
+    clock.set('2026-10-19T03:00:00Z');
+    await backend.runScheduler();
+    expect(backend.providerCalls.map((call) => call.topic)).toEqual(['consent-notice']);
+  });
+
+  it('does not send again a notice whose replay cannot render', async () => {
+    // Quiet hours defer the first push before it renders; the route then fails it.
+    const unrenderable = {
+      ...noticeTopic,
+      route: 'https://evil.example/settings',
+      quietHours: { start: '22:00', end: '08:00' },
+    };
+    const { clock, backend, runtime } = await consented([weekend, unrenderable]);
+    clock.set('2026-10-19T14:00:00Z'); // 23:00 KST
+    await backend.runScheduler();
+    expect(backend.deliveries.map((delivery) => delivery.status)).toEqual(['deferred']);
+    clock.set('2026-10-19T23:00:00Z'); // 08:00 KST: the replay fails once
+    await expect(backend.runScheduler()).rejects.toThrow(/could not process 1 item/u);
+    clock.set('2026-10-19T23:05:00Z');
+    await expect(backend.runScheduler()).resolves.toBeUndefined();
+    expect(backend.providerCalls).toEqual([]);
+    expect((await runtime.notices.list()).map((notice) => notice.kind)).toEqual(['consent-result']);
+  });
+});

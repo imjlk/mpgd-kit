@@ -1000,9 +1000,13 @@ function noEndpoint(): NotificationDeliveryRefusal {
  *   Asia/Seoul date seven days before it is due (as a `notice:` send of the
  *   notice topic in the notice's variant of `noticeCopy`, filled with
  *   `{{consentDate}}`, and recorded with channel `push` once delivered),
- *   earliest first and within the registry entry's `rate`. A direct caller
- *   replays its own in-flight platform send after the lease. Keys are kept for
- *   30 days after their last change.
+ *   earliest first and within the registry entry's `rate`. Only a free-form
+ *   provider sends a notice, and never with its mapping's own text; a notice
+ *   that cannot render is not tried again. A direct caller replays its own
+ *   in-flight platform send after the lease. Keys are kept for 30 days after
+ *   their last change.
+ * - The notice topic is the scheduler's: `deliver` and `setReminder` through
+ *   it throw `NOTIFICATIONS_INVALID_INPUT`.
  * - Setting or cancelling a reminder drops its sends' rows that still wait
  *   (deferred) or are in flight, so neither is replayed; a send the provider
  *   may already have accepted cannot be recalled. A send's limits count the
@@ -1022,20 +1026,25 @@ export function createNotificationConformanceBackend(
   /**
    * The topic a send is rendered from. A consent notice goes out through the
    * notice topic with its variant's `notices.copy` in place of the topic's
-   * own copy, so the gate resolves the locale as for any topic. Notices are
-   * sent only where `noticeCopy` is required, so it is there.
+   * own copy, so the gate resolves the locale as for any topic. A `title` or
+   * `body` in the topic's mapping is dropped, so nothing replaces that copy.
+   * Notices are sent only where `noticeCopy` is required, so it is there.
    */
   const topicFor = (
     request: SendRequest,
     origin: SendOrigin,
   ): NotificationTopicDeclaration | undefined => {
     const topic = topicOf(request.topic);
-    return topic === undefined || origin.kind !== 'notice'
-      ? topic
-      : {
-          ...topic,
-          copy: notificationNoticeVariantCopy(input.noticeCopy ?? {}, origin.variant),
-        };
+    if (topic === undefined || origin.kind !== 'notice') {
+      return topic;
+    }
+    const { mapping, ...delivery } = topic;
+    const { title: _title, body: _body, ...rest } = mapping ?? {};
+    return {
+      ...delivery,
+      ...(mapping === undefined ? {} : { mapping: rest }),
+      copy: notificationNoticeVariantCopy(input.noticeCopy ?? {}, origin.variant),
+    };
   };
   if (input.deployment !== undefined) {
     assertNotificationDeployment(input.deployment);
@@ -1070,6 +1079,14 @@ export function createNotificationConformanceBackend(
       `The deployment's notice topic ${noticeTopicHere.id} needs the catalog's notices.copy to send notices.`,
     );
   }
+  /** The notice topic is the scheduler's: a game send or reminder through it is refused. */
+  const refuseNoticeTopic = (topic: string): void => {
+    if (noticeTopic !== undefined && topic === noticeTopic) {
+      throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
+        message: `Topic ${topic} is reserved for consent notices, which only the scheduler sends.`,
+      });
+    }
+  };
   let current: NotificationConformanceSession | undefined;
   let sessionCount = 0;
   const sessionListeners = new Set<(session: NotificationConformanceSession) => void>();
@@ -1693,8 +1710,12 @@ export function createNotificationConformanceBackend(
       );
     } catch (error) {
       if (error instanceof NotificationSendInputError && ledger.get(key) === held) {
-        // A replay that cannot be made fails once instead of on every run.
+        // A replay that cannot be made fails once instead of on every run. A
+        // notice that cannot render is not sent again: the game still owes it.
         dropRows(key, held, (row) => due.includes(row));
+        if (held.origin.kind === 'notice') {
+          failedNotices.add(key);
+        }
       }
       throw error;
     }
@@ -1881,6 +1902,7 @@ export function createNotificationConformanceBackend(
     async setReminder(reminder) {
       const session = requireSession('setReminder');
       const provider = requireEntry('setReminder');
+      refuseNoticeTopic(reminder.topic);
       const issue = reminderInputIssue(reminder)
         ?? (provider.content === 'host-template' && reminder.templateData !== undefined
           ? 'templateData: a host-template provider keeps template context on the server'
@@ -1981,6 +2003,7 @@ export function createNotificationConformanceBackend(
     },
     async deliver(request) {
       const send = sendRequestOf(request, input.defaultPlayer);
+      refuseNoticeTopic(send.topic);
       const key = send.idempotencyKey;
       const fingerprint = notificationSendFingerprint(send);
       const held = lookup(key);
@@ -2042,7 +2065,14 @@ export function createNotificationConformanceBackend(
           due.push({ at: first, run: () => replayStored(key, held) });
         }
       }
-      if (rules === 'kr' && noticeTopic !== undefined && noticeTopicHere !== undefined) {
+      // Only a free-form provider sends a notice's own text; through any other
+      // the notice is not sent, so it stays owed in the game.
+      if (
+        rules === 'kr'
+        && noticeTopic !== undefined
+        && noticeTopicHere !== undefined
+        && entry?.content === 'free-form'
+      ) {
         const today = toSeoulCalendarDate(clock.now());
         for (const player of [...new Set(consentRows.map((row) => row.player))]) {
           for (const notice of noticesOf(player)) {

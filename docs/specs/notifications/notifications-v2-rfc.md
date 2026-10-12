@@ -980,6 +980,18 @@ the validator requires to equal the catalog's `notices.topic`.
   topic with the variant's copy in place of the topic's own, which it does
   not declare. Step 8 then resolves the locale, and falls back to the default
   locale, as for any topic.
+- **Content.** A notice says only its variant of `notices.copy`.
+  - The scheduler drops any `title` or `body` in the notice topic's mapping.
+  - It sends a notice only through a provider whose content is `free-form`.
+    Through any other provider it sends nothing and records nothing, so the
+    game still owes the notice.
+- **Reserved topic.** The notice topic is the scheduler's. A send or a server
+  reminder that a game asks for through it throws
+  `NOTIFICATIONS_INVALID_INPUT`. The player's topic preference still applies
+  to it, as to any `service` topic.
+- **Failed renders.** A push that cannot render fails once, whether it is
+  the first send or a replay, and is not tried again. The game still owes
+  the notice.
 - **Recording.** Once delivered, the backend records the notice with channel
   `push`.
 - **A waiting push.** A push that waits, deferred or in flight, is dropped
