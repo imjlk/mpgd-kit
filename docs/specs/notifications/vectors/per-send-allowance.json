@@ -108,6 +108,18 @@
         "status": "suppressed",
         "reason": "allowance-exhausted"
       }
+    },
+    {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "daily-puzzle",
+        "idempotencyKey": "d-1"
+      },
+      "returns": {
+        "status": "delivered",
+        "alreadyProcessed": true
+      }
     }
   ],
   "expect": {
@@ -122,6 +134,12 @@
         "topic": "daily-puzzle",
         "status": "suppressed",
         "reason": "allowance-exhausted"
+      },
+      {
+        "idempotencyKey": "d-1",
+        "topic": "daily-puzzle",
+        "status": "delivered",
+        "alreadyProcessed": true
       }
     ],
     "providerCalls": [

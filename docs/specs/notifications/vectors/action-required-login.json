@@ -1,0 +1,166 @@
+{
+  "vector": "action-required-login",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A host that needs the player to log in answers action-required for reads, requests and reminders without reaching a prompt; after the action completes the normal prompt runs.",
+  "appliesTo": [
+    {
+      "path": "permission.prompt",
+      "equals": "game"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.game-opt-in",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "game",
+        "readable": true,
+        "serverReadable": true,
+        "allowance": "persistent",
+        "userGesture": true,
+        "settings": false
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested"
+        ],
+        "addressing": "platform-user",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": false,
+        "timing": "none"
+      },
+      "open": "host-link"
+    }
+  },
+  "catalog": [
+    {
+      "id": "daily-puzzle",
+      "purpose": "requested",
+      "channels": [
+        "remote"
+      ],
+      "route": "/?entry=daily",
+      "copy": {
+        "ko": {
+          "title": "오늘의 퍼즐",
+          "body": "새 퍼즐이 열렸어요."
+        },
+        "en": {
+          "title": "Daily puzzle",
+          "body": "A new puzzle is open."
+        }
+      },
+      "mapping": {
+        "title": "Daily puzzle",
+        "body": "A new puzzle is open."
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "host": {
+    "actionRequired": true
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "game",
+      "action": "getPermission",
+      "input": {
+        "topics": [
+          "daily-puzzle"
+        ]
+      },
+      "returns": {
+        "app": "action-required",
+        "topics": {
+          "daily-puzzle": "action-required"
+        }
+      }
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "daily-puzzle"
+        ],
+        "gesture": true
+      },
+      "returns": {
+        "outcomes": {
+          "daily-puzzle": "action-required"
+        }
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setReminder",
+      "input": {
+        "key": "daily",
+        "topic": "daily-puzzle",
+        "fireAt": "2026-10-12T06:00:00Z"
+      },
+      "returns": {
+        "route": "remote",
+        "status": "action-required"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "completeAction"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "game",
+      "action": "getPermission",
+      "input": {
+        "topics": [
+          "daily-puzzle"
+        ]
+      },
+      "returns": {
+        "app": "prompt"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "daily-puzzle"
+        ],
+        "gesture": true
+      },
+      "returns": {
+        "outcomes": {
+          "daily-puzzle": "granted"
+        }
+      }
+    }
+  ],
+  "expect": {
+    "prompts": 1,
+    "reminders": []
+  }
+}

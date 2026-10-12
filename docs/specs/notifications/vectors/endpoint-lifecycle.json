@@ -19,6 +19,7 @@
         "serverReadable": false,
         "allowance": "persistent",
         "userGesture": false,
+        "promptLimit": 2,
         "settings": true
       },
       "remote": {

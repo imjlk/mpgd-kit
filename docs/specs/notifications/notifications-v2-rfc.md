@@ -182,6 +182,12 @@ export interface NotificationCapabilities {
     /** 'per-send': one acceptance allows one delivery (WeChat one-time subscriptions). */
     readonly allowance: 'persistent' | 'per-send';
     readonly userGesture: boolean;
+    /**
+     * How many times the host shows its prompt before only settings can change
+     * the answer: iOS 1, Android 13+ 2. Absent when the host can always ask
+     * again (Apps in Toss, Devvit, WeChat).
+     */
+    readonly promptLimit?: number;
     readonly maxTopicsPerPrompt?: number;
     /** Whether `openSettings` can open the OS or host notification settings. */
     readonly settings: boolean;
@@ -231,6 +237,8 @@ export type NotificationPermissionState =
   | 'blocked'
   /** The host gives no read; the server record decides. */
   | 'unknown'
+  /** The host needs a player action first, such as logging in on Devvit. */
+  | 'action-required'
   | 'unsupported';
 
 export interface NotificationPermissionSnapshot {
@@ -243,13 +251,15 @@ export interface NotificationPermissionSnapshot {
  * What one `requestPermission` call produced for a topic: the host's answer
  * when the prompt ran ('granted', 'already-granted', 'denied', 'dismissed'),
  * 'blocked' when the host refused for good or the call did not reach the
- * prompt because the state was already blocked, and 'unavailable' when the
+ * prompt because the state was already blocked, 'action-required' when the
+ * host needs a player action before it can prompt, and 'unavailable' when the
  * provider is unsupported or the topic has no mapping for it. The snapshot
  * carries the resulting state, so a second Android denial reports outcome
  * 'denied' with snapshot 'blocked'.
  */
 export type NotificationPermissionOutcome =
-  | 'granted' | 'already-granted' | 'denied' | 'blocked' | 'dismissed' | 'unavailable';
+  | 'granted' | 'already-granted' | 'denied' | 'blocked' | 'dismissed'
+  | 'action-required' | 'unavailable';
 
 export interface NotificationPermissionResult {
   readonly snapshot: NotificationPermissionSnapshot;
@@ -261,7 +271,15 @@ export interface NotificationPermissionResult {
 export interface NotificationEndpointRegistration {
   readonly provider: NotificationProviderId;
   readonly address:
-    | { readonly kind: 'fcm-token' | 'fcm-installation'; readonly value: string; readonly environment?: 'production' | 'sandbox' }
+    | {
+        readonly kind: 'fcm-token' | 'fcm-installation';
+        readonly value: string;
+        readonly environment?: 'production' | 'sandbox';
+        /** Stable per app install; a rotated address replaces the old one for it. */
+        readonly installationId: string;
+        /** The device's app-scope permission when this registration was sent. */
+        readonly permission: NotificationPermissionState;
+      }
     /** The server resolves the recipient from the authenticated player. */
     | { readonly kind: 'platform-user' };
   readonly locale?: string;
@@ -335,6 +353,12 @@ Rules every provider follows:
   `NOTIFICATIONS_CONFIGURATION_REQUIRED`, `NOTIFICATIONS_USER_GESTURE_REQUIRED`,
   `NOTIFICATIONS_HOST_VERSION_UNSUPPORTED`, `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`,
   and `NOTIFICATIONS_V2_UNAVAILABLE` from a bridge without v2.
+- **A required player action is a state.** While the host needs a player
+  action first (`availability: 'action-required'`, for example a logged-out
+  Devvit player), reads answer `action-required` and requests answer the
+  `action-required` outcome without reaching a prompt. The game resolves it
+  through the existing `identity.requestUpgrade({ reason: 'notifications' })`
+  and reads again.
 
 The gateway gains `notificationsV2?: NotificationProvider` next to the v1
 `notifications` adapter, as `commerceV2` did.
@@ -364,7 +388,8 @@ export interface ReminderResult {
   readonly status:
     | 'scheduled' | 'replaced' | 'cancelled'
     | 'permission-required' | 'request-missing' | 'preference-off'
-    | 'advertising-consent-missing' | 'capacity-exceeded' | 'unavailable';
+    | 'advertising-consent-missing' | 'capacity-exceeded'
+    | 'action-required' | 'unavailable';
 }
 
 export interface NotificationRuntime {
@@ -373,6 +398,8 @@ export interface NotificationRuntime {
   requestPermission(input: { readonly topics: readonly NotificationTopicId[]; readonly gesture: boolean }):
     Promise<NotificationPermissionResult>;
   register(): Promise<void>;
+  /** Unbinds this installation's address from the player, for example at logout. */
+  unregister(): Promise<void>;
   setTopicPreference(input: { readonly topic: NotificationTopicId; readonly enabled: boolean }): Promise<void>;
   setAdvertisingConsent(input: {
     readonly advertising?: 'granted' | 'withdrawn';
@@ -395,9 +422,13 @@ Runtime rules:
   `sources` says which answered.
 - **Requests.** With `permission.userGesture` and `gesture: false`, the call
   throws `NOTIFICATIONS_USER_GESTURE_REQUIRED` before reaching the host. A
-  topic whose latest state is `blocked` answers `blocked` without reaching
-  the host. Every other call reaches the host prompt, including one for a
-  topic already recorded as granted; the host may answer `already-granted`.
+  topic whose latest state is `blocked` answers `blocked`, and a provider in
+  `action-required` answers `action-required`, without reaching the host.
+  Every other call reaches the host prompt, including one for a topic already
+  recorded as granted; the host may answer `already-granted`. After a denial
+  the host reports `prompt-with-rationale` while prompts remain under
+  `permission.promptLimit` and `blocked` once they are used up; a host without
+  a limit reports `denied`.
 - **Records.** Consent records are an append-only history per player, kind,
   and scope (the app, or one topic). The runtime appends a record only when a
   decided state differs from the latest record of that kind and scope: after
@@ -410,10 +441,17 @@ Runtime rules:
   `setTopicPreference` writes `topic-preference` records (`granted` or
   `withdrawn`), and `setAdvertisingConsent` writes `advertising` and `night`
   records; both come from an authenticated player action (`source: 'player'`).
-- **Registration.** After a grant on a provider with
-  `remote.addressing: 'device'`, the runtime calls `register()` and sends the
-  registration to the backend for the authenticated player. `register()`
-  repeats that, for example after an account switch. Platform-user providers
+- **Registration.** For `remote.addressing: 'device'`, the runtime sends the
+  provider's registration, with the installation id and the device's current
+  permission, to the backend for the authenticated player: after a grant,
+  whenever an `endpoint-changed` event arrives (a rotated FCM token replaces
+  the old address for that installation), whenever a read or request changes
+  the device's decided permission, when a player authenticates (an account
+  switch moves the installation to the new player), and on `register()`. A
+  registration needs an authenticated player; one that arrives earlier is sent
+  at authentication. `unregister()` sends an authenticated unbind for the
+  installation; games call it before signing a player out, so a shared device
+  stops receiving the previous player's notifications. Platform-user providers
   need no registration; the backend resolves them from the authenticated
   identity.
 - **Restarts.** A restart drops runtime memory and listeners. Host state,
@@ -489,6 +527,9 @@ Routing is a pure decision in `@mpgd/platform`:
 3. Otherwise answer `{ route: 'none', status: 'unavailable' }` and do
    nothing.
 
+While the provider is `action-required`, the runtime answers the route it
+would take with `status: 'action-required'` and stores nothing.
+
 Before scheduling locally, the runtime applies, in this order, the parts of
 the [policy gate](#policy-gate) it can evaluate on the client, with the same
 reasons as statuses: delivery permission (`permission-required`), the topic
@@ -530,8 +571,11 @@ server.
 The server records where a player can be reached, per provider. Registration
 requires an authenticated request, because binding a device token to another
 player's account would deliver that player's notifications to the device. A
-device address is unique per provider: registering it for a new player moves
-it. Platform-user providers (Apps in Toss, Devvit) register no address; the
+device endpoint is keyed by provider and installation id and holds the
+current address and the device's permission: a new address for the same
+installation replaces the old one, an address is unique per provider, and
+registering an installation for a new player moves it. An authenticated
+unbind removes the installation's endpoint from the player. Platform-user providers (Apps in Toss, Devvit) register no address; the
 backend resolves the recipient from the player's authenticated identity for
 that provider, never from a key the client sends. A provider answer that the
 address is dead (FCM `UNREGISTERED`) marks the endpoint invalid.
@@ -561,23 +605,35 @@ The game shows or sends the notice and records that it did.
 
 ### Policy gate {#policy-gate}
 
-Every send passes one pure decision, `evaluateNotificationDelivery`, before
-any provider call, including a scheduled reminder or a deferred send when it
-comes due. The steps run in order and the first failure decides:
+Every send first looks up its idempotency key. A key whose delivery
+completed answers the stored `delivered` result with `alreadyProcessed: true`,
+a key whose delivery is waiting answers the same `deferred` result, and a key
+another worker holds answers `in-flight`, all without re-evaluating policy,
+so a retry is never counted against allowances or limits. Only `delivered`,
+`deferred`, and `in-flight` are stored against a key; a `suppressed` or
+`unavailable` answer is not, so a retry after the player's state changes is
+evaluated again.
 
-1. The topic exists and the provider's `remote.purposes` includes its
-   purpose, or `suppressed: purpose-unsupported`.
+Otherwise the send passes one pure decision, `evaluateNotificationDelivery`,
+before any provider call, including a scheduled reminder or a deferred send
+when it comes due. The steps run in order and the first failure decides:
+
+1. The topic exists, its `channels` include `remote` (or
+   `suppressed: channel-unsupported`), and the provider's `remote.purposes`
+   includes its purpose (or `suppressed: purpose-unsupported`).
 2. The recipient resolves: a valid endpoint for `remote.addressing: 'device'`,
    or an authenticated platform identity for `'platform-user'`, or
    `unavailable: no-endpoint`.
-3. Delivery permission allows it, or `suppressed: permission-denied`. When
-   `permission.serverReadable` is true, the backend reads the host at send
-   time and that answer decides (Devvit `isOptedIn`). Otherwise the latest
-   `delivery-permission` record must not be `denied` or `blocked`, a
-   `scope: 'topic'` provider needs a latest `host-agreement` of `granted` for
-   the topic (or `suppressed: agreement-missing`), and a `per-send` provider
-   needs an acceptance not yet used by a delivery (or
-   `suppressed: allowance-exhausted`).
+3. Delivery permission is positively `granted`, or
+   `suppressed: permission-denied`; `prompt-with-rationale` and every other
+   state do not deliver. When `permission.serverReadable` is true, the backend
+   reads the host at send time and that answer decides (Devvit `isOptedIn`).
+   Otherwise a device endpoint needs the permission its latest registration
+   reported, an app-scope platform-user provider needs a latest
+   `delivery-permission` record of `granted`, a `scope: 'topic'` provider
+   needs a latest `host-agreement` of `granted` for the topic (or
+   `suppressed: agreement-missing`), and a `per-send` provider needs an
+   acceptance no delivery has reserved (or `suppressed: allowance-exhausted`).
 4. The topic preference allows it. A `requested` topic needs a latest
    `topic-preference` of `granted` (no record: `suppressed: request-missing`;
    latest `withdrawn`: `suppressed: preference-off`); on a `scope: 'topic'`
@@ -602,14 +658,30 @@ comes due. The steps run in order and the first failure decides:
    `optOutRoute`. Host-template providers cannot carry advertising, so step 1
    already refused them.
 
-Statuses are `delivered`, `suppressed`, `deferred`, and `unavailable`.
-A deferred send is stored with its idempotency key and replayed through the
-gate by the [scheduler](#scheduler) at `until`; asking again for the same key
-while it waits answers `deferred` with the same `until`. Delivery then goes
-through the claim/lease ledger and the provider's `deliverIdempotently`.
-Unless a provider says otherwise, it accepts the send. An answer that the
-address is dead returns `unavailable: endpoint-invalid` and invalidates the
-endpoint; later sends find `no-endpoint`. The request and ledger keys move
+Statuses are `delivered`, `suppressed`, `deferred`, `unavailable`, and
+`in-flight`. A deferred send is stored with its idempotency key and replayed
+through the gate by the [scheduler](#scheduler) at `until`. Delivery then goes
+through the claim/lease ledger and the provider's `deliverIdempotently`. On a
+`per-send` provider the backend reserves the acceptance in the same atomic
+step that claims the delivery key, a compare-and-set on the acceptance, so two
+concurrent deliveries cannot spend one acceptance; the pure gate only reports
+whether an unreserved acceptance exists, and a released claim releases its
+reservation.
+
+Provider answers:
+
+- **Accepted.** `delivered`. Unless a provider says otherwise, it accepts the
+  send.
+- **Dead address.** `unavailable: endpoint-invalid`, and the endpoint is
+  invalidated; later sends find `no-endpoint`.
+- **Rate limited.** A provider that proves nothing was sent (the
+  `NotificationDeliveryNotSentError` contract, for example Apps in Toss
+  error 4095) answers `rate-limited` with an optional `retryAfterSeconds`. The
+  claim and any reservation are released and the send becomes
+  `deferred: provider-rate-limited` with `until` at now plus
+  `retryAfterSeconds` (60 seconds when absent), replayed by the scheduler. A
+  throttling answer that cannot prove nothing was sent keeps the claim, as
+  the delivery ledger already requires. The request and ledger keys move
 from the closed `PlatformTarget`/`NotificationTopic` sets to open provider and
 topic ids.
 
@@ -636,8 +708,8 @@ topic ids.
 
 ### Reminder scheduler {#scheduler}
 
-Server reminders and deferred sends are stored with a lease and processed
-when due: a D1 table plus a Cron trigger on the game-services Worker, and the
+Server reminders and deferred sends (night window, quiet hours, provider
+rate limits) are stored with a lease and processed when due: a D1 table plus a Cron trigger on the game-services Worker, and the
 Devvit scheduler in the Devvit server. A due item becomes a normal send
 through the policy gate. A reminder's idempotency key is
 `reminder:<player>:<key>:<fireAt as ISO 8601 with milliseconds>`; a deferred
@@ -647,7 +719,7 @@ send keeps its own key.
 
 | Profile | `permission` | `remote` | `local` | `open` |
 | --- | --- | --- | --- | --- |
-| Capacitor + FCM (Android, iOS) | app, os, readable, persistent, gesture not required, settings | device, free-form, all three purposes | supported, inexact, iOS `maxPending` 64 | payload |
+| Capacitor + FCM (Android, iOS) | app, os, readable, persistent, gesture not required, settings, `promptLimit` 2 on Android 13+ and 1 on iOS | device, free-form, all three purposes | supported, inexact, iOS `maxPending` 64 | payload |
 | Apps in Toss | topic, host, not readable, persistent, gesture required, no settings link | platform-user, host-template, `service` and `requested` | unsupported | landing-url |
 | Devvit | app, game, readable through the server bridge and server-readable, persistent, gesture required | platform-user, free-form (approved copy), `service` and `requested` | unsupported | host-link |
 | Web, Microsoft Store PWA, CrazyGames, OnePlay, Verse8 | `availability: 'unsupported'` | unsupported | unsupported | none |
@@ -664,7 +736,8 @@ send keeps its own key.
   objects, so `@mpgd/adapter-capacitor` gains no plugin dependency.
 - Permission mapping: Capacitor reports `prompt-with-rationale` after the
   first Android denial and `denied` after the second, which is permanent, so
-  the provider maps that to `blocked`; iOS `denied` is `blocked`. Android 12
+  the provider maps that to `blocked` and declares `promptLimit: 2`; iOS
+  `denied` is `blocked` and the iOS provider declares `promptLimit: 1`. Android 12
   and below have no runtime permission, and push plugins can report `granted`
   while the player has turned notifications off (`@capacitor/push-notifications`
   does); the provider reads `LocalNotifications.checkPermissions`, which
@@ -708,7 +781,8 @@ send keeps its own key.
 - There is no Reddit consent screen. The game renders its own toggle, and the
   server bridge calls `optInCurrentUser` or `optOutCurrentUser` for the
   logged-in requester and reads `isOptedIn`. A logged-out player needs login
-  first, which the provider reports as `action-required` availability.
+  first: the provider reports `action-required` availability and state, and
+  the game resolves it with `identity.requestUpgrade({ reason: 'notifications' })`.
 - No opt-out event exists and opt-out may move into Reddit settings, so the
   gate reads `isOptedIn` at send time instead of copying it.
 
@@ -796,24 +870,27 @@ them with fixture providers.
 | `profile` | `provider`, `capabilities`, and optional server-side `limits` (`perUserPerDay`) |
 | `catalog` | Topic entries as in the [topic catalog](#topic-catalog), with the provider mapping for this one profile under `mapping` instead of `targets` |
 | `context` | `player`, `now`, and the player's default `timeZone` |
-| `host` | Fake host settings: `deniesBeforeBlocked`, the number of denials after which the OS reports `blocked` (absent: never) |
+| `host` | Fake host settings: `actionRequired: true` starts the host in `action-required` until `completeAction` |
 | `steps` | Actor actions in order; a step may carry `returns` (matched as a subset) or `throws` (`{ code }`) |
 | `expect` | Final assertions; a key that is absent is not asserted |
 
 Fake defaults: the host starts at `prompt` for `os` and `game` prompts,
 `unknown` for unreadable `host` prompts, and `unsupported` for an unsupported
-profile, and it issues no endpoint until `issueEndpoint`. The backend's
-provider answers `accepted` unless `queueProviderResult` queued another
-answer. A `tap` buffers until the first subscriber and is `cold` when it came
-before `runtime.start`, `warm` after.
+profile, and it issues no endpoint until `issueEndpoint`. A `denied` prompt
+answer follows the profile's `permission.promptLimit` as the
+[runtime rules](#runtime) describe. `issueEndpoint` after `runtime.start`
+also emits `endpoint-changed`. The installation id is `installation-1`. The
+backend's provider answers `accepted` unless `queueProviderResult` queued
+another answer. A `tap` buffers until the first subscriber and is `cold` when
+it came before `runtime.start`, `warm` after.
 
 | Actor | Actions |
 | --- | --- |
 | `runtime` | `start`; `restart` (see [Runtime](#runtime)) |
 | `clock` | `set` (`at`), `advance` (`seconds`) |
-| `host` | `queuePrompt` (`result`: `granted`, `already-granted`, `denied`, `dismissed`, `host-terms-declined`); `setPermission` (`state`); `issueEndpoint` (`endpoint`: `{ kind, value }`); `tap` (`input`: `{ channel, topic?, route?, data? }`) |
-| `game` | The [runtime](#runtime) methods: `getPermission`, `requestPermission` (`topics`, `gesture`), `register`, `setTopicPreference`, `setAdvertisingConsent`, `setReminder`, `cancelReminder`, `openSettings`, and `subscribe` (`listener` names the listener) |
-| `backend` | `authenticate` (`player`); `deliver` (`input`: `topic`, `idempotencyKey`, optional `player` defaulting to `context.player`, `templateData`, `locale`); `queueProviderResult` (`result`: `accepted`, `unregistered`, `rate-limited`); `runScheduler` (process every due reminder and deferred send) |
+| `host` | `queuePrompt` (`result`: `granted`, `already-granted`, `denied`, `dismissed`, `host-terms-declined`); `setPermission` (`state`); `issueEndpoint` (`endpoint`: `{ kind, value }`); `completeAction`; `tap` (`input`: `{ channel, topic?, route?, data? }`) |
+| `game` | The [runtime](#runtime) methods: `getPermission`, `requestPermission` (`topics`, `gesture`), `register`, `unregister`, `setTopicPreference`, `setAdvertisingConsent`, `setReminder`, `cancelReminder`, `openSettings`, and `subscribe` (`listener` names the listener) |
+| `backend` | `authenticate` (`player`); `deliver` (`input`: `topic`, `idempotencyKey`, optional `player` defaulting to `context.player`, `templateData`, `locale`); `queueProviderResult` (`result`: `accepted`, `unregistered`, `rate-limited`, with optional `retryAfterSeconds`); `runScheduler` (process every due reminder and deferred send) |
 
 `expect` keys, each a list matched exactly in length and order, with only the
 listed fields of each item asserted:
@@ -822,9 +899,9 @@ listed fields of each item asserted:
 | --- | --- |
 | `prompts` | A number: calls that reached the host prompt API |
 | `consent` | [Consent records](#runtime) without `at` |
-| `endpoints` | Final endpoints: `provider`, `kind`, `value`, `player`, `status` (`valid` or `invalid`) |
-| `deliveries` | Every gate or scheduler outcome: `idempotencyKey`, `topic`, `status`, `reason`, `until` |
-| `providerCalls` | Every provider send: `topic`, `mapping`, `content` (`title`, `body`, `optOutRoute`) |
+| `endpoints` | Final endpoints: `provider`, `kind`, `value`, `installationId`, `permission`, `player`, `status` (`valid` or `invalid`) |
+| `deliveries` | Every gate, ledger, or scheduler outcome: `idempotencyKey`, `topic`, `status`, `reason`, `until`, `alreadyProcessed` |
+| `providerCalls` | Every provider attempt, including one answered `rate-limited`: `topic`, `address` (the device address value), `mapping`, `content` (`title`, `body`, `optOutRoute`) |
 | `local` | `operations` (`op`: `schedule`, `replace`, `cancel`, with `key`, `topic`, `fireAt`, `exact`) and the final `pending` list |
 | `reminders` | Pending server reminders |
 | `events` | An object keyed by listener name, each a list of events |
@@ -833,11 +910,12 @@ listed fields of each item asserted:
 | Vector | Checks |
 | --- | --- |
 | `os-permission-granted` | One app-scope prompt grants every topic; endpoint registration; permission record |
-| `os-permission-denied-twice` | `prompt-with-rationale` then `blocked`; no third dialog |
+| `os-permission-denied-twice` | `promptLimit` 2: `prompt-with-rationale` then `blocked`; no third dialog |
+| `os-permission-denied-once` | `promptLimit` 1: the first denial is `blocked`; no second dialog |
 | `local-schedule-never-prompts` | Scheduling without permission returns `permission-required` and shows nothing |
-| `host-agreement-recorded` | Unreadable host: agreement recorded with evidence, read back as granted after a restart; `already-granted` stays one record |
+| `host-agreement-recorded` | Unreadable host: agreement recorded with its evidence, read back as granted after a restart; `already-granted` stays one record |
 | `host-gesture-and-terms` | No gesture throws `NOTIFICATIONS_USER_GESTURE_REQUIRED`; host terms declined is `blocked` |
-| `per-send-allowance` | One acceptance allows one delivery |
+| `per-send-allowance` | One acceptance allows one delivery; retrying the delivered key answers the stored result, not `allowance-exhausted` |
 | `game-rendered-opt-in` | Game prompt, server opt-in, revocation read at send time |
 | `requested-topic-needs-opt-in` | A `requested` topic is suppressed until the player turns it on |
 | `advertising-needs-consent` | Suppressed without consent; labelled after consent; result and re-confirmation notices due |
@@ -848,6 +926,11 @@ listed fields of each item asserted:
 | `open-before-listener` | A cold-start open reaches the first subscriber once |
 | `endpoint-lifecycle` | A device address moves to the newly authenticated player; `UNREGISTERED` invalidates it |
 | `provider-daily-limit` | A provider limit suppresses the third send of the day |
+| `provider-rate-limited` | A `rate-limited` answer defers the send by `retryAfterSeconds`; the scheduler delivers it |
+| `local-only-topic` | A topic without the `remote` channel is never sent remotely |
+| `endpoint-rotation` | A rotated device address replaces the old one without an explicit `register()` |
+| `endpoint-unbind-on-logout` | `unregister()` removes the installation from the player; later sends find no endpoint |
+| `action-required-login` | A host that needs login answers `action-required` without prompting until the action completes |
 | `unsupported-target` | Reads answer `unsupported`, requests answer `unavailable` without a prompt, reminders are unavailable |
 
 ## Migration and PR plan {#pr-plan}

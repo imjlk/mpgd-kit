@@ -8,8 +8,8 @@
       "equals": "os"
     },
     {
-      "path": "permission.scope",
-      "equals": "app"
+      "path": "permission.promptLimit",
+      "equals": 2
     }
   ],
   "profile": {
@@ -23,6 +23,7 @@
         "serverReadable": false,
         "allowance": "persistent",
         "userGesture": false,
+        "promptLimit": 2,
         "settings": true
       },
       "remote": {
@@ -71,9 +72,6 @@
     "player": "p-1",
     "now": "2026-10-12T03:00:00Z",
     "timeZone": "Asia/Seoul"
-  },
-  "host": {
-    "deniesBeforeBlocked": 2
   },
   "steps": [
     {
