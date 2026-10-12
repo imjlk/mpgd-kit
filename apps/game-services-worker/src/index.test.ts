@@ -1,6 +1,7 @@
 import {
   createGameServicesOrpcBackendApi,
   createGameServicesOrpcClient,
+  createPlatformOrderVerifyRequest,
   microsoftStoreDigitalGoodsEvidenceSchema,
 } from '@mpgd/game-services';
 
@@ -264,12 +265,127 @@ assertEqual(
 const targetVerifierCalls: string[] = [];
 const targetVerifierReceivedSignals: boolean[] = [];
 const targetVerifierTimeouts: number[] = [];
+const androidFinalizerCalls: string[] = [];
+const androidFinalizerBinding = {
+  async finalizePurchaseGrant(input) {
+    androidFinalizerCalls.push(`${input.request.target}:${input.product.type}`);
+    return { status: 'completed', action: 'consume', alreadyCompleted: false };
+  },
+} satisfies GameServicesPurchaseGrantFinalizerBinding;
+// Commerce v2 C2: the google-play registry entry declares finish: server, so an
+// Android verifier without a Play finalizer closes the purchase routes (logged at
+// startup) while the rewarded-ad and leaderboard routes keep serving.
+const unfinalizedAndroidEnv = {
+  MPGD_STORE: 'memory',
+  GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER: {
+    async verifyPurchase(input) {
+      return verifiedDecision(`android-self:${input.request.idempotencyKey}`);
+    },
+    async verifyAdReward(input) {
+      return verifiedDecision(`android-self:${input.request.idempotencyKey}`);
+    },
+  },
+} satisfies GameServicesWorkerEnv;
+const unfinalizedAndroidService = createWorkerService(unfinalizedAndroidEnv);
+await assertRejects(
+  () =>
+    unfinalizedAndroidService.verifyPurchase({
+      target: 'android',
+      playerId: 'unfinalized-player',
+      productId: 'COINS_100',
+      platformTransactionId: 'unfinalized-txn',
+      idempotencyKey: 'unfinalized-purchase',
+      purchasedAt: '2026-07-04T00:00:00.000Z',
+    }),
+  /verified but never finalized/u,
+  'an Android verifier without a Play finalizer closes the purchase route',
+);
+await assertRejects(
+  () => unfinalizedAndroidService.getCommerceCapabilities(),
+  /verified but never finalized/u,
+  'the capabilities read reports the same misconfiguration',
+);
+const unfinalizedAndroidReward = await unfinalizedAndroidService.claimAdReward({
+  target: 'android',
+  playerId: 'unfinalized-player',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'unfinalized-impression',
+  idempotencyKey: 'unfinalized-reward',
+  evidence: { schema: 'mpgd.admob.client-reward.v1', payload: {} },
+  completedAt: '2026-07-04T00:00:00.000Z',
+}) as { readonly granted: boolean };
+assertEqual(unfinalizedAndroidReward.granted, true, 'rewarded ads keep serving');
+const unfinalizedPurchaseRoute = await createWorkerFetchHandler(unfinalizedAndroidEnv)(
+  new Request(`${baseUrl}/game-services/purchases/verify`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ target: 'android', playerId: 'p', productId: 'COINS_100' }),
+  }),
+);
+assertEqual(unfinalizedPurchaseRoute.status, 500, 'the public purchase route fails closed');
+// The explicit opt-out: the binding acknowledges purchases itself.
+const selfFinalizingService = createWorkerService({
+  ...unfinalizedAndroidEnv,
+  GAME_SERVICES_ANDROID_VERIFIER_FINALIZES: 'true',
+});
+const selfFinalizingCapabilities = await selfFinalizingService.getCommerceCapabilities() as {
+  readonly stores: readonly { readonly store: string; readonly finish: string }[];
+};
+assertEqual(
+  selfFinalizingCapabilities.stores.find((entry) => entry.store === 'google-play')?.finish,
+  'client',
+  'a self-finalizing Android binding is published with the client finish owner',
+);
+const selfFinalized = await selfFinalizingService.verifyPurchase({
+  target: 'android',
+  playerId: 'self-finalized-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'self-finalized-txn',
+  idempotencyKey: 'self-finalized-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+}) as { readonly verified: boolean; readonly finalization?: unknown };
+assertEqual(selfFinalized.verified, true, 'the binding verifies as in v1');
+assertEqual(selfFinalized.finalization, undefined, 'nothing is finalized on the server');
+await assertRejects(
+  () =>
+    createWorkerService({
+      MPGD_STORE: 'memory',
+      GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME: 'com.example.game',
+    }).getCommerceCapabilities(),
+  /must be configured together/u,
+  'the Play package name needs the publisher auth service',
+);
+await assertRejects(
+  () =>
+    createWorkerService({
+      MPGD_STORE: 'memory',
+      GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME: 'com.example.game',
+      GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH: {
+        async getAccessToken() {
+          return 'token';
+        },
+      },
+    }).getCommerceCapabilities(),
+  /ACCOUNT_BINDING or the explicit/u,
+  'the in-Worker Play boundary needs account binding or the unbound opt-in',
+);
+await assertRejects(
+  () =>
+    createWorkerService({
+      MPGD_STORE: 'memory',
+      MPGD_COMMERCE_LOOKUP_STORES: ['oneplay' as 'devvit'],
+    }).getCommerceCapabilities(),
+  /only devvit and verse8/u,
+  'lookup stores are limited to the server-push stores with a ledger lookup',
+);
 const targetVerifierService = createWorkerService({
   MPGD_STORE: 'memory',
   GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER: createTargetVerifierBinding('android'),
+  GAME_SERVICES_ANDROID_PURCHASE_FINALIZER: androidFinalizerBinding,
   GAME_SERVICES_IOS_EVIDENCE_VERIFIER: createTargetVerifierBinding('ios'),
   GAME_SERVICES_AIT_EVIDENCE_VERIFIER: createTargetVerifierBinding('ait'),
   GAME_SERVICES_VERSE8_EVIDENCE_VERIFIER: createTargetVerifierBinding('verse8'),
+  MPGD_COMMERCE_LOOKUP_STORES: ['devvit', 'verse8'],
 });
 const targetAndroidPurchase = await targetVerifierService.verifyPurchase({
   target: 'android',
@@ -340,6 +456,321 @@ assertDeepEqual(
   targetVerifierTimeouts,
   [10_000, 10_000, 10_000, 10_000],
   'target-specific verifier bindings should receive the local timeout budget',
+);
+assertDeepEqual(
+  androidFinalizerCalls,
+  ['android:consumable'],
+  'the Android grant is finalized through the bound Play finalizer',
+);
+// A binding keeps its v1 contract: schemas of its own still reach it.
+const customSchemaPurchase = await targetVerifierService.verifyPurchase({
+  target: 'android',
+  playerId: 'target-binding-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'target-binding-custom-txn',
+  idempotencyKey: 'target-binding-custom-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+  evidence: { schema: 'game.play-binding.v1', payload: { token: 't' } },
+}) as { readonly verified: boolean };
+assertEqual(customSchemaPurchase.verified, true, 'an unclaimed schema reaches the Android binding');
+assertEqual(targetVerifierCalls.at(-1), 'android:purchase:android', 'the binding ran');
+const bindingCallsAfterCustom = targetVerifierCalls.length;
+assertEqual(
+  (targetAndroidPurchase as { readonly finalization?: { readonly status: string } })
+    .finalization?.status,
+  'completed',
+  'the verify answer reports the Play finalization',
+);
+
+// The capabilities endpoint derives from the composed registry.
+const serviceCapabilities = await targetVerifierService.getCommerceCapabilities() as {
+  readonly commerceProtocolVersion: string;
+  readonly stores: readonly { readonly store: string; readonly finish: string; readonly schemas: readonly string[] }[];
+};
+assertDeepEqual(
+  serviceCapabilities.stores.map(
+    (entry) => `${entry.store}:${entry.finish}:${entry.schemas.join('+')}`,
+  ),
+  [
+    'google-play:server:google-play.product-purchase.v2',
+    'app-store:client:app-store.signed-transaction.v1',
+    'apps-in-toss:host:apps-in-toss.iap.callback.v1',
+    'devvit:none:devvit.order.v1',
+    'verse8:none:verse8.agent8-event.v1',
+  ],
+  'the Worker publishes every store its bindings serve',
+);
+assertEqual(
+  await createWorkerService({ MPGD_STORE: 'memory' }).getCommerceCapabilities(),
+  undefined,
+  'a Worker without registry entries publishes no capabilities',
+);
+
+// Server-push lookups answer pending until the fulfillment path wrote the ledger, never granted.
+const devvitLookup = await targetVerifierService.verifyPurchase({
+  target: 'reddit',
+  store: 'devvit',
+  playerId: 'reddit-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'order-1',
+  idempotencyKey: 'store:devvit:order-1',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+  evidence: {
+    schema: 'devvit.order.v1',
+    payload: { orderId: 'order-1', sku: 'coins_100', source: 'checkout' },
+  },
+}) as { readonly verified: boolean; readonly disposition?: string; readonly reason?: string };
+assertEqual(devvitLookup.verified, false, 'a Devvit order envelope never grants by itself');
+assertEqual(
+  devvitLookup.disposition,
+  'pending',
+  'the lookup waits for the fulfillment ledger entry',
+);
+assertEqual(devvitLookup.reason, 'LEDGER_GRANT_PENDING', 'the pending reason is observable');
+const verse8Lookup = await targetVerifierService.verifyPurchase({
+  target: 'verse8',
+  store: 'verse8',
+  playerId: 'verse8-player',
+  productId: 'COINS_100',
+  platformTransactionId: '42',
+  idempotencyKey: 'store:verse8:42',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+  evidence: {
+    schema: 'verse8.agent8-event.v1',
+    payload: { purchaseId: '42', productId: 'coins_100', quantity: 1 },
+  },
+}) as { readonly verified: boolean; readonly reason?: string };
+assertEqual(verse8Lookup.verified, false, 'a Verse8 Agent8 envelope never grants by itself');
+assertEqual(verse8Lookup.reason, 'LEDGER_GRANT_PENDING', 'the Verse8 lookup is pending too');
+const mismatchedStore = await targetVerifierService.verifyPurchase({
+  target: 'ios',
+  store: 'app-store',
+  playerId: 'target-binding-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'order-2',
+  idempotencyKey: 'store-mismatch',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+  evidence: {
+    schema: 'devvit.order.v1',
+    payload: { orderId: 'order-2', sku: 'coins_100', source: 'checkout' },
+  },
+}) as { readonly verified: boolean; readonly reason?: string };
+assertEqual(
+  mismatchedStore.reason,
+  'EVIDENCE_SCHEMA_STORE_MISMATCH',
+  'a schema registered for another store is refused before any binding runs',
+);
+assertEqual(
+  targetVerifierCalls.length,
+  bindingCallsAfterCustom,
+  'the lookup and mismatch answers reached no verifier binding',
+);
+// An aggregate verifier publishes the reference stores it serves as the
+// fallback, and Android only once a Play finalizer is bound.
+const aggregateLookupService = createWorkerService({
+  MPGD_STORE: 'memory',
+  GAME_SERVICES_EVIDENCE_VERIFIER: {
+    async verifyPurchase(input) {
+      return verifiedDecision(`aggregate:${input.request.idempotencyKey}`);
+    },
+    async verifyAdReward() {
+      return verifiedDecision('aggregate:ad-reward');
+    },
+  },
+  MPGD_COMMERCE_LOOKUP_STORES: ['devvit'],
+});
+const aggregateCapabilities = await aggregateLookupService.getCommerceCapabilities() as {
+  readonly stores: readonly { readonly store: string; readonly finish: string }[];
+};
+assertDeepEqual(
+  aggregateCapabilities.stores.map((entry) => `${entry.store}:${entry.finish}`),
+  ['devvit:none', 'google-play:client', 'app-store:client', 'apps-in-toss:host'],
+  'the aggregate fallback publishes the stores it serves next to the lookup entry',
+);
+const aggregateIosPurchase = await aggregateLookupService.verifyPurchase({
+  target: 'ios',
+  playerId: 'aggregate-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'aggregate-ios-txn',
+  idempotencyKey: 'aggregate-ios-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+}) as { readonly verified: boolean };
+assertEqual(aggregateIosPurchase.verified, true, 'a declared fallback store keeps the aggregate');
+const aggregateAndroidPurchase = await aggregateLookupService.verifyPurchase({
+  target: 'android',
+  playerId: 'aggregate-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'aggregate-android-txn',
+  idempotencyKey: 'aggregate-android-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+}) as { readonly verified: boolean };
+assertEqual(
+  aggregateAndroidPurchase.verified,
+  true,
+  'Android purchases without a Play finalizer still reach the aggregate as in v1',
+);
+const aggregateBrowserPurchase = await aggregateLookupService.verifyPurchase({
+  target: 'browser',
+  playerId: 'aggregate-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'aggregate-browser-txn',
+  idempotencyKey: 'aggregate-browser-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+}) as { readonly verified: boolean };
+assertEqual(
+  aggregateBrowserPurchase.verified,
+  true,
+  'a ledger target the aggregate served before (no entry, not declared) still reaches it',
+);
+// A client cannot dodge the devvit lookup by labelling a reddit purchase with another store.
+const dodgedLookup = await createWorkerFetchHandler({
+  MPGD_STORE: 'memory',
+  GAME_SERVICES_EVIDENCE_VERIFIER: {
+    async verifyPurchase(input) {
+      return verifiedDecision(`aggregate-dodge:${input.request.idempotencyKey}`);
+    },
+    async verifyAdReward() {
+      return verifiedDecision('aggregate-dodge:ad-reward');
+    },
+  },
+  MPGD_COMMERCE_LOOKUP_STORES: ['devvit'],
+})(
+  new Request(`${baseUrl}/game-services/purchases/verify`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      target: 'reddit',
+      store: 'verse8',
+      playerId: 'dodging-player',
+      productId: 'COINS_100',
+      platformTransactionId: 'order-dodge',
+      idempotencyKey: 'order-dodge',
+      purchasedAt: '2026-07-04T00:00:00.000Z',
+      evidence: { schema: 'devvit.order.v1', payload: { orderId: 'order-dodge', sku: 'coins_100', source: 'checkout' } },
+    }),
+  }),
+);
+assertEqual(dodgedLookup.status, 400, 'a reddit purchase under another store label is refused');
+// Without a payments authority the fulfillment verify is refused with a
+// clear reason; the fulfillment path writes the ledger directly instead.
+const paidOrder = {
+  target: 'reddit' as const,
+  orderId: 'order-fulfilled-1',
+  playerId: 'reddit-player',
+  platformSku: 'coins_100',
+  paidAt: '2026-07-04T00:00:00.000Z',
+  evidence: {
+    schema: 'devvit.payment-order.v1',
+    payload: { orderId: 'order-fulfilled-1', status: 'PAID', playerIdSource: 'devvit-context' },
+  },
+};
+const fulfillmentVerify = createPlatformOrderVerifyRequest({
+  order: paidOrder,
+  productId: 'COINS_100',
+});
+const unboundFulfillment = await aggregateLookupService.verifyPurchase(fulfillmentVerify) as {
+  readonly verified: boolean;
+  readonly reason?: string;
+};
+assertEqual(unboundFulfillment.verified, false, 'no authority, no fulfillment grant');
+assertEqual(
+  unboundFulfillment.reason,
+  'DEVVIT_PAYMENT_ORDER_AUTHORITY_REQUIRED',
+  'the refusal names the missing binding',
+);
+// With the authority bound, the fulfillment verify grants and the client lookup settles.
+const authorityCalls: string[] = [];
+const devvitAuthorityService = createWorkerService({
+  MPGD_STORE: 'memory',
+  GAME_SERVICES_EVIDENCE_VERIFIER: {
+    async verifyPurchase(input) {
+      return verifiedDecision(`aggregate-devvit:${input.request.idempotencyKey}`);
+    },
+    async verifyAdReward() {
+      return verifiedDecision('aggregate-devvit:ad-reward');
+    },
+  },
+  MPGD_COMMERCE_LOOKUP_STORES: ['devvit'],
+  GAME_SERVICES_DEVVIT_PAYMENT_ORDER_AUTHORITY: {
+    async getOrder(input) {
+      authorityCalls.push(`${input.orderId}:${input.playerId}:${input.platformSku}`);
+      return {
+        decision: 'resolved',
+        order: {
+          orderId: input.orderId,
+          playerId: input.playerId,
+          sku: input.platformSku,
+          status: 'PAID',
+        },
+      };
+    },
+  },
+});
+const fulfilled = await devvitAuthorityService.verifyPurchase(fulfillmentVerify) as {
+  readonly verified: boolean;
+  readonly ledgerEntryId?: string;
+};
+assertEqual(
+  fulfilled.verified,
+  true,
+  "the fulfillment handler's record grants through the authority",
+);
+assertDeepEqual(
+  authorityCalls,
+  ['order-fulfilled-1:reddit-player:coins_100'],
+  'the authority was asked once',
+);
+const settledLookup = await devvitAuthorityService.verifyPurchase({
+  target: 'reddit',
+  store: 'devvit',
+  playerId: 'reddit-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'order-fulfilled-1',
+  idempotencyKey: 'store:devvit:order-fulfilled-1',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+  evidence: {
+    schema: 'devvit.order.v1',
+    payload: { orderId: 'order-fulfilled-1', sku: 'coins_100', source: 'checkout' },
+  },
+}) as { readonly verified: boolean; readonly ledgerEntryId?: string; readonly alreadyProcessed: boolean };
+assertEqual(settledLookup.verified, true, 'the client envelope settles on the fulfillment grant');
+assertEqual(settledLookup.alreadyProcessed, true, 'nothing new was granted');
+assertEqual(settledLookup.ledgerEntryId, fulfilled.ledgerEntryId, 'the same ledger entry');
+assertEqual(
+  createWorkerService(workerEnv),
+  workerService,
+  'the service is built once per env object',
+);
+const aggregateWithFinalizer = await createWorkerService({
+  MPGD_STORE: 'memory',
+  GAME_SERVICES_EVIDENCE_VERIFIER: {
+    async verifyPurchase() {
+      return verifiedDecision('aggregate:purchase');
+    },
+    async verifyAdReward() {
+      return verifiedDecision('aggregate:ad-reward');
+    },
+  },
+  GAME_SERVICES_ANDROID_PURCHASE_FINALIZER: androidFinalizerBinding,
+}).getCommerceCapabilities() as {
+  readonly stores: readonly { readonly store: string; readonly finish: string }[];
+};
+assertEqual(
+  aggregateWithFinalizer.stores.find((entry) => entry.store === 'google-play')?.finish,
+  'server',
+  'an aggregate verifier with a bound Play finalizer publishes google-play',
+);
+const ledgerStatus = await targetVerifierService.getPurchaseLedgerStatus({
+  ledgerEntryIds: [
+    (targetAndroidPurchase as { readonly ledgerEntryId: string }).ledgerEntryId,
+    'missing',
+  ],
+  playerId: 'target-binding-player',
+}) as { readonly statuses: readonly { readonly status: string }[] };
+assertDeepEqual(
+  ledgerStatus.statuses.map((status) => status.status),
+  ['active', 'unknown'],
+  'the ledger status read answers active for the recorded grant',
 );
 
 const originalFetch = globalThis.fetch;
@@ -457,6 +888,7 @@ const partialTargetVerifierService = createWorkerService({
       return verifiedDecision('partial-android:ad-reward');
     },
   },
+  GAME_SERVICES_ANDROID_PURCHASE_FINALIZER: androidFinalizerBinding,
 });
 const partialAndroidPurchase = await partialTargetVerifierService.verifyPurchase({
   target: 'android',
@@ -516,7 +948,7 @@ const microsoftStoreFinalizerBinding = {
     };
   },
 } satisfies GameServicesPurchaseGrantFinalizerBinding;
-assertThrows(
+await assertRejects(
   () =>
     createWorkerService({
       MPGD_STORE: 'memory',
@@ -528,16 +960,16 @@ assertThrows(
           return { status: 'rejected', reason: 'NOT_SUPPORTED' };
         },
       },
-    }),
+    }).getCommerceCapabilities(),
   /must be configured together/u,
   'Microsoft Store verifier-only configuration must fail closed',
 );
-assertThrows(
+await assertRejects(
   () =>
     createWorkerService({
       MPGD_STORE: 'memory',
       GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER: microsoftStoreFinalizerBinding,
-    }),
+    }).getCommerceCapabilities(),
   /must be configured together/u,
   'Microsoft Store finalizer-only configuration must fail closed',
 );
@@ -990,6 +1422,47 @@ const postIngress = (
 const readError = async (response: Response): Promise<string> =>
   (await response.json() as { readonly error: string }).error;
 
+const ingressLedgerStatusMissingToken = await postIngress(
+  '/game-services/purchases/ledger-status',
+  { ledgerEntryIds: ['ledger-1'] },
+);
+assertEqual(
+  ingressLedgerStatusMissingToken.status,
+  401,
+  'the ledger status read is gated by ingress auth',
+);
+const ingressLedgerStatusForeignPlayer = await postIngress(
+  '/game-services/purchases/ledger-status',
+  { ledgerEntryIds: ['ledger-1'] },
+  'Bearer ingress-player-token',
+);
+assertEqual(
+  ingressLedgerStatusForeignPlayer.status,
+  403,
+  'a ledger status read names the authenticated player like every grant route',
+);
+const ingressLedgerStatus = await postIngress(
+  '/game-services/purchases/ledger-status',
+  { ledgerEntryIds: ['ledger-1'], playerId: 'ingress-player' },
+  'Bearer ingress-player-token',
+);
+assertEqual(ingressLedgerStatus.status, 200, 'an authenticated ledger status read passes');
+assertEqual(
+  JSON.stringify(await ingressLedgerStatus.json()),
+  JSON.stringify({ statuses: [{ ledgerEntryId: 'ledger-1', status: 'unknown' }] }),
+  'an unknown ledger entry answers unknown',
+);
+const ingressCapabilities = await postIngress('/game-services/purchases/capabilities', {});
+assertEqual(
+  ingressCapabilities.status,
+  404,
+  'the capabilities read is public and a Worker without registry entries has none',
+);
+assertEqual(
+  ingressAuthCalls.length,
+  2,
+  'the public capabilities read does not consult the ingress auth binding',
+);
 const ingressHappyPurchase = await postIngress(
   '/game-services/purchases/verify',
   ingressPurchaseRequest,
@@ -1312,6 +1785,24 @@ function assertDeepEqual<T>(
     throw new Error(
       `${message}: expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}.`,
     );
+  }
+}
+
+async function assertRejects(
+  run: () => Promise<unknown>,
+  expected: RegExp,
+  message: string,
+): Promise<void> {
+  let error: unknown;
+
+  try {
+    await run();
+  } catch (caught) {
+    error = caught;
+  }
+
+  if (!(error instanceof Error) || !expected.test(error.message)) {
+    throw new Error(`${message}: received ${String(error)}.`);
   }
 }
 

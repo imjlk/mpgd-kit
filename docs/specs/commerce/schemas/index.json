@@ -16,6 +16,10 @@
       "file": "commerce-capabilities.schema.json"
     },
     {
+      "title": "CommerceServiceCapabilities",
+      "file": "commerce-service-capabilities.schema.json"
+    },
+    {
       "title": "CommerceEvent",
       "file": "commerce-event.schema.json"
     },

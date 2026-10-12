@@ -20,6 +20,21 @@ export type EvidenceVerificationDecision =
       readonly platformEvidenceId?: string | null;
     }
   | {
+      /**
+       * An earlier ledger entry already grants this purchase: a server-push
+       * store's lookup verifier (RFC "Evidence registry") found the grant the
+       * host's fulfillment path wrote. The backend answers `verified` with
+       * that entry (`alreadyProcessed: true`) after checking it belongs to the
+       * requesting player, product, and target, and writes nothing new. Only
+       * purchase verification understands it; a rewarded-ad verifier that
+       * answers it is treated as a verifier error.
+       */
+      readonly status: 'settled';
+      readonly ledgerEntryId: string;
+      /** The ledger target the entry was written under when it is not the request's target. */
+      readonly ledgerTarget?: string;
+    }
+  | {
       readonly status: 'pending';
       readonly reason?: string;
     }

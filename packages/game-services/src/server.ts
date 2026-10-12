@@ -18,6 +18,15 @@ import {
   type GameServicesBackendTransportRequest,
   type GameServicesBackendTransportResponse,
 } from './client.js';
+import {
+  resolveCommerceStoreId,
+  type CommerceEvidenceRegistry,
+} from './commerce-evidence-registry.js';
+import {
+  isEntitlementGrantReversed,
+  readPurchaseLedgerStatuses,
+  RevocationKeyConflictError,
+} from './commerce-ledger.js';
 import { gameServicesContract, type GameServicesHealthResponse } from './contract.js';
 import {
   createRejectingGameServicesEvidenceVerifier,
@@ -31,6 +40,8 @@ import {
   assertClaimAdRewardResponse,
   assertEntitlementLedgerGrant,
   assertEntitlementLedgerResult,
+  assertEntitlementLedgerRevocation,
+  assertEntitlementRevocationTransaction,
   assertGameServicesDeploymentTarget,
   assertLeaderboardScoreTransaction,
   assertProductGrantTransaction,
@@ -44,11 +55,14 @@ import {
   type EntitlementLedgerGrant,
   type EntitlementLedgerPayload,
   type EntitlementLedgerResult,
+  type EntitlementLedgerRevocation,
+  type EntitlementRevocationTransaction,
   type GameServicesAdRewardTarget,
   type GameServicesStoreTarget,
   type LeaderboardScoreTransaction,
   type ProductGrantTransaction,
   type PurchaseGrantFinalization,
+  type PurchaseLedgerStatusRequest,
   type RecordLeaderboardScoreRequest,
   type RecordLeaderboardScoreResponse,
   type VerifyPurchaseRequest,
@@ -57,6 +71,13 @@ import {
 import { gameServicesRequestLimits, GameServicesRequestValidationError } from './validation.js';
 
 export { gameServicesRequestLimits, GameServicesRequestValidationError } from './validation.js';
+export {
+  listActiveEntitlementTransactions,
+  readPurchaseLedgerStatuses,
+  revokeEntitlementGrant,
+  RevocationKeyConflictError,
+  type RevokeEntitlementGrantResult,
+} from './commerce-ledger.js';
 
 type CorsHeaders = Record<string, string>;
 
@@ -74,6 +95,16 @@ export interface CreateGameServicesBackendInput {
   readonly evidenceVerificationTimeoutMs?: number;
   readonly purchaseGrantFinalizationTimeoutMs?: number;
   readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
+  /**
+   * The commerce v2 evidence registry (RFC "Evidence registry"). With it,
+   * purchase evidence is routed by `evidence.schema` to the registered
+   * verifier and finalizer, `purchaseGrantFinalizer` is not consulted for
+   * purchases, `evidenceVerifier` serves rewarded ads only, and the backend
+   * publishes `getCommerceCapabilities`. Without it the backend keeps the v1
+   * behaviour: one `evidenceVerifier` and one `purchaseGrantFinalizer` for
+   * every purchase, and no capabilities endpoint.
+   */
+  readonly commerceEvidenceRegistry?: CommerceEvidenceRegistry;
   /**
    * Receives unexpected (non-validation) failures such as store errors before the
    * transport answers with the generic `INTERNAL_ERROR` code. Defaults to `console.error`.
@@ -128,6 +159,30 @@ export interface GameServicesStore {
     ledgerEntryId: string,
   ): Promise<ProductGrantTransaction | undefined>;
   listEntitlementTransactions(): Promise<readonly ProductGrantTransaction[]>;
+  /** The grants with the given ids (at most `ledgerReadChunkSize` per call), any order. */
+  getEntitlementTransactions?(
+    ledgerEntryIds: readonly string[],
+  ): Promise<readonly ProductGrantTransaction[]>;
+  /**
+   * Appends a `revoke` entry (RFC "Revocation and expiry entries"). A grant is
+   * reversed once: a second revocation of the same grant, under any key,
+   * answers the first entry with `alreadyProcessed: true`, as does a replay of
+   * the same `(playerId, idempotencyKey)`; a key reused for another grant
+   * throws `RevocationKeyConflictError`, a reused `evidenceVerificationId`
+   * throws `EvidenceAlreadyProcessedError`, and an unknown grant throws.
+   * Optional: a store without it answers every ledger status read as
+   * `active` and refuses `revokeEntitlementGrant`.
+   */
+  recordEntitlementRevocation?(
+    input: EntitlementLedgerRevocation,
+  ): Promise<EntitlementLedgerResult>;
+  /**
+   * The revocations that reverse any of the given grant entries (at most
+   * `ledgerReadChunkSize` per call), oldest first.
+   */
+  findEntitlementRevocations?(input: {
+    readonly ledgerEntryIds: readonly string[];
+  }): Promise<readonly EntitlementRevocationTransaction[]>;
   recordLeaderboardScore(
     input: RecordLeaderboardScoreRequest,
     options?: { readonly recordedAt?: string },
@@ -173,6 +228,9 @@ export class InMemoryGameServicesStore implements GameServicesStore {
     ProductGrantTransaction
   >();
   private readonly entitlementTransactionsById = new Map<string, ProductGrantTransaction>();
+  private readonly revocationsByKey = new Map<string, EntitlementRevocationTransaction>();
+  private readonly revocationsByGrant = new Map<string, EntitlementRevocationTransaction>();
+  private readonly revocationsByEvidence = new Map<string, EntitlementRevocationTransaction>();
   private readonly leaderboardTransactionsByRun = new Map<string, LeaderboardScoreTransaction>();
   private readonly leaderboardTransactionsById = new Map<string, LeaderboardScoreTransaction>();
 
@@ -267,6 +325,77 @@ export class InMemoryGameServicesStore implements GameServicesStore {
 
   async listEntitlementTransactions(): Promise<readonly ProductGrantTransaction[]> {
     return [...this.entitlementTransactionsById.values()];
+  }
+
+  async getEntitlementTransactions(
+    ledgerEntryIds: readonly string[],
+  ): Promise<readonly ProductGrantTransaction[]> {
+    const found: ProductGrantTransaction[] = [];
+    for (const ledgerEntryId of new Set(ledgerEntryIds)) {
+      const transaction = this.entitlementTransactionsById.get(ledgerEntryId);
+      if (transaction !== undefined) {
+        found.push(transaction);
+      }
+    }
+    return found;
+  }
+
+  async recordEntitlementRevocation(
+    input: EntitlementLedgerRevocation,
+  ): Promise<EntitlementLedgerResult> {
+    const revocation = assertEntitlementLedgerRevocation(input);
+    const key = createRevocationIdempotencyKey(revocation);
+    const byKey = this.revocationsByKey.get(key);
+    if (byKey !== undefined) {
+      if (byKey.revokesLedgerEntryId !== revocation.revokesLedgerEntryId) {
+        throw new RevocationKeyConflictError();
+      }
+      return assertEntitlementLedgerResult({
+        ledgerEntryId: byKey.ledgerEntryId,
+        alreadyProcessed: true,
+      });
+    }
+    const byGrant = this.revocationsByGrant.get(revocation.revokesLedgerEntryId);
+    if (byGrant !== undefined) {
+      return assertEntitlementLedgerResult({
+        ledgerEntryId: byGrant.ledgerEntryId,
+        alreadyProcessed: true,
+      });
+    }
+    if (
+      revocation.evidenceVerificationId !== undefined
+      && this.revocationsByEvidence.has(revocation.evidenceVerificationId)
+    ) {
+      throw new EvidenceAlreadyProcessedError();
+    }
+    if (!this.entitlementTransactionsById.has(revocation.revokesLedgerEntryId)) {
+      // The D1 store's foreign key refuses the same write.
+      throw new Error('Entitlement revocation references an unknown grant.');
+    }
+
+    const transaction = assertEntitlementRevocationTransaction({
+      ...revocation,
+      ledgerEntryId: createRevocationLedgerEntryId(revocation),
+    });
+    this.revocationsByKey.set(key, transaction);
+    this.revocationsByGrant.set(revocation.revokesLedgerEntryId, transaction);
+    if (revocation.evidenceVerificationId !== undefined) {
+      this.revocationsByEvidence.set(revocation.evidenceVerificationId, transaction);
+    }
+
+    return assertEntitlementLedgerResult({
+      ledgerEntryId: transaction.ledgerEntryId,
+      alreadyProcessed: false,
+    });
+  }
+
+  async findEntitlementRevocations(input: {
+    readonly ledgerEntryIds: readonly string[];
+  }): Promise<readonly EntitlementRevocationTransaction[]> {
+    const wanted = new Set(input.ledgerEntryIds);
+    return [...this.revocationsByGrant.values()]
+      .filter((revocation) => wanted.has(revocation.revokesLedgerEntryId))
+      .sort((left, right) => left.revokedAt.localeCompare(right.revokedAt));
   }
 
   async recordLeaderboardScore(
@@ -364,6 +493,27 @@ export function createGameServicesBackend(
     now,
     ...(input.analytics === undefined ? {} : { sink: input.analytics }),
   });
+  const registry = input.commerceEvidenceRegistry;
+  if (registry !== undefined && input.purchaseGrantFinalizer !== undefined) {
+    throw new Error(
+      'createGameServicesBackend: pass the v1 purchaseGrantFinalizer as the registry '
+        + 'unregistered.finalizer instead of next to commerceEvidenceRegistry; with a registry '
+        + 'the entries own finalization.',
+    );
+  }
+  // With a registry, purchase evidence is routed by schema and the registry's
+  // finalizer owns post-grant finalization; the configured verifier keeps
+  // serving rewarded ads. Without one, the v1 single verifier and finalizer
+  // serve every purchase unchanged.
+  const purchaseEvidenceVerifier: GameServicesEvidenceVerifier = registry === undefined
+    ? evidenceVerifier
+    : {
+        verifyPurchase: (verificationInput) => registry.verifyPurchase(verificationInput),
+        verifyAdReward: (verificationInput) => evidenceVerifier.verifyAdReward(verificationInput),
+      };
+  const purchaseGrantFinalizer = registry === undefined
+    ? input.purchaseGrantFinalizer
+    : registry.finalizer;
 
   return {
     version,
@@ -373,19 +523,21 @@ export function createGameServicesBackend(
           catalog: input.catalog,
           store,
           now,
-          evidenceVerifier,
+          evidenceVerifier: purchaseEvidenceVerifier,
           evidenceVerificationTimeoutMs,
           purchaseGrantFinalizationTimeoutMs,
           deploymentTargetBindings,
-          ...(input.purchaseGrantFinalizer === undefined
+          ...(purchaseGrantFinalizer === undefined
             ? {}
-            : { purchaseGrantFinalizer: input.purchaseGrantFinalizer }),
+            : { purchaseGrantFinalizer }),
+          ...(registry === undefined ? {} : { registry }),
         }, async (verification) => {
           await analytics.track({
             name: verification.verified ? 'purchase_granted'
               : verification.disposition === 'pending' ? 'purchase_pending' : 'purchase_rejected',
             properties: {
               target: request.target,
+              store: resolveCommerceStoreId(request),
               playerId: request.playerId,
               productId: request.productId,
               ledgerEntryId: verification.ledgerEntryId,
@@ -399,6 +551,16 @@ export function createGameServicesBackend(
           });
         });
       },
+      async getPurchaseLedgerStatus(request) {
+        return readPurchaseLedgerStatuses(store, request);
+      },
+      ...(registry === undefined
+        ? {}
+        : {
+            async getCommerceCapabilities() {
+              return registry.getCapabilities();
+            },
+          }),
     },
     adRewards: {
       async claimAdReward(request) {
@@ -573,6 +735,22 @@ export function createGameServicesRouter(
       verifyPurchase: contract.commerce.verifyPurchase.handler(({ input }) => {
         return invoke(() => backend.purchases.verifyPurchase(input));
       }),
+      getPurchaseLedgerStatus: contract.commerce.getPurchaseLedgerStatus.handler(({ input }) => {
+        const read = backend.purchases.getPurchaseLedgerStatus;
+        if (read === undefined) {
+          throw new ORPCError('NOT_FOUND', { message: 'This backend has no ledger status read.' });
+        }
+        return invoke(() => read.call(backend.purchases, input));
+      }),
+      getCapabilities: contract.commerce.getCapabilities.handler(() => {
+        const read = backend.purchases.getCommerceCapabilities;
+        if (read === undefined) {
+          throw new ORPCError('NOT_FOUND', {
+            message: 'This backend publishes no commerce capabilities.',
+          });
+        }
+        return invoke(() => read.call(backend.purchases));
+      }),
     }),
     ads: contract.ads.router({
       claimReward: contract.ads.claimReward.handler(({ input }) => {
@@ -736,7 +914,9 @@ function bindRequestDeploymentTarget<
   request: Request,
   bindings: GameServicesDeploymentTargetBindings,
 ): Request {
-  const deploymentTarget = bindings[request.target] ?? request.target;
+  const deploymentTarget = (Object.hasOwn(bindings, request.target)
+    ? bindings[request.target]
+    : undefined) ?? request.target;
 
   if (
     request.deploymentTarget !== undefined
@@ -761,6 +941,62 @@ interface PurchaseVerificationContext {
   readonly purchaseGrantFinalizationTimeoutMs: number;
   readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
   readonly deploymentTargetBindings: GameServicesDeploymentTargetBindings;
+  readonly registry?: CommerceEvidenceRegistry;
+}
+
+/** The ledger targets a v1 backend (no registry) accepts: the platform targets with a ledger. */
+const gameServicesLedgerTargets = new Set<string>([
+  'browser',
+  'microsoft-store',
+  'android',
+  'ios',
+  'ait',
+  'reddit',
+  'verse8',
+  'oneplay',
+]);
+
+/**
+ * A target or store the backend does not serve is a 400, as an unknown v1
+ * target was: without a registry the ledger targets are the known platform
+ * targets; with one, the store must be registered (or declared for the
+ * fallback) and the target a ledger target or a served store id.
+ */
+function assertServedPurchaseRequest(
+  request: VerifyPurchaseRequest,
+  registry: CommerceEvidenceRegistry | undefined,
+): void {
+  if (registry === undefined) {
+    if (!gameServicesLedgerTargets.has(request.target)) {
+      throw new GameServicesRequestValidationError(
+        `target ${request.target} is not a ledger target this backend serves.`,
+      );
+    }
+    return;
+  }
+  const store = resolveCommerceStoreId(request);
+  if (!registry.serves(request)) {
+    throw new GameServicesRequestValidationError(
+      `store ${store} is not a store this backend serves for target ${request.target}.`,
+    );
+  }
+  // A served store's declared targets are the contract (a custom store may
+  // name a custom ledger target); a store without declared targets keeps the
+  // ledger target set and the served store ids.
+  const allowed = registry.allowedTargets(store);
+  if (allowed !== undefined) {
+    if (!allowed.has(request.target)) {
+      throw new GameServicesRequestValidationError(
+        `target ${request.target} is not a ledger target of store ${store}.`,
+      );
+    }
+    return;
+  }
+  if (!gameServicesLedgerTargets.has(request.target) && !registry.stores.has(request.target)) {
+    throw new GameServicesRequestValidationError(
+      `target ${request.target} is not a ledger target this backend serves.`,
+    );
+  }
 }
 
 async function verifyPurchaseWithStore(
@@ -772,12 +1008,14 @@ async function verifyPurchaseWithStore(
     assertVerifyPurchaseRequest(input),
     context.deploymentTargetBindings,
   );
+  assertServedPurchaseRequest(request, context.registry);
   const retryIdentity = {
     source: 'purchase',
     playerId: request.playerId,
     idempotencyKey: request.idempotencyKey,
     grantId: request.productId,
     target: request.target,
+    store: resolveCommerceStoreId(request),
     ...(request.deploymentTarget === undefined
       ? {}
       : { deploymentTarget: request.deploymentTarget }),
@@ -802,6 +1040,15 @@ async function verifyPurchaseForRetry(
         verified: false,
         alreadyProcessed: false,
         reason: 'IDEMPOTENCY_KEY_CONFLICT',
+      });
+    }
+    if (await isEntitlementGrantReversed(context.store, transaction.ledgerEntryId)) {
+      // A replayed key for a refunded grant is not a grant, as the lookup path answers.
+      return assertVerifyPurchaseResponse({
+        verified: false,
+        alreadyProcessed: false,
+        disposition: 'rejected',
+        reason: 'LEDGER_GRANT_REVERSED',
       });
     }
 
@@ -853,6 +1100,13 @@ async function verifyPurchaseForRetry(
     });
   }, context.evidenceVerificationTimeoutMs);
 
+  if (verification.status === 'settled') {
+    // A server-push lookup found the grant the host's fulfillment path wrote.
+    // Nothing is written; the entry is answered once it is checked against
+    // the requesting player, product, and target.
+    return completeSettledPurchase(request, verification, context);
+  }
+
   if (verification.status !== 'verified') {
     // A matching grant can land while provider verification is in flight. Recheck
     // before returning a stale provider state such as an already-consumed token.
@@ -879,6 +1133,14 @@ async function verifyPurchaseForRetry(
     verification,
     request.platformTransactionId,
   );
+  const evidenceSchema = request.evidence?.schema;
+  // The store written is the one the registry routed to (an entry's own
+  // store, or a declared fallback store); a fallback serving undeclared
+  // stores and the v1 path record the request's resolved store.
+  const routed = context.registry?.route(request);
+  const verifiedStore = routed?.status === 'routed'
+    ? routed.entry.store
+    : resolveCommerceStoreId(request);
 
   const grant = await recordEntitlementGrantWithEvidence(context.store, {
     playerId: request.playerId,
@@ -891,6 +1153,7 @@ async function verifyPurchaseForRetry(
     payload: {
       ...verificationPayload,
       target: request.target,
+      store: verifiedStore,
       ...(request.deploymentTarget === undefined
         ? {}
         : { deploymentTarget: request.deploymentTarget }),
@@ -899,6 +1162,7 @@ async function verifyPurchaseForRetry(
       platformProductId,
       ...(platformTransactionId === undefined ? {} : { platformTransactionId }),
       purchasedAt: request.purchasedAt,
+      ...(evidenceSchema === undefined ? {} : { evidenceSchema }),
       evidenceVerificationId: verification.verificationId,
       evidenceVerifiedAt: verification.verifiedAt,
     },
@@ -915,12 +1179,22 @@ async function verifyPurchaseForRetry(
         playerId: request.playerId,
         grantId: request.productId,
         target: request.target,
+        store: verifiedStore,
         ...(request.deploymentTarget === undefined
           ? {}
           : { deploymentTarget: request.deploymentTarget }),
         evidenceVerificationId: verification.verificationId,
       })
     ) {
+      if (await isEntitlementGrantReversed(context.store, existingEvidence.ledgerEntryId)) {
+        // A refunded grant's evidence replayed under another key is not a grant.
+        return assertVerifyPurchaseResponse({
+          verified: false,
+          alreadyProcessed: false,
+          disposition: 'rejected',
+          reason: 'LEDGER_GRANT_REVERSED',
+        });
+      }
       const finalization = await finalizeExistingPurchaseGrant(request, existingEvidence, context);
       // A different idempotency key is evidence replay unless a configured finalizer can resume
       // the provider operation. Keep generic stores fail-closed while allowing Store consume
@@ -982,6 +1256,58 @@ async function verifyPurchaseForRetry(
   });
 }
 
+/**
+ * Answers a purchase a server-push lookup verifier found settled by an earlier
+ * ledger entry. The entry must be a purchase grant of the requesting player,
+ * product, and ledger target; a fulfillment path that bound the grant to a
+ * deployment target must agree with the request when both name one.
+ */
+async function completeSettledPurchase(
+  request: VerifyPurchaseRequest,
+  decision: Extract<EvidenceVerificationDecision, { readonly status: 'settled' }>,
+  context: PurchaseVerificationContext,
+): Promise<VerifyPurchaseResponse> {
+  const settled = await context.store.getEntitlementTransaction(decision.ledgerEntryId);
+  if (
+    settled === undefined
+    || settled.source !== 'purchase'
+    || settled.playerId !== request.playerId
+    || settled.grantId !== request.productId
+    || settled.payload.target !== (decision.ledgerTarget ?? request.target)
+    || (
+      settled.payload.deploymentTarget !== undefined
+      && request.deploymentTarget !== undefined
+      && settled.payload.deploymentTarget !== request.deploymentTarget
+    )
+  ) {
+    return assertVerifyPurchaseResponse({
+      verified: false,
+      alreadyProcessed: false,
+      disposition: 'rejected',
+      reason: 'LEDGER_GRANT_IDENTITY_MISMATCH',
+    });
+  }
+  if (await isEntitlementGrantReversed(context.store, settled.ledgerEntryId)) {
+    // `settled` is an open verifier contract; a reversed grant never settles
+    // a purchase, whichever verifier named it.
+    return assertVerifyPurchaseResponse({
+      verified: false,
+      alreadyProcessed: false,
+      disposition: 'rejected',
+      reason: 'LEDGER_GRANT_REVERSED',
+    });
+  }
+
+  const finalization = await finalizeExistingPurchaseGrant(request, settled, context);
+
+  return assertVerifyPurchaseResponse({
+    verified: true,
+    ledgerEntryId: settled.ledgerEntryId,
+    alreadyProcessed: true,
+    ...(finalization === undefined ? {} : { finalization }),
+  });
+}
+
 async function finalizeExistingPurchaseGrant(
   request: VerifyPurchaseRequest,
   transaction: ProductGrantTransaction,
@@ -989,6 +1315,7 @@ async function finalizeExistingPurchaseGrant(
     readonly catalog: ProductCatalog;
     readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
     readonly purchaseGrantFinalizationTimeoutMs: number;
+    readonly registry?: CommerceEvidenceRegistry;
   },
 ): Promise<PurchaseGrantFinalization | undefined> {
   if (context.purchaseGrantFinalizer === undefined) {
@@ -1010,6 +1337,35 @@ async function finalizeExistingPurchaseGrant(
     || typeof evidenceVerificationId !== 'string'
     || evidenceVerificationId.length === 0
   ) {
+    // With a registry, a store nothing finalizes on the server (client,
+    // host, or none finish) has no pending finalization to report: the
+    // registry decides from the grant's recorded store and schema, never from
+    // the stand-in product. The v1 single finalizer keeps answering pending.
+    if (context.registry !== undefined) {
+      const recordedSchema = transaction.payload.evidenceSchema;
+      const supported = context.registry.finalizer.supportsPurchaseGrant?.({
+        request: typeof recordedSchema === 'string' && recordedSchema.length > 0
+          ? { ...finalizationRequest, evidence: { schema: recordedSchema, payload: {} } }
+          : finalizationRequest,
+        product: product ?? {
+          id: request.productId,
+          type: 'consumable' as const,
+          grant: transaction.grant ?? { type: 'entitlement' as const, entitlement: request.productId },
+          platformProductIds: {},
+        },
+        platformProductId: platformProductId ?? '',
+        evidenceVerificationId: typeof evidenceVerificationId === 'string'
+          ? evidenceVerificationId
+          : '',
+        evidencePayload: transaction.payload,
+        ledgerEntryId: transaction.ledgerEntryId,
+        alreadyProcessed: true,
+        timeoutMs: context.purchaseGrantFinalizationTimeoutMs,
+      });
+      if (supported === false) {
+        return undefined;
+      }
+    }
     return assertPurchaseGrantFinalization({
       status: 'pending',
       alreadyCompleted: false,
@@ -1245,7 +1601,10 @@ async function claimAdRewardForRetry(
       disposition: verification.status === 'pending' ? 'pending' : 'rejected',
       reason: verification.status === 'pending'
         ? (verification.reason ?? 'EVIDENCE_PENDING')
-        : verification.reason,
+        : verification.status === 'settled'
+          // Only purchase verification reads a settled ledger entry.
+          ? 'EVIDENCE_VERIFIER_ERROR'
+          : verification.reason,
     });
   }
 
@@ -1425,6 +1784,11 @@ function assertEvidenceVerificationDecision(
     return decision;
   }
 
+  if (decision.status === 'settled') {
+    assertNonEmptyDecisionString(decision.ledgerEntryId, 'ledgerEntryId');
+    return decision;
+  }
+
   if (decision.status === 'pending') {
     if (decision.reason !== undefined) {
       assertNonEmptyDecisionString(decision.reason, 'reason');
@@ -1594,6 +1958,8 @@ interface EntitlementTransactionIdentity {
   readonly playerId: string;
   readonly grantId: string;
   readonly target: string;
+  /** The purchase's store; a grant recorded without one (pre-C2) matches any. */
+  readonly store?: string;
   readonly deploymentTarget?: string;
 }
 
@@ -1707,6 +2073,7 @@ function matchesPurchaseEvidenceRecovery(
     readonly playerId: string;
     readonly grantId: string;
     readonly target: string;
+    readonly store?: string;
     readonly deploymentTarget?: string;
     readonly evidenceVerificationId: string;
   },
@@ -1729,7 +2096,16 @@ function matchesEntitlementTransactionIdentity(
     && transaction.playerId === identity.playerId
     && transaction.grantId === identity.grantId
     && transaction.payload.target === identity.target
-    && transaction.payload.deploymentTarget === identity.deploymentTarget;
+    // Two stores sharing one ledger target never share a grant: a key reused
+    // with another store is a conflict, while a grant recorded before the
+    // store was written meets any store.
+    && (identity.store === undefined
+      || transaction.payload.store === undefined
+      || transaction.payload.store === identity.store)
+    // A grant written without a deployment target (a host fulfillment path)
+    // meets the request bound to one; two bound targets must agree.
+    && (transaction.payload.deploymentTarget === undefined
+      || transaction.payload.deploymentTarget === identity.deploymentTarget);
 }
 
 function resolveEvidenceVerificationTimeout(timeoutMs: number | undefined): number {
@@ -1778,6 +2154,18 @@ async function routeGameServicesRequest(
   switch (endpoint) {
     case gameServicesBackendEndpoints.verifyPurchase:
       return okResponse(await backend.purchases.verifyPurchase(body as VerifyPurchaseRequest));
+    case gameServicesBackendEndpoints.getPurchaseLedgerStatus:
+      if (backend.purchases.getPurchaseLedgerStatus === undefined) {
+        return errorResponse(404, 'UNKNOWN_ENDPOINT');
+      }
+      return okResponse(
+        await backend.purchases.getPurchaseLedgerStatus(body as PurchaseLedgerStatusRequest),
+      );
+    case gameServicesBackendEndpoints.getCommerceCapabilities:
+      if (backend.purchases.getCommerceCapabilities === undefined) {
+        return errorResponse(404, 'UNKNOWN_ENDPOINT');
+      }
+      return okResponse(await backend.purchases.getCommerceCapabilities());
     case gameServicesBackendEndpoints.claimAdReward:
       return okResponse(await backend.adRewards.claimAdReward(body as ClaimAdRewardRequest));
     case gameServicesBackendEndpoints.recordLeaderboardScore:
@@ -1858,6 +2246,18 @@ function createEntitlementPlatformEvidenceKey(
   identity: EntitlementPlatformEvidenceIdentity,
 ): string {
   return createCompositeKey([identity.source, identity.target, identity.platformEvidenceId]);
+}
+
+function createRevocationIdempotencyKey(revocation: EntitlementLedgerRevocation): string {
+  return createCompositeKey(['revoke', revocation.playerId, revocation.idempotencyKey]);
+}
+
+function createRevocationLedgerEntryId(revocation: EntitlementLedgerRevocation): string {
+  return [
+    'revoke',
+    encodeIdSegment(revocation.playerId),
+    encodeIdSegment(revocation.idempotencyKey),
+  ].join('_');
 }
 
 function createEntitlementLedgerEntryId(grant: EntitlementLedgerGrant): string {

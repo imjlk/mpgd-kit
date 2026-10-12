@@ -116,3 +116,48 @@ head_sampling_rate = 1
 # [[services]]
 # binding = "GAME_SERVICES_VERSE8_EVIDENCE_VERIFIER"
 # service = "game-evidence-verifier-verse8"
+#
+# Commerce v2 (C2): the Worker composes its evidence registry from the
+# bindings above. The google-play entry declares finish = server, so an
+# Android verifier must be paired with a Play finalizer or the Worker refuses
+# to start. Either run the Play boundary in this Worker (the package name plus
+# a private service that mints Android Publisher access tokens from the
+# game-owned service account; bind the account-id resolver or opt into
+# unbound players only when ingress auth already binds playerId) ...
+#
+# GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME = "com.example.game"
+# GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER = "true"
+#
+# [[services]]
+# binding = "GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH"
+# service = "game-play-publisher-auth"
+#
+# [[services]]
+# binding = "GAME_SERVICES_GOOGLE_PLAY_ACCOUNT_BINDING"
+# service = "game-identity"
+# entrypoint = "GooglePlayAccountBinding"
+#
+# ... or bind a private finalizer that acknowledges or consumes the purchase,
+#
+# [[services]]
+# binding = "GAME_SERVICES_ANDROID_PURCHASE_FINALIZER"
+# service = "game-play-finalizer"
+#
+# ... or declare that the Android verifier binding acknowledges purchases
+# itself (the store is then published with the client finish owner).
+# GAME_SERVICES_ANDROID_VERIFIER_FINALIZES = "true"
+#
+# Server-push stores: look the client's devvit.order.v1 and
+# verse8.agent8-event.v1 envelopes up against this Worker's ledger, which the
+# fulfillment handler (Devvit) or the Agent8 service (Verse8) must write.
+# Apply migration 0006_entitlement_revocations.sql for the revoke entries the
+# ledger status read reports.
+# MPGD_COMMERCE_LOOKUP_STORES = ["devvit", "verse8"]
+#
+# Optional: let the Devvit fulfillment handler verify its own order through
+# this Worker (devvit.payment-order.v1) instead of writing the ledger
+# directly. The service reads the order from the Devvit payments plugin.
+#
+# [[services]]
+# binding = "GAME_SERVICES_DEVVIT_PAYMENT_ORDER_AUTHORITY"
+# service = "game-devvit-payments-authority"

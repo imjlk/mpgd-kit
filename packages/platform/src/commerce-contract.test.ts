@@ -8,7 +8,7 @@ import type {
   CommerceMinLength,
   CommerceUint32,
 } from './commerce-contract.js';
-import { assertStorePurchase } from './commerce.js';
+import { assertCommerceServiceCapabilities, assertStorePurchase } from './commerce.js';
 
 // Each pair declares the same shape once with the contract's structural tags
 // and once with typia's own aliases. typia must validate both identically and
@@ -56,6 +56,36 @@ describe('commerce contract tags', () => {
     const reference = typia.json.schemas<[TypiaTagged]>();
     expect(JSON.stringify(contract).replaceAll('ContractTagged', 'Shape'))
       .toBe(JSON.stringify(reference).replaceAll('TypiaTagged', 'Shape'));
+  });
+
+  it('keep the published service capabilities validator strict', () => {
+    const service = {
+      commerceProtocolVersion: '2.0.0-draft.1',
+      stores: [
+        {
+          store: 'google-play',
+          schemas: ['google-play.product-purchase.v2'],
+          finish: 'server',
+          purchase: { consumable: true, durable: true, subscription: false },
+        },
+      ],
+    } as const;
+    expect(assertCommerceServiceCapabilities(service)).toEqual(service);
+    expect(() => assertCommerceServiceCapabilities({ ...service, commerceProtocolVersion: '' }))
+      .toThrow();
+    expect(() =>
+      assertCommerceServiceCapabilities({
+        ...service,
+        stores: [{ ...service.stores[0], finish: 'later' }],
+      })).toThrow();
+    expect(() =>
+      assertCommerceServiceCapabilities({
+        ...service,
+        stores: [{ ...service.stores[0], schemas: [''] }],
+      })).toThrow();
+    expect(() =>
+      assertCommerceServiceCapabilities({ ...service, stores: [{ ...service.stores[0], extra: 1 }] }))
+      .toThrow();
   });
 
   it('keep the published purchase validator strict', () => {

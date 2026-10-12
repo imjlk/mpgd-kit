@@ -1131,6 +1131,8 @@ const httpBackend = createGameServicesHttpBackendApi({
               rank: 1,
             },
           };
+        default:
+          return { status: 404, body: { error: 'UNKNOWN_ENDPOINT' } };
       }
     },
   },

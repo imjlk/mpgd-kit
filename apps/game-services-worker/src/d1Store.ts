@@ -1,14 +1,20 @@
 import {
   assertEntitlementLedgerGrant,
   assertEntitlementLedgerResult,
+  assertEntitlementLedgerRevocation,
+  assertEntitlementRevocationTransaction,
   assertLeaderboardScoreTransaction,
   assertProductGrantTransaction,
   assertRecordLeaderboardScoreRequest,
   assertRecordLeaderboardScoreResponse,
+  chunkLedgerEntryIds,
   EvidenceAlreadyProcessedError,
+  RevocationKeyConflictError,
   type EntitlementLedgerGrant,
   type EntitlementLedgerResult,
+  type EntitlementLedgerRevocation,
   type EntitlementPlatformEvidenceIdentity,
+  type EntitlementRevocationTransaction,
   type GameServicesStore,
   type LeaderboardScoreTransaction,
   type ProductGrantTransaction,
@@ -24,6 +30,17 @@ type EntitlementRow = {
   idempotency_key: string;
   granted_at: string;
   grant_json: string | null;
+  payload_json: string;
+  evidence_verification_id: string | null;
+};
+
+type RevocationRow = {
+  ledger_entry_id: string;
+  player_id: string;
+  revokes_ledger_entry_id: string;
+  idempotency_key: string;
+  reason: EntitlementRevocationTransaction['reason'];
+  revoked_at: string;
   payload_json: string;
   evidence_verification_id: string | null;
 };
@@ -146,6 +163,112 @@ class D1GameServicesStore implements GameServicesStore {
     return results.map(entitlementFromRow);
   }
 
+  /** The grants with the given ids, one `IN` query per chunk of at most `ledgerReadChunkSize`. */
+  async getEntitlementTransactions(
+    ledgerEntryIds: readonly string[],
+  ): Promise<readonly ProductGrantTransaction[]> {
+    const found: ProductGrantTransaction[] = [];
+    for (const chunk of chunkLedgerEntryIds([...new Set(ledgerEntryIds)])) {
+      const placeholders = chunk.map(() => '?').join(', ');
+      const { results } = await this.db
+        .prepare(`SELECT * FROM entitlement_transactions WHERE ledger_entry_id IN (${placeholders})`)
+        .bind(...chunk)
+        .all<EntitlementRow>();
+      found.push(...results.map(entitlementFromRow));
+    }
+    return found;
+  }
+
+  /**
+   * Appends a `revoke` entry (migration 0006). `INSERT OR IGNORE` makes a
+   * replayed notification key, and a second revocation of one grant, read
+   * back the first entry with `alreadyProcessed: true`; a key that already
+   * reversed another grant is a `RevocationKeyConflictError`, a reused
+   * authority identity an `EvidenceAlreadyProcessedError`, and the foreign
+   * key keeps an entry for an unknown grant out.
+   */
+  async recordEntitlementRevocation(
+    input: EntitlementLedgerRevocation,
+  ): Promise<EntitlementLedgerResult> {
+    const revocation = assertEntitlementLedgerRevocation(input);
+    const ledgerEntryId = createRevocationLedgerEntryId(revocation);
+
+    const result = await this.db
+      .prepare(
+        `INSERT OR IGNORE INTO entitlement_revocations (
+          ledger_entry_id,
+          player_id,
+          revokes_ledger_entry_id,
+          idempotency_key,
+          reason,
+          revoked_at,
+          payload_json,
+          evidence_verification_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        ledgerEntryId,
+        revocation.playerId,
+        revocation.revokesLedgerEntryId,
+        revocation.idempotencyKey,
+        revocation.reason,
+        revocation.revokedAt,
+        JSON.stringify(revocation.payload),
+        revocation.evidenceVerificationId ?? null,
+      )
+      .run();
+
+    const byKey = await this.db
+      .prepare(
+        `SELECT * FROM entitlement_revocations
+         WHERE player_id = ? AND idempotency_key = ?`,
+      )
+      .bind(revocation.playerId, revocation.idempotencyKey)
+      .first<RevocationRow>();
+    if (byKey !== null) {
+      if (byKey.revokes_ledger_entry_id !== revocation.revokesLedgerEntryId) {
+        throw new RevocationKeyConflictError();
+      }
+      return assertEntitlementLedgerResult({
+        ledgerEntryId: byKey.ledger_entry_id,
+        alreadyProcessed: result.meta.changes === 0,
+      });
+    }
+    const byGrant = await this.db
+      .prepare('SELECT * FROM entitlement_revocations WHERE revokes_ledger_entry_id = ?')
+      .bind(revocation.revokesLedgerEntryId)
+      .first<RevocationRow>();
+    if (byGrant !== null) {
+      return assertEntitlementLedgerResult({
+        ledgerEntryId: byGrant.ledger_entry_id,
+        alreadyProcessed: true,
+      });
+    }
+    // Neither the key nor the grant holds the row: the insert was ignored by
+    // the authority identity index.
+    throw new EvidenceAlreadyProcessedError();
+  }
+
+  async findEntitlementRevocations(input: {
+    readonly ledgerEntryIds: readonly string[];
+  }): Promise<readonly EntitlementRevocationTransaction[]> {
+    const revocations: EntitlementRevocationTransaction[] = [];
+    for (const chunk of chunkLedgerEntryIds([...new Set(input.ledgerEntryIds)])) {
+      const placeholders = chunk.map(() => '?').join(', ');
+      const { results } = await this.db
+        .prepare(
+          `SELECT * FROM entitlement_revocations
+           WHERE revokes_ledger_entry_id IN (${placeholders})`,
+        )
+        .bind(...chunk)
+        .all<RevocationRow>();
+      revocations.push(...results.map(revocationFromRow));
+    }
+    return revocations.sort((left, right) =>
+      left.revokedAt.localeCompare(right.revokedAt)
+      || left.ledgerEntryId.localeCompare(right.ledgerEntryId));
+  }
+
   async recordLeaderboardScore(
     input: RecordLeaderboardScoreRequest,
     options: { readonly recordedAt?: string } = {},
@@ -237,10 +360,14 @@ class D1GameServicesStore implements GameServicesStore {
     const evidenceJsonPath = input.source === 'purchase'
       ? '$.platformTransactionId'
       : '$.platformImpressionId';
+    // The predicates match the partial unique index of migration 0004, so the
+    // lookup is an index probe rather than a table scan.
     const row = await this.db
       .prepare(
         `SELECT * FROM entitlement_transactions
          WHERE source = ?
+           AND json_type(payload_json, '$.target') = 'text'
+           AND json_type(payload_json, '${evidenceJsonPath}') = 'text'
            AND json_extract(payload_json, '$.target') = ?
            AND json_extract(payload_json, '${evidenceJsonPath}') = ?`,
       )
@@ -315,6 +442,21 @@ function entitlementFromRow(row: EntitlementRow): ProductGrantTransaction {
   );
 }
 
+function revocationFromRow(row: RevocationRow): EntitlementRevocationTransaction {
+  return assertEntitlementRevocationTransaction({
+    ledgerEntryId: row.ledger_entry_id,
+    playerId: row.player_id,
+    revokesLedgerEntryId: row.revokes_ledger_entry_id,
+    idempotencyKey: row.idempotency_key,
+    reason: row.reason,
+    revokedAt: row.revoked_at,
+    payload: JSON.parse(row.payload_json) as EntitlementRevocationTransaction['payload'],
+    ...(row.evidence_verification_id === null
+      ? {}
+      : { evidenceVerificationId: row.evidence_verification_id }),
+  });
+}
+
 function getEntitlementPlatformEvidenceIdentity(
   grant: EntitlementLedgerGrant,
 ): EntitlementPlatformEvidenceIdentity | undefined {
@@ -357,6 +499,14 @@ function createEntitlementLedgerEntryId(grant: EntitlementLedgerGrant): string {
     encodeIdSegment(grant.source),
     encodeIdSegment(grant.playerId),
     encodeIdSegment(grant.idempotencyKey),
+  ].join('_');
+}
+
+function createRevocationLedgerEntryId(revocation: EntitlementLedgerRevocation): string {
+  return [
+    'revoke',
+    encodeIdSegment(revocation.playerId),
+    encodeIdSegment(revocation.idempotencyKey),
   ].join('_');
 }
 

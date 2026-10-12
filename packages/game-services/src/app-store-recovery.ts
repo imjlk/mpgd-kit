@@ -249,6 +249,11 @@ async function verifyRestoredNonConsumable(
   if (decision.status === 'rejected') {
     return rejected(decision.reason);
   }
+  if (decision.status === 'settled') {
+    // Restored non-consumables are re-verified against Apple, never settled
+    // by a ledger lookup.
+    return rejected('APP_STORE_RESTORE_EVIDENCE_MISMATCH');
+  }
   const originalTransactionId = decision.payload?.appStoreOriginalTransactionId;
   const environment = decision.payload?.appStoreEnvironment;
   const bundleId = decision.payload?.appStoreBundleId;

@@ -1,31 +1,48 @@
 import type { AdPlacements } from '@mpgd/catalog';
 import {
   createAdRewardEvidenceVerifierRegistry,
+  createAppsInTossCommerceEvidenceEntry,
+  createAppStoreCommerceEvidenceEntry,
+  createCommerceEvidenceRegistry,
   createDevelopmentGameServicesEvidenceVerifier,
+  createDevvitOrderLookupCommerceEvidenceEntry,
+  createDevvitPaymentOrderCommerceEvidenceEntry,
   createGameServicesBackend,
   createGameServicesBackendApiHandler,
   createGameServicesHttpFetchHandler,
   createGameServicesRouter,
   createGameServicesRpcFetchHandler,
+  createGooglePlayCommerceEvidenceEntry,
+  createGooglePlayProductPurchaseBoundary,
+  createGooglePlayPublisherClient,
   createInMemoryGameServicesStore,
   createInMemoryVerifiedLeaderboardService,
+  createMicrosoftStoreCommerceEvidenceEntry,
   createVerifiedLeaderboardSnapshotFetchHandler,
+  createVerse8Agent8EventLookupCommerceEvidenceEntry,
+  devvitPaymentOrderEvidenceSchema,
   gameServicesBackendEndpoints,
   microsoftStoreDigitalGoodsEvidenceSchema,
   type AdRewardEvidenceVerifierRegistry,
   type AdRewardVerifierDescriptor,
   type AdRewardVerifierRegistration,
   type ClaimAdRewardRequest,
+  type CommerceEvidenceFallbackStore,
+  type CommerceEvidenceRegistry,
+  type CommerceEvidenceRegistryEntry,
+  type DevvitPaymentOrderAuthorityInput,
+  type DevvitPaymentOrderAuthorityResult,
   type EvidenceVerificationDecision,
   type FinalizePurchaseGrantInput,
   type GameServicesBackendApi,
   type GameServicesDeploymentTargetBindings,
   type GameServicesEvidenceVerifier,
+  type GameServicesLegacyStoreTarget,
   type GameServicesPurchaseGrantFinalizer,
   type GameServicesStore,
-  type GameServicesStoreTarget,
   type GetVerifiedLeaderboardSnapshotRequest,
   type PurchaseGrantFinalization,
+  type PurchaseLedgerStatusRequest,
   type RecordLeaderboardScoreRequest,
   type RecordVerifiedLeaderboardAttemptRequest,
   type RecordVerifiedLeaderboardAttemptResponse,
@@ -81,6 +98,51 @@ export interface GameServicesWorkerEnv {
   readonly GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER?:
     GameServicesPurchaseGrantFinalizerBinding;
   readonly GAME_SERVICES_VERSE8_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
+  /**
+   * Google Play finalizer (commerce v2 C2). The `google-play` registry entry
+   * declares `finish: 'server'`, so a deployment that verifies Android
+   * purchases must finalize them: either the in-Worker boundary
+   * (`GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME` plus the
+   * `GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH` service that mints Android
+   * Publisher access tokens from the game-owned service account), or a private
+   * `GAME_SERVICES_ANDROID_PURCHASE_FINALIZER` service that acknowledges or
+   * consumes the purchase itself. Neither configured next to an Android
+   * verifier is a startup error, not a silent gap.
+   */
+  readonly GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME?: string;
+  readonly GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH?: GooglePlayPublisherAuthBinding;
+  /**
+   * Binds the Google response to the authenticated player. Without it, set
+   * `GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER = "true"` only when the
+   * ingress already binds `playerId` to an authenticated application account.
+   */
+  readonly GAME_SERVICES_GOOGLE_PLAY_ACCOUNT_BINDING?: GooglePlayAccountBinding;
+  readonly GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER?: 'true';
+  readonly GAME_SERVICES_ANDROID_PURCHASE_FINALIZER?: GameServicesPurchaseGrantFinalizerBinding;
+  /**
+   * The Android verifier binding acknowledges or consumes the purchase itself
+   * (a v1 deployment): the google-play entry is registered with
+   * `finish: 'client'` and no Play finalizer is required. A commerce v2 Play
+   * provider, which declares `finish: 'server'`, is then told
+   * `configuration-required` by the capabilities comparison.
+   */
+  readonly GAME_SERVICES_ANDROID_VERIFIER_FINALIZES?: 'true';
+  /**
+   * Server-push stores whose client envelopes (`devvit.order.v1`,
+   * `verse8.agent8-event.v1`) are looked up against this Worker's ledger
+   * (JSON var, for example `["devvit", "verse8"]`). The host's fulfillment
+   * path must write that ledger; the lookup never grants from the envelope.
+   */
+  readonly MPGD_COMMERCE_LOOKUP_STORES?: readonly ('devvit' | 'verse8')[];
+  /**
+   * The Devvit payments authority the `devvit.payment-order.v1` entry binds a
+   * fulfillment handler's order through (`createPlatformOrderVerifyRequest`):
+   * a private service over the Devvit `payments` plugin's order read. Without
+   * it the fulfillment path writes the ledger directly
+   * (`createPlatformOrderLedgerGrant`), and a `devvit.payment-order.v1`
+   * verify request is refused with `DEVVIT_PAYMENT_ORDER_AUTHORITY_REQUIRED`.
+   */
+  readonly GAME_SERVICES_DEVVIT_PAYMENT_ORDER_AUTHORITY?: DevvitPaymentOrderAuthorityBinding;
   readonly GAME_SERVICES_ANDROID_DEPLOYMENT_TARGET?: string;
   readonly GAME_SERVICES_IOS_DEPLOYMENT_TARGET?: string;
   readonly GAME_SERVICES_AIT_DEPLOYMENT_TARGET?: string;
@@ -105,6 +167,28 @@ export interface GameServicesPurchaseGrantFinalizerBinding {
   finalizePurchaseGrant(
     input: Omit<FinalizePurchaseGrantInput, 'signal'>,
   ): Promise<PurchaseGrantFinalization>;
+}
+
+/** Reads a Reddit order for the `devvit.payment-order.v1` entry; the AbortSignal stays local. */
+export interface DevvitPaymentOrderAuthorityBinding {
+  getOrder(
+    input: Omit<DevvitPaymentOrderAuthorityInput, 'signal'>,
+  ): Promise<DevvitPaymentOrderAuthorityResult>;
+}
+
+/** Mints an access token for the Android Publisher scope from the game-owned service account. */
+export interface GooglePlayPublisherAuthBinding {
+  getAccessToken(input: { readonly scope: string }): Promise<string>;
+}
+
+/** Resolves the obfuscated account (and profile) identifiers the purchase must carry. */
+export interface GooglePlayAccountBinding {
+  resolveObfuscatedAccountId(
+    input: { readonly playerId: string },
+  ): Promise<string | null | undefined>;
+  resolveObfuscatedProfileId?(
+    input: { readonly playerId: string },
+  ): Promise<string | null | undefined>;
 }
 
 export interface VerifiedLeaderboardAuthBindingRequest {
@@ -139,6 +223,9 @@ export interface GameServicesIngressAuthBinding {
 
 export interface GameServicesWorkerService {
   verifyPurchase(input: VerifyPurchaseRequest): Promise<unknown>;
+  getPurchaseLedgerStatus(input: PurchaseLedgerStatusRequest): Promise<unknown>;
+  /** Undefined when no commerce evidence registry entry is configured. */
+  getCommerceCapabilities(): Promise<unknown>;
   claimAdReward(input: ClaimAdRewardRequest): Promise<unknown>;
   recordLeaderboardScore(input: RecordLeaderboardScoreRequest): Promise<unknown>;
   recordVerifiedAttempt(
@@ -166,6 +253,9 @@ const productCatalog = {
         ios: 'com.mpgd.game.coins100',
         ait: 'coins_100',
         'microsoft-store': 'coins_100',
+        reddit: 'coins_100',
+        verse8: 'coins_100',
+        browser: 'coins_100',
       },
     },
   ],
@@ -197,14 +287,52 @@ const adPlacements = {
 const fallbackMemoryStore = createInMemoryGameServicesStore();
 const fallbackVerifiedLeaderboardService = createInMemoryVerifiedLeaderboardService();
 
+// The Worker entrypoint calls these factories per request with the same env
+// object, so the store, registry (and its Play boundary), backend, and
+// handlers are built once per env and reused. The shared Play boundary keeps
+// one in-flight finalization lease per purchase across requests of the
+// isolate, which is the intended same-process dedupe: a second request for a
+// purchase whose acknowledge or consume is still running waits for that
+// call instead of issuing another.
+const fetchHandlersByEnv = new WeakMap<GameServicesWorkerEnv, (request: Request) => Promise<Response>>();
+const servicesByEnv = new WeakMap<GameServicesWorkerEnv, GameServicesWorkerService>();
+const backendsByEnv = new WeakMap<GameServicesWorkerEnv, GameServicesBackendApi>();
+const storesByEnv = new WeakMap<GameServicesWorkerEnv, GameServicesStore>();
+const registriesByEnv = new WeakMap<GameServicesWorkerEnv, WorkerCommerceEvidenceRegistry>();
+
+function cachedByEnv<T extends object>(
+  cache: WeakMap<GameServicesWorkerEnv, T>,
+  env: GameServicesWorkerEnv,
+  build: () => T,
+): T {
+  const cached = cache.get(env);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const built = build();
+  cache.set(env, built);
+  return built;
+}
+
 export function createWorkerFetchHandler(
+  env: GameServicesWorkerEnv,
+): (request: Request) => Promise<Response> {
+  return cachedByEnv(fetchHandlersByEnv, env, () => buildWorkerFetchHandler(env));
+}
+
+function buildWorkerFetchHandler(
   env: GameServicesWorkerEnv,
 ): (request: Request) => Promise<Response> {
   const admobConfig = resolveWorkerAdMobSsvConfig(env);
   const evidenceVerifier = resolveWorkerEvidenceVerifier(env, admobConfig);
   const backend = createWorkerBackend(env, evidenceVerifier);
   const verifiedLeaderboard = createWorkerVerifiedLeaderboardService(env);
-  const purchaseGrantFinalizer = resolveWorkerPurchaseGrantFinalizer(env);
+  const httpStore = createWorkerStore(env);
+  const httpRegistry = resolveWorkerCommerceEvidenceRegistry(env, httpStore);
+  const commerceEvidenceRegistry = httpRegistry.status === 'ready'
+    ? httpRegistry.registry
+    : undefined;
+  const registryError = httpRegistry.status === 'misconfigured' ? httpRegistry.error : undefined;
   const deploymentTargetBindings = resolveWorkerDeploymentTargetBindings(env);
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -223,14 +351,14 @@ export function createWorkerFetchHandler(
     createGameServicesBackendApiHandler({
       catalog: productCatalog,
       placements: adPlacements,
-      store: createWorkerStore(env),
+      store: httpStore,
       deploymentTargetBindings,
       ...(evidenceVerifier === undefined
         ? {}
         : { evidenceVerifier }),
-      ...(purchaseGrantFinalizer === undefined
+      ...(commerceEvidenceRegistry === undefined
         ? {}
-        : { purchaseGrantFinalizer }),
+        : { commerceEvidenceRegistry }),
     }),
     {
       corsHeaders,
@@ -273,7 +401,20 @@ export function createWorkerFetchHandler(
         return jsonResponse({ error: 'UNKNOWN_ENDPOINT' }, 404, corsHeaders);
       }
 
-      if (ingressAuth !== undefined) {
+      if (
+        registryError !== undefined
+        && (grantRoute.operation === 'verifyPurchase'
+          || grantRoute.operation === 'getCommerceCapabilities')
+      ) {
+        // The commerce registry is misconfigured: the purchase routes stay
+        // closed with the generic code; the error was logged at startup.
+        return jsonResponse({ error: 'INTERNAL_ERROR' }, 500, corsHeaders);
+      }
+
+      // The capabilities read carries no player data and stays public; the
+      // ledger status read is gated like a grant route when auth is bound,
+      // and its body names the player whose grants it reads.
+      if (ingressAuth !== undefined && grantRoute.operation !== 'getCommerceCapabilities') {
         const rejection = await authenticateIngressRequest(
           request,
           grantRoute,
@@ -331,12 +472,20 @@ function resolvePublicGrantRoute(
   switch (normalised) {
     case gameServicesBackendEndpoints.verifyPurchase:
       return { transport: 'http', operation: 'verifyPurchase' };
+    case gameServicesBackendEndpoints.getPurchaseLedgerStatus:
+      return { transport: 'http', operation: 'getPurchaseLedgerStatus' };
+    case gameServicesBackendEndpoints.getCommerceCapabilities:
+      return { transport: 'http', operation: 'getCommerceCapabilities' };
     case gameServicesBackendEndpoints.claimAdReward:
       return { transport: 'http', operation: 'claimAdReward' };
     case gameServicesBackendEndpoints.recordLeaderboardScore:
       return { transport: 'http', operation: 'recordLeaderboardScore' };
     case rpcRoute('commerce', 'verifyPurchase'):
       return { transport: 'rpc', operation: 'verifyPurchase' };
+    case rpcRoute('commerce', 'getPurchaseLedgerStatus'):
+      return { transport: 'rpc', operation: 'getPurchaseLedgerStatus' };
+    case rpcRoute('commerce', 'getCapabilities'):
+      return { transport: 'rpc', operation: 'getCommerceCapabilities' };
     case rpcRoute('ads', 'claimReward'):
       return { transport: 'rpc', operation: 'claimAdReward' };
     case rpcRoute('leaderboard', 'recordScore'):
@@ -482,6 +631,10 @@ function createWorkerVerifiedLeaderboardSnapshotFetchHandler(
 }
 
 export function createWorkerService(env: GameServicesWorkerEnv): GameServicesWorkerService {
+  return cachedByEnv(servicesByEnv, env, () => buildWorkerService(env));
+}
+
+function buildWorkerService(env: GameServicesWorkerEnv): GameServicesWorkerService {
   const admobConfig = resolveWorkerAdMobSsvConfig(env);
   const backend = createWorkerBackend(env, resolveWorkerEvidenceVerifier(env, admobConfig));
   const verifiedLeaderboard = createWorkerVerifiedLeaderboardService(env);
@@ -489,6 +642,16 @@ export function createWorkerService(env: GameServicesWorkerEnv): GameServicesWor
   return {
     verifyPurchase(input) {
       return backend.purchases.verifyPurchase(input);
+    },
+    async getPurchaseLedgerStatus(input) {
+      const read = backend.purchases.getPurchaseLedgerStatus;
+      if (read === undefined) {
+        throw new Error('This backend has no ledger status read.');
+      }
+      return read.call(backend.purchases, input);
+    },
+    async getCommerceCapabilities() {
+      return backend.purchases.getCommerceCapabilities?.call(backend.purchases);
     },
     claimAdReward(input) {
       return backend.adRewards.claimAdReward(input);
@@ -509,22 +672,448 @@ function createWorkerBackend(
   env: GameServicesWorkerEnv,
   evidenceVerifier: GameServicesEvidenceVerifier | undefined,
 ): GameServicesBackendApi {
-  assertMicrosoftStorePurchaseBindings(env);
-  const purchaseGrantFinalizer = resolveWorkerPurchaseGrantFinalizer(env);
+  return cachedByEnv(backendsByEnv, env, () => buildWorkerBackend(env, evidenceVerifier));
+}
 
-  return createGameServicesBackend({
+function buildWorkerBackend(
+  env: GameServicesWorkerEnv,
+  evidenceVerifier: GameServicesEvidenceVerifier | undefined,
+): GameServicesBackendApi {
+  const store = createWorkerStore(env);
+  const registry = resolveWorkerCommerceEvidenceRegistry(env, store);
+  const backend = createGameServicesBackend({
     catalog: productCatalog,
     placements: adPlacements,
-    store: createWorkerStore(env),
+    store,
     deploymentTargetBindings: resolveWorkerDeploymentTargetBindings(env),
     ...(evidenceVerifier === undefined
       ? {}
       : { evidenceVerifier }),
-    ...(purchaseGrantFinalizer === undefined
-      ? {}
-      : { purchaseGrantFinalizer }),
+    ...(registry.status === 'ready' && registry.registry !== undefined
+      ? { commerceEvidenceRegistry: registry.registry }
+      : {}),
     version: productCatalog.version,
   });
+  if (registry.status === 'ready') {
+    return backend;
+  }
+  // A misconfigured commerce registry fails the purchase routes, not the
+  // rewarded-ad and leaderboard routes that share this Worker.
+  const { error } = registry;
+  return {
+    ...backend,
+    purchases: {
+      ...backend.purchases,
+      verifyPurchase: () => Promise.reject(error),
+      getCommerceCapabilities: () => Promise.reject(error),
+    },
+  };
+}
+
+type WorkerCommerceEvidenceRegistry =
+  | { readonly status: 'ready'; readonly registry: CommerceEvidenceRegistry | undefined }
+  | { readonly status: 'misconfigured'; readonly error: Error };
+
+const reportedRegistryErrors = new WeakSet<GameServicesWorkerEnv>();
+
+/**
+ * The registry, or the configuration error that keeps the purchase routes
+ * closed; the error is logged once per environment at construction so a
+ * deployment sees it at startup while ads and leaderboards keep serving.
+ */
+function resolveWorkerCommerceEvidenceRegistry(
+  env: GameServicesWorkerEnv,
+  store: GameServicesStore,
+): WorkerCommerceEvidenceRegistry {
+  return cachedByEnv(registriesByEnv, env, () => buildWorkerCommerceEvidenceRegistry(env, store));
+}
+
+function buildWorkerCommerceEvidenceRegistry(
+  env: GameServicesWorkerEnv,
+  store: GameServicesStore,
+): WorkerCommerceEvidenceRegistry {
+  try {
+    return { status: 'ready', registry: createWorkerCommerceEvidenceRegistry(env, store) };
+  } catch (error) {
+    const failure = error instanceof Error ? error : new Error(String(error));
+    if (!reportedRegistryErrors.has(env)) {
+      reportedRegistryErrors.add(env);
+      console.error('GameServices Worker commerce registry is misconfigured:', failure.message);
+    }
+    return { status: 'misconfigured', error: failure };
+  }
+}
+
+/**
+ * The commerce v2 evidence registry (RFC "Evidence registry") composed from
+ * the Worker's bindings. Every store with an explicit purchase binding gets
+ * its reference entry; a `finish: 'server'` store without its finalizer
+ * (Google Play, Microsoft Store) fails here, at startup. Requests whose
+ * schema no entry claims keep the aggregate `GAME_SERVICES_EVIDENCE_VERIFIER`
+ * (or the local development verifier) as the v1 fallback, so a deployment
+ * that only configured the aggregate binding is unchanged: without any entry
+ * the backend runs without a registry and publishes no capabilities.
+ */
+function createWorkerCommerceEvidenceRegistry(
+  env: GameServicesWorkerEnv,
+  store: GameServicesStore,
+): CommerceEvidenceRegistry | undefined {
+  assertMicrosoftStorePurchaseBindings(env);
+  const entries: CommerceEvidenceRegistryEntry[] = [];
+  const bindingVerifier = (
+    binding: GameServicesEvidenceVerifierBinding,
+  ): Pick<GameServicesEvidenceVerifier, 'verifyPurchase'> => ({
+    verifyPurchase({ request, product, platformProductId, timeoutMs }) {
+      // AbortSignal is not structured-cloneable across a Worker Service Binding; the
+      // remote binding receives timeoutMs and enforces it within its own request scope.
+      return binding.verifyPurchase({ request, product, platformProductId, timeoutMs });
+    },
+  });
+
+  const googlePlay = resolveWorkerGooglePlayBoundary(env);
+  const androidVerifier = env.GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER;
+  const androidFinalizer = googlePlay
+    ?? (env.GAME_SERVICES_ANDROID_PURCHASE_FINALIZER === undefined
+      ? undefined
+      : bindingFinalizer(env.GAME_SERVICES_ANDROID_PURCHASE_FINALIZER, supportsGooglePlayGrant));
+  const androidVerifierFinalizes = env.GAME_SERVICES_ANDROID_VERIFIER_FINALIZES === 'true';
+  const aggregate = env.GAME_SERVICES_EVIDENCE_VERIFIER;
+  if (androidVerifier !== undefined) {
+    // A verifier binding keeps its v1 contract: it decides about a request
+    // without an envelope and about schemas of its own.
+    if (androidVerifierFinalizes) {
+      entries.push(
+        createGooglePlayCommerceEvidenceEntry({
+          verifier: bindingVerifier(androidVerifier),
+          finish: 'client',
+          acceptsMissingEvidence: true,
+          acceptsUnclaimedSchemas: true,
+        }),
+      );
+    } else if (androidFinalizer !== undefined) {
+      entries.push(
+        createGooglePlayCommerceEvidenceEntry({
+          verifier: bindingVerifier(androidVerifier),
+          finalizer: androidFinalizer,
+          acceptsMissingEvidence: true,
+          acceptsUnclaimedSchemas: true,
+        }),
+      );
+    } else {
+      throw new Error(
+        'Android purchases are verified but never finalized: the google-play registry entry '
+          + 'declares finish: server. Configure GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME with '
+          + 'GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH (the in-Worker Play boundary), bind '
+          + 'GAME_SERVICES_ANDROID_PURCHASE_FINALIZER, or set '
+          + 'GAME_SERVICES_ANDROID_VERIFIER_FINALIZES = "true" when the verifier binding '
+          + 'acknowledges purchases itself.',
+      );
+    }
+  } else if (googlePlay !== undefined) {
+    // The in-Worker Play boundary verifies the token and finalizes.
+    entries.push(
+      createGooglePlayCommerceEvidenceEntry({ verifier: googlePlay, finalizer: googlePlay }),
+    );
+  } else if (androidFinalizer !== undefined && aggregate !== undefined) {
+    // The aggregate verifier serves Android purchases and the bound finalizer
+    // acknowledges them: the pair is the google-play entry.
+    entries.push(
+      createGooglePlayCommerceEvidenceEntry({
+        verifier: bindingVerifier(aggregate),
+        finalizer: androidFinalizer,
+        acceptsMissingEvidence: true,
+        acceptsUnclaimedSchemas: true,
+      }),
+    );
+  }
+
+  if (env.GAME_SERVICES_IOS_EVIDENCE_VERIFIER !== undefined) {
+    entries.push(
+      createAppStoreCommerceEvidenceEntry({
+        verifier: bindingVerifier(env.GAME_SERVICES_IOS_EVIDENCE_VERIFIER),
+        acceptsUnclaimedSchemas: true,
+      }),
+    );
+  }
+
+  if (env.GAME_SERVICES_AIT_EVIDENCE_VERIFIER !== undefined) {
+    entries.push(
+      createAppsInTossCommerceEvidenceEntry({
+        verifier: bindingVerifier(env.GAME_SERVICES_AIT_EVIDENCE_VERIFIER),
+        acceptsMissingEvidence: true,
+        acceptsUnclaimedSchemas: true,
+      }),
+    );
+  }
+
+  if (
+    env.GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER !== undefined
+    && env.GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER !== undefined
+  ) {
+    const microsoftStoreVerifier = bindingVerifier(
+      env.GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER,
+    );
+    entries.push(createMicrosoftStoreCommerceEvidenceEntry({
+      verifier: {
+        verifyPurchase(input) {
+          // Store consumables are verified only with their Digital Goods
+          // envelope, so the paired consume finalizer can run after the grant.
+          if (!hasMicrosoftStorePurchaseEvidence(input)) {
+            return Promise.resolve({
+              status: 'rejected',
+              reason: 'MICROSOFT_STORE_PURCHASE_FINALIZER_UNSUPPORTED',
+            });
+          }
+          return microsoftStoreVerifier.verifyPurchase(input);
+        },
+      },
+      finalizer: bindingFinalizer(
+        env.GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER,
+        supportsMicrosoftStorePurchaseGrant,
+      ),
+      acceptsMissingEvidence: true,
+    }));
+  }
+
+  const lookupStores = resolveWorkerLookupStores(env);
+  const devvitAuthority = env.GAME_SERVICES_DEVVIT_PAYMENT_ORDER_AUTHORITY;
+  for (const lookupStore of lookupStores) {
+    if (lookupStore === 'verse8') {
+      entries.push(createVerse8Agent8EventLookupCommerceEvidenceEntry({ ledger: store }));
+      continue;
+    }
+    const lookup = createDevvitOrderLookupCommerceEvidenceEntry({ ledger: store });
+    if (devvitAuthority !== undefined) {
+      entries.push(lookup);
+      continue;
+    }
+    // The devvit store now has an entry, so its other schemas never reach the
+    // aggregate: a fulfillment verify (`devvit.payment-order.v1`) is refused
+    // with the reason it needs the authority binding rather than an
+    // anonymous EVIDENCE_SCHEMA_UNSUPPORTED. The fulfillment path writes the
+    // ledger directly (createPlatformOrderLedgerGrant) in this setup.
+    entries.push({
+      ...lookup,
+      acceptsUnclaimedSchemas: true,
+      verifier: {
+        verifyPurchase(input) {
+          const schema = input.request.evidence?.schema;
+          if (schema === devvitPaymentOrderEvidenceSchema) {
+            return Promise.resolve({
+              status: 'rejected',
+              reason: 'DEVVIT_PAYMENT_ORDER_AUTHORITY_REQUIRED',
+            });
+          }
+          if (schema !== lookup.schema) {
+            return Promise.resolve({ status: 'rejected', reason: 'EVIDENCE_SCHEMA_UNSUPPORTED' });
+          }
+          return lookup.verifier.verifyPurchase(input);
+        },
+      },
+    });
+  }
+  if (devvitAuthority !== undefined) {
+    // The fulfillment handler's own record, bound through the payments authority.
+    entries.push(createDevvitPaymentOrderCommerceEvidenceEntry({
+      authority: {
+        getOrder({ signal, ...bindingInput }) {
+          // AbortSignal is not structured-cloneable across a Worker Service Binding.
+          void signal;
+          return devvitAuthority.getOrder(bindingInput);
+        },
+      },
+    }));
+  }
+
+  if (entries.length === 0) {
+    return undefined;
+  }
+
+  // Stores without an entry keep the v1 aggregate path (or the local
+  // development verifier), and the fallback declares the stores it serves so
+  // the capabilities endpoint publishes them. In strict target mode the
+  // fallback only answers "unavailable". The registry never routes a store
+  // that has its own entry to the fallback.
+  const fallback = resolveWorkerUnregisteredPurchaseVerifier(env);
+  if (fallback === undefined) {
+    return createCommerceEvidenceRegistry(entries);
+  }
+  const registered = new Set(entries.map((entry) => entry.store));
+  const fallbackStores = fallback.stores?.filter((declared) => !registered.has(declared.store));
+  return createCommerceEvidenceRegistry(entries, {
+    unregistered: {
+      verifier: fallback.verifier,
+      // The declared stores are published; every other store without an
+      // entry keeps reaching the aggregate as it did before the registry.
+      ...(fallbackStores === undefined
+        ? {}
+        : { stores: fallbackStores, servesUndeclaredStores: true }),
+    },
+  });
+}
+
+/**
+ * The reference stores a v1 aggregate verifier serves, with their finish
+ * owners. Without a Play finalizer the aggregate cannot finish Android
+ * purchases, so `google-play` is published with the client finish owner: v1
+ * Android requests keep reaching the aggregate, and a commerce v2 Play
+ * provider (which declares `server`) is told `configuration-required`.
+ */
+const aggregateFallbackStores: readonly CommerceEvidenceFallbackStore[] = [
+  { store: 'google-play', finish: 'client', targets: ['android'] },
+  { store: 'app-store', finish: 'client', targets: ['ios'] },
+  { store: 'apps-in-toss', finish: 'host', targets: ['ait'] },
+  // `oneplay` is server-finished and the Worker binds no OnePlay finalizer,
+  // so it is served (undeclared) but not published.
+];
+
+function resolveWorkerUnregisteredPurchaseVerifier(
+  env: GameServicesWorkerEnv,
+): {
+  readonly verifier: Pick<GameServicesEvidenceVerifier, 'verifyPurchase'>;
+  /** Published for the capabilities endpoint; absent, any store without an entry is served. */
+  readonly stores?: readonly CommerceEvidenceFallbackStore[];
+} | undefined {
+  if (hasTargetSpecificEvidenceVerifierBinding(env)) {
+    // Strict target-specific mode: a store without its own binding fails closed
+    // with the same observable state as before the registry, and nothing is
+    // published for it.
+    return {
+      verifier: {
+        verifyPurchase() {
+          return Promise.resolve(unavailableEvidenceVerificationDecision());
+        },
+      },
+    };
+  }
+  const aggregate = env.GAME_SERVICES_EVIDENCE_VERIFIER;
+  if (aggregate !== undefined) {
+    // Android purchases through the aggregate are only published (and
+    // finalized) with a Play finalizer; see the google-play entry above.
+    return { verifier: bindingVerifierOf(aggregate), stores: aggregateFallbackStores };
+  }
+  if (env.MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE === 'true') {
+    const development = createDevelopmentGameServicesEvidenceVerifier();
+    return {
+      verifier: {
+        verifyPurchase(input) {
+          // Store consumables need a paired finalizer, never the development fallback.
+          if (input.request.target === 'microsoft-store') {
+            return Promise.resolve(unavailableEvidenceVerificationDecision());
+          }
+          return development.verifyPurchase(input);
+        },
+      },
+      stores: aggregateFallbackStores,
+    };
+  }
+  return undefined;
+}
+
+function bindingVerifierOf(
+  binding: GameServicesEvidenceVerifierBinding,
+): Pick<GameServicesEvidenceVerifier, 'verifyPurchase'> {
+  return {
+    verifyPurchase({ request, product, platformProductId, timeoutMs }) {
+      return binding.verifyPurchase({ request, product, platformProductId, timeoutMs });
+    },
+  };
+}
+
+function resolveWorkerLookupStores(
+  env: GameServicesWorkerEnv,
+): readonly ('devvit' | 'verse8')[] {
+  const configured = env.MPGD_COMMERCE_LOOKUP_STORES;
+  if (configured === undefined) {
+    return [];
+  }
+  if (!Array.isArray(configured)) {
+    throw new Error('MPGD_COMMERCE_LOOKUP_STORES must be a JSON array of store ids.');
+  }
+  const stores = new Set<'devvit' | 'verse8'>();
+  for (const candidate of configured) {
+    if (candidate !== 'devvit' && candidate !== 'verse8') {
+      throw new Error(
+        `MPGD_COMMERCE_LOOKUP_STORES names ${String(candidate)}; only devvit and verse8 have `
+          + 'a ledger lookup entry.',
+      );
+    }
+    stores.add(candidate);
+  }
+  return [...stores];
+}
+
+/**
+ * The in-Worker Google Play boundary: the Android Publisher client over the
+ * token service, with the account binding service or the explicit unbound
+ * opt-in. Both the package name and the auth service are required together.
+ */
+function resolveWorkerGooglePlayBoundary(
+  env: GameServicesWorkerEnv,
+): ReturnType<typeof createGooglePlayProductPurchaseBoundary> | undefined {
+  const packageName = env.GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME?.trim();
+  const auth = env.GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH;
+  if ((packageName === undefined || packageName.length === 0) && auth === undefined) {
+    return undefined;
+  }
+  if (packageName === undefined || packageName.length === 0 || auth === undefined) {
+    throw new Error(
+      'GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME and GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH must '
+        + 'be configured together.',
+    );
+  }
+  const accountBinding = env.GAME_SERVICES_GOOGLE_PLAY_ACCOUNT_BINDING;
+  const allowUnbound = env.GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER === 'true';
+  if (accountBinding === undefined && !allowUnbound) {
+    throw new Error(
+      'Google Play purchases require GAME_SERVICES_GOOGLE_PLAY_ACCOUNT_BINDING or the explicit '
+        + 'GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER = "true" opt-in.',
+    );
+  }
+  const scope = 'https://www.googleapis.com/auth/androidpublisher';
+  return createGooglePlayProductPurchaseBoundary({
+    client: createGooglePlayPublisherClient({
+      getAccessToken: () => auth.getAccessToken({ scope }),
+    }),
+    packageName,
+    ...(allowUnbound ? { allowUnboundAuthenticatedPlayer: true } : {}),
+    ...(accountBinding === undefined
+      ? {}
+      : {
+          resolveObfuscatedAccountId: async (playerId: string) =>
+            (await accountBinding.resolveObfuscatedAccountId({ playerId })) ?? undefined,
+          ...(accountBinding.resolveObfuscatedProfileId === undefined
+            ? {}
+            : {
+                resolveObfuscatedProfileId: async (playerId: string) =>
+                  (await accountBinding.resolveObfuscatedProfileId?.({ playerId })) ?? undefined,
+              }),
+        }),
+  });
+}
+
+function bindingFinalizer(
+  binding: GameServicesPurchaseGrantFinalizerBinding,
+  supports: (input: Pick<FinalizePurchaseGrantInput, 'request' | 'product'>) => boolean,
+): GameServicesPurchaseGrantFinalizer {
+  return {
+    supportsPurchaseGrant(input) {
+      return supports(input);
+    },
+    finalizePurchaseGrant(input) {
+      const { signal, ...bindingInput } = input;
+      // AbortSignal is not structured-cloneable across a Worker Service Binding. The remote
+      // binding receives timeoutMs and must enforce that timeout within its own request scope.
+      void signal;
+      return binding.finalizePurchaseGrant(bindingInput);
+    },
+  };
+}
+
+function supportsGooglePlayGrant(
+  input: Pick<FinalizePurchaseGrantInput, 'request' | 'product'>,
+): boolean {
+  return input.request.target === 'android' && input.product.type !== 'subscription';
 }
 
 function assertMicrosoftStorePurchaseBindings(env: GameServicesWorkerEnv): void {
@@ -540,28 +1129,6 @@ function assertMicrosoftStorePurchaseBindings(env: GameServicesWorkerEnv): void 
         + `together. Missing: ${missingBinding}.`,
     );
   }
-}
-
-function resolveWorkerPurchaseGrantFinalizer(
-  env: GameServicesWorkerEnv,
-): GameServicesPurchaseGrantFinalizer | undefined {
-  const binding = env.GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER;
-  if (binding === undefined) {
-    return undefined;
-  }
-
-  return {
-    supportsPurchaseGrant(input) {
-      return supportsMicrosoftStorePurchaseGrant(input);
-    },
-    finalizePurchaseGrant(input) {
-      const { signal, ...bindingInput } = input;
-      // AbortSignal is not structured-cloneable across a Worker Service Binding. The remote
-      // binding receives timeoutMs and must enforce that timeout within its own request scope.
-      void signal;
-      return binding.finalizePurchaseGrant(bindingInput);
-    },
-  };
 }
 
 function resolveWorkerDeploymentTargetBindings(
@@ -609,7 +1176,9 @@ function resolveWorkerEvidenceVerifier(
     : createD1AdMobSsvEvidenceVerifier(admobConfig);
 
   const targetBindings = hasTargetSpecificEvidenceVerifierBinding(env);
-  const resolveBinding = (target: ClaimAdRewardRequest['target'] | GameServicesStoreTarget) => {
+  const resolveBinding = (
+    target: ClaimAdRewardRequest['target'] | GameServicesLegacyStoreTarget,
+  ) => {
     if (targetBindings) {
       return resolveTargetSpecificEvidenceVerifierBinding(env, target);
     }
@@ -648,7 +1217,7 @@ function hasTargetSpecificEvidenceVerifierBinding(env: GameServicesWorkerEnv): b
 
 function resolveTargetSpecificEvidenceVerifierBinding(
   env: GameServicesWorkerEnv,
-  target: ClaimAdRewardRequest['target'] | GameServicesStoreTarget,
+  target: ClaimAdRewardRequest['target'] | GameServicesLegacyStoreTarget,
 ): GameServicesEvidenceVerifierBinding | undefined {
   switch (target) {
     case 'microsoft-store':
@@ -666,9 +1235,14 @@ function resolveTargetSpecificEvidenceVerifierBinding(
   }
 }
 
+/**
+ * The v1 purchase path, used by the backend only when no commerce evidence
+ * registry entry is configured (then the registry is absent and this
+ * verifier serves every purchase); with a registry it serves rewarded ads.
+ */
 function createWorkerEvidenceVerifier(
   resolveBinding: (
-    target: ClaimAdRewardRequest['target'] | GameServicesStoreTarget,
+    target: ClaimAdRewardRequest['target'] | GameServicesLegacyStoreTarget,
   ) => GameServicesEvidenceVerifierBinding | undefined,
   adRegistry: AdRewardEvidenceVerifierRegistry,
   fallbackVerifier?: GameServicesEvidenceVerifier,
@@ -676,13 +1250,13 @@ function createWorkerEvidenceVerifier(
   return {
     async verifyPurchase(input) {
       const { request, product, platformProductId, timeoutMs } = input;
-      const binding = resolveBinding(request.target);
+      const binding = resolveBinding(request.target as GameServicesLegacyStoreTarget);
 
-      if (request.target === 'microsoft-store' && !hasMicrosoftStorePurchaseEvidence(input)) {
-        return {
-          status: 'rejected',
-          reason: 'MICROSOFT_STORE_PURCHASE_FINALIZER_UNSUPPORTED',
-        };
+      if (request.target === 'microsoft-store') {
+        // Store grants are never safe through the generic development fallback because they must
+        // be paired with authoritative Collections consumption; with the pair bound, the
+        // registry entry serves them instead of this path.
+        return unavailableEvidenceVerificationDecision();
       }
       if (binding !== undefined) {
         return binding.verifyPurchase({
@@ -693,11 +1267,6 @@ function createWorkerEvidenceVerifier(
         });
       }
 
-      if (request.target === 'microsoft-store') {
-        // Store grants are never safe through the generic development fallback because they must
-        // be paired with authoritative Collections consumption.
-        return unavailableEvidenceVerificationDecision();
-      }
       return fallbackVerifier?.verifyPurchase(input)
         ?? unavailableEvidenceVerificationDecision();
     },
@@ -848,8 +1417,10 @@ function unavailableEvidenceVerificationDecision(): EvidenceVerificationDecision
 }
 
 function createWorkerStore(env: GameServicesWorkerEnv): GameServicesStore {
-  const db = resolveD1Database(env);
-  return db === undefined ? fallbackMemoryStore : createD1GameServicesStore(db);
+  return cachedByEnv(storesByEnv, env, () => {
+    const db = resolveD1Database(env);
+    return db === undefined ? fallbackMemoryStore : createD1GameServicesStore(db);
+  });
 }
 
 function createWorkerVerifiedLeaderboardService(

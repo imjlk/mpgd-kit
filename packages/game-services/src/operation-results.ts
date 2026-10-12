@@ -31,6 +31,8 @@ export interface PurchaseLedgerStatus {
 
 export interface PurchaseLedgerStatusRequest {
   readonly ledgerEntryIds: readonly string[];
+  /** The player whose grants are read; another player's entry answers `unknown`. */
+  readonly playerId: string;
 }
 
 export interface PurchaseLedgerStatusResponse {

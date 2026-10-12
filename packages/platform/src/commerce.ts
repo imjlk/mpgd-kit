@@ -23,6 +23,7 @@ import type {
   CommerceEvent,
   CommerceLogicalProductId,
   CommerceProvider,
+  CommerceServiceCapabilities,
   FetchProductsInput,
   FinishTransactionInput,
   FinishTransactionResult,
@@ -75,6 +76,8 @@ export type {
   CommerceEvent,
   CommerceLogicalProductId,
   CommerceProvider,
+  CommerceServiceCapabilities,
+  CommerceServiceStoreCapabilities,
   FetchProductsInput,
   FetchProductsType,
   FinishTransactionInput,
@@ -708,6 +711,9 @@ export const isActiveSubscription = typia.createEquals<ActiveSubscription>();
 export const assertFetchProductsInput = typia.createAssertEquals<FetchProductsInput>();
 export const assertCommerceCapabilities = typia.createAssertEquals<CommerceCapabilities>();
 export const isCommerceCapabilities = typia.createEquals<CommerceCapabilities>();
+export const assertCommerceServiceCapabilities =
+  typia.createAssertEquals<CommerceServiceCapabilities>();
+export const isCommerceServiceCapabilities = typia.createEquals<CommerceServiceCapabilities>();
 export const assertCommerceErrorInfo = typia.createAssertEquals<CommerceErrorInfo>();
 export const assertCreditOffer = typia.createAssertEquals<CreditOffer>();
 export const assertCreditSpendInput = typia.createAssertEquals<CreditSpendInput>();

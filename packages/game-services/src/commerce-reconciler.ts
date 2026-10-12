@@ -24,6 +24,11 @@ import {
 } from '@mpgd/platform/commerce';
 
 import type { PurchaseVerificationApi } from './client.js';
+import {
+  compareCommerceServiceCapabilities,
+  type CommerceServiceAlignment,
+} from './commerce-evidence-registry.js';
+import { chunkLedgerEntryIds } from './commerce-ledger.js';
 import type { MonetizationOperationStore } from './monetization-recovery.js';
 import type { GameServicesPurchaseInput, GameServicesPurchaseResult } from './operations.js';
 import type {
@@ -264,15 +269,41 @@ export interface CreateCommerceReconcilerInput {
    * ten minutes.
    */
   readonly inFlightTimeoutMs?: number;
+  /**
+   * How long the backend's `getCommerceCapabilities` read may take at start
+   * and on explicit passes before the last comparison is kept. Defaults to
+   * ten seconds.
+   */
+  readonly serviceCapabilitiesTimeoutMs?: number;
 }
 
 export const defaultStaleLaunchedAfterMs = 24 * 60 * 60 * 1000;
+/** How long one backend capabilities read may take before the last comparison is kept. */
+export const defaultServiceCapabilitiesTimeoutMs = 10 * 1000;
+
+/** `compareCommerceServiceCapabilities`'s answer, or `unpublished` for a backend without the read. */
+export type CommerceReconcilerServiceAlignment =
+  | CommerceServiceAlignment
+  | { readonly status: 'unpublished'; readonly store: StoreId };
 export const defaultRetryIntervalMs = 60 * 1000;
 export const defaultInFlightTimeoutMs = 10 * 60 * 1000;
 
 export interface CommerceReconciler {
   readonly provider: CommerceProvider;
   readonly started: boolean;
+  /**
+   * The last comparison of the provider's capabilities with the backend's
+   * published ones (RFC "Provider capabilities endpoint"); undefined until
+   * the first read, or when the backend offers no `getCommerceCapabilities`
+   * (`unpublished` once a backend answered that it has no such read). While
+   * it is `configuration-required`, the capabilities this reconciler reports
+   * carry that availability and `requestPurchase` refuses with
+   * `CONFIGURATION_REQUIRED`; a purchase never opens the store before the
+   * comparison was attempted.
+   */
+  readonly serviceAlignment: CommerceReconcilerServiceAlignment | undefined;
+  /** The provider's capability block with the backend alignment applied to `availability`. */
+  getCapabilities(): Promise<CommerceCapabilities>;
   /** Subscribe to the provider, read its available purchases when declared, then reconcile until idle. */
   start(): Promise<void>;
   /** Unsubscribe and drop in-memory state; the journal keeps every record. */
@@ -299,6 +330,15 @@ function isOpen(state: CommercePurchaseState): state is OpenState {
   return state === 'launched' || state === 'pending';
 }
 
+/** A backend answer that the capabilities read does not exist: HTTP 404 or oRPC NOT_FOUND. */
+function isNotFoundError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  const { status, code } = error as { readonly status?: unknown; readonly code?: unknown };
+  return status === 404 || code === 'NOT_FOUND';
+}
+
 export function createCommerceReconciler(input: CreateCommerceReconcilerInput): CommerceReconciler {
   const { provider, backend, store: journal, playerId } = input;
   const storeId = provider.store;
@@ -308,6 +348,11 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   const staleLaunchedAfterMs = input.staleLaunchedAfterMs ?? defaultStaleLaunchedAfterMs;
   const retryIntervalMs = input.retryIntervalMs ?? defaultRetryIntervalMs;
   const inFlightTimeoutMs = input.inFlightTimeoutMs ?? defaultInFlightTimeoutMs;
+  const serviceCapabilitiesTimeoutMs = input.serviceCapabilitiesTimeoutMs
+    ?? defaultServiceCapabilitiesTimeoutMs;
+  if (!Number.isFinite(serviceCapabilitiesTimeoutMs) || serviceCapabilitiesTimeoutMs <= 0) {
+    throw new RangeError('serviceCapabilitiesTimeoutMs must be a positive finite duration.');
+  }
   if (typeof playerId !== 'string' || playerId.trim() === '') {
     throw new TypeError('The commerce reconciler requires an authenticated player id.');
   }
@@ -404,6 +449,11 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     || (left.token !== undefined && left.token === right.token);
   const productCache = new Map<string, CommerceReconcilerProduct>();
   let capabilities: CommerceCapabilities | undefined;
+  let serviceAlignment: CommerceReconcilerServiceAlignment | undefined;
+  /** A backend that answered 404 / NOT_FOUND for the ledger status read: not asked again. */
+  let ledgerStatusUnpublished = false;
+  /** Serializes the backend capabilities read so overlapping triggers share one. */
+  let serviceAlignmentRead: Promise<void> | undefined;
   let unsubscribe: (() => void) | undefined;
   let started = false;
   /** The start in progress, so overlapping calls share one subscription. */
@@ -441,17 +491,86 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
    * again, since availability can change at runtime. A failed read keeps the
    * last block.
    */
+  const withServiceAlignment = (
+    block: CommerceCapabilities | undefined,
+  ): CommerceCapabilities | undefined =>
+    block === undefined || serviceAlignment?.status !== 'configuration-required'
+      ? block
+      : { ...block, availability: 'configuration-required' };
+
   const readCapabilities = async (refresh = false): Promise<CommerceCapabilities | undefined> => {
     if (capabilities !== undefined && !refresh) {
-      return capabilities;
+      return withServiceAlignment(capabilities);
     }
     try {
       capabilities = await provider.getCapabilities();
-      return capabilities;
     } catch (error) {
       fail('capabilities', error);
-      return capabilities;
     }
+    return withServiceAlignment(capabilities);
+  };
+
+  /**
+   * Compares the provider with the backend's published capabilities when the
+   * backend offers them: a store the backend does not accept, or a finish
+   * owner that disagrees, sets availability to `configuration-required`
+   * before any purchase UI opens. A failed read keeps the last comparison.
+   */
+  const readServiceAlignment = async (): Promise<void> => {
+    const readService = backend.getCommerceCapabilities;
+    if (
+      readService === undefined
+      || capabilities === undefined
+      || serviceAlignment?.status === 'unpublished'
+    ) {
+      return;
+    }
+    if (serviceAlignmentRead !== undefined) {
+      return serviceAlignmentRead;
+    }
+    const providerBlock = capabilities;
+    serviceAlignmentRead = (async () => {
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const service = await Promise.race([
+          readService.call(backend),
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(() => {
+              reject(new Error('The backend commerce capabilities read timed out.'));
+            }, serviceCapabilitiesTimeoutMs);
+          }),
+        ]);
+        serviceAlignment = compareCommerceServiceCapabilities({
+          store: storeId,
+          provider: providerBlock,
+          service,
+        });
+        if (serviceAlignment.status === 'configuration-required') {
+          fail(
+            'capabilities',
+            new CommerceError('CONFIGURATION_REQUIRED', {
+              message: serviceAlignment.message,
+              storeCode: serviceAlignment.reason,
+            }),
+          );
+        }
+      } catch (error) {
+        if (isNotFoundError(error)) {
+          // A v1 backend behind a v2 client adapter: it publishes nothing, and
+          // that is remembered rather than read again on every refresh.
+          serviceAlignment = { status: 'unpublished', store: storeId };
+          return;
+        }
+        // A failed or timed-out read keeps the last comparison.
+        fail('capabilities', error);
+      } finally {
+        if (timeout !== undefined) {
+          clearTimeout(timeout);
+        }
+        serviceAlignmentRead = undefined;
+      }
+    })();
+    return serviceAlignmentRead;
   };
 
   const resolveProduct = async (
@@ -647,9 +766,11 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       );
     }
     return {
-      // C2 opens `VerifyPurchaseRequest.target` to any `StoreId`; until then
-      // the ledger target is sent and the server decides whether it serves it.
-      target: target as VerifyPurchaseRequest['target'],
+      // The ledger target names the deployment platform; `store` names the
+      // store the purchase was made in (RFC "Open store ids"). A v1 server
+      // ignores `store` and keeps mapping the target.
+      target,
+      store: storeId,
       ...(deploymentTarget === target ? {} : { deploymentTarget }),
       playerId,
       productId: record.logicalId,
@@ -1015,7 +1136,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   // ledger status read (C2); without it the hook is inert.
   const revokeReversed = async (): Promise<void> => {
     const ledgerStatus = backend.getPurchaseLedgerStatus;
-    if (ledgerStatus === undefined) {
+    if (ledgerStatus === undefined || ledgerStatusUnpublished) {
       return;
     }
     const granted = await listGranted();
@@ -1024,10 +1145,20 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     }
     const ledgerEntryIds = [...new Set(granted.flatMap((record) =>
       (record.ledgerEntryId === undefined ? [] : [record.ledgerEntryId])))];
-    let statuses: readonly { readonly ledgerEntryId: string; readonly status: string; readonly reversedBy?: string }[];
+    const statuses: { readonly ledgerEntryId: string; readonly status: string; readonly reversedBy?: string }[] = [];
     try {
-      statuses = (await ledgerStatus.call(backend, { ledgerEntryIds })).statuses;
+      // Reads are chunked to what a backend store accepts in one query.
+      for (const chunk of chunkLedgerEntryIds(ledgerEntryIds)) {
+        const response = await ledgerStatus.call(backend, { ledgerEntryIds: chunk, playerId });
+        statuses.push(...response.statuses);
+      }
     } catch (error) {
+      if (isNotFoundError(error)) {
+        // A pre-C2 backend behind a transport adapter that always exposes the
+        // read: the hook stays inert, as it is for a backend without it.
+        ledgerStatusUnpublished = true;
+        return;
+      }
       fail('ledger-status', error);
       return;
     }
@@ -1055,7 +1186,11 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   const eventPass: PassOptions = { explicit: false, refreshCapabilities: false };
 
   const pass = async (options: PassOptions): Promise<void> => {
-    const capabilitiesNow = await readCapabilities(options.refreshCapabilities);
+    let capabilitiesNow = await readCapabilities(options.refreshCapabilities);
+    if (options.refreshCapabilities) {
+      await readServiceAlignment();
+      capabilitiesNow = withServiceAlignment(capabilities);
+    }
     // A provider without lifecycle.events is polled: every pass reads its
     // available purchases. An event provider whose start-time read failed is
     // read again until it succeeds, so a purchase that predates the
@@ -1199,6 +1334,24 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         result: failedOutcome(
           new CommerceError('NOT_PREPARED', {
             message: `The ${storeId} provider capabilities could not be read.`,
+          }),
+        ),
+      };
+    }
+    if (serviceAlignment === undefined) {
+      // A purchase before `start()` finished, or whose start could not read
+      // the backend: the comparison is attempted before any store UI opens.
+      await readServiceAlignment();
+    }
+    if (serviceAlignment?.status === 'configuration-required') {
+      // The backend does not serve this store as the provider declares it:
+      // no store UI opens until the deployment is corrected.
+      return {
+        kind: 'answered',
+        result: failedOutcome(
+          new CommerceError('CONFIGURATION_REQUIRED', {
+            message: serviceAlignment.message,
+            storeCode: serviceAlignment.reason,
           }),
         ),
       };
@@ -1378,6 +1531,18 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     get started() {
       return started;
     },
+    get serviceAlignment() {
+      return serviceAlignment;
+    },
+    async getCapabilities() {
+      const block = await readCapabilities();
+      if (block === undefined) {
+        throw new CommerceError('NOT_PREPARED', {
+          message: `The ${storeId} provider capabilities could not be read.`,
+        });
+      }
+      return block;
+    },
     async start() {
       if (started) {
         return;
@@ -1393,6 +1558,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
             unsubscribe = provider.subscribe(listener);
             started = true;
             const capabilitiesNow = await readCapabilities(true);
+            await readServiceAlignment();
             // An event-less provider is polled by the first pass instead, so it
             // is read once; a failed read is retried by the next pass.
             initialScanPending = capabilitiesNow === undefined

@@ -6,6 +6,8 @@ export * from './apps-in-toss-evidence-verification.js';
 export * from './apps-in-toss-partner-api.js';
 export * from './client.js';
 export * from './client-reward-evidence.js';
+export * from './commerce-evidence-registry.js';
+export * from './commerce-ledger.js';
 export * from './commerce-reconciler.js';
 export * from './default-client-reward-evidence.js';
 export * from './admob-client-reward.js';

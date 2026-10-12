@@ -1,16 +1,22 @@
 # Devvit Payments and Commerce v2
 
-> **The commerce v2 gateway option is not yet usable in production before
-> C2.** The v1 payments adapter and the fulfillment handler path
-> (`normalizeDevvitFulfillmentOrder`, `fulfillPlatformOrder`) keep working as
-> before. The backend side of the v2 server-push lookup (a verifier registered
-> for `devvit.order.v1` that answers `granted` once the fulfillment handler's
-> ledger entry exists and `pending` otherwise) is C2 work: today
-> `@mpgd/game-services` registers no verifier for that schema and
-> `GameServicesStoreTarget` does not accept the `reddit` target, so a v2
-> verify request is refused instead of answering `pending`, and a journal
-> record would end rejected, not granted. Enable `createDevvitPlatformGateway`'s
-> `commerce` option only once the backend can answer.
+> **The commerce v2 gateway option needs the backend's C2 pieces.** The v1
+> payments adapter and the fulfillment handler path
+> (`normalizeDevvitFulfillmentOrder` and the ledger write) keep working as
+> before. For `createDevvitPlatformGateway`'s `commerce` option the backend
+> must (1) register the `devvit.order.v1` lookup entry
+> (`createDevvitOrderLookupCommerceEvidenceEntry({ ledger })` in its
+> `createCommerceEvidenceRegistry`; the Worker does so with
+> `MPGD_COMMERCE_LOOKUP_STORES = ["devvit"]`), which answers `granted` once
+> the fulfillment handler's ledger entry for the order exists and `pending`
+> before it, and never grants from the client envelope; and (2) have the
+> fulfillment handler write that entry in the lookup's shape, through
+> `createPlatformOrderLedgerGrant` (key `reddit:<orderId>`, target `reddit`,
+> store `devvit`, the order id as the platform transaction id) or through
+> `verifyPurchase` with `createPlatformOrderVerifyRequest` and the
+> `devvit.payment-order.v1` entry. Refund orders
+> (`normalizeDevvitRefundOrder`) go to `revokePlatformOrder`, which appends
+> the `revoke` entry the reconciler's revocation pass reads.
 
 Reddit settles a Devvit purchase on the server: the payment handler your app
 registers (`fulfillOrder`) runs when an order is `PAID`, and only the backend
@@ -162,14 +168,18 @@ block with `nativeIap` and `subscriptionIap` derived from it, and the v1
 installs the v1 adapter next to it). Without the option the gateway offers
 no `commerceV2` and the server snapshot is returned as is.
 
-The backend side of the lookup is the server-push verifier the RFC describes
-for C2: a verify request carrying `devvit.order.v1` evidence
-(`assertDevvitOrderEvidence` validates the envelope) is `granted` when the
-ledger holds the grant the fulfillment handler wrote for that order and
-`pending` otherwise. A purchase discovered without a journal record derives
-the key `store:devvit:<encodeURIComponent(orderId)>`; the fulfillment handler keeps writing under
-`reddit:<orderId>`, and the platform-evidence unique index remains the
-backstop between the two.
+The backend side of the lookup is the server-push verifier C2 added
+(`createDevvitOrderLookupCommerceEvidenceEntry` in
+`@mpgd/game-services/commerce-evidence-registry`): a verify request carrying
+`devvit.order.v1` evidence is `granted` when the ledger holds the grant the
+fulfillment handler wrote for that order (target `reddit`, the order id as the
+platform transaction id, as `createPlatformOrderLedgerGrant` writes it) for
+the same player and product, `pending` (`LEDGER_GRANT_PENDING`) otherwise,
+and `rejected` when the envelope names another transaction or SKU than the
+request or the grant belongs to someone else. A purchase discovered without a
+journal record derives the key `store:devvit:<encodeURIComponent(orderId)>`;
+the fulfillment handler keeps writing under `reddit:<orderId>`, and the
+platform-evidence unique index remains the backstop between the two.
 
 ### Conformance
 

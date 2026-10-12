@@ -6,11 +6,14 @@ import type {
   PlatformEvidenceEnvelope,
   PlatformTarget,
 } from '@mpgd/platform';
+import type { StoreId } from '@mpgd/platform/commerce';
 
 import type {
   ClaimAdRewardResponse,
   PurchaseGrantFinalization,
   PurchaseGrantFinalizationAction,
+  PurchaseLedgerStatusRequest,
+  PurchaseLedgerStatusResponse,
   VerifyPurchaseResponse,
 } from './operation-results.js';
 import {
@@ -31,10 +34,24 @@ export type {
 
 export type { PlatformEvidenceEnvelope } from '@mpgd/platform';
 
-export type GameServicesStoreTarget = Extract<
+/**
+ * The closed v1 purchase target list. The deployment target of a v1 verify
+ * request names its store implicitly (`android` is Google Play, `ios` the App
+ * Store, `ait` Apps in Toss); `resolveLegacyCommerceStoreId` is that mapping.
+ *
+ * @deprecated `VerifyPurchaseRequest.target` is open since commerce v2 C2
+ * (`GameServicesStoreTarget` is `StoreId`); C4 removes this alias.
+ */
+export type GameServicesLegacyStoreTarget = Extract<
   PlatformTarget,
   'microsoft-store' | 'android' | 'ios' | 'ait' | 'oneplay'
 >;
+/**
+ * An open store or deployment target identifier (RFC "Open store ids"). The
+ * request validator bounds its shape; the backend's commerce evidence
+ * registry decides which stores it serves.
+ */
+export type GameServicesStoreTarget = StoreId;
 export type GameServicesAdRewardTarget = GameServicesLedgerTarget;
 export type GameServicesLeaderboardTarget = Extract<
   PlatformTarget,
@@ -53,7 +70,17 @@ export type EntitlementLedgerSource = 'purchase' | 'ad_reward' | 'admin';
 export type EntitlementLedgerPayload = Record<string, string | number | boolean>;
 
 export interface VerifyPurchaseRequest {
+  /** The ledger (deployment platform) target; see `store` for the store the purchase was made in. */
   readonly target: GameServicesStoreTarget;
+  /**
+   * The open store id the purchase was made in (RFC "Open store ids"), for
+   * example `google-play` or `credit-wallet`. A v1 request without it names
+   * its store through `target`: `android` is `google-play`, `ios` is
+   * `app-store`, `ait` is `apps-in-toss`, `reddit` is `devvit`, and every
+   * other target (`microsoft-store`, `verse8`, `oneplay`) is its own store id
+   * (`resolveLegacyCommerceStoreId`).
+   */
+  readonly store?: StoreId;
   /** Deployment config key used to resolve game-owned platform product identifiers. */
   readonly deploymentTarget?: string;
   readonly playerId: string;
@@ -108,6 +135,48 @@ export interface EntitlementLedgerResult {
   readonly alreadyProcessed: boolean;
 }
 
+/** Why a grant was reversed (RFC "Revocation and expiry entries"). */
+export type EntitlementRevocationReason = 'refund' | 'chargeback' | 'voided' | 'admin';
+
+/**
+ * A `revoke` ledger entry: it references the grant it reverses and never
+ * removes it, so the ledger stays append-only. Store notification handlers
+ * (a Play voided purchase, an App Store refund, an Apps in Toss or Devvit
+ * refunded order) write one through `revokeEntitlementGrant`; the entry's
+ * `idempotencyKey` makes the notification replay-safe.
+ */
+export interface EntitlementLedgerRevocation {
+  readonly playerId: string;
+  /** The `ledgerEntryId` of the grant this entry reverses. */
+  readonly revokesLedgerEntryId: string;
+  readonly idempotencyKey: string;
+  readonly reason: EntitlementRevocationReason;
+  readonly revokedAt: string;
+  readonly payload: EntitlementLedgerPayload;
+  /** The notification's own authority identity, when the handler has one. */
+  readonly evidenceVerificationId?: string;
+}
+
+export interface EntitlementRevocationTransaction extends EntitlementLedgerRevocation {
+  readonly ledgerEntryId: string;
+}
+
+/**
+ * A subscription `period` ledger entry: it extends an earlier grant with a
+ * renewal period and its expiry. This is the shape only; no reference store
+ * verifier writes one until a subscription verifier exists.
+ */
+export interface EntitlementLedgerPeriod {
+  readonly playerId: string;
+  /** The `ledgerEntryId` of the subscription grant this period extends. */
+  readonly extendsLedgerEntryId: string;
+  readonly idempotencyKey: string;
+  readonly periodIndex: number;
+  readonly startedAt: string;
+  readonly expiresAt: string;
+  readonly payload: EntitlementLedgerPayload;
+}
+
 export interface ProductGrantTransaction {
   readonly ledgerEntryId: string;
   readonly playerId: string;
@@ -133,6 +202,9 @@ export function assertVerifyPurchaseRequest(input: VerifyPurchaseRequest): Verif
   return validateRequest(() => {
     assertRecord(input, 'VerifyPurchaseRequest');
     assertStoreTarget(input.target);
+    if (input.store !== undefined) {
+      assertCommerceStoreId(input.store, 'store');
+    }
     assertOptionalGameServicesDeploymentTarget(input.deploymentTarget);
     assertRequestString(input.playerId, 'playerId');
     assertRequestString(input.productId, 'productId');
@@ -158,6 +230,58 @@ export function assertVerifyPurchaseResponse(
     assertPurchaseGrantFinalization(input.finalization);
   }
 
+  return input;
+}
+
+/** Bounds one ledger status read; a client asks for the grants of one journal window. */
+export const maxPurchaseLedgerStatusEntries = 256;
+
+/**
+ * Validates an untrusted ledger status read. Failures throw
+ * `GameServicesRequestValidationError` so transports can answer with a stable 400.
+ */
+export function assertPurchaseLedgerStatusRequest(
+  input: PurchaseLedgerStatusRequest,
+): PurchaseLedgerStatusRequest {
+  return validateRequest(() => {
+    assertRecord(input, 'PurchaseLedgerStatusRequest');
+    if (!Array.isArray(input.ledgerEntryIds)) {
+      throw new Error('ledgerEntryIds must be an array.');
+    }
+    if (input.ledgerEntryIds.length > maxPurchaseLedgerStatusEntries) {
+      throw new Error(
+        `ledgerEntryIds must not exceed ${String(maxPurchaseLedgerStatusEntries)} entries.`,
+      );
+    }
+    for (const ledgerEntryId of input.ledgerEntryIds) {
+      assertRequestString(ledgerEntryId, 'ledgerEntryIds[]');
+    }
+    assertRequestString(input.playerId, 'playerId');
+    return input;
+  });
+}
+
+export function assertPurchaseLedgerStatusResponse(
+  input: PurchaseLedgerStatusResponse,
+): PurchaseLedgerStatusResponse {
+  assertRecord(input, 'PurchaseLedgerStatusResponse');
+  if (!Array.isArray(input.statuses)) {
+    throw new Error('statuses must be an array.');
+  }
+  for (const status of input.statuses) {
+    assertRecord(status, 'statuses[]');
+    assertNonEmptyString(status.ledgerEntryId, 'statuses[].ledgerEntryId');
+    if (status.status !== 'active' && status.status !== 'reversed' && status.status !== 'unknown') {
+      throw new Error('statuses[].status must be active, reversed, or unknown.');
+    }
+    assertOptionalNonEmptyString(status.reversedBy, 'statuses[].reversedBy');
+    if (status.status === 'reversed' && status.reversedBy === undefined) {
+      throw new Error('a reversed status names the entry that reversed it.');
+    }
+    if (status.status !== 'reversed' && status.reversedBy !== undefined) {
+      throw new Error('only a reversed status names a reversing entry.');
+    }
+  }
   return input;
 }
 
@@ -288,6 +412,50 @@ export function assertEntitlementLedgerResult(
   return input;
 }
 
+export function assertEntitlementLedgerRevocation(
+  input: EntitlementLedgerRevocation,
+): EntitlementLedgerRevocation {
+  assertRecord(input, 'EntitlementLedgerRevocation');
+  assertNonEmptyString(input.playerId, 'playerId');
+  assertNonEmptyString(input.revokesLedgerEntryId, 'revokesLedgerEntryId');
+  assertNonEmptyString(input.idempotencyKey, 'idempotencyKey');
+  assertRevocationReason(input.reason);
+  assertNonEmptyString(input.revokedAt, 'revokedAt');
+  assertPayload(input.payload);
+  assertOptionalNonEmptyString(input.evidenceVerificationId, 'evidenceVerificationId');
+
+  return input;
+}
+
+export function assertEntitlementRevocationTransaction(
+  input: EntitlementRevocationTransaction,
+): EntitlementRevocationTransaction {
+  assertEntitlementLedgerRevocation(input);
+  assertNonEmptyString(input.ledgerEntryId, 'ledgerEntryId');
+
+  return input;
+}
+
+export function assertEntitlementLedgerPeriod(
+  input: EntitlementLedgerPeriod,
+): EntitlementLedgerPeriod {
+  assertRecord(input, 'EntitlementLedgerPeriod');
+  assertNonEmptyString(input.playerId, 'playerId');
+  assertNonEmptyString(input.extendsLedgerEntryId, 'extendsLedgerEntryId');
+  assertNonEmptyString(input.idempotencyKey, 'idempotencyKey');
+  if (!Number.isSafeInteger(input.periodIndex) || input.periodIndex < 0) {
+    throw new Error('periodIndex must be a non-negative integer.');
+  }
+  assertNonEmptyString(input.startedAt, 'startedAt');
+  assertNonEmptyString(input.expiresAt, 'expiresAt');
+  if (!(Date.parse(input.expiresAt) > Date.parse(input.startedAt))) {
+    throw new Error('expiresAt must be a timestamp after startedAt.');
+  }
+  assertPayload(input.payload);
+
+  return input;
+}
+
 export function assertProductGrantTransaction(
   input: ProductGrantTransaction,
 ): ProductGrantTransaction {
@@ -323,15 +491,24 @@ function assertRecord(input: unknown, label: string): asserts input is Record<st
   }
 }
 
+/**
+ * The purchase target is open (RFC "Open store ids"): any bounded kebab-case
+ * identifier passes here, and the backend's commerce evidence registry decides
+ * whether the store it names is served.
+ */
 function assertStoreTarget(input: unknown): asserts input is GameServicesStoreTarget {
+  assertCommerceStoreId(input, 'target');
+}
+
+/** A store id is a bounded kebab-case identifier such as `google-play` or `credit-wallet`. */
+export function assertCommerceStoreId(input: unknown, label = 'store'): asserts input is StoreId {
   if (
-    input !== 'microsoft-store'
-    && input !== 'android'
-    && input !== 'ios'
-    && input !== 'ait'
-    && input !== 'oneplay'
+    typeof input !== 'string'
+    || input.length === 0
+    || input.length > 64
+    || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(input)
   ) {
-    throw new Error('target must be microsoft-store, android, ios, ait, or oneplay.');
+    throw new Error(`${label} must be a lowercase kebab-case store identifier.`);
   }
 }
 
@@ -468,6 +645,12 @@ function assertPurchaseGrantFinalizationAction(
     && input !== 'complete'
   ) {
     throw new Error('finalization.action must be acknowledge, consume, finish, or complete.');
+  }
+}
+
+function assertRevocationReason(input: unknown): asserts input is EntitlementRevocationReason {
+  if (input !== 'refund' && input !== 'chargeback' && input !== 'voided' && input !== 'admin') {
+    throw new Error('reason must be refund, chargeback, voided, or admin.');
   }
 }
 
