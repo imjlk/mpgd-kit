@@ -1285,8 +1285,17 @@ describe('notifications fake backend: the scheduler and reminders', () => {
   });
 
   it('records a notice only while it is listed, so a late retry never skips the next re-confirmation', async () => {
-    const { clock, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
+    const { clock, host, backend, createRuntime } = setup(osProfile, [weekend, noticeTopic], {
       deployment: { ...kr, noticeTopic: 'consent-notice' },
+    });
+    // What the runtime sends the backend.
+    const forwarded: unknown[] = [];
+    const runtime = createRuntime(host.provider, {
+      ...backend,
+      async recordNotice(input) {
+        forwarded.push(input);
+        await backend.recordNotice(input);
+      },
     });
     backend.authenticate('p-1');
     await runtime.setAdvertisingConsent({ advertising: 'granted', textVersion: 'ad-v1' });
@@ -1316,13 +1325,20 @@ describe('notifications fake backend: the scheduler and reminders', () => {
     ]);
     expect(await runtime.notices.list()).toEqual([]);
     clock.set('2030-08-11T15:00:00Z');
-    const listed = await runtime.notices.list();
-    expect(listed).toEqual([expect.objectContaining({ kind: 'reconfirmation', dueBy: '2030-10-11' })]);
-    // An unknown notice changes nothing; malformed input throws, a whole listed notice included.
+    const listed = (await runtime.notices.list())[0];
+    if (listed === undefined) {
+      throw new Error('The re-confirmation due 2030-10-11 is listed from 2030-08-12 KST.');
+    }
+    expect(listed).toMatchObject({ kind: 'reconfirmation', dueBy: '2030-10-11', record: { state: 'granted' } });
+    // An unknown notice changes nothing; malformed input throws, with an
+    // unknown key at the top level or inside `record` in either form.
     await runtime.notices.recordShown({ ...first, record: { kind: 'night', at: now }, dueBy: '2030-10-11' });
     expect(backend.noticesGiven).toHaveLength(2);
     for (const malformed of [
-      listed[0],
+      { ...listed, shown: true },
+      { ...listed, record: { ...listed.record, note: 'shown' } },
+      { ...first, shown: true },
+      { ...first, record: { ...first.record, note: 'shown' } },
       { ...first, dueBy: '2030-02-30' },
       { ...first, record: { kind: 'advertising', at: '2026-10-12T03:00:00' } },
       { kind: 'reconfirmation', recordAt: now },
@@ -1331,6 +1347,20 @@ describe('notifications fake backend: the scheduler and reminders', () => {
         .rejects.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT' });
     }
     expect(backend.noticesGiven).toHaveLength(2);
+    // The listed notice passed as is is recorded, and the backend gets only its name.
+    await runtime.notices.recordShown(listed);
+    expect(forwarded.at(-1)).toEqual({
+      kind: 'reconfirmation',
+      record: { kind: 'advertising', at: now },
+      dueBy: '2030-10-11',
+      channel: 'in-game',
+    });
+    expect(backend.noticesGiven.map((given) => [given.kind, given.dueBy, given.channel])).toEqual([
+      ['consent-result', '2026-10-26', 'in-game'],
+      ['reconfirmation', '2028-10-11', 'in-game'],
+      ['reconfirmation', '2030-10-11', 'in-game'],
+    ]);
+    expect(await runtime.notices.list()).toEqual([]);
   });
 
   it('lists no notices without the Korean rules', async () => {

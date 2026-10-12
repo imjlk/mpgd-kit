@@ -466,8 +466,8 @@ export interface NotificationRuntime {
   };
   readonly notices: {
     list(): Promise<readonly NotificationNotice[]>;
-    /** Records a listed notice, named by its kind, its record's kind and time, and its `dueBy`. */
-    recordShown(input: {
+    /** Records a listed notice, passed as is or by its name: its kind, its record's kind and time, and its `dueBy`. */
+    recordShown(input: NotificationNotice | {
       readonly kind: NotificationNotice['kind'];
       readonly record: { readonly kind: 'advertising' | 'night'; readonly at: string };
       readonly dueBy: string;
@@ -862,15 +862,15 @@ each notice given: the notice's name, the channel (`in-game`, `push`, or
 `other`), and the time.
 
 The game shows a notice in the game and records it through
-`notices.recordShown` with the notice's name: its `kind`, its record's `kind`
-and `at`, and its `dueBy`, as `list()` gave them.
+`notices.recordShown` with the notice as `list()` gave it, or with its name:
+its `kind`, its record's `kind` and `at`, and its `dueBy`. The runtime sends
+the backend only the name.
 
 - **Retries.** The backend records a notice only while that notice is listed.
   Recording a notice that is not listed (already recorded, not yet listed, or
   unknown) changes nothing, so a retried call is safe.
-- **Malformed input.** A missing field, an unknown key (such as a listed
-  notice's `record.state`), or a time or date that does not parse throws
-  `NOTIFICATIONS_INVALID_INPUT`.
+- **Malformed input.** A missing field, an unknown key, or a time or date
+  that does not parse throws `NOTIFICATIONS_INVALID_INPUT`.
 
 If a notice is not recorded by the start of the day seven days before
 `dueBy`, the scheduler sends it through the catalog's notice topic.
@@ -1441,7 +1441,7 @@ Fake defaults:
 | `runtime` | `start`; `restart` (see [Runtime](#runtime)) |
 | `clock` | `set` (`at`), `advance` (`seconds`) |
 | `host` | `queuePrompt` (`result`: `granted`, `already-granted`, `denied`, `dismissed`, `host-terms-declined`); `setPermission` (`state`); `issueEndpoint` (`endpoint`: `{ kind, value }`); `completeAction`; `tap` (`input`: `{ channel, topic?, route?, data? }`) |
-| `game` | The [runtime](#runtime) methods: `getPermission`, `requestPermission` (`topics`, `gesture`), `revokePermission` (`topics`), `register`, `unregister`, `setTopicPreference`, `setAdvertisingConsent`, `setReminder`, `cancelReminder`, `listNotices`, `recordNotice` (`kind`, `record` with its `kind` and `at`, and `dueBy`), `openSettings`, and `subscribe` (`listener` names the listener) |
+| `game` | The [runtime](#runtime) methods: `getPermission`, `requestPermission` (`topics`, `gesture`), `revokePermission` (`topics`), `register`, `unregister`, `setTopicPreference`, `setAdvertisingConsent`, `setReminder`, `cancelReminder`, `listNotices`, `recordNotice` (a listed notice, or its `kind`, `record` with its `kind` and `at`, and `dueBy`), `openSettings`, and `subscribe` (`listener` names the listener) |
 | `backend` | `authenticate` (`player`); `deliver` (`input`: `topic`, `idempotencyKey`, optional `player` defaulting to `context.player`, `provider`, `templateData`, `data`, `locale`, `link`); `queueProviderResult` (`result`: `accepted`, `unregistered`, `rate-limited` with optional `retryAfterSeconds`, `rejected` with `reason`, or `ambiguous`); `registerEndpoint` (`input`: `installationId`, `kind`, `value`, `permission`; another installation of the same player); `revokeSession` (ends the session that registered the installation); `runScheduler` (process every due reminder, deferred send, and notice) |
 
 `expect` keys; a list is matched exactly in length and order, with only the

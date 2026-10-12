@@ -1840,7 +1840,7 @@ export interface NotificationNotice {
 /**
  * What names one notice: its kind, the record it reports on (that record's
  * kind and time), and its `dueBy`. A listed notice carries these fields, and
- * `notices.recordShown` takes exactly them.
+ * `notices.recordShown` takes the listed notice as is or exactly them.
  */
 export interface NotificationNoticeIdentity {
   readonly kind: NotificationNoticeKind;

@@ -280,7 +280,7 @@ export type NotificationConformanceStep =
   | {
       readonly actor: 'game';
       readonly action: 'recordNotice';
-      /** The notice's kind, the kind and time of the record it reports on, and its `dueBy`. */
+      /** A listed notice, or its kind, the kind and time of the record it reports on, and its `dueBy`. */
       readonly input: RecordNotificationNoticeInput;
       readonly throws?: NotificationConformanceThrows;
     }

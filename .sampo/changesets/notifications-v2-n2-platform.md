@@ -10,10 +10,10 @@ delivery is unsupported, permission snapshots and results with
 `requiredAction`, endpoint registrations without an installation id, local
 reminders, events, consent records including provider answers, consent
 notices, and the `NotificationRuntime` surface with `revokePermission`,
-`unregister()`, and `notices`, whose `recordShown` takes a notice's kind, its
-record's kind and time, and its `dueBy` and records the notice only while it
-is listed, so a retry changes nothing), `NotificationError` with the
-`NOTIFICATIONS_*` codes including `NOTIFICATIONS_INVALID_INPUT` and
+`unregister()`, and `notices`, whose `recordShown` takes a listed notice as
+is, or its kind, its record's kind and time, and its `dueBy`, and records the
+notice only while it is listed, so a retry changes nothing), `NotificationError`
+with the `NOTIFICATIONS_*` codes including `NOTIFICATIONS_INVALID_INPUT` and
 `NOTIFICATIONS_IDEMPOTENCY_CONFLICT` and the host's own `hostCode`, the bridge
 v2 payload shapes and event envelope, typia validators that reject unknown
 keys, the delivery provider registry entry with reference entries for FCM,

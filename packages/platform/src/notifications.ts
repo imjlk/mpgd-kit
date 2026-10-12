@@ -283,10 +283,11 @@ export interface CancelNotificationReminderInput {
 }
 
 /**
- * The notice `notices.recordShown` records: exactly its kind, the kind and time
- * of the record it reports on, and its `dueBy`, as `notices.list()` gave them.
+ * The notice `notices.recordShown` records: a notice as `notices.list()` gave
+ * it, or exactly its name (its kind, the kind and time of the record it
+ * reports on, and its `dueBy`).
  */
-export type RecordNotificationNoticeInput = NotificationNoticeIdentity;
+export type RecordNotificationNoticeInput = NotificationNoticeIdentity | NotificationNotice;
 
 /**
  * The game-facing notifications surface: the provider composed with the
@@ -516,10 +517,10 @@ const assertRecordNotificationNoticeInputShape =
   typia.createAssertEquals<RecordNotificationNoticeInput>();
 
 /**
- * Validates a `notices.recordShown` input: exactly a notice's kind, its
- * record's kind and time, and its `dueBy`, with no other key (a listed
- * notice's `record.state` and `record.textVersion` included). The time parses
- * strictly with an offset, and `dueBy` is a date that exists.
+ * Validates a `notices.recordShown` input: a listed notice as is, or exactly
+ * its name (kind, record kind and time, `dueBy`), with no other key in either
+ * form. The time parses strictly with an offset, and `dueBy` is a date that
+ * exists.
  */
 export function assertRecordNotificationNoticeInput(input: unknown): RecordNotificationNoticeInput {
   const notice = assertRecordNotificationNoticeInputShape(input);

@@ -744,11 +744,12 @@ export interface NotificationConformanceBackendClient {
   /** The session player's listed notices; none unless the deployment applies the Korean rules. */
   listNotices(): Promise<readonly NotificationNotice[]>;
   /**
-   * Records a notice given to the session's player while that notice is
-   * listed; recording one that is not listed changes nothing.
+   * Records a notice given to the session's player, named by its identity
+   * fields, while that notice is listed; recording one that is not listed
+   * changes nothing.
    */
   recordNotice(
-    input: RecordNotificationNoticeInput & { readonly channel: NotificationConformanceNoticeChannel },
+    input: NotificationNoticeIdentity & { readonly channel: NotificationConformanceNoticeChannel },
   ): Promise<void>;
 }
 
@@ -1625,11 +1626,7 @@ export function createNotificationConformanceBackend(
     listed: NotificationNotice,
     topic: string,
   ): Promise<void> => {
-    const notice: NotificationNoticeIdentity = {
-      kind: listed.kind,
-      record: { kind: listed.record.kind, at: listed.record.at },
-      dueBy: listed.dueBy,
-    };
+    const notice = noticeIdentityOf(listed);
     const request: SendRequest = {
       idempotencyKey: createNotificationNoticeIdempotencyKey({ ...notice, player }),
       player,
@@ -1892,16 +1889,15 @@ export function createNotificationConformanceBackend(
     async recordNotice(input) {
       const session = requireSession('recordNotice');
       const { channel, ...named } = input;
-      const notice = recordNoticeInputOf(named);
+      const notice = noticeIdentityOf(recordNoticeInputOf(named));
       // Only a listed notice is recorded: one already recorded, not listed
       // yet, or unknown changes nothing, so a retried call is safe.
       if (!noticeListed(session.player, notice)) {
         return;
       }
       noticesGiven.push({
-        kind: notice.kind,
-        record: { kind: notice.record.kind, at: normalizeNotificationTimestamp(notice.record.at) },
-        dueBy: notice.dueBy,
+        ...notice,
+        record: { ...notice.record, at: normalizeNotificationTimestamp(notice.record.at) },
         player: session.player,
         channel,
         at: clock.now(),
@@ -2014,11 +2010,20 @@ function recordNoticeInputOf(input: unknown): RecordNotificationNoticeInput {
     return assertRecordNotificationNoticeInput(input);
   } catch (error) {
     throw new NotificationError('NOTIFICATIONS_INVALID_INPUT', {
-      message: 'A notice is named by its kind, the kind and time of the record it reports on, and '
-        + `its dueBy: ${describeError(error)}`,
+      message: 'A notice is a listed notice, or its kind, the kind and time of the record it reports '
+        + `on, and its dueBy: ${describeError(error)}`,
       cause: error,
     });
   }
+}
+
+/** Only the fields that name a notice; a listed notice's `record.state` and `textVersion` are left out. */
+function noticeIdentityOf(notice: NotificationNoticeIdentity): NotificationNoticeIdentity {
+  return {
+    kind: notice.kind,
+    record: { kind: notice.record.kind, at: notice.record.at },
+    dueBy: notice.dueBy,
+  };
 }
 
 /** Why a reminder's input breaks the RFC bounds, or `undefined`. */
@@ -3353,7 +3358,8 @@ export function createNotificationConformanceRuntime(
         return backend.listNotices();
       },
       async recordShown(request) {
-        const notice = recordNoticeInputOf(request);
+        // A listed notice passed as is reaches the backend by its name only.
+        const notice = noticeIdentityOf(recordNoticeInputOf(request));
         await capabilitiesOf();
         await backend.recordNotice({ ...notice, channel: 'in-game' });
       },

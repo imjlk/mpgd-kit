@@ -1766,8 +1766,8 @@
                 "readOnly": true
               },
               "input": {
-                "$ref": "#/components/schemas/NotificationNoticeIdentity",
-                "description": "The notice's kind, the kind and time of the record it reports on, and its `dueBy`.",
+                "$ref": "#/components/schemas/RecordNotificationNoticeInput",
+                "description": "A listed notice, or its kind, the kind and time of the record it reports on, and its `dueBy`.",
                 "readOnly": true
               },
               "throws": {
@@ -2221,6 +2221,70 @@
         "additionalProperties": false,
         "description": "Local reminders are always inexact, so the capability carries no timing."
       },
+      "NotificationNotice": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/NotificationNoticeKind",
+            "readOnly": true
+          },
+          "record": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "oneOf": [
+                  {
+                    "const": "advertising"
+                  },
+                  {
+                    "const": "night"
+                  }
+                ],
+                "readOnly": true
+              },
+              "state": {
+                "oneOf": [
+                  {
+                    "const": "granted"
+                  },
+                  {
+                    "const": "withdrawn"
+                  }
+                ],
+                "readOnly": true
+              },
+              "at": {
+                "$ref": "#/components/schemas/IsoDateTime",
+                "readOnly": true
+              },
+              "textVersion": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "kind",
+              "state",
+              "at"
+            ],
+            "additionalProperties": false,
+            "description": "The advertising or night record the notice reports on, with its date.",
+            "readOnly": true
+          },
+          "dueBy": {
+            "type": "string",
+            "format": "date",
+            "description": "The last Asia/Seoul calendar date the notice may be given, `YYYY-MM-DD`.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "kind",
+          "record",
+          "dueBy"
+        ],
+        "additionalProperties": false
+      },
       "NotificationNoticeIdentity": {
         "type": "object",
         "properties": {
@@ -2268,7 +2332,7 @@
           "dueBy"
         ],
         "additionalProperties": false,
-        "description": "What names one notice: its kind, the record it reports on (that record's\nkind and time), and its `dueBy`. A listed notice carries these fields, and\n`notices.recordShown` takes exactly them."
+        "description": "What names one notice: its kind, the record it reports on (that record's\nkind and time), and its `dueBy`. A listed notice carries these fields, and\n`notices.recordShown` takes the listed notice as is or exactly them."
       },
       "NotificationNoticeKind": {
         "oneOf": [
@@ -2810,6 +2874,17 @@
             }
           ]
         }
+      },
+      "RecordNotificationNoticeInput": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/NotificationNotice"
+          },
+          {
+            "$ref": "#/components/schemas/NotificationNoticeIdentity"
+          }
+        ],
+        "description": "The notice `notices.recordShown` records: a notice as `notices.list()` gave\nit, or exactly its name (its kind, the kind and time of the record it\nreports on, and its `dueBy`)."
       }
     }
   }
