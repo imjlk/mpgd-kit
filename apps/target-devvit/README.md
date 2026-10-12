@@ -104,9 +104,13 @@ looks like this:
 
 The command needs `mise` on the MCP client's `PATH`; a client launched from the
 Dock may need mise's absolute path. Without mise, register
-`npx -y @devvit/mcp@0.0.27` from a shell whose default Node is 22. If
-`devvit_search` fails with a native-module error after a start on another
-Node, delete that npx directory and start the server again:
+`npx -y @devvit/mcp@0.0.27` only if the client's `PATH` resolves `npx` from
+Node 22, because the client's environment, not the shell you register from,
+picks the Node. Running `codex mcp add devvit` again replaces an older
+registration. The first start may download Node 22 and install the server's
+dependencies, which can outlast a client's startup timeout; start it again if
+it does. If `devvit_search` fails with a native-module error after a start on
+another Node, delete that npx directory and start the server again:
 
 ```sh
 rm -rf "$(npm config get cache)/_npx/fb3672217c090d4a"

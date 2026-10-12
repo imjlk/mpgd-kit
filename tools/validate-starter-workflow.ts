@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 
 import {
@@ -128,6 +129,7 @@ const expectedDevvitVersion = '0.14.1';
 // mise from loading project or global config, so the server gets no
 // mise-managed secrets and does not depend on the repository toolchain. Drop
 // the Node pin once @devvit/mcp depends on better-sqlite3 >=12.10.
+const devvitMcpPackage = '@devvit/mcp@0.0.27';
 const devvitMcpLaunch = [
   'mise',
   '--no-config',
@@ -136,7 +138,7 @@ const devvitMcpLaunch = [
   '--',
   'npx',
   '-y',
-  '@devvit/mcp@0.0.27',
+  devvitMcpPackage,
 ] as const;
 const devvitMcpLaunchDocs = [
   'AGENTS.md',
@@ -898,14 +900,23 @@ function validateMcpConfig(path: string): void {
   assertMcpServerCommand(servers['ttsc-graph'], '@ttsc/graph', `${path}: ttsc-graph`);
   assertExactMcpLaunch(servers.devvit, devvitMcpLaunch, `${path}: devvit`);
 
-  // Registration commands people copy into global configs must match .mcp.json.
+  // Registration commands people copy into global configs must match .mcp.json
+  // as a whole line, not as a prefix of a longer or different command.
+  const registration = `codex mcp add devvit -- ${devvitMcpLaunch.join(' ')}`;
   for (const doc of devvitMcpLaunchDocs) {
-    assertIncludesText(
-      readText(doc),
-      devvitMcpLaunch.join(' '),
-      `${doc}: Devvit MCP registration command`,
-    );
+    const lines = readText(doc).split('\n').map((line) => line.trim());
+    if (!lines.includes(registration)) {
+      failures.push(`${doc}: Devvit MCP registration must be the line: ${registration}`);
+    }
   }
+
+  // The repair step deletes the npx directory npx derives from the package spec.
+  const npxDirectory = createHash('sha512').update(devvitMcpPackage).digest('hex').slice(0, 16);
+  assertIncludesText(
+    readText('apps/target-devvit/README.md'),
+    `_npx/${npxDirectory}`,
+    'apps/target-devvit/README.md: Devvit MCP npx directory',
+  );
 }
 
 function validatePhaserTemplateAITPolyfill(): void {
@@ -2350,9 +2361,10 @@ function assertExactMcpLaunch(
   }
 
   const actual = [server.command, ...(Array.isArray(server.args) ? server.args : [])];
+  const extraKeys = Object.keys(server).filter((key) => key !== 'command' && key !== 'args');
 
-  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-    failures.push(`${label} must launch exactly: ${expected.join(' ')}.`);
+  if (JSON.stringify(actual) !== JSON.stringify(expected) || extraKeys.length > 0) {
+    failures.push(`${label} must launch exactly: ${expected.join(' ')} (no other keys).`);
   }
 }
 
