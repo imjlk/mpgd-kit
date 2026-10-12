@@ -23,6 +23,8 @@ const notificationTopics = new Set<NotificationTopic>([
 const defaultClaimLeaseMs = 5 * 60 * 1_000;
 const maxCompletionAttempts = 3;
 const maxNotificationTemplateDataEntries = 128;
+/** Caps identifiers, including a deep link after normalization so it normalizes to itself. */
+const maxIdentifierLength = 2_048;
 
 export type NotificationTemplateValue = string | number | boolean;
 export type NotificationTemplateData = Readonly<Record<string, NotificationTemplateValue>>;
@@ -56,7 +58,15 @@ export class NotificationDeliveryNotSentError extends Error {
 }
 
 export interface NotificationDeepLinkPolicy {
-  /** Exact HTTP(S) origins permitted for absolute links. Root-relative links are always allowed. */
+  /**
+   * Exact HTTP(S) origins permitted for absolute links. Root-relative links are
+   * allowed when they stay a path on the game origin, so one that names a host
+   * after a backslash (`/\host`) is rejected. Either kind is rejected when its
+   * path would begin with an empty segment after dot segments collapse
+   * (`/.//host`), or after it is percent-decoded once and parsed again
+   * (`/%2F/host`, `/%5Chost`, `/%09/host`, `/.%2F/host`), or when it is longer
+   * than 2,048 characters after normalization.
+   */
   readonly allowedOrigins?: readonly string[];
 }
 
@@ -557,13 +567,27 @@ function normalizeDeepLink(
 
   if (deepLink.startsWith('/') && !deepLink.startsWith('//')) {
     const baseUrl = new URL('https://mpgd.invalid');
-    const parsed = new URL(deepLink, baseUrl);
+    let parsed: URL | undefined;
 
-    if (parsed.origin !== baseUrl.origin) {
+    // A backslash after the leading slash parses as an authority (`/\host`),
+    // so the link names a host, not a path on the game origin.
+    if (!deepLink.startsWith('/\\')) {
+      try {
+        parsed = new URL(deepLink, baseUrl);
+      } catch {
+        // Rejected below.
+      }
+    }
+
+    if (
+      parsed === undefined
+      || parsed.origin !== baseUrl.origin
+      || hasNetworkPathPrefix(parsed.pathname)
+    ) {
       throw new Error('deepLink must stay on the configured game origin.');
     }
 
-    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    return requireNormalizedDeepLinkLength(`${parsed.pathname}${parsed.search}${parsed.hash}`);
   }
 
   let parsed: URL;
@@ -586,7 +610,44 @@ function normalizeDeepLink(
     throw new Error('deepLink origin is not allowed.');
   }
 
-  return parsed.toString();
+  if (hasNetworkPathPrefix(parsed.pathname)) {
+    throw new Error(
+      'deepLink path must not begin with an empty segment, even after percent-decoding.',
+    );
+  }
+
+  return requireNormalizedDeepLinkLength(parsed.toString());
+}
+
+/**
+ * Whether a normalized path could be read as a network-path reference to
+ * another host. Dot segments (also percent-encoded) can collapse `/.//host`
+ * into `//host`. A consumer that percent-decodes the path once and parses it
+ * again can reach the same shape from `/%2F/host`, `/%5Chost`, `/%09/host`,
+ * or `/.%2F/host`: URL parsing drops tabs and newlines, reads a backslash as
+ * a slash, and removes dot segments, so the decoded path is checked after
+ * the same steps.
+ */
+function hasNetworkPathPrefix(pathname: string): boolean {
+  const decoded = pathname
+    .replace(/%([0-7][0-9a-f])/giu, (_escape, hex: string) =>
+      String.fromCharCode(Number.parseInt(hex, 16)),
+    )
+    .replace(/[\t\n\r]/gu, '');
+
+  return /^[/\\]{2}/u.test(decoded)
+    || new URL(decoded, 'https://mpgd.invalid').pathname.startsWith('//');
+}
+
+/** Normalization can grow a link; keep it within the input cap so it normalizes to itself. */
+function requireNormalizedDeepLinkLength(deepLink: string): string {
+  if (deepLink.length > maxIdentifierLength) {
+    throw new Error(
+      `deepLink must contain at most ${String(maxIdentifierLength)} characters after normalization.`,
+    );
+  }
+
+  return deepLink;
 }
 
 function normalizeAllowedDeepLinkOrigins(
@@ -680,7 +741,7 @@ function normalizeIdentifier(input: unknown, label: string): string {
   if (
     typeof input !== 'string'
     || input.length === 0
-    || input.length > 2_048
+    || input.length > maxIdentifierLength
     || input.trim() !== input
   ) {
     throw new Error(`${label} must be a non-empty, trimmed string.`);
