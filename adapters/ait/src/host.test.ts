@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { rootRelativeRouteVectors } from '@mpgd/platform/route-vectors';
+
 import type { BridgeRequest } from '@mpgd/bridge';
 import type { Entitlement } from '@mpgd/platform';
 
@@ -5370,8 +5372,8 @@ describe('AIT sharing', () => {
     const dependencies = { appName: 'ttokdoku', getTossShareLink, share: async () => {} };
 
     for (const deepLink of [
-      // Root-relative escapes and other links outside the contract come from
-      // share-link.conformance.test.ts. The same rules apply to the path of an absolute link.
+      // Root-relative escapes come from the shared route vectors below.
+      // The same rules apply to the path of an absolute link.
       'https://game.example//evil.example/daily',
       'https://game.example/.//evil.example/daily',
       'https://game.example/%2F%2Fevil.example/daily',
@@ -5390,6 +5392,34 @@ describe('AIT sharing', () => {
     }
 
     expect(getTossShareLink).not.toHaveBeenCalled();
+  });
+
+  it('follows the shared route vectors for root-relative share links', async () => {
+    const paths: string[] = [];
+    const dependencies = {
+      appName: 'ttokdoku',
+      getTossShareLink: async (path: string) => {
+        paths.push(path);
+        return 'https://toss.im/_ul/daily';
+      },
+      share: async () => {},
+    };
+
+    for (const deepLink of rootRelativeRouteVectors.rejected) {
+      await expect(shareIntent({ text: 'Unsafe', deepLink }, dependencies), JSON.stringify(deepLink))
+        .resolves.toEqual({ status: 'unavailable' });
+    }
+
+    expect(paths).toEqual([]);
+
+    for (const [deepLink] of rootRelativeRouteVectors.normalized) {
+      await expect(shareIntent({ text: 'Share', deepLink }, dependencies), deepLink)
+        .resolves.toEqual({ status: 'shared', completion: 'presented' });
+    }
+
+    expect(paths).toEqual(
+      rootRelativeRouteVectors.normalized.map(([, route]) => `intoss://ttokdoku${route}`),
+    );
   });
 
   it('shares app links whose path stays in the mini-app', async () => {

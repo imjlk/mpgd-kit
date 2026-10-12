@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { rootRelativeRouteVectors } from '@mpgd/platform/route-vectors';
 
 import {
   browserMockPurchaseEvidenceSchema,
@@ -8,7 +10,6 @@ import {
 
 afterEach(() => {
   Reflect.deleteProperty(globalThis, 'localStorage');
-  vi.unstubAllGlobals();
 });
 
 describe('adapter-browser', () => {
@@ -104,69 +105,75 @@ describe('adapter-browser', () => {
     ]);
   });
 
-  it('copies a root-relative link resolved against the document base and keeps Web Share relative', async () => {
-    vi.stubGlobal('document', { baseURI: 'https://game.example/play/index.html' });
-    const lifecycle = { onPause: () => () => {}, onResume: () => () => {} };
+  it('shares normalized root-relative routes and refuses links that could name another host', async () => {
     const shares: ShareData[] = [];
-    const clipboard: string[] = [];
-    const shareIntent = {
-      kind: 'friend-challenge',
-      title: 'Daily challenge',
-      text: 'Can you beat me?',
-      deepLink: '/levels/../daily?challengeToken=signed-token',
-    } as const;
-    const shareGateway = createBrowserPlatformGateway({
-      lifecycle,
+    const gateway = createBrowserPlatformGateway({
       async share(data) {
         shares.push(data);
       },
     });
-    const fallbackGateway = createBrowserPlatformGateway({
-      lifecycle,
-      async share() {
-        throw new Error('Web Share failed');
-      },
-      async writeClipboardText(text) {
-        clipboard.push(text);
-      },
-    });
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const intent = { kind: 'invite', title: 'Join', text: 'Join me' } as const;
 
-    try {
-      await expect(shareGateway.sharing?.share?.(shareIntent)).resolves.toEqual({ status: 'shared' });
-      await expect(fallbackGateway.sharing?.share?.(shareIntent)).resolves.toEqual({ status: 'shared' });
-    } finally {
-      warn.mockRestore();
+    for (const deepLink of [
+      ...rootRelativeRouteVectors.rejected,
+      '\\\\evil.example/daily',
+      'javascript:alert(1)',
+      'data:text/html,hi',
+      'intoss://game/daily',
+      'https://game.example/daily\n',
+    ]) {
+      await expect(gateway.sharing?.share?.({ ...intent, deepLink }), JSON.stringify(deepLink))
+        .resolves.toEqual({ status: 'unavailable' });
     }
 
-    // Web Share resolves the route against the document itself.
-    expect(shares.map((data) => data.url)).toEqual(['/daily?challengeToken=signed-token']);
-    expect(clipboard).toEqual([
-      'Can you beat me?\nhttps://game.example/daily?challengeToken=signed-token',
-    ]);
+    expect(shares).toEqual([]);
+
+    for (const [deepLink, route] of rootRelativeRouteVectors.normalized) {
+      await expect(gateway.sharing?.share?.({ ...intent, deepLink }), deepLink)
+        .resolves.toEqual({ status: 'shared' });
+      expect(shares.at(-1)?.url, deepLink).toBe(route);
+    }
   });
 
-  it('copies a root-relative link only with an HTTP(S) page to resolve it against', async () => {
-    const clipboard: string[] = [];
-    const intent = { kind: 'invite', title: 'Join', text: 'Join me', deepLink: '/daily' } as const;
-    const writeClipboardText = async (text: string) => {
-      clipboard.push(text);
-    };
+  it('refuses share links outside the ShareIntent contract', async () => {
+    const shares: ShareData[] = [];
+    const gateway = createBrowserPlatformGateway({
+      locationHref: 'https://game.example/play/index.html?from=menu',
+      async share(data) {
+        shares.push(data);
+      },
+    });
+    const intent = { kind: 'invite', title: 'Join', text: 'Join me' } as const;
 
-    await expect(createBrowserPlatformGateway({
-      locationHref: 'https://game.example/play/',
-      writeClipboardText,
-    }).sharing?.share?.(intent)).resolves.toEqual({ status: 'shared' });
-    expect(clipboard).toEqual(['Join me\nhttps://game.example/daily']);
-
-    for (const locationHref of [undefined, 'file:///game/index.html', 'about:blank']) {
-      await expect(createBrowserPlatformGateway({
-        ...(locationHref === undefined ? {} : { locationHref }),
-        writeClipboardText,
-      }).sharing?.share?.(intent), String(locationHref)).resolves.toEqual({ status: 'unavailable' });
+    for (const deepLink of [
+      // Page-relative or empty links, which the other targets refuse too.
+      '',
+      ' /daily',
+      './daily',
+      'daily?x=1',
+      '?challengeToken=x',
+      '#top',
+      // Absolute links that are not spelled out as HTTP(S), or that could name another host.
+      'https:/daily',
+      'https:evil.example/x',
+      'https://user:pw@game.example/daily',
+      'https://game.example//evil.example/x',
+      'https://game.example/.//evil.example/x',
+      'https://game.example/%2F%2Fevil.example/x',
+    ]) {
+      await expect(gateway.sharing?.share?.({ ...intent, deepLink }), JSON.stringify(deepLink))
+        .resolves.toEqual({ status: 'unavailable' });
     }
 
-    expect(clipboard).toHaveLength(1);
+    await expect(gateway.sharing?.share?.({ ...intent, text: 1 } as never))
+      .resolves.toEqual({ status: 'unavailable' });
+    await expect(gateway.sharing?.share?.(null as never))
+      .resolves.toEqual({ status: 'unavailable' });
+    expect(shares).toEqual([]);
+
+    await expect(gateway.sharing?.share?.({ ...intent, deepLink: 'https://other.example/page' }))
+      .resolves.toEqual({ status: 'shared' });
+    expect(shares.at(-1)?.url).toBe('https://other.example/page');
   });
 
   it('ignores malformed nested inbound share data and reports notifications unsupported', async () => {
