@@ -105,7 +105,7 @@ describe('adapter-browser', () => {
     ]);
   });
 
-  it('shares only links that stay on the page origin or use HTTP(S)', async () => {
+  it('shares normalized root-relative routes and refuses links that could name another host', async () => {
     const shares: ShareData[] = [];
     const gateway = createBrowserPlatformGateway({
       async share(data) {

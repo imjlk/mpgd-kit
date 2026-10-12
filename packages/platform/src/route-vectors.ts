@@ -59,8 +59,16 @@ export const rootRelativeRouteVectors: RootRelativeRouteVectors = {
     '/levels/..%2F%2Fevil.example/daily',
     // A double-encoded dot segment resolves after one decode.
     '/%252e%252e//evil.example/daily',
-    // A decoded `?` or `#` stays in the path a client routes, so dot segments after it still collapse.
+    // A client may keep a decoded `?` or `#` in the path, or end the path at any of them.
     '/%3F%2F..%2F%2Fevil.example/daily',
     '/%23%2F..%2F%2Fevil.example/daily',
+    '/a%3Fb%23%2F..%2F%2Fevil.example/daily',
+    '/.%2F%2Fevil.example%3F%2F..%2F..',
+    '/.%2F%2Fevil.example%23%2F..%2F..',
+    '/.%2F%2Fevil.example%3F%2F..%2F..%3F%2F..%2F..',
+    '/a%2F..%2F%2Fevil.example%3F%2F..%2F..%2F..',
+    '/a%23%2F..%2F%2Fevil.example%3F%2F..%2F..',
+    '/a%3F%2F..%2F%2Fevil.example%23%2F..%2F..',
+    '/a%3F%2F..%2F%2Fevil.example%3F%2F..%2F..',
   ],
 };

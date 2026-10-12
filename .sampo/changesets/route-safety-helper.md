@@ -1,7 +1,8 @@
 ---
 npm/@mpgd/platform: minor
 npm/@mpgd/adapter-ait: minor
-npm/@mpgd/adapter-browser: patch
+npm/@mpgd/adapter-browser: minor
+npm/@mpgd/game-services: patch
 ---
 
 `@mpgd/platform/routes` exports one route-safety rule for links a game hands
@@ -13,16 +14,18 @@ and `rejected` vectors that every package mapping such links runs:
   client could read the link as another host: a second slash or a backslash
   after the leading slash, a control character, or a path that begins with an
   empty segment after dot segments collapse. The same holds when the path is
-  percent-decoded once and parsed again as a path, with a decoded `?` or `#`
-  kept in it.
+  percent-decoded once and parsed again, with the path ending at any decoded
+  `?` or `#` or keeping them all. A path with more than 16 decoded `?` and `#`
+  is refused.
 - `hasNetworkPathPrefix(pathname)` and `hasRouteControlCharacter(value)` are the
   checks it builds on. `hasNetworkPathPrefix` answers `true` for anything that
   is not a URL path.
 
 Notification delivery in `@mpgd/game-services` and Apps in Toss sharing in
-`@mpgd/adapter-ait` use this rule instead of their own copies. They accept the
-same links as before, except that they now also refuse a path that hides
-`..//host` behind an encoded `?` or `#` (`/%3F%2F..%2F%2Fhost`).
+`@mpgd/adapter-ait` use this rule instead of their own copies. They now also
+refuse a path that reaches another host when a decoded `?` or `#` stays in the
+path instead of ending it, such as `/%3F%2F..%2F%2Fhost`, and a path with more
+than 16 decoded `?` and `#`.
 
 Web sharing in `@mpgd/adapter-browser` now follows the `ShareIntent.deepLink`
 contract:
@@ -35,8 +38,8 @@ contract:
   (`./daily`, `?x=1`), `javascript:`, `data:`, and `intoss:` links, and a
   `text` or `deepLink` that is not a string. Before, it passed any string on.
 
-The Apps in Toss sandbox bridge reads share requests exactly as the host
-bridge does, through the new `readAitShareRequest`:
+The Apps in Toss sandbox bridge now reads share requests exactly as the host
+bridge does:
 
 - It answers `unavailable` for a request the host refuses, and
   `{ status: 'shared', completion: 'presented' }` otherwise. Before, it
