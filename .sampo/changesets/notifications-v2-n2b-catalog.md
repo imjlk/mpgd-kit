@@ -15,5 +15,6 @@ provider that sends a host template or its mapping's own text; a missing
 variants, an unknown variant, a blank title or body, and any other
 placeholder. These replace the rule that the notice topic's own text use only
 `{{consentDate}}`, and the free-form text rule no longer asks the notice topic
-for copy. Breaking for 0.x: a catalog that declared a notice topic with copy
-moves that text into `notices.copy`, one entry per variant.
+for copy. A catalog that gave its notice topic its own copy moves that text
+into `notices.copy`, one entry per variant; no released version had notice
+topics, since they arrive in this same release.
