@@ -50,9 +50,19 @@ request until the backend reports `finalization: 'completed'`, `none` marks
 `PurchaseVerificationApi.getPurchaseLedgerStatus` (C2). A second `purchase()`
 for a product whose attempt is still `launched` or `pending` fails with
 `IN_PROGRESS`; a replayed key answers from the journal and never reopens the
-store UI; `OUTCOME_UNKNOWN` and `ALREADY_OWNED` keep an attempt open until the
-available purchases decide. Transport failures on verify or finish keep the
-state, are reported as `failure` events, and are retried on the next pass.
+store UI, and a key reused for another product or source rejects;
+`OUTCOME_UNKNOWN` and `ALREADY_OWNED` keep an attempt open until the
+available purchases decide. A `requested` record left behind by a crash
+before the store answer was journaled, and a `launched` record with no store
+purchase after `staleLaunchedAfterMs` (24 hours by default; pass `Infinity`
+to keep the RFC rule without expiry), end as `failed` with the
+`OUTCOME_UNKNOWN` class so the product is not serialized behind them; a
+purchase the store reports later is still journaled under its derived key.
+An error event never ends a record that already holds a store purchase or a
+saved verify request. Transport failures on verify or finish keep the
+state, are reported as `failure` events, and are retried on the next pass;
+`finishTransaction` must be idempotent per transaction, since a crash between
+a successful finish and its journal write calls it again.
 Nothing is granted from a provider result: an adapter-settled purchase and a
 wallet spend (`credit-wallet.spend.v1`, no `settlement`) are verified like any
 other, and `finishTransaction` is only ever called for a `granted` or
@@ -65,7 +75,11 @@ returns a `commerce-purchase` record while its `state` is not terminal
 `@mpgd/game-services/monetization-operation-store` applies the rule for every
 kind), terminal records stay addressable by `read`, and the optional
 `listGranted(playerId)` returns `granted`, `finishing`, and `finished`
-records within the retention window for the revocation pass. A
+records within the retention window. Implement it: the revocation pass reads
+it, and so does the transaction match after a restart, so a purchase the
+store still lists for a finished record is recognized instead of being
+verified again under a derived key (the backend's platform-evidence unique
+index remains the backstop when it is not). A
 `createGameServicesClient` without an `operationStore` keeps the v2 journal in
 memory for the session only; duplicates are then caught by the backend
 ledger, not by the client. The deprecated v1 drivers

@@ -13,3 +13,11 @@ the fourteen vectors through its `createCommerceReconciler`. The reference
 run an adaptive vector's expectations are derived from keeps using the
 reference reconciler, so a derived expectation never depends on the runtime
 under test.
+
+`createDerivedPurchaseIdempotencyKey` percent-encodes the Apps in Toss order
+id (`apps-in-toss:purchase:<encodeURIComponent(orderId)>`), which is the
+byte-for-byte form of the v1 `createAppsInTossPurchaseIdempotencyKey` helper
+in `@mpgd/game-services`; ids without reserved characters are unchanged.
+`CommerceProvider.finishTransaction` documents that it is called again after
+a crash between a successful finish and its journal write, so it must be
+idempotent per transaction.

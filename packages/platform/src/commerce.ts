@@ -567,8 +567,9 @@ export interface DerivedPurchaseIdempotencyKeyInput {
  * the same key: `store:<storeId>:<transactionId>` by default, with each
  * component percent-encoded (`encodeURIComponent`) so ids containing `:`
  * cannot collide, and the forms v1 ledgers already use for Google Play
- * (`play-token-sha256:<hex>`) and Apps in Toss (`apps-in-toss:purchase:<orderId>`),
- * which stay byte-identical.
+ * (`play-token-sha256:<hex>`) and Apps in Toss
+ * (`apps-in-toss:purchase:<encodeURIComponent(orderId)>`), which stay
+ * byte-identical.
  */
 export async function createDerivedPurchaseIdempotencyKey(
   input: DerivedPurchaseIdempotencyKeyInput,
@@ -585,7 +586,8 @@ export async function createDerivedPurchaseIdempotencyKey(
     throw new TypeError('Derived purchase keys require a transaction id.');
   }
   if (store === 'apps-in-toss') {
-    return `apps-in-toss:purchase:${transactionId}`;
+    // Byte for byte the v1 `createAppsInTossPurchaseIdempotencyKey` form.
+    return `apps-in-toss:purchase:${encodeURIComponent(transactionId)}`;
   }
   return `store:${encodeURIComponent(store)}:${encodeURIComponent(transactionId)}`;
 }

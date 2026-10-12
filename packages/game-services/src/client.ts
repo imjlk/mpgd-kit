@@ -282,8 +282,14 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
       commerceReconciler.subscribe(input.onCommerceEvent);
     }
   }
-  /** Keys whose backend verdict was tracked by the transition observer, per purchase call. */
+  /** Keys of purchase calls in flight, and those whose backend verdict the observer tracked meanwhile. */
+  const inFlightKeys = new Set<string>();
   const trackedVerdicts = new Set<string>();
+  const markTracked = (key: string): void => {
+    if (inFlightKeys.has(key)) {
+      trackedVerdicts.add(key);
+    }
+  };
   if (commerceReconciler !== undefined && input.commerceReconciler === undefined) {
     // Verdicts arrive as events, inside or after a purchase call; each is tracked once.
     commerceReconciler.subscribe((event) => {
@@ -293,7 +299,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
       const { record } = event;
       const productId = record.logicalId;
       if (event.previous === 'verifying' && record.state === 'granted') {
-        trackedVerdicts.add(record.idempotencyKey);
+        markTracked(record.idempotencyKey);
         analytics.track({
           name: 'purchase_granted',
           properties: {
@@ -304,13 +310,13 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
           },
         }).catch(() => {});
       } else if (event.previous === 'verifying' && record.state === 'rejected') {
-        trackedVerdicts.add(record.idempotencyKey);
+        markTracked(record.idempotencyKey);
         analytics.track({
           name: 'purchase_rejected',
           properties: { productId, status: 'rejected', reason: record.response?.reason },
         }).catch(() => {});
       } else if (event.previous === 'verifying' && record.state === 'pending') {
-        trackedVerdicts.add(record.idempotencyKey);
+        markTracked(record.idempotencyKey);
         analytics.track({
           name: 'purchase_pending',
           properties: {
@@ -320,7 +326,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
           },
         }).catch(() => {});
       } else if (record.state === 'cancelled' || record.state === 'failed') {
-        trackedVerdicts.add(record.idempotencyKey);
+        markTracked(record.idempotencyKey);
         analytics.track({
           name: 'purchase_rejected',
           properties: { productId, status: record.state, reason: record.error?.code },
@@ -337,12 +343,15 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
         return observeGameServicesOperation('purchase', options, async (progress): Promise<GameServicesPurchaseResult> => {
           const key = purchaseInput.idempotencyKey;
           trackedVerdicts.delete(key);
+          inFlightKeys.add(key);
           if (!reconciler.started) {
             await reconciler.start();
           }
           // The store phase ends when the journal records what the store answered;
           // the reconcile pass inside requestPurchase then reports the server phases.
           let platformReported = false;
+          let serverRequested = false;
+          let serverResulted = false;
           const reportPlatform = (status: PurchaseResult['status']): void => {
             if (!platformReported) {
               platformReported = true;
@@ -364,8 +373,14 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
               }
             } else if (event.type === 'verify-requested') {
               reportPlatform('completed');
-              progress.serverRequested();
-            } else {
+              // A server-owned finish may re-read finalization in the same
+              // pass; the server phase is reported once per call.
+              if (!serverRequested) {
+                serverRequested = true;
+                progress.serverRequested();
+              }
+            } else if (!serverResulted) {
+              serverResulted = true;
               progress.serverResult(event.response.verified);
             }
           });
@@ -416,10 +431,11 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
                 },
               });
             }
-            trackedVerdicts.delete(key);
             return result;
           } finally {
             unsubscribe();
+            inFlightKeys.delete(key);
+            trackedVerdicts.delete(key);
           }
         });
       }

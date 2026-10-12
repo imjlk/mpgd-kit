@@ -182,6 +182,17 @@ export function createRecoverableMonetizationClient(
     ? undefined
     : createGameServicesClient({ ...input, operationStore: store });
   const commerceReconciler = commerceClient?.commerceReconciler;
+  // The per-operation clients below resume v1 records only: they see a gateway
+  // without the v2 provider, so they never build a second reconciler over the
+  // journal or reopen the store UI for a platform result already recorded.
+  const {
+    commerceReconciler: _sharedReconciler,
+    operationStore: _journal,
+    onCommerceEvent: _onCommerceEvent,
+    commerceProducts: _commerceProducts,
+    ...legacyClientInput
+  } = input;
+  const { commerceV2: _commerceV2, ...legacyGateway } = input.gateway;
 
   async function serializeOperation<T>(key: string, task: () => Promise<T>): Promise<T> {
     const previous = inFlight.get(key) ?? Promise.resolve();
@@ -347,10 +358,10 @@ export function createRecoverableMonetizationClient(
       return pendingPurchase();
     }
     const client = createGameServicesClient({
-      ...input,
+      ...legacyClientInput,
       requestNow: () => record.platformCompletedAt ?? observedAt(),
       gateway: {
-        ...input.gateway,
+        ...legacyGateway,
         commerce: {
           ...input.gateway.commerce,
           async purchase(request) {
@@ -502,10 +513,10 @@ export function createRecoverableMonetizationClient(
       return pendingReward();
     }
     const client = createGameServicesClient({
-      ...input,
+      ...legacyClientInput,
       requestNow: () => record.platformCompletedAt ?? observedAt(),
       gateway: {
-        ...input.gateway,
+        ...legacyGateway,
         ads: {
           ...input.gateway.ads,
           async showRewarded(request) {

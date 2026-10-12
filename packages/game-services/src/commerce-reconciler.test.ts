@@ -1704,4 +1704,397 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   );
 }
 
+// Review fixes.
+
+// 24. A leftover v1 purchase record is resumed by the v1 path even when the gateway has a v2 provider.
+{
+  const provider = createFakeProvider();
+  const store = createInMemoryMonetizationOperationStore();
+  const legacyRequests: VerifyPurchaseRequest[] = [];
+  await store.reserve({
+    key: JSON.stringify(['android', 'purchase', 'legacy-1']),
+    kind: 'purchase',
+    playerId: 'player-1',
+    target: 'android',
+    deploymentTarget: 'android',
+    revision: 0,
+    input: { productId: 'gems_small', source: 'shop', idempotencyKey: 'legacy-1' },
+    platform: {
+      status: 'completed',
+      transactionId: 'legacy-tx-1',
+      entitlementIds: [],
+      evidence: { schema: 'fixture.fake-store.v1', payload: { token: 'legacy-token' } },
+    },
+    platformCompletedAt: '2026-10-01T00:00:00.000Z',
+  });
+  const recovery = createRecoverableMonetizationClient({
+    gateway: createGateway(provider),
+    backend: createBackendApi({
+      async verifyPurchase(request) {
+        legacyRequests.push(request);
+        return { verified: true, alreadyProcessed: false, ledgerEntryId: 'ledger-legacy' };
+      },
+    }),
+    playerId: 'player-1',
+    target: 'android',
+    operationStore: store,
+  });
+  const summaries = await recovery.reconcile();
+  assertEqual(
+    summaries.map((summary) => `${summary.kind}:${summary.idempotencyKey}:${summary.status}`),
+    ['purchase:legacy-1:granted'],
+    'the v1 record is resumed and granted',
+  );
+  assertEqual(
+    legacyRequests.map((request) => request.platformTransactionId),
+    ['legacy-tx-1'],
+    'the recorded platform result is verified',
+  );
+  assertEqual(
+    provider.purchaseUiOpened,
+    0,
+    'the v2 provider never opened the store UI for a v1 record',
+  );
+  assertEqual(
+    (await store.listRecoverable('player-1')).length,
+    0,
+    'no v2 record was created for the v1 key',
+  );
+  await recovery.commerceReconciler?.stop();
+}
+
+// 25. Stale attempts: a requested record without an in-flight call and an expired launched record end as failed.
+{
+  const store = createInMemoryMonetizationOperationStore();
+  const h = createHarness({ store });
+  await h.reconciler.start();
+  await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-25',
+    source: 'shop',
+  });
+  await h.reconciler.stop();
+  const launched = (await store.read(
+    createCommercePurchaseOperationKey('android', 'op-25'),
+  )) as CommercePurchaseOperationRecord;
+  // Seed what a crash between the reservation and the launched write leaves behind.
+  await store.reserve({
+    ...launched,
+    key: createCommercePurchaseOperationKey('android', 'op-25b'),
+    idempotencyKey: 'op-25b',
+    state: 'requested',
+    revision: 0,
+  });
+  let clock = '2026-10-02T00:00:00.000Z';
+  const later = createHarness({ store, overrides: { now: () => clock } });
+  await later.reconciler.start();
+  assertEqual(
+    later.history('op-25b'),
+    ['failed'],
+    'a requested record with no in-flight call is stale and ends',
+  );
+  assertEqual(
+    (await later.reconciler.read('op-25b'))?.error?.code,
+    'OUTCOME_UNKNOWN',
+    'with the OUTCOME_UNKNOWN class',
+  );
+  const blocked = await later.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-25c',
+    source: 'shop',
+  });
+  assertEqual(
+    blocked.outcome === 'failed' && blocked.error.code,
+    'IN_PROGRESS',
+    'a fresh launched attempt still serializes the product',
+  );
+  clock = '2026-10-03T00:00:01.000Z';
+  await later.reconciler.reconcile();
+  assertEqual(
+    later.history('op-25'),
+    ['failed'],
+    'a launched attempt with no store purchase expires after the window',
+  );
+  const allowed = await later.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-25d',
+    source: 'shop',
+  });
+  assertEqual(allowed.outcome, 'launched', 'the product is purchasable again');
+  await later.reconciler.stop();
+  // A purchase the store reports after the expiry is still journaled under its derived key.
+  const resumed = createHarness({ store, overrides: { now: () => clock } });
+  resumed.backend.queue({ status: 'granted', ledgerEntryId: 'le-25' });
+  await resumed.reconciler.start();
+  await resumed.reconciler.stop();
+  // Infinity keeps the RFC rule without expiry.
+  const forever = createHarness({
+    overrides: {
+      staleLaunchedAfterMs: Number.POSITIVE_INFINITY,
+      now: () => '2030-01-01T00:00:00.000Z',
+    },
+  });
+  await forever.reconciler.start();
+  await forever.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-25e',
+    source: 'shop',
+  });
+  await forever.reconciler.reconcile();
+  assertEqual(forever.history('op-25e'), ['requested', 'launched'], 'no expiry');
+  await forever.reconciler.stop();
+}
+
+// 26. A reused key must name the same product and source.
+{
+  const h = createHarness();
+  await h.reconciler.start();
+  await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-26',
+    source: 'shop',
+  });
+  await assertRejects(
+    () =>
+      h.reconciler.requestPurchase({
+        logicalId: 'remove_ads',
+        idempotencyKey: 'op-26',
+        source: 'shop',
+      }),
+    /bound to another product or source/u,
+    'another product under the same key',
+  );
+  await assertRejects(
+    () =>
+      h.reconciler.requestPurchase({
+        logicalId: 'gems_small',
+        idempotencyKey: 'op-26',
+        source: 'event',
+      }),
+    /bound to another product or source/u,
+    'another source under the same key',
+  );
+  assertEqual(h.provider.purchaseUiOpened, 1, 'no store UI for the mismatched replays');
+  await h.reconciler.stop();
+}
+
+// 27. A failed start is retryable and leaves nothing subscribed.
+{
+  const store = createInMemoryMonetizationOperationStore();
+  let listFailures = 1;
+  const flaky: MonetizationOperationStore = {
+    ...store,
+    async listRecoverable(playerId) {
+      if (listFailures > 0) {
+        listFailures -= 1;
+        throw new Error('journal unavailable');
+      }
+      return store.listRecoverable(playerId);
+    },
+  };
+  const h = createHarness({ store: flaky });
+  await assertRejects(() => h.reconciler.start(), /journal unavailable/u, 'the first start fails');
+  assertEqual(h.reconciler.started, false, 'not started');
+  await h.reconciler.start();
+  assertEqual(h.reconciler.started, true, 'the retry starts');
+  h.backend.queue({ status: 'granted', ledgerEntryId: 'le-27' });
+  h.provider.report(purchaseOf({ transactionId: 'tx-27' }));
+  await h.reconciler.runUntilIdle();
+  assertEqual(
+    h.history('store:fake-store:tx-27').at(-1),
+    'finished',
+    'events reach the retried subscription',
+  );
+  await h.reconciler.stop();
+}
+
+// 28. An unknown product kind never finishes as consumable; the finish waits for the catalog.
+{
+  let catalogDown = true;
+  const provider = createFakeProvider();
+  const fetchProducts = provider.fetchProducts;
+  const flakyProvider: FakeProvider = {
+    ...provider,
+    async fetchProducts(request) {
+      if (catalogDown) {
+        throw new Error('catalog unavailable');
+      }
+      return fetchProducts.call(provider, request);
+    },
+  };
+  const h = createHarness({ provider: flakyProvider });
+  h.backend.queue({ status: 'granted', ledgerEntryId: 'le-28' });
+  await h.reconciler.start();
+  provider.report(
+    purchaseOf({ transactionId: 'tx-28', storeSku: 'remove.ads', logicalId: 'remove_ads' }),
+  );
+  await h.reconciler.runUntilIdle();
+  assertEqual(
+    h.history('store:fake-store:tx-28'),
+    ['purchased', 'verifying', 'granted', 'finishing'],
+    'granted, but the finish waits',
+  );
+  assertEqual(
+    (await h.reconciler.read('store:fake-store:tx-28'))?.productKind,
+    undefined,
+    'the kind is unknown',
+  );
+  assertEqual(provider.finishCalls.length, 0, 'no finish with a guessed kind');
+  catalogDown = false;
+  await h.reconciler.reconcile();
+  assertEqual(
+    h.history('store:fake-store:tx-28').at(-1),
+    'finished',
+    'finished once the catalog answers',
+  );
+  assertEqual(provider.finishCalls[0]?.isConsumable, false, 'as the durable product it is');
+  await h.reconciler.stop();
+}
+
+// 29. A pass failure from an earlier event never rejects a purchase the store already answered.
+{
+  const store = createInMemoryMonetizationOperationStore();
+  let fail = false;
+  const flaky: MonetizationOperationStore = {
+    ...store,
+    async listRecoverable(playerId) {
+      if (fail) {
+        throw new Error('journal unavailable');
+      }
+      return store.listRecoverable(playerId);
+    },
+  };
+  const h = createHarness({ store: flaky });
+  await h.reconciler.start();
+  fail = true;
+  h.provider.emit({ type: 'purchaseError', error: { code: 'UNKNOWN', retryable: false } });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  fail = false;
+  const result = await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-29',
+    source: 'shop',
+  });
+  assertEqual(result.outcome, 'launched', 'the purchase call resolves with the store answer');
+  assertEqual(
+    h.failures.includes('journal(op-29)') || h.failures.includes('journal'),
+    true,
+    'the stale pass failure is reported instead',
+  );
+  await h.reconciler.stop();
+}
+
+// 30. An error event never ends a record that holds a purchase or a saved request.
+{
+  const h = createHarness();
+  h.backend.queue({ status: 'pending' });
+  await h.reconciler.start();
+  await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-30',
+    source: 'shop',
+  });
+  h.provider.report(purchaseOf({ transactionId: 'tx-30' }));
+  await h.reconciler.runUntilIdle();
+  assertEqual(h.history('op-30').at(-1), 'pending', 'backend-side pending with a saved request');
+  h.provider.emit({
+    type: 'purchaseError',
+    logicalId: 'gems_small',
+    error: { code: 'USER_CANCELLED', retryable: false },
+  });
+  h.provider.emit({ type: 'purchaseError', error: { code: 'UNKNOWN', retryable: false } });
+  await h.reconciler.runUntilIdle();
+  assertEqual(
+    h.history('op-30').filter((state) => state === 'cancelled' || state === 'failed'),
+    [],
+    'a later error does not end a paid attempt (the pass resends the saved request)',
+  );
+  await h.reconciler.requestPurchase({
+    logicalId: 'remove_ads',
+    idempotencyKey: 'op-30b',
+    source: 'shop',
+  });
+  h.provider.report(
+    purchaseOf({
+      transactionId: 'tx-30b',
+      storeSku: 'remove.ads',
+      logicalId: 'remove_ads',
+      state: 'pending',
+    }),
+  );
+  await h.reconciler.runUntilIdle();
+  h.provider.emit({
+    type: 'purchaseError',
+    logicalId: 'remove_ads',
+    error: { code: 'USER_CANCELLED', retryable: false },
+  });
+  await h.reconciler.runUntilIdle();
+  assertEqual(
+    h.history('op-30b').at(-1),
+    'pending',
+    'a store-side pending purchase is decided by the store, not by an error event',
+  );
+  await h.reconciler.stop();
+}
+
+// 31. A second transaction for a product whose attempt is backend-pending gets its own derived record.
+{
+  const h = createHarness();
+  h.backend.queue({ status: 'pending' });
+  await h.reconciler.start();
+  await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-31',
+    source: 'shop',
+  });
+  h.provider.report(purchaseOf({ transactionId: 'tx-31' }));
+  await h.reconciler.runUntilIdle();
+  h.backend.queue({ status: 'pending' });
+  h.backend.queue({ status: 'granted', ledgerEntryId: 'le-31b' });
+  h.provider.report(purchaseOf({ transactionId: 'tx-31b' }));
+  await h.reconciler.runUntilIdle();
+  assertEqual(
+    h.history('store:fake-store:tx-31b').at(-1),
+    'finished',
+    'the second transaction is journaled and granted under its derived key',
+  );
+  assertEqual(
+    (await h.reconciler.read('op-31'))?.purchase?.transactionId,
+    'tx-31',
+    'the game attempt keeps its own transaction',
+  );
+  await h.reconciler.stop();
+}
+
+// 32. The client reports the server phase once per call under a server-owned finish.
+{
+  const provider = createFakeProvider({
+    capabilities: capabilitiesOf({ lifecycle: { finish: 'server' } }),
+    withFinish: false,
+  });
+  const backend = createFakeBackend();
+  const client = createGameServicesClient({
+    gateway: createGateway(provider),
+    backend: createBackendApi(backend),
+    playerId: 'player-1',
+    target: 'android',
+  });
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-32' });
+  backend.queue({ status: 'granted', ledgerEntryId: 'le-32', finalization: 'completed' });
+  provider.queueRequest({ outcome: 'purchased', purchase: purchaseOf({ transactionId: 'tx-32' }) });
+  const phases: string[] = [];
+  const result = await client.purchase(
+    { productId: 'gems_small', source: 'shop', idempotencyKey: 'op-32' },
+    { onProgress: (step) => void phases.push(step.phase) },
+  );
+  assertEqual(result.status, 'granted', 'granted');
+  assertEqual(
+    phases,
+    ['platform-requested', 'platform-result', 'server-requested', 'server-result', 'completed'],
+    'one server phase for two verify calls',
+  );
+  assertEqual(backend.requests.length, 2, 'the finalization re-read happened');
+  await client.commerceReconciler?.stop();
+}
+
 console.info('commerce reconciler tests passed');

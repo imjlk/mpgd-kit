@@ -94,6 +94,14 @@ function toVerifyRequest(
   };
 }
 
+/** The vector catalog always resolves, so a record without a kind is a reconciler bug. */
+function requireKind(record: CommercePurchaseOperationRecord): CommerceJournalRecord['kind'] {
+  if (record.productKind === undefined) {
+    throw new Error(`Record ${record.idempotencyKey} has no product kind.`);
+  }
+  return record.productKind;
+}
+
 /** The reference journal as the reconciler's operation store. */
 function adaptJournal(
   journal: CommerceConformanceJournal,
@@ -105,7 +113,7 @@ function adaptJournal(
     playerId: record.playerId,
     store: record.store,
     logicalId: record.logicalId as CommerceJournalRecord['logicalId'],
-    kind: record.productKind,
+    kind: requireKind(record),
     origin: record.origin,
     state: record.state,
     updatedAt: record.updatedAt,

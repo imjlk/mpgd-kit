@@ -222,7 +222,13 @@ export interface CommerceProvider {
   requestPurchase(input: RequestPurchaseInput): Promise<RequestPurchaseResult>;
   /** Purchases the store still reports as unfinished. */
   getAvailablePurchases(input?: GetAvailablePurchasesInput): Promise<readonly StorePurchase[]>;
-  /** Required when `lifecycle.finish` is 'client' or 'host'. */
+  /**
+   * Required when `lifecycle.finish` is 'client' or 'host'. Idempotent per
+   * transaction: the reconciler calls it again after a crash between a
+   * successful finish and its journal write, and on every pass while a
+   * finish keeps failing, so finishing an already finished transaction
+   * answers `{ finished: true }` rather than failing.
+   */
   finishTransaction?(input: FinishTransactionInput): Promise<FinishTransactionResult>;
   /** Asks the store to resynchronize, for example `AppStore.sync`. */
   restorePurchases?(): Promise<void>;

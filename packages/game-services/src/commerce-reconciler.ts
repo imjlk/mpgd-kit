@@ -67,7 +67,8 @@ export interface CommercePurchaseOperationRecord {
   readonly idempotencyKey: string;
   readonly store: StoreId;
   readonly logicalId: LogicalProductId;
-  readonly productKind: PurchaseKind;
+  /** Unknown while the catalog cannot be read; a client or host finish waits until it is. */
+  readonly productKind?: PurchaseKind;
   readonly origin: CommercePurchaseOrigin;
   readonly state: CommercePurchaseState;
   readonly updatedAt: string;
@@ -239,7 +240,17 @@ export interface CreateCommerceReconcilerInput {
   readonly products?: readonly CommerceReconcilerProduct[];
   readonly now?: () => string;
   readonly onEvent?: (event: CommerceReconcilerEvent) => void;
+  /**
+   * How long a `launched` record with no store purchase keeps serializing
+   * purchases of its product. After it the attempt is `failed` with
+   * `OUTCOME_UNKNOWN`; a purchase the store reports later is journaled under
+   * its derived key. Defaults to 24 hours; `Infinity` keeps the RFC rule
+   * without expiry.
+   */
+  readonly staleLaunchedAfterMs?: number;
 }
+
+export const defaultStaleLaunchedAfterMs = 24 * 60 * 60 * 1000;
 
 export interface CommerceReconciler {
   readonly provider: CommerceProvider;
@@ -276,8 +287,12 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   const target = input.target;
   const deploymentTarget = input.deploymentTarget ?? input.target;
   const now = input.now ?? (() => new Date().toISOString());
+  const staleLaunchedAfterMs = input.staleLaunchedAfterMs ?? defaultStaleLaunchedAfterMs;
   if (typeof playerId !== 'string' || playerId.trim() === '') {
     throw new TypeError('The commerce reconciler requires an authenticated player id.');
+  }
+  if (!(staleLaunchedAfterMs > 0)) {
+    throw new RangeError('staleLaunchedAfterMs must be a positive duration.');
   }
 
   const listeners = new Set<(event: CommerceReconcilerEvent) => void>();
@@ -309,6 +324,8 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   /** Records seen this session by purchase idempotency key, terminal ones included for matching. */
   const records = new Map<string, CommercePurchaseOperationRecord>();
   const inbox: CommerceEvent[] = [];
+  /** Keys whose `requestPurchase` call is still running; a `requested` record outside it is stale. */
+  const inFlightKeys = new Set<string>();
   const productCache = new Map<string, CommerceReconcilerProduct>();
   let capabilities: CommerceCapabilities | undefined;
   let unsubscribe: (() => void) | undefined;
@@ -390,14 +407,15 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
 
   const resolveLogicalId = async (
     purchase: StorePurchase,
-  ): Promise<{ readonly logicalId: LogicalProductId; readonly kind: PurchaseKind } | undefined> => {
+  ): Promise<{ readonly logicalId: LogicalProductId; readonly kind?: PurchaseKind } | undefined> => {
     const product = purchase.logicalId === undefined
       ? await resolveProduct({ storeSku: purchase.storeSku })
       : await resolveProduct({ logicalId: purchase.logicalId });
     if (product === undefined) {
       if (purchase.logicalId !== undefined) {
-        // The provider mapped the SKU itself; the kind is only needed for the finish call.
-        return { logicalId: purchase.logicalId, kind: 'consumable' };
+        // The provider mapped the SKU itself. The kind stays unknown until the
+        // catalog answers: a client or host finish never guesses consumable.
+        return { logicalId: purchase.logicalId };
       }
       return undefined;
     }
@@ -594,6 +612,11 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         return;
       }
       record = open[0];
+      if (record?.purchase !== undefined && record.purchase.transactionId !== purchase.transactionId) {
+        // The open attempt already holds another transaction (store-side or
+        // backend-side pending): this is a second purchase of the product.
+        record = undefined;
+      }
     }
     if (record === undefined) {
       if (purchase.state === 'revoked') {
@@ -611,7 +634,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
           idempotencyKey,
           store: purchase.store,
           logicalId: product.logicalId,
-          productKind: product.kind,
+          ...(product.kind === undefined ? {} : { productKind: product.kind }),
           origin: 'discovered',
           state: purchase.state,
           purchase,
@@ -640,7 +663,12 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       // record stays open and the available purchases resolve it.
       return;
     }
-    const open = openRecordsFor(logicalId);
+    // Only an attempt the store never answered can end on an error event: a
+    // record holding a store purchase or a saved verify request is decided by
+    // the available purchases and the backend, never by a later error.
+    const open = openRecordsFor(logicalId).filter(
+      (record) => record.purchase === undefined && record.request === undefined,
+    );
     if (open.length > 1) {
       fail(
         'match',
@@ -655,6 +683,12 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       await write(record, error.code === 'USER_CANCELLED' ? 'cancelled' : 'failed', { error });
     }
   };
+
+  const staleAttemptError = (message: string): CommerceErrorInfo => ({
+    code: 'OUTCOME_UNKNOWN',
+    retryable: false,
+    message,
+  });
 
   const sendVerify = async (
     record: CommercePurchaseOperationRecord,
@@ -683,6 +717,34 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     try {
       for (;;) {
         switch (record.state) {
+          case 'requested':
+            if (inFlightKeys.has(record.idempotencyKey)) {
+              return;
+            }
+            // The store answer was never journaled (a crash or a lost write
+            // after the reservation): the attempt ends so the product is not
+            // serialized behind it; a purchase the store reports later is
+            // journaled under its derived key.
+            await write(record, 'failed', {
+              error: staleAttemptError(
+                `The store answer for ${record.idempotencyKey} was never journaled.`,
+              ),
+            });
+            return;
+          case 'launched': {
+            if (record.purchase !== undefined || inFlightKeys.has(record.idempotencyKey)) {
+              return;
+            }
+            const age = Date.parse(now()) - Date.parse(record.updatedAt);
+            if (Number.isFinite(age) && age > staleLaunchedAfterMs) {
+              await write(record, 'failed', {
+                error: staleAttemptError(
+                  `No store purchase was reported for ${record.idempotencyKey} within ${String(staleLaunchedAfterMs)} ms.`,
+                ),
+              });
+            }
+            return;
+          }
           case 'purchased':
             record = await write(record, 'verifying', {
               request: record.request ?? buildRequest(record),
@@ -766,12 +828,26 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
               );
               return;
             }
+            // A consume and an acknowledge are not interchangeable: the finish
+            // waits until the catalog says which kind the product is.
+            const kind = record.productKind
+              ?? (await resolveProduct({ logicalId: record.logicalId }))?.kind;
+            if (kind === undefined) {
+              fail(
+                'catalog',
+                new Error(
+                  `The kind of ${record.logicalId} is unknown; the finish waits for the catalog.`,
+                ),
+                record.idempotencyKey,
+              );
+              return;
+            }
             let finished = false;
             try {
               finished = (await provider.finishTransaction({
                 transactionId: finish.transactionId,
                 ledgerEntryId: finish.ledgerEntryId,
-                isConsumable: record.productKind === 'consumable',
+                isConsumable: kind === 'consumable',
               })).finished;
             } catch (error) {
               // Transport-class failure: keep `finishing` for the next pass.
@@ -860,6 +936,10 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         pendingFailure = undefined;
         throw error;
       }
+      // An event that landed between the loop's last check and its teardown.
+      if (started && triggerPending && running === undefined) {
+        await runUntilIdle();
+      }
       return;
     }
     if (pendingFailure !== undefined) {
@@ -906,6 +986,12 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       // and the store UI opens once per key however many calls overlap.
       const existing = await readRecord(request.idempotencyKey);
       if (existing !== undefined) {
+        if (
+          existing.logicalId !== request.logicalId
+          || (existing.input !== undefined && existing.input.source !== request.source)
+        ) {
+          throw new Error('Purchase idempotency key is bound to another product or source.');
+        }
         return journaled(existing);
       }
       const product = await resolveProduct({ logicalId: request.logicalId });
@@ -917,6 +1003,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
           }).toCommerceErrorInfo(),
         };
       }
+      inFlightKeys.add(request.idempotencyKey);
       const { created, record } = await reserve({
         idempotencyKey: request.idempotencyKey,
         store: storeId,
@@ -951,18 +1038,15 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       }
       // Purchases are serialized per player, store, and logical product: an
       // open attempt for the same product fails this one with IN_PROGRESS, so
-      // a reported purchase matches at most one open record.
-      let reservedEarlier = true;
-      const open = (await listRecoverable()).filter((candidate) => {
-        if (candidate.idempotencyKey === record.idempotencyKey) {
-          reservedEarlier = false;
-          return false;
-        }
-        return (
-          candidate.logicalId === product.logicalId
-          && (isOpen(candidate.state) || (candidate.state === 'requested' && reservedEarlier))
-        );
-      });
+      // a reported purchase matches at most one open record. Overlapping
+      // calls never both reach here: the lock orders them, and the later one
+      // finds the earlier attempt already launched.
+      const open = (await listRecoverable()).filter(
+        (candidate) =>
+          candidate.idempotencyKey !== record.idempotencyKey
+          && candidate.logicalId === product.logicalId
+          && isOpen(candidate.state),
+      );
       if (open.length > 0) {
         return failWith(new CommerceError('IN_PROGRESS', {
           message: `A purchase of ${product.logicalId} is already in progress (${open[0]?.idempotencyKey}).`,
@@ -999,11 +1083,24 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         await write(record, result.outcome, { error: result.error });
       }
       return result;
-    }).then(async (result) => {
-      trigger();
-      await runUntilIdle();
-      return result;
-    });
+    }).then(
+      async (result) => {
+        inFlightKeys.delete(request.idempotencyKey);
+        trigger();
+        try {
+          await runUntilIdle();
+        } catch (error) {
+          // The store answer is journaled; a pass that failed meanwhile is
+          // reported, not thrown at the caller of a purchase already made.
+          fail('journal', error, request.idempotencyKey);
+        }
+        return result;
+      },
+      (error: unknown) => {
+        inFlightKeys.delete(request.idempotencyKey);
+        throw error;
+      },
+    );
 
   return {
     provider,
@@ -1014,18 +1111,26 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       if (started) {
         return;
       }
-      started = true;
-      await withLock(async () => {
-        await loadRecords();
-        // Subscribe first, then read: an event delivered before the listener is found either way.
-        unsubscribe = provider.subscribe(listener);
-        const capabilitiesNow = await readCapabilities();
-        // An event-less provider is polled by the first pass instead, so it is read once.
-        if (capabilitiesNow !== undefined && capabilitiesNow.lifecycle.events) {
-          await readAvailable(capabilitiesNow);
-        }
-        trigger();
-      });
+      try {
+        await withLock(async () => {
+          await loadRecords();
+          // Subscribe first, then read: an event delivered before the listener is found either way.
+          unsubscribe = provider.subscribe(listener);
+          started = true;
+          const capabilitiesNow = await readCapabilities();
+          // An event-less provider is polled by the first pass instead, so it is read once.
+          if (capabilitiesNow !== undefined && capabilitiesNow.lifecycle.events) {
+            await readAvailable(capabilitiesNow);
+          }
+          trigger();
+        });
+      } catch (error) {
+        // A failed start is retryable: nothing stays subscribed or started.
+        started = false;
+        unsubscribe?.();
+        unsubscribe = undefined;
+        throw error;
+      }
       await runUntilIdle();
     },
     async stop() {

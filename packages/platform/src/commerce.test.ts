@@ -438,6 +438,10 @@ describe('derived idempotency keys', () => {
     await expect(createDerivedPurchaseIdempotencyKey({
       store: 'apps-in-toss', transactionId: 'order-1', token: 'order-1',
     })).resolves.toBe('apps-in-toss:purchase:order-1');
+    // Percent-encoded like the v1 createAppsInTossPurchaseIdempotencyKey helper.
+    await expect(createDerivedPurchaseIdempotencyKey({
+      store: 'apps-in-toss', transactionId: 'order:1/2', token: 'order:1/2',
+    })).resolves.toBe('apps-in-toss:purchase:order%3A1%2F2');
   });
 
   it('hashes the Google Play token exactly like the v1 helper', async () => {

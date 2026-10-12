@@ -38,10 +38,19 @@ confirmed through verify like any other.
 - Purchases are serialized per player, store, and product: a second
   `requestPurchase` while one is `launched` or `pending` fails with
   `IN_PROGRESS`; a replayed key answers from the journal and never reopens
-  the store UI; `OUTCOME_UNKNOWN` and `ALREADY_OWNED` keep an attempt open.
-  Transport failures on verify or finish keep the state and are reported
-  through `onEvent` / `subscribe` as `failure` events, then retried on the
-  next pass.
+  the store UI, and a key reused for another product or source rejects;
+  `OUTCOME_UNKNOWN` and `ALREADY_OWNED` keep an attempt open. A `requested`
+  record left behind by a crash before the store answer was journaled, and a
+  `launched` record with no store purchase after `staleLaunchedAfterMs`
+  (default 24 hours; `Infinity` keeps the RFC rule without expiry), end as
+  `failed` with the `OUTCOME_UNKNOWN` class so the product is not serialized
+  behind them; a purchase the store reports later is journaled under its
+  derived key. An error event never ends a record that already holds a store
+  purchase or a saved verify request. Transport failures on verify or finish
+  keep the state and are reported through `onEvent` / `subscribe` as
+  `failure` events, then retried on the next pass; a client or host finish
+  waits until the catalog says whether the product is consumable rather than
+  guessing.
 - `assertCommerceFinishAllowed(record)` is the finish gate: `finishTransaction`
   is only ever called for a `granted` or `finishing` record that holds the
   backend's ledger entry id and a store transaction. The v2 StoreKit SDK keeps
@@ -74,13 +83,28 @@ answers from the journal for a v2 key (removed in C4).
 `MonetizationOperationRecord` gains the `commerce-purchase` kind
 (`CommercePurchaseOperationRecord`; the v1 kinds are
 `LegacyMonetizationOperationRecord`), `MonetizationOperationStore` gains the
-optional `listGranted(playerId)` read for the revocation pass, and
+optional `listGranted(playerId)` read (granted, finishing, and finished
+records within the retention window) that the revocation pass and the
+transaction match after a restart use, and
 `@mpgd/game-services/monetization-operation-store` exports
 `isMonetizationOperationRecoverable` (the `listRecoverable` rule for every
 kind), `isMonetizationOperationGranted`, and
 `createInMemoryMonetizationOperationStore` (session-only, for tests and
-clients without a durable store). A store that narrows records on `result`
-or `platform` must check `kind` first.
+clients without a durable store).
+
+Type-level changes a consumer may have to follow, kept to a minor release
+because the kit is at 0.x and every one of them is additive at runtime: code
+that reads `result`, `platform`, or `input` on a `MonetizationOperationRecord`
+must narrow on `kind` first (the v1 kinds are unchanged);
+`GameServicesPurchaseResult.status` and `MonetizationOperationSummary.status`
+gain the `revoked` member, which an exhaustive switch must handle;
+`RecoverableMonetizationClient` gains `restorePurchases()` and
+`commerceReconciler?`, which an implementation of that interface must add; a
+store whose `listRecoverable` keeps the old inline rule (`result ===
+undefined`) lists terminal commerce records as well, which the reconciler
+filters out, and a store without `listGranted` reports reversals only for
+grants seen in the session and relies on the backend's platform-evidence
+unique index for a purchase re-listed after a restart.
 
 Tests: every transition and the match order in
 `commerce-reconciler.test.ts`; the fourteen RFC vectors run through the real

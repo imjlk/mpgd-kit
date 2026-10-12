@@ -443,7 +443,8 @@ purchase alone, so every runtime derives the same key:
 - Existing stores keep their current forms so ledgers written by v1 still
   deduplicate: `play-token-sha256:<hex>` for `google-play` (one shared helper
   replaces the two copies), and `apps-in-toss:purchase:<orderId>` for
-  `apps-in-toss`.
+  `apps-in-toss`, with the order id percent-encoded as the v1
+  `createAppsInTossPurchaseIdempotencyKey` helper does.
 
 When a game key and a derived key ever reach the backend for the same
 purchase, the existing platform-evidence unique index
