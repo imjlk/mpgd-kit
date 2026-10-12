@@ -171,6 +171,13 @@ describe('ONE play H5 adapter', () => {
     await expect(commerce.requestPurchase(purchaseInput('checkout', { logicalId: 'OTHER' }))).rejects.toThrow(
       'identity changed',
     );
+    // A replay that changes what is bought is refused, not answered from the settled flight.
+    await expect(commerce.requestPurchase(purchaseInput('checkout', { quantity: 2 }))).rejects.toThrow(
+      'identity changed',
+    );
+    await expect(commerce.requestPurchase(purchaseInput('checkout', { offerId: 'launch-offer' }))).rejects.toThrow(
+      'identity changed',
+    );
     await expect(commerce.requestPurchase(purchaseInput(' padded '))).rejects.toThrow('identity is invalid');
     expect(f.purchase).toHaveBeenCalledOnce();
   });
@@ -414,6 +421,16 @@ describe('ONE play H5 adapter', () => {
     await expect(generic.requestPurchase(purchaseInput('intent-fail-2'))).resolves.toMatchObject({
       outcome: 'failed',
       error: { code: 'UNKNOWN' },
+    });
+    // A fetch-backed port rejects with a TypeError when offline: a retryable network failure, not an
+    // invalid intent.
+    const offline = createOnePlayCommerceProvider({
+      ...f,
+      server: { issueIntent: async () => { throw new TypeError('Failed to fetch'); } },
+    });
+    await expect(offline.requestPurchase(purchaseInput('intent-offline'))).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'NETWORK', retryable: true },
     });
     expect(f.purchase).not.toHaveBeenCalled();
   });

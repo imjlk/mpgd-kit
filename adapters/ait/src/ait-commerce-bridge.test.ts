@@ -93,6 +93,19 @@ describe('Apps in Toss commerce v2 bridge', () => {
     expect(stripped.commerce).not.toBe(validBlock);
     expect(stripped.commerce.purchase).not.toBe(validBlock.purchase);
 
+    // The same keys nested under `providerAvailability` are dropped too; the other entries stay.
+    answers.push({
+      nativeAds: false,
+      providerAvailability: {
+        nativeIap: 'available',
+        subscriptionIap: 'unsupported',
+        rewardedAds: 'configuration-required',
+      },
+      commerce: validBlock,
+    });
+    const nested = await gateway.getCapabilities();
+    expect(nested.providerAvailability).toEqual({ rewardedAds: 'configuration-required' });
+
     // A missing, malformed or over-keyed block is replaced, never passed on: the
     // gateway has a provider, so the store reads as temporarily unavailable
     // (nothing sold) rather than as permanently unsupported.

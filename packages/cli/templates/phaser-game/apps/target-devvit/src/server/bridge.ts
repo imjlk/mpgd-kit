@@ -241,12 +241,83 @@ function createUnsupportedCommerceBlock() {
   };
 }
 
+const commerceBlockShape = {
+  purchase: {
+    consumable: 'boolean',
+    durable: 'boolean',
+    subscription: 'boolean',
+    quantity: 'boolean',
+  },
+  catalog: { products: 'boolean', offers: 'boolean', localizedPrice: 'boolean' },
+  lifecycle: {
+    availablePurchases: 'boolean',
+    pending: 'boolean',
+    restore: 'boolean',
+    events: 'boolean',
+    finish: ['client', 'server', 'host', 'none'],
+  },
+  authority: {
+    evidence: ['client-token', 'host-callback', 'adapter-settled', 'server-push'],
+    accountBinding: ['required', 'optional', 'host'],
+  },
+} as const;
+const commerceAvailabilities: readonly unknown[] = [
+  'available',
+  'unsupported',
+  'configuration-required',
+  'action-required',
+  'temporarily-unavailable',
+];
+
+function isPlainRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean {
+  const own = Object.keys(value);
+  return own.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+}
+
+/**
+ * A fresh copy of a well-formed commerce capability block (the exact keys and
+ * values `PlatformCapabilities.commerce` allows), or undefined for anything
+ * else, so a malformed handler answer never reaches the snapshot.
+ */
+function copyCommerceBlock(value: unknown): Record<string, unknown> | undefined {
+  if (!isPlainRecord(value)
+    || !hasExactKeys(value, [...Object.keys(commerceBlockShape), 'availability'])
+    || !commerceAvailabilities.includes(value.availability)) {
+    return undefined;
+  }
+  const copy: Record<string, unknown> = { availability: value.availability };
+  for (const [section, fields] of Object.entries(commerceBlockShape)) {
+    const source = value[section];
+    if (!isPlainRecord(source) || !hasExactKeys(source, Object.keys(fields))) {
+      return undefined;
+    }
+    const sectionCopy: Record<string, unknown> = {};
+    for (const [field, rule] of Object.entries(fields)) {
+      const fieldValue = source[field];
+      const valid = rule === 'boolean'
+        ? typeof fieldValue === 'boolean'
+        : (rule as readonly unknown[]).includes(fieldValue);
+      if (!valid) {
+        return undefined;
+      }
+      sectionCopy[field] = fieldValue;
+    }
+    copy[section] = sectionCopy;
+  }
+  return copy;
+}
+
 /**
  * The `commerce` block of the server snapshot: what the configured commerce
  * handler reports for this server, otherwise the unsupported block. It fails
  * closed: a missing handler, a handler that throws or answers an error, or an
- * answer without a capability block sells nothing. The webview gateway owns the
- * block it finally reports (its provider's, or the unsupported one).
+ * answer without a well-formed capability block sells nothing. The webview
+ * gateway owns the block it finally reports (its provider's, or the
+ * unsupported one).
  */
 async function readCommerceCapabilities(
   input: BridgeRequest,
@@ -267,9 +338,7 @@ async function readCommerceCapabilities(
       ? (data as { readonly capabilities?: unknown }).capabilities
       : undefined;
 
-    return typeof capabilities === 'object' && capabilities !== null && !Array.isArray(capabilities)
-      ? capabilities
-      : createUnsupportedCommerceBlock();
+    return copyCommerceBlock(capabilities) ?? createUnsupportedCommerceBlock();
   } catch {
     return createUnsupportedCommerceBlock();
   }

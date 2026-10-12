@@ -37,15 +37,17 @@ function createFixtureCommerceProvider(input: {
       };
     },
     async fetchProducts() {
-      return [{
-        logicalId: fixtureProductId,
-        store: fixtureStore,
-        storeSku: fixtureProductId,
-        kind: 'consumable',
-        title: 'Fixture product',
-        description: '',
-        price: { formatted: '$0.99', currencyCode: 'USD', amountMicros: 990_000 },
-      }];
+      return [
+        {
+          logicalId: fixtureProductId,
+          store: fixtureStore,
+          storeSku: fixtureProductId,
+          kind: 'consumable',
+          title: 'Fixture product',
+          description: '',
+          price: { formatted: '$0.99', currencyCode: 'USD', amountMicros: 990_000 },
+        },
+      ];
     },
     async requestPurchase(request) {
       input.onPurchase();
@@ -59,7 +61,10 @@ function createFixtureCommerceProvider(input: {
           quantity: 1,
           state: input.mode() === 'pending' ? 'pending' : 'purchased',
           token: `fixture-token-${request.idempotencyKey}`,
-          evidence: { schema: 'fixture.purchase.v1', payload: { idempotencyKey: request.idempotencyKey } },
+          evidence: {
+            schema: 'fixture.purchase.v1',
+            payload: { idempotencyKey: request.idempotencyKey },
+          },
         },
       };
     },

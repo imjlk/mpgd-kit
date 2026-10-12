@@ -10,6 +10,7 @@ import {
   isStoreProduct,
   isStorePurchase,
   type CommerceErrorCode,
+  type CommerceErrorInfo,
   type CommerceProvider,
   type FetchProductsInput,
   type RequestPurchaseInput,
@@ -146,7 +147,7 @@ export function createOnePlayCommerceProvider(input: {
     logicalIds.add(product.id);
     physicalIds.add(product.platformId);
   }
-  const flights = new Map<string, { readonly logicalId: string; readonly source: string; readonly result: Promise<RequestPurchaseResult> }>();
+  const flights = new Map<string, { readonly identity: string; readonly result: Promise<RequestPurchaseResult> }>();
   const store = onePlayCommerceStoreId;
   return {
     store,
@@ -207,9 +208,12 @@ export function createOnePlayCommerceProvider(input: {
     },
     requestPurchase(request: RequestPurchaseInput): Promise<RequestPurchaseResult> {
       if (!identifier(request.idempotencyKey)) { return Promise.reject(new TypeError('ONE play purchase identity is invalid.')); }
+      // Every field that changes what is bought binds the key, so a replay with
+      // another quantity or offer is refused instead of answered from the flight.
+      const identity = JSON.stringify([request.logicalId, request.source, request.offerId ?? null, request.quantity ?? null]);
       const previous = flights.get(request.idempotencyKey);
       if (previous !== undefined) {
-        if (previous.logicalId !== request.logicalId || previous.source !== request.source) { return Promise.reject(new TypeError('ONE play purchase identity changed.')); }
+        if (previous.identity !== identity) { return Promise.reject(new TypeError('ONE play purchase identity changed.')); }
         return previous.result;
       }
       const product = products.find((candidate) => candidate.id === request.logicalId);
@@ -239,20 +243,26 @@ export function createOnePlayCommerceProvider(input: {
       onePlayFullscreenOwners.set(sdk, owner);
       const release = () => { if (onePlayFullscreenOwners.get(sdk) === owner) { onePlayFullscreenOwners.delete(sdk); } };
       const result = Promise.resolve().then(async (): Promise<RequestPurchaseResult> => {
-        let developerPayload: string;
-        try {
-          const intent = await server.issueIntent({ productId: product.id, platformProductId: product.platformId, idempotencyKey: request.idempotencyKey });
-          if (!identifier(intent.developerPayload) || new TextEncoder().encode(intent.developerPayload).length > 200) { throw new TypeError('Invalid ONE play checkout intent.'); }
-          developerPayload = intent.developerPayload;
-        } catch (error) {
+        const intentFailed = (error: CommerceErrorInfo): RequestPurchaseResult => {
           release();
           emit('not-started');
-          return {
-            outcome: 'failed',
-            error: error instanceof TypeError
-              ? new CommerceError('INVALID_RESPONSE', { message: 'ONE play checkout intent is invalid.' }).toCommerceErrorInfo()
-              : commerceErrorInfoOf(error),
-          };
+          return { outcome: 'failed', error };
+        };
+        let intent: Awaited<ReturnType<OnePlayCommerceServerPort['issueIntent']>>;
+        try {
+          intent = await server.issueIntent({ productId: product.id, platformProductId: product.platformId, idempotencyKey: request.idempotencyKey });
+        } catch (error) {
+          // The game server could not be reached or refused: nothing was bought.
+          // `fetch()` rejects with a TypeError when the request never completes
+          // (offline, DNS, CORS), which is a retryable network failure; any
+          // other error keeps its own class.
+          return intentFailed(error instanceof TypeError
+            ? new CommerceError('NETWORK', { message: 'ONE play checkout intent could not be issued.', retryable: true, cause: error }).toCommerceErrorInfo()
+            : commerceErrorInfoOf(error));
+        }
+        const developerPayload: unknown = typeof intent === 'object' && intent !== null ? intent.developerPayload : undefined;
+        if (!identifier(developerPayload) || new TextEncoder().encode(developerPayload).length > 200) {
+          return intentFailed(new CommerceError('INVALID_RESPONSE', { message: 'ONE play checkout intent is invalid.' }).toCommerceErrorInfo());
         }
         try {
           // No local timeout: the host may keep payment UI open. Unknown outcomes retain ownership.
@@ -302,7 +312,7 @@ export function createOnePlayCommerceProvider(input: {
           return { outcome: 'launched' };
         }
       });
-      flights.set(request.idempotencyKey, { logicalId: request.logicalId, source: request.source, result });
+      flights.set(request.idempotencyKey, { identity, result });
       return result;
     },
     async getAvailablePurchases() {

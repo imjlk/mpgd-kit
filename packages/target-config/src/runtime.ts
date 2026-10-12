@@ -489,7 +489,15 @@ export function applyTargetConfigToCommerceCapabilities(
 ): CommerceCapabilities {
   const oneTime = config.features.iap;
   const subscriptions = isPlatformFeatureEnabled(config, 'subscriptions');
-  const sellable = oneTime || subscriptions;
+  const declaresOneTime = commerce.purchase.consumable || commerce.purchase.durable;
+  const declaresKind = declaresOneTime || commerce.purchase.subscription;
+  // Sellable is what the configuration allows of what the provider declares.
+  // A block that declares no kind at all (the unsupported or degraded block)
+  // keeps its own availability, so a stalled provider still reads as
+  // temporarily unavailable rather than unsupported.
+  const sellable = declaresKind
+    ? (oneTime && declaresOneTime) || (subscriptions && commerce.purchase.subscription)
+    : oneTime || subscriptions;
   return {
     purchase: {
       consumable: commerce.purchase.consumable && oneTime,

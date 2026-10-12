@@ -315,6 +315,23 @@ const subscriptionsOff = applyTargetConfigToCommerceCapabilities(sellingCommerce
 assert.equal(subscriptionsOff.purchase.consumable, true);
 assert.equal(subscriptionsOff.purchase.subscription, false);
 assert.equal(subscriptionsOff.availability, 'available');
+// A provider that sells only subscriptions, on a target that allows only one-time products, sells
+// nothing: no catalog and no availability, matching the empty masked catalog.
+const subscriptionOnlyOnOneTimeTarget = applyTargetConfigToCommerceCapabilities(
+  createCommerceBlock({ oneTime: false, subscription: true }),
+  { ...enabledConfig, features: { ...enabledConfig.features, iap: true, subscriptions: false } },
+);
+assert.equal(subscriptionOnlyOnOneTimeTarget.purchase.subscription, false);
+assert.equal(subscriptionOnlyOnOneTimeTarget.catalog.products, false);
+assert.equal(subscriptionOnlyOnOneTimeTarget.availability, 'unsupported');
+// A block that declares no kind keeps the provider's own state when the target sells something.
+assert.equal(
+  applyTargetConfigToCommerceCapabilities(
+    createCommerceBlock({ oneTime: false, subscription: false, availability: 'temporarily-unavailable' }),
+    enabledConfig,
+  ).availability,
+  'temporarily-unavailable',
+);
 const iapOff = applyTargetConfigToCommerceCapabilities(sellingCommerce, {
   ...enabledConfig,
   features: { ...enabledConfig.features, iap: false },

@@ -390,6 +390,35 @@ test('the capability snapshot fails closed when the commerce handler errors or a
     }),
     async () => ({ id: 'req', ok: true, data: { nonsense: true } }),
     async () => ({ id: 'req', ok: true, data: { capabilities: 'available' } }),
+    // Object-shaped but not a capability block: an empty object, a wrong
+    // value, a missing section, and a retired extra key.
+    async () => ({ id: 'req', ok: true, data: { capabilities: {} } }),
+    async () => ({
+      id: 'req',
+      ok: true,
+      data: {
+        capabilities: { ...createUnsupportedCommerceCapabilities(), availability: 'maybe' },
+      },
+    }),
+    async () => {
+      const { authority: _authority, ...withoutAuthority } = createUnsupportedCommerceCapabilities();
+      return { id: 'req', ok: true, data: { capabilities: withoutAuthority } };
+    },
+    async () => ({
+      id: 'req',
+      ok: true,
+      data: { capabilities: { ...createUnsupportedCommerceCapabilities(), nativeIap: true } },
+    }),
+    async () => ({
+      id: 'req',
+      ok: true,
+      data: {
+        capabilities: {
+          ...createUnsupportedCommerceCapabilities(),
+          lifecycle: { ...createUnsupportedCommerceCapabilities().lifecycle, finish: 'later' },
+        },
+      },
+    }),
     async () => ({ id: 'req', ok: true, data: null }),
     async () => {
       throw new Error('handler crashed');

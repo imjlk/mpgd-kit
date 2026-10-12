@@ -290,8 +290,8 @@ function getBridge(): GamePlatformBridge | undefined {
 /**
  * The capability snapshot the gateway reports for a host answer. A host built
  * before commerce v2 became the only commerce surface may still send the
- * removed `nativeIap` and `subscriptionIap` flags: they are dropped, so a
- * snapshot never carries them. The `commerce` block is always valid: the
+ * removed `nativeIap` and `subscriptionIap` flags, at the top level or under
+ * `providerAvailability`: they are dropped, so a snapshot never carries them. The `commerce` block is always valid: the
  * host's block when the gateway has a commerce provider and the block is
  * well-formed, the temporarily-unavailable block when the provider exists but
  * the host's block is missing or malformed, and the unsupported block for a
@@ -304,6 +304,17 @@ function toGatewayCapabilities(
   const capabilities: Record<string, unknown> = { ...hostAnswer };
   delete capabilities.nativeIap;
   delete capabilities.subscriptionIap;
+  const availability = capabilities.providerAvailability;
+  if (typeof availability === 'object' && availability !== null && !Array.isArray(availability)) {
+    // The same retired keys under `providerAvailability`: a stale host still
+    // sends them, and the snapshot contract has no place for them.
+    const {
+      nativeIap: _retiredNativeIap,
+      subscriptionIap: _retiredSubscriptionIap,
+      ...current
+    } = availability as Readonly<Record<string, unknown>>;
+    capabilities.providerAvailability = current;
+  }
   const hostCommerce = capabilities.commerce;
   if (!hasCommerceProvider) {
     capabilities.commerce = createUnsupportedCommerceCapabilities();
