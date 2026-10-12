@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/commerce/schemas/commerce-service-capabilities.schema.json",
+  "title": "CommerceServiceCapabilities",
+  "x-mpgd-protocol": "mpgd.commerce.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/CommerceServiceCapabilities",
+  "components": {
+    "schemas": {
+      "CommerceFinishOwner": {
+        "oneOf": [
+          {
+            "const": "client"
+          },
+          {
+            "const": "host"
+          },
+          {
+            "const": "none"
+          },
+          {
+            "const": "server"
+          }
+        ]
+      },
+      "CommerceServiceCapabilities": {
+        "type": "object",
+        "properties": {
+          "commerceProtocolVersion": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "stores": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommerceServiceStoreCapabilities"
+            },
+            "readOnly": true
+          }
+        },
+        "required": [
+          "commerceProtocolVersion",
+          "stores"
+        ],
+        "additionalProperties": false,
+        "description": "The backend's published commerce capabilities (RFC \"Provider capabilities\nendpoint\"): the protocol version it speaks and one row per store its\nevidence registry accepts. The client runtime compares it with its\nprovider's capability block at start."
+      },
+      "CommerceServiceStoreCapabilities": {
+        "type": "object",
+        "properties": {
+          "store": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "readOnly": true
+          },
+          "schemas": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NonEmptyString"
+            },
+            "description": "Evidence schemas the backend routes for this store.",
+            "readOnly": true
+          },
+          "finish": {
+            "$ref": "#/components/schemas/CommerceFinishOwner",
+            "description": "Who finishes a granted purchase of this store, as the backend expects it.",
+            "readOnly": true
+          },
+          "purchase": {
+            "type": "object",
+            "properties": {
+              "consumable": {
+                "type": "boolean",
+                "readOnly": true
+              },
+              "durable": {
+                "type": "boolean",
+                "readOnly": true
+              },
+              "subscription": {
+                "type": "boolean",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "consumable",
+              "durable",
+              "subscription"
+            ],
+            "additionalProperties": false,
+            "readOnly": true
+          }
+        },
+        "required": [
+          "store",
+          "schemas",
+          "finish",
+          "purchase"
+        ],
+        "additionalProperties": false,
+        "description": "What the backend accepts for one store (RFC \"Provider capabilities endpoint\")."
+      },
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

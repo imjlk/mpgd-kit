@@ -7,6 +7,7 @@ import {
   type CommerceErrorInfo,
   type CommerceEvent,
   type CommerceProvider,
+  type CommerceServiceCapabilities,
   type FinishTransactionInput,
   type RequestPurchaseResult,
   type StorePurchase,
@@ -38,6 +39,7 @@ import {
 import { createGameServicesRuntime } from './runtime.js';
 import type {
   PurchaseLedgerStatus,
+  PurchaseLedgerStatusRequest,
   VerifyPurchaseRequest,
   VerifyPurchaseResponse,
 } from './types.js';
@@ -272,16 +274,33 @@ type Decision =
 
 interface FakeBackend extends PurchaseVerificationApi {
   readonly requests: VerifyPurchaseRequest[];
+  readonly ledgerStatusRequests: PurchaseLedgerStatusRequest[];
+  readonly capabilityReads: number;
   queue(decision: Decision): void;
   reverse(ledgerEntryId: string, by: string): void;
 }
 
-function createFakeBackend(options: { readonly withLedgerStatus?: boolean } = {}): FakeBackend {
+function createFakeBackend(options: {
+  readonly withLedgerStatus?: boolean;
+  /** The published capabilities; a backend without them is a v1 backend. */
+  readonly serviceCapabilities?: CommerceServiceCapabilities;
+  /** The capabilities read answers like a v1 server behind a v2 client adapter: 404. */
+  readonly capabilitiesNotFound?: boolean;
+  /** The capabilities read never answers. */
+  readonly capabilitiesHang?: boolean;
+} = {}): FakeBackend {
+  const serviceCapabilities = options.serviceCapabilities;
+  const ledgerStatusRequests: PurchaseLedgerStatusRequest[] = [];
+  let capabilityReads = 0;
   const decisions: Decision[] = [];
   const requests: VerifyPurchaseRequest[] = [];
   const reversed = new Map<string, string>();
   return {
     requests,
+    ledgerStatusRequests,
+    get capabilityReads() {
+      return capabilityReads;
+    },
     queue(decision) {
       decisions.push(decision);
     },
@@ -321,9 +340,26 @@ function createFakeBackend(options: { readonly withLedgerStatus?: boolean } = {}
             }),
       };
     },
+    ...(serviceCapabilities === undefined
+      && options.capabilitiesNotFound !== true
+      && options.capabilitiesHang !== true
+      ? {}
+      : {
+          async getCommerceCapabilities(): Promise<CommerceServiceCapabilities> {
+            capabilityReads += 1;
+            if (options.capabilitiesHang === true) {
+              return new Promise<CommerceServiceCapabilities>(() => {});
+            }
+            if (serviceCapabilities === undefined) {
+              throw Object.assign(new Error('not found'), { status: 404 });
+            }
+            return serviceCapabilities;
+          },
+        }),
     ...(options.withLedgerStatus === true
       ? {
-          async getPurchaseLedgerStatus(input: { readonly ledgerEntryIds: readonly string[] }) {
+          async getPurchaseLedgerStatus(input: PurchaseLedgerStatusRequest) {
+            ledgerStatusRequests.push(input);
             return {
               statuses: input.ledgerEntryIds.map((ledgerEntryId): PurchaseLedgerStatus => {
                 const by = reversed.get(ledgerEntryId);
@@ -439,6 +475,7 @@ const fullClientHistory = [
     h.backend.requests[0],
     {
       target: 'android',
+      store: 'fake-store',
       playerId: 'player-1',
       productId: 'gems_small',
       platformTransactionId: 'tx-1',
@@ -446,7 +483,7 @@ const fullClientHistory = [
       purchasedAt: '2026-10-01T00:00:00.000Z',
       evidence: { schema: 'fixture.fake-store.v1', payload: { token: 'token-tx-1' } },
     },
-    'the verify request carries the game key, the store transaction, its evidence, and the store purchase time',
+    'the verify request carries the game key, the store id, the store transaction, its evidence, and the store purchase time',
   );
   assertEqual(
     h.provider.finishCalls,
@@ -2788,6 +2825,149 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   assertEqual(h.provider.finishCalls.length, 2, 'an explicit reconcile retries at once');
   assertEqual(h.history('op-48').at(-1), 'finished', 'finished');
   clock = '2026-10-02T00:02:00.000Z';
+  await h.reconciler.stop();
+}
+
+// 49. The backend's published capabilities are compared with the provider at start (C2).
+{
+  const published = (
+    finish: 'client' | 'server',
+    store = 'fake-store',
+  ): CommerceServiceCapabilities => ({
+    commerceProtocolVersion: '2.0.0-draft.1',
+    stores: [
+      {
+        store,
+        schemas: ['fixture.fake-store.v1'],
+        finish,
+        purchase: { consumable: true, durable: true, subscription: false },
+      },
+    ],
+  });
+  const aligned = createHarness({
+    backend: createFakeBackend({ serviceCapabilities: published('client') }),
+  });
+  await aligned.reconciler.start();
+  assertEqual(
+    aligned.reconciler.serviceAlignment?.status,
+    'aligned',
+    'the backend accepts the store as declared',
+  );
+  const alignedCapabilities = await aligned.reconciler.getCapabilities();
+  assertEqual(alignedCapabilities.availability, 'available', 'availability unchanged');
+  assertEqual(aligned.failures, [], 'no failure reported');
+  await aligned.reconciler.stop();
+
+  const v1 = createHarness({ backend: createFakeBackend() });
+  await v1.reconciler.start();
+  assertEqual(
+    v1.reconciler.serviceAlignment,
+    undefined,
+    'a v1 backend publishes nothing to compare',
+  );
+  await v1.reconciler.stop();
+
+  const finishMismatch = createHarness({
+    backend: createFakeBackend({ serviceCapabilities: published('server') }),
+  });
+  await finishMismatch.reconciler.start();
+  const alignment = finishMismatch.reconciler.serviceAlignment;
+  assertEqual(
+    alignment?.status === 'configuration-required' ? alignment.reason : alignment?.status,
+    'FINISH_OWNER_MISMATCH',
+    'a finish owner that disagrees is configuration-required',
+  );
+  assertEqual(
+    (await finishMismatch.reconciler.getCapabilities()).availability,
+    'configuration-required',
+    'the reported capabilities carry the alignment',
+  );
+  assertEqual(finishMismatch.failures, ['capabilities'], 'the mismatch is reported once per read');
+  const refused = await finishMismatch.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-49',
+    source: 'shop',
+  });
+  assertEqual(
+    refused.outcome === 'failed' ? refused.error.code : refused.outcome,
+    'CONFIGURATION_REQUIRED',
+    'no store UI opens while the deployment is misaligned',
+  );
+  const refusedRecord = await finishMismatch.reconciler.read('op-49');
+  assertEqual(refusedRecord, undefined, 'the refusal leaves no record');
+  assertEqual(finishMismatch.provider.purchaseUiOpened, 0, 'the store was not called');
+  await finishMismatch.reconciler.stop();
+
+  const notAccepted = createHarness({
+    backend: createFakeBackend({ serviceCapabilities: published('client', 'other-store') }),
+  });
+  await notAccepted.reconciler.start();
+  const missing = notAccepted.reconciler.serviceAlignment;
+  assertEqual(
+    missing?.status === 'configuration-required' ? missing.reason : missing?.status,
+    'STORE_NOT_ACCEPTED',
+    'a store the backend does not accept is configuration-required',
+  );
+  await notAccepted.reconciler.stop();
+
+  // A v1 server behind a v2 client adapter answers 404 once: remembered, not a failure.
+  const unpublished = createHarness({ backend: createFakeBackend({ capabilitiesNotFound: true }) });
+  await unpublished.reconciler.start();
+  assertEqual(unpublished.reconciler.serviceAlignment?.status, 'unpublished', 'remembered');
+  assertEqual(unpublished.failures, [], 'a missing endpoint is not a failure');
+  await unpublished.reconciler.reconcile();
+  assertEqual(unpublished.backend.capabilityReads, 1, 'the 404 is not read again on refresh');
+  await unpublished.reconciler.stop();
+
+  // A purchase before start() attempts the comparison before any store UI opens.
+  const early = createHarness({
+    backend: createFakeBackend({ serviceCapabilities: published('server') }),
+  });
+  const earlyResult = await early.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: 'op-49b',
+    source: 'shop',
+  });
+  assertEqual(
+    earlyResult.outcome === 'failed' ? earlyResult.error.code : earlyResult.outcome,
+    'CONFIGURATION_REQUIRED',
+    'the comparison runs before the first purchase even without start()',
+  );
+  assertEqual(early.provider.purchaseUiOpened, 0, 'the store was not called');
+
+  // A hung read keeps the last comparison after the timeout instead of holding the lock.
+  const hung = createHarness({
+    backend: createFakeBackend({ capabilitiesHang: true }),
+    overrides: { serviceCapabilitiesTimeoutMs: 5 },
+  });
+  await hung.reconciler.start();
+  assertEqual(hung.reconciler.serviceAlignment, undefined, 'nothing compared yet');
+  assertEqual(hung.failures, ['capabilities'], 'the timeout is reported');
+  await hung.reconciler.stop();
+}
+
+// 50. The revocation pass reads ledger status in chunks scoped to the player (C2).
+{
+  const backend = createFakeBackend({ withLedgerStatus: true });
+  const h = createHarness({ backend });
+  await h.reconciler.start();
+  for (let index = 0; index < 120; index += 1) {
+    backend.queue({ status: 'granted', ledgerEntryId: `le-chunk-${String(index)}` });
+    h.provider.report(purchaseOf({ transactionId: `tx-chunk-${String(index)}` }));
+  }
+  await h.reconciler.runUntilIdle();
+  backend.ledgerStatusRequests.length = 0;
+  await h.reconciler.reconcile();
+  assertEqual(
+    backend.ledgerStatusRequests.map((request) => request.ledgerEntryIds.length),
+    [100, 20],
+    'granted records are read in chunks of at most 100 ids',
+  );
+  assertEqual(
+    backend.ledgerStatusRequests.every((request) => request.playerId === 'player-1'),
+    true,
+    'every chunk names the player whose grants it reads',
+  );
   await h.reconciler.stop();
 }
 

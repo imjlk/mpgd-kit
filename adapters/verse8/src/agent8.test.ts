@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ProductCatalog } from '@mpgd/catalog';
+import { createInMemoryGameServicesStore } from '@mpgd/game-services/server';
 
 import { createVerse8Agent8CommerceService, type Verse8Agent8Context } from './agent8';
 
@@ -91,6 +92,44 @@ describe('Verse8 Agent8 commerce service', () => {
       balances: { coin: 200, gem: 0 },
       entitlements: [],
     });
+  });
+
+  it('writes the server-push ledger grant the commerce v2 lookup reads', async () => {
+    const fixture = createContext();
+    const ledger = createInMemoryGameServicesStore();
+    const service = createVerse8Agent8CommerceService({
+      catalog,
+      ledger,
+      now: () => '2026-07-16T00:00:00.000Z',
+    });
+    const event = { account: '0xplayer', purchaseId: 7, productId: 'coins-100', quantity: 1 };
+
+    await service.handleItemPurchased(event, fixture.context);
+    await service.handleItemPurchased(event, fixture.context);
+
+    const grants = await ledger.listEntitlementTransactions();
+    expect(grants).toHaveLength(1);
+    expect(grants[0]).toMatchObject({
+      playerId: '0xplayer',
+      grantId: 'COINS_100',
+      source: 'purchase',
+      idempotencyKey: 'store:verse8:7',
+      evidenceVerificationId: 'verse8:verse8.agent8-event.v1:7',
+      payload: {
+        target: 'verse8',
+        store: 'verse8',
+        platformProductId: 'coins-100',
+        platformTransactionId: '7',
+        evidenceSchema: 'verse8.agent8-event.v1',
+      },
+    });
+    expect(
+      await ledger.findEntitlementTransactionByPlatformEvidence({
+        source: 'purchase',
+        target: 'verse8',
+        platformEvidenceId: '7',
+      }),
+    ).toBeDefined();
   });
 
   it('stores an entitlement and its purchase marker in the same state update', async () => {

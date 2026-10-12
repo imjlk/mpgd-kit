@@ -126,14 +126,16 @@ event has arrived. Do not poll `VXShop.onClose` as proof of completion.
 
 ## Commerce v2 provider
 
-> **Not yet usable in production before C2.** The backend side of the
-> server-push lookup (a verifier registered for `verse8.agent8-event.v1` that
-> answers `granted` once the Agent8 record exists and `pending` otherwise) is
-> C2 work. Today `@mpgd/game-services` registers no verifier for that schema
-> and `GameServicesStoreTarget` does not accept the `verse8` target, so a
-> verify request for a Verse8 purchase is refused instead of answering
-> `pending`; a journal record would end rejected, not granted. Configure
-> `vxShop.purchases` only once the backend can answer.
+> **Needs the backend's C2 pieces.** Configure `vxShop.purchases` only when
+> the backend (1) registers the `verse8.agent8-event.v1` lookup entry
+> (`createVerse8Agent8EventLookupCommerceEvidenceEntry({ ledger })` in its
+> `createCommerceEvidenceRegistry`; the Worker does so with
+> `MPGD_COMMERCE_LOOKUP_STORES = ["verse8"]`), which answers `granted` once
+> the Agent8 event's ledger grant for the purchase exists and `pending`
+> before it, and never grants from the client envelope; and (2) the Agent8
+> service writes that grant: pass the game-services store as `ledger` to
+> `createVerse8Agent8CommerceService` (target `verse8`, store `verse8`, the
+> purchase id as the platform transaction id, key `store:verse8:<purchaseId>`).
 
 `createVerse8CommerceProvider(input)` from `@mpgd/adapter-verse8` is the
 commerce v2 `CommerceProvider` (RFC:
@@ -223,12 +225,16 @@ Methods:
   reconciler's `restorePurchases` and the next signal are the readers. The
   provider emits no `purchaseError`.
 
-The backend side of the lookup is the server-push verifier the RFC describes
-for C2: a verify request carrying `verse8.agent8-event.v1` evidence
-(`assertVerse8Agent8EventEvidence` validates the envelope) is `granted` when
-the Agent8 record for that purchase id exists and `pending` otherwise. The
-client never grants: the reconciler moves a purchase to `granted` only on
-that answer.
+The backend side of the lookup is the server-push verifier C2 added
+(`createVerse8Agent8EventLookupCommerceEvidenceEntry` in
+`@mpgd/game-services/commerce-evidence-registry`): a verify request carrying
+`verse8.agent8-event.v1` evidence is `granted` when the ledger holds the
+grant the Agent8 event wrote for that purchase id (target `verse8`, written
+by `createVerse8Agent8CommerceService({ ledger })`) for the same player and
+product, `pending` (`LEDGER_GRANT_PENDING`) otherwise, and `rejected` when
+the envelope names another purchase or product than the request. The client
+never grants: the reconciler moves a purchase to `granted` only on that
+answer.
 
 `adapters/verse8/src/verse8-commerce-provider.conformance.test.ts` runs the
 RFC vectors through `runCommerceConformanceVectors` with a fake VXShop and

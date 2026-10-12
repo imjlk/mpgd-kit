@@ -5,7 +5,17 @@ import { encodeAdMobSsvCustomData } from '@mpgd/game-services';
 import { Miniflare } from 'miniflare';
 
 import { createD1AdMobSsvCallbackStore } from './admobSsvD1.js';
-import { createWorkerFetchHandler, createWorkerService } from './handler.js';
+import {
+  createWorkerFetchHandler,
+  createWorkerService,
+  type GameServicesPurchaseGrantFinalizerBinding,
+} from './handler.js';
+
+const androidFinalizerStub: GameServicesPurchaseGrantFinalizerBinding = {
+  async finalizePurchaseGrant() {
+    return { status: 'completed', action: 'consume', alreadyCompleted: false };
+  },
+};
 import {
   createAdMobSsvCallbackFetchHandler,
   createD1AdMobSsvEvidenceVerifier,
@@ -14,13 +24,15 @@ import {
 const timestamp = Date.now();
 const placements = {
   version: 'admob-test',
-  placements: [{
-    id: 'CONTINUE_AFTER_FAIL',
-    type: 'rewarded',
-    reward: { type: 'continue', amount: 1 },
-    frequencyCap: { cooldownSeconds: 60, maxPerSession: 3 },
-    platformPlacementIds: { android: 'reward_continue' },
-  }],
+  placements: [
+    {
+      id: 'CONTINUE_AFTER_FAIL',
+      type: 'rewarded',
+      reward: { type: 'continue', amount: 1 },
+      frequencyCap: { cooldownSeconds: 60, maxPerSession: 3 },
+      platformPlacementIds: { android: 'reward_continue' },
+    },
+  ],
 } as const;
 const miniflare = new Miniflare({
   modules: true,
@@ -38,11 +50,10 @@ try {
     const migration = await readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8');
     await db.exec(toD1ExecScript(migration));
   }
-  const keyPair = await crypto.subtle.generateKey(
-    { name: 'ECDSA', namedCurve: 'P-256' },
-    true,
-    ['sign', 'verify'],
-  );
+  const keyPair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, [
+    'sign',
+    'verify',
+  ]);
   const publicKeySpki = Buffer.from(await crypto.subtle.exportKey('spki', keyPair.publicKey))
     .toString('base64');
   let currentKeys = [{ keyId: 1, base64: publicKeySpki }];
@@ -95,10 +106,14 @@ try {
     MPGD_STORE: 'd1',
     MPGD_ADMOB_SSV_ANDROID_AD_UNIT: 'rotated_ad_unit',
   } as const;
-  assert.throws(() => createWorkerFetchHandler({
-    MPGD_STORE: 'memory',
-    MPGD_ADMOB_SSV_ANDROID_AD_UNIT: 'reward_continue',
-  }), /requires MPGD_STORE=d1/u);
+  assert.throws(
+    () =>
+      createWorkerFetchHandler({
+        MPGD_STORE: 'memory',
+        MPGD_ADMOB_SSV_ANDROID_AD_UNIT: 'reward_continue',
+      }),
+    /requires MPGD_STORE=d1/u,
+  );
   let purchaseBindingCalls = 0;
   let rewardBindingCalls = 0;
   const composedWorker = createWorkerService({
@@ -113,6 +128,8 @@ try {
         return { status: 'rejected', reason: 'REWARD_BINDING_SHOULD_NOT_RUN' } as const;
       },
     },
+    // Commerce v2 C2: an Android purchase verifier needs its Play finalizer.
+    GAME_SERVICES_ANDROID_PURCHASE_FINALIZER: androidFinalizerStub,
   });
   await composedWorker.verifyPurchase({
     target: 'android',
@@ -143,6 +160,7 @@ try {
     DB: db,
     MPGD_STORE: 'd1',
     MPGD_ADMOB_SSV_IOS_AD_UNIT: 'reward_continue',
+    GAME_SERVICES_ANDROID_PURCHASE_FINALIZER: androidFinalizerStub,
     GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER: {
       async verifyPurchase() {
         return { status: 'rejected', reason: 'UNSUPPORTED' } as const;
@@ -196,11 +214,13 @@ async function signedCallback(
   idempotencyKey: string,
   transactionId: string,
 ): Promise<string> {
-  const customData = encodeURIComponent(encodeAdMobSsvCustomData({
-    playerId: 'player-1',
-    placementId: 'CONTINUE_AFTER_FAIL',
-    idempotencyKey,
-  }));
+  const customData = encodeURIComponent(
+    encodeAdMobSsvCustomData({
+      playerId: 'player-1',
+      placementId: 'CONTINUE_AFTER_FAIL',
+      idempotencyKey,
+    }),
+  );
   const query = [
     'ad_network=5450213213286189855',
     'ad_unit=reward_continue',

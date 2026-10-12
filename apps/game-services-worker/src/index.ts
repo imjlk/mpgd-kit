@@ -1,6 +1,7 @@
 import type {
   ClaimAdRewardRequest,
   GetVerifiedLeaderboardSnapshotRequest,
+  PurchaseLedgerStatusRequest,
   RecordLeaderboardScoreRequest,
   RecordVerifiedLeaderboardAttemptRequest,
   VerifyPurchaseRequest,
@@ -20,6 +21,14 @@ export class GameServicesWorker extends WorkerEntrypoint<GameServicesWorkerEnv> 
 
   async verifyPurchase(input: VerifyPurchaseRequest) {
     return createWorkerService(this.env).verifyPurchase(input);
+  }
+
+  async getPurchaseLedgerStatus(input: PurchaseLedgerStatusRequest) {
+    return createWorkerService(this.env).getPurchaseLedgerStatus(input);
+  }
+
+  async getCommerceCapabilities() {
+    return createWorkerService(this.env).getCommerceCapabilities();
   }
 
   async claimAdReward(input: ClaimAdRewardRequest) {
@@ -46,6 +55,8 @@ export {
   type GameServicesIngressAuthBindingRequest,
   type GameServicesIngressPrincipal,
   type GameServicesWorkerEnv,
+  type GooglePlayAccountBinding,
+  type GooglePlayPublisherAuthBinding,
   type VerifiedLeaderboardAuthBinding,
   type VerifiedLeaderboardAuthBindingRequest,
 } from './handler.js';

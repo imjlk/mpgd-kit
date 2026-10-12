@@ -4,6 +4,12 @@ import {
   type ProductCatalog,
   type ProductGrant,
 } from '@mpgd/catalog';
+import {
+  createServerPushLedgerGrant,
+  verse8Agent8EventEvidenceSchema as verse8Agent8EventLedgerSchema,
+  verse8CommerceStoreId as verse8LedgerStoreId,
+} from '@mpgd/game-services/commerce-evidence-registry';
+import type { GameServicesStore } from '@mpgd/game-services/server';
 import type { Entitlement, LogicalProductId } from '@mpgd/platform';
 
 import { defaultVerse8CatalogTarget } from './catalog-target.js';
@@ -43,6 +49,29 @@ export interface Verse8Agent8CommerceOptions {
   readonly target?: CatalogTarget;
   readonly stateNamespace?: string;
   readonly now?: () => string;
+  /**
+   * The game-services ledger the commerce v2 server-push lookup reads
+   * (`createVerse8Agent8EventLookupCommerceEvidenceEntry`). With it, every
+   * `$onItemPurchased` grant is also written there under target `verse8`
+   * (`ledgerTarget`), store `verse8`, and the purchase id as the platform
+   * transaction id, after the Agent8 user state committed; a verify request
+   * carrying `verse8.agent8-event.v1` evidence then answers `granted` for
+   * that purchase and `pending` before it. The write is idempotent on the
+   * purchase id; a ledger that is unreachable fails the event so Agent8
+   * redelivers it (the user-state grant is already committed and replays as
+   * `alreadyProcessed`).
+   */
+  readonly ledger?: GameServicesStore;
+  /** The ledger target the lookup reads under; defaults to `verse8`. */
+  readonly ledgerTarget?: string;
+  /**
+   * The deployment target the backend binds `verse8` requests to
+   * (`deploymentTargetBindings`), recorded on the ledger grant so a verify
+   * request bound to it meets the grant under the same key.
+   */
+  readonly ledgerDeploymentTarget?: string;
+  /** The Agent8 account as the game-services player id; defaults to the account itself. */
+  readonly resolvePlayerId?: (account: string) => string;
 }
 
 export interface Verse8Agent8PurchaseResult {
@@ -108,6 +137,38 @@ export function createVerse8Agent8CommerceService(
     options.catalog,
     options.target ?? defaultVerse8CatalogTarget,
   );
+  const ledger = options.ledger;
+  const ledgerTarget = options.ledgerTarget ?? 'verse8';
+  const resolvePlayerId = options.resolvePlayerId ?? ((account: string) => account);
+  const recordLedgerGrant = async (
+    event: Verse8Agent8PurchaseEvent,
+    product: ProductCatalog['products'][number],
+    grantedAt: string,
+  ): Promise<void> => {
+    if (ledger === undefined) {
+      return;
+    }
+    const purchaseId = String(event.purchaseId);
+    const grant = createServerPushLedgerGrant({
+      store: verse8LedgerStoreId,
+      target: ledgerTarget,
+      ...(options.ledgerDeploymentTarget === undefined
+        ? {}
+        : { deploymentTarget: options.ledgerDeploymentTarget }),
+      playerId: resolvePlayerId(event.account),
+      product,
+      platformProductId: event.productId,
+      transactionId: purchaseId,
+      quantity: event.quantity,
+      purchasedAt: grantedAt,
+      grantedAt,
+      evidence: {
+        schema: verse8Agent8EventLedgerSchema,
+        payload: { purchaseId, productId: event.productId, quantity: event.quantity },
+      },
+    });
+    await ledger.recordEntitlementGrant(grant);
+  };
 
   return {
     async handleItemPurchased(event, context) {
@@ -125,6 +186,11 @@ export function createVerse8Agent8CommerceService(
 
           if (existing !== undefined) {
             assertSamePurchase(existing, normalized, product?.id);
+            if (product !== undefined) {
+              // A redelivery after a ledger write that failed: the user-state
+              // grant stands and the ledger write is retried idempotently.
+              await recordLedgerGrant(normalized, product, existing.grantedAt);
+            }
 
             return {
               success: true,
@@ -161,6 +227,7 @@ export function createVerse8Agent8CommerceService(
           // The grant and its consume-once marker share one Agent8 user-state
           // update so a retry cannot observe one without the other.
           await context.updateUserState(normalized.account, { [namespace]: next });
+          await recordLedgerGrant(normalized, product, grantedAt);
 
           return {
             success: true,

@@ -1,6 +1,13 @@
 import { readFile } from 'node:fs/promises';
 
-import { EvidenceAlreadyProcessedError, type EntitlementLedgerGrant } from '@mpgd/game-services';
+import {
+  EvidenceAlreadyProcessedError,
+  listActiveEntitlementTransactions,
+  readPurchaseLedgerStatuses,
+  revokeEntitlementGrant,
+  type EntitlementLedgerGrant,
+  type EntitlementLedgerRevocation,
+} from '@mpgd/game-services';
 import { Miniflare } from 'miniflare';
 
 import { createD1GameServicesStore } from './d1Store.js';
@@ -155,6 +162,119 @@ try {
     (await store.listEntitlementTransactions()).length,
     historicalCount + 1,
     'D1 replay rejection should not create another grant',
+  );
+
+  // Commerce v2 C2: revoke entries (migration 0006) and the ledger status read.
+  await applyMigration(db, '0006_entitlement_revocations.sql');
+  const activeBefore = await readPurchaseLedgerStatuses(store, {
+    ledgerEntryIds: [recorded.ledgerEntryId, 'ledger-historical-purchase', 'missing'],
+  });
+  assertEqual(
+    JSON.stringify(activeBefore.statuses.map((status) => status.status)),
+    JSON.stringify(['active', 'active', 'unknown']),
+    'D1 should answer active for grants without a revoke entry',
+  );
+  const revocation = {
+    playerId: grant.playerId,
+    revokesLedgerEntryId: recorded.ledgerEntryId,
+    idempotencyKey: 'd1-purchase-1:refund',
+    reason: 'refund',
+    revokedAt: '2026-07-15T00:00:00.000Z',
+    payload: { target: 'android', platformTransactionId: 'd1-purchase-1' },
+    evidenceVerificationId: 'provider:d1-purchase:refund',
+  } as const satisfies EntitlementLedgerRevocation;
+  const revoked = await revokeEntitlementGrant(store, revocation);
+  assertEqual(revoked.status, 'revoked', 'D1 should append the revoke entry');
+  const revokeEntryId = revoked.status === 'revoked' ? revoked.ledgerEntryId : '';
+  const replayedRevocation = await revokeEntitlementGrant(store, revocation);
+  assertEqual(
+    JSON.stringify(replayedRevocation),
+    JSON.stringify({ status: 'revoked', ledgerEntryId: revokeEntryId, alreadyProcessed: true }),
+    'a replayed notification key should answer the first revoke entry',
+  );
+  const secondRevocation = await revokeEntitlementGrant(store, {
+    ...revocation,
+    idempotencyKey: 'd1-purchase-1:chargeback',
+    reason: 'chargeback',
+    evidenceVerificationId: 'provider:d1-purchase:chargeback',
+  });
+  assertEqual(
+    JSON.stringify(secondRevocation),
+    JSON.stringify({ status: 'revoked', ledgerEntryId: revokeEntryId, alreadyProcessed: true }),
+    'a grant is reversed once; a second revocation answers the first entry',
+  );
+  assertEqual(
+    JSON.stringify(await revokeEntitlementGrant(store, {
+      ...revocation,
+      revokesLedgerEntryId: 'missing',
+      idempotencyKey: 'missing:refund',
+    })),
+    JSON.stringify({ status: 'grant_not_found' }),
+    'a revoke entry needs an existing grant',
+  );
+  const otherGrant = await store.recordEntitlementGrant({
+    ...grant,
+    idempotencyKey: 'd1-purchase-3',
+    evidenceVerificationId: 'provider:d1-purchase-3',
+    payload: { target: 'android', evidenceVerificationId: 'provider:d1-purchase-3' },
+  });
+  assertEqual(
+    JSON.stringify(await revokeEntitlementGrant(store, {
+      ...revocation,
+      revokesLedgerEntryId: otherGrant.ledgerEntryId,
+      evidenceVerificationId: 'provider:d1-purchase-3:refund',
+    })),
+    JSON.stringify({ status: 'key_conflict' }),
+    'a notification key that reversed one grant cannot reverse another',
+  );
+  assertEqual(
+    JSON.stringify(await revokeEntitlementGrant(store, {
+      ...revocation,
+      revokesLedgerEntryId: otherGrant.ledgerEntryId,
+      idempotencyKey: 'd1-purchase-3:refund',
+    })),
+    JSON.stringify({ status: 'evidence_already_processed' }),
+    'a reused authority identity is a replay, never a second reversal',
+  );
+  const batched = await store.getEntitlementTransactions?.([
+    recorded.ledgerEntryId,
+    otherGrant.ledgerEntryId,
+    'missing',
+    recorded.ledgerEntryId,
+  ]);
+  assertEqual(batched?.length, 2, 'D1 reads grants in one batched query per chunk');
+  const revocations = await store.findEntitlementRevocations?.({
+    ledgerEntryIds: [recorded.ledgerEntryId, 'ledger-historical-purchase'],
+  });
+  assertEqual(revocations?.length, 1, 'D1 should list the revoke entry by its grant');
+  assertEqual(revocations?.[0]?.reason, 'refund', 'D1 should keep the first revocation reason');
+  assertEqual(
+    revocations?.[0]?.evidenceVerificationId,
+    'provider:d1-purchase:refund',
+    'D1 should retain the notification authority identity',
+  );
+  const statusAfter = await readPurchaseLedgerStatuses(store, {
+    ledgerEntryIds: [recorded.ledgerEntryId, 'ledger-historical-purchase'],
+  });
+  assertEqual(
+    JSON.stringify(statusAfter.statuses),
+    JSON.stringify([
+      { ledgerEntryId: recorded.ledgerEntryId, status: 'reversed', reversedBy: revokeEntryId },
+      { ledgerEntryId: 'ledger-historical-purchase', status: 'active' },
+    ]),
+    'D1 ledger status should name the reversing entry',
+  );
+  assertEqual(
+    (await store.listEntitlementTransactions()).length,
+    historicalCount + 2,
+    'the revoke entries must not remove any grant row',
+  );
+  assertEqual(
+    (await listActiveEntitlementTransactions(store)).some(
+      (entry) => entry.ledgerEntryId === recorded.ledgerEntryId,
+    ),
+    false,
+    'entitlement reads subtract the reversed grant',
   );
 } finally {
   await miniflare.dispose();

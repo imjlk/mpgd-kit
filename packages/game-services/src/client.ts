@@ -9,6 +9,7 @@ import type {
   PurchaseResult,
   RewardedAdResult,
 } from '@mpgd/platform';
+import type { CommerceServiceCapabilities } from '@mpgd/platform/commerce';
 
 import { findAdapterSettledGrant } from './authoritative-purchase.js';
 import {
@@ -46,7 +47,7 @@ import type {
   ClaimAdRewardResponse,
   GameServicesLeaderboardTarget,
   GameServicesLedgerTarget,
-  GameServicesStoreTarget,
+  GameServicesLegacyStoreTarget,
   PurchaseLedgerStatusRequest,
   PurchaseLedgerStatusResponse,
   RecordLeaderboardScoreRequest,
@@ -69,9 +70,17 @@ export interface PurchaseVerificationApi {
   /**
    * Whether earlier ledger grants are still active (RFC "Revocation and
    * expiry entries"). The commerce reconciler runs its revocation pass only
-   * when a backend offers this read; the reference server gains it in C2.
+   * when a backend offers this read; the reference server offers it since C2.
    */
   getPurchaseLedgerStatus?(input: PurchaseLedgerStatusRequest): Promise<PurchaseLedgerStatusResponse>;
+  /**
+   * What the backend accepts (RFC "Provider capabilities endpoint"): the
+   * stores its commerce evidence registry serves, their schemas, and who
+   * finishes. The commerce reconciler compares it with its provider at start
+   * when a backend offers it; the reference server offers it when it was
+   * created with a `commerceEvidenceRegistry`.
+   */
+  getCommerceCapabilities?(): Promise<CommerceServiceCapabilities>;
 }
 
 export interface AdRewardClaimApi {
@@ -91,6 +100,8 @@ export interface GameServicesBackendApi {
 
 export const gameServicesBackendEndpoints = {
   verifyPurchase: '/game-services/purchases/verify',
+  getPurchaseLedgerStatus: '/game-services/purchases/ledger-status',
+  getCommerceCapabilities: '/game-services/purchases/capabilities',
   claimAdReward: '/game-services/ad-rewards/claim',
   recordLeaderboardScore: '/game-services/leaderboard/record',
 } as const;
@@ -734,6 +745,19 @@ export function createGameServicesHttpBackendApi(
           body,
         );
       },
+      async getPurchaseLedgerStatus(body) {
+        return sendGameServicesBackendRequest<
+          PurchaseLedgerStatusRequest,
+          PurchaseLedgerStatusResponse
+        >(input.transport, gameServicesBackendEndpoints.getPurchaseLedgerStatus, body);
+      },
+      async getCommerceCapabilities() {
+        return sendGameServicesBackendRequest<Record<string, never>, CommerceServiceCapabilities>(
+          input.transport,
+          gameServicesBackendEndpoints.getCommerceCapabilities,
+          {},
+        );
+      },
     },
     adRewards: {
       async claimAdReward(body) {
@@ -808,6 +832,12 @@ export function createGameServicesOrpcBackendApi(
       verifyPurchase(input) {
         return client.commerce.verifyPurchase(input);
       },
+      getPurchaseLedgerStatus(input) {
+        return client.commerce.getPurchaseLedgerStatus(input);
+      },
+      getCommerceCapabilities() {
+        return client.commerce.getCapabilities();
+      },
     },
     adRewards: {
       claimAdReward(input) {
@@ -854,7 +884,7 @@ function purchaseRejectionReason(purchase: PurchaseResult): string | undefined {
 
 function isGameServicesCommerceTarget(
   target: GameServicesLedgerTarget,
-): target is GameServicesStoreTarget | 'verse8' {
+): target is GameServicesLegacyStoreTarget | 'verse8' {
   return target === 'microsoft-store'
     || target === 'android'
     || target === 'ios'

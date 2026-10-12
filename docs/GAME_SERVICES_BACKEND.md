@@ -277,12 +277,129 @@ production Verse8 verifier. This authenticated game-server endpoint is distinct
 from the public `GET /ads/status` polling endpoint used by the Verse8 browser
 parent; the status endpoint does not consume evidence for a ledger grant.
 
-Verse8 VXShop purchases do not use `verifyPurchase` or a Worker evidence
-binding. The browser can only open the shop and report a pending state. The
-reserved Agent8 `$onItemPurchased` system event is the purchase authority and
-must apply the game-owned catalog grant through a consume-once server path. See
+Verse8 VXShop purchases never grant through `verifyPurchase` evidence. The
+browser can only open the shop and report a pending state. The reserved Agent8
+`$onItemPurchased` system event is the purchase authority and must apply the
+game-owned catalog grant through a consume-once server path; with a ledger
+configured it also writes the server-push ledger grant that the commerce v2
+`verse8.agent8-event.v1` lookup entry reads (below). See
 [Verse8 VXShop and Agent8 Commerce](VERSE8_COMMERCE.md) for the supported
 boundary.
+
+### Commerce evidence registry
+
+Commerce v2 (RFC "Evidence registry") routes purchase evidence by
+`evidence.schema` instead of by target. Compose a registry from the reference
+entries and pass it to the backend:
+
+```ts
+import {
+  createAppStoreCommerceEvidenceEntry,
+  createCommerceEvidenceRegistry,
+  createDevvitOrderLookupCommerceEvidenceEntry,
+  createGooglePlayCommerceEvidenceEntry,
+  createVerse8Agent8EventLookupCommerceEvidenceEntry,
+} from '@mpgd/game-services/commerce-evidence-registry';
+
+const registry = createCommerceEvidenceRegistry([
+  createGooglePlayCommerceEvidenceEntry({ verifier: googlePlay, finalizer: googlePlay }),
+  createAppStoreCommerceEvidenceEntry({ verifier: appStoreVerifier }),
+  createDevvitOrderLookupCommerceEvidenceEntry({ ledger: store }),
+  createVerse8Agent8EventLookupCommerceEvidenceEntry({ ledger: store }),
+]);
+
+const backend = createGameServicesBackend({
+  catalog,
+  placements,
+  store,
+  commerceEvidenceRegistry: registry,
+  evidenceVerifier: adEvidenceVerifier, // rewarded ads only
+});
+```
+
+Each entry names its `schema`, its `store` (an open `StoreId`), a
+`verifier`, an optional `finalizer`, and the `finish` owner; `finish: 'server'`
+without a finalizer, a schema claimed by two entries, a store with two finish
+owners, or two entries of one store that accept a missing envelope fail
+registry construction, so a missing Play finalizer is a startup error rather
+than a grant that is never acknowledged. A request whose schema no entry
+claims is rejected with `EVIDENCE_SCHEMA_UNSUPPORTED`; a schema registered for
+another store with `EVIDENCE_SCHEMA_STORE_MISMATCH`; a request naming a ledger
+target the entry does not declare in `targets` with
+`EVIDENCE_SCHEMA_TARGET_MISMATCH`, all before any verifier runs. The optional
+`unregistered` fallback keeps a deployment's aggregate v1 verifier for stores
+without an entry (a store with an entry never reaches it) and declares the
+stores it serves (`stores`), which the capabilities endpoint publishes without
+schemas; a request for a store the registry does not serve, or a target that
+is neither a ledger target nor a served store, is a 400 as an unknown v1
+target was. A request without an envelope reaches only an entry that declares
+`acceptsMissingEvidence` (the App Store entry does, for its Server API
+lookup), and a schema no entry claims reaches only the store's entry that
+declares `acceptsUnclaimedSchemas` (a verifier binding with its own list).
+Without a registry the backend keeps the v1 behaviour: one `evidenceVerifier`
+and one `purchaseGrantFinalizer` for every purchase; passing a
+`purchaseGrantFinalizer` next to a registry throws.
+
+`VerifyPurchaseRequest.store` names the store a purchase was made in; `target`
+stays the ledger target. A v1 request without `store` maps `android` to
+`google-play`, `ios` to `app-store`, `ait` to `apps-in-toss`, `reddit` to
+`devvit`, and every other target to itself (`resolveLegacyCommerceStoreId`).
+The ledger payload records `store` and `evidenceSchema` so an evidence-less
+retry finalizes through the entry that verified the grant.
+
+The server-push stores register lookup verifiers (`devvit.order.v1`,
+`verse8.agent8-event.v1`): the client envelope only names the purchase, and
+the verifier answers `granted` (with the existing ledger entry and
+`alreadyProcessed: true`) once the host's fulfillment path wrote the grant for
+the same store and transaction id, `pending` (`LEDGER_GRANT_PENDING`) before
+that, and `rejected` for a transaction, product, or player mismatch. The
+fulfillment path writes that grant with `createPlatformOrderLedgerGrant`
+(Devvit, key `reddit:<orderId>`) or `createServerPushLedgerGrant` (the Verse8
+Agent8 service does so when given a `ledger`), or verifies its own record
+through the `devvit.payment-order.v1` entry
+(`createDevvitPaymentOrderCommerceEvidenceEntry`, bound through a game-owned
+`DevvitPaymentOrderAuthority` port). A verifier that answers
+`{ status: 'settled', ledgerEntryId }` is checked against the requesting
+player, product, and target before the entry is answered; nothing is written.
+
+With a registry the backend publishes `getCommerceCapabilities()`
+(`POST /game-services/purchases/capabilities`, oRPC `commerce.getCapabilities`):
+one row per store with its schemas, finish owner, and purchase kinds. The
+commerce reconciler compares it with its provider at start and sets the
+provider's availability to `configuration-required` (and refuses
+`requestPurchase` with `CONFIGURATION_REQUIRED`) for a store the backend does
+not accept or a finish owner that disagrees.
+
+### Revocation entries
+
+The ledger is append-only and gains `revoke` entries that reference an earlier
+grant (`GameServicesStore.recordEntitlementRevocation`,
+`findEntitlementRevocations`, and the batched `getEntitlementTransactions`;
+the memory and D1 stores implement all three, a grant is reversed once, a
+notification key reused for another grant is `RevocationKeyConflictError`,
+and a reused authority identity is `EvidenceAlreadyProcessedError`). Store
+notification handlers are game-owned: a Play voided purchase, an App Store
+Server Notification refund, an Apps in Toss refunded order, or a Devvit refund
+order calls `revokeEntitlementGrant` from
+`@mpgd/game-services/commerce-ledger` with the notification's own key, so a
+redelivered notification answers the first entry with `alreadyProcessed`
+(`key_conflict` and `evidence_already_processed` are the misuse answers).
+`revokePlatformOrder` does that for a `normalizeDevvitRefundOrder` result; a
+refund that arrives before its fulfillment answers `grant_not_found` and
+must be retried, or the fulfillment path must consult the refund feed before
+granting. `getPurchaseLedgerStatus({ ledgerEntryIds, playerId })` (`POST
+/game-services/purchases/ledger-status`, oRPC `commerce.getPurchaseLedgerStatus`)
+answers one status per requested id in request order: `active`, `reversed`
+with the reversing entry, or `unknown` (an unknown id, or another player's
+entry when `playerId` is named); the reconciler reads it in chunks of at most
+100 ids scoped to its player, and the Worker's ingress auth requires the body
+`playerId` to match the principal like every grant route.
+`listActiveEntitlementTransactions` subtracts reversed grants for entitlement
+reads. The D1 migration `0006_entitlement_revocations.sql` keeps the grant
+row referenced (`ON DELETE RESTRICT`): a deletion request removes a player's
+revocation rows before the grants they reverse. The subscription `period`
+entry (`EntitlementLedgerPeriod`) is a validated shape only; nothing writes it
+until a subscription verifier exists.
 
 If any target-specific binding is configured, the Worker enters strict
 target-specific mode for purchase routing. Each purchase request is sent only
@@ -421,7 +538,9 @@ processed-attempt decision, and retained-entry tables. Apply
 `0003_verified_leaderboard_metrics.sql` afterward to persist optional immutable
 numeric attempt metrics on processed decisions and ranked entries. Apply
 `0004_entitlement_evidence.sql` next to persist provider verification identities
-and enforce source-scoped evidence replay protection.
+and enforce source-scoped evidence replay protection, and
+`0006_entitlement_revocations.sql` for the commerce v2 `revoke` entries behind
+the ledger status read (it only adds a table and indexes).
 
 Durable leaderboard providers should also run
 `@mpgd/game-services/verified-leaderboard-durability-conformance`. Its fault
@@ -451,6 +570,40 @@ const score = await env.GAME_SERVICES.recordLeaderboardScore(input);
 const verified = await env.GAME_SERVICES.recordVerifiedAttempt(verifiedCommand);
 const snapshot = await env.GAME_SERVICES.getSnapshot(snapshotRequest);
 ```
+
+`getPurchaseLedgerStatus(input)` and `getCommerceCapabilities()` are also
+service binding methods; the latter answers `undefined` on a Worker without
+commerce registry entries.
+
+The Worker composes its commerce evidence registry from bindings: the
+`google-play` entry from `GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER` or the
+in-Worker Play boundary (`GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME` with the
+`GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH` service that mints Android Publisher
+access tokens from the game-owned service account, plus
+`GAME_SERVICES_GOOGLE_PLAY_ACCOUNT_BINDING` or the explicit
+`GAME_SERVICES_GOOGLE_PLAY_ALLOW_UNBOUND_PLAYER = "true"` opt-in), finalized by
+that boundary or by a `GAME_SERVICES_ANDROID_PURCHASE_FINALIZER` service, and
+or, when the binding acknowledges purchases itself,
+`GAME_SERVICES_ANDROID_VERIFIER_FINALIZES = "true"` (the entry is published
+with the client finish owner, so a commerce v2 Play provider is told
+`configuration-required`); an Android verifier with none of these closes the
+purchase routes (`verifyPurchase` and the capabilities read answer the
+configuration error, logged once at startup) while ads and leaderboards keep
+serving; `app-store` from `GAME_SERVICES_IOS_EVIDENCE_VERIFIER`;
+`apps-in-toss` from `GAME_SERVICES_AIT_EVIDENCE_VERIFIER`; `microsoft-store`
+from the verifier and finalizer pair; and the `devvit.order.v1` and
+`verse8.agent8-event.v1` lookups from `MPGD_COMMERCE_LOOKUP_STORES` (for
+example `["devvit", "verse8"]`), reading the Worker's own ledger. Binding
+entries keep their v1 contract: a request without an envelope and a schema
+no entry claims still reach the binding of their store. Stores without an
+entry keep the aggregate `GAME_SERVICES_EVIDENCE_VERIFIER` (or the local
+development verifier) as the v1 fallback, which is published for `app-store`,
+`apps-in-toss`, `oneplay`, and `google-play` with the client finish owner
+(the aggregate cannot finish Android purchases; bind a Play finalizer to
+publish `google-play` as server-finished); in strict target-specific mode a
+store without its binding keeps answering `EVIDENCE_VERIFIER_UNAVAILABLE` and
+is not published. A Worker without any entry runs without a registry and
+publishes no capabilities.
 
 Use public HTTP/oRPC for external game clients and service binding RPC for
 internal Cloudflare Worker-to-Worker calls. `recordVerifiedAttempt()` is a
@@ -590,7 +743,9 @@ starter. Game-specific production integrations still need these pieces:
 - A game-owned authenticated Google Play API client and production package,
   product, and obfuscated account identifiers for the shared one-time product
   verifier boundary.
-- App Store Server API or signed StoreKit transaction verification.
+- App Store Server API or signed StoreKit transaction verification, and the
+  App Store Server Notifications and Play voided-purchase handlers that call
+  `revokeEntitlementGrant`.
 - Deployment-owned AdMob callback persistence and public-key refresh wiring.
 - Game-specific Apps in Toss mTLS transport, optional Toss Login binding or a
   verified anonymous-player/order association, and independently verified

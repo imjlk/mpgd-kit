@@ -33,6 +33,23 @@ purchases through it whenever `gateway.commerceV2` exists and exposes it as
 `restorePurchases()` over the durable journal. See
 [docs/MONETIZATION_RECOVERY.md](../../docs/MONETIZATION_RECOVERY.md).
 
+## Commerce evidence registry
+
+`createCommerceEvidenceRegistry` from
+`@mpgd/game-services/commerce-evidence-registry` is the RFC "Evidence
+registry": the backend routes every verify request by `evidence.schema` to the
+registered verifier and finalizer, publishes the stores it accepts through
+`getCommerceCapabilities` (`CommerceServiceCapabilities`), and rejects an
+unknown schema (`EVIDENCE_SCHEMA_UNSUPPORTED`) or one registered for another
+store (`EVIDENCE_SCHEMA_STORE_MISMATCH`) before any verifier runs. Reference
+entries wrap the Play, App Store, Microsoft Store, and Apps in Toss verifiers,
+and the server-push stores (`devvit.order.v1`, `verse8.agent8-event.v1`) get
+lookup verifiers that answer the grant the host's fulfillment path already
+wrote, never the client envelope. `@mpgd/game-services/commerce-ledger` adds
+the `revoke` entry write path (`revokeEntitlementGrant`), the ledger status
+read behind `getPurchaseLedgerStatus`, and `listActiveEntitlementTransactions`.
+See [docs/GAME_SERVICES_BACKEND.md](../../docs/GAME_SERVICES_BACKEND.md).
+
 ## Registered rewarded-ad evidence
 
 `createGameServicesClient`, `createRecoverableMonetizationClient`, and

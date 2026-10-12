@@ -1,5 +1,6 @@
 import type {
   CommerceCapabilities,
+  CommerceFinishOwner,
   LogicalProductId,
   PlatformEvidenceEnvelope,
   StarterLogicalProductId,
@@ -249,4 +250,29 @@ export interface ActiveSubscription {
   readonly startedAt: IsoTimestamp;
   readonly expiresAt: IsoTimestamp;
   readonly autoRenew: boolean;
+}
+
+/** What the backend accepts for one store (RFC "Provider capabilities endpoint"). */
+export interface CommerceServiceStoreCapabilities {
+  readonly store: StoreId;
+  /** Evidence schemas the backend routes for this store. */
+  readonly schemas: readonly NonEmptyString[];
+  /** Who finishes a granted purchase of this store, as the backend expects it. */
+  readonly finish: CommerceFinishOwner;
+  readonly purchase: {
+    readonly consumable: boolean;
+    readonly durable: boolean;
+    readonly subscription: boolean;
+  };
+}
+
+/**
+ * The backend's published commerce capabilities (RFC "Provider capabilities
+ * endpoint"): the protocol version it speaks and one row per store its
+ * evidence registry accepts. The client runtime compares it with its
+ * provider's capability block at start.
+ */
+export interface CommerceServiceCapabilities {
+  readonly commerceProtocolVersion: NonEmptyString;
+  readonly stores: readonly CommerceServiceStoreCapabilities[];
 }

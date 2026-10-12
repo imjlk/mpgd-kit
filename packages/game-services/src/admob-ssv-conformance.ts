@@ -389,7 +389,9 @@ function assertDecision(
   status: 'pending' | 'rejected',
   reason: AdMobSsvConformanceReason,
 ): void {
-  const receivedReason = decision.status === 'verified' ? undefined : decision.reason;
+  const receivedReason = decision.status === 'verified' || decision.status === 'settled'
+    ? undefined
+    : decision.reason;
 
   assert(
     decision.status === status && receivedReason === reason,
