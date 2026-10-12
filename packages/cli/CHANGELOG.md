@@ -1,5 +1,16 @@
 # @mpgd/cli
 
+## 0.46.1 — 2026-10-12
+
+### Patch changes
+
+- [2149670d](https://github.com/imjlk/mpgd-kit/commit/2149670dec731cf244ae05121dc87c5ee361adee) The generated Devvit target README now registers the optional Devvit MCP
+  server with `mise --no-config exec node@22 -- npx -y @devvit/mcp@0.0.27`.
+  `@devvit/mcp` 0.0.27 depends on `better-sqlite3` 11.9.1, which ships prebuilt
+  binaries for Node 22 but not 24 and does not build on 26, and `--no-config`
+  keeps mise-managed environment out of the server. The README also gives the
+  plain `npx` form for hosts without mise. — Thanks @imjlk!
+
 ## 0.46.0 — 2026-10-12
 
 ### Patch changes
