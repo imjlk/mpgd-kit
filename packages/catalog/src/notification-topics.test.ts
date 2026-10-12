@@ -599,6 +599,25 @@ assertIssue(
   /apps-in-toss sends its own template, which cannot state what the player did/u,
   'a notice topic on a host-template provider',
 );
+// A provider whose mapping carries its own approved text is reported once,
+// whether or not the mapping gives it.
+for (const reddit of [{}, { title: 'Notice', body: 'You agreed.' }]) {
+  assert.deepEqual(
+    issuesOf(withNotices('consent-notice', { ...noticeTopic, targets: { reddit } })),
+    [
+      'topics[0].targets.reddit: devvit sends the text of its mapping, which cannot state what '
+        + 'the player did; the notice topic must not map to it',
+    ],
+    'a notice topic on a provider with mapped text',
+  );
+}
+// Only the server sends a notice.
+assertIssue(
+  withNotices('consent-notice', { ...noticeTopic, channels: ['local', 'remote'] }),
+  'topics[0].channels',
+  /only the server sends consent notices; the notice topic declares no local channel/u,
+  'a notice topic with the local channel',
+);
 // notices.copy gives every locale, the default one included, a title and a
 // body for each variant, filled only with the consent date.
 assertIssue(

@@ -20,10 +20,12 @@ import {
 } from './notifications-conformance.js';
 import {
   createUnsupportedNotificationCapabilities,
+  notificationNoticeVariants,
   type NotificationDeliveryProviderEntry,
   type NotificationDeployment,
   type NotificationEvent,
   type NotificationNoticeCopy,
+  type NotificationNoticeVariant,
   type NotificationProvider,
   type NotificationTopicDeclaration,
 } from './notifications.js';
@@ -2474,6 +2476,69 @@ describe('notifications reference runtime and fakes: routes, registrations, and 
       ['야간 수신 동의 안내', '2026-10-12에 야간 수신에 동의하셨어요.'],
       ['수신 철회 안내', '2026-10-12에 철회하셨어요.'],
     ]);
+  });
+
+  it('pushes each kind of notice in its own variant, also when a push is replayed', async () => {
+    const { clock, host, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
+      deployment: { ...kr, noticeTopic: 'consent-notice' },
+    });
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['consent-notice'], gesture: true });
+    await runtime.setAdvertisingConsent({ advertising: 'granted', night: 'granted', textVersion: 'ad-v1' });
+    clock.set('2026-10-13T03:00:00Z');
+    await runtime.setAdvertisingConsent({ advertising: 'withdrawn', textVersion: 'ad-v1' });
+    // The first push is rate-limited, and the next run replays it in its variant.
+    backend.queueProviderResult({ status: 'rate-limited', retryAfterSeconds: 60 });
+    clock.set('2026-10-20T03:00:00Z');
+    await backend.runScheduler();
+    clock.set('2026-10-20T03:01:00Z');
+    await backend.runScheduler();
+    // Two years on, the night consent is re-confirmed, then withdrawn.
+    clock.set('2028-10-04T03:00:00Z');
+    await runtime.register();
+    await backend.runScheduler();
+    await runtime.setAdvertisingConsent({ night: 'withdrawn', textVersion: 'night-v1' });
+    clock.set('2028-10-11T03:00:00Z');
+    await backend.runScheduler();
+    expect(backend.providerCalls.map((call) => [call.sendKey, call.content.title])).toEqual([
+      ['notice:p-1:consent-result:advertising:2026-10-12T03:00:00Z:2026-10-26', '수신 동의 안내'],
+      ['notice:p-1:consent-result:night:2026-10-12T03:00:00.001Z:2026-10-26', '야간 수신 동의 안내'],
+      ['notice:p-1:consent-result:advertising:2026-10-13T03:00:00Z:2026-10-27', '수신 철회 안내'],
+      ['notice:p-1:consent-result:advertising:2026-10-12T03:00:00Z:2026-10-26', '수신 동의 안내'],
+      ['notice:p-1:reconfirmation:night:2026-10-12T03:00:00.001Z:2028-10-11', '야간 수신 동의 확인'],
+      ['notice:p-1:consent-result:night:2028-10-04T03:00:00Z:2028-10-18', '야간 수신 철회 안내'],
+    ]);
+  });
+
+  it("gives a notice in the recipient's locale, else its language, else the default locale", async () => {
+    const texts = (title: string, body: string) => Object.fromEntries(
+      notificationNoticeVariants.map((variant) => [variant, { title, body }]),
+    ) as Readonly<Record<NotificationNoticeVariant, { readonly title: string; readonly body: string }>>;
+    const bilingual: NotificationNoticeCopy = {
+      ko: texts('수신 안내', '{{consentDate}} 처리'),
+      en: texts('Notice', 'Processed on {{consentDate}}.'),
+    };
+    const sent: string[] = [];
+    for (const locale of ['en-US', 'fr']) {
+      const { clock, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
+        deployment: { ...kr, noticeTopic: 'consent-notice' },
+        noticeCopy: bilingual,
+      });
+      backend.authenticate('p-1');
+      await backend.registerEndpoint({
+        provider: osProfile.provider,
+        address: { kind: 'fcm-token', value: 'tok-1', permission: 'granted' },
+        locale,
+      });
+      await runtime.setAdvertisingConsent({ advertising: 'granted', textVersion: 'ad-v1' });
+      clock.set('2026-10-19T03:00:00Z');
+      await backend.runScheduler();
+      sent.push(...backend.providerCalls.map((call) => `${locale}: ${call.content.title ?? ''} / ${call.content.body ?? ''}`));
+    }
+    expect(sent).toEqual(['en-US: Notice / Processed on 2026-10-12.', 'fr: 수신 안내 / 2026-10-12 처리']);
   });
 
   it('requires the notice topic only on a target that delivers advertising, as the validator does', () => {

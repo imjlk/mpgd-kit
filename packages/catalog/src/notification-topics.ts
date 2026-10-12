@@ -118,9 +118,10 @@ const validateNotificationTopicCatalogShape =
  * - topic ids are unique, and every `copy` includes `defaultLocale` (matched
  *   without regard to case, as `findNotificationCopy` matches it);
  * - the notices: `notices.topic` names a declared `service` topic with the
- *   `remote` channel that keeps only the delivery settings (no `copy`, no
- *   `title` or `body` in a mapping, and no host-template provider, whose
- *   template could not state the record), and `notices.copy` includes
+ *   `remote` channel that keeps only the delivery settings (no `local`
+ *   channel, no `copy`, no `title` or `body` in a mapping, and no provider
+ *   that sends a host template or its mapping's own text, which could not
+ *   state the record), and `notices.copy` includes
  *   `defaultLocale`, matched the same way, and gives every locale a title and
  *   a body for each of `notificationNoticeVariants`, none blank and none with
  *   a placeholder but `{{consentDate}}`;
@@ -196,7 +197,7 @@ export function validateNotificationTopicCatalog(
       }
     }
   });
-  issues.push(...noticeIssues(catalog, ids));
+  issues.push(...noticeIssues(catalog, ids, options.targetProviders ?? {}));
   issues.push(...deploymentIssues(catalog, options.deployment));
   // With no issue, `notices.copy` has every variant for every locale: the
   // catalog has the declared type.
@@ -248,6 +249,18 @@ function mappingIssues(
   rules: NotificationDeployment['advertisingRules'],
   noticeTopic: boolean,
 ): NotificationTopicCatalogIssue[] {
+  // A notice says what the player did, which only notices.copy can say: a
+  // provider that sends a host template, or its mapping's own approved text,
+  // cannot carry it, so its mapping rules do not apply either.
+  if (noticeTopic && sendsOwnText(provider)) {
+    const text = provider.content === 'host-template'
+      ? 'its own template'
+      : 'the text of its mapping';
+    return [{
+      path: at,
+      message: `${provider.provider} sends ${text}, which cannot state what the player did; the notice topic must not map to it`,
+    }];
+  }
   const issues: NotificationTopicCatalogIssue[] = [];
   for (const [field, rule] of Object.entries(provider.mapping)) {
     const path = `${at}.${field}`;
@@ -333,13 +346,6 @@ function mappingIssues(
       message: `${provider.provider} does not deliver ${topic.purpose} topics; a ${topic.purpose} topic with the remote channel must not map to it`,
     });
   }
-  // A notice states the record it reports on, which a host template cannot.
-  if (noticeTopic && provider.content === 'host-template') {
-    issues.push({
-      path: at,
-      message: `${provider.provider} sends its own template, which cannot state what the player did; the notice topic must not map to it`,
-    });
-  }
   // A free-form provider sends, and a local notification shows, the topic's
   // own text: the mapping's title and body, else the copy. Without either a
   // send has nothing to say and a local reminder answers `unavailable`. The
@@ -358,6 +364,13 @@ function mappingIssues(
   return issues;
 }
 
+/** Whether a provider sends a host template, or a title and a body its mapping must carry. */
+function sendsOwnText(provider: NotificationProviderRegistryEntry): boolean {
+  return provider.content === 'host-template'
+    || provider.mapping['title']?.required === true
+    || provider.mapping['body']?.required === true;
+}
+
 /** A registry pattern as the `u` flag reads it, or `undefined` when it does not compile. */
 function compileMappingPattern(pattern: string): RegExp | undefined {
   try {
@@ -371,12 +384,13 @@ function compileMappingPattern(pattern: string): RegExp | undefined {
 function noticeIssues(
   catalog: NotificationTopicCatalogShape,
   ids: ReadonlyMap<string, number>,
+  targetProviders: Readonly<Record<string, NotificationProviderRegistryEntry>>,
 ): NotificationTopicCatalogIssue[] {
   if (catalog.notices === undefined) {
     return [];
   }
   return [
-    ...noticeTopicIssues(catalog, catalog.notices.topic, ids),
+    ...noticeTopicIssues(catalog, catalog.notices.topic, ids, targetProviders),
     ...noticeCopyIssues(catalog.notices.copy, catalog.defaultLocale),
   ];
 }
@@ -389,6 +403,7 @@ function noticeTopicIssues(
   catalog: NotificationTopicCatalogShape,
   id: string,
   ids: ReadonlyMap<string, number>,
+  targetProviders: Readonly<Record<string, NotificationProviderRegistryEntry>>,
 ): NotificationTopicCatalogIssue[] {
   const index = ids.get(id);
   const topic = index === undefined ? undefined : catalog.topics[index];
@@ -403,14 +418,28 @@ function noticeTopicIssues(
   }
   const at = `topics[${index}]`;
   const issues: NotificationTopicCatalogIssue[] = [];
+  // Only the server sends a notice; a local reminder of it would have no text.
+  if (topic.channels.includes('local')) {
+    issues.push({
+      path: `${at}.channels`,
+      message: 'only the server sends consent notices; the notice topic declares no local channel',
+    });
+  }
   if (topic.copy !== undefined) {
     issues.push({
       path: `${at}.copy`,
       message: `the notice topic's text is notices.copy, one per notice variant; ${topic.id} declares no copy of its own`,
     });
   }
-  // A mapping's own title and body would be sent in place of notices.copy.
+  // A mapping's own title and body would be sent in place of notices.copy. A
+  // provider that needs them is reported with the mapping rules.
   for (const [target, mapping] of Object.entries(topic.targets ?? {})) {
+    const provider = Object.prototype.hasOwnProperty.call(targetProviders, target)
+      ? targetProviders[target]
+      : undefined;
+    if (provider !== undefined && sendsOwnText(provider)) {
+      continue;
+    }
     for (const field of ['title', 'body'] as const) {
       if (mapping[field] !== undefined) {
         issues.push({

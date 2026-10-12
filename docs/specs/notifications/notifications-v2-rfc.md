@@ -612,8 +612,8 @@ products and ad placements.
           "body": "{{consentDate}}에 광고성 알림 수신에 동의하셨어요."
         },
         "consent-result.advertising.withdrawn": {
-          "title": "광고성 알림 수신 철회 안내",
-          "body": "{{consentDate}}에 광고성 알림 수신 동의를 철회하셨어요."
+          "title": "광고성 알림 수신 거부 안내",
+          "body": "{{consentDate}}에 광고성 알림 수신 거부가 처리됐어요."
         }
         // …and consent-result.night.granted, consent-result.night.withdrawn,
         // reconfirmation.advertising, and reconfirmation.night
@@ -698,21 +698,23 @@ products and ad placements.
   deployment enables the Korean rules (see
   [Consent records](#consent-records)):
   - **`notices.topic`** names a `service` topic with the `remote` channel,
-    which keeps only the delivery settings. It declares no `copy`, its
-    mappings carry no `title` or `body`, and it maps to no host-template
-    provider, whose template could not state the record. The deployment's
-    `noticeTopic` names the same topic for the scheduler.
+    which keeps only the delivery settings. It declares no `copy` and no
+    `local` channel, and its mappings carry no `title` or `body`. It maps to
+    no provider that sends a host template or its mapping's own text, which
+    could not state the record. The deployment's `noticeTopic` names the same
+    topic for the scheduler.
   - **`notices.copy`** maps each locale to one `{ title, body }` per notice
     variant: `consent-result.advertising.granted`,
     `consent-result.advertising.withdrawn`, `consent-result.night.granted`,
     `consent-result.night.withdrawn`, `reconfirmation.advertising`, and
     `reconfirmation.night`. One notice topic can then say whether the player
     consented or withdrew, and to advertising or to night sending, as decree
-    art. 62-3 requires.
+    art. 62-3 requires. A refusal is recorded as `withdrawn`, so a
+    `withdrawn` text must read for a refusal too.
   - **Placeholders.** A notice's title and body may use only
     `{{consentDate}}`.
-  - **Validation.** The validator reports a notice topic that declares
-    `copy`, a missing `notices.copy`, one without `defaultLocale` (matched
+  - **Validation.** The validator reports a notice topic that breaks these
+    rules, a missing `notices.copy`, one without `defaultLocale` (matched
     without regard to case), a locale without one of the six variants, an
     unknown variant, a blank title or body, and any other placeholder. Given
     the deployment settings, it also reports a `noticeTopic` that names
@@ -1412,9 +1414,9 @@ A deployment sets `advertisingRules`:
 
 Given the deployment settings, `validate:notifications` requires this setting
 when the catalog has an `advertising` topic. Under `kr` it also requires the
-notice topic and the advertising sender, and it reports a blank sender
-contact, sender name, or opt-out line, which [gate step 8](#policy-gate)
-would read as missing or absent.
+notice topic with its `notices.copy` and the advertising sender, and it
+reports a blank sender contact, sender name, or opt-out line, which
+[gate step 8](#policy-gate) would read as missing or absent.
 
 What the kit enforces for `advertising` topics under `kr`:
 
@@ -1532,7 +1534,7 @@ How a real provider is judged:
 | `appliesTo` | Predicates on capability paths that must all hold: `{ "path": "permission.prompt", "equals": "os" }`, `{ "path": "remote.purposes", "includes": "advertising" }`, or `"excludes"` |
 | `profile` | `provider`, `capabilities`, and optional server-side `limits` (`perUserPerDay`, `perUserPerMinute`). The fake backend derives the provider's registry entry from them: purposes, addressing, content, and permission fields from the capabilities; `expiry` and `actions` true for a free-form device provider; `link` true for `host-link` opens; no `rate` |
 | `catalog` | Topic entries as in the [topic catalog](#topic-catalog), with the provider mapping for this one profile under `mapping` instead of `targets`. Vector catalogs list only the topics a scenario needs and are not validated: `advertising-unsupported-by-host` maps an advertising topic the validator would reject, to prove the gate refuses it too |
-| `notices` | The catalog's `notices` block without its topic, which the deployment's `noticeTopic` names: `copy`, a title and a body per locale and notice variant. The notice topic in `catalog` declares no copy |
+| `notices` | The catalog's `notices` block without its topic, which the deployment's `noticeTopic` names: `copy`, a title and a body per locale and notice variant. The notice topic in `catalog` declares no copy. A `kr` vector whose catalog declares the notice topic needs it, or the runner fails the vector at `backend` |
 | `context` | `player`, `now`, and the device's `timeZone`, which the runtime registers |
 | `host` | Fake host settings: with `actionRequired: true`, the fixture provider reports `availability: 'action-required'` and `requiredAction: 'login'` until `completeAction`; `profile.capabilities` is its declaration afterwards |
 | `deployment` | Backend deployment settings: `advertisingRules` (`kr` or `none`), `advertisingSender` (`{ name?, contact }`), `advertisingOptOutLine`, `noticeTopic` (the catalog's `notices.topic`), and `timeZone` (Asia/Seoul when absent) |
@@ -1606,7 +1608,7 @@ listed fields of each item asserted:
 | `requested-topic-needs-opt-in` | A `requested` topic is suppressed until the player turns it on |
 | `advertising-needs-consent` | Suppressed without consent; rendered with label, sender line, free opt-out line, opt-out action, and expiry; the result notice is listed, the first re-confirmation not yet |
 | `advertising-notices` | An unrecorded result notice is sent through the notice topic; a re-confirmation is listed 60 days before its `dueBy`; recording it before then, recording a name that matches nothing, and recording it again after its `dueBy` change nothing; the next one is listed two years later |
-| `advertising-notice-variants` | The scheduler pushes the result notices of a night-time consent and of an advertising withdrawal through one notice topic, each in its own variant of `notices.copy` |
+| `advertising-notice-variants` | After advertising and night consent, then an advertising withdrawal, the scheduler pushes the three result notices through one notice topic, each in its own variant of `notices.copy` |
 | `advertising-night-window` | Deferred to 08:00 KST without night consent and sent with an expiry; immediate without expiry with it |
 | `advertising-rules-none` | Without the Korean rules: a send before consent is `suppressed: advertising-consent-missing`; after consent, no window, label, or expiry |
 | `advertising-unsupported-by-host` | A host-template provider refuses an advertising topic |

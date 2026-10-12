@@ -1021,22 +1021,21 @@ export function createNotificationConformanceBackend(
     input.catalog.find((topic) => topic.id === id);
   /**
    * The topic a send is rendered from. A consent notice goes out through the
-   * notice topic with its variant's `notices.copy` as the topic's copy, so the
-   * gate resolves the locale as for any topic; the notice topic's own copy
-   * is never sent.
+   * notice topic with its variant's `notices.copy` in place of the topic's
+   * own copy, so the gate resolves the locale as for any topic. Notices are
+   * sent only where `noticeCopy` is required, so it is there.
    */
   const topicFor = (
     request: SendRequest,
     origin: SendOrigin,
   ): NotificationTopicDeclaration | undefined => {
     const topic = topicOf(request.topic);
-    if (topic === undefined || origin.kind !== 'notice') {
-      return topic;
-    }
-    const { copy: _own, ...delivery } = topic;
-    return input.noticeCopy === undefined
-      ? delivery
-      : { ...delivery, copy: notificationNoticeVariantCopy(input.noticeCopy, origin.variant) };
+    return topic === undefined || origin.kind !== 'notice'
+      ? topic
+      : {
+          ...topic,
+          copy: notificationNoticeVariantCopy(input.noticeCopy ?? {}, origin.variant),
+        };
   };
   if (input.deployment !== undefined) {
     assertNotificationDeployment(input.deployment);

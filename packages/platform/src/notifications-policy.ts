@@ -2069,7 +2069,9 @@ export function isSameNotificationNotice(
 /**
  * The copy a notice is given in: its kind, its record's kind, and for a
  * result notice the record's state, so the text can say what the player did
- * (decree art. 62-3). A re-confirmation always reports on a consent.
+ * (decree art. 62-3). A refusal is recorded as `withdrawn`, so a `withdrawn`
+ * text reads for a refusal too; a re-confirmation always reports on a
+ * consent. A named union keeps the JSON Schema names readable.
  */
 export type NotificationNoticeVariant =
   | 'consent-result.advertising.granted'
@@ -2079,6 +2081,7 @@ export type NotificationNoticeVariant =
   | 'reconfirmation.advertising'
   | 'reconfirmation.night';
 
+/** Every `NotificationNoticeVariant`, in this order; a test keeps the two equal. */
 export const notificationNoticeVariants = Object.freeze([
   'consent-result.advertising.granted',
   'consent-result.advertising.withdrawn',

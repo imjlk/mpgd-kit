@@ -1,7 +1,7 @@
 {
   "vector": "advertising-notice-variants",
   "protocol": "2.0.0-draft.1",
-  "summary": "A consent notice says what the player did: the scheduler pushes the result notice of a night-time consent and of an advertising withdrawal through the one notice topic, each in its own variant of the catalog's notice copy, with the record's date.",
+  "summary": "A consent notice says what the player did: after advertising and night consent and then an advertising withdrawal, the scheduler pushes the three result notices through the one notice topic, each in its own variant of the catalog's notice copy, with the record's date.",
   "appliesTo": [
     {
       "path": "remote.purposes",
@@ -64,16 +64,16 @@
           "body": "{{consentDate}}에 광고성 알림 수신에 동의하셨어요. 알림 설정에서 언제든 철회할 수 있어요."
         },
         "consent-result.advertising.withdrawn": {
-          "title": "광고성 알림 수신 철회 안내",
-          "body": "{{consentDate}}에 광고성 알림 수신 동의를 철회하셨어요."
+          "title": "광고성 알림 수신 거부 안내",
+          "body": "{{consentDate}}에 광고성 알림 수신 거부가 처리됐어요."
         },
         "consent-result.night.granted": {
           "title": "야간 광고성 알림 수신 동의 안내",
           "body": "{{consentDate}}에 야간(21시~8시) 광고성 알림 수신에 동의하셨어요. 알림 설정에서 언제든 철회할 수 있어요."
         },
         "consent-result.night.withdrawn": {
-          "title": "야간 광고성 알림 수신 철회 안내",
-          "body": "{{consentDate}}에 야간(21시~8시) 광고성 알림 수신 동의를 철회하셨어요."
+          "title": "야간 광고성 알림 수신 거부 안내",
+          "body": "{{consentDate}}에 야간(21시~8시) 광고성 알림 수신 거부가 처리됐어요."
         },
         "reconfirmation.advertising": {
           "title": "광고성 알림 수신 동의 확인",
@@ -91,7 +91,7 @@
         },
         "consent-result.advertising.withdrawn": {
           "title": "Promotional notifications",
-          "body": "You withdrew from promotional notifications on {{consentDate}}."
+          "body": "Your refusal of promotional notifications was processed on {{consentDate}}."
         },
         "consent-result.night.granted": {
           "title": "Night-time promotional notifications",
@@ -99,7 +99,7 @@
         },
         "consent-result.night.withdrawn": {
           "title": "Night-time promotional notifications",
-          "body": "You withdrew from promotional notifications between 21:00 and 08:00 on {{consentDate}}."
+          "body": "Your refusal of promotional notifications between 21:00 and 08:00 was processed on {{consentDate}}."
         },
         "reconfirmation.advertising": {
           "title": "Promotional notifications",
@@ -161,8 +161,9 @@
       "actor": "game",
       "action": "setAdvertisingConsent",
       "input": {
+        "advertising": "granted",
         "night": "granted",
-        "textVersion": "night-consent-v1"
+        "textVersion": "ad-consent-v1"
       }
     },
     {
@@ -191,7 +192,12 @@
   "expect": {
     "deliveries": [
       {
-        "idempotencyKey": "notice:p-1:consent-result:night:2026-10-12T03:00:00Z:2026-10-26",
+        "idempotencyKey": "notice:p-1:consent-result:advertising:2026-10-12T03:00:00Z:2026-10-26",
+        "topic": "consent-notice",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "notice:p-1:consent-result:night:2026-10-12T03:00:00.001Z:2026-10-26",
         "topic": "consent-notice",
         "status": "delivered"
       },
@@ -205,6 +211,13 @@
       {
         "topic": "consent-notice",
         "content": {
+          "title": "광고성 알림 수신 동의 안내",
+          "body": "2026-10-12에 광고성 알림 수신에 동의하셨어요. 알림 설정에서 언제든 철회할 수 있어요."
+        }
+      },
+      {
+        "topic": "consent-notice",
+        "content": {
           "title": "야간 광고성 알림 수신 동의 안내",
           "body": "2026-10-12에 야간(21시~8시) 광고성 알림 수신에 동의하셨어요. 알림 설정에서 언제든 철회할 수 있어요."
         }
@@ -212,8 +225,8 @@
       {
         "topic": "consent-notice",
         "content": {
-          "title": "광고성 알림 수신 철회 안내",
-          "body": "2026-10-13에 광고성 알림 수신 동의를 철회하셨어요."
+          "title": "광고성 알림 수신 거부 안내",
+          "body": "2026-10-13에 광고성 알림 수신 거부가 처리됐어요."
         }
       }
     ],
