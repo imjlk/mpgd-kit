@@ -115,9 +115,10 @@ Every purchase the plugin reports (`getPurchases()`, `purchase()`, and
 `purchaseUpdated`) carries the Billing Library 9.1.0 `Purchase` getters
 `products`, `purchaseState`, `purchaseTime`, `quantity`, `isAcknowledged`,
 and `obfuscatedAccountId`, with `priceAmountMicros` on offers. The 0.1 names
-`productIds`, `state`, and `purchaseTimeMillis` were removed; the TypeScript
-readers do not read them, so a shell must carry the matching native module
-(`cap sync` after upgrading). `purchaseUpdated` is retained
+`productIds`, `state`, and `purchaseTimeMillis` were removed from the payload
+and the type. The TypeScript readers still accept them, so a web bundle that
+reaches a 0.1 native build first (a live update) keeps paid purchases
+readable; run `cap sync` after upgrading all the same. `purchaseUpdated` is retained
 until a listener consumes it, so a purchase that completes after the
 `purchase` call timed out, or before the web view attached its listener,
 still reaches the provider, and a cancel or non-OK result that arrives after

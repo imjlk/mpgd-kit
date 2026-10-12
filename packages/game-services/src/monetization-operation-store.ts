@@ -13,9 +13,9 @@ import type {
  * non-pending result; a commerce purchase record is open until its state is
  * terminal (`finished`, `cancelled`, `failed`, `rejected`, `revoked`). A
  * retired v1 `purchase` record (written before commerce v2 C4) is open only
- * while it holds a completed platform result and no terminal result: the
- * recoverable client sends its verification to the backend once more and
- * closes it. Terminal records stay addressable by `read` for duplicate
+ * while it holds a completed platform result and either no terminal result or
+ * a grant whose finalization is still pending: the recoverable client sends
+ * its verification to the backend once more and closes it. Terminal records stay addressable by `read` for duplicate
  * protection.
  */
 export function isMonetizationOperationRecoverable(record: MonetizationOperationRecord): boolean {
@@ -28,11 +28,17 @@ export function isMonetizationOperationRecoverable(record: MonetizationOperation
   return record.result === undefined || record.result.status === 'pending';
 }
 
-/** A retired v1 purchase record whose backend verification was never settled. */
+/**
+ * A retired v1 purchase record whose backend verification was never settled,
+ * or whose grant still waits for the backend to consume or acknowledge the
+ * store purchase (`response.finalization.status === 'pending'`).
+ */
 export function isRetiredPurchaseOpen(record: RetiredPurchaseOperationRecord): boolean {
   return record.platform?.status === 'completed'
     && record.platform.transactionId !== undefined
-    && (record.result === undefined || record.result.status === 'pending');
+    && (record.result === undefined
+      || record.result.status === 'pending'
+      || record.response?.finalization?.status === 'pending');
 }
 
 /** Whether a commerce v2 record holds a ledger grant the revocation pass should keep checking. */

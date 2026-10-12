@@ -639,6 +639,21 @@ for (const [availability, expected] of [
     false,
     `a ${availability} provider never sees the purchase`,
   );
+  // Subscriptions follow the same readiness rule as one-time products.
+  assert.deepEqual(
+    await commerce.requestPurchase({
+      logicalId: 'VIP_PASS',
+      source: 'shop',
+      idempotencyKey: `not-ready-subscription-${availability}`,
+    }),
+    { outcome: 'failed', error: expected },
+    `a subscription from a provider that is ${availability} is refused like a one-time product`,
+  );
+  assert.equal(
+    notReady.commerce.calls.some((name) => name.startsWith('requestPurchase:')),
+    false,
+    `a ${availability} provider never sees the subscription purchase`,
+  );
   const blocked = requireCommerce(withTargetAvailability(notReady.gateway, sellsNothing));
   assert.deepEqual(
     await blocked.requestPurchase({

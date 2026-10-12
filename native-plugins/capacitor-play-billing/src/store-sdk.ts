@@ -526,7 +526,7 @@ function convertPurchase(purchase: unknown): StoreSdkPurchase | Promise<StoreSdk
   if (!isRecord(purchase)) {
     throw evidenceInvalid('Play purchase is not an object.');
   }
-  const state = purchase.purchaseState;
+  const state = purchaseStateOf(purchase);
   if (state !== 'pending' && state !== 'purchased') {
     throw evidenceInvalid('Play purchase state is invalid.');
   }
@@ -557,7 +557,9 @@ function buildSdkPurchase(
   },
 ): StoreSdkPurchase {
   const { sku, state, token, transactionId } = parsed;
-  const purchaseTime = purchase.purchaseTime;
+  const purchaseTime = typeof purchase.purchaseTime === 'number'
+    ? purchase.purchaseTime
+    : purchase.purchaseTimeMillis;
   const purchasedAt = typeof purchaseTime === 'number'
     && Number.isSafeInteger(purchaseTime)
     && purchaseTime > 0
@@ -587,16 +589,28 @@ function skuOf(purchase: unknown): string | undefined {
   if (!isRecord(purchase)) {
     return undefined;
   }
-  const products = purchase.products;
+  const products = purchase.products ?? purchase.productIds;
   const sku = Array.isArray(products) && products.length === 1 ? products[0] : undefined;
   return typeof sku === 'string' && productIdPattern.test(sku) ? sku : undefined;
 }
 
+/**
+ * The purchase state under its Billing 9.1.0 name, or under the 0.1 name
+ * (`state`). The plugin's own native code sends only the current names; the
+ * 0.1 names (`state`, `productIds`, `purchaseTimeMillis`) are still read so a
+ * web bundle shipped ahead of its native binary, for example by a live
+ * update onto a 0.1 build, keeps every paid purchase readable and
+ * recoverable instead of rejecting it as invalid evidence.
+ */
+function purchaseStateOf(purchase: Readonly<Record<string, unknown>>): unknown {
+  return purchase.purchaseState ?? purchase.state;
+}
+
 function isUnfinished(purchase: Readonly<Record<string, unknown>>, includePending: boolean): boolean {
-  const state = purchase.purchaseState;
+  const state = purchaseStateOf(purchase);
   if (state === 'purchased') {
-    // An absent flag is unfinished so a paid purchase is never dropped from
-    // recovery.
+    // A 0.1 native build reports no flag; an absent flag is unfinished so a
+    // paid purchase is never dropped from recovery.
     return purchase.isAcknowledged !== true;
   }
   return state === 'pending' && includePending;
@@ -614,7 +628,7 @@ function assertOutcomePurchase(
   if (skuOf(purchase) !== expectedSku) {
     throw evidenceInvalid('Play purchase did not match the requested product.');
   }
-  if (purchase.purchaseState !== expectedState) {
+  if (purchaseStateOf(purchase) !== expectedState) {
     throw evidenceInvalid('Play purchase state is inconsistent.');
   }
   return purchase;

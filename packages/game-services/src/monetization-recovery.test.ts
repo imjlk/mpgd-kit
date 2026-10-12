@@ -495,6 +495,104 @@ assert.equal(
   'a closed retired record is not verified a second time',
 );
 
+// A retired v1 grant whose consume or acknowledge was still pending is sent again under its own key
+// until the backend reports the finalization completed, as the v1 client did; it is never regranted.
+{
+  const finalizationStore = createStore();
+  const retiredGrant: MonetizationOperationRecord = {
+    ...(retiredPurchase as Extract<MonetizationOperationRecord, { kind: 'purchase' }>),
+    key: JSON.stringify(['android', 'purchase', 'retired-v1-finalizing']),
+    input: { productId: 'COINS_100', source: 'shop', idempotencyKey: 'retired-v1-finalizing' },
+    response: {
+      verified: true,
+      alreadyProcessed: false,
+      ledgerEntryId: 'purchase-retired-v1-finalizing',
+      finalization: { status: 'pending', alreadyCompleted: false, reason: 'PROVIDER_UNAVAILABLE' },
+    },
+    result: {
+      status: 'granted',
+      purchase: {
+        status: 'completed',
+        transactionId: 'retired-v1-transaction',
+        entitlementIds: [],
+      },
+      ledgerEntryId: 'purchase-retired-v1-finalizing',
+    },
+  };
+  assert.equal(
+    isMonetizationOperationRecoverable(retiredGrant),
+    true,
+    'a retired v1 grant with a pending finalization is still open',
+  );
+  await finalizationStore.reserve(retiredGrant);
+  const sent: string[] = [];
+  let finalizationState: 'outage' | 'pending' | 'completed' = 'outage';
+  const finalizing = createRecoverableMonetizationClient({
+    gateway,
+    backend: {
+      ...backend,
+      purchases: {
+        ...backend.purchases,
+        async verifyPurchase(request) {
+          sent.push(request.idempotencyKey);
+          if (finalizationState === 'outage') {
+            throw new Error('backend unavailable');
+          }
+          return {
+            verified: true,
+            alreadyProcessed: true,
+            ledgerEntryId: 'purchase-retired-v1-finalizing',
+            finalization: finalizationState === 'pending'
+              ? {
+                  status: 'pending' as const,
+                  alreadyCompleted: false,
+                  reason: 'PROVIDER_UNAVAILABLE',
+                }
+              : {
+                  status: 'completed' as const,
+                  action: 'consume' as const,
+                  alreadyCompleted: false,
+                },
+          };
+        },
+      },
+    },
+    playerId: 'player-1',
+    target: 'android',
+    operationStore: finalizationStore,
+  });
+  const summaryOf = async (): Promise<string | undefined> => {
+    const entry = (await finalizing.reconcile()).find(
+      (summary) => summary.idempotencyKey === 'retired-v1-finalizing',
+    );
+    return entry === undefined
+      ? undefined
+      : `${entry.kind}:${entry.status}:${String(entry.finalizationPending)}`;
+  };
+  assert.equal(
+    await summaryOf(),
+    'purchase:granted:true',
+    'a backend outage keeps the recorded grant and its pending finalization',
+  );
+  finalizationState = 'pending';
+  assert.equal(await summaryOf(), 'purchase:granted:true');
+  assert.equal(
+    isMonetizationOperationRecoverable((await finalizationStore.read(retiredGrant.key))!),
+    true,
+    'a finalization the backend still reports pending keeps the record open',
+  );
+  finalizationState = 'completed';
+  assert.equal(await summaryOf(), 'purchase:granted:false');
+  const closed = await finalizationStore.read(retiredGrant.key);
+  assert.equal(closed !== undefined && isMonetizationOperationRecoverable(closed), false);
+  assert.equal(await summaryOf(), undefined, 'a finished grant is not sent again');
+  assert.equal(
+    sent.filter((key) => key === 'retired-v1-finalizing').length,
+    3,
+    'each pass sends the saved request under the original key until finalization completes',
+  );
+}
+
 ssvAvailable = true;
 const delayedReward = { placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'delayed-reward' };
 assert.equal((await client.claimRewardedAd(delayedReward)).status, 'pending');

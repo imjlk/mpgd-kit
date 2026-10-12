@@ -580,11 +580,12 @@ export function createRecoverableMonetizationClient(
     const summarize = (
       latest: RetiredPurchaseOperationRecord,
       status: MonetizationOperationSummary['status'],
+      finalizationPending = false,
     ): MonetizationOperationSummary => ({
       kind: 'purchase',
       idempotencyKey: latest.input.idempotencyKey,
       status,
-      finalizationPending: false,
+      finalizationPending,
     });
     try {
       return await serializeOperation(initial.key, async () => {
@@ -619,15 +620,29 @@ export function createRecoverableMonetizationClient(
           || request.platformTransactionId !== platform.transactionId) {
           return summarize(latest, 'action-required');
         }
-        let response = latest.response;
-        if (response?.verified !== true) {
+        // A grant whose consume or acknowledge is still pending is sent once
+        // more as well: the backend retries the finalization of a ledger
+        // entry it already holds under the same key, as the v1 client did.
+        const saved = latest.response;
+        let response = saved;
+        if (saved?.verified !== true || saved.finalization?.status === 'pending') {
+          let answer: VerifyPurchaseResponse;
           try {
-            response = await input.backend.purchases.verifyPurchase(request);
+            answer = await input.backend.purchases.verifyPurchase(request);
           } catch {
             // Transport trouble stays retryable; nothing is decided here.
-            return summarize(latest, 'pending');
+            return saved?.verified === true
+              ? summarize(latest, 'granted', true)
+              : summarize(latest, 'pending');
           }
+          // A recorded grant is never replaced by a later non-grant answer.
+          response = saved?.verified === true && !answer.verified ? saved : answer;
         }
+        if (response === undefined) {
+          return summarize(latest, 'pending');
+        }
+        const finalizationPending = response.verified
+          && response.finalization?.status === 'pending';
         const result: GameServicesPurchaseResult = response.verified
           ? {
               status: 'granted',
@@ -645,9 +660,17 @@ export function createRecoverableMonetizationClient(
         try {
           await save(latest, { request, response, result });
         } catch {
-          return summarize(latest, result.status === 'granted' ? 'granted' : 'pending');
+          return summarize(
+            latest,
+            result.status === 'granted' ? 'granted' : 'pending',
+            finalizationPending,
+          );
         }
-        return summarize(latest, result.status === 'granted' ? 'granted' : result.status);
+        return summarize(
+          latest,
+          result.status === 'granted' ? 'granted' : result.status,
+          finalizationPending,
+        );
       });
     } catch {
       return summarize(initial, 'pending');

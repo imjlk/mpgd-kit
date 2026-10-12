@@ -18,10 +18,10 @@ BREAKING: Commerce v2, PR C4: the v1 provider and recovery driver are removed.
   `['nativeIap']`); readiness is the gateway's `commerce` capability block, and
   the gateway exposes the provider as `gateway.commerce`.
 - Removed the deprecated `PlayPurchase` fields `productIds`, `state`, and
-  `purchaseTimeMillis` from the TypeScript type, the TypeScript readers, and the
-  Android plugin's payload; use `products`, `purchaseState`, and `purchaseTime`.
-  A shell must carry the matching native module (`cap sync` after upgrading),
-  or purchases fail closed as invalid evidence.
+  `purchaseTimeMillis` from the TypeScript type and the Android plugin's
+  payload; use `products`, `purchaseState`, and `purchaseTime`. The TypeScript
+  readers still accept the 0.1 names, so a web bundle that reaches a 0.1
+  native build first (a live update) keeps every paid purchase recoverable.
 - Added `createPlayBillingCommerceCapabilities(availability)`, a pure
   SDK-free function (`src/commerce-profile.ts` imports types only) that returns
   the `CommerceCapabilities` block the provider declares for an availability.

@@ -556,6 +556,16 @@ function commerceSellsOneTime(commerce: CommerceCapabilities): boolean {
     && (commerce.purchase.consumable || commerce.purchase.durable);
 }
 
+/**
+ * Subscriptions are sold under the same readiness rule as one-time products:
+ * the provider is available and declares the kind. A provider that is not
+ * ready yet gets the retryable or configuration refusal from the mask instead
+ * of a purchase that reaches the store.
+ */
+function commerceSellsSubscriptions(commerce: CommerceCapabilities): boolean {
+  return commerce.availability === 'available' && commerce.purchase.subscription;
+}
+
 export function getFeatureAvailability(
   feature: PlatformFeature,
   config: TargetConfig,
@@ -748,7 +758,7 @@ export function withTargetAvailability(
     const commerce = requireCommerce(await getGatewayCapabilities());
     return {
       oneTime: oneTimeEnabled && commerceSellsOneTime(commerce),
-      subscriptions: subscriptionsEnabled && commerce.purchase.subscription,
+      subscriptions: subscriptionsEnabled && commerceSellsSubscriptions(commerce),
       // What the target configuration allows, apart from what the provider can
       // sell right now: a refusal names the provider's readiness only when the
       // configuration would have allowed the purchase.
@@ -1035,8 +1045,13 @@ function isFeatureCapabilitySupported(
   config: TargetConfig,
 ): boolean {
   switch (feature) {
-    case 'iap':
-      return commerceSellsOneTime(requireCommerce(capabilities));
+    // Whether the provider sells the kind at all; its readiness is the
+    // provider state (`commerce.availability`), so a store that is not ready
+    // yet reads as that state rather than as unsupported.
+    case 'iap': {
+      const { purchase } = requireCommerce(capabilities);
+      return purchase.consumable || purchase.durable;
+    }
     case 'subscriptions':
       return requireCommerce(capabilities).purchase.subscription;
     case 'bannerAds':

@@ -1050,7 +1050,7 @@ as an unknown member or a missing `commerce` capability block.
 | `toCommerceAdapter`, `ToCommerceAdapterOptions` | None. A v2 provider no longer serves v1 callers |
 | `findAuthoritativePurchaseSettlement` | The journal record or `GameServicesPurchaseResult` the reconciler returns |
 | `PlatformCapabilities.nativeIap` | `capabilities.commerce.availability === 'available' && (commerce.purchase.consumable \|\| commerce.purchase.durable)` |
-| `PlatformCapabilities.subscriptionIap` | `capabilities.commerce.purchase.subscription` |
+| `PlatformCapabilities.subscriptionIap` | `capabilities.commerce.availability === 'available' && capabilities.commerce.purchase.subscription` |
 | `providerAvailability.nativeIap`/`subscriptionIap`, and `'nativeIap'`/`'subscriptionIap'` in `PlatformProviderFeature` | `capabilities.commerce.availability` |
 | Optional `PlatformCapabilities.commerce`; `deriveLegacyCommerceCapabilities`, `LegacyCommerceCapabilities` | `commerce` is required; a gateway that sells nothing reports `createUnsupportedCommerceCapabilities()` (from `@mpgd/platform` or `@mpgd/platform/commerce`) |
 | Bridge methods `commerce.getProducts`, `commerce.purchase`, `commerce.restore`, `commerce.getEntitlements` | The six `commerce.v2.*` methods. A host that still receives a v1 method answers `UNSUPPORTED_METHOD`; a host that sells nothing answers `COMMERCE_V2_UNAVAILABLE` to the v2 methods |
