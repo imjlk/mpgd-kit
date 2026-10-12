@@ -66,6 +66,8 @@
     "@mpgd/adapter-verse8": "__MPGD_DEPENDENCY_VERSION_ADAPTER_VERSE8__",
     "@mpgd/analytics": "__MPGD_DEPENDENCY_VERSION_ANALYTICS__",
     "@mpgd/bridge": "__MPGD_DEPENDENCY_VERSION_BRIDGE__",
+    "@mpgd/capacitor-play-billing": "__MPGD_DEPENDENCY_VERSION_CAPACITOR_PLAY_BILLING__",
+    "@mpgd/capacitor-storekit": "__MPGD_DEPENDENCY_VERSION_CAPACITOR_STOREKIT__",
     "@mpgd/catalog": "__MPGD_DEPENDENCY_VERSION_CATALOG__",
     "@mpgd/game-services": "__MPGD_DEPENDENCY_VERSION_GAME_SERVICES__",
     "@mpgd/i18n": "__MPGD_DEPENDENCY_VERSION_I18N__",

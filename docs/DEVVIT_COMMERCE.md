@@ -196,3 +196,44 @@ the runner (it scripts a client finish), `cancelled-and-failed` (a later
 call) and `purchase-pending-then-purchased` (store-side pending) are listed as
 not applicable, and `adapter-settled` and the wallet vectors belong to other
 profiles.
+
+## Starter wiring and catalog SKUs
+
+Commerce v2 PR C3 connects the generated game and the private starter. The
+catalog is the single source of the Devvit SKUs: `platformProductIds.reddit`
+of each one-time product (a subscription with a `reddit` SKU fails
+`pnpm validate:catalog`, since Devvit sells one-time goods only).
+
+- **Webview.** `buildGateways/reddit.ts` passes `commerce` to
+  `createDevvitPlatformGateway` when the catalog names any Reddit SKU:
+  `createDevvitCommerceProducts(catalog)` (the products, with the logical id
+  as title and a Reddit Gold placeholder price unless a `describe` callback
+  supplies copy) and `createDevvitWebPaymentsClient()` from
+  `@mpgd/adapter-devvit/web`, the checkout client over `purchase()` from
+  `@devvit/web/client`. `toDevvitCheckoutResult` maps the `OrderResultEvent`:
+  `STATUS_SUCCESS` with an order id to `completed`, without one to `pending`
+  (the reconciler resolves it from the paid-order list), `STATUS_CANCELLED`
+  to `cancelled` (`USER_CANCELLED`), `STATUS_ERROR` to `failed` with the
+  platform `errorCode` as `storeCode`, and an unknown status to `pending`.
+  Without Reddit SKUs the gateway offers no `commerceV2`.
+- **Server.** `apps/target-devvit/src/server/index.ts` builds
+  `createDevvitCommerceV2BridgeHandler({ payments, products })` with
+  `createDevvitCommerceBridgeProducts(catalog)` (`{ productId, sku }`, from
+  `@mpgd/adapter-devvit/server`) and hands it to the bridge as `commerce`
+  only when `devvit.json` sets `permissions.payments: true` **and** the
+  catalog names at least one Reddit SKU. The shipped `devvit.json` keeps
+  `permissions.payments: false`, so every `commerce.v2.*` method keeps
+  failing closed with `COMMERCE_V2_UNAVAILABLE` until the game opts in; the
+  server logs which way it started.
+- **Opting in.** Set `permissions.payments: true`, add the `payments` block
+  Devvit requires (`products` or `productsFile` whose `sku` values are the
+  catalog's `reddit` keys, and `endpoints.fulfillOrder`, plus
+  `refundOrder` for refunds), and implement the fulfillment handler that
+  writes the ledger grant as described at the top of this page. The handler
+  only lists orders and products; the grant still comes from the
+  fulfillment handler's ledger entry, which the backend's `devvit.order.v1`
+  lookup reads.
+
+Both sides always read the `reddit` key, whatever the deployment target is
+named, and `pnpm validate:effective-config` rejects an IAP-enabled Devvit
+target whose effective products or SKUs differ from the server's list.

@@ -51,6 +51,7 @@ import {
 export * from './commerce-contract.js';
 export * from './commerce-provider.js';
 export * from './payments.js';
+export * from './catalog-products.js';
 
 export const defaultDevvitRpcEndpoint = defaultBridgeRpcEndpoint;
 /** Bridge error of `createDevvitOrpcBridge` when the oRPC request itself failed. */

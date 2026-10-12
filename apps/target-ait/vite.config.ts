@@ -1,12 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import type { AitIapProductConfig } from '@mpgd/adapter-ait';
 import { extractAitAdBridgeConfig, type AitAdBridgeConfig } from '@mpgd/adapter-ait/ad-config';
+import { extractAitIapProductConfig } from '@mpgd/adapter-ait/iap-config';
 import ttsc from '@ttsc/unplugin/vite';
 import { defineConfig, type Plugin } from 'vite';
 
 const aitAppName = process.env.MPGD_AIT_APP_NAME?.trim() || 'mpgd-kit';
 const aitAdConfig = readAitAdConfig(process.env.MPGD_AD_PLACEMENTS_FILE);
+const aitIapProducts = readAitIapProducts(process.env.MPGD_PRODUCT_CATALOG_FILE);
 const aitLocalMockPath = fileURLToPath(
   new URL('../../adapters/ait/src/local-mock.ts', import.meta.url),
 );
@@ -35,6 +38,7 @@ export default defineConfig(({ command, isPreview }) => {
         appName: aitAppName,
         adGroupIds: aitAdConfig.adGroupIds,
         adPlacementTypes: aitAdConfig.adPlacementTypes,
+        iapProducts: aitIapProducts,
       }),
       ...(command === 'build'
         ? [
@@ -57,6 +61,7 @@ function createAitRuntimeConfigPlugin(input: Readonly<{
   readonly appName: string;
   readonly adGroupIds: Readonly<Record<string, string>>;
   readonly adPlacementTypes: AitAdBridgeConfig['adPlacementTypes'];
+  readonly iapProducts: readonly AitIapProductConfig[];
 }>): Plugin {
   const publicId = 'virtual:mpgd-ait-runtime-config';
   const resolvedId = `\0${publicId}`;
@@ -87,4 +92,27 @@ function readAitAdConfig(path: string | undefined): AitAdBridgeConfig {
   }
 
   return extractAitAdBridgeConfig(parsed, path);
+}
+
+/**
+ * The Apps in Toss SKUs come from the product catalog (`platformProductIds.ait`)
+ * so the wrapper and the game share one source; without a configured catalog
+ * file the wrapper sells nothing and the host bridge fails every purchase closed.
+ */
+function readAitIapProducts(path: string | undefined): readonly AitIapProductConfig[] {
+  if (path === undefined || path.trim().length === 0) {
+    return [];
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+  } catch (error) {
+    throw new Error(`AIT product catalog file is unreadable or invalid JSON: ${path}`, {
+      cause: error,
+    });
+  }
+
+  return extractAitIapProductConfig(parsed, { sourceLabel: path });
 }

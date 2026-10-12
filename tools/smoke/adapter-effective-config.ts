@@ -542,10 +542,13 @@ async function verifyDevvitAdapter(): Promise<void> {
   const effectiveConfig = requireEffectiveConfig(runtime.effectiveConfig, 'reddit');
 
   assertEqual(effectiveConfig.target, 'reddit', 'reddit effective target');
+  // The catalog names Reddit SKUs, so the product is configured for the
+  // target; whether it can be sold is the server bridge's commerce v2 answer,
+  // which this recording bridge fails closed.
   assertEqual(
     getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.enabled,
-    false,
-    'reddit product should be disabled',
+    true,
+    'reddit product should be configured from the catalog SKU',
   );
   assertEqual(
     getEffectiveAdPlacementConfig(effectiveConfig, 'CONTINUE_AFTER_FAIL')?.enabled,

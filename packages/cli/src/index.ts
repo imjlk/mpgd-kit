@@ -338,6 +338,8 @@ const mpgdTemplateDependencyPackages = [
   { name: '@mpgd/adapter-verse8', packageDir: 'adapters/verse8' },
   { name: '@mpgd/analytics', packageDir: 'packages/analytics' },
   { name: '@mpgd/bridge', packageDir: 'packages/bridge' },
+  { name: '@mpgd/capacitor-play-billing', packageDir: 'native-plugins/capacitor-play-billing' },
+  { name: '@mpgd/capacitor-storekit', packageDir: 'native-plugins/capacitor-storekit' },
   { name: '@mpgd/catalog', packageDir: 'packages/catalog' },
   { name: '@mpgd/cli', packageDir: 'packages/cli' },
   { name: '@mpgd/game-services', packageDir: 'packages/game-services' },
@@ -1979,8 +1981,8 @@ const targetCommand = defineI18n({
             ko: '프로덕션 HTTPS Game Services 기본 URL.',
           },
           providers: {
-            en: 'Comma-separated requested provider IDs; this does not install SDKs.',
-            ko: '쉼표로 구분한 요청 provider ID. SDK를 설치하지는 않습니다.',
+            en: 'Comma-separated provider IDs. play-billing (Android) and storekit (iOS) install the kit store plugin into the shell and the game, register it with cap sync, and wire an unwired template gateway; other IDs are recorded only.',
+            ko: '쉼표로 구분한 provider ID. play-billing(Android)과 storekit(iOS)은 키트 스토어 플러그인을 셸과 게임에 설치하고 cap sync로 등록하며, 연결되지 않은 템플릿 게이트웨이를 연결합니다. 다른 ID는 기록만 합니다.',
           },
         },
       ),
@@ -2029,7 +2031,7 @@ const targetCommand = defineI18n({
         providers: {
           type: 'string',
           required: false,
-          description: 'Comma-separated requested provider IDs; this does not install SDKs.',
+          description: 'Comma-separated provider IDs. play-billing (Android) and storekit (iOS) install the kit store plugin into the shell and the game, register it with cap sync, and wire an unwired template gateway; other IDs are recorded only.',
         },
       },
       run: (ctx) => {
@@ -2054,6 +2056,7 @@ const targetCommand = defineI18n({
             gameRoot,
             appId,
             displayName,
+            templateRoot: gameTemplateDir,
             ...(iconSource === undefined ? {} : { iconSource }),
             ...(backendUrl === undefined ? {} : { backendUrl }),
             ...(selectedProviders === undefined ? {} : {
@@ -2070,13 +2073,32 @@ const targetCommand = defineI18n({
           for (const platform of plan.nativePlatformsToAdd) {
             console.info(`${dryRun ? 'Would add' : 'Added'} native platform: ${platform}`);
           }
+          for (const plugin of plan.providerPlugins) {
+            console.info(
+              `${dryRun ? 'Would install' : 'Installed'} ${plugin.platform} store plugin `
+                + `${plugin.packageName}@${plugin.version} (${plugin.id}) into the shell`
+                + `${plugin.versionSource === 'kit' ? ' and the game' : ''}`
+                + `${dryRun ? '; cap add or cap sync registers it' : ''}.`,
+            );
+          }
+          for (const warning of plan.warnings) {
+            console.warn(`Warning: ${warning}`);
+          }
           console.info(
-            'File count covers managed shell files only; pnpm may also update root or shell lockfiles.',
+            'File count covers managed shell and game files only; pnpm may also update root or shell lockfiles.',
           );
           if (!dryRun) {
             console.info('Production native builds still require release identity and signing checks.');
           }
           return;
+        }
+        if (ctx.values.providers !== undefined) {
+          throw new Error(
+            '--providers is only available for capacitor initialization: it installs the '
+              + 'play-billing (Android) and storekit (iOS) store plugins into the game-owned '
+              + `native shell, which ${requestedTarget} does not initialize. Run `
+              + '"mpgd target init capacitor --providers ..." instead.',
+          );
         }
         const target = normalizeConfiguredBuildTarget(requestedTarget);
 
@@ -2087,7 +2109,7 @@ const targetCommand = defineI18n({
         }
 
         for (const option of [
-          'app-id', 'display-name', 'icon-source', 'backend-url', 'providers',
+          'app-id', 'display-name', 'icon-source', 'backend-url',
         ] as const) {
           if (ctx.values[option] !== undefined) {
             throw new Error(`--${option} is only available for capacitor initialization.`);

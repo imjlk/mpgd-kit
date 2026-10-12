@@ -391,6 +391,9 @@ importers:
       '@mpgd/bridge':
         specifier: workspace:*
         version: link:../../packages/bridge
+      '@mpgd/catalog':
+        specifier: workspace:*
+        version: link:../../packages/catalog
       '@mpgd/game-services':
         specifier: workspace:*
         version: link:../../packages/game-services
@@ -471,6 +474,12 @@ importers:
       '@mpgd/adapter-wechat':
         specifier: workspace:*
         version: link:../../adapters/wechat
+      '@mpgd/capacitor-play-billing':
+        specifier: workspace:*
+        version: link:../../native-plugins/capacitor-play-billing
+      '@mpgd/capacitor-storekit':
+        specifier: workspace:*
+        version: link:../../native-plugins/capacitor-storekit
       '@mpgd/catalog':
         specifier: workspace:*
         version: link:../../packages/catalog
@@ -795,6 +804,12 @@ importers:
       '@mpgd/bridge':
         specifier: workspace:*
         version: link:../bridge
+      '@mpgd/capacitor-play-billing':
+        specifier: workspace:*
+        version: link:../../native-plugins/capacitor-play-billing
+      '@mpgd/capacitor-storekit':
+        specifier: workspace:*
+        version: link:../../native-plugins/capacitor-storekit
       '@mpgd/game-runtime':
         specifier: workspace:*
         version: link:../game-runtime

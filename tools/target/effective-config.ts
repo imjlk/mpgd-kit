@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
+import { extractAitIapProductConfig } from '@mpgd/adapter-ait/iap-config';
+import { createDevvitCommerceBridgeProducts } from '@mpgd/adapter-devvit/server';
 import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 
 import { assertDeploymentTargetName } from '../../packages/cli/src/target-name';
@@ -82,7 +84,70 @@ export function validateEffectiveTargetConfigMatrix(
     validateEffectiveTargetConfig(config);
   }
 
+  const hostTargets = targets.filter((target) => {
+    const adapter = matrix.targets[target]?.sources.platformAdapter;
+    return adapter === 'ait' || adapter === 'devvit';
+  });
+  if (hostTargets.length > 0) {
+    const catalog = readJsonFile(productCatalogFilePath()) as ProductCatalog;
+    for (const target of hostTargets) {
+      const config = matrix.targets[target];
+      if (config !== undefined) {
+        validateHostProductList(config, catalog);
+      }
+    }
+  }
+
   return matrix;
+}
+
+/**
+ * Apps in Toss and Devvit sell from a host-side product list, not from the
+ * game bundle: the AIT wrapper installs `extractAitIapProductConfig(catalog)`
+ * (`platformProductIds.ait`) and the Devvit server serves
+ * `createDevvitCommerceBridgeProducts(catalog)` (`platformProductIds.reddit`).
+ * The effective config of an IAP-enabled target must sell exactly that list,
+ * with the same SKUs, so the game never offers a product its host does not
+ * sell (or the reverse).
+ */
+function validateHostProductList(config: EffectiveTargetConfig, catalog: ProductCatalog): void {
+  if (!config.features.iap) {
+    return;
+  }
+  const ait = config.sources.platformAdapter === 'ait';
+  const hostLabel = ait
+    ? 'the Apps in Toss wrapper (platformProductIds.ait)'
+    : 'the Devvit server (platformProductIds.reddit)';
+  const hostProducts = new Map<string, string>(
+    ait
+      ? extractAitIapProductConfig(catalog).map((product) => [product.productId, product.sku])
+      : createDevvitCommerceBridgeProducts(catalog).map((product) => [
+          product.productId,
+          product.sku,
+        ]),
+  );
+  const sold = new Map<string, string>(
+    config.monetization.products.flatMap((product) =>
+      product.enabled && product.platformProductId !== undefined
+        ? [[product.id, product.platformProductId] as const]
+        : [],
+    ),
+  );
+  for (const [productId, sku] of sold) {
+    if (hostProducts.get(productId) !== sku) {
+      throw new Error(
+        `Effective target ${config.target} sells ${productId} as ${sku}, but ${hostLabel} `
+          + `${hostProducts.has(productId) ? `lists it as ${String(hostProducts.get(productId))}` : 'does not list it'}.`,
+      );
+    }
+  }
+  for (const productId of hostProducts.keys()) {
+    if (!sold.has(productId)) {
+      throw new Error(
+        `Effective target ${config.target} does not sell ${productId}, but ${hostLabel} lists it.`,
+      );
+    }
+  }
 }
 
 export function writeEffectiveTargetConfigs(
@@ -192,6 +257,14 @@ function validateEffectiveTargetConfig(config: EffectiveTargetConfig): void {
     );
   }
 
+  // Devvit products are an explicit opt-in: a catalog that names no Reddit SKU
+  // at all keeps the reddit target buildable, but once any product names one,
+  // every IAP-enabled product must, so the webview and the Devvit server
+  // (both derived from the same catalog) never disagree on what is sold.
+  const catalogNamesTarget = config.monetization.products.some(
+    (product) => product.platformProductId !== undefined,
+  );
+
   for (const product of config.monetization.products) {
     if (!config.features.iap && product.enabled) {
       throw new Error(
@@ -202,7 +275,7 @@ function validateEffectiveTargetConfig(config: EffectiveTargetConfig): void {
     if (
       config.features.iap
       && product.reason === 'missing-platform-id'
-      && config.target !== 'reddit'
+      && (config.target !== 'reddit' || catalogNamesTarget)
     ) {
       throw new Error(
         `Effective target ${config.target} is missing a platform product id for ${product.id}.`,

@@ -1747,6 +1747,32 @@ function createBackendApi(purchases: PurchaseVerificationApi): GameServicesBacke
   );
 }
 
+// 23b. createGameServicesRuntime hands `commerceProducts` to the reconciler:
+// the configured catalog kind wins over the store's answer.
+{
+  const provider = createFakeProvider();
+  const store = createInMemoryMonetizationOperationStore();
+  const runtime = createGameServicesRuntime({
+    gateway: createGateway(provider),
+    playerId: 'player-1',
+    authorityMode: 'non-production',
+    allowLocalBackend: true,
+    localBackend: createBackendApi(createFakeBackend()),
+    operationStore: store,
+    commerceProducts: [{ logicalId: 'gems_small', kind: 'durable', storeSku: 'gems.small' }],
+  });
+  const result = await runtime.client?.purchase({
+    productId: 'gems_small',
+    source: 'shop',
+    idempotencyKey: 'op-23b',
+  });
+  assertEqual(result?.status, 'pending', 'launched');
+  const record = await store.read(
+    createCommercePurchaseOperationKey(runtime.target ?? 'android', 'op-23b'),
+  ) as CommercePurchaseOperationRecord | undefined;
+  assertEqual(record?.productKind, 'durable', 'the configured catalog kind is journaled');
+}
+
 // Review fixes.
 
 // 24. A leftover v1 purchase record is resumed by the v1 path even when the gateway has a v2 provider.

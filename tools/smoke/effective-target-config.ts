@@ -107,6 +107,7 @@ for (const [target, config] of Object.entries(matrix.targets)) {
 
 verifyGameOwnedIntegrationOverrides();
 verifyRuntimeAdapterValidation();
+verifyHostProductListValidation();
 
 console.log(`Effective target config smoke passed: ${Object.keys(matrix.targets).join(', ')}`);
 
@@ -358,6 +359,77 @@ function verifyRuntimeAdapterValidation(): void {
   }
 }
 
+/**
+ * The Apps in Toss wrapper and the Devvit server sell from catalog-derived
+ * host lists; an effective config that sells a different product or SKU, or
+ * leaves out a product the host lists, is rejected.
+ */
+function verifyHostProductListValidation(): void {
+  for (const target of ['ait', 'reddit'] as const) {
+    const config = matrix.targets[target];
+
+    if (config === undefined) {
+      throw new Error(`Missing ${target} effective config.`);
+    }
+
+    // The kit keeps Apps in Toss IAP off in its target config; the host list
+    // check applies once a game turns it on, so the smoke turns it on here.
+    const withProducts = (
+      products: EffectiveTargetConfig['monetization']['products'],
+    ): typeof matrix => ({
+      ...matrix,
+      targets: {
+        ...matrix.targets,
+        [target]: {
+          ...config,
+          features: { ...config.features, iap: true },
+          monetization: {
+            ...config.monetization,
+            products: products.map((product) =>
+              product.reason === 'target-disabled'
+                ? { ...product, enabled: true, reason: 'available' as const }
+                : product,
+            ),
+          },
+        },
+      },
+    });
+    validateEffectiveTargetConfigMatrix(withProducts(config.monetization.products), [target]);
+    const host = target === 'ait' ? 'Apps in Toss wrapper' : 'Devvit server';
+
+    assertThrows(
+      () =>
+        validateEffectiveTargetConfigMatrix(
+          withProducts(
+            config.monetization.products.map((product) =>
+              product.id === 'COINS_100'
+                ? { ...product, platformProductId: 'coins_100_other' }
+                : product,
+            ),
+          ),
+          [target],
+        ),
+      `${target} effective config must sell the ${host} SKU`,
+      'lists it as coins_100',
+    );
+    assertThrows(
+      () =>
+        validateEffectiveTargetConfigMatrix(
+          withProducts(
+            config.monetization.products.map((product) =>
+              product.id === 'REMOVE_ADS'
+                ? { ...product, enabled: false, reason: 'capability-unsupported' as const }
+                : product,
+            ),
+          ),
+          [target],
+        ),
+      `${target} effective config must sell every product the ${host} lists`,
+      'does not sell REMOVE_ADS',
+    );
+  }
+}
+
 function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): void {
   const expectedIntegrationConfig = expectedIntegrations[target];
 
@@ -483,10 +555,15 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
   }
 
   if (target === 'reddit') {
+    // The kit catalog names a Devvit SKU for every one-time product, so the
+    // effective config lists them as configured; the Devvit server still
+    // decides whether they are sold (commerce v2 opt-in).
     assertEqual(
-      config.monetization.products.every((product) => !product.enabled),
+      config.monetization.products.every(
+        (product) => product.enabled && product.platformProductId !== undefined,
+      ),
       true,
-      'reddit products without app-owned Devvit SKUs should be disabled',
+      'reddit products should be configured from the catalog Devvit SKUs',
     );
     assertEqual(
       config.ads.placements.every((placement) => !placement.enabled),

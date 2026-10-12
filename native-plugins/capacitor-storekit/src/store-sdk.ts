@@ -527,7 +527,10 @@ export function createCapacitorStoreKitStoreSdk(
         return 'configuration-required';
       } catch (error) {
         const code = isRecord(error) ? error.code : undefined;
-        return code === 'STOREKIT_INVALID_PRODUCTS' || code === 'STOREKIT_PRODUCT_UNAVAILABLE'
+        // Capacitor's `UNIMPLEMENTED` means the native plugin is not installed in the shell.
+        return code === 'STOREKIT_INVALID_PRODUCTS'
+          || code === 'STOREKIT_PRODUCT_UNAVAILABLE'
+          || code === 'UNIMPLEMENTED'
           ? 'configuration-required'
           : 'temporarily-unavailable';
       }

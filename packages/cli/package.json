@@ -76,6 +76,8 @@
     "@mpgd/adapter-verse8": "workspace:*",
     "@mpgd/analytics": "workspace:*",
     "@mpgd/bridge": "workspace:*",
+    "@mpgd/capacitor-play-billing": "workspace:*",
+    "@mpgd/capacitor-storekit": "workspace:*",
     "@mpgd/game-services": "workspace:*",
     "@mpgd/game-runtime": "workspace:*",
     "@mpgd/i18n": "workspace:*",

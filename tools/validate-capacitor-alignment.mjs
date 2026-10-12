@@ -22,11 +22,27 @@ assert.equal(adapter.devDependencies['@capacitor/core'], shellVersion);
 const gameTemplate = readJson('packages/cli/templates/phaser-game/package.json');
 assert.equal(gameTemplate.dependencies['@capacitor/core'], shellVersion);
 
+// The store plugins `--providers` installs share the shell's Capacitor line,
+// and the template pins them so the wired gateways resolve.
+for (const name of ['capacitor-play-billing', 'capacitor-storekit']) {
+  const storePlugin = readJson(`native-plugins/${name}/package.json`);
+  assert.equal(storePlugin.dependencies?.['@capacitor/core'], undefined, `${name}: the host must supply Capacitor core`);
+  assert.equal(storePlugin.peerDependencies['@capacitor/core'], `^${pluginMinimum}`, `${name}: Capacitor peer range`);
+  assert.equal(storePlugin.devDependencies['@capacitor/core'], shellVersion, `${name}: Capacitor dev version`);
+  assert.ok(gameTemplate.dependencies[`@mpgd/${name}`] !== undefined, `The game template must depend on @mpgd/${name}`);
+}
+
 const swiftPackageUrl = 'https://github.com/ionic-team/capacitor-swift-pm.git';
 const shellSwift = read('apps/mobile-capacitor/ios/App/CapApp-SPM/Package.swift');
 assert.ok(
   shellSwift.includes(`.package(url: "${swiftPackageUrl}", exact: "${shellVersion}")`),
   'The generated iOS shell must pin the same Capacitor version',
+);
+const storeKitSwift = read('native-plugins/capacitor-storekit/Package.swift');
+assert.ok(
+  storeKitSwift.includes(`.package(url: "${swiftPackageUrl}", exact: "${shellVersion}")`)
+    || storeKitSwift.includes(`.package(url: "${swiftPackageUrl}", from: "${pluginMinimum}")`),
+  'The StoreKit plugin must resolve the same Capacitor 8 line as the shell',
 );
 const pluginSwift = read('native-plugins/capacitor-game-services/Package.swift');
 assert.ok(

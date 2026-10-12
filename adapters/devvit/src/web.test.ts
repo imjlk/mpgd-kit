@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-const { requestExpandedMode, showShareSheet } = vi.hoisted(() => ({
+const { requestExpandedMode, showShareSheet, purchase } = vi.hoisted(() => ({
   requestExpandedMode: vi.fn<
     (event: MouseEvent, entry: string) => void | Promise<void>
   >(),
@@ -9,20 +9,67 @@ const { requestExpandedMode, showShareSheet } = vi.hoisted(() => ({
     readonly title?: string;
     readonly text?: string;
   }) => Promise<void>>(),
+  purchase: vi.fn<(skuOrSkus: string | readonly string[]) => Promise<{
+    readonly status: number;
+    readonly orderId?: string;
+    readonly errorCode?: number;
+    readonly errorMessage?: string;
+  }>>(),
 }));
 
 vi.mock('@devvit/web/client', () => ({
   getWebViewMode: () => 'inline',
   requestExpandedMode,
   showShareSheet,
+  purchase,
 }));
 
 import {
+  createDevvitWebPaymentsClient,
   presentDevvitShareSheet,
   requestDevvitExpandedMode,
   startDevvitPreviewWebView,
   startDevvitWebView,
+  toDevvitCheckoutResult,
 } from './web';
+
+describe('createDevvitWebPaymentsClient', () => {
+  it('opens one SKU checkout and maps the Reddit order result', async () => {
+    const client = createDevvitWebPaymentsClient();
+    purchase.mockResolvedValueOnce({ status: 1, orderId: 'order-1' });
+
+    await expect(client.purchase('coins_100')).resolves.toEqual({
+      status: 'completed',
+      orderId: 'order-1',
+    });
+    expect(purchase).toHaveBeenCalledWith('coins_100');
+    await expect(client.purchase(' ')).rejects.toThrow(/non-empty SKU/u);
+  });
+
+  it('keeps an unfinished or unknown checkout open and never grants', () => {
+    expect(toDevvitCheckoutResult({ status: 1 })).toEqual({ status: 'pending' });
+    expect(toDevvitCheckoutResult({ status: 'STATUS_SUCCESS', orderId: ' order-2 ' })).toEqual({
+      status: 'completed',
+      orderId: 'order-2',
+    });
+    expect(toDevvitCheckoutResult({ status: 0 })).toEqual({
+      status: 'cancelled',
+      error: { code: 'USER_CANCELLED', storeCode: 'DEVVIT_CHECKOUT_CANCELLED', retryable: false },
+    });
+    expect(toDevvitCheckoutResult({ status: 2, errorCode: 7, errorMessage: 'declined' })).toEqual({
+      status: 'failed',
+      error: { code: '7', storeCode: '7', message: 'declined' },
+    });
+    expect(toDevvitCheckoutResult({ status: 2 })).toEqual({
+      status: 'failed',
+      error: { code: 'DEVVIT_CHECKOUT_FAILED', storeCode: 'DEVVIT_CHECKOUT_FAILED' },
+    });
+    expect(toDevvitCheckoutResult({ status: 99, orderId: 'order-3' })).toEqual({
+      status: 'pending',
+      orderId: 'order-3',
+    });
+  });
+});
 
 describe('startDevvitPreviewWebView', () => {
   it('uses the Devvit client while keeping the inline entry preview-only', async () => {

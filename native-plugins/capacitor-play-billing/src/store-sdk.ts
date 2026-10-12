@@ -102,6 +102,8 @@ const obfuscatedAccountIdPattern = /^[A-Za-z0-9._-]{1,64}$/u;
 const maximumProducts = 100;
 const maximumPurchaseTimeMillis = 8_640_000_000_000_000;
 const configurationErrorCodes: ReadonlySet<string> = new Set([
+  // Capacitor's `UNIMPLEMENTED`: the native plugin is not installed in the shell.
+  'UNIMPLEMENTED',
   'PLAY_BILLING_CONFIGURATION_ERROR',
   'PLAY_BILLING_PRODUCT_UNAVAILABLE',
   'PLAY_BILLING_OFFER_REQUIRED',

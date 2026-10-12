@@ -6,6 +6,8 @@ declare module 'virtual:mpgd-ait-runtime-config' {
       string,
       import('@mpgd/adapter-ait/ad-config').AitAdPlacementType
     >>;
+    /** Catalog products sold on Apps in Toss (`platformProductIds.ait`), read at build time. */
+    readonly iapProducts: readonly import('@mpgd/adapter-ait').AitIapProductConfig[];
   }>;
 
   export default runtimeConfig;
