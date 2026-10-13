@@ -432,7 +432,8 @@ function toClipboardUrl(link: string, options: BrowserPlatformGatewayOptions): s
     try {
       const url = new URL(link, base);
 
-      if (url.protocol === 'https:' || url.protocol === 'http:') {
+      if ((url.protocol === 'https:' || url.protocol === 'http:')
+        && url.username === '' && url.password === '') {
         return url.href;
       }
     } catch {

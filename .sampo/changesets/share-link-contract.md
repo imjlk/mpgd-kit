@@ -34,6 +34,8 @@ Every target whose host builds or receives a share URL now checks
   `mygame://invite`, `./daily`, or `/%2F%2Fevil.example/x`, now answers
   `unavailable` without reaching the native or server bridge, and the bridge
   receives the normalized link. Before, they passed every intent on as is.
+  The common reader also requires a supported `kind` and string `title` and
+  `text` before dispatching to these adapters.
 - Apps in Toss reads links that are not `intoss://<app>` links with
   `normalizeShareLink` before reducing them to their path. It now also refuses
   `https:/daily`, `https:evil.example/x`, and links with credentials, which it

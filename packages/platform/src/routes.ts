@@ -192,7 +192,8 @@ export function normalizeShareLink(deepLink: string): string | undefined {
 /**
  * Reads a `share` intent under the `ShareIntent` contract: the intent with its
  * `deepLink` normalized by `normalizeShareLink`, or `undefined` when it is not
- * an object, its `text` is not a string, or its `deepLink` is not a link that
+ * an object, its kind is unsupported, its title or text is not a string, or
+ * its `deepLink` is not a link that
  * rule accepts. The intent may come from untyped game code, so none of this
  * is assumed.
  */
@@ -201,11 +202,12 @@ export function readShareIntent(intent: unknown): ShareIntent | undefined {
     return undefined;
   }
 
-  const { text, deepLink } = intent as Readonly<Record<string, unknown>>;
+  const { kind, title, text, deepLink } = intent as Readonly<Record<string, unknown>>;
   const link = typeof deepLink === 'string' ? normalizeShareLink(deepLink) : undefined;
 
-  return typeof text === 'string' && link !== undefined
-    ? { ...(intent as ShareIntent), deepLink: link }
+  return (kind === 'daily-result' || kind === 'friend-challenge' || kind === 'invite')
+    && typeof title === 'string' && typeof text === 'string' && link !== undefined
+    ? { ...(intent as ShareIntent), kind, title, text, deepLink: link }
     : undefined;
 }
 

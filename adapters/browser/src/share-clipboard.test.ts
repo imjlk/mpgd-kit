@@ -15,6 +15,25 @@ afterEach(() => {
 });
 
 describe('browser share clipboard fallback', () => {
+  it('never copies userinfo from any clipboard base', async () => {
+    const copied: string[] = [];
+    for (const source of ['configured', 'document', 'location']) {
+      vi.stubGlobal('document', source === 'document'
+        ? { baseURI: 'https://user:secret@game.example/play/' } : undefined);
+      vi.stubGlobal('location', source === 'location'
+        ? { href: 'https://user:secret@game.example/play/' } : undefined);
+      const gateway = createBrowserPlatformGateway({
+        lifecycle,
+        ...(source === 'configured' ? { locationHref: 'https://user:secret@game.example/play/' } : {}),
+        async writeClipboardText(text) { copied.push(text); },
+      });
+      await expect(gateway.sharing?.share?.({
+        kind: 'invite', title: 'Join', text: 'Join', deepLink: '/daily',
+      })).resolves.toEqual({ status: 'unavailable' });
+    }
+    expect(copied).toEqual([]);
+  });
+
   it('uses the configured game page ahead of a host shell or asset base', async () => {
     vi.stubGlobal('document', { baseURI: 'https://host.example/assets/' });
     vi.stubGlobal('location', { href: 'https://shell.example/' });

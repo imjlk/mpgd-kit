@@ -10,3 +10,6 @@ an HTTP(S) page to resolve it against, the share answers `unavailable`. Web Shar
 still receives the normalized route unchanged. Web sharing now reads its intent
 through `withShareIntentCheck` from `@mpgd/platform/routes`, with the same rule
 as before.
+
+Clipboard bases carrying a username or password are rejected, so resolving a
+root-relative link cannot copy URL credentials into a shared link.

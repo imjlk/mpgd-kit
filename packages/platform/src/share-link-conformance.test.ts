@@ -11,6 +11,22 @@ import {
 const intent = { kind: 'invite', title: 'Join', text: 'Join me' } as const;
 const presented: ShareResult = { status: 'shared', completion: 'presented' };
 
+describe('required share metadata', () => {
+  it('refuses missing or invalid kind and title before invoking an adapter', async () => {
+    const received: ShareIntent[] = [];
+    const checked = withShareIntentCheck({
+      async share(value) { received.push(value); return presented; },
+    });
+    for (const metadata of [{}, { kind: 'invite' }, { title: 'Join' },
+      { kind: 'unknown', title: 'Join' }, { kind: 'invite', title: 1 }]) {
+      const value = { text: 'Join', deepLink: '/daily', ...metadata };
+      expect(readShareIntent(value)).toBeUndefined();
+      await expect(checked.share?.(value as ShareIntent)).resolves.toEqual({ status: 'unavailable' });
+    }
+    expect(received).toEqual([]);
+  });
+});
+
 function recordingAdapter(mapLink: (link: string) => string = (link) => link): {
   readonly handed: string[];
   readonly sharing: ShareAdapter;
@@ -57,8 +73,8 @@ describe('share intents', () => {
   it('reads an intent with its deep link normalized and keeps the rest', () => {
     expect(readShareIntent({ ...intent, deepLink: '/levels/../daily', payload: { puzzleId: 'p' } }))
       .toEqual({ ...intent, deepLink: '/daily', payload: { puzzleId: 'p' } });
-    expect(readShareIntent({ text: 'Join me', deepLink: 'HTTPS://Game.Example' }))
-      .toEqual({ text: 'Join me', deepLink: 'https://game.example/' });
+    expect(readShareIntent({ ...intent, deepLink: 'HTTPS://Game.Example' }))
+      .toEqual({ ...intent, deepLink: 'https://game.example/' });
   });
 
   it('refuses intents without a string text or a deep link the route rule accepts', () => {
