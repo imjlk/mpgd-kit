@@ -20,9 +20,13 @@ import {
 } from './notifications-conformance.js';
 import {
   createUnsupportedNotificationCapabilities,
+  notificationNoticeVariants,
   type NotificationDeliveryProviderEntry,
   type NotificationDeployment,
   type NotificationEvent,
+  type NotificationNoticeCopy,
+  type NotificationNoticeSettings,
+  type NotificationNoticeVariant,
   type NotificationProvider,
   type NotificationTopicDeclaration,
 } from './notifications.js';
@@ -102,14 +106,45 @@ const duel: NotificationTopicDeclaration = {
   route: '/?entry=challenge',
   mapping: { title: 'Duel', body: 'A duel is waiting.', link: 't3_duel' },
 };
+/** The notice topic keeps only the delivery settings; its text is `noticeCopy`. */
 const noticeTopic: NotificationTopicDeclaration = {
   id: 'consent-notice',
   purpose: 'service',
   channels: ['remote'],
   route: '/settings/notifications',
-  copy: { ko: { title: '수신 동의 안내', body: '{{consentDate}}에 동의하셨어요.' } },
   mapping: { channelId: 'reminders' },
 };
+/** The catalog's `notices.copy`: a title and a body per notice variant. */
+const noticeCopy: NotificationNoticeCopy = {
+  ko: {
+    'consent-result.advertising.granted': {
+      title: '수신 동의 안내',
+      body: '{{consentDate}}에 동의하셨어요.',
+    },
+    'consent-result.advertising.withdrawn': {
+      title: '수신 철회 안내',
+      body: '{{consentDate}}에 철회하셨어요.',
+    },
+    'consent-result.night.granted': {
+      title: '야간 수신 동의 안내',
+      body: '{{consentDate}}에 야간 수신에 동의하셨어요.',
+    },
+    'consent-result.night.withdrawn': {
+      title: '야간 수신 철회 안내',
+      body: '{{consentDate}}에 야간 수신을 철회하셨어요.',
+    },
+    'reconfirmation.advertising': {
+      title: '수신 동의 확인',
+      body: '{{consentDate}}에 하신 동의가 이어지고 있어요.',
+    },
+    'reconfirmation.night': {
+      title: '야간 수신 동의 확인',
+      body: '{{consentDate}}에 하신 야간 수신 동의가 이어지고 있어요.',
+    },
+  },
+};
+/** The catalog's `notices` block, which the backend takes as is. */
+const notices: NotificationNoticeSettings = { topic: 'consent-notice', copy: noticeCopy };
 const weekend: NotificationTopicDeclaration = {
   id: 'weekend-event',
   purpose: 'advertising',
@@ -127,6 +162,8 @@ const kr: NotificationDeployment = {
 interface SetupOptions {
   readonly host?: NotificationConformanceHostFixture;
   readonly deployment?: NotificationDeployment;
+  /** The catalog's `notices` block; without it the scheduler sends no notice. */
+  readonly notices?: NotificationNoticeSettings;
   readonly entry?: (entry: NotificationDeliveryProviderEntry) => NotificationDeliveryProviderEntry;
 }
 
@@ -156,6 +193,7 @@ function setup(
     catalog,
     clock,
     ...(options.deployment === undefined ? {} : { deployment: options.deployment }),
+    ...(options.notices === undefined ? {} : { notices: options.notices }),
     defaultLocale: 'ko',
     defaultPlayer: 'p-1',
     readServerPermission: (input) => host.readServerPermission(input),
@@ -228,7 +266,7 @@ async function devicePlayer(
 describe('notifications conformance runner', () => {
   it('passes every RFC vector with the reference runtime and fakes', async () => {
     const results = await runNotificationConformanceVectors(vectors);
-    expect(results).toHaveLength(39);
+    expect(results).toHaveLength(40);
     expect(results.filter((result) => !result.passed).map((result) => ({
       vector: result.vector,
       status: result.status,
@@ -334,7 +372,7 @@ describe('notifications conformance runner', () => {
     expect(results.filter((result) => result.status === 'passed').map((result) => result.vector))
       .toEqual(['unsupported-target']);
     const skipped = results.filter((result) => result.status === 'skipped');
-    expect(skipped).toHaveLength(38);
+    expect(skipped).toHaveLength(39);
     expect(skipped.every((result) => !result.passed && result.reason !== undefined)).toBe(true);
     const reasonOf = (name: string) => results.find((result) => result.vector === name)?.reason;
     // The unsupported block declares an app-scope OS prompt but no prompt limit.
@@ -442,12 +480,13 @@ describe('notifications conformance runner', () => {
     ]);
     const misconfigured = await runNotificationConformanceVector({
       ...vector,
-      deployment: { advertisingRules: 'kr', noticeTopic: 'energy-full' },
+      deployment: { advertisingRules: 'kr' },
+      notices: { topic: 'energy-full', copy: noticeCopy },
     });
     expect(misconfigured.failures).toEqual([{
       path: 'backend',
-      expected: 'the deployment is valid',
-      actual: "TypeError: The deployment's notice topic energy-full is not a declared service topic.",
+      expected: 'the deployment and the notices are valid',
+      actual: 'TypeError: The notice topic energy-full is not a declared service topic.',
     }]);
   });
 });
@@ -1228,7 +1267,8 @@ describe('notifications fake backend: the scheduler and reminders', () => {
 
   it('sends unrecorded notices through the notice topic and records them; re-confirmation repeats', async () => {
     const { clock, host, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
-      deployment: { ...kr, noticeTopic: 'consent-notice' },
+      deployment: kr,
+      notices,
     });
     await runtime.start();
     backend.authenticate('p-1');
@@ -1261,11 +1301,11 @@ describe('notifications fake backend: the scheduler and reminders', () => {
       await backend.runScheduler();
       expect(await runtime.notices.list()).toEqual([]);
     }
-    // Each notice of the series has its own key.
-    expect(backend.providerCalls.map((call) => call.sendKey)).toEqual([
-      'notice:p-1:consent-result:advertising:2026-10-12T03:00:00Z:2026-10-26',
-      'notice:p-1:reconfirmation:advertising:2026-10-12T03:00:00Z:2028-10-11',
-      'notice:p-1:reconfirmation:advertising:2026-10-12T03:00:00Z:2030-10-11',
+    // Each notice of the series has its own key, and a re-confirmation is given in its own copy.
+    expect(backend.providerCalls.map((call) => [call.sendKey, call.content.title, call.content.body])).toEqual([
+      ['notice:p-1:consent-result:advertising:2026-10-12T03:00:00Z:2026-10-26', '수신 동의 안내', '2026-10-12에 동의하셨어요.'],
+      ['notice:p-1:reconfirmation:advertising:2026-10-12T03:00:00Z:2028-10-11', '수신 동의 확인', '2026-10-12에 하신 동의가 이어지고 있어요.'],
+      ['notice:p-1:reconfirmation:advertising:2026-10-12T03:00:00Z:2030-10-11', '수신 동의 확인', '2026-10-12에 하신 동의가 이어지고 있어요.'],
     ]);
     expect(backend.noticesGiven.map((given) => [given.kind, given.dueBy, given.channel])).toEqual([
       ['consent-result', '2026-10-26', 'push'],
@@ -1286,7 +1326,8 @@ describe('notifications fake backend: the scheduler and reminders', () => {
 
   it('records a notice only while it is listed, so a late retry never skips the next re-confirmation', async () => {
     const { clock, host, backend, createRuntime } = setup(osProfile, [weekend, noticeTopic], {
-      deployment: { ...kr, noticeTopic: 'consent-notice' },
+      deployment: kr,
+      notices,
     });
     // What the runtime sends the backend.
     const forwarded: unknown[] = [];
@@ -1806,7 +1847,8 @@ describe('notifications reference runtime and fakes: attribution, failures, and 
 
   it('keeps the notices of records written in one call apart, and records a notice only while listed', async () => {
     const { clock, host, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
-      deployment: { ...kr, noticeTopic: 'consent-notice' },
+      deployment: kr,
+      notices,
     });
     await runtime.start();
     backend.authenticate('p-1');
@@ -1836,9 +1878,10 @@ describe('notifications reference runtime and fakes: attribution, failures, and 
   });
 
   it('fails a notice the notice topic cannot render once, and leaves it owed in the game', async () => {
-    const broken = { ...noticeTopic, copy: { ko: { title: '안내', body: '{{playerName}}님, {{consentDate}}' } } };
-    const { clock, host, backend, runtime } = setup(osProfile, [weekend, broken], {
-      deployment: { ...kr, noticeTopic: 'consent-notice' },
+    const unrenderable = { ...noticeTopic, route: 'https://evil.example/settings' };
+    const { clock, host, backend, runtime } = setup(osProfile, [weekend, unrenderable], {
+      deployment: kr,
+      notices,
     });
     await runtime.start();
     backend.authenticate('p-1');
@@ -1977,7 +2020,8 @@ describe('notifications reference runtime and fakes: attribution, failures, and 
 describe('notifications reference runtime and fakes: series and ownership', () => {
   it('does not send a notice again that the game gave while its push waited', async () => {
     const { clock, host, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
-      deployment: { ...kr, noticeTopic: 'consent-notice' },
+      deployment: kr,
+      notices,
     });
     await runtime.start();
     backend.authenticate('p-1');
@@ -2315,7 +2359,8 @@ describe('notifications reference runtime and fakes: routes, registrations, and 
 
   it('answers notices for the player who began the call, and refuses after an account switch', async () => {
     const { host, backend, createRuntime } = setup(osProfile, [weekend, noticeTopic], {
-      deployment: { ...kr, noticeTopic: 'consent-notice' },
+      deployment: kr,
+      notices,
     });
     const capabilitiesRead = gate();
     const runtime = createRuntime({
@@ -2398,16 +2443,146 @@ describe('notifications reference runtime and fakes: routes, registrations, and 
     await expect(offline.runUntilIdle()).resolves.toBeUndefined();
   });
 
+  it("checks the catalog's notices.copy as the catalog validator does", () => {
+    const clock = createNotificationConformanceClock(now);
+    const entry = notificationConformanceRegistryEntry(osProfile);
+    const create = (copy: unknown, deployment: NotificationDeployment = kr) => () =>
+      createNotificationConformanceBackend({
+        entry,
+        catalog: [weekend, noticeTopic],
+        clock,
+        deployment,
+        notices: { topic: 'consent-notice', copy: copy as NotificationNoticeCopy },
+        defaultLocale: 'ko',
+        defaultPlayer: 'p-1',
+      });
+    expect(create(noticeCopy)).not.toThrow();
+    const ko = noticeCopy['ko'];
+    const withText = (variant: NotificationNoticeVariant, title: string, body: string) =>
+      ({ ko: { ...ko, [variant]: { title, body } } });
+    const { 'reconfirmation.night': _night, ...withoutNight } = ko ?? {};
+    for (const [copy, issue] of [
+      [undefined, 'notices.copy: a notice states what the player did'],
+      [{ en: ko }, 'notices.copy: must include the default locale ko'],
+      [{ ko: withoutNight }, 'notices.copy["ko"]["reconfirmation.night"]: every locale needs'],
+      [withText('reconfirmation.night', ' ', '{{consentDate}}'), '["reconfirmation.night"].title: a notice\'s title must not be blank'],
+      [withText('reconfirmation.night', '안내', '안내'), '["reconfirmation.night"]: a notice states the date'],
+      [withText('reconfirmation.night', '{{playerName}}', '{{consentDate}}'), '{{playerName}} would have no value'],
+      [withText('reconfirmation.night', '안내', '{consentDate}에 동의'), 'a brace outside a {{name}} placeholder'],
+    ] as const) {
+      expect(create(copy)).toThrow(issue);
+    }
+    // The rules hold under any advertising rules: the copy is the catalog's.
+    expect(create({ en: ko }, { advertisingRules: 'none' })).toThrow(/must include the default locale ko/u);
+    // A JavaScript caller gets a clear error for a block without its topic.
+    for (const malformed of [null, 'consent-notice', { copy: noticeCopy }, { topic: '', copy: noticeCopy }]) {
+      expect(() => createNotificationConformanceBackend({
+        entry,
+        catalog: [weekend, noticeTopic],
+        clock,
+        deployment: kr,
+        notices: malformed as unknown as NotificationNoticeSettings,
+        defaultLocale: 'ko',
+        defaultPlayer: 'p-1',
+      }), JSON.stringify(malformed)).toThrow(/notices block needs its topic and its copy/u);
+    }
+  });
+
+  it("sends each notice in its variant's copy, never the notice topic's own", async () => {
+    const withOwnCopy = { ...noticeTopic, copy: { ko: { title: '알림', body: '{{consentDate}}' } } };
+    const { clock, host, backend, runtime } = setup(osProfile, [weekend, withOwnCopy], {
+      deployment: kr,
+      notices,
+    });
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['consent-notice'], gesture: true });
+    await runtime.setAdvertisingConsent({ advertising: 'granted', night: 'granted', textVersion: 'ad-v1' });
+    await runtime.setAdvertisingConsent({ advertising: 'withdrawn', textVersion: 'ad-v1' });
+    clock.set('2026-10-19T03:00:00Z');
+    await backend.runScheduler();
+    expect(backend.providerCalls.map((call) => [call.content.title, call.content.body])).toEqual([
+      ['수신 동의 안내', '2026-10-12에 동의하셨어요.'],
+      ['야간 수신 동의 안내', '2026-10-12에 야간 수신에 동의하셨어요.'],
+      ['수신 철회 안내', '2026-10-12에 철회하셨어요.'],
+    ]);
+  });
+
+  it('pushes each kind of notice in its own variant, also when a push is replayed', async () => {
+    const { clock, host, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
+      deployment: kr,
+      notices,
+    });
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['consent-notice'], gesture: true });
+    await runtime.setAdvertisingConsent({ advertising: 'granted', night: 'granted', textVersion: 'ad-v1' });
+    clock.set('2026-10-13T03:00:00Z');
+    await runtime.setAdvertisingConsent({ advertising: 'withdrawn', textVersion: 'ad-v1' });
+    // The first push is rate-limited, and the next run replays it in its variant.
+    backend.queueProviderResult({ status: 'rate-limited', retryAfterSeconds: 60 });
+    clock.set('2026-10-20T03:00:00Z');
+    await backend.runScheduler();
+    clock.set('2026-10-20T03:01:00Z');
+    await backend.runScheduler();
+    // Two years on, the night consent is re-confirmed, then withdrawn.
+    clock.set('2028-10-04T03:00:00Z');
+    await runtime.register();
+    await backend.runScheduler();
+    await runtime.setAdvertisingConsent({ night: 'withdrawn', textVersion: 'night-v1' });
+    clock.set('2028-10-11T03:00:00Z');
+    await backend.runScheduler();
+    expect(backend.providerCalls.map((call) => [call.sendKey, call.content.title])).toEqual([
+      ['notice:p-1:consent-result:advertising:2026-10-12T03:00:00Z:2026-10-26', '수신 동의 안내'],
+      ['notice:p-1:consent-result:night:2026-10-12T03:00:00.001Z:2026-10-26', '야간 수신 동의 안내'],
+      ['notice:p-1:consent-result:advertising:2026-10-13T03:00:00Z:2026-10-27', '수신 철회 안내'],
+      ['notice:p-1:consent-result:advertising:2026-10-12T03:00:00Z:2026-10-26', '수신 동의 안내'],
+      ['notice:p-1:reconfirmation:night:2026-10-12T03:00:00.001Z:2028-10-11', '야간 수신 동의 확인'],
+      ['notice:p-1:consent-result:night:2028-10-04T03:00:00Z:2028-10-18', '야간 수신 철회 안내'],
+    ]);
+  });
+
+  it("gives a notice in the recipient's locale, else its language, else the default locale", async () => {
+    const texts = (title: string, body: string) => Object.fromEntries(
+      notificationNoticeVariants.map((variant) => [variant, { title, body }]),
+    ) as Readonly<Record<NotificationNoticeVariant, { readonly title: string; readonly body: string }>>;
+    const bilingual: NotificationNoticeCopy = {
+      ko: texts('수신 안내', '{{consentDate}} 처리'),
+      en: texts('Notice', 'Processed on {{consentDate}}.'),
+    };
+    const sent: string[] = [];
+    for (const locale of ['en-US', 'fr']) {
+      const { clock, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
+        deployment: kr,
+        notices: { ...notices, copy: bilingual },
+      });
+      backend.authenticate('p-1');
+      await backend.registerEndpoint({
+        provider: osProfile.provider,
+        address: { kind: 'fcm-token', value: 'tok-1', permission: 'granted' },
+        locale,
+      });
+      await runtime.setAdvertisingConsent({ advertising: 'granted', textVersion: 'ad-v1' });
+      clock.set('2026-10-19T03:00:00Z');
+      await backend.runScheduler();
+      sent.push(...backend.providerCalls.map((call) => `${locale}: ${call.content.title ?? ''} / ${call.content.body ?? ''}`));
+    }
+    expect(sent).toEqual(['en-US: Notice / Processed on 2026-10-12.', 'fr: 수신 안내 / 2026-10-12 처리']);
+  });
+
   it('requires the notice topic only on a target that delivers advertising, as the validator does', () => {
     const clock = createNotificationConformanceClock(now);
     const entry = notificationConformanceRegistryEntry(osProfile);
-    const deployment = { ...kr, noticeTopic: 'consent-notice' };
     // A target that maps no advertising topic need not declare the notice topic.
     expect(() => createNotificationConformanceBackend({
-      entry, catalog: [challenge], clock, deployment, defaultLocale: 'ko', defaultPlayer: 'p-1',
+      entry, catalog: [challenge], clock, deployment: kr, notices, defaultLocale: 'ko', defaultPlayer: 'p-1',
     })).not.toThrow();
     expect(() => createNotificationConformanceBackend({
-      entry, catalog: [challenge, weekend], clock, deployment, defaultLocale: 'ko', defaultPlayer: 'p-1',
+      entry, catalog: [challenge, weekend], clock, deployment: kr, notices, defaultLocale: 'ko', defaultPlayer: 'p-1',
     })).toThrow(/not declared for a target that delivers advertising/u);
   });
 });
@@ -2494,5 +2669,149 @@ describe('notifications conformance runner: hosts, identifiers, and timestamps',
     expect(await runtime.reminders.set({ key: 'h', topic: 'energy-half', fireAt: '2026-10-12T05:00:00Z' }))
       .toEqual({ route: 'local', status: 'scheduled' });
     expect(host.localPending).toEqual([{ key: 'h', topic: 'energy-half', fireAt: '2026-10-12T05:00:00Z' }]);
+  });
+});
+
+describe('notifications fake backend: what a notice says, and who sends it', () => {
+  /** A device player who consented to advertising at `now`. */
+  async function consented(catalog: readonly NotificationTopicDeclaration[]) {
+    const ready = setup(osProfile, catalog, { deployment: kr, notices });
+    await ready.runtime.start();
+    ready.backend.authenticate('p-1');
+    ready.host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    ready.host.queuePrompt('granted');
+    await ready.runtime.requestPermission({ topics: ['consent-notice'], gesture: true });
+    await ready.runtime.setAdvertisingConsent({ advertising: 'granted', textVersion: 'ad-v1' });
+    return ready;
+  }
+
+  it("sends a notice in its variant's copy, never the text of the topic's mapping", async () => {
+    const mapped = { ...noticeTopic, mapping: { channelId: 'notices', title: 'Notice', body: 'Agreed.' } };
+    const { clock, backend } = await consented([weekend, mapped]);
+    clock.set('2026-10-19T03:00:00Z');
+    await backend.runScheduler();
+    expect(backend.providerCalls.map((call) => [call.content.title, call.content.body, call.mapping])).toEqual([
+      ['수신 동의 안내', '2026-10-12에 동의하셨어요.', { channelId: 'notices' }],
+    ]);
+  });
+
+  it('sends no notice through a provider that is not free-form, so the game still owes it', async () => {
+    const templated = { ...noticeTopic, mapping: { templateSetCode: 'notice', agreement: 'none' } };
+    const { clock, backend, runtime } = setup(hostProfile, [templated], {
+      deployment: kr,
+      notices,
+    });
+    backend.authenticate('p-1');
+    await runtime.setAdvertisingConsent({ advertising: 'granted', textVersion: 'ad-v1' });
+    clock.set('2026-10-19T03:00:00Z');
+    await backend.runScheduler();
+    expect(backend.providerCalls).toEqual([]);
+    expect(backend.noticesGiven).toEqual([]);
+    expect((await runtime.notices.list()).map((notice) => notice.kind)).toEqual(['consent-result']);
+  });
+
+  it('sends no notice through a free-form provider that needs a title and a body in the mapping', async () => {
+    const pushes = async (mappingFields: readonly string[]) => {
+      const { clock, host, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
+        deployment: kr,
+        notices,
+        entry: (entry) => ({ ...entry, mappingFields }),
+      });
+      await runtime.start();
+      backend.authenticate('p-1');
+      host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+      host.queuePrompt('granted');
+      await runtime.requestPermission({ topics: ['consent-notice'], gesture: true });
+      await runtime.setAdvertisingConsent({ advertising: 'granted', textVersion: 'ad-v1' });
+      clock.set('2026-10-19T03:00:00Z');
+      await backend.runScheduler();
+      return { pushed: backend.providerCalls.length, owed: (await runtime.notices.list()).length };
+    };
+    expect(await pushes([])).toEqual({ pushed: 1, owed: 0 });
+    // Such a provider sends its mapping's own text, as the catalog validator knows it.
+    expect(await pushes(['title', 'body'])).toEqual({ pushed: 0, owed: 1 });
+  });
+
+  it("lists each notice with the variant the scheduler pushes, a refusal in its own text or the withdrawal's", async () => {
+    const ko = noticeCopy['ko'];
+    const withNightRefusal: NotificationNoticeCopy = ko === undefined ? noticeCopy : {
+      ko: {
+        ...ko,
+        'consent-result.night.refused': {
+          title: '야간 수신 거부 안내',
+          body: '{{consentDate}}에 야간 수신을 거부하셨어요.',
+        },
+      },
+    };
+    const { clock, host, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
+      deployment: kr,
+      notices: { ...notices, copy: withNightRefusal },
+    });
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['consent-notice'], gesture: true });
+    // With no consent before them, both withdrawals are refusals.
+    await runtime.setAdvertisingConsent({ advertising: 'withdrawn', night: 'withdrawn', textVersion: 'ad-v1' });
+    const listed = await runtime.notices.list();
+    expect(listed.map((notice) => notice.variant)).toEqual([
+      'consent-result.advertising.refused',
+      'consent-result.night.refused',
+    ]);
+    clock.set('2026-10-19T03:00:00Z');
+    await backend.runScheduler();
+    // The catalog has no advertising refusal text, so the withdrawal's stands in.
+    expect(backend.providerCalls.map((call) => [call.content.title, call.content.body])).toEqual([
+      ['수신 철회 안내', '2026-10-12에 철회하셨어요.'],
+      ['야간 수신 거부 안내', '2026-10-12에 야간 수신을 거부하셨어요.'],
+    ]);
+    // A consent and then its withdrawal is a withdrawal again.
+    await runtime.setAdvertisingConsent({ night: 'granted', textVersion: 'ad-v1' });
+    await runtime.setAdvertisingConsent({ night: 'withdrawn', textVersion: 'ad-v1' });
+    expect((await runtime.notices.list()).map((notice) => notice.variant)).toEqual([
+      'consent-result.night.granted',
+      'consent-result.night.withdrawn',
+    ]);
+    // A listed notice is still recorded as is, variant and all.
+    const [granted] = await runtime.notices.list();
+    if (granted !== undefined) {
+      await runtime.notices.recordShown(granted);
+    }
+    expect((await runtime.notices.list()).map((notice) => notice.variant)).toEqual([
+      'consent-result.night.withdrawn',
+    ]);
+  });
+
+  it('reserves the notice topic for the scheduler', async () => {
+    const { clock, backend, runtime } = await consented([weekend, noticeTopic]);
+    await expect(backend.deliver({ idempotencyKey: 'k-1', topic: 'consent-notice', templateData: { consentDate: 'x' } }))
+      .rejects.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT', message: expect.stringMatching(/reserved for consent notices/u) });
+    await expect(runtime.reminders.set({ key: 'r-1', topic: 'consent-notice', fireAt: '2026-10-12T06:00:00Z' }))
+      .rejects.toMatchObject({ code: 'NOTIFICATIONS_INVALID_INPUT' });
+    expect(backend.reminders).toEqual([]);
+    // The scheduler still sends through it.
+    clock.set('2026-10-19T03:00:00Z');
+    await backend.runScheduler();
+    expect(backend.providerCalls.map((call) => call.topic)).toEqual(['consent-notice']);
+  });
+
+  it('does not send again a notice whose replay cannot render', async () => {
+    // Quiet hours defer the first push before it renders; the route then fails it.
+    const unrenderable = {
+      ...noticeTopic,
+      route: 'https://evil.example/settings',
+      quietHours: { start: '22:00', end: '08:00' },
+    };
+    const { clock, backend, runtime } = await consented([weekend, unrenderable]);
+    clock.set('2026-10-19T14:00:00Z'); // 23:00 KST
+    await backend.runScheduler();
+    expect(backend.deliveries.map((delivery) => delivery.status)).toEqual(['deferred']);
+    clock.set('2026-10-19T23:00:00Z'); // 08:00 KST: the replay fails once
+    await expect(backend.runScheduler()).rejects.toThrow(/could not process 1 item/u);
+    clock.set('2026-10-19T23:05:00Z');
+    await expect(backend.runScheduler()).resolves.toBeUndefined();
+    expect(backend.providerCalls).toEqual([]);
+    expect((await runtime.notices.list()).map((notice) => notice.kind)).toEqual(['consent-result']);
   });
 });

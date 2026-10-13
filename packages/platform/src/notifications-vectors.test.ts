@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createUnsupportedNotificationCapabilities,
+  notificationNoticeVariants,
   notificationsProtocolVersion,
 } from './notifications.js';
 import {
@@ -32,11 +33,12 @@ function readVector(file: string): unknown {
 }
 
 describe('notifications conformance vectors', () => {
-  it('ships the thirty-nine RFC vectors', () => {
+  it('ships the forty RFC vectors', () => {
     expect(vectorFiles).toEqual([
       'action-required-login.json',
       'advertising-needs-consent.json',
       'advertising-night-window.json',
+      'advertising-notice-variants.json',
       'advertising-notices.json',
       'advertising-rules-none.json',
       'advertising-sender-required.json',
@@ -104,6 +106,7 @@ describe('notifications conformance vectors', () => {
       'game.getPermission',
       'game.requestPermission',
       'game.revokePermission',
+      'game.register',
       'game.unregister',
       'game.setTopicPreference',
       'game.setAdvertisingConsent',
@@ -120,8 +123,9 @@ describe('notifications conformance vectors', () => {
       'backend.revokeSession',
       'backend.runScheduler',
     ];
-    // `clock.advance` and `game.register` are part of the format; no committed
-    // vector uses them, since authentication registers on its own.
+    // `clock.advance` is part of the format; no committed vector uses it.
+    // Authentication registers on its own, so only a vector that comes back
+    // after the registration went stale uses `game.register`.
     expect([...seen].sort()).toEqual([...named].sort());
   });
 
@@ -176,10 +180,14 @@ describe('notifications conformance vectors', () => {
         advertisingRules: 'kr',
         advertisingSender: { name: 'Studio', contact: '080-1234-5678' },
         advertisingOptOutLine: '무료 수신거부: 설정 > 알림',
-        noticeTopic: 'consent-notice',
         timeZone: 'Asia/Seoul',
       },
     })).toBe(true);
+    // The notice topic is the `notices` block's, not a deployment setting.
+    expect(isNotificationConformanceVector({
+      ...base,
+      deployment: { advertisingRules: 'kr', noticeTopic: 'consent-notice' },
+    })).toBe(false);
     expect(isNotificationConformanceVector({ ...base, deployment: { advertisingSender: { name: 'Studio' } } }))
       .toBe(false);
     expect(isNotificationConformanceVector({ ...base, deployment: { advertisingRules: 'eu' } })).toBe(false);
@@ -251,6 +259,42 @@ describe('notifications conformance vectors', () => {
     expect(authentications).toHaveLength(2);
     expect(vector.steps.slice(authentications.at(-1)).some((step) => step.action === 'register'))
       .toBe(false);
+  });
+
+  it("reads a vector's notices as the catalog's block: its topic, and copy under the catalog rules", () => {
+    const base = assertNotificationConformanceVector(readVector('advertising-notices.json'));
+    expect(base.notices?.topic).toBe('consent-notice');
+    const ko = base.notices?.copy['ko'];
+    // Every variant but the advertising refusal, which is given in the withdrawal's text.
+    expect(ko === undefined ? [] : Object.keys(ko).sort()).toEqual(
+      notificationNoticeVariants.filter((variant) => variant !== 'consent-result.advertising.refused').sort(),
+    );
+    const withCopy = (copy: unknown) => ({ ...base, notices: { topic: 'consent-notice', copy } });
+    expect(isNotificationConformanceVector(withCopy({ ko }))).toBe(true);
+    expect(isNotificationConformanceVector({ ...base, notices: { copy: { ko } } })).toBe(false);
+    if (ko !== undefined) {
+      const { 'reconfirmation.night': _night, ...withoutNight } = ko;
+      const night = (title: string, body: string) => withCopy({ ko: { ...ko, 'reconfirmation.night': { title, body } } });
+      expect(isNotificationConformanceVector(withCopy({ ko: withoutNight }))).toBe(false);
+      // The catalog rules, read in the runner's default locale ko.
+      expect(() => assertNotificationConformanceVector(withCopy({ en: ko })))
+        .toThrow('notices.copy: must include the default locale ko');
+      expect(() => assertNotificationConformanceVector(night(' ', '{{consentDate}}')))
+        .toThrow('notices.copy["ko"]["reconfirmation.night"].title: a notice\'s title must not be blank');
+      expect(() => assertNotificationConformanceVector(night('확인', '확인')))
+        .toThrow('notices.copy["ko"]["reconfirmation.night"]: a notice states the date');
+      expect(() => assertNotificationConformanceVector(night('확인', '{consentDate}')))
+        .toThrow('a brace outside a {{name}} placeholder');
+      // A refusal's text is optional, and follows the same rules when given.
+      const refusal = { title: '거부', body: '{{consentDate}}에 거부하셨어요.' };
+      expect(isNotificationConformanceVector(withCopy({ ko: { ...ko, 'consent-result.advertising.refused': refusal } })))
+        .toBe(true);
+      expect(() => assertNotificationConformanceVector(withCopy({
+        ko: { ...ko, 'consent-result.advertising.refused': { ...refusal, body: '거부하셨어요.' } },
+      }))).toThrow('notices.copy["ko"]["consent-result.advertising.refused"]: a notice states the date');
+      expect(isNotificationConformanceVector(withCopy({ ko: { ...ko, 'consent-result.night.denied': refusal } })))
+        .toBe(false);
+    }
   });
 
   it('explains why a provider does not satisfy appliesTo', () => {

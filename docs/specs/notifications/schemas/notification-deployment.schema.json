@@ -59,11 +59,6 @@
             "description": "The free-of-charge opt-out line; `무료 수신거부: 수신거부 버튼` when absent or blank.",
             "readOnly": true
           },
-          "noticeTopic": {
-            "$ref": "#/components/schemas/NonEmptyString",
-            "description": "The catalog's `notices.topic`, which overdue consent notices are sent through under `kr`.",
-            "readOnly": true
-          },
           "timeZone": {
             "$ref": "#/components/schemas/NonEmptyString",
             "description": "IANA zone for recipients that registered none; Asia/Seoul when absent.",
