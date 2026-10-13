@@ -31,6 +31,8 @@ const htmlAssetPattern = /<(?:script[^>]*\ssrc|link[^>]*\srel=["'](?:moduleprelo
 const htmlAssetPatternReversed = /<link[^>]*\shref=["']([^"']+)["'][^>]*\srel=["'](?:modulepreload|stylesheet|preload)["']/giu;
 const htmlMediaTagPattern = /<(?:img|audio|video|source|track|input|embed|object)\b[^>]*>/giu;
 const htmlMediaUrlPattern = /\s(?:src|poster|data)=["']([^"']+)["']/giu;
+const htmlImageCandidateTagPattern = /<(?:img|source|link)\b[^>]*>/giu;
+const htmlImageCandidatePattern = /\s(?:srcset|imagesrcset)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/giu;
 const cssImportPattern = /@import\s+(?:url\(\s*["']?([^\s"')]+)["']?\s*\)|["']([^"']+)["'])/gi;
 const cssUrlPattern = /url\(\s*(?:"([^"]+)"|'([^']+)'|([^\s)]+))\s*\)/giu;
 
@@ -83,6 +85,20 @@ function walkInlineGraph(
       const reference = match[1];
       if (reference !== undefined && isLocalReference(reference)) {
         queue.push({ file: resolveReference(root, dirname(entryPath), reference), dynamic: false });
+      }
+    }
+  }
+  // Charge every possible responsive candidate conservatively: the built
+  // artifact has no fixed viewport or DPR with which to select one image.
+  for (const tag of html.matchAll(htmlImageCandidateTagPattern)) {
+    for (const match of tag[0].matchAll(htmlImageCandidatePattern)) {
+      for (const reference of srcsetReferences(match[1] ?? match[2] ?? match[3] ?? '')) {
+        if (isLocalReference(reference)) {
+          queue.push({
+            file: resolveReference(root, dirname(entryPath), reference),
+            dynamic: false,
+          });
+        }
       }
     }
   }
@@ -179,6 +195,32 @@ function walkInlineGraph(
     forbiddenHits,
     contents: allContents,
   };
+}
+
+/** URL tokenization from the HTML srcset algorithm; descriptors are not size-selection inputs here. */
+function srcsetReferences(input: string): readonly string[] {
+  const references: string[] = [];
+  const whitespace = /[\t\n\f\r ]/u;
+  let position = 0;
+  while (position < input.length) {
+    while (position < input.length && (whitespace.test(input[position]!) || input[position] === ',')) position += 1;
+    const start = position;
+    while (position < input.length && !whitespace.test(input[position]!)) position += 1;
+    const url = input.slice(start, position);
+    if (url.length === 0) break;
+    references.push(url.replace(/,+$/u, ''));
+    // A data URL may contain commas. Only trailing commas or a descriptor
+    // separator end a candidate; splitting the whole attribute on ',' is wrong.
+    if (url.endsWith(',')) continue;
+    let inParens = false;
+    while (position < input.length) {
+      const character = input[position++];
+      if (character === '(') inParens = true;
+      else if (character === ')') inParens = false;
+      else if (character === ',' && !inParens) break;
+    }
+  }
+  return references;
 }
 
 export function assertDevvitInlineBudget(input: {

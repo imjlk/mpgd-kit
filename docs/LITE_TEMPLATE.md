@@ -97,12 +97,16 @@ the Devvit target:
 ```
 
 `mpgd target smoke reddit` then walks the inline entry's load graph (HTML
-scripts, modulepreloads, stylesheets, static imports, and dynamic `import()`
-edges) and fails when:
+scripts, preloads, stylesheets, local media, static imports, and dynamic
+`import()` edges) and fails when:
 
 - a `forbidModules` entry is reachable, matched by chunk name or a content
   signature (`phaser`, `matter-js`, `pixi`, `three`);
 - the gzip total exceeds `maxGzipKb`.
+
+HTML bytes, CSS-referenced fonts and images, and every local `srcset` or
+`imagesrcset` candidate count toward the total. Responsive candidates are
+counted conservatively because the build has no fixed viewport or DPR.
 
 `deferredChunks` (paths relative to the Devvit client output, `*` wildcards)
 mark chunks that only the expanded surface or a user interaction fetches; they
@@ -114,7 +118,7 @@ poster does not pull Phaser.
 Load time, Lighthouse, and scroll behavior still need a device or Devvit
 playtest; the smoke check only guards bundle composition and size.
 
-`examples/lite-starter` measures 11.2 KiB gzip for the inline first load
+`examples/lite-starter` measures about 12 KiB gzip for the HTML-inclusive inline first load
 (the Devvit adapter, the text-selection policy, and the lite shell), with
 Phaser absent from every chunk and `matter-js` loaded on demand.
 

@@ -27,7 +27,14 @@ body.devvit-inline-mode-host {
   place-content: safe center;
   justify-items: center;
   gap: 0.75rem;
-  padding: clamp(1.25rem, 5vw, 3rem);
+  --inline-padding-block: clamp(1.25rem, 5vw, 3rem);
+  --inline-padding-inline: clamp(1.25rem, 5vw, 3rem);
+  padding-block:
+    calc(var(--inline-padding-block) + env(safe-area-inset-top, 0px))
+    calc(var(--inline-padding-block) + env(safe-area-inset-bottom, 0px));
+  padding-inline:
+    calc(var(--inline-padding-inline) + env(safe-area-inset-left, 0px))
+    calc(var(--inline-padding-inline) + env(safe-area-inset-right, 0px));
   background:
     radial-gradient(circle at 85% 15%, rgb(56 189 248 / 0.2), transparent 38%),
     linear-gradient(145deg, #0f172a, #172554);
@@ -121,7 +128,7 @@ body.devvit-inline-mode-host {
 @media (max-height: 440px) {
   .devvit-launch-screen {
     gap: 0.45rem;
-    padding-block: 0.5rem;
+    --inline-padding-block: 0.5rem;
   }
 
   .devvit-launch-screen h1 {

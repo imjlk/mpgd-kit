@@ -47,6 +47,15 @@ afterEach(() => {
 });
 
 describe('createLiteShell', () => {
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    'rejects an unusable Canvas maxDpr %s before constructing a surface',
+    (maxDpr) => {
+      vi.stubGlobal('document', undefined);
+      expect(() => createCanvasRenderer({ maxDpr })).toThrow(
+        'Canvas maxDpr must be a positive finite number',
+      );
+    },
+  );
   it('passes the original PointerEvent to onTap', () => {
     const onTap = vi.fn();
     const { element } = setup({ onTap });

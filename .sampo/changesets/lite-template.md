@@ -26,3 +26,5 @@ dynamic-import edges can be deferred.
 Explicit game disposal releases its owned audio binding, runtime and shell once. HTML first-load asset tags and attributes are matched case-insensitively.
 
 HTML media and preload bytes count toward the inline budget. LiteShell size and resize notifications report the Canvas renderer's effective DPR, and repeated fits skip redundant backing-store resizes.
+
+Responsive image candidates count conservatively toward the first-load budget, while data URLs remain embedded in the HTML byte count. Canvas DPR caps must be positive and finite. Inline layouts reserve all four native safe-area insets, including short screens, in both the example and generated lite template.

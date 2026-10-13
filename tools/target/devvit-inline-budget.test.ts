@@ -155,6 +155,27 @@ try {
     /exceeds inlineBudget/,
   );
 
+  // Responsive candidates include data URLs with commas, but only local files add bytes.
+  writeFileSync(join(root, 'index.html'), [
+    '<img srcset="data:image/png;base64,AAAA 1x, ./assets/image.png 2x">',
+    '<source srcset="./assets/poster.png 300w, ./assets/image.png 600w">',
+    '<link rel="preload" as="image" imagesrcset="./assets/movie.mp4 1x">',
+  ].join(''));
+  assert.deepEqual(
+    collectDevvitInlineGraph(root, 'index.html').files.map((file) => file.path).sort(),
+    ['assets/image.png', 'assets/movie.mp4', 'assets/poster.png', 'index.html'],
+  );
+  assert.throws(
+    () =>
+      assertDevvitInlineBudget({
+        target: 'reddit',
+        clientDir: root,
+        inlineEntry: 'index.html',
+        budget: { maxGzipKb: 1 },
+      }),
+    /exceeds inlineBudget/,
+  );
+
   // An HTML entry cannot defer a script or preload by giving its filename.
   writeFileSync(join(root, 'index.html'), '<script src="/assets/phaser.js"></script>');
   writeFileSync(join(root, 'assets/phaser.js'), 'export const opaque=1;');
