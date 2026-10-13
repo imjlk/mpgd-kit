@@ -240,7 +240,10 @@ function assertNotificationSnapshotFreshness(
   }
   assert(second !== first, 'notification capabilities must return a fresh block for every read');
   for (const key of ['permission', 'remote', 'local'] as const) {
-    assert(second[key] !== first[key], `notification capabilities must return a fresh ${key} record`);
+    assert(
+      second[key] !== first[key],
+      `notification capabilities must return a fresh ${key} record`,
+    );
   }
   assert(
     second.remote.purposes !== first.remote.purposes,
