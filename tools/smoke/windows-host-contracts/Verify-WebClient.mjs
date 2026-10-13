@@ -12,10 +12,12 @@ const { createMicrosoftStoreNativeBridgeClient, createMicrosoftStoreNativeCommer
 const fixtures = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 const listeners = new Set();
 let cancelPurchase = false;
+let localizedCatalog = false;
 const webView = {
   postMessage(request) {
     let key = request.method;
     if (cancelPurchase && request.method === 'purchase.request') key = 'purchase.request.cancel';
+    else if (localizedCatalog && request.method === 'catalog.getDetails') key = 'catalog.getDetails.localized';
     else if (request.method === 'catalog.getDetails' && request.payload.itemIds.length > 1) key = 'catalog.getDetails.large';
     const response = JSON.parse(fixtures[key]);
     response.requestId = request.requestId;
@@ -33,10 +35,16 @@ try {
   const largeCatalog = await client.getDetails(Array.from({ length: 64 }, (_value, index) => `wire.coins.${index}`));
   assert.equal(largeCatalog.length, 64);
   assert.equal(largeCatalog[63].description.length, 4096);
+  localizedCatalog = true;
+  const localized = (await client.getDetails(['wire.coins']))[0];
+  assert.equal(localized.title, 'سکه\u200Cها');
+  assert.equal(localized.description, '👨\u200D👩\u200D👧');
+  assert.equal(localized.price.formatted, '\u200F$1.00');
+  localizedCatalog = false;
   cancelPurchase = true;
   const commerce = createMicrosoftStoreNativeCommerceRuntime(client);
   await assert.rejects(commerce.createPaymentRequest([{
     supportedMethods: 'https://store.microsoft.com/billing', data: { sku: 'wire.coins' },
   }]).show(), error => error.name === 'AbortError');
-  console.log('C# serialized results accepted by the public TypeScript bridge client: 6 (including localized catalog and cancelled checkout)');
+  console.log('C# serialized results accepted by the public TypeScript bridge client: 7 (including joiners/RTL, large catalog and cancelled checkout)');
 } finally { client.dispose(); }

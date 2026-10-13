@@ -135,13 +135,14 @@ foreach (string game in new[] { "puzzle", "tower" })
     await active;
     Assert(responses.Count == 0 && !host.ActivateDocument(source), "closed window suppresses response");
 }
-if (args.Length == 1) File.WriteAllText(args[0], JsonSerializer.Serialize(wireFixtures));
 var localized = NativeBridgeResult.Success(new GetCatalogDetailsCommand("localized", ["wire.coins"]),
     new NativeProductDetailsResult([new("wire.coins", "سکه\u200Cها", "👨\u200D👩\u200D👧", new("USD", "\u200F$1.00"))]), allowed);
 using (var display = JsonDocument.Parse(localized))
     Assert(display.RootElement.GetProperty("result").GetProperty("items")[0].GetProperty("title").GetString() == "سکه\u200Cها", "localized display text accepts joiners and direction marks");
 InvalidResult(new GetCatalogDetailsCommand("bad-text", ["wire.coins"]),
     new NativeProductDetailsResult([new("wire.coins", "unsafe\u202Etitle", null, new("USD", "$1.00"))]));
+wireFixtures["catalog.getDetails.localized"] = localized;
+if (args.Length == 1) File.WriteAllText(args[0], JsonSerializer.Serialize(wireFixtures));
 Console.WriteLine($"Native host contract checks passed: {checks}");
 
 sealed class Dispatcher : INativeBridgeDispatcher
