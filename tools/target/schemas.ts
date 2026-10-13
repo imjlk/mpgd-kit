@@ -98,7 +98,7 @@ export interface DevvitTargetConfig extends BaseTargetConfig {
 }
 
 export interface DevvitInlineBudget {
-  /** Maximum gzip size, in KiB, of the inline entry's statically reachable JS and CSS. */
+  /** Maximum gzip size, in KiB, of the HTML, code, styles and CSS-referenced assets. */
   readonly maxGzipKb?: number;
   /** Module names that must not be reachable from the inline entry's static graph, e.g. `phaser`. */
   readonly forbidModules?: readonly string[];

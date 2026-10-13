@@ -30,6 +30,7 @@ const staticImportPattern = /(?:^|[;\s}])(?:import|export)\s*(?:[\w*{}\s,$]+\s*f
 const htmlAssetPattern = /<(?:script[^>]*\ssrc|link[^>]*\srel=["'](?:modulepreload|stylesheet)["'][^>]*\shref)=["']([^"']+)["']/g;
 const htmlAssetPatternReversed = /<link[^>]*\shref=["']([^"']+)["'][^>]*\srel=["'](?:modulepreload|stylesheet)["']/g;
 const cssImportPattern = /@import\s+(?:url\(\s*["']?([^\s"')]+)["']?\s*\)|["']([^"']+)["'])/gi;
+const cssUrlPattern = /url\(\s*(?:"([^"]+)"|'([^']+)'|([^\s)]+))\s*\)/giu;
 
 /**
  * Walk the inline entry's load graph: HTML scripts, modulepreloads and
@@ -89,10 +90,15 @@ function walkInlineGraph(
     }
   }
   for (const block of html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/giu)) {
-    for (const match of (block[1] ?? '').matchAll(cssImportPattern)) {
-      const reference = match[1] ?? match[2];
-      if (reference !== undefined && isLocalReference(reference)) {
-        queue.push({ file: resolveReference(root, dirname(entryPath), reference), dynamic: false });
+    for (const pattern of [cssImportPattern, cssUrlPattern]) {
+      for (const match of (block[1] ?? '').matchAll(pattern)) {
+        const reference = match[1] ?? match[2] ?? match[3];
+        if (reference !== undefined && isLocalReference(reference)) {
+          queue.push({
+            file: resolveReference(root, dirname(entryPath), reference),
+            dynamic: false,
+          });
+        }
       }
     }
   }
@@ -146,10 +152,12 @@ function walkInlineGraph(
         }
       }
     } else if (file.endsWith('.css')) {
-      for (const match of content.matchAll(cssImportPattern)) {
-        const reference = match[1] ?? match[2];
-        if (reference !== undefined && isLocalReference(reference)) {
-          queue.push({ file: resolveReference(root, dirname(file), reference), dynamic: false });
+      for (const pattern of [cssImportPattern, cssUrlPattern]) {
+        for (const match of content.matchAll(pattern)) {
+          const reference = match[1] ?? match[2] ?? match[3];
+          if (reference !== undefined && isLocalReference(reference)) {
+            queue.push({ file: resolveReference(root, dirname(file), reference), dynamic: false });
+          }
         }
       }
     }
@@ -208,7 +216,8 @@ export function assertDevvitInlineBudget(input: {
 }
 
 function isLocalReference(reference: string): boolean {
-  return !/^(?:[a-z]+:)?\/\//i.test(reference) && !reference.startsWith('data:');
+  return reference !== '' && !reference.startsWith('#')
+    && !/^(?:[a-z][a-z\d+.-]*:|\/\/)/iu.test(reference);
 }
 
 function resolveReference(root: string, fromDir: string, reference: string): string {

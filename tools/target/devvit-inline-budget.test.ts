@@ -86,6 +86,25 @@ try {
   const cssReport = collectDevvitInlineGraph(root, 'index.html', ['assets/*.css']);
   assert.ok(cssReport.files.some((file) => file.path === 'assets/more.css'));
   assert.ok(cssReport.files.some((file) => file.path === 'assets/nested.css'));
+  writeFileSync(
+    join(root, 'assets/preview.css'),
+    '@font-face{src:url("./font.woff2")}body{background:url(./image.png);mask:url(#local)}',
+  );
+  writeFileSync(join(root, 'assets/font.woff2'), randomBytes(4096));
+  writeFileSync(join(root, 'assets/image.png'), randomBytes(4096));
+  const withAssets = collectDevvitInlineGraph(root, 'index.html', ['assets/phaser.js']);
+  assert.ok(withAssets.files.some((file) => file.path === 'assets/font.woff2'));
+  assert.ok(withAssets.files.some((file) => file.path === 'assets/image.png'));
+  assert.throws(
+    () =>
+      assertDevvitInlineBudget({
+        target: 'reddit',
+        clientDir: root,
+        inlineEntry: 'index.html',
+        budget: { maxGzipKb: 1, deferredChunks: ['assets/phaser.js'] },
+      }),
+    /exceeds inlineBudget/,
+  );
 
   // An HTML entry cannot defer a script or preload by giving its filename.
   writeFileSync(join(root, 'index.html'), '<script src="/assets/phaser.js"></script>');
