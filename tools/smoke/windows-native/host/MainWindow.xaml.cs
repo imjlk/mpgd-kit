@@ -46,6 +46,30 @@ public sealed partial class MainWindow : Window
             // Store commerce. The context is private to this native host.
             _ = WindowStoreContext.Create(this);
             AttachFixtureBridge();
+            core.AddWebResourceRequestedFilter("https://starter.mpgd.invalid/ci-load-gate.svg", CoreWebView2WebResourceContext.Image);
+            core.WebResourceRequested += async (_, request) =>
+            {
+                var deferral = request.GetDeferral();
+                try
+                {
+                    // Keep load completion pending while the real web client
+                    // sends its startup requests from the committed document.
+                    await Task.Delay(2000);
+                    if (!closed)
+                    {
+                        var stream = new Windows.Storage.Streams.InMemoryRandomAccessStream();
+                        using var writer = new Windows.Storage.Streams.DataWriter(stream);
+                        writer.WriteString("<svg xmlns='http://www.w3.org/2000/svg'/>");
+                        await writer.StoreAsync();
+                        writer.DetachStream();
+                        stream.Seek(0);
+                        request.Response = core.Environment.CreateWebResourceResponse(
+                            stream, 200, "OK", "Content-Type: image/svg+xml");
+                    }
+                }
+                catch (Exception error) { RecordFailure(error); }
+                finally { deferral.Complete(); }
+            };
             core.NavigationStarting += (_, navigation) =>
             {
                 if (!Uri.TryCreate(navigation.Uri, UriKind.Absolute, out var uri) ||
@@ -55,11 +79,9 @@ public sealed partial class MainWindow : Window
                     RecordFailure(new InvalidOperationException("Unexpected starter navigation."));
                 }
             };
-            core.NavigationCompleted += (_, navigation) =>
+            core.ContentLoading += (_, loading) =>
             {
-                if (!navigation.IsSuccess)
-                    RecordFailure(new InvalidOperationException("Starter navigation failed: " + navigation.WebErrorStatus));
-                else
+                if (!loading.IsErrorPage)
                 {
                     DispatcherQueue.TryEnqueue(async () =>
                     {
@@ -69,12 +91,22 @@ public sealed partial class MainWindow : Window
                     });
                 }
             };
+            core.NavigationCompleted += (_, navigation) =>
+            {
+                if (!navigation.IsSuccess)
+                    RecordFailure(new InvalidOperationException("Starter navigation failed: " + navigation.WebErrorStatus));
+            };
             core.ProcessFailed += (_, failure) => RecordFailure(
                 new InvalidOperationException("WebView2 process failed: " + failure.ProcessFailedKind));
             await core.AddScriptToExecuteOnDocumentCreatedAsync("""
                 globalThis.__mpgdNativeErrors = [];
                 addEventListener('error', e => __mpgdNativeErrors.push(String(e.message || 'resource error')), true);
                 addEventListener('unhandledrejection', e => __mpgdNativeErrors.push(String(e.reason)));
+                addEventListener('DOMContentLoaded', () => {
+                    const gate = document.createElement('img');
+                    gate.src = '/ci-load-gate.svg';
+                    document.body.append(gate);
+                });
                 """);
             core.Navigate("https://starter.mpgd.invalid/index.html");
             probe.Start();
@@ -86,7 +118,7 @@ public sealed partial class MainWindow : Window
     {
         bridge?.Dispose();
         string item = bridgeScenario == 0 ? "puzzle.coins" : "tower.coins";
-        bridge = new(GameWebView, new Uri("https://starter.mpgd.invalid/index.html"), [item], new FixtureStoreOperations(item), RecordFailure);
+        bridge = new(GameWebView, new Uri("https://starter.mpgd.invalid/index.html"), [item], new FixtureStoreOperations(item, DispatcherQueue), RecordFailure);
     }
 
     private async Task<string> StartBridgeProbe()
@@ -127,7 +159,7 @@ public sealed partial class MainWindow : Window
                 && state["nativeBridge"].TryGetProperty("itemId", out var itemId) && itemId.GetString() == expectedItem)
             {
                 var evidence = state["nativeBridge"];
-                if (!evidence.GetProperty("passed").GetBoolean())
+                if (!evidence.GetProperty("passed").GetBoolean() || !evidence.GetProperty("beforeDocumentLoad").GetBoolean())
                     throw new InvalidOperationException("Native fixture bridge contract failed.");
                 bridgeEvidence.Add(evidence.Clone());
                 if (bridgeScenario == 0)

@@ -36,7 +36,9 @@ webView.CoreWebView2.Navigate(gameConfiguration.StartUri);
 
 The adapter checks HTTPS host and port, rejects credentials in navigation URLs,
 blocks new windows, disables host objects and devtools, and accepts messages
-only after a successful allowed navigation. Every navigation start or WebView2
+from a committed, allowed document as it starts loading, including startup
+requests before the load-complete event. Failed navigation and every navigation
+start or WebView2
 process failure invalidates the document. Queued operations are cancelled and
 late replies from the previous document are suppressed, including navigation
 back to the same URL. Closure detaches handlers and suppresses responses. Use
@@ -82,7 +84,8 @@ For a custom transport, construct `NativeBridgeHost` with an
 cancelled queued callbacks from starting, and await started operations until
 they finish. `postResponse` synchronously sends JSON on that thread. Call
 `InvalidateDocument` at every navigation start, `ActivateDocument` only after an
-allowed document successfully loads, and `Dispose` at closure. Lifecycle calls
+allowed document commits, invalidate again on load failure, and `Dispose` at
+closure. Lifecycle calls
 and response delivery must share the window UI dispatcher.
 
 ## Acceptance scope

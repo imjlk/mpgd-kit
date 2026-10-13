@@ -1,32 +1,42 @@
 using Mpgd.MicrosoftStore.Host;
+using Microsoft.UI.Dispatching;
 
 namespace KitStarterHost;
 
 // Exercises the common host on a real WinUI/WebView2 window. These callbacks
 // contain no account credentials, SDK checkout or backend grants.
-internal sealed class FixtureStoreOperations(string itemId) : INativeStoreOperations
+internal sealed class FixtureStoreOperations(string itemId, DispatcherQueue queue) : INativeStoreOperations
 {
-    public Task<NativeProductDetailsResult> GetDetailsAsync(GetCatalogDetailsCommand command, CancellationToken cancellation)
+    private void AssertUiThread(CancellationToken cancellation)
     {
         cancellation.ThrowIfCancellationRequested();
+        if (!queue.HasThreadAccess) throw new InvalidOperationException("Fixture callback ran outside its window UI thread.");
+    }
+
+    public Task<NativeProductDetailsResult> GetDetailsAsync(GetCatalogDetailsCommand command, CancellationToken cancellation)
+    {
+        AssertUiThread(cancellation);
         return Task.FromResult(new NativeProductDetailsResult([new(itemId, "Fixture coins", null, new("USD", "$1.00"))]));
     }
 
-    public Task<NativePlayerSession> SignInAsync(CancellationToken cancellation)
+    public async Task<NativePlayerSession> SignInAsync(CancellationToken cancellation)
     {
-        cancellation.ThrowIfCancellationRequested();
-        return Task.FromResult(new NativePlayerSession(DateTimeOffset.UtcNow.AddMinutes(15).ToUnixTimeMilliseconds(), "ci-fixture-player", new string('f', 64)));
+        AssertUiThread(cancellation);
+        // Complete asynchronously so NativeBridgeHost's ConfigureAwait(false)
+        // continuation must enqueue its WebView2 response back onto this UI.
+        await Task.Delay(10, cancellation);
+        return new NativePlayerSession(DateTimeOffset.UtcNow.AddMinutes(15).ToUnixTimeMilliseconds(), "ci-fixture-player", new string('f', 64));
     }
 
     public Task<NativePurchasesResult> ListPurchasesAsync(CancellationToken cancellation)
     {
-        cancellation.ThrowIfCancellationRequested();
+        AssertUiThread(cancellation);
         return Task.FromResult(new NativePurchasesResult([new(itemId, itemId)]));
     }
 
     public Task<NativePurchaseResult> RequestPurchaseAsync(RequestPurchaseCommand command, CancellationToken cancellation)
     {
-        cancellation.ThrowIfCancellationRequested();
+        AssertUiThread(cancellation);
         return Task.FromResult(new NativePurchaseResult("succeeded", itemId));
     }
 }

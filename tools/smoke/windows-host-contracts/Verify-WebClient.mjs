@@ -13,7 +13,9 @@ const fixtures = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 const listeners = new Set();
 const webView = {
   postMessage(request) {
-    const response = JSON.parse(fixtures[request.method]);
+    const key = request.method === 'catalog.getDetails' && request.payload.itemIds.length > 1
+      ? 'catalog.getDetails.large' : request.method;
+    const response = JSON.parse(fixtures[key]);
     response.requestId = request.requestId;
     queueMicrotask(() => { for (const listener of listeners) listener({ data: response }); });
   },
@@ -26,5 +28,8 @@ try {
   assert.equal((await client.signIn()).playerId, 'fixture-player');
   assert.equal((await client.listPurchases())[0].purchaseToken, 'wire.coins');
   assert.deepEqual(await client.requestPurchase('wire.coins'), { status: 'succeeded', purchaseToken: 'wire.coins' });
-  console.log('C# serialized results accepted by the public TypeScript bridge client: 4');
+  const largeCatalog = await client.getDetails(Array.from({ length: 64 }, (_value, index) => `wire.coins.${index}`));
+  assert.equal(largeCatalog.length, 64);
+  assert.equal(largeCatalog[63].description.length, 4096);
+  console.log('C# serialized results accepted by the public TypeScript bridge client: 5 (including a large localized catalog)');
 } finally { client.dispose(); }

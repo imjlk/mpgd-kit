@@ -6,7 +6,7 @@ import {
 // Bundled against the installed CLI consumer's adapter, exercising the public
 // TS client and C# host together rather than duplicating response validation.
 export async function startBridgeProbe(itemId) {
-  const probe = { itemId, complete: false, passed: false };
+  const probe = { itemId, complete: false, passed: false, beforeDocumentLoad: document.readyState !== 'complete' };
   globalThis.__mpgdBridgeProbe = probe;
   const client = createMicrosoftStoreNativeBridgeClient({
     webView: globalThis.chrome.webview,

@@ -21,6 +21,13 @@ foreach (BridgeCommand command in new BridgeCommand[] { new GetCatalogDetailsCom
     };
     wireFixtures[command.Method] = NativeBridgeResult.Success(command, result, allowed);
 }
+var largeIds = Enumerable.Range(0, 64).Select(index => $"wire.coins.{index}").ToArray();
+var largeAllowed = new HashSet<string>(largeIds, StringComparer.Ordinal);
+var largeItems = largeIds.Select(id => new NativeProductDetail(id, "Localized coins", new string('한', 4096), new("USD", "$1.00"))).ToArray();
+wireFixtures["catalog.getDetails.large"] = NativeBridgeResult.Success(new GetCatalogDetailsCommand("large", largeIds), new NativeProductDetailsResult(largeItems), largeAllowed);
+Assert(wireFixtures["catalog.getDetails.large"].Length > NativeBridgeProtocol.MaximumMessageLength, "valid large catalog response is not limited by request size");
+using (var largeHost = new NativeBridgeHost(new(new Uri("https://wire.example.invalid/")), largeIds.Append("wire.coins"), wireOperations, new Dispatcher(), _ => { }))
+    Assert(largeHost.ActivateDocument("https://wire.example.invalid/"), "configured product allowlist may exceed per-request item limit");
 if (args.Length == 1) File.WriteAllText(args[0], JsonSerializer.Serialize(wireFixtures));
 foreach (string malformed in new[] { "null", "{}", "{", new string('x', 65537), Message("bad", "catalog.getDetails", new { itemIds = Array.Empty<string>() }), Message("bad", "identity.signIn", new { extra = true }), Message("bad", "purchase.request", new { itemId = "wire.coins", extra = true }), Message("bad", "catalog.getDetails", new { itemIds = new[] { "wire.coins", "wire.coins" } }), Message("bad", "unknown.method") })
     Assert(!NativeBridgeProtocol.TryParseCommand(malformed, allowed, out _, out _), "reject malformed protocol request");

@@ -115,8 +115,8 @@ generated Phaser canvas to remain ready for 30 seconds without JavaScript/bootst
 The native matrix is required by ci-required; unsigned package and startup receipts retain source
 and bundle hashes. See [the CI host and acceptance runbook](https://github.com/imjlk/mpgd-kit/tree/main/tools/smoke/windows-native).
 
-The CI host is not part of the generated game's release output and has no commerce/identity bridge.
-Game-owned WinUI hosts and Store-installed login/purchase behavior still require game acceptance.
+The CI host is not part of the generated game's release output. Its bridge uses fixture callbacks;
+real Store login, purchase and backend grants still require game-owned acceptance.
 
 The shared installer/runtime/process/cleanup module is included in @mpgd/cli. Import
 getMicrosoftStoreNativeAcceptanceModulePath from @mpgd/cli/windows-native-tools to locate it;

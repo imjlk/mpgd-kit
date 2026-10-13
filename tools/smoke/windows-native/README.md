@@ -3,7 +3,8 @@
 The Windows consumer job creates a standalone game under a path containing spaces and installs
 the current checkout's packed npm artifacts. It builds the game and Microsoft Store PWA, then
 Build-StarterMsix.ps1 embeds that exact generated web bundle in this CI-only WinUI/WebView2 host.
-This host is not shipped by create-game and does not implement a commerce or authentication bridge.
+This host is not shipped by create-game. Its native bridge exercises fixture callbacks, without
+performing real Store authentication, checkout or backend grants.
 
 The build uses a pinned .NET SDK, self-contained .NET and Windows App SDK runtimes, and locked NuGet
 dependencies. x64 and ARM64 packages are built on Windows. Separate windows-latest and windows-11-arm

@@ -37,9 +37,10 @@ internal static class NativeBridgeResult
             _ => false,
         };
         if (!valid) throw new InvalidOperationException("Invalid native result.");
-        string response = JsonSerializer.Serialize(new { protocol = NativeBridgeProtocol.Protocol, command.RequestId, command.Method, ok = true, result }, Options);
-        if (response.Length > NativeBridgeProtocol.MaximumMessageLength) throw new InvalidOperationException("Native response exceeds message limit.");
-        return response;
+        // Result size is bounded by per-field and per-collection limits above.
+        // The inbound request ceiling is not the web contract's response limit:
+        // 64 valid localized descriptions may legitimately exceed 64 KiB.
+        return JsonSerializer.Serialize(new { protocol = NativeBridgeProtocol.Protocol, command.RequestId, command.Method, ok = true, result }, Options);
     }
 
     internal static string Failure(string requestId, string method, string errorCode) =>

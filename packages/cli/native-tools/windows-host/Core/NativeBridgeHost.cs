@@ -1,8 +1,9 @@
 namespace Mpgd.MicrosoftStore.Host;
 
 /// <summary>A window-owned native bridge. InvalidateDocument on every top-level
-/// navigation start, activate only after a successful allowed navigation, and
-/// dispose when the window closes. PostResponse must synchronously send JSON.</summary>
+/// navigation start, activate when an allowed document commits, invalidate on
+/// navigation failure, and dispose when the window closes. PostResponse must
+/// synchronously send JSON.</summary>
 public sealed class NativeBridgeHost : IDisposable
 {
     private readonly NativeBridgeOrigin origin;
@@ -30,8 +31,7 @@ public sealed class NativeBridgeHost : IDisposable
         if (maximumPendingRequests < 1) throw new ArgumentOutOfRangeException(nameof(maximumPendingRequests));
         this.origin = origin;
         allowedItems = new(allowedItemIds, StringComparer.Ordinal);
-        if (allowedItems.Count > NativeBridgeProtocol.MaximumItemCount
-            || allowedItems.Any(item => !NativeBridgeProtocol.IsValidIdentifier(item, NativeBridgeProtocol.MaximumItemIdLength)))
+        if (allowedItems.Any(item => !NativeBridgeProtocol.IsValidIdentifier(item, NativeBridgeProtocol.MaximumItemIdLength)))
             throw new ArgumentException("Invalid product allowlist.", nameof(allowedItemIds));
         this.operations = operations;
         this.dispatcher = dispatcher;
