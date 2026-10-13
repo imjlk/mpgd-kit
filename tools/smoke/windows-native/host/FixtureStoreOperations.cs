@@ -5,7 +5,7 @@ namespace KitStarterHost;
 
 // Exercises the common host on a real WinUI/WebView2 window. These callbacks
 // contain no account credentials, SDK checkout or backend grants.
-internal sealed class FixtureStoreOperations(string itemId, DispatcherQueue queue) : INativeStoreOperations
+internal sealed class FixtureStoreOperations(string itemId, DispatcherQueue queue, Action notifyRecoverableFailures) : INativeStoreOperations
 {
     private void AssertUiThread(CancellationToken cancellation)
     {
@@ -25,6 +25,10 @@ internal sealed class FixtureStoreOperations(string itemId, DispatcherQueue queu
         // Complete asynchronously so NativeBridgeHost's ConfigureAwait(false)
         // continuation must enqueue its WebView2 response back onto this UI.
         await Task.Delay(10, cancellation);
+        AssertUiThread(cancellation);
+        // Simulate SDK notification kinds on the live adapter. Its response
+        // must still cross real WebView2; no GPU process is actually terminated.
+        notifyRecoverableFailures();
         return new NativePlayerSession(DateTimeOffset.UtcNow.AddMinutes(15).ToUnixTimeMilliseconds(), "ci-fixture-player", new string('f', 64));
     }
 

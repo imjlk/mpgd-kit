@@ -39,6 +39,7 @@ void InvalidResult(BridgeCommand command, object result)
     Assert(rejected, "reject invalid response");
 }
 InvalidResult(new SignInCommand("test"), new NativePlayerSession(DateTimeOffset.UtcNow.AddSeconds(30).ToUnixTimeMilliseconds(), "player", new string('s', 64)));
+InvalidResult(new SignInCommand("test"), new NativePlayerSession(DateTimeOffset.UtcNow.AddSeconds(90).ToUnixTimeMilliseconds(), "player", new string('s', 64)));
 InvalidResult(new SignInCommand("test"), new NativePlayerSession(DateTimeOffset.UtcNow.AddDays(2).ToUnixTimeMilliseconds(), "player", new string('s', 64)));
 InvalidResult(new SignInCommand("test"), new NativePlayerSession(DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeMilliseconds(), " player ", new string('s', 64)));
 InvalidResult(new ListPurchasesCommand("test"), new NativePurchasesResult([new("wire.coins", "wire.coins"), new("wire.coins", "wire.coins")]));

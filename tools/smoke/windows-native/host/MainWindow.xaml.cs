@@ -70,15 +70,6 @@ public sealed partial class MainWindow : Window
                 catch (Exception error) { RecordFailure(error); }
                 finally { deferral.Complete(); }
             };
-            core.NavigationStarting += (_, navigation) =>
-            {
-                if (!Uri.TryCreate(navigation.Uri, UriKind.Absolute, out var uri) ||
-                    uri.Scheme != "https" || uri.Host != "starter.mpgd.invalid")
-                {
-                    navigation.Cancel = true;
-                    RecordFailure(new InvalidOperationException("Unexpected starter navigation."));
-                }
-            };
             core.ContentLoading += (_, loading) =>
             {
                 if (!loading.IsErrorPage)
@@ -93,7 +84,7 @@ public sealed partial class MainWindow : Window
             };
             core.NavigationCompleted += (_, navigation) =>
             {
-                if (!navigation.IsSuccess)
+                if (!navigation.IsSuccess && navigation.WebErrorStatus != CoreWebView2WebErrorStatus.OperationCanceled)
                     RecordFailure(new InvalidOperationException("Starter navigation failed: " + navigation.WebErrorStatus));
             };
             core.ProcessFailed += (_, failure) => RecordFailure(
@@ -118,7 +109,14 @@ public sealed partial class MainWindow : Window
     {
         bridge?.Dispose();
         string item = bridgeScenario == 0 ? "puzzle.coins" : "tower.coins";
-        bridge = new(GameWebView, new Uri("https://starter.mpgd.invalid/index.html"), [item], new FixtureStoreOperations(item, DispatcherQueue), RecordFailure);
+        bridge = new(GameWebView, new Uri("https://starter.mpgd.invalid/index.html"), [item],
+            new FixtureStoreOperations(item, DispatcherQueue, () =>
+            {
+                foreach (var kind in new[] { CoreWebView2ProcessFailedKind.GpuProcessExited,
+                    CoreWebView2ProcessFailedKind.UtilityProcessExited, CoreWebView2ProcessFailedKind.SandboxHelperProcessExited,
+                    CoreWebView2ProcessFailedKind.FrameRenderProcessExited, CoreWebView2ProcessFailedKind.RenderProcessUnresponsive })
+                    bridge!.HandleProcessFailure(kind);
+            }), RecordFailure);
     }
 
     private async Task<string> StartBridgeProbe()

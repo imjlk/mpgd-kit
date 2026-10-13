@@ -1,7 +1,7 @@
 namespace Mpgd.MicrosoftStore.Host;
 
 /// <summary>A window-owned native bridge. InvalidateDocument on every top-level
-/// navigation start, activate when an allowed document commits, invalidate on
+/// accepted navigation start, activate when an allowed document commits, invalidate on
 /// navigation failure, and dispose when the window closes. PostResponse must
 /// synchronously send JSON.</summary>
 public sealed class NativeBridgeHost : IDisposable

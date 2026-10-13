@@ -15,6 +15,8 @@ public sealed class WebView2NativeBridge : IDisposable
     private ulong navigationId;
     private bool documentActivated;
     private bool documentRejected;
+    private bool navigationRejected;
+    private string? lastCommittedSource;
     private bool closed;
 
     public WebView2NativeBridge(WebView2 view, Uri startUri, IEnumerable<string> allowedItemIds,
@@ -41,39 +43,72 @@ public sealed class WebView2NativeBridge : IDisposable
 
     private void NavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs args)
     {
+        if (!origin.Allows(args.Uri))
+        {
+            args.Cancel = true;
+            // A cancelled navigation keeps the previous document. A blocked
+            // redirect can follow an allowed start that already revoked it.
+            if (args.NavigationId == navigationId)
+            {
+                navigationRejected = true;
+                if (!documentActivated && lastCommittedSource is not null)
+                    documentActivated = host.ActivateDocument(lastCommittedSource);
+            }
+            return;
+        }
         navigationId = args.NavigationId;
         documentActivated = false;
         documentRejected = false;
+        navigationRejected = false;
         host.InvalidateDocument();
-        if (!origin.Allows(args.Uri)) args.Cancel = true;
     }
 
     private void ContentLoading(object? sender, CoreWebView2ContentLoadingEventArgs args)
     {
-        if (closed || args.NavigationId != navigationId) return;
+        if (closed || args.NavigationId != navigationId || navigationRejected) return;
         documentRejected = args.IsErrorPage;
         // The new document is committed before its startup scripts can send
         // messages. Waiting for NavigationCompleted drops valid boot requests.
         if (!documentRejected) documentActivated = host.ActivateDocument(core.Source);
-    }
-
-    private void NavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs args)
-    {
-        if (closed || args.NavigationId != navigationId) return;
-        if (!args.IsSuccess)
+        else
         {
             documentActivated = false;
             host.InvalidateDocument();
         }
+        lastCommittedSource = documentActivated ? core.Source : null;
+    }
+
+    private void NavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs args)
+    {
+        if (closed || args.NavigationId != navigationId || navigationRejected) return;
+        if (!args.IsSuccess)
+        {
+            if (args.WebErrorStatus == CoreWebView2WebErrorStatus.OperationCanceled && documentActivated && !documentRejected)
+                return; // The committed page remains usable after a cancelled load.
+            documentActivated = false;
+            lastCommittedSource = null;
+            host.InvalidateDocument();
+        }
         else if (!documentActivated && !documentRejected)
+        {
             documentActivated = host.ActivateDocument(core.Source);
+            lastCommittedSource = documentActivated ? core.Source : null;
+        }
     }
 
     private static void NewWindowRequested(object? sender, CoreWebView2NewWindowRequestedEventArgs args) => args.Handled = true;
 
-    private void ProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs args)
+    private void ProcessFailed(object? sender, CoreWebView2ProcessFailedEventArgs args) =>
+        HandleProcessFailure(args.ProcessFailedKind);
+
+    internal void HandleProcessFailure(CoreWebView2ProcessFailedKind kind)
     {
+        // GPU/utility/subframe failures and an unresponsive renderer leave the
+        // top-level document intact or recover without a new navigation.
+        if (closed || kind is not (CoreWebView2ProcessFailedKind.BrowserProcessExited
+            or CoreWebView2ProcessFailedKind.RenderProcessExited)) return;
         documentActivated = false;
+        lastCommittedSource = null;
         host.InvalidateDocument();
     }
 

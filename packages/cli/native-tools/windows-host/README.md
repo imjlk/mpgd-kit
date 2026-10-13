@@ -37,10 +37,12 @@ webView.CoreWebView2.Navigate(gameConfiguration.StartUri);
 The adapter checks HTTPS host and port, rejects credentials in navigation URLs,
 blocks new windows, disables host objects and devtools, and accepts messages
 from a committed, allowed document as it starts loading, including startup
-requests before the load-complete event. Failed navigation and every navigation
-start or WebView2
-process failure invalidates the document. Queued operations are cancelled and
-late replies from the previous document are suppressed, including navigation
+requests before the load-complete event. Failed navigation and every accepted navigation
+start invalidates the document. Blocked external navigation keeps the intact
+page's bridge active. Browser or main renderer exit invalidates it; auto-recovered
+GPU, utility and subframe failures and renderer unresponsiveness preserve it.
+Queued operations are cancelled and late replies from the previous document are
+suppressed, including navigation
 back to the same URL. Closure detaches handlers and suppresses responses. Use
 one adapter and operation implementation per window.
 
@@ -70,10 +72,11 @@ service tickets and account credentials stay in private native/backend state.
 Client checkout produces evidence; the backend ledger verifies and commits all
 durable grants.
 
-`NativePlayerSession.ExpiresAt` uses Unix epoch milliseconds, with 1 minute to
-24 hours remaining at serialization. It accepts a bounded player ID
-and a whitespace-free token of 32–4096 characters. Games may enforce a shorter
-lifetime. Product and purchase results must refer to their allowlist. Purchase
+`NativePlayerSession.ExpiresAt` uses Unix epoch milliseconds, with 2 minutes to
+24 hours remaining at serialization, leaving a minute of transport headroom
+above the web client's 1-minute acceptance minimum. It accepts a bounded player ID
+and a whitespace-free token of 32–4096 characters. Games may enforce a lower
+maximum lifetime. Product and purchase results must refer to their allowlist. Purchase
 tokens equal their item ID, matching the existing web client contract; the
 authoritative backend still verifies and commits the purchase.
 
@@ -83,9 +86,10 @@ For a custom transport, construct `NativeBridgeHost` with an
 `INativeBridgeDispatcher`. Run queued callbacks on the owning UI thread, prevent
 cancelled queued callbacks from starting, and await started operations until
 they finish. `postResponse` synchronously sends JSON on that thread. Call
-`InvalidateDocument` at every navigation start, `ActivateDocument` only after an
+`InvalidateDocument` at every accepted navigation start, `ActivateDocument` only after an
 allowed document commits, invalidate again on load failure, and `Dispose` at
-closure. Lifecycle calls
+closure. Invalidate on process failure only when the top-level document exits;
+auto-recovered helper/subframe failures retain it. Lifecycle calls
 and response delivery must share the window UI dispatcher.
 
 ## Acceptance scope
@@ -94,6 +98,9 @@ Contract tests cover two independent game configurations, protocol and product
 rejection, sanitized errors, duplicate/busy requests, cancelled queues, navigation
 generation and closure. Windows CI links the installed package's core and WinUI
 sources into x64/ARM64 MSIX, binds StoreContext to the native window, and exercises
-four methods through WebView2 with fixture callbacks. Receipts identify fixture
+four methods through WebView2 with fixture callbacks. It also checks requests
+before load completion, real blocked external navigation, and simulated
+recoverable process notification kinds on the live adapter. It does not terminate
+GPU processes. Receipts identify fixture
 results separately. They do not claim real Store login, settled purchases,
 backend grants or Store upload.

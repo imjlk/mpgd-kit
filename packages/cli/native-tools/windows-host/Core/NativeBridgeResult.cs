@@ -23,7 +23,7 @@ internal static class NativeBridgeResult
                     && item.Price is not null && Text(item.Price.Formatted, 128)
                     && item.Price.CurrencyCode is { Length: 3 } currency && currency.All(c => c is >= 'A' and <= 'Z')),
             (SignInCommand, NativePlayerSession session) =>
-                session.ExpiresAt >= DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds()
+                session.ExpiresAt >= DateTimeOffset.UtcNow.AddMinutes(2).ToUnixTimeMilliseconds()
                 && session.ExpiresAt <= DateTimeOffset.UtcNow.AddHours(24).ToUnixTimeMilliseconds()
                 && NativeBridgeProtocol.IsValidIdentifier(session.PlayerId, 256) && Token(session.SessionToken),
             (ListPurchasesCommand, NativePurchasesResult purchases) =>

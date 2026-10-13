@@ -28,7 +28,18 @@ export async function startBridgeProbe(itemId) {
     probe.listPurchases = list.length === 1 && list[0].itemId === itemId;
     probe.requestPurchase = buy.status === 'succeeded' && buy.purchaseToken === itemId;
     probe.allowlist = rejected;
-    probe.passed = probe.catalog && probe.signIn && probe.listPurchases && probe.requestPurchase && probe.allowlist;
+    // Startup requests ran before load completion. Finish the slow image first
+    // so the blocked-navigation check does not cancel unrelated image loading.
+    if (document.readyState !== 'complete') {
+      await new Promise(resolve => addEventListener('load', resolve, { once: true }));
+    }
+    location.href = 'https://blocked.example.invalid/';
+    await new Promise(resolve => setTimeout(resolve, 200));
+    const afterBlockedNavigation = await client.getDetails([itemId]);
+    probe.blockedNavigationPreserved = location.origin === 'https://starter.mpgd.invalid'
+      && afterBlockedNavigation[0]?.itemId === itemId;
+    probe.passed = probe.catalog && probe.signIn && probe.listPurchases && probe.requestPurchase
+      && probe.allowlist && probe.blockedNavigationPreserved;
   } finally {
     probe.complete = true;
     client.dispose();
