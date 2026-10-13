@@ -40,4 +40,32 @@ const missingPnpmScript = () => resolveNativeCommandLaunch({
   platform: 'win32',
 });
 assert.throws(missingPnpmScript, /pnpm exec mpgd/u);
+assert.deepEqual(
+  resolveNativeCommandLaunch({
+    command: 'pnpm',
+    args: ['--dir', 'C:\\game with spaces', 'build'],
+    environment: { npm_execpath: 'C:\\tool chain\\pnpm.exe' },
+    platform: 'win32',
+  }),
+  {
+    command: 'C:\\tool chain\\pnpm.exe',
+    args: ['--dir', 'C:\\game with spaces', 'build'],
+  },
+);
+const pnpmShim = () => resolveNativeCommandLaunch({
+  command: 'pnpm',
+  args: [],
+  environment: { npm_execpath: 'C:\\tools\\pnpm.cmd' },
+  platform: 'win32',
+});
+assert.throws(pnpmShim, /pnpm exec mpgd/u);
+for (const entry of ['npm-cli.js', 'npx-cli.js', 'yarn.js', 'other.exe']) {
+  const wrongManager = () => resolveNativeCommandLaunch({
+    command: 'pnpm',
+    args: [],
+    platform: 'win32',
+    environment: { npm_execpath: `C:\\tools\\${entry}` },
+  });
+  assert.throws(wrongManager, /pnpm exec mpgd/u);
+}
 console.info('Native command launch selection passed.');
