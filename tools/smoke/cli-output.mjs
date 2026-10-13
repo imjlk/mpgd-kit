@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +47,30 @@ try {
     assert.equal(sourceRoot, expectedRoot, 'the source root must contain both game and kit sources');
     assert.equal(outside(path.relative(sourceRoot, gameRoot)), false);
     if (workspace) assert.equal(outside(path.relative(sourceRoot, root)), false);
+  }
+  const liteRoot = path.join(fixtureRoot, 'lite-game');
+  const lite = spawnSync(process.execPath, [
+    'packages/cli/dist/bin.js', 'game', 'create', liteRoot, '--kit-path', root, '--template', 'lite',
+  ], { cwd: root, encoding: 'utf8', timeout: 180_000 });
+  assert.equal(lite.status, 0, lite.stderr);
+  const litePackage = JSON.parse(readFileSync(path.join(liteRoot, 'package.json'), 'utf8'));
+  assert.equal(litePackage.dependencies.phaser, undefined, 'lite games must not depend on Phaser');
+  assert.equal(typeof litePackage.dependencies['@mpgd/lite-shell'], 'string');
+  assert.equal(existsSync(path.join(liteRoot, 'src/scenes')), false);
+  assert.equal(existsSync(path.join(liteRoot, 'src/lite/tapGame.ts')), true);
+  const liteSources = ['src/runtime/createGame.ts', 'src/platform/devvitEntrypoint.ts', 'src/lite/tapGame.ts']
+    .map((file) => readFileSync(path.join(liteRoot, file), 'utf8')).join('\n');
+  assert.doesNotMatch(liteSources, /from 'phaser'/);
+  for (const [args, message] of [
+    [['--template', 'pixi'], /Unsupported --template pixi/],
+    [['--template', 'lite', '--renderer', 'svg'], /implemented lite renderers: canvas/],
+    [['--renderer', 'canvas'], /only available with --template lite/],
+  ]) {
+    const rejected = spawnSync(process.execPath, [
+      'packages/cli/dist/bin.js', 'game', 'create', path.join(fixtureRoot, 'rejected-game'), '--kit-path', root, ...args,
+    ], { cwd: root, encoding: 'utf8', timeout: 180_000 });
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.stderr, message);
   }
 } finally {
   rmSync(fixtureRoot, { recursive: true, force: true });

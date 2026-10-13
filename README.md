@@ -172,6 +172,8 @@ Settings action, or expose no replay action. See [Tutorial Engine](docs/TUTORIAL
 - `examples/phaser-starter` is a private, non-publishable reference fixture.
   Kit contributors use it to validate generated-game wiring and root target
   scripts; downstream games do not depend on it.
+- `examples/lite-starter` is the private reference for the Phaser-free lite template
+  (`mpgd game create --template lite`); see `docs/LITE_TEMPLATE.md`.
 - `examples/asset-packs` is a private [asset-pack design sample](docs/asset-packs-design.md)
   for staged bundled/static-origin loading, preparation and resident ownership.
   It consumes `@mpgd/phaser-assets/packs`; see the [reusable API guide](packages/phaser-assets/README.md).
