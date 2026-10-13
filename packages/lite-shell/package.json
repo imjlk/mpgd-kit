@@ -1,7 +1,7 @@
 {
   "name": "@mpgd/lite-shell",
-  "private": true,
   "version": "0.1.0",
+  "private": true,
   "description": "Renderer-agnostic lightweight game shell (no Phaser): DPR-aware stage, scroll-safe tap input, idle-sleeping frame loop, and font subset loading. Ships a Canvas2D renderer.",
   "license": "MIT",
   "repository": {
@@ -18,14 +18,16 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "scripts": {
     "check": "ttsc --noEmit",
-    "test": "vitest run",
+    "test": "pnpm build && vitest run && node test/dist-import.mjs",
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
-    "fix": "ttsc fix"
+    "fix": "ttsc fix",
+    "build": "cd ../.. && node tools/run-ttsx.mjs tools/package/build-packages.ts @mpgd/lite-shell"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -33,5 +35,19 @@
     "ttsc": "0.30.4",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"
-  }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "mpgd",
+    "game-development",
+    "canvas",
+    "devvit",
+    "lightweight"
+  ],
+  "bugs": {
+    "url": "https://github.com/imjlk/mpgd-kit/issues"
+  },
+  "homepage": "https://github.com/imjlk/mpgd-kit/tree/main/packages/lite-shell#readme"
 }

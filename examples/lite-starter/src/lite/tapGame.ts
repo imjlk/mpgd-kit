@@ -57,6 +57,9 @@ export function createTapGame(options: TapGameOptions): LiteShell<CanvasSurface>
       // Keep animating only while the document is visible; the loop sleeps otherwise.
       return physicsActive || document.visibilityState === 'visible';
     },
+    onFirstFrame() {
+      globalThis.performance?.mark?.('lite:first-frame');
+    },
     onTap({ x, y }) {
       const dot = target(shell.size.width, shell.size.height);
       if (Math.hypot(x - dot.x, y - dot.y) <= dot.r * 1.6) {

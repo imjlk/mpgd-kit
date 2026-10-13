@@ -1,6 +1,6 @@
-import { createFrameLoop, type FrameLoop, type FrameScheduler } from './loop';
-import type { LiteRenderer, StageSize } from './renderer';
-import { defaultTapThreshold, TapRecognizer, type TapThreshold } from './tap';
+import { createFrameLoop, type FrameLoop, type FrameScheduler } from './loop.js';
+import type { LiteRenderer, StageSize } from './renderer.js';
+import { defaultTapThreshold, TapRecognizer, type TapThreshold } from './tap.js';
 
 export interface LiteTap {
   /** Stage-local CSS pixel coordinates. */
@@ -13,8 +13,20 @@ export interface LiteShellOptions<Surface> {
   readonly renderer: LiteRenderer<Surface>;
   /** Draw one frame. Return true while more frames are needed. */
   readonly frame: (surface: Surface, deltaMs: number, time: number) => boolean;
-  readonly onTap?: (tap: LiteTap) => void;
+  /**
+   * Called for each recognized tap. `event` is the original `pointerup`, so
+   * user-activation APIs such as Devvit `requestExpandedMode(event, ...)` work.
+   */
+  readonly onTap?: (tap: LiteTap, event: PointerEvent) => void;
   readonly onResize?: (size: StageSize) => void;
+  /** Called once, right after the first frame has been drawn. */
+  readonly onFirstFrame?: (time: number) => void;
+  /**
+   * Content-driven height. When set, the stage width follows the mount and the
+   * height is `contentHeight(width)` CSS px (the mount's height is set to it).
+   * Call `shell.refit()` after content changes. Default: fill the mount.
+   */
+  readonly contentHeight?: (width: number) => number;
   readonly tapThreshold?: TapThreshold;
   readonly scheduler?: FrameScheduler;
 }
@@ -24,9 +36,13 @@ export interface LiteShell<Surface> {
   readonly size: StageSize;
   /** Request frames; call after state changes. */
   invalidate(): void;
+  /** Re-measure (and re-run `contentHeight`), resizing only if something changed. */
+  refit(): void;
   readonly loop: FrameLoop;
   dispose(): void;
 }
+
+const currentDpr = (): number => globalThis.devicePixelRatio || 1;
 
 /**
  * Mount a lightweight stage. Touch uses `touch-action: manipulation` so the
@@ -41,14 +57,40 @@ export function createLiteShell<Surface>(options: LiteShellOptions<Surface>): Li
   mount.append(element);
 
   let size: StageSize = { width: 0, height: 0, dpr: 1 };
+  let firstFrameDone = options.onFirstFrame === undefined;
+  let disposed = false;
   const loop = createFrameLoop({
-    tick: (delta, time) => options.frame(renderer.surface, delta, time),
+    tick: (delta, time) => {
+      const more = options.frame(renderer.surface, delta, time);
+      if (!firstFrameDone) {
+        firstFrameDone = true;
+        options.onFirstFrame?.(time);
+      }
+      return more;
+    },
     ...(options.scheduler === undefined ? {} : { scheduler: options.scheduler }),
   });
 
   const measure = (): void => {
+    if (disposed) {
+      return;
+    }
     const rect = mount.getBoundingClientRect();
-    size = { width: rect.width, height: rect.height, dpr: globalThis.devicePixelRatio || 1 };
+    const width = rect.width;
+    let height = rect.height;
+    if (options.contentHeight !== undefined) {
+      height = Math.max(0, Math.ceil(options.contentHeight(width)));
+      const css = `${height}px`;
+      // Setting the same value does not trigger another observer callback.
+      if (mount.style.height !== css) {
+        mount.style.height = css;
+      }
+    }
+    const dpr = currentDpr();
+    if (width === size.width && height === size.height && dpr === size.dpr) {
+      return; // no change: avoid clearing the backing store twice
+    }
+    size = { width, height, dpr };
     renderer.resize(size);
     options.onResize?.(size);
     loop.wake();
@@ -66,7 +108,7 @@ export function createLiteShell<Surface>(options: LiteShellOptions<Surface>): Li
   const onUp = (event: PointerEvent) => {
     if (recognizer.up(event.pointerId, point(event))) {
       const rect = element.getBoundingClientRect();
-      options.onTap?.({ x: event.clientX - rect.left, y: event.clientY - rect.top });
+      options.onTap?.({ x: event.clientX - rect.left, y: event.clientY - rect.top }, event);
       loop.wake();
     }
   };
@@ -74,6 +116,22 @@ export function createLiteShell<Surface>(options: LiteShellOptions<Surface>): Li
   element.addEventListener('pointermove', onMove);
   element.addEventListener('pointerup', onUp);
   element.addEventListener('pointercancel', onCancel);
+
+  // DPR changes (browser zoom, moving between monitors) don't resize the mount,
+  // so watch the current resolution and re-arm after each change.
+  let dprQuery: MediaQueryList | undefined;
+  const onDprChange = (): void => {
+    watchDpr();
+    measure();
+  };
+  const watchDpr = (): void => {
+    dprQuery?.removeEventListener('change', onDprChange);
+    dprQuery = typeof globalThis.matchMedia === 'function'
+      ? globalThis.matchMedia(`(resolution: ${currentDpr()}dppx)`)
+      : undefined;
+    dprQuery?.addEventListener('change', onDprChange);
+  };
+  watchDpr();
 
   const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : undefined;
   observer?.observe(mount);
@@ -85,9 +143,12 @@ export function createLiteShell<Surface>(options: LiteShellOptions<Surface>): Li
       return size;
     },
     invalidate: () => loop.wake(),
+    refit: measure,
     loop,
     dispose() {
+      disposed = true;
       observer?.disconnect();
+      dprQuery?.removeEventListener('change', onDprChange);
       element.removeEventListener('pointerdown', onDown);
       element.removeEventListener('pointermove', onMove);
       element.removeEventListener('pointerup', onUp);
