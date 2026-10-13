@@ -311,12 +311,59 @@ const degraded: readonly (readonly [string, () => Promise<unknown>, PlatformProv
     'configuration-required',
   ],
   [
+    'a host app too old for the API',
+    async () => {
+      throw new PlatformOperationError({
+        code: 'NOTIFICATIONS_HOST_VERSION_UNSUPPORTED',
+        retryable: false,
+      });
+    },
+    'unsupported',
+  ],
+  [
+    'a bridge that predates the v2 methods',
+    async () => {
+      throw new PlatformOperationError({ code: 'UNSUPPORTED_METHOD', retryable: false });
+    },
+    'unsupported',
+  ],
+  [
+    'a bridge that rejects the v2 method name',
+    async () => {
+      throw new PlatformOperationError({ code: 'INVALID_BRIDGE_REQUEST', retryable: false });
+    },
+    'unsupported',
+  ],
+  [
+    'a retryable transport failure',
+    async () => {
+      throw new PlatformOperationError({ code: 'AIT_BRIDGE_REQUEST_FAILED', retryable: true });
+    },
+    'temporarily-unavailable',
+  ],
+  [
+    'a lasting code marked retryable',
+    async () => {
+      throw new PlatformOperationError({ code: 'UNSUPPORTED_METHOD', retryable: true });
+    },
+    'temporarily-unavailable',
+  ],
+  [
     'a passing failure',
     async () => {
       throw new PlatformOperationError({
         code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
         retryable: true,
       });
+    },
+    'temporarily-unavailable',
+  ],
+  [
+    'a sparse purposes list',
+    async () => {
+      const purposes = ['service'];
+      purposes.length = 3;
+      return { ...osCapabilities, remote: { ...osCapabilities.remote, purposes } };
     },
     'temporarily-unavailable',
   ],
@@ -384,6 +431,87 @@ for (const [name, answer, availability] of degraded) {
     globalThis.setTimeout = originalSetTimeout;
   }
   assert.deepEqual(delays, [3_000], 'the read is bounded at three seconds');
+}
+
+// Overlapping reads share one provider read while it is in flight; nothing is
+// kept after it settles, and every caller gets its own copy.
+{
+  const fake = createProvider();
+  let release: () => void = () => {};
+  fake.answer(
+    () => new Promise((resolve) => {
+      release = () => resolve(osCapabilities);
+    }),
+  );
+  const gateway = withTargetAvailability(createGateway(fake.provider), configWith('available'));
+  const reads = Promise.all([
+    gateway.getCapabilities(),
+    gateway.getCapabilities(),
+    gateway.getTargetRuntime(),
+  ]);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(fake.reads(), 1, 'overlapping reads share one provider read');
+  release();
+  const [first, second, runtime] = await reads;
+  assert.deepEqual(first.notifications, osCapabilities);
+  assert.deepEqual(second.notifications, osCapabilities);
+  assert.deepEqual(runtime.capabilities.notifications, osCapabilities);
+  assert.notEqual(first.notifications, second.notifications, 'each caller gets its own block');
+  assert.notEqual(first.notifications?.remote, second.notifications?.remote);
+  assert.notEqual(first.notifications?.remote.purposes, second.notifications?.remote.purposes);
+  fake.answer(async () => osCapabilities);
+  await gateway.getCapabilities();
+  await gateway.getCapabilities();
+  assert.equal(fake.reads(), 3, 'a settled read is not kept');
+}
+
+// A `notificationsV2` whose required methods are not functions counts as absent,
+// as a partial v1 adapter does.
+for (const [name, provider] of [
+  ['null', null],
+  ['an empty object', {}],
+  ['a non-function getCapabilities', { ...createProvider().provider, getCapabilities: 1 }],
+  ['no requestPermission', { ...createProvider().provider, requestPermission: undefined }],
+  ['no subscribe', { ...createProvider().provider, subscribe: undefined }],
+] as const) {
+  const malformed = {
+    ...createGateway(createProvider().provider, { v1: false }),
+    notificationsV2: provider,
+  } as unknown as PlatformGateway;
+  const gateway = withTargetAvailability(malformed, configWith('available'));
+  assert.equal(Object.hasOwn(gateway, 'notificationsV2'), false, `${name} is not exposed`);
+  const runtime = await gateway.getTargetRuntime();
+  assert.equal(runtime.integrations.notifications.adapterSupported, false, name);
+  assert.equal(runtime.integrations.notifications.state, 'unsupported', name);
+  assert.equal(runtime.capabilities.notifications, undefined, `${name} adds no block`);
+}
+
+// The state follows v2 even when a v1 adapter beside it reports otherwise; the
+// RFC makes an adapter back v1 with the v2 provider so the two agree.
+for (const [v1Readiness, v2Availability] of [
+  ['configuration-required', 'available'],
+  ['available', 'unsupported'],
+] as const) {
+  const fake = createProvider({
+    ...osCapabilities,
+    availability: v2Availability,
+    ...(v2Availability === 'unsupported'
+      ? { remote: { supported: false, purposes: [], addressing: 'none', content: 'free-form' } }
+      : {}),
+  });
+  const gateway = withTargetAvailability(
+    createGateway(fake.provider, {
+      snapshot: { providerAvailability: { pushNotifications: v1Readiness } },
+    }),
+    configWith('available'),
+  );
+  const runtime = await gateway.getTargetRuntime();
+  assert.equal(
+    runtime.capabilities.providerAvailability?.pushNotifications,
+    v2Availability,
+    `v1 ${v1Readiness} beside v2 ${v2Availability}`,
+  );
+  assert.equal(runtime.integrations.notifications.state, v2Availability);
 }
 
 // A gateway with only the v2 provider counts as supporting notifications.
