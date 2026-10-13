@@ -92,7 +92,9 @@ try {
   assert.throws(
     () =>
       assertDevvitInlineBudget({
-        target: 'reddit', clientDir: root, inlineEntry: 'index.html',
+        target: 'reddit',
+        clientDir: root,
+        inlineEntry: 'index.html',
         budget: { forbidModules: ['phaser'], deferredChunks: ['assets/phaser.js'] },
       }),
     /forbidden module\(s\): phaser in assets\/phaser\.js/,
