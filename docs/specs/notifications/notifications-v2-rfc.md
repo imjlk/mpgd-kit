@@ -661,10 +661,13 @@ products and ad placements.
 
 - `route` must be root-relative, and so must an `advertising` topic's
   `optOutRoute`, the screen where the player withdraws advertising consent:
-  one leading `/` and no backslash, control character, or dot segment, in the
-  path as written or once percent-decoded. This way neither a URL parser nor a
-  client that decodes the path resolves it to a protocol-relative path such as
-  `//evil.example/x`. This is stricter than the v1 delivery policy (see the
+  at most 2,048 characters and already in the form `normalizeRootRelativeRoute`
+  from `@mpgd/platform/routes` returns, the rule share links and v1 deep links
+  follow. This way neither a URL parser nor a client that decodes the path once
+  reads it as another host, such as `//evil.example/x`. A route with another
+  normalized form (`/a/../b`, `/é`) is refused rather than rewritten, so the
+  declared route is the one a player opens. This is stricter than the v1
+  delivery policy, which sends the normalized form (see the
   [migration plan](#pr-plan)).
 - **Content.**
   - **Source.** Content comes from the target mapping when the provider's

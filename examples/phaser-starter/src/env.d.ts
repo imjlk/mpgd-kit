@@ -2,6 +2,8 @@
 
 declare const __APP_TARGET__: string;
 declare const __MPGD_CONFIG_TARGET__: string;
+/** The Apps in Toss app name `intoss://` share links carry; see `vite.shared.ts`. */
+declare const __MPGD_AIT_APP_NAME__: string;
 declare const __MPGD_PLATFORM_TARGET__:
   | import('@mpgd/target-config').EffectivePlatformTargetMetadata
   | undefined;

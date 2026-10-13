@@ -11,11 +11,7 @@ import {
   type ProductInfo,
   type ShareIntent,
 } from '@mpgd/platform';
-import {
-  hasNetworkPathPrefix,
-  hasRouteControlCharacter,
-  normalizeRootRelativeRoute,
-} from '@mpgd/platform/routes';
+import { withShareIntentCheck } from '@mpgd/platform/routes';
 
 import { createUnavailableAdAdapter } from './unavailable-ads.js';
 
@@ -124,7 +120,7 @@ export function createBrowserPlatformGateway(
         return 'already-fullscreen';
       },
     },
-    sharing: {
+    sharing: withShareIntentCheck({
       ...(shareSupported
         ? {
             async share(intent: ShareIntent) {
@@ -135,7 +131,7 @@ export function createBrowserPlatformGateway(
       async readInboundShare() {
         return inboundShareFromUrl(resolveBrowserUrl(options.locationHref));
       },
-    },
+    }),
     notifications: {
       async getStatus() {
         return 'unsupported';
@@ -365,27 +361,24 @@ function mergedSearchParams(url: URL | undefined): URLSearchParams {
   return params;
 }
 
+/**
+ * Shares an intent `withShareIntentCheck` accepted, so its `deepLink` is a
+ * normalized root-relative route or an absolute HTTP(S) URL. Web Share takes
+ * the link as is and resolves a route against the document itself. The
+ * clipboard fallback copies the absolute URL a paste can open.
+ */
 async function shareFromBrowser(
   intent: ShareIntent,
   options: BrowserPlatformGatewayOptions,
 ) {
-  // The intent may come from untyped game code; answer like the other adapters.
-  const candidate: unknown = intent;
-  const text = isRecord(candidate) ? candidate['text'] : undefined;
-  const url = isRecord(candidate) ? toShareableUrl(candidate['deepLink']) : undefined;
-
-  if (typeof text !== 'string' || url === undefined) {
-    return { status: 'unavailable' } as const;
-  }
-
   const share = options.share ?? globalThis.navigator?.share?.bind(globalThis.navigator);
 
   if (share !== undefined) {
     try {
       await share({
         title: intent.title,
-        text,
-        url,
+        text: intent.text,
+        url: intent.deepLink,
       });
 
       return { status: 'shared' } as const;
@@ -401,13 +394,14 @@ async function shareFromBrowser(
   const writeClipboardText =
     options.writeClipboardText
     ?? globalThis.navigator?.clipboard?.writeText?.bind(globalThis.navigator.clipboard);
+  const url = toClipboardUrl(intent.deepLink, options);
 
-  if (writeClipboardText === undefined) {
+  if (writeClipboardText === undefined || url === undefined) {
     return { status: 'unavailable' } as const;
   }
 
   try {
-    await writeClipboardText(`${text}\n${url}`);
+    await writeClipboardText(`${intent.text}\n${url}`);
     return { status: 'shared' } as const;
   } catch {
     return { status: 'unavailable' } as const;
@@ -415,47 +409,39 @@ async function shareFromBrowser(
 }
 
 /**
- * The link a browser share passes on, or `undefined` when it could reach
- * another host or is not a web link, following the `ShareIntent.deepLink`
- * contract. A root-relative link is normalized with `normalizeRootRelativeRoute`
- * from `@mpgd/platform/routes` and stays relative, so Web Share resolves it
- * against the document as before. An absolute link must spell out `http://` or
- * `https://`, carry no credentials, and keep a path no client can read as
- * another host. Page-relative links (`./daily`, `?x=1`) are refused, as on the
- * other targets.
+ * The URL the clipboard fallback copies. An absolute link is copied as is. A
+ * root-relative route is resolved against the explicit game page URL
+ * (`locationHref`) first, then the document base or ambient location.
+ * Without any HTTP(S) page, there is no link worth
+ * pasting.
  */
-function toShareableUrl(deepLink: unknown): string | undefined {
-  if (typeof deepLink !== 'string' || hasRouteControlCharacter(deepLink)) {
-    return undefined;
+function toClipboardUrl(link: string, options: BrowserPlatformGatewayOptions): string | undefined {
+  if (!link.startsWith('/')) {
+    return link;
   }
 
-  if (deepLink.startsWith('/')) {
-    return normalizeRootRelativeRoute(deepLink);
+  for (const base of [
+    options.locationHref,
+    globalThis.document?.baseURI,
+    globalThis.location?.href,
+  ]) {
+    if (base === undefined) {
+      continue;
+    }
+
+    try {
+      const url = new URL(link, base);
+
+      if ((url.protocol === 'https:' || url.protocol === 'http:')
+        && url.username === '' && url.password === '') {
+        return url.href;
+      }
+    } catch {
+      // A base that cannot resolve a path, such as `about:blank`, is skipped.
+    }
   }
 
-  // `https:/daily` and `https:host/x` parse as absolute links to another host
-  // without a base but resolve on the page with one, so only the full form counts.
-  if (!/^https?:\/\//iu.test(deepLink)) {
-    return undefined;
-  }
-
-  let parsed: URL;
-
-  try {
-    parsed = new URL(deepLink);
-  } catch {
-    return undefined;
-  }
-
-  return parsed.username === ''
-    && parsed.password === ''
-    && !hasNetworkPathPrefix(parsed.pathname)
-    ? parsed.href
-    : undefined;
-}
-
-function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  return undefined;
 }
 
 function canShare(options: BrowserPlatformGatewayOptions): boolean {

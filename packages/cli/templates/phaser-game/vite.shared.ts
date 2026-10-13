@@ -17,6 +17,8 @@ interface RuntimePlatformTargetMetadata {
   readonly crazyGamesLaunch?: 'basic' | 'full';
   readonly authoritativeGameServices?: boolean;
   readonly integrations?: Record<string, unknown>;
+  /** An Apps in Toss target's `metadata.appName`, for the sandbox bridge only. */
+  readonly aitAppName?: string;
 }
 
 // Sandbox gateways self-complete purchases and rewards without any backend
@@ -100,7 +102,10 @@ export function createGameViteSharedConfig<SharedPluginOption = PluginOption>(
       __APP_TARGET__: JSON.stringify(appTarget),
       __MPGD_CONFIG_TARGET__: JSON.stringify(configTarget),
       __MPGD_PLATFORM_TARGET__:
-        platformTarget === undefined ? 'undefined' : JSON.stringify(platformTarget),
+        platformTarget === undefined
+          ? 'undefined'
+          : JSON.stringify(toEffectivePlatformTargetMetadata(platformTarget)),
+      __MPGD_AIT_APP_NAME__: JSON.stringify(resolveAitAppName(platformTarget)),
       __MPGD_TARGET_CONFIG_MATRIX__:
         runtimeTargetConfigMatrix === undefined
           ? 'undefined'
@@ -264,6 +269,8 @@ function readRuntimePlatformTarget(
     throw new Error(`Platform target ${configTarget} authoritativeGameServices must be a boolean.`);
   }
 
+  const aitAppName = readAitAppName(target);
+
   return {
     kind: target.kind,
     adapter: target.adapter,
@@ -272,7 +279,39 @@ function readRuntimePlatformTarget(
       : { authoritativeGameServices: target.authoritativeGameServices }),
     ...(target.crazyGamesLaunch === undefined ? {} : { crazyGamesLaunch: target.crazyGamesLaunch as 'basic' | 'full' }),
     ...(target.integrations === undefined ? {} : { integrations: target.integrations }),
+    ...(aitAppName === undefined ? {} : { aitAppName }),
   };
+}
+
+function toEffectivePlatformTargetMetadata(
+  input: RuntimePlatformTargetMetadata,
+): Omit<RuntimePlatformTargetMetadata, 'aitAppName'> {
+  return {
+    kind: input.kind,
+    adapter: input.adapter,
+    ...(input.authoritativeGameServices === undefined
+      ? {}
+      : { authoritativeGameServices: input.authoritativeGameServices }),
+    ...(input.crazyGamesLaunch === undefined ? {} : { crazyGamesLaunch: input.crazyGamesLaunch }),
+    ...(input.integrations === undefined ? {} : { integrations: input.integrations }),
+  };
+}
+
+/**
+ * The app name `intoss://` share links must carry in the Apps in Toss sandbox
+ * bridge, the one the wrapper's host bridge uses: `MPGD_AIT_APP_NAME`, else
+ * the target's `metadata.appName`, else the game name.
+ */
+function resolveAitAppName(platformTarget: RuntimePlatformTargetMetadata | undefined): string {
+  return process.env.MPGD_AIT_APP_NAME?.trim() || platformTarget?.aitAppName || '__GAME_NAME__';
+}
+
+function readAitAppName(target: Record<string, unknown>): string | undefined {
+  const appName = target.kind === 'apps-in-toss' && isRecord(target.metadata)
+    ? target.metadata.appName
+    : undefined;
+
+  return typeof appName === 'string' && appName.trim().length > 0 ? appName.trim() : undefined;
 }
 
 function isRecord(input: unknown): input is Record<string, unknown> {

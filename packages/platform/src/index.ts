@@ -479,12 +479,15 @@ export interface ShareIntent {
   readonly text: string;
   /**
    * A root-relative link on the game's origin (`/daily?challengeToken=…`) or an
-   * absolute `https://` (or `http://`) link. Adapters that build a share URL
-   * from it (Apps in Toss and web) check it with `@mpgd/platform/routes` and
-   * answer `unavailable` when it could name another host, contains a control
+   * absolute `https://` (or `http://`) link. Every adapter whose host builds or
+   * receives a share URL checks it with `normalizeShareLink` from
+   * `@mpgd/platform/routes`, most through that module's `withShareIntentCheck`,
+   * hands the host the normalized link, and answers `unavailable` when the rule
+   * refuses it: a link that could name another host, contains a control
    * character, or has another form, such as a page-relative link. Apps in Toss
-   * also accepts its own `intoss://<app>` links. Adapters whose host shares no
-   * link ignore it.
+   * also accepts its own `intoss://<app>` links. An adapter whose host shares
+   * no link ignores it: WeChat's card reopens the game with `query` built from
+   * `kind` and `payload`.
    */
   readonly deepLink: string;
   readonly payload?: SharePayload;
@@ -550,6 +553,18 @@ export interface NotificationSubscriptionAdapter {
 export interface NativeOpenUrlEvent {
   readonly url: string;
   readonly source: 'cold' | 'warm';
+  /**
+   * For a game link, the URL's path, query, and fragment, normalized with
+   * `normalizeRootRelativeRoute` from `@mpgd/platform/routes`. The host is not
+   * part of it: `mygame://game/daily` and `https://game.example/daily` give
+   * `/daily`, and `mygame://level/3` gives `/3`. Adapters do not deliver a game
+   * link whose path that rule refuses, so a router that routes by path opens
+   * this route as is. It is absent when the URL has no path to check, such as
+   * `mygame:daily` or `mygame://daily`. A router that builds its route from
+   * anything else in the URL, such as a custom-scheme host, checks that route
+   * with `normalizeRootRelativeRoute` and opens only what it returns.
+   */
+  readonly route?: string;
 }
 
 export interface NativeBackButtonEvent {
@@ -615,7 +630,11 @@ export interface LifecycleAdapter {
   onBackButton?(
     handler: (event: NativeBackButtonEvent) => boolean | Promise<boolean>,
   ): () => void;
-  /** Game links and OAuth redirects use separate callbacks. */
+  /**
+   * Game links and OAuth redirects use separate callbacks. A game link is
+   * untrusted input: open its checked `route`, or check any route built from
+   * `url` with `normalizeRootRelativeRoute` (see `NativeOpenUrlEvent.route`).
+   */
   onGameUrlOpen?(callback: (event: NativeOpenUrlEvent) => void): () => void;
   onOAuthRedirect?(callback: (event: NativeOpenUrlEvent) => void): () => void;
   getInitialGameUrl?(): Promise<NativeOpenUrlEvent | null>;

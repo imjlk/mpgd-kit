@@ -191,6 +191,12 @@ describe('notifications contract', () => {
     // The route a local notification opens stays on the game's origin.
     expect(() => assertLocalNotificationRequest({ ...request, route: '/%2e//evil.example/x' }))
       .toThrow(/not root-relative/u);
+    // A route in another form names the normalized one to write instead.
+    expect(() => assertLocalNotificationRequest({ ...request, route: '/?name=Ada Lovelace' }))
+      .toThrow(
+        'The local reminder route is not in normalized form: "/?name=Ada Lovelace"; '
+          + 'write "/?name=Ada%20Lovelace"',
+      );
     expect(() => assertLocalNotificationRequest({ ...request, optOutRoute: '/settings' })).toThrow();
     expect(assertLocalScheduleResult({ status: 'capacity-exceeded' }).status).toBe('capacity-exceeded');
     expect(() => assertLocalScheduleResult({ status: 'queued' })).toThrow();

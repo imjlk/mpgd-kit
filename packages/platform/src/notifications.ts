@@ -26,9 +26,9 @@ import type {
   NotificationTopicsInput,
 } from './notifications-contract.js';
 import {
-  isRootRelativeNotificationRoute,
   isValidNotificationTimeZone,
   notificationPermissionStateOf,
+  notificationRouteError,
   notificationTimeFieldIssue,
   notificationTimeFields,
   notificationTopicDefinitionIssues,
@@ -533,10 +533,11 @@ const assertLocalNotificationRequestShape = withStrictTimes(
 /** Validates a local reminder request, including a root-relative `route`. */
 export function assertLocalNotificationRequest(input: unknown): LocalNotificationRequest {
   const request = assertLocalNotificationRequestShape(input);
-  if (request.route !== undefined && !isRootRelativeNotificationRoute(request.route)) {
-    throw new TypeError(
-      `The local reminder route is not root-relative: ${JSON.stringify(request.route)}`,
-    );
+  const error = request.route === undefined
+    ? undefined
+    : notificationRouteError('The local reminder route', request.route);
+  if (error !== undefined) {
+    throw new TypeError(error);
   }
   return request;
 }

@@ -25,6 +25,7 @@ const previousInitCwd = process.env.INIT_CWD;
 const previousPwd = process.env.PWD;
 const previousPlatformTargetsFile = process.env.MPGD_PLATFORM_TARGETS_FILE;
 const previousConfigTarget = process.env.MPGD_CONFIG_TARGET;
+const previousAitAppName = process.env.MPGD_AIT_APP_NAME;
 
 try {
   writeFileSync(
@@ -315,6 +316,7 @@ try {
   restoreEnv('PWD', previousPwd);
   restoreEnv('MPGD_PLATFORM_TARGETS_FILE', previousPlatformTargetsFile);
   restoreEnv('MPGD_CONFIG_TARGET', previousConfigTarget);
+  restoreEnv('MPGD_AIT_APP_NAME', previousAitAppName);
   rmSync(tempDir, { force: true, recursive: true });
 }
 
@@ -497,6 +499,7 @@ async function assertVitePlatformTargetMetadata(): Promise<void> {
           wrapperApp: 'apps/target-ait',
           webDir: 'apps/target-ait/public/game',
           artifact: '.ait',
+          metadata: { appName: ' ttokdoku ', displayName: 'Ttokdoku' },
         },
       },
     }, null, 2)}\n`,
@@ -504,6 +507,7 @@ async function assertVitePlatformTargetMetadata(): Promise<void> {
   writeFileSync(malformedTargetsFile, '{ malformed json\n');
   process.env.MPGD_PLATFORM_TARGETS_FILE = targetsFile;
   process.env.MPGD_CONFIG_TARGET = 'ait';
+  delete process.env.MPGD_AIT_APP_NAME;
 
   try {
     for (const configPath of configPaths) {
@@ -512,7 +516,26 @@ async function assertVitePlatformTargetMetadata(): Promise<void> {
 
       assert.ok(serializedMetadata !== undefined, `${configPath} platform target define`);
       assert.deepEqual(JSON.parse(serializedMetadata), expectedMetadata);
+      // The Apps in Toss sandbox bridge refuses `intoss://` share links for any
+      // app but the one the target names, as the wrapper's host bridge does.
+      assert.equal(
+        config.define?.['__MPGD_AIT_APP_NAME__'],
+        '"ttokdoku"',
+        `${configPath} AIT app name from metadata.appName`,
+      );
     }
+
+    process.env.MPGD_AIT_APP_NAME = ' wrapper-app ';
+    for (const configPath of configPaths) {
+      const config = await loadViteConfig(configPath);
+
+      assert.equal(
+        config.define?.['__MPGD_AIT_APP_NAME__'],
+        '"wrapper-app"',
+        `${configPath} AIT app name from MPGD_AIT_APP_NAME`,
+      );
+    }
+    delete process.env.MPGD_AIT_APP_NAME;
 
     for (const [targetsPath, expectedPath] of [
       [missingTargetsFile, 'missing-runtime-platform-targets.json'],
@@ -533,6 +556,7 @@ async function assertVitePlatformTargetMetadata(): Promise<void> {
   } finally {
     restoreEnv('MPGD_PLATFORM_TARGETS_FILE', previousPlatformTargetsFile);
     restoreEnv('MPGD_CONFIG_TARGET', previousConfigTarget);
+    restoreEnv('MPGD_AIT_APP_NAME', previousAitAppName);
   }
 }
 

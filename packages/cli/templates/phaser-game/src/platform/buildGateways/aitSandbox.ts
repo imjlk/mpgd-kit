@@ -14,6 +14,9 @@ export async function createBuildGateway(runtime: RuntimeConfig): Promise<Platfo
   return createAitPlatformGateway({
     appVersion: runtime.appVersion,
     buildId: runtime.buildId,
-    fallbackBridge: createAitSandboxBridge({ buildId: runtime.buildId }),
+    fallbackBridge: createAitSandboxBridge({
+      appName: __MPGD_AIT_APP_NAME__,
+      buildId: runtime.buildId,
+    }),
   });
 }

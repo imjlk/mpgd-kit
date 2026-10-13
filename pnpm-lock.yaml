@@ -742,6 +742,9 @@ importers:
       '@mpgd/phaser-assets':
         specifier: workspace:*
         version: link:../phaser-assets
+      '@mpgd/platform':
+        specifier: workspace:*
+        version: link:../platform
       '@mpgd/target-config':
         specifier: workspace:*
         version: link:../target-config
@@ -821,9 +824,6 @@ importers:
       '@mpgd/i18n':
         specifier: workspace:*
         version: link:../i18n
-      '@mpgd/platform':
-        specifier: workspace:*
-        version: link:../platform
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.2
