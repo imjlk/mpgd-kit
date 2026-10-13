@@ -309,8 +309,13 @@ describe('createBridgeCommerceProvider', () => {
       sequence: 1,
       event: { type: 'received', channel: 'local' },
     } as never);
+    // An envelope that names no protocol is malformed, not another protocol's.
+    deliver?.({ sequence: 2, event: { type: 'purchaseUpdated' } } as never);
+    deliver?.({ protocol: 7, sequence: 3, event: { type: 'purchaseUpdated' } } as never);
     expect(events).toEqual([
       { type: 'purchaseUpdated', purchase: expect.objectContaining({ transactionId: 'tx-1' }) },
+      { type: 'purchaseError', error: expect.objectContaining({ code: 'INVALID_RESPONSE' }) },
+      { type: 'purchaseError', error: expect.objectContaining({ code: 'INVALID_RESPONSE' }) },
       { type: 'purchaseError', error: expect.objectContaining({ code: 'INVALID_RESPONSE' }) },
       { type: 'purchaseError', error: expect.objectContaining({ code: 'INVALID_RESPONSE' }) },
     ]);

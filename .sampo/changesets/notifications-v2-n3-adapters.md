@@ -26,7 +26,9 @@ yet; P1–P3 add the providers.
   `notifications.v2.*` through `assertMethodReady` as it does `commerce.v2.*`.
   A launched commerce v2 purchase ends its pause on commerce events only, and
   the gateway hands its commerce provider only the commerce envelopes of the
-  provider's channel. `CommerceProviderBridge.subscribe` and
+  provider's channel. The commerce v2 provider over the bridge reports an
+  envelope that names no protocol as a purchase error, as the Apps in Toss
+  provider does, instead of dropping it. `CommerceProviderBridge.subscribe` and
   `CreateBridgeCommerceProviderInput.subscribe` keep the commerce envelope
   type (`BridgeCommerceEvent`) they had before `BridgeEvent` became a union.
 - `@mpgd/adapter-devvit`: the sandbox bridge answers the code.
