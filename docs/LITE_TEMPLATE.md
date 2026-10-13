@@ -12,8 +12,8 @@ the renderer changes.
 ## Create a lite game
 
 ```sh
-mpgd game create my-game --template lite              # --renderer canvas is the default
-mpgd game create my-game --template lite --renderer canvas
+mpgd game create my-game --template lite --workspace --kit-path <mpgd-kit>
+mpgd game create my-game --template lite --renderer canvas --workspace --kit-path <mpgd-kit>
 ```
 
 `--renderer` names a `LiteRenderer` implementation. `canvas` (Canvas2D) ships
@@ -121,7 +121,7 @@ Phaser absent from every chunk and `matter-js` loaded on demand.
 ## Publishing status
 
 `@mpgd/lite-shell` is `private` until its first npm publish (see
-`AGENTS.md`). Until then, lite games outside a kit checkout must be generated
-with `--workspace --kit-path <mpgd-kit>` (or use a `link:` dependency); a
-non-workspace `mpgd game create --template lite` writes `^0.1.0`, which cannot
-be installed yet.
+`AGENTS.md`). Until then, lite games must be generated with
+`--workspace --kit-path <mpgd-kit>`. The CLI rejects non-workspace lite
+generation before writing a project, so it cannot emit an uninstallable
+dependency on the private package.
