@@ -29,6 +29,27 @@ try {
     'index.html',
   ]);
 
+  for (const html of [
+    '<SCRIPT SRC="/assets/preview.js"></SCRIPT><LINK REL="STYLESHEET" HREF="./assets/preview.css">',
+    '<ScRiPt SrC="/assets/preview.js"></ScRiPt><LiNk HrEf="./assets/preview.css" ReL="stylesheet">',
+  ]) {
+    writeFileSync(join(root, 'index.html'), html);
+    assert.deepEqual(
+      collectDevvitInlineGraph(root, 'index.html', ['assets/phaser*.js']).files.map((file) => file.path).sort(),
+      report.files.map((file) => file.path).sort(),
+    );
+    assert.throws(
+      () =>
+        assertDevvitInlineBudget({
+          target: 'reddit',
+          clientDir: root,
+          inlineEntry: 'index.html',
+          budget: { forbidModules: ['phaser'] },
+        }),
+      /forbidden module\(s\): phaser/,
+    );
+  }
+
   // Dynamic imports are followed unless declared deferred.
   assert.throws(
     () =>

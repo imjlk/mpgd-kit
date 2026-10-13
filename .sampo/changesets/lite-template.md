@@ -22,3 +22,5 @@ Windows template paths are normalized before overlay selection, and persisted
 browser history navigation keeps the game alive. Inline budgets include static
 and stylesheet imports even when a filename appears in `deferredChunks`; only
 dynamic-import edges can be deferred.
+
+Explicit game disposal releases its owned audio binding, runtime and shell once. HTML first-load asset tags and attributes are matched case-insensitively.

@@ -27,8 +27,8 @@ const moduleSignatures: Readonly<Record<string, RegExp>> = {
 
 const dynamicImportPattern = /\bimport\(\s*["']([^"']+)["']\s*\)/g;
 const staticImportPattern = /(?:^|[;\s}])(?:import|export)\s*(?:[\w*{}\s,$]+\s*from\s*)?["']([^"']+)["']/g;
-const htmlAssetPattern = /<(?:script[^>]*\ssrc|link[^>]*\srel=["'](?:modulepreload|stylesheet)["'][^>]*\shref)=["']([^"']+)["']/g;
-const htmlAssetPatternReversed = /<link[^>]*\shref=["']([^"']+)["'][^>]*\srel=["'](?:modulepreload|stylesheet)["']/g;
+const htmlAssetPattern = /<(?:script[^>]*\ssrc|link[^>]*\srel=["'](?:modulepreload|stylesheet)["'][^>]*\shref)=["']([^"']+)["']/giu;
+const htmlAssetPatternReversed = /<link[^>]*\shref=["']([^"']+)["'][^>]*\srel=["'](?:modulepreload|stylesheet)["']/giu;
 const cssImportPattern = /@import\s+(?:url\(\s*["']?([^\s"')]+)["']?\s*\)|["']([^"']+)["'])/gi;
 const cssUrlPattern = /url\(\s*(?:"([^"]+)"|'([^']+)'|([^\s)]+))\s*\)/giu;
 

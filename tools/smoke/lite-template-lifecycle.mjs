@@ -10,26 +10,36 @@ for (const relativePath of [
   const source = readFileSync(new URL(relativePath, import.meta.url), 'utf8')
     .replace(/^import[\s\S]*?;\r?\n/gmu, '')
     .replace('export function createStarterGame', 'function createStarterGame');
-  const handlers = new Map();
-  let disposals = 0;
-  const dispose = () => { disposals += 1; };
-  const context = {
-    document: { getElementById: () => ({ style: {} }) },
-    bindGameAudio: () => ({ dispose }),
-    createTapGame: () => ({ dispose }),
-    addEventListener: (type, handler) => handlers.set(type, handler),
-    removeEventListener: (type, handler) => {
-      if (handlers.get(type) === handler) handlers.delete(type);
-    },
-    input: { mountId: 'game', context: { gameRuntime: { execution: {}, dispose } } },
-  };
-  runInNewContext(`${stripTypeScriptTypes(source)}\ncreateStarterGame(input);`, context);
-  handlers.get('pagehide')({ persisted: true });
-  handlers.get('pagehide')({ persisted: true });
-  assert.equal(disposals, 0, `${relativePath}: history caching must keep all owners alive`);
-  handlers.get('pagehide')({ persisted: false });
-  assert.equal(disposals, 3, `${relativePath}: permanent unload disposes audio, runtime, and shell`);
-  assert.equal(handlers.has('pagehide'), false);
+  for (const mode of ['pagehide', 'direct']) {
+    const handlers = new Map();
+    let disposals = 0;
+    const dispose = () => { disposals += 1; };
+    const context = {
+      document: { getElementById: () => ({ style: {} }) },
+      bindGameAudio: () => ({ dispose }),
+      createTapGame: () => shell,
+      addEventListener: (type, handler) => handlers.set(type, handler),
+      removeEventListener: (type, handler) => {
+        if (handlers.get(type) === handler) handlers.delete(type);
+      },
+      input: { mountId: 'game', context: { gameRuntime: { execution: {}, dispose } } },
+    };
+    const shell = { size: { width: 300, height: 200, dpr: 1 }, dispose };
+    const game = runInNewContext(`${stripTypeScriptTypes(source)}\ncreateStarterGame(input);`, context);
+    handlers.get('pagehide')({ persisted: true });
+    handlers.get('pagehide')({ persisted: true });
+    assert.equal(disposals, 0, `${relativePath}: history caching must keep all owners alive`);
+    const onPageHide = handlers.get('pagehide');
+    shell.size = { width: 400, height: 250, dpr: 2 };
+    assert.equal(game.size, shell.size, 'the owner wrapper must preserve the live size getter');
+    if (mode === 'direct') game.dispose();
+    else onPageHide({ persisted: false });
+    assert.equal(disposals, 3, `${relativePath}: permanent unload disposes audio, runtime, and shell`);
+    assert.equal(handlers.has('pagehide'), false);
+    game.dispose();
+    onPageHide({ persisted: false });
+    assert.equal(disposals, 3, `${relativePath}: disposal must be idempotent`);
+  }
 }
 for (const relativePath of [
   '../../packages/cli/templates/lite-overlay/src/lite/tapGame.ts',
