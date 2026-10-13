@@ -31,7 +31,7 @@ Compared with the Phaser template the generator:
 - removes `phaser` and `@mpgd/phaser-assets` and adds `@mpgd/lite-shell`;
 - sets `agent/game-manifest.json` `game.engine` to `lite-canvas`.
 
-The reference project is [`examples/lite-starter`](https://github.com/imjlk/mpgd-kit/tree/main/examples/lite-starter),
+The reference project is `examples/lite-starter`,
 generated with `--template lite --workspace` and extended with an optional
 `matter-js` collapse loaded by `import()` on the fifth hit.
 
