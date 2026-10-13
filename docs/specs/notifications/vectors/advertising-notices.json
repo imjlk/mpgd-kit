@@ -94,9 +94,13 @@
           "title": "야간 광고성 알림 수신 동의 안내",
           "body": "{{consentDate}}에 야간(21시~8시) 광고성 알림 수신에 동의하셨어요. 알림 설정에서 언제든 철회할 수 있어요."
         },
-        "consent-result.night.withdrawn": {
+        "consent-result.night.refused": {
           "title": "야간 광고성 알림 수신 거부 안내",
           "body": "{{consentDate}}에 야간(21시~8시) 광고성 알림 수신 거부가 처리됐어요."
+        },
+        "consent-result.night.withdrawn": {
+          "title": "야간 광고성 알림 수신 동의 철회 안내",
+          "body": "{{consentDate}}에 야간(21시~8시) 광고성 알림 수신 동의 철회가 처리됐어요."
         },
         "reconfirmation.advertising": {
           "title": "광고성 알림 수신 동의 확인",
@@ -104,7 +108,7 @@
         },
         "reconfirmation.night": {
           "title": "야간 광고성 알림 수신 동의 확인",
-          "body": "{{consentDate}}에 동의하신 야간(21시~8시) 광고성 알림을 계속 받고 있어요. 알림 설정에서 언제든 철회할 수 있어요."
+          "body": "{{consentDate}}에 하신 야간(21시~8시) 광고성 알림 수신 동의를 확인해 주세요. 알림 설정에서 언제든 철회할 수 있어요."
         }
       },
       "en": {
@@ -120,9 +124,13 @@
           "title": "Night-time promotional notifications",
           "body": "You agreed to promotional notifications between 21:00 and 08:00 on {{consentDate}}. You can withdraw any time in notification settings."
         },
-        "consent-result.night.withdrawn": {
+        "consent-result.night.refused": {
           "title": "Night-time promotional notifications",
           "body": "Your refusal of promotional notifications between 21:00 and 08:00 was processed on {{consentDate}}."
+        },
+        "consent-result.night.withdrawn": {
+          "title": "Night-time promotional notifications",
+          "body": "Your withdrawal of consent to promotional notifications between 21:00 and 08:00 was processed on {{consentDate}}."
         },
         "reconfirmation.advertising": {
           "title": "Promotional notifications",
@@ -130,7 +138,7 @@
         },
         "reconfirmation.night": {
           "title": "Night-time promotional notifications",
-          "body": "You still receive the promotional notifications between 21:00 and 08:00 you agreed to on {{consentDate}}. You can withdraw any time in notification settings."
+          "body": "Please review the consent to promotional notifications between 21:00 and 08:00 that you gave on {{consentDate}}. You can withdraw it any time in notification settings."
         }
       }
     }

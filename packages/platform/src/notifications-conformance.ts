@@ -20,7 +20,6 @@ import {
   notificationKeyIssue,
   notificationNoticeCopyIssues,
   notificationNoticeSendFrom,
-  notificationNoticeVariant,
   notificationNoticeVariantCopy,
   notificationPermissionConsentKind,
   notificationPermissionStateOf,
@@ -1001,8 +1000,8 @@ function noEndpoint(): NotificationDeliveryRefusal {
  *   device endpoints after the lease, replayed through the gate without the
  *   key lookup), and, under the Korean rules, every unrecorded notice from the
  *   Asia/Seoul date seven days before it is due (as a `notice:` send of the
- *   notice topic in the notice's variant of `notices.copy`, filled with
- *   `{{consentDate}}`, and recorded with channel `push` once delivered),
+ *   notice topic in the variant of `notices.copy` it is listed with, filled
+ *   with `{{consentDate}}`, and recorded with channel `push` once delivered),
  *   earliest first and within the registry entry's `rate`. Only a free-form
  *   provider sends a notice, and never with its mapping's own text; a notice
  *   that cannot render is not tried again. A direct caller replays its own
@@ -1735,7 +1734,8 @@ export function createNotificationConformanceBackend(
     topic: string,
   ): Promise<void> => {
     const notice = noticeIdentityOf(listed);
-    const variant = notificationNoticeVariant(listed);
+    // The variant the notice was listed with, so the push says what the game shows.
+    const { variant } = listed;
     const request: SendRequest = {
       idempotencyKey: createNotificationNoticeIdempotencyKey({ ...notice, player }),
       player,

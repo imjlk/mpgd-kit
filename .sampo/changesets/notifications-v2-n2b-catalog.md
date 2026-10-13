@@ -6,7 +6,9 @@ npm/@mpgd/catalog: minor
 `notices.copy` maps each locale to a title and a body per notice variant
 (`consent-result.advertising.granted`, `consent-result.advertising.withdrawn`,
 `consent-result.night.granted`, `consent-result.night.withdrawn`,
-`reconfirmation.advertising`, and `reconfirmation.night`), filled only with
+`reconfirmation.advertising`, and `reconfirmation.night`, with optional
+`consent-result.advertising.refused` and `consent-result.night.refused`,
+which fall back to the withdrawal's text), filled only with
 `{{consentDate}}`, which each variant uses, and the notice topic keeps only
 the delivery settings. A backend takes the whole block as its one notice
 setting. `validateNotificationTopicCatalog` reports a notice topic that
@@ -22,6 +24,7 @@ at that mapping. Issue paths spell locale and variant keys in brackets, shape
 issues name the public types, and an undefined `notices.copy` entry or target
 mapping is an issue rather than an exception. These replace the rule that the
 notice topic's own text use only `{{consentDate}}`, and the free-form text
-rule no longer asks the notice topic for copy. A catalog that gave its notice topic its own copy moves that text
-into `notices.copy`, one entry per variant; no released version had notice
-topics, since they arrive in this same release.
+rule no longer asks the notice topic for copy. A catalog that gave its notice
+topic its own copy moves that text into `notices.copy`, one entry per
+variant; no released version had notice topics, since they arrive in this
+same release.

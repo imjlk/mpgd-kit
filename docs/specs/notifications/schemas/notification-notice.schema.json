@@ -70,12 +70,18 @@
             "format": "date",
             "description": "The last Asia/Seoul calendar date the notice may be given, `YYYY-MM-DD`.",
             "readOnly": true
+          },
+          "variant": {
+            "$ref": "#/components/schemas/NotificationNoticeVariant",
+            "description": "The variant of `notices.copy` the notice is given in, set when it is\nlisted, so the game shows the text the scheduler would send.",
+            "readOnly": true
           }
         },
         "required": [
           "kind",
           "record",
-          "dueBy"
+          "dueBy",
+          "variant"
         ],
         "additionalProperties": false
       },
@@ -88,6 +94,35 @@
             "const": "reconfirmation"
           }
         ]
+      },
+      "NotificationNoticeVariant": {
+        "oneOf": [
+          {
+            "const": "consent-result.advertising.granted"
+          },
+          {
+            "const": "consent-result.advertising.refused"
+          },
+          {
+            "const": "consent-result.advertising.withdrawn"
+          },
+          {
+            "const": "consent-result.night.granted"
+          },
+          {
+            "const": "consent-result.night.refused"
+          },
+          {
+            "const": "consent-result.night.withdrawn"
+          },
+          {
+            "const": "reconfirmation.advertising"
+          },
+          {
+            "const": "reconfirmation.night"
+          }
+        ],
+        "description": "The copy a notice is given in: its kind, its record's kind, and for a\nresult notice what the record was, so the text can say what the player did\n(decree art. 62-3): a consent (`granted`), the withdrawal of a consent\n(`withdrawn`), or a refusal (`refused`), a `withdrawn` record whose latest\nearlier record of its kind is not a consent. A re-confirmation always\nreports on a consent. A named union keeps the JSON Schema names readable."
       }
     }
   }

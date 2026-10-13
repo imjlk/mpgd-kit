@@ -2698,6 +2698,57 @@ describe('notifications fake backend: what a notice says, and who sends it', () 
     expect((await runtime.notices.list()).map((notice) => notice.kind)).toEqual(['consent-result']);
   });
 
+  it("lists each notice with the variant the scheduler pushes, a refusal in its own text or the withdrawal's", async () => {
+    const ko = noticeCopy['ko'];
+    const withNightRefusal: NotificationNoticeCopy = ko === undefined ? noticeCopy : {
+      ko: {
+        ...ko,
+        'consent-result.night.refused': {
+          title: '야간 수신 거부 안내',
+          body: '{{consentDate}}에 야간 수신을 거부하셨어요.',
+        },
+      },
+    };
+    const { clock, host, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
+      deployment: kr,
+      notices: { ...notices, copy: withNightRefusal },
+    });
+    await runtime.start();
+    backend.authenticate('p-1');
+    host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+    host.queuePrompt('granted');
+    await runtime.requestPermission({ topics: ['consent-notice'], gesture: true });
+    // With no consent before them, both withdrawals are refusals.
+    await runtime.setAdvertisingConsent({ advertising: 'withdrawn', night: 'withdrawn', textVersion: 'ad-v1' });
+    const listed = await runtime.notices.list();
+    expect(listed.map((notice) => notice.variant)).toEqual([
+      'consent-result.advertising.refused',
+      'consent-result.night.refused',
+    ]);
+    clock.set('2026-10-19T03:00:00Z');
+    await backend.runScheduler();
+    // The catalog has no advertising refusal text, so the withdrawal's stands in.
+    expect(backend.providerCalls.map((call) => [call.content.title, call.content.body])).toEqual([
+      ['수신 철회 안내', '2026-10-12에 철회하셨어요.'],
+      ['야간 수신 거부 안내', '2026-10-12에 야간 수신을 거부하셨어요.'],
+    ]);
+    // A consent and then its withdrawal is a withdrawal again.
+    await runtime.setAdvertisingConsent({ night: 'granted', textVersion: 'ad-v1' });
+    await runtime.setAdvertisingConsent({ night: 'withdrawn', textVersion: 'ad-v1' });
+    expect((await runtime.notices.list()).map((notice) => notice.variant)).toEqual([
+      'consent-result.night.granted',
+      'consent-result.night.withdrawn',
+    ]);
+    // A listed notice is still recorded as is, variant and all.
+    const [granted] = await runtime.notices.list();
+    if (granted !== undefined) {
+      await runtime.notices.recordShown(granted);
+    }
+    expect((await runtime.notices.list()).map((notice) => notice.variant)).toEqual([
+      'consent-result.night.withdrawn',
+    ]);
+  });
+
   it('reserves the notice topic for the scheduler', async () => {
     const { clock, backend, runtime } = await consented([weekend, noticeTopic]);
     await expect(backend.deliver({ idempotencyKey: 'k-1', topic: 'consent-notice', templateData: { consentDate: 'x' } }))

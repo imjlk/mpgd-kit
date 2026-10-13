@@ -22,8 +22,8 @@ import {
   notificationKeyIssue,
   notificationNoticeCopyIssues,
   notificationNoticeSendFrom,
-  notificationNoticeVariant,
   notificationNoticeVariantCopy,
+  notificationNoticeVariantFallbacks,
   notificationNoticeVariants,
   notificationPermissionConsentKind,
   notificationPermissionStateOf,
@@ -1060,36 +1060,39 @@ describe('notification consent notices', () => {
     expect(listed('2025-12-28T15:00:00Z')).toEqual([['reconfirmation', '2026-02-27']]);
   });
 
-  it('gives each notice the copy variant of its kind, record kind, and record state', () => {
+  it('lists each notice with its copy variant, and a withdrawal that follows no consent as a refusal', () => {
     expect(notificationNoticeVariants).toEqual([
       'consent-result.advertising.granted',
+      'consent-result.advertising.refused',
       'consent-result.advertising.withdrawn',
       'consent-result.night.granted',
+      'consent-result.night.refused',
       'consent-result.night.withdrawn',
       'reconfirmation.advertising',
       'reconfirmation.night',
     ]);
-    const pick = (
-      kind: 'consent-result' | 'reconfirmation',
-      recordKind: 'advertising' | 'night',
-      state: 'granted' | 'withdrawn',
-    ) => notificationNoticeVariant({ kind, record: { kind: recordKind, state } });
-    expect([
-      pick('consent-result', 'advertising', 'granted'),
-      pick('consent-result', 'advertising', 'withdrawn'),
-      pick('consent-result', 'night', 'granted'),
-      pick('consent-result', 'night', 'withdrawn'),
-      pick('reconfirmation', 'advertising', 'granted'),
-      pick('reconfirmation', 'night', 'granted'),
-    ]).toEqual(notificationNoticeVariants);
-    // A listed notice picks its own variant.
-    const [withdrawal] = listNotificationNotices(
-      [record('advertising', 'withdrawn', { at: noon })],
-      [],
-      noon,
-    );
-    expect(withdrawal === undefined ? undefined : notificationNoticeVariant(withdrawal))
-      .toBe('consent-result.advertising.withdrawn');
+    const minute = (minutes: number) => new Date(Date.parse(noon) + minutes * 60_000).toISOString();
+    const records = [
+      record('night', 'withdrawn', { at: minute(0) }),
+      record('advertising', 'granted', { at: minute(1) }),
+      record('advertising', 'withdrawn', { at: minute(2) }),
+      record('advertising', 'withdrawn', { at: minute(3) }),
+      record('night', 'granted', { at: minute(4) }),
+      record('advertising', 'granted', { at: minute(5) }),
+    ];
+    expect(listNotificationNotices(records, [], '2028-09-01T03:00:00Z').map((notice) => notice.variant)).toEqual([
+      // Nothing before it: a refusal.
+      'consent-result.night.refused',
+      'consent-result.advertising.granted',
+      // A consent before it: a withdrawal.
+      'consent-result.advertising.withdrawn',
+      // A withdrawal before it: a refusal.
+      'consent-result.advertising.refused',
+      'consent-result.night.granted',
+      'consent-result.advertising.granted',
+      'reconfirmation.advertising',
+      'reconfirmation.night',
+    ]);
   });
 
   it('checks notice copy by the catalog rules, with locale and variant keys in brackets', () => {
@@ -1097,6 +1100,13 @@ describe('notification consent notices', () => {
       notificationNoticeVariants.map((variant) => [variant, { title: '안내', body: '{{consentDate}}' }]),
     );
     expect(notificationNoticeCopyIssues({ 'ko-KR': texts }, 'ko-kr')).toEqual([]);
+    // A refusal's text is optional; the withdrawal's stands in for it.
+    const {
+      'consent-result.advertising.refused': _advertising,
+      'consent-result.night.refused': _night,
+      ...withoutRefusals
+    } = texts;
+    expect(notificationNoticeCopyIssues({ ko: withoutRefusals }, 'ko')).toEqual([]);
     expect(notificationNoticeCopyIssues({ 'ko-KR': { ...texts, 'reconfirmation.night': undefined } }, 'ko-KR', 'copy'))
       .toEqual([{
         path: 'copy["ko-KR"]["reconfirmation.night"]',
@@ -1139,6 +1149,16 @@ describe('notification consent notices', () => {
       'en',
       'ko',
     )).toEqual(text('ko reconfirmation.night'));
+    // A locale without a refusal's text gives the withdrawal's.
+    expect(notificationNoticeVariantFallbacks).toEqual({
+      'consent-result.advertising.refused': 'consent-result.advertising.withdrawn',
+      'consent-result.night.refused': 'consent-result.night.withdrawn',
+    });
+    const { 'consent-result.night.refused': _refused, ...enWithoutRefusal } = copy.en;
+    expect(notificationNoticeVariantCopy({ ...copy, en: enWithoutRefusal }, 'consent-result.night.refused')).toEqual({
+      ko: text('ko consent-result.night.refused'),
+      en: text('en consent-result.night.withdrawn'),
+    });
   });
 
   it('keys a scheduled notice by player, kind, record kind, record time, and due date', () => {

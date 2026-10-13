@@ -2053,6 +2053,11 @@ export interface NotificationNotice {
   };
   /** The last Asia/Seoul calendar date the notice may be given, `YYYY-MM-DD`. */
   readonly dueBy: string & tags.Format<'date'>;
+  /**
+   * The variant of `notices.copy` the notice is given in, set when it is
+   * listed, so the game shows the text the scheduler would send.
+   */
+  readonly variant: NotificationNoticeVariant;
 }
 
 /**
@@ -2084,15 +2089,18 @@ export function isSameNotificationNotice(
 
 /**
  * The copy a notice is given in: its kind, its record's kind, and for a
- * result notice the record's state, so the text can say what the player did
- * (decree art. 62-3). A refusal is recorded as `withdrawn`, so a `withdrawn`
- * text reads for a refusal too; a re-confirmation always reports on a
- * consent. A named union keeps the JSON Schema names readable.
+ * result notice what the record was, so the text can say what the player did
+ * (decree art. 62-3): a consent (`granted`), the withdrawal of a consent
+ * (`withdrawn`), or a refusal (`refused`), a `withdrawn` record whose latest
+ * earlier record of its kind is not a consent. A re-confirmation always
+ * reports on a consent. A named union keeps the JSON Schema names readable.
  */
 export type NotificationNoticeVariant =
   | 'consent-result.advertising.granted'
+  | 'consent-result.advertising.refused'
   | 'consent-result.advertising.withdrawn'
   | 'consent-result.night.granted'
+  | 'consent-result.night.refused'
   | 'consent-result.night.withdrawn'
   | 'reconfirmation.advertising'
   | 'reconfirmation.night';
@@ -2100,21 +2108,49 @@ export type NotificationNoticeVariant =
 /** Every `NotificationNoticeVariant`, in this order; a test keeps the two equal. */
 export const notificationNoticeVariants = Object.freeze([
   'consent-result.advertising.granted',
+  'consent-result.advertising.refused',
   'consent-result.advertising.withdrawn',
   'consent-result.night.granted',
+  'consent-result.night.refused',
   'consent-result.night.withdrawn',
   'reconfirmation.advertising',
   'reconfirmation.night',
 ] as const satisfies readonly NotificationNoticeVariant[]);
 
 /**
- * The catalog's `notices.copy`: per locale, a title and a body for every
- * notice variant. `{{consentDate}}`, the record's Asia/Seoul date, is the
- * only placeholder the server fills, and each variant uses it.
+ * The variants `notices.copy` may leave out, each with the variant whose text
+ * stands in for it: a refusal is given in the withdrawal's text.
  */
-export type NotificationNoticeCopy = Readonly<
-  Record<string, Readonly<Record<NotificationNoticeVariant, NotificationTopicCopy>>>
->;
+export const notificationNoticeVariantFallbacks: Readonly<
+  Partial<Record<NotificationNoticeVariant, NotificationNoticeVariant>>
+> = Object.freeze({
+  'consent-result.advertising.refused': 'consent-result.advertising.withdrawn',
+  'consent-result.night.refused': 'consent-result.night.withdrawn',
+});
+
+/**
+ * One locale of `notices.copy`: a title and a body for each notice variant.
+ * A refusal's text is optional; without it a refusal is given in the
+ * withdrawal's text (`notificationNoticeVariantFallbacks`).
+ */
+export interface NotificationNoticeLocaleCopy {
+  readonly 'consent-result.advertising.granted': NotificationTopicCopy;
+  readonly 'consent-result.advertising.refused'?: NotificationTopicCopy;
+  readonly 'consent-result.advertising.withdrawn': NotificationTopicCopy;
+  readonly 'consent-result.night.granted': NotificationTopicCopy;
+  readonly 'consent-result.night.refused'?: NotificationTopicCopy;
+  readonly 'consent-result.night.withdrawn': NotificationTopicCopy;
+  readonly 'reconfirmation.advertising': NotificationTopicCopy;
+  readonly 'reconfirmation.night': NotificationTopicCopy;
+}
+
+/**
+ * The catalog's `notices.copy`: per locale, a title and a body for every
+ * notice variant, a refusal's optional. `{{consentDate}}`, the record's
+ * Asia/Seoul date, is the only placeholder the server fills, and each
+ * variant uses it.
+ */
+export type NotificationNoticeCopy = Readonly<Record<string, NotificationNoticeLocaleCopy>>;
 
 /**
  * The catalog's `notices` block, which a backend and a vector take as one:
@@ -2137,7 +2173,8 @@ function isPlainObject(value: unknown): value is Readonly<Record<string, unknown
  *
  * - an object of locales that includes `defaultLocale`, matched without
  *   regard to case;
- * - per locale, a title and a body for each notice variant, and no other key;
+ * - per locale, a title and a body for each notice variant, a refusal's
+ *   optional (`notificationNoticeVariantFallbacks`), and no other key;
  * - each title and body a string that is not blank, with no placeholder but
  *   `{{consentDate}}` and no brace outside one; and `{{consentDate}}` in the
  *   title or the body, because a notice states the date of the act it
@@ -2175,8 +2212,8 @@ export function notificationNoticeCopyIssues(
       });
       continue;
     }
-    for (const variant of variants) {
-      if (texts[variant] === undefined) {
+    for (const variant of notificationNoticeVariants) {
+      if (texts[variant] === undefined && notificationNoticeVariantFallbacks[variant] === undefined) {
         issues.push({
           path: `${at}[${JSON.stringify(variant)}]`,
           message: `every locale needs a title and a body for each notice variant; ${locale} lacks ${variant}`,
@@ -2252,32 +2289,38 @@ function noticeTextIssues(text: unknown, path: string): NotificationTopicIssue[]
   return issues;
 }
 
-/** The variant a notice is given in, from its kind, its record's kind, and the record's state. */
-export function notificationNoticeVariant(notice: {
-  readonly kind: NotificationNoticeKind;
-  readonly record: {
-    readonly kind: 'advertising' | 'night';
-    readonly state: 'granted' | 'withdrawn';
-  };
-}): NotificationNoticeVariant {
-  return notice.kind === 'reconfirmation'
-    ? `reconfirmation.${notice.record.kind}`
-    : `consent-result.${notice.record.kind}.${notice.record.state}`;
+/**
+ * The variant a notice is given in. `act` is what its record was: a consent,
+ * the withdrawal of a consent, or a refusal; a re-confirmation reports on a
+ * consent.
+ */
+function noticeVariantOf(
+  kind: NotificationNoticeKind,
+  recordKind: 'advertising' | 'night',
+  act: 'granted' | 'withdrawn' | 'refused',
+): NotificationNoticeVariant {
+  return kind === 'reconfirmation'
+    ? `reconfirmation.${recordKind}`
+    : `consent-result.${recordKind}.${act}`;
 }
 
 /**
  * One variant's copy per locale, shaped as a topic's `copy`, so the notice
  * topic sends it with the lookup and default-locale fallback of any topic
- * (`findNotificationCopy`). A locale without the variant, which a validated
- * catalog never has, is left out rather than found empty.
+ * (`findNotificationCopy`). A locale without a refusal's text gives the
+ * withdrawal's (`notificationNoticeVariantFallbacks`); a locale without the
+ * variant, which a validated catalog never has, is left out rather than
+ * found empty.
  */
 export function notificationNoticeVariantCopy(
   copy: NotificationNoticeCopy,
   variant: NotificationNoticeVariant,
 ): Readonly<Record<string, NotificationTopicCopy>> {
+  const fallback = notificationNoticeVariantFallbacks[variant];
   return Object.fromEntries(
     Object.entries(copy).flatMap(([locale, variants]) => {
-      const text: NotificationTopicCopy | undefined = variants[variant];
+      const text: NotificationTopicCopy | undefined = variants[variant]
+        ?? (fallback === undefined ? undefined : variants[fallback]);
       return text === undefined ? [] : [[locale, text] as const];
     }),
   );
@@ -2328,9 +2371,13 @@ function noticeNameOf(
 
 /**
  * The notices a player's advertising and night records owe at `at`, ordered
- * by `dueBy` and then `kind`. A notice that `given` names is not listed:
+ * by `dueBy` and then `kind`, each with the variant of `notices.copy` it is
+ * given in. `records` are in the order they were written. A notice that
+ * `given` names is not listed:
  *
- * - a `consent-result` notice for every record;
+ * - a `consent-result` notice for every record, which reports a refusal for
+ *   a `withdrawn` record whose latest earlier record of its kind is not a
+ *   consent;
  * - per kind whose latest record is a consent, the first re-confirmation of
  *   that consent not given yet, from `notificationReconfirmationListDays`
  *   days before its `dueBy`. Each one follows the one before it, so silence
@@ -2357,10 +2404,16 @@ export function listNotificationNotices(
     readonly record: NotificationNotice['record'];
   }>();
   const notices: NotificationNotice[] = [];
+  // Each kind's latest record so far: a withdrawal that follows no consent is a refusal.
+  const latestState = new Map<NoticeRecord['kind'], NoticeRecord['state']>();
   for (const record of records) {
     if (record.kind !== 'advertising' && record.kind !== 'night') {
       continue;
     }
+    const act = record.state === 'withdrawn' && latestState.get(record.kind) !== 'granted'
+      ? 'refused'
+      : record.state;
+    latestState.set(record.kind, record.state);
     const instant = parseInstant(record.at);
     const noticeRecord: NotificationNotice['record'] = {
       kind: record.kind,
@@ -2372,7 +2425,12 @@ export function listNotificationNotices(
     const dueBy = consentResultDueByOf(instant);
     if (!givenNames.has(noticeNameOf('consent-result', record.kind, instant, dueBy))) {
       // Each notice gets its own copy, so changing one never changes another.
-      notices.push({ kind: 'consent-result', record: { ...noticeRecord }, dueBy });
+      notices.push({
+        kind: 'consent-result',
+        record: { ...noticeRecord },
+        dueBy,
+        variant: noticeVariantOf('consent-result', record.kind, act),
+      });
     }
   }
   for (const kind of ['advertising', 'night'] as const) {
@@ -2389,7 +2447,12 @@ export function listNotificationNotices(
       dueBy = reconfirmationDueByOf(consent.instant, ordinal);
     }
     if (calendarDaysBefore(dueBy, notificationReconfirmationListDays) <= today) {
-      notices.push({ kind: 'reconfirmation', record: { ...consent.record }, dueBy });
+      notices.push({
+        kind: 'reconfirmation',
+        record: { ...consent.record },
+        dueBy,
+        variant: noticeVariantOf('reconfirmation', kind, 'granted'),
+      });
     }
   }
   return notices.sort((left, right) =>

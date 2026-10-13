@@ -420,12 +420,18 @@ export interface NotificationConsentRecord {
   readonly textVersion?: string;
 }
 
+export type NotificationNoticeVariant =
+  | `consent-result.${'advertising' | 'night'}.${'granted' | 'withdrawn' | 'refused'}`
+  | `reconfirmation.${'advertising' | 'night'}`;
+
 export interface NotificationNotice {
   readonly kind: 'consent-result' | 'reconfirmation';
   /** The advertising or night record the notice reports on, with its date. */
   readonly record: Pick<NotificationConsentRecord, 'kind' | 'state' | 'at' | 'textVersion'>;
   /** The last Asia/Seoul calendar date the notice may be given, as YYYY-MM-DD. */
   readonly dueBy: string;
+  /** The variant of the catalog's notices.copy it is given in, such as 'consent-result.night.refused'. */
+  readonly variant: NotificationNoticeVariant;
 }
 
 export interface ReminderResult {
@@ -614,9 +620,13 @@ products and ad placements.
         "consent-result.advertising.withdrawn": {
           "title": "광고성 알림 수신 거부 안내",
           "body": "{{consentDate}}에 광고성 알림 수신 거부가 처리됐어요."
+        },
+        "reconfirmation.night": {
+          "title": "야간 광고성 알림 수신 동의 확인",
+          "body": "{{consentDate}}에 하신 야간(21시~8시) 광고성 알림 수신 동의를 확인해 주세요. 알림 설정에서 언제든 철회할 수 있어요."
         }
         // …and consent-result.night.granted, consent-result.night.withdrawn,
-        // reconfirmation.advertising, and reconfirmation.night
+        // and reconfirmation.advertising; the refusal texts are optional
       }
     }
   },
@@ -707,9 +717,17 @@ products and ad placements.
     `consent-result.advertising.withdrawn`, `consent-result.night.granted`,
     `consent-result.night.withdrawn`, `reconfirmation.advertising`, and
     `reconfirmation.night`. One notice topic can then say whether the player
-    consented or withdrew, and to advertising or to night sending, as decree
-    art. 62-3 requires. A refusal is recorded as `withdrawn`, so a
-    `withdrawn` text must read for a refusal too.
+    consented, refused, or withdrew, and to advertising or to night sending,
+    as decree art. 62-3 requires.
+  - **Refusals.** A refusal is recorded as `withdrawn`: it is a `withdrawn`
+    record whose latest earlier record of its kind is not a consent. The
+    optional `consent-result.advertising.refused` and
+    `consent-result.night.refused` give its text. Without one, a refusal is
+    given in the withdrawal's text, which must then read for a refusal too.
+  - **Night re-confirmation.** A night consent stands, and is re-confirmed,
+    after the player withdraws advertising consent, so the
+    `reconfirmation.night` text must not say the player still receives night
+    advertising.
   - **One setting.** The backend takes the whole `notices` block as is: the
     topic the scheduler sends through, and the copy. No deployment setting
     names the notice topic.
@@ -721,8 +739,8 @@ products and ad placements.
     written.
   - **Validation.** The validator reports a notice topic that breaks these
     rules, a missing `notices.copy`, one without `defaultLocale` (matched
-    without regard to case), a locale without one of the six variants, an
-    unknown variant, a blank title or body, a variant without
+    without regard to case), a locale without one of the six required
+    variants, an unknown variant, a blank title or body, a variant without
     `{{consentDate}}`, any other placeholder, and a stray brace. The backend
     and the vector loader check `notices.copy` by the same rules
     (`notificationNoticeCopyIssues`). Issue paths spell locale and variant
@@ -956,9 +974,18 @@ and time), and its `dueBy`.
   `setAdvertisingConsent` call writes.
 
 The backend lists notices with the record they report on, including its
-date, because the notice must state it (decree art. 62-3(2)). It also records
-each notice given: the notice's name, the channel (`in-game`, `push`, or
-`other`), and the time.
+date, because the notice must state it (decree art. 62-3(2)). Each listed
+notice carries `variant`, the variant of `notices.copy` it is given in, so
+the game shows the text the scheduler would push:
+
+- **Result notice.** `consent-result.<record kind>.<act>`, where the act is
+  `granted`, `withdrawn`, or `refused` for a `withdrawn` record whose latest
+  earlier record of its kind is not a consent.
+- **Re-confirmation.** `reconfirmation.<record kind>`; it always reports on a
+  consent.
+
+It also records each notice given: the notice's name, the channel
+(`in-game`, `push`, or `other`), and the time.
 
 The game shows a notice in the game and records it through
 `notices.recordShown` with the notice as `list()` gave it, or with its name:
@@ -982,10 +1009,9 @@ If a notice is not recorded by the start of the day seven days before
 - **Key.** `notice:<player>:<kind>:<record kind>:<record at>:<dueBy>`, with
   the player percent-encoded, the record's time in the
   [canonical form](#timestamps), and `dueBy` as `YYYY-MM-DD`.
-- **Copy.** The notice is given in its variant of `notices.copy`, picked
-  from the notice's kind, its record's kind, and for a result notice the
-  record's state (`notificationNoticeVariant`). A re-confirmation always
-  reports on a consent.
+- **Copy.** The notice is given in the variant it is listed with. A locale
+  without a refusal's text gives the withdrawal's
+  (`notificationNoticeVariantCopy`).
 - **Template data.** `consentDate`, the record's Asia/Seoul date, is the only
   value the server fills.
 - **Gate.** The send is a `service` notification through the policy gate,
@@ -1614,7 +1640,7 @@ listed fields of each item asserted:
 | `local` | `operations` (`op`: `schedule`, `replace`, `cancel`, with `key`, `topic`, `fireAt`, `exact`) and the final `pending` list |
 | `reminders` | Pending server reminders |
 | `events` | An object keyed by listener name, each a list of events |
-| `notices` | The backend's listed notices at the end, ordered by `dueBy` and then `kind`: `kind` (`consent-result`, `reconfirmation`), `record` (its `kind` and `state`), `dueBy` (an Asia/Seoul date) |
+| `notices` | The backend's listed notices at the end, ordered by `dueBy` and then `kind`: `kind` (`consent-result`, `reconfirmation`), `record` (its `kind` and `state`), `dueBy` (an Asia/Seoul date), `variant` |
 
 | Vector | Checks |
 | --- | --- |
@@ -1633,7 +1659,7 @@ listed fields of each item asserted:
 | `requested-topic-needs-opt-in` | A `requested` topic is suppressed until the player turns it on |
 | `advertising-needs-consent` | Suppressed without consent; rendered with label, sender line, free opt-out line, opt-out action, and expiry; the result notice is listed, the first re-confirmation not yet |
 | `advertising-notices` | An unrecorded result notice is sent through the notice topic; a re-confirmation is listed 60 days before its `dueBy`; recording it before then, recording a name that matches nothing, and recording it again after its `dueBy` change nothing; the next one is listed two years later |
-| `advertising-notice-variants` | After advertising and night consent, then an advertising withdrawal, the scheduler pushes the three result notices through one notice topic, each in its own variant of `notices.copy` |
+| `advertising-notice-variants` | Through one notice topic, each in its own variant of `notices.copy`, the scheduler pushes the results of an advertising and a night consent, both re-confirmations two years later, the withdrawal of each, and a second withdrawal of each, which is a refusal; the game lists each notice with its variant, and the advertising refusal, which the copy leaves out, is given in the withdrawal's text |
 | `advertising-night-window` | Deferred to 08:00 KST without night consent and sent with an expiry; immediate without expiry with it |
 | `advertising-rules-none` | Without the Korean rules: a send before consent is `suppressed: advertising-consent-missing`; after consent, no window, label, or expiry |
 | `advertising-unsupported-by-host` | A host-template provider refuses an advertising topic |
@@ -1699,7 +1725,7 @@ publishable package carries a Sampo changeset.
 | --- | --- | --- |
 | N1 | This RFC and the vectors | |
 | N2 | `@mpgd/platform/notifications`: types, capabilities, the provider registry entry, permission mapping helpers, the pure policy gate, notice due dates, reminder routing, typia validators, JSON Schemas, and `notificationsProtocolVersion`; `@mpgd/catalog` topic catalog and `validate:notifications`; conformance runner with fixture-identifier substitution, reference runtime, and fakes passing every vector; `validate:notifications-alignment`; v1 wrapper over the runtime | Closed topics |
-| N2b | `notices.copy` with one title and body per notice variant (`NotificationNoticeVariant`, `notificationNoticeVariant`), its validator rules, the scheduler's choice of variant, and the `advertising-notice-variants` vector | One notice text for every record |
+| N2b | `notices.copy` with one title and body per notice variant (`NotificationNoticeVariant`, optional refusal texts), its validator rules, each listed notice's `variant`, which the scheduler pushes, and the `advertising-notice-variants` vector | One notice text for every record |
 | N3 | Bridge `notifications.v2.*` methods (including `revokePermission`), the event union, fail-closed answers in every transport; `PlatformCapabilities.notifications` and `gateway.notificationsV2` gating in the target-config runtime; the Capacitor external-activity and registry pass-through for v2 methods | |
 | P1 | `@mpgd/adapter-ait`: provider over `Notification.requestAgreement` with the agreement mapping, the 120-second settle, agreement evidence, and landing opens that `getLaunchIntent` does not route again; `@mpgd/game-services`: Apps in Toss functional-message delivery provider with `FAIL` code mapping | Session-only agreements, deprecated API |
 | P2 | `@mpgd/adapter-capacitor/notifications`: `PushSdk` and `LocalNotificationSdk` over the plugins as optional peers, the provider, channels, the native opt-out action, cold-start buffering, settings link | |

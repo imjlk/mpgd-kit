@@ -728,6 +728,11 @@
             "$ref": "#/components/schemas/CalendarDate",
             "description": "Asia/Seoul calendar date `YYYY-MM-DD`.",
             "readOnly": true
+          },
+          "variant": {
+            "$ref": "#/components/schemas/NotificationNoticeVariant",
+            "description": "The variant of `notices.copy` the notice is listed with.",
+            "readOnly": true
           }
         },
         "required": [],
@@ -2276,12 +2281,18 @@
             "format": "date",
             "description": "The last Asia/Seoul calendar date the notice may be given, `YYYY-MM-DD`.",
             "readOnly": true
+          },
+          "variant": {
+            "$ref": "#/components/schemas/NotificationNoticeVariant",
+            "description": "The variant of `notices.copy` the notice is given in, set when it is\nlisted, so the game shows the text the scheduler would send.",
+            "readOnly": true
           }
         },
         "required": [
           "kind",
           "record",
-          "dueBy"
+          "dueBy",
+          "variant"
         ],
         "additionalProperties": false
       },
@@ -2344,6 +2355,53 @@
           }
         ]
       },
+      "NotificationNoticeLocaleCopy": {
+        "type": "object",
+        "properties": {
+          "consent-result.advertising.granted": {
+            "$ref": "#/components/schemas/NotificationTopicCopy",
+            "readOnly": true
+          },
+          "consent-result.advertising.refused": {
+            "$ref": "#/components/schemas/NotificationTopicCopy",
+            "readOnly": true
+          },
+          "consent-result.advertising.withdrawn": {
+            "$ref": "#/components/schemas/NotificationTopicCopy",
+            "readOnly": true
+          },
+          "consent-result.night.granted": {
+            "$ref": "#/components/schemas/NotificationTopicCopy",
+            "readOnly": true
+          },
+          "consent-result.night.refused": {
+            "$ref": "#/components/schemas/NotificationTopicCopy",
+            "readOnly": true
+          },
+          "consent-result.night.withdrawn": {
+            "$ref": "#/components/schemas/NotificationTopicCopy",
+            "readOnly": true
+          },
+          "reconfirmation.advertising": {
+            "$ref": "#/components/schemas/NotificationTopicCopy",
+            "readOnly": true
+          },
+          "reconfirmation.night": {
+            "$ref": "#/components/schemas/NotificationTopicCopy",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "consent-result.advertising.granted",
+          "consent-result.advertising.withdrawn",
+          "consent-result.night.granted",
+          "consent-result.night.withdrawn",
+          "reconfirmation.advertising",
+          "reconfirmation.night"
+        ],
+        "additionalProperties": false,
+        "description": "One locale of `notices.copy`: a title and a body for each notice variant.\nA refusal's text is optional; without it a refusal is given in the\nwithdrawal's text (`notificationNoticeVariantFallbacks`)."
+      },
       "NotificationNoticeSettings": {
         "type": "object",
         "properties": {
@@ -2353,7 +2411,7 @@
             "readOnly": true
           },
           "copy": {
-            "$ref": "#/components/schemas/ReadonlyRecordstringReadonlyRecordNotificationNoticeVariantNotificationTopicCopy",
+            "$ref": "#/components/schemas/ReadonlyRecordstringNotificationNoticeLocaleCopy",
             "readOnly": true
           }
         },
@@ -2363,6 +2421,35 @@
         ],
         "additionalProperties": false,
         "description": "The catalog's `notices` block, which a backend and a vector take as one:\nthe topic consent notices go out through, and their copy per variant."
+      },
+      "NotificationNoticeVariant": {
+        "oneOf": [
+          {
+            "const": "consent-result.advertising.granted"
+          },
+          {
+            "const": "consent-result.advertising.refused"
+          },
+          {
+            "const": "consent-result.advertising.withdrawn"
+          },
+          {
+            "const": "consent-result.night.granted"
+          },
+          {
+            "const": "consent-result.night.refused"
+          },
+          {
+            "const": "consent-result.night.withdrawn"
+          },
+          {
+            "const": "reconfirmation.advertising"
+          },
+          {
+            "const": "reconfirmation.night"
+          }
+        ],
+        "description": "The copy a notice is given in: its kind, its record's kind, and for a\nresult notice what the record was, so the text can say what the player did\n(decree art. 62-3): a consent (`granted`), the withdrawal of a consent\n(`withdrawn`), or a refusal (`refused`), a `withdrawn` record whose latest\nearlier record of its kind is not a consent. A re-confirmation always\nreports on a consent. A named union keeps the JSON Schema names readable."
       },
       "NotificationOpenPath": {
         "oneOf": [
@@ -2804,37 +2891,11 @@
         "type": "integer",
         "minimum": 1
       },
-      "ReadonlyRecordNotificationNoticeVariantNotificationTopicCopy": {
+      "ReadonlyRecordstringNotificationNoticeLocaleCopy": {
         "type": "object",
-        "properties": {
-          "consent-result.advertising.granted": {
-            "$ref": "#/components/schemas/NotificationTopicCopy"
-          },
-          "consent-result.advertising.withdrawn": {
-            "$ref": "#/components/schemas/NotificationTopicCopy"
-          },
-          "consent-result.night.granted": {
-            "$ref": "#/components/schemas/NotificationTopicCopy"
-          },
-          "consent-result.night.withdrawn": {
-            "$ref": "#/components/schemas/NotificationTopicCopy"
-          },
-          "reconfirmation.advertising": {
-            "$ref": "#/components/schemas/NotificationTopicCopy"
-          },
-          "reconfirmation.night": {
-            "$ref": "#/components/schemas/NotificationTopicCopy"
-          }
-        },
-        "required": [
-          "consent-result.advertising.granted",
-          "consent-result.advertising.withdrawn",
-          "consent-result.night.granted",
-          "consent-result.night.withdrawn",
-          "reconfirmation.advertising",
-          "reconfirmation.night"
-        ],
-        "additionalProperties": false
+        "additionalProperties": {
+          "$ref": "#/components/schemas/NotificationNoticeLocaleCopy"
+        }
       },
       "ReadonlyRecordstringNotificationPermissionOutcome": {
         "type": "object",
@@ -2852,12 +2913,6 @@
         "type": "object",
         "additionalProperties": {
           "$ref": "#/components/schemas/NotificationTopicCopy"
-        }
-      },
-      "ReadonlyRecordstringReadonlyRecordNotificationNoticeVariantNotificationTopicCopy": {
-        "type": "object",
-        "additionalProperties": {
-          "$ref": "#/components/schemas/ReadonlyRecordNotificationNoticeVariantNotificationTopicCopy"
         }
       },
       "ReadonlyRecordstringhostrecord": {

@@ -46,9 +46,10 @@ export interface NotificationTopicCatalogNotices {
   /**
    * Per locale, a title and a body for each notice variant
    * (`notificationNoticeVariants`), so a notice says whether the player
-   * consented or withdrew, and to advertising or night sending. The only
-   * placeholder is `{{consentDate}}`, the record's Asia/Seoul date, which
-   * each variant uses.
+   * consented, refused, or withdrew, and to advertising or night sending. A
+   * refusal's text is optional: without it a refusal is given in the
+   * withdrawal's. The only placeholder is `{{consentDate}}`, the record's
+   * Asia/Seoul date, which each variant uses.
    */
   readonly copy: NotificationNoticeCopy;
 }
@@ -117,8 +118,9 @@ export type NotificationTopicCatalogValidation =
  *   text, which could not state the record), and `notices.copy` follows
  *   `notificationNoticeCopyIssues` in `@mpgd/platform/notifications`: it
  *   includes `defaultLocale`, matched the same way, and gives every locale a
- *   title and a body for each of `notificationNoticeVariants`, none blank,
- *   with `{{consentDate}}` in one of them and no other placeholder or brace;
+ *   title and a body for each of `notificationNoticeVariants` (a refusal's
+ *   optional), none blank, with `{{consentDate}}` in one of them and no other
+ *   placeholder or brace;
  * - for a target with a provider entry: each mapping field follows its rule
  *   (required, a string within `maxLength` Unicode code points, one of
  *   `values`, matching `pattern`, which the `u` flag reads; a pattern that

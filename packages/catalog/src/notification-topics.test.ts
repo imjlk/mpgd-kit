@@ -663,6 +663,22 @@ assertIssue(
   /is not a notice variant/u,
   'an unknown variant',
 );
+// A refusal's text is optional: without it, a refusal is given in the
+// withdrawal's text. Given, it follows the same rules.
+const {
+  'consent-result.advertising.refused': _advertisingRefusal,
+  'consent-result.night.refused': _nightRefusal,
+  ...withoutRefusals
+} = koNotices;
+assert.deepEqual(issuesOf(withNoticeCopy({ ko: withoutRefusals })), []);
+assertIssue(
+  withNoticeCopy({
+    ko: { ...koNotices, 'consent-result.night.refused': { title: '거부', body: '거부' } },
+  }),
+  'notices.copy["ko"]["consent-result.night.refused"]',
+  /states the date of the act it reports on/u,
+  'a refusal text follows the notice rules',
+);
 for (const [field, text] of [
   ['title', ' '],
   ['body', ''],

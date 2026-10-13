@@ -106,6 +106,7 @@ describe('notifications conformance vectors', () => {
       'game.getPermission',
       'game.requestPermission',
       'game.revokePermission',
+      'game.register',
       'game.unregister',
       'game.setTopicPreference',
       'game.setAdvertisingConsent',
@@ -122,8 +123,9 @@ describe('notifications conformance vectors', () => {
       'backend.revokeSession',
       'backend.runScheduler',
     ];
-    // `clock.advance` and `game.register` are part of the format; no committed
-    // vector uses them, since authentication registers on its own.
+    // `clock.advance` is part of the format; no committed vector uses it.
+    // Authentication registers on its own, so only a vector that comes back
+    // after the registration went stale uses `game.register`.
     expect([...seen].sort()).toEqual([...named].sort());
   });
 
@@ -263,7 +265,10 @@ describe('notifications conformance vectors', () => {
     const base = assertNotificationConformanceVector(readVector('advertising-notices.json'));
     expect(base.notices?.topic).toBe('consent-notice');
     const ko = base.notices?.copy['ko'];
-    expect(ko === undefined ? [] : Object.keys(ko).sort()).toEqual([...notificationNoticeVariants].sort());
+    // Every variant but the advertising refusal, which is given in the withdrawal's text.
+    expect(ko === undefined ? [] : Object.keys(ko).sort()).toEqual(
+      notificationNoticeVariants.filter((variant) => variant !== 'consent-result.advertising.refused').sort(),
+    );
     const withCopy = (copy: unknown) => ({ ...base, notices: { topic: 'consent-notice', copy } });
     expect(isNotificationConformanceVector(withCopy({ ko }))).toBe(true);
     expect(isNotificationConformanceVector({ ...base, notices: { copy: { ko } } })).toBe(false);
@@ -280,6 +285,15 @@ describe('notifications conformance vectors', () => {
         .toThrow('notices.copy["ko"]["reconfirmation.night"]: a notice states the date');
       expect(() => assertNotificationConformanceVector(night('확인', '{consentDate}')))
         .toThrow('a brace outside a {{name}} placeholder');
+      // A refusal's text is optional, and follows the same rules when given.
+      const refusal = { title: '거부', body: '{{consentDate}}에 거부하셨어요.' };
+      expect(isNotificationConformanceVector(withCopy({ ko: { ...ko, 'consent-result.advertising.refused': refusal } })))
+        .toBe(true);
+      expect(() => assertNotificationConformanceVector(withCopy({
+        ko: { ...ko, 'consent-result.advertising.refused': { ...refusal, body: '거부하셨어요.' } },
+      }))).toThrow('notices.copy["ko"]["consent-result.advertising.refused"]: a notice states the date');
+      expect(isNotificationConformanceVector(withCopy({ ko: { ...ko, 'consent-result.night.denied': refusal } })))
+        .toBe(false);
     }
   });
 

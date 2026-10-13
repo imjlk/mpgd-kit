@@ -14,6 +14,7 @@ import {
   type NotificationDeployment,
   type NotificationNoticeKind,
   type NotificationNoticeSettings,
+  type NotificationNoticeVariant,
   type NotificationPermissionOutcome,
   type NotificationPermissionState,
   type NotificationReminderRoute,
@@ -191,6 +192,8 @@ export interface NotificationConformanceNoticeExpectation {
   readonly record?: NotificationConformanceNoticeRecordExpectation;
   /** Asia/Seoul calendar date `YYYY-MM-DD`. */
   readonly dueBy?: CalendarDate;
+  /** The variant of `notices.copy` the notice is listed with. */
+  readonly variant?: NotificationNoticeVariant;
 }
 
 export type NotificationConformanceStep =
