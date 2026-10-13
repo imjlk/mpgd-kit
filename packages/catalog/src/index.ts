@@ -222,3 +222,16 @@ function assertUniqueNormalizedPlatformIdentifiers(
     }
   }
 }
+
+export {
+  assertNotificationTopicCatalog,
+  isRootRelativeNotificationRoute,
+  resolveNotificationTopicsForTarget,
+  validateNotificationTopicCatalog,
+  type NotificationTopicCatalog,
+  type NotificationTopicCatalogEntry,
+  type NotificationTopicCatalogIssue,
+  type NotificationTopicCatalogNotices,
+  type NotificationTopicCatalogValidation,
+  type NotificationTopicCatalogValidationOptions,
+} from './notification-topics.js';

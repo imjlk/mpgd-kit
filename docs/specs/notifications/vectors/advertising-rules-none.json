@@ -109,6 +109,19 @@
       }
     },
     {
+      "actor": "backend",
+      "action": "deliver",
+      "input": {
+        "topic": "weekend-event",
+        "idempotencyKey": "o-0",
+        "locale": "ko"
+      },
+      "returns": {
+        "status": "suppressed",
+        "reason": "advertising-consent-missing"
+      }
+    },
+    {
       "actor": "game",
       "action": "setAdvertisingConsent",
       "input": {
@@ -131,6 +144,11 @@
   ],
   "expect": {
     "deliveries": [
+      {
+        "idempotencyKey": "o-0",
+        "status": "suppressed",
+        "reason": "advertising-consent-missing"
+      },
       {
         "idempotencyKey": "o-1",
         "status": "delivered"

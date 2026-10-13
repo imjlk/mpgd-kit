@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-notice.schema.json",
+  "title": "NotificationNotice",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationNotice",
+  "components": {
+    "schemas": {
+      "IsoDateTime": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NotificationNotice": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/NotificationNoticeKind",
+            "readOnly": true
+          },
+          "record": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "oneOf": [
+                  {
+                    "const": "advertising"
+                  },
+                  {
+                    "const": "night"
+                  }
+                ],
+                "readOnly": true
+              },
+              "state": {
+                "oneOf": [
+                  {
+                    "const": "granted"
+                  },
+                  {
+                    "const": "withdrawn"
+                  }
+                ],
+                "readOnly": true
+              },
+              "at": {
+                "$ref": "#/components/schemas/IsoDateTime",
+                "readOnly": true
+              },
+              "textVersion": {
+                "$ref": "#/components/schemas/NonEmptyString",
+                "readOnly": true
+              }
+            },
+            "required": [
+              "kind",
+              "state",
+              "at"
+            ],
+            "additionalProperties": false,
+            "description": "The advertising or night record the notice reports on, with its date.",
+            "readOnly": true
+          },
+          "dueBy": {
+            "type": "string",
+            "format": "date",
+            "description": "The last Asia/Seoul calendar date the notice may be given, `YYYY-MM-DD`.",
+            "readOnly": true
+          },
+          "variant": {
+            "$ref": "#/components/schemas/NotificationNoticeVariant",
+            "description": "The variant of `notices.copy` the notice is given in, set when it is\nlisted, so the game shows the text the scheduler would send.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "kind",
+          "record",
+          "dueBy",
+          "variant"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationNoticeKind": {
+        "oneOf": [
+          {
+            "const": "consent-result"
+          },
+          {
+            "const": "reconfirmation"
+          }
+        ]
+      },
+      "NotificationNoticeVariant": {
+        "oneOf": [
+          {
+            "const": "consent-result.advertising.granted"
+          },
+          {
+            "const": "consent-result.advertising.refused"
+          },
+          {
+            "const": "consent-result.advertising.withdrawn"
+          },
+          {
+            "const": "consent-result.night.granted"
+          },
+          {
+            "const": "consent-result.night.refused"
+          },
+          {
+            "const": "consent-result.night.withdrawn"
+          },
+          {
+            "const": "reconfirmation.advertising"
+          },
+          {
+            "const": "reconfirmation.night"
+          }
+        ],
+        "description": "The copy a notice is given in: its kind, its record's kind, and for a\nresult notice what the record was, so the text can say what the player did\n(decree art. 62-2): a consent (`granted`), the withdrawal of a consent\n(`withdrawn`), or a refusal (`refused`), a `withdrawn` record whose latest\nearlier record of its kind is not a consent. A re-confirmation always\nreports on a consent (decree art. 62-3). A named union keeps the JSON\nSchema names readable."
+      }
+    }
+  }
+}

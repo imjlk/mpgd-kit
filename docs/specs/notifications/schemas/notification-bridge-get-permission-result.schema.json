@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-bridge-get-permission-result.schema.json",
+  "title": "NotificationBridgeGetPermissionResult",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationPermissionSnapshot",
+  "components": {
+    "schemas": {
+      "NotificationPermissionSnapshot": {
+        "type": "object",
+        "properties": {
+          "app": {
+            "$ref": "#/components/schemas/NotificationPermissionState",
+            "description": "Present when `permission.scope` is 'app'.",
+            "readOnly": true
+          },
+          "topics": {
+            "$ref": "#/components/schemas/ReadonlyRecordNotificationTopicIdNotificationPermissionState",
+            "readOnly": true
+          },
+          "requiredAction": {
+            "$ref": "#/components/schemas/NotificationRequiredAction",
+            "description": "Present with an `action-required` state.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "topics"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationPermissionState": {
+        "oneOf": [
+          {
+            "const": "action-required"
+          },
+          {
+            "const": "blocked"
+          },
+          {
+            "const": "denied"
+          },
+          {
+            "const": "granted"
+          },
+          {
+            "const": "prompt"
+          },
+          {
+            "const": "prompt-with-rationale"
+          },
+          {
+            "const": "unknown"
+          },
+          {
+            "const": "unsupported"
+          }
+        ]
+      },
+      "NotificationRequiredAction": {
+        "oneOf": [
+          {
+            "const": "host-settings"
+          },
+          {
+            "const": "login"
+          }
+        ],
+        "description": "The player action a host needs before it can prompt."
+      },
+      "ReadonlyRecordNotificationTopicIdNotificationPermissionState": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/NotificationPermissionState"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,267 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-capabilities.schema.json",
+  "title": "NotificationCapabilities",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationCapabilities",
+  "components": {
+    "schemas": {
+      "NotificationCapabilities": {
+        "type": "object",
+        "properties": {
+          "availability": {
+            "$ref": "#/components/schemas/PlatformProviderAvailability",
+            "readOnly": true
+          },
+          "permission": {
+            "$ref": "#/components/schemas/NotificationPermissionCapabilities",
+            "readOnly": true
+          },
+          "remote": {
+            "$ref": "#/components/schemas/NotificationRemoteCapabilities",
+            "readOnly": true
+          },
+          "local": {
+            "$ref": "#/components/schemas/NotificationLocalCapabilities",
+            "readOnly": true
+          },
+          "open": {
+            "$ref": "#/components/schemas/NotificationOpenPath",
+            "description": "How an open reaches the game.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "availability",
+          "permission",
+          "remote",
+          "local",
+          "open"
+        ],
+        "additionalProperties": false,
+        "description": "Notifications v2 capability declaration. A provider returns a fresh object\non every read; code branches on these declarations, never on a provider id\nor target name. Release gates such as Devvit's `approval-required` stay in\nthe target config's `integrations.notifications` state."
+      },
+      "NotificationLocalCapabilities": {
+        "type": "object",
+        "properties": {
+          "supported": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "maxPending": {
+            "$ref": "#/components/schemas/PositiveQuantity",
+            "description": "Pending-notification ceiling the provider must stay under (iOS: 64).",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "supported"
+        ],
+        "additionalProperties": false,
+        "description": "Local reminders are always inexact, so the capability carries no timing."
+      },
+      "NotificationOpenPath": {
+        "oneOf": [
+          {
+            "const": "host-link"
+          },
+          {
+            "const": "landing-url"
+          },
+          {
+            "const": "none"
+          },
+          {
+            "const": "payload"
+          }
+        ]
+      },
+      "NotificationPermissionAllowance": {
+        "oneOf": [
+          {
+            "const": "per-send"
+          },
+          {
+            "const": "persistent"
+          }
+        ]
+      },
+      "NotificationPermissionCapabilities": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "$ref": "#/components/schemas/NotificationPermissionScope",
+            "description": "Where delivery permission lives: one for the app, or one per topic.",
+            "readOnly": true
+          },
+          "prompt": {
+            "$ref": "#/components/schemas/NotificationPermissionPrompt",
+            "description": "Who renders the consent UI.",
+            "readOnly": true
+          },
+          "readable": {
+            "type": "boolean",
+            "description": "Whether the client can read the current state without prompting.",
+            "readOnly": true
+          },
+          "serverReadable": {
+            "type": "boolean",
+            "description": "Whether the backend can read the current state at send time (Devvit `isOptedIn`).",
+            "readOnly": true
+          },
+          "allowance": {
+            "$ref": "#/components/schemas/NotificationPermissionAllowance",
+            "description": "'per-send': one acceptance allows one delivery (WeChat one-time subscriptions).",
+            "readOnly": true
+          },
+          "userGesture": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "promptLimit": {
+            "$ref": "#/components/schemas/PositiveQuantity",
+            "description": "How many denials the host accepts before only settings can change the\nanswer: iOS 1, Android 13+ 2. A dismissed dialog is not a denial. Absent\nwhen the host can always ask again (Apps in Toss, Devvit, WeChat).",
+            "readOnly": true
+          },
+          "maxTopicsPerPrompt": {
+            "$ref": "#/components/schemas/PositiveQuantity",
+            "readOnly": true
+          },
+          "settings": {
+            "type": "boolean",
+            "description": "Whether `openSettings` can open the OS or host notification settings.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "scope",
+          "prompt",
+          "readable",
+          "serverReadable",
+          "allowance",
+          "userGesture",
+          "settings"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationPermissionPrompt": {
+        "oneOf": [
+          {
+            "const": "game"
+          },
+          {
+            "const": "host"
+          },
+          {
+            "const": "os"
+          }
+        ]
+      },
+      "NotificationPermissionScope": {
+        "oneOf": [
+          {
+            "const": "app"
+          },
+          {
+            "const": "topic"
+          }
+        ]
+      },
+      "NotificationPurpose": {
+        "oneOf": [
+          {
+            "const": "advertising"
+          },
+          {
+            "const": "requested"
+          },
+          {
+            "const": "service"
+          }
+        ],
+        "description": "What a topic is for; it decides the consent a send needs (RFC \"Topics and purposes\")."
+      },
+      "NotificationRemoteAddressing": {
+        "oneOf": [
+          {
+            "const": "device"
+          },
+          {
+            "const": "none"
+          },
+          {
+            "const": "platform-user"
+          }
+        ]
+      },
+      "NotificationRemoteCapabilities": {
+        "type": "object",
+        "properties": {
+          "supported": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "purposes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationPurpose"
+            },
+            "description": "Purposes the host lets the server deliver.",
+            "readOnly": true
+          },
+          "addressing": {
+            "$ref": "#/components/schemas/NotificationRemoteAddressing",
+            "description": "`'none'` exactly when `supported` is false.",
+            "readOnly": true
+          },
+          "content": {
+            "$ref": "#/components/schemas/NotificationRemoteContent",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "supported",
+          "purposes",
+          "addressing",
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "NotificationRemoteContent": {
+        "oneOf": [
+          {
+            "const": "free-form"
+          },
+          {
+            "const": "host-template"
+          }
+        ]
+      },
+      "PlatformProviderAvailability": {
+        "oneOf": [
+          {
+            "const": "action-required"
+          },
+          {
+            "const": "available"
+          },
+          {
+            "const": "configuration-required"
+          },
+          {
+            "const": "temporarily-unavailable"
+          },
+          {
+            "const": "unsupported"
+          }
+        ],
+        "description": "Readiness of an installed platform provider, independent of target policy."
+      },
+      "PositiveQuantity": {
+        "type": "integer",
+        "minimum": 1
+      }
+    }
+  }
+}

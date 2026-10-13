@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-bridge-cancel-local-payload.schema.json",
+  "title": "NotificationBridgeCancelLocalPayload",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/CancelLocalNotificationsInput",
+  "components": {
+    "schemas": {
+      "CancelLocalNotificationsInput": {
+        "type": "object",
+        "properties": {
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NonEmptyString"
+            },
+            "readOnly": true
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "additionalProperties": false
+      },
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

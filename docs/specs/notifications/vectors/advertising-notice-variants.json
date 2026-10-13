@@ -1,0 +1,386 @@
+{
+  "vector": "advertising-notice-variants",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A consent notice says what the player did. The scheduler pushes the result notices of an advertising and a night consent, their re-confirmations two years later once the game registers again, and then the withdrawal of each and a second withdrawal, which follows no consent and so is a refusal, each through the one notice topic in its own variant of the catalog's notice copy with the record's date. The game lists each notice with that variant, and the advertising refusal, whose text the copy leaves out, is given in the withdrawal's text.",
+  "appliesTo": [
+    {
+      "path": "remote.purposes",
+      "includes": "advertising"
+    },
+    {
+      "path": "remote.addressing",
+      "equals": "device"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.os-fcm",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "promptLimit": 2,
+        "settings": true
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested",
+          "advertising"
+        ],
+        "addressing": "device",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": true,
+        "maxPending": 64
+      },
+      "open": "payload"
+    }
+  },
+  "catalog": [
+    {
+      "id": "consent-notice",
+      "purpose": "service",
+      "channels": [
+        "remote"
+      ],
+      "route": "/settings/notifications",
+      "mapping": {
+        "channelId": "reminders"
+      }
+    }
+  ],
+  "notices": {
+    "topic": "consent-notice",
+    "copy": {
+      "ko": {
+        "consent-result.advertising.granted": {
+          "title": "[Fixture Games] 광고성 알림 수신 동의 결과",
+          "body": "{{consentDate}}에 하신 광고성 알림 수신 동의가 처리됐어요. 알림 설정에서 언제든 철회할 수 있어요."
+        },
+        "consent-result.advertising.withdrawn": {
+          "title": "[Fixture Games] 광고성 알림 수신 거부 결과",
+          "body": "{{consentDate}}에 하신 광고성 알림 수신 거부가 처리됐어요."
+        },
+        "consent-result.night.granted": {
+          "title": "[Fixture Games] 야간 광고성 알림 수신 동의 결과",
+          "body": "{{consentDate}}에 하신 야간(21시~8시) 광고성 알림 수신 동의가 처리됐어요. 알림 설정에서 언제든 철회할 수 있어요."
+        },
+        "consent-result.night.refused": {
+          "title": "[Fixture Games] 야간 광고성 알림 수신 거부 결과",
+          "body": "{{consentDate}}에 하신 야간(21시~8시) 광고성 알림 수신 거부가 처리됐어요."
+        },
+        "consent-result.night.withdrawn": {
+          "title": "[Fixture Games] 야간 광고성 알림 수신 동의 철회 결과",
+          "body": "{{consentDate}}에 하신 야간(21시~8시) 광고성 알림 수신 동의 철회가 처리됐어요."
+        },
+        "reconfirmation.advertising": {
+          "title": "[Fixture Games] 광고성 알림 수신 동의 확인",
+          "body": "{{consentDate}}에 광고성 알림 수신에 동의하셨어요. 동의를 유지하려면 따로 하실 일은 없고, 철회하려면 알림 설정에서 광고성 알림을 끄면 돼요."
+        },
+        "reconfirmation.night": {
+          "title": "[Fixture Games] 야간 광고성 알림 수신 동의 확인",
+          "body": "{{consentDate}}에 야간(21시~8시) 광고성 알림 수신에 동의하셨어요. 동의를 유지하려면 따로 하실 일은 없고, 철회하려면 알림 설정에서 야간 수신을 끄면 돼요."
+        }
+      },
+      "en": {
+        "consent-result.advertising.granted": {
+          "title": "[Fixture Games] Promotional notifications: consent processed",
+          "body": "Your consent to promotional notifications on {{consentDate}} has been processed. You can withdraw it any time in notification settings."
+        },
+        "consent-result.advertising.withdrawn": {
+          "title": "[Fixture Games] Promotional notifications: opt-out processed",
+          "body": "Your opt-out of promotional notifications on {{consentDate}} has been processed."
+        },
+        "consent-result.night.granted": {
+          "title": "[Fixture Games] Night-time promotional notifications: consent processed",
+          "body": "Your consent to promotional notifications between 21:00 and 08:00 on {{consentDate}} has been processed. You can withdraw it any time in notification settings."
+        },
+        "consent-result.night.refused": {
+          "title": "[Fixture Games] Night-time promotional notifications: refusal processed",
+          "body": "Your refusal of promotional notifications between 21:00 and 08:00 on {{consentDate}} has been processed."
+        },
+        "consent-result.night.withdrawn": {
+          "title": "[Fixture Games] Night-time promotional notifications: withdrawal processed",
+          "body": "Your withdrawal of consent to promotional notifications between 21:00 and 08:00 on {{consentDate}} has been processed."
+        },
+        "reconfirmation.advertising": {
+          "title": "[Fixture Games] Promotional notifications: your consent",
+          "body": "You agreed to promotional notifications on {{consentDate}}. To keep this consent, you need do nothing; to withdraw it, turn promotional notifications off in notification settings."
+        },
+        "reconfirmation.night": {
+          "title": "[Fixture Games] Night-time promotional notifications: your consent",
+          "body": "You agreed to promotional notifications between 21:00 and 08:00 on {{consentDate}}. To keep this consent, you need do nothing; to withdraw it, turn night-time notifications off in notification settings."
+        }
+      }
+    }
+  },
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "deployment": {
+    "advertisingRules": "kr",
+    "advertisingSender": {
+      "contact": "080-1234-5678"
+    }
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "issueEndpoint",
+      "endpoint": {
+        "kind": "fcm-token",
+        "value": "tok-1"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "consent-notice"
+        ],
+        "gesture": true
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setAdvertisingConsent",
+      "input": {
+        "advertising": "granted",
+        "night": "granted",
+        "textVersion": "ad-consent-v1"
+      }
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2026-10-20T03:00:00Z"
+    },
+    {
+      "actor": "backend",
+      "action": "runScheduler"
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2028-10-04T03:00:00Z"
+    },
+    {
+      "actor": "game",
+      "action": "register"
+    },
+    {
+      "actor": "backend",
+      "action": "runScheduler"
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2028-10-05T03:00:00Z"
+    },
+    {
+      "actor": "game",
+      "action": "setAdvertisingConsent",
+      "input": {
+        "advertising": "withdrawn",
+        "night": "withdrawn",
+        "textVersion": "ad-consent-v1"
+      }
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2028-10-06T03:00:00Z"
+    },
+    {
+      "actor": "game",
+      "action": "setAdvertisingConsent",
+      "input": {
+        "advertising": "withdrawn",
+        "night": "withdrawn",
+        "textVersion": "ad-consent-v1"
+      }
+    },
+    {
+      "actor": "game",
+      "action": "listNotices",
+      "returns": [
+        {
+          "kind": "consent-result",
+          "record": {
+            "kind": "advertising",
+            "state": "withdrawn",
+            "at": "2028-10-05T03:00:00Z"
+          },
+          "dueBy": "2028-10-19",
+          "variant": "consent-result.advertising.withdrawn"
+        },
+        {
+          "kind": "consent-result",
+          "record": {
+            "kind": "night",
+            "state": "withdrawn",
+            "at": "2028-10-05T03:00:00.001Z"
+          },
+          "dueBy": "2028-10-19",
+          "variant": "consent-result.night.withdrawn"
+        },
+        {
+          "kind": "consent-result",
+          "record": {
+            "kind": "advertising",
+            "state": "withdrawn",
+            "at": "2028-10-06T03:00:00Z"
+          },
+          "dueBy": "2028-10-20",
+          "variant": "consent-result.advertising.refused"
+        },
+        {
+          "kind": "consent-result",
+          "record": {
+            "kind": "night",
+            "state": "withdrawn",
+            "at": "2028-10-06T03:00:00.001Z"
+          },
+          "dueBy": "2028-10-20",
+          "variant": "consent-result.night.refused"
+        }
+      ]
+    },
+    {
+      "actor": "clock",
+      "action": "set",
+      "at": "2028-10-13T03:00:00Z"
+    },
+    {
+      "actor": "backend",
+      "action": "runScheduler"
+    }
+  ],
+  "expect": {
+    "deliveries": [
+      {
+        "idempotencyKey": "notice:p-1:consent-result:advertising:2026-10-12T03:00:00Z:2026-10-26",
+        "topic": "consent-notice",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "notice:p-1:consent-result:night:2026-10-12T03:00:00.001Z:2026-10-26",
+        "topic": "consent-notice",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "notice:p-1:reconfirmation:advertising:2026-10-12T03:00:00Z:2028-10-11",
+        "topic": "consent-notice",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "notice:p-1:reconfirmation:night:2026-10-12T03:00:00.001Z:2028-10-11",
+        "topic": "consent-notice",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "notice:p-1:consent-result:advertising:2028-10-05T03:00:00Z:2028-10-19",
+        "topic": "consent-notice",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "notice:p-1:consent-result:night:2028-10-05T03:00:00.001Z:2028-10-19",
+        "topic": "consent-notice",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "notice:p-1:consent-result:advertising:2028-10-06T03:00:00Z:2028-10-20",
+        "topic": "consent-notice",
+        "status": "delivered"
+      },
+      {
+        "idempotencyKey": "notice:p-1:consent-result:night:2028-10-06T03:00:00.001Z:2028-10-20",
+        "topic": "consent-notice",
+        "status": "delivered"
+      }
+    ],
+    "providerCalls": [
+      {
+        "topic": "consent-notice",
+        "content": {
+          "title": "[Fixture Games] 광고성 알림 수신 동의 결과",
+          "body": "2026-10-12에 하신 광고성 알림 수신 동의가 처리됐어요. 알림 설정에서 언제든 철회할 수 있어요."
+        }
+      },
+      {
+        "topic": "consent-notice",
+        "content": {
+          "title": "[Fixture Games] 야간 광고성 알림 수신 동의 결과",
+          "body": "2026-10-12에 하신 야간(21시~8시) 광고성 알림 수신 동의가 처리됐어요. 알림 설정에서 언제든 철회할 수 있어요."
+        }
+      },
+      {
+        "topic": "consent-notice",
+        "content": {
+          "title": "[Fixture Games] 광고성 알림 수신 동의 확인",
+          "body": "2026-10-12에 광고성 알림 수신에 동의하셨어요. 동의를 유지하려면 따로 하실 일은 없고, 철회하려면 알림 설정에서 광고성 알림을 끄면 돼요."
+        }
+      },
+      {
+        "topic": "consent-notice",
+        "content": {
+          "title": "[Fixture Games] 야간 광고성 알림 수신 동의 확인",
+          "body": "2026-10-12에 야간(21시~8시) 광고성 알림 수신에 동의하셨어요. 동의를 유지하려면 따로 하실 일은 없고, 철회하려면 알림 설정에서 야간 수신을 끄면 돼요."
+        }
+      },
+      {
+        "topic": "consent-notice",
+        "content": {
+          "title": "[Fixture Games] 광고성 알림 수신 거부 결과",
+          "body": "2028-10-05에 하신 광고성 알림 수신 거부가 처리됐어요."
+        }
+      },
+      {
+        "topic": "consent-notice",
+        "content": {
+          "title": "[Fixture Games] 야간 광고성 알림 수신 동의 철회 결과",
+          "body": "2028-10-05에 하신 야간(21시~8시) 광고성 알림 수신 동의 철회가 처리됐어요."
+        }
+      },
+      {
+        "topic": "consent-notice",
+        "content": {
+          "title": "[Fixture Games] 광고성 알림 수신 거부 결과",
+          "body": "2028-10-06에 하신 광고성 알림 수신 거부가 처리됐어요."
+        }
+      },
+      {
+        "topic": "consent-notice",
+        "content": {
+          "title": "[Fixture Games] 야간 광고성 알림 수신 거부 결과",
+          "body": "2028-10-06에 하신 야간(21시~8시) 광고성 알림 수신 거부가 처리됐어요."
+        }
+      }
+    ],
+    "notices": []
+  }
+}

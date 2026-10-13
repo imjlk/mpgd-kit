@@ -1,7 +1,8 @@
 import type { AdProvider } from './ads.js';
-// Only the typia-free contract module may be imported here: headless
+// Only the typia-free contract modules may be imported here: headless
 // consumers type-check this entry with `skipLibCheck: false` and no DOM lib.
 import type { CommerceProvider } from './commerce-contract.js';
+import type { NotificationProvider } from './notifications-contract.js';
 
 export type PlatformTarget =
   | 'browser'
@@ -476,6 +477,15 @@ export interface ShareIntent {
   readonly kind: 'daily-result' | 'friend-challenge' | 'invite';
   readonly title: string;
   readonly text: string;
+  /**
+   * A root-relative link on the game's origin (`/daily?challengeToken=…`) or an
+   * absolute `https://` (or `http://`) link. Adapters that build a share URL
+   * from it (Apps in Toss and web) check it with `@mpgd/platform/routes` and
+   * answer `unavailable` when it could name another host, contains a control
+   * character, or has another form, such as a page-relative link. Apps in Toss
+   * also accepts its own `intoss://<app>` links. Adapters whose host shares no
+   * link ignore it.
+   */
   readonly deepLink: string;
   readonly payload?: SharePayload;
   readonly previewImageUrl?: string;
@@ -682,6 +692,17 @@ export interface PlatformGateway {
   readonly presentation?: PresentationAdapter;
   readonly sharing?: ShareAdapter;
   readonly notifications?: NotificationSubscriptionAdapter;
+  /**
+   * Optional notifications v2 provider (`@mpgd/platform/notifications`).
+   * Transitional: adapters expose it next to the v1 `notifications` adapter
+   * until the major release that removes v1. Games do not call it directly:
+   * the game-services client composes it with the backend into the
+   * notifications runtime, and `toNotificationSubscriptionAdapter` serves v1
+   * callers from that runtime with the topics resolved for the target. Absent
+   * on gateways whose target has no v2 provider; N3 gates it on
+   * `integrations.notifications` in the target-config runtime.
+   */
+  readonly notificationsV2?: NotificationProvider;
   readonly promotions?: PromotionRewardAdapter;
   readonly gameActivity?: GameActivityAdapter;
   readonly gameSettings?: GameSettingsAdapter;

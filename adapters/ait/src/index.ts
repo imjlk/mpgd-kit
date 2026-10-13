@@ -38,6 +38,7 @@ import { commerceProtocolVersion, type CommerceProvider } from '@mpgd/platform/c
 import { createAitBridgeCommerceProvider } from './commerce-bridge.js';
 import { aitCommerceStoreId, createAitCommerceCapabilities } from './commerce-provider.js';
 import { createAitLifecycleAdapter } from './lifecycle.js';
+import { normalizeAitAppName, readAitShareRequest } from './share-link.js';
 
 export interface GamePlatformBridge {
   request(input: BridgeRequest): Promise<BridgeResponse>;
@@ -70,6 +71,12 @@ export interface CreateAitSandboxBridgeOptions {
    * methods answer `COMMERCE_V2_UNAVAILABLE`.
    */
   readonly buildId?: string;
+  /**
+   * The app name `intoss://` share links must carry, as the host bridge's
+   * `appName`; both default to `mpgd-kit`. Root-relative and `https://` share
+   * links do not depend on it.
+   */
+  readonly appName?: string;
 }
 
 export function createAitPlatformGateway(input: {
@@ -295,6 +302,9 @@ export function createAitSandboxBridge(
   // fails closed. Every other build keeps the fail-closed bridge error and
   // no event channel, so its gateway offers no `commerceV2` at all.
   const commerceV2Enabled = options.buildId === aitSandboxBuildId;
+  // The same default as the host bridge, so an unconfigured sandbox refuses
+  // what an unconfigured host refuses.
+  const sandboxAppName = normalizeAitAppName(options.appName ?? 'mpgd-kit');
 
   return {
     // The sandbox emits no commerce events; the channel exists so the gateway
@@ -354,9 +364,14 @@ export function createAitSandboxBridge(
           return ok(input, 'already-fullscreen');
 
         case 'share.share':
-          return ok(input, {
-            status: 'shared',
-          });
+          // The sandbox reads share requests exactly as the host does, so a
+          // request the host would refuse is not reported as shared here.
+          return ok(
+            input,
+            readAitShareRequest(input.payload, sandboxAppName) === undefined
+              ? { status: 'unavailable' }
+              : { status: 'shared', completion: 'presented' },
+          );
 
         case 'share.readInboundShare':
           return ok(input, null);
