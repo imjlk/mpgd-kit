@@ -180,6 +180,16 @@ async function buildPackage(
   assertFile(join(distDir, 'index.js'));
   assertFile(join(distDir, 'index.d.ts'));
   if (workspacePackage.name === '@mpgd/cli') {
+    const hostSources = join(distDir, 'windows-host');
+    copyDir(
+      join(workspacePackage.dir, 'native-tools', 'windows-host', 'Core'),
+      join(hostSources, 'Core'),
+    );
+    copyFileSync(
+      join(workspacePackage.dir, 'native-tools', 'windows-host', 'README.md'),
+      join(hostSources, 'README.md'),
+    );
+    copyDir(join('native-plugins', 'microsoft-store-host', 'windows'), join(hostSources, 'WinUI'));
     copyFileSync(
       join(srcDir, 'ios-keychain-import.swift'),
       join(distDir, 'ios-keychain-import.swift'),
