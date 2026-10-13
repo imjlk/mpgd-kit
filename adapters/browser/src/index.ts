@@ -210,7 +210,8 @@ function createMockCommerceProvider(): CommerceProvider {
         : [];
     },
     async requestPurchase(input): Promise<RequestPurchaseResult> {
-      if (input.logicalId !== mockProductId || (input.quantity !== undefined && input.quantity > 1)) {
+      if (input.logicalId !== mockProductId || input.offerId !== undefined
+        || (input.quantity !== undefined && input.quantity > 1)) {
         return {
           outcome: 'failed',
           error: {

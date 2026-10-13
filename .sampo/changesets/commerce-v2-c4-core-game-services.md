@@ -48,3 +48,6 @@ is the only purchase path, and nothing is granted from a client callback.
 
 Retired purchase recovery rejects a saved verifier request that selects a
 different deployment from the durable journal before contacting the backend.
+
+Transient store readiness is refused before reserving a purchase journal entry,
+so the same idempotency key can be retried when the store becomes available.

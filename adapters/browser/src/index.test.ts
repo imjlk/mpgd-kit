@@ -329,6 +329,10 @@ describe('adapter-browser', () => {
       quantity: 2,
     })).resolves.toMatchObject({ outcome: 'failed', error: { code: 'ITEM_UNAVAILABLE' } });
 
+    await expect(provider.requestPurchase({
+      logicalId: 'COINS_100', source: 'shop', idempotencyKey: 'mock-offer', offerId: 'unsupported',
+    })).resolves.toMatchObject({ outcome: 'failed', error: { code: 'ITEM_UNAVAILABLE' } });
+
     const reward = await gateway.ads.showRewarded({
       placementId: 'CONTINUE_AFTER_FAIL',
       idempotencyKey: 'mock-reward',
