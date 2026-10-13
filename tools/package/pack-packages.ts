@@ -129,7 +129,8 @@ function expectedTemplateFiles(packageDir: string, packageJson: PackageJson): st
     .flatMap((templateDir) => {
       const packageJsonPath = join(templateDir, 'package.json');
 
-      if (!existsSync(packageJsonPath)) {
+      // This directory overlays phaser-game; it is not an independent package.
+      if (!existsSync(packageJsonPath) && relative(templatesDir, templateDir) !== 'lite-overlay') {
         throw new Error(
           `${packageJson.name ?? 'package'} template ${relative(packageDir, templateDir)} must include package.json`,
         );

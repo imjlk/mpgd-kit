@@ -1,46 +1,17 @@
 # Lite Starter Brief
 
-Build a Phaser 4 game on top of the mpgd platform boundary.
+Build a Canvas2D game using `@mpgd/lite-shell` and the mpgd platform boundary.
+Read `AGENTS.md`, the agent manifest, and the `use-mpgd-kit` router before editing.
 
-Read `AGENTS.md`, `agent/game-manifest.json`, and the generated
-`.agents/skills/use-mpgd-kit/SKILL.md` router before changing kit-facing
-capabilities or target workflows.
+- Deterministic rules and state belong in `src/game/state.ts`.
+- Rendering and input belong in `src/lite/tapGame.ts`; mounting belongs in `src/runtime/createGame.ts`.
+- Use `PlatformGateway` for identity, storage, commerce, ads, lifecycle, and host presentation.
+- Keep SDK calls in adapters or target wrappers and use backend ledger APIs before durable grants.
+- Create one `createGamePlatformRuntime` during bootstrap. Bind audio through `bindGameAudio` with the game-owned execution scope.
+- Keep recovery above renderer lifetimes; reconcile existing operations on startup and resume without opening SDK UI.
+- Rewarded v2 needs an application-owned durable encrypted journal. An in-memory store is not recovery evidence.
+- Reserve safe-area geometry once and preserve feed scrolling and browser touch gestures.
 
-Boundaries:
-
-- Phaser scenes render and collect input only.
-- Target services go through `PlatformGateway`.
-- Purchases, rewarded ad grants, and leaderboard records should go through
-  backend ledger APIs before mutating durable game save state.
-- Platform SDK imports belong in adapters or target wrappers.
-- Orientation policy should be chosen before adding resize behavior; treat
-  locked modes as soft prompts unless a platform adapter supports hard locks.
-- Safe-area geometry must be reserved exactly once: use outer CSS safe-area
-  padding or the viewport snapshot `safeArea.contentBounds`, never both.
-
-Useful commands:
-
-```sh
-pnpm dev
-pnpm check
-pnpm build
-pnpm icons:generate
-pnpm icons:verify
-pnpm exec mpgd target build-all --targets-file ./mpgd.targets.json --kit-path ../mpgd-kit --targets web,verse8,ait,reddit --profile staging --ait-variant wrapper
-pnpm devvit:login
-pnpm devvit:init
-pnpm devvit:playtest
-```
-
-## Game-owned execution and advertising
-
-Construct one `createGamePlatformRuntime` during bootstrap. Scenes bind gameplay
-execution with `audioOwner: 'game'`; the Phaser game's sound manager owns audio
-projection. Add SDKs only in target assembly or adapters. All rewarded views use
-the game-owned action coordinator and authoritative services, with an
-application-owned durable encrypted operation store. Keep recovery above scenes
-and reconcile existing operations on startup and resume without opening SDK UI.
-
-## ONE play server-owned monetization
-
-Specify issued placement/product IDs, the authenticated reward and checkout intent routes, durable SSV/intent/ledger stores, an encrypted client operation journal, and reconciliation plus atomic cancellation fencing. Keep monetization disabled until these ports are wired. Purchase/ad callbacks are evidence; backend grants precede consume/acknowledge. Separate confirmed checkout closure from financial completion. Plan real-app acceptance with ONEconsole credentials and hosting headers.
+Run `pnpm dev`, `pnpm check`, `pnpm build`, and `pnpm accept`.
+Devvit inline and expanded entries both use the lite renderer. Keep optional engines behind explicit dynamic import boundaries and verify the inline budget.
+Production commerce and ads remain unavailable until authenticated backend, issued IDs, durable stores, and real-platform acceptance are configured.

@@ -3542,6 +3542,10 @@ function createGameApp(input: {
   const appDir = resolveAppDirectory(input.directory);
   const gameName = path.basename(appDir);
 
+  if (input.template === 'lite' && !input.workspace) {
+    throw new Error('The lite template requires --workspace until @mpgd/lite-shell is published.');
+  }
+
   assertValidGameName(gameName);
 
   const packageName = input.packageName ?? gameName;
@@ -3932,9 +3936,10 @@ function renderTemplate(
 }
 
 function templateOutputPath(relativePath: string): string {
-  return path.basename(relativePath) === 'gitignore'
-    ? path.join(path.dirname(relativePath), '.gitignore')
-    : relativePath;
+  const normalized = relativePath.replace(/\\/gu, '/');
+  return path.posix.basename(normalized) === 'gitignore'
+    ? path.posix.join(path.posix.dirname(normalized), '.gitignore')
+    : normalized;
 }
 
 function toPascalCase(value: string): string {

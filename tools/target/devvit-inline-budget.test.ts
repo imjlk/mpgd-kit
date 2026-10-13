@@ -58,7 +58,7 @@ try {
         target: 'reddit',
         clientDir: root,
         inlineEntry: 'index.html',
-        budget: { forbidModules: ['phaser'] },
+        budget: { forbidModules: ['phaser'], deferredChunks: ['assets/phaser.js'] },
       }),
     /forbidden module\(s\): phaser in assets\/phaser\.js/,
   );
@@ -77,6 +77,22 @@ try {
       }),
     /exceeds inlineBudget\.maxGzipKb 1 KiB/,
   );
+
+  // CSS imports are static first-load edges, even if listed as deferred.
+  writeFileSync(join(root, 'assets/preview.css'), '@import url("./more.css");body{margin:0}');
+  writeFileSync(join(root, 'assets/more.css'), '@import "./nested.css";');
+  writeFileSync(join(root, 'assets/nested.css'), 'body{color:red}');
+  const cssReport = collectDevvitInlineGraph(root, 'index.html', ['assets/*.css']);
+  assert.ok(cssReport.files.some((file) => file.path === 'assets/more.css'));
+  assert.ok(cssReport.files.some((file) => file.path === 'assets/nested.css'));
+
+  // An HTML entry cannot defer a script or preload by giving its filename.
+  writeFileSync(join(root, 'index.html'), '<script src="/assets/phaser.js"></script>');
+  writeFileSync(join(root, 'assets/phaser.js'), 'export const opaque=1;');
+  assert.throws(() => assertDevvitInlineBudget({
+    target: 'reddit', clientDir: root, inlineEntry: 'index.html',
+    budget: { forbidModules: ['phaser'], deferredChunks: ['assets/phaser.js'] },
+  }), /forbidden module\(s\): phaser in assets\/phaser\.js/);
 
   assert.throws(
     () =>

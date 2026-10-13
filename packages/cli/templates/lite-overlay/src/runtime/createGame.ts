@@ -30,14 +30,14 @@ export function createStarterGame(input: {
     },
   });
   const shell = createTapGame({ mount, title: '__GAME_TITLE__' });
-  globalThis.addEventListener(
-    'pagehide',
-    () => {
+  const onPageHide = (event: PageTransitionEvent): void => {
+    if (!event.persisted) {
+      globalThis.removeEventListener('pagehide', onPageHide);
       audio.dispose();
       input.context.gameRuntime.dispose();
       shell.dispose();
-    },
-    { once: true },
-  );
+    }
+  };
+  globalThis.addEventListener('pagehide', onPageHide);
   return shell;
 }

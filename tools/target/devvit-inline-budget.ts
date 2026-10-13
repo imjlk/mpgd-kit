@@ -29,12 +29,13 @@ const dynamicImportPattern = /\bimport\(\s*["']([^"']+)["']\s*\)/g;
 const staticImportPattern = /(?:^|[;\s}])(?:import|export)\s*(?:[\w*{}\s,$]+\s*from\s*)?["']([^"']+)["']/g;
 const htmlAssetPattern = /<(?:script[^>]*\ssrc|link[^>]*\srel=["'](?:modulepreload|stylesheet)["'][^>]*\shref)=["']([^"']+)["']/g;
 const htmlAssetPatternReversed = /<link[^>]*\shref=["']([^"']+)["'][^>]*\srel=["'](?:modulepreload|stylesheet)["']/g;
+const cssImportPattern = /@import\s+(?:url\(\s*["']?([^\s"')]+)["']?\s*\)|["']([^"']+)["'])/gi;
 
 /**
  * Walk the inline entry's load graph: HTML scripts, modulepreloads and
  * stylesheets, static `import`/`export from` edges, and dynamic `import()`
  * edges (an inline entry often awaits its surface router dynamically).
- * Chunks matching `deferredChunks` are boundaries: neither they nor what is
+ * Dynamically imported chunks matching `deferredChunks` are boundaries: neither they nor what is
  * reachable only through them count toward the inline first load.
  */
 export function collectDevvitInlineGraph(
@@ -61,12 +62,12 @@ function walkInlineGraph(
     throw new Error(`Devvit inlineEntry ${inlineEntry} does not exist in ${clientDir}.`);
   }
   const html = readFileSync(entryPath, 'utf8');
-  const queue: string[] = [];
+  const queue: { readonly file: string; readonly dynamic: boolean }[] = [];
   for (const pattern of [htmlAssetPattern, htmlAssetPatternReversed]) {
     for (const match of html.matchAll(pattern)) {
       const reference = match[1];
       if (reference !== undefined && isLocalReference(reference)) {
-        queue.push(resolveReference(root, dirname(entryPath), reference));
+        queue.push({ file: resolveReference(root, dirname(entryPath), reference), dynamic: false });
       }
     }
   }
@@ -76,31 +77,39 @@ function walkInlineGraph(
   const forbiddenHits: readonly { module: string; file: string }[] = [];
   const allContents: { path: string; content: string }[] = [];
   while (queue.length > 0) {
-    const file = queue.shift();
-    if (file === undefined || seen.has(file) || !existsSync(file)) {
+    const edge = queue.shift();
+    if (edge === undefined || seen.has(edge.file) || !existsSync(edge.file)) {
       continue;
     }
-    if (deferred.some((pattern) => pattern.test(relative(root, file).split('\\').join('/')))) {
-      seen.add(file);
+    const { file, dynamic } = edge;
+    const filePath = relative(root, file).replace(/\\/gu, '/');
+    if (dynamic && deferred.some((pattern) => pattern.test(filePath))) {
+      // A later static edge must still include this file in the first load.
       continue;
     }
     seen.add(file);
     const buffer = readFileSync(file);
     files.push({
-      path: relative(root, file),
+      path: filePath,
       bytes: buffer.length,
       gzipBytes: gzipSync(buffer, { level: 9 }).length,
     });
     const content = buffer.toString('utf8');
-    allContents.push({ path: relative(root, file), content });
+    allContents.push({ path: filePath, content });
     if (file.endsWith('.js') || file.endsWith('.mjs')) {
-      const references = [
-        ...[...content.matchAll(staticImportPattern)].map((match) => match[1]),
-        ...[...content.matchAll(dynamicImportPattern)].map((match) => match[1]),
-      ];
-      for (const reference of references) {
+      for (const [pattern, dynamic] of [[staticImportPattern, false], [dynamicImportPattern, true]] as const) {
+        for (const match of content.matchAll(pattern)) {
+          const reference = match[1];
+          if (reference !== undefined && isLocalReference(reference)) {
+            queue.push({ file: resolveReference(root, dirname(file), reference), dynamic });
+          }
+        }
+      }
+    } else if (file.endsWith('.css')) {
+      for (const match of content.matchAll(cssImportPattern)) {
+        const reference = match[1] ?? match[2];
         if (reference !== undefined && isLocalReference(reference)) {
-          queue.push(resolveReference(root, dirname(file), reference));
+          queue.push({ file: resolveReference(root, dirname(file), reference), dynamic: false });
         }
       }
     }
