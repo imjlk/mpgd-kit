@@ -49,7 +49,10 @@ export interface NotificationTopicCatalogNotices {
    * consented, refused, or withdrew, and to advertising or night sending. A
    * refusal's text is optional: without it a refusal is given in the
    * withdrawal's. The only placeholder is `{{consentDate}}`, the record's
-   * Asia/Seoul date, which each variant uses.
+   * Asia/Seoul date, which each variant uses; the text carries the rest of
+   * what the decree requires, the sender's name and, for a result notice
+   * (art. 62-2), the processing result or, for a re-confirmation (art. 62-3),
+   * how to keep or withdraw the consent.
    */
   readonly copy: NotificationNoticeCopy;
 }

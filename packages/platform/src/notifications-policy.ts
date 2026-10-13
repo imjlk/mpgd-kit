@@ -2090,10 +2090,11 @@ export function isSameNotificationNotice(
 /**
  * The copy a notice is given in: its kind, its record's kind, and for a
  * result notice what the record was, so the text can say what the player did
- * (decree art. 62-3): a consent (`granted`), the withdrawal of a consent
+ * (decree art. 62-2): a consent (`granted`), the withdrawal of a consent
  * (`withdrawn`), or a refusal (`refused`), a `withdrawn` record whose latest
  * earlier record of its kind is not a consent. A re-confirmation always
- * reports on a consent. A named union keeps the JSON Schema names readable.
+ * reports on a consent (decree art. 62-3). A named union keeps the JSON
+ * Schema names readable.
  */
 export type NotificationNoticeVariant =
   | 'consent-result.advertising.granted'
@@ -2148,7 +2149,10 @@ export interface NotificationNoticeLocaleCopy {
  * The catalog's `notices.copy`: per locale, a title and a body for every
  * notice variant, a refusal's optional. `{{consentDate}}`, the record's
  * Asia/Seoul date, is the only placeholder the server fills, and each
- * variant uses it.
+ * variant uses it. The text carries the rest of what the decree requires:
+ * the sender's name and, for a result notice (art. 62-2), the processing
+ * result, or, for a re-confirmation (art. 62-3), how to keep or withdraw the
+ * consent.
  */
 export type NotificationNoticeCopy = Readonly<Record<string, NotificationNoticeLocaleCopy>>;
 

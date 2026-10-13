@@ -4,9 +4,10 @@ npm/@mpgd/catalog: minor
 
 `@mpgd/catalog` adds the notification topic catalog:
 `NotificationTopicCatalog` types (`version`, `defaultLocale`, an optional
-`notices.topic`, and topics with `id`, `purpose`, `channels`, `route`,
-`optOutRoute`, `copy` per locale, optional `frequency`, `quietHours`, and
-`deferrable`, and open-keyed `targets` mappings),
+`notices` block, `{ topic, copy }`, which names the topic consent notices go
+out through and gives their copy, and topics with `id`, `purpose`,
+`channels`, `route`, `optOutRoute`, `copy` per locale, optional `frequency`,
+`quietHours`, and `deferrable`, and open-keyed `targets` mappings),
 `validateNotificationTopicCatalog` and `assertNotificationTopicCatalog`, which
 report every issue with its path: routes that stay on the game's origin and
 never resolve to a protocol-relative path, an `optOutRoute` and no `local`

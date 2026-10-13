@@ -614,16 +614,16 @@ products and ad placements.
     "copy": {
       "ko": {
         "consent-result.advertising.granted": {
-          "title": "광고성 알림 수신 동의 안내",
-          "body": "{{consentDate}}에 광고성 알림 수신에 동의하셨어요."
+          "title": "[My Game] 광고성 알림 수신 동의 결과",
+          "body": "{{consentDate}}에 하신 광고성 알림 수신 동의가 처리됐어요. 알림 설정에서 언제든 철회할 수 있어요."
         },
         "consent-result.advertising.withdrawn": {
-          "title": "광고성 알림 수신 거부 안내",
-          "body": "{{consentDate}}에 광고성 알림 수신 거부가 처리됐어요."
+          "title": "[My Game] 광고성 알림 수신 거부 결과",
+          "body": "{{consentDate}}에 하신 광고성 알림 수신 거부가 처리됐어요."
         },
         "reconfirmation.night": {
-          "title": "야간 광고성 알림 수신 동의 확인",
-          "body": "{{consentDate}}에 하신 야간(21시~8시) 광고성 알림 수신 동의를 확인해 주세요. 알림 설정에서 언제든 철회할 수 있어요."
+          "title": "[My Game] 야간 광고성 알림 수신 동의 확인",
+          "body": "{{consentDate}}에 야간(21시~8시) 광고성 알림 수신에 동의하셨어요. 동의를 유지하려면 따로 하실 일은 없고, 철회하려면 알림 설정에서 야간 수신을 끄면 돼요."
         }
         // …and consent-result.night.granted, consent-result.night.withdrawn,
         // and reconfirmation.advertising; the refusal texts are optional
@@ -717,8 +717,14 @@ products and ad placements.
     `consent-result.advertising.withdrawn`, `consent-result.night.granted`,
     `consent-result.night.withdrawn`, `reconfirmation.advertising`, and
     `reconfirmation.night`. One notice topic can then say whether the player
-    consented, refused, or withdrew, and to advertising or to night sending,
-    as decree art. 62-3 requires.
+    consented, refused, or withdrew, and to advertising or to night sending.
+  - **Contents.** The copy must carry what the decree requires; the server
+    fills only the date.
+    - A result notice (§50⑦, decree art. 62-2) gives the sender's name, the
+      act (a consent, a refusal, or a withdrawal) and its date, and the
+      processing result.
+    - A re-confirmation (§50⑧, decree art. 62-3(2)) gives the sender's name,
+      the consent and its date, and how to keep or withdraw it.
   - **Refusals.** A refusal is recorded as `withdrawn`: it is a `withdrawn`
     record whose latest earlier record of its kind is not a consent. The
     optional `consent-result.advertising.refused` and
@@ -974,9 +980,9 @@ and time), and its `dueBy`.
   `setAdvertisingConsent` call writes.
 
 The backend lists notices with the record they report on, including its
-date, because the notice must state it (decree art. 62-3(2)). Each listed
-notice carries `variant`, the variant of `notices.copy` it is given in, so
-the game shows the text the scheduler would push:
+date, because the notice must state it (decree arts. 62-2 and 62-3(2)). Each
+listed notice carries `variant`, the variant of `notices.copy` it is given
+in, so the game shows the text the scheduler would push:
 
 - **Result notice.** `consent-result.<record kind>.<act>`, where the act is
   `granted`, `withdrawn`, or `refused` for a `withdrawn` record whose latest
@@ -1017,8 +1023,9 @@ If a notice is not recorded by the start of the day seven days before
 - **Gate.** The send is a `service` notification through the policy gate,
   never combined with advertising. The scheduler gives the gate the notice
   topic with the variant's copy in place of the topic's own, which it does
-  not declare. Step 8 then resolves the locale, and falls back to the default
-  locale, as for any topic.
+  not declare. Step 8 then resolves the locale by the **Locale** rule of
+  the [topic catalog's content](#topic-catalog), as for any topic, and so
+  falls back to the default locale.
 - **Content.** A notice says only its variant of `notices.copy`.
   - The scheduler drops any `title` or `body` in the notice topic's mapping.
   - It sends a notice only through a provider whose content is `free-form`.
@@ -1485,11 +1492,13 @@ What the kit enforces for `advertising` topics under `kr`:
   - The message carries an opt-out action that opens the opt-out screen
     directly; describing a settings path is not enough (p.44).
 - **Notices.**
-  - A result notice is due within 14 days of a consent, refusal, or withdrawal
-    (§50⑦; pp.23–24).
+  - A result notice is due within 14 days of a consent, refusal, or
+    withdrawal. It gives the sender's name, the act and its date, and the
+    processing result (§50⑦, decree art. 62-2; pp.23–24).
   - A re-confirmation notice is due every two years per medium, counted from
-    the consent date, and it states that date (§50⑧, decree art. 62-3;
-    pp.25–26, 65–70).
+    the consent date. It gives the sender's name, the consent and its date,
+    and how to keep or withdraw it (§50⑧, decree art. 62-3; pp.25–26,
+    65–70).
 
 What the kit does not decide: whether a given topic is advertising. The guide
 has no example about games, rewards, energy, or attendance; its only game

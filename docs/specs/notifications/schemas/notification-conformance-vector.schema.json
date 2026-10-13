@@ -2449,7 +2449,7 @@
             "const": "reconfirmation.night"
           }
         ],
-        "description": "The copy a notice is given in: its kind, its record's kind, and for a\nresult notice what the record was, so the text can say what the player did\n(decree art. 62-3): a consent (`granted`), the withdrawal of a consent\n(`withdrawn`), or a refusal (`refused`), a `withdrawn` record whose latest\nearlier record of its kind is not a consent. A re-confirmation always\nreports on a consent. A named union keeps the JSON Schema names readable."
+        "description": "The copy a notice is given in: its kind, its record's kind, and for a\nresult notice what the record was, so the text can say what the player did\n(decree art. 62-2): a consent (`granted`), the withdrawal of a consent\n(`withdrawn`), or a refusal (`refused`), a `withdrawn` record whose latest\nearlier record of its kind is not a consent. A re-confirmation always\nreports on a consent (decree art. 62-3). A named union keeps the JSON\nSchema names readable."
       },
       "NotificationOpenPath": {
         "oneOf": [

@@ -3,8 +3,9 @@ npm/@mpgd/platform: minor
 ---
 
 `@mpgd/platform/notifications` gives consent notices one copy per variant, so
-a notice can say whether the player consented, refused, or withdrew, and to
-advertising or to night sending, as decree art. 62-3 requires. It adds
+a result notice can say whether the player consented, refused, or withdrew,
+and to advertising or to night sending (decree art. 62-2), and a
+re-confirmation which consent it confirms (decree art. 62-3). It adds
 `NotificationNoticeVariant` with `notificationNoticeVariants`, including the
 two optional refusal variants, whose text falls back to the withdrawal's
 (`notificationNoticeVariantFallbacks`); `NotificationNoticeCopy` (the
@@ -29,4 +30,4 @@ which the loader checks by the same rules, and can expect a listed notice's
 `variant`; `advertising-notices` moves its notice text there, and the new
 `advertising-notice-variants` vector pushes both re-confirmations and every
 kind of result notice, one refusal in its own text and one in the
-withdrawal's; all forty vectors pass.
+withdrawal's.
