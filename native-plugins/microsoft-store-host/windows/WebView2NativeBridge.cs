@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.Web.WebView2.Core;
+using System.Text.Json;
 
 namespace Mpgd.MicrosoftStore.Host;
 
@@ -18,8 +19,10 @@ public sealed class WebView2NativeBridge : IDisposable
     private bool navigationRejected;
     private string? lastCommittedSource;
     private bool closed;
+    private string? bootstrapScriptId;
+    private int pendingDocumentChecks;
 
-    public WebView2NativeBridge(WebView2 view, Uri startUri, IEnumerable<string> allowedItemIds,
+    private WebView2NativeBridge(WebView2 view, Uri startUri, IEnumerable<string> allowedItemIds,
         INativeStoreOperations operations, Action<Exception>? onTransportError = null)
     {
         ArgumentNullException.ThrowIfNull(view);
@@ -39,6 +42,20 @@ public sealed class WebView2NativeBridge : IDisposable
         core.NewWindowRequested += NewWindowRequested;
         core.WebMessageReceived += WebMessageReceived;
         core.ProcessFailed += ProcessFailed;
+    }
+
+    public static async Task<WebView2NativeBridge> AttachAsync(WebView2 view, Uri startUri,
+        IEnumerable<string> allowedItemIds, INativeStoreOperations operations, Action<Exception>? onTransportError = null)
+    {
+        var bridge = new WebView2NativeBridge(view, startUri, allowedItemIds, operations, onTransportError);
+        try
+        {
+            // Register before the first navigation so even boot-time requests
+            // carry the nonce of the document that actually posted them.
+            bridge.bootstrapScriptId = await bridge.core.AddScriptToExecuteOnDocumentCreatedAsync(WebView2DocumentTransport.Bootstrap);
+            return bridge;
+        }
+        catch { bridge.Dispose(); throw; }
     }
 
     private void NavigationStarting(object? sender, CoreWebView2NavigationStartingEventArgs args)
@@ -115,8 +132,27 @@ public sealed class WebView2NativeBridge : IDisposable
     private async void WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs args)
     {
         if (closed) return;
-        try { await host.HandleMessageAsync(args.Source, args.WebMessageAsJson); }
+        try { await HandleTransportMessageAsync(args.Source, args.WebMessageAsJson); }
         catch (Exception error) { onTransportError?.Invoke(error); }
+    }
+
+    internal async Task HandleTransportMessageAsync(string source, string json)
+    {
+        if (closed || !documentActivated || !origin.Allows(source) || pendingDocumentChecks >= 64
+            || !WebView2DocumentTransport.TryReadRequest(json, out var nonce, out var request)) return;
+        ulong currentNavigation = navigationId;
+        pendingDocumentChecks++;
+        try
+        {
+            // WebMessageReceived can arrive after a same-origin reload commits.
+            // Read the live document, then recheck navigation before entering
+            // the host. Origin alone cannot authenticate a queued old message.
+            string liveNonce = await core.ExecuteScriptAsync(WebView2DocumentTransport.ReadNonceScript);
+            if (closed || currentNavigation != navigationId || !documentActivated
+                || JsonSerializer.Deserialize<string>(liveNonce) != nonce) return;
+            await host.HandleMessageAsync(source, request);
+        }
+        finally { pendingDocumentChecks--; }
     }
 
     public void Dispose()
@@ -132,5 +168,10 @@ public sealed class WebView2NativeBridge : IDisposable
         core.NewWindowRequested -= NewWindowRequested;
         core.WebMessageReceived -= WebMessageReceived;
         core.ProcessFailed -= ProcessFailed;
+        if (bootstrapScriptId is not null)
+        {
+            try { core.RemoveScriptToExecuteOnDocumentCreated(bootstrapScriptId); }
+            catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException) { }
+        }
     }
 }

@@ -27,7 +27,7 @@ On the window's UI thread, initialize WebView2, then attach before navigating:
 ```csharp
 await webView.EnsureCoreWebView2Async();
 StoreContext store = WindowStoreContext.Create(window);
-var bridge = new WebView2NativeBridge(
+var bridge = await WebView2NativeBridge.AttachAsync(
     webView, new Uri(gameConfiguration.StartUri),
     gameConfiguration.AllowedItemIds, gameOwnedOperations);
 window.Closed += (_, _) => bridge.Dispose();
@@ -45,6 +45,13 @@ Queued operations are cancelled and late replies from the previous document are
 suppressed, including navigation
 back to the same URL. Closure detaches handlers and suppresses responses. Use
 one adapter and operation implementation per window.
+
+Await `AttachAsync` before navigating. It installs a document-created script
+that wraps only the native v1 requests with a random per-document nonce; the
+public TypeScript client and v1 payload remain unchanged. Incoming messages must
+match the live document's nonce after a navigation recheck, so queued messages
+from an old page cannot start checkout after a same-origin reload. Other WebView2
+message protocols are preserved. Disposing removes the script registration.
 
 `WindowStoreContext.Create` initializes the SDK with that window's HWND on its
 UI thread. Keep the context in native code. Initialization does not perform
@@ -64,6 +71,8 @@ the declared bounded result records. Invalid results and unexpected exceptions
 become `NATIVE_OPERATION_FAILED`; exception messages never reach the web page.
 Use `NativeBridgeOperationException` for declared user-cancelled,
 identity-unavailable or store-unavailable errors.
+User cancellation of a purchase callback produces a `not-purchased` result,
+matching the existing web commerce runtime's abort semantics.
 
 The game owns Store IDs and offers, MSAL/WAM account selection, backend endpoints,
 SDK product validation and session issuance. Sign-in returns the game backend's
@@ -91,6 +100,9 @@ allowed document commits, invalidate again on load failure, and `Dispose` at
 closure. Invalidate on process failure only when the top-level document exits;
 auto-recovered helper/subframe failures retain it. Lifecycle calls
 and response delivery must share the window UI dispatcher.
+Authenticate each incoming message's document generation before calling the
+host; a source URI alone cannot distinguish queued messages after a same-origin
+reload. The WinUI adapter supplies this transport check automatically.
 
 ## Acceptance scope
 

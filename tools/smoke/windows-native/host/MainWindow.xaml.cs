@@ -15,6 +15,9 @@ public sealed partial class MainWindow : Window
     private bool probing;
     private string bundleSha256 = "";
     private WebView2NativeBridge? bridge;
+    private FixtureStoreOperations? fixtureOperations;
+    private string? previousDocumentNonce;
+    private bool staleDocumentMessageRejected;
     private int bridgeScenario;
     private readonly List<JsonElement> bridgeEvidence = [];
     private bool closed;
@@ -45,7 +48,7 @@ public sealed partial class MainWindow : Window
             // Validate HWND binding on the owning UI thread without performing
             // Store commerce. The context is private to this native host.
             _ = WindowStoreContext.Create(this);
-            AttachFixtureBridge();
+            await AttachFixtureBridge();
             core.AddWebResourceRequestedFilter("https://starter.mpgd.invalid/ci-load-gate.svg", CoreWebView2WebResourceContext.Image);
             core.WebResourceRequested += async (_, request) =>
             {
@@ -105,22 +108,36 @@ public sealed partial class MainWindow : Window
         catch (Exception error) { RecordFailure(error); }
     }
 
-    private void AttachFixtureBridge()
+    private async Task AttachFixtureBridge()
     {
         bridge?.Dispose();
         string item = bridgeScenario == 0 ? "puzzle.coins" : "tower.coins";
-        bridge = new(GameWebView, new Uri("https://starter.mpgd.invalid/index.html"), [item],
-            new FixtureStoreOperations(item, DispatcherQueue, () =>
+        fixtureOperations = new(item, () => DispatcherQueue.HasThreadAccess, () =>
             {
                 foreach (var kind in new[] { CoreWebView2ProcessFailedKind.GpuProcessExited,
                     CoreWebView2ProcessFailedKind.UtilityProcessExited, CoreWebView2ProcessFailedKind.SandboxHelperProcessExited,
                     CoreWebView2ProcessFailedKind.FrameRenderProcessExited, CoreWebView2ProcessFailedKind.RenderProcessUnresponsive })
                     bridge!.HandleProcessFailure(kind);
-            }), RecordFailure);
+            });
+        bridge = await WebView2NativeBridge.AttachAsync(GameWebView,
+            new Uri("https://starter.mpgd.invalid/index.html"), [item], fixtureOperations, RecordFailure);
     }
 
     private async Task<string> StartBridgeProbe()
     {
+        if (bridgeScenario == 1 && !staleDocumentMessageRejected)
+        {
+            if (previousDocumentNonce is null) throw new InvalidOperationException("Missing previous document nonce.");
+            var stale = JsonSerializer.Serialize(new {
+                transport = WebView2DocumentTransport.Protocol, documentNonce = previousDocumentNonce,
+                request = new { protocol = NativeBridgeProtocol.Protocol, requestId = "stale-document",
+                    method = NativeBridgeProtocol.PurchaseRequestMethod, payload = new { itemId = "tower.coins" } }
+            });
+            int before = fixtureOperations!.PurchaseCalls;
+            await bridge!.HandleTransportMessageAsync("https://starter.mpgd.invalid/index.html", stale);
+            if (fixtureOperations.PurchaseCalls != before) throw new InvalidOperationException("Old document started a checkout.");
+            staleDocumentMessageRejected = true;
+        }
         string item = JsonSerializer.Serialize(bridgeScenario == 0 ? "puzzle.coins" : "tower.coins");
         return await GameWebView.CoreWebView2.ExecuteScriptAsync("""
             globalThis.__mpgdBridgeProbe = { complete: false, passed: false };
@@ -162,13 +179,15 @@ public sealed partial class MainWindow : Window
                 bridgeEvidence.Add(evidence.Clone());
                 if (bridgeScenario == 0)
                 {
+                    previousDocumentNonce = JsonSerializer.Deserialize<string>(await GameWebView.CoreWebView2.ExecuteScriptAsync(WebView2DocumentTransport.ReadNonceScript));
                     bridgeScenario = 1;
-                    AttachFixtureBridge();
+                    await AttachFixtureBridge();
                     GameWebView.CoreWebView2.Navigate("https://starter.mpgd.invalid/index.html");
                     return;
                 }
             }
             state["nativeHostContracts"] = JsonSerializer.SerializeToElement(bridgeEvidence);
+            state["staleDocumentMessageRejected"] = JsonSerializer.SerializeToElement(staleDocumentMessageRejected);
             state["bundleSha256"] = JsonSerializer.SerializeToElement(bundleSha256);
             state["observedAt"] = JsonSerializer.SerializeToElement(DateTime.UtcNow.ToString("o"));
             var path = Path.Combine(ApplicationData.Current.LocalFolder.Path, "starter-ready.json");

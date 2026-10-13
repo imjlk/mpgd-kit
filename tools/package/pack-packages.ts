@@ -35,6 +35,7 @@ for (const workspacePackage of discoverPublishablePackages()) {
         'dist/windows-host/Core/Mpgd.MicrosoftStore.Host.csproj',
         'dist/windows-host/Core/NativeBridgeHost.cs',
         'dist/windows-host/WinUI/WebView2NativeBridge.cs',
+        'dist/windows-host/WinUI/WebView2DocumentTransport.cs',
         'dist/windows-host/WinUI/WindowStoreContext.cs']
       : []),
     ...expectedTemplateFiles(workspacePackage.dir, workspacePackage.packageJson),

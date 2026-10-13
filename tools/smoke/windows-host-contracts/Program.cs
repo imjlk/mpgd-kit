@@ -7,6 +7,13 @@ string Message(string id, string method = "identity.signIn", object? payload = n
     JsonSerializer.Serialize(new { protocol = NativeBridgeProtocol.Protocol, requestId = id, method, payload = payload ?? new { } });
 bool Ok(string response) => JsonDocument.Parse(response).RootElement.GetProperty("ok").GetBoolean();
 var wireFixtures = new Dictionary<string, string>();
+string envelope = JsonSerializer.Serialize(new { transport = WebView2DocumentTransport.Protocol,
+    documentNonce = new string('a', 32), request = JsonSerializer.Deserialize<JsonElement>(Message("document")) });
+Assert(WebView2DocumentTransport.TryReadRequest(envelope, out var docNonce, out var docRequest)
+    && docNonce == new string('a', 32) && docRequest == Message("document"), "document envelope preserves v1 request");
+foreach (string invalidEnvelope in new[] { Message("unwrapped"), "null", "{", envelope.Replace(new string('a', 32), "bad-nonce"),
+    envelope.Replace(WebView2DocumentTransport.Protocol, "other"), new string('x', 66049) })
+    Assert(!WebView2DocumentTransport.TryReadRequest(invalidEnvelope, out _, out _), "reject malformed document transport");
 var allowed = new HashSet<string>(["wire.coins"], StringComparer.Ordinal);
 var wireOperations = new Operations("wire.coins");
 foreach (BridgeCommand command in new BridgeCommand[] { new GetCatalogDetailsCommand("wire", ["wire.coins"]), new SignInCommand("wire"), new ListPurchasesCommand("wire"), new RequestPurchaseCommand("wire", "wire.coins") })
@@ -28,7 +35,6 @@ wireFixtures["catalog.getDetails.large"] = NativeBridgeResult.Success(new GetCat
 Assert(wireFixtures["catalog.getDetails.large"].Length > NativeBridgeProtocol.MaximumMessageLength, "valid large catalog response is not limited by request size");
 using (var largeHost = new NativeBridgeHost(new(new Uri("https://wire.example.invalid/")), largeIds.Append("wire.coins"), wireOperations, new Dispatcher(), _ => { }))
     Assert(largeHost.ActivateDocument("https://wire.example.invalid/"), "configured product allowlist may exceed per-request item limit");
-if (args.Length == 1) File.WriteAllText(args[0], JsonSerializer.Serialize(wireFixtures));
 foreach (string malformed in new[] { "null", "{}", "{", new string('x', 65537), Message("bad", "catalog.getDetails", new { itemIds = Array.Empty<string>() }), Message("bad", "identity.signIn", new { extra = true }), Message("bad", "purchase.request", new { itemId = "wire.coins", extra = true }), Message("bad", "catalog.getDetails", new { itemIds = new[] { "wire.coins", "wire.coins" } }), Message("bad", "unknown.method") })
     Assert(!NativeBridgeProtocol.TryParseCommand(malformed, allowed, out _, out _), "reject malformed protocol request");
 void InvalidResult(BridgeCommand command, object result)
@@ -81,6 +87,10 @@ foreach (string game in new[] { "puzzle", "tower" })
     responses.Clear();
     await host.HandleMessageAsync(source, Message("cancel-user"));
     Assert(responses.Single().Contains("USER_CANCELLED"), "declared failure");
+    responses.Clear();
+    await host.HandleMessageAsync(source, Message("cancel-purchase", "purchase.request", new { itemId = item }));
+    Assert(Ok(responses.Single()) && responses.Single().Contains("not-purchased"), "checkout cancellation uses the public non-purchase result");
+    wireFixtures["purchase.request.cancel"] = responses.Single();
     operations.Error = null;
     operations.InvalidResult = true;
     responses.Clear();
@@ -122,6 +132,7 @@ foreach (string game in new[] { "puzzle", "tower" })
     await active;
     Assert(responses.Count == 0 && !host.ActivateDocument(source), "closed window suppresses response");
 }
+if (args.Length == 1) File.WriteAllText(args[0], JsonSerializer.Serialize(wireFixtures));
 Console.WriteLine($"Native host contract checks passed: {checks}");
 
 sealed class Dispatcher : INativeBridgeDispatcher
@@ -163,6 +174,7 @@ sealed class Operations(string item) : INativeStoreOperations
     public Task<NativePurchaseResult> RequestPurchaseAsync(RequestPurchaseCommand command, CancellationToken cancellation)
     {
         Calls++;
-        return Task.FromResult(new NativePurchaseResult("succeeded", item));
+        return Error is { } error ? Task.FromException<NativePurchaseResult>(error)
+            : Task.FromResult(new NativePurchaseResult("succeeded", item));
     }
 }

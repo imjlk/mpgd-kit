@@ -10,5 +10,6 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="$(NativeHostSourceDirectory)/Core/*.cs" Link="Host/%(Filename)%(Extension)" />
+    <Compile Include="$(NativeTransportSourceFile)" Link="Host/WebView2DocumentTransport.cs" />
   </ItemGroup>
 </Project>

@@ -118,14 +118,21 @@ public sealed class NativeBridgeHost : IDisposable
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
                 catch (NativeBridgeOperationException error)
                 {
-                    string code = error.Failure switch
+                    if (command is RequestPurchaseCommand && error.Failure == NativeBridgeFailure.UserCancelled)
                     {
-                        NativeBridgeFailure.UserCancelled => "USER_CANCELLED",
-                        NativeBridgeFailure.IdentityUnavailable => "IDENTITY_UNAVAILABLE",
-                        NativeBridgeFailure.StoreUnavailable => "STORE_UNAVAILABLE",
-                        _ => "NATIVE_OPERATION_FAILED",
-                    };
-                    response = NativeBridgeResult.Failure(command.RequestId, command.Method, code);
+                        response = NativeBridgeResult.Success(command, new NativePurchaseResult("not-purchased"), allowedItems);
+                    }
+                    else
+                    {
+                        string code = error.Failure switch
+                        {
+                            NativeBridgeFailure.UserCancelled => "USER_CANCELLED",
+                            NativeBridgeFailure.IdentityUnavailable => "IDENTITY_UNAVAILABLE",
+                            NativeBridgeFailure.StoreUnavailable => "STORE_UNAVAILABLE",
+                            _ => "NATIVE_OPERATION_FAILED",
+                        };
+                        response = NativeBridgeResult.Failure(command.RequestId, command.Method, code);
+                    }
                 }
                 catch { response = NativeBridgeResult.Failure(command.RequestId, command.Method, "NATIVE_OPERATION_FAILED"); }
                 finally { serial.Release(); }
