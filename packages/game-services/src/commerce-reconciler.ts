@@ -79,11 +79,14 @@ export interface CommercePurchaseOperationRecord {
   readonly updatedAt: string;
   /** The game's purchase input; absent for a purchase discovered from the store. */
   readonly input?: GameServicesPurchaseInput;
+  /** Full checkout identity, including an optional offer or quantity, bound before launch. */
+  readonly checkoutInput?: RequestPurchaseInput;
   readonly purchase?: StorePurchase;
   /** Saved before the first send and resent unchanged on later passes. */
   readonly request?: VerifyPurchaseRequest;
   readonly response?: VerifyPurchaseResponse;
   readonly ledgerEntryId?: string;
+  /** A retryable error on `requested` means the provider proved checkout never started. */
   readonly error?: CommerceErrorInfo;
   readonly revokedBy?: string;
 }
@@ -111,7 +114,15 @@ export function isCommercePurchaseOperationRecord(
 export function summarizeCommercePurchaseOperation(
   record: CommercePurchaseOperationRecord,
 ): CommercePurchaseSummaryStatus {
+  if (isRetryableBeforeLaunch(record)) {
+    return 'failed';
+  }
   return summarizeCommercePurchaseState(record.state);
+}
+
+function isRetryableBeforeLaunch(record: CommercePurchaseOperationRecord): boolean {
+  return record.state === 'requested' && record.error?.retryable === true
+    && record.purchase === undefined && record.request === undefined;
 }
 
 /**
@@ -160,9 +171,9 @@ export function toGameServicesPurchaseResult(
 
 function toPurchaseResult(record: CommercePurchaseOperationRecord): PurchaseResult {
   const purchase = record.purchase;
-  if (record.state === 'cancelled' || record.state === 'failed') {
+  if (record.state === 'cancelled' || record.state === 'failed' || isRetryableBeforeLaunch(record)) {
     return {
-      status: record.state,
+      status: record.state === 'cancelled' ? 'cancelled' : 'failed',
       entitlementIds: [],
       ...(record.error === undefined ? {} : { diagnostic: toDiagnostic(record.error) }),
     };
@@ -673,6 +684,25 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     return { created: reserved.created, record: reserved.record };
   };
 
+  // Revising a refused pre-launch attempt does not change its lifecycle state.
+  // Keep the identity durable, and clear the refusal before a deliberate retry.
+  const reviseRequestedError = async (
+    record: CommercePurchaseOperationRecord,
+    error: CommerceErrorInfo | undefined,
+  ): Promise<CommercePurchaseOperationRecord> => {
+    const { error: _previousError, ...rest } = record;
+    const next: CommercePurchaseOperationRecord = {
+      ...rest,
+      ...(error === undefined ? {} : { error }),
+      revision: record.revision + 1,
+      updatedAt: now(),
+    };
+    await journal.replace(record.revision, next);
+    remember(next);
+    retryAt.delete(record.idempotencyKey);
+    return next;
+  };
+
   const readRecord = async (
     idempotencyKey: string,
   ): Promise<CommercePurchaseOperationRecord | undefined> => {
@@ -971,6 +1001,11 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       for (;;) {
         switch (record.state) {
           case 'requested':
+            if (isRetryableBeforeLaunch(record)) {
+              // Only an explicit same-key purchase retries a proven unopened
+              // checkout; recovery must never open a payment surface itself.
+              return;
+            }
             if (isInFlight(record.idempotencyKey)) {
               return;
             }
@@ -1272,6 +1307,9 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
   }
 
   const journaled = (record: CommercePurchaseOperationRecord): RequestPurchaseResult => {
+    if (isRetryableBeforeLaunch(record) && record.error !== undefined) {
+      return { outcome: 'failed', error: record.error };
+    }
     if ((record.state === 'cancelled' || record.state === 'failed') && record.error !== undefined) {
       return { outcome: record.state, error: record.error };
     }
@@ -1312,21 +1350,15 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       if (
         existing.logicalId !== request.logicalId
         || (existing.input !== undefined && existing.input.source !== request.source)
+        || (existing.checkoutInput !== undefined
+          && (existing.checkoutInput.offerId !== request.offerId
+            || existing.checkoutInput.quantity !== request.quantity))
       ) {
         throw new Error('Purchase idempotency key is bound to another product or source.');
       }
-      return { kind: 'answered', result: journaled(existing) };
-    }
-    const product = await resolveProduct({ logicalId: request.logicalId });
-    if (product === undefined) {
-      return {
-        kind: 'answered',
-        result: failedOutcome(
-          new CommerceError('ITEM_UNAVAILABLE', {
-            message: `Store ${storeId} does not sell ${request.logicalId}.`,
-          }),
-        ),
-      };
+      if (!isRetryableBeforeLaunch(existing) || isInFlight(request.idempotencyKey)) {
+        return { kind: 'answered', result: journaled(existing) };
+      }
     }
     const capabilitiesNow = await readCapabilities(true);
     if (capabilitiesNow === undefined) {
@@ -1339,13 +1371,29 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         ),
       };
     }
-    if (capabilitiesNow.availability === 'temporarily-unavailable') {
+    if (capabilitiesNow.availability !== 'available') {
+      const code = capabilitiesNow.availability === 'configuration-required'
+        ? 'CONFIGURATION_REQUIRED'
+        : capabilitiesNow.availability === 'action-required'
+          ? 'ACTION_REQUIRED'
+          : 'STORE_UNAVAILABLE';
       return {
         kind: 'answered',
         result: failedOutcome(
-          new CommerceError('STORE_UNAVAILABLE', {
-            message: `Store ${storeId} is temporarily unavailable.`,
-            retryable: true,
+          new CommerceError(code, {
+            message: `Store ${storeId} is ${capabilitiesNow.availability}.`,
+            retryable: capabilitiesNow.availability === 'temporarily-unavailable',
+          }),
+        ),
+      };
+    }
+    const product = await resolveProduct({ logicalId: request.logicalId });
+    if (product === undefined) {
+      return {
+        kind: 'answered',
+        result: failedOutcome(
+          new CommerceError('ITEM_UNAVAILABLE', {
+            message: `Store ${storeId} does not sell ${request.logicalId}.`,
           }),
         ),
       };
@@ -1386,19 +1434,20 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         })),
       };
     }
-    const { created, record } = await reserve({
+    const { created, record } = existing === undefined ? await reserve({
       idempotencyKey: request.idempotencyKey,
       store: storeId,
       logicalId: product.logicalId,
       productKind: product.kind,
       origin: 'game',
       state: 'requested',
+      checkoutInput: { ...request },
       input: {
         productId: product.logicalId,
         source: request.source,
         idempotencyKey: request.idempotencyKey,
       },
-    });
+    }) : { created: true, record: await reviseRequestedError(existing, undefined) };
     if (!created) {
       return { kind: 'answered', result: journaled(record) };
     }
@@ -1426,9 +1475,10 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     record: CommercePurchaseOperationRecord,
     product: CommerceReconcilerProduct,
     result: RequestPurchaseResult,
+    notStarted: boolean,
   ): Promise<RequestPurchaseResult> => {
     try {
-      return await journalAnswer(request, record, product, result);
+      return await journalAnswer(request, record, product, result, notStarted);
     } catch (error) {
       fail('journal', error, record.idempotencyKey);
       return result;
@@ -1440,6 +1490,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
     reserved: CommercePurchaseOperationRecord,
     product: CommerceReconcilerProduct,
     result: RequestPurchaseResult,
+    notStarted: boolean,
   ): Promise<RequestPurchaseResult> => {
     // A sheet open past inFlightTimeoutMs may have been ended by a pass as a
     // stale attempt; the journal's answer stands, and a purchase the store
@@ -1495,6 +1546,8 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
       } else if (purchase.state === 'purchased') {
         await write(launched, 'purchased', { purchase });
       }
+    } else if (result.outcome === 'failed' && result.error.retryable && notStarted) {
+      await reviseRequestedError(record, result.error);
     } else {
       await write(record, result.outcome, { error: result.error });
     }
@@ -1515,12 +1568,22 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         // The store call runs outside the lock: the sheet may stay open for
         // minutes, and events arriving meanwhile are reconciled right away.
         let answer: RequestPurchaseResult;
+        let notStarted = false;
+        let presentationSequence = 0;
+        const unsubscribePresentation = provider.presentation?.subscribe((event) => {
+          if (event.idempotencyKey === request.idempotencyKey && event.sequence > presentationSequence) {
+            presentationSequence = event.sequence;
+            notStarted = event.state === 'not-started';
+          }
+        });
         try {
           answer = await provider.requestPurchase(request);
         } catch (error) {
           answer = failedOutcome(error);
+        } finally {
+          unsubscribePresentation?.();
         }
-        result = await withLock(() => recordAnswer(request, prepared.record, prepared.product, answer));
+        result = await withLock(() => recordAnswer(request, prepared.record, prepared.product, answer, notStarted));
       }
     } finally {
       if (owned) {

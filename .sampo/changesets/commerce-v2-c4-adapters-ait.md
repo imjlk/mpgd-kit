@@ -41,3 +41,5 @@ Toss adapter. The `commerce.v2.*` provider is the only commerce path.
   `createAitCommerceProvider()`, loses `readIapEntitlements`. The provider's
   behavior (purchase, available purchases, `finishTransaction`,
   `restorePurchases`) is unchanged.
+
+Gateway commerce capabilities follow the same pinned host bridge as purchase commands and events after a global bridge replacement.

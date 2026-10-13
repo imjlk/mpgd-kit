@@ -193,10 +193,19 @@ export function createAitPlatformGateway(input: {
   return {
     target: 'ait',
     async getCapabilities() {
-      return toGatewayCapabilities(
-        await request<Readonly<Record<string, unknown>>>('runtime.getCapabilities', {}),
+      const bridgeNow = input.bridge ?? getBridge() ?? input.fallbackBridge;
+      const capabilities = toGatewayCapabilities(
+        await requestOn<Readonly<Record<string, unknown>>>(bridgeNow, 'runtime.getCapabilities', {}),
         commerce !== undefined,
       );
+      if (commerce !== undefined && commerceBridge !== bridgeNow) {
+        const pinned = toGatewayCapabilities(
+          await requestOn<Readonly<Record<string, unknown>>>(commerceBridge, 'runtime.getCapabilities', {}),
+          true,
+        );
+        return { ...capabilities, commerce: pinned.commerce };
+      }
+      return capabilities;
     },
     identity: {
       getPlayer: () => request('identity.getPlayer', {}),

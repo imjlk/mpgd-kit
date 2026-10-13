@@ -51,3 +51,5 @@ different deployment from the durable journal before contacting the backend.
 
 Transient store readiness is refused before reserving a purchase journal entry,
 so the same idempotency key can be retried when the store becomes available.
+
+Provider readiness is checked before optional catalog resolution. A retryable provider failure whose presentation source proves checkout never started stays requested with its diagnostic, so the original bound key can be retried across restarts. Recovery does not reopen the payment surface; failures without that proof retain their prior terminal behavior.
