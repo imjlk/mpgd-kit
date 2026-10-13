@@ -420,12 +420,18 @@ export interface NotificationConsentRecord {
   readonly textVersion?: string;
 }
 
+export type NotificationNoticeVariant =
+  | `consent-result.${'advertising' | 'night'}.${'granted' | 'withdrawn' | 'refused'}`
+  | `reconfirmation.${'advertising' | 'night'}`;
+
 export interface NotificationNotice {
   readonly kind: 'consent-result' | 'reconfirmation';
   /** The advertising or night record the notice reports on, with its date. */
   readonly record: Pick<NotificationConsentRecord, 'kind' | 'state' | 'at' | 'textVersion'>;
   /** The last Asia/Seoul calendar date the notice may be given, as YYYY-MM-DD. */
   readonly dueBy: string;
+  /** The variant of the catalog's notices.copy it is given in, such as 'consent-result.night.refused'. */
+  readonly variant: NotificationNoticeVariant;
 }
 
 export interface ReminderResult {
@@ -433,8 +439,8 @@ export interface ReminderResult {
   readonly status:
     | 'scheduled' | 'replaced' | 'cancelled'
     | 'permission-required' | 'request-missing' | 'preference-off'
-    | 'advertising-consent-missing' | 'frequency-capped' | 'capacity-exceeded'
-    | 'action-required' | 'unavailable';
+    | 'advertising-consent-missing' | 'frequency-capped' | 'quiet-hours'
+    | 'capacity-exceeded' | 'action-required' | 'unavailable';
 }
 
 export interface NotificationRuntime {
@@ -466,7 +472,12 @@ export interface NotificationRuntime {
   };
   readonly notices: {
     list(): Promise<readonly NotificationNotice[]>;
-    recordShown(input: { readonly kind: NotificationNotice['kind']; readonly recordAt: string }): Promise<void>;
+    /** Records a listed notice, passed as is or by its name: its kind, its record's kind and time, and its `dueBy`. */
+    recordShown(input: NotificationNotice | {
+      readonly kind: NotificationNotice['kind'];
+      readonly record: { readonly kind: 'advertising' | 'night'; readonly at: string };
+      readonly dueBy: string;
+    }): Promise<void>;
   };
   openSettings(): Promise<'opened' | 'unavailable'>;
   subscribe(listener: (event: NotificationEvent) => void): () => void;
@@ -478,8 +489,11 @@ Runtime rules:
 - **Start.** The runtime subscribes to the provider before `start` resolves
   and buffers every provider event until the game's first `subscribe`. That
   subscriber receives them once, in order; later subscribers receive only
-  later events. The runtime itself acts on `endpoint-changed` and
+  later events. After `stop()`, the next `start` buffers again for its first
+  subscriber. The runtime itself acts on `endpoint-changed` and
   `permission-changed` as they arrive.
+- **Topics.** A read, request, or revocation takes each topic once, however
+  often the call lists it, so one prompt never writes two acceptances.
 - **Reads.** `getPermission` returns the provider snapshot. A topic the host
   reports as `unknown` takes the latest backend record when one exists, and
   `sources` says which answered. A game-rendered consent is one boolean at the
@@ -535,14 +549,23 @@ Runtime rules:
     action (`source: 'player'`).
   - **Before authentication.** A record observed before authentication is sent
     at authentication; only the latest per kind and scope is kept.
+- **Backend calls.** A call that reaches the backend (a player action, a
+  server reminder, `reminders.cancel`'s server part, and `notices`) belongs to
+  the player signed in when it began.
+  - Before sign-in it throws `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`.
+  - It is refused the same way when another player signed in since it began,
+    so it never reads or changes the next player's state.
 - **Registration.** For `remote.addressing: 'device'`, the runtime sends the
   provider's registration, with the device's current permission, to the
   backend for the authenticated player.
   - **When it sends.** After a grant; whenever an `endpoint-changed` event
     arrives (a rotated FCM token replaces the old address for that
-    installation); whenever a read or request changes the device's decided
-    permission; when a player authenticates (an account switch moves the
-    installation to the new player); and on `register()`.
+    installation); whenever a read, a request, or a revocation changes the
+    device's decided permission; when a player authenticates (an account
+    switch moves the installation to the new player); at start and on each
+    read, once the registration the backend last acknowledged is older than
+    7 days, so the endpoint of a device in use never goes stale; and on
+    `register()`.
   - **Before authentication.** A registration needs an authenticated player;
     one that arrives earlier is sent at authentication.
   - **Skipping repeats.** The runtime persists the last registration the
@@ -559,13 +582,22 @@ Runtime rules:
     installation is revoked, logged out, or expires, so a shared device stops
     receiving the previous player's notifications even when an unbind never
     arrives.
+    - `unregister()` also cancels the device's pending local reminders, which
+      belong to the player leaving. It cancels them even when the unbind
+      fails, such as on an offline logout, and then throws the unbind's
+      error.
+    - The installation stays unbound, across restarts, until `register()` or
+      the next authentication.
 - **Local reminders.** On start, on authentication, and after each backend
   read, the runtime compares `listLocal()` with the latest backend preference
   and permission and cancels the reminders that no longer pass, because a
   preference changed on another device never reaches this one as an event.
+  It also cancels, without waiting for the backend, every pending reminder
+  whose topic no longer takes the local route: an app update removed the
+  topic from the catalog or took away its `local` channel.
 - **Restarts.** A restart drops runtime memory and listeners. Host state,
-  backend records, the persisted registration, and the backend
-  authentication persist.
+  backend records, the persisted registration, the unbound state after
+  `unregister()`, and the backend authentication persist.
 
 ## Topic catalog {#topic-catalog}
 
@@ -577,7 +609,27 @@ products and ad placements.
 {
   "version": "2026-10-12",
   "defaultLocale": "ko",
-  "notices": { "topic": "consent-notice" },
+  "notices": {
+    "topic": "consent-notice",
+    "copy": {
+      "ko": {
+        "consent-result.advertising.granted": {
+          "title": "[My Game] 광고성 알림 수신 동의 결과",
+          "body": "{{consentDate}}에 하신 광고성 알림 수신 동의가 처리됐어요. 알림 설정에서 언제든 철회할 수 있어요."
+        },
+        "consent-result.advertising.withdrawn": {
+          "title": "[My Game] 광고성 알림 수신 거부 결과",
+          "body": "{{consentDate}}에 하신 광고성 알림 수신 거부가 처리됐어요."
+        },
+        "reconfirmation.night": {
+          "title": "[My Game] 야간 광고성 알림 수신 동의 확인",
+          "body": "{{consentDate}}에 야간(21시~8시) 광고성 알림 수신에 동의하셨어요. 동의를 유지하려면 따로 하실 일은 없고, 철회하려면 알림 설정에서 야간 수신을 끄면 돼요."
+        }
+        // …and consent-result.night.granted, consent-result.night.withdrawn,
+        // and reconfirmation.advertising; the refusal texts are optional
+      }
+    }
+  },
   "topics": [
     {
       "id": "energy-full",
@@ -595,6 +647,13 @@ products and ad placements.
         "android": { "channelId": "reminders" },
         "reddit": { "title": "Energy full", "body": "Your energy is full again." }
       }
+    },
+    {
+      "id": "consent-notice",
+      "purpose": "service",
+      "channels": ["remote"],
+      "route": "/settings/notifications",
+      "targets": { "android": { "channelId": "notices" } }
     }
   ]
 }
@@ -620,7 +679,7 @@ products and ad placements.
     template data.
   - **Free-form providers.** A topic mapped to one needs that text, for a push
     and for a local notification alike: `copy`, or a `title` and a `body` in
-    the mapping.
+    the mapping. The notice topic's text is `notices.copy`.
 - `targets` keys are open target names. Each provider declares the mapping
   fields it needs, and the validator checks the catalog against the providers
   a target enables:
@@ -629,20 +688,76 @@ products and ad placements.
     agreement statement.
   - **Devvit** needs `title` ≤ 60 and `body` ≤ 100 characters and may carry a
     default `link`, a `t3_` or `t1_` id.
-- An `advertising` topic must not map to a provider whose
-  `remote.purposes` excludes it, and it may not declare the `local` channel:
-  a device-scheduled advertisement could not be withdrawn, labelled, or held
-  for the night window by the server. The validator reports both before
-  release.
+  - A field's `pattern` is read with the `u` flag. The validator reports a
+    pattern that does not compile instead of throwing.
+  - `agreement: 'none'` must not map to a `per-send` provider. Such a topic
+    never prompts, so no send would have the acceptance gate step 3 needs.
+- A topic with the `remote` channel must not map to a provider whose
+  `remote.purposes` excludes its purpose, because gate step 1 would refuse
+  every send (`purpose-unsupported`). An `advertising` topic also needs a
+  provider that delivers it as free-form content and, under the Korean rules,
+  can carry an expiry and the opt-out action. It may not declare the `local`
+  channel: a device-scheduled advertisement could not be withdrawn,
+  labelled, or held for the night window by the server. The validator
+  reports each of these before release.
 - Optional `frequency` (`{ "maxPerDay": n }`), `quietHours`
   (`{ "start": "22:00", "end": "08:00" }`), and `deferrable` (default
   `true`) are applied by the [policy gate](#policy-gate), steps 6 and 7, and
   by the local route in [Reminders](#reminders).
-- `notices.topic` names a `service` topic. When the deployment enables the
-  Korean rules, the server sends overdue consent notices through it (see
-  [Consent records](#consent-records)). Given the deployment settings, the
-  validator reports a catalog that has an `advertising` topic but no notice
-  topic under those rules.
+- `notices` declares the consent notices the server sends when the
+  deployment enables the Korean rules (see
+  [Consent records](#consent-records)):
+  - **`notices.topic`** names a `service` topic with the `remote` channel,
+    which keeps only the delivery settings. It declares no `copy` and no
+    `local` channel, and its mappings carry no `title` or `body`, not even one
+    alone. It maps to no provider that sends a host template or its mapping's
+    own text, which could not state the record.
+  - **`notices.copy`** maps each locale to one `{ title, body }` per notice
+    variant: `consent-result.advertising.granted`,
+    `consent-result.advertising.withdrawn`, `consent-result.night.granted`,
+    `consent-result.night.withdrawn`, `reconfirmation.advertising`, and
+    `reconfirmation.night`. One notice topic can then say whether the player
+    consented, refused, or withdrew, and to advertising or to night sending.
+  - **Contents.** The copy must carry what the decree requires; the server
+    fills only the date.
+    - A result notice (§50⑦, decree art. 62-2) gives the sender's name, the
+      act (a consent, a refusal, or a withdrawal) and its date, and the
+      processing result.
+    - A re-confirmation (§50⑧, decree art. 62-3(2)) gives the sender's name,
+      the consent and its date, and how to keep or withdraw it.
+  - **Refusals.** A refusal is recorded as `withdrawn`: it is a `withdrawn`
+    record whose latest earlier record of its kind is not a consent. The
+    optional `consent-result.advertising.refused` and
+    `consent-result.night.refused` give its text. Without one, a refusal is
+    given in the withdrawal's text, which must then read for a refusal too.
+  - **Night re-confirmation.** A night consent stands, and is re-confirmed,
+    after the player withdraws advertising consent, so the
+    `reconfirmation.night` text must not say the player still receives night
+    advertising.
+  - **One setting.** The backend takes the whole `notices` block as is: the
+    topic the scheduler sends through, and the copy. No deployment setting
+    names the notice topic.
+  - **Placeholders.** A notice's title and body may use only
+    `{{consentDate}}`, and each variant uses it in its title or its body,
+    because a notice states the date of the act it reports on. A brace left
+    outside a `{{name}}` placeholder, as in `{consentDate}`,
+    `{{consent.date}}`, or full-width braces, would reach the player as
+    written.
+  - **Validation.** The validator reports a notice topic that breaks these
+    rules, a missing `notices.copy`, one without `defaultLocale` (matched
+    without regard to case), a locale without one of the six required
+    variants, an unknown variant, a blank title or body, a variant without
+    `{{consentDate}}`, any other placeholder, and a stray brace. The backend
+    and the vector loader check `notices.copy` by the same rules
+    (`notificationNoticeCopyIssues`). Issue paths spell locale and variant
+    keys in brackets, as in
+    `notices.copy["ko-KR"]["reconfirmation.night"].title`.
+  - **Korean rules.** Given the deployment settings, under the Korean rules
+    with an `advertising` topic, the validator reports a missing notice topic
+    and a target that maps an advertising topic but not the notice topic. A
+    provider that sends its mapping's own text can carry advertising but not
+    the notice topic, so the validator reports an advertising topic mapped to
+    it, once, at that mapping.
 
 ## Reminders {#reminders}
 
@@ -669,6 +784,11 @@ A reminder `key` names one reminder per player across both routes:
 - `cancel` removes the key from each route that has it and answers the route
   where it was found, or `{ route: 'none', status: 'cancelled' }` when neither
   had it.
+  - Both routes have it only when a local reminder was set while signed out,
+    which cannot remove the server one. `cancel` then removes both and answers
+    `local`, the route of the latest `set`.
+  - Signed out, `cancel` still removes a local reminder, then throws
+    `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` for the server part.
 - While the provider is `action-required`, `set` answers the route it would
   take with `status: 'action-required'` and stores nothing. `cancel` still
   removes a local reminder and answers `action-required` for the server part.
@@ -690,12 +810,18 @@ the [policy gate](#policy-gate) it can evaluate on the client:
 1. delivery permission, whose `permission-denied` the local route reports as
    `permission-required`;
 2. the topic preference (`request-missing`, `preference-off`);
-3. `frequency.maxPerDay`, counted over the topic's pending local reminders
+3. the topic's `quietHours`, as gate step 6 applies them:
+   - a `fireAt` inside them moves to their end, as a server send would be
+     deferred;
+   - a clock change can make that end fall inside the next window, so the
+     move repeats; after six windows the reminder answers `quiet-hours`;
+   - a topic with `deferrable: false` is not scheduled inside them
+     (`quiet-hours`), as the gate would suppress its send;
+4. `frequency.maxPerDay`, counted over the topic's pending local reminders
    whose `fireAt` falls within any 24 hours (`frequency-capped`).
 
 Advertising topics never take the local route (see the
-[topic catalog](#topic-catalog)). A local `fireAt` inside the topic's
-`quietHours` moves to their end, as a server send would be deferred.
+[topic catalog](#topic-catalog)), so the night window does not apply to it.
 
 Server reminders apply gate steps 3 to 5 at set time against the backend's
 records (or the host read for a server-readable provider). They answer
@@ -707,7 +833,8 @@ Pending local reminders follow later changes. When a topic's preference
 becomes `withdrawn`, or the device's delivery permission stops being
 `granted`, the runtime cancels that topic's (or every) pending local
 reminder, because the device would otherwise still show them. The
-[runtime's reconciliation](#runtime) catches changes made on another device.
+[runtime's reconciliation](#runtime) catches changes made on another device,
+and topics an app update took off the local route.
 
 Local reminders use inexact timing:
 
@@ -721,6 +848,11 @@ Local reminders use inexact timing:
 
 Server reminders are keyed by player and `key`: setting the same key replaces
 the pending reminder, and cancelling removes it.
+
+- Replacing or cancelling also stops a send of the reminder that waits
+  (`deferred`) or whose provider answer was `ambiguous` (`in-flight`); the
+  scheduler replays neither, and `cancel` answers `remote`.
+- A send the provider may already have accepted cannot be recalled.
 
 ## Opens {#opens}
 
@@ -822,31 +954,97 @@ functions over Korean calendar dates (Asia/Seoul), and `dueBy` is the last
 day the notice may be given:
 
 - **Result notice.** `dueBy` is 14 days after the record's date, counted from
-  the next day, for every consent, refusal, or withdrawal.
+  the next day, for every consent, refusal, or withdrawal. It is listed as
+  soon as its record exists.
 - **Re-confirmation notice.** It is due every two years, counted from the date
   of the latest consent of that kind:
   - The n-th notice is due by the day before the date 2n years after the
     consent date; a 29 February consent date uses 28 February.
-  - Each one is listed once the previous one is recorded. Silence after a
-    notice keeps the consent, and the series continues.
+  - The first is listed from 60 days before its `dueBy`, and each later one
+    from 60 days before its own `dueBy` once the one before it is recorded.
+    Silence after a notice keeps the consent, and the series continues.
   - A new consent restarts the count, and a withdrawal ends it.
 
-The backend lists due notices with the record they report on, including its
-date, because the notice must state it (decree art. 62-3(2)). It also records
-each notice given: the kind, the record's date, the channel (`in-game`,
-`push`, or `other`), and the time.
+A listed notice stays listed after its `dueBy` until it is recorded.
+
+A notice is named by its kind, the record it reports on (the record's kind
+and time), and its `dueBy`.
+
+- **Record times.** The backend dates each of a player's records at least
+  1 ms after the previous one, so a record's kind and time name it.
+- **Precision.** A name reads its record's time to the millisecond. Digits
+  past the millisecond are dropped, as in the
+  [canonical form](#timestamps).
+- **Distinct names.** Every re-confirmation of one consent has its own name,
+  and so do the notices of the `advertising` and `night` records that one
+  `setAdvertisingConsent` call writes.
+
+The backend lists notices with the record they report on, including its
+date, because the notice must state it (decree arts. 62-2 and 62-3(2)). Each
+listed notice carries `variant`, the variant of `notices.copy` it is given
+in, so the game shows the text the scheduler would push:
+
+- **Result notice.** `consent-result.<record kind>.<act>`, where the act is
+  `granted`, `withdrawn`, or `refused` for a `withdrawn` record whose latest
+  earlier record of its kind is not a consent.
+- **Re-confirmation.** `reconfirmation.<record kind>`; it always reports on a
+  consent.
+
+It also records each notice given: the notice's name, the channel
+(`in-game`, `push`, or `other`), and the time.
 
 The game shows a notice in the game and records it through
-`notices.recordShown`. If none is recorded by the start of the day seven days
-before `dueBy`, the scheduler sends it through the catalog's notice topic.
+`notices.recordShown` with the notice as `list()` gave it, or with its name:
+its `kind`, its record's `kind` and `at`, and its `dueBy`. The runtime sends
+the backend only the name, with the record's time in the
+[canonical form](#timestamps).
 
-- **Key.** `notice:<player>:<kind>:<record at>`, with the player
-  percent-encoded and the record's time in the [canonical form](#timestamps).
-- **Template data.** `consentDate`, the record's Asia/Seoul date.
+- **Retries.** The backend records a notice only while that notice is listed.
+  Recording a notice that is not listed (already recorded, not yet listed, or
+  unknown) changes nothing, so a retried call is safe. Record times compare
+  as instants to the millisecond, so another spelling of the same instant
+  matches, but a name that names another instant or date records nothing:
+  for example, a record time cut to seconds. A game passes the listed notice
+  or its fields unchanged.
+- **Malformed input.** A missing field, an unknown key, or a time or date
+  that does not parse throws `NOTIFICATIONS_INVALID_INPUT`.
+
+If a notice is not recorded by the start of the day seven days before
+`dueBy`, the scheduler sends it through the catalog's `notices.topic`.
+
+- **Key.** `notice:<player>:<kind>:<record kind>:<record at>:<dueBy>`, with
+  the player percent-encoded, the record's time in the
+  [canonical form](#timestamps), and `dueBy` as `YYYY-MM-DD`.
+- **Copy.** The notice is given in the variant it is listed with. A locale
+  without a refusal's text gives the withdrawal's
+  (`notificationNoticeVariantCopy`).
+- **Template data.** `consentDate`, the record's Asia/Seoul date, is the only
+  value the server fills.
 - **Gate.** The send is a `service` notification through the policy gate,
-  never combined with advertising.
+  never combined with advertising. The scheduler gives the gate the notice
+  topic with the variant's copy in place of the topic's own, which it does
+  not declare. The gate then resolves the locale by the **Locale** rule of
+  the [topic catalog's content](#topic-catalog), as for any topic, and so
+  falls back to the default locale.
+- **Content.** A notice says only its variant of `notices.copy`.
+  - The scheduler drops any `title` or `body` in the notice topic's mapping.
+  - It sends a notice only through a provider that can carry it
+    (`notificationProviderCarriesNotices`): free-form content, and no `title`
+    or `body` the provider needs in the mapping, which it would send instead.
+    Through any other provider it sends nothing and records nothing, so the
+    game still owes the notice. `notificationNoticeTopic` gives the notice
+    topic as the gate renders one notice from it.
+- **Reserved topic.** The notice topic is the scheduler's. A send or a server
+  reminder that a game asks for through it throws
+  `NOTIFICATIONS_INVALID_INPUT`. The player's topic preference still applies
+  to it, as to any `service` topic.
+- **Failed renders.** A push that cannot render fails once, whether it is
+  the first send or a replay, and is not tried again. The game still owes
+  the notice.
 - **Recording.** Once delivered, the backend records the notice with channel
   `push`.
+- **A waiting push.** A push that waits, deferred or in flight, is dropped
+  once the game records the notice. The player is not told twice.
 
 ### Policy gate {#policy-gate}
 
@@ -896,6 +1094,11 @@ client's declaration. The steps run in order and the first failure decides:
    - **`scope: 'topic'` provider.** It needs a latest `host-agreement` of
      `granted` for the topic (or `suppressed: agreement-missing`), unless the
      topic's mapping declares that the host needs no agreement.
+     - For such a topic, a provider answer that the recipient has not agreed
+       is recorded but does not stop sends. The host decides on each send.
+     - The rule that sends stop until the player agrees again applies only
+       to topics that need an agreement. Nothing could ask the player again
+       for a topic that needs none: it reads `granted` and never prompts.
    - **`per-send` provider.** It needs an acceptance that no delivery has
      reserved (or `suppressed: allowance-exhausted`).
 4. **Topic preference.** A `requested` topic needs a latest `topic-preference`
@@ -926,9 +1129,12 @@ client's declaration. The steps run in order and the first failure decides:
    - **No time left.** A send whose windows leave no time to send, such as
      quiet hours that close where the night window opens, is `suppressed:
      night-consent-missing` instead of being deferred forever.
-7. **Frequency and provider limits.** They count the recipient's delivered
-   sends in the rolling window before the send: a send at `s` counts for a
-   send at `t` when `t − window < s ≤ t`.
+7. **Frequency and provider limits.** They count the recipient's other
+   delivered sends in the rolling window before the send: a send at `s`
+   counts for a send at `t` when `t − window < s ≤ t`. A send's earlier
+   delivery to another endpoint is the same send and does not count. The
+   history comes oldest first; the gate sorts a copy of one that does not,
+   so the order never changes the answer.
    - A topic `frequency` cap or a provider limit whose window is a day or
      longer answers `suppressed: frequency-capped` or `suppressed:
      provider-limit`.
@@ -941,7 +1147,9 @@ client's declaration. The steps run in order and the first failure decides:
    deployment's advertising sender, `{ name?, contact }`, or it is
    `suppressed: advertising-sender-missing`. `name` may be omitted only when it
    equals the app's name, and `contact` is the phone number or address the law
-   requires. The rendered content is:
+   requires. The gate trims these texts and the opt-out line: a blank
+   `contact` counts as missing, a blank `name` as omitted, and a blank opt-out
+   line as absent. The rendered content is:
    - the title starts with `(광고) `;
    - the body starts with `(광고) ` and the sender line (`name`, a space, and
      `contact`, or `contact` alone when `name` is omitted), then the copy on
@@ -1033,16 +1241,19 @@ Every provider answer maps to one of five kinds:
     `unavailable: provider-rejected`, which is not stored.
   - `agreement`, when the host says the recipient has not agreed to the
     template, also appends a `host-agreement` record of `denied` with
-    `source: 'provider'`. The gate then stops sending until the player agrees
-    again.
+    `source: 'provider'`. For a topic that needs an agreement, the gate then
+    stops sending until the player agrees again. For a topic whose mapping
+    needs no agreement, the record does not stop sends, and the host decides
+    on each send.
 - **`ambiguous`**: the provider cannot say whether it sent (a timeout, a 5xx
   answer, a crash after the claim).
   - The claim is kept, as the delivery ledger requires, and the send answers
     `in-flight`.
   - A direct caller retries after the lease.
-  - A scheduled or deferred row is re-deferred to the lease's expiry and
-    replayed through `deliverIdempotently`; it is never replaced by
-    `in-flight`.
+  - A scheduled or deferred row is `in-flight` too. The scheduler, which owns
+    it, replays it through `deliverIdempotently` once the lease expires.
+  - One rule covers every claimer. `deferred` would also claim that nothing
+    was sent, which an `ambiguous` answer cannot prove.
 
 A response that covers several recipients maps per recipient onto each
 recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
@@ -1096,9 +1307,10 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
 ### Reminder scheduler {#scheduler}
 
 Server reminders, deferred sends (night window, quiet hours, provider limits,
-rate limits, ambiguous answers), and overdue consent notices are stored with
-a lease and processed when due. The default is a D1 table plus a Cron trigger
-on the game-services Worker; the Devvit server uses the Devvit scheduler.
+rate limits), sends in flight after an ambiguous answer, and overdue consent
+notices are stored with a lease and processed when due. The default is a D1
+table plus a Cron trigger on the game-services Worker; the Devvit server uses
+the Devvit scheduler.
 
 - **Each due item** becomes a normal send through the policy gate, and its
   key moves through the [key states](#key-states).
@@ -1121,6 +1333,16 @@ milliseconds only when they are not zero, as `@mpgd/platform` already
 normalizes commerce timestamps. Keys use it, and runners compare timestamps
 as instants. A notice's `dueBy` is an Asia/Seoul calendar date
 (`YYYY-MM-DD`).
+
+- **Strict reading.** Every validator reads each timestamp and date after
+  the shape check. A date that does not exist, such as 31 April, and a space
+  instead of `T` are refused, never rolled over.
+- **Runners.** Two timestamps that read strictly compare as instants. Any
+  other text compares as written.
+- **Provider answers.** When a topic's daily cap reads the provider's pending
+  local reminders, one listed with a `fireAt` that does not read strictly
+  throws `NOTIFICATIONS_CONFIGURATION_REQUIRED`: the provider broke the
+  contract.
 
 ## Provider profiles {#profiles}
 
@@ -1199,7 +1421,9 @@ as instants. A notice's `dueBy` is an Asia/Seoul calendar date
   statement need agreement; the console rejects opt-in style templates without
   one. Messages a player needs to use the service (payment, refund, and
   similar) are sent without agreement. Their mapping declares `agreement:
-  'none'`, reads `granted`, and never prompts.
+  'none'`, reads `granted`, and never prompts. A `rejected` answer with reason
+  `agreement` still records the denial, but later sends go on and the host
+  decides each one.
 - **No read.** Neither the client nor the server can read the agreement, and
   revocation in Toss settings raises no event. So `readable` is false, and the
   server record is what the gate uses. A send to a user who revoked comes back
@@ -1250,7 +1474,10 @@ A deployment sets `advertisingRules`:
   line, expiry, or notices.
 
 Given the deployment settings, `validate:notifications` requires this setting
-when the catalog has an `advertising` topic.
+when the catalog has an `advertising` topic. Under `kr` it also requires the
+notice topic with its `notices.copy` and the advertising sender, and it
+reports a blank sender contact, sender name, or opt-out line, which
+[gate step 8](#policy-gate) would read as missing or absent.
 
 What the kit enforces for `advertising` topics under `kr`:
 
@@ -1268,11 +1495,13 @@ What the kit enforces for `advertising` topics under `kr`:
   - The message carries an opt-out action that opens the opt-out screen
     directly; describing a settings path is not enough (p.44).
 - **Notices.**
-  - A result notice is due within 14 days of a consent, refusal, or withdrawal
-    (§50⑦; pp.23–24).
+  - A result notice is due within 14 days of a consent, refusal, or
+    withdrawal. It gives the sender's name, the act and its date, and the
+    processing result (§50⑦, decree art. 62-2; pp.23–24).
   - A re-confirmation notice is due every two years per medium, counted from
-    the consent date, and it states that date (§50⑧, decree art. 62-3;
-    pp.25–26, 65–70).
+    the consent date. It gives the sender's name, the consent and its date,
+    and how to keep or withdraw it (§50⑧, decree art. 62-3; pp.25–26,
+    65–70).
 
 What the kit does not decide: whether a given topic is advertising. The guide
 has no example about games, rewards, energy, or attendance; its only game
@@ -1349,6 +1578,12 @@ How a real provider is judged:
   schema (`fixture.host-agreement.v1`) matches the provider's own id and the
   evidence schema its harness declares. This applies in both `returns` and
   `expect`, as commerce substitutes store ids.
+  - Only a `provider` field and an evidence `schema` change. An address or a
+    topic that happens to hold the same text stays as written.
+- **Host observations.** Only a host actor in the harness counts prompts and
+  local operations. Without one, a vector that expects `prompts` or
+  `local.operations` fails rather than reading zero, and so does one that
+  expects `local.pending` from a provider without `listLocal`.
 - **Local `permission-required`.** A `setReminder` step that expects it also
   calls the provider's `scheduleLocal` directly. That call must answer
   `permission-required` without prompting or scheduling, because the runtime
@@ -1362,9 +1597,10 @@ How a real provider is judged:
 | `appliesTo` | Predicates on capability paths that must all hold: `{ "path": "permission.prompt", "equals": "os" }`, `{ "path": "remote.purposes", "includes": "advertising" }`, or `"excludes"` |
 | `profile` | `provider`, `capabilities`, and optional server-side `limits` (`perUserPerDay`, `perUserPerMinute`). The fake backend derives the provider's registry entry from them: purposes, addressing, content, and permission fields from the capabilities; `expiry` and `actions` true for a free-form device provider; `link` true for `host-link` opens; no `rate` |
 | `catalog` | Topic entries as in the [topic catalog](#topic-catalog), with the provider mapping for this one profile under `mapping` instead of `targets`. Vector catalogs list only the topics a scenario needs and are not validated: `advertising-unsupported-by-host` maps an advertising topic the validator would reject, to prove the gate refuses it too |
+| `notices` | The catalog's `notices` block: `topic`, the notice topic, which `catalog` declares without copy, and `copy`, a title and a body per locale and notice variant, checked by the catalog's rules in the default locale `ko`. Without it the scheduler sends no notice. A `topic` that `catalog` declares as anything but a remote `service` topic, or leaves out while it declares an advertising topic under `kr`, fails the vector at `backend` |
 | `context` | `player`, `now`, and the device's `timeZone`, which the runtime registers |
 | `host` | Fake host settings: with `actionRequired: true`, the fixture provider reports `availability: 'action-required'` and `requiredAction: 'login'` until `completeAction`; `profile.capabilities` is its declaration afterwards |
-| `deployment` | Backend deployment settings: `advertisingRules` (`kr` or `none`), `advertisingSender` (`{ name?, contact }`), `advertisingOptOutLine`, `noticeTopic` (the catalog's `notices.topic`), and `timeZone` (Asia/Seoul when absent) |
+| `deployment` | Backend deployment settings: `advertisingRules` (`kr` or `none`), `advertisingSender` (`{ name?, contact }`), `advertisingOptOutLine`, and `timeZone` (Asia/Seoul when absent) |
 | `steps` | Actor actions in order; a step may carry `returns` or `throws` (`{ code }`). `returns` is matched as a subset: objects by their listed keys, and arrays item by item with the same length |
 | `expect` | Final assertions; a key that is absent is not asserted, and a field set to `null` asserts that the field is absent |
 
@@ -1400,7 +1636,7 @@ Fake defaults:
 | `runtime` | `start`; `restart` (see [Runtime](#runtime)) |
 | `clock` | `set` (`at`), `advance` (`seconds`) |
 | `host` | `queuePrompt` (`result`: `granted`, `already-granted`, `denied`, `dismissed`, `host-terms-declined`); `setPermission` (`state`); `issueEndpoint` (`endpoint`: `{ kind, value }`); `completeAction`; `tap` (`input`: `{ channel, topic?, route?, data? }`) |
-| `game` | The [runtime](#runtime) methods: `getPermission`, `requestPermission` (`topics`, `gesture`), `revokePermission` (`topics`), `register`, `unregister`, `setTopicPreference`, `setAdvertisingConsent`, `setReminder`, `cancelReminder`, `listNotices`, `recordNotice` (`kind`, `recordAt`), `openSettings`, and `subscribe` (`listener` names the listener) |
+| `game` | The [runtime](#runtime) methods: `getPermission`, `requestPermission` (`topics`, `gesture`), `revokePermission` (`topics`), `register`, `unregister`, `setTopicPreference`, `setAdvertisingConsent`, `setReminder`, `cancelReminder`, `listNotices`, `recordNotice` (a listed notice, or its `kind`, `record` with its `kind` and `at`, and `dueBy`), `openSettings`, and `subscribe` (`listener` names the listener) |
 | `backend` | `authenticate` (`player`); `deliver` (`input`: `topic`, `idempotencyKey`, optional `player` defaulting to `context.player`, `provider`, `templateData`, `data`, `locale`, `link`); `queueProviderResult` (`result`: `accepted`, `unregistered`, `rate-limited` with optional `retryAfterSeconds`, `rejected` with `reason`, or `ambiguous`); `registerEndpoint` (`input`: `installationId`, `kind`, `value`, `permission`; another installation of the same player); `revokeSession` (ends the session that registered the installation); `runScheduler` (process every due reminder, deferred send, and notice) |
 
 `expect` keys; a list is matched exactly in length and order, with only the
@@ -1416,14 +1652,14 @@ listed fields of each item asserted:
 | `local` | `operations` (`op`: `schedule`, `replace`, `cancel`, with `key`, `topic`, `fireAt`, `exact`) and the final `pending` list |
 | `reminders` | Pending server reminders |
 | `events` | An object keyed by listener name, each a list of events |
-| `notices` | The backend's due notices at the end, ordered by `dueBy` and then `kind`: `kind` (`consent-result`, `reconfirmation`), `record` (its `kind` and `state`), `dueBy` (an Asia/Seoul date) |
+| `notices` | The backend's listed notices at the end, ordered by `dueBy` and then `kind`: `kind` (`consent-result`, `reconfirmation`), `record` (its `kind` and `state`), `dueBy` (an Asia/Seoul date), `variant` |
 
 | Vector | Checks |
 | --- | --- |
 | `os-permission-granted` | One app-scope prompt grants every topic; endpoint registration with the device permission; no consent record |
-| `os-permission-denied-twice` | `promptLimit` 2: `prompt-with-rationale` then `blocked`; no third dialog; the endpoint holds `blocked` |
-| `os-permission-denied-once` | `promptLimit` 1: the first denial is `blocked`; no second dialog |
-| `os-permission-dismissed` | A dismissed dialog leaves the state and counts no denial |
+| `os-permission-denied-twice` | `promptLimit` 2 on a device-addressed provider: `prompt-with-rationale` then `blocked`; no third dialog; the endpoint holds `blocked`; no consent record |
+| `os-permission-denied-once` | `promptLimit` 1 on a device-addressed provider: the first denial is `blocked`; no second dialog; no consent record |
+| `os-permission-dismissed` | On a device-addressed provider, a dismissed dialog leaves the state and counts no denial; no consent record |
 | `local-schedule-never-prompts` | Scheduling without permission returns `permission-required` and shows nothing |
 | `host-agreement-recorded` | Unreadable host: agreement recorded with its evidence and the implied topic preference, read back as granted after a restart; `already-granted` adds no record |
 | `host-agreement-then-withdrawn` | A withdrawn preference suppresses despite the agreement; accepting the sheet again re-enables the topic |
@@ -1433,10 +1669,11 @@ listed fields of each item asserted:
 | `game-rendered-opt-in` | Game prompt, server opt-in, revocation read at send time |
 | `game-rendered-opt-out` | `revokePermission` opts out at the host; the next send is suppressed |
 | `requested-topic-needs-opt-in` | A `requested` topic is suppressed until the player turns it on |
-| `advertising-needs-consent` | Suppressed without consent; rendered with label, sender line, free opt-out line, opt-out action, and expiry; notices due |
-| `advertising-notices` | An unrecorded result notice is sent through the notice topic; re-confirmation repeats every two years |
+| `advertising-needs-consent` | Suppressed without consent; rendered with label, sender line, free opt-out line, opt-out action, and expiry; the result notice is listed, the first re-confirmation not yet |
+| `advertising-notices` | An unrecorded result notice is sent through the notice topic; a re-confirmation is listed 60 days before its `dueBy`; recording it before then, recording a name that matches nothing, and recording it again after its `dueBy` change nothing; the next one is listed two years later |
+| `advertising-notice-variants` | Through one notice topic, each in its own variant of `notices.copy`, the scheduler pushes the results of an advertising and a night consent, both re-confirmations two years later, the withdrawal of each, and a second withdrawal of each, which is a refusal; the game lists each notice with its variant, and the advertising refusal, which the copy leaves out, is given in the withdrawal's text |
 | `advertising-night-window` | Deferred to 08:00 KST without night consent and sent with an expiry; immediate without expiry with it |
-| `advertising-rules-none` | Without the Korean rules: consent still needed, no window, label, or expiry |
+| `advertising-rules-none` | Without the Korean rules: a send before consent is `suppressed: advertising-consent-missing`; after consent, no window, label, or expiry |
 | `advertising-unsupported-by-host` | A host-template provider refuses an advertising topic |
 | `advertising-sender-required` | Advertising consent without a configured advertising sender is suppressed |
 | `reminder-local-route` | A `requested` topic without opt-in is refused; local route, replace by key, cancel; no server reminder |
@@ -1444,7 +1681,7 @@ listed fields of each item asserted:
 | `reminder-server-route` | Server route after the agreement, cancel, re-set, delivery at the due time through the gate |
 | `reminder-cancel-across-routes` | A key names one reminder across routes; cancel after a restart finds the server reminder |
 | `open-before-listener` | A cold-start open reaches the game's first subscriber once |
-| `endpoint-lifecycle` | A device address moves to the newly authenticated player; `UNREGISTERED` invalidates it |
+| `endpoint-lifecycle` | Authentication alone moves a device address to the newly authenticated player; `UNREGISTERED` invalidates it |
 | `endpoint-fan-out` | Every granted installation receives the send; a dead one is invalidated alone; a retry sends nothing |
 | `endpoint-rotation` | A rotated device address replaces the old one without an explicit `register()` |
 | `endpoint-unbind-on-logout` | `unregister()` removes the installation from the player; later sends find no endpoint |
@@ -1468,6 +1705,16 @@ reads see backend records. v1 callers request with `gesture: true`, and
 `approval-required` stays with the target config, which keeps the v1 adapter
 when v2 is not exposed.
 
+- `catalog` holds the topics resolved for the runtime's target
+  (`resolveNotificationTopicsForTarget`), as the runtime reads them.
+- A topic outside them reads `configuration-required` and requests
+  `unavailable`: the catalog does not declare it, or the target does not map
+  it. An entry that still carries `targets` names no single target, so it
+  counts as outside.
+- Any failure with the `NOTIFICATIONS_CONFIGURATION_REQUIRED` code maps to
+  `configuration-required`, including a bridge error that kept only its
+  `code`.
+
 | v2 answer | v1 `getStatus` | v1 `requestSubscription` |
 | --- | --- | --- |
 | `granted` state | `subscribed` | |
@@ -1490,6 +1737,7 @@ publishable package carries a Sampo changeset.
 | --- | --- | --- |
 | N1 | This RFC and the vectors | |
 | N2 | `@mpgd/platform/notifications`: types, capabilities, the provider registry entry, permission mapping helpers, the pure policy gate, notice due dates, reminder routing, typia validators, JSON Schemas, and `notificationsProtocolVersion`; `@mpgd/catalog` topic catalog and `validate:notifications`; conformance runner with fixture-identifier substitution, reference runtime, and fakes passing every vector; `validate:notifications-alignment`; v1 wrapper over the runtime | Closed topics |
+| N2b | `notices.copy` with one title and body per notice variant (`NotificationNoticeVariant`, optional refusal texts), its validator rules, each listed notice's `variant`, which the scheduler pushes, and the `advertising-notice-variants` vector | One notice text for every record |
 | N3 | Bridge `notifications.v2.*` methods (including `revokePermission`), the event union, fail-closed answers in every transport; `PlatformCapabilities.notifications` and `gateway.notificationsV2` gating in the target-config runtime; the Capacitor external-activity and registry pass-through for v2 methods | |
 | P1 | `@mpgd/adapter-ait`: provider over `Notification.requestAgreement` with the agreement mapping, the 120-second settle, agreement evidence, and landing opens that `getLaunchIntent` does not route again; `@mpgd/game-services`: Apps in Toss functional-message delivery provider with `FAIL` code mapping | Session-only agreements, deprecated API |
 | P2 | `@mpgd/adapter-capacitor/notifications`: `PushSdk` and `LocalNotificationSdk` over the plugins as optional peers, the provider, channels, the native opt-out action, cold-start buffering, settings link | |

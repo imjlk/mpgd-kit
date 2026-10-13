@@ -1,0 +1,131 @@
+{
+  "protocol": "mpgd.notifications.v2",
+  "protocolVersion": "2.0.0-draft.1",
+  "regenerate": "pnpm generate:notifications-schemas",
+  "schemas": [
+    {
+      "title": "NotificationCapabilities",
+      "file": "notification-capabilities.schema.json"
+    },
+    {
+      "title": "NotificationPermissionSnapshot",
+      "file": "notification-permission-snapshot.schema.json"
+    },
+    {
+      "title": "NotificationPermissionResult",
+      "file": "notification-permission-result.schema.json"
+    },
+    {
+      "title": "NotificationEndpointRegistration",
+      "file": "notification-endpoint-registration.schema.json"
+    },
+    {
+      "title": "LocalNotificationRequest",
+      "file": "local-notification-request.schema.json"
+    },
+    {
+      "title": "LocalScheduleResult",
+      "file": "local-schedule-result.schema.json"
+    },
+    {
+      "title": "NotificationEvent",
+      "file": "notification-event.schema.json"
+    },
+    {
+      "title": "NotificationEventEnvelope",
+      "file": "notification-event-envelope.schema.json"
+    },
+    {
+      "title": "NotificationConsentRecord",
+      "file": "notification-consent-record.schema.json"
+    },
+    {
+      "title": "NotificationNotice",
+      "file": "notification-notice.schema.json"
+    },
+    {
+      "title": "NotificationDeliveryProviderEntry",
+      "file": "notification-delivery-provider-entry.schema.json"
+    },
+    {
+      "title": "NotificationDeployment",
+      "file": "notification-deployment.schema.json"
+    },
+    {
+      "title": "NotificationBridgeGetCapabilitiesPayload",
+      "file": "notification-bridge-get-capabilities-payload.schema.json"
+    },
+    {
+      "title": "NotificationBridgeGetCapabilitiesResult",
+      "file": "notification-bridge-get-capabilities-result.schema.json"
+    },
+    {
+      "title": "NotificationBridgeGetPermissionPayload",
+      "file": "notification-bridge-get-permission-payload.schema.json"
+    },
+    {
+      "title": "NotificationBridgeGetPermissionResult",
+      "file": "notification-bridge-get-permission-result.schema.json"
+    },
+    {
+      "title": "NotificationBridgeRequestPermissionPayload",
+      "file": "notification-bridge-request-permission-payload.schema.json"
+    },
+    {
+      "title": "NotificationBridgeRequestPermissionResult",
+      "file": "notification-bridge-request-permission-result.schema.json"
+    },
+    {
+      "title": "NotificationBridgeRevokePermissionPayload",
+      "file": "notification-bridge-revoke-permission-payload.schema.json"
+    },
+    {
+      "title": "NotificationBridgeRevokePermissionResult",
+      "file": "notification-bridge-revoke-permission-result.schema.json"
+    },
+    {
+      "title": "NotificationBridgeRegisterPayload",
+      "file": "notification-bridge-register-payload.schema.json"
+    },
+    {
+      "title": "NotificationBridgeRegisterResult",
+      "file": "notification-bridge-register-result.schema.json"
+    },
+    {
+      "title": "NotificationBridgeScheduleLocalPayload",
+      "file": "notification-bridge-schedule-local-payload.schema.json"
+    },
+    {
+      "title": "NotificationBridgeScheduleLocalResult",
+      "file": "notification-bridge-schedule-local-result.schema.json"
+    },
+    {
+      "title": "NotificationBridgeCancelLocalPayload",
+      "file": "notification-bridge-cancel-local-payload.schema.json"
+    },
+    {
+      "title": "NotificationBridgeCancelLocalResult",
+      "file": "notification-bridge-cancel-local-result.schema.json"
+    },
+    {
+      "title": "NotificationBridgeListLocalPayload",
+      "file": "notification-bridge-list-local-payload.schema.json"
+    },
+    {
+      "title": "NotificationBridgeListLocalResult",
+      "file": "notification-bridge-list-local-result.schema.json"
+    },
+    {
+      "title": "NotificationBridgeOpenSettingsPayload",
+      "file": "notification-bridge-open-settings-payload.schema.json"
+    },
+    {
+      "title": "NotificationBridgeOpenSettingsResult",
+      "file": "notification-bridge-open-settings-result.schema.json"
+    },
+    {
+      "title": "NotificationConformanceVector",
+      "file": "notification-conformance-vector.schema.json"
+    }
+  ]
+}

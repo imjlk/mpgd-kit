@@ -1,0 +1,61 @@
+---
+npm/@mpgd/platform: minor
+---
+
+`@mpgd/platform` adds the notifications v2 contract as three new subpaths.
+`./notifications` holds the client contract types (`NotificationProvider` with
+`revokePermission` for game-rendered consent, `NotificationCapabilities` with
+`permission.promptLimit` and `remote.addressing: 'none'` exactly when remote
+delivery is unsupported, permission snapshots and results with
+`requiredAction`, endpoint registrations without an installation id, local
+reminders, events, consent records including provider answers, consent
+notices, and the `NotificationRuntime` surface with `revokePermission`,
+`unregister()`, and `notices`, whose `recordShown` takes a listed notice as
+is, or its kind, its record's kind and time, and its `dueBy`, and records the
+notice only while it is listed, so a retry changes nothing), `NotificationError`
+with the `NOTIFICATIONS_*` codes including `NOTIFICATIONS_INVALID_INPUT` and
+`NOTIFICATIONS_IDEMPOTENCY_CONFLICT` and the host's own `hostCode`, the bridge
+v2 payload shapes and event envelope, typia validators that reject unknown
+keys and read every timestamp and date strictly (`isNotificationTimestamp`: a
+date that exists, `T`, and an offset), the delivery provider registry entry
+with reference entries for FCM, Apps in Toss, and Devvit, the backend
+deployment settings (`advertisingRules`, the advertising sender and opt-out
+line, the zone), and the pure policy gate
+`evaluateNotificationDelivery`: an unknown topic, channel, and purpose;
+recipients and the Devvit link; positively granted permission per provider
+kind, host agreements unless a topic needs none (then the host decides each
+send, after a provider's denial too), and per-send acceptances; the topic
+preference; advertising consent; the Korean night window with an expiry at the
+next 21:00 and quiet hours in the recipient's zone; frequency caps and
+provider limits over rolling windows, deferring short ones; and, under the
+Korean rules, the advertising sender, the `(광고)` label, the opt-out line, and
+the opt-out action, read by `resolveNotificationAdvertisingSettings`: a blank
+sender contact suppresses the send, and a blank sender name or opt-out line is
+left out or replaced by the default. It also holds send bounds, reserved key
+prefixes, request fingerprints, reminder routing and the client-evaluable
+local and set-time server reminder checks (a local reminder of a topic that is
+not deferrable answers `quiet-hours` inside its quiet hours), consent notice
+due dates with the re-confirmation series (each re-confirmation listed from 60
+days before its `dueBy`), canonical reminder keys and notice keys that name
+each notice by its kind, its record's kind and time, and its `dueBy`,
+root-relative route checks that refuse any route a URL parser or a decoding
+client would resolve to a protocol-relative path, and the v1
+`toNotificationSubscriptionAdapter` wrapper over the runtime and the topics
+resolved for its target, which reads any failure with the configuration code
+as `configuration-required`. `./notifications-vectors` fixes the conformance
+vector format, and `./notifications-conformance` runs the vectors with a
+reference runtime (which also cancels a pending local reminder whose topic an
+app update took off the local route, cancels a reminder key on both routes,
+re-sends a registration older than 7 days at start and on reads, and keeps an
+unregistered installation unbound across restarts), fake host, fake backend
+(sessions, an idempotency ledger with fingerprints and leases, device fan-out
+under derived keys, the five provider answers, deferred replay with backoff, a
+paced scheduler, and notices pushed through the catalog's `notices` block,
+`{ topic, copy }`), and clock, substituting the fixture provider id
+and evidence schema in the fields that name them for a provider under test,
+failing prompt and local expectations without a host actor, comparing
+timestamps as strict instants, and skipping a vector whose `appliesTo` its
+capabilities do not satisfy; all forty vectors pass. `PlatformGateway`
+gains an optional `notificationsV2` provider, declared through a typia-free
+contract module so the main entry stays free of typia. This is additive: no
+provider implements v2 yet, and the protocol version stays `2.0.0-draft.1`.

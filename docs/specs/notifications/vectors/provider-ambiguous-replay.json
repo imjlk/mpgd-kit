@@ -1,7 +1,7 @@
 {
   "vector": "provider-ambiguous-replay",
   "protocol": "2.0.0-draft.1",
-  "summary": "A provider answer that cannot say whether it sent keeps the claim; the scheduler re-defers the reminder past the claim lease instead of losing it, and a later run delivers it once under the same key.",
+  "summary": "A provider answer that cannot say whether it sent keeps the claim; the reminder's send stays in flight, not lost, and the scheduler replays it once the claim lease expires, delivering it once under the same key.",
   "appliesTo": [
     {
       "path": "local.supported",

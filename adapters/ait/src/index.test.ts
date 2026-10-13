@@ -166,11 +166,20 @@ describe('adapter-ait', () => {
         kind: 'daily-result',
         title: 'Daily result',
         text: "I finished today's puzzle.",
-        deepLink: 'intoss://game/daily',
+        deepLink: '/daily',
       }),
     ).resolves.toEqual({
       status: 'shared',
+      completion: 'presented',
     });
+    await expect(
+      gateway.sharing?.share?.({
+        kind: 'daily-result',
+        title: 'Daily result',
+        text: "I finished today's puzzle.",
+        deepLink: '/.//evil.example/daily',
+      }),
+    ).resolves.toEqual({ status: 'unavailable' });
     await expect(gateway.sharing?.readInboundShare?.()).resolves.toBeNull();
     await expect(gateway.notifications?.getStatus('daily-ready')).resolves.toBe(
       'configuration-required',
@@ -251,6 +260,38 @@ describe('adapter-ait', () => {
     ).resolves.toEqual({
       submitted: true,
     });
+  });
+
+  it('applies the host share-link rules in the sandbox', async () => {
+    const intent = { kind: 'invite', title: 'Join', text: 'Join me' } as const;
+    const named = createAitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'ait-sandbox',
+      fallbackBridge: createAitSandboxBridge({ appName: ' ttokdoku ' }),
+    });
+    const derived = createAitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'ait-sandbox',
+      fallbackBridge: createAitSandboxBridge(),
+    });
+
+    // With an app name, links must carry it, as on the host.
+    await expect(named.sharing?.share?.({ ...intent, deepLink: 'intoss://ttokdoku/daily' }))
+      .resolves.toEqual({ status: 'shared', completion: 'presented' });
+    await expect(named.sharing?.share?.({ ...intent, deepLink: 'intoss://other/daily' }))
+      .resolves.toEqual({ status: 'unavailable' });
+    await expect(named.sharing?.share?.({ ...intent, deepLink: '/daily' }))
+      .resolves.toEqual({ status: 'shared', completion: 'presented' });
+
+    // Without one, the sandbox uses the host's default app name.
+    await expect(derived.sharing?.share?.({ ...intent, deepLink: 'intoss://mpgd-kit/daily' }))
+      .resolves.toEqual({ status: 'shared', completion: 'presented' });
+    await expect(derived.sharing?.share?.({ ...intent, deepLink: 'intoss://other/daily' }))
+      .resolves.toEqual({ status: 'unavailable' });
+    await expect(derived.sharing?.share?.({ ...intent, deepLink: '/\\evil.example/daily' }))
+      .resolves.toEqual({ status: 'unavailable' });
+
+    expect(() => createAitSandboxBridge({ appName: 'not valid' })).toThrow('AIT appName');
   });
 
   it('persists sandbox storage across bridge recreation when browser storage is available', async () => {

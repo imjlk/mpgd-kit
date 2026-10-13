@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/local-notification-request.schema.json",
+  "title": "LocalNotificationRequest",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/LocalNotificationRequest",
+  "components": {
+    "schemas": {
+      "IsoTimestamp": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "LocalNotificationRequest": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/NonEmptyString",
+            "description": "Stable logical key; the provider derives its native id from it.",
+            "readOnly": true
+          },
+          "topic": {
+            "$ref": "#/components/schemas/NotificationTopicId",
+            "readOnly": true
+          },
+          "fireAt": {
+            "$ref": "#/components/schemas/IsoTimestamp",
+            "description": "RFC 3339 with an explicit offset.",
+            "readOnly": true
+          },
+          "title": {
+            "type": "string",
+            "readOnly": true
+          },
+          "body": {
+            "type": "string",
+            "readOnly": true
+          },
+          "route": {
+            "type": "string",
+            "description": "The topic's root-relative route. Advertising topics never schedule locally.",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "key",
+          "topic",
+          "fireAt",
+          "title",
+          "body"
+        ],
+        "additionalProperties": false
+      },
+      "NonEmptyString": {
+        "type": "string",
+        "minLength": 1
+      },
+      "NotificationTopicId": {
+        "type": "string",
+        "description": "Open topic id declared by the game's topic catalog."
+      }
+    }
+  }
+}

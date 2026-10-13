@@ -10,6 +10,10 @@
     {
       "path": "permission.promptLimit",
       "equals": 1
+    },
+    {
+      "path": "remote.addressing",
+      "equals": "device"
     }
   ],
   "profile": {

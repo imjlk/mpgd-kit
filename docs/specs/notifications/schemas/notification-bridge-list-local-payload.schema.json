@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/docs/specs/notifications/schemas/notification-bridge-list-local-payload.schema.json",
+  "title": "NotificationBridgeListLocalPayload",
+  "x-mpgd-protocol": "mpgd.notifications.v2",
+  "x-mpgd-protocol-version": "2.0.0-draft.1",
+  "$ref": "#/components/schemas/NotificationBridgeProtocolPayload",
+  "components": {
+    "schemas": {
+      "NotificationBridgeProtocolPayload": {
+        "type": "object",
+        "properties": {
+          "protocol": {
+            "const": "mpgd.notifications.v2",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "protocol"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}
