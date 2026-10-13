@@ -97,7 +97,10 @@ function walkInlineGraph(
     const content = buffer.toString('utf8');
     allContents.push({ path: filePath, content });
     if (file.endsWith('.js') || file.endsWith('.mjs')) {
-      for (const [pattern, dynamic] of [[staticImportPattern, false], [dynamicImportPattern, true]] as const) {
+      for (const [pattern, dynamic] of [
+        [staticImportPattern, false],
+        [dynamicImportPattern, true],
+      ] as const) {
         for (const match of content.matchAll(pattern)) {
           const reference = match[1];
           if (reference !== undefined && isLocalReference(reference)) {

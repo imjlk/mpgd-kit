@@ -89,10 +89,14 @@ try {
   // An HTML entry cannot defer a script or preload by giving its filename.
   writeFileSync(join(root, 'index.html'), '<script src="/assets/phaser.js"></script>');
   writeFileSync(join(root, 'assets/phaser.js'), 'export const opaque=1;');
-  assert.throws(() => assertDevvitInlineBudget({
-    target: 'reddit', clientDir: root, inlineEntry: 'index.html',
-    budget: { forbidModules: ['phaser'], deferredChunks: ['assets/phaser.js'] },
-  }), /forbidden module\(s\): phaser in assets\/phaser\.js/);
+  assert.throws(
+    () =>
+      assertDevvitInlineBudget({
+        target: 'reddit', clientDir: root, inlineEntry: 'index.html',
+        budget: { forbidModules: ['phaser'], deferredChunks: ['assets/phaser.js'] },
+      }),
+    /forbidden module\(s\): phaser in assets\/phaser\.js/,
+  );
 
   assert.throws(
     () =>
