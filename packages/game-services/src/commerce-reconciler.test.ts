@@ -1,5 +1,9 @@
 import type { AnalyticsEvent } from '@mpgd/analytics';
-import { createUnsupportedCapabilities, type PlatformGateway } from '@mpgd/platform';
+import {
+  createUnsupportedCapabilities,
+  type PlatformGateway,
+  type PlatformPurchasePresentationEvent,
+} from '@mpgd/platform';
 import {
   createCommerceEventBuffer,
   createGooglePlayTokenPurchaseKey,
@@ -1474,6 +1478,143 @@ const fullClientHistory = [
     source: 'shop',
   });
   assertEqual(reads > beforeNewPurchase, true, 'a new purchase refreshes the capability read');
+  await h.reconciler.stop();
+}
+
+// Readiness is checked before an optional provider catalog can hide its products.
+for (const [availability, code] of [
+  ['temporarily-unavailable', 'STORE_UNAVAILABLE'],
+  ['configuration-required', 'CONFIGURATION_REQUIRED'],
+  ['action-required', 'ACTION_REQUIRED'],
+] as const) {
+  let catalogReads = 0;
+  const provider = createFakeProvider({
+    getCapabilities: async () => ({ ...capabilitiesOf(), availability }),
+  });
+  provider.fetchProducts = async () => {
+    catalogReads += 1;
+    return [];
+  };
+  const h = createHarness({ provider });
+  await h.reconciler.start();
+  const refusal = await h.reconciler.requestPurchase({
+    logicalId: 'gems_small',
+    idempotencyKey: `catalog-${availability}`,
+    source: 'shop',
+  });
+  assertEqual(
+    refusal.outcome === 'failed' && refusal.error.code,
+    code,
+    'readiness is not masked by a hidden catalog',
+  );
+  assertEqual(catalogReads, 0, 'an unavailable provider is refused before catalog lookup');
+  assertEqual(provider.purchaseUiOpened, 0, 'readiness refusal never opens checkout');
+  await h.reconciler.stop();
+}
+
+// A proven unopened checkout remains retryable across a restart, with its durable identity.
+{
+  const provider = createFakeProvider();
+  const purchase = provider.requestPurchase;
+  let presentationListener: ((event: PlatformPurchasePresentationEvent) => void) | undefined;
+  let offline = true;
+  Object.assign(provider, {
+    presentation: {
+      subscribe(listener: (event: PlatformPurchasePresentationEvent) => void) {
+        presentationListener = listener;
+        return () => {
+          presentationListener = undefined;
+        };
+      },
+    },
+    async requestPurchase(request: Parameters<CommerceProvider['requestPurchase']>[0]): Promise<RequestPurchaseResult> {
+      if (offline) {
+        presentationListener?.({
+          idempotencyKey: request.idempotencyKey,
+          sequence: 1,
+          state: 'not-started',
+        });
+        return { outcome: 'failed', error: { code: 'NETWORK', retryable: true } };
+      }
+      return purchase(request);
+    },
+  });
+  const h = createHarness({ provider });
+  const request = {
+    logicalId: 'gems_small',
+    idempotencyKey: 'intent-retry',
+    source: 'shop' as const,
+  };
+  await h.reconciler.start();
+  assertEqual(
+    (await h.reconciler.requestPurchase(request)).outcome,
+    'failed',
+    'the caller sees the retryable refusal',
+  );
+  const refused = await h.reconciler.read(request.idempotencyKey);
+  assertEqual(refused?.state, 'requested', 'an unopened checkout is not terminal');
+  assertEqual(
+    toGameServicesPurchaseResult(refused!).purchase.diagnostic?.retryable,
+    true,
+    'the client retains its retryable diagnostic',
+  );
+  assertEqual(provider.purchaseUiOpened, 0, 'offline intent issuance opens no store UI');
+  await h.reconciler.stop();
+  const restarted = createHarness({ provider, store: h.store });
+  await restarted.reconciler.start();
+  assertEqual(
+    (await restarted.reconciler.read(request.idempotencyKey))?.state,
+    'requested',
+    'recovery does not terminalize the unopened checkout',
+  );
+  await assertRejects(
+    () => restarted.reconciler.requestPurchase({ ...request, source: 'event' }),
+    /bound to another product or source/,
+    'a retry cannot change its bound identity',
+  );
+  for (const changed of [
+    { ...request, quantity: 2 },
+    { ...request, offerId: 'another-offer' },
+  ]) {
+    await assertRejects(
+      () => restarted.reconciler.requestPurchase(changed),
+      /bound to another product or source/,
+      'a restart preserves the offer and quantity binding',
+    );
+  }
+  offline = false;
+  await Promise.all([
+    restarted.reconciler.requestPurchase(request),
+    restarted.reconciler.requestPurchase(request),
+  ]);
+  await restarted.reconciler.requestPurchase(request);
+  assertEqual(provider.purchaseUiOpened, 1, 'same-key retries and replays open checkout only once');
+  assertEqual(
+    (await restarted.reconciler.read(request.idempotencyKey))?.state,
+    'launched',
+    'the recovered checkout advances',
+  );
+  await restarted.reconciler.stop();
+}
+
+// A retryable error alone cannot prove that a native payment surface never started.
+{
+  const h = createHarness();
+  h.provider.queueRequest({ outcome: 'failed', error: { code: 'NETWORK', retryable: true } });
+  await h.reconciler.start();
+  const request = {
+    logicalId: 'gems_small',
+    idempotencyKey: 'ambiguous-network',
+    source: 'shop' as const,
+  };
+  await h.reconciler.requestPurchase(request);
+  await h.reconciler.requestPurchase(request);
+  assertEqual(
+    (await h.reconciler.read(request.idempotencyKey))?.state,
+    'failed',
+    'a refusal without presentation proof remains terminal',
+  );
+  assertEqual(h.provider.purchaseUiOpened, 1, 'an ambiguous failure never reopens checkout');
   await h.reconciler.stop();
 }
 

@@ -651,7 +651,16 @@ describe('adapter-ait', () => {
         return {
           id: input.id,
           ok: true,
-          data: input.method === 'commerce.v2.restorePurchases'
+          data: input.method === 'runtime.getCapabilities'
+            ? {
+                haptics: name === 'second',
+                commerce: {
+                  ...createUnsupportedCommerceCapabilities(),
+                  availability: name === 'first' ? 'available' : 'unsupported',
+                  purchase: { ...createUnsupportedCommerceCapabilities().purchase, consumable: name === 'first' },
+                },
+              }
+            : input.method === 'commerce.v2.restorePurchases'
             ? { restored: true }
             : { playerId: name },
         };
@@ -665,7 +674,13 @@ describe('adapter-ait', () => {
       globals.__GAME_PLATFORM_BRIDGE__ = hostBridge('second');
       await expect(gateway.identity.getPlayer()).resolves.toEqual({ playerId: 'second' });
       await expect(gateway.commerce?.restorePurchases?.()).resolves.toBeUndefined();
-      expect(served).toEqual(['second:identity.getPlayer', 'first:commerce.v2.restorePurchases']);
+      await expect(gateway.getCapabilities()).resolves.toMatchObject({
+        haptics: true, commerce: { availability: 'available', purchase: { consumable: true } },
+      });
+      expect(served).toEqual([
+        'second:identity.getPlayer', 'first:commerce.v2.restorePurchases',
+        'second:runtime.getCapabilities', 'first:runtime.getCapabilities',
+      ]);
     } finally {
       if (previous === undefined) {
         delete globals.__GAME_PLATFORM_BRIDGE__;
