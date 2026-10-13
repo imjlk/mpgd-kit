@@ -84,6 +84,12 @@ try {
     & $commonModule { param($Receipt) Copy-MsixAdditionalEvidence $Receipt @{ canvasLoaded = $true } @('status', 'nativeLaunchVerified') } $baseReceipt
     Assert-True ($baseReceipt.canvasLoaded -and -not $baseReceipt.nativeLaunchVerified) 'Additional evidence changed native evidence.'
     Assert-Throws { & $commonModule { param($Receipt) Copy-MsixAdditionalEvidence $Receipt @{ nativeLaunchVerified = $true } @('status', 'nativeLaunchVerified') } $baseReceipt } 'cannot overwrite'
+    Assert-Throws { & $commonModule { param($Receipt) Complete-MsixAcceptanceEvidence $Receipt $null '.' @{} @('status') { throw 'collect failed' } } $baseReceipt } 'collect failed'
+    Assert-True ($baseReceipt.status -eq 'failed') 'Evidence collection failure was marked passed.'
+    Assert-Throws { & $commonModule { param($Receipt) Complete-MsixAcceptanceEvidence $Receipt $null '.' @{} @('status') { param($Installed, $Directory, $Fields) $Fields.status = 'passed' } } $baseReceipt } 'cannot overwrite'
+    Assert-True ($baseReceipt.status -eq 'failed') 'A callback replaced the final outcome.'
+    & $commonModule { param($Receipt) Complete-MsixAcceptanceEvidence $Receipt $null '.' @{} @('status') { param($Installed, $Directory, $Fields) $Fields.collected = $true } } $baseReceipt
+    Assert-True ($baseReceipt.status -eq 'passed' -and $baseReceipt.collected) 'Successful evidence collection did not complete acceptance.'
     $state = [pscustomobject]@{
         url = 'https://starter.mpgd.invalid/index.html'; bundleSha256 = ('a' * 64)
         canvasWidth = 1280; canvasHeight = 720; gameBundleLoaded = $true; bootError = $false

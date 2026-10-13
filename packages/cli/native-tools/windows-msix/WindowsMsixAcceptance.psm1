@@ -111,6 +111,17 @@ function Copy-MsixAdditionalEvidence {
     }
 }
 
+function Complete-MsixAcceptanceEvidence {
+    param($Receipt, $Installed, [string]$OutputDirectory, [hashtable]$Fields,
+          [string[]]$Reserved, [scriptblock]$Collector)
+    if ($null -ne $Collector) {
+        & $Collector $Installed $OutputDirectory $Fields | Out-Null
+        Copy-MsixAdditionalEvidence $Receipt $Fields $Reserved
+    }
+    # Evidence collection must finish before an invocation can pass.
+    $Receipt.status = 'passed'
+}
+
 function Invoke-MsixNativeAcceptance {
     [CmdletBinding()]
     param(
@@ -272,11 +283,7 @@ function Invoke-MsixNativeAcceptance {
         }
         if (Test-Path -LiteralPath $hostLog) { throw 'The installed host recorded a startup exception.' }
         $receipt.nativeLaunchVerified = $true
-        if ($null -ne $CollectEvidence) {
-            & $CollectEvidence $installed $OutputDirectory $extraEvidence | Out-Null
-            Copy-MsixAdditionalEvidence $receipt $extraEvidence $reserved
-        }
-        $receipt.status = 'passed'
+        Complete-MsixAcceptanceEvidence $receipt $installed $OutputDirectory $extraEvidence $reserved $CollectEvidence
     } catch {
         $failure = $_.Exception.Message
         $receipt.failure = $failure
