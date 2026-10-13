@@ -5,11 +5,14 @@ param(
     [Parameter(Mandatory = $true)][string]$OutputDirectory,
     [Parameter(Mandatory = $true)][string]$SourceMetadata,
     [Parameter(Mandatory = $true)][ValidateSet('x64', 'ARM64')][string]$Architecture,
-    [string]$ModulePath = (Join-Path $PSScriptRoot '../../../packages/cli/native-tools/windows-msix/WindowsMsixAcceptance.psm1'),
+    [string]$ModulePath,
     [ValidateRange(10, 120)][int]$ObserveSeconds = 30
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($ModulePath)) {
+    $ModulePath = Join-Path $PSScriptRoot '../../../packages/cli/native-tools/windows-msix/WindowsMsixAcceptance.psm1'
+}
 Import-Module (Join-Path $PSScriptRoot 'WindowsMsixSmoke.psm1') -Force
 Import-Module $ModulePath -Force
 $build = Get-Content -LiteralPath $SourceMetadata -Raw | ConvertFrom-Json
