@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { buildSync } from 'esbuild';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const outputRoot = process.env.MPGD_WINDOWS_SMOKE_ROOT
@@ -66,6 +67,7 @@ const nativeModule = nativeTools.getMicrosoftStoreNativeAcceptanceModulePath();
 const nativeToolingRoot = join(outputRoot, 'native', 'native-tooling');
 mkdirSync(nativeToolingRoot, { recursive: true });
 copyFileSync(nativeModule, join(nativeToolingRoot, 'WindowsMsixAcceptance.psm1'));
+cpSync(nativeTools.getMicrosoftStoreNativeHostSourceDirectory(), join(nativeToolingRoot, 'windows-host'), { recursive: true });
 run('pnpm', ['check'], gameRoot);
 run('pnpm', ['build'], gameRoot);
 assert.ok(existsSync(join(gameRoot, 'dist/index.html')), 'Missing web entry point');
@@ -81,6 +83,14 @@ run('pnpm', ['build:microsoft-store'], gameRoot, {
   MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1',
 });
 run('pnpm', ['smoke:microsoft-store'], gameRoot);
+// Add a CI-only native bridge probe after the PWA acceptance has finished.
+// Resolve its public web client from this standalone consumer's installed package.
+const fixtureEntry = join(gameRoot, '.native-bridge-fixture.mjs');
+copyFileSync(join(repoRoot, 'tools/smoke/windows-native/bridge-fixture.mjs'), fixtureEntry);
+buildSync({
+  entryPoints: [fixtureEntry], bundle: true, platform: 'browser', format: 'esm',
+  outfile: join(gameRoot, 'dist/native-bridge-fixture.js'),
+});
 writeFileSync(join(outputRoot, 'result.json'), `${JSON.stringify({
   platform: process.platform,
   node: process.version,

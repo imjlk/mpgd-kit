@@ -3,22 +3,28 @@ using System.Text.Json;
 using Microsoft.UI.Xaml;
 using Microsoft.Web.WebView2.Core;
 using Windows.Storage;
+using Mpgd.MicrosoftStore.Host;
 
 namespace KitStarterHost;
 
-// This host belongs only to KIT CI. It has no Store commerce or account bridge.
+// CI exercises typed fixture callbacks; real Store login and checkout remain
+// game-owned and are not claimed by this acceptance host.
 public sealed partial class MainWindow : Window
 {
     private readonly DispatcherTimer probe = new() { Interval = TimeSpan.FromSeconds(1) };
     private bool probing;
     private string bundleSha256 = "";
+    private WebView2NativeBridge? bridge;
+    private int bridgeScenario;
+    private readonly List<JsonElement> bridgeEvidence = [];
+    private bool closed;
 
     public MainWindow()
     {
         InitializeComponent();
         Title = "MPGD KIT generated starter acceptance";
         probe.Tick += ProbeStarter;
-        Closed += (_, _) => probe.Stop();
+        Closed += (_, _) => { closed = true; probe.Stop(); bridge?.Dispose(); };
     }
 
     internal static void RecordFailure(Exception error) => File.WriteAllText(
@@ -36,6 +42,10 @@ public sealed partial class MainWindow : Window
             await GameWebView.EnsureCoreWebView2Async();
             var core = GameWebView.CoreWebView2;
             core.SetVirtualHostNameToFolderMapping("starter.mpgd.invalid", root, CoreWebView2HostResourceAccessKind.Deny);
+            // Validate HWND binding on the owning UI thread without performing
+            // Store commerce. The context is private to this native host.
+            _ = WindowStoreContext.Create(this);
+            AttachFixtureBridge();
             core.NavigationStarting += (_, navigation) =>
             {
                 if (!Uri.TryCreate(navigation.Uri, UriKind.Absolute, out var uri) ||
@@ -49,6 +59,15 @@ public sealed partial class MainWindow : Window
             {
                 if (!navigation.IsSuccess)
                     RecordFailure(new InvalidOperationException("Starter navigation failed: " + navigation.WebErrorStatus));
+                else
+                {
+                    DispatcherQueue.TryEnqueue(async () =>
+                    {
+                        if (closed) return;
+                        try { await StartBridgeProbe(); }
+                        catch (Exception error) { RecordFailure(error); }
+                    });
+                }
             };
             core.ProcessFailed += (_, failure) => RecordFailure(
                 new InvalidOperationException("WebView2 process failed: " + failure.ProcessFailedKind));
@@ -63,12 +82,30 @@ public sealed partial class MainWindow : Window
         catch (Exception error) { RecordFailure(error); }
     }
 
+    private void AttachFixtureBridge()
+    {
+        bridge?.Dispose();
+        string item = bridgeScenario == 0 ? "puzzle.coins" : "tower.coins";
+        bridge = new(GameWebView, new Uri("https://starter.mpgd.invalid/index.html"), [item], new FixtureStoreOperations(item), RecordFailure);
+    }
+
+    private async Task<string> StartBridgeProbe()
+    {
+        string item = JsonSerializer.Serialize(bridgeScenario == 0 ? "puzzle.coins" : "tower.coins");
+        return await GameWebView.CoreWebView2.ExecuteScriptAsync("""
+            globalThis.__mpgdBridgeProbe = { complete: false, passed: false };
+            import('/native-bridge-fixture.js')
+                .then(module => module.startBridgeProbe(ITEM_ID))
+                .catch(() => { globalThis.__mpgdBridgeProbe.complete = true; });
+            """.Replace("ITEM_ID", item));
+    }
     private async void ProbeStarter(object? sender, object args)
     {
         if (probing) return;
         probing = true;
         try
         {
+            if (closed) return;
             var result = await GameWebView.CoreWebView2.ExecuteScriptAsync("""
                 (() => {
                     const c = document.querySelector('#game canvas');
@@ -77,12 +114,31 @@ public sealed partial class MainWindow : Window
                         gameBundleLoaded: performance.getEntriesByType('resource').some(
                             e => new URL(e.name).pathname === '/assets/game.js'),
                         bootError: document.querySelector('.boot-error') !== null,
-                        errors: globalThis.__mpgdNativeErrors ?? ['probe not initialized']
+                        errors: globalThis.__mpgdNativeErrors ?? ['probe not initialized'],
+                        nativeBridge: globalThis.__mpgdBridgeProbe ?? { complete: false }
                     };
                 })()
                 """);
             var state = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(result)
                 ?? throw new InvalidOperationException("Missing starter probe result.");
+            if (closed) return;
+            string expectedItem = bridgeScenario == 0 ? "puzzle.coins" : "tower.coins";
+            if (bridgeEvidence.Count < 2 && state["nativeBridge"].GetProperty("complete").GetBoolean()
+                && state["nativeBridge"].TryGetProperty("itemId", out var itemId) && itemId.GetString() == expectedItem)
+            {
+                var evidence = state["nativeBridge"];
+                if (!evidence.GetProperty("passed").GetBoolean())
+                    throw new InvalidOperationException("Native fixture bridge contract failed.");
+                bridgeEvidence.Add(evidence.Clone());
+                if (bridgeScenario == 0)
+                {
+                    bridgeScenario = 1;
+                    AttachFixtureBridge();
+                    GameWebView.CoreWebView2.Navigate("https://starter.mpgd.invalid/index.html");
+                    return;
+                }
+            }
+            state["nativeHostContracts"] = JsonSerializer.SerializeToElement(bridgeEvidence);
             state["bundleSha256"] = JsonSerializer.SerializeToElement(bundleSha256);
             state["observedAt"] = JsonSerializer.SerializeToElement(DateTime.UtcNow.ToString("o"));
             var path = Path.Combine(ApplicationData.Current.LocalFolder.Path, "starter-ready.json");

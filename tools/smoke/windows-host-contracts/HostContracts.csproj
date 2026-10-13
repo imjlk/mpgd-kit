@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>12</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <NativeHostSourceDirectory Condition="'$(NativeHostSourceDirectory)' == ''">$(MSBuildThisFileDirectory)../../../packages/cli/native-tools/windows-host</NativeHostSourceDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(NativeHostSourceDirectory)/Core/*.cs" Link="Host/%(Filename)%(Extension)" />
+  </ItemGroup>
+</Project>

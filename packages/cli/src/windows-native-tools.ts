@@ -13,3 +13,17 @@ export function getMicrosoftStoreNativeAcceptanceModulePath(): string {
   }
   return modulePath;
 }
+
+/** Locate the C# core and WinUI integration sources shipped with this CLI. */
+export function getMicrosoftStoreNativeHostSourceDirectory(): string {
+  const sourceDirectory = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    './windows-host',
+  );
+  for (const file of ['Core/Mpgd.MicrosoftStore.Host.csproj', 'WinUI/WebView2NativeBridge.cs']) {
+    if (!statSync(path.join(sourceDirectory, file)).isFile()) {
+      throw new Error('The installed CLI is missing its Microsoft Store native host sources.');
+    }
+  }
+  return sourceDirectory;
+}

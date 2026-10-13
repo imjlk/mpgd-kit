@@ -979,6 +979,11 @@ jobs:
         with:
           dotnet-version: 8.0.425
       - uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2.0.0
+      - name: Test the C# host contract from the installed CLI tarball
+        shell: powershell
+        env:
+          HOST_SOURCES: ${{ runner.temp }}/windows-starter/native/native-tooling/windows-host
+        run: ./tools/smoke/windows-host-contracts/Run-HostContracts.ps1 -SourceDirectory $env:HOST_SOURCES
       - name: Package the generated game in the CI WinUI host
         shell: powershell
         env:

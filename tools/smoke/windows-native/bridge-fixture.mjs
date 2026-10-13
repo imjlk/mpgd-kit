@@ -1,0 +1,36 @@
+import {
+  createMicrosoftStoreNativeBridgeClient,
+  MicrosoftStoreNativeBridgeError,
+} from '@mpgd/adapter-browser/microsoft-store-native';
+
+// Bundled against the installed CLI consumer's adapter, exercising the public
+// TS client and C# host together rather than duplicating response validation.
+export async function startBridgeProbe(itemId) {
+  const probe = { itemId, complete: false, passed: false };
+  globalThis.__mpgdBridgeProbe = probe;
+  const client = createMicrosoftStoreNativeBridgeClient({
+    webView: globalThis.chrome.webview,
+    timeoutMs: 10_000, signInTimeoutMs: 10_000, purchaseTimeoutMs: 10_000,
+  });
+  try {
+    const catalog = await client.getDetails([itemId]);
+    const session = await client.signIn();
+    const list = await client.listPurchases();
+    const buy = await client.requestPurchase(itemId);
+    let rejected = false;
+    try { await client.requestPurchase('other.coins'); }
+    catch (error) {
+      rejected = error instanceof MicrosoftStoreNativeBridgeError
+        && error.code === 'NATIVE_OPERATION_FAILED' && error.message === 'PRODUCT_NOT_ALLOWED';
+    }
+    probe.catalog = catalog.length === 1 && catalog[0].itemId === itemId;
+    probe.signIn = session.playerId === 'ci-fixture-player';
+    probe.listPurchases = list.length === 1 && list[0].itemId === itemId;
+    probe.requestPurchase = buy.status === 'succeeded' && buy.purchaseToken === itemId;
+    probe.allowlist = rejected;
+    probe.passed = probe.catalog && probe.signIn && probe.listPurchases && probe.requestPurchase && probe.allowlist;
+  } finally {
+    probe.complete = true;
+    client.dispose();
+  }
+}

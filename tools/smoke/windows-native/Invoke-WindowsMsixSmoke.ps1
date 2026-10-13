@@ -33,6 +33,12 @@ $readiness = {
     if (Test-Path -LiteralPath $readyLog) {
         $state = Read-AtomicJson $readyLog
         $Receipt.generatedGameLoaded = Test-StarterReadiness $state $build.gameBundleSha256
+        $contracts = @($state.nativeHostContracts)
+        $Receipt.nativeHostContractsVerified = $contracts.Count -eq 2 -and
+            $contracts[0].itemId -ceq 'puzzle.coins' -and $contracts[1].itemId -ceq 'tower.coins' -and
+            @($contracts | Where-Object { $_.passed -ne $true }).Count -eq 0 -and
+            $state.nativeBridge.passed -eq $true -and $state.nativeBridge.itemId -ceq 'tower.coins'
+        $Receipt.generatedGameLoaded = $Receipt.generatedGameLoaded -and $Receipt.nativeHostContractsVerified
         if ($Receipt.generatedGameLoaded) { $Receipt.generatedGame = $state }
     }
     return [bool]$Receipt.generatedGameLoaded

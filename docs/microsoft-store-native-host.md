@@ -13,6 +13,18 @@ authoritative backend; the native callback never grants a product by itself.
 
 ## Host requirements
 
+`@mpgd/cli/windows-native-tools` exports
+`getMicrosoftStoreNativeHostSourceDirectory()` for reusable .NET 8 core and
+WinUI/WebView2 sources shipped in the CLI tarball. The common host owns protocol
+validation, bounded typed results, UI dispatch, and cancellation on navigation
+or closure. Games provide their login and commerce callbacks, Store product
+mappings and backend policy. See the
+[C# integration guide](https://github.com/imjlk/mpgd-kit/blob/main/packages/cli/native-tools/windows-host/README.md).
+
+The x64 and ARM64 CI host compiles these installed package sources and checks
+four bridge methods for two fixture game configurations through WebView2. These
+receipts remain separate from real account login and settled-purchase acceptance.
+
 The native host must enforce all of these rules before handling a bridge request:
 
 - Navigate only to the configured HTTPS game origin and reject messages from every other source.

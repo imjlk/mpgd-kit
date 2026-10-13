@@ -38,7 +38,7 @@
   },
   "files": [
     "dist",
-    "native-tools",
+    "native-tools/windows-msix",
     "templates"
   ],
   "bin": {
