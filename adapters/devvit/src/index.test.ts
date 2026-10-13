@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   bridgeCommerceV2Methods,
+  bridgeNotificationsV2Methods,
   bridgeStorageLoadProtocol,
   createBridgeError,
   type BridgeRequest,
@@ -885,6 +886,40 @@ describe('adapter-devvit', () => {
         },
       });
     }
+  });
+
+  it('fails closed for notifications v2 methods until a Devvit v2 provider exists', async () => {
+    const bridge = createDevvitSandboxBridge();
+
+    for (const method of bridgeNotificationsV2Methods) {
+      const response = await bridge.request({
+        id: `v2-${method}`,
+        method,
+        payload: { topics: ['daily'] },
+        meta: {
+          target: 'reddit',
+          appVersion: '1.2.3',
+          buildId: 'build-reddit',
+          sentAt: '2026-10-13T00:00:00.000Z',
+        },
+      });
+
+      expect(response).toEqual({
+        id: `v2-${method}`,
+        ok: false,
+        error: {
+          code: 'NOTIFICATIONS_V2_UNAVAILABLE',
+          message: expect.stringContaining(method),
+          retryable: false,
+        },
+      });
+    }
+    const gateway = createDevvitPlatformGateway({
+      appVersion: '1.2.3',
+      buildId: 'build-reddit',
+      bridge,
+    });
+    expect(gateway.notificationsV2).toBeUndefined();
   });
 });
 

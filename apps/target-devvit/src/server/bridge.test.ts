@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { bridgeCommerceV2Methods, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
+import {
+  bridgeCommerceV2Methods,
+  bridgeNotificationsV2Methods,
+  type BridgeRequest,
+  type BridgeResponse,
+} from '@mpgd/bridge';
 
 import {
   createDevvitBridgeHandler,
@@ -280,6 +285,40 @@ test('commerce v2 methods fail closed with COMMERCE_V2_UNAVAILABLE', async () =>
       assert.match(response.error.message, new RegExp(method.replaceAll('.', '\\.')));
     }
   }
+});
+
+test('notifications v2 methods fail closed with NOTIFICATIONS_V2_UNAVAILABLE', async () => {
+  // Signed in or not, and with commerce wired, the server has no notifications v2 yet.
+  const commerce = {
+    async request(input: BridgeRequest): Promise<BridgeResponse> {
+      throw new Error(`commerce must not serve ${input.method}`);
+    },
+  };
+  for (const handler of [
+    createHandler(new FakeDevvitRedis(), playerId),
+    createHandler(new FakeDevvitRedis(), undefined),
+    createDevvitBridgeHandler({
+      redis: new FakeDevvitRedis(),
+      currentPlayerId: () => playerId,
+      currentDisplayName: async () => 'Player',
+      commerce,
+    }),
+  ]) {
+    for (const method of bridgeNotificationsV2Methods) {
+      for (const payload of [{ topics: ['daily'] }, { protocol: 'mpgd.notifications.v2' }, null]) {
+        const response = await handler(request(method, payload));
+        assertError(response, 'NOTIFICATIONS_V2_UNAVAILABLE');
+        if (response.ok === false) {
+          assert.equal(response.error.retryable, false);
+          assert.match(response.error.message, new RegExp(method.replaceAll('.', '\\.')));
+        }
+      }
+    }
+  }
+  // The v1 answers are unchanged.
+  const handler = createHandler(new FakeDevvitRedis(), playerId);
+  const status = await handler(request('notifications.getStatus', { topic: 'daily-ready' }));
+  assert.deepEqual(status.ok ? status.data : undefined, 'approval-required');
 });
 
 test('commerce v2 methods are served by the configured commerce handler only', async () => {

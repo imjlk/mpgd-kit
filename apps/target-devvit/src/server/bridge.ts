@@ -2,6 +2,8 @@ import {
   bridgeStorageLoadProtocol,
   createBridgeError,
   createCommerceV2UnavailableBridgeError,
+  createNotificationsV2UnavailableBridgeError,
+  isBridgeNotificationsV2Method,
   type BridgeRequest,
   type BridgeResponse,
   type BridgeStorageLoadData,
@@ -90,6 +92,12 @@ export function createDevvitBridgeHandler(
   }
 
   return async function handleBridgeRequest(input: BridgeRequest): Promise<BridgeResponse> {
+    // Notifications v2 arrives with the Devvit provider (P3), which serves the
+    // game-rendered opt-in from this bridge; until then every v2 method
+    // answers the dedicated code, and the v1 `notifications.*` answers stay.
+    if (isBridgeNotificationsV2Method(input.method)) {
+      return createNotificationsV2UnavailableBridgeError(input, 'Devvit server bridge');
+    }
     switch (input.method) {
       case 'runtime.getCapabilities':
         return ok(input, {

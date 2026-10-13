@@ -228,7 +228,12 @@ The gateway's capability snapshot gains `PlatformCapabilities.notifications?:
 NotificationCapabilities` under the capability-snapshot rules (a fresh object
 with exact keys), as commerce added its block. Whenever `notificationsV2` is
 exposed, `providerAvailability.pushNotifications` equals
-`notifications.availability`, so the target config gates on the v2 state.
+`notifications.availability`, so the target config gates on the v2 state. An
+adapter that exposes the v1 `notifications` adapter next to `notificationsV2`
+serves v1 from the same provider, so the two report the same readiness. P2
+does this for Capacitor, and P1 and P3 do the same where they keep v1. The
+target config still takes the readiness from the v2 block, so the state
+follows v2 even where an adapter's v1 disagrees.
 
 The client declaration describes what the provider can do on the device. The
 backend never trusts it for a send decision: the gate reads the server's own
@@ -1559,6 +1564,31 @@ Other rules the profiles encode:
     [`docs/specs/notifications/schemas/`](https://github.com/imjlk/mpgd-kit/tree/main/docs/specs/notifications/schemas).
   - `validate:notifications-alignment`, run in `pnpm check`, keeps the
     constant, the vectors, and the schemas aligned.
+- **What N3 landed.** No transport serves v2 yet; P1–P3 add the providers.
+  - `@mpgd/bridge` adds the nine methods to `BridgeMethod`
+    (`bridgeNotificationsV2Methods`, kept equal to `notificationBridgeMethods`
+    by a type check and a test). `@mpgd/bridge/notifications` validates each
+    method's payload and answer with the N2 validators
+    (`assertBridgeNotificationsV2Payload`, `assertBridgeNotificationsV2Result`);
+    the main entry loads no notifications code.
+  - `BridgeEvent` is the union above. `createBridgeEventSource` numbers one
+    protocol's events from 0 for each session and attaches to the provider only
+    for the first listener, so events the provider buffered reach it.
+  - The Cloudflare Pages host, the Apps in Toss host and sandbox bridges, and
+    the Devvit sandbox and server bridges (the kit's and the CLI template's)
+    answer every method with `NOTIFICATIONS_V2_UNAVAILABLE`
+    (`createNotificationsV2UnavailableBridgeError`).
+  - The Capacitor gateway answers the same code for a method no registered
+    provider serves, before it pauses the game or reaches the base plugin, and
+    its registry refuses the methods as methods a v1 provider declares. For the
+    provider P2 adds, `requestPermission` and `openSettings` pause the game,
+    and the registry passes the methods through `assertMethodReady`.
+  - `withTargetAvailability` exposes `notificationsV2` only while
+    `integrations.notifications` lets the game call notifications, as it does
+    the v1 adapter. It then adds `PlatformCapabilities.notifications` from one
+    bounded read of the provider, copied fresh with exact keys, and sets
+    `providerAvailability.pushNotifications` to its availability. A read that
+    fails, stalls, or breaks the contract yields a block that offers nothing.
 
 ## Conformance vectors {#vectors}
 

@@ -17,6 +17,8 @@ import {
 import {
   assertBridgeRequest,
   bridgeStorageLoadProtocol,
+  createNotificationsV2UnavailableBridgeError,
+  isBridgeNotificationsV2Method,
   type BridgeRequest,
   type BridgeResponse,
   type BridgeStorageLoadData,
@@ -388,6 +390,12 @@ export function createAitHostBridge(
   };
 
   async function handleRequest(request: BridgeRequest): Promise<BridgeResponse> {
+    // Notifications v2 arrives with the Apps in Toss provider (P1); until then
+    // every v2 method answers the dedicated code, and the v1
+    // `notifications.*` methods below keep serving the game.
+    if (isBridgeNotificationsV2Method(request.method)) {
+      return createNotificationsV2UnavailableBridgeError(request, 'Apps in Toss host bridge');
+    }
     switch (request.method) {
       case 'runtime.getCapabilities': {
         const adsSupported = areFullScreenAdsSupported(dependencies);

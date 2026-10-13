@@ -12,9 +12,26 @@ Every `getCapabilities()` read must return a new object with every required
 optional and is treated as `false` when absent; `subscriptionIap` follows the
 same rule. The optional `providerAvailability` record contains per-feature
 readiness states and is compared with the fixture's expected provider state,
-not treated as a boolean capability. Mutating or retaining one
-snapshot must not change the result of the next read. The runner compares each
-read with the fixture's expected provider state.
+not treated as a boolean capability.
+
+Two optional blocks describe a provider in more detail. Each must have every
+required key, no unknown keys, and known values, and is compared with the
+fixture's expected block:
+
+- `commerce` holds the commerce v2 `purchase`, `catalog`, `lifecycle`, and
+  `authority` records and an `availability` readiness state. `nativeIap` and
+  `subscriptionIap` must equal the values derived from it.
+- `notifications` holds the notifications v2 `permission`, `remote`, and
+  `local` records, an `availability` readiness state, and the `open` path.
+  Counts are positive 32-bit integers, `remote.purposes` lists only known
+  purposes, and `remote.addressing` is `'none'` exactly when remote delivery
+  is unsupported. The block is present exactly when the gateway exposes
+  `notificationsV2`, and `providerAvailability.pushNotifications` then equals
+  its `availability`.
+
+Mutating or retaining one snapshot, including a nested record or the purposes
+list of a block, must not change the result of the next read. The runner
+compares each read with the fixture's expected provider state.
 
 ## Provider transitions {#provider-transitions}
 

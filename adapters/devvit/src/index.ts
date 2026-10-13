@@ -3,7 +3,9 @@ import {
   commerceV2UnavailableBridgeErrorCode,
   createBridgeError,
   createCommerceV2UnavailableBridgeError,
+  createNotificationsV2UnavailableBridgeError,
   decodeBridgeStorageLoadData,
+  isBridgeNotificationsV2Method,
   type BridgeMethod,
   type BridgeRequest,
   type BridgeResponse,
@@ -415,6 +417,11 @@ export function createDevvitSandboxBridge(): DevvitBridge {
 
   return {
     async request(input) {
+      // Notifications v2 arrives with the Devvit provider (P3); until then
+      // every v2 method answers the dedicated code.
+      if (isBridgeNotificationsV2Method(input.method)) {
+        return createNotificationsV2UnavailableBridgeError(input, 'Devvit sandbox bridge');
+      }
       switch (input.method) {
         case 'runtime.getCapabilities':
           return ok(input, {

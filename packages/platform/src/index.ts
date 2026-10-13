@@ -2,7 +2,7 @@ import type { AdProvider } from './ads.js';
 // Only the typia-free contract modules may be imported here: headless
 // consumers type-check this entry with `skipLibCheck: false` and no DOM lib.
 import type { CommerceProvider } from './commerce-contract.js';
-import type { NotificationProvider } from './notifications-contract.js';
+import type { NotificationCapabilities, NotificationProvider } from './notifications-contract.js';
 
 export type PlatformTarget =
   | 'browser'
@@ -413,6 +413,16 @@ export interface PlatformCapabilities {
    * `subscriptionIap` must equal `deriveLegacyCommerceCapabilities(commerce)`.
    */
   readonly commerce?: CommerceCapabilities;
+  /**
+   * Optional notifications v2 capability block of the `notificationsV2`
+   * provider the gateway exposes: present exactly when the gateway exposes
+   * one, raw adapters included. `withTargetAvailability` in
+   * `@mpgd/target-config` adds it from that provider and leaves it out while
+   * the provider is hidden. When present it must be a fresh object on every
+   * read with no unknown keys, and `providerAvailability.pushNotifications`
+   * must equal its `availability`.
+   */
+  readonly notifications?: NotificationCapabilities;
 }
 
 export interface PlayerIdentity {
@@ -718,8 +728,10 @@ export interface PlatformGateway {
    * the game-services client composes it with the backend into the
    * notifications runtime, and `toNotificationSubscriptionAdapter` serves v1
    * callers from that runtime with the topics resolved for the target. Absent
-   * on gateways whose target has no v2 provider; N3 gates it on
-   * `integrations.notifications` in the target-config runtime.
+   * on gateways whose target has no v2 provider. `withTargetAvailability` in
+   * `@mpgd/target-config` exposes it only while `integrations.notifications`
+   * lets the game call notifications, as it does the v1 adapter, and then
+   * adds `PlatformCapabilities.notifications` from it.
    */
   readonly notificationsV2?: NotificationProvider;
   readonly promotions?: PromotionRewardAdapter;

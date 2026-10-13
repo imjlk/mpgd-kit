@@ -32,6 +32,7 @@ import {
   isNotificationCapabilities,
   isNotificationErrorCode,
   isNotificationEvent,
+  isNotificationEventEnvelope,
   isNotificationTimestamp,
   notificationBridgeMethods,
   NotificationError,
@@ -211,7 +212,20 @@ describe('notifications contract', () => {
       provider: 'fcm',
       capabilities: osCapabilities,
     }).provider).toBe('fcm');
+    // A capability block crossing the bridge follows the same addressing rule.
+    expect(() => assertNotificationBridgeGetCapabilitiesResult({
+      protocolVersion: notificationsProtocolVersion,
+      provider: 'fcm',
+      capabilities: { ...osCapabilities, remote: { ...osCapabilities.remote, addressing: 'none' } },
+    })).toThrow(/addressing 'none' exactly when remote.supported is false/u);
     expect(assertNotificationBridgeRegisterResult({ registration: null })).toEqual({ registration: null });
+    expect(assertNotificationBridgeRegisterResult({
+      registration: { provider: 'devvit', address: { kind: 'platform-user' }, timeZone: 'Asia/Seoul' },
+    }).registration?.timeZone).toBe('Asia/Seoul');
+    // So does a registration: quiet hours read its zone.
+    expect(() => assertNotificationBridgeRegisterResult({
+      registration: { provider: 'devvit', address: { kind: 'platform-user' }, timeZone: 'Mars/Olympus_Mons' },
+    })).toThrow(/Unknown time zone/u);
     expect(assertNotificationBridgeCancelLocalResult({ cancelled: true })).toEqual({ cancelled: true });
     expect(assertNotificationBridgeListLocalResult({
       pending: [{ key: 'energy', topic: 'energy-full', fireAt: '2026-10-12T06:00:00Z' }],
@@ -237,6 +251,29 @@ describe('notifications contract', () => {
       .toBe(0);
     expect(() => assertNotificationEventEnvelope({ protocol: notificationsProtocol, sequence: -1, event: opened }))
       .toThrow();
+  });
+
+  it('checks an endpoint change against the register answer time zone rule', () => {
+    const changed = (timeZone: string) => ({
+      type: 'endpoint-changed',
+      registration: { provider: 'devvit', address: { kind: 'platform-user' }, timeZone },
+    } as const);
+    const envelope = (timeZone: string) => ({
+      protocol: notificationsProtocol,
+      sequence: 0,
+      event: changed(timeZone),
+    });
+    expect(assertNotificationEvent(changed('Asia/Seoul'))).toEqual(changed('Asia/Seoul'));
+    expect(assertNotificationEventEnvelope(envelope('Asia/Seoul')).event).toEqual(changed('Asia/Seoul'));
+    expect(isNotificationEvent(changed('Asia/Seoul'))).toBe(true);
+    expect(isNotificationEventEnvelope(envelope('Asia/Seoul'))).toBe(true);
+    expect(() => assertNotificationEvent(changed('Mars/Olympus_Mons'))).toThrow(/Unknown time zone/u);
+    expect(() => assertNotificationEventEnvelope(envelope('Mars/Olympus_Mons')))
+      .toThrow(/Unknown time zone/u);
+    expect(isNotificationEvent(changed('Mars/Olympus_Mons'))).toBe(false);
+    expect(isNotificationEventEnvelope(envelope('Mars/Olympus_Mons'))).toBe(false);
+    expect(() => assertNotificationBridgeRegisterResult({ registration: changed('Mars/Olympus_Mons').registration }))
+      .toThrow(/Unknown time zone/u);
   });
 
   it('validates consent records per kind', () => {

@@ -22,10 +22,25 @@ optional integration contracts:
 - `sharing.share()` and `sharing.readInboundShare()` separate outbound viral
   behavior from inbound routing.
 - `notifications` manages user subscription state only. It never sends a push.
+- `notificationsV2` is the notifications v2 provider
+  ([RFC](specs/notifications/notifications-v2-rfc.md)), reached through the
+  game-services notifications runtime rather than called by the game.
+  `withTargetAvailability()` exposes it under the same `integrations.notifications`
+  state as `notifications` and then adds its capability block to
+  `getCapabilities()`. No adapter provides it yet.
 
 These groups are optional so existing adapters remain source compatible.
 Callers must read the target runtime integration state before showing a CTA and
 must still handle an operation returning `unavailable`.
+
+Once a gateway exposes `notificationsV2`, the `notifications` integration state
+follows it: `providerAvailability.pushNotifications` is the v2 block's
+`availability`. A game still reads that state from `getTargetRuntime()` before
+it shows a notifications CTA, then asks through the notifications runtime
+([RFC "Runtime"](specs/notifications/notifications-v2-rfc.md#runtime)). It calls
+the v1 `notifications` adapter only if the gateway exposes one, because a
+gateway may expose `notificationsV2` alone. An adapter that exposes both
+serves v1 from the v2 provider, so the two report the same readiness.
 
 `ShareResult.completion` separates proof that a platform share surface was
 `presented` from proof that sharing `completed`. The field is optional so
@@ -67,9 +82,10 @@ must still handle the operation failing after a positive snapshot.
 `@mpgd/platform/capability-conformance` exports a provider-neutral runner for
 adapter and target-wrapper fixtures. The repository smoke suite applies it to
 raw and target-configured gateways for web preview, Microsoft Store, Verse8,
-Android, iOS, Apps in Toss, and Reddit. It verifies the exact boolean shape,
-snapshot isolation, target identity, target masking, and live provider
-transitions without importing platform SDKs into the shared package.
+Android, iOS, Apps in Toss, and Reddit. It verifies the boolean keys, the
+optional commerce and notifications blocks, snapshot isolation, target
+identity, target masking, and live provider transitions without importing
+platform SDKs into the shared package.
 
 The checked-in targets intentionally describe current kit readiness, not the
 desired end state. For example, Apps in Toss sharing is available through
