@@ -679,6 +679,42 @@ assertEqual(leavingEvents, 1, 'the leaving listener got the event');
 assertEqual(attachedWhileDelivering, 1, 'the stream stays attached during the delivery');
 assertEqual(leavingStream.subscriberCount, 0, 'the stream detaches after the delivery');
 
+// A stream that fails to detach after that delivery is reported, as a
+// listener's own failure is, instead of throwing into the stream's emit.
+{
+  let deliverToSession: ((event: NotificationEvent) => void) | undefined;
+  const failingDetach = createBridgeEventSource('mpgd.notifications.v2', {
+    subscribe(listener) {
+      deliverToSession = listener;
+      return () => {
+        throw new Error('detach failed');
+      };
+    },
+  });
+  const detachWarnings: unknown[] = [];
+  const warn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    detachWarnings.push(args[1]);
+  };
+  try {
+    const stop = failingDetach.subscribe(() => {
+      stop();
+    });
+    assertDoesNotThrow(
+      () => deliverToSession?.(received),
+      'a failed detach does not reach the stream',
+    );
+  } finally {
+    console.warn = warn;
+  }
+  assertEqual(detachWarnings.length, 1, 'the failed detach is reported once');
+  assertEqual(
+    (detachWarnings[0] as Error | undefined)?.message,
+    'detach failed',
+    'the report carries the stream error',
+  );
+}
+
 // A stream that replays its buffer and then throws leaves no subscription
 // behind, including one a listener made during the replay.
 let replayAttempts = 0;
@@ -799,6 +835,40 @@ assertDoesNotThrow(
   () => assertNotificationEventEnvelope(knownZoneEndpointChanged),
   'assertNotificationEventEnvelope accepts a known time zone',
 );
+// The bridge keeps its own copy of the platform's time zone rule, so both
+// must agree on every zone.
+for (const timeZone of [
+  'Asia/Seoul',
+  'UTC',
+  'Etc/GMT+9',
+  'America/Argentina/Buenos_Aires',
+  'asia/seoul',
+  'Mars/Olympus_Mons',
+  '+09:00',
+  'GMT+9',
+  ' ',
+]) {
+  const envelope = {
+    ...knownZoneEndpointChanged,
+    event: {
+      ...knownZoneEndpointChanged.event,
+      registration: { ...knownZoneEndpointChanged.event.registration, timeZone },
+    },
+  };
+  const accepts = (validate: (input: unknown) => unknown): boolean => {
+    try {
+      validate(envelope);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  assertEqual(
+    accepts(assertBridgeEvent),
+    accepts(assertNotificationEventEnvelope),
+    `the bridge and platform agree on the time zone ${JSON.stringify(timeZone)}`,
+  );
+}
 
 // The overloads pair each protocol with its own events.
 const commerceOnly = createFakeStream<CommerceEvent>();

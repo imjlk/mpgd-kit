@@ -17,7 +17,7 @@ operation will complete.
 
 <!--
 @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Explains required booleans, optional fields, provider readiness, and fresh reads.
-@evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #b582d23 Checked the optional subscription, readiness, commerce, and notifications fields, including the notificationsV2 tie, against the gateway type and runner.
+@evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f5e938c Checked the optional subscription, readiness, commerce, and notifications fields, including the notificationsV2 tie, against the gateway type and runner.
 -->
 Each read returns a separate object. Required fields are booleans; the
 optional `bannerAds` and `subscriptionIap` fields behave as `false` when absent.

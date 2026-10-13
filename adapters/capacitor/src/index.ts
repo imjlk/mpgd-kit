@@ -2,6 +2,7 @@ import {
   bridgeCommerceEventProtocol,
   decodeBridgeCredentialLoadData,
   decodeBridgeStorageLoadData,
+  type BridgeCommerceEvent,
   type BridgeMethod,
 } from '@mpgd/bridge';
 import { CapacitorGameServices } from '@mpgd/capacitor-game-services';
@@ -177,12 +178,18 @@ export function createCapacitorPlatformGateway(input: {
     : createBridgeCommerceProvider({
         store: commerceProvider.commerce.store,
         request: (method, payload) => request(method, payload),
-        // The provider's channel (`NativeBridge`) may carry other protocols;
-        // the commerce provider takes the commerce envelopes.
+        // The provider's channel (`NativeBridge`) may carry other protocols.
+        // Only an envelope that names another protocol is dropped; anything
+        // else, a malformed envelope included, reaches the commerce
+        // provider's validator.
         subscribe: (listener) => commerceProvider.bridge.subscribe((envelope) => {
-          if (envelope.protocol === bridgeCommerceEventProtocol) {
-            listener(envelope);
+          const protocol: unknown = typeof envelope === 'object' && envelope !== null
+            ? (envelope as { readonly protocol?: unknown }).protocol
+            : undefined;
+          if (typeof protocol === 'string' && protocol !== bridgeCommerceEventProtocol) {
+            return;
           }
+          listener(envelope as BridgeCommerceEvent);
         }),
       });
   const lifecycle = createCapacitorAppEvents({

@@ -252,7 +252,11 @@ export interface BridgeEventSource {
   subscribe(listener: BridgeEventListener): () => void;
 }
 
-/** Where a host's events of one protocol come from, such as a provider's `subscribe`. */
+/**
+ * Where a host's events of one protocol come from, such as a provider's
+ * `subscribe`. A `subscribe` that throws must not keep the listener: the
+ * caller has no unsubscribe for it and attaches again on its next attempt.
+ */
 export interface BridgeEventStream<TEvent> {
   subscribe(listener: (event: TEvent) => void): () => void;
 }
@@ -333,7 +337,13 @@ export function createBridgeEventSource(
       delivering = false;
       if (detachAfterDelivery) {
         detachAfterDelivery = false;
-        detachWhenIdle();
+        try {
+          detachWhenIdle();
+        } catch (error) {
+          // A listener's unsubscribe asked for this detach, so a stream that
+          // fails to detach is reported as that listener's failure would be.
+          reportListenerFailure(error);
+        }
       }
     }
   };

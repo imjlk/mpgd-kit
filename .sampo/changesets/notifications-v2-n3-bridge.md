@@ -49,8 +49,9 @@ fail-closed answer.
   delivery is delivered after it. A listener that throws, or returns a
   promise that rejects, is reported with `console.warn` and does not stop the
   others. The last listener leaving during a delivery detaches the stream once
-  the delivery ends, and if the stream's `subscribe` throws, every
-  subscription made during that call is dropped. Its overloads pair each
+  the delivery ends, reporting a failed detach the same way. If the stream's
+  `subscribe` throws, every subscription made during that call is dropped;
+  such a `subscribe` must not keep the listener. Its overloads pair each
   protocol with its own events. `BridgeEventStream` types the stream,
   `BridgeEventProtocol` names the protocols, and `BridgeEventOf<protocol>`
   names a protocol's events.

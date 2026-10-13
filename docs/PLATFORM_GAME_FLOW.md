@@ -39,8 +39,8 @@ follows it: `providerAvailability.pushNotifications` is the v2 block's
 it shows a notifications CTA, then asks through the notifications runtime
 ([RFC "Runtime"](specs/notifications/notifications-v2-rfc.md#runtime)). It calls
 the v1 `notifications` adapter only if the gateway exposes one, because a
-gateway may expose `notificationsV2` alone. An adapter that exposes both backs
-v1 with the v2 provider, so the two never disagree about readiness.
+gateway may expose `notificationsV2` alone. An adapter that exposes both
+serves v1 from the v2 provider, so the two report the same readiness.
 
 `ShareResult.completion` separates proof that a platform share surface was
 `presented` from proof that sharing `completed`. The field is optional so

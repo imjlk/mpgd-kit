@@ -138,7 +138,7 @@ export interface PlatformGatewayCapabilityConformanceReport {
  * key, known readiness states, the commerce and notifications blocks under
  * their own rules, a fresh object, and the provider's latest state.
  * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Checks each gateway read against the required boolean keys and expected provider state.
- * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #b582d23 Reviewed required booleans, optional banner/subscription defaults, ordered readiness comparison, the commerce and notifications block checks with the notificationsV2 tie and push readiness, and fresh nested rereads including an empty purposes list.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f5e938c Reviewed required booleans, optional banner/subscription defaults, ordered readiness comparison, the commerce and notifications block checks with the notificationsV2 tie and push readiness, and fresh nested rereads including an empty purposes list.
  * @evidence docs/specs/platform-capability-snapshots.md#provider-transitions Checks a fresh provider read after the optional transition update.
  * @evidenceReview docs/specs/platform-capability-snapshots.md#provider-transitions #839c0c8 Reviewed the changed-state guard and post-update snapshot assertion.
  * @evidence docs/specs/platform-capability-snapshots.md#fixture-validation Rejects invalid fixture sets and returns the names of passing fixtures.

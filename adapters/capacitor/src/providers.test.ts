@@ -646,9 +646,10 @@ describe('Capacitor optional provider composition', () => {
     }])).toThrow(/lacks methods/);
   });
 
-  it('rejects every notifications v2 answer until P2 adds them to isValidProviderData', () => {
-    // Answers the bridge validators accept; the provider data check refuses
-    // them until P2 lets a provider serve the methods and validates its answers.
+  it('is a tripwire for P2: isValidProviderData rejects every notifications v2 answer', () => {
+    // Not a test of this change: it passes with or without the explicit v2
+    // branch in isValidProviderData. It fails once a v2 answer is accepted, so
+    // P2 replaces it with tests of the answers it validates there.
     const answers: readonly (readonly [BridgeNotificationsV2Method, unknown])[] = [
       ['notifications.v2.getPermission', { app: 'granted', topics: {} }],
       ['notifications.v2.listLocal', { pending: [] }],

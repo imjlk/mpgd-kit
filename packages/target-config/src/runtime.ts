@@ -1044,7 +1044,10 @@ const isNotificationCapabilitiesShape = typia.createEquals<NotificationCapabilit
 /**
  * Reads the provider's block for every snapshot. Reads that overlap share one
  * provider read while it is in flight; nothing is kept once it settles, so
- * the next read asks the provider again. Each caller gets its own copy.
+ * the next read asks the provider again. Each caller gets its own copy. A
+ * read that starts while another is in flight gets that read's answer, which
+ * can predate a change the caller just made (for example a login), so a game
+ * that re-reads after a change awaits any read it started before.
  */
 function createNotificationCapabilityReader(
   provider: NotificationProvider,

@@ -31,6 +31,7 @@ import {
   createCapacitorProviderRegistry,
   createDegradedCommerceCapabilities,
   deriveCommerceFeatureStates,
+  type CapacitorCommerceServiceProvider,
   type CapacitorServiceProvider,
   type NativeBridge,
 } from './providers.js';
@@ -434,6 +435,42 @@ describe('provider registry with a commerce v2 provider', () => {
 });
 
 describe('gateway with a commerce v2 provider', () => {
+  it('hands its commerce provider only the commerce envelopes of a shared channel', () => {
+    const { provider } = createStoreProvider();
+    const served = createCommerceServiceProvider({ id: 'store', commerce: provider });
+    let emit: ((envelope: BridgeEvent) => void) | undefined;
+    const shared: CapacitorCommerceServiceProvider = {
+      ...served,
+      bridge: {
+        request: (input) => served.bridge.request(input),
+        subscribe(listener) {
+          emit = listener;
+          return () => {
+            emit = undefined;
+          };
+        },
+      },
+    };
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android', appVersion: '3', buildId: 'shared', bridge: baseBridge(),
+      providers: [shared],
+    });
+    const events: CommerceEvent[] = [];
+    gateway.commerceV2?.subscribe((event) => events.push(event));
+    // A notifications envelope on the provider's channel is not commerce's.
+    emit?.({
+      protocol: 'mpgd.notifications.v2',
+      sequence: 0,
+      event: { type: 'received', channel: 'remote' },
+    });
+    expect(events).toEqual([]);
+    // A malformed envelope still reaches the commerce provider's validator.
+    emit?.(null as never);
+    expect(events).toEqual([
+      { type: 'purchaseError', error: expect.objectContaining({ code: 'INVALID_RESPONSE' }) },
+    ]);
+  });
+
   it('exposes commerceV2 over the bridge path and serves v1 callers', async () => {
     const { sdk, provider } = createStoreProvider();
     const gateway = createCapacitorPlatformGateway({

@@ -17,7 +17,8 @@ Before, the provider passed through ungated.
   `providerAvailability.pushNotifications` set to its availability, so the
   notifications integration state follows the v2 provider. Each read is
   bounded at three seconds, and reads that overlap share one provider read
-  while it is in flight; nothing is kept after it settles. The answer is
+  while it is in flight, so a read that starts during another gets its
+  answer; nothing is kept after it settles. The answer is
   copied into a fresh block with exact keys, and the copy is validated, so a
   sparse `purposes` list does not pass.
 - A read that throws, stalls, or answers a block the contract rejects yields

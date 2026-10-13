@@ -14,9 +14,9 @@ same rule. The optional `providerAvailability` record contains per-feature
 readiness states and is compared with the fixture's expected provider state,
 not treated as a boolean capability.
 
-Two optional blocks describe a provider in more detail. Each must have exactly
-its declared keys and known values, and be compared with the fixture's
-expected block:
+Two optional blocks describe a provider in more detail. Each must have every
+required key, no unknown keys, and known values, and is compared with the
+fixture's expected block:
 
 - `commerce` holds the commerce v2 `purchase`, `catalog`, `lifecycle`, and
   `authority` records and an `availability` readiness state. `nativeIap` and

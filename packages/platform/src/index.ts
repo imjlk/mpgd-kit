@@ -415,7 +415,8 @@ export interface PlatformCapabilities {
   readonly commerce?: CommerceCapabilities;
   /**
    * Optional notifications v2 capability block of the `notificationsV2`
-   * provider the gateway exposes. `withTargetAvailability` in
+   * provider the gateway exposes: present exactly when the gateway exposes
+   * one, raw adapters included. `withTargetAvailability` in
    * `@mpgd/target-config` adds it from that provider and leaves it out while
    * the provider is hidden. When present it must be a fresh object on every
    * read with no unknown keys, and `providerAvailability.pushNotifications`
