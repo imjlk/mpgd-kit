@@ -87,6 +87,21 @@ export interface DevvitTargetConfig extends BaseTargetConfig {
   readonly wrapperApp: string;
   readonly webDir: string;
   readonly artifact: 'devvit';
+  /**
+   * Optional client HTML entry (relative to the Devvit client output) that
+   * Reddit loads for the inline feed surface, for example `index.html`.
+   * Setting it opts the target into inline artifact verification.
+   */
+  readonly inlineEntry?: string;
+  /** Optional first-load budget for `inlineEntry`; verified only when set. */
+  readonly inlineBudget?: DevvitInlineBudget;
+}
+
+export interface DevvitInlineBudget {
+  /** Maximum gzip size, in KiB, of the inline entry's statically reachable JS and CSS. */
+  readonly maxGzipKb?: number;
+  /** Module names that must not be reachable from the inline entry's static graph, e.g. `phaser`. */
+  readonly forbidModules?: readonly string[];
 }
 
 export interface MiniGamePackageBudget {

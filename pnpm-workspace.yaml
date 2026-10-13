@@ -7,6 +7,7 @@ packages:
   - 'native-plugins/*'
   - 'backend/*'
   - 'examples/*'
+  - 'examples/lite-starter/apps/*'
 allowBuilds:
   '@sentry/cli': true
   '@swc/core': true

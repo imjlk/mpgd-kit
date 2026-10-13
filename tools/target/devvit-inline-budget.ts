@@ -1,0 +1,153 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, normalize, relative, resolve } from 'node:path';
+import { gzipSync } from 'node:zlib';
+
+import type { DevvitInlineBudget } from './schemas';
+
+export interface DevvitInlineGraphFile {
+  readonly path: string;
+  readonly bytes: number;
+  readonly gzipBytes: number;
+}
+
+export interface DevvitInlineReport {
+  readonly entry: string;
+  readonly files: readonly DevvitInlineGraphFile[];
+  readonly gzipBytes: number;
+  readonly forbiddenHits: readonly { readonly module: string; readonly file: string }[];
+}
+
+/** Content signatures for well-known engines that are not identifiable by chunk name alone. */
+const moduleSignatures: Readonly<Record<string, RegExp>> = {
+  phaser: /Phaser v\d|PHASER_VERSION|\bPhaser\.(?:Game|Scene|AUTO)\b/,
+  'matter-js': /matter-js@|Matter\.Engine\b/,
+  pixi: /PIXI\.Application|pixi\.js/,
+  three: /REVISION\s*=\s*["']\d+["'].*three/,
+};
+
+const staticImportPattern = /(?:^|[;\s}])(?:import|export)\s*(?:[\w*{}\s,$]+\s*from\s*)?["']([^"']+)["']/g;
+const htmlAssetPattern = /<(?:script[^>]*\ssrc|link[^>]*\srel=["'](?:modulepreload|stylesheet)["'][^>]*\shref)=["']([^"']+)["']/g;
+const htmlAssetPatternReversed = /<link[^>]*\shref=["']([^"']+)["'][^>]*\srel=["'](?:modulepreload|stylesheet)["']/g;
+
+/**
+ * Walk the inline entry's first-load graph: HTML scripts, modulepreloads and
+ * stylesheets, plus static `import`/`export from` edges. Dynamic `import()`
+ * chunks are excluded because they are fetched only after interaction.
+ */
+export function collectDevvitInlineGraph(clientDir: string, inlineEntry: string): DevvitInlineReport {
+  const { contents: _contents, ...report } = walkInlineGraph(clientDir, inlineEntry);
+  return report;
+}
+
+function walkInlineGraph(
+  clientDir: string,
+  inlineEntry: string,
+): DevvitInlineReport & { readonly contents: readonly { readonly path: string; readonly content: string }[] } {
+  const root = resolve(clientDir);
+  const entryPath = resolve(root, inlineEntry);
+  if (!existsSync(entryPath)) {
+    throw new Error(`Devvit inlineEntry ${inlineEntry} does not exist in ${clientDir}.`);
+  }
+  const html = readFileSync(entryPath, 'utf8');
+  const queue: string[] = [];
+  for (const pattern of [htmlAssetPattern, htmlAssetPatternReversed]) {
+    for (const match of html.matchAll(pattern)) {
+      const reference = match[1];
+      if (reference !== undefined && isLocalReference(reference)) {
+        queue.push(resolveReference(root, dirname(entryPath), reference));
+      }
+    }
+  }
+  const seen = new Set<string>();
+  const files: DevvitInlineGraphFile[] = [];
+  const forbiddenHits: readonly { module: string; file: string }[] = [];
+  const allContents: { path: string; content: string }[] = [];
+  while (queue.length > 0) {
+    const file = queue.shift();
+    if (file === undefined || seen.has(file) || !existsSync(file)) {
+      continue;
+    }
+    seen.add(file);
+    const buffer = readFileSync(file);
+    files.push({
+      path: relative(root, file),
+      bytes: buffer.length,
+      gzipBytes: gzipSync(buffer, { level: 9 }).length,
+    });
+    const content = buffer.toString('utf8');
+    allContents.push({ path: relative(root, file), content });
+    if (file.endsWith('.js') || file.endsWith('.mjs')) {
+      for (const match of content.matchAll(staticImportPattern)) {
+        const reference = match[1];
+        if (reference !== undefined && isLocalReference(reference)) {
+          queue.push(resolveReference(root, dirname(file), reference));
+        }
+      }
+    }
+  }
+  return {
+    entry: inlineEntry,
+    files,
+    gzipBytes: files.reduce((total, file) => total + file.gzipBytes, 0),
+    forbiddenHits,
+    contents: allContents,
+  };
+}
+
+export function assertDevvitInlineBudget(input: {
+  readonly target: string;
+  readonly clientDir: string;
+  readonly inlineEntry: string;
+  readonly budget?: DevvitInlineBudget;
+}): DevvitInlineReport {
+  const report = walkInlineGraph(input.clientDir, input.inlineEntry);
+  const contents = report.contents;
+  if (report.files.length === 0) {
+    throw new Error(
+      `${input.target} inlineEntry ${input.inlineEntry} references no local scripts.`,
+    );
+  }
+  const hits: { module: string; file: string }[] = [];
+  for (const moduleName of input.budget?.forbidModules ?? []) {
+    const signature = moduleSignatures[moduleName];
+    const namePattern = new RegExp(`(?:^|[/._-])${escapeRegExp(moduleName)}(?:[._-]|$)`, 'i');
+    for (const file of contents) {
+      if (namePattern.test(file.path.replace(/\.[a-z0-9]+$/i, '')) || signature?.test(file.content) === true) {
+        hits.push({ module: moduleName, file: file.path });
+      }
+    }
+  }
+  if (hits.length > 0) {
+    throw new Error(
+      `${input.target} inline entry statically loads forbidden module(s): `
+        + hits.map((hit) => `${hit.module} in ${hit.file}`).join(', ')
+        + '. Load them with dynamic import() from the expanded surface instead.',
+    );
+  }
+  const maxGzipKb = input.budget?.maxGzipKb;
+  if (maxGzipKb !== undefined && report.gzipBytes > maxGzipKb * 1024) {
+    throw new Error(
+      `${input.target} inline entry first-load gzip size ${(report.gzipBytes / 1024).toFixed(1)} KiB `
+        + `exceeds inlineBudget.maxGzipKb ${maxGzipKb} KiB (${report.files.map((file) => file.path).join(', ')}).`,
+    );
+  }
+  return {
+    entry: report.entry,
+    files: report.files,
+    gzipBytes: report.gzipBytes,
+    forbiddenHits: hits,
+  };
+}
+
+function isLocalReference(reference: string): boolean {
+  return !/^(?:[a-z]+:)?\/\//i.test(reference) && !reference.startsWith('data:');
+}
+
+function resolveReference(root: string, fromDir: string, reference: string): string {
+  const clean = reference.split(/[?#]/)[0] ?? reference;
+  return normalize(clean.startsWith('/') ? join(root, clean) : resolve(fromDir, clean));
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
