@@ -13,6 +13,9 @@ any router sees them.
   `NativeOpenUrlEvent` docs say a router that builds its route from anything
   else in the URL, such as a custom-scheme host, must check it with
   `normalizeRootRelativeRoute`.
+- Query-only or fragment-only hierarchical links preserve a root route:
+  `mygame://game?entry=daily` gives `/?entry=daily` and `mygame://game#top`
+  gives `/#top`.
 - The Capacitor adapter discards a game link, cold or warm, whose path that
   rule refuses, such as `mygame://game//evil.example/x` or
   `https://game.example/%2F%2Fevil.example/x`. It also discards one with a

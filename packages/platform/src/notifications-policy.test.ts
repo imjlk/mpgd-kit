@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   applyNotificationAdvertisingLabel,
@@ -597,6 +597,19 @@ describe('evaluateNotificationDelivery', () => {
 });
 
 describe('notification topic routes', () => {
+  it('validates and reports invalid routes without a URL global', () => {
+    vi.stubGlobal('URL', undefined);
+    try {
+      expect(isRootRelativeNotificationRoute('/daily?entry=push#top')).toBe(true);
+      expect(isRootRelativeNotificationRoute('/a/../daily')).toBe(false);
+      expect(isRootRelativeNotificationRoute('/%2F%2Fevil.example')).toBe(false);
+      expect(notificationTopicDefinitionIssues({ ...service, route: '/é' }))
+        .toEqual([{ path: 'topic.route', message: expect.stringContaining('/%C3%A9') }]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   const base = 'https://mpgd.invalid';
   // Each passes a same-origin check against a placeholder base, yet resolves to
   // a protocol-relative pathname that a client opens as a link to another host.

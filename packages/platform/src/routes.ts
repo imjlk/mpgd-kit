@@ -9,7 +9,42 @@ import type { ShareAdapter, ShareIntent, ShareResult } from './index.js';
  * host.
  */
 
-const placeholderOrigin = 'https://mpgd.invalid';
+/** Collapse HTTP(S) path segments without requiring the DOM URL global. */
+function normalizePath(path: string): string {
+  const segments = path.replace(/\\/gu, '/').slice(1).split('/');
+  const result: string[] = [];
+  for (const [index, segment] of segments.entries()) {
+    const dot = segment.replace(/%2e/giu, '.');
+    if (dot === '.' || dot === '..') {
+      if (dot === '..') {
+        result.pop();
+      }
+      if (index === segments.length - 1) {
+        result.push('');
+      }
+    } else {
+      result.push(segment);
+    }
+  }
+  return `/${result.join('/')}`;
+}
+
+/** WHATWG HTTP(S) component encoding; existing percent escapes stay intact. */
+function encodeRouteComponent(value: string, component: 'path' | 'query' | 'hash'): string {
+  const extra = component === 'path' ? ' "#<>?^`{}' : component === 'query' ? ' "#<>\'' : ' "<>`';
+  let result = '';
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code > 0x7e || code <= 0x20 || extra.includes(character)) {
+      const scalar = code >= 0xd800 && code <= 0xdfff ? '\uFFFD' : character;
+      // encodeURIComponent leaves an apostrophe unescaped, unlike a special query.
+      result += character === "'" ? '%27' : encodeURIComponent(scalar);
+    } else {
+      result += character;
+    }
+  }
+  return result;
+}
 
 /** Whether `value` contains an ASCII control character (C0 or DEL). */
 export function hasRouteControlCharacter(value: string): boolean {
@@ -65,15 +100,14 @@ export function hasNetworkPathPrefix(pathname: string): boolean {
   // Each reading is a prefix of the decoded path, so it starts with one slash
   // and no second slash or backslash: parsing it cannot fail or reach another
   // origin. A `?` or `#` left in a reading is escaped so it stays in the path,
-  // and the `#` after it keeps a trailing space or control character in the
-  // path, as when the rest of the link follows, instead of letting URL parsing
-  // strip it.
+  // and the path-only normalizer keeps trailing spaces and controls, as when
+  // the rest of the link follows, instead of stripping them as URL input.
   return [...delimiters, decoded.length].some((end) => {
     const reading = decoded
       .slice(0, end)
       .replace(/[?#]/gu, (delimiter) => (delimiter === '?' ? '%3F' : '%23'));
 
-    return new URL(`${reading}#`, placeholderOrigin).pathname.startsWith('//');
+    return normalizePath(reading).startsWith('//');
   });
 }
 
@@ -100,9 +134,18 @@ export function normalizeRootRelativeRoute(input: string): string | undefined {
     return undefined;
   }
 
-  // With no control character and no second slash or backslash, the input is
-  // a plain path: it cannot fail to parse or reach another origin.
-  const { pathname, search, hash } = new URL(input, placeholderOrigin);
+  // Match the HTTP(S) URL path algorithm with string operations so pure
+  // notification/catalog validation also works in runtimes with no URL.
+  const trimmed = input.replace(/ +$/u, '');
+  const hashIndex = trimmed.indexOf('#');
+  const beforeHash = hashIndex < 0 ? trimmed : trimmed.slice(0, hashIndex);
+  const queryIndex = beforeHash.indexOf('?');
+  const path = queryIndex < 0 ? beforeHash : beforeHash.slice(0, queryIndex);
+  const query = queryIndex < 0 ? '' : beforeHash.slice(queryIndex + 1);
+  const fragment = hashIndex < 0 ? '' : trimmed.slice(hashIndex + 1);
+  const pathname = encodeRouteComponent(normalizePath(path), 'path');
+  const search = query === '' ? '' : `?${encodeRouteComponent(query, 'query')}`;
+  const hash = fragment === '' ? '' : `#${encodeRouteComponent(fragment, 'hash')}`;
 
   return hasNetworkPathPrefix(pathname) ? undefined : `${pathname}${search}${hash}`;
 }

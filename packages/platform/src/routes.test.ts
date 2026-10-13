@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { rootRelativeRouteVectors, shareLinkVectors } from './route-vectors.js';
 import {
@@ -66,6 +66,33 @@ function problemWith(input: string): string | undefined {
 }
 
 describe('root-relative routes', () => {
+  it('normalizes without a URL global', () => {
+    vi.stubGlobal('URL', undefined);
+    try {
+      for (const [input, route] of rootRelativeRouteVectors.normalized) {
+        expect(normalizeRootRelativeRoute(input), input).toBe(route);
+      }
+      for (const input of rootRelativeRouteVectors.rejected) {
+        expect(normalizeRootRelativeRoute(input), input).toBeUndefined();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('matches HTTP(S) URL component serialization and dot segments', () => {
+    const components = ['', ' ', 'é', '😀', '\uD800', '\uDC00', "'", '"', '<', '>', '^', '`', '{', '}', '[', ']', '\\', '%', '%2e', '%2E%2e', '..', '.', '%2f', '%3f', '?', '#'];
+    for (const part of components) {
+      for (const input of [`/a/${part}/b`, `/a/${part}`, `/a?q=${part}#tail`, `/a#${part}`, `/a/${part}/../b`]) {
+        const parsed = new URL(input, base);
+        const expected = hasNetworkPathPrefix(parsed.pathname)
+          ? undefined
+          : `${parsed.pathname}${parsed.search}${parsed.hash}`;
+        expect(normalizeRootRelativeRoute(input), JSON.stringify(input)).toBe(expected);
+      }
+    }
+  });
+
   it('normalizes routes that stay on the origin, and a normalized route normalizes to itself', () => {
     for (const [input, route] of rootRelativeRouteVectors.normalized) {
       expect(normalizeRootRelativeRoute(input), input).toBe(route);

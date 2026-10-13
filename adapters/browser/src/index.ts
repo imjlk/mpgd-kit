@@ -410,10 +410,9 @@ async function shareFromBrowser(
 
 /**
  * The URL the clipboard fallback copies. An absolute link is copied as is. A
- * root-relative route is resolved against `document.baseURI`, as Web Share
- * resolves it. When the document has no HTTP(S) base, as in an embedded or
- * `file:` page, the page URL the gateway was given (`locationHref`) or the
- * location is tried next; without any HTTP(S) page, there is no link worth
+ * root-relative route is resolved against the explicit game page URL
+ * (`locationHref`) first, then the document base or ambient location.
+ * Without any HTTP(S) page, there is no link worth
  * pasting.
  */
 function toClipboardUrl(link: string, options: BrowserPlatformGatewayOptions): string | undefined {
@@ -422,8 +421,8 @@ function toClipboardUrl(link: string, options: BrowserPlatformGatewayOptions): s
   }
 
   for (const base of [
-    globalThis.document?.baseURI,
     options.locationHref,
+    globalThis.document?.baseURI,
     globalThis.location?.href,
   ]) {
     if (base === undefined) {

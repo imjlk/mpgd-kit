@@ -85,6 +85,34 @@ function catalogWith(...topics: readonly unknown[]): unknown {
 
 /** Deployment settings without the Korean rules, so the rules below are checked on their own. */
 const plainDeployment: NotificationDeployment = { advertisingRules: 'none' };
+// Pure catalog APIs must work on mini-game runtimes with no DOM URL global.
+{
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'URL');
+  Object.defineProperty(globalThis, 'URL', { configurable: true, value: undefined });
+  try {
+    const options = { targetProviders, deployment: plainDeployment };
+    assert.ok(
+      validateNotificationTopicCatalog(catalogWith(baseTopic), options).valid,
+      'valid catalog without URL',
+    );
+    assertNotificationTopicCatalog(catalogWith(baseTopic), options);
+    assert.ok(
+      !validateNotificationTopicCatalog(catalogWith({ ...baseTopic, route: '/.//evil.example' }), options).valid,
+      'unsafe catalog without URL',
+    );
+    assert.throws(
+      () => assertNotificationTopicCatalog(catalogWith({ ...baseTopic, route: '/é' }), options),
+      /normalized form/u,
+      'invalid catalog without URL reports a validation error',
+    );
+  } finally {
+    if (descriptor === undefined) {
+      Reflect.deleteProperty(globalThis, 'URL');
+    } else {
+      Object.defineProperty(globalThis, 'URL', descriptor);
+    }
+  }
+}
 const krDeployment: NotificationDeployment = {
   advertisingRules: 'kr',
   advertisingSender: { contact: '080-1234-5678' },

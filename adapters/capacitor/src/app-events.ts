@@ -59,11 +59,14 @@ function readGameLinkRoute(url: string): string | null | undefined {
     return null;
   }
 
-  if (!parsed.pathname.startsWith('/')) {
+  const pathname = parsed.pathname === '' && (parsed.search !== '' || parsed.hash !== '')
+    ? '/'
+    : parsed.pathname;
+  if (!pathname.startsWith('/')) {
     return undefined;
   }
 
-  return normalizeRootRelativeRoute(`${parsed.pathname}${parsed.search}${parsed.hash}`) ?? null;
+  return normalizeRootRelativeRoute(`${pathname}${parsed.search}${parsed.hash}`) ?? null;
 }
 
 function toOpenUrlEvent(

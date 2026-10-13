@@ -15,6 +15,21 @@ afterEach(() => {
 });
 
 describe('browser share clipboard fallback', () => {
+  it('uses the configured game page ahead of a host shell or asset base', async () => {
+    vi.stubGlobal('document', { baseURI: 'https://host.example/assets/' });
+    vi.stubGlobal('location', { href: 'https://shell.example/' });
+    const clipboard: string[] = [];
+    const gateway = createBrowserPlatformGateway({
+      lifecycle,
+      locationHref: 'https://game.example/play/',
+      async writeClipboardText(text) { clipboard.push(text); },
+    });
+    await expect(gateway.sharing?.share?.({
+      kind: 'invite', title: 'Join', text: 'Join', deepLink: '/daily',
+    })).resolves.toEqual({ status: 'shared' });
+    expect(clipboard).toEqual(['Join\nhttps://game.example/daily']);
+  });
+
   it('copies a root-relative link resolved against the document base and keeps Web Share relative', async () => {
     vi.stubGlobal('document', { baseURI: 'https://game.example/play/index.html' });
     vi.spyOn(console, 'warn').mockImplementation(() => {});

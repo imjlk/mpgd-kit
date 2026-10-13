@@ -247,6 +247,8 @@ describe('Capacitor App event ownership', () => {
     fake.emit('appUrlOpen', { url: 'https://game.example/a%20b/%C3%A9' });
     // The host is not part of the route.
     fake.emit('appUrlOpen', { url: 'mpgd://level/3' });
+    fake.emit('appUrlOpen', { url: 'mpgd://game?entry=daily' });
+    fake.emit('appUrlOpen', { url: 'mpgd://game#top' });
     // No path to check: the router maps these itself and checks what it derives.
     fake.emit('appUrlOpen', { url: 'mpgd://daily' });
     fake.emit('appUrlOpen', { url: 'mpgd:daily' });
@@ -258,6 +260,8 @@ describe('Capacitor App event ownership', () => {
       },
       { url: 'https://game.example/a%20b/%C3%A9', source: 'warm', route: '/a%20b/%C3%A9' },
       { url: 'mpgd://level/3', source: 'warm', route: '/3' },
+      { url: 'mpgd://game?entry=daily', source: 'warm', route: '/?entry=daily' },
+      { url: 'mpgd://game#top', source: 'warm', route: '/#top' },
       { url: 'mpgd://daily', source: 'warm' },
       { url: 'mpgd:daily', source: 'warm' },
     ]);

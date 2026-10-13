@@ -9,6 +9,9 @@ share links and v1 notification deep links follow, instead of its own copy.
 Topic `route` and `optOutRoute` in a catalog, a local reminder's `route`, and
 the route a router opens all follow it.
 
+Root-relative normalization uses string operations, so catalog and notification
+policy validation works in runtimes without the DOM `URL` constructor.
+
 - A route that is not already in its normalized form is refused, and the
   catalog issue and the thrown error name that form. Examples are `/é`
   (`/%C3%A9`), `/a b` (`/a%20b`), a backslash in the path, and an empty `?` or
