@@ -575,7 +575,7 @@ describe('commerce v2 launched purchase activity', () => {
     gateway.lifecycle.onPause(() => { counts.pauses += 1; });
     gateway.lifecycle.onResume(() => { counts.resumes += 1; });
     await settle();
-    await expect(gateway.commerceV2?.requestPurchase({
+    await expect(gateway.commerce?.requestPurchase({
       logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop',
     })).resolves.toEqual({ outcome: 'launched' });
     expect(counts).toEqual({ pauses: 1, resumes: 0 });

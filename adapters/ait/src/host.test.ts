@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rootRelativeRouteVectors } from '@mpgd/platform/route-vectors';
 
 import { bridgeNotificationsV2Methods, type BridgeRequest } from '@mpgd/bridge';
-import type { CommerceDiagnostic, ProductInfo, PurchaseRestoreResult } from '@mpgd/platform'; 
+import type { CommerceDiagnostic, ProductInfo, PurchaseRestoreResult } from '@mpgd/platform';
 import {
   createAitHostBridge,
   createAitSessionIdentityProvider,
