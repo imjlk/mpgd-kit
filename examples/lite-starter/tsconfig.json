@@ -1,0 +1,35 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "rootDir": "../..",
+    "useDefineForClassFields": true,
+    "strict": true,
+    "strictNullChecks": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "types": ["vite/client", "node"],
+    "noEmit": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "vite.config.ts",
+    "../../packages/**/*.ts",
+    "../../adapters/**/*.ts",
+    "../../native-plugins/*/src/**/*.ts"
+  ],
+  "exclude": [
+    "dist",
+    "../../packages/**/dist/**",
+    "../../packages/cli/templates/**",
+    "../../adapters/**/dist/**",
+    "../../native-plugins/**/dist/**"
+  ]
+}

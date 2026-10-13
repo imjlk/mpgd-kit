@@ -1,0 +1,21 @@
+{
+  "lang": "en-US",
+  "name": "Lite Starter",
+  "short_name": "lite-starter",
+  "description": "Lite Starter built with mpgd-kit.",
+  "id": "./lite-starter",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

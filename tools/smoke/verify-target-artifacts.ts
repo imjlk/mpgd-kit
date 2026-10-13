@@ -13,7 +13,9 @@ import {
 import { readJsonFile } from '../io';
 import { assertFreshNativeBuildArtifact } from '../target/native-build-attempt';
 import { assertCrazyGamesArtifact } from '../target/crazygames-artifact';
+import { assertDevvitInlineBudget } from '../target/devvit-inline-budget';
 import { assertOnePlayArtifact } from '../target/oneplay-artifact';
+import type { DevvitInlineBudget } from '../target/schemas';
 import {
   createMicrosoftStorePwaRevision,
   readMicrosoftStorePwaReleaseEvidence,
@@ -61,6 +63,8 @@ interface SmokePlatformTargetConfig {
   readonly orientation?: 'portrait' | 'landscape';
   readonly experimental?: true;
   readonly packageBudget?: SmokeMiniGameTargetConfig['packageBudget'];
+  readonly inlineEntry?: string;
+  readonly inlineBudget?: DevvitInlineBudget;
 }
 
 interface SmokePlatformTargetsConfig {
@@ -161,6 +165,18 @@ export function verifyTargetArtifacts(
 
     if (targetConfig.kind === 'devvit-web') {
       verifyDevvitWebManifest(target, targetConfig, artifactPath, effectiveConfigPath);
+      if (targetConfig.inlineEntry !== undefined) {
+        const inline = assertDevvitInlineBudget({
+          target,
+          clientDir: `${artifactPath}/client`,
+          inlineEntry: targetConfig.inlineEntry,
+          ...(targetConfig.inlineBudget === undefined ? {} : { budget: targetConfig.inlineBudget }),
+        });
+        console.info(
+          `${target}: inline entry ${inline.entry} first-load ${(inline.gzipBytes / 1024).toFixed(1)} KiB gzip `
+            + `across ${inline.files.length} file(s).`,
+        );
+      }
     }
 
     if (isSmokeMiniGameTargetConfig(targetConfig)) {

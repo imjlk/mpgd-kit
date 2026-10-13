@@ -325,6 +325,20 @@ const sourceDir = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolvePackageRoot(sourceDir);
 const detectedKitRoot = resolveDefaultKitRoot();
 const gameTemplateDir = path.resolve(packageRoot, 'templates/phaser-game');
+const liteTemplateOverlayDir = path.resolve(packageRoot, 'templates/lite-overlay');
+const supportedGameTemplates = ['phaser', 'lite'] as const;
+type GameTemplate = (typeof supportedGameTemplates)[number];
+/** Lite renderers implemented today. dom/svg are reserved extension points in @mpgd/lite-shell. */
+const supportedLiteRenderers = ['canvas'] as const;
+type LiteRendererOption = (typeof supportedLiteRenderers)[number];
+/** Phaser-only base template files that the lite template does not emit. */
+const liteTemplateRemovedFiles = new Set([
+  'src/scenes/BootScene.ts',
+  'src/scenes/LobbyScene.ts',
+  'src/scenes/PlayScene.ts',
+  'src/assets/manifest.ts',
+  'src/assets/marker.svg',
+]);
 const cliVersion = readPackageVersion(packageRoot);
 const recommendedMatrixTargets = 'web,microsoft-store,verse8,ait,reddit';
 const recommendedMatrixTargetsWithoutMicrosoftStore = recommendedMatrixTargets
@@ -351,6 +365,7 @@ const mpgdTemplateDependencyPackages = [
   { name: '@mpgd/game-services', packageDir: 'packages/game-services' },
   { name: '@mpgd/game-runtime', packageDir: 'packages/game-runtime' },
   { name: '@mpgd/i18n', packageDir: 'packages/i18n' },
+  { name: '@mpgd/lite-shell', packageDir: 'packages/lite-shell' },
   { name: '@mpgd/phaser-assets', packageDir: 'packages/phaser-assets' },
   { name: '@mpgd/platform', packageDir: 'packages/platform' },
   { name: '@mpgd/target-config', packageDir: 'packages/target-config' },
@@ -845,9 +860,27 @@ const gameCommand = defineI18n({
             en: 'Include the Microsoft Store PWA target and release workflow.',
             ko: 'Microsoft Store PWA 타깃과 출시 워크플로를 포함합니다.',
           },
+          template: {
+            en: 'Game template: phaser (default) or lite (no Phaser, @mpgd/lite-shell).',
+            ko: '게임 템플릿: phaser(기본) 또는 lite(Phaser 없음, @mpgd/lite-shell).',
+          },
+          renderer: {
+            en: 'Lite template renderer. Only canvas is implemented today.',
+            ko: 'lite 템플릿 렌더러. 현재는 canvas만 지원합니다.',
+          },
         },
       ),
       args: {
+        template: {
+          type: 'string',
+          required: false,
+          description: 'Game template: phaser (default) or lite.',
+        },
+        renderer: {
+          type: 'string',
+          required: false,
+          description: 'Lite template renderer: canvas (default).',
+        },
         directory: {
           type: 'positional',
           required: true,
@@ -899,8 +932,14 @@ const gameCommand = defineI18n({
             ? 'workspace:*'
             : readOptionalString(ctx.values['dependency-version']);
         const kitPath = readGameCreateKitPath(ctx.values, ctx.values.workspace === true);
+        const { template, renderer } = readGameCreateTemplate(
+          readOptionalString(ctx.values.template),
+          readOptionalString(ctx.values.renderer),
+        );
 
         createGameApp({
+          template,
+          ...(renderer === undefined ? {} : { renderer }),
           directory,
           ...(title === undefined ? {} : { title }),
           ...(packageName === undefined ? {} : { packageName }),
@@ -3406,7 +3445,108 @@ function normalizeLegalHtml(content: string, sourceFile: string): string {
   return content.endsWith('\n') ? content : `${content}\n`;
 }
 
+function readGameCreateTemplate(
+  template: string | undefined,
+  renderer: string | undefined,
+): { readonly template: GameTemplate; readonly renderer?: LiteRendererOption } {
+  const resolvedTemplate = template ?? 'phaser';
+  if (!(supportedGameTemplates as readonly string[]).includes(resolvedTemplate)) {
+    throw new Error(
+      `Unsupported --template ${resolvedTemplate}; expected one of: ${supportedGameTemplates.join(', ')}.`,
+    );
+  }
+  if (resolvedTemplate !== 'lite') {
+    if (renderer !== undefined) {
+      throw new Error('--renderer is only available with --template lite.');
+    }
+    return { template: resolvedTemplate as GameTemplate };
+  }
+  const resolvedRenderer = renderer ?? 'canvas';
+  if (!(supportedLiteRenderers as readonly string[]).includes(resolvedRenderer)) {
+    throw new Error(
+      `Unsupported --renderer ${resolvedRenderer}; implemented lite renderers: ${supportedLiteRenderers.join(', ')}. `
+        + 'dom and svg are planned LiteRenderer implementations.',
+    );
+  }
+  return { template: 'lite', renderer: resolvedRenderer as LiteRendererOption };
+}
+
+/** Apply the lite overlay to base template files: drop Phaser-only files and swap renderers. */
+function applyLiteTemplateOverlay(
+  baseFiles: readonly TemplateFile[],
+  overlayFiles: readonly TemplateFile[],
+): readonly TemplateFile[] {
+  const overlay = new Map(overlayFiles.map((file) => [file.relativePath, file]));
+  const merged = baseFiles.flatMap((file) => {
+    if (liteTemplateRemovedFiles.has(file.relativePath)) {
+      return [];
+    }
+    const replacement = overlay.get(file.relativePath);
+    overlay.delete(file.relativePath);
+    if (replacement !== undefined) {
+      return [replacement];
+    }
+    if (file.relativePath === 'package.json') {
+      return [{ ...file, content: liteTemplatePackageJson(file.content) }];
+    }
+    if (file.relativePath === 'agent/game-manifest.json') {
+      return [{ ...file, content: liteTemplateGameManifest(file.content) }];
+    }
+    if (file.relativePath === 'mpgd.targets.json') {
+      return [{ ...file, content: liteTemplateTargets(file.content) }];
+    }
+    return [file];
+  });
+  return [...merged, ...overlay.values()];
+}
+
+function liteTemplateTargets(content: string): string {
+  const value = JSON.parse(content) as { targets: Record<string, Record<string, unknown>> };
+  const reddit = value.targets.reddit;
+  if (reddit !== undefined) {
+    reddit.inlineEntry = 'index.html';
+    reddit.inlineBudget = {
+      maxGzipKb: 40,
+      forbidModules: ['phaser', 'matter-js'],
+      deferredChunks: ['main.js', 'matter.js', 'assets/main-*.js', 'assets/matter-*.js'],
+    };
+  }
+  return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+function liteTemplatePackageJson(content: string): string {
+  const value = JSON.parse(content) as {
+    description?: string;
+    dependencies?: Record<string, string>;
+  };
+  value.description = (value.description ?? '').replace('mpgd Phaser game', 'mpgd lite (Canvas2D) game');
+  const dependencies = { ...value.dependencies };
+  delete dependencies.phaser;
+  delete dependencies['@mpgd/phaser-assets'];
+  dependencies['@mpgd/lite-shell'] = '__MPGD_DEPENDENCY_VERSION_LITE_SHELL__';
+  value.dependencies = Object.fromEntries(Object.entries(dependencies).sort(([a], [b]) => a.localeCompare(b)));
+  return `${JSON.stringify(value, null, 2)}\n`;
+}
+
+function liteTemplateGameManifest(content: string): string {
+  const value = JSON.parse(content) as {
+    game?: Record<string, unknown>;
+    blocks?: { id: string; owner: string }[];
+  };
+  if (value.game !== undefined) {
+    value.game.engine = 'lite-canvas';
+  }
+  value.blocks = (value.blocks ?? []).map((block) =>
+    block.id === 'assets.manifest.phaser-loader'
+      ? { id: 'render.lite-shell.canvas', owner: 'src/lite/tapGame.ts' }
+      : block,
+  );
+  return `${JSON.stringify(value, null, 2)}\n`;
+}
+
 function createGameApp(input: {
+  readonly template?: GameTemplate;
+  readonly renderer?: LiteRendererOption;
   readonly directory: string;
   readonly title?: string;
   readonly packageName?: string;
@@ -3418,6 +3558,10 @@ function createGameApp(input: {
 }): void {
   const appDir = resolveAppDirectory(input.directory);
   const gameName = path.basename(appDir);
+
+  if (input.template === 'lite' && !input.workspace) {
+    throw new Error('The lite template requires --workspace until @mpgd/lite-shell is published.');
+  }
 
   assertValidGameName(gameName);
 
@@ -3441,7 +3585,11 @@ function createGameApp(input: {
     ...(input.title === undefined ? {} : { title: input.title }),
     microsoftStore: input.microsoftStore,
   });
-  const files = collectTemplateFiles(gameTemplateDir).flatMap((file) => {
+  const baseTemplateFiles = collectTemplateFiles(gameTemplateDir);
+  const selectedTemplateFiles = input.template === 'lite'
+    ? applyLiteTemplateOverlay(baseTemplateFiles, collectTemplateFiles(liteTemplateOverlayDir))
+    : baseTemplateFiles;
+  const files = selectedTemplateFiles.flatMap((file) => {
     const prepared = prepareBaseGameTemplateFile({
       relativePath: file.relativePath,
       content: file.content,
@@ -3805,9 +3953,10 @@ function renderTemplate(
 }
 
 function templateOutputPath(relativePath: string): string {
-  return path.basename(relativePath) === 'gitignore'
-    ? path.join(path.dirname(relativePath), '.gitignore')
-    : relativePath;
+  const normalized = relativePath.replace(/\\/gu, '/');
+  return path.posix.basename(normalized) === 'gitignore'
+    ? path.posix.join(path.posix.dirname(normalized), '.gitignore')
+    : normalized;
 }
 
 function toPascalCase(value: string): string {

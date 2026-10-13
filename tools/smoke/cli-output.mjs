@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,6 +47,42 @@ try {
     assert.equal(sourceRoot, expectedRoot, 'the source root must contain both game and kit sources');
     assert.equal(outside(path.relative(sourceRoot, gameRoot)), false);
     if (workspace) assert.equal(outside(path.relative(sourceRoot, root)), false);
+  }
+  const liteRoot = path.join(fixtureRoot, 'lite-game');
+  const lite = spawnSync(process.execPath, [
+    'packages/cli/dist/bin.js', 'game', 'create', liteRoot, '--kit-path', root, '--template', 'lite', '--workspace',
+  ], { cwd: root, encoding: 'utf8', timeout: 180_000 });
+  assert.equal(lite.status, 0, lite.stderr);
+  const litePackage = JSON.parse(readFileSync(path.join(liteRoot, 'package.json'), 'utf8'));
+  assert.equal(litePackage.dependencies.phaser, undefined, 'lite games must not depend on Phaser');
+  assert.equal(typeof litePackage.dependencies['@mpgd/lite-shell'], 'string');
+  assert.equal(existsSync(path.join(liteRoot, 'src/scenes')), false);
+  assert.equal(existsSync(path.join(liteRoot, 'src/lite/tapGame.ts')), true);
+  const liteSources = ['src/runtime/createGame.ts', 'src/platform/devvitEntrypoint.ts', 'src/lite/tapGame.ts']
+    .map((file) => readFileSync(path.join(liteRoot, file), 'utf8')).join('\n');
+  assert.doesNotMatch(liteSources, /from 'phaser'/);
+  const liteManifest = JSON.parse(readFileSync(path.join(liteRoot, 'agent/game-manifest.json'), 'utf8'));
+  assert.equal(liteManifest.game.engine, 'lite-canvas');
+  const liteTargets = JSON.parse(readFileSync(path.join(liteRoot, 'mpgd.targets.json'), 'utf8'));
+  assert.equal(liteTargets.targets.reddit.inlineEntry, 'index.html');
+  assert.equal(liteTargets.targets.reddit.inlineBudget.maxGzipKb, 40);
+  assert.deepEqual(liteTargets.targets.reddit.inlineBudget.forbidModules, ['phaser', 'matter-js']);
+  const liteGuidance = ['AGENTS.md', 'README.md', 'agent/brief.md', 'agent/acceptance.md',
+    'docs/MPGD_KIT_WORKFLOWS.md', '.agents/skills/use-mpgd-kit/SKILL.md']
+    .map((file) => readFileSync(path.join(liteRoot, file), 'utf8')).join('\n');
+  assert.doesNotMatch(liteGuidance, /Build a Phaser|Phaser scenes|src\/scenes|Keep Phaser-loadable/);
+  assert.match(liteGuidance, /Canvas2D/);
+  for (const [args, message] of [
+    [['--template', 'lite'], /requires --workspace/],
+    [['--template', 'pixi'], /Unsupported --template pixi/],
+    [['--template', 'lite', '--renderer', 'svg'], /implemented lite renderers: canvas/],
+    [['--renderer', 'canvas'], /only available with --template lite/],
+  ]) {
+    const rejected = spawnSync(process.execPath, [
+      'packages/cli/dist/bin.js', 'game', 'create', path.join(fixtureRoot, 'rejected-game'), '--kit-path', root, ...args,
+    ], { cwd: root, encoding: 'utf8', timeout: 180_000 });
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.stderr, message);
   }
 } finally {
   rmSync(fixtureRoot, { recursive: true, force: true });

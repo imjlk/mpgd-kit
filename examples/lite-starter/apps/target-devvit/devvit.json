@@ -1,0 +1,47 @@
+{
+  "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
+  "name": "lite-starter",
+  "marketingAssets": {
+    "icon": "generated/marketing-icon.png"
+  },
+  "post": {
+    "dir": "dist/client",
+    "entrypoints": {
+      "default": {
+        "entry": "index.html",
+        "height": "tall"
+      },
+      "game": {
+        "entry": "game.html",
+        "height": "tall"
+      }
+    }
+  },
+  "server": {
+    "dir": "dist/server",
+    "entry": "index.cjs"
+  },
+  "permissions": {
+    "redis": true,
+    "reddit": {
+      "enable": true
+    },
+    "payments": false,
+    "realtime": false
+  },
+  "menu": {
+    "items": [
+      {
+        "label": "Create Lite Starter post",
+        "description": "Create a playable Lite Starter post.",
+        "forUserType": "moderator",
+        "location": "subreddit",
+        "endpoint": "/internal/menu/create-post"
+      }
+    ]
+  },
+  "scripts": {
+    "dev": "vite build --mode staging --watch",
+    "build": "pnpm build"
+  }
+}

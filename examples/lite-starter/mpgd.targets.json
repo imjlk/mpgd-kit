@@ -1,0 +1,114 @@
+{
+  "targets": {
+    "web-preview": {
+      "kind": "web",
+      "gameApp": ".",
+      "adapter": "browser",
+      "icon": {
+        "profile": "web-preview"
+      },
+      "output": "artifacts/web-preview"
+    },
+    "verse8": {
+      "kind": "web",
+      "gameApp": ".",
+      "adapter": "verse8",
+      "icon": {
+        "profile": "web-preview"
+      },
+      "output": "artifacts/verse8"
+    },
+    "crazygames": {
+      "kind": "web",
+      "gameApp": ".",
+      "adapter": "crazygames",
+      "icon": {
+        "profile": "web-preview"
+      },
+      "installable": false,
+      "crazyGamesLaunch": "basic",
+      "output": "artifacts/crazygames"
+    },
+    "oneplay": {
+      "kind": "web",
+      "gameApp": ".",
+      "adapter": "oneplay",
+      "icon": {
+        "profile": "web-preview"
+      },
+      "installable": false,
+      "output": "artifacts/oneplay",
+      "authoritativeGameServices": false
+    },
+    "android": {
+      "kind": "capacitor-android",
+      "gameApp": ".",
+      "shellApp": "${MPGD_KIT_PATH}/apps/mobile-capacitor",
+      "adapter": "capacitor",
+      "icon": {
+        "profile": "android"
+      },
+      "webDir": "${MPGD_KIT_PATH}/apps/mobile-capacitor/www",
+      "artifact": "aab"
+    },
+    "ios": {
+      "kind": "capacitor-ios",
+      "gameApp": ".",
+      "shellApp": "${MPGD_KIT_PATH}/apps/mobile-capacitor",
+      "adapter": "capacitor",
+      "icon": {
+        "profile": "ios"
+      },
+      "webDir": "${MPGD_KIT_PATH}/apps/mobile-capacitor/www",
+      "artifact": "ipa"
+    },
+    "ait": {
+      "kind": "apps-in-toss",
+      "gameApp": ".",
+      "wrapperApp": "apps/target-ait",
+      "adapter": "ait",
+      "authoritativeGameServices": false,
+      "metadata": {
+        "appName": "lite-starter",
+        "displayName": "Lite Starter",
+        "primaryColor": "#101820",
+        "sdkMajor": 3
+      },
+      "navigationBar": {
+        "withBackButton": false,
+        "withHomeButton": false,
+        "withTitle": false,
+        "transparentBackground": true,
+        "theme": "dark"
+      },
+      "icon": {
+        "profile": "ait"
+      },
+      "webDir": "apps/target-ait/public/game",
+      "artifact": ".ait"
+    },
+    "reddit": {
+      "kind": "devvit-web",
+      "gameApp": ".",
+      "wrapperApp": "apps/target-devvit",
+      "adapter": "devvit",
+      "icon": {
+        "profile": "devvit"
+      },
+      "webDir": "apps/target-devvit/dist/client",
+      "artifact": "devvit",
+      "inlineEntry": "index.html",
+      "inlineBudget": {
+        "maxGzipKb": 40,
+        "forbidModules": [
+          "phaser",
+          "matter-js"
+        ],
+        "deferredChunks": [
+          "main.js",
+          "matter.js"
+        ]
+      }
+    }
+  }
+}

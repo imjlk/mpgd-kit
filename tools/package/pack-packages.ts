@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, readdirSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
 
 import { discoverPublishablePackages, type PackageJson } from './workspace';
 
@@ -129,7 +129,11 @@ function expectedTemplateFiles(packageDir: string, packageJson: PackageJson): st
     .flatMap((templateDir) => {
       const packageJsonPath = join(templateDir, 'package.json');
 
-      if (!existsSync(packageJsonPath)) {
+      // Overlay templates (e.g. lite-overlay) are partial file sets layered on
+      // top of a full template, so they intentionally have no package.json.
+      const isOverlay = basename(templateDir).endsWith('-overlay');
+
+      if (!isOverlay && !existsSync(packageJsonPath)) {
         throw new Error(
           `${packageJson.name ?? 'package'} template ${relative(packageDir, templateDir)} must include package.json`,
         );
