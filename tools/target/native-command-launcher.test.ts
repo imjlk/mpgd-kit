@@ -60,9 +60,12 @@ const pnpmShim = () => resolveNativeCommandLaunch({
 });
 assert.throws(pnpmShim, /pnpm exec mpgd/u);
 for (const entry of ['npm-cli.js', 'npx-cli.js', 'yarn.js', 'other.exe']) {
-  assert.throws(() => resolveNativeCommandLaunch({
-    command: 'pnpm', args: [], platform: 'win32',
+  const wrongManager = () => resolveNativeCommandLaunch({
+    command: 'pnpm',
+    args: [],
+    platform: 'win32',
     environment: { npm_execpath: `C:\\tools\\${entry}` },
-  }), /pnpm exec mpgd/u);
+  });
+  assert.throws(wrongManager, /pnpm exec mpgd/u);
 }
 console.info('Native command launch selection passed.');
