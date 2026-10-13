@@ -48,6 +48,33 @@ class ThrowingWebView extends FakeWebView {
 }
 
 describe('Microsoft Store native bridge', () => {
+  it('accepts localized joiners and direction marks in catalog display text', async () => {
+    const webView = new FakeWebView();
+    const client = createMicrosoftStoreNativeBridgeClient({ webView, createRequestId: () => 'localized' });
+    const pending = client.getDetails(['coins']);
+    const item = {
+      itemId: 'coins', title: 'سکه\u200Cها', description: '👨\u200D👩\u200D👧',
+      price: { currencyCode: 'USD', formatted: '\u200F$1.00' },
+    };
+    webView.respond({ requestId: 'localized.0', method: 'catalog.getDetails', ok: true, result: { items: [item] } });
+    await expect(pending).resolves.toEqual([item]);
+    client.dispose();
+  });
+
+  it.each(['unsafe\u202Etitle', 'invalid\uD800title', 'control\ntitle'])(
+    'rejects unsafe display text %j', async (title) => {
+      const webView = new FakeWebView();
+      const client = createMicrosoftStoreNativeBridgeClient({ webView, createRequestId: () => 'unsafe-text' });
+      const pending = client.getDetails(['coins']);
+      webView.respond({
+        requestId: 'unsafe-text.0', method: 'catalog.getDetails', ok: true,
+        result: { items: [{ itemId: 'coins', title, price: { currencyCode: 'USD', formatted: '$1.00' } }] },
+      });
+      await expect(pending).rejects.toMatchObject({ code: 'BRIDGE_PROTOCOL_ERROR' });
+      client.dispose();
+    },
+  );
+
   it('receives only a game-scoped session after native sign-in and Store linking', async () => {
     const webView = new FakeWebView();
     const now = Date.parse('2026-08-18T08:00:00.000Z');

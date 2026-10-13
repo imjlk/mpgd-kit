@@ -728,6 +728,11 @@
             "$ref": "#/components/schemas/CalendarDate",
             "description": "Asia/Seoul calendar date `YYYY-MM-DD`.",
             "readOnly": true
+          },
+          "variant": {
+            "$ref": "#/components/schemas/NotificationNoticeVariant",
+            "description": "The variant of `notices.copy` the notice is listed with.",
+            "readOnly": true
           }
         },
         "required": [],
@@ -2061,6 +2066,11 @@
             "description": "Topic entries with this profile's mapping under `mapping`. Only the topics\nthe scenario needs; the catalog validator does not check them.",
             "readOnly": true
           },
+          "notices": {
+            "$ref": "#/components/schemas/NotificationNoticeSettings",
+            "description": "The catalog's `notices` block: the topic the scheduler's notice pushes go\nout through, which `catalog` declares with no copy of its own, and their\ncopy per variant, which follows the catalog's rules.",
+            "readOnly": true
+          },
           "context": {
             "$ref": "#/components/schemas/NotificationConformanceContextFixture",
             "readOnly": true
@@ -2188,11 +2198,6 @@
             "description": "The free-of-charge opt-out line; `무료 수신거부: 수신거부 버튼` when absent or blank.",
             "readOnly": true
           },
-          "noticeTopic": {
-            "$ref": "#/components/schemas/NonEmptyString",
-            "description": "The catalog's `notices.topic`, which overdue consent notices are sent through under `kr`.",
-            "readOnly": true
-          },
           "timeZone": {
             "$ref": "#/components/schemas/NonEmptyString",
             "description": "IANA zone for recipients that registered none; Asia/Seoul when absent.",
@@ -2276,12 +2281,18 @@
             "format": "date",
             "description": "The last Asia/Seoul calendar date the notice may be given, `YYYY-MM-DD`.",
             "readOnly": true
+          },
+          "variant": {
+            "$ref": "#/components/schemas/NotificationNoticeVariant",
+            "description": "The variant of `notices.copy` the notice is given in, set when it is\nlisted, so the game shows the text the scheduler would send.",
+            "readOnly": true
           }
         },
         "required": [
           "kind",
           "record",
-          "dueBy"
+          "dueBy",
+          "variant"
         ],
         "additionalProperties": false
       },
@@ -2343,6 +2354,102 @@
             "const": "reconfirmation"
           }
         ]
+      },
+      "NotificationNoticeLocaleCopy": {
+        "type": "object",
+        "properties": {
+          "consent-result.advertising.granted": {
+            "$ref": "#/components/schemas/NotificationTopicCopy",
+            "readOnly": true
+          },
+          "consent-result.advertising.refused": {
+            "$ref": "#/components/schemas/NotificationTopicCopy",
+            "readOnly": true
+          },
+          "consent-result.advertising.withdrawn": {
+            "$ref": "#/components/schemas/NotificationTopicCopy",
+            "readOnly": true
+          },
+          "consent-result.night.granted": {
+            "$ref": "#/components/schemas/NotificationTopicCopy",
+            "readOnly": true
+          },
+          "consent-result.night.refused": {
+            "$ref": "#/components/schemas/NotificationTopicCopy",
+            "readOnly": true
+          },
+          "consent-result.night.withdrawn": {
+            "$ref": "#/components/schemas/NotificationTopicCopy",
+            "readOnly": true
+          },
+          "reconfirmation.advertising": {
+            "$ref": "#/components/schemas/NotificationTopicCopy",
+            "readOnly": true
+          },
+          "reconfirmation.night": {
+            "$ref": "#/components/schemas/NotificationTopicCopy",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "consent-result.advertising.granted",
+          "consent-result.advertising.withdrawn",
+          "consent-result.night.granted",
+          "consent-result.night.withdrawn",
+          "reconfirmation.advertising",
+          "reconfirmation.night"
+        ],
+        "additionalProperties": false,
+        "description": "One locale of `notices.copy`: a title and a body for each notice variant.\nA refusal's text is optional; without it a refusal is given in the\nwithdrawal's text (`notificationNoticeVariantFallbacks`)."
+      },
+      "NotificationNoticeSettings": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "$ref": "#/components/schemas/NonEmptyString.o1",
+            "description": "A remote `service` topic that keeps only the delivery settings.",
+            "readOnly": true
+          },
+          "copy": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringNotificationNoticeLocaleCopy",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "topic",
+          "copy"
+        ],
+        "additionalProperties": false,
+        "description": "The catalog's `notices` block, which a backend and a vector take as one:\nthe topic consent notices go out through, and their copy per variant."
+      },
+      "NotificationNoticeVariant": {
+        "oneOf": [
+          {
+            "const": "consent-result.advertising.granted"
+          },
+          {
+            "const": "consent-result.advertising.refused"
+          },
+          {
+            "const": "consent-result.advertising.withdrawn"
+          },
+          {
+            "const": "consent-result.night.granted"
+          },
+          {
+            "const": "consent-result.night.refused"
+          },
+          {
+            "const": "consent-result.night.withdrawn"
+          },
+          {
+            "const": "reconfirmation.advertising"
+          },
+          {
+            "const": "reconfirmation.night"
+          }
+        ],
+        "description": "The copy a notice is given in: its kind, its record's kind, and for a\nresult notice what the record was, so the text can say what the player did\n(decree art. 62-2): a consent (`granted`), the withdrawal of a consent\n(`withdrawn`), or a refusal (`refused`), a `withdrawn` record whose latest\nearlier record of its kind is not a consent. A re-confirmation always\nreports on a consent (decree art. 62-3). A named union keeps the JSON\nSchema names readable."
       },
       "NotificationOpenPath": {
         "oneOf": [
@@ -2783,6 +2890,12 @@
       "PositiveQuantity": {
         "type": "integer",
         "minimum": 1
+      },
+      "ReadonlyRecordstringNotificationNoticeLocaleCopy": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/NotificationNoticeLocaleCopy"
+        }
       },
       "ReadonlyRecordstringNotificationPermissionOutcome": {
         "type": "object",
