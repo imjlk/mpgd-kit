@@ -349,8 +349,6 @@ export interface NotificationDeployment {
   readonly advertisingSender?: NotificationAdvertisingSender;
   /** The free-of-charge opt-out line; `무료 수신거부: 수신거부 버튼` when absent or blank. */
   readonly advertisingOptOutLine?: NonEmptyString;
-  /** The catalog's `notices.topic`, which overdue consent notices are sent through under `kr`. */
-  readonly noticeTopic?: NonEmptyString;
   /** IANA zone for recipients that registered none; Asia/Seoul when absent. */
   readonly timeZone?: NonEmptyString;
 }
@@ -1137,6 +1135,24 @@ function nextNightWindowStart(at: string): string {
 // Content (RFC "Topic catalog" and gate step 8).
 
 const placeholderPattern = /\{\{\s*([A-Za-z_][A-Za-z0-9_-]*)\s*\}\}/gu;
+/** A brace, full-width ones included, which a text holds only inside a `{{name}}` placeholder. */
+const bracePattern = /[{}\uFF5B\uFF5D]/u;
+
+/**
+ * A text's `{{name}}` placeholders, as `fillNotificationTemplate` reads them,
+ * and whether a brace is left once they are taken out. `{name}`, `{{name}`,
+ * `{{a.b}}`, and full-width braces fill nothing and would reach the player as
+ * written.
+ */
+export function readNotificationTemplate(text: string): {
+  readonly placeholders: readonly string[];
+  readonly strayBrace: boolean;
+} {
+  return {
+    placeholders: [...text.matchAll(placeholderPattern)].map((match) => match[1] ?? ''),
+    strayBrace: bracePattern.test(text.replace(placeholderPattern, '')),
+  };
+}
 
 /** Fills `{{name}}` placeholders from `data`; a placeholder without a value is a caller error. */
 export function fillNotificationTemplate(text: string, data: NotificationTemplateData = {}): string {
@@ -2033,6 +2049,11 @@ export interface NotificationNotice {
   };
   /** The last Asia/Seoul calendar date the notice may be given, `YYYY-MM-DD`. */
   readonly dueBy: string & tags.Format<'date'>;
+  /**
+   * The variant of `notices.copy` the notice is given in, set when it is
+   * listed, so the game shows the text the scheduler would send.
+   */
+  readonly variant: NotificationNoticeVariant;
 }
 
 /**
@@ -2060,6 +2081,283 @@ export function isSameNotificationNotice(
     && left.record.kind === right.record.kind
     && left.dueBy === right.dueBy
     && parseInstant(left.record.at) === parseInstant(right.record.at);
+}
+
+/**
+ * The copy a notice is given in: its kind, its record's kind, and for a
+ * result notice what the record was, so the text can say what the player did
+ * (decree art. 62-2): a consent (`granted`), the withdrawal of a consent
+ * (`withdrawn`), or a refusal (`refused`), a `withdrawn` record whose latest
+ * earlier record of its kind is not a consent. A re-confirmation always
+ * reports on a consent (decree art. 62-3). A named union keeps the JSON
+ * Schema names readable.
+ */
+export type NotificationNoticeVariant =
+  | 'consent-result.advertising.granted'
+  | 'consent-result.advertising.refused'
+  | 'consent-result.advertising.withdrawn'
+  | 'consent-result.night.granted'
+  | 'consent-result.night.refused'
+  | 'consent-result.night.withdrawn'
+  | 'reconfirmation.advertising'
+  | 'reconfirmation.night';
+
+/** Every `NotificationNoticeVariant`, in this order; a test keeps the two equal. */
+export const notificationNoticeVariants = Object.freeze([
+  'consent-result.advertising.granted',
+  'consent-result.advertising.refused',
+  'consent-result.advertising.withdrawn',
+  'consent-result.night.granted',
+  'consent-result.night.refused',
+  'consent-result.night.withdrawn',
+  'reconfirmation.advertising',
+  'reconfirmation.night',
+] as const satisfies readonly NotificationNoticeVariant[]);
+
+/**
+ * The variants `notices.copy` may leave out, each with the variant whose text
+ * stands in for it: a refusal is given in the withdrawal's text.
+ */
+export const notificationNoticeVariantFallbacks: Readonly<
+  Partial<Record<NotificationNoticeVariant, NotificationNoticeVariant>>
+> = Object.freeze({
+  'consent-result.advertising.refused': 'consent-result.advertising.withdrawn',
+  'consent-result.night.refused': 'consent-result.night.withdrawn',
+});
+
+/**
+ * One locale of `notices.copy`: a title and a body for each notice variant.
+ * A refusal's text is optional; without it a refusal is given in the
+ * withdrawal's text (`notificationNoticeVariantFallbacks`).
+ */
+export interface NotificationNoticeLocaleCopy {
+  readonly 'consent-result.advertising.granted': NotificationTopicCopy;
+  readonly 'consent-result.advertising.refused'?: NotificationTopicCopy;
+  readonly 'consent-result.advertising.withdrawn': NotificationTopicCopy;
+  readonly 'consent-result.night.granted': NotificationTopicCopy;
+  readonly 'consent-result.night.refused'?: NotificationTopicCopy;
+  readonly 'consent-result.night.withdrawn': NotificationTopicCopy;
+  readonly 'reconfirmation.advertising': NotificationTopicCopy;
+  readonly 'reconfirmation.night': NotificationTopicCopy;
+}
+
+/**
+ * The catalog's `notices.copy`: per locale, a title and a body for every
+ * notice variant, a refusal's optional. `{{consentDate}}`, the record's
+ * Asia/Seoul date, is the only placeholder the server fills, and each
+ * variant uses it. The text carries the rest of what the decree requires:
+ * the sender's name and, for a result notice (art. 62-2), the processing
+ * result, or, for a re-confirmation (art. 62-3(2)), how to keep or withdraw
+ * the consent.
+ */
+export type NotificationNoticeCopy = Readonly<Record<string, NotificationNoticeLocaleCopy>>;
+
+/**
+ * The catalog's `notices` block, which a backend and a vector take as one:
+ * the topic consent notices go out through, and their copy per variant.
+ */
+export interface NotificationNoticeSettings {
+  /** A remote `service` topic that keeps only the delivery settings. */
+  readonly topic: NonEmptyString;
+  readonly copy: NotificationNoticeCopy;
+}
+
+function isPlainObject(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The rules `notices.copy` follows wherever it is read (the catalog
+ * validator, a backend, and the vector loader), each issue under `path`,
+ * with locale and variant keys in brackets (`["ko-KR"]["reconfirmation.night"]`):
+ *
+ * - an object of locales that includes `defaultLocale`, matched without
+ *   regard to case;
+ * - per locale, a title and a body for each notice variant, a refusal's
+ *   optional (`notificationNoticeVariantFallbacks`), and no other key;
+ * - each title and body a string that is not blank, with no placeholder but
+ *   `{{consentDate}}` and no brace outside one; and `{{consentDate}}` in the
+ *   title or the body, because a notice states the date of the act it
+ *   reports on.
+ */
+export function notificationNoticeCopyIssues(
+  copy: unknown,
+  defaultLocale: string,
+  path = 'notices.copy',
+): NotificationTopicIssue[] {
+  if (copy === undefined) {
+    return [{
+      path,
+      message: 'a notice states what the player did; give a title and a body for each notice variant in each locale',
+    }];
+  }
+  if (!isPlainObject(copy)) {
+    return [{
+      path,
+      message: 'expected NotificationNoticeCopy: each locale mapped to a title and a body per notice variant',
+    }];
+  }
+  const issues: NotificationTopicIssue[] = [];
+  const variants: readonly string[] = notificationNoticeVariants;
+  // The same lookup a send makes: a locale matches a copy key without regard to case.
+  if (!Object.keys(copy).some((locale) => locale.toLowerCase() === defaultLocale.toLowerCase())) {
+    issues.push({ path, message: `must include the default locale ${defaultLocale}` });
+  }
+  for (const [locale, texts] of Object.entries(copy)) {
+    const at = `${path}[${JSON.stringify(locale)}]`;
+    if (!isPlainObject(texts)) {
+      issues.push({
+        path: at,
+        message: 'expected the notice copy of one locale: a title and a body per notice variant',
+      });
+      continue;
+    }
+    for (const variant of notificationNoticeVariants) {
+      if (texts[variant] === undefined && notificationNoticeVariantFallbacks[variant] === undefined) {
+        issues.push({
+          path: `${at}[${JSON.stringify(variant)}]`,
+          message: `every locale needs a title and a body for each notice variant; ${locale} lacks ${variant}`,
+        });
+      }
+    }
+    for (const [variant, text] of Object.entries(texts)) {
+      const variantPath = `${at}[${JSON.stringify(variant)}]`;
+      if (!variants.includes(variant)) {
+        issues.push({
+          path: variantPath,
+          message: `is not a notice variant; expected one of ${variants.join(', ')}`,
+        });
+      } else if (text !== undefined) {
+        issues.push(...noticeTextIssues(text, variantPath));
+      }
+    }
+  }
+  return issues;
+}
+
+/**
+ * One variant's title and body: strings, not blank, and filled only with
+ * `{{consentDate}}`, which one of them uses.
+ */
+function noticeTextIssues(text: unknown, path: string): NotificationTopicIssue[] {
+  if (!isPlainObject(text)) {
+    return [{ path, message: 'expected NotificationTopicCopy: a title and a body' }];
+  }
+  const issues: NotificationTopicIssue[] = [];
+  for (const key of Object.keys(text)) {
+    if (key !== 'title' && key !== 'body') {
+      issues.push({
+        path: `${path}.${key}`,
+        message: "is not part of a notice's text; a notice has only a title and a body",
+      });
+    }
+  }
+  let dated = false;
+  for (const field of ['title', 'body'] as const) {
+    const value = text[field];
+    if (typeof value !== 'string') {
+      issues.push({ path: `${path}.${field}`, message: `expected a string ${field}` });
+      continue;
+    }
+    if (value.trim().length === 0) {
+      issues.push({ path: `${path}.${field}`, message: `a notice's ${field} must not be blank` });
+    }
+    const { placeholders, strayBrace } = readNotificationTemplate(value);
+    for (const name of placeholders) {
+      if (name === 'consentDate') {
+        dated = true;
+      } else {
+        issues.push({
+          path: `${path}.${field}`,
+          message: `notices are filled only with {{consentDate}}; {{${name}}} would have no value`,
+        });
+      }
+    }
+    if (strayBrace) {
+      issues.push({
+        path: `${path}.${field}`,
+        message: 'a brace outside a {{name}} placeholder reaches the player as written; write {{consentDate}}',
+      });
+    }
+  }
+  if (!dated) {
+    issues.push({
+      path,
+      message: 'a notice states the date of the act it reports on; its title or body needs {{consentDate}}',
+    });
+  }
+  return issues;
+}
+
+/**
+ * The variant a notice is given in. `act` is what its record was: a consent,
+ * the withdrawal of a consent, or a refusal; a re-confirmation reports on a
+ * consent.
+ */
+function noticeVariantOf(
+  kind: NotificationNoticeKind,
+  recordKind: 'advertising' | 'night',
+  act: 'granted' | 'withdrawn' | 'refused',
+): NotificationNoticeVariant {
+  return kind === 'reconfirmation'
+    ? `reconfirmation.${recordKind}`
+    : `consent-result.${recordKind}.${act}`;
+}
+
+/**
+ * One variant's copy per locale, shaped as a topic's `copy`, so the notice
+ * topic sends it with the lookup and default-locale fallback of any topic
+ * (`findNotificationCopy`). A locale without a refusal's text gives the
+ * withdrawal's (`notificationNoticeVariantFallbacks`); a locale without the
+ * variant, which a validated catalog never has, is left out rather than
+ * found empty.
+ */
+export function notificationNoticeVariantCopy(
+  copy: NotificationNoticeCopy,
+  variant: NotificationNoticeVariant,
+): Readonly<Record<string, NotificationTopicCopy>> {
+  const fallback = notificationNoticeVariantFallbacks[variant];
+  return Object.fromEntries(
+    Object.entries(copy).flatMap(([locale, variants]) => {
+      const text: NotificationTopicCopy | undefined = variants[variant]
+        ?? (fallback === undefined ? undefined : variants[fallback]);
+      return text === undefined ? [] : [[locale, text] as const];
+    }),
+  );
+}
+
+/**
+ * Whether a provider can carry a consent notice: it sends free-form content
+ * and needs no `title` or `body` in a topic's mapping, which it would send in
+ * place of the notice's copy. The catalog validator keeps the notice topic
+ * off any other provider, and a scheduler pushes no notice through one.
+ */
+export function notificationProviderCarriesNotices(
+  entry: Pick<NotificationDeliveryProviderEntry, 'content' | 'mappingFields'>,
+): boolean {
+  return entry.content === 'free-form'
+    && !entry.mappingFields.includes('title')
+    && !entry.mappingFields.includes('body');
+}
+
+/**
+ * The notice topic as the gate renders one notice from it: its delivery
+ * settings, any `title` or `body` dropped from its mapping so nothing stands
+ * in for the copy, and the variant's `notices.copy` in place of a copy of its
+ * own (`notificationNoticeVariantCopy`).
+ */
+export function notificationNoticeTopic(
+  topic: NotificationTopicDeclaration,
+  copy: NotificationNoticeCopy,
+  variant: NotificationNoticeVariant,
+): NotificationTopicDeclaration {
+  const { mapping, copy: _ownCopy, ...delivery } = topic;
+  const { title: _title, body: _body, ...rest } = mapping ?? {};
+  return {
+    ...delivery,
+    ...(mapping === undefined ? {} : { mapping: rest }),
+    copy: notificationNoticeVariantCopy(copy, variant),
+  };
 }
 
 /** Result notice: 14 days after the record's Asia/Seoul date, counted from the next day. */
@@ -2107,9 +2405,13 @@ function noticeNameOf(
 
 /**
  * The notices a player's advertising and night records owe at `at`, ordered
- * by `dueBy` and then `kind`. A notice that `given` names is not listed:
+ * by `dueBy` and then `kind`, each with the variant of `notices.copy` it is
+ * given in. `records` are in the order they were written. A notice that
+ * `given` names is not listed:
  *
- * - a `consent-result` notice for every record;
+ * - a `consent-result` notice for every record, which reports a refusal for
+ *   a `withdrawn` record whose latest earlier record of its kind is not a
+ *   consent;
  * - per kind whose latest record is a consent, the first re-confirmation of
  *   that consent not given yet, from `notificationReconfirmationListDays`
  *   days before its `dueBy`. Each one follows the one before it, so silence
@@ -2136,10 +2438,16 @@ export function listNotificationNotices(
     readonly record: NotificationNotice['record'];
   }>();
   const notices: NotificationNotice[] = [];
+  // Each kind's latest record so far: a withdrawal that follows no consent is a refusal.
+  const latestState = new Map<NoticeRecord['kind'], NoticeRecord['state']>();
   for (const record of records) {
     if (record.kind !== 'advertising' && record.kind !== 'night') {
       continue;
     }
+    const act = record.state === 'withdrawn' && latestState.get(record.kind) !== 'granted'
+      ? 'refused'
+      : record.state;
+    latestState.set(record.kind, record.state);
     const instant = parseInstant(record.at);
     const noticeRecord: NotificationNotice['record'] = {
       kind: record.kind,
@@ -2151,7 +2459,12 @@ export function listNotificationNotices(
     const dueBy = consentResultDueByOf(instant);
     if (!givenNames.has(noticeNameOf('consent-result', record.kind, instant, dueBy))) {
       // Each notice gets its own copy, so changing one never changes another.
-      notices.push({ kind: 'consent-result', record: { ...noticeRecord }, dueBy });
+      notices.push({
+        kind: 'consent-result',
+        record: { ...noticeRecord },
+        dueBy,
+        variant: noticeVariantOf('consent-result', record.kind, act),
+      });
     }
   }
   for (const kind of ['advertising', 'night'] as const) {
@@ -2168,7 +2481,12 @@ export function listNotificationNotices(
       dueBy = reconfirmationDueByOf(consent.instant, ordinal);
     }
     if (calendarDaysBefore(dueBy, notificationReconfirmationListDays) <= today) {
-      notices.push({ kind: 'reconfirmation', record: { ...consent.record }, dueBy });
+      notices.push({
+        kind: 'reconfirmation',
+        record: { ...consent.record },
+        dueBy,
+        variant: noticeVariantOf('reconfirmation', kind, 'granted'),
+      });
     }
   }
   return notices.sort((left, right) =>

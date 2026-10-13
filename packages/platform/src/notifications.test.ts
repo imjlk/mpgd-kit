@@ -288,8 +288,13 @@ describe('notifications contract', () => {
       kind: 'reconfirmation',
       record: { kind: 'advertising', state: 'granted', at: '2026-10-12T03:00:00Z', textVersion: 'ad-v1' },
       dueBy: '2028-10-11',
+      variant: 'reconfirmation.advertising',
     } as const;
     expect(assertNotificationNotice(notice)).toEqual(notice);
+    // A listed notice names the copy variant it is given in.
+    const { variant: _variant, ...withoutVariant } = notice;
+    expect(() => assertNotificationNotice(withoutVariant)).toThrow();
+    expect(() => assertNotificationNotice({ ...notice, variant: 'reconfirmation.consent' })).toThrow();
     expect(() => assertNotificationNotice({ ...notice, dueBy: '2028-10-11T00:00:00Z' })).toThrow();
     expect(() => assertNotificationNotice({ ...notice, record: { ...notice.record, kind: 'topic-preference' } }))
       .toThrow();
@@ -331,8 +336,10 @@ describe('notifications contract', () => {
     expect(assertNotificationDeployment({
       advertisingRules: 'kr',
       advertisingSender: { contact: '080-1234-5678' },
-      noticeTopic: 'consent-notice',
     }).advertisingRules).toBe('kr');
+    // The notice topic is the catalog's notices block, never a deployment setting.
+    expect(() => assertNotificationDeployment({ advertisingRules: 'kr', noticeTopic: 'consent-notice' }))
+      .toThrow();
     expect(() => assertNotificationDeployment({ advertisingRules: 'eu' })).toThrow();
     expect(() => assertNotificationDeployment({ timeZone: 'Mars/Olympus_Mons' })).toThrow(/Unknown time zone/u);
     expect(() => assertNotificationDeployment({ advertisingSender: { name: 'Studio' } })).toThrow();
@@ -574,6 +581,7 @@ describe('strict notification timestamps', () => {
         kind: 'consent-result',
         record: { kind: 'advertising', state: 'granted', at, textVersion: 'ads-v1' },
         dueBy: '2026-10-26',
+        variant: 'consent-result.advertising.granted',
       })).toThrow(/record\.at must be RFC 3339/u);
       expect(() => assertRecordNotificationNoticeInput({
         kind: 'consent-result',
@@ -585,6 +593,7 @@ describe('strict notification timestamps', () => {
       kind: 'consent-result',
       record: { kind: 'advertising', state: 'granted', at: '2026-10-12T03:00:00Z', textVersion: 'ads-v1' },
       dueBy: '2026-02-30',
+      variant: 'consent-result.advertising.granted',
     })).toThrow(/dueBy must be a date that exists/u);
   });
 

@@ -41,7 +41,12 @@ test('prepared workspace tests run mutating builds first, then the disjoint rema
   const filters = (part) => [...part.matchAll(/--filter '?(\S+?)'?(?=\s|$)/g)].map((match) => match[1].replace(/'$/, ''));
   const selectedNames = (part) => {
     const args = ['-r', ...filters(part).flatMap((filter) => ['--filter', filter]), 'list', '--depth', '-1', '--json'];
-    const selected = spawnSync(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', args, { encoding: 'utf8' });
+    const pnpmEntry = process.platform === 'win32' ? process.env.npm_execpath : undefined;
+    if (process.platform === 'win32') assert.match(pnpmEntry ?? '', /\.(?:exe|[cm]?js)$/u);
+    const pnpmScript = pnpmEntry && /\.[cm]?js$/u.test(pnpmEntry) ? pnpmEntry : undefined;
+    const selected = spawnSync(pnpmScript ? process.execPath : pnpmEntry ?? 'pnpm',
+      pnpmScript ? [pnpmScript, ...args] : args, { encoding: 'utf8' });
+    assert.ifError(selected.error);
     assert.equal(selected.status, 0, selected.stderr);
     return JSON.parse(selected.stdout).map((workspace) => workspace.name);
   };

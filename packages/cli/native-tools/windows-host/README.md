@@ -1,0 +1,118 @@
+# Microsoft Store native host support
+
+These C# sources ship inside the existing `@mpgd/cli` npm package. No additional
+npm or NuGet package is required. The core targets .NET 8 without SDK or NuGet
+dependencies. The optional WinUI files compile inside your existing Windows
+App SDK / WebView2 host.
+
+```js
+import { getMicrosoftStoreNativeHostSourceDirectory } from '@mpgd/cli/windows-native-tools';
+const sources = getMicrosoftStoreNativeHostSourceDirectory();
+```
+
+The locator returns the installed `dist/windows-host` directory. SDK-dependent
+sources are maintained in `native-plugins/microsoft-store-host/windows` and copied
+there during the CLI build. SDK-independent sources stay in the CLI source tree.
+
+Copy the source tree into a game-owned, ignored build directory. Reference
+`Core/Mpgd.MicrosoftStore.Host.csproj` or link `Core/*.cs` directly; link
+`WinUI/*.cs` only into a Windows host. Keep `bin` and `obj` outside the installed
+npm package. CI builds and exercises these files after packing and installing
+the CLI, without relying on a workspace project reference.
+
+## Attach to a window
+
+On the window's UI thread, initialize WebView2, then attach before navigating:
+
+```csharp
+await webView.EnsureCoreWebView2Async();
+StoreContext store = WindowStoreContext.Create(window);
+var bridge = await WebView2NativeBridge.AttachAsync(
+    webView, new Uri(gameConfiguration.StartUri),
+    gameConfiguration.AllowedItemIds, gameOwnedOperations);
+window.Closed += (_, _) => bridge.Dispose();
+webView.CoreWebView2.Navigate(gameConfiguration.StartUri);
+```
+
+The adapter checks HTTPS host and port, rejects credentials in navigation URLs,
+blocks new windows, disables host objects and devtools, and accepts messages
+from a committed, allowed document as it starts loading, including startup
+requests before the load-complete event. Failed navigation and every accepted navigation
+start invalidates the document. Blocked external navigation keeps the intact
+page's bridge active. Browser or main renderer exit invalidates it; auto-recovered
+GPU, utility and subframe failures and renderer unresponsiveness preserve it.
+Queued operations are cancelled and late replies from the previous document are
+suppressed, including navigation
+back to the same URL. Closure detaches handlers and suppresses responses. Use
+one adapter and operation implementation per window.
+
+Await `AttachAsync` before navigating. It installs a document-created script
+that wraps only the native v1 requests with a random per-document nonce; the
+public TypeScript client and v1 payload remain unchanged. Incoming messages must
+match the live document's nonce after a navigation recheck, so queued messages
+from an old page cannot start checkout after a same-origin reload. Other WebView2
+message protocols are preserved. Disposing removes the script registration.
+
+`WindowStoreContext.Create` initializes the SDK with that window's HWND on its
+UI thread. Keep the context in native code. Initialization does not perform
+login, checkout or grant an entitlement.
+
+## Game-owned operations
+
+Implement `INativeStoreOperations` with typed callbacks for catalog, sign-in,
+purchase listing and checkout. Callbacks begin on the window UI thread and are
+serialized. Observe cancellation whenever the SDK permits it. An SDK operation
+that ignores cancellation retains its serialization lease until it finishes;
+its result is still suppressed after navigation or closure.
+
+The common code parses `mpgd.microsoft-store.native.v1`, enforces message limits,
+allowed products, duplicate IDs and pending-request limits, and serializes only
+the declared bounded result records. Invalid results and unexpected exceptions
+become `NATIVE_OPERATION_FAILED`; exception messages never reach the web page.
+Use `NativeBridgeOperationException` for declared user-cancelled,
+identity-unavailable or store-unavailable errors.
+User cancellation of a purchase callback produces a `not-purchased` result,
+matching the existing web commerce runtime's abort semantics.
+
+The game owns Store IDs and offers, MSAL/WAM account selection, backend endpoints,
+SDK product validation and session issuance. Sign-in returns the game backend's
+short-lived player session, never an SDK access token. Collections IDs, Microsoft
+service tickets and account credentials stay in private native/backend state.
+Client checkout produces evidence; the backend ledger verifies and commits all
+durable grants.
+
+`NativePlayerSession.ExpiresAt` uses Unix epoch milliseconds, with 2 minutes to
+24 hours remaining at serialization, leaving a minute of transport headroom
+above the web client's 1-minute acceptance minimum. It accepts a bounded player ID
+and a whitespace-free token of 32–4096 characters. Games may enforce a lower
+maximum lifetime. Product and purchase results must refer to their allowlist. Purchase
+tokens equal their item ID, matching the existing web client contract; the
+authoritative backend still verifies and commits the purchase.
+
+## Core-only integration
+
+For a custom transport, construct `NativeBridgeHost` with an
+`INativeBridgeDispatcher`. Run queued callbacks on the owning UI thread, prevent
+cancelled queued callbacks from starting, and await started operations until
+they finish. `postResponse` synchronously sends JSON on that thread. Call
+`InvalidateDocument` at every accepted navigation start, `ActivateDocument` only after an
+allowed document commits, invalidate again on load failure, and `Dispose` at
+closure. Invalidate on process failure only when the top-level document exits;
+auto-recovered helper/subframe failures retain it. Lifecycle calls
+and response delivery must share the window UI dispatcher.
+Authenticate each incoming message's document generation before calling the
+host; a source URI alone cannot distinguish queued messages after a same-origin
+reload. The WinUI adapter supplies this transport check automatically.
+
+## Acceptance scope
+
+Contract tests cover two independent game configurations, protocol and product
+rejection, sanitized errors, duplicate/busy requests, cancelled queues, navigation
+generation and closure. Windows CI links the installed package's core and WinUI
+sources into x64/ARM64 MSIX, binds StoreContext to the native window, and exercises
+four methods through WebView2 with fixture callbacks. It also checks requests
+before load completion, real blocked external navigation, and simulated
+recoverable process notification kinds on the live adapter. It does not terminate
+GPU processes. Receipts identify fixture
+results separately. They do not claim real Store login, settled purchases,
+backend grants or Store upload.

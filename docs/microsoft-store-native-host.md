@@ -13,6 +13,18 @@ authoritative backend; the native callback never grants a product by itself.
 
 ## Host requirements
 
+`@mpgd/cli/windows-native-tools` exports
+`getMicrosoftStoreNativeHostSourceDirectory()` for reusable .NET 8 core and
+WinUI/WebView2 sources shipped in the CLI tarball. The common host owns protocol
+validation, bounded typed results, UI dispatch, and cancellation on navigation
+or closure. Games provide their login and commerce callbacks, Store product
+mappings and backend policy. See the
+[C# integration guide](https://github.com/imjlk/mpgd-kit/blob/main/packages/cli/native-tools/windows-host/README.md).
+
+The x64 and ARM64 CI host compiles these installed package sources and checks
+four bridge methods for two fixture game configurations through WebView2. These
+receipts remain separate from real account login and settled-purchase acceptance.
+
 The native host must enforce all of these rules before handling a bridge request:
 
 - Navigate only to the configured HTTPS game origin and reject messages from every other source.
@@ -93,3 +105,21 @@ requires.
 This contract does not make a PWABuilder hosted package native. A game that selects this path still
 needs a signed WinUI/WebView2 package, Windows acceptance tests, and a Store-installed end-to-end
 purchase test before commerce can be enabled.
+
+## KIT CI startup acceptance
+
+The prepared Windows consumer CI builds a standalone game from this checkout's packed packages,
+embeds its exact web bundle in a CI-only WinUI host, and installs x64 and ARM64 MSIX packages on
+matching Windows CPUs. It requires packaged .NET/WinUI modules, a native window, WebView2 and the
+generated Phaser canvas to remain ready for 30 seconds without JavaScript/bootstrap errors.
+The native matrix is required by ci-required; unsigned package and startup receipts retain source
+and bundle hashes. See [the CI host and acceptance runbook](https://github.com/imjlk/mpgd-kit/tree/main/tools/smoke/windows-native).
+
+The CI host is not part of the generated game's release output. Its bridge uses fixture callbacks;
+real Store login, purchase and backend grants still require game-owned acceptance.
+
+The shared installer/runtime/process/cleanup module is included in @mpgd/cli. Import
+getMicrosoftStoreNativeAcceptanceModulePath from @mpgd/cli/windows-native-tools to locate it;
+game CI supplies package identity and verified source metadata to Invoke-MsixNativeAcceptance.
+Optional payload/readiness/evidence hooks add game-specific checks while the shared native checks
+and receipt fields remain authoritative. KIT tests the module from the installed npm tarball.

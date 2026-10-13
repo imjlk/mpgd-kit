@@ -20,9 +20,15 @@ import {
   normalizeNotificationTimestamp,
   notificationConsentResultDueBy,
   notificationKeyIssue,
+  notificationNoticeCopyIssues,
   notificationNoticeSendFrom,
+  notificationNoticeTopic,
+  notificationNoticeVariantCopy,
+  notificationNoticeVariantFallbacks,
+  notificationNoticeVariants,
   notificationPermissionConsentKind,
   notificationPermissionStateOf,
+  notificationProviderCarriesNotices,
   notificationReconfirmationDueBy,
   notificationReconfirmationListDays,
   notificationRegistryMismatch,
@@ -31,6 +37,7 @@ import {
   notificationTemplateDataIssue,
   notificationTopicDefinitionIssues,
   notificationTopicNeedsNoAgreement,
+  readNotificationTemplate,
   referenceNotificationProviders,
   referenceNotificationTargetProviders,
   renderNotificationAdvertisement,
@@ -746,6 +753,25 @@ describe('notification content', () => {
     expect(() => fillNotificationTemplate('{{toString}}', {})).toThrow(/no value/u);
   });
 
+  it('reads the placeholders a fill fills, and any brace left outside them', () => {
+    expect(readNotificationTemplate('{{ consentDate }}에 {{name}}님')).toEqual({
+      placeholders: ['consentDate', 'name'],
+      strayBrace: false,
+    });
+    for (const text of [
+      '{consentDate}',
+      '{{consentDate}',
+      'consentDate}}',
+      '{{consent.date}}',
+      '｛｛consentDate｝｝',
+      '{{consentDate}}}',
+    ]) {
+      expect(readNotificationTemplate(text).strayBrace, text).toBe(true);
+    }
+    // A fill leaves such a brace in the text as written.
+    expect(fillNotificationTemplate('{consentDate}', { consentDate: '2026-10-12' })).toBe('{consentDate}');
+  });
+
   it('puts (광고) and one space before the text, once', () => {
     expect(applyNotificationAdvertisingLabel('Sale')).toBe('(광고) Sale');
     expect(applyNotificationAdvertisingLabel('(광고) Sale')).toBe('(광고) Sale');
@@ -1072,6 +1098,136 @@ describe('notification consent notices', () => {
     expect(notificationReconfirmationDueBy(at)).toBe('2026-02-27');
     expect(listed('2025-12-28T14:59:59Z')).toEqual([]);
     expect(listed('2025-12-28T15:00:00Z')).toEqual([['reconfirmation', '2026-02-27']]);
+  });
+
+  it('lists each notice with its copy variant, and a withdrawal that follows no consent as a refusal', () => {
+    expect(notificationNoticeVariants).toEqual([
+      'consent-result.advertising.granted',
+      'consent-result.advertising.refused',
+      'consent-result.advertising.withdrawn',
+      'consent-result.night.granted',
+      'consent-result.night.refused',
+      'consent-result.night.withdrawn',
+      'reconfirmation.advertising',
+      'reconfirmation.night',
+    ]);
+    const minute = (minutes: number) => new Date(Date.parse(noon) + minutes * 60_000).toISOString();
+    const records = [
+      record('night', 'withdrawn', { at: minute(0) }),
+      record('advertising', 'granted', { at: minute(1) }),
+      record('advertising', 'withdrawn', { at: minute(2) }),
+      record('advertising', 'withdrawn', { at: minute(3) }),
+      record('night', 'granted', { at: minute(4) }),
+      record('advertising', 'granted', { at: minute(5) }),
+    ];
+    expect(listNotificationNotices(records, [], '2028-09-01T03:00:00Z').map((notice) => notice.variant)).toEqual([
+      // Nothing before it: a refusal.
+      'consent-result.night.refused',
+      'consent-result.advertising.granted',
+      // A consent before it: a withdrawal.
+      'consent-result.advertising.withdrawn',
+      // A withdrawal before it: a refusal.
+      'consent-result.advertising.refused',
+      'consent-result.night.granted',
+      'consent-result.advertising.granted',
+      'reconfirmation.advertising',
+      'reconfirmation.night',
+    ]);
+  });
+
+  it('checks notice copy by the catalog rules, with locale and variant keys in brackets', () => {
+    const texts = Object.fromEntries(
+      notificationNoticeVariants.map((variant) => [variant, { title: '안내', body: '{{consentDate}}' }]),
+    );
+    expect(notificationNoticeCopyIssues({ 'ko-KR': texts }, 'ko-kr')).toEqual([]);
+    // A refusal's text is optional; the withdrawal's stands in for it.
+    const {
+      'consent-result.advertising.refused': _advertising,
+      'consent-result.night.refused': _night,
+      ...withoutRefusals
+    } = texts;
+    expect(notificationNoticeCopyIssues({ ko: withoutRefusals }, 'ko')).toEqual([]);
+    expect(notificationNoticeCopyIssues({ 'ko-KR': { ...texts, 'reconfirmation.night': undefined } }, 'ko-KR', 'copy'))
+      .toEqual([{
+        path: 'copy["ko-KR"]["reconfirmation.night"]',
+        message: 'every locale needs a title and a body for each notice variant; ko-KR lacks reconfirmation.night',
+      }]);
+    expect(notificationNoticeCopyIssues({ ko: undefined, en: [] }, 'ko').map((issue) => issue.path))
+      .toEqual(['notices.copy["ko"]', 'notices.copy["en"]']);
+    expect(notificationNoticeCopyIssues(
+      { ko: { ...texts, 'reconfirmation.night': { title: '확인', body: '{{consentDate}의 동의' } } },
+      'ko',
+    )).toEqual([
+      {
+        path: 'notices.copy["ko"]["reconfirmation.night"].body',
+        message: 'a brace outside a {{name}} placeholder reaches the player as written; write {{consentDate}}',
+      },
+      {
+        path: 'notices.copy["ko"]["reconfirmation.night"]',
+        message: 'a notice states the date of the act it reports on; its title or body needs {{consentDate}}',
+      },
+    ]);
+  });
+
+  it("reads one variant's copy per locale as a topic's copy, with the same locale lookup", () => {
+    const text = (title: string) => ({ title, body: '{{consentDate}}' });
+    const variants = (prefix: string) => Object.fromEntries(
+      notificationNoticeVariants.map((variant) => [variant, text(`${prefix} ${variant}`)]),
+    ) as Readonly<Record<(typeof notificationNoticeVariants)[number], { title: string; body: string }>>;
+    const copy = { ko: variants('ko'), en: variants('en') };
+    const night = notificationNoticeVariantCopy(copy, 'consent-result.night.granted');
+    expect(night).toEqual({
+      ko: text('ko consent-result.night.granted'),
+      en: text('en consent-result.night.granted'),
+    });
+    expect(findNotificationCopy({ copy: night }, 'en-US', 'ko')).toEqual(text('en consent-result.night.granted'));
+    expect(findNotificationCopy({ copy: night }, 'fr', 'ko')).toEqual(text('ko consent-result.night.granted'));
+    // A locale without the variant is left out, so the lookup falls back to the default locale.
+    const partial = { ...copy, en: {} } as unknown as typeof copy;
+    expect(findNotificationCopy(
+      { copy: notificationNoticeVariantCopy(partial, 'reconfirmation.night') },
+      'en',
+      'ko',
+    )).toEqual(text('ko reconfirmation.night'));
+    // A locale without a refusal's text gives the withdrawal's.
+    expect(notificationNoticeVariantFallbacks).toEqual({
+      'consent-result.advertising.refused': 'consent-result.advertising.withdrawn',
+      'consent-result.night.refused': 'consent-result.night.withdrawn',
+    });
+    const { 'consent-result.night.refused': _refused, ...enWithoutRefusal } = copy.en;
+    expect(notificationNoticeVariantCopy({ ...copy, en: enWithoutRefusal }, 'consent-result.night.refused')).toEqual({
+      ko: text('ko consent-result.night.refused'),
+      en: text('en consent-result.night.withdrawn'),
+    });
+  });
+
+  it('sends a notice only through a provider that can carry it, from the notice topic without its own text', () => {
+    // Free-form content, and no title or body the mapping must carry.
+    expect(notificationProviderCarriesNotices(referenceNotificationProviders.fcm)).toBe(true);
+    expect(notificationProviderCarriesNotices(referenceNotificationProviders['apps-in-toss'])).toBe(false);
+    expect(notificationProviderCarriesNotices(referenceNotificationProviders.devvit)).toBe(false);
+    const text = { title: '안내', body: '{{consentDate}}에 동의하셨어요.' };
+    const copy = {
+      ko: Object.fromEntries(notificationNoticeVariants.map((variant) => [variant, text])),
+    } as unknown as Parameters<typeof notificationNoticeTopic>[1];
+    const topic: NotificationTopicDeclaration = {
+      id: 'consent-notice',
+      purpose: 'service',
+      channels: ['remote'],
+      route: '/settings/notifications',
+      copy: { ko: { title: 'Own', body: 'Own text' } },
+      mapping: { channelId: 'notices', title: 'Mapped', body: 'Mapped text' },
+    };
+    expect(notificationNoticeTopic(topic, copy, 'reconfirmation.night')).toEqual({
+      id: 'consent-notice',
+      purpose: 'service',
+      channels: ['remote'],
+      route: '/settings/notifications',
+      copy: { ko: text },
+      mapping: { channelId: 'notices' },
+    });
+    const { mapping: _mapping, ...unmapped } = topic;
+    expect(notificationNoticeTopic(unmapped, copy, 'reconfirmation.night')).not.toHaveProperty('mapping');
   });
 
   it('keys a scheduled notice by player, kind, record kind, record time, and due date', () => {

@@ -604,7 +604,7 @@ function requireText(
     throw protocolError(`${label} is invalid.`);
   }
   const inspected = allowDescriptionWhitespace ? input.replace(/[\t\n\r]/gu, '') : input;
-  if (/[\p{Cc}\p{Cf}]/u.test(inspected)) {
+  if (/[\p{Cc}\p{Cs}\u202A-\u202E\u2066-\u2069]/u.test(inspected)) {
     throw protocolError(`${label} is invalid.`);
   }
   return input;
