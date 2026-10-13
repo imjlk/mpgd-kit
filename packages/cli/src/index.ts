@@ -17,6 +17,7 @@ import i18n, { defineI18n } from '@gunshi/plugin-i18n';
 import resources from '@gunshi/resources';
 import { cli } from 'gunshi';
 import { assertPlatformVersionLedger } from '@mpgd/target-config';
+import { resolveNativeCommandLaunch } from './command-launcher.js';
 
 import { buildAssetPacks } from './asset-pack-build.js';
 import { verifyAssetPackDelivery } from './asset-pack-verify.js';
@@ -282,6 +283,8 @@ export {
   type MicrosoftStorePackageIdentity,
   type RunMicrosoftStorePackageAcceptanceInput,
 } from './microsoft-store-package-acceptance.js';
+
+export { getMicrosoftStoreNativeAcceptanceModulePath } from './windows-native-tools.js';
 
 export {
   createMicrosoftStorePackageGenerationRuntime,
@@ -4471,12 +4474,11 @@ function runPnpm(args: readonly string[], commandEnv: NodeJS.ProcessEnv): void {
     throw new Error('Missing MPGD_KIT_PATH. Pass --kit-path or set MPGD_KIT_PATH.');
   }
 
-  const command = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
-  const result = spawnSync(command, [...args], {
+  const launch = resolveNativeCommandLaunch({ command: 'pnpm', args, environment: commandEnv });
+  const result = spawnSync(launch.command, [...launch.args], {
     cwd: kitPath,
     env: commandEnv,
     stdio: 'inherit',
-    shell: process.platform === 'win32',
   });
 
   if (result.error !== undefined) {

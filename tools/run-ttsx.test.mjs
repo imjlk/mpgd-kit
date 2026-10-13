@@ -58,8 +58,9 @@ test('resolves the root file set of a project through tsgo --showConfig', (t) =>
   const { configPath, count, keys } = resolveProjectRootFiles({ tsgoBinary, project: fixture.project, cwd: fixture.root });
   assert.equal(configPath, fixture.project);
   assert.equal(count, 1);
-  assert.equal(keys.has(fixture.included), true);
-  assert.equal(keys.has(fixture.outside), false);
+  const comparisonPath = (path) => process.platform === 'win32' ? path.toLowerCase() : path;
+  assert.equal(keys.has(comparisonPath(fixture.included)), true);
+  assert.equal(keys.has(comparisonPath(fixture.outside)), false);
 });
 
 test('a directory project stands for its tsconfig.json, as with tsc -p', (t) => {
@@ -206,7 +207,8 @@ test('native plugin test entries belong to their own tsconfig, not the tools pro
     const project = join('native-plugins', plugin, 'tsconfig.json');
     assert.doesNotThrow(() => assertEntryInProject({ tsgoBinary, project, entry, cwd: repoRoot }));
     const { keys } = resolveProjectRootFiles({ tsgoBinary, project, cwd: repoRoot });
-    const fixtureDir = join(repoRoot, 'native-plugins', plugin, 'test', sep);
+    const fixturePath = join(repoRoot, 'native-plugins', plugin, 'test', sep);
+    const fixtureDir = process.platform === 'win32' ? fixturePath.toLowerCase() : fixturePath;
     const fixtures = [...keys].filter((file) => file.startsWith(fixtureDir));
     assert.ok(fixtures.length > 0, `${plugin} tsconfig must select its test/ fixtures`);
   }

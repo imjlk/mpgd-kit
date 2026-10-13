@@ -1,3 +1,5 @@
+# Generated target scripts use POSIX environment assignments and defaults.
+shellEmulator: true
 packages:
   - 'apps/*'
   - 'packages/*'

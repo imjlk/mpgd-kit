@@ -1,3 +1,5 @@
+# Run the generated POSIX target scripts consistently on Windows and Unix.
+shellEmulator: true
 packages:
   - '.'
   - 'apps/*'

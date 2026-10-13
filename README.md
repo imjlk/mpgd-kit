@@ -509,6 +509,29 @@ pnpm sampo:publish
 npm publishing is intended to use trusted publishing/OIDC with provenance. Use a
 token-based publish path only as a fallback.
 
+## Windows build validation
+
+CI's `build-windows-starter` job uses the toolchain pinned in `.mise.toml` and
+builds packages on Windows before running `pnpm smoke:windows-starter`. The smoke
+creates a standalone game under a path containing spaces, installs the current
+checkout's packed packages, verifies a frozen reinstall, runs type checking, and
+builds both the web game and Microsoft Store PWA with artifact verification.
+Windows failures or skipped required coverage fail the `ci-required` gate;
+failed consumer runs retain command logs and artifacts for diagnosis.
+
+To reproduce locally on Windows, run `mise exec -- pnpm build:packages` followed
+by `mise exec -- pnpm smoke:windows-starter`. The smoke prints its temporary
+evidence directory and keeps it for inspection. This covers KIT and PWA build
+behavior. KIT CI also packages the generated starter and verifies installed
+WinUI/MSIX startup on x64 and ARM64; see the
+[native acceptance guide](tools/smoke/windows-native/README.md). Game-owned
+Windows hosts and real login/purchase acceptance remain in `mpgd-games`.
+
+Generated games enable `shellEmulator: true` in `pnpm-workspace.yaml` so target
+scripts can use POSIX environment defaults on Windows. Existing games should add
+the same setting when using these scripts. The CLI launches the active pnpm
+entrypoint directly, preserving argument boundaries and avoiding global shims.
+
 ## ttsc Graph Workflow
 
 The root `ttsc` dependency is the toolchain version authority. `pnpm validate:toolchain`
