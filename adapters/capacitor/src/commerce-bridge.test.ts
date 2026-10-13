@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 import {
   assertBridgeEvent,
   bridgeCommerceV2Methods,
+  type BridgeCommerceEvent,
   type BridgeEvent,
   type BridgeMethod,
   type BridgeRequest,
@@ -23,11 +24,14 @@ import {
   createBridgeCommerceProvider,
   createCommerceProviderBridge,
   createCommerceServiceProvider,
+  type CommerceProviderBridge,
+  type CreateBridgeCommerceProviderInput,
 } from './commerce-bridge.js';
 import { createCapacitorPlatformGateway } from './index.js';
 import {
   createCapacitorProviderRegistry,
   createDegradedCommerceCapabilities,
+  type CapacitorCommerceServiceProvider,
   type CapacitorServiceProvider,
   type NativeBridge,
 } from './providers.js';
@@ -238,8 +242,29 @@ describe('createCommerceProviderBridge', () => {
 });
 
 describe('createBridgeCommerceProvider', () => {
+  it('keeps the commerce envelope type on the commerce-only channels', () => {
+    // A listener written for the commerce envelope, as `BridgeEvent` was before
+    // notifications v2, still fits each channel that carries only commerce.
+    const onCommerce = (envelope: BridgeCommerceEvent): void => {
+      expect(envelope.protocol).toBe(commerceProtocol);
+    };
+    const { provider } = createStoreProvider();
+    const bridge: CommerceProviderBridge = createCommerceProviderBridge({ provider });
+    bridge.subscribe(onCommerce)();
+    const input: CreateBridgeCommerceProviderInput = {
+      store: 'fixture.store',
+      request: async () => undefined as never,
+      subscribe: (listener) => bridge.subscribe(listener),
+    };
+    input.subscribe(onCommerce)();
+    expectTypeOf<Parameters<CommerceProviderBridge['subscribe']>[0]>()
+      .toEqualTypeOf<(event: BridgeCommerceEvent) => void>();
+    expectTypeOf<Parameters<CreateBridgeCommerceProviderInput['subscribe']>[0]>()
+      .toEqualTypeOf<(event: BridgeCommerceEvent) => void>();
+  });
+
   it('unwraps envelopes, ignores foreign protocols, and reports invalid ones', () => {
-    let deliver: ((event: BridgeEvent) => void) | undefined;
+    let deliver: ((event: BridgeCommerceEvent) => void) | undefined;
     const provider = createBridgeCommerceProvider({
       store: 'fixture.store',
       request: async () => undefined as never,
@@ -263,9 +288,28 @@ describe('createBridgeCommerceProvider', () => {
       },
     });
     deliver?.({ protocol: 'mpgd.other.v1', sequence: 1, event: { type: 'nope' } } as never);
+    // A notifications v2 envelope on a channel shared despite its type is not
+    // commerce's to judge.
+    deliver?.({
+      protocol: 'mpgd.notifications.v2',
+      sequence: 0,
+      event: { type: 'opened', channel: 'remote', source: 'warm', topic: 'energy-full' },
+    } satisfies BridgeEvent as never);
     deliver?.({ protocol: commerceProtocol, sequence: 'x', event: {} } as never);
+    // A notifications event under the commerce protocol is a malformed commerce envelope.
+    deliver?.({
+      protocol: commerceProtocol,
+      sequence: 1,
+      event: { type: 'received', channel: 'local' },
+    } as never);
+    // An envelope that names no protocol is malformed, not another protocol's.
+    deliver?.({ sequence: 2, event: { type: 'purchaseUpdated' } } as never);
+    deliver?.({ protocol: 7, sequence: 3, event: { type: 'purchaseUpdated' } } as never);
     expect(events).toEqual([
       { type: 'purchaseUpdated', purchase: expect.objectContaining({ transactionId: 'tx-1' }) },
+      { type: 'purchaseError', error: expect.objectContaining({ code: 'INVALID_RESPONSE' }) },
+      { type: 'purchaseError', error: expect.objectContaining({ code: 'INVALID_RESPONSE' }) },
+      { type: 'purchaseError', error: expect.objectContaining({ code: 'INVALID_RESPONSE' }) },
       { type: 'purchaseError', error: expect.objectContaining({ code: 'INVALID_RESPONSE' }) },
     ]);
   });
@@ -426,6 +470,42 @@ describe('provider registry with a commerce provider', () => {
 });
 
 describe('gateway with a commerce provider', () => {
+  it('hands its commerce provider only the commerce envelopes of a shared channel', () => {
+    const { provider } = createStoreProvider();
+    const served = createCommerceServiceProvider({ id: 'store', commerce: provider });
+    let emit: ((envelope: BridgeEvent) => void) | undefined;
+    const shared: CapacitorCommerceServiceProvider = {
+      ...served,
+      bridge: {
+        request: (input) => served.bridge.request(input),
+        subscribe(listener) {
+          emit = listener;
+          return () => {
+            emit = undefined;
+          };
+        },
+      },
+    };
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android', appVersion: '3', buildId: 'shared', bridge: baseBridge(),
+      providers: [shared],
+    });
+    const events: CommerceEvent[] = [];
+    gateway.commerce?.subscribe((event) => events.push(event));
+    // A notifications envelope on the provider's channel is not commerce's.
+    emit?.({
+      protocol: 'mpgd.notifications.v2',
+      sequence: 0,
+      event: { type: 'received', channel: 'remote' },
+    });
+    expect(events).toEqual([]);
+    // A malformed envelope still reaches the commerce provider's validator.
+    emit?.(null as never);
+    expect(events).toEqual([
+      { type: 'purchaseError', error: expect.objectContaining({ code: 'INVALID_RESPONSE' }) },
+    ]);
+  });
+
   it('exposes the provider over the bridge path', async () => {
     const { sdk, provider } = createStoreProvider();
     const gateway = createCapacitorPlatformGateway({

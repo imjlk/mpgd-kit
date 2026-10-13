@@ -25,6 +25,17 @@ snapshot, nested commerce blocks included, must not change the result of the
 next read. The runner compares each read with the fixture's expected provider
 state.
 
+- `notifications` holds the notifications v2 `permission`, `remote`, and
+  `local` records, an `availability` readiness state, and the `open` path.
+  Counts are positive 32-bit integers, `remote.purposes` lists only known
+  purposes, and `remote.addressing` is `'none'` exactly when remote delivery
+  is unsupported. The block is present exactly when the gateway exposes
+  `notificationsV2`, and `providerAvailability.pushNotifications` then equals
+  its `availability`.
+
+The notification block, nested records, and purposes list must also be fresh
+on every read; frozen shared objects and sparse purpose lists are invalid.
+
 ## Provider transitions {#provider-transitions}
 
 When a fixture supplies a transition, its expected capabilities must differ

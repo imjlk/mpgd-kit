@@ -1,10 +1,9 @@
 import {
-  assertBridgeEvent,
-  bridgeEventProtocol,
+  bridgeCommerceEventProtocol,
   createBridgeError,
   isBridgeCommerceV2Method,
+  type BridgeCommerceEvent,
   type BridgeCommerceV2Method,
-  type BridgeEvent,
   type BridgeRequest,
   type BridgeResponse,
 } from '@mpgd/bridge';
@@ -22,12 +21,14 @@ import {
   assertCommerceBridgeRequestPurchaseResult,
   assertCommerceBridgeRestorePurchasesPayload,
   assertCommerceBridgeRestorePurchasesResult,
+  assertCommerceEventEnvelope,
   CommerceError,
   commerceErrorInfoOf,
   commerceProtocol,
   commerceProtocolVersion,
   type CommerceBridgeMethods,
   type CommerceEvent,
+  type CommerceEventEnvelope,
   type CommerceProvider,
   type StoreId,
 } from '@mpgd/platform/commerce';
@@ -44,7 +45,7 @@ export const commerceV2MethodUnsupportedBridgeErrorCode =
 export interface CommerceProviderBridge {
   request(input: BridgeRequest): Promise<BridgeResponse>;
   /** Delivers `{ protocol: 'mpgd.commerce.v2', sequence, event }`; `sequence` starts at 0 per bridge. */
-  subscribe(listener: (event: BridgeEvent) => void): () => void;
+  subscribe(listener: (event: BridgeCommerceEvent) => void): () => void;
 }
 
 export interface CreateCommerceProviderBridgeInput {
@@ -66,12 +67,12 @@ export function createCommerceProviderBridge(
   input: CreateCommerceProviderBridgeInput,
 ): CommerceProviderBridge {
   const { provider } = input;
-  const listeners = new Set<(event: BridgeEvent) => void>();
+  const listeners = new Set<(event: BridgeCommerceEvent) => void>();
   let sequence = 0;
   let detach: (() => void) | undefined;
 
   const deliver = (event: CommerceEvent): void => {
-    const envelope: BridgeEvent = { protocol: commerceProtocol, sequence, event };
+    const envelope: BridgeCommerceEvent = { protocol: commerceProtocol, sequence, event };
     sequence += 1;
     for (const listener of [...listeners]) {
       listener(envelope);
@@ -254,7 +255,7 @@ export interface CreateBridgeCommerceProviderInput {
   readonly store: StoreId;
   /** Sends one validated bridge request; the gateway's `request` fits. */
   readonly request: <TData>(method: BridgeCommerceV2Method, payload: unknown) => Promise<TData>;
-  readonly subscribe: (listener: (event: BridgeEvent) => void) => () => void;
+  readonly subscribe: (listener: (event: BridgeCommerceEvent) => void) => () => void;
 }
 
 /**
@@ -308,14 +309,18 @@ export function createBridgeCommerceProvider(
     },
     subscribe(listener) {
       return input.subscribe((envelope) => {
-        // Another protocol on a shared event channel is not ours to judge.
-        if (typeof envelope === 'object' && envelope !== null
-          && (envelope as { readonly protocol?: unknown }).protocol !== bridgeEventProtocol) {
+        // Another protocol on a shared event channel is not ours to judge; an
+        // envelope without a protocol is malformed and must reach the
+        // validator, as in the Apps in Toss provider.
+        const protocol: unknown = typeof envelope === 'object' && envelope !== null
+          ? (envelope as { readonly protocol?: unknown }).protocol
+          : undefined;
+        if (typeof protocol === 'string' && protocol !== bridgeCommerceEventProtocol) {
           return;
         }
-        let event: BridgeEvent;
+        let event: CommerceEventEnvelope;
         try {
-          event = assertBridgeEvent(envelope);
+          event = assertCommerceEventEnvelope(envelope);
         } catch (error) {
           listener({
             type: 'purchaseError',

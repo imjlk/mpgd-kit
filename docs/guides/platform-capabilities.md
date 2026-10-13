@@ -29,6 +29,8 @@ read `commerce.purchase` and `commerce.availability` to decide whether to show
 a store. The optional `providerAvailability` record explains why an installed
 provider is unavailable for the other features; its values are readiness
 states, not boolean capabilities.
+The optional `notifications` block is present exactly when the gateway
+exposes `notificationsV2`. Its availability equals push notification readiness.
 Re-read before a
 feature is shown or used. If a capability is `false`, hide or disable that
 path. Even after a `true` snapshot, handle an operation that fails or becomes

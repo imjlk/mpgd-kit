@@ -439,8 +439,9 @@ for (const requestDeployment of ['ios', undefined, 'android', 'android-productio
   };
   await journal.reserve(record);
   let verificationCalls = 0;
+  const { commerce: _commerce, ...retiredGateway } = gateway;
   const recovery = createRecoverableMonetizationClient({
-    gateway,
+    gateway: retiredGateway,
     backend: {
       ...backend,
       purchases: {

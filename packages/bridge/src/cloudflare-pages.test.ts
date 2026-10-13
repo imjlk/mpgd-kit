@@ -8,8 +8,10 @@ import {
   type CloudflarePagesServiceBinding,
   type MpgdCloudflarePagesHostEnv,
 } from './cloudflare-pages';
+import { validNotificationsV2BridgeRequests } from './fixtures';
 import {
   bridgeCommerceV2Methods,
+  bridgeNotificationsV2Methods,
   bridgeStorageLoadProtocol,
   type BridgeRequest,
   type BridgeResponse,
@@ -239,6 +241,48 @@ for (const method of bridgeCommerceV2Methods) {
       `${method} should answer COMMERCE_V2_UNAVAILABLE`,
     );
     assertEqual(response.error.retryable, false, `${method} should not be retryable`);
+  }
+}
+
+// Notifications v2: web targets have no notification path. Every method fails
+// closed over both the JSON endpoint and oRPC, whatever its payload.
+assertEqual(
+  validNotificationsV2BridgeRequests.length,
+  bridgeNotificationsV2Methods.length,
+  'every notifications v2 method should be exercised',
+);
+for (const fixture of validNotificationsV2BridgeRequests) {
+  for (const payload of [fixture.payload, { protocol: 'mpgd.notifications.v2' }, null]) {
+    const request = {
+      id: `notifications-v2-${fixture.method}`,
+      method: fixture.method,
+      payload,
+      meta: requestMeta(),
+    } satisfies BridgeRequest;
+    for (const [transport, response] of [
+      ['JSON endpoint', await postBridge(request)],
+      ['oRPC', await client.request(request)],
+    ] as const) {
+      assertEqual(response.ok, false, `${fixture.method} should fail closed over ${transport}`);
+      if (!response.ok) {
+        assertEqual(
+          response.error.code,
+          'NOTIFICATIONS_V2_UNAVAILABLE',
+          `${fixture.method} should answer NOTIFICATIONS_V2_UNAVAILABLE over ${transport}`,
+        );
+        assertEqual(
+          response.error.retryable,
+          false,
+          `${fixture.method} should not be retryable over ${transport}`,
+        );
+        assertEqual(
+          response.error.message.includes(fixture.method),
+          true,
+          `${fixture.method} answer should name the method over ${transport}`,
+        );
+        assertEqual(response.id, request.id, `${fixture.method} answer keeps the request id`);
+      }
+    }
   }
 }
 

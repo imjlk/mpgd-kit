@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { bridgeCommerceV2Methods, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
+import {
+  bridgeCommerceV2Methods,
+  bridgeNotificationsV2Methods,
+  type BridgeRequest,
+  type BridgeResponse,
+} from '@mpgd/bridge';
 import { createUnsupportedCommerceCapabilities } from '@mpgd/platform';
 import { adProtocol, adProtocolVersion } from '@mpgd/platform/ads';
 
@@ -492,6 +497,47 @@ describe('adapter-ait', () => {
           retryable: false,
         },
       });
+    }
+  });
+
+  it('fails closed for notifications v2 methods in every sandbox build', async () => {
+    // The sandbox build gets the commerce v2 stub, but no build gets notifications v2.
+    for (const buildId of ['ait-sandbox', 'build-ait']) {
+      const bridge = createAitSandboxBridge({ storage: null, buildId });
+      for (const method of bridgeNotificationsV2Methods) {
+        for (const payload of [{ protocol: 'mpgd.notifications.v2' }, { topics: ['daily'] }, null]) {
+          const response = await bridge.request({
+            id: `v2-${method}`,
+            method,
+            payload,
+            meta: {
+              target: 'ait',
+              appVersion: '1.2.3',
+              buildId,
+              sentAt: '2026-10-13T00:00:00.000Z',
+            },
+          });
+
+          expect(response).toEqual({
+            id: `v2-${method}`,
+            ok: false,
+            error: {
+              code: 'NOTIFICATIONS_V2_UNAVAILABLE',
+              message: expect.stringContaining(method),
+              retryable: false,
+            },
+          });
+        }
+      }
+      const gateway = createAitPlatformGateway({
+        appVersion: '1.2.3',
+        buildId,
+        fallbackBridge: bridge,
+      });
+      expect(gateway.notificationsV2).toBeUndefined();
+      // The v1 adapter keeps answering.
+      await expect(gateway.notifications?.getStatus('daily-ready'))
+        .resolves.toBe('configuration-required');
     }
   });
 

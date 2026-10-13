@@ -180,8 +180,10 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
       runtime.integrations.inboundShare.state === 'available',
     `${configTarget} sharing should be clamped by outbound and inbound availability`,
   );
+  // A game reaches notifications through v1, v2, or both: one of them is
+  // exposed exactly when the integration is available.
   assertEqual(
-    gateway.notifications !== undefined,
+    gateway.notifications !== undefined || gateway.notificationsV2 !== undefined,
     runtime.integrations.notifications.state === 'available',
     `${configTarget} notifications should be clamped by availability`,
   );
@@ -691,7 +693,7 @@ function supportsIntegration(
       return (
         typeof gateway.notifications?.getStatus === 'function'
         && typeof gateway.notifications?.requestSubscription === 'function'
-      );
+      ) || gateway.notificationsV2 !== undefined;
   }
 }
 

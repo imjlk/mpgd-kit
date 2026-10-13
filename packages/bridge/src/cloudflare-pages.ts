@@ -5,6 +5,8 @@ import {
   bridgeStorageLoadProtocol,
   createBridgeError,
   createCommerceV2UnavailableBridgeError,
+  createNotificationsV2UnavailableBridgeError,
+  isBridgeNotificationsV2Method,
   type BridgeRequest,
   type BridgeResponse,
   type BridgeStorageLoadData,
@@ -155,6 +157,14 @@ export function createMpgdCloudflarePagesBridgeHandler<
   TEnv extends MpgdCloudflarePagesHostEnv = MpgdCloudflarePagesHostEnv,
 >(): MpgdCloudflarePagesBridgeHandler<TEnv> {
   return async (input) => {
+    // Web targets have no notification path (notifications RFC "Provider
+    // profiles"), so the host answers every v2 method with its dedicated code.
+    if (isBridgeNotificationsV2Method(input.bridgeRequest.method)) {
+      return createNotificationsV2UnavailableBridgeError(
+        input.bridgeRequest,
+        'Cloudflare Pages host',
+      );
+    }
     switch (input.bridgeRequest.method) {
       case 'runtime.getCapabilities':
         return ok(input.bridgeRequest, {

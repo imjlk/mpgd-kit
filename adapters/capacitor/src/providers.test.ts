@@ -2,15 +2,19 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   bridgeCommerceV2Methods,
+  bridgeNotificationsV2Methods,
   bridgeStorageLoadProtocol,
   type BridgeMethod,
+  type BridgeNotificationsV2Method,
   type BridgeRequest,
 } from '@mpgd/bridge';
+import { assertBridgeNotificationsV2Result } from '@mpgd/bridge/notifications';
 import { createUnsupportedCapabilities } from '@mpgd/platform';
 import { createUnsupportedCommerceCapabilities } from '@mpgd/platform/commerce';
 
 import { createCapacitorPlatformGateway } from './index.js';
 import {
+  assertProviderResponseData,
   createCapacitorProviderRegistry,
   type CapacitorServiceProvider,
   type NativeBridge,
@@ -518,5 +522,59 @@ describe('Capacitor optional provider composition', () => {
     expect(() => createCapacitorProviderRegistry([{
       ...provider, id: 'idle', features: [],
     }])).toThrow(/must declare features and methods/);
+  });
+
+  it('is a tripwire for P2: isValidProviderData rejects every notifications v2 answer', () => {
+    // Not a test of this change: it passes with or without the explicit v2
+    // branch in isValidProviderData. It fails once a v2 answer is accepted, so
+    // P2 replaces it with tests of the answers it validates there.
+    const answers: readonly (readonly [BridgeNotificationsV2Method, unknown])[] = [
+      ['notifications.v2.getPermission', { app: 'granted', topics: {} }],
+      ['notifications.v2.listLocal', { pending: [] }],
+      ['notifications.v2.openSettings', { status: 'opened' }],
+    ];
+    for (const [method, answer] of answers) {
+      expect(() => assertBridgeNotificationsV2Result(method, answer)).not.toThrow();
+      expect(() => assertProviderResponseData(method, answer)).toThrow(/returned invalid data/);
+    }
+    for (const method of bridgeNotificationsV2Methods) {
+      expect(() => assertProviderResponseData(method, {})).toThrow(/returned invalid data/);
+    }
+  });
+
+  it('keeps notifications v2 off declared methods and passes it through readiness', async () => {
+    const push: CapacitorServiceProvider = {
+      id: 'push',
+      features: ['pushNotifications'],
+      methods: ['notifications.getStatus', 'notifications.requestSubscription'],
+      async getAvailability() { return { pushNotifications: 'configuration-required' }; },
+      bridge: { async request() { throw new Error('must not be invoked'); } },
+    };
+    for (const method of bridgeNotificationsV2Methods) {
+      expect(() => createCapacitorProviderRegistry([{
+        ...push, methods: [...push.methods, method],
+      }])).toThrow(/notifications v2 is unavailable/);
+    }
+    const registry = createCapacitorProviderRegistry([push]);
+    // A v1 provider that is not ready refuses its own methods ...
+    await expect(registry.assertMethodReady('notifications.requestSubscription', { topic: 'daily' }))
+      .rejects.toMatchObject({ code: 'NATIVE_PROVIDER_CONFIGURATION_REQUIRED' });
+    // ... but readiness never turns a notifications v2 answer into an error:
+    // the v2 provider reports its own state.
+    for (const method of bridgeNotificationsV2Methods) {
+      expect(registry.byMethod.has(method)).toBe(false);
+      await expect(registry.assertMethodReady(method, { topics: ['daily'] })).resolves.toBeUndefined();
+    }
+    // No provider can own a v2 method until P2 adds the registry surface for
+    // one, so put the unready push provider in charge of them directly: the
+    // registry passes them through instead of refusing them as unsupported or
+    // not configured.
+    const owned = createCapacitorProviderRegistry([push]);
+    for (const method of bridgeNotificationsV2Methods) {
+      (owned.byMethod as Map<BridgeMethod, CapacitorServiceProvider>).set(method, push);
+      await expect(owned.assertMethodReady(method, { topics: ['daily'] })).resolves.toBeUndefined();
+    }
+    await expect(owned.assertMethodReady('notifications.requestSubscription', { topic: 'daily' }))
+      .rejects.toMatchObject({ code: 'NATIVE_PROVIDER_CONFIGURATION_REQUIRED' });
   });
 });

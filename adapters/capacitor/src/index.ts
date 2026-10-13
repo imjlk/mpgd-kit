@@ -1,6 +1,8 @@
 import {
+  bridgeCommerceEventProtocol,
   decodeBridgeCredentialLoadData,
   decodeBridgeStorageLoadData,
+  type BridgeCommerceEvent,
   type BridgeMethod,
 } from '@mpgd/bridge';
 import { CapacitorGameServices } from '@mpgd/capacitor-game-services';
@@ -19,6 +21,7 @@ import {
   type ShareResult,
   type ViewportAdapter,
 } from '@mpgd/platform';
+import { withShareIntentCheck } from '@mpgd/platform/routes';
 import {
   createCapacitorAppEvents,
   type CapacitorAppEventsApi,
@@ -33,6 +36,7 @@ import {
   type CapacitorServiceProvider,
   type NativeBridge,
 } from './providers.js';
+import { assertNotificationsV2Served, externalActivityMethods } from './request-policy.js';
 import { createCapacitorViewport } from './viewport.js';
 
 export {
@@ -106,14 +110,6 @@ export {
   type CapacitorViewportHost,
 } from './viewport.js';
 
-const externalActivityMethods = new Set<BridgeMethod>([
-  'commerce.v2.requestPurchase',
-  'ads.showRewarded',
-  'ads.showInterstitial',
-  'identity.requestUpgrade',
-  'notifications.requestSubscription',
-]);
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -179,7 +175,19 @@ export function createCapacitorPlatformGateway(input: {
     : createBridgeCommerceProvider({
         store: commerceProvider.commerce.store,
         request: (method, payload) => request(method, payload),
-        subscribe: (listener) => commerceProvider.bridge.subscribe(listener),
+        // The provider's channel (`NativeBridge`) may carry other protocols.
+        // Only an envelope that names another protocol is dropped; anything
+        // else, a malformed envelope included, reaches the commerce
+        // provider's validator.
+        subscribe: (listener) => commerceProvider.bridge.subscribe((envelope) => {
+          const protocol: unknown = typeof envelope === 'object' && envelope !== null
+            ? (envelope as { readonly protocol?: unknown }).protocol
+            : undefined;
+          if (typeof protocol === 'string' && protocol !== bridgeCommerceEventProtocol) {
+            return;
+          }
+          listener(envelope as BridgeCommerceEvent);
+        }),
       });
   const lifecycle = createCapacitorAppEvents({
     target: input.target,
@@ -216,6 +224,9 @@ export function createCapacitorPlatformGateway(input: {
     payload: unknown,
     leaderboardRoute?: 'native' | 'remote',
   ): Promise<TData> {
+    // Before any pause: an unserved notifications v2 method never reaches the
+    // base plugin, which speaks no v2.
+    assertNotificationsV2Served(method, providers.byMethod.has(method));
     const releaseExternalActivity = externalActivityMethods.has(method)
       ? lifecycle.beginExternalActivity?.()
       : undefined;
@@ -282,7 +293,13 @@ export function createCapacitorPlatformGateway(input: {
     if (commerceProvider === undefined) {
       return;
     }
-    const subscription = commerceProvider.bridge.subscribe(({ event }) => {
+    const subscription = commerceProvider.bridge.subscribe((envelope) => {
+      // Only this purchase's commerce events end the hold; the channel may
+      // carry other protocols.
+      if (envelope.protocol !== bridgeCommerceEventProtocol) {
+        return;
+      }
+      const { event } = envelope;
       if (event.type === 'subscriptionUpdated') {
         return;
       }
@@ -401,10 +418,12 @@ export function createCapacitorPlatformGateway(input: {
       requestGameSurface: (payload) =>
         request<PresentationResult>('presentation.requestGameSurface', payload),
     },
-    sharing: {
+    // The bridge's host may build a share URL from the link, so it only ever
+    // sees an intent the ShareIntent contract accepts, with the link normalized.
+    sharing: withShareIntentCheck({
       share: (payload) => request<ShareResult>('share.share', payload),
       readInboundShare: () => request<InboundShare | null>('share.readInboundShare', {}),
-    },
+    }),
     notifications: {
       getStatus: (topic) =>
         request<NotificationSubscriptionStatus>('notifications.getStatus', { topic }),

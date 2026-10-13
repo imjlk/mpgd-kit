@@ -814,7 +814,10 @@ function validatePhaserTemplateCommerceWiring(): void {
       '    providers,\n',
     ],
     'src/platform/buildGateways/aitSandbox.ts': [
-      'fallbackBridge: createAitSandboxBridge({ buildId: runtime.buildId })',
+      'fallbackBridge: createAitSandboxBridge({',
+      // The sandbox requires the game's app name in `intoss://` share links.
+      'appName: __MPGD_AIT_APP_NAME__,',
+      'buildId: runtime.buildId,',
     ],
     'src/platform/buildGateways/reddit.ts': [
       'createDevvitCommerceProducts(productCatalog)',

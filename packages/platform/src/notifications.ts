@@ -26,9 +26,9 @@ import type {
   NotificationTopicsInput,
 } from './notifications-contract.js';
 import {
-  isRootRelativeNotificationRoute,
   isValidNotificationTimeZone,
   notificationPermissionStateOf,
+  notificationRouteError,
   notificationTimeFieldIssue,
   notificationTimeFields,
   notificationTopicDefinitionIssues,
@@ -533,10 +533,11 @@ const assertLocalNotificationRequestShape = withStrictTimes(
 /** Validates a local reminder request, including a root-relative `route`. */
 export function assertLocalNotificationRequest(input: unknown): LocalNotificationRequest {
   const request = assertLocalNotificationRequestShape(input);
-  if (request.route !== undefined && !isRootRelativeNotificationRoute(request.route)) {
-    throw new TypeError(
-      `The local reminder route is not root-relative: ${JSON.stringify(request.route)}`,
-    );
+  const error = request.route === undefined
+    ? undefined
+    : notificationRouteError('The local reminder route', request.route);
+  if (error !== undefined) {
+    throw new TypeError(error);
   }
   return request;
 }
@@ -546,10 +547,41 @@ export const assertLocalNotificationEntry = withStrictTimes(
   typia.createAssertEquals<LocalNotificationEntry>(),
   notificationTimeFields.LocalNotificationEntry,
 );
-export const assertNotificationEvent = typia.createAssertEquals<NotificationEvent>();
-export const isNotificationEvent = typia.createEquals<NotificationEvent>();
-export const assertNotificationEventEnvelope = typia.createAssertEquals<NotificationEventEnvelope>();
-export const isNotificationEventEnvelope = typia.createEquals<NotificationEventEnvelope>();
+const assertNotificationEventShape = typia.createAssertEquals<NotificationEvent>();
+const isNotificationEventShape = typia.createEquals<NotificationEvent>();
+const assertNotificationEventEnvelopeShape =
+  typia.createAssertEquals<NotificationEventEnvelope>();
+const isNotificationEventEnvelopeShape = typia.createEquals<NotificationEventEnvelope>();
+
+/** Validates an event; an `endpoint-changed` registration follows `assertNotificationEndpointRegistration`. */
+export function assertNotificationEvent(input: unknown): NotificationEvent {
+  const event = assertNotificationEventShape(input);
+  if (event.type === 'endpoint-changed') {
+    assertNotificationEndpointRegistration(event.registration);
+  }
+  return event;
+}
+
+export function isNotificationEvent(input: unknown): input is NotificationEvent {
+  return isNotificationEventShape(input) && hasKnownRegistrationTimeZone(input);
+}
+
+/** Validates an envelope; its event follows `assertNotificationEvent`. */
+export function assertNotificationEventEnvelope(input: unknown): NotificationEventEnvelope {
+  const envelope = assertNotificationEventEnvelopeShape(input);
+  assertNotificationEvent(envelope.event);
+  return envelope;
+}
+
+export function isNotificationEventEnvelope(input: unknown): input is NotificationEventEnvelope {
+  return isNotificationEventEnvelopeShape(input) && hasKnownRegistrationTimeZone(input.event);
+}
+
+function hasKnownRegistrationTimeZone(event: NotificationEvent): boolean {
+  return event.type !== 'endpoint-changed'
+    || event.registration.timeZone === undefined
+    || isValidNotificationTimeZone(event.registration.timeZone);
+}
 export const assertNotificationConsentRecord = withStrictTimes(
   'consent record',
   typia.createAssertEquals<NotificationConsentRecord>(),
@@ -602,8 +634,17 @@ export function assertNotificationTopicDefinition(input: unknown): NotificationT
 }
 export const assertNotificationBridgeGetCapabilitiesPayload =
   typia.createAssertEquals<NotificationBridgeGetCapabilitiesPayload>();
-export const assertNotificationBridgeGetCapabilitiesResult =
+const assertNotificationBridgeGetCapabilitiesResultShape =
   typia.createAssertEquals<NotificationBridgeGetCapabilitiesResult>();
+
+/** Validates a `getCapabilities` answer, whose block follows `assertNotificationCapabilities`. */
+export function assertNotificationBridgeGetCapabilitiesResult(
+  input: unknown,
+): NotificationBridgeGetCapabilitiesResult {
+  const result = assertNotificationBridgeGetCapabilitiesResultShape(input);
+  assertNotificationCapabilities(result.capabilities);
+  return result;
+}
 export const assertNotificationBridgeGetPermissionPayload =
   typia.createAssertEquals<NotificationBridgeGetPermissionPayload>();
 export const assertNotificationBridgeGetPermissionResult = assertNotificationPermissionSnapshot;
@@ -615,8 +656,19 @@ export const assertNotificationBridgeRevokePermissionPayload =
 export const assertNotificationBridgeRevokePermissionResult = assertNotificationPermissionResult;
 export const assertNotificationBridgeRegisterPayload =
   typia.createAssertEquals<NotificationBridgeRegisterPayload>();
-export const assertNotificationBridgeRegisterResult =
+const assertNotificationBridgeRegisterResultShape =
   typia.createAssertEquals<NotificationBridgeRegisterResult>();
+
+/** Validates a `register` answer, whose registration follows `assertNotificationEndpointRegistration`. */
+export function assertNotificationBridgeRegisterResult(
+  input: unknown,
+): NotificationBridgeRegisterResult {
+  const result = assertNotificationBridgeRegisterResultShape(input);
+  if (result.registration !== null) {
+    assertNotificationEndpointRegistration(result.registration);
+  }
+  return result;
+}
 export const assertNotificationBridgeScheduleLocalPayload = assertLocalNotificationRequest;
 export const assertNotificationBridgeScheduleLocalResult = assertLocalScheduleResult;
 export const assertNotificationBridgeCancelLocalPayload =

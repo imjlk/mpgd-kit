@@ -2,9 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { rootRelativeRouteVectors } from '@mpgd/platform/route-vectors';
 
-import type { BridgeRequest } from '@mpgd/bridge';
-import type { CommerceDiagnostic, ProductInfo, PurchaseRestoreResult } from '@mpgd/platform';
-
+import { bridgeNotificationsV2Methods, type BridgeRequest } from '@mpgd/bridge';
+import type { CommerceDiagnostic, ProductInfo, PurchaseRestoreResult } from '@mpgd/platform'; 
 import {
   createAitHostBridge,
   createAitSessionIdentityProvider,
@@ -1521,6 +1520,36 @@ describe('AIT production host bridge', () => {
       topic: 'streak-at-risk',
     })).resolves.toBe('subscribed');
     expect(cleanupCount).toBe(1);
+  });
+
+  it('fails closed for notifications v2 methods without prompting the host', async () => {
+    let agreementRequests = 0;
+    const requestAgreement = Object.assign(
+      () => {
+        agreementRequests += 1;
+        return () => {};
+      },
+      { isSupported: () => true },
+    );
+    const bridge = createAitHostBridge({
+      notificationTemplateCodes: { 'streak-at-risk': 'TTOKDOKU_STREAK_ALERT' },
+      dependencies: createDependencies({ requestNotificationAgreement: requestAgreement }),
+    });
+
+    for (const method of bridgeNotificationsV2Methods) {
+      for (const payload of [{ topics: ['streak-at-risk'] }, { protocol: 'mpgd.notifications.v2' }, null]) {
+        await expect(requestError(bridge, method, payload)).resolves.toEqual({
+          code: 'NOTIFICATIONS_V2_UNAVAILABLE',
+          message: expect.stringContaining(method),
+          retryable: false,
+        });
+      }
+    }
+    expect(agreementRequests).toBe(0);
+    // The v1 methods keep serving the game.
+    await expect(request(bridge, 'notifications.getStatus', {
+      topic: 'streak-at-risk',
+    })).resolves.toBe('not-subscribed');
   });
 
   it('deduplicates promotion grants with the server-issued claim id', async () => {
