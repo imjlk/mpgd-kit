@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 
-import { bridgeCommerceV2Methods, type BridgeEvent, type BridgeRequest } from '@mpgd/bridge';
+import {
+  bridgeCommerceV2Methods,
+  type BridgeCommerceEvent,
+  type BridgeEvent,
+  type BridgeRequest,
+} from '@mpgd/bridge';
 import { deriveLegacyCommerceCapabilities, type CommerceEvent } from '@mpgd/platform/commerce';
 
 import {
@@ -8,7 +13,11 @@ import {
   createFakeAitIapHost,
   flushAitIap,
 } from '../test/ait-iap-fixture.js';
-import { createAitBridgeCommerceProvider } from './commerce-bridge.js';
+import {
+  createAitBridgeCommerceProvider,
+  type AitCommerceV2BridgeHandler,
+  type CreateAitBridgeCommerceProviderInput,
+} from './commerce-bridge.js';
 import { createAitHostBridge } from './host.js';
 import { createAitPlatformGateway, type GamePlatformBridge } from './index.js';
 
@@ -49,6 +58,26 @@ function request(method: BridgeRequest['method'], payload: unknown, id = `${meth
 }
 
 describe('Apps in Toss commerce v2 bridge', () => {
+  it('keeps the commerce envelope type on the commerce-only channels', () => {
+    // A listener written for the commerce envelope, as `BridgeEvent` was before
+    // notifications v2, still fits each channel that carries only commerce.
+    const onCommerce = (envelope: BridgeCommerceEvent): void => {
+      expect(envelope.protocol).toBe('mpgd.commerce.v2');
+    };
+    const { bridge } = setup();
+    const channel = bridge.commerceV2;
+    if (channel === undefined) {
+      throw new Error('The configured host exposes its commerce event channel.');
+    }
+    channel.subscribe(onCommerce)();
+    expectTypeOf<Parameters<NonNullable<GamePlatformBridge['commerceV2']>['subscribe']>[0]>()
+      .toEqualTypeOf<(event: BridgeCommerceEvent) => void>();
+    expectTypeOf<Parameters<AitCommerceV2BridgeHandler['subscribe']>[0]>()
+      .toEqualTypeOf<(event: BridgeCommerceEvent) => void>();
+    expectTypeOf<Parameters<CreateAitBridgeCommerceProviderInput['subscribe']>[0]>()
+      .toEqualTypeOf<(event: BridgeCommerceEvent) => void>();
+  });
+
   it('serves the capability block with the boolean flags derived from it', async () => {
     const { gateway } = setup();
     const capabilities = await gateway.getCapabilities();
@@ -156,11 +185,17 @@ describe('Apps in Toss commerce v2 bridge', () => {
       }
     };
     deliver({ protocol: 'mpgd.ads.v1', sequence: 0, event: { type: 'shown' } });
+    // Notifications v2 envelopes share the channel and are not commerce's to judge.
+    const opened = { type: 'opened', channel: 'local', source: 'cold', topic: 'energy-full' };
+    deliver({ protocol: 'mpgd.notifications.v2', sequence: 0, event: opened });
     expect(events).toEqual([]);
     deliver({ sequence: 0, event: { type: 'purchaseUpdated' } });
     deliver({ protocol: 7, sequence: 1, event: { type: 'purchaseUpdated' } });
     deliver(null);
+    // A notifications event under the commerce protocol is a malformed commerce envelope.
+    deliver({ protocol: 'mpgd.commerce.v2', sequence: 2, event: opened });
     expect(events.map((event) => event.type)).toEqual([
+      'purchaseError',
       'purchaseError',
       'purchaseError',
       'purchaseError',

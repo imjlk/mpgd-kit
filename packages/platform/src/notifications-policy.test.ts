@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   applyNotificationAdvertisingLabel,
@@ -54,6 +54,8 @@ import {
 } from './notifications-policy.js';
 
 import type { NotificationCapabilities } from './notifications-contract.js';
+import { rootRelativeRouteVectors } from './route-vectors.js';
+import { normalizeRootRelativeRoute } from './routes.js';
 
 const noon = '2026-10-12T03:00:00Z'; // 12:00 Asia/Seoul
 const tenPm = '2026-10-12T13:00:00Z'; // 22:00 Asia/Seoul
@@ -595,6 +597,19 @@ describe('evaluateNotificationDelivery', () => {
 });
 
 describe('notification topic routes', () => {
+  it('validates and reports invalid routes without a URL global', () => {
+    vi.stubGlobal('URL', undefined);
+    try {
+      expect(isRootRelativeNotificationRoute('/daily?entry=push#top')).toBe(true);
+      expect(isRootRelativeNotificationRoute('/a/../daily')).toBe(false);
+      expect(isRootRelativeNotificationRoute('/%2F%2Fevil.example')).toBe(false);
+      expect(notificationTopicDefinitionIssues({ ...service, route: '/é' }))
+        .toEqual([{ path: 'topic.route', message: expect.stringContaining('/%C3%A9') }]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   const base = 'https://mpgd.invalid';
   // Each passes a same-origin check against a placeholder base, yet resolves to
   // a protocol-relative pathname that a client opens as a link to another host.
@@ -627,10 +642,39 @@ describe('notification topic routes', () => {
       expect(new URL(decoded, base).origin === base && !decoded.includes('\\')).toBe(false);
       expect(isRootRelativeNotificationRoute(route), route).toBe(false);
     }
-    // Decoded dot segments and paths that cannot be decoded are refused too.
-    for (const route of ['/levels/%252e%252e', '/50%', '/%E0%A4%A']) {
-      expect(isRootRelativeNotificationRoute(route), route).toBe(false);
+  });
+
+  it('follows the shared route rule and accepts only routes already in normalized form', () => {
+    for (const route of rootRelativeRouteVectors.rejected) {
+      expect(isRootRelativeNotificationRoute(route), JSON.stringify(route)).toBe(false);
     }
+    for (const [input, route] of rootRelativeRouteVectors.normalized) {
+      expect(isRootRelativeNotificationRoute(route), route).toBe(true);
+      expect(isRootRelativeNotificationRoute(input), input).toBe(input === route);
+    }
+    // Not URL-serialized yet, or carrying an empty `?` or `#`: the declared
+    // route would differ from the one a player opens, so the issue names it.
+    for (const [route, normalized] of [
+      ['/é', '/%C3%A9'],
+      ['/a b', '/a%20b'],
+      ['/?q=a b', '/?q=a%20b'],
+      ['/a\\b', '/a/b'],
+      ['/a?', '/a'],
+      ['/a#', '/a'],
+    ] as const) {
+      expect(isRootRelativeNotificationRoute(route), route).toBe(false);
+      expect(normalizeRootRelativeRoute(route)).toBe(normalized);
+      expect(notificationTopicDefinitionIssues({ ...service, route })).toEqual([{
+        path: 'topic.route',
+        message: `${JSON.stringify(route)} must be written in its normalized form, ${JSON.stringify(normalized)}`,
+      }]);
+    }
+    // Encoded dot segments or escapes that stay on the origin once decoded are
+    // left to the router, as the shared rule leaves them.
+    for (const route of ['/levels/%252e%252e', '/a/%2E%2E%2Fb', '/50%', '/a/%09b']) {
+      expect(isRootRelativeNotificationRoute(route), route).toBe(true);
+    }
+    expect(isRootRelativeNotificationRoute(`/${'a'.repeat(2047)}`)).toBe(true);
   });
 
   it('accepts root-relative routes that resolve to themselves on the game origin', () => {
@@ -812,6 +856,13 @@ describe('notification content', () => {
       topic: { ...advertising, optOutRoute: '/%2e//evil.example/y' },
       consent: [record('advertising', 'granted')],
     }))).toThrow(/optOutRoute that is not root-relative/u);
+    expect(() => resolveNotificationContent({
+      topic: { ...service, route: '/é' },
+      content: 'host-template',
+      defaultLocale: 'ko',
+    })).toThrow(
+      'Topic rival-challenge has a route that is not in normalized form: "/é"; write "/%C3%A9"',
+    );
   });
 });
 

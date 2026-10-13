@@ -184,9 +184,13 @@ describe('adapter-capacitor', () => {
 
   it('delegates shared launch, identity, share, and notification flows', async () => {
     const methods: string[] = [];
+    const sharePayloads: unknown[] = [];
     const bridge: NativeBridge = {
       async request(input) {
         methods.push(input.method);
+        if (input.method === 'share.share') {
+          sharePayloads.push(input.payload);
+        }
 
         const dataByMethod: Partial<Record<typeof input.method, unknown>> = {
           'identity.getSession': {
@@ -224,12 +228,21 @@ describe('adapter-capacitor', () => {
     await expect(
       gateway.presentation?.requestGameSurface({ entry: 'daily' }),
     ).resolves.toBe('already-fullscreen');
+    // An app-scheme link is outside the ShareIntent contract: refused before the bridge.
     await expect(
       gateway.sharing?.share?.({
         kind: 'invite',
         title: 'Invite',
         text: 'Play with me',
         deepLink: 'mpgd://invite',
+      }),
+    ).resolves.toEqual({ status: 'unavailable' });
+    await expect(
+      gateway.sharing?.share?.({
+        kind: 'invite',
+        title: 'Invite',
+        text: 'Play with me',
+        deepLink: '/invite',
       }),
     ).resolves.toEqual({ status: 'unavailable' });
     await expect(gateway.sharing?.readInboundShare?.()).resolves.toBeNull();
@@ -239,6 +252,12 @@ describe('adapter-capacitor', () => {
     await expect(
       gateway.notifications?.requestSubscription('daily-ready'),
     ).resolves.toBe('unavailable');
+    expect(sharePayloads).toEqual([{
+      kind: 'invite',
+      title: 'Invite',
+      text: 'Play with me',
+      deepLink: '/invite',
+    }]);
     expect(methods).toEqual([
       'identity.getSession',
       'presentation.getLaunchIntent',

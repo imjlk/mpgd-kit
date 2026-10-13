@@ -63,6 +63,10 @@ try {
   assert.doesNotMatch(liteSources, /from 'phaser'/);
   const liteManifest = JSON.parse(readFileSync(path.join(liteRoot, 'agent/game-manifest.json'), 'utf8'));
   assert.equal(liteManifest.game.engine, 'lite-canvas');
+  const liteTargets = JSON.parse(readFileSync(path.join(liteRoot, 'mpgd.targets.json'), 'utf8'));
+  assert.equal(liteTargets.targets.reddit.inlineEntry, 'index.html');
+  assert.equal(liteTargets.targets.reddit.inlineBudget.maxGzipKb, 40);
+  assert.deepEqual(liteTargets.targets.reddit.inlineBudget.forbidModules, ['phaser', 'matter-js']);
   const liteGuidance = ['AGENTS.md', 'README.md', 'agent/brief.md', 'agent/acceptance.md',
     'docs/MPGD_KIT_WORKFLOWS.md', '.agents/skills/use-mpgd-kit/SKILL.md']
     .map((file) => readFileSync(path.join(liteRoot, file), 'utf8')).join('\n');

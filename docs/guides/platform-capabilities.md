@@ -17,13 +17,16 @@ operation will complete.
 
 <!--
 @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Explains required booleans, optional fields, provider readiness, and fresh reads.
-@evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #a1834db Checked optional subscription and readiness fields against the gateway type and runner.
+@evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f5e938c Checked the optional subscription, readiness, commerce, and notifications fields, including the notificationsV2 tie, against the gateway type and runner.
 -->
 Each read returns a separate object. Required fields are booleans; the
 optional `bannerAds` and `subscriptionIap` fields behave as `false` when absent.
 The optional `providerAvailability` record explains why an installed provider
 is unavailable; its values are readiness states, not boolean capabilities.
-Re-read before a
+The optional `commerce` and `notifications` blocks describe the commerce v2
+and notifications v2 providers in more detail. `notifications` is present only
+while the gateway exposes `notificationsV2`, and its `availability` is then
+the push notification readiness. Re-read before a
 feature is shown or used. If a capability is `false`, hide or disable that
 path. Even after a `true` snapshot, handle an operation that fails or becomes
 unavailable; the snapshot is not a promise that the operation succeeds.

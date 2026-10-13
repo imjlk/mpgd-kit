@@ -1,10 +1,9 @@
 import {
-  assertBridgeEvent,
-  bridgeEventProtocol,
+  bridgeCommerceEventProtocol,
   createBridgeError,
+  type BridgeCommerceEvent,
   type BridgeCommerceV2Method,
-  type BridgeEvent,
-  type BridgeEventSource,
+  type BridgeEventStream,
   type BridgeRequest,
   type BridgeResponse,
 } from '@mpgd/bridge';
@@ -22,6 +21,7 @@ import {
   assertCommerceBridgeRequestPurchaseResult,
   assertCommerceBridgeRestorePurchasesPayload,
   assertCommerceBridgeRestorePurchasesResult,
+  assertCommerceEventEnvelope,
   CommerceError,
   commerceErrorInfoOf,
   commerceProtocol,
@@ -29,6 +29,7 @@ import {
   isCommerceErrorCode,
   type CommerceBridgeMethods,
   type CommerceEvent,
+  type CommerceEventEnvelope,
   type CommerceProvider,
   type StoreId,
 } from '@mpgd/platform/commerce';
@@ -48,7 +49,7 @@ export const aitCommerceV2InvalidPayloadBridgeErrorCode = 'COMMERCE_V2_INVALID_P
 export const aitCommerceV2MethodUnsupportedBridgeErrorCode =
   'COMMERCE_V2_METHOD_UNSUPPORTED' as const;
 
-export interface AitCommerceV2BridgeHandler extends BridgeEventSource {
+export interface AitCommerceV2BridgeHandler extends BridgeEventStream<BridgeCommerceEvent> {
   /** Answers one of the six `commerce.v2.*` methods; other methods are rejected. */
   request(input: BridgeRequest): Promise<BridgeResponse>;
 }
@@ -65,12 +66,12 @@ export interface AitCommerceV2BridgeHandler extends BridgeEventSource {
 export function createAitCommerceV2BridgeHandler(
   provider: CommerceProvider,
 ): AitCommerceV2BridgeHandler {
-  const listeners = new Set<(event: BridgeEvent) => void>();
+  const listeners = new Set<(event: BridgeCommerceEvent) => void>();
   let sequence = 0;
   let detach: (() => void) | undefined;
 
   const deliver = (event: CommerceEvent): void => {
-    const envelope: BridgeEvent = { protocol: commerceProtocol, sequence, event };
+    const envelope: BridgeCommerceEvent = { protocol: commerceProtocol, sequence, event };
     sequence += 1;
     for (const listener of [...listeners]) {
       try {
@@ -229,7 +230,7 @@ export interface CreateAitBridgeCommerceProviderInput {
   readonly store: StoreId;
   /** Sends one bridge request and returns its data; the gateway's `request` fits. */
   readonly request: <TData>(method: BridgeCommerceV2Method, payload: unknown) => Promise<TData>;
-  readonly subscribe: (listener: (event: BridgeEvent) => void) => () => void;
+  readonly subscribe: (listener: (event: BridgeCommerceEvent) => void) => () => void;
 }
 
 /**
@@ -288,12 +289,12 @@ export function createAitBridgeCommerceProvider(
         const protocol: unknown = typeof envelope === 'object' && envelope !== null
           ? (envelope as { readonly protocol?: unknown }).protocol
           : undefined;
-        if (typeof protocol === 'string' && protocol !== bridgeEventProtocol) {
+        if (typeof protocol === 'string' && protocol !== bridgeCommerceEventProtocol) {
           return;
         }
-        let event: BridgeEvent;
+        let event: CommerceEventEnvelope;
         try {
-          event = assertBridgeEvent(envelope);
+          event = assertCommerceEventEnvelope(envelope);
         } catch (error) {
           listener({
             type: 'purchaseError',

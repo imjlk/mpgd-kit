@@ -1,11 +1,16 @@
-import { hasRouteControlCharacter, normalizeRootRelativeRoute } from '@mpgd/platform/routes';
+import {
+  hasRouteControlCharacter,
+  normalizeRootRelativeRoute,
+  normalizeShareLink,
+} from '@mpgd/platform/routes';
 
 /**
  * Converts a game share link to the app-owned `intoss://<app>` deep link, or
- * answers `undefined` when the link could name another host or app. A
- * root-relative, `http(s)://`, or `intoss://<app>` link is reduced to the
- * path it carries and checked with `normalizeRootRelativeRoute` from
- * `@mpgd/platform/routes`, the same rule notification deep links follow.
+ * answers `undefined` when the link could name another host or app. An
+ * `intoss://<app>` link is reduced to the path it carries and checked with
+ * `normalizeRootRelativeRoute` from `@mpgd/platform/routes`. Any other link
+ * must pass `normalizeShareLink`, the rule every target's share links follow,
+ * and an absolute link is then reduced to its path the same way.
  */
 export function toAitShareLink(input: string, appName: string): string | undefined {
   // No share link needs a control character, and URL parsing drops tabs and
@@ -30,21 +35,19 @@ export function toAitShareLink(input: string, appName: string): string | undefin
     return toAppLink(rest.startsWith('/') ? rest : `/${rest}`, appName);
   }
 
-  if (input.startsWith('/')) {
-    return toAppLink(input, appName);
-  }
+  const link = normalizeShareLink(input);
 
-  let parsed: URL;
-
-  try {
-    parsed = new URL(input);
-  } catch {
+  if (link === undefined) {
     return undefined;
   }
 
-  return parsed.protocol === 'http:' || parsed.protocol === 'https:'
-    ? toAppLink(`${parsed.pathname}${parsed.search}${parsed.hash}`, appName)
-    : undefined;
+  if (link.startsWith('/')) {
+    return toAppLink(link, appName);
+  }
+
+  const { pathname, search, hash } = new URL(link);
+
+  return toAppLink(`${pathname}${search}${hash}`, appName);
 }
 
 /** Trims an Apps in Toss app name and requires letters, numbers, and hyphens only. */

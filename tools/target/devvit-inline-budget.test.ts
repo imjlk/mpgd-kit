@@ -26,6 +26,7 @@ try {
     'assets/preview.css',
     'assets/preview.js',
     'assets/shared.js',
+    'index.html',
   ]);
 
   // Dynamic imports are followed unless declared deferred.
@@ -105,6 +106,31 @@ try {
       assertDevvitInlineBudget({ target: 'reddit', clientDir: root, inlineEntry: 'missing.html' }),
     /does not exist/,
   );
+
+  // The HTML response, including inline scripts and styles, is first-load content.
+  writeFileSync(join(root, 'index.html'), '<script>console.log("Phaser v4.2.0")</script>');
+  assert.throws(() => assertDevvitInlineBudget({
+    target: 'reddit', clientDir: root, inlineEntry: 'index.html',
+    budget: { forbidModules: ['phaser'] },
+  }), /forbidden module\(s\): phaser in index\.html/);
+  writeFileSync(join(root, 'index.html'), '<script type="module">import "./assets/phaser.js";</script>');
+  assert.throws(() => assertDevvitInlineBudget({
+    target: 'reddit', clientDir: root, inlineEntry: 'index.html',
+    budget: { forbidModules: ['phaser'] },
+  }), /forbidden module\(s\): phaser in assets\/phaser\.js/);
+  writeFileSync(join(root, 'index.html'), '<style>@import "./assets/more.css";</style>');
+  assert.ok(collectDevvitInlineGraph(root, 'index.html').files.some(
+    (file) => file.path === 'assets/nested.css',
+  ));
+  writeFileSync(join(root, 'index.html'), `<style>${randomBytes(4096).toString('base64')}</style>`);
+  assert.throws(() => assertDevvitInlineBudget({
+    target: 'reddit', clientDir: root, inlineEntry: 'index.html', budget: { maxGzipKb: 1 },
+  }), /exceeds inlineBudget/);
+
+  assert.throws(() => collectDevvitInlineGraph(root, join(root, 'index.html')), /must be relative/);
+  assert.throws(() => collectDevvitInlineGraph(root, '../index.html'), /escapes the client artifact/);
+  writeFileSync(join(root, 'index.html'), '<script src="../outside.js"></script>');
+  assert.throws(() => collectDevvitInlineGraph(root, 'index.html'), /escapes the client artifact/);
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

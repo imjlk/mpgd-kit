@@ -22,10 +22,25 @@ optional integration contracts:
 - `sharing.share()` and `sharing.readInboundShare()` separate outbound viral
   behavior from inbound routing.
 - `notifications` manages user subscription state only. It never sends a push.
+- `notificationsV2` is the notifications v2 provider
+  ([RFC](specs/notifications/notifications-v2-rfc.md)), reached through the
+  game-services notifications runtime rather than called by the game.
+  `withTargetAvailability()` exposes it under the same `integrations.notifications`
+  state as `notifications` and then adds its capability block to
+  `getCapabilities()`. No adapter provides it yet.
 
 These groups are optional so existing adapters remain source compatible.
 Callers must read the target runtime integration state before showing a CTA and
 must still handle an operation returning `unavailable`.
+
+Once a gateway exposes `notificationsV2`, the `notifications` integration state
+follows it: `providerAvailability.pushNotifications` is the v2 block's
+`availability`. A game still reads that state from `getTargetRuntime()` before
+it shows a notifications CTA, then asks through the notifications runtime
+([RFC "Runtime"](specs/notifications/notifications-v2-rfc.md#runtime)). It calls
+the v1 `notifications` adapter only if the gateway exposes one, because a
+gateway may expose `notificationsV2` alone. An adapter that exposes both
+serves v1 from the v2 provider, so the two report the same readiness.
 
 `ShareResult.completion` separates proof that a platform share surface was
 `presented` from proof that sharing `completed`. The field is optional so
@@ -67,9 +82,10 @@ must still handle the operation failing after a positive snapshot.
 `@mpgd/platform/capability-conformance` exports a provider-neutral runner for
 adapter and target-wrapper fixtures. The repository smoke suite applies it to
 raw and target-configured gateways for web preview, Microsoft Store, Verse8,
-Android, iOS, Apps in Toss, and Reddit. It verifies the exact boolean shape,
-snapshot isolation, target identity, target masking, and live provider
-transitions without importing platform SDKs into the shared package.
+Android, iOS, Apps in Toss, and Reddit. It verifies the boolean keys, the
+optional commerce and notifications blocks, snapshot isolation, target
+identity, target masking, and live provider transitions without importing
+platform SDKs into the shared package.
 
 The checked-in targets intentionally describe current kit readiness, not the
 desired end state. For example, Apps in Toss sharing is available through
@@ -111,10 +127,36 @@ must not grant rewards, assert a player identity, or establish an authoritative
 score. Challenge tokens should be signed and checked by the game server before
 use.
 
-The browser adapter uses Web Share and then a clipboard fallback. Apps in Toss
+`ShareIntent.deepLink` is a root-relative route on the game's origin or an
+absolute `https://` (or `http://`) link. Every adapter whose host builds or
+receives a share URL checks it with `normalizeShareLink` from
+`@mpgd/platform/routes`, most through `withShareIntentCheck` from the same
+module, before the host sees the intent. A link that could name another host,
+carries a control character, or has another form, such as `./daily`, answers
+`unavailable`, and the host gets the normalized link. Each of these adapters'
+tests run `runShareLinkConformance` from `@mpgd/platform/share-link-conformance`
+over the shared route vectors, and `pnpm validate:share-link-conformance`, part
+of `pnpm check`, fails for an adapter that defines a share without running it.
+WeChat is the listed exception: its share card reopens the game with `query`
+and carries no link, and mini-game runtimes have no `URL` global, so the adapter
+drops `deepLink`.
+
+The browser adapter uses Web Share and then a clipboard fallback. Web Share
+receives a root-relative link as is and resolves it against the document; the
+clipboard fallback resolves it against the explicit game page (`locationHref`)
+first, then `document.baseURI` or the ambient location, and answers
+`unavailable` without an HTTP(S) page to resolve it against. Apps in Toss
 uses a Toss share link before opening its native share sheet. Mobile and Reddit
 bridge contracts are present, but target config exposes their current setup
 state instead of pretending an unwired SDK call is available.
+
+Links a native app opens are untrusted too. The Capacitor adapter discards a
+game link whose path `normalizeRootRelativeRoute` refuses, and its
+`lifecycle.onGameUrlOpen` and `getInitialGameUrl` events carry the checked
+path as `route`, without the URL's host. A router that routes by path opens
+that route; one that builds its route from anything else in the URL, such as a
+custom-scheme host, checks it with `normalizeRootRelativeRoute` and opens only
+what that returns.
 
 `presentDevvitShareSheet()` in `@mpgd/adapter-devvit/web` wraps Devvit's
 `showShareSheet()` effect and returns `shared + presented`; Devvit does not

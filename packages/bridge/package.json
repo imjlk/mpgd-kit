@@ -40,6 +40,10 @@
     "./cloudflare-pages": {
       "types": "./dist/cloudflare-pages.d.ts",
       "default": "./dist/cloudflare-pages.js"
+    },
+    "./notifications": {
+      "types": "./dist/notifications.d.ts",
+      "default": "./dist/notifications.js"
     }
   },
   "files": [

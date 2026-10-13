@@ -72,3 +72,49 @@ export const rootRelativeRouteVectors: RootRelativeRouteVectors = {
     '/a%3F%2F..%2F%2Fevil.example%3F%2F..%2F..',
   ],
 };
+
+/**
+ * Shared vectors for `normalizeShareLink`, next to the root-relative routes
+ * and escapes above, which share links follow too.
+ */
+export interface ShareLinkVectors {
+  /** Absolute links `normalizeShareLink` accepts, with the link it returns. */
+  readonly normalized: readonly (readonly [input: string, link: string])[];
+  /** Links outside the `ShareIntent.deepLink` contract: `normalizeShareLink` answers `undefined`. */
+  readonly rejected: readonly string[];
+}
+
+export const shareLinkVectors: ShareLinkVectors = {
+  normalized: [
+    [
+      'https://game.example/daily?challengeToken=x#result',
+      'https://game.example/daily?challengeToken=x#result',
+    ],
+    ['HTTPS://Game.Example/levels/../daily', 'https://game.example/daily'],
+    ['http://game.example', 'http://game.example/'],
+    ['https://game.example/levels//3', 'https://game.example/levels//3'],
+  ],
+  rejected: [
+    // Page-relative or empty links, which hosts would resolve differently.
+    '',
+    ' /daily',
+    './daily',
+    'daily?x=1',
+    '?challengeToken=x',
+    '#top',
+    // Other schemes, including an Apps in Toss link for another app.
+    'javascript:alert(1)',
+    'data:text/html,hi',
+    'intoss://other-app/daily',
+    '\\\\evil.example/daily',
+    // Absolute links that are not spelled out as HTTP(S), carry credentials,
+    // or keep a path a client could read as another host.
+    'https:/daily',
+    'https:evil.example/x',
+    'https://user:pw@game.example/daily',
+    'https://game.example//evil.example/x',
+    'https://game.example/.//evil.example/x',
+    'https://game.example/%2F%2Fevil.example/x',
+    'https://game.example/daily\n',
+  ],
+};

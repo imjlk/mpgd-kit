@@ -3,7 +3,9 @@ import {
   commerceV2UnavailableBridgeErrorCode,
   createBridgeError,
   createCommerceV2UnavailableBridgeError,
+  createNotificationsV2UnavailableBridgeError,
   decodeBridgeStorageLoadData,
+  isBridgeNotificationsV2Method,
   type BridgeMethod,
   type BridgeRequest,
   type BridgeResponse,
@@ -40,6 +42,7 @@ import {
   type CommerceErrorCode,
   type CommerceProvider,
 } from '@mpgd/platform/commerce';
+import { withShareIntentCheck } from '@mpgd/platform/routes';
 
 import { assertDevvitOrderEvidence, type DevvitPaidOrder } from './commerce-contract.js';
 import {
@@ -168,10 +171,12 @@ export function createDevvitPlatformGateway(
       requestGameSurface: (payload) =>
         request<PresentationResult>('presentation.requestGameSurface', payload),
     },
-    sharing: {
+    // The bridge's host may build a share URL from the link, so it only ever
+    // sees an intent the ShareIntent contract accepts, with the link normalized.
+    sharing: withShareIntentCheck({
       share: (payload) => request<ShareResult>('share.share', payload),
       readInboundShare: () => request<InboundShare | null>('share.readInboundShare', {}),
-    },
+    }),
     notifications: {
       getStatus: (topic) =>
         request<NotificationSubscriptionStatus>('notifications.getStatus', { topic }),
@@ -412,6 +417,11 @@ export function createDevvitSandboxBridge(): DevvitBridge {
 
   return {
     async request(input) {
+      // Notifications v2 arrives with the Devvit provider (P3); until then
+      // every v2 method answers the dedicated code.
+      if (isBridgeNotificationsV2Method(input.method)) {
+        return createNotificationsV2UnavailableBridgeError(input, 'Devvit sandbox bridge');
+      }
       switch (input.method) {
         case 'runtime.getCapabilities':
           return ok(input, {

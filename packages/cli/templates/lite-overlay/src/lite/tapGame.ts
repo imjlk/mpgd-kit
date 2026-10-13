@@ -62,6 +62,16 @@ export function createTapGame(options: TapGameOptions): LiteShell<CanvasSurface>
       }
     },
   });
-  document.addEventListener('visibilitychange', () => shell.invalidate());
-  return shell;
+  const onVisibilityChange = (): void => shell.invalidate();
+  document.addEventListener('visibilitychange', onVisibilityChange);
+  return {
+    ...shell,
+    get size() {
+      return shell.size;
+    },
+    dispose() {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      shell.dispose();
+    },
+  };
 }

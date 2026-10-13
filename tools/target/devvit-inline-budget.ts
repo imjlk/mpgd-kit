@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, normalize, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
 
 import type { DevvitInlineBudget } from './schemas';
@@ -57,7 +57,11 @@ function walkInlineGraph(
   deferredChunks: readonly string[],
 ): DevvitInlineReport & { readonly contents: readonly { readonly path: string; readonly content: string }[] } {
   const root = resolve(clientDir);
+  if (isAbsolute(inlineEntry)) {
+    throw new Error('Devvit inlineEntry must be relative to the client artifact.');
+  }
   const entryPath = resolve(root, inlineEntry);
+  assertClientPath(root, entryPath);
   if (!existsSync(entryPath)) {
     throw new Error(`Devvit inlineEntry ${inlineEntry} does not exist in ${clientDir}.`);
   }
@@ -71,15 +75,46 @@ function walkInlineGraph(
       }
     }
   }
+  for (const block of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/giu)) {
+    for (const [pattern, dynamic] of [
+      [staticImportPattern, false],
+      [dynamicImportPattern, true],
+    ] as const) {
+      for (const match of (block[1] ?? '').matchAll(pattern)) {
+        const reference = match[1];
+        if (reference !== undefined && isLocalReference(reference)) {
+          queue.push({ file: resolveReference(root, dirname(entryPath), reference), dynamic });
+        }
+      }
+    }
+  }
+  for (const block of html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/giu)) {
+    for (const match of (block[1] ?? '').matchAll(cssImportPattern)) {
+      const reference = match[1] ?? match[2];
+      if (reference !== undefined && isLocalReference(reference)) {
+        queue.push({ file: resolveReference(root, dirname(entryPath), reference), dynamic: false });
+      }
+    }
+  }
   const deferred = deferredChunks.map(globToRegExp);
-  const seen = new Set<string>();
-  const files: DevvitInlineGraphFile[] = [];
+  const seen = new Set<string>([entryPath]);
+  const entryBytes = Buffer.from(html);
+  const entryName = relative(root, entryPath).replace(/\\/gu, '/');
+  const files: DevvitInlineGraphFile[] = [{
+    path: entryName,
+    bytes: entryBytes.length,
+    gzipBytes: gzipSync(entryBytes, { level: 9 }).length,
+  }];
   const forbiddenHits: readonly { module: string; file: string }[] = [];
-  const allContents: { path: string; content: string }[] = [];
+  const allContents: { path: string; content: string }[] = [{ path: entryName, content: html }];
   while (queue.length > 0) {
     const edge = queue.shift();
-    if (edge === undefined || seen.has(edge.file) || !existsSync(edge.file)) {
+    if (edge === undefined || seen.has(edge.file)) {
       continue;
+    }
+    assertClientPath(root, edge.file);
+    if (!existsSync(edge.file)) {
+      throw new Error(`Devvit inline dependency ${edge.file} does not exist.`);
     }
     const { file, dynamic } = edge;
     const filePath = relative(root, file).replace(/\\/gu, '/');
@@ -138,11 +173,6 @@ export function assertDevvitInlineBudget(input: {
     input.budget?.deferredChunks ?? [],
   );
   const contents = report.contents;
-  if (report.files.length === 0) {
-    throw new Error(
-      `${input.target} inlineEntry ${input.inlineEntry} references no local scripts.`,
-    );
-  }
   const hits: { module: string; file: string }[] = [];
   for (const moduleName of input.budget?.forbidModules ?? []) {
     const signature = moduleSignatures[moduleName];
@@ -182,6 +212,13 @@ function isLocalReference(reference: string): boolean {
 function resolveReference(root: string, fromDir: string, reference: string): string {
   const clean = reference.split(/[?#]/)[0] ?? reference;
   return normalize(clean.startsWith('/') ? join(root, clean) : resolve(fromDir, clean));
+}
+
+function assertClientPath(root: string, file: string): void {
+  const fromRoot = relative(root, file).replace(/\\/gu, '/');
+  if (fromRoot === '..' || fromRoot.startsWith('../') || isAbsolute(fromRoot)) {
+    throw new Error(`Devvit inline path ${file} escapes the client artifact.`);
+  }
 }
 
 function globToRegExp(pattern: string): RegExp {

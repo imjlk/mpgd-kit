@@ -14,6 +14,10 @@ targets are unchanged.
 
 Until the private lite-shell package is initially published, lite generation
 requires `--workspace`. Generated lite guidance identifies Canvas2D ownership.
+
+Lite generation configures its Reddit inline budget, preserves feed and history
+lifecycle, removes visibility listeners on disposal, and verifies HTML content
+and artifact boundaries along with linked first-load resources.
 Windows template paths are normalized before overlay selection, and persisted
 browser history navigation keeps the game alive. Inline budgets include static
 and stylesheet imports even when a filename appears in `deferredChunks`; only

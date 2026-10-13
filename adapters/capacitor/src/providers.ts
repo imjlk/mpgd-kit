@@ -1,6 +1,7 @@
 import {
   bridgeCommerceV2Methods,
   isBridgeCommerceV2Method,
+  isBridgeNotificationsV2Method,
   type BridgeEvent,
   type BridgeMethod,
   type BridgeRequest,
@@ -26,8 +27,9 @@ import { assertCommerceBridgeResult } from './commerce-bridge.js';
 export interface NativeBridge {
   request(input: BridgeRequest): Promise<BridgeResponse>;
   /**
-   * Optional commerce v2 event delivery (`{ protocol: 'mpgd.commerce.v2', sequence, event }`).
-   * B1 wires it for store providers; the base gateway works without it.
+   * Optional event delivery in the bridge envelopes, told apart by `protocol`
+   * (`{ protocol: 'mpgd.commerce.v2', sequence, event }` from store
+   * providers). The base gateway works without it.
    */
   subscribe?(listener: (event: BridgeEvent) => void): () => void;
 }
@@ -177,6 +179,14 @@ export function createCapacitorProviderRegistry(
             + 'a declared method.',
         );
       }
+      if (isBridgeNotificationsV2Method(method)) {
+        // A notifications v2 provider gets its own registry surface (P2); a
+        // declared method would bypass the pass-through readiness rule.
+        throw new Error(
+          `Capacitor provider ${provider.id} cannot declare notifications v2 method ${method}; `
+            + 'notifications v2 is unavailable as a declared method.',
+        );
+      }
       if (!providerMethodSet.has(method)) {
         throw new Error(`Capacitor provider ${provider.id} cannot replace base method ${method}.`);
       }
@@ -303,9 +313,12 @@ export function createCapacitorProviderRegistry(
       if (provider === undefined) {
         return;
       }
-      if (isBridgeCommerceV2Method(method)) {
-        // The v2 provider reads its own `availability` and fails closed before
-        // any store UI opens; the registry adds no second, stale snapshot.
+      if (isBridgeCommerceV2Method(method) || isBridgeNotificationsV2Method(method)) {
+        // A v2 provider reads its own `availability` and answers with it
+        // (commerce fails closed before any store UI opens; notifications
+        // answer `unsupported` or `action-required` states and outcomes), so
+        // the registry adds no second, stale snapshot that would turn those
+        // answers into errors.
         return;
       }
       if (method === 'ads.unmountBanner') {
@@ -489,6 +502,12 @@ function isValidProviderData(method: BridgeMethod, value: unknown): boolean {
     } catch {
       return false;
     }
+  }
+  if (isBridgeNotificationsV2Method(method)) {
+    // P2 must validate these answers here, with `assertBridgeNotificationsV2Result`
+    // from `@mpgd/bridge/notifications`, when it lets a provider serve the
+    // methods. Until then every notifications v2 answer is rejected.
+    return false;
   }
   switch (method) {
     case 'commerce.getProducts':
