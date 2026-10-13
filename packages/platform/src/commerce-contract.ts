@@ -3,13 +3,14 @@ import type {
   CommerceFinishOwner,
   LogicalProductId,
   PlatformEvidenceEnvelope,
+  PlatformPurchasePresentationEvent,
   StarterLogicalProductId,
 } from './index.js';
 
 /**
  * Commerce v2 client contract types (RFC "Client contract"). This module is
  * typia-free on purpose: `./index` references `CommerceProvider` for
- * `PlatformGateway.commerceV2`, and headless consumers type-check
+ * `PlatformGateway.commerce`, and headless consumers type-check
  * `@mpgd/platform` with `skipLibCheck: false` and no DOM lib, where typia's
  * root declarations do not compile. `./commerce` re-exports everything here
  * and builds the validators and JSON Schemas from these same types.
@@ -217,6 +218,16 @@ export interface FinishTransactionResult {
 
 export interface CommerceProvider {
   readonly store: StoreId;
+  /**
+   * Trusted native presentation facts for the purchase UI (opened, closed,
+   * never started), independent of the purchase result. A provider whose host
+   * can prove when its payment surface closes (ONE play) offers it; the game
+   * runtime's presentation gate subscribes when present and treats a result
+   * alone as unknown.
+   */
+  readonly presentation?: {
+    subscribe(listener: (event: PlatformPurchasePresentationEvent) => void): () => void;
+  };
   getCapabilities(): Promise<CommerceCapabilities>;
   fetchProducts(input: FetchProductsInput): Promise<readonly StoreProduct[]>;
   /** Returns `launched` when the result arrives later as a `purchaseUpdated` event. */

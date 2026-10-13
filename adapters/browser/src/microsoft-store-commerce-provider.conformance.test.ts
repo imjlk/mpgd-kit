@@ -166,9 +166,6 @@ function createConformanceDigitalGoods(
       }
       return { status: 'completed', transactionId: ledgerEntryId, alreadyProcessed: false };
     },
-    async getEntitlements() {
-      return [];
-    },
   };
   const products = context.catalog.map((entry): MicrosoftStoreCommerceProduct => {
     if (entry.kind !== 'consumable') {
@@ -291,10 +288,10 @@ function createGatewayVectorProvider(
       target: 'microsoft-store',
     };
     const gateway = withMicrosoftStoreCommerceProvider(base, created);
-    if (gateway.commerceV2 === undefined) {
-      throw new Error('The gateway must expose the installed commerce v2 provider.');
+    if (gateway.commerce === undefined) {
+      throw new Error('The gateway must expose the installed commerce provider.');
     }
-    return gateway.commerceV2;
+    return gateway.commerce;
   });
   return { provider, store: actor };
 }
@@ -324,7 +321,7 @@ describe('Microsoft Store commerce provider conformance', () => {
     })));
   });
 
-  it('passes every compatible vector through the gateway commerceV2 surface', async () => {
+  it('passes every compatible vector through the gateway commerce provider', async () => {
     const results = await runCommerceConformanceVectors(microsoftStoreVectors, {
       createProvider: createGatewayVectorProvider,
     });

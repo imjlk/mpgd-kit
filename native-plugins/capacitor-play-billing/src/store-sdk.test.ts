@@ -352,20 +352,20 @@ describe('createCapacitorPlayBillingStoreSdk', () => {
     expect(plugin.getPurchasesCalls).toBe(2);
   });
 
-  it('keeps a purchase from a 0.1 native build available when it carries no acknowledged flag', async () => {
+  it('keeps a purchase available when it carries no acknowledged flag', async () => {
     const { sdk, plugin } = createSdk();
-    // A legacy payload: the 0.1 names only, no isAcknowledged, no quantity.
+    // A payload without isAcknowledged and quantity.
     plugin.upsert({
-      productIds: ['gems.small'],
+      products: ['gems.small'],
       purchaseToken: 'legacy-paid',
       orderId: 'GPA.legacy',
-      purchaseTimeMillis: 1_000,
-      state: 'purchased',
+      purchaseTime: 1_000,
+      purchaseState: 'purchased',
     } as never);
     plugin.upsert({
-      productIds: ['gems.small'],
+      products: ['gems.small'],
       purchaseToken: 'legacy-pending',
-      state: 'pending',
+      purchaseState: 'pending',
     } as never);
     expect(await sdk.getAvailablePurchases({ includePending: true })).toEqual([
       {
@@ -386,10 +386,44 @@ describe('createCapacitorPlayBillingStoreSdk', () => {
     ]);
     // Only an explicit acknowledgement finishes a purchased entry.
     plugin.upsert({
-      productIds: ['gems.small'], purchaseToken: 'legacy-paid', orderId: 'GPA.legacy',
-      state: 'purchased', isAcknowledged: true,
+      products: ['gems.small'], purchaseToken: 'legacy-paid', orderId: 'GPA.legacy',
+      purchaseState: 'purchased', isAcknowledged: true,
     } as never);
     expect((await sdk.getAvailablePurchases({})).map((purchase) => purchase.token)).toEqual([]);
+  });
+
+  it('keeps a purchase from a 0.1 native build available under the 0.1 field names', async () => {
+    const { sdk, plugin } = createSdk();
+    // A 0.1 native payload: the retired names only, no isAcknowledged.
+    plugin.upsert({
+      productIds: ['gems.small'],
+      purchaseToken: 'v01-paid',
+      orderId: 'GPA.v01',
+      purchaseTimeMillis: 1_000,
+      state: 'purchased',
+    } as never);
+    plugin.upsert({
+      productIds: ['gems.small'],
+      purchaseToken: 'v01-pending',
+      state: 'pending',
+    } as never);
+    expect(await sdk.getAvailablePurchases({ includePending: true })).toEqual([
+      {
+        sku: 'gems.small',
+        transactionId: 'GPA.v01',
+        state: 'purchased',
+        purchasedAt: '1970-01-01T00:00:01.000Z',
+        token: 'v01-paid',
+        quantity: 1,
+      },
+      {
+        sku: 'gems.small',
+        transactionId: await createGooglePlayTokenPurchaseKey('v01-pending'),
+        state: 'pending',
+        token: 'v01-pending',
+        quantity: 1,
+      },
+    ]);
   });
 
   it('emits purchase updates in the order the plugin delivered them', async () => {
@@ -469,7 +503,7 @@ describe('createCapacitorPlayBillingStoreSdk', () => {
     ]);
   });
 
-  it('derives the transaction id from the order id or the v1 token key', async () => {
+  it('derives the transaction id from the order id or the token key', async () => {
     expect(await toPlayBillingSdkPurchase(fakePlayPurchase({
       purchaseToken: 'tok',
       orderId: '  GPA.42 ',
@@ -487,12 +521,27 @@ describe('createCapacitorPlayBillingStoreSdk', () => {
     const keyed = await toPlayBillingSdkPurchase(fakePlayPurchase({ purchaseToken: 'tok', orderId: ' ' }));
     expect(keyed.transactionId).toBe(await createGooglePlayTokenPurchaseKey('tok'));
     expect(keyed.transactionId).toMatch(/^play-token-sha256:[0-9a-f]{64}$/u);
-    // The deprecated 0.1 names still convert, so a plugin build in between is readable.
+    // A 0.1 native build sends only the retired names; they still convert so
+    // a web bundle ahead of its native binary keeps paid purchases readable.
     expect(await toPlayBillingSdkPurchase({
       productIds: ['gems.small'],
       purchaseToken: 'legacy',
+      orderId: 'GPA.legacy',
       state: 'purchased',
       purchaseTimeMillis: 1_000,
+    } as never)).toMatchObject({
+      sku: 'gems.small',
+      transactionId: 'GPA.legacy',
+      state: 'purchased',
+      purchasedAt: '1970-01-01T00:00:01.000Z',
+    });
+    expect(await toPlayBillingSdkPurchase({
+      products: ['gems.small'],
+      purchaseToken: 'current',
+      purchaseState: 'purchased',
+      purchaseTime: 1_000,
+      productIds: ['other.sku'],
+      purchaseTimeMillis: 5_000,
     } as never)).toMatchObject({ sku: 'gems.small', purchasedAt: '1970-01-01T00:00:01.000Z' });
     await expect(toPlayBillingSdkPurchase(fakePlayPurchase({ purchaseToken: 'bad\u0001' })))
       .rejects.toMatchObject({ code: 'PLAY_BILLING_EVIDENCE_INVALID' });

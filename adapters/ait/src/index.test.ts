@@ -6,6 +6,7 @@ import {
   type BridgeRequest,
   type BridgeResponse,
 } from '@mpgd/bridge';
+import { createUnsupportedCommerceCapabilities } from '@mpgd/platform';
 import { adProtocol, adProtocolVersion } from '@mpgd/platform/ads';
 
 import { createAitPlatformGateway, createAitSandboxBridge, type GamePlatformBridge } from './index';
@@ -144,7 +145,7 @@ describe('adapter-ait', () => {
     });
   });
 
-  it('provides sandbox identity, storage, purchase, ad, and leaderboard behavior', async () => {
+  it('provides sandbox identity, storage, ad, and leaderboard behavior and sells nothing without the sandbox build id', async () => {
     const gateway = createAitPlatformGateway({
       appVersion: '1.2.3',
       buildId: 'build-ait',
@@ -236,16 +237,14 @@ describe('adapter-ait', () => {
         inventory: ['shield'],
       },
     });
-    await expect(
-      gateway.commerce.purchase({
-        productId: 'COINS_100',
-        source: 'shop',
-        idempotencyKey: 'sandbox-purchase-1',
-      }),
-    ).resolves.toMatchObject({
-      status: 'completed',
-      entitlementIds: ['COINS_100'],
-    });
+    // The sandbox bridge sells only for the sandbox build id: here there is no
+    // commerce provider and the snapshot carries the unsupported block, not
+    // the removed boolean flags.
+    expect(gateway.commerce).toBeUndefined();
+    const capabilities = await gateway.getCapabilities();
+    expect(capabilities).not.toHaveProperty('nativeIap');
+    expect(capabilities).not.toHaveProperty('subscriptionIap');
+    expect(capabilities.commerce).toEqual(createUnsupportedCommerceCapabilities());
     await expect(
       gateway.ads.showRewarded({
         placementId: 'CONTINUE_AFTER_FAIL',
@@ -441,8 +440,40 @@ describe('adapter-ait', () => {
     expect(reads).toBe(1);
   });
 
-  it('fails closed for commerce v2 methods until an Apps in Toss v2 provider exists', async () => {
+  it('fails closed for commerce v2 methods and serves no removed commerce method without the sandbox build id', async () => {
     const bridge = createAitSandboxBridge({ storage: null });
+
+    for (const method of ['commerce.getProducts', 'commerce.purchase', 'commerce.restore', 'commerce.getEntitlements']) {
+      await expect(bridge.request({
+        id: `removed-${method}`,
+        method: method as BridgeRequest['method'],
+        payload: {},
+        meta: {
+          target: 'ait',
+          appVersion: '1.2.3',
+          buildId: 'build-ait',
+          sentAt: '2026-10-12T00:00:00.000Z',
+        },
+      })).resolves.toMatchObject({ ok: false, error: { code: 'UNSUPPORTED_METHOD' } });
+    }
+
+    // The bridge itself sends the unsupported block and none of the removed flags.
+    const answer = await bridge.request({
+      id: 'sandbox-capabilities',
+      method: 'runtime.getCapabilities',
+      payload: {},
+      meta: {
+        target: 'ait',
+        appVersion: '1.2.3',
+        buildId: 'build-ait',
+        sentAt: '2026-10-12T00:00:00.000Z',
+      },
+    });
+    expect(answer.ok).toBe(true);
+    const data = answer.ok ? answer.data : undefined;
+    expect(data).not.toHaveProperty('nativeIap');
+    expect(data).not.toHaveProperty('subscriptionIap');
+    expect(data).toMatchObject({ commerce: createUnsupportedCommerceCapabilities() });
 
     for (const method of bridgeCommerceV2Methods) {
       const response = await bridge.request({
@@ -516,16 +547,17 @@ describe('adapter-ait', () => {
       buildId: 'ait-sandbox',
       fallbackBridge: createAitSandboxBridge({ storage: null, buildId: 'ait-sandbox' }),
     });
-    const provider = gateway.commerceV2;
+    const provider = gateway.commerce;
     if (provider === undefined) {
-      throw new Error('The sandbox gateway must expose commerceV2.');
+      throw new Error('The sandbox gateway must expose commerce.');
     }
     expect(provider.store).toBe('apps-in-toss');
-    await expect(gateway.getCapabilities()).resolves.toMatchObject({
-      nativeIap: true,
-      subscriptionIap: false,
+    const sandboxCapabilities = await gateway.getCapabilities();
+    expect(sandboxCapabilities).toMatchObject({
       commerce: { availability: 'available', lifecycle: { finish: 'host' } },
     });
+    expect(sandboxCapabilities).not.toHaveProperty('nativeIap');
+    expect(sandboxCapabilities).not.toHaveProperty('subscriptionIap');
     await expect(provider.getCapabilities()).resolves.toMatchObject({
       lifecycle: { finish: 'host' },
       authority: { evidence: 'host-callback', accountBinding: 'host' },
@@ -574,20 +606,23 @@ describe('adapter-ait', () => {
     expect(provider.subscribe(() => {})).toBeTypeOf('function');
 
     // Any other build gets no event channel, so its gateway offers no
-    // commerceV2 at all; the v2 methods themselves stay fail-closed.
+    // commerce provider and reports the unsupported block; the v2 methods
+    // themselves stay fail-closed.
     const other = createAitPlatformGateway({
       appVersion: '1.2.3',
       buildId: 'build-ait',
       fallbackBridge: createAitSandboxBridge({ storage: null, buildId: 'build-ait' }),
     });
-    expect(other.commerceV2).toBeUndefined();
-    await expect(other.getCapabilities()).resolves.not.toHaveProperty('commerce');
+    expect(other.commerce).toBeUndefined();
+    await expect(other.getCapabilities()).resolves.toMatchObject({
+      commerce: createUnsupportedCommerceCapabilities(),
+    });
     const unset = createAitPlatformGateway({
       appVersion: '1.2.3',
       buildId: 'ait-sandbox',
       fallbackBridge: createAitSandboxBridge({ storage: null }),
     });
-    expect(unset.commerceV2).toBeUndefined();
+    expect(unset.commerce).toBeUndefined();
     // A sandbox bridge wired behind a gateway of another build stays closed
     // even though it exposes the channel.
     const mismatch = createAitPlatformGateway({
@@ -595,15 +630,17 @@ describe('adapter-ait', () => {
       buildId: 'build-ait',
       fallbackBridge: createAitSandboxBridge({ storage: null, buildId: 'ait-sandbox' }),
     });
-    await expect(mismatch.getCapabilities()).resolves.not.toHaveProperty('commerce');
-    await expect(mismatch.commerceV2?.requestPurchase({
+    await expect(mismatch.getCapabilities()).resolves.toMatchObject({
+      commerce: createUnsupportedCommerceCapabilities(),
+    });
+    await expect(mismatch.commerce?.requestPurchase({
       logicalId: 'COINS_100',
       idempotencyKey: 'sandbox-purchase-v2-mismatch',
       source: 'shop',
     })).rejects.toMatchObject({ storeCode: 'COMMERCE_V2_UNAVAILABLE' });
   });
 
-  it('keeps commerce v2 commands on the bridge whose events it subscribed to', async () => {
+  it('keeps commerce commands on the bridge whose events it subscribed to', async () => {
     const globals = globalThis as { __GAME_PLATFORM_BRIDGE__?: GamePlatformBridge };
     const previous = globals.__GAME_PLATFORM_BRIDGE__;
     const served: string[] = [];
@@ -624,10 +661,10 @@ describe('adapter-ait', () => {
       globals.__GAME_PLATFORM_BRIDGE__ = hostBridge('first');
       const gateway = createAitPlatformGateway({ appVersion: '1.2.3', buildId: 'build-ait' });
       // The host bridge is reinstalled: ordinary requests follow the global
-      // bridge, commerce v2 stays with the bridge that owns its events.
+      // bridge, commerce stays with the bridge that owns its events.
       globals.__GAME_PLATFORM_BRIDGE__ = hostBridge('second');
       await expect(gateway.identity.getPlayer()).resolves.toEqual({ playerId: 'second' });
-      await expect(gateway.commerceV2?.restorePurchases?.()).resolves.toBeUndefined();
+      await expect(gateway.commerce?.restorePurchases?.()).resolves.toBeUndefined();
       expect(served).toEqual(['second:identity.getPlayer', 'first:commerce.v2.restorePurchases']);
     } finally {
       if (previous === undefined) {

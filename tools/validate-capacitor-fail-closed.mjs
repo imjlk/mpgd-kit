@@ -1,7 +1,23 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+// The six commerce v2 bridge methods are the whole commerce bridge (the v1
+// `commerce.*` methods were removed in commerce v2 PR C4).
+const commerceV2Methods = [
+  'commerce.v2.getCapabilities',
+  'commerce.v2.fetchProducts',
+  'commerce.v2.requestPurchase',
+  'commerce.v2.getAvailablePurchases',
+  'commerce.v2.finishTransaction',
+  'commerce.v2.restorePurchases',
+];
+const retiredCommerceMethods = [
+  'commerce.getProducts',
+  'commerce.purchase',
+  'commerce.restore',
+  'commerce.getEntitlements',
+];
 const implementations = [
   {
     path: 'native-plugins/capacitor-game-services/android/src/main/java/dev/mpgd/capacitor/CapacitorGameServicesPlugin.java',
@@ -17,7 +33,6 @@ for (const implementation of implementations) {
   const source = read(implementation.path);
 
   for (const name of [
-    'nativeIap',
     'nativeAds',
     'rewardedAds',
     'interstitialAds',
@@ -26,21 +41,34 @@ for (const implementation of implementations) {
   ]) {
     assert.match(source, implementation.capability(name, false), `${implementation.path}: ${name} must be disabled without a provider`);
   }
+  // The commerce capability block is the gateway's: the native base answer
+  // carries none of the retired boolean flags.
+  for (const name of ['nativeIap', 'subscriptionIap']) {
+    assert.doesNotMatch(
+      source,
+      new RegExp(`["']${name}["']`, 'u'),
+      `${implementation.path}: the retired ${name} flag must not be reported`,
+    );
+  }
   assert.match(
     source,
     implementation.capability('localizedContent', true),
     `${implementation.path}: WebView localization remains available without native providers`,
   );
 
-  for (const code of ['NATIVE_IAP_UNAVAILABLE', 'NATIVE_ADS_UNAVAILABLE', 'NATIVE_LEADERBOARD_UNAVAILABLE']) {
+  for (const code of ['COMMERCE_V2_UNAVAILABLE', 'NATIVE_ADS_UNAVAILABLE', 'NATIVE_LEADERBOARD_UNAVAILABLE']) {
     assert.ok(source.includes(code), `${implementation.path}: missing fail-closed ${code} response`);
   }
 
+  for (const method of retiredCommerceMethods) {
+    assert.ok(
+      !source.includes(`"${method}"`),
+      `${implementation.path}: the retired v1 ${method} route must not return`,
+    );
+  }
+
   for (const method of [
-    'commerce.getProducts',
-    'commerce.purchase',
-    'commerce.restore',
-    'commerce.getEntitlements',
+    ...commerceV2Methods,
     'ads.preload',
     'ads.showRewarded',
     'ads.showInterstitial',
@@ -102,6 +130,15 @@ for (const [path, label] of [
 ]) {
   const sdk = read(path);
   assert.match(sdk, /'UNIMPLEMENTED'/u, `${label}: a missing native plugin must map to configuration-required`);
+}
+
+// Commerce v2 PR C4 removed the v1 recovery drivers and bridge providers: a
+// store plugin ships only its commerce v2 provider and `StoreSdk`.
+for (const name of ['capacitor-play-billing', 'capacitor-storekit']) {
+  assert.ok(
+    !existsSync(new URL(`../native-plugins/${name}/src/provider.ts`, import.meta.url)),
+    `${name}: the v1 provider and recovery driver must not return`,
+  );
 }
 
 // The reference shell does not bundle a store plugin: `mpgd target init

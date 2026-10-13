@@ -1,7 +1,9 @@
 import type { PlatformGateway } from '@mpgd/platform';
 
+import { createTestCommerceProvider, createTestGateway } from './commerce-test-provider.test.js';
 import {
   createGameServicesRuntime,
+  gameServicesBackendEndpoints,
   GameServicesBackendError,
   GameServicesBackendTransportError,
   GameServicesHeaderResolutionError,
@@ -354,7 +356,9 @@ try {
         status: malformedCustomResponse ? Number.NaN : failCustomRequest ? 503 : 200,
         body: failCustomRequest
           ? { code: 'unavailable' }
-          : { verified: true, ledgerEntryId: 'custom-ledger', alreadyProcessed: false },
+          : request.endpoint === gameServicesBackendEndpoints.claimAdReward
+            ? { granted: true, ledgerEntryId: 'custom-reward-ledger', alreadyProcessed: false }
+            : { verified: true, ledgerEntryId: 'custom-ledger', alreadyProcessed: false },
       };
     },
   };
@@ -381,7 +385,12 @@ try {
     idempotencyKey: 'custom-second',
   });
   assertEqual(second.status, 'granted', 'custom HTTP transport should remain selected');
-  assertEqual(customRequests.length, 2, 'each purchase should make exactly one backend request');
+  // A purchase reads the backend capabilities once when the reconciler starts,
+  // verifies once, and reads ledger status; only the verify request is a grant.
+  const verifyRequests = (): GameServicesBackendTransportRequest[] => customRequests.filter(
+    (request) => request.endpoint === gameServicesBackendEndpoints.verifyPurchase,
+  );
+  assertEqual(verifyRequests().length, 2, 'each purchase should make exactly one verify request');
   assertEqual(
     customRequests[0]?.headers?.authorization,
     'Bearer first',
@@ -393,12 +402,12 @@ try {
     'custom transport must receive only one canonical authorization header',
   );
   assertEqual(
-    customRequests[1]?.headers?.authorization,
+    verifyRequests()[1]?.headers?.authorization,
     'Bearer refreshed',
     'the next request should resolve refreshed authorization',
   );
   assertEqual(
-    customRequests[1]?.headers?.['x-game-target'],
+    verifyRequests()[1]?.headers?.['x-game-target'],
     'android',
     'custom transport should receive static backend headers',
   );
@@ -416,9 +425,8 @@ try {
   });
   const sentBeforeHeaderFailure = customRequests.length;
   try {
-    await requireValue(headerFailureRuntime.client, 'header failure client').purchase({
-      productId: 'COINS_100',
-      source: 'shop',
+    await requireValue(headerFailureRuntime.client, 'header failure client').claimRewardedAd({
+      placementId: 'CONTINUE_AFTER_FAIL',
       idempotencyKey: 'header-failure',
     });
     throw new Error('Failed header resolution unexpectedly sent a request.');
@@ -436,10 +444,18 @@ try {
   assertEqual(unexpectedFetchCalls, 0, 'header failure must not use fallback fetch');
 
   failCustomRequest = true;
+  // The reconciler keeps a purchase whose backend answer failed open: the
+  // saved verify request is resent later, and nothing is granted meanwhile.
+  const outagePurchase = await customClient.purchase({
+    productId: 'COINS_100',
+    source: 'shop',
+    idempotencyKey: 'custom-outage',
+  });
+  assertEqual(outagePurchase.status, 'pending', 'a backend outage leaves the purchase pending');
+  assertEqual(outagePurchase.ledgerEntryId, undefined, 'a backend outage grants nothing');
   try {
-    await customClient.purchase({
-      productId: 'COINS_100',
-      source: 'shop',
+    await customClient.claimRewardedAd({
+      placementId: 'CONTINUE_AFTER_FAIL',
       idempotencyKey: 'custom-failure',
     });
     throw new Error('Custom backend failure unexpectedly succeeded.');
@@ -453,9 +469,8 @@ try {
   failCustomRequest = false;
   throwCustomRequest = true;
   try {
-    await customClient.purchase({
-      productId: 'COINS_100',
-      source: 'shop',
+    await customClient.claimRewardedAd({
+      placementId: 'CONTINUE_AFTER_FAIL',
       idempotencyKey: 'custom-throw',
     });
     throw new Error('Thrown custom transport failure unexpectedly succeeded.');
@@ -468,9 +483,8 @@ try {
   throwCustomRequest = false;
   malformedCustomResponse = true;
   try {
-    await customClient.purchase({
-      productId: 'COINS_100',
-      source: 'shop',
+    await customClient.claimRewardedAd({
+      placementId: 'CONTINUE_AFTER_FAIL',
       idempotencyKey: 'custom-malformed',
     });
     throw new Error('Malformed custom transport response unexpectedly succeeded.');
@@ -482,6 +496,7 @@ try {
   malformedCustomResponse = false;
   assertEqual(unexpectedFetchCalls, 0, 'transport failures must not fall back to fetch');
 
+  const sentBeforeRejectedProduction = customRequests.length;
   const rejectedProduction = createGameServicesRuntime({
     gateway: createGateway(),
     playerId,
@@ -494,7 +509,11 @@ try {
     'invalid_authoritative_backend',
     'custom transport must not bypass production base URL validation',
   );
-  assertEqual(customRequests.length, 5, 'invalid production runtime must not invoke transport');
+  assertEqual(
+    customRequests.length,
+    sentBeforeRejectedProduction,
+    'invalid production runtime must not invoke transport',
+  );
   assertThrows(
     () =>
       createGameServicesRuntime({
@@ -695,74 +714,11 @@ assertEqual(
 console.log('GameServices runtime authority smoke test passed.');
 
 function createGateway(target: PlatformGateway['target'] = 'android'): PlatformGateway {
-  return {
+  return createTestGateway({
     target,
-    async getCapabilities() {
-      return {
-        nativeIap: true,
-        nativeAds: true,
-        rewardedAds: true,
-        interstitialAds: true,
-        nativeLeaderboard: true,
-        remoteLeaderboard: false,
-        achievements: false,
-        cloudSave: false,
-        socialShare: false,
-        haptics: false,
-        localizedContent: true,
-      };
-    },
-    identity: {
-      async getPlayer() {
-        return { playerId };
-      },
-    },
-    commerce: {
-      async getProducts() {
-        return [];
-      },
-      async purchase(input) {
-        return {
-          status: 'completed',
-          transactionId: `transaction-${input.idempotencyKey}`,
-          entitlementIds: [],
-        };
-      },
-      async getEntitlements() {
-        return [];
-      },
-    },
-    ads: {
-      async preload() {},
-      async showRewarded(input) {
-        return {
-          status: 'completed',
-          rewardGranted: true,
-          ledgerEntryId: `impression-${input.idempotencyKey}`,
-        };
-      },
-    },
-    leaderboard: {
-      async submitScore() {
-        return { submitted: true };
-      },
-      async open() {},
-    },
-    lifecycle: {
-      onPause() {
-        return () => {};
-      },
-      onResume() {
-        return () => {};
-      },
-    },
-    storage: {
-      async load() {
-        return null;
-      },
-      async save() {},
-    },
-  };
+    playerId,
+    provider: createTestCommerceProvider({ store: `${target}-store` }),
+  });
 }
 
 function assertLocalCalls(expected: number, label: string): void {

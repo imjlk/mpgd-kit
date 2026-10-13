@@ -47,7 +47,9 @@ const nativeFixture: AdConformanceFixture = {
             const id = String(step.invocationId);
             last = id;
             if (step.format === 'purchase') {
-              void f.gateway.commerce.purchase({ productId: String(step.placementId), source: 'shop', idempotencyKey: id }).then(() => { throw new Error('Purchase must be blocked before the SDK.'); }, (error: unknown) => {
+              const commerce = f.gateway.commerce;
+              if (commerce === undefined) { throw new Error('The coordinated gateway must expose the commerce provider.'); }
+              void commerce.requestPurchase({ logicalId: String(step.placementId), source: 'shop', idempotencyKey: id }).then(() => { throw new Error('Purchase must be blocked before the SDK.'); }, (error: unknown) => {
                 if (!(error instanceof Error) || !('code' in error)) { throw error; }
                 outcomes.set(id, 'unavailable');
                 reasons.set(id, String(error.code));

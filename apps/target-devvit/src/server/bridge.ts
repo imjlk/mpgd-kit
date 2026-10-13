@@ -1,4 +1,5 @@
 import {
+  bridgeEventProtocol,
   bridgeStorageLoadProtocol,
   createBridgeError,
   createCommerceV2UnavailableBridgeError,
@@ -101,7 +102,6 @@ export function createDevvitBridgeHandler(
     switch (input.method) {
       case 'runtime.getCapabilities':
         return ok(input, {
-          nativeIap: false,
           nativeAds: false,
           rewardedAds: false,
           interstitialAds: false,
@@ -112,6 +112,7 @@ export function createDevvitBridgeHandler(
           socialShare: false,
           haptics: false,
           localizedContent: true,
+          commerce: await readCommerceCapabilities(input, dependencies.commerce),
         });
 
       case 'identity.getPlayer': {
@@ -172,21 +173,6 @@ export function createDevvitBridgeHandler(
       case 'notifications.requestSubscription':
         return ok(input, 'unavailable');
 
-      case 'commerce.getProducts':
-      case 'commerce.getEntitlements':
-        return ok(input, []);
-
-      case 'commerce.purchase':
-        return ok(input, {
-          status: 'cancelled',
-          entitlementIds: [],
-        });
-
-      case 'commerce.restore':
-        return ok(input, {
-          restoredEntitlements: [],
-        });
-
       case 'ads.preload':
         return ok(input, {});
 
@@ -219,8 +205,9 @@ export function createDevvitBridgeHandler(
       case 'storage.save':
         return saveStorage(input, dependencies, storageKeyNamespace, warn);
 
-      // Commerce v2 (B6): served by the configured handler over the payments
-      // plugin; the checkout itself opens in the webview.
+      // Commerce v2: served by the configured handler over the payments
+      // plugin; the checkout itself opens in the webview. The removed v1
+      // `commerce.*` methods fall to UNSUPPORTED_METHOD below.
       case 'commerce.v2.getCapabilities':
       case 'commerce.v2.fetchProducts':
       case 'commerce.v2.requestPurchase':
@@ -239,6 +226,130 @@ export function createDevvitBridgeHandler(
         );
     }
   };
+}
+
+/**
+ * The all-false commerce capability block of a server that sells nothing
+ * (`createUnsupportedCommerceCapabilities()` of `@mpgd/platform`, kept equal by
+ * the bridge test). A fresh object on every read.
+ */
+function createUnsupportedCommerceBlock() {
+  return {
+    purchase: { consumable: false, durable: false, subscription: false, quantity: false },
+    catalog: { products: false, offers: false, localizedPrice: false },
+    lifecycle: {
+      availablePurchases: false,
+      pending: false,
+      restore: false,
+      events: false,
+      finish: 'none',
+    },
+    authority: { evidence: 'client-token', accountBinding: 'optional' },
+    availability: 'unsupported',
+  };
+}
+
+const commerceBlockShape = {
+  purchase: {
+    consumable: 'boolean',
+    durable: 'boolean',
+    subscription: 'boolean',
+    quantity: 'boolean',
+  },
+  catalog: { products: 'boolean', offers: 'boolean', localizedPrice: 'boolean' },
+  lifecycle: {
+    availablePurchases: 'boolean',
+    pending: 'boolean',
+    restore: 'boolean',
+    events: 'boolean',
+    finish: ['client', 'server', 'host', 'none'],
+  },
+  authority: {
+    evidence: ['client-token', 'host-callback', 'adapter-settled', 'server-push'],
+    accountBinding: ['required', 'optional', 'host'],
+  },
+} as const;
+const commerceAvailabilities: readonly unknown[] = [
+  'available',
+  'unsupported',
+  'configuration-required',
+  'action-required',
+  'temporarily-unavailable',
+];
+
+function isPlainRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean {
+  const own = Object.keys(value);
+  return own.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+}
+
+/**
+ * A fresh copy of a well-formed commerce capability block (the exact keys and
+ * values `PlatformCapabilities.commerce` allows), or undefined for anything
+ * else, so a malformed handler answer never reaches the snapshot.
+ */
+function copyCommerceBlock(value: unknown): Record<string, unknown> | undefined {
+  if (!isPlainRecord(value)
+    || !hasExactKeys(value, [...Object.keys(commerceBlockShape), 'availability'])
+    || !commerceAvailabilities.includes(value.availability)) {
+    return undefined;
+  }
+  const copy: Record<string, unknown> = { availability: value.availability };
+  for (const [section, fields] of Object.entries(commerceBlockShape)) {
+    const source = value[section];
+    if (!isPlainRecord(source) || !hasExactKeys(source, Object.keys(fields))) {
+      return undefined;
+    }
+    const sectionCopy: Record<string, unknown> = {};
+    for (const [field, rule] of Object.entries(fields)) {
+      const fieldValue = source[field];
+      const valid = rule === 'boolean'
+        ? typeof fieldValue === 'boolean'
+        : (rule as readonly unknown[]).includes(fieldValue);
+      if (!valid) {
+        return undefined;
+      }
+      sectionCopy[field] = fieldValue;
+    }
+    copy[section] = sectionCopy;
+  }
+  return copy;
+}
+
+/**
+ * The `commerce` block of the server snapshot: what the configured commerce
+ * handler reports for this server, otherwise the unsupported block. It fails
+ * closed: a missing handler, a handler that throws or answers an error, or an
+ * answer without a well-formed capability block sells nothing. The webview
+ * gateway owns the block it finally reports (its provider's, or the
+ * unsupported one).
+ */
+async function readCommerceCapabilities(
+  input: BridgeRequest,
+  handler: DevvitBridgeCommerceHandler | undefined,
+): Promise<unknown> {
+  if (handler === undefined) {
+    return createUnsupportedCommerceBlock();
+  }
+
+  try {
+    const response = await handler.request({
+      ...input,
+      method: 'commerce.v2.getCapabilities',
+      payload: { protocol: bridgeEventProtocol },
+    });
+    const data: unknown = response.ok ? response.data : undefined;
+    const capabilities = typeof data === 'object' && data !== null
+      ? (data as { readonly capabilities?: unknown }).capabilities
+      : undefined;
+
+    return copyCommerceBlock(capabilities) ?? createUnsupportedCommerceBlock();
+  } catch {
+    return createUnsupportedCommerceBlock();
+  }
 }
 
 async function loadStorage(

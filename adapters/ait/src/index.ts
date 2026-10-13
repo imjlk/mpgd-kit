@@ -13,7 +13,9 @@ import {
   type BridgeStorageLoadData,
 } from '@mpgd/bridge';
 import {
+  createUnsupportedCommerceCapabilities,
   PlatformOperationError,
+  type CommerceCapabilities,
   type IdentitySession,
   type IdentityUpgradeResult,
   type InboundShare,
@@ -36,7 +38,11 @@ import {
   toAdAdapter,
   type AdProvider,
 } from '@mpgd/platform/ads';
-import { commerceProtocolVersion, type CommerceProvider } from '@mpgd/platform/commerce';
+import {
+  commerceProtocolVersion,
+  isCommerceCapabilities,
+  type CommerceProvider,
+} from '@mpgd/platform/commerce';
 
 import { createAitBridgeCommerceProvider } from './commerce-bridge.js';
 import { aitCommerceStoreId, createAitCommerceCapabilities } from './commerce-provider.js';
@@ -50,7 +56,7 @@ export interface GamePlatformBridge {
   /**
    * Commerce v2 event channel (`@mpgd/bridge` `BridgeCommerceEvent`
    * envelopes). A host that serves the `commerce.v2.*` methods exposes it; the
-   * gateway then offers `commerceV2` over this bridge.
+   * gateway then offers `commerce` over this bridge.
    */
   readonly commerceV2?: BridgeEventStream<BridgeCommerceEvent>;
 }
@@ -69,9 +75,10 @@ export interface CreateAitSandboxBridgeOptions {
   /**
    * The build id the gateway sends (`runtime.buildId`). Only the sandbox build
    * (`ait-sandbox`, the build `pnpm dev:ait` makes) gets the commerce v2 event
-   * channel and the evidence-only v2 stub; any other build, or no build id,
-   * exposes no channel, so the gateway offers no `commerceV2`, and the v2
-   * methods answer `COMMERCE_V2_UNAVAILABLE`.
+   * channel and the evidence-only commerce stub; any other build, or no build
+   * id, exposes no channel, so the gateway offers no `commerce` and reports the
+   * unsupported commerce block, and the `commerce.v2.*` methods answer
+   * `COMMERCE_V2_UNAVAILABLE`.
    */
   readonly buildId?: string;
   /**
@@ -175,7 +182,7 @@ export function createAitPlatformGateway(input: {
   // reinstalled later.
   const commerceBridge = advertisingBridge;
   const commerceEventSource = commerceBridge?.commerceV2;
-  const commerceV2: CommerceProvider | undefined = commerceEventSource === undefined
+  const commerce: CommerceProvider | undefined = commerceEventSource === undefined
     ? undefined
     : createAitBridgeCommerceProvider({
         store: aitCommerceStoreId,
@@ -186,7 +193,10 @@ export function createAitPlatformGateway(input: {
   return {
     target: 'ait',
     async getCapabilities() {
-      return { ...await request<PlatformCapabilities>('runtime.getCapabilities', {}) };
+      return toGatewayCapabilities(
+        await request<Readonly<Record<string, unknown>>>('runtime.getCapabilities', {}),
+        commerce !== undefined,
+      );
     },
     identity: {
       getPlayer: () => request('identity.getPlayer', {}),
@@ -214,13 +224,7 @@ export function createAitPlatformGateway(input: {
         request<PromotionRewardAvailability>('promotions.getAvailability', payload),
       grantReward: (payload) => request<PromotionRewardResult>('promotions.grantReward', payload),
     },
-    commerce: {
-      getProducts: () => request('commerce.getProducts', {}),
-      purchase: (payload) => request('commerce.purchase', payload),
-      restore: () => request('commerce.restore', {}),
-      getEntitlements: () => request('commerce.getEntitlements', {}),
-    },
-    ...(commerceV2 === undefined ? {} : { commerceV2 }),
+    ...(commerce === undefined ? {} : { commerce }),
     ads: {
       ...(provider === undefined ? {} : { provider }),
       preload: (payload) => request('ads.preload', payload),
@@ -267,7 +271,6 @@ export {
 export type {
   AitIapControllerOptions,
   AitIapDependencies,
-  AitIapEntitlementReader,
   AitIapHostDependencies,
   AitIapPreparationInput,
   AitIapPreparer,
@@ -287,6 +290,62 @@ function getBridge(): GamePlatformBridge | undefined {
   return (globalThis as { __GAME_PLATFORM_BRIDGE__?: GamePlatformBridge }).__GAME_PLATFORM_BRIDGE__;
 }
 
+/**
+ * The capability snapshot the gateway reports for a host answer. A host built
+ * before commerce v2 became the only commerce surface may still send the
+ * removed `nativeIap` and `subscriptionIap` flags, at the top level or under
+ * `providerAvailability`: they are dropped, so a snapshot never carries them. The `commerce` block is always valid: the
+ * host's block when the gateway has a commerce provider and the block is
+ * well-formed, the temporarily-unavailable block when the provider exists but
+ * the host's block is missing or malformed, and the unsupported block for a
+ * gateway without a provider (it sells nothing, whatever the host claims).
+ */
+function toGatewayCapabilities(
+  hostAnswer: Readonly<Record<string, unknown>>,
+  hasCommerceProvider: boolean,
+): PlatformCapabilities {
+  const capabilities: Record<string, unknown> = { ...hostAnswer };
+  delete capabilities.nativeIap;
+  delete capabilities.subscriptionIap;
+  const availability = capabilities.providerAvailability;
+  if (typeof availability === 'object' && availability !== null && !Array.isArray(availability)) {
+    // The same retired keys under `providerAvailability`: a stale host still
+    // sends them, and the snapshot contract has no place for them.
+    const {
+      nativeIap: _retiredNativeIap,
+      subscriptionIap: _retiredSubscriptionIap,
+      ...current
+    } = availability as Readonly<Record<string, unknown>>;
+    capabilities.providerAvailability = current;
+  }
+  const hostCommerce = capabilities.commerce;
+  if (!hasCommerceProvider) {
+    capabilities.commerce = createUnsupportedCommerceCapabilities();
+  } else if (isCommerceCapabilities(hostCommerce)) {
+    capabilities.commerce = copyCommerceCapabilities(hostCommerce);
+  } else {
+    // The gateway has a provider but the host did not describe it with a
+    // valid block (a stale or broken host): report the store as temporarily
+    // unavailable, nothing sold, rather than as permanently unsupported.
+    capabilities.commerce = {
+      ...createUnsupportedCommerceCapabilities(),
+      availability: 'temporarily-unavailable',
+    };
+  }
+  return capabilities as unknown as PlatformCapabilities;
+}
+
+/** A fresh block on every read, whatever object the host answered with. */
+function copyCommerceCapabilities(capabilities: CommerceCapabilities): CommerceCapabilities {
+  return {
+    purchase: { ...capabilities.purchase },
+    catalog: { ...capabilities.catalog },
+    lifecycle: { ...capabilities.lifecycle },
+    authority: { ...capabilities.authority },
+    availability: capabilities.availability,
+  };
+}
+
 export function createAitSandboxBridge(
   options: CreateAitSandboxBridgeOptions = {},
 ): GamePlatformBridge {
@@ -300,23 +359,24 @@ export function createAitSandboxBridge(
   // PlatformGateway storage exposes load/save only. Sandbox callers should use stable,
   // namespaced keys whose values are overwritten instead of creating an unbounded key stream.
   const storageKeyPrefix = options.storageKeyPrefix ?? 'mpgd:ait-sandbox:';
-  // Commerce v2 exists only for the sandbox build: an evidence-only stub
-  // whose order ids no backend authority knows, so a verify request for them
-  // fails closed. Every other build keeps the fail-closed bridge error and
-  // no event channel, so its gateway offers no `commerceV2` at all.
-  const commerceV2Enabled = options.buildId === aitSandboxBuildId;
+  // Commerce exists only for the sandbox build: an evidence-only stub whose
+  // order ids no backend authority knows, so a verify request for them fails
+  // closed. Every other build keeps the fail-closed bridge error and no event
+  // channel, so its gateway offers no `commerce` provider at all and reports
+  // the unsupported commerce block.
+  const commerceEnabled = options.buildId === aitSandboxBuildId;
   // The same default as the host bridge, so an unconfigured sandbox refuses
   // what an unconfigured host refuses.
   const sandboxAppName = normalizeAitAppName(options.appName ?? 'mpgd-kit');
 
   return {
     // The sandbox emits no commerce events; the channel exists so the gateway
-    // offers `commerceV2` for the sandbox build the way it does for the host.
-    ...(commerceV2Enabled ? { commerceV2: { subscribe: () => () => {} } } : {}),
+    // offers `commerce` for the sandbox build the way it does for the host.
+    ...(commerceEnabled ? { commerceV2: { subscribe: () => () => {} } } : {}),
     async request(input) {
       // Both the bridge option and the build id the gateway sends must name
       // the sandbox build; a bridge wired behind another gateway stays closed.
-      const commerceV2Served = commerceV2Enabled && input.meta.buildId === aitSandboxBuildId;
+      const commerceServed = commerceEnabled && input.meta.buildId === aitSandboxBuildId;
       // Notifications v2 arrives with the Apps in Toss provider (P1). Every
       // build answers the dedicated code for every v2 method, the sandbox
       // build included.
@@ -326,7 +386,6 @@ export function createAitSandboxBridge(
       switch (input.method) {
         case 'runtime.getCapabilities':
           return ok(input, {
-            nativeIap: true,
             nativeAds: true,
             bannerAds: false,
             rewardedAds: true,
@@ -338,11 +397,11 @@ export function createAitSandboxBridge(
             socialShare: true,
             haptics: true,
             localizedContent: true,
-            // The sandbox build also serves commerce v2, so its snapshot
-            // carries the block the flags derive from.
-            ...(commerceV2Served
-              ? { subscriptionIap: false, commerce: createAitCommerceCapabilities('available') }
-              : {}),
+            // Only the sandbox build sells (the evidence-only stub below);
+            // every other build reports the unsupported block.
+            commerce: commerceServed
+              ? createAitCommerceCapabilities('available')
+              : createUnsupportedCommerceCapabilities(),
           });
 
         case 'identity.getPlayer':
@@ -396,35 +455,6 @@ export function createAitSandboxBridge(
 
         case 'promotions.grantReward':
           return ok(input, { status: 'unavailable' });
-
-        case 'commerce.getProducts':
-          return ok(input, [
-            {
-              id: 'COINS_100',
-              type: 'consumable',
-              title: '100 Coins',
-              description: 'Adds 100 sandbox coins.',
-              price: {
-                formatted: 'KRW 1,100',
-                currencyCode: 'KRW',
-              },
-            },
-          ]);
-
-        case 'commerce.purchase':
-          return ok(input, {
-            status: 'completed',
-            transactionId: `ait-sandbox-${input.id}`,
-            entitlementIds: ['COINS_100'],
-          });
-
-        case 'commerce.restore':
-          return ok(input, {
-            restoredEntitlements: [],
-          });
-
-        case 'commerce.getEntitlements':
-          return ok(input, []);
 
         case 'ads.preload':
           return ok(input, {});
@@ -539,7 +569,7 @@ export function createAitSandboxBridge(
         case 'commerce.v2.getAvailablePurchases':
         case 'commerce.v2.finishTransaction':
         case 'commerce.v2.restorePurchases':
-          return commerceV2Served
+          return commerceServed
             ? ok(input, answerSandboxCommerceV2(input))
             : createCommerceV2UnavailableBridgeError(input, 'Apps in Toss sandbox bridge');
 

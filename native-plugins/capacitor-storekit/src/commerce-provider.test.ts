@@ -375,8 +375,12 @@ function expectThrows(operation: () => unknown, message: string): void {
     sdk: plugin,
     isIos: () => true,
   });
-  assertEqual(service.id, 'apple-storekit', 'the registry id defaults to the v1 id');
-  assertEqual(service.features, ['nativeIap'], 'the service provider serves native IAP');
+  assertEqual(service.id, 'apple-storekit', 'the registry id defaults to apple-storekit');
+  assertEqual(
+    [service.features, service.methods],
+    [[], []],
+    'the service provider declares no feature and no method; commerce is its capability block',
+  );
   const gateway = createCapacitorPlatformGateway({
     target: 'ios',
     appVersion: '1.0.0',
@@ -388,9 +392,9 @@ function expectThrows(operation: () => unknown, message: string): void {
     },
     providers: [service],
   });
-  const commerce = gateway.commerceV2;
+  const commerce = gateway.commerce;
   if (commerce === undefined) {
-    throw new Error('The gateway must expose the StoreKit commerce v2 provider.');
+    throw new Error('The gateway must expose the StoreKit commerce provider.');
   }
   assertEqual(commerce.store, 'app-store', 'the bridged provider keeps the store id');
   const capabilities = await commerce.getCapabilities();

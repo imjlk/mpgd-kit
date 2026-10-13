@@ -191,7 +191,8 @@ export async function createCrazyGamesPlatformGateway(options: CrazyGamesGateway
       getLaunchIntent: async () => ({ entry: 'free-play' }),
       requestGameSurface: async () => 'already-fullscreen',
     },
-    // Account identity, IAP, rewards and platform leaderboards are not certified by this adapter.
+    // Account identity, commerce, rewards and platform leaderboards are not certified by this adapter.
+    // There is no `commerce` provider: the capability snapshot reports the unsupported commerce block.
     sharing: {},
     leaderboard: { submitScore: async () => ({ submitted: false }), open: async () => {} },
   };

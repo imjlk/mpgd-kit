@@ -1,12 +1,12 @@
-import type {
-  PlatformEvidenceEnvelope,
-  PlatformGateway,
-  PurchaseResult,
-  RewardedAdResult,
-} from '@mpgd/platform';
+import type { PlatformEvidenceEnvelope, PlatformGateway, RewardedAdResult } from '@mpgd/platform';
 import type { AnalyticsEvent } from '@mpgd/analytics';
 
 import type { GameServicesBackendApi } from './client.js';
+import {
+  createTestCommerceProvider,
+  createTestGateway,
+  createTestStorePurchase,
+} from './commerce-test-provider.test.js';
 import type { ClaimAdRewardRequest } from './types.js';
 import { createDefaultClientRewardEvidenceRegistry } from './default-client-reward-evidence.js';
 import type {
@@ -72,7 +72,6 @@ function createStore(): MonetizationOperationStore {
   };
 }
 
-let purchaseUiCalls = 0;
 let rewardUiCalls = 0;
 let purchaseGrants = 0;
 let rewardGrants = 0;
@@ -96,55 +95,27 @@ const provisionalAdReward: RewardedAdResult = {
 const purchaseRequestTimes: string[] = [];
 const analyticsEvents: AnalyticsEvent[] = [];
 let currentTime = '2026-09-26T00:00:00.000Z';
-const gateway: PlatformGateway = {
-  target: 'android',
-  async getCapabilities() {
+// The store sheet: `finish: 'server'` means the backend's finalization ends a granted purchase.
+const commerce = createTestCommerceProvider({
+  finish: 'server',
+  async answer(request) {
+    if (request.idempotencyKey === 'inflight-purchase') {
+      uiEntered?.();
+      await new Promise<void>((resolve) => { uiRelease = resolve; });
+    }
+    if (request.idempotencyKey === 'delayed-purchase') {
+      // The store answers later: the purchase shows up in its unfinished list.
+      return { outcome: 'launched' };
+    }
     return {
-      nativeIap: true,
-      nativeAds: true,
-      rewardedAds: true,
-      interstitialAds: true,
-      nativeLeaderboard: false,
-      remoteLeaderboard: false,
-      achievements: false,
-      cloudSave: false,
-      socialShare: false,
-      haptics: false,
-      localizedContent: true,
+      outcome: 'purchased',
+      purchase: createTestStorePurchase(request),
     };
   },
-  identity: {
-    async getPlayer() {
-      return { playerId: 'player-1' };
-    },
-  },
-  commerce: {
-    async getProducts() {
-      return [];
-    },
-    async purchase(operation) {
-      purchaseUiCalls += 1;
-      if (operation.idempotencyKey === 'inflight-purchase') {
-        uiEntered?.();
-        await new Promise<void>((resolve) => { uiRelease = resolve; });
-      }
-      if (operation.idempotencyKey === 'delayed-purchase') {
-        return { status: 'pending', entitlementIds: [] };
-      }
-      if (operation.idempotencyKey === 'sdk-crash') {
-        throw new Error('SDK callback was lost after checkout');
-      }
-      return {
-        status: 'completed',
-        transactionId: `transaction-${operation.idempotencyKey}`,
-        entitlementIds: [],
-        evidence: { schema: 'test.purchase.v1', payload: { token: 'provider-token' } },
-      };
-    },
-    async getEntitlements() {
-      return [];
-    },
-  },
+});
+const gateway: PlatformGateway = createTestGateway({
+  playerId: 'player-1',
+  provider: commerce,
   ads: {
     async preload() {},
     async showRewarded(operation) {
@@ -166,27 +137,7 @@ const gateway: PlatformGateway = {
       };
     },
   },
-  leaderboard: {
-    async submitScore() {
-      return { submitted: false };
-    },
-    async open() {},
-  },
-  lifecycle: {
-    onPause() {
-      return () => {};
-    },
-    onResume() {
-      return () => {};
-    },
-  },
-  storage: {
-    async load() {
-      return null;
-    },
-    async save() {},
-  },
-};
+});
 const backend: GameServicesBackendApi = {
   purchases: {
     async verifyPurchase(request) {
@@ -208,11 +159,9 @@ const backend: GameServicesBackendApi = {
         verified: true,
         alreadyProcessed: purchaseKeys.has(request.idempotencyKey),
         ledgerEntryId: `purchase-${request.idempotencyKey}`,
-        ...(request.idempotencyKey === 'finish-later' ? {
-          finalization: finalizationComplete
-            ? { status: 'completed' as const, action: 'consume' as const, alreadyCompleted: false }
-            : { status: 'pending' as const, alreadyCompleted: false, reason: 'PROVIDER_UNAVAILABLE' },
-        } : {}),
+        finalization: request.idempotencyKey === 'finish-later' && !finalizationComplete
+          ? { status: 'pending' as const, alreadyCompleted: false, reason: 'PROVIDER_UNAVAILABLE' }
+          : { status: 'completed' as const, action: 'consume' as const, alreadyCompleted: false },
       };
     },
   },
@@ -259,6 +208,8 @@ const makeClient = (playerId: string) => createRecoverableMonetizationClient({
   analytics,
 });
 const client = makeClient('player-1');
+
+// A backend response lost after the ledger grant: the saved verify request is resent after a restart.
 const purchaseOperation = {
   productId: 'COINS_100',
   source: 'shop' as const,
@@ -266,7 +217,7 @@ const purchaseOperation = {
 };
 assert.equal((await client.purchase(purchaseOperation)).status, 'pending');
 assert.equal(purchaseGrants, 1, 'the backend already granted before the response was lost');
-assert.equal(purchaseUiCalls, 1);
+assert.equal(commerce.purchaseUiOpened, 1);
 currentTime = '2026-09-27T00:00:00.000Z';
 const restarted = makeClient('player-1');
 const recoveryProgress: string[] = [];
@@ -278,7 +229,7 @@ const recoveredPurchase = await restarted.purchase(purchaseOperation, {
 });
 assert.equal(recoveredPurchase.status, 'granted');
 assert.equal(recoveredPurchase.ledgerEntryId, 'purchase-response-lost');
-assert.equal(purchaseUiCalls, 1, 'backend retries must not reopen checkout');
+assert.equal(commerce.purchaseUiOpened, 1, 'backend retries must not reopen checkout');
 assert.equal(purchaseGrants, 1, 'the same purchase must not be granted twice');
 assert.equal(purchaseRequestTimes.join(','), '2026-09-26T00:00:00.000Z,2026-09-26T00:00:00.000Z');
 assert.equal(recoveryProgress.includes('completed'), true);
@@ -296,38 +247,39 @@ assert.equal((await restarted.claimRewardedAd(rewardOperation)).status, 'granted
 assert.equal(rewardUiCalls, 1, 'SSV delay must not reopen the ad');
 assert.equal(rewardGrants, 1, 'duplicate callbacks must not create another grant');
 
-const sdkCrash = {
+// A store that answers later: the store lists the purchase, and a reconcile pass verifies it
+// under the game's key without opening the sheet again.
+const delayedPurchase = {
   productId: 'COINS_100',
   source: 'shop' as const,
-  idempotencyKey: 'sdk-crash',
+  idempotencyKey: 'delayed-purchase',
 };
-assert.equal((await client.purchase(sdkCrash)).status, 'pending');
-assert.equal((await restarted.purchase(sdkCrash)).status, 'pending');
-assert.equal(purchaseUiCalls, 2, 'an unknown SDK completion must not reopen checkout');
-const recoveredPlatform: PurchaseResult = {
-  status: 'completed',
-  transactionId: 'transaction-sdk-crash',
-  entitlementIds: [],
-  evidence: { schema: 'test.purchase.v1', payload: { token: 'recovered-token' } },
-};
-const recoveredCallback = await restarted.recoverPurchaseResult('sdk-crash', recoveredPlatform);
-assert.equal(recoveredCallback.status, 'granted');
-assert.equal((await restarted.recoverPurchaseResult('sdk-crash', {
-  entitlementIds: [],
-  evidence: { payload: { token: 'recovered-token' }, schema: 'test.purchase.v1' },
-  transactionId: 'transaction-sdk-crash',
-  status: 'completed',
-})).status, 'granted');
-assert.equal(purchaseUiCalls, 2);
-await assert.rejects(
-  restarted.recoverPurchaseResult('sdk-crash', {
-    status: 'completed',
-    transactionId: 'other-transaction',
-    entitlementIds: [],
+assert.equal((await client.purchase(delayedPurchase)).status, 'pending');
+const purchaseUiBeforeListing = commerce.purchaseUiOpened;
+commerce.available.push(
+  createTestStorePurchase({
+    idempotencyKey: 'delayed-purchase',
+    logicalId: 'COINS_100',
   }),
-  /conflicts/u,
+);
+const resumed = makeClient('player-1');
+const listedSummary = await resumed.reconcile();
+assert.equal(
+  listedSummary.some((entry) => entry.kind === 'commerce-purchase'
+    && entry.idempotencyKey === 'delayed-purchase' && entry.status === 'granted'),
+  true,
+  'the purchase the store lists later is granted by the backend',
+);
+assert.equal(commerce.purchaseUiOpened, purchaseUiBeforeListing, 'recovery never reopens checkout');
+assert.equal((await resumed.purchase(delayedPurchase)).status, 'granted');
+assert.equal(commerce.purchaseUiOpened, purchaseUiBeforeListing);
+assert.equal(
+  Object.keys(listedSummary[0] ?? {}).includes('purchase'),
+  false,
+  'summaries never carry the store purchase or its evidence',
 );
 
+// A server-owned finish: the grant stays open while the provider-side finalization is pending.
 const finishLater = {
   productId: 'COINS_100',
   source: 'shop' as const,
@@ -343,26 +295,14 @@ assert.equal(outageSummary.some((entry) => entry.idempotencyKey === 'finish-late
 assert.equal((await restarted.purchase(finishLater)).status, 'granted');
 finalizationOutage = false;
 finalizationComplete = true;
-const casStore: MonetizationOperationStore = {
-  ...operationStore,
-  async replace(expectedRevision, record) {
-    if (record.kind === 'purchase' && record.input.idempotencyKey === 'finish-later'
-      && record.response?.finalization?.status === 'completed') {
-      throw new Error('stale finalization CAS');
-    }
-    await operationStore.replace(expectedRevision, record);
-  },
-};
-const recoveryBase = { gateway, backend, playerId: 'player-1', target: 'android' as const };
-const casInput = { ...recoveryBase, operationStore: casStore };
-const casClient = createRecoverableMonetizationClient(casInput);
-const afterCasFailure = await casClient.purchase(finishLater);
-assert.equal(afterCasFailure.status, 'granted');
-assert.equal(afterCasFailure.verification?.finalization?.status, 'pending');
 await restarted.reconcile();
 const finished = await restarted.purchase(finishLater);
 assert.equal(finished.verification?.finalization?.status, 'completed');
-assert.equal(purchaseUiCalls, 3, 'finalization retries must not reopen checkout');
+assert.equal(
+  (await restarted.reconcile()).some((entry) => entry.idempotencyKey === 'finish-later'),
+  false,
+  'a finished purchase is no longer reported',
+);
 assert.equal(purchaseGrants, 3, 'finalization must not regrant an entitlement');
 
 ssvAvailable = false;
@@ -404,40 +344,9 @@ const rejectedOperation = {
   idempotencyKey: 'permanent-rejection',
 };
 assert.equal((await rejectedClient.purchase(rejectedOperation)).status, 'rejected');
-const beforeRepeatedRejection = purchaseUiCalls;
+const beforeRepeatedRejection = commerce.purchaseUiOpened;
 assert.equal((await rejectedClient.purchase(rejectedOperation)).status, 'rejected');
-assert.equal(purchaseUiCalls, beforeRepeatedRejection);
-
-let failRequestWrite = true;
-const failingStore: MonetizationOperationStore = {
-  ...operationStore,
-  async replace(expectedRevision, record) {
-    if (failRequestWrite && record.kind === 'purchase' && record.request !== undefined) {
-      failRequestWrite = false;
-      throw new Error('journal write failed before backend dispatch');
-    }
-    await operationStore.replace(expectedRevision, record);
-  },
-};
-const interrupted = createRecoverableMonetizationClient({
-  gateway,
-  backend,
-  playerId: 'player-1',
-  target: 'android',
-  operationStore: failingStore,
-});
-const journalFailure = {
-  productId: 'COINS_100',
-  source: 'shop' as const,
-  idempotencyKey: 'journal-failed-before-dispatch',
-};
-const grantsBeforeJournalFailure = purchaseGrants;
-assert.equal((await interrupted.purchase(journalFailure)).status, 'pending');
-assert.equal(purchaseGrants, grantsBeforeJournalFailure);
-const uiAfterJournalFailure = purchaseUiCalls;
-assert.equal((await restarted.purchase(journalFailure)).status, 'granted');
-assert.equal(purchaseUiCalls, uiAfterJournalFailure);
-assert.equal(purchaseGrants, grantsBeforeJournalFailure + 1);
+assert.equal(commerce.purchaseUiOpened, beforeRepeatedRejection);
 
 ssvAvailable = false;
 const stillPending = { placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'still-pending' };
@@ -465,17 +374,105 @@ const foreignTarget: MonetizationOperationRecord = {
   input: { placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'foreign-target' },
 };
 const unreadable = {
-  kind: 'purchase',
+  kind: 'rewarded-ad',
   playerId: 'player-1',
   target: 'android',
   key: 'bad-record',
   deploymentTarget: 'android',
   revision: 0,
 } as unknown as MonetizationOperationRecord;
+// A journal written before commerce v2 C4 can still hold v1 purchase records: they parse, and
+// one that was mid-verification (a completed platform result, no terminal result) is finished
+// through the backend once; nothing reopens checkout or grants locally.
+const retiredPurchase: MonetizationOperationRecord = {
+  key: JSON.stringify(['android', 'purchase', 'retired-v1-purchase']),
+  kind: 'purchase',
+  playerId: 'player-1',
+  target: 'android',
+  deploymentTarget: 'android',
+  revision: 0,
+  input: { productId: 'COINS_100', source: 'shop', idempotencyKey: 'retired-v1-purchase' },
+  platform: {
+    status: 'completed',
+    transactionId: 'retired-v1-transaction',
+    entitlementIds: [],
+    evidence: { schema: 'test.purchase.v1', payload: { token: 'retired-token' } },
+  },
+  platformCompletedAt: '2026-09-01T00:00:00.000Z',
+};
+assert.equal(
+  isMonetizationOperationRecoverable(retiredPurchase),
+  true,
+  'a retired v1 purchase record with a completed platform result and no result is still open',
+);
+const neverCompletedRetiredPurchase: MonetizationOperationRecord = {
+  ...(retiredPurchase as Extract<MonetizationOperationRecord, { kind: 'purchase' }>),
+  key: JSON.stringify(['android', 'purchase', 'retired-v1-never-completed']),
+  input: { productId: 'COINS_100', source: 'shop', idempotencyKey: 'retired-v1-never-completed' },
+  platform: { status: 'pending', entitlementIds: [] },
+};
+assert.equal(
+  isMonetizationOperationRecoverable(neverCompletedRetiredPurchase),
+  false,
+  'a retired v1 purchase record whose platform never completed has nothing to verify',
+);
+await operationStore.reserve(retiredPurchase);
+await operationStore.reserve(neverCompletedRetiredPurchase);
+// The persisted verifier request must select the same deployment as its journal.
+for (const requestDeployment of ['ios', undefined, 'android', 'android-production'] as const) {
+  const journal = createStore();
+  const idempotencyKey = `retired-deployment-${requestDeployment ?? 'default'}`;
+  const record: MonetizationOperationRecord = {
+    ...retiredPurchase,
+    key: JSON.stringify(['android', 'purchase', idempotencyKey]),
+    deploymentTarget: 'android-production',
+    input: { ...retiredPurchase.input, idempotencyKey },
+    request: {
+      target: 'android',
+      ...(requestDeployment === undefined ? {} : { deploymentTarget: requestDeployment }),
+      playerId: 'player-1',
+      productId: 'COINS_100',
+      platformTransactionId: 'retired-v1-transaction',
+      idempotencyKey,
+      purchasedAt: '2026-09-01T00:00:00.000Z',
+    },
+  };
+  await journal.reserve(record);
+  let verificationCalls = 0;
+  const { commerce: _commerce, ...retiredGateway } = gateway;
+  const recovery = createRecoverableMonetizationClient({
+    gateway: retiredGateway,
+    backend: {
+      ...backend,
+      purchases: {
+        ...backend.purchases,
+        async verifyPurchase(request) {
+          verificationCalls += 1;
+          return backend.purchases.verifyPurchase(request);
+        },
+      },
+    },
+    playerId: 'player-1',
+    target: 'android',
+    deploymentTarget: 'android-production',
+    operationStore: journal,
+  });
+  const expectedCalls = requestDeployment === 'android-production' ? 1 : 0;
+  assert.equal(
+    (await recovery.reconcile())[0]?.status,
+    expectedCalls === 1 ? 'granted' : 'action-required',
+  );
+  assert.equal(verificationCalls, expectedCalls, 'only the journal deployment can be verified');
+}
 const diagnosticStore: MonetizationOperationStore = {
   ...operationStore,
   async listRecoverable(playerId) {
-    return [...await operationStore.listRecoverable(playerId), malformed, foreignTarget, unreadable];
+    return [
+      ...await operationStore.listRecoverable(playerId),
+      malformed,
+      foreignTarget,
+      unreadable,
+    ];
   },
 };
 const isolatedInput = {
@@ -486,6 +483,8 @@ const isolatedInput = {
   operationStore: diagnosticStore,
 };
 const isolated = createRecoverableMonetizationClient(isolatedInput);
+const purchaseUiBeforeIsolated = commerce.purchaseUiOpened;
+const grantsBeforeIsolated = purchaseGrants;
 const isolatedSummary = await isolated.reconcile();
 const hasPending = isolatedSummary.some((entry) => entry.idempotencyKey === 'still-pending');
 assert.equal(hasPending, true);
@@ -496,18 +495,150 @@ assert.equal(hasForeign, false);
 const hasUnreadable = isolatedSummary.some((entry) => entry.idempotencyKey === 'unreadable-operation'
   && entry.status === 'action-required');
 assert.equal(hasUnreadable, true);
+assert.equal(
+  isolatedSummary.some((entry) => entry.idempotencyKey === 'retired-v1-purchase'
+    && entry.status === 'granted'),
+  true,
+  'reconcile() finishes the verification a retired v1 purchase record was in the middle of',
+);
+assert.equal(
+  isolatedSummary.some((entry) => entry.idempotencyKey === 'retired-v1-never-completed'),
+  false,
+  'reconcile() has nothing to report for a retired record whose platform never completed',
+);
+assert.equal(
+  commerce.purchaseUiOpened,
+  purchaseUiBeforeIsolated,
+  'a retired v1 purchase record never reopens checkout',
+);
+assert.equal(
+  purchaseGrants,
+  grantsBeforeIsolated + 1,
+  'the retired record is verified once, by the backend (the ledger grants, not the client)',
+);
+const drained = await operationStore.read(retiredPurchase.key);
+assert.equal(
+  drained?.kind === 'purchase' && drained.result?.status === 'granted'
+    && drained.result.ledgerEntryId === 'purchase-retired-v1-purchase',
+  true,
+  'the backend answer is journaled as the closing result',
+);
+assert.equal(
+  drained !== undefined && isMonetizationOperationRecoverable(drained),
+  false,
+  'a closed retired record is not open again',
+);
+assert.equal(
+  (await isolated.restorePurchases()).some(
+    (entry) => entry.idempotencyKey === 'retired-v1-purchase',
+  ),
+  false,
+  'restorePurchases() does not send a closed retired v1 purchase record again',
+);
+assert.equal(
+  purchaseGrants,
+  grantsBeforeIsolated + 1,
+  'a closed retired record is not verified a second time',
+);
 
-const delayedPurchase = {
-  productId: 'COINS_100',
-  source: 'shop' as const,
-  idempotencyKey: 'delayed-purchase',
-};
-assert.equal((await client.purchase(delayedPurchase)).status, 'pending');
-const purchaseUiBeforeCallback = purchaseUiCalls;
-assert.equal((await restarted.recoverPurchaseResult('delayed-purchase', {
-  status: 'completed', transactionId: 'transaction-delayed-purchase', entitlementIds: [],
-})).status, 'granted');
-assert.equal(purchaseUiCalls, purchaseUiBeforeCallback);
+// A retired v1 grant whose consume or acknowledge was still pending is sent again under its own key
+// until the backend reports the finalization completed, as the v1 client did; it is never regranted.
+{
+  const finalizationStore = createStore();
+  const retiredGrant: MonetizationOperationRecord = {
+    ...(retiredPurchase as Extract<MonetizationOperationRecord, { kind: 'purchase' }>),
+    key: JSON.stringify(['android', 'purchase', 'retired-v1-finalizing']),
+    input: { productId: 'COINS_100', source: 'shop', idempotencyKey: 'retired-v1-finalizing' },
+    response: {
+      verified: true,
+      alreadyProcessed: false,
+      ledgerEntryId: 'purchase-retired-v1-finalizing',
+      finalization: { status: 'pending', alreadyCompleted: false, reason: 'PROVIDER_UNAVAILABLE' },
+    },
+    result: {
+      status: 'granted',
+      purchase: {
+        status: 'completed',
+        transactionId: 'retired-v1-transaction',
+        entitlementIds: [],
+      },
+      ledgerEntryId: 'purchase-retired-v1-finalizing',
+    },
+  };
+  assert.equal(
+    isMonetizationOperationRecoverable(retiredGrant),
+    true,
+    'a retired v1 grant with a pending finalization is still open',
+  );
+  await finalizationStore.reserve(retiredGrant);
+  const sent: string[] = [];
+  let finalizationState: 'outage' | 'pending' | 'completed' = 'outage';
+  const finalizing = createRecoverableMonetizationClient({
+    gateway,
+    backend: {
+      ...backend,
+      purchases: {
+        ...backend.purchases,
+        async verifyPurchase(request) {
+          sent.push(request.idempotencyKey);
+          if (finalizationState === 'outage') {
+            throw new Error('backend unavailable');
+          }
+          return {
+            verified: true,
+            alreadyProcessed: true,
+            ledgerEntryId: 'purchase-retired-v1-finalizing',
+            finalization: finalizationState === 'pending'
+              ? {
+                  status: 'pending' as const,
+                  alreadyCompleted: false,
+                  reason: 'PROVIDER_UNAVAILABLE',
+                }
+              : {
+                  status: 'completed' as const,
+                  action: 'consume' as const,
+                  alreadyCompleted: false,
+                },
+          };
+        },
+      },
+    },
+    playerId: 'player-1',
+    target: 'android',
+    operationStore: finalizationStore,
+  });
+  const summaryOf = async (): Promise<string | undefined> => {
+    const entry = (await finalizing.reconcile()).find(
+      (summary) => summary.idempotencyKey === 'retired-v1-finalizing',
+    );
+    return entry === undefined
+      ? undefined
+      : `${entry.kind}:${entry.status}:${String(entry.finalizationPending)}`;
+  };
+  assert.equal(
+    await summaryOf(),
+    'purchase:granted:true',
+    'a backend outage keeps the recorded grant and its pending finalization',
+  );
+  finalizationState = 'pending';
+  assert.equal(await summaryOf(), 'purchase:granted:true');
+  assert.equal(
+    isMonetizationOperationRecoverable((await finalizationStore.read(retiredGrant.key))!),
+    true,
+    'a finalization the backend still reports pending keeps the record open',
+  );
+  finalizationState = 'completed';
+  assert.equal(await summaryOf(), 'purchase:granted:false');
+  const closed = await finalizationStore.read(retiredGrant.key);
+  assert.equal(closed !== undefined && isMonetizationOperationRecoverable(closed), false);
+  assert.equal(await summaryOf(), undefined, 'a finished grant is not sent again');
+  assert.equal(
+    sent.filter((key) => key === 'retired-v1-finalizing').length,
+    3,
+    'each pass sends the saved request under the original key until finalization completes',
+  );
+}
+
 ssvAvailable = true;
 const delayedReward = { placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'delayed-reward' };
 assert.equal((await client.claimRewardedAd(delayedReward)).status, 'pending');
@@ -518,6 +649,7 @@ assert.equal((await restarted.recoverRewardResult('delayed-reward', {
 assert.equal(rewardUiCalls, rewardUiBeforeCallback);
 
 ssvAvailable = true;
+const recoveryBase = { gateway, backend, playerId: 'player-1', target: 'android' as const };
 const grantBeforeResult = {
   placementId: 'CONTINUE_AFTER_FAIL',
   idempotencyKey: 'grant-before-result',
@@ -571,6 +703,8 @@ assert.equal(interruptedGrant.status, 'granted');
 const contradictoryGrant = await contradictoryReward.claimRewardedAd(grantBeforeContradiction);
 assert.equal(contradictoryGrant.status, 'granted');
 
+// A checkout still open: a reconcile pass does not open a second sheet, and a queued replay of the
+// same key answers from the one purchase.
 const inflightOperation = {
   productId: 'COINS_100',
   source: 'shop' as const,
@@ -579,19 +713,16 @@ const inflightOperation = {
 const entered = new Promise<void>((resolve) => {
   uiEntered = resolve;
 });
-const beforeInflightUi = purchaseUiCalls;
+const beforeInflightUi = commerce.purchaseUiOpened;
 const runningPurchase = client.purchase(inflightOperation);
 await entered;
-const duringInflight = await client.reconcile();
-const retriedDuringInflight = duringInflight.some(
-  (entry) => entry.idempotencyKey === 'inflight-purchase',
-);
-assert.equal(retriedDuringInflight, false);
+await client.reconcile();
+assert.equal(commerce.purchaseUiOpened, beforeInflightUi + 1, 'a pass never opens a second sheet');
 const queuedPurchase = client.purchase(inflightOperation);
 uiRelease?.();
 assert.equal((await runningPurchase).status, 'granted');
 assert.equal((await queuedPurchase).status, 'granted');
-assert.equal(purchaseUiCalls, beforeInflightUi + 1);
+assert.equal(commerce.purchaseUiOpened, beforeInflightUi + 1);
 
 function failOneJournalWrite(
   shouldFail: (record: MonetizationOperationRecord) => boolean,
@@ -608,23 +739,6 @@ function failOneJournalWrite(
     },
   };
 }
-
-const platformWriteKey = 'platform-write-failure';
-const platformWriteStore = failOneJournalWrite((record) => record.kind === 'purchase'
-  && record.input.idempotencyKey === platformWriteKey && record.platform?.status === 'completed');
-const platformWriteInput = { ...recoveryBase, operationStore: platformWriteStore };
-const platformWriteClient = createRecoverableMonetizationClient(platformWriteInput);
-const platformWriteOperation = {
-  productId: 'COINS_100',
-  source: 'shop' as const,
-  idempotencyKey: platformWriteKey,
-};
-const platformWriteFirst = await platformWriteClient.purchase(platformWriteOperation);
-assert.equal(platformWriteFirst.status, 'pending');
-assert.equal(platformWriteFirst.purchase.status, 'completed');
-const afterPlatformWriteUi = purchaseUiCalls;
-assert.equal((await platformWriteClient.purchase(platformWriteOperation)).status, 'granted');
-assert.equal(purchaseUiCalls, afterPlatformWriteUi);
 
 const adPlatformWriteKey = 'ad-platform-write-failure';
 const adPlatformWriteStore = failOneJournalWrite((record) => record.kind === 'rewarded-ad'
@@ -645,25 +759,6 @@ const recoveredAdPlatformWrite = await adPlatformWriteClient.claimRewardedAd(
 );
 assert.equal(recoveredAdPlatformWrite.status, 'granted');
 assert.equal(rewardUiCalls, afterAdPlatformWriteUi);
-
-const responseWriteKey = 'response-write-failure';
-const responseWriteStore = failOneJournalWrite((record) => record.kind === 'purchase'
-  && record.input.idempotencyKey === responseWriteKey && record.response?.verified === true);
-const responseWriteInput = { ...recoveryBase, operationStore: responseWriteStore };
-const responseWriteClient = createRecoverableMonetizationClient(responseWriteInput);
-const responseWriteOperation = {
-  productId: 'COINS_100',
-  source: 'shop' as const,
-  idempotencyKey: responseWriteKey,
-};
-const grantsBeforeResponseWrite = purchaseGrants;
-const responseWriteFirst = await responseWriteClient.purchase(responseWriteOperation);
-assert.equal(responseWriteFirst.status, 'granted');
-assert.equal(purchaseGrants, grantsBeforeResponseWrite + 1);
-const afterResponseWriteUi = purchaseUiCalls;
-assert.equal((await responseWriteClient.purchase(responseWriteOperation)).status, 'granted');
-assert.equal(purchaseUiCalls, afterResponseWriteUi);
-assert.equal(purchaseGrants, grantsBeforeResponseWrite + 1);
 
 const adResponseWriteKey = 'ad-response-write-failure';
 const adResponseWriteStore = failOneJournalWrite((record) => record.kind === 'rewarded-ad'
@@ -686,141 +781,7 @@ assert.equal(retriedAdResponseWrite.status, 'granted');
 assert.equal(rewardUiCalls, afterAdResponseWriteUi);
 assert.equal(rewardGrants, rewardsBeforeResponseWrite + 1);
 
-// A known server grant must survive a persistent journal outage within this runtime.
-let responseStorageDown = true;
-const outageStore: MonetizationOperationStore = {
-  ...operationStore,
-  async replace(expectedRevision, record) {
-    if (responseStorageDown && record.kind === 'purchase'
-      && record.input.idempotencyKey === 'persistent-response-outage'
-      && record.response?.verified === true) {
-      throw new Error('response storage unavailable');
-    }
-    await operationStore.replace(expectedRevision, record);
-  },
-};
-const outageClient = createRecoverableMonetizationClient({
-  ...recoveryBase,
-  operationStore: outageStore,
-});
-const outageOperation = {
-  productId: 'COINS_100',
-  source: 'shop' as const,
-  idempotencyKey: 'persistent-response-outage',
-};
-assert.equal((await outageClient.purchase(outageOperation)).status, 'granted');
-assert.equal((await outageClient.purchase(outageOperation)).status, 'granted');
-responseStorageDown = false;
-assert.equal((await outageClient.purchase(outageOperation)).status, 'granted');
-
-let resultStorageDown = true;
-const microsoftStore = createStore();
-const microsoftJournal: MonetizationOperationStore = {
-  ...microsoftStore,
-  async replace(expectedRevision, record) {
-    if (resultStorageDown && record.kind === 'purchase'
-      && record.result?.status === 'granted') {
-      throw new Error('result storage unavailable');
-    }
-    await microsoftStore.replace(expectedRevision, record);
-  },
-};
-let microsoftCheckouts = 0;
-const microsoftGateway: PlatformGateway = {
-  ...gateway,
-  target: 'microsoft-store',
-  commerce: {
-    ...gateway.commerce,
-    async purchase() {
-      microsoftCheckouts += 1;
-      return {
-        status: 'completed',
-        transactionId: 'microsoft-ledger-1',
-        entitlementIds: ['COINS_100'],
-        authoritativeGrant: { ledgerEntryId: 'microsoft-ledger-1' },
-      };
-    },
-  },
-};
-const microsoftClient = createRecoverableMonetizationClient({
-  ...recoveryBase,
-  target: 'microsoft-store',
-  gateway: microsoftGateway,
-  operationStore: microsoftJournal,
-});
-const microsoftOperation = {
-  productId: 'COINS_100',
-  source: 'shop' as const,
-  idempotencyKey: 'microsoft-result-outage',
-};
-assert.equal((await microsoftClient.purchase(microsoftOperation)).status, 'granted');
-assert.equal((await microsoftClient.purchase(microsoftOperation)).status, 'granted');
-resultStorageDown = false;
-assert.equal((await microsoftClient.purchase(microsoftOperation)).status, 'granted');
-
-// The adapter completed this Microsoft Store grant before the platform result was journaled.
-let platformStorageDown = true;
-const microsoftPlatformStore = createStore();
-const microsoftPlatformJournal: MonetizationOperationStore = {
-  ...microsoftPlatformStore,
-  async replace(expectedRevision, record) {
-    if (platformStorageDown && record.kind === 'purchase' && record.platform !== undefined) {
-      throw new Error('platform storage unavailable');
-    }
-    await microsoftPlatformStore.replace(expectedRevision, record);
-  },
-};
-const microsoftPlatformClient = createRecoverableMonetizationClient({
-  ...recoveryBase,
-  target: 'microsoft-store',
-  gateway: microsoftGateway,
-  operationStore: microsoftPlatformJournal,
-});
-const microsoftPlatformOperation = {
-  productId: 'COINS_100',
-  source: 'shop' as const,
-  idempotencyKey: 'microsoft-platform-outage',
-};
-const checkoutsBeforePlatformOutage = microsoftCheckouts;
-const microsoftPlatformFirst = await microsoftPlatformClient.purchase(microsoftPlatformOperation);
-assert.equal(microsoftPlatformFirst.status, 'granted');
-assert.equal(microsoftPlatformFirst.ledgerEntryId, 'microsoft-ledger-1');
-const microsoftPlatformRetry = await microsoftPlatformClient.purchase(microsoftPlatformOperation);
-assert.equal(microsoftPlatformRetry.status, 'granted');
-platformStorageDown = false;
-const microsoftRestored = await microsoftPlatformClient.purchase(microsoftPlatformOperation);
-assert.equal(microsoftRestored.status, 'granted');
-assert.equal(microsoftCheckouts, checkoutsBeforePlatformOutage + 1);
-platformStorageDown = true;
-await microsoftPlatformStore.reserve({
-  key: JSON.stringify(['microsoft-store', 'purchase', 'microsoft-callback-outage']),
-  kind: 'purchase',
-  playerId: 'player-1',
-  target: 'microsoft-store',
-  deploymentTarget: 'microsoft-store',
-  revision: 0,
-  input: { productId: 'COINS_100', source: 'shop', idempotencyKey: 'microsoft-callback-outage' },
-});
-const replayedMicrosoftGrant = await microsoftPlatformClient.recoverPurchaseResult(
-  'microsoft-callback-outage',
-  {
-    status: 'completed',
-    transactionId: 'microsoft-ledger-2',
-    entitlementIds: ['COINS_100'],
-    authoritativeGrant: { ledgerEntryId: 'microsoft-ledger-2' },
-  },
-);
-assert.equal(replayedMicrosoftGrant.status, 'granted');
-assert.equal(replayedMicrosoftGrant.ledgerEntryId, 'microsoft-ledger-2');
-platformStorageDown = false;
-
-const otherDeployment = createRecoverableMonetizationClient({
-  ...recoveryBase,
-  deploymentTarget: 'android-production',
-  operationStore,
-});
-await assert.rejects(otherDeployment.purchase(purchaseOperation), /another player or subject/);
-
+// Reconciliation survives a temporary journal read outage on a rewarded-ad record.
 const readFailureStore: MonetizationOperationStore = {
   ...operationStore,
   async read() {
@@ -828,13 +789,13 @@ const readFailureStore: MonetizationOperationStore = {
   },
 };
 await operationStore.reserve({
-  key: JSON.stringify(['android', 'purchase', 'read-outage']),
-  kind: 'purchase',
+  key: JSON.stringify(['android', 'rewarded-ad', 'read-outage']),
+  kind: 'rewarded-ad',
   playerId: 'player-1',
   target: 'android',
   deploymentTarget: 'android',
   revision: 0,
-  input: { productId: 'COINS_100', source: 'shop', idempotencyKey: 'read-outage' },
+  input: { placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'read-outage' },
 });
 const readFailureClient = createRecoverableMonetizationClient({
   ...recoveryBase,
@@ -842,65 +803,10 @@ const readFailureClient = createRecoverableMonetizationClient({
 });
 const readFailureSummary = await readFailureClient.reconcile();
 assert.equal(
-  readFailureSummary.some((entry) => entry.status === 'pending'),
+  readFailureSummary.some((entry) => entry.kind === 'rewarded-ad' && entry.status === 'pending'),
   true,
 );
 
-const racedStore = createStore();
-let loseCallbackRace = true;
-const racingJournal: MonetizationOperationStore = {
-  ...racedStore,
-  async replace(expectedRevision, record) {
-    if (loseCallbackRace && record.kind === 'purchase'
-      && record.platform?.transactionId === 'losing-callback') {
-      loseCallbackRace = false;
-      await racedStore.replace(expectedRevision, {
-        ...record,
-        platform: {
-          status: 'completed',
-          transactionId: 'winning-callback',
-          entitlementIds: [],
-        },
-      });
-      throw new Error('lost journal compare-and-swap');
-    }
-    await racedStore.replace(expectedRevision, record);
-  },
-};
-const racingClient = createRecoverableMonetizationClient({
-  ...recoveryBase,
-  operationStore: racingJournal,
-});
-const raceKey = 'conflicting-cross-process-callback';
-await racedStore.reserve({
-  key: JSON.stringify(['android', 'purchase', raceKey]),
-  kind: 'purchase',
-  playerId: 'player-1',
-  target: 'android',
-  deploymentTarget: 'android',
-  revision: 0,
-  input: { productId: 'COINS_100', source: 'shop', idempotencyKey: raceKey },
-});
-assert.equal((await racingClient.recoverPurchaseResult(raceKey, {
-  status: 'completed',
-  transactionId: 'losing-callback',
-  entitlementIds: [],
-})).status, 'pending');
-await assert.rejects(
-  racingClient.purchase({
-    productId: 'COINS_100',
-    source: 'shop',
-    idempotencyKey: raceKey,
-  }),
-  /conflicts with the recorded operation/,
-);
-
-const purchaseRejection = {
-  verified: false,
-  alreadyProcessed: false,
-  disposition: 'rejected' as const,
-  reason: 'STORE_REJECTED',
-};
 const rewardRejection = {
   granted: false,
   alreadyProcessed: false,
@@ -913,24 +819,11 @@ function rejectBeforeGrantLands(journal: MonetizationOperationStore): Monetizati
   return {
     ...journal,
     async replace(expectedRevision, record) {
-      if (raced.has(record.key) || record.kind === 'commerce-purchase' || record.platform === undefined) {
+      if (raced.has(record.key) || record.kind !== 'rewarded-ad' || record.platform === undefined) {
         await journal.replace(expectedRevision, record);
         return;
       }
-      if (record.kind === 'purchase' && record.response?.verified === true) {
-        raced.add(record.key);
-        await journal.replace(expectedRevision, {
-          ...record,
-          response: purchaseRejection,
-          result: {
-            status: 'rejected',
-            purchase: record.platform,
-            verification: purchaseRejection,
-          },
-        });
-        throw new Error('another runtime recorded a rejection first');
-      }
-      if (record.kind === 'rewarded-ad' && record.response?.granted === true) {
+      if (record.response?.granted === true) {
         raced.add(record.key);
         await journal.replace(expectedRevision, {
           ...record,
@@ -944,18 +837,9 @@ function rejectBeforeGrantLands(journal: MonetizationOperationStore): Monetizati
   };
 }
 
-let contestedVerifications = 0;
 let contestedClaims = 0;
 const contestedBackend: GameServicesBackendApi = {
   ...backend,
-  purchases: {
-    async verifyPurchase() {
-      contestedVerifications += 1;
-      return contestedVerifications === 1
-        ? { verified: true, alreadyProcessed: false, ledgerEntryId: 'purchase-contested' }
-        : purchaseRejection;
-    },
-  },
   adRewards: {
     async claimAdReward() {
       contestedClaims += 1;
@@ -971,25 +855,6 @@ const contestedClient = createRecoverableMonetizationClient({
   backend: contestedBackend,
   operationStore: rejectBeforeGrantLands(contestedStore),
 });
-const contestedPurchase = {
-  productId: 'COINS_100',
-  source: 'shop' as const,
-  idempotencyKey: 'contested-purchase',
-};
-assert.equal((await contestedClient.purchase(contestedPurchase)).status, 'granted');
-const uiBeforeContestedRetry = purchaseUiCalls;
-const contestedRetry = await contestedClient.purchase(contestedPurchase);
-assert.equal(contestedRetry.status, 'granted', 'a cached grant replaces a stale rejection');
-assert.equal(contestedRetry.ledgerEntryId, 'purchase-contested');
-assert.equal(purchaseUiCalls, uiBeforeContestedRetry);
-const contestedRecord = await contestedStore.read(
-  JSON.stringify(['android', 'purchase', 'contested-purchase']),
-);
-assert.equal(
-  contestedRecord?.kind === 'purchase' ? contestedRecord.result?.status : undefined,
-  'granted',
-);
-
 const contestedReward = { placementId: 'CONTINUE_AFTER_FAIL', idempotencyKey: 'contested-reward' };
 assert.equal((await contestedClient.claimRewardedAd(contestedReward)).status, 'granted');
 const rewardUiBeforeContestedRetry = rewardUiCalls;
@@ -1031,25 +896,6 @@ assert.equal(
   'platform-requested,platform-result,server-requested,server-result,completed:granted',
 );
 
-const progressPlatformKey = 'progress-platform-write';
-const progressPlatformClient = createRecoverableMonetizationClient({
-  ...recoveryBase,
-  operationStore: failOneJournalWrite((record) => record.kind === 'purchase'
-    && record.input.idempotencyKey === progressPlatformKey && record.platform !== undefined),
-});
-const progressPlatformOperation = {
-  productId: 'COINS_100',
-  source: 'shop' as const,
-  idempotencyKey: progressPlatformKey,
-};
-const progressPlatformEvents = observeProgress();
-const progressPlatformResult = await progressPlatformClient.purchase(
-  progressPlatformOperation,
-  progressPlatformEvents.options,
-);
-assert.equal(progressPlatformResult.status, 'pending');
-assert.equal(progressPlatformEvents.events.join(','), 'platform-requested,completed:pending');
-
 ssvAvailable = true;
 const progressClaimKey = 'progress-claim-write';
 const progressClaimClient = createRecoverableMonetizationClient({
@@ -1086,6 +932,85 @@ assert.equal(
   provisionalUiBefore + 1,
   'SSV recovery must not reopen a provisional ad',
 );
+
+// The recoverable client's restore trigger runs the provider restore and a pass.
+{
+  const restoreProvider = createTestCommerceProvider({ finish: 'none' });
+  let restoreCalls = 0;
+  const restoring = createRecoverableMonetizationClient({
+    gateway: createTestGateway({
+      playerId: 'restore-player',
+      provider: {
+        ...restoreProvider,
+        async restorePurchases() {
+          restoreCalls += 1;
+          restoreProvider.available.push(
+            createTestStorePurchase({
+              idempotencyKey: 'restored-purchase',
+              logicalId: 'COINS_100',
+            }),
+          );
+        },
+      },
+    }),
+    backend,
+    playerId: 'restore-player',
+    target: 'android',
+    operationStore: createStore(),
+    now: () => currentTime,
+  });
+  assert.equal((await restoring.reconcile()).length, 0, 'nothing to recover before the restore');
+  const grantsBeforeRestore = purchaseGrants;
+  await restoring.restorePurchases();
+  assert.equal(restoreCalls, 1, 'the provider restore ran');
+  assert.equal(
+    purchaseGrants,
+    grantsBeforeRestore + 1,
+    'a restored purchase is verified and granted by the backend',
+  );
+  assert.equal(
+    (await restoring.commerceReconciler?.listRecoverable())?.length,
+    0,
+    'the restored purchase ends terminal, so it is no longer reported',
+  );
+  await restoring.commerceReconciler?.stop();
+}
+
+// A gateway without a commerce provider: purchases are rejected without any store UI, there is no
+// reconciler, and rewarded-ad recovery is untouched.
+{
+  const rewardsBeforeNoCommerce = rewardUiCalls;
+  const { commerce: _commerce, ...gatewayWithoutCommerce } = gateway;
+  const noCommerce = createRecoverableMonetizationClient({
+    gateway: gatewayWithoutCommerce,
+    backend,
+    playerId: 'player-1',
+    target: 'android',
+    operationStore,
+    now: () => currentTime,
+    analytics,
+  });
+  const purchaseUiBeforeNoCommerce = commerce.purchaseUiOpened;
+  const grantsBeforeNoCommerce = purchaseGrants;
+  const rejected = await noCommerce.purchase({
+    productId: 'COINS_100',
+    source: 'shop',
+    idempotencyKey: 'no-commerce-purchase',
+  });
+  assert.equal(rejected.status, 'rejected');
+  assert.equal(rejected.purchase.status, 'failed');
+  assert.equal(analyticsEvents.at(-1)?.name, 'purchase_rejected');
+  assert.equal(analyticsEvents.at(-1)?.properties.reason, 'commerce_unavailable');
+  assert.equal(noCommerce.commerceReconciler, undefined, 'no provider, no reconciler');
+  assert.equal(commerce.purchaseUiOpened, purchaseUiBeforeNoCommerce, 'no store UI opened');
+  assert.equal(purchaseGrants, grantsBeforeNoCommerce, 'nothing was verified or granted');
+  assert.equal(
+    (await noCommerce.restorePurchases()).every((entry) => entry.kind === 'rewarded-ad'),
+    true,
+    'restorePurchases() falls back to the rewarded-ad pass',
+  );
+  assert.equal(rewardUiCalls, rewardsBeforeNoCommerce, 'recovery never reopens a rewarded ad');
+}
 
 // Late callbacks must join the original journal operation, including after a
 // runtime restart, without changing proof identity or reopening native UI.

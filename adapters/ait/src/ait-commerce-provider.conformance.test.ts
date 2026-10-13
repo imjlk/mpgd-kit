@@ -269,7 +269,6 @@ function createVectorProvider(context: CommerceConformanceContext): CommerceConf
     iapProducts: products,
     prepareIap: async () => true,
     verifyIapProductGrant: verifierOf(context),
-    readIapEntitlements: async () => [],
     onPendingOrdersChanged: (listener) => host.onPendingOrdersChanged(listener),
   });
   return { provider: observe(provider), store: actor };
@@ -281,7 +280,6 @@ function createBridgedVectorProvider(context: CommerceConformanceContext): Comme
     iapProducts: products,
     prepareIap: async () => true,
     verifyIapProductGrant: verifierOf(context),
-    readIapEntitlements: async () => [],
     onPendingOrdersChanged: (listener) => host.onPendingOrdersChanged(listener),
     dependencies: createFakeAitHostDependencies(host),
   });
@@ -290,10 +288,10 @@ function createBridgedVectorProvider(context: CommerceConformanceContext): Comme
     buildId: `conformance:${context.vector.vector}`,
     bridge,
   });
-  if (gateway.commerceV2 === undefined) {
+  if (gateway.commerce === undefined) {
     throw new Error('The gateway must expose the host bridge commerce v2 provider.');
   }
-  return { provider: observe(gateway.commerceV2), store: actor };
+  return { provider: observe(gateway.commerce), store: actor };
 }
 
 function summarize(results: readonly CommerceConformanceVectorResult[]) {

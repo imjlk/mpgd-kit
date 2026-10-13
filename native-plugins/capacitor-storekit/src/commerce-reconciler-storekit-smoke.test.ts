@@ -14,21 +14,14 @@ import {
 } from '../test/fake-storekit-plugin.js';
 import { createCapacitorStoreKitCommerceProvider } from './commerce-provider.js';
 import type { StoreKitTransaction } from './definitions.js';
-import {
-  createCapacitorStoreKitProvider,
-  recoverStoreKitPurchases,
-  type StoreKitPurchaseVerification,
-} from './provider.js';
 
 /**
- * The deprecated v1 recovery driver (`recoverStoreKitPurchases`) and the
- * commerce v2 reconciler (`createCommerceReconciler` over
- * `createCapacitorStoreKitCommerceProvider`) run the same unfinished
- * transactions against the same backend decisions through the same fake
- * plugin, and must reach the same outcome: a grant finishes with the ledger
- * entry, a rejection and an outage never finish, a failed finish is retried,
- * and another account's transaction is never submitted. The v2 StoreKit SDK
- * keeps no finish allow-list of its own: the reconciler is the finish gate.
+ * The commerce reconciler (`createCommerceReconciler` over
+ * `createCapacitorStoreKitCommerceProvider`) runs unfinished transactions of a
+ * fake plugin against scripted backend decisions: a grant finishes with the
+ * ledger entry, a rejection and an outage never finish, a failed finish is
+ * retried, and another account's transaction is never submitted. The StoreKit
+ * SDK keeps no finish allow-list of its own: the reconciler is the finish gate.
  */
 
 const storeSku = 'com.example.game.coins100';
@@ -55,50 +48,6 @@ interface Outcome {
   readonly status: 'granted' | 'rejected' | 'pending' | 'none';
   readonly finished: boolean;
   readonly verified: number;
-}
-
-async function runLegacy(
-  decision: Decision,
-  input: { readonly foreignAccount?: boolean; readonly finishFails?: boolean } = {},
-): Promise<Outcome> {
-  const plugin = createFakeStoreKitPlugin({
-    products: [fakeProduct({ productId: storeSku })],
-    transactions: transactions(input),
-  });
-  if (input.finishFails === true) {
-    plugin.queueFinish({ throws: new Error('finish failed') });
-  }
-  const provider = createCapacitorStoreKitProvider({
-    products: [{ id: 'COINS_100', storeId: storeSku, type: 'consumable' }],
-    getAppAccountToken: () => fakeAccountToken,
-    isIos: () => true,
-    sdk: plugin,
-  });
-  let verified = 0;
-  const backend = {
-    async recoverPurchase(): Promise<StoreKitPurchaseVerification> {
-      verified += 1;
-      if ('throws' in decision) {
-        throw new Error('backend unavailable');
-      }
-      return decision.verified
-        ? { verified: true, alreadyProcessed: false, ledgerEntryId: decision.ledgerEntryId }
-        : { verified: false, alreadyProcessed: false, disposition: decision.disposition };
-    },
-  };
-  const recovered = await recoverStoreKitPurchases({ provider, backend, playerId: 'player-1' });
-  const first = recovered[0];
-  const finished = plugin.calls.some((call) => call.startsWith('finish:'))
-    && first?.status === 'granted' && first.finishPending !== true;
-  return {
-    status: first === undefined
-      ? 'none'
-      : first.reason === 'account-mismatch'
-        ? 'none'
-        : first.status,
-    finished,
-    verified,
-  };
 }
 
 async function runReconciler(
@@ -166,97 +115,75 @@ async function runReconciler(
 
 const grant: Decision = { verified: true, ledgerEntryId: 'ledger-1' };
 
-// A grant finishes with the ledger entry id on both paths.
+// A grant finishes with the ledger entry id.
 {
-  const legacy = await runLegacy(grant);
-  const v2 = await runReconciler(grant);
+  const outcome = await runReconciler(grant);
   assertEqual(
-    legacy,
+    { status: outcome.status, finished: outcome.finished, verified: outcome.verified },
     { status: 'granted', finished: true, verified: 1 },
-    'v1: granted and finished',
+    'granted and finished',
   );
   assertEqual(
-    { status: v2.status, finished: v2.finished, verified: v2.verified },
-    legacy,
-    'v2: the same outcome',
-  );
-  assertEqual(
-    v2.history,
+    outcome.history,
     ['purchased', 'verifying', 'granted', 'finishing', 'finished'],
-    'v2: the discovered transaction moves through the RFC states',
+    'the discovered transaction moves through the RFC states',
   );
   assertEqual(
-    v2.finishCalls,
+    outcome.finishCalls,
     ['finish:2000000123456789:ledger-1'],
-    'v2: finished once with the ledger entry the backend returned',
+    'finished once with the ledger entry the backend returned',
   );
 }
 
-// A rejection never finishes on either path.
+// A rejection never finishes.
 {
   const rejected: Decision = { verified: false, disposition: 'rejected' };
-  const legacy = await runLegacy(rejected);
-  const v2 = await runReconciler(rejected);
-  assertEqual(legacy, { status: 'rejected', finished: false, verified: 1 }, 'v1: rejected');
+  const outcome = await runReconciler(rejected);
   assertEqual(
-    { status: v2.status, finished: v2.finished, verified: v2.verified },
-    legacy,
-    'v2: rejected',
+    { status: outcome.status, finished: outcome.finished, verified: outcome.verified },
+    { status: 'rejected', finished: false, verified: 1 },
+    'rejected',
   );
-  assertEqual(v2.finishCalls, [], 'v2: no finish without a grant');
+  assertEqual(outcome.finishCalls, [], 'no finish without a grant');
 }
 
-// A backend outage stays retryable on both paths; nothing is finished.
+// A backend outage stays retryable; nothing is finished.
 {
   const outage: Decision = { throws: true };
-  const legacy = await runLegacy(outage);
-  const v2 = await runReconciler(outage);
-  assertEqual(legacy, { status: 'pending', finished: false, verified: 1 }, 'v1: pending');
+  const outcome = await runReconciler(outage);
   assertEqual(
-    { status: v2.status, finished: v2.finished, verified: v2.verified },
-    legacy,
-    'v2: pending',
+    { status: outcome.status, finished: outcome.finished, verified: outcome.verified },
+    { status: 'pending', finished: false, verified: 1 },
+    'pending',
   );
-  assertEqual(v2.history, ['purchased', 'verifying'], 'v2: verifying is kept for the next pass');
+  assertEqual(outcome.history, ['purchased', 'verifying'], 'verifying is kept for the next pass');
 }
 
-// A failed native finish keeps the grant and the finish pending on both paths.
+// A failed native finish keeps the grant and the finish pending.
 {
-  const legacy = await runLegacy(grant, { finishFails: true });
-  const v2 = await runReconciler(grant, { finishFails: true });
+  const outcome = await runReconciler(grant, { finishFails: true });
   assertEqual(
-    legacy,
+    { status: outcome.status, finished: outcome.finished, verified: outcome.verified },
     { status: 'granted', finished: false, verified: 1 },
-    'v1: granted, finish pending',
+    'granted, finish pending',
   );
+  assertEqual(outcome.history.at(-1), 'finishing', 'finishing is retried on the next pass');
   assertEqual(
-    { status: v2.status, finished: v2.finished, verified: v2.verified },
-    legacy,
-    'v2: granted, finish pending',
-  );
-  assertEqual(v2.history.at(-1), 'finishing', 'v2: finishing is retried on the next pass');
-  assertEqual(
-    v2.finishCalls,
+    outcome.finishCalls,
     ['finish:2000000123456789:ledger-1'],
-    'v2: the finish was attempted once',
+    'the finish was attempted once',
   );
 }
 
-// Another account's transaction is never submitted on either path.
+// Another account's transaction is never submitted.
 {
-  const legacy = await runLegacy(grant, { foreignAccount: true });
-  const v2 = await runReconciler(grant, { foreignAccount: true });
+  const outcome = await runReconciler(grant, { foreignAccount: true });
   assertEqual(
-    legacy,
+    { status: outcome.status, finished: outcome.finished, verified: outcome.verified },
     { status: 'none', finished: false, verified: 0 },
-    'v1: account mismatch is rejected without a backend call',
+    'the SDK keeps the transaction away from the reconciler',
   );
-  assertEqual(
-    { status: v2.status, finished: v2.finished, verified: v2.verified },
-    legacy,
-    'v2: the SDK keeps the transaction away from the reconciler',
-  );
-  assertEqual(v2.history, [], 'v2: no journal record');
+  assertEqual(outcome.history, [], 'no journal record');
 }
 
-console.info('StoreKit v1 driver and commerce v2 reconciler smoke parity passed.');
+console.info('StoreKit commerce reconciler smoke passed.');

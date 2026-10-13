@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 
 import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
-import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
+import {
+  createUnsupportedCommerceCapabilities,
+  type PlatformGateway,
+  type PlatformTarget,
+} from '@mpgd/platform';
+import type { CommerceCapabilities } from '@mpgd/platform/commerce';
 
 import { createBrowserPlatformGateway } from '../../adapters/browser/src/index';
 import { createVerse8PlatformGateway } from '../../adapters/verse8/src/index';
@@ -236,8 +241,8 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
       'available',
       'microsoft-store Game Services leaderboard should be available',
     );
-    await gateway.commerce.purchase({
-      productId: 'COINS_100',
+    await gateway.commerce?.requestPurchase({
+      logicalId: 'COINS_100',
       source: 'shop',
       idempotencyKey: 'microsoft-store-purchase',
     });
@@ -304,16 +309,21 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
       'reddit IAP should require an installed payments adapter',
     );
     assertDeepEqual(
-      await gateway.commerce.purchase({
-        productId: 'COINS_100',
+      await gateway.commerce?.requestPurchase({
+        logicalId: 'COINS_100',
         source: 'shop',
         idempotencyKey: 'reddit-purchase',
       }),
       {
-        status: 'cancelled',
-        entitlementIds: [],
+        outcome: 'failed',
+        error: { code: 'ITEM_UNAVAILABLE', retryable: false },
       },
       'reddit purchase should remain disabled without a payments adapter',
+    );
+    assertDeepEqual(
+      targetGateway.calls,
+      [],
+      'a disabled reddit purchase must not reach the provider',
     );
     assertDeepEqual(
       await gateway.ads.showRewarded({
@@ -357,8 +367,8 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
     `${configTarget} rewarded placement should be enabled`,
   );
 
-  await gateway.commerce.purchase({
-    productId: 'COINS_100',
+  await gateway.commerce?.requestPurchase({
+    logicalId: 'COINS_100',
     source: 'shop',
     idempotencyKey: `${configTarget}-purchase`,
   });
@@ -439,7 +449,16 @@ async function verifyBrowserOnlyFallbacks(
     true,
     `all ${configTarget} ad placements should match target availability`,
   );
-  assertDeepEqual(await gateway.commerce.getProducts(), [], 'IAP products should be hidden');
+  assertEqual(
+    gateway.commerce,
+    undefined,
+    `${configTarget} sells nothing, so it has no commerce provider`,
+  );
+  assertDeepEqual(
+    runtime.capabilities.commerce,
+    createUnsupportedCommerceCapabilities(),
+    `${configTarget} should report the unsupported commerce block`,
+  );
   assertDeepEqual(
     await gateway.ads.showRewarded({
       placementId: 'CONTINUE_AFTER_FAIL',
@@ -508,7 +527,7 @@ function createTargetGateway(target: PlatformTarget): {
         const isReddit = target === 'reddit';
 
         return {
-          nativeIap: !isReddit,
+          commerce: isReddit ? createUnsupportedCommerceCapabilities() : sellingCommerce(),
           nativeAds: !isReddit,
           rewardedAds: !isReddit,
           interstitialAds: !isReddit,
@@ -543,18 +562,23 @@ function createTargetGateway(target: PlatformTarget): {
         },
       },
       commerce: {
-        async getProducts() {
+        store: `${target}-fixture`,
+        async getCapabilities() {
+          return target === 'reddit' ? createUnsupportedCommerceCapabilities() : sellingCommerce();
+        },
+        async fetchProducts() {
           return [];
         },
-        async purchase() {
+        async requestPurchase() {
           calls.push('purchase');
-          return {
-            status: 'completed',
-            entitlementIds: ['COINS_100'],
-          };
+          // The store UI opened; nothing is granted from a provider answer.
+          return { outcome: 'launched' };
         },
-        async getEntitlements() {
+        async getAvailablePurchases() {
           return [];
+        },
+        subscribe() {
+          return () => {};
         },
       },
       ads: {
@@ -625,6 +649,23 @@ function createTargetGateway(target: PlatformTarget): {
         },
       },
     },
+  };
+}
+
+/** A one-time store that is ready to sell: the block a real provider reports. */
+function sellingCommerce(): CommerceCapabilities {
+  return {
+    purchase: { consumable: true, durable: true, subscription: false, quantity: false },
+    catalog: { products: true, offers: false, localizedPrice: false },
+    lifecycle: {
+      availablePurchases: true,
+      pending: true,
+      restore: false,
+      events: true,
+      finish: 'server',
+    },
+    authority: { evidence: 'client-token', accountBinding: 'required' },
+    availability: 'available',
   };
 }
 

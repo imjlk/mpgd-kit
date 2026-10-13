@@ -22,7 +22,7 @@ The output directory is `artifacts/crazygames`, with `index.html` at its root. C
 
 Full Launch supports configured interstitial placements through the SDK's `midgame` advertising API. The catalog maps `STAGE_END_INTERSTITIAL` to `midgame`; the adapter accepts only configured logical placement IDs. Games still own appropriate break placement and frequency policy.
 
-Rewarded ads, banners, IAP, authenticated account identity, and platform leaderboards are unavailable in this integration. SDK reward callbacks are not independent backend evidence and must never grant inventory. A future rewarded integration needs a trusted verification path and backend ledger settlement before enabling that capability.
+Rewarded ads, banners, IAP, authenticated account identity, and platform leaderboards are unavailable in this integration. The CrazyGames gateway sells nothing: it has no `commerce` provider (`gateway.commerce` is `undefined`) and its capability snapshot reports the unsupported commerce block (`createUnsupportedCapabilities()`, `commerce.availability: 'unsupported'`). Game Services purchases therefore answer `rejected` without opening any store UI. SDK reward callbacks are not independent backend evidence and must never grant inventory. A future rewarded integration needs a trusted verification path and backend ledger settlement before enabling that capability.
 
 SDK environment `local` uses CrazyGames' test overlays. It does not certify real ad delivery. `disabled`, script blocking, or initialization failure keep the game playable and make platform advertising unavailable. Local saves use the browser storage port; this integration does not enable the SDK Data Module or promise account synchronization.
 

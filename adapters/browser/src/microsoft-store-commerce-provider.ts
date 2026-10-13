@@ -6,9 +6,7 @@ import {
   CommerceError,
   commerceErrorInfoOf,
   createCommerceEventBuffer,
-  deriveLegacyCommerceCapabilities,
   isCommerceErrorCode,
-  toCommerceAdapter,
   type CommerceCapabilities,
   type CommerceErrorCode,
   type CommerceErrorInfo,
@@ -26,7 +24,7 @@ import {
 import {
   createMicrosoftStoreCommerceEngine,
   microsoftStoreDigitalGoodsEvidenceSchema,
-  type CreateMicrosoftStoreCommerceAdapterInput,
+  type CreateMicrosoftStoreCommerceEngineInput,
   type MicrosoftStoreCatalogEntry,
   type MicrosoftStoreCheckoutReport,
   type MicrosoftStoreCommerceAvailability,
@@ -40,7 +38,7 @@ import { createUnavailableAdAdapter } from './unavailable-ads.js';
 export const microsoftStoreCommerceStoreId = 'microsoft-store' as const;
 
 export interface CreateMicrosoftStoreCommerceProviderInput
-  extends CreateMicrosoftStoreCommerceAdapterInput {
+  extends CreateMicrosoftStoreCommerceEngineInput {
   /** Defaults to `microsoft-store`; conformance vectors name their fixture store. */
   readonly store?: StoreId;
 }
@@ -86,17 +84,10 @@ interface RememberedSettlement {
   readonly recoveryScope: string;
 }
 
-const purchaseCapabilities = Object.freeze({
-  consumable: true,
-  durable: false,
-  subscription: false,
-  quantity: false,
-});
-
 /**
- * Commerce v2 provider over the Microsoft Store Digital Goods path. It runs
- * the same engine as the v1 adapter: `requestPurchase` opens Payment Request
- * and asks the game-owned authority, which is why the profile is
+ * Commerce v2 provider over the Microsoft Store Digital Goods path.
+ * `requestPurchase` opens Payment Request and asks the game-owned authority,
+ * which is why the profile is
  * `authority.evidence: 'adapter-settled'`. A `purchased` outcome carries the
  * authority's ledger entry as `settlement`; the reconciler still confirms it
  * through the backend. The provider never grants on its own, and the backend
@@ -235,7 +226,7 @@ export function createMicrosoftStoreCommerceProvider(
       // A throwing authority probe degrades the snapshot instead of rejecting it.
       availability = 'temporarily-unavailable';
     }
-    return createCapabilities(availability);
+    return createMicrosoftStoreCommerceCapabilities(availability);
   };
 
   const provider: MicrosoftStoreCommerceProvider = {
@@ -271,7 +262,11 @@ export function createMicrosoftStoreCommerceProvider(
       }
       // The kind and quantity checks need no store call, so Payment Request
       // still opens inside the caller's user activation.
-      assertRequestPurchaseSupported(createCapabilities('available'), request, 'consumable');
+      assertRequestPurchaseSupported(
+        createMicrosoftStoreCommerceCapabilities('available'),
+        request,
+        'consumable',
+      );
       if (!engine.isPrepared(request.logicalId)) {
         // A game normally calls fetchProducts first; preparing here keeps the
         // request valid but spends the user activation on the catalog read.
@@ -330,9 +325,9 @@ export function createMicrosoftStoreCommerceProvider(
       });
     },
     async restorePurchases(): Promise<void> {
-      // Entitlements come from the ledger, so the v1 trailing entitlement read
-      // is skipped: an entitlement outage cannot fail a replay that settled.
-      const report = await probed(() => engine.restore({ readEntitlements: false }));
+      // Entitlements come from the backend ledger, never from this provider,
+      // so a replay reads nothing but the Store and the authority.
+      const report = await probed(() => engine.restore());
       const recoveryScope = report.recoveryScope;
       for (const fulfillment of report.fulfillments) {
         if (fulfillment.outcome.kind === 'granted') {
@@ -448,10 +443,11 @@ export function createMicrosoftStoreCommerceProvider(
 
 /**
  * Installs the commerce v2 provider on a `microsoft-store` gateway: the
- * provider as `commerceV2`, the v1 `commerce` served through
- * `toCommerceAdapter`, the `commerce` capability block with the boolean flags
- * derived from it, and the ads surface replaced with the unavailable adapter
- * exactly as `withMicrosoftStoreCommerceAdapter` does.
+ * provider as `commerce`, the `commerce` capability block (a fresh copy per
+ * read), and the ads surface replaced wholesale with the unavailable adapter.
+ * Microsoft Store builds reuse the browser gateway as a base. That base has no
+ * ad SDK, and the Store build must never expose a mock reward that looks like
+ * a ledger grant.
  */
 export function withMicrosoftStoreCommerceProvider(
   gateway: PlatformGateway,
@@ -476,11 +472,8 @@ export function withMicrosoftStoreCommerceProvider(
         provider.getCapabilities(),
         gateway.getCapabilities(),
       ]);
-      const legacy = deriveLegacyCommerceCapabilities(commerce);
       return {
         ...capabilities,
-        nativeIap: legacy.nativeIap,
-        subscriptionIap: legacy.subscriptionIap,
         nativeAds: false,
         rewardedAds: false,
         interstitialAds: false,
@@ -489,15 +482,23 @@ export function withMicrosoftStoreCommerceProvider(
         commerce,
       };
     },
-    commerce: toCommerceAdapter(provider),
-    commerceV2: provider,
+    commerce: provider,
     ads: createUnavailableAdAdapter(),
   };
 }
 
-function createCapabilities(availability: PlatformProviderAvailability): CommerceCapabilities {
+/**
+ * The Digital Goods capability declaration (RFC "Capabilities" row
+ * `microsoft-store`): developer-managed consumables, no store-side pending
+ * state, the backend consume finalizer finishes, and the game-owned authority
+ * settles before `requestPurchase` returns. Pure: a fresh object on every
+ * call, no SDK, no construction.
+ */
+export function createMicrosoftStoreCommerceCapabilities(
+  availability: PlatformProviderAvailability,
+): CommerceCapabilities {
   return {
-    purchase: { ...purchaseCapabilities },
+    purchase: { consumable: true, durable: false, subscription: false, quantity: false },
     catalog: { products: true, offers: false, localizedPrice: true },
     lifecycle: {
       availablePurchases: true,

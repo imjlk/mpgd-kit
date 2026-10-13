@@ -4,7 +4,16 @@ import type {
   PurchaseResult,
   RewardedAdResult,
 } from '@mpgd/platform';
+import type {
+  CommerceProvider,
+  RequestPurchaseInput,
+  RequestPurchaseResult,
+} from '@mpgd/platform/commerce';
 
+import {
+  createTestCommerceProvider,
+  createTestStorePurchase,
+} from './commerce-test-provider.test.js';
 import {
   createGameServicesClient,
   type GameServicesBackendApi,
@@ -39,6 +48,27 @@ const completedReward: RewardedAdResult = {
   evidence: { schema: 'private-ad-evidence', payload: { token: 'secret-ad-token' } },
 };
 
+/** The store's answer for a platform result the way the fixtures spell it. */
+function storeAnswer(request: RequestPurchaseInput, platform: PurchaseResult): RequestPurchaseResult {
+  switch (platform.status) {
+    case 'completed':
+      return {
+        outcome: 'purchased',
+        purchase: createTestStorePurchase(request, {
+          transactionId: platform.transactionId ?? 'private-transaction',
+          token: `private-token-${platform.transactionId ?? 'private-transaction'}`,
+          ...(platform.evidence === undefined ? {} : { evidence: platform.evidence }),
+        }),
+      };
+    case 'pending':
+      return { outcome: 'launched' };
+    case 'cancelled':
+      return { outcome: 'cancelled', error: { code: 'USER_CANCELLED', retryable: false } };
+    case 'failed':
+      return { outcome: 'failed', error: { code: 'UNKNOWN', retryable: false } };
+  }
+}
+
 function harness(options: {
   target?: GameServicesLedgerTarget;
   purchase?: PurchaseResult;
@@ -48,20 +78,25 @@ function harness(options: {
   platformError?: Error;
   serverError?: Error;
   now?: () => string;
+  /** The gateway sells nothing: it has no commerce provider. */
+  noCommerce?: boolean;
+  evidence?: 'client-token' | 'adapter-settled';
 } = {}) {
   const calls = { purchase: 0, reward: 0, verify: 0, claim: 0 };
   const timeline: string[] = [];
-  const gateway = {
-    commerce: {
-      async purchase(): Promise<PurchaseResult> {
-        calls.purchase += 1;
-        timeline.push('gateway:purchase');
-        if (options.platformError !== undefined) {
-          throw options.platformError;
-        }
-        return options.purchase ?? completedPurchase;
-      },
+  const provider = createTestCommerceProvider({
+    evidence: options.evidence ?? 'client-token',
+    answer(request) {
+      calls.purchase += 1;
+      timeline.push('gateway:purchase');
+      if (options.platformError !== undefined) {
+        throw options.platformError;
+      }
+      return storeAnswer(request, options.purchase ?? completedPurchase);
     },
+  });
+  const gateway = {
+    ...(options.noCommerce === true ? {} : { commerce: provider satisfies CommerceProvider }),
     ads: {
       async showRewarded(): Promise<RewardedAdResult> {
         calls.reward += 1;
@@ -121,6 +156,7 @@ function harness(options: {
       target: options.target ?? 'android',
       playerId: 'private-player',
       now: options.now ?? (() => '2026-09-13T00:00:00.000Z'),
+      warn: () => {},
     }),
   };
 }
@@ -137,6 +173,12 @@ function ok(condition: boolean, message: string): void {
 }
 function phases(events: readonly GameServicesOperationProgress[]): string[] {
   return events.map((event) => event.phase);
+}
+async function until(condition: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 500 && !condition(); attempt += 1) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 2));
+  }
+  ok(condition(), 'The awaited condition was not reached');
 }
 async function rejects(promise: Promise<unknown>, expected: Error): Promise<void> {
   try {
@@ -280,11 +322,8 @@ for (const status of ['skipped', 'unavailable', 'failed'] as const) {
   );
   equal(current.calls.claim, 0, 'No claim without rewarded completion');
 }
-for (const configured of [
-  { purchase: { status: 'completed', entitlementIds: [] } satisfies PurchaseResult },
-  { verified: false },
-]) {
-  const current = harness(configured);
+{
+  const current = harness({ verified: false });
   const events: GameServicesPurchaseProgress[] = [];
   equal(
     (await current.client.purchase(purchaseInput, { onProgress: (event) => {
@@ -293,6 +332,16 @@ for (const configured of [
     'Rejection is not an exception',
   );
   equal(events.at(-1)?.phase, 'completed', 'Rejected result completes normally');
+  equal(
+    phases(events),
+    ['platform-requested', 'platform-result', 'server-requested', 'server-result', 'completed'],
+    'A backend rejection reports both server phases',
+  );
+  equal(
+    events.find((event) => event.phase === 'server-result'),
+    { phase: 'server-result', accepted: false, kind: 'purchase', sequence: 4 },
+    'The server verdict is not accepted',
+  );
 }
 for (const configured of [
   { reward: { status: 'completed', rewardGranted: false } satisfies RewardedAdResult },
@@ -324,20 +373,48 @@ for (const kind of ['purchase', 'rewarded-ad'] as const) {
         events.push(event);
       },
     };
+    if (kind === 'purchase' && at !== 'local') {
+      // The reconciler journals a store failure as `failed` and a backend
+      // outage as `pending`; neither reaches the caller as an exception.
+      const result = await current.client.purchase(purchaseInput, options);
+      equal(
+        result.status,
+        at === 'platform' ? 'failed' : 'pending',
+        `A ${at} failure settles into a journaled state`,
+      );
+      equal(events.at(-1)?.phase, 'completed', 'The journaled state completes normally');
+      ok(
+        !JSON.stringify([events, result]).includes('PRIVATE'),
+        'Progress and results never copy original exception details',
+      );
+      continue;
+    }
     await rejects(
       kind === 'purchase'
         ? current.client.purchase(purchaseInput, options)
         : current.client.claimRewardedAd(rewardInput, options),
       error,
     );
+    ok(
+      !JSON.stringify(events).includes('PRIVATE'),
+      'Progress never copies original exception details',
+    );
+    if (kind === 'purchase') {
+      // The reconciler journals before it opens the store, so a failing clock
+      // ends the call before any store UI or server call; the original
+      // exception still reaches the caller untouched.
+      equal(events.at(-1)?.phase, 'exception', 'A journal failure ends in an exception');
+      equal(
+        current.calls.purchase + current.calls.verify,
+        0,
+        'No store UI and no server call after a local journal failure',
+      );
+      continue;
+    }
     equal(
       events.at(-1),
       { phase: 'exception', at, kind, sequence: events.length },
       'Failure location',
-    );
-    ok(
-      !JSON.stringify(events).includes('PRIVATE'),
-      'Progress never copies original exception details',
     );
     if (at === 'local') {
       equal(
@@ -354,70 +431,62 @@ for (const kind of ['purchase', 'rewarded-ad'] as const) {
   }
 }
 
-const unsupported = harness({
-  target: 'reddit',
-  reward: { status: 'unavailable', rewardGranted: false },
-});
-const unsupportedEvents: GameServicesOperationProgress[] = [];
-await unsupported.client.purchase(purchaseInput, {
-  onProgress: (event) => {
-    unsupportedEvents.push(event);
-  },
-});
-await unsupported.client.claimRewardedAd(rewardInput, {
-  onProgress: (event) => {
-    unsupportedEvents.push(event);
-  },
-});
-equal(
-  phases(unsupportedEvents),
-  ['completed', 'platform-requested', 'platform-result', 'completed'],
-  'Unsupported purchases omit SDK stages; an unavailable ad provider omits server stages',
-);
-equal(
-  unsupported.calls,
-  { purchase: 0, reward: 1, verify: 0, claim: 0 },
-  'Build-target support does not replace provider availability',
-);
-
-const authoritative = harness({
-  target: 'microsoft-store',
-  purchase: {
-    ...completedPurchase,
-    transactionId: 'authoritative-ledger',
-    authoritativeGrant: { ledgerEntryId: 'authoritative-ledger', alreadyProcessed: true },
-  },
-});
-const authoritativeEvents: GameServicesPurchaseProgress[] = [];
-const authoritativeResult = await authoritative.client.purchase(purchaseInput, {
-  onProgress: (event) => {
-    authoritativeEvents.push(event);
-  },
-});
-equal(authoritativeResult.status, 'granted', 'Authoritative completion is preserved');
-equal(authoritativeResult.ledgerEntryId, 'authoritative-ledger', 'Authority ledger retained');
-equal(authoritative.calls.verify, 0, 'No duplicate verification');
-equal(
-  phases(authoritativeEvents),
-  ['platform-requested', 'platform-result', 'completed'],
-  'Authority path emits no fake verification',
-);
-
-for (const status of ['completed', 'pending'] as const) {
-  const verse8 = harness({ target: 'verse8', purchase: { ...completedPurchase, status } });
-  const events: GameServicesPurchaseProgress[] = [];
-  const result = await verse8.client.purchase(purchaseInput, {
+// A gateway without a commerce provider sells nothing: the purchase completes
+// as `rejected` with no store phase, no server phase, and no store UI.
+for (const target of ['reddit', 'verse8'] as const) {
+  const unsupported = harness({
+    target,
+    noCommerce: true,
+    reward: { status: 'unavailable', rewardGranted: false },
+  });
+  const unsupportedEvents: GameServicesOperationProgress[] = [];
+  const unsupportedPurchase = await unsupported.client.purchase(purchaseInput, {
     onProgress: (event) => {
-      events.push(event);
+      unsupportedEvents.push(event);
+    },
+  });
+  equal(unsupportedPurchase.status, 'rejected', `${target} without a provider rejects`);
+  equal(unsupportedPurchase.purchase.status, 'failed', 'The platform result is a plain failure');
+  equal(unsupportedPurchase.purchase.entitlementIds, [], 'Nothing is granted');
+  await unsupported.client.claimRewardedAd(rewardInput, {
+    onProgress: (event) => {
+      unsupportedEvents.push(event);
     },
   });
   equal(
-    result.status,
-    status === 'completed' ? 'rejected' : 'pending',
-    'Verse8 server-event grant policy retained',
+    phases(unsupportedEvents),
+    ['completed', 'platform-requested', 'platform-result', 'completed'],
+    'A purchase without a provider omits SDK stages; an unavailable ad provider omits server stages',
   );
-  equal(verse8.calls.verify, 0, 'No alternate Verse8 grant path');
-  equal(phases(events), ['platform-requested', 'platform-result', 'completed'], 'Verse8 stages');
+  equal(
+    unsupported.calls,
+    { purchase: 0, reward: 1, verify: 0, claim: 0 },
+    'Build-target support does not replace provider availability',
+  );
+}
+
+// A provider that settles on its own is still confirmed through the backend:
+// the progress carries the server phases and the ledger entry is the backend's.
+{
+  const settled = harness({ target: 'microsoft-store', evidence: 'adapter-settled' });
+  const settledEvents: GameServicesPurchaseProgress[] = [];
+  const settledResult = await settled.client.purchase(purchaseInput, {
+    onProgress: (event) => {
+      settledEvents.push(event);
+    },
+  });
+  equal(settledResult.status, 'granted', 'An adapter-settled purchase is granted by the backend');
+  equal(
+    settledResult.ledgerEntryId,
+    'private-purchase-ledger',
+    'The backend answer owns the ledger entry',
+  );
+  equal(settled.calls.verify, 1, 'An adapter-settled completion is verified once');
+  equal(
+    phases(settledEvents),
+    ['platform-requested', 'platform-result', 'server-requested', 'server-result', 'completed'],
+    'No settlement shortcut hides the verification stages',
+  );
 }
 
 for (const asynchronous of [false, true]) {
@@ -467,14 +536,19 @@ const concurrentClient = createGameServicesClient({
   target: 'android',
   playerId: 'private-player',
   backend: concurrent.backend,
+  warn: () => {},
+  // One store sheet per product at a time, so the two operations buy two products.
+  commerceProducts: [
+    { logicalId: 'COINS_100', kind: 'consumable' },
+    { logicalId: 'GEMS_50', kind: 'consumable' },
+  ],
   gateway: {
     ...concurrent.gateway,
-    commerce: {
-      ...concurrent.gateway.commerce,
-      purchase: () => new Promise<PurchaseResult>((resolve) => {
-        pending.push(resolve);
+    commerce: createTestCommerceProvider({
+      answer: (request) => new Promise<RequestPurchaseResult>((resolve) => {
+        pending.push((platform) => resolve(storeAnswer(request, platform)));
       }),
-    },
+    }),
   },
 });
 const firstEvents: GameServicesPurchaseProgress[] = [];
@@ -489,7 +563,7 @@ const first = concurrentClient.purchase(
   },
 );
 const second = concurrentClient.purchase(
-  { ...purchaseInput, idempotencyKey: 'two' },
+  { ...purchaseInput, productId: 'GEMS_50', idempotencyKey: 'two' },
   {
     correlationId: 'view-two',
     onProgress: (event) => {
@@ -497,10 +571,11 @@ const second = concurrentClient.purchase(
     },
   },
 );
-pending[1]?.(completedPurchase);
+await until(() => pending.length === 2);
+pending[1]?.({ ...completedPurchase, transactionId: 'private-transaction-two' });
 await second;
 equal(firstEvents.length, 1, 'First operation remains independently pending');
-pending[0]?.(completedPurchase);
+pending[0]?.({ ...completedPurchase, transactionId: 'private-transaction-one' });
 await first;
 for (const [events, correlation] of [
   [firstEvents, 'view-one'],

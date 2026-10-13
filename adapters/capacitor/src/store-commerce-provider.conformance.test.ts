@@ -215,10 +215,10 @@ function createBridgedVectorProvider(context: CommerceConformanceContext): Comme
     },
     providers: [createCommerceServiceProvider({ id: 'store', commerce: provider })],
   });
-  if (gateway.commerceV2 === undefined) {
-    throw new Error('The gateway must expose the registered commerce v2 provider.');
+  if (gateway.commerce === undefined) {
+    throw new Error('The gateway must expose the registered commerce provider.');
   }
-  return { provider: gateway.commerceV2, store };
+  return { provider: gateway.commerce, store };
 }
 
 describe('store commerce provider conformance', () => {

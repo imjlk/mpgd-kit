@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createMicrosoftStoreCommerceAdapter } from './microsoft-store';
+import { createMicrosoftStoreCommerceProvider } from './microsoft-store';
 import {
   createMicrosoftStoreNativeBridgeClient,
   createMicrosoftStoreNativeCommerceRuntime,
@@ -182,7 +182,7 @@ describe('Microsoft Store native bridge', () => {
       data: { sku: 'hint_pack_20' },
     }]).show()).resolves.toEqual({ details: { purchaseToken: 'hint_pack_20' } });
 
-    const commerce = createMicrosoftStoreCommerceAdapter({
+    const commerce = createMicrosoftStoreCommerceProvider({
       products: [{
         info: {
           id: 'HINT_PACK_20',
@@ -206,16 +206,15 @@ describe('Microsoft Store native bridge', () => {
         async verifyAndGrant() {
           return { status: 'pending' };
         },
-        async getEntitlements() {
-          return [];
-        },
       },
       getRecoveryScope: () => 'authenticated-player',
       ...runtime,
     });
-    await expect(commerce.getProducts()).resolves.toEqual([{
-      id: 'HINT_PACK_20',
-      type: 'consumable',
+    await expect(commerce.fetchProducts({})).resolves.toEqual([{
+      logicalId: 'HINT_PACK_20',
+      store: 'microsoft-store',
+      storeSku: 'hint_pack_20',
+      kind: 'consumable',
       title: '20 hints',
       description: '20 hints',
       price: { formatted: '₩1,000', currencyCode: 'KRW' },
@@ -607,7 +606,7 @@ describe('Microsoft Store native bridge', () => {
       price: { currency: 'KRW', formatted: 'Store ₩1,000', value: '999' },
     };
     const createCommerce = (price: typeof formattedDetail.price) =>
-      createMicrosoftStoreCommerceAdapter({
+      createMicrosoftStoreCommerceProvider({
         products: [{
           info: {
             id: 'HINT_PACK_20',
@@ -631,9 +630,6 @@ describe('Microsoft Store native bridge', () => {
           async verifyAndGrant() {
             return { status: 'pending' };
           },
-          async getEntitlements() {
-            return [];
-          },
         },
         getRecoveryScope: () => 'authenticated-player',
         async getDigitalGoodsService() {
@@ -649,24 +645,24 @@ describe('Microsoft Store native bridge', () => {
         locale: 'ko-KR',
       });
 
-    await expect(createCommerce(formattedDetail.price).getProducts()).resolves.toEqual([
+    await expect(createCommerce(formattedDetail.price).fetchProducts({})).resolves.toEqual([
       expect.objectContaining({
-        price: { formatted: 'Store ₩1,000', currencyCode: 'KRW' },
+        price: expect.objectContaining({ formatted: 'Store ₩1,000', currencyCode: 'KRW' }),
       }),
     ]);
     await expect(createCommerce({
       currency: 'KRW',
       formatted: '  ',
       value: '1000',
-    }).getProducts()).resolves.toEqual([
+    }).fetchProducts({})).resolves.toEqual([
       expect.objectContaining({
-        price: { formatted: '₩1,000', currencyCode: 'KRW' },
+        price: expect.objectContaining({ formatted: '₩1,000', currencyCode: 'KRW' }),
       }),
     ]);
     await expect(createCommerce({
       currency: 'invalid',
       formatted: '₩1,000',
       value: '1000',
-    }).getProducts()).resolves.toEqual([]);
+    }).fetchProducts({})).resolves.toEqual([]);
   });
 });

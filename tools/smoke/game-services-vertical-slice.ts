@@ -6,6 +6,7 @@ import {
   createGameServicesHttpBackendApi,
   createGameServicesIdempotencyKey,
   createInMemoryGameServicesStore,
+  createInMemoryMonetizationOperationStore,
   createInProcessGameServicesBackendTransport,
 } from '@mpgd/game-services';
 
@@ -36,6 +37,7 @@ for (const target of ['android', 'ios', 'ait'] as const) {
     playerId,
     now: () => '2026-07-03T00:00:00.000Z',
     backend,
+    operationStore: createInMemoryMonetizationOperationStore(),
   });
 
   const runId = `${target}-run-1`;
@@ -75,9 +77,27 @@ for (const target of ['android', 'ios', 'ait'] as const) {
 
   assertEqual(purchase.status, 'granted', `${target} purchase should be ledger-granted`);
   assertEqual(
-    duplicatePurchase.verification?.alreadyProcessed,
+    duplicatePurchase.ledgerEntryId,
+    purchase.ledgerEntryId,
+    `${target} duplicate purchase should answer from the reconciler journal`,
+  );
+  // A second runtime with a fresh journal buys again under the same key: the backend ledger dedupes.
+  const freshJournalPurchase = await createGameServicesClient({
+    gateway: createCapableMockGateway({ target, playerId }),
+    target,
+    playerId,
+    now: () => '2026-07-03T00:00:00.000Z',
+    backend,
+    operationStore: createInMemoryMonetizationOperationStore(),
+  }).purchase({
+    productId: 'COINS_100',
+    source: 'result',
+    idempotencyKey: purchaseKey,
+  });
+  assertEqual(
+    freshJournalPurchase.verification?.alreadyProcessed,
     true,
-    `${target} duplicate purchase should be idempotent`,
+    `${target} duplicate purchase should be idempotent in the ledger`,
   );
   assertEqual(reward.status, 'granted', `${target} reward should be ledger-granted`);
   assertEqual(score.submitted, true, `${target} leaderboard should be ledger-recorded`);
@@ -98,14 +118,15 @@ for (const target of ['android', 'ios', 'ait'] as const) {
     gateway: createCapableMockGateway({
       target,
       playerId,
-      purchaseResult: {
-        status: 'cancelled',
-        entitlementIds: [],
+      purchaseOutcome: {
+        outcome: 'cancelled',
+        error: { code: 'USER_CANCELLED', retryable: false },
       },
     }),
     target,
     playerId,
     backend,
+    operationStore: createInMemoryMonetizationOperationStore(),
   });
   const cancelledPurchase = await cancelledClient.purchase({
     productId: 'COINS_100',
@@ -130,6 +151,7 @@ for (const target of ['android', 'ios', 'ait'] as const) {
     target,
     playerId,
     backend,
+    operationStore: createInMemoryMonetizationOperationStore(),
   });
   const skippedReward = await skippedAdClient.claimRewardedAd({
     placementId: 'CONTINUE_AFTER_FAIL',
@@ -150,6 +172,7 @@ for (const target of ['android', 'ios', 'ait'] as const) {
     target,
     playerId,
     backend,
+    operationStore: createInMemoryMonetizationOperationStore(),
   });
   const failedScore = await failedLeaderboardClient.submitLeaderboardScore({
     leaderboardId: 'default',

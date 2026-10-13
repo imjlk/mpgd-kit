@@ -6,7 +6,8 @@ import {
   type BridgeRequest,
   type BridgeResponse,
 } from '@mpgd/bridge';
-import { PlatformOperationError } from '@mpgd/platform';
+import { createUnsupportedCapabilities, PlatformOperationError } from '@mpgd/platform';
+import { createUnsupportedCommerceCapabilities } from '@mpgd/platform/commerce';
 
 import { createCapacitorPlatformGateway, type NativeBridge } from './index';
 
@@ -32,9 +33,9 @@ describe('adapter-capacitor', () => {
       bridge,
     });
 
-    await expect(gateway.commerce.getProducts()).resolves.toEqual([]);
-    expect(requests.map((request) => request.method)).toEqual(['commerce.getProducts']);
-    // A4 only declares the event surface; nothing in the v1 gateway subscribes.
+    await expect(gateway.identity.getPlayer()).resolves.toEqual([]);
+    expect(requests.map((request) => request.method)).toEqual(['identity.getPlayer']);
+    // The event surface is declared for commerce providers; nothing else subscribes.
     expect(subscriptions).toBe(0);
   });
 
@@ -47,11 +48,7 @@ describe('adapter-capacitor', () => {
         return {
           id: input.id,
           ok: true,
-          data: {
-            status: 'completed',
-            transactionId: 'native-transaction-1',
-            entitlementIds: ['coins-100'],
-          },
+          data: { status: 'unavailable', rewardGranted: false },
         } satisfies BridgeResponse;
       },
     };
@@ -64,23 +61,14 @@ describe('adapter-capacitor', () => {
     });
 
     await expect(
-      gateway.commerce.purchase({
-        productId: 'COINS_100',
-        source: 'shop',
-        idempotencyKey: 'purchase-1',
-      }),
-    ).resolves.toEqual({
-      status: 'completed',
-      transactionId: 'native-transaction-1',
-      entitlementIds: ['coins-100'],
-    });
+      gateway.ads.showRewarded({ placementId: 'CONTINUE', idempotencyKey: 'reward-1' }),
+    ).resolves.toEqual({ status: 'unavailable', rewardGranted: false });
     expect(requests).toHaveLength(1);
     expect(requests[0]).toMatchObject({
-      method: 'commerce.purchase',
+      method: 'ads.showRewarded',
       payload: {
-        productId: 'COINS_100',
-        source: 'shop',
-        idempotencyKey: 'purchase-1',
+        placementId: 'CONTINUE',
+        idempotencyKey: 'reward-1',
       },
       meta: {
         target: 'android',
@@ -147,7 +135,7 @@ describe('adapter-capacitor', () => {
       bridge,
     });
 
-    await expect(gateway.commerce.getProducts()).rejects.toMatchObject({
+    await expect(gateway.identity.getPlayer()).rejects.toMatchObject({
       name: 'PlatformOperationError',
       code: 'STORE_UNAVAILABLE',
       message: 'Store unavailable.',
@@ -175,11 +163,87 @@ describe('adapter-capacitor', () => {
       bridge,
     });
 
-    await expect(gateway.commerce.getProducts()).rejects.toMatchObject({
+    await expect(gateway.identity.getPlayer()).rejects.toMatchObject({
       name: 'PlatformOperationError',
       code: 'NATIVE_BRIDGE_INVALID_RESPONSE',
       retryable: false,
     });
+  });
+
+  it('reports the unsupported commerce block and no commerce provider without one', async () => {
+    const requests: BridgeRequest[] = [];
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android',
+      appVersion: '1.2.3',
+      buildId: 'build-android',
+      bridge: {
+        async request(input) {
+          requests.push(input);
+          return { id: input.id, ok: true, data: createUnsupportedCapabilities() };
+        },
+      },
+    });
+
+    expect(gateway.commerce).toBeUndefined();
+    expect('commerce' in gateway).toBe(false);
+    const capabilities = await gateway.getCapabilities();
+    expect(capabilities.commerce).toEqual(createUnsupportedCommerceCapabilities());
+    // Every read is a fresh object.
+    expect((await gateway.getCapabilities()).commerce).not.toBe(capabilities.commerce);
+    expect(requests.every((request) => request.method === 'runtime.getCapabilities')).toBe(true);
+  });
+
+  it('strips retired boolean flags and replaces a missing or invalid native commerce block', async () => {
+    const natives: readonly unknown[] = [
+      null,
+      { ...createUnsupportedCapabilities(), nativeIap: true, subscriptionIap: true },
+      {
+        ...createUnsupportedCapabilities(),
+        nativeIap: true,
+        commerce: { availability: 'available', purchase: { consumable: 'yes' } },
+      },
+      Object.fromEntries(
+        Object.entries(createUnsupportedCapabilities()).filter(([key]) => key !== 'commerce'),
+      ),
+    ];
+    for (const native of natives) {
+      const gateway = createCapacitorPlatformGateway({
+        target: 'ios',
+        appVersion: '1.2.3',
+        buildId: 'build-ios',
+        bridge: {
+          async request(input) {
+            return { id: input.id, ok: true, data: native } satisfies BridgeResponse;
+          },
+        },
+      });
+
+      const capabilities = await gateway.getCapabilities();
+      expect(Object.hasOwn(capabilities, 'nativeIap')).toBe(false);
+      expect(Object.hasOwn(capabilities, 'subscriptionIap')).toBe(false);
+      expect(Object.hasOwn(capabilities.providerAvailability ?? {}, 'nativeIap')).toBe(false);
+      expect(capabilities.commerce).toEqual(createUnsupportedCommerceCapabilities());
+    }
+  });
+
+  it('exposes no v1 commerce surface or renamed gateway property', async () => {
+    const requests: BridgeRequest[] = [];
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android',
+      appVersion: '1.2.3',
+      buildId: 'build-android',
+      bridge: {
+        async request(input) {
+          requests.push(input);
+          return { id: input.id, ok: true, data: null };
+        },
+      },
+    });
+
+    // The gateway has no v1 commerce surface: the retired names are not reachable.
+    expect(Object.keys(gateway)).not.toContain('commerceV2');
+    expect(gateway.commerce).toBeUndefined();
+    expect(requests).toEqual([]);
   });
 
   it('delegates shared launch, identity, share, and notification flows', async () => {

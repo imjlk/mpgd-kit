@@ -16,7 +16,6 @@ import { PlatformOperationError } from '@mpgd/platform';
  * profiles", Capacitor).
  */
 export const externalActivityMethods: ReadonlySet<BridgeMethod> = new Set<BridgeMethod>([
-  'commerce.purchase',
   'commerce.v2.requestPurchase',
   'ads.showRewarded',
   'ads.showInterstitial',

@@ -17,16 +17,21 @@ operation will complete.
 
 <!--
 @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Explains required booleans, optional fields, provider readiness, and fresh reads.
-@evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f5e938c Checked the optional subscription, readiness, commerce, and notifications fields, including the notificationsV2 tie, against the gateway type and runner.
+@evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f566c58 Checked the required commerce block, the optional banner flag, and the readiness fields against the gateway type and runner.
 -->
-Each read returns a separate object. Required fields are booleans; the
-optional `bannerAds` and `subscriptionIap` fields behave as `false` when absent.
-The optional `providerAvailability` record explains why an installed provider
-is unavailable; its values are readiness states, not boolean capabilities.
-The optional `commerce` and `notifications` blocks describe the commerce v2
-and notifications v2 providers in more detail. `notifications` is present only
-while the gateway exposes `notificationsV2`, and its `availability` is then
-the push notification readiness. Re-read before a
+Each read returns a separate object. The platform fields are booleans and only
+`bannerAds` is optional: it behaves as `false` when absent. `commerce` is
+required, a typed block whose `availability`, `purchase`, `lifecycle`, and
+`authority` fields describe the store; a gateway that sells nothing reports
+`createUnsupportedCommerceCapabilities()` instead of omitting it. The former
+`nativeIap` and `subscriptionIap` flags are not part of a snapshot any more, so
+read `commerce.purchase` and `commerce.availability` to decide whether to show
+a store. The optional `providerAvailability` record explains why an installed
+provider is unavailable for the other features; its values are readiness
+states, not boolean capabilities.
+The optional `notifications` block is present exactly when the gateway
+exposes `notificationsV2`. Its availability equals push notification readiness.
+Re-read before a
 feature is shown or used. If a capability is `false`, hide or disable that
 path. Even after a `true` snapshot, handle an operation that fails or becomes
 unavailable; the snapshot is not a promise that the operation succeeds.
@@ -41,7 +46,13 @@ closed. Keep handling operation failure even after a successful `true` read.
 See the type-checked
 [`readRewardedAdAvailability` example](https://github.com/imjlk/mpgd-kit/blob/main/docs/examples/platform-capabilities.ts)
 for a decision-point read that keeps a rejected bridge call distinct from a
-resolved `false` flag. Handle an actual ad operation result separately.
+resolved `false` flag. Handle an actual ad operation result separately. The
+[`readStoreAvailability` example](https://github.com/imjlk/mpgd-kit/blob/main/docs/examples/platform-capabilities.ts)
+does the same for the store: it shows a store only when `commerce.availability`
+is `available` and `commerce.purchase` names a kind the game sells, and it
+never treats a `commerce` block that says `unsupported` as a failed read. A
+purchase still starts through the commerce provider and is granted only by the
+backend ledger.
 
 ## Verify a gateway fixture
 

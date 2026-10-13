@@ -35,18 +35,6 @@ export type {
 export type { PlatformEvidenceEnvelope } from '@mpgd/platform';
 
 /**
- * The closed v1 purchase target list. The deployment target of a v1 verify
- * request names its store implicitly (`android` is Google Play, `ios` the App
- * Store, `ait` Apps in Toss); `resolveLegacyCommerceStoreId` is that mapping.
- *
- * @deprecated `VerifyPurchaseRequest.target` is open since commerce v2 C2
- * (`GameServicesStoreTarget` is `StoreId`); C4 removes this alias.
- */
-export type GameServicesLegacyStoreTarget = Extract<
-  PlatformTarget,
-  'microsoft-store' | 'android' | 'ios' | 'ait' | 'oneplay'
->;
-/**
  * An open store or deployment target identifier (RFC "Open store ids"). The
  * request validator bounds its shape; the backend's commerce evidence
  * registry decides which stores it serves.

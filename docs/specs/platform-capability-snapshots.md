@@ -8,19 +8,23 @@ a physical device or is ready for release.
 ## Snapshot shape {#snapshot-shape}
 
 Every `getCapabilities()` read must return a new object with every required
-`PlatformCapabilities` key, no unknown keys, and boolean values. `bannerAds` is
-optional and is treated as `false` when absent; `subscriptionIap` follows the
-same rule. The optional `providerAvailability` record contains per-feature
-readiness states and is compared with the fixture's expected provider state,
-not treated as a boolean capability.
+`PlatformCapabilities` key and no unknown keys. The platform flags are
+booleans; `bannerAds` is optional and is treated as `false` when absent.
+`commerce` is required and is the only commerce source: a block of `purchase`,
+`catalog`, `lifecycle`, `authority`, and `availability` with exact keys and
+typed values. A gateway that sells nothing reports a fresh
+`createUnsupportedCommerceCapabilities()` block instead of omitting it, and a
+gateway with a commerce provider reports that provider's validated block. The
+boolean `nativeIap` and `subscriptionIap` flags were removed with the v1
+commerce adapter; they are unknown keys now, and a snapshot that carries one
+fails. The optional `providerAvailability` record contains per-feature
+readiness states for the other providers (commerce readiness is the block's
+own `availability`) and is compared with the fixture's expected provider
+state, not treated as a boolean capability. Mutating or retaining one
+snapshot, nested commerce blocks included, must not change the result of the
+next read. The runner compares each read with the fixture's expected provider
+state.
 
-Two optional blocks describe a provider in more detail. Each must have every
-required key, no unknown keys, and known values, and is compared with the
-fixture's expected block:
-
-- `commerce` holds the commerce v2 `purchase`, `catalog`, `lifecycle`, and
-  `authority` records and an `availability` readiness state. `nativeIap` and
-  `subscriptionIap` must equal the values derived from it.
 - `notifications` holds the notifications v2 `permission`, `remote`, and
   `local` records, an `availability` readiness state, and the `open` path.
   Counts are positive 32-bit integers, `remote.purposes` lists only known
@@ -29,9 +33,8 @@ fixture's expected block:
   `notificationsV2`, and `providerAvailability.pushNotifications` then equals
   its `availability`.
 
-Mutating or retaining one snapshot, including a nested record or the purposes
-list of a block, must not change the result of the next read. The runner
-compares each read with the fixture's expected provider state.
+The notification block, nested records, and purposes list must also be fresh
+on every read; frozen shared objects and sparse purpose lists are invalid.
 
 ## Provider transitions {#provider-transitions}
 

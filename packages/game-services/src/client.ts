@@ -11,7 +11,6 @@ import type {
 } from '@mpgd/platform';
 import type { CommerceServiceCapabilities } from '@mpgd/platform/commerce';
 
-import { findAdapterSettledGrant } from './authoritative-purchase.js';
 import {
   resolveClientRewardClaim,
   type ClientRewardEvidenceRegistry,
@@ -47,7 +46,6 @@ import type {
   ClaimAdRewardResponse,
   GameServicesLeaderboardTarget,
   GameServicesLedgerTarget,
-  GameServicesLegacyStoreTarget,
   PurchaseLedgerStatusRequest,
   PurchaseLedgerStatusResponse,
   RecordLeaderboardScoreRequest,
@@ -221,9 +219,11 @@ export interface GameServicesClient extends GameServicesOperationClient {
     input: GameServicesLeaderboardInput,
   ): Promise<GameServicesLeaderboardResult>;
   /**
-   * The commerce v2 reconciler behind `purchase` when the gateway exposes
-   * `commerceV2`. Call `start()` at runtime start and `reconcile()` on app
-   * resume; `purchase` starts it on first use.
+   * The commerce reconciler behind `purchase`, present when the gateway
+   * exposes `commerce`. Call `start()` at runtime start and `reconcile()` on
+   * app resume; `purchase` starts it on first use. A gateway without a commerce
+   * provider has none, and `purchase` then answers `rejected` without opening
+   * any store UI.
    */
   readonly commerceReconciler?: CommerceReconciler;
 }
@@ -242,9 +242,9 @@ export interface CreateGameServicesClientInput {
   /** Explicit client decoders only; server verification is configured independently. */
   readonly rewardEvidenceRegistry?: ClientRewardEvidenceRegistry;
   /**
-   * Journal of the commerce v2 reconciler used when `gateway.commerceV2`
-   * exists. Without one the journal lives in memory for this session only:
-   * duplicates are then caught by the backend ledger, not by the client.
+   * Journal of the commerce reconciler used when `gateway.commerce` exists.
+   * Without one the journal lives in memory for this session only: duplicates
+   * are then caught by the backend ledger, not by the client.
    */
   readonly operationStore?: MonetizationOperationStore;
   /** A reconciler shared with another client, for example the recovery client's. */
@@ -278,12 +278,12 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
     ...(input.analytics === undefined ? {} : { sink: input.analytics }),
   });
 
-  const commerceProvider = input.gateway.commerceV2;
+  const commerceProvider = input.gateway.commerce;
   let commerceReconciler: CommerceReconciler | undefined;
   if (commerceProvider !== undefined) {
     if (input.commerceReconciler === undefined && input.operationStore === undefined) {
       (input.warn ?? console.warn)(
-        '@mpgd/game-services: the commerce v2 reconciler is journaling in memory for this session '
+        '@mpgd/game-services: the commerce reconciler is journaling in memory for this session '
           + 'because no operationStore was given; purchases are not recoverable across restarts and '
           + 'the backend ledger is the only duplicate backstop. Pass a durable MonetizationOperationStore.',
       );
@@ -459,137 +459,28 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
           }
         });
       }
-      return observeGameServicesOperation('purchase', options, async (progress): Promise<GameServicesPurchaseResult> => {
-        const target = input.target;
-
-        if (!isGameServicesCommerceTarget(target)) {
-          const purchase = {
-            status: 'failed',
-            entitlementIds: [],
-          } satisfies PurchaseResult;
-
-          await analytics.track({
-            name: 'purchase_rejected',
-            properties: {
-              productId: purchaseInput.productId,
-              status: purchase.status,
-              reason: 'unsupported_target',
-            },
-          });
-
-          return {
-            status: 'rejected',
-            purchase,
-          };
-        }
-
-        progress.platformRequested();
-        const purchase = await input.gateway.commerce.purchase(purchaseInput);
-        progress.platformResult(purchase.status);
-
-        if (target === 'verse8') {
-          const status = purchase.status === 'completed' ? 'rejected' : purchase.status;
-
-          await analytics.track({
-            name: purchase.status === 'pending' ? 'purchase_pending' : 'purchase_rejected',
-            properties: {
-              productId: purchaseInput.productId,
-              status,
-              reason: purchase.status === 'completed'
-                ? 'verse8_grants_require_agent8_purchase_event'
-                : purchase.status === 'pending'
-                  ? 'agent8_purchase_event_pending'
-                  : undefined,
-            },
-          });
-
-          return {
-            status,
-            purchase,
-          };
-        }
-
-        // A provider that declares adapter settlement already wrote the ledger
-        // grant before returning; the target-name rule remains only for
-        // gateways without a commerce v2 provider (removed in C4).
-        const settledGrant = await findAdapterSettledGrant({
-          gateway: input.gateway,
-          target,
-          purchase,
-        });
-        if (settledGrant !== undefined) {
-          const result = {
-            status: 'granted',
-            purchase,
-            ledgerEntryId: settledGrant.ledgerEntryId,
-          } satisfies GameServicesPurchaseResult;
-
-          await analytics.track({
-            name: 'purchase_granted',
-            properties: {
-              productId: purchaseInput.productId,
-              status: result.status,
-              ledgerEntryId: settledGrant.ledgerEntryId,
-              alreadyProcessed: settledGrant.alreadyProcessed,
-            },
-          });
-
-          return result;
-        }
-
-        if (purchase.status !== 'completed' || purchase.transactionId === undefined) {
-          await analytics.track({
-            name: purchase.status === 'pending' ? 'purchase_pending' : 'purchase_rejected',
-            properties: {
-              productId: purchaseInput.productId,
-              status: purchase.status,
-              reason: purchaseRejectionReason(purchase),
-            },
-          });
-
-          return {
-            status: purchase.status === 'completed' ? 'rejected' : purchase.status,
-            purchase,
-          };
-        }
-
-        const verificationRequest: VerifyPurchaseRequest = {
-          target,
-          ...(input.deploymentTarget === undefined || input.deploymentTarget === target
-            ? {}
-            : { deploymentTarget: input.deploymentTarget }),
-          playerId: input.playerId,
-          productId: purchaseInput.productId,
-          platformTransactionId: purchase.transactionId,
-          idempotencyKey: purchaseInput.idempotencyKey,
-          purchasedAt: requestNow(),
-          ...(purchase.evidence === undefined ? {} : { evidence: purchase.evidence }),
-        };
-        progress.serverRequested();
-        const verification = await input.backend.purchases.verifyPurchase(verificationRequest);
-        progress.serverResult(verification.verified);
-
-        const result = {
-          status: verification.verified ? 'granted' : (verification.disposition ?? 'rejected'),
-          purchase,
-          verification,
-          ...(verification.ledgerEntryId === undefined
-            ? {}
-            : { ledgerEntryId: verification.ledgerEntryId }),
-        } satisfies GameServicesPurchaseResult;
+      // No commerce provider: the target sells nothing through this gateway.
+      // The reconciler is the only purchase path, so there is no fallback that
+      // could grant from a platform callback; fail closed without store UI.
+      return observeGameServicesOperation('purchase', options, async (): Promise<GameServicesPurchaseResult> => {
+        const purchase = {
+          status: 'failed',
+          entitlementIds: [],
+        } satisfies PurchaseResult;
 
         await analytics.track({
-          name: verification.verified ? 'purchase_granted' : verification.disposition === 'pending' ? 'purchase_pending' : 'purchase_rejected',
+          name: 'purchase_rejected',
           properties: {
             productId: purchaseInput.productId,
-            status: result.status,
-            ledgerEntryId: verification.ledgerEntryId,
-            alreadyProcessed: verification.alreadyProcessed,
-            reason: verification.reason,
+            status: purchase.status,
+            reason: 'commerce_unavailable',
           },
         });
 
-        return result;
+        return {
+          status: 'rejected',
+          purchase,
+        };
       });
     },
 
@@ -870,27 +761,6 @@ export function createGameServicesIdempotencyKey(input: {
 
 function normalizeSegment(value: string): string {
   return value.replaceAll(/[^a-zA-Z0-9_-]+/g, '-').replaceAll(/^-|-$/g, '').slice(0, 64);
-}
-
-function purchaseRejectionReason(purchase: PurchaseResult): string | undefined {
-  if (purchase.status === 'completed' && purchase.transactionId === undefined) {
-    return 'missing_transaction_id';
-  }
-  if (purchase.status === 'pending') {
-    return 'purchase_pending';
-  }
-  return undefined;
-}
-
-function isGameServicesCommerceTarget(
-  target: GameServicesLedgerTarget,
-): target is GameServicesLegacyStoreTarget | 'verse8' {
-  return target === 'microsoft-store'
-    || target === 'android'
-    || target === 'ios'
-    || target === 'ait'
-    || target === 'verse8'
-    || target === 'oneplay';
 }
 
 function isGameServicesLeaderboardTarget(

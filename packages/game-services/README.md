@@ -17,21 +17,37 @@ root certificates, the bundle ID, environment, and production App Apple ID,
 and pass the result as `signedTransactionVerifier` to
 `createAppStoreGameServicesEvidenceVerifier`. Backend only: the peer is not
 installed by game clients, and no other subpath imports it. It moved here from
-`@mpgd/adapter-capacitor/app-store-server`, which stays as a deprecated
-re-export for one release.
+`@mpgd/adapter-capacitor/app-store-server`, whose deprecated re-export was
+removed in commerce v2 PR C4.
 
-## Commerce v2 reconciler
+## Commerce reconciler
 
 `createCommerceReconciler` from `@mpgd/game-services/commerce-reconciler` is
-the RFC "Reconciler" over any commerce v2 `CommerceProvider`: it journals every
-purchase as a `commerce-purchase` record of the `MonetizationOperationStore`,
-sends the saved verify request to the backend, finishes a purchase only after
-the ledger grant, and never grants on the client. `createGameServicesClient`
-purchases through it whenever `gateway.commerceV2` exists and exposes it as
-`commerceReconciler`; `createRecoverableMonetizationClient` and
-`createGameServicesRuntime` run it from `monetizationRecovery.reconcile()` and
-`restorePurchases()` over the durable journal. See
+the RFC "Reconciler" over a `CommerceProvider`: it journals every purchase as
+a `commerce-purchase` record of the `MonetizationOperationStore`, sends the
+saved verify request to the backend, finishes a purchase only after the ledger
+grant, and never grants on the client. It is the only purchase path.
+`createGameServicesClient` purchases through it whenever `gateway.commerce`
+exists and exposes it as `commerceReconciler`;
+`createRecoverableMonetizationClient` and `createGameServicesRuntime` run it
+from `monetizationRecovery.reconcile()` and `restorePurchases()` over the
+durable journal. See
 [docs/MONETIZATION_RECOVERY.md](../../docs/MONETIZATION_RECOVERY.md).
+
+A gateway without `gateway.commerce` sells nothing: `purchase()` answers
+`rejected` with a failed platform result and the analytics reason
+`commerce_unavailable`, opens no store UI, and never reaches the backend. The
+v1 purchase path is gone (commerce v2 PR C4): there is no `recoverPurchaseResult`
+(the reconciler learns results from the provider's `getAvailablePurchases` and
+`purchaseUpdated` events), no target-name shortcut for adapter-settled
+purchases, and no `createGooglePlayTokenTransactionId` (use
+`createGooglePlayTokenPurchaseKey` from `@mpgd/platform/commerce`). A leftover
+v1 `purchase` journal record is retired: it stays readable and never reopens the
+store UI or grants locally, but a record that was mid-verification has its saved
+verify request sent to the backend once more by `reconcile()` (the backend's
+answer closes it). Entitlements are not read from the
+gateway: read the backend ledger on the server with
+`listActiveEntitlementTransactions` from `@mpgd/game-services/commerce-ledger`.
 
 ## Commerce evidence registry
 
@@ -126,7 +142,11 @@ await client.purchase(input, {
 | `completed` | The local invocation returned a normal result; `status` equals that result's status |
 | `exception` | The invocation threw; `at` identifies platform, server, or local processing |
 
-Purchase and rewarded-ad progress are discriminated by `kind` and `phase`.
+Purchase and rewarded-ad progress are discriminated by `kind` and `phase`. A
+purchase goes through the reconciler, which journals a store failure as a
+`failed` result and a backend outage as `pending`, so those end with a
+`completed` event rather than `exception`; `exception` marks a failure of the
+call itself, such as a journal write that rejects before the store opens.
 `sequence` starts at one per invocation and increases for each actual event.
 Events are frozen and calls have independent observers, sequences, and optional
 correlation IDs. Callback invocation order is deterministic; asynchronous callback

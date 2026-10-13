@@ -18,6 +18,7 @@ import {
   type BridgeRpcEndpoint,
 } from '@mpgd/bridge/orpc';
 import {
+  createUnsupportedCommerceCapabilities,
   PlatformOperationError,
   type IdentitySession,
   type IdentityUpgradeResult,
@@ -37,7 +38,6 @@ import {
   assertCommerceBridgeGetCapabilitiesResult,
   CommerceError,
   commerceProtocol,
-  deriveLegacyCommerceCapabilities,
   isCommerceErrorCode,
   type CommerceErrorCode,
   type CommerceProvider,
@@ -92,6 +92,17 @@ export class DevvitBridgeError extends Error {
  */
 export type DevvitGatewayCommerceOptions = Omit<CreateDevvitCommerceProviderInput, 'orders'>;
 
+/**
+ * What `runtime.getCapabilities` may still carry from a server built before
+ * the boolean commerce flags were removed: the gateway drops those keys and
+ * owns the `commerce` block itself.
+ */
+type DevvitServerCapabilities = Omit<PlatformCapabilities, 'commerce'> & {
+  readonly nativeIap?: unknown;
+  readonly subscriptionIap?: unknown;
+  readonly commerce?: unknown;
+};
+
 export interface DevvitPlatformGatewayOptions {
   readonly appVersion: string;
   readonly buildId: string;
@@ -99,15 +110,17 @@ export interface DevvitPlatformGatewayOptions {
   readonly fallbackBridge?: DevvitBridge;
   readonly rpcEndpoint?: BridgeRpcEndpoint;
   /**
-   * Installs the commerce v2 provider (`createDevvitCommerceProvider`) as
-   * `commerceV2`, with the `commerce` capability block and `nativeIap` and
-   * `subscriptionIap` derived from it. Absent, the gateway offers no
-   * `commerceV2`; the v1 `commerce` surface is the bridge's either way.
+   * Installs the commerce provider (`createDevvitCommerceProvider`) as the
+   * gateway's `commerce`, and its capability block as the snapshot's
+   * `commerce`. Absent, the gateway sells nothing: it has no `commerce` and
+   * reports `createUnsupportedCommerceCapabilities()`, whatever the server
+   * snapshot says.
    *
-   * Not yet usable in production before C2: the backend lookup verifier for
-   * `devvit.order.v1` does not exist yet, so a verify request for a Devvit
-   * purchase is refused today instead of answering `pending`, and no journal
-   * record can reach `granted`. Enable it once the backend can answer.
+   * A purchase is granted by the backend ledger only: the fulfillment handler
+   * writes the ledger entry, and the backend's `devvit.order.v1` lookup
+   * verifier answers the reconciler's verify request from it. Owned
+   * entitlements come from that ledger through `@mpgd/game-services`, not
+   * from the payments client.
    */
   readonly commerce?: DevvitGatewayCommerceOptions;
 }
@@ -141,7 +154,7 @@ export function createDevvitPlatformGateway(
     return response.data as TData;
   }
 
-  const commerceV2: CommerceProvider | undefined = input.commerce === undefined
+  const commerce: CommerceProvider | undefined = input.commerce === undefined
     ? undefined
     : createDevvitCommerceProvider({
         ...input.commerce,
@@ -151,14 +164,29 @@ export function createDevvitPlatformGateway(
   return {
     target: 'reddit',
     async getCapabilities() {
-      const capabilities = { ...await request<PlatformCapabilities>('runtime.getCapabilities', {}) };
-      if (commerceV2 === undefined) {
-        return capabilities;
+      const {
+        nativeIap: _nativeIap,
+        subscriptionIap: _subscriptionIap,
+        commerce: _serverCommerce,
+        ...capabilities
+      } = await request<DevvitServerCapabilities>('runtime.getCapabilities', {});
+      const availability = capabilities.providerAvailability;
+      if (typeof availability === 'object' && availability !== null && !Array.isArray(availability)) {
+        const {
+          nativeIap: _retiredNativeIap,
+          subscriptionIap: _retiredSubscriptionIap,
+          ...current
+        } = availability as Readonly<Record<string, unknown>>;
+        capabilities.providerAvailability = current as NonNullable<PlatformCapabilities['providerAvailability']>;
       }
       // The webview provider owns the block: the server snapshot stays honest
-      // about the server, and the flags derive from the block it reports.
-      const commerce = await commerceV2.getCapabilities();
-      return { ...capabilities, ...deriveLegacyCommerceCapabilities(commerce), commerce };
+      // about the server, and a gateway without a provider sells nothing.
+      return {
+        ...capabilities,
+        commerce: commerce === undefined
+          ? createUnsupportedCommerceCapabilities()
+          : await commerce.getCapabilities(),
+      };
     },
     identity: {
       getPlayer: () => request<PlayerIdentity | null>('identity.getPlayer', {}),
@@ -183,13 +211,7 @@ export function createDevvitPlatformGateway(
       requestSubscription: (topic) =>
         request<NotificationSubscriptionResult>('notifications.requestSubscription', { topic }),
     },
-    commerce: {
-      getProducts: () => request('commerce.getProducts', {}),
-      purchase: (payload) => request('commerce.purchase', payload),
-      restore: () => request('commerce.restore', {}),
-      getEntitlements: () => request('commerce.getEntitlements', {}),
-    },
-    ...(commerceV2 === undefined ? {} : { commerceV2 }),
+    ...(commerce === undefined ? {} : { commerce }),
     ads: {
       preload: (payload) => request('ads.preload', payload),
       showRewarded: (payload) => request('ads.showRewarded', payload),
@@ -425,7 +447,6 @@ export function createDevvitSandboxBridge(): DevvitBridge {
       switch (input.method) {
         case 'runtime.getCapabilities':
           return ok(input, {
-            nativeIap: false,
             nativeAds: false,
             rewardedAds: false,
             interstitialAds: false,
@@ -436,6 +457,7 @@ export function createDevvitSandboxBridge(): DevvitBridge {
             socialShare: false,
             haptics: false,
             localizedContent: true,
+            commerce: createUnsupportedCommerceCapabilities(),
           });
 
         case 'identity.getPlayer':
@@ -478,21 +500,6 @@ export function createDevvitSandboxBridge(): DevvitBridge {
 
         case 'notifications.requestSubscription':
           return ok(input, 'unavailable');
-
-        case 'commerce.getProducts':
-        case 'commerce.getEntitlements':
-          return ok(input, []);
-
-        case 'commerce.purchase':
-          return ok(input, {
-            status: 'cancelled',
-            entitlementIds: [],
-          });
-
-        case 'commerce.restore':
-          return ok(input, {
-            restoredEntitlements: [],
-          });
 
         case 'ads.preload':
           return ok(input, {});
@@ -553,7 +560,7 @@ export function createDevvitSandboxBridge(): DevvitBridge {
           });
         }
 
-        // Commerce v2 providers arrive with the B-phase PRs (B6 for Devvit).
+        // The sandbox sells nothing: every commerce method fails closed.
         case 'commerce.v2.getCapabilities':
         case 'commerce.v2.fetchProducts':
         case 'commerce.v2.requestPurchase':

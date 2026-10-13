@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createUnsupportedCapabilities,
+  createUnsupportedCommerceCapabilities,
   type PlatformGateway,
-  type PurchaseResult,
 } from '@mpgd/platform';
 import {
   adProtocol,
@@ -94,16 +94,32 @@ function environment() {
   const presentation = createFullScreenPresentationScope({ execution });
   return { execution, presentation };
 }
-function gateway(): PlatformGateway {
+type FixtureCommerce = NonNullable<PlatformGateway['commerce']>;
+type FixturePurchaseRequest = Parameters<FixtureCommerce['requestPurchase']>[0];
+type FixturePurchaseOutcome = Awaited<ReturnType<FixtureCommerce['requestPurchase']>>;
+const cancelledOutcome: FixturePurchaseOutcome = {
+  outcome: 'cancelled',
+  error: { code: 'USER_CANCELLED', retryable: false },
+};
+function commerceFixture(
+  requestPurchase: (input: FixturePurchaseRequest) => Promise<FixturePurchaseOutcome> =
+    async () => cancelledOutcome,
+): FixtureCommerce & { readonly requestPurchase: ReturnType<typeof vi.fn<(input: FixturePurchaseRequest) => Promise<FixturePurchaseOutcome>>> } {
+  return {
+    store: 'fixture',
+    getCapabilities: async () => createUnsupportedCommerceCapabilities(),
+    fetchProducts: async () => [],
+    requestPurchase: vi.fn(requestPurchase),
+    getAvailablePurchases: async () => [],
+    subscribe: () => () => {},
+  };
+}
+function gateway(commerce: FixtureCommerce = commerceFixture()): PlatformGateway {
   return {
     target: 'browser',
     getCapabilities: async () => createUnsupportedCapabilities(),
     identity: { getPlayer: async () => ({ playerId: 'player' }) },
-    commerce: {
-      getProducts: async () => [],
-      purchase: vi.fn(async () => ({ status: 'cancelled' as const, entitlementIds: [] })),
-      getEntitlements: async () => [],
-    },
+    commerce,
     ads: {
       preload: async () => {},
       showRewarded: async () => ({ status: 'unavailable', rewardGranted: false }),
@@ -405,16 +421,18 @@ describe('coordinated advertising', () => {
   it('uses one surface for purchase, rewarded, and interstitial gateway calls', async () => {
     const native = sdk();
     const state = environment();
-    const original = gateway();
+    const commerce = commerceFixture();
+    const original = gateway(commerce);
     const controlled = createCoordinatedPlatformGateway({
       gateway: original,
       provider: native.provider,
       ...state,
+      classifyPurchasePresentation: () => 'closed',
     });
     const ad = controlled.ads.showRewarded({ placementId: 'CONTINUE', idempotencyKey: 'a' });
     await flush();
-    await expect(controlled.commerce.purchase({ productId: 'COINS', source: 'shop', idempotencyKey: 'p' })).rejects.toMatchObject({ code: 'busy' });
-    expect(original.commerce.purchase).not.toHaveBeenCalled();
+    await expect(controlled.commerce?.requestPurchase({ logicalId: 'COINS', source: 'shop', idempotencyKey: 'p' })).rejects.toMatchObject({ code: 'busy' });
+    expect(commerce.requestPurchase).not.toHaveBeenCalled();
     const blocked = await controlled.ads.provider?.show({ ...request('b'), format: 'interstitial' });
     expect(blocked?.reason).toBe('busy');
     native.emit('started', 'a', 1);
@@ -561,14 +579,14 @@ describe('coordinated purchase presentation', () => {
   it('uses adapter presentation facts to release known closure and retain unknown outcomes', async () => {
     for (const fact of ['closed', 'unknown', 'not-started'] as const) {
       const state = environment();
-      const original = gateway();
       let nativeFact: (event: PurchasePresentationEvent) => void = () => {};
-      const source = { ...original, commerce: { ...original.commerce,
+      const source = gateway({
+        ...commerceFixture(),
         presentation: { subscribe(listener: typeof nativeFact) { nativeFact = listener; return () => {}; } },
-        async purchase() { nativeFact({ idempotencyKey: 'p', sequence: 1, state: fact }); return { status: 'completed' as const, entitlementIds: [] }; },
-      } };
+        async requestPurchase() { nativeFact({ idempotencyKey: 'p', sequence: 1, state: fact }); return { outcome: 'launched' as const }; },
+      });
       const controlled = createCoordinatedPlatformGateway({ gateway: source, provider: sdk().provider, ...state });
-      await controlled.commerce.purchase({ productId: 'COINS', source: 'shop', idempotencyKey: 'p' });
+      await controlled.commerce?.requestPurchase({ logicalId: 'COINS', source: 'shop', idempotencyKey: 'p' });
       expect(state.execution.getSnapshot().blocked.simulation).toBe(fact === 'unknown');
       controlled.dispose();
     }
@@ -577,12 +595,11 @@ describe('coordinated purchase presentation', () => {
   it('ignores contradictory no-start facts and isolates a late purchase result from the next ad', async () => {
     const state = environment();
     const native = sdk();
-    const original = gateway();
-    let finish!: (result: PurchaseResult) => void;
-    original.commerce.purchase = () => new Promise((resolve) => { finish = resolve; });
+    let finish!: (result: FixturePurchaseOutcome) => void;
+    const original = gateway(commerceFixture(() => new Promise((resolve) => { finish = resolve; })));
     let callback!: (event: PurchasePresentationEvent) => void;
     const controlled = createCoordinatedPlatformGateway({ gateway: original, provider: native.provider, ...state, classifyPurchasePresentation: () => 'closed', purchasePresentation: { subscribe(listener) { callback = listener; return () => {}; } } });
-    const purchase = controlled.commerce.purchase({ productId: 'COINS', source: 'shop', idempotencyKey: 'p' });
+    const purchase = controlled.commerce?.requestPurchase({ logicalId: 'COINS', source: 'shop', idempotencyKey: 'p' });
     await flush();
     callback({ idempotencyKey: 'p', sequence: 1, state: 'open' });
     callback({ idempotencyKey: 'p', sequence: 2, state: 'not-started' });
@@ -590,7 +607,7 @@ describe('coordinated purchase presentation', () => {
     callback({ idempotencyKey: 'p', sequence: 3, state: 'closed' });
     const ad = controlled.ads.provider?.show({ ...request('b'), format: 'interstitial' });
     await flush();
-    finish({ status: 'cancelled', entitlementIds: [] });
+    finish(cancelledOutcome);
     await purchase;
     callback({ idempotencyKey: 'p', sequence: 4, state: 'closed' });
     expect(state.presentation.getSnapshot().owner?.invocationId).toBe('b');
@@ -604,7 +621,7 @@ describe('coordinated purchase presentation', () => {
     class Gateway {
       readonly target = 'browser' as const;
       readonly identity = original.identity;
-      readonly commerce = Object.freeze(original.commerce);
+      readonly commerce = Object.freeze(commerceFixture());
       readonly ads = Object.freeze(original.ads);
       readonly leaderboard = original.leaderboard;
       readonly lifecycle = original.lifecycle;
@@ -615,10 +632,10 @@ describe('coordinated purchase presentation', () => {
     const callbacks = new Set<(event: PurchasePresentationEvent) => void>();
     const controlled = createCoordinatedPlatformGateway({ gateway: Object.freeze(new Gateway()), provider: sdk().provider, ...state, purchasePresentation: { subscribe(callback) { callbacks.add(callback); return () => { callbacks.delete(callback); }; } } });
     expect(await controlled.getCapabilities()).toEqual(createUnsupportedCapabilities());
-    const input = { productId: 'COINS', source: 'shop', idempotencyKey: 'p' } as const;
-    const first = controlled.commerce.purchase(input);
-    expect(controlled.commerce.purchase(input)).toBe(first);
-    expect((await first).status).toBe('cancelled');
+    const input = { logicalId: 'COINS', source: 'shop', idempotencyKey: 'p' } as const;
+    const first = controlled.commerce?.requestPurchase(input);
+    expect(controlled.commerce?.requestPurchase(input)).toBe(first);
+    expect((await first)?.outcome).toBe('cancelled');
     expect(state.presentation.getSnapshot().status).toBe('unknown');
     controlled.dispose();
     expect(callbacks.size).toBe(1);
@@ -630,16 +647,70 @@ describe('coordinated purchase presentation', () => {
   });
   it('allows a preflight busy key to retry and prevents retired keys from reopening SDK UI', async () => {
     const state = environment();
-    const original = gateway();
+    const commerce = commerceFixture();
+    const original = gateway(commerce);
     const controlled = createCoordinatedPlatformGateway({ gateway: original, provider: sdk().provider, ...state, classifyPurchasePresentation: () => 'closed' });
     const blocker = state.presentation.acquire({ kind: 'interstitial', invocationId: 'ad' });
-    const request = { productId: 'COINS', source: 'shop', idempotencyKey: 'p' } as const;
-    await expect(controlled.commerce.purchase(request)).rejects.toMatchObject({ code: 'busy' });
+    const request = { logicalId: 'COINS', source: 'shop', idempotencyKey: 'p' } as const;
+    await expect(controlled.commerce?.requestPurchase(request)).rejects.toMatchObject({ code: 'busy' });
     blocker.confirmClosed();
-    await controlled.commerce.purchase(request);
-    await controlled.commerce.purchase({ ...request, idempotencyKey: 'q' });
-    await expect(controlled.commerce.purchase(request)).rejects.toMatchObject({ code: 'already-completed' });
-    expect(original.commerce.purchase).toHaveBeenCalledTimes(2);
+    await controlled.commerce?.requestPurchase(request);
+    await controlled.commerce?.requestPurchase({ ...request, idempotencyKey: 'q' });
+    await expect(controlled.commerce?.requestPurchase(request)).rejects.toMatchObject({ code: 'already-completed' });
+    expect(commerce.requestPurchase).toHaveBeenCalledTimes(2);
+  });
+
+  it('leaves the provider untouched when nothing trusted can release a purchase lease', async () => {
+    const state = environment();
+    const commerce = commerceFixture();
+    const original = gateway(commerce);
+    const controlled = createCoordinatedPlatformGateway({ gateway: original, provider: sdk().provider, ...state });
+    expect(controlled.commerce?.store).toBe('fixture');
+    await controlled.commerce?.requestPurchase({ logicalId: 'COINS', source: 'shop', idempotencyKey: 'p' });
+    expect(commerce.requestPurchase).toHaveBeenCalledOnce();
+    // A purchase result alone proves nothing about the payment surface, so no
+    // lease is held and later ads are not blocked for the rest of the session.
+    expect(state.presentation.getSnapshot().status).toBe('ready');
+    controlled.dispose();
+  });
+
+  it('hands the provider result to classifyPurchasePresentation and releases on a trusted closure', async () => {
+    const state = environment();
+    const commerce = commerceFixture(async () => ({ outcome: 'launched' as const }));
+    const seen: string[] = [];
+    const controlled = createCoordinatedPlatformGateway({
+      gateway: gateway(commerce),
+      provider: sdk().provider,
+      ...state,
+      classifyPurchasePresentation: (result) => {
+        seen.push(result.outcome);
+        return result.outcome === 'launched' ? 'unknown' : 'closed';
+      },
+    });
+    await controlled.commerce?.requestPurchase({ logicalId: 'COINS', source: 'shop', idempotencyKey: 'a' });
+    expect(seen).toEqual(['launched']);
+    // A `launched` answer says the sheet is still open: the lease stays held.
+    expect(state.execution.getSnapshot().blocked.simulation).toBe(true);
+    controlled.dispose();
+    const closing = environment();
+    const settled = createCoordinatedPlatformGateway({
+      gateway: gateway(commerceFixture()),
+      provider: sdk().provider,
+      ...closing,
+      classifyPurchasePresentation: (result) => (result.outcome === 'cancelled' ? 'closed' : 'unknown'),
+    });
+    await settled.commerce?.requestPurchase({ logicalId: 'COINS', source: 'shop', idempotencyKey: 'b' });
+    expect(closing.execution.getSnapshot().blocked.simulation).toBe(false);
+    settled.dispose();
+  });
+
+  it('forwards a gateway without a commerce provider', () => {
+    const state = environment();
+    const bare = { ...gateway() } as { commerce?: unknown } & PlatformGateway;
+    delete bare.commerce;
+    const controlled = createCoordinatedPlatformGateway({ gateway: bare, provider: sdk().provider, ...state });
+    expect(controlled.commerce).toBeUndefined();
+    controlled.dispose();
   });
 });
 

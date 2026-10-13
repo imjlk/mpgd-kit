@@ -37,9 +37,9 @@ import {
   type GameServicesBackendApi,
   type GameServicesDeploymentTargetBindings,
   type GameServicesEvidenceVerifier,
-  type GameServicesLegacyStoreTarget,
   type GameServicesPurchaseGrantFinalizer,
   type GameServicesStore,
+  type GameServicesStoreTarget,
   type GetVerifiedLeaderboardSnapshotRequest,
   type PurchaseGrantFinalization,
   type PurchaseLedgerStatusRequest,
@@ -1154,6 +1154,14 @@ function resolveWorkerDeploymentTargetBindings(
   };
 }
 
+/**
+ * The ids the per-target evidence verifier bindings are looked up by: an ad
+ * reward target, or the open store id a purchase request names. Only
+ * `microsoft-store`, `android`, `ios`, `ait`, and `verse8` have a binding; any
+ * other id has none.
+ */
+type EvidenceVerifierBindingTarget = ClaimAdRewardRequest['target'] | GameServicesStoreTarget;
+
 function resolveWorkerEvidenceVerifier(
   env: GameServicesWorkerEnv,
   admobConfig: AdMobSsvWorkerConfig | undefined,
@@ -1176,9 +1184,7 @@ function resolveWorkerEvidenceVerifier(
     : createD1AdMobSsvEvidenceVerifier(admobConfig);
 
   const targetBindings = hasTargetSpecificEvidenceVerifierBinding(env);
-  const resolveBinding = (
-    target: ClaimAdRewardRequest['target'] | GameServicesLegacyStoreTarget,
-  ) => {
+  const resolveBinding = (target: EvidenceVerifierBindingTarget) => {
     if (targetBindings) {
       return resolveTargetSpecificEvidenceVerifierBinding(env, target);
     }
@@ -1217,7 +1223,7 @@ function hasTargetSpecificEvidenceVerifierBinding(env: GameServicesWorkerEnv): b
 
 function resolveTargetSpecificEvidenceVerifierBinding(
   env: GameServicesWorkerEnv,
-  target: ClaimAdRewardRequest['target'] | GameServicesLegacyStoreTarget,
+  target: EvidenceVerifierBindingTarget,
 ): GameServicesEvidenceVerifierBinding | undefined {
   switch (target) {
     case 'microsoft-store':
@@ -1242,7 +1248,7 @@ function resolveTargetSpecificEvidenceVerifierBinding(
  */
 function createWorkerEvidenceVerifier(
   resolveBinding: (
-    target: ClaimAdRewardRequest['target'] | GameServicesLegacyStoreTarget,
+    target: EvidenceVerifierBindingTarget,
   ) => GameServicesEvidenceVerifierBinding | undefined,
   adRegistry: AdRewardEvidenceVerifierRegistry,
   fallbackVerifier?: GameServicesEvidenceVerifier,
@@ -1250,7 +1256,7 @@ function createWorkerEvidenceVerifier(
   return {
     async verifyPurchase(input) {
       const { request, product, platformProductId, timeoutMs } = input;
-      const binding = resolveBinding(request.target as GameServicesLegacyStoreTarget);
+      const binding = resolveBinding(request.target);
 
       if (request.target === 'microsoft-store') {
         // Store grants are never safe through the generic development fallback because they must

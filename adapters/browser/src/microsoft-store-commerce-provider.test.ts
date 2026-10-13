@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { PlatformGateway, ProductInfo } from '@mpgd/platform';
-import { CommerceError, type CommerceEvent } from '@mpgd/platform/commerce';
+import { CommerceError, isCommerceCapabilities, type CommerceEvent } from '@mpgd/platform/commerce';
 
 import { createBrowserPlatformGateway } from './index';
 import {
+  createMicrosoftStoreCommerceCapabilities,
   createMicrosoftStoreCommerceProvider,
   microsoftStoreDigitalGoodsEvidenceSchema,
   withMicrosoftStoreCommerceProvider,
@@ -95,9 +96,6 @@ function createFixture(options: FixtureOptions = {}) {
     claimRecoveryOwnership,
     hasRecoveryOwnership,
     verifyAndGrant,
-    async getEntitlements() {
-      return [];
-    },
   };
   const storage = options.storage ?? memoryStorage();
   const provider = createMicrosoftStoreCommerceProvider({
@@ -144,6 +142,24 @@ const expectedPurchase = Object.freeze({
   accountBinding: { kind: 'obfuscated-account-id', value: 'player-1' },
 });
 
+describe('createMicrosoftStoreCommerceCapabilities', () => {
+  it('is a pure declaration: a fresh object per call that matches the provider block', async () => {
+    const first = createMicrosoftStoreCommerceCapabilities('available');
+    const second = createMicrosoftStoreCommerceCapabilities('available');
+    expect(second).toEqual(first);
+    expect(second).not.toBe(first);
+    expect(second.purchase).not.toBe(first.purchase);
+    expect(second.lifecycle).not.toBe(first.lifecycle);
+    expect(isCommerceCapabilities(first)).toBe(true);
+    expect(createMicrosoftStoreCommerceCapabilities('unsupported').availability).toBe('unsupported');
+    (first.purchase as { consumable: boolean }).consumable = false;
+    expect(createMicrosoftStoreCommerceCapabilities('available').purchase.consumable).toBe(true);
+    await expect(createFixture().provider.getCapabilities()).resolves.toEqual(
+      createMicrosoftStoreCommerceCapabilities('available'),
+    );
+  });
+});
+
 describe('createMicrosoftStoreCommerceProvider', () => {
   it('declares the RFC microsoft-store profile with a fresh block on every read', async () => {
     const { provider } = createFixture();
@@ -188,9 +204,6 @@ describe('createMicrosoftStoreCommerceProvider', () => {
         },
         async verifyAndGrant() {
           return { status: 'failed' };
-        },
-        async getEntitlements() {
-          return [];
         },
       },
       async getDigitalGoodsService() {
@@ -590,9 +603,6 @@ describe('createMicrosoftStoreCommerceProvider', () => {
         async verifyAndGrant() {
           return { status: 'failed' };
         },
-        async getEntitlements() {
-          return [];
-        },
       },
     });
     await expect(provider.getCapabilities()).resolves.toMatchObject({
@@ -623,7 +633,7 @@ describe('createMicrosoftStoreCommerceProvider', () => {
     expect(fixture.verifyAndGrant).toHaveBeenCalledOnce();
   });
 
-  it('completes a restore that settled purchases even when the entitlement read fails', async () => {
+  it('replays a recovery record on restorePurchases after the first authority claim failed', async () => {
     const storage = memoryStorage();
     const first = createFixture({
       listed: [],
@@ -650,9 +660,6 @@ describe('createMicrosoftStoreCommerceProvider', () => {
           return { status: 'granted', idempotencyKey: input.idempotencyKey ?? 'durable' };
         },
         verifyAndGrant: grant,
-        async getEntitlements() {
-          throw new Error('entitlement service down');
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -694,9 +701,6 @@ describe('createMicrosoftStoreCommerceProvider', () => {
         },
         async verifyAndGrant() {
           return { status: 'failed' };
-        },
-        async getEntitlements() {
-          return [];
         },
       },
       createPaymentRequest: () => {
@@ -808,14 +812,12 @@ describe('withMicrosoftStoreCommerceProvider', () => {
     };
   }
 
-  it('exposes commerceV2, the v1 wrapper, and the derived capability block', async () => {
+  it('exposes the provider as commerce with the capability block and no boolean flags', async () => {
     const fixture = createFixture({ listed: [{ itemId: sku, purchaseToken: sku }] });
     const gateway = withMicrosoftStoreCommerceProvider(createBase(), fixture.provider);
-    expect(gateway.commerceV2).toBe(fixture.provider);
+    expect(gateway.commerce).toBe(fixture.provider);
     const capabilities = await gateway.getCapabilities();
     expect(capabilities).toMatchObject({
-      nativeIap: true,
-      subscriptionIap: false,
       nativeAds: false,
       rewardedAds: false,
       interstitialAds: false,
@@ -825,50 +827,45 @@ describe('withMicrosoftStoreCommerceProvider', () => {
         availability: 'available',
       },
     });
+    expect(capabilities).not.toHaveProperty('nativeIap');
+    expect(capabilities).not.toHaveProperty('subscriptionIap');
+    expect(capabilities.commerce).toEqual(createMicrosoftStoreCommerceCapabilities('available'));
     expect((await gateway.getCapabilities()).commerce).not.toBe(capabilities.commerce);
     await expect(gateway.ads.showRewarded({ placementId: 'x', idempotencyKey: 'ad-1' })).resolves.toMatchObject({
       status: 'unavailable',
     });
 
-    await expect(gateway.commerce.getProducts()).resolves.toEqual([{
-      ...product,
+    const provider = gateway.commerce;
+    if (provider === undefined) {
+      throw new Error('The gateway must expose the installed commerce provider.');
+    }
+    await expect(provider.fetchProducts({})).resolves.toMatchObject([{
+      logicalId: product.id,
+      store: 'microsoft-store',
+      storeSku: sku,
+      kind: 'consumable',
       title: 'Hint Pack: 20',
       description: 'Store description',
       price: { formatted: '$0.99', currencyCode: 'USD' },
     }]);
-    // The v1 wrapper keeps the authoritative grant pointer the settlement helpers rely on.
-    await expect(gateway.commerce.purchase({
-      productId: product.id,
-      source: 'shop',
-      idempotencyKey: 'checkout-1',
-    })).resolves.toEqual({
-      status: 'completed',
-      transactionId: sku,
-      entitlementIds: [],
-      evidence,
-      authoritativeGrant: { ledgerEntryId: 'ledger-1' },
-    });
-    await expect(gateway.commerce.restore?.()).resolves.toEqual({
-      restoredEntitlements: [],
-      settledPurchases: [{
-        transactionId: sku,
-        productId: product.id,
-        status: 'granted',
-        ledgerEntryId: 'ledger-1',
-      }],
+    // The settlement pointer is the reconciler's lead into the ledger, never a grant.
+    await expect(provider.requestPurchase(purchaseInput)).resolves.toMatchObject({
+      outcome: 'purchased',
+      purchase: { transactionId: sku, settlement: { ledgerEntryId: 'ledger-1' } },
     });
   });
 
-  it('reports an unconfigured store as nativeIap false with the block availability', async () => {
+  it('reports an unconfigured store with the block availability', async () => {
     const fixture = createFixture({ availability: 'configuration-required' });
     const gateway = withMicrosoftStoreCommerceProvider(createBase(), fixture.provider, {
       remoteLeaderboard: true,
     });
-    await expect(gateway.getCapabilities()).resolves.toMatchObject({
-      nativeIap: false,
+    const capabilities = await gateway.getCapabilities();
+    expect(capabilities).toMatchObject({
       remoteLeaderboard: true,
       commerce: { availability: 'configuration-required' },
     });
+    expect(capabilities).not.toHaveProperty('nativeIap');
   });
 
   it('refuses gateways of another target or after target availability is applied', () => {

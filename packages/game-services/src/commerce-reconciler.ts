@@ -116,10 +116,11 @@ export function summarizeCommercePurchaseOperation(
 
 /**
  * Only `granted` and `finishing` records that hold the backend's ledger entry
- * id and a store transaction may be finished. The StoreKit v2 SDK keeps no
- * finish allow-list of its own (the v1 driver's `finishGrantedTransaction`
- * pairing), so this is the finish gate for every `client` and `host` owner:
- * the ledger entry id comes from the journal revision the backend grant wrote.
+ * id and a store transaction may be finished. The StoreKit SDK keeps no
+ * finish allow-list of its own (the removed v1 driver paired transactions in
+ * `finishGrantedTransaction`), so this is the finish gate for every `client`
+ * and `host` owner: the ledger entry id comes from the journal revision the
+ * backend grant wrote.
  */
 export function assertCommerceFinishAllowed(
   record: CommercePurchaseOperationRecord,
@@ -232,7 +233,7 @@ export interface CreateCommerceReconcilerInput {
   readonly provider: CommerceProvider;
   /** The game backend; `getPurchaseLedgerStatus` enables the revocation pass once the server exposes it (C2). */
   readonly backend: PurchaseVerificationApi;
-  /** Durable, compare-and-swap journal shared with the v1 recovery client. */
+  /** Durable, compare-and-swap journal shared with the recoverable monetization client's rewarded-ad records. */
   readonly store: MonetizationOperationStore;
   readonly playerId: string;
   /** Ledger target sent as `VerifyPurchaseRequest.target`. */

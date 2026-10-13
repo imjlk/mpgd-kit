@@ -31,14 +31,17 @@ export function createGameGateway(providers: readonly CapacitorServiceProvider[]
 }
 ```
 
-`getCapabilities()` reports a fresh boolean snapshot and optional
-`providerAvailability` detail. The possible states are `unsupported`,
-`configuration-required`, `action-required`, `temporarily-unavailable`, and
-`available`. A target's `features` configuration is an upper bound, **not**
-proof that a provider is installed or ready. `nativeIap` describes one-time
-purchases; `subscriptionIap` is separate. Rewarded, interstitial, and banner
-ads and native versus remote leaderboards remain distinct. Target-config
-applies the configured upper bound to this live provider state.
+`getCapabilities()` reports a fresh boolean snapshot, optional
+`providerAvailability` detail, and the `commerce` capability block. The
+possible states are `unsupported`, `configuration-required`, `action-required`,
+`temporarily-unavailable`, and `available`. A target's `features` configuration
+is an upper bound, **not** proof that a provider is installed or ready.
+Commerce is not a provider feature: the `commerce` block (see below) is the
+only commerce source, and the retired `nativeIap` and `subscriptionIap` flags
+are never reported, even when a native shell built before commerce v2 still
+sends them. Rewarded, interstitial, and banner ads and native versus remote
+leaderboards remain distinct. Target-config applies the configured upper
+bound to this live provider state.
 
 When native and remote leaderboard routes coexist, the target-config wrapper
 selects a `route` on score/open calls; direct adapter callers can request
@@ -64,14 +67,14 @@ The source tests and installed-tarball consumer validate composition, types,
 error paths, and fallback behavior. They do not establish that any optional
 SDK works on a physical device or that a store/ad setup is release-ready.
 
-## Commerce v2 providers
+## Commerce providers
 
-Commerce v2 ([RFC](../../docs/specs/commerce/commerce-v2-rfc.md), PR B1) adds
-a second commerce surface next to the v1 `commerce.*` bridge methods. A store
-plugin exposes an in-process `StoreSdk`, the adapter turns it into a
-`CommerceProvider` from `@mpgd/platform/commerce`, and the provider registry
-serves both the six `commerce.v2.*` bridge methods and the four v1 methods
-from it.
+Commerce ([RFC](../../docs/specs/commerce/commerce-v2-rfc.md)) has one
+surface: the `CommerceProvider` from `@mpgd/platform/commerce`, exposed as
+`gateway.commerce` and served over the six `commerce.v2.*` bridge methods. A
+store plugin exposes an in-process `StoreSdk`, the adapter turns it into a
+`CommerceProvider`, and the provider registry serves it. The four v1
+`commerce.*` bridge methods and the v1 gateway object are removed.
 
 `StoreSdk` is shaped like the OpenIAP Client Protocol so a future Capacitor
 IAP plugin over the OpenIAP cores is a drop-in: `fetchProducts({ skus, type })`,
@@ -143,33 +146,41 @@ cannot advertise one the SDK lacks: `restore: true` without
 `sdk.restorePurchases`, like `finish: 'client' | 'host'` without
 `sdk.finishTransaction`, is rejected when the provider is created.
 
-`createCommerceServiceProvider` wraps the provider as a `CapacitorServiceProvider`
-whose `commerce` field the registry recognizes: the ten commerce bridge
-methods are implied (declaring a v1 `commerce.*` method alongside is an
-error), `nativeIap` and `subscriptionIap` readiness derive from
-`commerce.getCapabilities()`, and the in-process bridge delivers events as
-`{ protocol: 'mpgd.commerce.v2', sequence, event }` with a per-session
-sequence starting at 0. v1 callers keep working: `gateway.commerce` is served
-by `toCommerceAdapter(provider)`, so a `launched` purchase is `pending`, a
-synchronous purchase is `completed` with evidence and no entitlements, and
-`restore` returns no entitlements. The gateway exposes the v2 surface as
-`gateway.commerceV2` (served through the same validated bridge path, which
-the conformance test exercises for every store vector) and adds a `commerce`
-block to `getCapabilities()` from which `nativeIap` and `subscriptionIap` are
-derived. The block comes from the registry's one bounded read per snapshot
-(`getCapabilitySnapshot`, three-second timeout, shape validated): a stalled,
-failing, or invalid provider yields a degraded block
-(`createDegradedCommerceCapabilities`: `availability:
-'temporarily-unavailable'`, nothing sold, `nativeIap: false`) and never
-rejects the capability read. A `launched` v2 purchase keeps
-`beginExternalActivity()` open after the request returns, since the store UI
-is still up: the gateway releases it when the provider reports that product
-(`purchaseUpdated` or `purchaseError`), after
-`launchedPurchaseActivityTimeoutMs` (two minutes), or on `lifecycle.dispose`;
-the v1 `commerce.purchase` path has no event to wait for and releases when
-its request returns. Without a v2 provider nothing changes: `commerceV2` is
-absent and a `commerce.v2.*` request still answers `COMMERCE_V2_UNAVAILABLE`
-as the transport left it.
+`createCommerceServiceProvider({ id, commerce })` wraps the provider as a
+`CapacitorServiceProvider` whose `commerce` field the registry recognizes. It
+declares no `features` and no `methods`: the six `commerce.v2.*` bridge methods
+are implied (declaring one, or a retired v1 `commerce.*` method, is an error),
+the bridge must implement `subscribe`, and the in-process bridge delivers
+events as `{ protocol: 'mpgd.commerce.v2', sequence, event }` with a
+per-session sequence starting at 0. `CapacitorServiceProvider.features` lists
+non-commerce features only (`PlatformProviderFeature` has no IAP names), and a
+second commerce provider is a registration error.
+
+The gateway exposes the provider as `gateway.commerce` (served through the same
+validated bridge path, which the conformance test exercises for every store
+vector) and omits the property when no provider is registered. The
+`commerce` block of `getCapabilities()` is always present and is a fresh copy
+on every read: the provider's validated capability block, or
+`createUnsupportedCommerceCapabilities()` when no commerce provider is
+registered. A native `runtime.getCapabilities` answer is only the base: its
+`nativeIap` and `subscriptionIap` keys are stripped and its `commerce` block,
+whatever it says, is replaced. The block comes from the registry's one bounded
+read per snapshot (`getCapabilitySnapshot` returns `{ availability, commerce }`,
+three-second timeout, shape validated): a stalled, failing, or invalid
+provider yields a degraded block (`createDegradedCommerceCapabilities`:
+`availability: 'temporarily-unavailable'`, nothing sold) and never rejects the
+capability read. A `launched` purchase keeps `beginExternalActivity()` open
+after the request returns, since the store UI is still up: the gateway releases
+it when the provider reports that product (`purchaseUpdated` or
+`purchaseError`), after `launchedPurchaseActivityTimeoutMs` (two minutes), or
+on `lifecycle.dispose`. The registry does not gate a commerce method by a
+snapshot: the provider reads its own `availability` and fails closed before any
+store UI opens. A `commerce.v2.*` request that reaches a transport without a
+provider still answers `COMMERCE_V2_UNAVAILABLE`.
+
+Games do not call the provider from a scene: `createGameServicesClient` from
+`@mpgd/game-services` purchases through `createCommerceReconciler` over
+`gateway.commerce`, and nothing is granted from a client callback.
 
 ## Notifications v2
 
@@ -195,13 +206,12 @@ Once P2 lets a provider serve `notifications.v2.*` methods, these rules apply:
 
 ## App Store server-side transaction signatures
 
-The server-side verifier moved to `@mpgd/game-services/app-store-server`
+The server-side verifier lives in `@mpgd/game-services/app-store-server`
 (see the [game-services README](../../packages/game-services/README.md)):
 install the optional `@apple/app-store-server-library@3.1.0` peer next to
 `@mpgd/game-services` and import `createAppleSignedTransactionVerifier` from
-there. `@mpgd/adapter-capacitor/app-store-server` is deprecated: it re-exports
-the same function and options type for one release and is removed in the next
-major version. Supply DER-encoded Apple root certificates from the
+there. The former `@mpgd/adapter-capacitor/app-store-server` subpath, a
+deprecated re-export, was removed. Supply DER-encoded Apple root certificates from the
 [Apple PKI](https://www.apple.com/certificateauthority/), the game's bundle
 ID, environment, and production App Apple ID. Use the result as
 `signedTransactionVerifier` in `createAppStoreGameServicesEvidenceVerifier`.
@@ -215,6 +225,21 @@ writes the game-services grant. A StoreKit device callback is only provisional
 evidence; it never grants a product. Retryable certificate-status failures
 remain pending, while invalid signatures are rejected. Mock verification does
 not prove a real App Store purchase or device delivery.
+
+### Migrating from v1
+
+Commerce v2 PR C4 removed the v1 surface in one major release.
+
+| Removed | Replacement |
+| --- | --- |
+| `gateway.commerce.getProducts / purchase / restore / getEntitlements` (v1 `CommerceAdapter`) | `gateway.commerce` is now the `CommerceProvider` (`fetchProducts`, `requestPurchase`, `getAvailablePurchases`, `finishTransaction?`, `restorePurchases?`, `subscribe`); games purchase through `@mpgd/game-services` |
+| `gateway.commerceV2` | `gateway.commerce` |
+| `commerce.getProducts`, `commerce.purchase`, `commerce.restore`, `commerce.getEntitlements` bridge methods and `toCommerceAdapter` | the six `commerce.v2.*` methods |
+| `nativeIap`, `subscriptionIap` in `getCapabilities()` and `providerAvailability` | `capabilities.commerce` (`purchase.consumable`, `purchase.durable`, `purchase.subscription`, `availability`) |
+| `'nativeIap'` / `'subscriptionIap'` in `CapacitorServiceProvider.features`; the `features` input of `createCommerceServiceProvider`; `CapacitorCommerceFeature`; `deriveCommerceFeatureStates` | omit `features`: a provider with `commerce` declares none, and its readiness is its capability block |
+| the `productType` parameter of `assertMethodReady`; `NATIVE_PROVIDER_PRODUCT_UNKNOWN`, `NATIVE_PROVIDER_PRODUCT_TYPE_REQUIRED` | none: product routing belongs to the commerce provider |
+| `CapacitorProviderCapabilitySnapshot.commerce?` (optional) | always present: the provider block, the degraded block, or the unsupported block |
+| `@mpgd/adapter-capacitor/app-store-server` | `@mpgd/game-services/app-store-server` |
 
 ## Opt-in AdMob rewarded ads
 

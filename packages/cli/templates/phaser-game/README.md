@@ -459,9 +459,11 @@ HTTPS game-services backend that verifies purchase or reward evidence.
   Verse8-signed accounts from self-signed guest accounts. Ads are available
   only when placement mappings are present. VXShop stays capability-disabled
   until the gateway receives the literal `purchaseEventAuthority:
-  'agent8-server'`, catalog product mappings, and an authenticated Agent8
-  entitlement reader. The client purchase result is always `pending`; grants
-  belong only in the reserved Agent8 `$onItemPurchased` event. Do not use
+  'agent8-server'`, catalog product mappings, and `purchases`, an
+  authenticated Agent8 source (`listPurchases`) for the purchases the server
+  recorded. The client purchase result is always `launched`; grants belong
+  only in the reserved Agent8 `$onItemPurchased` event, which the backend
+  ledger looks up when the reconciler verifies the purchase. Do not use
   `VXShop.onClose`, client metadata, or a client-created transaction ID as
   purchase evidence. Keep `@agent8/gameserver-node` in the separate Agent8
   server project and use `@mpgd/adapter-verse8/agent8` there for the locked,

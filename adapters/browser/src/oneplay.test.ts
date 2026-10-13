@@ -1,12 +1,24 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createOnePlayAdProvider,
-  createOnePlayCommerceAdapter,
+  createOnePlayCommerceCapabilities,
+  createOnePlayCommerceProvider,
   createOnePlayPlatformGateway,
+  onePlayCommerceStoreId,
+  onePlayManagedPurchaseEvidenceSchema,
+  type OnePlayCommerceProvider,
   type OnePlayEnvironment,
   type OnePlaySdk,
 } from './oneplay.js';
 import { toAdAdapter, type AdPresentationEvent } from '@mpgd/platform/ads';
+import type { PlatformPurchasePresentationEvent } from '@mpgd/platform';
+import {
+  assertStorePurchase,
+  CommerceError,
+  isCommerceCapabilities,
+  type CommerceErrorCode,
+  type RequestPurchaseInput,
+} from '@mpgd/platform/commerce';
 
 function fixture() {
   const listeners = new Map<string, Set<(event: never) => void>>();
@@ -84,35 +96,55 @@ function commerceFixture() {
   const products = [{ id: 'COINS', platformId: 'coins-sku', type: 'consumable' as const }];
   const server = {
     issueIntent: vi.fn(async () => ({ developerPayload: 'server-intent' })),
-    getEntitlements: vi.fn(async () => []),
-    restore: vi.fn(async () => ({ restoredEntitlements: [] })),
   };
   return { sdk, purchase, products, server };
+}
+function purchaseInput(idempotencyKey: string, overrides: Partial<RequestPurchaseInput> = {}): RequestPurchaseInput {
+  return { logicalId: 'COINS', source: 'shop', idempotencyKey, ...overrides };
+}
+function recordPresentation(commerce: OnePlayCommerceProvider): PlatformPurchasePresentationEvent[] {
+  const events: PlatformPurchasePresentationEvent[] = [];
+  commerce.presentation.subscribe((event) => events.push(event));
+  return events;
 }
 describe('ONE play H5 adapter', () => {
   it('uses authenticated checkout payloads without granting and deduplicates checkout UI', async () => {
     const f = commerceFixture();
-    const commerce = createOnePlayCommerceAdapter(f);
-    const request = { productId: 'COINS', source: 'shop' as const, idempotencyKey: 'checkout' };
+    const commerce = createOnePlayCommerceProvider(f);
+    const request = purchaseInput('checkout');
     const presentations: string[] = [];
-    commerce.presentation?.subscribe((event) => presentations.push(event.state));
-    const first = commerce.purchase(request);
-    expect(commerce.purchase(request)).toBe(first);
+    commerce.presentation.subscribe((event) => presentations.push(event.state));
+    const first = commerce.requestPurchase(request);
+    expect(commerce.requestPurchase(request)).toBe(first);
     const result = await first;
-    expect(result).toMatchObject({
-      status: 'completed',
+    if (result.outcome !== 'purchased') {
+      throw new Error(`Expected purchased, got ${result.outcome}.`);
+    }
+    expect(assertStorePurchase(result.purchase)).toEqual({
+      store: 'oneplay',
       transactionId: 'purchase',
-      entitlementIds: [],
+      storeSku: 'coins-sku',
+      logicalId: 'COINS',
+      quantity: 1,
+      state: 'purchased',
+      token: 'token',
       evidence: {
         schema: 'oneplay.managed-purchase.v1',
         payload: {
-          developerPayload: 'server-intent',
           purchaseToken: 'token',
+          purchaseId: 'purchase',
           productId: 'coins-sku',
+          developerPayload: 'server-intent',
         },
       },
+      accountBinding: { kind: 'host-identity' },
     });
-    expect(result.authoritativeGrant).toBeUndefined();
+    expect(result.purchase.evidence.schema).toBe(onePlayManagedPurchaseEvidenceSchema);
+    expect(commerce.store).toBe(onePlayCommerceStoreId);
+    // The client never grants: no ledger pointer and nothing is finished here.
+    expect(result.purchase).not.toHaveProperty('settlement');
+    expect(commerce.finishTransaction).toBeUndefined();
+    expect(commerce.restorePurchases).toBeUndefined();
     expect(presentations).toEqual(['closed']);
     expect(f.purchase).toHaveBeenCalledExactlyOnceWith({
       productId: 'coins-sku',
@@ -123,25 +155,45 @@ describe('ONE play H5 adapter', () => {
       platformProductId: 'coins-sku',
       idempotencyKey: 'checkout',
     });
-    await commerce.restore?.();
-    expect(f.server.restore).toHaveBeenCalledOnce();
+    // A settled attempt still answers a replayed key from the same flight.
+    await expect(commerce.requestPurchase(request)).resolves.toBe(result);
+    expect(f.purchase).toHaveBeenCalledOnce();
+    await expect(commerce.getAvailablePurchases()).resolves.toEqual([]);
+    expect(commerce.subscribe(() => {})).toBeTypeOf('function');
+  });
+  it('rejects a replayed key that names another product or source and an invalid key', async () => {
+    const f = commerceFixture();
+    const commerce = createOnePlayCommerceProvider(f);
+    await commerce.requestPurchase(purchaseInput('checkout'));
+    await expect(commerce.requestPurchase(purchaseInput('checkout', { source: 'event' }))).rejects.toThrow(
+      'identity changed',
+    );
+    await expect(commerce.requestPurchase(purchaseInput('checkout', { logicalId: 'OTHER' }))).rejects.toThrow(
+      'identity changed',
+    );
+    // A replay that changes what is bought is refused, not answered from the settled flight.
+    await expect(commerce.requestPurchase(purchaseInput('checkout', { quantity: 2 }))).rejects.toThrow(
+      'identity changed',
+    );
+    await expect(commerce.requestPurchase(purchaseInput('checkout', { offerId: 'launch-offer' }))).rejects.toThrow(
+      'identity changed',
+    );
+    await expect(commerce.requestPurchase(purchaseInput(' padded '))).rejects.toThrow('identity is invalid');
+    expect(f.purchase).toHaveBeenCalledOnce();
   });
   it('reports a busy SDK as not started before rejecting so another coordinator can release its lease', async () => {
     const f = commerceFixture();
     const ads = createOnePlayAdProvider({ sdk: f.sdk, placementIds });
     const ad = ads.show(show);
-    const commerce = createOnePlayCommerceAdapter(f);
-    const facts: string[] = [];
-    commerce.presentation?.subscribe((event) => facts.push(event.state));
-    expect(() => commerce.purchase({ productId: 'COINS', source: 'shop', idempotencyKey: 'busy' })).toThrow(
-      'The platform operation failed.',
-    );
-    expect(facts).toEqual(['not-started']);
+    const commerce = createOnePlayCommerceProvider(f);
+    const facts = recordPresentation(commerce);
+    const busy = commerce.requestPurchase(purchaseInput('busy'));
+    await expect(busy).rejects.toBeInstanceOf(CommerceError);
+    await expect(busy).rejects.toMatchObject({ code: 'IN_PROGRESS', storeCode: 'ONEPLAY_BUSY', retryable: false });
+    expect(facts).toEqual([{ idempotencyKey: 'busy', sequence: 1, state: 'not-started' }]);
     expect(f.purchase).not.toHaveBeenCalled();
     await ad;
-    expect((await commerce.purchase({ productId: 'COINS', source: 'shop', idempotencyKey: 'retry' })).status).toBe(
-      'completed',
-    );
+    expect(await commerce.requestPurchase(purchaseInput('retry'))).toMatchObject({ outcome: 'purchased' });
   });
   it('keeps purchase support independent from product detail support', async () => {
     const f = commerceFixture();
@@ -150,11 +202,19 @@ describe('ONE play H5 adapter', () => {
       iap: { ...f.sdk.iap!, isSupported: (feature) => feature !== 'getProductDetails' },
     };
     const gateway = await createOnePlayPlatformGateway({ sdk, products: f.products, commerceServer: f.server });
-    expect(await gateway.getCapabilities()).toMatchObject({
-      nativeIap: true,
-      subscriptionIap: false,
-    });
-    expect(await gateway.commerce.getProducts()).toEqual([]);
+    const capabilities = await gateway.getCapabilities();
+    expect(capabilities.commerce).toEqual(createOnePlayCommerceCapabilities({
+      availability: 'available',
+      consumable: true,
+      durable: false,
+      catalogProducts: false,
+    }));
+    expect(capabilities.commerce.purchase.consumable).toBe(true);
+    expect(capabilities.commerce.catalog.products).toBe(false);
+    expect(capabilities).not.toHaveProperty('nativeIap');
+    expect(capabilities).not.toHaveProperty('subscriptionIap');
+    expect(capabilities.providerAvailability).not.toHaveProperty('nativeIap');
+    expect(await gateway.commerce?.fetchProducts({})).toEqual([]);
     await gateway.lifecycle.dispose?.();
   });
   it('batches price lookup by 20 and handles partial, reordered and unknown products', async () => {
@@ -175,13 +235,89 @@ describe('ONE play H5 adapter', () => {
       })),
     );
     const sdk: OnePlaySdk = { ...f.sdk, iap: { ...f.sdk.iap!, getProductDetailsAsync: details } };
-    const result = await createOnePlayCommerceAdapter({ ...f, sdk, products }).getProducts();
+    const result = await createOnePlayCommerceProvider({ ...f, sdk, products }).fetchProducts({});
     expect(details.mock.calls.map(([ids]) => ids.length)).toEqual([20, 1]);
-    expect(result.map((product) => product.id)).toEqual(['P19', 'P0', 'P20']);
-    expect(result[0]?.price).toEqual({ formatted: '1,000 KRW', currencyCode: 'KRW' });
+    expect(result.map((product) => product.logicalId)).toEqual(['P19', 'P0', 'P20']);
+    expect(result[0]).toEqual({
+      logicalId: 'P19',
+      store: 'oneplay',
+      storeSku: 'sku19',
+      kind: 'consumable',
+      title: 'sku19',
+      description: '',
+      price: { formatted: '1,000 KRW', currencyCode: 'KRW', amountMicros: 1_000_000_000 },
+    });
   });
-  it.each(['user_cancelled', 'already_owned', 'timeout', 'transport'])(
-    'handles checkout %s and shares fullscreen ownership with ads',
+  it('maps product kinds, filters by logical id and skips malformed SDK details', async () => {
+    const f = commerceFixture();
+    const products = [
+      { id: 'COINS', platformId: 'coins-sku', type: 'consumable' as const },
+      { id: 'NO_ADS', platformId: 'no-ads-sku', type: 'non_consumable' as const },
+      { id: 'BAD', platformId: 'bad-sku', type: 'consumable' as const },
+    ];
+    const detail = (productId: string, overrides: Record<string, unknown> = {}) => ({
+      productId,
+      type: 'inapp',
+      title: productId,
+      price: '1,000',
+      priceAmountMicros: 1_000_000_000,
+      priceCurrencyCode: 'KRW',
+      ...overrides,
+    });
+    const details = vi.fn(async (ids: readonly string[]) => ids.map((id) => (
+      id === 'bad-sku' ? detail(id, { priceCurrencyCode: 'won' }) : detail(id)
+    )));
+    const sdk: OnePlaySdk = { ...f.sdk, iap: { ...f.sdk.iap!, getProductDetailsAsync: details } };
+    const commerce = createOnePlayCommerceProvider({ ...f, sdk, products });
+    const all = await commerce.fetchProducts({});
+    expect(all.map((product) => [product.logicalId, product.kind])).toEqual([
+      ['COINS', 'consumable'],
+      ['NO_ADS', 'durable'],
+    ]);
+    details.mockClear();
+    expect((await commerce.fetchProducts({ logicalIds: ['NO_ADS'] })).map((product) => product.logicalId)).toEqual(['NO_ADS']);
+    expect(details).toHaveBeenCalledExactlyOnceWith(['no-ads-sku']);
+    await expect(commerce.fetchProducts({ type: 'subscription' })).resolves.toEqual([]);
+    details.mockRejectedValueOnce(new Error('bridge down'));
+    await expect(commerce.fetchProducts({})).rejects.toMatchObject({ code: 'STORE_UNAVAILABLE', retryable: true });
+  });
+  it.each([
+    ['user_cancelled', 'cancelled', 'USER_CANCELLED'],
+    ['already_owned', 'failed', 'ALREADY_OWNED'],
+    ['already_processing', 'failed', 'IN_PROGRESS'],
+    ['need_login', 'failed', 'ACTION_REQUIRED'],
+    ['need_update', 'failed', 'ACTION_REQUIRED'],
+    ['sdk_not_initialized', 'failed', 'NOT_PREPARED'],
+    ['platform_not_supported', 'failed', 'STORE_UNAVAILABLE'],
+    ['unsupported_action', 'failed', 'STORE_UNAVAILABLE'],
+    ['invalid_request', 'failed', 'UNKNOWN'],
+    ['invalid_params', 'failed', 'UNKNOWN'],
+    ['security_error', 'failed', 'UNKNOWN'],
+    ['payment_failed', 'failed', 'UNKNOWN'],
+  ] as const)(
+    'maps the %s SDK reason to a closed %s outcome and releases fullscreen ownership',
+    async (reason, outcome, code) => {
+      const f = commerceFixture();
+      const sdk: OnePlaySdk = {
+        ...f.sdk,
+        iap: { ...f.sdk.iap!, purchase: async () => { throw { reason }; } },
+      };
+      const commerce = createOnePlayCommerceProvider({ ...f, sdk });
+      const facts = recordPresentation(commerce);
+      const result = await commerce.requestPurchase(purchaseInput('checkout'));
+      expect(result).toEqual({
+        outcome,
+        error: expect.objectContaining({ code, storeCode: reason }),
+      });
+      expect(facts).toEqual([{ idempotencyKey: 'checkout', sequence: 1, state: 'closed' }]);
+      const ads = createOnePlayAdProvider({ sdk, placementIds });
+      expect((await ads.getAvailability({ format: 'interstitial', placementId: 'STAGE_END_INTERSTITIAL' })).state).toBe(
+        'available',
+      );
+    },
+  );
+  it.each(['timeout', 'transport', 'unlisted_reason'])(
+    'keeps a %s checkout launched and shares fullscreen ownership with ads',
     async (reason) => {
       const f = commerceFixture();
       const sdk: OnePlaySdk = {
@@ -193,35 +329,222 @@ describe('ONE play H5 adapter', () => {
           },
         },
       };
-      const result = await createOnePlayCommerceAdapter({ ...f, sdk }).purchase({ productId: 'COINS', source: 'shop', idempotencyKey: 'checkout' });
-      expect(result.status).toBe(
-        reason === 'user_cancelled'
-          ? 'cancelled'
-          : reason === 'already_owned'
-            ? 'failed'
-            : 'pending',
-      );
+      const commerce = createOnePlayCommerceProvider({ ...f, sdk });
+      const facts = recordPresentation(commerce);
+      const request = purchaseInput('checkout');
+      const first = commerce.requestPurchase(request);
+      await expect(first).resolves.toEqual({ outcome: 'launched' });
+      // The native surface may still be open: ownership stays and a replay never reopens it.
+      expect(facts).toEqual([{ idempotencyKey: 'checkout', sequence: 1, state: 'unknown' }]);
+      expect(commerce.requestPurchase(request)).toBe(first);
+      expect(f.purchase).not.toHaveBeenCalled();
       const ads = createOnePlayAdProvider({ sdk, placementIds });
       expect((await ads.getAvailability({ format: 'interstitial', placementId: 'STAGE_END_INTERSTITIAL' })).state).toBe(
-        reason === 'timeout' || reason === 'transport' ? 'temporarily-unavailable' : 'available',
+        'temporarily-unavailable',
       );
+      await expect(commerce.requestPurchase(purchaseInput('another'))).rejects.toMatchObject({
+        code: 'IN_PROGRESS',
+        storeCode: 'ONEPLAY_BUSY',
+      });
     },
   );
+  it.each([
+    ['purchase id', { purchaseId: '' }],
+    ['purchase token', { purchaseToken: ' ' }],
+    ['product id', { productId: 'other-sku' }],
+    ['developer payload', { developerPayload: 'other-intent' }],
+  ])('treats an SDK answer with a mismatched %s as an unknown outcome, never a purchase', async (_label, override) => {
+    const f = commerceFixture();
+    const sdk: OnePlaySdk = {
+      ...f.sdk,
+      iap: {
+        ...f.sdk.iap!,
+        purchase: async (input) => ({
+          orderId: 'order',
+          purchaseTimeMillis: 1,
+          purchaseId: 'purchase',
+          purchaseToken: 'token',
+          productId: input.productId,
+          developerPayload: input.developerPayload,
+          ...override,
+        }),
+      },
+    };
+    const commerce = createOnePlayCommerceProvider({ ...f, sdk });
+    const facts = recordPresentation(commerce);
+    await expect(commerce.requestPurchase(purchaseInput('checkout'))).resolves.toEqual({ outcome: 'launched' });
+    expect(facts.map((event) => event.state)).toEqual(['unknown']);
+  });
   it('requires server integration and validates developer payload byte length before native UI', async () => {
     const f = commerceFixture();
-    expect((await createOnePlayCommerceAdapter({ sdk: f.sdk, products: f.products }).purchase({ productId: 'COINS', source: 'shop', idempotencyKey: 'missing' })).status).toBe(
-      'failed',
-    );
-    const commerce = createOnePlayCommerceAdapter({
+    const unconfigured = createOnePlayCommerceProvider({ sdk: f.sdk, products: f.products });
+    const facts = recordPresentation(unconfigured);
+    await expect(unconfigured.requestPurchase(purchaseInput('missing'))).resolves.toEqual({
+      outcome: 'failed',
+      error: expect.objectContaining({ code: 'CONFIGURATION_REQUIRED' }),
+    });
+    expect(facts.map((event) => event.state)).toEqual(['not-started']);
+    const commerce = createOnePlayCommerceProvider({
       ...f,
       server: { ...f.server, issueIntent: async () => ({ developerPayload: '한'.repeat(70) }) },
     });
-    expect((await commerce.purchase({ productId: 'COINS', source: 'shop', idempotencyKey: 'oversize' })).status).toBe(
-      'failed',
-    );
+    const oversizeFacts = recordPresentation(commerce);
+    await expect(commerce.requestPurchase(purchaseInput('oversize'))).resolves.toEqual({
+      outcome: 'failed',
+      error: expect.objectContaining({ code: 'INVALID_RESPONSE' }),
+    });
+    expect(oversizeFacts.map((event) => event.state)).toEqual(['not-started']);
+    expect(f.purchase).not.toHaveBeenCalled();
+    // The failed attempt released ownership, so another key can still check out.
+    expect(await createOnePlayCommerceProvider(f).requestPurchase(purchaseInput('after'))).toMatchObject({
+      outcome: 'purchased',
+    });
+  });
+  it('keeps the server error class when intent issuance fails and never opens native UI', async () => {
+    const f = commerceFixture();
+    const commerce = createOnePlayCommerceProvider({
+      ...f,
+      server: {
+        issueIntent: async () => {
+          throw new CommerceError('ACCOUNT_BINDING_REQUIRED', { message: 'Sign in first.' });
+        },
+      },
+    });
+    await expect(commerce.requestPurchase(purchaseInput('intent-fail'))).resolves.toEqual({
+      outcome: 'failed',
+      error: expect.objectContaining({ code: 'ACCOUNT_BINDING_REQUIRED' }),
+    });
+    const generic = createOnePlayCommerceProvider({
+      ...f,
+      server: { issueIntent: async () => { throw new Error('unauthorized'); } },
+    });
+    await expect(generic.requestPurchase(purchaseInput('intent-fail-2'))).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'UNKNOWN' },
+    });
+    // A fetch-backed port rejects with a TypeError when offline: a retryable network failure, not an
+    // invalid intent.
+    const offline = createOnePlayCommerceProvider({
+      ...f,
+      server: { issueIntent: async () => { throw new TypeError('Failed to fetch'); } },
+    });
+    await expect(offline.requestPurchase(purchaseInput('intent-offline'))).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'NETWORK', retryable: true },
+    });
     expect(f.purchase).not.toHaveBeenCalled();
   });
-
+  it('refuses unknown products, quantities above one, offers and an unavailable SDK without opening UI', async () => {
+    const f = commerceFixture();
+    const commerce = createOnePlayCommerceProvider(f);
+    const facts = recordPresentation(commerce);
+    const refusals: [RequestPurchaseInput, CommerceErrorCode][] = [
+      [purchaseInput('unknown', { logicalId: 'MISSING' }), 'ITEM_UNAVAILABLE'],
+      [purchaseInput('quantity', { quantity: 2 }), 'ITEM_UNAVAILABLE'],
+      [purchaseInput('offer', { offerId: 'launch-offer' }), 'ITEM_UNAVAILABLE'],
+    ];
+    for (const [request, code] of refusals) {
+      await expect(commerce.requestPurchase(request)).resolves.toEqual({
+        outcome: 'failed',
+        error: expect.objectContaining({ code }),
+      });
+    }
+    const noSdk = createOnePlayCommerceProvider({ products: f.products, server: f.server });
+    await expect(noSdk.requestPurchase(purchaseInput('no-sdk'))).resolves.toMatchObject({
+      outcome: 'failed',
+      error: { code: 'STORE_UNAVAILABLE' },
+    });
+    expect(facts.map((event) => event.state)).toEqual(['not-started', 'not-started', 'not-started']);
+    expect(f.purchase).not.toHaveBeenCalled();
+    expect(f.server.issueIntent).not.toHaveBeenCalled();
+  });
+  it('declares the RFC oneplay profile and reports why it cannot sell', async () => {
+    const f = commerceFixture();
+    const sdkWith = (iap: Partial<NonNullable<OnePlaySdk['iap']>> | undefined): OnePlaySdk => {
+      const { iap: _omitted, ...rest } = f.sdk;
+      return iap === undefined ? rest : { ...rest, iap: { ...f.sdk.iap!, ...iap } };
+    };
+    const products = [
+      ...f.products,
+      { id: 'NO_ADS', platformId: 'no-ads-sku', type: 'non_consumable' as const },
+    ];
+    const available = await createOnePlayCommerceProvider({ ...f, products }).getCapabilities();
+    expect(available).toEqual({
+      purchase: { consumable: true, durable: true, subscription: false, quantity: false },
+      catalog: { products: true, offers: false, localizedPrice: true },
+      lifecycle: { availablePurchases: false, pending: true, restore: false, events: false, finish: 'server' },
+      authority: { evidence: 'client-token', accountBinding: 'host' },
+      availability: 'available',
+    });
+    expect(isCommerceCapabilities(available)).toBe(true);
+    // Only consumables are mapped: durable stays false. A fresh block per read.
+    const consumableOnly = createOnePlayCommerceProvider(f);
+    const first = await consumableOnly.getCapabilities();
+    expect(first.purchase).toEqual({ consumable: true, durable: false, subscription: false, quantity: false });
+    expect(await consumableOnly.getCapabilities()).not.toBe(first);
+    // No server port, no products, no purchase support, and no SDK at all.
+    await expect(createOnePlayCommerceProvider({ sdk: f.sdk, products: f.products }).getCapabilities())
+      .resolves.toMatchObject({ availability: 'configuration-required' });
+    await expect(createOnePlayCommerceProvider({ sdk: f.sdk, server: f.server }).getCapabilities())
+      .resolves.toMatchObject({ availability: 'configuration-required', purchase: { consumable: false, durable: false } });
+    await expect(createOnePlayCommerceProvider({ ...f, sdk: sdkWith({ isSupported: (feature) => feature !== 'purchase' }) }).getCapabilities())
+      .resolves.toMatchObject({ availability: 'unsupported' });
+    await expect(createOnePlayCommerceProvider({ ...f, sdk: sdkWith(undefined) }).getCapabilities())
+      .resolves.toMatchObject({ availability: 'unsupported' });
+    await expect(createOnePlayCommerceProvider({ products: f.products, server: f.server }).getCapabilities())
+      .resolves.toMatchObject({ availability: 'unsupported' });
+  });
+  it('exposes the pure capability declaration as a fresh object per call', () => {
+    const input = { availability: 'available', consumable: true, durable: true, catalogProducts: true } as const;
+    const first = createOnePlayCommerceCapabilities(input);
+    const second = createOnePlayCommerceCapabilities(input);
+    expect(second).toEqual(first);
+    expect(second).not.toBe(first);
+    expect(second.purchase).not.toBe(first.purchase);
+    expect(isCommerceCapabilities(first)).toBe(true);
+    expect(createOnePlayCommerceCapabilities({ ...input, availability: 'unsupported', durable: false, catalogProducts: false }))
+      .toMatchObject({
+        purchase: { consumable: true, durable: false },
+        catalog: { products: false, localizedPrice: false },
+        availability: 'unsupported',
+      });
+  });
+  it('rejects invalid product mappings at construction', () => {
+    const f = commerceFixture();
+    for (const products of [
+      [{ id: '', platformId: 'sku', type: 'consumable' as const }],
+      [{ id: 'A', platformId: 'sku', type: 'subscription' as never }],
+      [
+        { id: 'A', platformId: 'sku', type: 'consumable' as const },
+        { id: 'A', platformId: 'other', type: 'consumable' as const },
+      ],
+      [
+        { id: 'A', platformId: 'sku', type: 'consumable' as const },
+        { id: 'B', platformId: 'sku', type: 'consumable' as const },
+      ],
+    ]) {
+      expect(() => createOnePlayCommerceProvider({ ...f, products })).toThrow('mapping is invalid');
+    }
+  });
+  it('installs the provider on the gateway and reports its block without boolean flags', async () => {
+    const f = commerceFixture();
+    const gateway = await createOnePlayPlatformGateway({ sdk: f.sdk, products: f.products, commerceServer: f.server });
+    const provider = gateway.commerce;
+    if (provider === undefined) {
+      throw new Error('The ONE play gateway must install a commerce provider.');
+    }
+    expect(provider.store).toBe('oneplay');
+    const capabilities = await gateway.getCapabilities();
+    expect(capabilities.commerce).toEqual(await provider.getCapabilities());
+    expect(capabilities.commerce.availability).toBe('available');
+    expect(await gateway.getCapabilities()).not.toHaveProperty('nativeIap');
+    // The gateway's provider keeps the presentation facts and the server-issued intent flow.
+    const facts: string[] = [];
+    provider.presentation?.subscribe((event) => facts.push(event.state));
+    expect(await provider.requestPurchase(purchaseInput('gateway'))).toMatchObject({ outcome: 'purchased' });
+    expect(facts).toEqual(['closed']);
+    await gateway.lifecycle.dispose?.();
+  });
   it('requires server request issuance and never treats a rewarded callback as a grant', async () => {
     const f = fixture();
     const ids = { REWARD: { format: 'rewarded', platformId: 'issued-reward' } } as const;
@@ -312,9 +635,10 @@ describe('ONE play H5 adapter', () => {
     expect(await gateway.getCapabilities()).toMatchObject({
       interstitialAds: true,
       rewardedAds: false,
-      nativeIap: false,
       cloudSave: false,
     });
+    // The fixture SDK has no IAP surface: the provider is installed but reports it cannot sell.
+    expect((await gateway.getCapabilities()).commerce).toMatchObject({ availability: 'unsupported' });
     expect(await gateway.presentation?.getLaunchIntent()).toEqual({ entry: 'free-play' });
   });
   it('retains an early pause, applies ringer changes independently and never resumes an exited document', async () => {
@@ -370,9 +694,9 @@ describe('ONE play H5 adapter', () => {
     expect(gateway.gameLoading).toBeUndefined();
     expect(await gateway.identity.getSession?.()).toMatchObject({ trustLevel: 'local' });
     expect(await gateway.getCapabilities()).toMatchObject({
-      nativeIap: false,
       rewardedAds: false,
       interstitialAds: false,
+      commerce: { availability: 'unsupported' },
     });
     expect(await gateway.ads.showInterstitial?.({ placementId: 'STAGE_END_INTERSTITIAL' })).toEqual(
       { status: 'unavailable' },

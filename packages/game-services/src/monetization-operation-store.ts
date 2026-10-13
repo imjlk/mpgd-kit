@@ -3,25 +3,42 @@ import { isTerminalCommercePurchaseState } from '@mpgd/platform/commerce';
 import type {
   MonetizationOperationRecord,
   MonetizationOperationStore,
+  RetiredPurchaseOperationRecord,
 } from './monetization-recovery.js';
 
 /**
  * Whether a journal record still needs a reconcile pass. A game's durable
  * `MonetizationOperationStore.listRecoverable` applies this rule (or an
- * equivalent index): a v1 purchase or rewarded-ad record is open until it
- * holds a non-pending result with no pending finalization; a commerce v2
- * purchase record is open until its state is terminal (`finished`,
- * `cancelled`, `failed`, `rejected`, `revoked`). Terminal records stay
- * addressable by `read` for duplicate protection.
+ * equivalent index): a rewarded-ad record is open until it holds a
+ * non-pending result; a commerce purchase record is open until its state is
+ * terminal (`finished`, `cancelled`, `failed`, `rejected`, `revoked`). A
+ * retired v1 `purchase` record (written before commerce v2 C4) is open only
+ * while it holds a completed platform result and either no terminal result or
+ * a grant whose finalization is still pending: the recoverable client sends
+ * its verification to the backend once more and closes it. Terminal records stay addressable by `read` for duplicate
+ * protection.
  */
 export function isMonetizationOperationRecoverable(record: MonetizationOperationRecord): boolean {
   if (record.kind === 'commerce-purchase') {
     return !isTerminalCommercePurchaseState(record.state);
   }
-  if (record.result === undefined || record.result.status === 'pending') {
-    return true;
+  if (record.kind === 'purchase') {
+    return isRetiredPurchaseOpen(record);
   }
-  return record.kind === 'purchase' && record.response?.finalization?.status === 'pending';
+  return record.result === undefined || record.result.status === 'pending';
+}
+
+/**
+ * A retired v1 purchase record whose backend verification was never settled,
+ * or whose grant still waits for the backend to consume or acknowledge the
+ * store purchase (`response.finalization.status === 'pending'`).
+ */
+export function isRetiredPurchaseOpen(record: RetiredPurchaseOperationRecord): boolean {
+  return record.platform?.status === 'completed'
+    && record.platform.transactionId !== undefined
+    && (record.result === undefined
+      || record.result.status === 'pending'
+      || record.response?.finalization?.status === 'pending');
 }
 
 /** Whether a commerce v2 record holds a ledger grant the revocation pass should keep checking. */

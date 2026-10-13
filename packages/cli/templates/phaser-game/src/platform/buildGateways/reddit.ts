@@ -20,7 +20,7 @@ const productCatalog = productCatalogJson as ProductCatalog;
  * which serves it only after the Devvit server opted in
  * (`permissions.payments` plus the same catalog SKUs), and the grant comes
  * from the fulfillment handler's ledger entry. Without SKUs the gateway
- * offers no `commerceV2` at all.
+ * offers no `commerce` provider at all.
  */
 export async function createBuildGateway(runtime: RuntimeConfig): Promise<PlatformGateway> {
   const commerce = createCommerceOptions();
