@@ -1,5 +1,8 @@
 [CmdletBinding()]
-param([string]$SourceDirectory = (Join-Path $PSScriptRoot '../../../packages/cli/native-tools/windows-host'))
+param(
+    [string]$SourceDirectory = (Join-Path $PSScriptRoot '../../../packages/cli/native-tools/windows-host'),
+    [string]$ConsumerDirectory = (Join-Path $PSScriptRoot '../../../packages/cli')
+)
 $ErrorActionPreference = 'Stop'
 $taskRoot = Join-Path ([IO.Path]::GetTempPath()) ('mpgd-host-contracts-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $taskRoot | Out-Null
@@ -12,5 +15,5 @@ if ($LASTEXITCODE -ne 0) { throw 'Native host contract fixture failed to compile
 $wire = Join-Path $taskRoot 'wire-results.json'
 & dotnet (Join-Path $artifacts 'bin/HostContracts/release/HostContracts.dll') $wire
 if ($LASTEXITCODE -ne 0) { throw 'Native host contracts failed.' }
-& node (Join-Path $PSScriptRoot 'Verify-WebClient.mjs') $wire
+& node (Join-Path $PSScriptRoot 'Verify-WebClient.mjs') $wire ([IO.Path]::GetFullPath($ConsumerDirectory))
 if ($LASTEXITCODE -ne 0) { throw 'C# results are incompatible with the public web bridge client.' }

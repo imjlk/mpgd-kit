@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createMicrosoftStoreNativeBridgeClient } from '@mpgd/adapter-browser/microsoft-store-native';
+import { createRequire } from 'node:module';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+
+const requireFromConsumer = createRequire(join(process.argv[3], 'package.json'));
+const { createMicrosoftStoreNativeBridgeClient } = await import(
+  pathToFileURL(requireFromConsumer.resolve('@mpgd/adapter-browser/microsoft-store-native')).href,
+);
 
 const fixtures = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 const listeners = new Set();
