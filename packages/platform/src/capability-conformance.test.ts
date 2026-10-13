@@ -737,7 +737,7 @@ export async function rejectsEmptyFixtureSet(): Promise<void> {
 
 /**
  * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Exercises fresh boolean snapshots against expected values.
- * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f566c58 Verified that the fixture returns a new object on every read, including optional readiness handling.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #12e3a3a Verified that the fixture returns a new object on every read, including optional readiness handling.
  * @evidence docs/specs/platform-capability-snapshots.md#provider-transitions Exercises a provider update and the expected post-update snapshot.
  * @evidenceReview docs/specs/platform-capability-snapshots.md#provider-transitions #839c0c8 Verified that the fixture changes cloudSave and the runner rereads it.
  */
@@ -763,7 +763,7 @@ export async function acceptsFreshSnapshotsAndTransitions(): Promise<void> {
 
 /**
  * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Rejects a provider that returns the same snapshot object twice.
- * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f566c58 Confirmed the runner rejects object reuse after its attempted mutation, including nested readiness records.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #12e3a3a Confirmed the runner rejects object reuse after its attempted mutation, including nested readiness records.
  */
 export async function rejectsSharedSnapshot(): Promise<void> {
   const capabilities = Object.freeze(createUnsupportedCapabilities());
@@ -778,7 +778,7 @@ export async function rejectsSharedSnapshot(): Promise<void> {
 
 /**
  * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Ensures the expected state cannot move with a provider-owned snapshot.
- * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f566c58 Compared first and second reads against a detached expectation after mutation.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #12e3a3a Compared first and second reads against a detached expectation after mutation.
  */
 export async function rejectsAliasedExpectation(): Promise<void> {
   const expected = { ...createUnsupportedCapabilities() };
@@ -802,7 +802,7 @@ export async function rejectsAliasedExpectation(): Promise<void> {
 
 /**
  * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Rejects reuse of a non-adjacent snapshot object.
- * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f566c58 Verified reuse of the first top-level object after a transition remains invalid.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #12e3a3a Verified reuse of the first top-level object after a transition remains invalid.
  * @evidence docs/specs/platform-capability-snapshots.md#provider-transitions Covers identity reuse after an otherwise valid provider transition.
  * @evidenceReview docs/specs/platform-capability-snapshots.md#provider-transitions #839c0c8 Checked the update changes cloudSave before the third read.
  */
@@ -834,7 +834,7 @@ export async function rejectsEarlierSnapshotAfterTransition(): Promise<void> {
 
 /**
  * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Rejects a missing required key and an unknown key.
- * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f566c58 Checked missing and unknown top-level fields against the runner's shape guard.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #12e3a3a Checked missing and unknown top-level fields against the runner's shape guard.
  */
 export async function rejectsMalformedSnapshots(): Promise<void> {
   const missing = { ...createUnsupportedCapabilities() };

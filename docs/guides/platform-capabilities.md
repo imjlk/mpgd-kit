@@ -17,7 +17,7 @@ operation will complete.
 
 <!--
 @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Explains required booleans, optional fields, provider readiness, and fresh reads.
-@evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f566c58 Checked the required commerce block, the optional banner flag, and the readiness fields against the gateway type and runner.
+@evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #12e3a3a Checked the required commerce block, the optional banner flag, and the readiness fields against the gateway type and runner.
 -->
 Each read returns a separate object. The platform fields are booleans and only
 `bannerAds` is optional: it behaves as `false` when absent. `commerce` is
