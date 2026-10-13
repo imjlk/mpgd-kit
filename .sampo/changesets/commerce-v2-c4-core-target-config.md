@@ -33,3 +33,5 @@ adapter, and reads commerce capabilities from the `commerce` block only.
   `capability-unsupported`). `providerAvailability.nativeIap` and
   `.subscriptionIap` are no longer read; they no longer exist. A snapshot
   without the required `commerce` block fails with a `TypeError` that says so.
+
+Single-route purchase refusals retain provider readiness independently of whether the store is currently available.

@@ -104,7 +104,6 @@ const hardFailureCodes: ReadonlyMap<string, HardFailure> = new Map<string, HardF
   ['unsupported_action', { code: 'STORE_UNAVAILABLE', retryable: false }],
   ['sdk_not_initialized', { code: 'NOT_PREPARED' }],
   ['already_processing', { code: 'IN_PROGRESS' }],
-  ['already_owned', { code: 'ALREADY_OWNED' }],
   ['need_login', { code: 'ACTION_REQUIRED' }],
   ['need_update', { code: 'ACTION_REQUIRED' }],
   ['security_error', { code: 'UNKNOWN' }],
@@ -147,7 +146,11 @@ export function createOnePlayCommerceProvider(input: {
     logicalIds.add(product.id);
     physicalIds.add(product.platformId);
   }
-  const flights = new Map<string, { readonly identity: string; readonly result: Promise<RequestPurchaseResult> }>();
+  const flights = new Map<string, {
+    readonly identity: string;
+    readonly result: Promise<RequestPurchaseResult>;
+    retryable?: boolean;
+  }>();
   const store = onePlayCommerceStoreId;
   return {
     store,
@@ -214,7 +217,9 @@ export function createOnePlayCommerceProvider(input: {
       const previous = flights.get(request.idempotencyKey);
       if (previous !== undefined) {
         if (previous.identity !== identity) { return Promise.reject(new TypeError('ONE play purchase identity changed.')); }
-        return previous.result;
+        if (previous.retryable !== true) {
+          return previous.result;
+        }
       }
       const product = products.find((candidate) => candidate.id === request.logicalId);
       let sequence = 0;
@@ -244,6 +249,12 @@ export function createOnePlayCommerceProvider(input: {
       const release = () => { if (onePlayFullscreenOwners.get(sdk) === owner) { onePlayFullscreenOwners.delete(sdk); } };
       const result = Promise.resolve().then(async (): Promise<RequestPurchaseResult> => {
         const intentFailed = (error: CommerceErrorInfo): RequestPurchaseResult => {
+          if (error.retryable) {
+            const flight = flights.get(request.idempotencyKey);
+            if (flight !== undefined) {
+              flight.retryable = true;
+            }
+          }
           release();
           emit('not-started');
           return { outcome: 'failed', error };
@@ -290,6 +301,13 @@ export function createOnePlayCommerceProvider(input: {
           return { outcome: 'purchased', purchase: storePurchase };
         } catch (error: unknown) {
           const reason = typeof error === 'object' && error !== null && 'reason' in error ? error.reason : undefined;
+          if (reason === 'already_owned') {
+            // The SDK refused a new sheet; the existing purchase is still
+            // settled by the server, so keep the journal open but release UI.
+            release();
+            emit('closed');
+            return { outcome: 'launched' };
+          }
           if (reason === 'user_cancelled') {
             release();
             emit('closed');

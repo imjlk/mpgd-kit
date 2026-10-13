@@ -559,6 +559,38 @@ const kindsOf = (products: readonly { readonly kind: string }[]): string[] => pr
   (entry) => entry.kind,
 );
 
+for (const [readiness, code] of [
+  ['temporarily-unavailable', 'STORE_UNAVAILABLE'],
+  ['configuration-required', 'CONFIGURATION_REQUIRED'],
+  ['action-required', 'ACTION_REQUIRED'],
+] as const) {
+  const capabilities = createCommerceBlock({ oneTime: true, availability: readiness });
+  const provider = createRecordingCommerceProvider({
+    capabilities,
+    products: [createStoreProduct('single-route', 'consumable')],
+  });
+  const gateway: PlatformGateway = {
+    ...createBrowserPlatformGateway(),
+    commerce: provider,
+    getCapabilities: async () => ({ ...createUnsupportedCapabilities(), commerce: capabilities }),
+  };
+  const gated = requireCommerce(withTargetAvailability(gateway, sellsOneTimeOnly));
+  const refusal = await gated.requestPurchase({
+    logicalId: 'single-route',
+    idempotencyKey: `single-${readiness}`,
+    source: 'shop',
+  });
+  assert.equal(refusal.outcome, 'failed');
+  if (refusal.outcome === 'failed') {
+    assert.equal(refusal.error.code, code);
+    assert.equal(refusal.error.retryable, readiness === 'temporarily-unavailable');
+  }
+  assert.equal(
+    provider.calls.some((call) => call.startsWith('requestPurchase:')),
+    false,
+  );
+}
+
 {
   const all = createMixedGateway();
   assert.deepEqual(

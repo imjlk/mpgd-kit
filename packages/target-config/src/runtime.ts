@@ -790,6 +790,8 @@ export function withTargetAvailability(
         subscriptions: false,
         oneTimeEnabled,
         subscriptionsEnabled,
+        oneTimeRoute: false,
+        subscriptionsRoute: false,
         readiness: undefined,
       };
     }
@@ -802,6 +804,8 @@ export function withTargetAvailability(
       // configuration would have allowed the purchase.
       oneTimeEnabled,
       subscriptionsEnabled,
+      oneTimeRoute: oneTimeEnabled && (commerce.purchase.consumable || commerce.purchase.durable),
+      subscriptionsRoute: subscriptionsEnabled && commerce.purchase.subscription,
       readiness: commerce.availability,
     };
   };
@@ -894,7 +898,7 @@ export function withTargetAvailability(
           if (
             isSubscription === undefined
             && options.effectiveConfig === undefined
-            && available.oneTime !== available.subscriptions
+            && available.oneTimeRoute !== available.subscriptionsRoute
           ) {
             const kind = (await commerceSource.fetchProducts({
               logicalIds: [input.logicalId],
@@ -913,10 +917,10 @@ export function withTargetAvailability(
             options.effectiveConfig !== undefined && configuredProduct?.enabled !== true;
           if (!allowed || catalogRefused) {
             const routeEnabled = isSubscription === true
-              ? available.subscriptionsEnabled
+              ? available.subscriptionsRoute
               : isSubscription === undefined
-                ? available.oneTimeEnabled && available.subscriptionsEnabled
-                : available.oneTimeEnabled;
+                ? available.oneTimeRoute && available.subscriptionsRoute
+                : available.oneTimeRoute;
             return {
               outcome: 'failed',
               error: purchaseRefusal(routeEnabled && !catalogRefused ? available.readiness : undefined),
