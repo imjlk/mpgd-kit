@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { resolveNativeCommandLaunch } from '../../packages/cli/dist/command-launcher.js';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const outputRoot = process.env.MPGD_WINDOWS_SMOKE_ROOT
@@ -17,15 +18,9 @@ mkdirSync(packRoot, { recursive: true });
 console.log(`Windows starter consumer evidence: ${outputRoot}`);
 
 function run(command, args, cwd = repoRoot, environment = process.env) {
-  const pnpmEntry = command === 'pnpm' && process.platform === 'win32'
-    ? process.env.npm_execpath : undefined;
-  if (command === 'pnpm' && process.platform === 'win32') {
-    assert.match(pnpmEntry ?? '', /\.(?:exe|[cm]?js)$/u, 'Launch this smoke through pnpm on Windows.');
-  }
-  const pnpmScript = pnpmEntry && /\.[cm]?js$/u.test(pnpmEntry) ? pnpmEntry : undefined;
+  const launch = resolveNativeCommandLaunch({ command, args, environment });
   console.log(`Running ${command} ${args.join(' ')} in ${cwd}`);
-  const result = spawnSync(pnpmScript ? process.execPath : pnpmEntry ?? command,
-    pnpmScript ? [pnpmScript, ...args] : args, {
+  const result = spawnSync(launch.command, [...launch.args], {
       cwd, env: environment, encoding: 'utf8', timeout: 900_000,
       maxBuffer: 32 * 1024 * 1024,
     });
