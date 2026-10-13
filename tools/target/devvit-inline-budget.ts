@@ -100,11 +100,13 @@ function walkInlineGraph(
   const seen = new Set<string>([entryPath]);
   const entryBytes = Buffer.from(html);
   const entryName = relative(root, entryPath).replace(/\\/gu, '/');
-  const files: DevvitInlineGraphFile[] = [{
-    path: entryName,
-    bytes: entryBytes.length,
-    gzipBytes: gzipSync(entryBytes, { level: 9 }).length,
-  }];
+  const files: DevvitInlineGraphFile[] = [
+    {
+      path: entryName,
+      bytes: entryBytes.length,
+      gzipBytes: gzipSync(entryBytes, { level: 9 }).length,
+    },
+  ];
   const forbiddenHits: readonly { module: string; file: string }[] = [];
   const allContents: { path: string; content: string }[] = [{ path: entryName, content: html }];
   while (queue.length > 0) {

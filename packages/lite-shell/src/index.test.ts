@@ -33,31 +33,36 @@ describe('TapRecognizer', () => {
 });
 
 describe('createFrameLoop', () => {
-  it.each(['wake', 'dispose'] as const)('does not duplicate frames when tick calls %s', (action) => {
-    const queue = new Map<number, (time: number) => void>();
-    let sequence = 0;
-    const loop = createFrameLoop({
-      tick: () => {
-        loop[action]();
-        return true;
-      },
-      scheduler: {
-        request(callback) {
-          const handle = ++sequence;
-          queue.set(handle, callback);
-          return handle;
+  it.each(['wake', 'dispose'] as const)(
+    'does not duplicate frames when tick calls %s',
+    (action) => {
+      const queue = new Map<number, (time: number) => void>();
+      let sequence = 0;
+      const loop = createFrameLoop({
+        tick: () => {
+          loop[action]();
+          return true;
         },
-        cancel: (handle) => { queue.delete(handle); },
-      },
-    });
-    loop.wake();
-    const callback = queue.get(1);
-    queue.delete(1);
-    callback?.(16);
-    expect(queue.size).toBe(action === 'wake' ? 1 : 0);
-    loop.dispose();
-    expect(queue.size).toBe(0);
-  });
+        scheduler: {
+          request(callback) {
+            const handle = ++sequence;
+            queue.set(handle, callback);
+            return handle;
+          },
+          cancel: (handle) => {
+            queue.delete(handle);
+          },
+        },
+      });
+      loop.wake();
+      const callback = queue.get(1);
+      queue.delete(1);
+      callback?.(16);
+      expect(queue.size).toBe(action === 'wake' ? 1 : 0);
+      loop.dispose();
+      expect(queue.size).toBe(0);
+    },
+  );
   it('sleeps when tick reports idle and wakes on demand', () => {
     const queue: ((time: number) => void)[] = [];
     let remaining = 2;
