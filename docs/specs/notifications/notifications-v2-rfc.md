@@ -228,7 +228,12 @@ The gateway's capability snapshot gains `PlatformCapabilities.notifications?:
 NotificationCapabilities` under the capability-snapshot rules (a fresh object
 with exact keys), as commerce added its block. Whenever `notificationsV2` is
 exposed, `providerAvailability.pushNotifications` equals
-`notifications.availability`, so the target config gates on the v2 state.
+`notifications.availability`, so the target config gates on the v2 state. An
+adapter that exposes the v1 `notifications` adapter next to `notificationsV2`
+backs v1 with the same provider (the v1 wrapper over the runtime, see the
+[migration plan](#pr-plan)), so the two report the same readiness; P2 does
+this for Capacitor. The target config still takes the readiness from the v2
+block, so the state follows v2 even where an adapter's v1 disagrees.
 
 The client declaration describes what the provider can do on the device. The
 backend never trusts it for a send decision: the gate reads the server's own

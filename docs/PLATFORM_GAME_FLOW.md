@@ -33,6 +33,15 @@ These groups are optional so existing adapters remain source compatible.
 Callers must read the target runtime integration state before showing a CTA and
 must still handle an operation returning `unavailable`.
 
+Once a gateway exposes `notificationsV2`, the `notifications` integration state
+follows it: `providerAvailability.pushNotifications` is the v2 block's
+`availability`. A game still reads that state from `getTargetRuntime()` before
+it shows a notifications CTA, then asks through the notifications runtime
+([RFC "Runtime"](specs/notifications/notifications-v2-rfc.md#runtime)). It calls
+the v1 `notifications` adapter only if the gateway exposes one, because a
+gateway may expose `notificationsV2` alone. An adapter that exposes both backs
+v1 with the v2 provider, so the two never disagree about readiness.
+
 `ShareResult.completion` separates proof that a platform share surface was
 `presented` from proof that sharing `completed`. The field is optional so
 existing adapters and games remain compatible; a legacy `status: 'shared'`
@@ -73,9 +82,10 @@ must still handle the operation failing after a positive snapshot.
 `@mpgd/platform/capability-conformance` exports a provider-neutral runner for
 adapter and target-wrapper fixtures. The repository smoke suite applies it to
 raw and target-configured gateways for web preview, Microsoft Store, Verse8,
-Android, iOS, Apps in Toss, and Reddit. It verifies the exact boolean shape,
-snapshot isolation, target identity, target masking, and live provider
-transitions without importing platform SDKs into the shared package.
+Android, iOS, Apps in Toss, and Reddit. It verifies the boolean keys, the
+optional commerce and notifications blocks, snapshot isolation, target
+identity, target masking, and live provider transitions without importing
+platform SDKs into the shared package.
 
 The checked-in targets intentionally describe current kit readiness, not the
 desired end state. For example, Apps in Toss sharing is available through
