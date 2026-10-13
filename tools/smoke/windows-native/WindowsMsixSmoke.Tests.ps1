@@ -70,6 +70,20 @@ try {
         @{ ProcessId = 13; ParentProcessId = 999 }
     ))
     Assert-True ($children.Count -eq 2 -and 13 -notin $children.ProcessId) 'Unrelated WebView processes counted as this host.'
+    Import-Module (Join-Path $PSScriptRoot '../../../packages/cli/native-tools/windows-msix/WindowsMsixAcceptance.psm1') -Force
+    $source = @{ GitSha = ('a' * 40); RunId = '42'; Owner = 'fixture'; Workflow = '.github/workflows/ci.yml' }
+    Assert-MsixAcceptanceSource $source
+    $source.GitSha = 'short'
+    Assert-Throws { Assert-MsixAcceptanceSource $source } 'full source SHA'
+    $source.GitSha = ('a' * 40); $source.RunId = '../42'
+    Assert-Throws { Assert-MsixAcceptanceSource $source } 'run ID'
+    $source.RunId = '42'; $source.Owner = '../other'
+    Assert-Throws { Assert-MsixAcceptanceSource $source } 'owner'
+    $commonModule = Get-Module WindowsMsixAcceptance
+    $baseReceipt = [ordered]@{ status = 'failed'; nativeLaunchVerified = $false }
+    & $commonModule { param($Receipt) Copy-MsixAdditionalEvidence $Receipt @{ canvasLoaded = $true } @('status', 'nativeLaunchVerified') } $baseReceipt
+    Assert-True ($baseReceipt.canvasLoaded -and -not $baseReceipt.nativeLaunchVerified) 'Additional evidence changed native evidence.'
+    Assert-Throws { & $commonModule { param($Receipt) Copy-MsixAdditionalEvidence $Receipt @{ nativeLaunchVerified = $true } @('status', 'nativeLaunchVerified') } $baseReceipt } 'cannot overwrite'
     $state = [pscustomobject]@{
         url = 'https://starter.mpgd.invalid/index.html'; bundleSha256 = ('a' * 64)
         canvasWidth = 1280; canvasHeight = 720; gameBundleLoaded = $true; bootError = $false

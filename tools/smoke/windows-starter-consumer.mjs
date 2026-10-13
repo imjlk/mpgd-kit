@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const outputRoot = process.env.MPGD_WINDOWS_SMOKE_ROOT
@@ -59,6 +60,12 @@ appendFileSync(join(gameRoot, 'pnpm-workspace.yaml'), `${overrides.join('\n')}\n
 run('pnpm', ['install', '--no-frozen-lockfile'], gameRoot);
 // A second frozen install checks that the standalone lockfile is usable.
 run('pnpm', ['install', '--frozen-lockfile'], gameRoot);
+const requireFromGame = createRequire(join(gameRoot, 'package.json'));
+const nativeTools = await import(pathToFileURL(requireFromGame.resolve('@mpgd/cli/windows-native-tools')).href);
+const nativeModule = nativeTools.getMicrosoftStoreNativeAcceptanceModulePath();
+const nativeToolingRoot = join(outputRoot, 'native', 'native-tooling');
+mkdirSync(nativeToolingRoot, { recursive: true });
+copyFileSync(nativeModule, join(nativeToolingRoot, 'WindowsMsixAcceptance.psm1'));
 run('pnpm', ['check'], gameRoot);
 run('pnpm', ['build'], gameRoot);
 assert.ok(existsSync(join(gameRoot, 'dist/index.html')), 'Missing web entry point');
@@ -77,7 +84,7 @@ run('pnpm', ['smoke:microsoft-store'], gameRoot);
 writeFileSync(join(outputRoot, 'result.json'), `${JSON.stringify({
   platform: process.platform,
   node: process.version,
-  checks: ['create', 'packed-install', 'frozen-install', 'typecheck', 'web-build',
+  checks: ['create', 'packed-install', 'frozen-install', 'packed-native-tooling', 'typecheck', 'web-build',
     'microsoft-store-pwa-build', 'microsoft-store-pwa-smoke'],
   scope: 'KIT packed consumer and Microsoft Store PWA; CI packages this game in a WinUI host for native x64/ARM64 launch checks.',
 }, null, 2)}\n`);

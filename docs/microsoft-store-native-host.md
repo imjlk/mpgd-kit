@@ -105,3 +105,9 @@ and bundle hashes. See [the CI host and acceptance runbook](https://github.com/i
 
 The CI host is not part of the generated game's release output and has no commerce/identity bridge.
 Game-owned WinUI hosts and Store-installed login/purchase behavior still require game acceptance.
+
+The shared installer/runtime/process/cleanup module is included in @mpgd/cli. Import
+getMicrosoftStoreNativeAcceptanceModulePath from @mpgd/cli/windows-native-tools to locate it;
+game CI supplies package identity and verified source metadata to Invoke-MsixNativeAcceptance.
+Optional payload/readiness/evidence hooks add game-specific checks while the shared native checks
+and receipt fields remain authoritative. KIT tests the module from the installed npm tarball.

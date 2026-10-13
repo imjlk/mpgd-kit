@@ -1036,7 +1036,8 @@ jobs:
           NATIVE_ARCH: ${{ matrix.architecture }}
           PACKAGE_ROOT: ${{ runner.temp }}/native-packages/${{ matrix.architecture }}
           RECEIPT_ROOT: ${{ runner.temp }}/native-receipts/${{ matrix.architecture }}
-        run: ./tools/smoke/windows-native/Invoke-WindowsMsixSmoke.ps1 -PackageDirectory $env:PACKAGE_ROOT -OutputDirectory $env:RECEIPT_ROOT -SourceMetadata (Join-Path $env:PACKAGE_ROOT 'package-build.json') -Architecture $env:NATIVE_ARCH
+          NATIVE_MODULE: ${{ runner.temp }}/native-packages/native-tooling/WindowsMsixAcceptance.psm1
+        run: ./tools/smoke/windows-native/Invoke-WindowsMsixSmoke.ps1 -PackageDirectory $env:PACKAGE_ROOT -OutputDirectory $env:RECEIPT_ROOT -SourceMetadata (Join-Path $env:PACKAGE_ROOT 'package-build.json') -Architecture $env:NATIVE_ARCH -ModulePath $env:NATIVE_MODULE
       - name: Retain native startup receipts and failure diagnostics
         if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

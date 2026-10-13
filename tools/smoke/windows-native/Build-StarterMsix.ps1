@@ -12,6 +12,8 @@ $web = Join-Path $GameDirectory 'dist'
 $bundle = Join-Path $web 'assets\game.js'
 if (-not (Test-Path -LiteralPath $bundle -PathType Leaf)) { throw 'Missing generated game bundle.' }
 $gameHash = (Get-FileHash -LiteralPath $bundle -Algorithm SHA256).Hash.ToLowerInvariant()
+$module = Join-Path $OutputDirectory 'native-tooling\WindowsMsixAcceptance.psm1'
+$toolingHash = (Get-FileHash -LiteralPath $module -Algorithm SHA256).Hash.ToLowerInvariant()
 $hostRoot = Join-Path $env:RUNNER_TEMP ('kit-native-host-' + [Guid]::NewGuid().ToString('N'))
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'host') -Destination $hostRoot -Recurse
 Copy-Item -LiteralPath $web -Destination (Join-Path $hostRoot 'wwwroot') -Recurse
@@ -37,6 +39,7 @@ foreach ($arch in @('x64', 'ARM64')) {
     Copy-Item -LiteralPath (Join-Path $hostRoot 'packages.lock.json') -Destination (Join-Path $destination 'packages.lock.json')
     @{
         architecture = $arch; sourceGitSha = $env:GITHUB_SHA; runId = $env:GITHUB_RUN_ID
-        gameBundleSha256 = $gameHash; origin = 'KIT CLI packed consumer generated game'
+        gameBundleSha256 = $gameHash; toolingSha256 = $toolingHash
+        origin = 'KIT CLI packed consumer generated game'
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $destination 'package-build.json') -Encoding UTF8
 }

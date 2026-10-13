@@ -284,6 +284,8 @@ export {
   type RunMicrosoftStorePackageAcceptanceInput,
 } from './microsoft-store-package-acceptance.js';
 
+export { getMicrosoftStoreNativeAcceptanceModulePath } from './windows-native-tools.js';
+
 export {
   createMicrosoftStorePackageGenerationRuntime,
   microsoftStorePackageGeneratorEndpoint,
