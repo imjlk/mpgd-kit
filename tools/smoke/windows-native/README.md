@@ -3,6 +3,8 @@
 The Windows consumer job creates a standalone game under a path containing spaces and installs
 the current checkout's packed npm artifacts. It builds the game and Microsoft Store PWA, then
 Build-StarterMsix.ps1 embeds that exact generated web bundle in this CI-only WinUI/WebView2 host.
+The SDK-dependent host project lives in [apps/target-windows-native-smoke](../../../apps/target-windows-native-smoke/KitStarterHost.csproj),
+inside the platform SDK boundary. Tools here own orchestration and acceptance policy.
 This host is not shipped by create-game. Its native bridge exercises fixture callbacks, without
 performing real Store authentication, checkout or backend grants.
 

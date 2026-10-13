@@ -15,7 +15,7 @@ $gameHash = (Get-FileHash -LiteralPath $bundle -Algorithm SHA256).Hash.ToLowerIn
 $module = Join-Path $OutputDirectory 'native-tooling\WindowsMsixAcceptance.psm1'
 $toolingHash = (Get-FileHash -LiteralPath $module -Algorithm SHA256).Hash.ToLowerInvariant()
 $hostRoot = Join-Path $env:RUNNER_TEMP ('kit-native-host-' + [Guid]::NewGuid().ToString('N'))
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'host') -Destination $hostRoot -Recurse
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot '../../../apps/target-windows-native-smoke') -Destination $hostRoot -Recurse
 Copy-Item -LiteralPath (Join-Path $OutputDirectory 'native-tooling/windows-host') -Destination (Join-Path $hostRoot 'SharedHost') -Recurse
 Copy-Item -LiteralPath $web -Destination (Join-Path $hostRoot 'wwwroot') -Recurse
 Add-Type -AssemblyName System.Drawing
