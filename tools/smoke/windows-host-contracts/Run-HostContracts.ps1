@@ -1,9 +1,15 @@
 [CmdletBinding()]
 param(
-    [string]$SourceDirectory = (Join-Path $PSScriptRoot '../../../packages/cli/native-tools/windows-host'),
-    [string]$ConsumerDirectory = (Join-Path $PSScriptRoot '../../../packages/cli')
+    [string]$SourceDirectory,
+    [string]$ConsumerDirectory
 )
 $ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace($SourceDirectory)) {
+    $SourceDirectory = Join-Path $PSScriptRoot '../../../packages/cli/native-tools/windows-host'
+}
+if ([string]::IsNullOrWhiteSpace($ConsumerDirectory)) {
+    $ConsumerDirectory = Join-Path $PSScriptRoot '../../../packages/cli'
+}
 $taskRoot = Join-Path ([IO.Path]::GetTempPath()) ('mpgd-host-contracts-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $taskRoot | Out-Null
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'HostContracts.csproj') -Destination $taskRoot
