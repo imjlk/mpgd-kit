@@ -14,6 +14,8 @@ export interface LiteRenderer<Surface = unknown> {
   readonly kind: LiteRendererKind;
   readonly element: HTMLElement | SVGElement;
   readonly surface: Surface;
+  /** Effective stage size after resize, when a renderer applies constraints such as a DPR cap. */
+  readonly size?: StageSize;
   resize(size: StageSize): void;
   dispose(): void;
 }
@@ -42,6 +44,9 @@ export function createCanvasRenderer(options: { readonly maxDpr?: number } = {})
   return {
     kind: 'canvas',
     element: canvas,
+    get size() {
+      return size;
+    },
     surface: {
       canvas,
       context,

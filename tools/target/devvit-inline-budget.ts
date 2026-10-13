@@ -27,8 +27,10 @@ const moduleSignatures: Readonly<Record<string, RegExp>> = {
 
 const dynamicImportPattern = /\bimport\(\s*["']([^"']+)["']\s*\)/g;
 const staticImportPattern = /(?:^|[;\s}])(?:import|export)\s*(?:[\w*{}\s,$]+\s*from\s*)?["']([^"']+)["']/g;
-const htmlAssetPattern = /<(?:script[^>]*\ssrc|link[^>]*\srel=["'](?:modulepreload|stylesheet)["'][^>]*\shref)=["']([^"']+)["']/giu;
-const htmlAssetPatternReversed = /<link[^>]*\shref=["']([^"']+)["'][^>]*\srel=["'](?:modulepreload|stylesheet)["']/giu;
+const htmlAssetPattern = /<(?:script[^>]*\ssrc|link[^>]*\srel=["'](?:modulepreload|stylesheet|preload)["'][^>]*\shref)=["']([^"']+)["']/giu;
+const htmlAssetPatternReversed = /<link[^>]*\shref=["']([^"']+)["'][^>]*\srel=["'](?:modulepreload|stylesheet|preload)["']/giu;
+const htmlMediaTagPattern = /<(?:img|audio|video|source|track|input|embed|object)\b[^>]*>/giu;
+const htmlMediaUrlPattern = /\s(?:src|poster|data)=["']([^"']+)["']/giu;
 const cssImportPattern = /@import\s+(?:url\(\s*["']?([^\s"')]+)["']?\s*\)|["']([^"']+)["'])/gi;
 const cssUrlPattern = /url\(\s*(?:"([^"]+)"|'([^']+)'|([^\s)]+))\s*\)/giu;
 
@@ -70,6 +72,14 @@ function walkInlineGraph(
   const queue: { readonly file: string; readonly dynamic: boolean }[] = [];
   for (const pattern of [htmlAssetPattern, htmlAssetPatternReversed]) {
     for (const match of html.matchAll(pattern)) {
+      const reference = match[1];
+      if (reference !== undefined && isLocalReference(reference)) {
+        queue.push({ file: resolveReference(root, dirname(entryPath), reference), dynamic: false });
+      }
+    }
+  }
+  for (const tag of html.matchAll(htmlMediaTagPattern)) {
+    for (const match of tag[0].matchAll(htmlMediaUrlPattern)) {
       const reference = match[1];
       if (reference !== undefined && isLocalReference(reference)) {
         queue.push({ file: resolveReference(root, dirname(entryPath), reference), dynamic: false });

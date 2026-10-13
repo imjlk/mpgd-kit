@@ -57,6 +57,7 @@ export function createLiteShell<Surface>(options: LiteShellOptions<Surface>): Li
   mount.append(element);
 
   let size: StageSize = { width: 0, height: 0, dpr: 1 };
+  let measuredSize: StageSize | undefined;
   let firstFrameDone = options.onFirstFrame === undefined;
   let disposed = false;
   const loop = createFrameLoop({
@@ -87,11 +88,12 @@ export function createLiteShell<Surface>(options: LiteShellOptions<Surface>): Li
       }
     }
     const dpr = currentDpr();
-    if (width === size.width && height === size.height && dpr === size.dpr) {
+    if (measuredSize !== undefined && width === measuredSize.width && height === measuredSize.height && dpr === measuredSize.dpr) {
       return; // no change: avoid clearing the backing store twice
     }
-    size = { width, height, dpr };
-    renderer.resize(size);
+    measuredSize = { width, height, dpr };
+    renderer.resize(measuredSize);
+    size = renderer.size ?? measuredSize;
     options.onResize?.(size);
     loop.wake();
   };

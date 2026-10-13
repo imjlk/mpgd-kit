@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { LiteRenderer, StageSize } from './renderer.js';
+import { createCanvasRenderer, type LiteRenderer, type StageSize } from './renderer.js';
 import { createLiteShell } from './shell.js';
 import { loadFontSubset } from './font.js';
 
@@ -102,6 +102,28 @@ describe('createLiteShell', () => {
     expect(queries[1]?.media).toBe('(resolution: 2dppx)');
     shell.dispose();
     expect(queries[1]?.removed).toBe(true);
+  });
+
+  it('reports the Canvas backing-store DPR cap without redundant resizes', () => {
+    vi.stubGlobal('devicePixelRatio', 4);
+    const canvas = {
+      ...fakeElement(),
+      width: 0,
+      height: 0,
+      getContext: () => ({ setTransform: vi.fn() }),
+    };
+    vi.stubGlobal('document', { createElement: () => canvas });
+    const renderer = createCanvasRenderer();
+    const resize = vi.spyOn(renderer, 'resize');
+    const onResize = vi.fn();
+    const { shell } = setup({ renderer, onResize });
+    expect(shell.size).toEqual({ width: 300, height: 200, dpr: 3 });
+    expect(shell.size).toBe(renderer.surface.size);
+    expect(canvas.width).toBe(900);
+    expect(onResize).toHaveBeenCalledWith(shell.size);
+    shell.refit();
+    expect(resize).toHaveBeenCalledTimes(1);
+    shell.dispose();
   });
 });
 

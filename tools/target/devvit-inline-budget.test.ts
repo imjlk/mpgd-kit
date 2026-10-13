@@ -127,6 +127,34 @@ try {
     /exceeds inlineBudget/,
   );
 
+  // HTML media and preload bytes are part of the first load even when named as deferred.
+  writeFileSync(join(root, 'index.html'), [
+    '<IMG SRC="./assets/image.png">',
+    '<LINK HREF="./assets/font.woff2" AS="font" REL="PRELOAD">',
+    '<video src="./assets/movie.mp4" poster="./assets/poster.png"></video>',
+    '<img src="data:image/png;base64,AAAA">',
+  ].join(''));
+  writeFileSync(join(root, 'assets/movie.mp4'), randomBytes(4096));
+  writeFileSync(join(root, 'assets/poster.png'), randomBytes(4096));
+  const media = collectDevvitInlineGraph(root, 'index.html', ['assets/*']);
+  assert.deepEqual(media.files.map((file) => file.path).sort(), [
+    'assets/font.woff2',
+    'assets/image.png',
+    'assets/movie.mp4',
+    'assets/poster.png',
+    'index.html',
+  ]);
+  assert.throws(
+    () =>
+      assertDevvitInlineBudget({
+        target: 'reddit',
+        clientDir: root,
+        inlineEntry: 'index.html',
+        budget: { maxGzipKb: 1 },
+      }),
+    /exceeds inlineBudget/,
+  );
+
   // An HTML entry cannot defer a script or preload by giving its filename.
   writeFileSync(join(root, 'index.html'), '<script src="/assets/phaser.js"></script>');
   writeFileSync(join(root, 'assets/phaser.js'), 'export const opaque=1;');
