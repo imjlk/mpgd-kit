@@ -134,10 +134,11 @@ export interface PlatformGatewayCapabilityConformanceReport {
 
 /**
  * Runs provider-neutral capability checks against real adapter gateways or
- * target-configured wrappers. Every read must return a complete boolean
- * snapshot, a fresh object, and the provider's latest state.
+ * target-configured wrappers. Every read must return every required boolean
+ * key, known readiness states, the commerce and notifications blocks under
+ * their own rules, a fresh object, and the provider's latest state.
  * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Checks each gateway read against the required boolean keys and expected provider state.
- * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #a1834db Reviewed required booleans, optional banner/subscription defaults, ordered readiness comparison, and fresh nested rereads.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #b582d23 Reviewed required booleans, optional banner/subscription defaults, ordered readiness comparison, the commerce and notifications block checks with the notificationsV2 tie and push readiness, and fresh nested rereads including an empty purposes list.
  * @evidence docs/specs/platform-capability-snapshots.md#provider-transitions Checks a fresh provider read after the optional transition update.
  * @evidenceReview docs/specs/platform-capability-snapshots.md#provider-transitions #839c0c8 Reviewed the changed-state guard and post-update snapshot assertion.
  * @evidence docs/specs/platform-capability-snapshots.md#fixture-validation Rejects invalid fixture sets and returns the names of passing fixtures.
@@ -194,13 +195,13 @@ async function runFixture(
   );
 
   const first = await fixture.gateway.getCapabilities();
-  assertCapabilitySnapshot(first, initialExpected);
+  assertCapabilitySnapshot(first, initialExpected, fixture.gateway);
 
   tryMutateSnapshot(first);
 
   const second = await fixture.gateway.getCapabilities();
   assert(second !== first, 'getCapabilities must return a fresh snapshot object for every read');
-  assertCapabilitySnapshot(second, initialExpected);
+  assertCapabilitySnapshot(second, initialExpected, fixture.gateway);
 
   if (fixture.transition === undefined || transitionExpected === undefined) {
     return;
@@ -222,12 +223,13 @@ async function runFixture(
     updated !== first,
     'getCapabilities must not reuse an earlier snapshot after a provider transition',
   );
-  assertCapabilitySnapshot(updated, transitionExpected);
+  assertCapabilitySnapshot(updated, transitionExpected, fixture.gateway);
 }
 
 function assertCapabilitySnapshot(
   actual: PlatformCapabilities,
   expected: PlatformCapabilities,
+  gateway: PlatformGateway,
 ): void {
   const actualKeys = Object.keys(actual).sort();
   const missingKeys = platformCapabilityKeys.filter((key) => !Object.hasOwn(actual, key));
@@ -259,14 +261,21 @@ function assertCapabilitySnapshot(
     'provider availability must match the expected provider state',
   );
   assertCommerceCapabilityBlock(actual, expected.commerce);
-  assertNotificationCapabilityBlock(actual, expected.notifications);
+  assertNotificationCapabilityBlock(actual, expected.notifications, gateway);
 }
 
 function assertNotificationCapabilityBlock(
   snapshot: PlatformCapabilities,
   expected: NotificationCapabilities | undefined,
+  gateway: PlatformGateway,
 ): void {
   const actual: unknown = snapshot.notifications;
+  // The block describes the exposed provider (notifications RFC "Capabilities").
+  assertEqual(
+    actual !== undefined,
+    gateway.notificationsV2 !== undefined,
+    'notification capabilities must be present exactly when the gateway exposes notificationsV2',
+  );
   if (actual === undefined) {
     assert(
       expected === undefined,
@@ -484,38 +493,23 @@ function assertProviderAvailabilityShape(value: unknown): void {
   }
 }
 
+// A deep copy of the plain records and lists, whatever their shape: the
+// oracle stays independent of the provider even when a fixture expects a
+// malformed block to be reported as is.
 function cloneExpectedCapabilities(value: PlatformCapabilities): PlatformCapabilities {
-  return {
-    ...value,
-    ...(value.providerAvailability === undefined
-      ? {}
-      : { providerAvailability: { ...value.providerAvailability } }),
-    ...(value.commerce === undefined
-      ? {}
-      : {
-          commerce: {
-            purchase: { ...value.commerce.purchase },
-            catalog: { ...value.commerce.catalog },
-            lifecycle: { ...value.commerce.lifecycle },
-            authority: { ...value.commerce.authority },
-            availability: value.commerce.availability,
-          },
-        }),
-    ...(value.notifications === undefined
-      ? {}
-      : {
-          notifications: {
-            availability: value.notifications.availability,
-            permission: { ...value.notifications.permission },
-            remote: {
-              ...value.notifications.remote,
-              purposes: [...value.notifications.remote.purposes],
-            },
-            local: { ...value.notifications.local },
-            open: value.notifications.open,
-          },
-        }),
-  };
+  return clonePlainData(value);
+}
+
+function clonePlainData<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((entry: unknown) => clonePlainData(entry)) as T;
+  }
+  if (typeof value === 'object' && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, clonePlainData(entry)]),
+    ) as T;
+  }
+  return value;
 }
 
 function normalizedAvailability(value: PlatformCapabilities['providerAvailability']): string {
@@ -548,6 +542,7 @@ function tryMutateSnapshot(snapshot: PlatformCapabilities): void {
 
 // Every nested record and the purposes list are probed, as for commerce.
 function tryMutateNotificationSnapshot(notifications: NotificationCapabilities): void {
+  const { purposes } = notifications.remote;
   const probes: readonly (readonly [object, string, unknown])[] = [
     [notifications.permission, 'readable', !notifications.permission.readable],
     [
@@ -555,8 +550,9 @@ function tryMutateNotificationSnapshot(notifications: NotificationCapabilities):
       'content',
       notifications.remote.content === 'free-form' ? 'host-template' : 'free-form',
     ],
-    // Emptying the list shows a reused array once a later read lists none.
-    [notifications.remote.purposes, 'length', 0],
+    // A reused list shows on the next read: emptied when it lists purposes,
+    // or holding one when it was empty.
+    purposes.length === 0 ? [purposes, '0', 'service'] : [purposes, 'length', 0],
     [notifications.local, 'supported', !notifications.local.supported],
     [
       notifications,

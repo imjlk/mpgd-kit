@@ -32,6 +32,7 @@ import {
   isNotificationCapabilities,
   isNotificationErrorCode,
   isNotificationEvent,
+  isNotificationEventEnvelope,
   isNotificationTimestamp,
   notificationBridgeMethods,
   NotificationError,
@@ -244,6 +245,29 @@ describe('notifications contract', () => {
       .toBe(0);
     expect(() => assertNotificationEventEnvelope({ protocol: notificationsProtocol, sequence: -1, event: opened }))
       .toThrow();
+  });
+
+  it('checks an endpoint change against the register answer time zone rule', () => {
+    const changed = (timeZone: string) => ({
+      type: 'endpoint-changed',
+      registration: { provider: 'devvit', address: { kind: 'platform-user' }, timeZone },
+    } as const);
+    const envelope = (timeZone: string) => ({
+      protocol: notificationsProtocol,
+      sequence: 0,
+      event: changed(timeZone),
+    });
+    expect(assertNotificationEvent(changed('Asia/Seoul'))).toEqual(changed('Asia/Seoul'));
+    expect(assertNotificationEventEnvelope(envelope('Asia/Seoul')).event).toEqual(changed('Asia/Seoul'));
+    expect(isNotificationEvent(changed('Asia/Seoul'))).toBe(true);
+    expect(isNotificationEventEnvelope(envelope('Asia/Seoul'))).toBe(true);
+    expect(() => assertNotificationEvent(changed('Mars/Olympus_Mons'))).toThrow(/Unknown time zone/u);
+    expect(() => assertNotificationEventEnvelope(envelope('Mars/Olympus_Mons')))
+      .toThrow(/Unknown time zone/u);
+    expect(isNotificationEvent(changed('Mars/Olympus_Mons'))).toBe(false);
+    expect(isNotificationEventEnvelope(envelope('Mars/Olympus_Mons'))).toBe(false);
+    expect(() => assertNotificationBridgeRegisterResult({ registration: changed('Mars/Olympus_Mons').registration }))
+      .toThrow(/Unknown time zone/u);
   });
 
   it('validates consent records per kind', () => {

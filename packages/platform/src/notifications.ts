@@ -535,10 +535,41 @@ export const assertLocalNotificationEntry = withStrictTimes(
   typia.createAssertEquals<LocalNotificationEntry>(),
   notificationTimeFields.LocalNotificationEntry,
 );
-export const assertNotificationEvent = typia.createAssertEquals<NotificationEvent>();
-export const isNotificationEvent = typia.createEquals<NotificationEvent>();
-export const assertNotificationEventEnvelope = typia.createAssertEquals<NotificationEventEnvelope>();
-export const isNotificationEventEnvelope = typia.createEquals<NotificationEventEnvelope>();
+const assertNotificationEventShape = typia.createAssertEquals<NotificationEvent>();
+const isNotificationEventShape = typia.createEquals<NotificationEvent>();
+const assertNotificationEventEnvelopeShape =
+  typia.createAssertEquals<NotificationEventEnvelope>();
+const isNotificationEventEnvelopeShape = typia.createEquals<NotificationEventEnvelope>();
+
+/** Validates an event; an `endpoint-changed` registration follows `assertNotificationEndpointRegistration`. */
+export function assertNotificationEvent(input: unknown): NotificationEvent {
+  const event = assertNotificationEventShape(input);
+  if (event.type === 'endpoint-changed') {
+    assertNotificationEndpointRegistration(event.registration);
+  }
+  return event;
+}
+
+export function isNotificationEvent(input: unknown): input is NotificationEvent {
+  return isNotificationEventShape(input) && hasKnownRegistrationTimeZone(input);
+}
+
+/** Validates an envelope; its event follows `assertNotificationEvent`. */
+export function assertNotificationEventEnvelope(input: unknown): NotificationEventEnvelope {
+  const envelope = assertNotificationEventEnvelopeShape(input);
+  assertNotificationEvent(envelope.event);
+  return envelope;
+}
+
+export function isNotificationEventEnvelope(input: unknown): input is NotificationEventEnvelope {
+  return isNotificationEventEnvelopeShape(input) && hasKnownRegistrationTimeZone(input.event);
+}
+
+function hasKnownRegistrationTimeZone(event: NotificationEvent): boolean {
+  return event.type !== 'endpoint-changed'
+    || event.registration.timeZone === undefined
+    || isValidNotificationTimeZone(event.registration.timeZone);
+}
 export const assertNotificationConsentRecord = withStrictTimes(
   'consent record',
   typia.createAssertEquals<NotificationConsentRecord>(),
