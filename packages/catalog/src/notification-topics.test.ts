@@ -88,7 +88,6 @@ const plainDeployment: NotificationDeployment = { advertisingRules: 'none' };
 const krDeployment: NotificationDeployment = {
   advertisingRules: 'kr',
   advertisingSender: { contact: '080-1234-5678' },
-  noticeTopic: 'consent-notice',
 };
 
 function issuesOf(input: unknown, deployment: NotificationDeployment = plainDeployment): readonly string[] {
@@ -147,7 +146,7 @@ const valid = assertNotificationTopicCatalog(
         copy: { ko: { title: '새 도전장', body: '{{rival}}님이 도전장을 보냈어요.' } },
         targets: {
           ait: { templateSetCode: 'fixture-rival-challenge', agreement: 'none' },
-          'storefront-web': { channel: 'open targets stay unchecked' },
+          'storefront-web': { channel: 'an open target follows no provider rules' },
         },
       },
       {
@@ -518,7 +517,7 @@ assert.deepEqual(
   [],
 );
 
-// Open target names without a provider entry stay unchecked.
+// An open target name, without a provider entry, follows no provider's mapping rules.
 assert.deepEqual(
   issuesOf(catalogWith({ ...advertising, targets: { 'storefront-web': { anything: true } } })),
   [],
@@ -587,9 +586,23 @@ assertIssue(
     targets: { android: { channelId: 'notices', title: 'Notice', body: 'You agreed.' } },
   }),
   'topics[0].targets.android.body',
-  /a body in its mapping would replace it/u,
+  /its mappings carry no title or body, not even one alone; remove body/u,
   'a notice topic mapping with its own text',
 );
+// A lone title is refused too, on a provider target or an open one.
+for (const target of ['android', 'storefront-web']) {
+  assert.deepEqual(
+    issuesOf(withNotices('consent-notice', {
+      ...noticeTopic,
+      targets: { [target]: { channelId: 'notices', title: 'Notice' } },
+    })),
+    [
+      `topics[0].targets.${target}.title: the notice topic's text is notices.copy, so its `
+        + 'mappings carry no title or body, not even one alone; remove title',
+    ],
+    `a lone title in the notice topic's ${target} mapping`,
+  );
+}
 assertIssue(
   withNotices('consent-notice', {
     ...noticeTopic,
@@ -623,7 +636,7 @@ assertIssue(
 assertIssue(
   withNoticeCopy(undefined),
   'notices.copy',
-  /declare notices\.copy with a title and a body for each notice variant/u,
+  /give a title and a body for each notice variant in each locale/u,
   'notices without copy',
 );
 assertIssue(
@@ -640,13 +653,13 @@ assert.deepEqual(
 const { 'reconfirmation.night': _night, ...withoutNight } = koNotices;
 assertIssue(
   withNoticeCopy({ ko: withoutNight }),
-  'notices.copy.ko["reconfirmation.night"]',
+  'notices.copy["ko"]["reconfirmation.night"]',
   /ko lacks reconfirmation\.night/u,
   'a locale without a variant',
 );
 assertIssue(
   withNoticeCopy({ ko: { ...koNotices, 'reconfirmation.later': { title: '안내', body: '안내' } } }),
-  'notices.copy.ko["reconfirmation.later"]',
+  'notices.copy["ko"]["reconfirmation.later"]',
   /is not a notice variant/u,
   'an unknown variant',
 );
@@ -658,10 +671,14 @@ for (const [field, text] of [
     withNoticeCopy({
       ko: {
         ...koNotices,
-        'consent-result.night.granted': { title: '안내', body: '안내', [field]: text },
+        'consent-result.night.granted': {
+          title: '{{consentDate}}',
+          body: '{{consentDate}}',
+          [field]: text,
+        },
       },
     }),
-    `notices.copy.ko["consent-result.night.granted"].${field}`,
+    `notices.copy["ko"]["consent-result.night.granted"].${field}`,
     new RegExp(`a notice's ${field} must not be blank`, 'u'),
     `a blank notice ${field}`,
   );
@@ -676,10 +693,106 @@ assertIssue(
       },
     },
   }),
-  'notices.copy.ko["consent-result.advertising.withdrawn"].title',
+  'notices.copy["ko"]["consent-result.advertising.withdrawn"].title',
   /filled only with \{\{consentDate\}\}; \{\{playerName\}\} would have no value/u,
   'a notice placeholder other than consentDate',
 );
+// Each variant states the date of the act it reports on, in its title or its
+// body, and a brace outside a {{name}} placeholder would reach the player as
+// written.
+const nightReconfirmation = (title: string, body: string): unknown =>
+  withNoticeCopy({ ko: { ...koNotices, 'reconfirmation.night': { title, body } } });
+assert.deepEqual(
+  issuesOf(nightReconfirmation('안내', '확인')),
+  [
+    'notices.copy["ko"]["reconfirmation.night"]: a notice states the date of the act it reports '
+      + 'on; its title or body needs {{consentDate}}',
+  ],
+  'a notice variant without the consent date',
+);
+assert.deepEqual(issuesOf(nightReconfirmation('{{consentDate}} 확인', '확인')), []);
+for (const body of [
+  '{consentDate}',
+  '{{consentDate}',
+  'consentDate}}',
+  '{{consent.date}}',
+  '｛｛consentDate｝｝',
+  '{{consentDate}}}',
+]) {
+  assertIssue(
+    nightReconfirmation('{{consentDate}} 확인', body),
+    'notices.copy["ko"]["reconfirmation.night"].body',
+    /a brace outside a \{\{name\}\} placeholder reaches the player as written/u,
+    `a stray brace in ${body}`,
+  );
+}
+// Locale and variant keys are spelled in brackets, whatever they hold.
+assert.deepEqual(
+  issuesOf({
+    version: 'test',
+    defaultLocale: 'ko-KR',
+    notices: {
+      topic: 'consent-notice',
+      copy: {
+        'ko-KR': { ...koNotices, 'reconfirmation.night': { title: 1, body: '{{consentDate}}' } },
+      },
+    },
+    topics: [noticeTopic],
+  }),
+  ['notices.copy["ko-KR"]["reconfirmation.night"].title: expected a string title'],
+);
+// A value left undefined is an issue, never an exception.
+assert.deepEqual(issuesOf(withNoticeCopy({ ko: undefined })), [
+  'notices.copy["ko"]: expected the notice copy of one locale: a title and a body per notice variant',
+]);
+assert.deepEqual(
+  issuesOf(withNoticeCopy({ ko: { ...koNotices, 'reconfirmation.night': undefined } })),
+  [
+    'notices.copy["ko"]["reconfirmation.night"]: every locale needs a title and a body for each '
+      + 'notice variant; ko lacks reconfirmation.night',
+  ],
+);
+for (const target of ['android', 'storefront-web']) {
+  assert.deepEqual(
+    issuesOf(withNotices('consent-notice', { ...noticeTopic, targets: { [target]: undefined } })),
+    [
+      `topics[0].targets.${target}: expected NotificationTopicMapping, an object: {} maps a target `
+        + 'that needs no fields',
+    ],
+    `an undefined ${target} mapping`,
+  );
+}
+// Shape issues name the public types, and never call notices.copy optional.
+for (const [notices, issue] of [
+  ['consent-notice', 'notices: expected (NotificationTopicCatalogNotices | undefined)'],
+  [{ copy: noticeCopy }, 'notices.topic: expected (string & MinLength<1>)'],
+  [
+    { topic: 'consent-notice', copy: [] },
+    'notices.copy: expected NotificationNoticeCopy: each locale mapped to a title and a body per '
+      + 'notice variant',
+  ],
+  [
+    { topic: 'consent-notice', copy: { ko: { ...koNotices, 'reconfirmation.night': 'x' } } },
+    'notices.copy["ko"]["reconfirmation.night"]: expected NotificationTopicCopy: a title and a body',
+  ],
+  [
+    {
+      topic: 'consent-notice',
+      copy: { ko: { ...koNotices, 'reconfirmation.night': { title: 'a', body: '{{consentDate}}', x: 1 } } },
+    },
+    'notices.copy["ko"]["reconfirmation.night"].x: is not part of a notice\'s text; a notice has '
+      + 'only a title and a body',
+  ],
+] as const) {
+  assert.deepEqual(
+    issuesOf({ version: 'test', defaultLocale: 'ko', notices, topics: [noticeTopic] }),
+    [issue],
+    `the issue of notices ${JSON.stringify(notices).slice(0, 40)}`,
+  );
+}
+assert.deepEqual(issuesOf(catalogWith({ ...baseTopic, copy: { ko: { title: 1, body: 'b' } } })), [
+  'topics[0].copy["ko"].title: expected (string & MinLength<1>)',
+]);
 
 // An advertising topic needs the deployment's rules, and under the Korean
 // rules the sender and the notice topic; a provider without an expiry or the
@@ -697,31 +810,16 @@ assert.deepEqual(
     targetProviders,
     deployment: { advertisingRules: 'kr' },
   }).issues.map((issue) => issue.path),
-  ['notices.topic', 'deployment.noticeTopic', 'deployment.advertisingSender'],
+  ['notices.topic', 'deployment.advertisingSender'],
 );
+// The catalog's notices block is the one notice setting: the deployment names
+// no notice topic.
 assert.deepEqual(
   issuesOf(withNotices('consent-notice', advertisingTopic, noticeTopic), krDeployment),
   [],
 );
-assertIssue(
-  withNotices('consent-notice', advertisingTopic, noticeTopic),
-  'deployment.noticeTopic',
-  /must be the catalog's notices.topic \(consent-notice\)/u,
-  'the deployment names the catalog notice topic',
-  { ...krDeployment, noticeTopic: 'other' },
-);
-// The scheduler sends overdue notices only through the deployment's
-// noticeTopic, so under the Korean rules an advertising catalog needs it.
-const { noticeTopic: _noticeTopic, ...krWithoutNoticeTopic } = krDeployment;
-assert.deepEqual(
-  issuesOf(withNotices('consent-notice', advertisingTopic, noticeTopic), krWithoutNoticeTopic),
-  [
-    'deployment.noticeTopic: the Korean advertising rules send overdue consent notices only '
-      + "through the deployment's noticeTopic; set it to the catalog's notices.topic (consent-notice)",
-  ],
-);
 // Without an advertising topic, or under 'none', no notice topic is needed.
-assert.deepEqual(issuesOf(catalogWith(baseTopic), krWithoutNoticeTopic), []);
+assert.deepEqual(issuesOf(catalogWith(baseTopic), krDeployment), []);
 assert.deepEqual(issuesOf(catalogWith(advertisingTopic), { advertisingRules: 'none' }), []);
 // The validator reads the sender and the opt-out line as gate step 8 does: a
 // blank contact suppresses every advertising send, and a blank name or opt-out
@@ -771,6 +869,50 @@ assertIssue(
   /consent-notice has no mapping for ios, which delivers an advertising topic/u,
   'the notice topic is mapped where advertising is',
   krDeployment,
+);
+// A provider that sends its mapping's own text can carry advertising but not
+// the notice topic, so under the Korean rules advertising cannot map to it.
+// That is reported once, at the advertising mapping, whether or not the
+// notice topic maps there too (which is its own issue).
+const approvedText: NotificationProviderRegistryEntry = {
+  ...referenceNotificationProviders.fcm,
+  provider: 'fixture.approved-text',
+  mappingFields: ['title', 'body'],
+  mapping: { title: { required: true, maxLength: 60 }, body: { required: true, maxLength: 100 } },
+};
+const approvedAdvertising = {
+  ...advertising,
+  targets: { web: { title: '(광고) 주말 이벤트', body: '주말 이벤트가 시작됐어요.' } },
+};
+const advertisingOnApprovedText = 'topics[0].targets.web: fixture.approved-text sends the text of '
+  + 'its mapping, so it cannot carry the consent notices that advertising on web needs under the '
+  + 'Korean rules; an advertising topic must not map to it';
+for (const [targets, noticeIssues] of [
+  [{}, []],
+  [
+    { web: {} },
+    [
+      'topics[1].targets.web: fixture.approved-text sends the text of its mapping, which cannot '
+        + 'state what the player did; the notice topic must not map to it',
+    ],
+  ],
+] as const) {
+  assert.deepEqual(
+    validateNotificationTopicCatalog(
+      withNotices('consent-notice', approvedAdvertising, { ...noticeTopic, targets }),
+      { targetProviders: { web: approvedText }, deployment: krDeployment },
+    ).issues.map((issue) => `${issue.path}: ${issue.message}`),
+    [advertisingOnApprovedText, ...noticeIssues],
+    `the notice topic maps to ${JSON.stringify(targets)}`,
+  );
+}
+// Without the Korean rules the advertising mapping is fine there.
+assert.deepEqual(
+  validateNotificationTopicCatalog(withNotices('consent-notice', approvedAdvertising, noticeTopic), {
+    targetProviders: { web: approvedText },
+    deployment: plainDeployment,
+  }).issues,
+  [],
 );
 // Without an advertising topic no deployment is needed.
 assert.equal(

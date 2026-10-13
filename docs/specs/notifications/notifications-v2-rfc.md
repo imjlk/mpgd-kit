@@ -699,10 +699,9 @@ products and ad placements.
   [Consent records](#consent-records)):
   - **`notices.topic`** names a `service` topic with the `remote` channel,
     which keeps only the delivery settings. It declares no `copy` and no
-    `local` channel, and its mappings carry no `title` or `body`. It maps to
-    no provider that sends a host template or its mapping's own text, which
-    could not state the record. The deployment's `noticeTopic` names the same
-    topic for the scheduler.
+    `local` channel, and its mappings carry no `title` or `body`, not even one
+    alone. It maps to no provider that sends a host template or its mapping's
+    own text, which could not state the record.
   - **`notices.copy`** maps each locale to one `{ title, body }` per notice
     variant: `consent-result.advertising.granted`,
     `consent-result.advertising.withdrawn`, `consent-result.night.granted`,
@@ -711,15 +710,30 @@ products and ad placements.
     consented or withdrew, and to advertising or to night sending, as decree
     art. 62-3 requires. A refusal is recorded as `withdrawn`, so a
     `withdrawn` text must read for a refusal too.
+  - **One setting.** The backend takes the whole `notices` block as is: the
+    topic the scheduler sends through, and the copy. No deployment setting
+    names the notice topic.
   - **Placeholders.** A notice's title and body may use only
-    `{{consentDate}}`.
+    `{{consentDate}}`, and each variant uses it in its title or its body,
+    because a notice states the date of the act it reports on. A brace left
+    outside a `{{name}}` placeholder, as in `{consentDate}`,
+    `{{consent.date}}`, or full-width braces, would reach the player as
+    written.
   - **Validation.** The validator reports a notice topic that breaks these
     rules, a missing `notices.copy`, one without `defaultLocale` (matched
     without regard to case), a locale without one of the six variants, an
-    unknown variant, a blank title or body, and any other placeholder. Given
-    the deployment settings, it also reports a `noticeTopic` that names
-    another topic and, under the Korean rules with an `advertising` topic, a
-    missing notice topic or `noticeTopic`.
+    unknown variant, a blank title or body, a variant without
+    `{{consentDate}}`, any other placeholder, and a stray brace. The backend
+    and the vector loader check `notices.copy` by the same rules
+    (`notificationNoticeCopyIssues`). Issue paths spell locale and variant
+    keys in brackets, as in
+    `notices.copy["ko-KR"]["reconfirmation.night"].title`.
+  - **Korean rules.** Given the deployment settings, under the Korean rules
+    with an `advertising` topic, the validator reports a missing notice topic
+    and a target that maps an advertising topic but not the notice topic. A
+    provider that sends its mapping's own text can carry advertising but not
+    the notice topic, so the validator reports an advertising topic mapped to
+    it, once, at that mapping.
 
 ## Reminders {#reminders}
 
@@ -963,8 +977,7 @@ the backend only the name, with the record's time in the
   that does not parse throws `NOTIFICATIONS_INVALID_INPUT`.
 
 If a notice is not recorded by the start of the day seven days before
-`dueBy`, the scheduler sends it through the deployment's `noticeTopic`, which
-the validator requires to equal the catalog's `notices.topic`.
+`dueBy`, the scheduler sends it through the catalog's `notices.topic`.
 
 - **Key.** `notice:<player>:<kind>:<record kind>:<record at>:<dueBy>`, with
   the player percent-encoded, the record's time in the
@@ -1546,10 +1559,10 @@ How a real provider is judged:
 | `appliesTo` | Predicates on capability paths that must all hold: `{ "path": "permission.prompt", "equals": "os" }`, `{ "path": "remote.purposes", "includes": "advertising" }`, or `"excludes"` |
 | `profile` | `provider`, `capabilities`, and optional server-side `limits` (`perUserPerDay`, `perUserPerMinute`). The fake backend derives the provider's registry entry from them: purposes, addressing, content, and permission fields from the capabilities; `expiry` and `actions` true for a free-form device provider; `link` true for `host-link` opens; no `rate` |
 | `catalog` | Topic entries as in the [topic catalog](#topic-catalog), with the provider mapping for this one profile under `mapping` instead of `targets`. Vector catalogs list only the topics a scenario needs and are not validated: `advertising-unsupported-by-host` maps an advertising topic the validator would reject, to prove the gate refuses it too |
-| `notices` | The catalog's `notices` block without its topic, which the deployment's `noticeTopic` names: `copy`, a title and a body per locale and notice variant. The notice topic in `catalog` declares no copy. A `kr` vector whose catalog declares the notice topic needs it, or the runner fails the vector at `backend` |
+| `notices` | The catalog's `notices` block: `topic`, the notice topic, which `catalog` declares without copy, and `copy`, a title and a body per locale and notice variant, checked by the catalog's rules in the default locale `ko`. Without it the scheduler sends no notice. A `topic` that `catalog` declares as anything but a remote `service` topic, or leaves out while it declares an advertising topic under `kr`, fails the vector at `backend` |
 | `context` | `player`, `now`, and the device's `timeZone`, which the runtime registers |
 | `host` | Fake host settings: with `actionRequired: true`, the fixture provider reports `availability: 'action-required'` and `requiredAction: 'login'` until `completeAction`; `profile.capabilities` is its declaration afterwards |
-| `deployment` | Backend deployment settings: `advertisingRules` (`kr` or `none`), `advertisingSender` (`{ name?, contact }`), `advertisingOptOutLine`, `noticeTopic` (the catalog's `notices.topic`), and `timeZone` (Asia/Seoul when absent) |
+| `deployment` | Backend deployment settings: `advertisingRules` (`kr` or `none`), `advertisingSender` (`{ name?, contact }`), `advertisingOptOutLine`, and `timeZone` (Asia/Seoul when absent) |
 | `steps` | Actor actions in order; a step may carry `returns` or `throws` (`{ code }`). `returns` is matched as a subset: objects by their listed keys, and arrays item by item with the same length |
 | `expect` | Final assertions; a key that is absent is not asserted, and a field set to `null` asserts that the field is absent |
 

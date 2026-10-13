@@ -11,7 +11,7 @@
         },
         "consent-result.advertising.withdrawn": {
           "title": "Promotional notifications",
-          "body": "You withdrew from promotional notifications on {{consentDate}}."
+          "body": "You withdrew from promotional notifications on {consentDate}."
         },
         "consent-result.night.granted": {
           "title": "Night-time promotional notifications",

@@ -178,10 +178,14 @@ describe('notifications conformance vectors', () => {
         advertisingRules: 'kr',
         advertisingSender: { name: 'Studio', contact: '080-1234-5678' },
         advertisingOptOutLine: '무료 수신거부: 설정 > 알림',
-        noticeTopic: 'consent-notice',
         timeZone: 'Asia/Seoul',
       },
     })).toBe(true);
+    // The notice topic is the `notices` block's, not a deployment setting.
+    expect(isNotificationConformanceVector({
+      ...base,
+      deployment: { advertisingRules: 'kr', noticeTopic: 'consent-notice' },
+    })).toBe(false);
     expect(isNotificationConformanceVector({ ...base, deployment: { advertisingSender: { name: 'Studio' } } }))
       .toBe(false);
     expect(isNotificationConformanceVector({ ...base, deployment: { advertisingRules: 'eu' } })).toBe(false);
@@ -255,15 +259,27 @@ describe('notifications conformance vectors', () => {
       .toBe(false);
   });
 
-  it("reads a vector's catalog notice copy, every variant in every locale", () => {
+  it("reads a vector's notices as the catalog's block: its topic, and copy under the catalog rules", () => {
     const base = assertNotificationConformanceVector(readVector('advertising-notices.json'));
+    expect(base.notices?.topic).toBe('consent-notice');
     const ko = base.notices?.copy['ko'];
     expect(ko === undefined ? [] : Object.keys(ko).sort()).toEqual([...notificationNoticeVariants].sort());
+    const withCopy = (copy: unknown) => ({ ...base, notices: { topic: 'consent-notice', copy } });
+    expect(isNotificationConformanceVector(withCopy({ ko }))).toBe(true);
+    expect(isNotificationConformanceVector({ ...base, notices: { copy: { ko } } })).toBe(false);
     if (ko !== undefined) {
       const { 'reconfirmation.night': _night, ...withoutNight } = ko;
-      expect(isNotificationConformanceVector({ ...base, notices: { copy: { ko: withoutNight } } })).toBe(false);
-      expect(isNotificationConformanceVector({ ...base, notices: { copy: { ko }, topic: 'consent-notice' } }))
-        .toBe(false);
+      const night = (title: string, body: string) => withCopy({ ko: { ...ko, 'reconfirmation.night': { title, body } } });
+      expect(isNotificationConformanceVector(withCopy({ ko: withoutNight }))).toBe(false);
+      // The catalog rules, read in the runner's default locale ko.
+      expect(() => assertNotificationConformanceVector(withCopy({ en: ko })))
+        .toThrow('notices.copy: must include the default locale ko');
+      expect(() => assertNotificationConformanceVector(night(' ', '{{consentDate}}')))
+        .toThrow('notices.copy["ko"]["reconfirmation.night"].title: a notice\'s title must not be blank');
+      expect(() => assertNotificationConformanceVector(night('확인', '확인')))
+        .toThrow('notices.copy["ko"]["reconfirmation.night"]: a notice states the date');
+      expect(() => assertNotificationConformanceVector(night('확인', '{consentDate}')))
+        .toThrow('a brace outside a {{name}} placeholder');
     }
   });
 

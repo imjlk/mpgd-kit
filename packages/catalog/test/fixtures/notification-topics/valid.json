@@ -90,7 +90,7 @@
         "ait": { "templateSetCode": "fixture-rival-challenge", "agreement": "required" },
         "android": { "channelId": "social" },
         "reddit": { "title": "New challenge", "body": "{{rival}} sent you a challenge." },
-        "storefront-web": { "channel": "open targets stay unchecked" }
+        "storefront-web": { "channel": "an open target follows no provider rules" }
       }
     },
     {

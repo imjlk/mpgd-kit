@@ -325,8 +325,10 @@ describe('notifications contract', () => {
     expect(assertNotificationDeployment({
       advertisingRules: 'kr',
       advertisingSender: { contact: '080-1234-5678' },
-      noticeTopic: 'consent-notice',
     }).advertisingRules).toBe('kr');
+    // The notice topic is the catalog's notices block, never a deployment setting.
+    expect(() => assertNotificationDeployment({ advertisingRules: 'kr', noticeTopic: 'consent-notice' }))
+      .toThrow();
     expect(() => assertNotificationDeployment({ advertisingRules: 'eu' })).toThrow();
     expect(() => assertNotificationDeployment({ timeZone: 'Mars/Olympus_Mons' })).toThrow(/Unknown time zone/u);
     expect(() => assertNotificationDeployment({ advertisingSender: { name: 'Studio' } })).toThrow();

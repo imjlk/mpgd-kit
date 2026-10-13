@@ -352,8 +352,6 @@ export interface NotificationDeployment {
   readonly advertisingSender?: NotificationAdvertisingSender;
   /** The free-of-charge opt-out line; `무료 수신거부: 수신거부 버튼` when absent or blank. */
   readonly advertisingOptOutLine?: NonEmptyString;
-  /** The catalog's `notices.topic`, which overdue consent notices are sent through under `kr`. */
-  readonly noticeTopic?: NonEmptyString;
   /** IANA zone for recipients that registered none; Asia/Seoul when absent. */
   readonly timeZone?: NonEmptyString;
 }
@@ -1140,6 +1138,24 @@ function nextNightWindowStart(at: string): string {
 // Content (RFC "Topic catalog" and gate step 8).
 
 const placeholderPattern = /\{\{\s*([A-Za-z_][A-Za-z0-9_-]*)\s*\}\}/gu;
+/** A brace, full-width ones included, which a text holds only inside a `{{name}}` placeholder. */
+const bracePattern = /[{}\uFF5B\uFF5D]/u;
+
+/**
+ * A text's `{{name}}` placeholders, as `fillNotificationTemplate` reads them,
+ * and whether a brace is left once they are taken out. `{name}`, `{{name}`,
+ * `{{a.b}}`, and full-width braces fill nothing and would reach the player as
+ * written.
+ */
+export function readNotificationTemplate(text: string): {
+  readonly placeholders: readonly string[];
+  readonly strayBrace: boolean;
+} {
+  return {
+    placeholders: [...text.matchAll(placeholderPattern)].map((match) => match[1] ?? ''),
+    strayBrace: bracePattern.test(text.replace(placeholderPattern, '')),
+  };
+}
 
 /** Fills `{{name}}` placeholders from `data`; a placeholder without a value is a caller error. */
 export function fillNotificationTemplate(text: string, data: NotificationTemplateData = {}): string {
@@ -2094,11 +2110,147 @@ export const notificationNoticeVariants = Object.freeze([
 /**
  * The catalog's `notices.copy`: per locale, a title and a body for every
  * notice variant. `{{consentDate}}`, the record's Asia/Seoul date, is the
- * only placeholder the server fills.
+ * only placeholder the server fills, and each variant uses it.
  */
 export type NotificationNoticeCopy = Readonly<
   Record<string, Readonly<Record<NotificationNoticeVariant, NotificationTopicCopy>>>
 >;
+
+/**
+ * The catalog's `notices` block, which a backend and a vector take as one:
+ * the topic consent notices go out through, and their copy per variant.
+ */
+export interface NotificationNoticeSettings {
+  /** A remote `service` topic that keeps only the delivery settings. */
+  readonly topic: NonEmptyString;
+  readonly copy: NotificationNoticeCopy;
+}
+
+function isPlainObject(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The rules `notices.copy` follows wherever it is read (the catalog
+ * validator, a backend, and the vector loader), each issue under `path`,
+ * with locale and variant keys in brackets (`["ko-KR"]["reconfirmation.night"]`):
+ *
+ * - an object of locales that includes `defaultLocale`, matched without
+ *   regard to case;
+ * - per locale, a title and a body for each notice variant, and no other key;
+ * - each title and body a string that is not blank, with no placeholder but
+ *   `{{consentDate}}` and no brace outside one; and `{{consentDate}}` in the
+ *   title or the body, because a notice states the date of the act it
+ *   reports on.
+ */
+export function notificationNoticeCopyIssues(
+  copy: unknown,
+  defaultLocale: string,
+  path = 'notices.copy',
+): NotificationTopicIssue[] {
+  if (copy === undefined) {
+    return [{
+      path,
+      message: 'a notice states what the player did; give a title and a body for each notice variant in each locale',
+    }];
+  }
+  if (!isPlainObject(copy)) {
+    return [{
+      path,
+      message: 'expected NotificationNoticeCopy: each locale mapped to a title and a body per notice variant',
+    }];
+  }
+  const issues: NotificationTopicIssue[] = [];
+  const variants: readonly string[] = notificationNoticeVariants;
+  // The same lookup a send makes: a locale matches a copy key without regard to case.
+  if (!Object.keys(copy).some((locale) => locale.toLowerCase() === defaultLocale.toLowerCase())) {
+    issues.push({ path, message: `must include the default locale ${defaultLocale}` });
+  }
+  for (const [locale, texts] of Object.entries(copy)) {
+    const at = `${path}[${JSON.stringify(locale)}]`;
+    if (!isPlainObject(texts)) {
+      issues.push({
+        path: at,
+        message: 'expected the notice copy of one locale: a title and a body per notice variant',
+      });
+      continue;
+    }
+    for (const variant of variants) {
+      if (texts[variant] === undefined) {
+        issues.push({
+          path: `${at}[${JSON.stringify(variant)}]`,
+          message: `every locale needs a title and a body for each notice variant; ${locale} lacks ${variant}`,
+        });
+      }
+    }
+    for (const [variant, text] of Object.entries(texts)) {
+      const variantPath = `${at}[${JSON.stringify(variant)}]`;
+      if (!variants.includes(variant)) {
+        issues.push({
+          path: variantPath,
+          message: `is not a notice variant; expected one of ${variants.join(', ')}`,
+        });
+      } else if (text !== undefined) {
+        issues.push(...noticeTextIssues(text, variantPath));
+      }
+    }
+  }
+  return issues;
+}
+
+/**
+ * One variant's title and body: strings, not blank, and filled only with
+ * `{{consentDate}}`, which one of them uses.
+ */
+function noticeTextIssues(text: unknown, path: string): NotificationTopicIssue[] {
+  if (!isPlainObject(text)) {
+    return [{ path, message: 'expected NotificationTopicCopy: a title and a body' }];
+  }
+  const issues: NotificationTopicIssue[] = [];
+  for (const key of Object.keys(text)) {
+    if (key !== 'title' && key !== 'body') {
+      issues.push({
+        path: `${path}.${key}`,
+        message: "is not part of a notice's text; a notice has only a title and a body",
+      });
+    }
+  }
+  let dated = false;
+  for (const field of ['title', 'body'] as const) {
+    const value = text[field];
+    if (typeof value !== 'string') {
+      issues.push({ path: `${path}.${field}`, message: `expected a string ${field}` });
+      continue;
+    }
+    if (value.trim().length === 0) {
+      issues.push({ path: `${path}.${field}`, message: `a notice's ${field} must not be blank` });
+    }
+    const { placeholders, strayBrace } = readNotificationTemplate(value);
+    for (const name of placeholders) {
+      if (name === 'consentDate') {
+        dated = true;
+      } else {
+        issues.push({
+          path: `${path}.${field}`,
+          message: `notices are filled only with {{consentDate}}; {{${name}}} would have no value`,
+        });
+      }
+    }
+    if (strayBrace) {
+      issues.push({
+        path: `${path}.${field}`,
+        message: 'a brace outside a {{name}} placeholder reaches the player as written; write {{consentDate}}',
+      });
+    }
+  }
+  if (!dated) {
+    issues.push({
+      path,
+      message: 'a notice states the date of the act it reports on; its title or body needs {{consentDate}}',
+    });
+  }
+  return issues;
+}
 
 /** The variant a notice is given in, from its kind, its record's kind, and the record's state. */
 export function notificationNoticeVariant(notice: {

@@ -20,7 +20,7 @@ keys and read every timestamp and date strictly (`isNotificationTimestamp`: a
 date that exists, `T`, and an offset), the delivery provider registry entry
 with reference entries for FCM, Apps in Toss, and Devvit, the backend
 deployment settings (`advertisingRules`, the advertising sender and opt-out
-line, the notice topic, the zone), and the pure policy gate
+line, the zone), and the pure policy gate
 `evaluateNotificationDelivery`: an unknown topic, channel, and purpose;
 recipients and the Devvit link; positively granted permission per provider
 kind, host agreements unless a topic needs none (then the host decides each

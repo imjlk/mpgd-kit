@@ -79,6 +79,7 @@
     }
   ],
   "notices": {
+    "topic": "consent-notice",
     "copy": {
       "ko": {
         "consent-result.advertising.granted": {
@@ -143,8 +144,7 @@
     "advertisingRules": "kr",
     "advertisingSender": {
       "contact": "080-1234-5678"
-    },
-    "noticeTopic": "consent-notice"
+    }
   },
   "steps": [
     {

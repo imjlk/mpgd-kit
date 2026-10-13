@@ -1,8 +1,8 @@
-import typia, { type tags } from 'typia';
+import type { tags } from 'typia';
 
 import {
   findNotificationCopy,
-  notificationNoticeVariants,
+  notificationNoticeCopyIssues,
   notificationTopicDefinitionIssues,
   notificationTopicNeedsNoAgreement,
   resolveNotificationAdvertisingSettings,
@@ -13,6 +13,11 @@ import {
   type NotificationTopicDefinition,
   type NotificationTopicMapping,
 } from '@mpgd/platform/notifications';
+
+import {
+  validateNotificationTopicCatalogShape,
+  type NotificationTopicCatalog as NotificationTopicCatalogShape,
+} from './notification-topics-shape.js';
 
 export { isRootRelativeNotificationRoute } from '@mpgd/platform/notifications';
 
@@ -27,6 +32,10 @@ export interface NotificationTopicCatalogEntry extends NotificationTopicDefiniti
   readonly targets?: Readonly<Record<string, NotificationTopicMapping>>;
 }
 
+/**
+ * The consent notices the server sends; a backend takes the block as is, as
+ * its `NotificationNoticeSettings`.
+ */
 export interface NotificationTopicCatalogNotices {
   /**
    * The `service` topic the server sends overdue consent notices through
@@ -38,7 +47,8 @@ export interface NotificationTopicCatalogNotices {
    * Per locale, a title and a body for each notice variant
    * (`notificationNoticeVariants`), so a notice says whether the player
    * consented or withdrew, and to advertising or night sending. The only
-   * placeholder is `{{consentDate}}`, the record's Asia/Seoul date.
+   * placeholder is `{{consentDate}}`, the record's Asia/Seoul date, which
+   * each variant uses.
    */
   readonly copy: NotificationNoticeCopy;
 }
@@ -46,8 +56,8 @@ export interface NotificationTopicCatalogNotices {
 export interface NotificationTopicCatalog {
   readonly version: string & tags.MinLength<1>;
   /**
-   * The locale every topic's `copy` must include, matched without regard to
-   * case, and used when no other locale fits.
+   * The locale every topic's `copy`, and `notices.copy`, must include,
+   * matched without regard to case, and used when no other locale fits.
    */
   readonly defaultLocale: string & tags.MinLength<1>;
   readonly notices?: NotificationTopicCatalogNotices;
@@ -64,7 +74,10 @@ export interface NotificationTopicCatalogValidationOptions {
   /**
    * The provider registry entry each target name enables. A target with an
    * entry has its mappings checked against the entry's mapping rules and
-   * purposes; other target names are open and stay unchecked.
+   * purposes. Another target name is open: no provider's rules apply to its
+   * mappings, but the catalog's own rules still do, such as no title or body
+   * in the notice topic's mapping, and under the Korean rules the notice
+   * topic on every target that delivers advertising.
    */
   readonly targetProviders?: Readonly<Record<string, NotificationProviderRegistryEntry>>;
   /**
@@ -82,31 +95,11 @@ export type NotificationTopicCatalogValidation =
     }
   | { readonly valid: false; readonly issues: readonly NotificationTopicCatalogIssue[] };
 
-/** A notice variant's text as the shape check reads it; the notice rules check the rest. */
-interface NotificationNoticeTextShape {
-  readonly title: string;
-  readonly body: string;
-}
-
-/**
- * The catalog as the shape check reads it: `notices.copy` may lack, misname,
- * or blank a variant, which the notice rules then report by name with every
- * other issue.
- */
-interface NotificationTopicCatalogShape extends Omit<NotificationTopicCatalog, 'notices'> {
-  readonly notices?: {
-    readonly topic: string & tags.MinLength<1>;
-    readonly copy?: Readonly<Record<string, Readonly<Record<string, NotificationNoticeTextShape>>>>;
-  };
-}
-
-const validateNotificationTopicCatalogShape =
-  typia.createValidateEquals<NotificationTopicCatalogShape>();
-
 /**
  * Validates a topic catalog and reports every issue it finds:
  *
- * - the shape (unknown keys are rejected);
+ * - the shape (unknown keys are rejected, and each target's mapping is an
+ *   object);
  * - each topic's own rules from `notificationTopicDefinitionIssues` in
  *   `@mpgd/platform/notifications`: a trimmed id that is not `__proto__`,
  *   channels that do not repeat, no `local` channel for `advertising`,
@@ -119,12 +112,13 @@ const validateNotificationTopicCatalogShape =
  *   without regard to case, as `findNotificationCopy` matches it);
  * - the notices: `notices.topic` names a declared `service` topic with the
  *   `remote` channel that keeps only the delivery settings (no `local`
- *   channel, no `copy`, no `title` or `body` in a mapping, and no provider
- *   that sends a host template or its mapping's own text, which could not
- *   state the record), and `notices.copy` includes
- *   `defaultLocale`, matched the same way, and gives every locale a title and
- *   a body for each of `notificationNoticeVariants`, none blank and none with
- *   a placeholder but `{{consentDate}}`;
+ *   channel, no `copy`, no `title` or `body` in a mapping, not even one
+ *   alone, and no provider that sends a host template or its mapping's own
+ *   text, which could not state the record), and `notices.copy` follows
+ *   `notificationNoticeCopyIssues` in `@mpgd/platform/notifications`: it
+ *   includes `defaultLocale`, matched the same way, and gives every locale a
+ *   title and a body for each of `notificationNoticeVariants`, none blank,
+ *   with `{{consentDate}}` in one of them and no other placeholder or brace;
  * - for a target with a provider entry: each mapping field follows its rule
  *   (required, a string within `maxLength` Unicode code points, one of
  *   `values`, matching `pattern`, which the `u` flag reads; a pattern that
@@ -134,16 +128,18 @@ const validateNotificationTopicCatalogShape =
  *   with the `remote` channel maps only to a provider whose `purposes`
  *   include its purpose, an `advertising` topic maps only to a provider that
  *   delivers advertising as free-form content (under the Korean rules, also
- *   with an expiry and actions), and a topic on a free-form provider has its
- *   own text: `copy`, or a `title` and a `body` in the mapping, except the
- *   notice topic, whose text is `notices.copy`;
+ *   with an expiry and actions, and able to carry the notice topic), and a
+ *   topic on a free-form provider has its own text: `copy`, or a `title` and
+ *   a `body` in the mapping, except the notice topic, whose text is
+ *   `notices.copy`;
  * - given an `advertising` topic, the deployment settings: `advertisingRules`,
  *   and under `kr` the catalog's notice topic, mapped on every target that
- *   maps an advertising topic and named by the deployment's `noticeTopic`,
- *   and the advertising sender and opt-out line as gate step 8 reads them
- *   (`resolveNotificationAdvertisingSettings`): a contact, and no blank
- *   contact, name, or opt-out line. A deployment `noticeTopic` must be the
- *   catalog's `notices.topic`.
+ *   maps an advertising topic, and the advertising sender and opt-out line as
+ *   gate step 8 reads them (`resolveNotificationAdvertisingSettings`): a
+ *   contact, and no blank contact, name, or opt-out line.
+ *
+ * Issue paths spell locale and variant keys in brackets, such as
+ * `notices.copy["ko-KR"]["reconfirmation.night"].title`.
  */
 export function validateNotificationTopicCatalog(
   input: unknown,
@@ -154,12 +150,13 @@ export function validateNotificationTopicCatalog(
     return {
       valid: false,
       issues: shape.errors.map((error) => ({
-        path: error.path.replace(/^\$input\.?/u, '') || '(catalog)',
+        path: bracketLocales(error.path.replace(/^\$input\.?/u, '')) || '(catalog)',
         message: `expected ${error.expected}`,
       })),
     };
   }
   const catalog = shape.data;
+  const targetProviders = options.targetProviders ?? {};
   const rules = options.deployment?.advertisingRules;
   const noticeTopic = catalog.notices?.topic;
   const issues: NotificationTopicCatalogIssue[] = [];
@@ -181,13 +178,18 @@ export function validateNotificationTopicCatalog(
       });
     }
     for (const [target, mapping] of Object.entries(topic.targets ?? {})) {
-      const provider = options.targetProviders !== undefined
-        && Object.prototype.hasOwnProperty.call(options.targetProviders, target)
-        ? options.targetProviders[target]
-        : undefined;
+      // The shape check lets a target's value be undefined.
+      if (mapping === undefined) {
+        issues.push({
+          path: `${at}.targets.${target}`,
+          message: 'expected NotificationTopicMapping, an object: {} maps a target that needs no fields',
+        });
+        continue;
+      }
+      const provider = providerFor(targetProviders, target);
       if (provider !== undefined) {
         issues.push(...mappingIssues(
-          `${at}.targets.${target}`,
+          { at: `${at}.targets.${target}`, target },
           topic,
           mapping,
           provider,
@@ -197,8 +199,8 @@ export function validateNotificationTopicCatalog(
       }
     }
   });
-  issues.push(...noticeIssues(catalog, ids, options.targetProviders ?? {}));
-  issues.push(...deploymentIssues(catalog, options.deployment));
+  issues.push(...noticeIssues(catalog, ids, targetProviders));
+  issues.push(...deploymentIssues(catalog, options.deployment, targetProviders));
   // With no issue, `notices.copy` has every variant for every locale: the
   // catalog has the declared type.
   return issues.length === 0
@@ -242,7 +244,7 @@ export function resolveNotificationTopicsForTarget(
 }
 
 function mappingIssues(
-  at: string,
+  { at, target }: { readonly at: string; readonly target: string },
   topic: NotificationTopicCatalogEntry,
   mapping: NotificationTopicMapping,
   provider: NotificationProviderRegistryEntry,
@@ -338,6 +340,13 @@ function mappingIssues(
         path: at,
         message: `${provider.provider} cannot carry the expiry and the opt-out action the Korean advertising rules need`,
       });
+    } else if (rules === 'kr' && sendsOwnText(provider)) {
+      // The notice topic cannot map here, so this is reported once, here,
+      // instead of as a notice topic missing from the target.
+      issues.push({
+        path: at,
+        message: `${provider.provider} sends the text of its mapping, so it cannot carry the consent notices that advertising on ${target} needs under the Korean rules; an advertising topic must not map to it`,
+      });
     }
   } else if (topic.channels.includes('remote') && !provider.purposes.includes(topic.purpose)) {
     // A local-only topic is never sent remotely, so the remote purposes do not apply to it.
@@ -371,6 +380,24 @@ function sendsOwnText(provider: NotificationProviderRegistryEntry): boolean {
     || provider.mapping['body']?.required === true;
 }
 
+/** The registry entry a target name enables; `undefined` for an open target. */
+function providerFor(
+  targetProviders: Readonly<Record<string, NotificationProviderRegistryEntry>>,
+  target: string,
+): NotificationProviderRegistryEntry | undefined {
+  return Object.prototype.hasOwnProperty.call(targetProviders, target)
+    ? targetProviders[target]
+    : undefined;
+}
+
+/** A typia path with a topic's `copy` locale key in brackets, as the notice rules spell it. */
+function bracketLocales(path: string): string {
+  return path.replace(
+    /^(topics\[\d+\]\.copy)\.([A-Za-z_$][\w$]*)/u,
+    (_match, copy: string, locale: string) => `${copy}[${JSON.stringify(locale)}]`,
+  );
+}
+
 /** A registry pattern as the `u` flag reads it, or `undefined` when it does not compile. */
 function compileMappingPattern(pattern: string): RegExp | undefined {
   try {
@@ -391,7 +418,7 @@ function noticeIssues(
   }
   return [
     ...noticeTopicIssues(catalog, catalog.notices.topic, ids, targetProviders),
-    ...noticeCopyIssues(catalog.notices.copy, catalog.defaultLocale),
+    ...notificationNoticeCopyIssues(catalog.notices.copy, catalog.defaultLocale),
   ];
 }
 
@@ -431,110 +458,33 @@ function noticeTopicIssues(
       message: `the notice topic's text is notices.copy, one per notice variant; ${topic.id} declares no copy of its own`,
     });
   }
-  // A mapping's own title and body would be sent in place of notices.copy. A
+  // The notice topic's mappings carry no text, so nothing can stand in for
+  // notices.copy: not a title or a body, and not one of them alone. A
   // provider that needs them is reported with the mapping rules.
   for (const [target, mapping] of Object.entries(topic.targets ?? {})) {
-    const provider = Object.prototype.hasOwnProperty.call(targetProviders, target)
-      ? targetProviders[target]
-      : undefined;
-    if (provider !== undefined && sendsOwnText(provider)) {
+    const provider = providerFor(targetProviders, target);
+    if (mapping === undefined || (provider !== undefined && sendsOwnText(provider))) {
       continue;
     }
     for (const field of ['title', 'body'] as const) {
       if (mapping[field] !== undefined) {
         issues.push({
           path: `${at}.targets.${target}.${field}`,
-          message: `the notice topic's text is notices.copy; a ${field} in its mapping would replace it`,
+          message: `the notice topic's text is notices.copy, so its mappings carry no title or body, not even one alone; remove ${field}`,
         });
       }
     }
   }
   return issues;
-}
-
-/**
- * `notices.copy` includes the default locale, and every locale gives a title
- * and a body for each notice variant, none blank and none with a placeholder
- * but `{{consentDate}}`, the only value the server fills.
- */
-function noticeCopyIssues(
-  copy: NonNullable<NotificationTopicCatalogShape['notices']>['copy'],
-  defaultLocale: string,
-): NotificationTopicCatalogIssue[] {
-  if (copy === undefined) {
-    return [{
-      path: 'notices.copy',
-      message: 'a notice states what the player did; declare notices.copy with a title and a body for each notice variant',
-    }];
-  }
-  const issues: NotificationTopicCatalogIssue[] = [];
-  const variants: readonly string[] = notificationNoticeVariants;
-  // The same lookup a send makes: a locale matches a copy key without regard to case.
-  if (!Object.keys(copy).some((locale) => locale.toLowerCase() === defaultLocale.toLowerCase())) {
-    issues.push({
-      path: 'notices.copy',
-      message: `notices.copy must include the default locale ${defaultLocale}`,
-    });
-  }
-  for (const [locale, texts] of Object.entries(copy)) {
-    const at = `notices.copy.${locale}`;
-    for (const variant of variants) {
-      if (!Object.prototype.hasOwnProperty.call(texts, variant)) {
-        issues.push({
-          path: `${at}["${variant}"]`,
-          message: `every locale needs a title and a body for each notice variant; ${locale} lacks ${variant}`,
-        });
-      }
-    }
-    for (const [variant, text] of Object.entries(texts)) {
-      const path = `${at}["${variant}"]`;
-      if (!variants.includes(variant)) {
-        issues.push({
-          path,
-          message: `is not a notice variant; expected one of ${variants.join(', ')}`,
-        });
-        continue;
-      }
-      for (const field of ['title', 'body'] as const) {
-        const value = text[field];
-        if (value.trim().length === 0) {
-          issues.push({
-            path: `${path}.${field}`,
-            message: `a notice's ${field} must not be blank`,
-          });
-        }
-        for (const name of placeholdersOf(value).filter(
-          (placeholder) => placeholder !== 'consentDate',
-        )) {
-          issues.push({
-            path: `${path}.${field}`,
-            message: `notices are filled only with {{consentDate}}; {{${name}}} would have no value`,
-          });
-        }
-      }
-    }
-  }
-  return issues;
-}
-
-const placeholderPattern = /\{\{\s*([A-Za-z_][A-Za-z0-9_-]*)\s*\}\}/gu;
-
-function placeholdersOf(text: string): string[] {
-  return [...text.matchAll(placeholderPattern)].map((match) => match[1] ?? '');
 }
 
 /** The deployment settings an advertising topic needs. */
 function deploymentIssues(
   catalog: NotificationTopicCatalogShape,
   deployment: NotificationDeployment | undefined,
+  targetProviders: Readonly<Record<string, NotificationProviderRegistryEntry>>,
 ): NotificationTopicCatalogIssue[] {
   const issues: NotificationTopicCatalogIssue[] = [];
-  if (deployment?.noticeTopic !== undefined && deployment.noticeTopic !== catalog.notices?.topic) {
-    issues.push({
-      path: 'deployment.noticeTopic',
-      message: `must be the catalog's notices.topic (${catalog.notices?.topic ?? 'none declared'})`,
-    });
-  }
   if (!catalog.topics.some((topic) => topic.purpose === 'advertising')) {
     return issues;
   }
@@ -555,14 +505,19 @@ function deploymentIssues(
         message: 'the Korean advertising rules send overdue consent notices through a service topic; declare notices.topic',
       });
     } else if (noticeTopic !== undefined) {
-      // A target that delivers advertising also delivers its notices.
+      // A target that delivers advertising also delivers its notices. A
+      // provider that cannot carry them is reported at the advertising mapping.
       const unmapped = new Set<string>();
       for (const topic of catalog.topics) {
         if (topic.purpose !== 'advertising') {
           continue;
         }
         for (const target of Object.keys(topic.targets ?? {})) {
-          if (!Object.prototype.hasOwnProperty.call(noticeTopic.targets ?? {}, target)) {
+          const provider = providerFor(targetProviders, target);
+          if (
+            !Object.prototype.hasOwnProperty.call(noticeTopic.targets ?? {}, target)
+            && !(provider !== undefined && sendsOwnText(provider))
+          ) {
             unmapped.add(target);
           }
         }
@@ -573,14 +528,6 @@ function deploymentIssues(
           message: `${noticeTopic.id} has no mapping for ${target}, which delivers an advertising topic and so its consent notices`,
         });
       }
-    }
-    // The scheduler sends overdue notices through the deployment's noticeTopic only.
-    if (deployment.noticeTopic === undefined) {
-      issues.push({
-        path: 'deployment.noticeTopic',
-        message: "the Korean advertising rules send overdue consent notices only through the deployment's noticeTopic; "
-          + `set it to the catalog's notices.topic (${catalog.notices?.topic ?? 'none declared'})`,
-      });
     }
     // The sender and the opt-out line as gate step 8 reads them.
     issues.push(...resolveNotificationAdvertisingSettings(deployment).issues);

@@ -20,6 +20,7 @@ import {
   normalizeNotificationTimestamp,
   notificationConsentResultDueBy,
   notificationKeyIssue,
+  notificationNoticeCopyIssues,
   notificationNoticeSendFrom,
   notificationNoticeVariant,
   notificationNoticeVariantCopy,
@@ -34,6 +35,7 @@ import {
   notificationTemplateDataIssue,
   notificationTopicDefinitionIssues,
   notificationTopicNeedsNoAgreement,
+  readNotificationTemplate,
   referenceNotificationProviders,
   referenceNotificationTargetProviders,
   renderNotificationAdvertisement,
@@ -718,6 +720,25 @@ describe('notification content', () => {
     expect(() => fillNotificationTemplate('{{toString}}', {})).toThrow(/no value/u);
   });
 
+  it('reads the placeholders a fill fills, and any brace left outside them', () => {
+    expect(readNotificationTemplate('{{ consentDate }}에 {{name}}님')).toEqual({
+      placeholders: ['consentDate', 'name'],
+      strayBrace: false,
+    });
+    for (const text of [
+      '{consentDate}',
+      '{{consentDate}',
+      'consentDate}}',
+      '{{consent.date}}',
+      '｛｛consentDate｝｝',
+      '{{consentDate}}}',
+    ]) {
+      expect(readNotificationTemplate(text).strayBrace, text).toBe(true);
+    }
+    // A fill leaves such a brace in the text as written.
+    expect(fillNotificationTemplate('{consentDate}', { consentDate: '2026-10-12' })).toBe('{consentDate}');
+  });
+
   it('puts (광고) and one space before the text, once', () => {
     expect(applyNotificationAdvertisingLabel('Sale')).toBe('(광고) Sale');
     expect(applyNotificationAdvertisingLabel('(광고) Sale')).toBe('(광고) Sale');
@@ -1069,6 +1090,33 @@ describe('notification consent notices', () => {
     );
     expect(withdrawal === undefined ? undefined : notificationNoticeVariant(withdrawal))
       .toBe('consent-result.advertising.withdrawn');
+  });
+
+  it('checks notice copy by the catalog rules, with locale and variant keys in brackets', () => {
+    const texts = Object.fromEntries(
+      notificationNoticeVariants.map((variant) => [variant, { title: '안내', body: '{{consentDate}}' }]),
+    );
+    expect(notificationNoticeCopyIssues({ 'ko-KR': texts }, 'ko-kr')).toEqual([]);
+    expect(notificationNoticeCopyIssues({ 'ko-KR': { ...texts, 'reconfirmation.night': undefined } }, 'ko-KR', 'copy'))
+      .toEqual([{
+        path: 'copy["ko-KR"]["reconfirmation.night"]',
+        message: 'every locale needs a title and a body for each notice variant; ko-KR lacks reconfirmation.night',
+      }]);
+    expect(notificationNoticeCopyIssues({ ko: undefined, en: [] }, 'ko').map((issue) => issue.path))
+      .toEqual(['notices.copy["ko"]', 'notices.copy["en"]']);
+    expect(notificationNoticeCopyIssues(
+      { ko: { ...texts, 'reconfirmation.night': { title: '확인', body: '{{consentDate}의 동의' } } },
+      'ko',
+    )).toEqual([
+      {
+        path: 'notices.copy["ko"]["reconfirmation.night"].body',
+        message: 'a brace outside a {{name}} placeholder reaches the player as written; write {{consentDate}}',
+      },
+      {
+        path: 'notices.copy["ko"]["reconfirmation.night"]',
+        message: 'a notice states the date of the act it reports on; its title or body needs {{consentDate}}',
+      },
+    ]);
   });
 
   it("reads one variant's copy per locale as a topic's copy, with the same locale lookup", () => {

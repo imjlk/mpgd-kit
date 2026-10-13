@@ -2,6 +2,7 @@ import typia, { type tags } from 'typia';
 
 import {
   isValidNotificationTimeZone,
+  notificationNoticeCopyIssues,
   notificationTopicDefinitionIssues,
   type NotificationCapabilities,
   type NotificationChannel,
@@ -11,8 +12,8 @@ import {
   type NotificationDeferralReason,
   type NotificationDeliveryStatus,
   type NotificationDeployment,
-  type NotificationNoticeCopy,
   type NotificationNoticeKind,
+  type NotificationNoticeSettings,
   type NotificationPermissionOutcome,
   type NotificationPermissionState,
   type NotificationReminderRoute,
@@ -38,6 +39,9 @@ type NonNegativeInteger = number & tags.Type<'uint32'>;
 type PositiveInteger = number & tags.Type<'uint32'> & tags.Minimum<1>;
 type TemplateData = Readonly<Record<string, string | number | boolean>>;
 type CalendarDate = string & tags.Format<'date'>;
+
+/** The default locale a vector runs in, unless the runner's options name another. */
+export const notificationConformanceDefaultLocale = 'ko';
 
 /** A capability path such as `permission.prompt` or `remote.purposes`. */
 type CapabilityPath = string & tags.Pattern<'^[a-zA-Z]+(?:\\.[a-zA-Z]+)*$'>;
@@ -69,12 +73,6 @@ export interface NotificationConformanceContextFixture {
   readonly now: IsoTimestamp;
   /** The device's zone, which the runtime registers. */
   readonly timeZone: NonEmptyString;
-}
-
-/** The catalog's `notices` block, without the topic the deployment's `noticeTopic` names. */
-export interface NotificationConformanceNoticesFixture {
-  /** Per locale, the title and body of every notice variant. */
-  readonly copy: NotificationNoticeCopy;
 }
 
 export interface NotificationConformanceHostFixture {
@@ -452,10 +450,11 @@ export interface NotificationConformanceVector {
    */
   readonly catalog: readonly NotificationTopicDeclaration[];
   /**
-   * The catalog's `notices.copy`, which the scheduler's notice pushes are
-   * given in; the notice topic in `catalog` declares no copy of its own.
+   * The catalog's `notices` block: the topic the scheduler's notice pushes go
+   * out through, which `catalog` declares with no copy of its own, and their
+   * copy per variant, which follows the catalog's rules.
    */
-  readonly notices?: NotificationConformanceNoticesFixture;
+  readonly notices?: NotificationNoticeSettings;
   readonly context: NotificationConformanceContextFixture;
   readonly host?: NotificationConformanceHostFixture;
   /** Backend deployment settings; Asia/Seoul is the zone when `timeZone` is absent. */
@@ -473,8 +472,10 @@ const assertNotificationConformanceVectorShape =
  * with `rate-limited`, a `reason` exactly with `rejected`), time zones that
  * `Intl` knows, every timestamp and date read strictly (a date that exists,
  * `T`, and an offset), unique catalog topic ids that meet the topic
- * definition rules, and that the vector's own fixture profile satisfies its
- * `appliesTo` predicates.
+ * definition rules, a `notices.copy` that follows the catalog's rules
+ * (`notificationNoticeCopyIssues`) in the default locale
+ * `notificationConformanceDefaultLocale`, and that the vector's own fixture
+ * profile satisfies its `appliesTo` predicates.
  */
 export function assertNotificationConformanceVector(input: unknown): NotificationConformanceVector {
   const vector = assertNotificationConformanceVectorShape(input);
@@ -504,6 +505,17 @@ export function assertNotificationConformanceVector(input: unknown): Notificatio
     }
     ids.add(topic.id);
     const issues = notificationTopicDefinitionIssues(topic, `catalog[${index}]`);
+    if (issues.length > 0) {
+      throw new TypeError(
+        `Vector ${vector.vector}: ${issues.map((issue) => `${issue.path}: ${issue.message}`).join('; ')}`,
+      );
+    }
+  }
+  if (vector.notices !== undefined) {
+    const issues = notificationNoticeCopyIssues(
+      vector.notices.copy,
+      notificationConformanceDefaultLocale,
+    );
     if (issues.length > 0) {
       throw new TypeError(
         `Vector ${vector.vector}: ${issues.map((issue) => `${issue.path}: ${issue.message}`).join('; ')}`,

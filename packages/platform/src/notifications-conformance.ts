@@ -18,6 +18,7 @@ import {
   notificationDefaultDeploymentTimeZone,
   NotificationError,
   notificationKeyIssue,
+  notificationNoticeCopyIssues,
   notificationNoticeSendFrom,
   notificationNoticeVariant,
   notificationNoticeVariantCopy,
@@ -49,8 +50,8 @@ import {
   type NotificationEndpointRegistration,
   type NotificationEvent,
   type NotificationNotice,
-  type NotificationNoticeCopy,
   type NotificationNoticeIdentity,
+  type NotificationNoticeSettings,
   type NotificationNoticeVariant,
   type NotificationPermissionOutcome,
   type NotificationPermissionResult,
@@ -71,6 +72,7 @@ import {
 } from './notifications.js';
 import {
   notificationConformanceAppliesToReason,
+  notificationConformanceDefaultLocale,
   type NotificationConformanceDeliverInput,
   type NotificationConformanceEndpointFixture,
   type NotificationConformanceExpectation,
@@ -100,7 +102,7 @@ import {
  * vector whose `appliesTo` they do not satisfy.
  */
 
-export const notificationConformanceDefaultLocale = 'ko';
+export { notificationConformanceDefaultLocale };
 
 /** The evidence schema the fake host attaches to a host-rendered agreement. */
 export const notificationConformanceAgreementSchema = 'fixture.host-agreement.v1';
@@ -862,11 +864,12 @@ export interface CreateNotificationConformanceBackendInput {
   readonly clock: Pick<NotificationConformanceClock, 'now'>;
   readonly deployment?: NotificationDeployment;
   /**
-   * The catalog's `notices.copy`, which consent notice pushes are given in;
-   * required where the deployment's notice topic is declared under the
-   * Korean rules.
+   * The catalog's `notices` block as is: the topic consent notice pushes go
+   * out through, and their copy, which follows the catalog's rules
+   * (`notificationNoticeCopyIssues` with `defaultLocale`). Without it the
+   * scheduler sends no notice.
    */
-  readonly noticeCopy?: NotificationNoticeCopy;
+  readonly notices?: NotificationNoticeSettings;
   readonly defaultLocale: string;
   /** The recipient of a `deliver` without a `player`, and the owner of `registerInstallation`. */
   readonly defaultPlayer: string;
@@ -965,10 +968,10 @@ function noEndpoint(): NotificationDeliveryRefusal {
  *   kind and time name it, and so does each notice that reports on it. It
  *   records a notice only while that notice is listed, so a retried or early
  *   call changes nothing, and a pushed notice the game gave while the push
- *   waited is not sent again. Notices go out through the deployment's notice
- *   topic only on a target that declares it; a target that delivers
- *   advertising under the Korean rules must declare it, as the catalog
- *   validator requires.
+ *   waited is not sent again. Notices go out through `notices.topic` only on
+ *   a target that declares it; a target that delivers advertising under the
+ *   Korean rules must declare it, as the catalog validator requires, and
+ *   `notices.copy` must follow the catalog's rules.
  * - Endpoints: a device endpoint is keyed by provider and installation, keeps
  *   the latest address, permission, and `lastRegisteredAt`, and moves with the
  *   installation to a newly authenticated player. An address is unique per
@@ -998,7 +1001,7 @@ function noEndpoint(): NotificationDeliveryRefusal {
  *   device endpoints after the lease, replayed through the gate without the
  *   key lookup), and, under the Korean rules, every unrecorded notice from the
  *   Asia/Seoul date seven days before it is due (as a `notice:` send of the
- *   notice topic in the notice's variant of `noticeCopy`, filled with
+ *   notice topic in the notice's variant of `notices.copy`, filled with
  *   `{{consentDate}}`, and recorded with channel `push` once delivered),
  *   earliest first and within the registry entry's `rate`. Only a free-form
  *   provider sends a notice, and never with its mapping's own text; a notice
@@ -1028,7 +1031,7 @@ export function createNotificationConformanceBackend(
    * notice topic with its variant's `notices.copy` in place of the topic's
    * own copy, so the gate resolves the locale as for any topic. A `title` or
    * `body` in the topic's mapping is dropped, so nothing replaces that copy.
-   * Notices are sent only where `noticeCopy` is required, so it is there.
+   * Notices are sent only through `notices.topic`, so the copy is there.
    */
   const topicFor = (
     request: SendRequest,
@@ -1043,13 +1046,13 @@ export function createNotificationConformanceBackend(
     return {
       ...delivery,
       ...(mapping === undefined ? {} : { mapping: rest }),
-      copy: notificationNoticeVariantCopy(input.noticeCopy ?? {}, origin.variant),
+      copy: notificationNoticeVariantCopy(input.notices?.copy ?? {}, origin.variant),
     };
   };
   if (input.deployment !== undefined) {
     assertNotificationDeployment(input.deployment);
   }
-  const noticeTopic = input.deployment?.noticeTopic;
+  const noticeTopic = input.notices?.topic;
   // Required only where the catalog validator requires it: declared, it is a
   // remote service topic; a target that delivers advertising under the Korean
   // rules must declare it. Another target sends no notice pushes.
@@ -1058,9 +1061,7 @@ export function createNotificationConformanceBackend(
     noticeTopicHere !== undefined
     && (noticeTopicHere.purpose !== 'service' || !noticeTopicHere.channels.includes('remote'))
   ) {
-    throw new TypeError(
-      `The deployment's notice topic ${noticeTopic} is not a declared service topic.`,
-    );
+    throw new TypeError(`The notice topic ${noticeTopic} is not a declared service topic.`);
   }
   if (
     noticeTopic !== undefined
@@ -1069,15 +1070,20 @@ export function createNotificationConformanceBackend(
     && input.catalog.some((topic) => topic.purpose === 'advertising')
   ) {
     throw new TypeError(
-      `The deployment's notice topic ${noticeTopic} is not declared for a target that delivers advertising.`,
+      `The notice topic ${noticeTopic} is not declared for a target that delivers advertising.`,
     );
   }
-  // The notice topic sends only `notices.copy`: its own copy cannot say what
-  // the player did.
-  if (rules === 'kr' && noticeTopicHere !== undefined && input.noticeCopy === undefined) {
-    throw new TypeError(
-      `The deployment's notice topic ${noticeTopicHere.id} needs the catalog's notices.copy to send notices.`,
-    );
+  // A notice says only its variant of `notices.copy`, so the copy follows the
+  // catalog's rules: every variant in every locale, and the consent date.
+  if (input.notices !== undefined) {
+    const issues = notificationNoticeCopyIssues(input.notices.copy, input.defaultLocale);
+    if (issues.length > 0) {
+      throw new TypeError(
+        `The catalog's notices.copy breaks the catalog rules: ${issues
+          .map((issue) => `${issue.path}: ${issue.message}`)
+          .join('; ')}`,
+      );
+    }
   }
   /** The notice topic is the scheduler's: a game send or reminder through it is refused. */
   const refuseNoticeTopic = (topic: string): void => {
@@ -3957,7 +3963,7 @@ export async function runNotificationConformanceVector(
       catalog: vector.catalog,
       clock,
       ...(vector.deployment === undefined ? {} : { deployment: vector.deployment }),
-      ...(vector.notices === undefined ? {} : { noticeCopy: vector.notices.copy }),
+      ...(vector.notices === undefined ? {} : { notices: vector.notices }),
       defaultLocale,
       defaultPlayer: vector.context.player,
       ...(host === undefined || readServerPermission === undefined

@@ -25,6 +25,7 @@ import {
   type NotificationDeployment,
   type NotificationEvent,
   type NotificationNoticeCopy,
+  type NotificationNoticeSettings,
   type NotificationNoticeVariant,
   type NotificationProvider,
   type NotificationTopicDeclaration,
@@ -142,6 +143,8 @@ const noticeCopy: NotificationNoticeCopy = {
     },
   },
 };
+/** The catalog's `notices` block, which the backend takes as is. */
+const notices: NotificationNoticeSettings = { topic: 'consent-notice', copy: noticeCopy };
 const weekend: NotificationTopicDeclaration = {
   id: 'weekend-event',
   purpose: 'advertising',
@@ -159,8 +162,8 @@ const kr: NotificationDeployment = {
 interface SetupOptions {
   readonly host?: NotificationConformanceHostFixture;
   readonly deployment?: NotificationDeployment;
-  /** The catalog's `notices.copy`; `noticeCopy` when absent. */
-  readonly noticeCopy?: NotificationNoticeCopy;
+  /** The catalog's `notices` block; without it the scheduler sends no notice. */
+  readonly notices?: NotificationNoticeSettings;
   readonly entry?: (entry: NotificationDeliveryProviderEntry) => NotificationDeliveryProviderEntry;
 }
 
@@ -190,7 +193,7 @@ function setup(
     catalog,
     clock,
     ...(options.deployment === undefined ? {} : { deployment: options.deployment }),
-    noticeCopy: options.noticeCopy ?? noticeCopy,
+    ...(options.notices === undefined ? {} : { notices: options.notices }),
     defaultLocale: 'ko',
     defaultPlayer: 'p-1',
     readServerPermission: (input) => host.readServerPermission(input),
@@ -477,12 +480,13 @@ describe('notifications conformance runner', () => {
     ]);
     const misconfigured = await runNotificationConformanceVector({
       ...vector,
-      deployment: { advertisingRules: 'kr', noticeTopic: 'energy-full' },
+      deployment: { advertisingRules: 'kr' },
+      notices: { topic: 'energy-full', copy: noticeCopy },
     });
     expect(misconfigured.failures).toEqual([{
       path: 'backend',
       expected: 'the deployment is valid',
-      actual: "TypeError: The deployment's notice topic energy-full is not a declared service topic.",
+      actual: 'TypeError: The notice topic energy-full is not a declared service topic.',
     }]);
   });
 });
@@ -1263,7 +1267,8 @@ describe('notifications fake backend: the scheduler and reminders', () => {
 
   it('sends unrecorded notices through the notice topic and records them; re-confirmation repeats', async () => {
     const { clock, host, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
-      deployment: { ...kr, noticeTopic: 'consent-notice' },
+      deployment: kr,
+      notices,
     });
     await runtime.start();
     backend.authenticate('p-1');
@@ -1321,7 +1326,8 @@ describe('notifications fake backend: the scheduler and reminders', () => {
 
   it('records a notice only while it is listed, so a late retry never skips the next re-confirmation', async () => {
     const { clock, host, backend, createRuntime } = setup(osProfile, [weekend, noticeTopic], {
-      deployment: { ...kr, noticeTopic: 'consent-notice' },
+      deployment: kr,
+      notices,
     });
     // What the runtime sends the backend.
     const forwarded: unknown[] = [];
@@ -1841,7 +1847,8 @@ describe('notifications reference runtime and fakes: attribution, failures, and 
 
   it('keeps the notices of records written in one call apart, and records a notice only while listed', async () => {
     const { clock, host, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
-      deployment: { ...kr, noticeTopic: 'consent-notice' },
+      deployment: kr,
+      notices,
     });
     await runtime.start();
     backend.authenticate('p-1');
@@ -1871,13 +1878,10 @@ describe('notifications reference runtime and fakes: attribution, failures, and 
   });
 
   it('fails a notice the notice topic cannot render once, and leaves it owed in the game', async () => {
-    const ko = noticeCopy['ko'];
-    const broken: NotificationNoticeCopy = ko === undefined ? noticeCopy : {
-      ko: { ...ko, 'consent-result.advertising.granted': { title: '안내', body: '{{playerName}}님, {{consentDate}}' } },
-    };
-    const { clock, host, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
-      deployment: { ...kr, noticeTopic: 'consent-notice' },
-      noticeCopy: broken,
+    const unrenderable = { ...noticeTopic, route: 'https://evil.example/settings' };
+    const { clock, host, backend, runtime } = setup(osProfile, [weekend, unrenderable], {
+      deployment: kr,
+      notices,
     });
     await runtime.start();
     backend.authenticate('p-1');
@@ -2016,7 +2020,8 @@ describe('notifications reference runtime and fakes: attribution, failures, and 
 describe('notifications reference runtime and fakes: series and ownership', () => {
   it('does not send a notice again that the game gave while its push waited', async () => {
     const { clock, host, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
-      deployment: { ...kr, noticeTopic: 'consent-notice' },
+      deployment: kr,
+      notices,
     });
     await runtime.start();
     backend.authenticate('p-1');
@@ -2354,7 +2359,8 @@ describe('notifications reference runtime and fakes: routes, registrations, and 
 
   it('answers notices for the player who began the call, and refuses after an account switch', async () => {
     const { host, backend, createRuntime } = setup(osProfile, [weekend, noticeTopic], {
-      deployment: { ...kr, noticeTopic: 'consent-notice' },
+      deployment: kr,
+      notices,
     });
     const capabilitiesRead = gate();
     const runtime = createRuntime({
@@ -2437,30 +2443,44 @@ describe('notifications reference runtime and fakes: routes, registrations, and 
     await expect(offline.runUntilIdle()).resolves.toBeUndefined();
   });
 
-  it("needs the catalog's notices.copy wherever the notice topic sends under the Korean rules", () => {
+  it("checks the catalog's notices.copy as the catalog validator does", () => {
     const clock = createNotificationConformanceClock(now);
     const entry = notificationConformanceRegistryEntry(osProfile);
-    const create = (deployment: NotificationDeployment, copy?: NotificationNoticeCopy) => () =>
+    const create = (copy: unknown, deployment: NotificationDeployment = kr) => () =>
       createNotificationConformanceBackend({
         entry,
         catalog: [weekend, noticeTopic],
         clock,
         deployment,
-        ...(copy === undefined ? {} : { noticeCopy: copy }),
+        notices: { topic: 'consent-notice', copy: copy as NotificationNoticeCopy },
         defaultLocale: 'ko',
         defaultPlayer: 'p-1',
       });
-    expect(create({ ...kr, noticeTopic: 'consent-notice' }))
-      .toThrow(/The deployment's notice topic consent-notice needs the catalog's notices\.copy/u);
-    expect(create({ ...kr, noticeTopic: 'consent-notice' }, noticeCopy)).not.toThrow();
-    // Without the Korean rules the scheduler sends no notice.
-    expect(create({ advertisingRules: 'none', noticeTopic: 'consent-notice' })).not.toThrow();
+    expect(create(noticeCopy)).not.toThrow();
+    const ko = noticeCopy['ko'];
+    const withText = (variant: NotificationNoticeVariant, title: string, body: string) =>
+      ({ ko: { ...ko, [variant]: { title, body } } });
+    const { 'reconfirmation.night': _night, ...withoutNight } = ko ?? {};
+    for (const [copy, issue] of [
+      [undefined, 'notices.copy: a notice states what the player did'],
+      [{ en: ko }, 'notices.copy: must include the default locale ko'],
+      [{ ko: withoutNight }, 'notices.copy["ko"]["reconfirmation.night"]: every locale needs'],
+      [withText('reconfirmation.night', ' ', '{{consentDate}}'), '["reconfirmation.night"].title: a notice\'s title must not be blank'],
+      [withText('reconfirmation.night', '안내', '안내'), '["reconfirmation.night"]: a notice states the date'],
+      [withText('reconfirmation.night', '{{playerName}}', '{{consentDate}}'), '{{playerName}} would have no value'],
+      [withText('reconfirmation.night', '안내', '{consentDate}에 동의'), 'a brace outside a {{name}} placeholder'],
+    ] as const) {
+      expect(create(copy)).toThrow(issue);
+    }
+    // The rules hold under any advertising rules: the copy is the catalog's.
+    expect(create({ en: ko }, { advertisingRules: 'none' })).toThrow(/must include the default locale ko/u);
   });
 
   it("sends each notice in its variant's copy, never the notice topic's own", async () => {
     const withOwnCopy = { ...noticeTopic, copy: { ko: { title: '알림', body: '{{consentDate}}' } } };
     const { clock, host, backend, runtime } = setup(osProfile, [weekend, withOwnCopy], {
-      deployment: { ...kr, noticeTopic: 'consent-notice' },
+      deployment: kr,
+      notices,
     });
     await runtime.start();
     backend.authenticate('p-1');
@@ -2480,7 +2500,8 @@ describe('notifications reference runtime and fakes: routes, registrations, and 
 
   it('pushes each kind of notice in its own variant, also when a push is replayed', async () => {
     const { clock, host, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
-      deployment: { ...kr, noticeTopic: 'consent-notice' },
+      deployment: kr,
+      notices,
     });
     await runtime.start();
     backend.authenticate('p-1');
@@ -2524,8 +2545,8 @@ describe('notifications reference runtime and fakes: routes, registrations, and 
     const sent: string[] = [];
     for (const locale of ['en-US', 'fr']) {
       const { clock, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
-        deployment: { ...kr, noticeTopic: 'consent-notice' },
-        noticeCopy: bilingual,
+        deployment: kr,
+        notices: { ...notices, copy: bilingual },
       });
       backend.authenticate('p-1');
       await backend.registerEndpoint({
@@ -2544,13 +2565,12 @@ describe('notifications reference runtime and fakes: routes, registrations, and 
   it('requires the notice topic only on a target that delivers advertising, as the validator does', () => {
     const clock = createNotificationConformanceClock(now);
     const entry = notificationConformanceRegistryEntry(osProfile);
-    const deployment = { ...kr, noticeTopic: 'consent-notice' };
     // A target that maps no advertising topic need not declare the notice topic.
     expect(() => createNotificationConformanceBackend({
-      entry, catalog: [challenge], clock, deployment, defaultLocale: 'ko', defaultPlayer: 'p-1',
+      entry, catalog: [challenge], clock, deployment: kr, notices, defaultLocale: 'ko', defaultPlayer: 'p-1',
     })).not.toThrow();
     expect(() => createNotificationConformanceBackend({
-      entry, catalog: [challenge, weekend], clock, deployment, defaultLocale: 'ko', defaultPlayer: 'p-1',
+      entry, catalog: [challenge, weekend], clock, deployment: kr, notices, defaultLocale: 'ko', defaultPlayer: 'p-1',
     })).toThrow(/not declared for a target that delivers advertising/u);
   });
 });
@@ -2643,7 +2663,7 @@ describe('notifications conformance runner: hosts, identifiers, and timestamps',
 describe('notifications fake backend: what a notice says, and who sends it', () => {
   /** A device player who consented to advertising at `now`. */
   async function consented(catalog: readonly NotificationTopicDeclaration[]) {
-    const ready = setup(osProfile, catalog, { deployment: { ...kr, noticeTopic: 'consent-notice' } });
+    const ready = setup(osProfile, catalog, { deployment: kr, notices });
     await ready.runtime.start();
     ready.backend.authenticate('p-1');
     ready.host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
@@ -2666,7 +2686,8 @@ describe('notifications fake backend: what a notice says, and who sends it', () 
   it('sends no notice through a provider that is not free-form, so the game still owes it', async () => {
     const templated = { ...noticeTopic, mapping: { templateSetCode: 'notice', agreement: 'none' } };
     const { clock, backend, runtime } = setup(hostProfile, [templated], {
-      deployment: { ...kr, noticeTopic: 'consent-notice' },
+      deployment: kr,
+      notices,
     });
     backend.authenticate('p-1');
     await runtime.setAdvertisingConsent({ advertising: 'granted', textVersion: 'ad-v1' });

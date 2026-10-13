@@ -770,21 +770,6 @@
         "required": [],
         "additionalProperties": false
       },
-      "NotificationConformanceNoticesFixture": {
-        "type": "object",
-        "properties": {
-          "copy": {
-            "$ref": "#/components/schemas/ReadonlyRecordstringReadonlyRecordNotificationNoticeVariantNotificationTopicCopy",
-            "description": "Per locale, the title and body of every notice variant.",
-            "readOnly": true
-          }
-        },
-        "required": [
-          "copy"
-        ],
-        "additionalProperties": false,
-        "description": "The catalog's `notices` block, without the topic the deployment's `noticeTopic` names."
-      },
       "NotificationConformanceOutcomeExpectation": {
         "type": "object",
         "properties": {
@@ -2077,8 +2062,8 @@
             "readOnly": true
           },
           "notices": {
-            "$ref": "#/components/schemas/NotificationConformanceNoticesFixture",
-            "description": "The catalog's `notices.copy`, which the scheduler's notice pushes are\ngiven in; the notice topic in `catalog` declares no copy of its own.",
+            "$ref": "#/components/schemas/NotificationNoticeSettings",
+            "description": "The catalog's `notices` block: the topic the scheduler's notice pushes go\nout through, which `catalog` declares with no copy of its own, and their\ncopy per variant, which follows the catalog's rules.",
             "readOnly": true
           },
           "context": {
@@ -2206,11 +2191,6 @@
           "advertisingOptOutLine": {
             "$ref": "#/components/schemas/NonEmptyString",
             "description": "The free-of-charge opt-out line; `무료 수신거부: 수신거부 버튼` when absent or blank.",
-            "readOnly": true
-          },
-          "noticeTopic": {
-            "$ref": "#/components/schemas/NonEmptyString",
-            "description": "The catalog's `notices.topic`, which overdue consent notices are sent through under `kr`.",
             "readOnly": true
           },
           "timeZone": {
@@ -2363,6 +2343,26 @@
             "const": "reconfirmation"
           }
         ]
+      },
+      "NotificationNoticeSettings": {
+        "type": "object",
+        "properties": {
+          "topic": {
+            "$ref": "#/components/schemas/NonEmptyString.o1",
+            "description": "A remote `service` topic that keeps only the delivery settings.",
+            "readOnly": true
+          },
+          "copy": {
+            "$ref": "#/components/schemas/ReadonlyRecordstringReadonlyRecordNotificationNoticeVariantNotificationTopicCopy",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "topic",
+          "copy"
+        ],
+        "additionalProperties": false,
+        "description": "The catalog's `notices` block, which a backend and a vector take as one:\nthe topic consent notices go out through, and their copy per variant."
       },
       "NotificationOpenPath": {
         "oneOf": [
