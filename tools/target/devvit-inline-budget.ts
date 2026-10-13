@@ -203,21 +203,33 @@ function srcsetReferences(input: string): readonly string[] {
   const whitespace = /[\t\n\f\r ]/u;
   let position = 0;
   while (position < input.length) {
-    while (position < input.length && (whitespace.test(input[position]!) || input[position] === ',')) position += 1;
+    while (position < input.length && (whitespace.test(input.charAt(position)) || input[position] === ',')) {
+      position += 1;
+    }
     const start = position;
-    while (position < input.length && !whitespace.test(input[position]!)) position += 1;
+    while (position < input.length && !whitespace.test(input.charAt(position))) {
+      position += 1;
+    }
     const url = input.slice(start, position);
-    if (url.length === 0) break;
+    if (url.length === 0) {
+      break;
+    }
     references.push(url.replace(/,+$/u, ''));
     // A data URL may contain commas. Only trailing commas or a descriptor
     // separator end a candidate; splitting the whole attribute on ',' is wrong.
-    if (url.endsWith(',')) continue;
+    if (url.endsWith(',')) {
+      continue;
+    }
     let inParens = false;
     while (position < input.length) {
       const character = input[position++];
-      if (character === '(') inParens = true;
-      else if (character === ')') inParens = false;
-      else if (character === ',' && !inParens) break;
+      if (character === '(') {
+        inParens = true;
+      } else if (character === ')') {
+        inParens = false;
+      } else if (character === ',' && !inParens) {
+        break;
+      }
     }
   }
   return references;
