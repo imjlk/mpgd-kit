@@ -59,12 +59,32 @@ describe('createLiteShell', () => {
   it('passes the original PointerEvent to onTap', () => {
     const onTap = vi.fn();
     const { element } = setup({ onTap });
-    const event = { pointerId: 1, clientX: 30, clientY: 40, timeStamp: 0 };
+    const event = {
+      pointerId: 1,
+      clientX: 30,
+      clientY: 40,
+      timeStamp: 0,
+      button: 0,
+      isPrimary: true,
+    };
     (element.listeners.get('pointerdown') as (e: unknown) => void)(event);
     const up = { ...event, timeStamp: 50 };
     (element.listeners.get('pointerup') as (e: unknown) => void)(up);
     expect(onTap).toHaveBeenCalledWith({ x: 20, y: 20 }, up);
   });
+
+  it.each([{ button: 2, isPrimary: true }, { button: 0, isPrimary: false }])(
+    'ignores secondary pointer input %o',
+    (input) => {
+      const onTap = vi.fn();
+      const { element, shell } = setup({ onTap });
+      const event = { pointerId: 1, clientX: 30, clientY: 40, timeStamp: 0, ...input };
+      (element.listeners.get('pointerdown') as (e: unknown) => void)(event);
+      (element.listeners.get('pointerup') as (e: unknown) => void)({ ...event, timeStamp: 50 });
+      expect(onTap).not.toHaveBeenCalled();
+      shell.dispose();
+    },
+  );
 
   it('calls onFirstFrame exactly once', () => {
     const onFirstFrame = vi.fn();

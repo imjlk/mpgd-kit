@@ -104,10 +104,18 @@ export function createLiteShell<Surface>(options: LiteShellOptions<Surface>): Li
     y: event.clientY,
     time: event.timeStamp,
   });
-  const onDown = (event: PointerEvent) => recognizer.down(event.pointerId, point(event));
+  const onDown = (event: PointerEvent) => {
+    if (event.isPrimary && event.button === 0) {
+      recognizer.down(event.pointerId, point(event));
+    }
+  };
   const onMove = (event: PointerEvent) => recognizer.move(event.pointerId, point(event));
   const onCancel = (event: PointerEvent) => recognizer.cancel(event.pointerId);
   const onUp = (event: PointerEvent) => {
+    if (!event.isPrimary || event.button !== 0) {
+      recognizer.cancel(event.pointerId);
+      return;
+    }
     if (recognizer.up(event.pointerId, point(event))) {
       const rect = element.getBoundingClientRect();
       options.onTap?.({ x: event.clientX - rect.left, y: event.clientY - rect.top }, event);
