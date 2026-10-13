@@ -270,12 +270,13 @@ function Invoke-MsixNativeAcceptance {
         if ((Get-FileHash -LiteralPath $original -Algorithm SHA256).Hash -cne $originalHash) {
             throw 'The original unsigned Store artifact changed during acceptance.'
         }
+        if (Test-Path -LiteralPath $hostLog) { throw 'The installed host recorded a startup exception.' }
         $receipt.nativeLaunchVerified = $true
-        $receipt.status = 'passed'
         if ($null -ne $CollectEvidence) {
             & $CollectEvidence $installed $OutputDirectory $extraEvidence | Out-Null
             Copy-MsixAdditionalEvidence $receipt $extraEvidence $reserved
         }
+        $receipt.status = 'passed'
     } catch {
         $failure = $_.Exception.Message
         $receipt.failure = $failure

@@ -22,7 +22,8 @@ export function resolveNativeCommandLaunch(input: {
     return { command: input.command, args: input.args };
   }
   const pnpmEntry = input.environment.npm_execpath;
-  if (pnpmEntry === undefined || !/\.(?:exe|[cm]?js)$/iu.test(pnpmEntry)) {
+  const pnpmBase = pnpmEntry?.split(/[\\/]/u).at(-1) ?? '';
+  if (pnpmEntry === undefined || !/^pnpm(?:\.exe|\.[cm]?js)$/iu.test(pnpmBase)) {
     throw new Error(
       'Windows builds require pnpm exec mpgd so npm_execpath resolves the pnpm executable or JavaScript entrypoint.',
     );

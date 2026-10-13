@@ -522,8 +522,10 @@ failed consumer runs retain command logs and artifacts for diagnosis.
 To reproduce locally on Windows, run `mise exec -- pnpm build:packages` followed
 by `mise exec -- pnpm smoke:windows-starter`. The smoke prints its temporary
 evidence directory and keeps it for inspection. This covers KIT and PWA build
-behavior; native WinUI/MSIX packaging and installed-app launch checks belong to
-the game-owned Windows workflows in `mpgd-games`.
+behavior. KIT CI also packages the generated starter and verifies installed
+WinUI/MSIX startup on x64 and ARM64; see the
+[native acceptance guide](tools/smoke/windows-native/README.md). Game-owned
+Windows hosts and real login/purchase acceptance remain in `mpgd-games`.
 
 Generated games enable `shellEmulator: true` in `pnpm-workspace.yaml` so target
 scripts can use POSIX environment defaults on Windows. Existing games should add
