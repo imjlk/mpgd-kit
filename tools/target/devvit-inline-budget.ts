@@ -25,23 +25,35 @@ const moduleSignatures: Readonly<Record<string, RegExp>> = {
   three: /REVISION\s*=\s*["']\d+["'].*three/,
 };
 
+const dynamicImportPattern = /\bimport\(\s*["']([^"']+)["']\s*\)/g;
 const staticImportPattern = /(?:^|[;\s}])(?:import|export)\s*(?:[\w*{}\s,$]+\s*from\s*)?["']([^"']+)["']/g;
 const htmlAssetPattern = /<(?:script[^>]*\ssrc|link[^>]*\srel=["'](?:modulepreload|stylesheet)["'][^>]*\shref)=["']([^"']+)["']/g;
 const htmlAssetPatternReversed = /<link[^>]*\shref=["']([^"']+)["'][^>]*\srel=["'](?:modulepreload|stylesheet)["']/g;
 
 /**
- * Walk the inline entry's first-load graph: HTML scripts, modulepreloads and
- * stylesheets, plus static `import`/`export from` edges. Dynamic `import()`
- * chunks are excluded because they are fetched only after interaction.
+ * Walk the inline entry's load graph: HTML scripts, modulepreloads and
+ * stylesheets, static `import`/`export from` edges, and dynamic `import()`
+ * edges (an inline entry often awaits its surface router dynamically).
+ * Chunks matching `deferredChunks` are boundaries: neither they nor what is
+ * reachable only through them count toward the inline first load.
  */
-export function collectDevvitInlineGraph(clientDir: string, inlineEntry: string): DevvitInlineReport {
-  const { contents: _contents, ...report } = walkInlineGraph(clientDir, inlineEntry);
+export function collectDevvitInlineGraph(
+  clientDir: string,
+  inlineEntry: string,
+  deferredChunks: readonly string[] = [],
+): DevvitInlineReport {
+  const { contents: _contents, ...report } = walkInlineGraph(
+    clientDir,
+    inlineEntry,
+    deferredChunks,
+  );
   return report;
 }
 
 function walkInlineGraph(
   clientDir: string,
   inlineEntry: string,
+  deferredChunks: readonly string[],
 ): DevvitInlineReport & { readonly contents: readonly { readonly path: string; readonly content: string }[] } {
   const root = resolve(clientDir);
   const entryPath = resolve(root, inlineEntry);
@@ -58,6 +70,7 @@ function walkInlineGraph(
       }
     }
   }
+  const deferred = deferredChunks.map(globToRegExp);
   const seen = new Set<string>();
   const files: DevvitInlineGraphFile[] = [];
   const forbiddenHits: readonly { module: string; file: string }[] = [];
@@ -65,6 +78,10 @@ function walkInlineGraph(
   while (queue.length > 0) {
     const file = queue.shift();
     if (file === undefined || seen.has(file) || !existsSync(file)) {
+      continue;
+    }
+    if (deferred.some((pattern) => pattern.test(relative(root, file).split('\\').join('/')))) {
+      seen.add(file);
       continue;
     }
     seen.add(file);
@@ -77,8 +94,11 @@ function walkInlineGraph(
     const content = buffer.toString('utf8');
     allContents.push({ path: relative(root, file), content });
     if (file.endsWith('.js') || file.endsWith('.mjs')) {
-      for (const match of content.matchAll(staticImportPattern)) {
-        const reference = match[1];
+      const references = [
+        ...[...content.matchAll(staticImportPattern)].map((match) => match[1]),
+        ...[...content.matchAll(dynamicImportPattern)].map((match) => match[1]),
+      ];
+      for (const reference of references) {
         if (reference !== undefined && isLocalReference(reference)) {
           queue.push(resolveReference(root, dirname(file), reference));
         }
@@ -100,7 +120,11 @@ export function assertDevvitInlineBudget(input: {
   readonly inlineEntry: string;
   readonly budget?: DevvitInlineBudget;
 }): DevvitInlineReport {
-  const report = walkInlineGraph(input.clientDir, input.inlineEntry);
+  const report = walkInlineGraph(
+    input.clientDir,
+    input.inlineEntry,
+    input.budget?.deferredChunks ?? [],
+  );
   const contents = report.contents;
   if (report.files.length === 0) {
     throw new Error(
@@ -146,6 +170,11 @@ function isLocalReference(reference: string): boolean {
 function resolveReference(root: string, fromDir: string, reference: string): string {
   const clean = reference.split(/[?#]/)[0] ?? reference;
   return normalize(clean.startsWith('/') ? join(root, clean) : resolve(fromDir, clean));
+}
+
+function globToRegExp(pattern: string): RegExp {
+  const normalized = pattern.replace(/^\.\//, '');
+  return new RegExp(`^${normalized.split('*').map(escapeRegExp).join('[^/]*')}$`);
 }
 
 function escapeRegExp(value: string): string {

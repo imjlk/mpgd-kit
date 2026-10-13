@@ -1,4 +1,9 @@
-import { createCanvasRenderer, createLiteShell, type CanvasSurface, type LiteShell } from '@mpgd/lite-shell';
+import {
+  createCanvasRenderer,
+  createLiteShell,
+  type CanvasSurface,
+  type LiteShell,
+} from '@mpgd/lite-shell';
 
 import { startCollapse, type Collapse } from './collapse';
 import { createStarterRunState, stepStarterRunState, type StarterRunState } from '../game/state';
@@ -22,7 +27,11 @@ export function createTapGame(options: TapGameOptions): LiteShell<CanvasSurface>
   const target = (width: number, height: number) => {
     const angle = run.phase * Math.PI * 2;
     const radius = Math.min(width, height) * 0.28;
-    return { x: width / 2 + Math.cos(angle) * radius, y: height / 2 + Math.sin(angle) * radius, r: 22 };
+    return {
+      x: width / 2 + Math.cos(angle) * radius,
+      y: height / 2 + Math.sin(angle) * radius,
+      r: 22,
+    };
   };
 
   const shell = createLiteShell<CanvasSurface>({

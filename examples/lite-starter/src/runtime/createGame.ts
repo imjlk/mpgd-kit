@@ -30,10 +30,14 @@ export function createStarterGame(input: {
     },
   });
   const shell = createTapGame({ mount, title: 'Lite Starter' });
-  globalThis.addEventListener('pagehide', () => {
-    audio.dispose();
-    input.context.gameRuntime.dispose();
-    shell.dispose();
-  }, { once: true });
+  globalThis.addEventListener(
+    'pagehide',
+    () => {
+      audio.dispose();
+      input.context.gameRuntime.dispose();
+      shell.dispose();
+    },
+    { once: true },
+  );
   return shell;
 }

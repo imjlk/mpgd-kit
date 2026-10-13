@@ -21,20 +21,32 @@ try {
   writeFileSync(join(root, 'assets/preview.css'), 'body{margin:0}');
   writeFileSync(join(root, 'assets/phaser.js'), 'console.log("Phaser v4.2.0");'.repeat(2000));
 
-  const report = collectDevvitInlineGraph(root, 'index.html');
+  const report = collectDevvitInlineGraph(root, 'index.html', ['assets/phaser*.js']);
   assert.deepEqual(report.files.map((file) => file.path).sort(), [
     'assets/preview.css',
     'assets/preview.js',
     'assets/shared.js',
   ]);
 
-  // Dynamic import of Phaser is allowed: it is not part of the inline first load.
+  // Dynamic imports are followed unless declared deferred.
+  assert.throws(
+    () =>
+      assertDevvitInlineBudget({
+        target: 'reddit',
+        clientDir: root,
+        inlineEntry: 'index.html',
+        budget: { forbidModules: ['phaser'] },
+      }),
+    /forbidden module\(s\): phaser/,
+  );
+
+  // A deferred (expanded-only) Phaser chunk is allowed.
   assert.doesNotThrow(() =>
     assertDevvitInlineBudget({
       target: 'reddit',
       clientDir: root,
       inlineEntry: 'index.html',
-      budget: { maxGzipKb: 1, forbidModules: ['phaser'] },
+      budget: { maxGzipKb: 1, forbidModules: ['phaser'], deferredChunks: ['assets/phaser.js'] },
     }),
   );
 

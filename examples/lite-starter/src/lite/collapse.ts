@@ -34,7 +34,7 @@ export async function startCollapse(width: number, height: number, count = 24): 
       size,
       size,
       { restitution: 0, friction: 0.8 },
-    )
+    ),
   );
   Matter.Composite.add(engine.world, bodies);
 

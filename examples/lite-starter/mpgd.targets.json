@@ -99,10 +99,14 @@
       "artifact": "devvit",
       "inlineEntry": "index.html",
       "inlineBudget": {
-        "maxGzipKb": 60,
+        "maxGzipKb": 40,
         "forbidModules": [
           "phaser",
           "matter-js"
+        ],
+        "deferredChunks": [
+          "main.js",
+          "matter.js"
         ]
       }
     }

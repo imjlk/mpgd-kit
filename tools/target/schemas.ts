@@ -102,6 +102,12 @@ export interface DevvitInlineBudget {
   readonly maxGzipKb?: number;
   /** Module names that must not be reachable from the inline entry's static graph, e.g. `phaser`. */
   readonly forbidModules?: readonly string[];
+  /**
+   * Chunks (paths relative to the client output, `*` wildcards allowed) that are
+   * fetched only by the expanded surface or after a user interaction. They and
+   * anything reachable only through them are excluded from the inline budget.
+   */
+  readonly deferredChunks?: readonly string[];
 }
 
 export interface MiniGamePackageBudget {

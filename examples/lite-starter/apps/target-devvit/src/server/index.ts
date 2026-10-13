@@ -16,7 +16,7 @@ import { createDevvitBridgeHandler } from './bridge.js';
 
 const maxRequestBodySize = 1_048_576;
 const gameName = 'lite-starter';
-const gameTitle = "Lite Starter";
+const gameTitle = 'Lite Starter';
 /**
  * Commerce v2 opt-in: the catalog's Reddit SKUs (`platformProductIds.reddit`),
  * the `payments` plugin (`permissions.payments` in devvit.json), and a
