@@ -374,8 +374,51 @@ describe('platform gateway capability conformance', () => {
     );
   });
 
+  it.each(['block', 'permission', 'remote', 'local', 'purposes'] as const)(
+    'rejects reused frozen notification %s data', async (part) => {
+      const original = createDeviceNotifications();
+      const shared: NotificationCapabilities = Object.freeze({
+        ...original,
+        permission: Object.freeze(original.permission),
+        remote: Object.freeze({
+          ...original.remote,
+          purposes: Object.freeze([...original.remote.purposes]),
+        }),
+        local: Object.freeze(original.local),
+      });
+      const read = (): NotificationCapabilities => {
+        const copy = copyNotifications(shared);
+        switch (part) {
+          case 'block':
+            return shared;
+          case 'permission':
+            return { ...copy, permission: shared.permission };
+          case 'remote':
+            return { ...copy, remote: shared.remote };
+          case 'local':
+            return { ...copy, local: shared.local };
+          case 'purposes':
+            return { ...copy, remote: { ...copy.remote, purposes: shared.remote.purposes } };
+        }
+      };
+      const fixture = exposingNotificationsV2(createFixture(() => withNotifications(read())));
+      await expectRejection(
+        { ...fixture, expectedCapabilities: withNotifications(createDeviceNotifications()) },
+        'notification capabilities must return a fresh',
+      );
+    },
+  );
+
   // As for commerce: each malformed block is also the expected state.
   it.each([
+    [
+      'a sparse purposes list',
+      {
+        ...createDeviceNotifications(),
+        remote: { ...createDeviceNotifications().remote, purposes: new Array(1) },
+      },
+      'notification capability remote.purposes must list only service, requested, advertising',
+    ],
     [
       'an unknown key',
       { ...createDeviceNotifications(), timing: 'exact' },

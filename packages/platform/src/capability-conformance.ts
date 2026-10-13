@@ -202,6 +202,7 @@ async function runFixture(
   const second = await fixture.gateway.getCapabilities();
   assert(second !== first, 'getCapabilities must return a fresh snapshot object for every read');
   assertCapabilitySnapshot(second, initialExpected, fixture.gateway);
+  assertNotificationSnapshotFreshness(first, second);
 
   if (fixture.transition === undefined || transitionExpected === undefined) {
     return;
@@ -224,6 +225,27 @@ async function runFixture(
     'getCapabilities must not reuse an earlier snapshot after a provider transition',
   );
   assertCapabilitySnapshot(updated, transitionExpected, fixture.gateway);
+  assertNotificationSnapshotFreshness(first, updated);
+  assertNotificationSnapshotFreshness(second, updated);
+}
+
+function assertNotificationSnapshotFreshness(
+  previous: PlatformCapabilities,
+  next: PlatformCapabilities,
+): void {
+  const first = previous.notifications;
+  const second = next.notifications;
+  if (first === undefined || second === undefined) {
+    return;
+  }
+  assert(second !== first, 'notification capabilities must return a fresh block for every read');
+  for (const key of ['permission', 'remote', 'local'] as const) {
+    assert(second[key] !== first[key], `notification capabilities must return a fresh ${key} record`);
+  }
+  assert(
+    second.remote.purposes !== first.remote.purposes,
+    'notification capabilities must return a fresh purposes list',
+  );
 }
 
 function assertCapabilitySnapshot(
@@ -360,12 +382,23 @@ function assertNotificationCapabilityField(
       return;
     case 'purposes':
       assert(
-        Array.isArray(value)
-          && value.every((purpose) => notificationPurposes.includes(purpose as string)),
+        isDenseNotificationPurposeList(value),
         `notification capability ${path} must list only ${notificationPurposes.join(', ')}`,
       );
       return;
   }
+}
+
+function isDenseNotificationPurposeList(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.hasOwn(value, index) || !notificationPurposes.includes(value[index] as string)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function normalizedNotifications(value: NotificationCapabilities | undefined): string {
@@ -565,7 +598,7 @@ function tryMutateNotificationSnapshot(notifications: NotificationCapabilities):
     try {
       Reflect.set(target, key, next);
     } catch {
-      // A frozen nested notifications block already satisfies isolation.
+      // Frozen values still need distinct references, checked across snapshots.
     }
   }
 }

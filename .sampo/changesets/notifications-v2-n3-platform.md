@@ -24,3 +24,6 @@ answers and events.
 - `assertNotificationEvent`, `assertNotificationEventEnvelope`,
   `isNotificationEvent`, and `isNotificationEventEnvelope` apply the same time
   zone rule to an `endpoint-changed` registration.
+
+The conformance runner rejects reused notification blocks, nested records,
+and purposes lists even when frozen, and rejects holes in purposes arrays.
