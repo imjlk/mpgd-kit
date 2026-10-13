@@ -265,9 +265,16 @@ export interface BridgeEventStream<TEvent> {
  * out as `{ protocol, sequence, event }`, where `sequence` starts at 0 and
  * counts this session's events of that protocol, including across a detach.
  *
- * - A listener that throws does not keep the event from the others.
+ * - A listener that throws, or returns a promise that rejects, does not keep
+ *   the event from the others; the failure is reported with `console.warn`.
  * - An event the stream emits during a delivery (a listener can make it emit)
  *   waits for that delivery, so every listener sees the sequence in order.
+ * - The last listener leaving during a delivery detaches the stream only once
+ *   the delivery ends, so a listener that replaces itself keeps the stream
+ *   attached and receives no event twice.
+ * - If `stream.subscribe` throws, every subscription made during that call,
+ *   including any a listener made while the stream replayed its buffer, is
+ *   dropped, so none stays registered without an attached stream.
  * - An event emitted while no bridge listener is attached never reaches the
  *   bridge. A provider buffers only until its first subscriber, so a session
  *   should keep one listener for its life.
@@ -291,8 +298,12 @@ export function createBridgeEventSource(
   let sequence = 0;
   let delivering = false;
   let detach: (() => void) | undefined;
+  let detachAfterDelivery = false;
   let attaching = false;
 
+  const reportListenerFailure = (error: unknown): void => {
+    console.warn(`A ${protocol} bridge event listener failed.`, error);
+  };
   const deliver = (event: BridgeEventOf<BridgeEventProtocol>): void => {
     // The overloads pair each protocol with its own events.
     pending.push({ protocol, sequence, event } as BridgeEvent);
@@ -309,18 +320,31 @@ export function createBridgeEventSource(
             continue;
           }
           try {
-            subscription.listener(envelope);
+            const returned: unknown = subscription.listener(envelope);
+            if (isPromiseLike(returned)) {
+              void returned.then(undefined, reportListenerFailure);
+            }
           } catch (error) {
-            console.warn(`A ${protocol} bridge event listener failed.`, error);
+            reportListenerFailure(error);
           }
         }
       }
     } finally {
       delivering = false;
+      if (detachAfterDelivery) {
+        detachAfterDelivery = false;
+        detachWhenIdle();
+      }
     }
   };
   const detachWhenIdle = (): void => {
     if (subscriptions.size > 0 || detach === undefined) {
+      return;
+    }
+    if (delivering) {
+      // Detaching mid-delivery would let a listener that replaces itself
+      // attach the stream a second time while the stream is still emitting.
+      detachAfterDelivery = true;
       return;
     }
     const unsubscribe = detach;
@@ -331,15 +355,23 @@ export function createBridgeEventSource(
   return {
     subscribe(listener) {
       const subscription = { listener };
-      subscriptions.add(subscription);
       // A listener may subscribe another while the stream delivers what it
       // buffered; the stream is attached once.
-      if (detach === undefined && !attaching) {
+      if (detach !== undefined || attaching) {
+        subscriptions.add(subscription);
+      } else {
+        const registeredBefore = new Set(subscriptions);
+        subscriptions.add(subscription);
         attaching = true;
         try {
           detach = stream.subscribe(deliver);
         } catch (error) {
-          subscriptions.delete(subscription);
+          // Drop this subscription and any a listener made during the replay.
+          for (const added of [...subscriptions]) {
+            if (!registeredBefore.has(added)) {
+              subscriptions.delete(added);
+            }
+          }
           throw error;
         } finally {
           attaching = false;
@@ -352,6 +384,12 @@ export function createBridgeEventSource(
       };
     },
   };
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (typeof value === 'object' || typeof value === 'function')
+    && value !== null
+    && typeof (value as { readonly then?: unknown }).then === 'function';
 }
 
 export const bridgeStorageLoadProtocol = 'mpgd.storage.load.v1' as const;
@@ -405,10 +443,32 @@ let bridgeEventAssert: ((input: unknown) => BridgeEvent) | undefined;
  * Validates an event envelope of either protocol and rejects unknown keys.
  * The validator covers every event of both protocols, so it is built on the
  * first call: a bundle that never validates a bridge event leaves it out.
+ * An `endpoint-changed` registration also needs a `timeZone` that `Intl`
+ * knows, as `assertNotificationEndpointRegistration` requires of a
+ * `register` answer.
  */
 export function assertBridgeEvent(input: unknown): BridgeEvent {
   bridgeEventAssert ??= typia.createAssertEquals<BridgeEvent>();
-  return bridgeEventAssert(input);
+  const envelope = bridgeEventAssert(input);
+  if (envelope.protocol === bridgeNotificationsEventProtocol
+    && envelope.event.type === 'endpoint-changed') {
+    const { timeZone } = envelope.event.registration;
+    if (timeZone !== undefined && !isKnownTimeZone(timeZone)) {
+      throw new TypeError(`Unknown time zone in the registration: ${timeZone}`);
+    }
+  }
+  return envelope;
+}
+
+// The rule of `isValidNotificationTimeZone` from `@mpgd/platform/notifications`,
+// kept here so the main entry loads none of that module's code.
+function isKnownTimeZone(timeZone: string): boolean {
+  try {
+    void new Intl.DateTimeFormat('en-US', { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function decodeBridgeStorageLoadData(

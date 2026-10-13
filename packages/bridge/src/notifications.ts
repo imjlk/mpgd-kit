@@ -31,6 +31,13 @@ import {
 // loads the `@mpgd/platform/notifications` validators, which a transport that
 // only answers `NOTIFICATIONS_V2_UNAVAILABLE` does not need.
 
+// The shapes these validators return, also exported by the main entry.
+export type {
+  BridgeNotificationsV2Method,
+  BridgeNotificationsV2Payload,
+  BridgeNotificationsV2Result,
+} from './index.js';
+
 // Each entry is the `@mpgd/platform/notifications` validator of that
 // method's shape, and the interfaces check that every entry returns its own
 // method's shape (a mapped type would trip the lint rule on type parameters).

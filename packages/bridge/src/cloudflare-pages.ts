@@ -4,6 +4,7 @@ import {
   createBridgeError,
   createCommerceV2UnavailableBridgeError,
   createNotificationsV2UnavailableBridgeError,
+  isBridgeNotificationsV2Method,
   type BridgeRequest,
   type BridgeResponse,
   type BridgeStorageLoadData,
@@ -154,6 +155,14 @@ export function createMpgdCloudflarePagesBridgeHandler<
   TEnv extends MpgdCloudflarePagesHostEnv = MpgdCloudflarePagesHostEnv,
 >(): MpgdCloudflarePagesBridgeHandler<TEnv> {
   return async (input) => {
+    // Web targets have no notification path (notifications RFC "Provider
+    // profiles"), so the host answers every v2 method with its dedicated code.
+    if (isBridgeNotificationsV2Method(input.bridgeRequest.method)) {
+      return createNotificationsV2UnavailableBridgeError(
+        input.bridgeRequest,
+        'Cloudflare Pages host',
+      );
+    }
     switch (input.bridgeRequest.method) {
       case 'runtime.getCapabilities':
         return ok(input.bridgeRequest, {
@@ -277,22 +286,6 @@ export function createMpgdCloudflarePagesBridgeHandler<
       case 'commerce.v2.finishTransaction':
       case 'commerce.v2.restorePurchases':
         return createCommerceV2UnavailableBridgeError(input.bridgeRequest, 'Cloudflare Pages host');
-
-      // Web targets have no notification path (notifications RFC "Provider
-      // profiles"), so the host answers v2 with its dedicated code.
-      case 'notifications.v2.getCapabilities':
-      case 'notifications.v2.getPermission':
-      case 'notifications.v2.requestPermission':
-      case 'notifications.v2.revokePermission':
-      case 'notifications.v2.register':
-      case 'notifications.v2.scheduleLocal':
-      case 'notifications.v2.cancelLocal':
-      case 'notifications.v2.listLocal':
-      case 'notifications.v2.openSettings':
-        return createNotificationsV2UnavailableBridgeError(
-          input.bridgeRequest,
-          'Cloudflare Pages host',
-        );
 
       default:
         return createBridgeError(

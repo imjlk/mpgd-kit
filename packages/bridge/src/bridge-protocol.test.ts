@@ -26,6 +26,7 @@ import {
   invalidNotificationsV2Payloads,
   invalidNotificationsV2Results,
   notificationsV2ScheduleLocalPayload,
+  notificationsV2UnknownZoneEndpointChanged,
   validBridgeErrorResponse,
   validBridgeEvents,
   validBridgeOkResponse,
@@ -65,6 +66,8 @@ import {
 import {
   assertBridgeNotificationsV2Payload,
   assertBridgeNotificationsV2Result,
+  type BridgeNotificationsV2Payload,
+  type BridgeNotificationsV2Result,
 } from './notifications';
 
 assertDoesNotThrow(() => assertBridgeRequest(validBridgeRequest), 'valid request should pass');
@@ -265,6 +268,13 @@ const typed: { readonly topics: readonly string[] } = assertBridgeNotificationsV
   { topics: ['energy-full'] },
 );
 assertEqual(typed.topics[0], 'energy-full', 'a validated payload should keep its typed shape');
+// The subpath also names the shapes its validators return.
+const typedThroughSubpath: BridgeNotificationsV2Payload<'notifications.v2.requestPermission'> =
+  typed;
+const answeredThroughSubpath: BridgeNotificationsV2Result<'notifications.v2.openSettings'> =
+  assertBridgeNotificationsV2Result('notifications.v2.openSettings', { status: 'opened' });
+assertEqual(typedThroughSubpath.topics.length, 1, 'the subpath payload type fits the payload');
+assertEqual(answeredThroughSubpath.status, 'opened', 'the subpath result type fits the answer');
 for (const method of [
   'constructor',
   'toString',
@@ -390,10 +400,11 @@ void openedOf;
 void purchaseOf;
 
 // A host session numbers each protocol's events from 0.
-function createFakeStream<TEvent>() {
+function createFakeStream<TEvent>(options: { readonly liveIteration?: boolean } = {}) {
   const subscribers = new Set<(event: TEvent) => void>();
   const buffered: TEvent[] = [];
   let subscribeCalls = 0;
+  let subscribedOnce = false;
   return {
     get subscribeCalls() {
       return subscribeCalls;
@@ -402,17 +413,21 @@ function createFakeStream<TEvent>() {
       return subscribers.size;
     },
     emit(event: TEvent) {
-      // Like a provider: events before the first subscriber wait for it.
-      if (subscribers.size === 0) {
+      // Like a provider (`NotificationProvider`): events before the first
+      // subscriber wait for it; later events reach only current subscribers.
+      if (!subscribedOnce) {
         buffered.push(event);
         return;
       }
-      for (const subscriber of [...subscribers]) {
+      // A provider may walk its live set, which also reaches a subscriber
+      // added during this emit.
+      for (const subscriber of options.liveIteration === true ? subscribers : [...subscribers]) {
         subscriber(event);
       }
     },
     subscribe(listener: (event: TEvent) => void) {
       subscribeCalls += 1;
+      subscribedOnce = true;
       subscribers.add(listener);
       for (const event of buffered.splice(0)) {
         listener(event);
@@ -462,13 +477,17 @@ stopFirst();
 assertEqual(stream.subscriberCount, 1, 'a remaining listener keeps the stream attached');
 stopSecond();
 assertEqual(stream.subscriberCount, 0, 'the last listener detaches the stream');
+// The provider buffered only until its first subscriber, so an event while
+// the session is detached reaches no one and takes no sequence number.
 stream.emit(opened);
 const afterDetach: BridgeEvent[] = [];
 const stopAfterDetach = session.subscribe((event) => afterDetach.push(event));
 assertEqual(stream.subscribeCalls, 2, 'a later listener attaches the stream again');
+assertEqual(afterDetach.length, 0, 'an event emitted while detached is not replayed');
+stream.emit(received);
 assertEqual(
-  afterDetach[0]?.sequence,
-  2,
+  JSON.stringify(afterDetach.map((event) => event.sequence)),
+  JSON.stringify([2]),
   'the session keeps counting across a detach instead of starting over',
 );
 stopAfterDetach();
@@ -611,6 +630,174 @@ assertEqual(
   JSON.stringify(secondSeen),
   JSON.stringify([0, 1]),
   'the second listener sees 0, then 1',
+);
+
+// The last listener replacing itself during a delivery keeps the stream
+// attached: a provider walking its live set would otherwise reach the second
+// attachment within the same emit and deliver the event again.
+const swapStream = createFakeStream<NotificationEvent>({ liveIteration: true });
+const swapSession = createBridgeEventSource('mpgd.notifications.v2', swapStream);
+const swapLog: string[] = [];
+let stopSwapped: () => void;
+const replacement = (event: BridgeEvent): void => {
+  swapLog.push(`replacement ${String(event.sequence)}`);
+};
+stopSwapped = swapSession.subscribe((event) => {
+  swapLog.push(`first ${String(event.sequence)}`);
+  stopSwapped();
+  stopSwapped = swapSession.subscribe(replacement);
+});
+swapStream.emit(opened);
+assertEqual(
+  JSON.stringify(swapLog),
+  JSON.stringify(['first 0']),
+  'a listener added during a delivery does not receive that event',
+);
+assertEqual(swapStream.subscribeCalls, 1, 'the stream stays attached through the swap');
+assertEqual(swapStream.subscriberCount, 1, 'the session holds one stream subscription');
+swapStream.emit(received);
+assertEqual(
+  JSON.stringify(swapLog),
+  JSON.stringify(['first 0', 'replacement 1']),
+  'the replacement receives the next event once',
+);
+stopSwapped();
+assertEqual(swapStream.subscriberCount, 0, 'the last listener leaving outside a delivery detaches');
+
+// The last listener leaving during a delivery detaches once the delivery ends.
+const leavingStream = createFakeStream<NotificationEvent>();
+const leaving = createBridgeEventSource('mpgd.notifications.v2', leavingStream);
+let leavingEvents = 0;
+let attachedWhileDelivering: number | undefined;
+const stopLeaving = leaving.subscribe(() => {
+  leavingEvents += 1;
+  stopLeaving();
+  attachedWhileDelivering = leavingStream.subscriberCount;
+});
+leavingStream.emit(received);
+assertEqual(leavingEvents, 1, 'the leaving listener got the event');
+assertEqual(attachedWhileDelivering, 1, 'the stream stays attached during the delivery');
+assertEqual(leavingStream.subscriberCount, 0, 'the stream detaches after the delivery');
+
+// A stream that replays its buffer and then throws leaves no subscription
+// behind, including one a listener made during the replay.
+let replayAttempts = 0;
+const replayingSubscribers = new Set<(event: NotificationEvent) => void>();
+const replaying = createBridgeEventSource('mpgd.notifications.v2', {
+  subscribe(listener) {
+    replayAttempts += 1;
+    if (replayAttempts === 1) {
+      listener(opened);
+      listener(received);
+      throw new Error('native listener failed');
+    }
+    replayingSubscribers.add(listener);
+    return () => {
+      replayingSubscribers.delete(listener);
+    };
+  },
+});
+const replayedToFirst: number[] = [];
+const replayedToNested: number[] = [];
+assertThrows(
+  () =>
+    replaying.subscribe((event) => {
+      replayedToFirst.push(event.sequence);
+      if (event.sequence === 0) {
+        replaying.subscribe((nested) => replayedToNested.push(nested.sequence));
+      }
+    }),
+  'the failed attach reaches the caller',
+);
+assertEqual(
+  JSON.stringify([replayedToFirst, replayedToNested]),
+  JSON.stringify([[0, 1], [1]]),
+  'the replay reached the listeners before the stream failed',
+);
+const afterReplayFailure: number[] = [];
+replaying.subscribe((event) => afterReplayFailure.push(event.sequence));
+assertEqual(replayAttempts, 2, 'the next listener attaches again');
+for (const subscriber of [...replayingSubscribers]) {
+  subscriber(received);
+}
+assertEqual(
+  JSON.stringify([afterReplayFailure, replayedToNested, replayedToFirst.length]),
+  JSON.stringify([[2], [1], 2]),
+  'only the listener that attached the stream receives later events',
+);
+
+// A listener that returns a rejected promise is reported like one that throws.
+{
+  const asyncStream = createFakeStream<NotificationEvent>();
+  const asyncSession = createBridgeEventSource('mpgd.notifications.v2', asyncStream);
+  const asyncWarnings: unknown[] = [];
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+  const warn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    asyncWarnings.push(args[1]);
+  };
+  process.on('unhandledRejection', onUnhandled);
+  const asyncFailure = new Error('async listener failed');
+  const afterAsync: number[] = [];
+  try {
+    asyncSession.subscribe(async () => {
+      await Promise.resolve();
+      throw asyncFailure;
+    });
+    asyncSession.subscribe((event) => afterAsync.push(event.sequence));
+    asyncStream.emit(received);
+    // Let the rejection settle and Node look for an unhandled one.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  } finally {
+    console.warn = warn;
+    process.off('unhandledRejection', onUnhandled);
+  }
+  assertEqual(
+    JSON.stringify(afterAsync),
+    JSON.stringify([0]),
+    'the next listener still receives it',
+  );
+  assertEqual(asyncWarnings.length, 1, 'the rejection is reported once');
+  assertEqual(asyncWarnings[0], asyncFailure, 'the report carries the rejection reason');
+  assertEqual(unhandled.length, 0, 'the rejection is handled');
+}
+
+// An endpoint change follows the `register` answer's time zone rule.
+assertThrows(
+  () => assertBridgeEvent(notificationsV2UnknownZoneEndpointChanged),
+  'assertBridgeEvent rejects a registration in an unknown time zone',
+);
+assertThrows(
+  () => assertNotificationEventEnvelope(notificationsV2UnknownZoneEndpointChanged),
+  'assertNotificationEventEnvelope rejects a registration in an unknown time zone',
+);
+assertThrows(
+  () =>
+    assertBridgeNotificationsV2Result('notifications.v2.register', {
+      registration: notificationsV2UnknownZoneEndpointChanged.event.registration,
+    }),
+  'a register answer with the same registration is rejected too',
+);
+const knownZoneEndpointChanged = {
+  ...notificationsV2UnknownZoneEndpointChanged,
+  event: {
+    ...notificationsV2UnknownZoneEndpointChanged.event,
+    registration: {
+      ...notificationsV2UnknownZoneEndpointChanged.event.registration,
+      timeZone: 'Asia/Seoul',
+    },
+  },
+};
+assertDoesNotThrow(
+  () => assertBridgeEvent(knownZoneEndpointChanged),
+  'assertBridgeEvent accepts a known time zone',
+);
+assertDoesNotThrow(
+  () => assertNotificationEventEnvelope(knownZoneEndpointChanged),
+  'assertNotificationEventEnvelope accepts a known time zone',
 );
 
 // The overloads pair each protocol with its own events.

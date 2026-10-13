@@ -362,6 +362,19 @@ export const validBridgeEvents = [
 ] as const satisfies readonly BridgeEvent[];
 
 const notificationsV2Opened = validBridgeEvents[3];
+const notificationsV2EndpointChanged = validBridgeEvents[5];
+
+/** An endpoint change whose registration names a time zone `Intl` does not know. */
+export const notificationsV2UnknownZoneEndpointChanged = {
+  ...notificationsV2EndpointChanged,
+  event: {
+    ...notificationsV2EndpointChanged.event,
+    registration: {
+      ...notificationsV2EndpointChanged.event.registration,
+      timeZone: 'Mars/Olympus_Mons',
+    },
+  },
+} as const satisfies BridgeEvent;
 
 export const invalidBridgeEvents: readonly unknown[] = [
   { ...validBridgeEvents[0], protocol: 'mpgd.commerce.v1' },
@@ -383,6 +396,8 @@ export const invalidBridgeEvents: readonly unknown[] = [
   // Opened data is routing text only.
   { ...notificationsV2Opened, event: { ...notificationsV2Opened.event, data: { count: 1 } } },
   { ...notificationsV2Opened, event: { type: 'dismissed', channel: 'remote' } },
+  // A registration's time zone follows the `register` answer's rule.
+  notificationsV2UnknownZoneEndpointChanged,
 ];
 
 export const validBridgeOkResponse: BridgeResponse<{ readonly nativeAds: boolean }> = {
