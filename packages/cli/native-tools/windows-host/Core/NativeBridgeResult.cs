@@ -50,7 +50,14 @@ internal static class NativeBridgeResult
     {
         if (string.IsNullOrWhiteSpace(text) || text.Length > maximum) return false;
         string inspected = allowDescriptionWhitespace ? text.Replace("\t", "").Replace("\n", "").Replace("\r", "") : text;
-        return NativeBridgeProtocol.IsValidIdentifier(inspected.Trim(), maximum);
+        for (int index = 0; index < inspected.Length; index++)
+        {
+            char character = inspected[index];
+            if (char.IsHighSurrogate(character) && char.IsSurrogatePair(inspected, index)) { index++; continue; }
+            if (char.IsSurrogate(character) || char.IsControl(character)
+                || character is >= '\u202A' and <= '\u202E' or >= '\u2066' and <= '\u2069') return false;
+        }
+        return true;
     }
 
     private static bool Token(string? token, int minimum = 32) => NativeBridgeProtocol.IsValidIdentifier(token, 4096)

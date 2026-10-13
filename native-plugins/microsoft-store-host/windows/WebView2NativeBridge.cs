@@ -17,6 +17,7 @@ public sealed class WebView2NativeBridge : IDisposable
     private bool documentActivated;
     private bool documentRejected;
     private bool navigationRejected;
+    private bool navigationCommitted;
     private string? lastCommittedSource;
     private bool closed;
     private string? bootstrapScriptId;
@@ -77,12 +78,14 @@ public sealed class WebView2NativeBridge : IDisposable
         documentActivated = false;
         documentRejected = false;
         navigationRejected = false;
+        navigationCommitted = false;
         host.InvalidateDocument();
     }
 
     private void ContentLoading(object? sender, CoreWebView2ContentLoadingEventArgs args)
     {
         if (closed || args.NavigationId != navigationId || navigationRejected) return;
+        navigationCommitted = true;
         documentRejected = args.IsErrorPage;
         // The new document is committed before its startup scripts can send
         // messages. Waiting for NavigationCompleted drops valid boot requests.
@@ -102,6 +105,11 @@ public sealed class WebView2NativeBridge : IDisposable
         {
             if (args.WebErrorStatus == CoreWebView2WebErrorStatus.OperationCanceled && documentActivated && !documentRejected)
                 return; // The committed page remains usable after a cancelled load.
+            if (!navigationCommitted && lastCommittedSource is not null)
+            {
+                documentActivated = host.ActivateDocument(lastCommittedSource);
+                return;
+            }
             documentActivated = false;
             lastCommittedSource = null;
             host.InvalidateDocument();

@@ -158,10 +158,7 @@ public static class NativeBridgeProtocol
                 return false;
             }
 
-            return method is CatalogGetDetailsMethod
-                or IdentitySignInMethod
-                or PurchaseListMethod
-                or PurchaseRequestMethod;
+            return true;
         }
         catch (JsonException)
         {

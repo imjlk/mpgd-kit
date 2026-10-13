@@ -49,7 +49,7 @@ public sealed partial class MainWindow : Window
             // Store commerce. The context is private to this native host.
             _ = WindowStoreContext.Create(this);
             await AttachFixtureBridge();
-            core.AddWebResourceRequestedFilter("https://starter.mpgd.invalid/ci-load-gate.svg", CoreWebView2WebResourceContext.Image);
+            core.AddWebResourceRequestedFilter("https://ci-load-gate.mpgd.invalid/gate.svg", CoreWebView2WebResourceContext.Image);
             core.WebResourceRequested += async (_, request) =>
             {
                 var deferral = request.GetDeferral();
@@ -98,7 +98,7 @@ public sealed partial class MainWindow : Window
                 addEventListener('unhandledrejection', e => __mpgdNativeErrors.push(String(e.reason)));
                 addEventListener('DOMContentLoaded', () => {
                     const gate = document.createElement('img');
-                    gate.src = '/ci-load-gate.svg';
+                    gate.src = 'https://ci-load-gate.mpgd.invalid/gate.svg';
                     document.body.append(gate);
                 });
                 """);
@@ -175,7 +175,7 @@ public sealed partial class MainWindow : Window
             {
                 var evidence = state["nativeBridge"];
                 if (!evidence.GetProperty("passed").GetBoolean() || !evidence.GetProperty("beforeDocumentLoad").GetBoolean())
-                    throw new InvalidOperationException("Native fixture bridge contract failed.");
+                    throw new InvalidOperationException("Native fixture bridge contract failed: " + evidence.GetRawText());
                 bridgeEvidence.Add(evidence.Clone());
                 if (bridgeScenario == 0)
                 {

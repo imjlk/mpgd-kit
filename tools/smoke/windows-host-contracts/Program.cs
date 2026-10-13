@@ -75,6 +75,9 @@ foreach (string game in new[] { "puzzle", "tower" })
     Assert(Ok(responses.Single()) && responses.Single().Contains("sessionToken") && !responses.Single().Contains("serviceTicket")
         && JsonDocument.Parse(responses.Single()).RootElement.GetProperty("result").GetProperty("expiresAt").ValueKind == JsonValueKind.Number, "typed session response");
     responses.Clear();
+    await host.HandleMessageAsync(source, Message("future", "future.method"));
+    Assert(responses.Single().Contains("UNSUPPORTED_METHOD"), "unknown valid method fails without a timeout");
+    responses.Clear();
     await host.HandleMessageAsync(source, Message("catalog", "catalog.getDetails", new { itemIds = new[] { item } }));
     await host.HandleMessageAsync(source, Message("list", "purchase.list"));
     await host.HandleMessageAsync(source, Message("buy", "purchase.request", new { itemId = item }));
@@ -133,6 +136,12 @@ foreach (string game in new[] { "puzzle", "tower" })
     Assert(responses.Count == 0 && !host.ActivateDocument(source), "closed window suppresses response");
 }
 if (args.Length == 1) File.WriteAllText(args[0], JsonSerializer.Serialize(wireFixtures));
+var localized = NativeBridgeResult.Success(new GetCatalogDetailsCommand("localized", ["wire.coins"]),
+    new NativeProductDetailsResult([new("wire.coins", "سکه\u200Cها", "👨\u200D👩\u200D👧", new("USD", "\u200F$1.00"))]), allowed);
+using (var display = JsonDocument.Parse(localized))
+    Assert(display.RootElement.GetProperty("result").GetProperty("items")[0].GetProperty("title").GetString() == "سکه\u200Cها", "localized display text accepts joiners and direction marks");
+InvalidResult(new GetCatalogDetailsCommand("bad-text", ["wire.coins"]),
+    new NativeProductDetailsResult([new("wire.coins", "unsafe\u202Etitle", null, new("USD", "$1.00"))]));
 Console.WriteLine($"Native host contract checks passed: {checks}");
 
 sealed class Dispatcher : INativeBridgeDispatcher
