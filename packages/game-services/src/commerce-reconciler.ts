@@ -488,7 +488,7 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
 
   /**
    * The provider's capability block. Event-triggered passes use the last read;
-   * an explicit trigger (`start`, `reconcile`, `restorePurchases`) reads it
+   * an explicit trigger (`start`, `reconcile`, `restorePurchases`, a new purchase) reads it
    * again, since availability can change at runtime. A failed read keeps the
    * last block.
    */
@@ -1328,13 +1328,24 @@ export function createCommerceReconciler(input: CreateCommerceReconcilerInput): 
         ),
       };
     }
-    const capabilitiesNow = await readCapabilities();
+    const capabilitiesNow = await readCapabilities(true);
     if (capabilitiesNow === undefined) {
       return {
         kind: 'answered',
         result: failedOutcome(
           new CommerceError('NOT_PREPARED', {
             message: `The ${storeId} provider capabilities could not be read.`,
+          }),
+        ),
+      };
+    }
+    if (capabilitiesNow.availability === 'temporarily-unavailable') {
+      return {
+        kind: 'answered',
+        result: failedOutcome(
+          new CommerceError('STORE_UNAVAILABLE', {
+            message: `Store ${storeId} is temporarily unavailable.`,
+            retryable: true,
           }),
         ),
       };

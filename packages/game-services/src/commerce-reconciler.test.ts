@@ -1405,7 +1405,41 @@ const fullClientHistory = [
   await h.reconciler.stop();
 }
 
-// 19. Capabilities that cannot be read fail a purchase closed before the store UI opens; a later read is cached.
+// 19. New purchases read fresh capabilities and refuse transient readiness without binding a key.
+{
+  let availability: CommerceCapabilities['availability'] = 'temporarily-unavailable';
+  const provider = createFakeProvider({
+    getCapabilities: async () => ({ ...capabilitiesOf(), availability }),
+  });
+  const h = createHarness({ provider });
+  await h.reconciler.start();
+  const request = {
+    logicalId: 'gems_small',
+    idempotencyKey: 'readiness-retry',
+    source: 'shop' as const,
+  };
+  const refused = await h.reconciler.requestPurchase(request);
+  assertEqual(
+    refused.outcome === 'failed' && refused.error.retryable,
+    true,
+    'transient readiness is retryable',
+  );
+  assertEqual(
+    await h.reconciler.read(request.idempotencyKey),
+    undefined,
+    'transient readiness must not reserve the idempotency key',
+  );
+  assertEqual(provider.purchaseUiOpened, 0, 'transient readiness never opens store UI');
+  availability = 'available';
+  provider.queueRequest({ outcome: 'launched' });
+  assertEqual(
+    (await h.reconciler.requestPurchase(request)).outcome,
+    'launched',
+    'the recovered provider accepts the original key',
+  );
+  assertEqual(provider.purchaseUiOpened, 1, 'the same key can open the recovered store once');
+  await h.reconciler.stop();
+}
 {
   let reads = 0;
   const h = createHarness({
@@ -1433,12 +1467,13 @@ const fullClientHistory = [
     source: 'shop',
   });
   assertEqual(launched.outcome, 'launched', 'the fourth read succeeded');
+  const beforeNewPurchase = reads;
   await h.reconciler.requestPurchase({
     logicalId: 'remove_ads',
     idempotencyKey: 'op-19c',
     source: 'shop',
   });
-  assertEqual(reads, 4, 'the successful read is cached');
+  assertEqual(reads > beforeNewPurchase, true, 'a new purchase refreshes the capability read');
   await h.reconciler.stop();
 }
 
