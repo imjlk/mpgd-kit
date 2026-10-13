@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 import {
   assertBridgeEvent,
   bridgeCommerceV2Methods,
+  type BridgeCommerceEvent,
   type BridgeEvent,
   type BridgeMethod,
   type BridgeRequest,
@@ -22,6 +23,8 @@ import {
   createBridgeCommerceProvider,
   createCommerceProviderBridge,
   createCommerceServiceProvider,
+  type CommerceProviderBridge,
+  type CreateBridgeCommerceProviderInput,
 } from './commerce-bridge.js';
 import { createCapacitorPlatformGateway } from './index.js';
 import {
@@ -245,8 +248,29 @@ describe('createCommerceProviderBridge', () => {
 });
 
 describe('createBridgeCommerceProvider', () => {
+  it('keeps the commerce envelope type on the commerce-only channels', () => {
+    // A listener written for the commerce envelope, as `BridgeEvent` was before
+    // notifications v2, still fits each channel that carries only commerce.
+    const onCommerce = (envelope: BridgeCommerceEvent): void => {
+      expect(envelope.protocol).toBe(commerceProtocol);
+    };
+    const { provider } = createStoreProvider();
+    const bridge: CommerceProviderBridge = createCommerceProviderBridge({ provider });
+    bridge.subscribe(onCommerce)();
+    const input: CreateBridgeCommerceProviderInput = {
+      store: 'fixture.store',
+      request: async () => undefined as never,
+      subscribe: (listener) => bridge.subscribe(listener),
+    };
+    input.subscribe(onCommerce)();
+    expectTypeOf<Parameters<CommerceProviderBridge['subscribe']>[0]>()
+      .toEqualTypeOf<(event: BridgeCommerceEvent) => void>();
+    expectTypeOf<Parameters<CreateBridgeCommerceProviderInput['subscribe']>[0]>()
+      .toEqualTypeOf<(event: BridgeCommerceEvent) => void>();
+  });
+
   it('unwraps envelopes, ignores foreign protocols, and reports invalid ones', () => {
-    let deliver: ((event: BridgeEvent) => void) | undefined;
+    let deliver: ((event: BridgeCommerceEvent) => void) | undefined;
     const provider = createBridgeCommerceProvider({
       store: 'fixture.store',
       request: async () => undefined as never,
@@ -270,12 +294,13 @@ describe('createBridgeCommerceProvider', () => {
       },
     });
     deliver?.({ protocol: 'mpgd.other.v1', sequence: 1, event: { type: 'nope' } } as never);
-    // Notifications v2 envelopes share the channel and are not commerce's to judge.
+    // A notifications v2 envelope on a channel shared despite its type is not
+    // commerce's to judge.
     deliver?.({
       protocol: 'mpgd.notifications.v2',
       sequence: 0,
       event: { type: 'opened', channel: 'remote', source: 'warm', topic: 'energy-full' },
-    });
+    } satisfies BridgeEvent as never);
     deliver?.({ protocol: commerceProtocol, sequence: 'x', event: {} } as never);
     // A notifications event under the commerce protocol is a malformed commerce envelope.
     deliver?.({

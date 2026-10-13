@@ -3,6 +3,7 @@ import {
   createBridgeError,
   createCommerceV2UnavailableBridgeError,
   createNotificationsV2UnavailableBridgeError,
+  isBridgeNotificationsV2Method,
   type BridgeRequest,
   type BridgeResponse,
   type BridgeStorageLoadData,
@@ -91,6 +92,12 @@ export function createDevvitBridgeHandler(
   }
 
   return async function handleBridgeRequest(input: BridgeRequest): Promise<BridgeResponse> {
+    // Notifications v2 arrives with the Devvit provider (P3), which serves the
+    // game-rendered opt-in from this bridge; until then every v2 method
+    // answers the dedicated code, and the v1 `notifications.*` answers stay.
+    if (isBridgeNotificationsV2Method(input.method)) {
+      return createNotificationsV2UnavailableBridgeError(input, 'Devvit server bridge');
+    }
     switch (input.method) {
       case 'runtime.getCapabilities':
         return ok(input, {
@@ -223,20 +230,6 @@ export function createDevvitBridgeHandler(
         return dependencies.commerce === undefined
           ? createCommerceV2UnavailableBridgeError(input, 'Devvit server bridge')
           : dependencies.commerce.request(input);
-
-      // Notifications v2 arrives with the Devvit provider (P3), which serves
-      // the game-rendered opt-in from this bridge; the v1 `notifications.*`
-      // answers above stay until then.
-      case 'notifications.v2.getCapabilities':
-      case 'notifications.v2.getPermission':
-      case 'notifications.v2.requestPermission':
-      case 'notifications.v2.revokePermission':
-      case 'notifications.v2.register':
-      case 'notifications.v2.scheduleLocal':
-      case 'notifications.v2.cancelLocal':
-      case 'notifications.v2.listLocal':
-      case 'notifications.v2.openSettings':
-        return createNotificationsV2UnavailableBridgeError(input, 'Devvit server bridge');
 
       default:
         return createBridgeError(

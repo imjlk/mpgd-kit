@@ -177,7 +177,13 @@ export function createCapacitorPlatformGateway(input: {
     : createBridgeCommerceProvider({
         store: commerceProvider.commerce.store,
         request: (method, payload) => request(method, payload),
-        subscribe: (listener) => commerceProvider.bridge.subscribe(listener),
+        // The provider's channel (`NativeBridge`) may carry other protocols;
+        // the commerce provider takes the commerce envelopes.
+        subscribe: (listener) => commerceProvider.bridge.subscribe((envelope) => {
+          if (envelope.protocol === bridgeCommerceEventProtocol) {
+            listener(envelope);
+          }
+        }),
       });
   const lifecycle = createCapacitorAppEvents({
     target: input.target,

@@ -5,12 +5,15 @@ import {
   bridgeNotificationsV2Methods,
   bridgeStorageLoadProtocol,
   type BridgeMethod,
+  type BridgeNotificationsV2Method,
   type BridgeRequest,
 } from '@mpgd/bridge';
+import { assertBridgeNotificationsV2Result } from '@mpgd/bridge/notifications';
 import { createUnsupportedCapabilities } from '@mpgd/platform';
 
 import { createCapacitorPlatformGateway } from './index.js';
 import {
+  assertProviderResponseData,
   createCapacitorProviderRegistry,
   type CapacitorServiceProvider,
   type NativeBridge,
@@ -641,6 +644,23 @@ describe('Capacitor optional provider composition', () => {
     expect(() => createCapacitorProviderRegistry([{
       ...provider, methods: ['commerce.purchase'],
     }])).toThrow(/lacks methods/);
+  });
+
+  it('rejects every notifications v2 answer until P2 adds them to isValidProviderData', () => {
+    // Answers the bridge validators accept; the provider data check refuses
+    // them until P2 lets a provider serve the methods and validates its answers.
+    const answers: readonly (readonly [BridgeNotificationsV2Method, unknown])[] = [
+      ['notifications.v2.getPermission', { app: 'granted', topics: {} }],
+      ['notifications.v2.listLocal', { pending: [] }],
+      ['notifications.v2.openSettings', { status: 'opened' }],
+    ];
+    for (const [method, answer] of answers) {
+      expect(() => assertBridgeNotificationsV2Result(method, answer)).not.toThrow();
+      expect(() => assertProviderResponseData(method, answer)).toThrow(/returned invalid data/);
+    }
+    for (const method of bridgeNotificationsV2Methods) {
+      expect(() => assertProviderResponseData(method, {})).toThrow(/returned invalid data/);
+    }
   });
 
   it('keeps notifications v2 off declared methods and passes it through readiness', async () => {

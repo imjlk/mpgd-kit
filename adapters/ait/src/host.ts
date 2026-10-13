@@ -18,6 +18,7 @@ import {
   assertBridgeRequest,
   bridgeStorageLoadProtocol,
   createNotificationsV2UnavailableBridgeError,
+  isBridgeNotificationsV2Method,
   type BridgeRequest,
   type BridgeResponse,
   type BridgeStorageLoadData,
@@ -389,6 +390,12 @@ export function createAitHostBridge(
   };
 
   async function handleRequest(request: BridgeRequest): Promise<BridgeResponse> {
+    // Notifications v2 arrives with the Apps in Toss provider (P1); until then
+    // every v2 method answers the dedicated code, and the v1
+    // `notifications.*` methods below keep serving the game.
+    if (isBridgeNotificationsV2Method(request.method)) {
+      return createNotificationsV2UnavailableBridgeError(request, 'Apps in Toss host bridge');
+    }
     switch (request.method) {
       case 'runtime.getCapabilities': {
         const adsSupported = areFullScreenAdsSupported(dependencies);
@@ -606,20 +613,6 @@ export function createAitHostBridge(
       case 'commerce.v2.finishTransaction':
       case 'commerce.v2.restorePurchases':
         return await commerceV2.request(request);
-
-      // Notifications v2 arrives with the Apps in Toss provider (P1); until
-      // then the host answers its dedicated code, and the v1
-      // `notifications.*` methods above keep serving the game.
-      case 'notifications.v2.getCapabilities':
-      case 'notifications.v2.getPermission':
-      case 'notifications.v2.requestPermission':
-      case 'notifications.v2.revokePermission':
-      case 'notifications.v2.register':
-      case 'notifications.v2.scheduleLocal':
-      case 'notifications.v2.cancelLocal':
-      case 'notifications.v2.listLocal':
-      case 'notifications.v2.openSettings':
-        return createNotificationsV2UnavailableBridgeError(request, 'Apps in Toss host bridge');
 
       case 'ads.preload': {
         const placementId = readPlacementId(request.payload);

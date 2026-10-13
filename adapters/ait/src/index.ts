@@ -4,7 +4,9 @@ import {
   createCommerceV2UnavailableBridgeError,
   createNotificationsV2UnavailableBridgeError,
   decodeBridgeStorageLoadData,
-  type BridgeEventSource,
+  isBridgeNotificationsV2Method,
+  type BridgeCommerceEvent,
+  type BridgeEventStream,
   type BridgeMethod,
   type BridgeRequest,
   type BridgeResponse,
@@ -46,11 +48,11 @@ export interface GamePlatformBridge {
   /** Native observations are scoped to this host; SDK commands still use request envelopes. */
   readonly advertising?: Pick<AdProvider, 'id' | 'protocol' | 'protocolVersion' | 'rewardSignal' | 'subscribe'>;
   /**
-   * Commerce v2 event channel (`@mpgd/bridge` `BridgeEvent` envelopes). A host
-   * that serves the `commerce.v2.*` methods exposes it; the gateway then
-   * offers `commerceV2` over this bridge.
+   * Commerce v2 event channel (`@mpgd/bridge` `BridgeCommerceEvent`
+   * envelopes). A host that serves the `commerce.v2.*` methods exposes it; the
+   * gateway then offers `commerceV2` over this bridge.
    */
-  readonly commerceV2?: BridgeEventSource;
+  readonly commerceV2?: BridgeEventStream<BridgeCommerceEvent>;
 }
 
 export interface AitSandboxStorage {
@@ -315,6 +317,12 @@ export function createAitSandboxBridge(
       // Both the bridge option and the build id the gateway sends must name
       // the sandbox build; a bridge wired behind another gateway stays closed.
       const commerceV2Served = commerceV2Enabled && input.meta.buildId === aitSandboxBuildId;
+      // Notifications v2 arrives with the Apps in Toss provider (P1). Every
+      // build answers the dedicated code for every v2 method, the sandbox
+      // build included.
+      if (isBridgeNotificationsV2Method(input.method)) {
+        return createNotificationsV2UnavailableBridgeError(input, 'Apps in Toss sandbox bridge');
+      }
       switch (input.method) {
         case 'runtime.getCapabilities':
           return ok(input, {
@@ -534,19 +542,6 @@ export function createAitSandboxBridge(
           return commerceV2Served
             ? ok(input, answerSandboxCommerceV2(input))
             : createCommerceV2UnavailableBridgeError(input, 'Apps in Toss sandbox bridge');
-
-        // Notifications v2 arrives with the Apps in Toss provider (P1). Every
-        // build answers the dedicated code, the sandbox build included.
-        case 'notifications.v2.getCapabilities':
-        case 'notifications.v2.getPermission':
-        case 'notifications.v2.requestPermission':
-        case 'notifications.v2.revokePermission':
-        case 'notifications.v2.register':
-        case 'notifications.v2.scheduleLocal':
-        case 'notifications.v2.cancelLocal':
-        case 'notifications.v2.listLocal':
-        case 'notifications.v2.openSettings':
-          return createNotificationsV2UnavailableBridgeError(input, 'Apps in Toss sandbox bridge');
 
         default:
           return createSandboxBridgeError(

@@ -503,6 +503,12 @@ function isValidProviderData(method: BridgeMethod, value: unknown): boolean {
       return false;
     }
   }
+  if (isBridgeNotificationsV2Method(method)) {
+    // P2 must validate these answers here, with `assertBridgeNotificationsV2Result`
+    // from `@mpgd/bridge/notifications`, when it lets a provider serve the
+    // methods. Until then every notifications v2 answer is rejected.
+    return false;
+  }
   switch (method) {
     case 'commerce.getProducts':
       return Array.isArray(value) && value.every((product) =>

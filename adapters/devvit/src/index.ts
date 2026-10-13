@@ -5,6 +5,7 @@ import {
   createCommerceV2UnavailableBridgeError,
   createNotificationsV2UnavailableBridgeError,
   decodeBridgeStorageLoadData,
+  isBridgeNotificationsV2Method,
   type BridgeMethod,
   type BridgeRequest,
   type BridgeResponse,
@@ -413,6 +414,11 @@ export function createDevvitSandboxBridge(): DevvitBridge {
 
   return {
     async request(input) {
+      // Notifications v2 arrives with the Devvit provider (P3); until then
+      // every v2 method answers the dedicated code.
+      if (isBridgeNotificationsV2Method(input.method)) {
+        return createNotificationsV2UnavailableBridgeError(input, 'Devvit sandbox bridge');
+      }
       switch (input.method) {
         case 'runtime.getCapabilities':
           return ok(input, {
@@ -552,18 +558,6 @@ export function createDevvitSandboxBridge(): DevvitBridge {
         case 'commerce.v2.finishTransaction':
         case 'commerce.v2.restorePurchases':
           return createCommerceV2UnavailableBridgeError(input, 'Devvit sandbox bridge');
-
-        // Notifications v2 arrives with the Devvit provider (P3).
-        case 'notifications.v2.getCapabilities':
-        case 'notifications.v2.getPermission':
-        case 'notifications.v2.requestPermission':
-        case 'notifications.v2.revokePermission':
-        case 'notifications.v2.register':
-        case 'notifications.v2.scheduleLocal':
-        case 'notifications.v2.cancelLocal':
-        case 'notifications.v2.listLocal':
-        case 'notifications.v2.openSettings':
-          return createNotificationsV2UnavailableBridgeError(input, 'Devvit sandbox bridge');
 
         default:
           return createBridgeError(

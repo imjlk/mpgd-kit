@@ -182,7 +182,7 @@ method to the base plugin: it answers `NOTIFICATIONS_V2_UNAVAILABLE`, which is
 not retryable, before it pauses the game. A provider cannot declare those
 methods in `methods`.
 
-Two rules already apply to a provider that serves them:
+Once P2 lets a provider serve `notifications.v2.*` methods, these rules apply:
 
 - `notifications.v2.requestPermission` and `notifications.v2.openSettings`
   pause the game while they run, like `notifications.requestSubscription` and
@@ -190,6 +190,8 @@ Two rules already apply to a provider that serves them:
 - The provider registry passes `notifications.v2.*` through `assertMethodReady`
   without a readiness check, as it does `commerce.v2.*`, so the provider's own
   `unsupported` or `action-required` answers reach the game as answers.
+- The gateway validates each answer before the game sees it. Until P2 adds the
+  notifications v2 answers to that check, it rejects every one of them.
 
 ## App Store server-side transaction signatures
 
