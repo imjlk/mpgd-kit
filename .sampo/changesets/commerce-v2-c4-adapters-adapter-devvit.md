@@ -36,3 +36,6 @@ commerce path.
 - The `@mpgd/adapter-devvit/payments` entry keeps `normalizeDevvitCommerceProducts`
   and the checkout types (`DevvitCheckoutResult`, `DevvitCheckoutFailure`,
   `DevvitCommerceProduct`).
+
+Retired commerce flags are also removed from nested `providerAvailability`
+records returned by older Devvit bridges while current feature entries remain.

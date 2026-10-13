@@ -167,6 +167,15 @@ export function createDevvitPlatformGateway(
         commerce: _serverCommerce,
         ...capabilities
       } = await request<DevvitServerCapabilities>('runtime.getCapabilities', {});
+      const availability = capabilities.providerAvailability;
+      if (typeof availability === 'object' && availability !== null && !Array.isArray(availability)) {
+        const {
+          nativeIap: _retiredNativeIap,
+          subscriptionIap: _retiredSubscriptionIap,
+          ...current
+        } = availability as Readonly<Record<string, unknown>>;
+        capabilities.providerAvailability = current as NonNullable<PlatformCapabilities['providerAvailability']>;
+      }
       // The webview provider owns the block: the server snapshot stays honest
       // about the server, and a gateway without a provider sells nothing.
       return {

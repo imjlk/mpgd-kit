@@ -45,3 +45,6 @@ is the only purchase path, and nothing is granted from a client callback.
   and a backend outage as `pending`, so those calls complete instead of ending
   in an `exception` progress event; `exception` marks a failure of the call
   itself, such as a journal write that rejects before the store opens.
+
+Retired purchase recovery rejects a saved verifier request that selects a
+different deployment from the durable journal before contacting the backend.

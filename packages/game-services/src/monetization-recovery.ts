@@ -615,6 +615,7 @@ export function createRecoverableMonetizationClient(
         };
         if (request.playerId !== input.playerId
           || request.target !== latest.target
+          || (request.deploymentTarget ?? request.target) !== latest.deploymentTarget
           || request.productId !== latest.input.productId
           || request.idempotencyKey !== latest.input.idempotencyKey
           || request.platformTransactionId !== platform.transactionId) {

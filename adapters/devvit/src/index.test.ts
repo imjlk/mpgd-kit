@@ -1012,7 +1012,7 @@ describe('adapter-devvit commerce v2 gateway', () => {
     expect(again.commerce).not.toBe(capabilities.commerce);
   });
 
-  it('replaces a server commerce block and drops the removed boolean flags', async () => {
+  it('replaces server commerce and drops retired flags from both capability levels', async () => {
     const bridge: DevvitBridge = {
       async request(request) {
         return {
@@ -1022,6 +1022,11 @@ describe('adapter-devvit commerce v2 gateway', () => {
             ...snapshot,
             nativeIap: true,
             subscriptionIap: true,
+            providerAvailability: {
+              socialShare: 'available',
+              nativeIap: 'available',
+              subscriptionIap: 'available',
+            },
             commerce: createDevvitCommerceCapabilities('available'),
           },
         };
@@ -1029,9 +1034,14 @@ describe('adapter-devvit commerce v2 gateway', () => {
     };
     const gateway = createDevvitPlatformGateway({ appVersion: '1.0.0', buildId: 'b', bridge });
     const capabilities = await gateway.getCapabilities();
-    expect(capabilities).toEqual(snapshot);
+    expect(capabilities).toEqual({
+      ...snapshot,
+      providerAvailability: { socialShare: 'available' },
+    });
     expect(capabilities).not.toHaveProperty('nativeIap');
     expect(capabilities).not.toHaveProperty('subscriptionIap');
+    expect(capabilities.providerAvailability).not.toHaveProperty('nativeIap');
+    expect(capabilities.providerAvailability).not.toHaveProperty('subscriptionIap');
   });
 
   it('installs the webview provider as the gateway commerce with its capability block', async () => {

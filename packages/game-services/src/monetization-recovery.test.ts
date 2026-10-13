@@ -418,6 +418,51 @@ assert.equal(
 );
 await operationStore.reserve(retiredPurchase);
 await operationStore.reserve(neverCompletedRetiredPurchase);
+// The persisted verifier request must select the same deployment as its journal.
+for (const requestDeployment of ['ios', undefined, 'android', 'android-production'] as const) {
+  const journal = createStore();
+  const idempotencyKey = `retired-deployment-${requestDeployment ?? 'default'}`;
+  const record: MonetizationOperationRecord = {
+    ...retiredPurchase,
+    key: JSON.stringify(['android', 'purchase', idempotencyKey]),
+    deploymentTarget: 'android-production',
+    input: { ...retiredPurchase.input, idempotencyKey },
+    request: {
+      target: 'android',
+      ...(requestDeployment === undefined ? {} : { deploymentTarget: requestDeployment }),
+      playerId: 'player-1',
+      productId: 'COINS_100',
+      platformTransactionId: 'retired-v1-transaction',
+      idempotencyKey,
+      purchasedAt: '2026-09-01T00:00:00.000Z',
+    },
+  };
+  await journal.reserve(record);
+  let verificationCalls = 0;
+  const recovery = createRecoverableMonetizationClient({
+    gateway,
+    backend: {
+      ...backend,
+      purchases: {
+        ...backend.purchases,
+        async verifyPurchase(request) {
+          verificationCalls += 1;
+          return backend.purchases.verifyPurchase(request);
+        },
+      },
+    },
+    playerId: 'player-1',
+    target: 'android',
+    deploymentTarget: 'android-production',
+    operationStore: journal,
+  });
+  const expectedCalls = requestDeployment === 'android-production' ? 1 : 0;
+  assert.equal(
+    (await recovery.reconcile())[0]?.status,
+    expectedCalls === 1 ? 'granted' : 'action-required',
+  );
+  assert.equal(verificationCalls, expectedCalls, 'only the journal deployment can be verified');
+}
 const diagnosticStore: MonetizationOperationStore = {
   ...operationStore,
   async listRecoverable(playerId) {
