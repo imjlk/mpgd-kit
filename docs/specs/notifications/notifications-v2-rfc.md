@@ -1023,14 +1023,17 @@ If a notice is not recorded by the start of the day seven days before
 - **Gate.** The send is a `service` notification through the policy gate,
   never combined with advertising. The scheduler gives the gate the notice
   topic with the variant's copy in place of the topic's own, which it does
-  not declare. Step 8 then resolves the locale by the **Locale** rule of
+  not declare. The gate then resolves the locale by the **Locale** rule of
   the [topic catalog's content](#topic-catalog), as for any topic, and so
   falls back to the default locale.
 - **Content.** A notice says only its variant of `notices.copy`.
   - The scheduler drops any `title` or `body` in the notice topic's mapping.
-  - It sends a notice only through a provider whose content is `free-form`.
+  - It sends a notice only through a provider that can carry it
+    (`notificationProviderCarriesNotices`): free-form content, and no `title`
+    or `body` the provider needs in the mapping, which it would send instead.
     Through any other provider it sends nothing and records nothing, so the
-    game still owes the notice.
+    game still owes the notice. `notificationNoticeTopic` gives the notice
+    topic as the gate renders one notice from it.
 - **Reserved topic.** The notice topic is the scheduler's. A send or a server
   reminder that a game asks for through it throws
   `NOTIFICATIONS_INVALID_INPUT`. The player's topic preference still applies

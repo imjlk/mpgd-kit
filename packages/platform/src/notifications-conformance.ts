@@ -20,9 +20,10 @@ import {
   notificationKeyIssue,
   notificationNoticeCopyIssues,
   notificationNoticeSendFrom,
-  notificationNoticeVariantCopy,
+  notificationNoticeTopic,
   notificationPermissionConsentKind,
   notificationPermissionStateOf,
+  notificationProviderCarriesNotices,
   notificationRegistryMismatch,
   notificationReservedKeyPrefix,
   notificationSendFingerprint,
@@ -1002,11 +1003,11 @@ function noEndpoint(): NotificationDeliveryRefusal {
  *   Asia/Seoul date seven days before it is due (as a `notice:` send of the
  *   notice topic in the variant of `notices.copy` it is listed with, filled
  *   with `{{consentDate}}`, and recorded with channel `push` once delivered),
- *   earliest first and within the registry entry's `rate`. Only a free-form
- *   provider sends a notice, and never with its mapping's own text; a notice
- *   that cannot render is not tried again. A direct caller replays its own
- *   in-flight platform send after the lease. Keys are kept for 30 days after
- *   their last change.
+ *   earliest first and within the registry entry's `rate`. Only a provider
+ *   that can carry a notice (`notificationProviderCarriesNotices`) sends one,
+ *   and never with its mapping's own text; a notice that cannot render is
+ *   not tried again. A direct caller replays its own in-flight platform send
+ *   after the lease. Keys are kept for 30 days after their last change.
  * - The notice topic is the scheduler's: `deliver` and `setReminder` through
  *   it throw `NOTIFICATIONS_INVALID_INPUT`.
  * - Setting or cancelling a reminder drops its sends' rows that still wait
@@ -1027,9 +1028,9 @@ export function createNotificationConformanceBackend(
     input.catalog.find((topic) => topic.id === id);
   /**
    * The topic a send is rendered from. A consent notice goes out through the
-   * notice topic with its variant's `notices.copy` in place of the topic's
-   * own copy, so the gate resolves the locale as for any topic. A `title` or
-   * `body` in the topic's mapping is dropped, so nothing replaces that copy.
+   * notice topic as `notificationNoticeTopic` gives it: its variant's
+   * `notices.copy` in place of a copy of its own, so the gate resolves the
+   * locale as for any topic, and no `title` or `body` from its mapping.
    * Notices are sent only through `notices.topic`, so the copy is there.
    */
   const topicFor = (
@@ -1037,19 +1038,25 @@ export function createNotificationConformanceBackend(
     origin: SendOrigin,
   ): NotificationTopicDeclaration | undefined => {
     const topic = topicOf(request.topic);
-    if (topic === undefined || origin.kind !== 'notice') {
-      return topic;
-    }
-    const { mapping, ...delivery } = topic;
-    const { title: _title, body: _body, ...rest } = mapping ?? {};
-    return {
-      ...delivery,
-      ...(mapping === undefined ? {} : { mapping: rest }),
-      copy: notificationNoticeVariantCopy(input.notices?.copy ?? {}, origin.variant),
-    };
+    return topic === undefined || origin.kind !== 'notice'
+      ? topic
+      : notificationNoticeTopic(topic, input.notices?.copy ?? {}, origin.variant);
   };
   if (input.deployment !== undefined) {
     assertNotificationDeployment(input.deployment);
+  }
+  // A JavaScript caller can pass anything: the block needs its topic.
+  const notices: unknown = input.notices;
+  if (
+    notices !== undefined
+    && (typeof notices !== 'object'
+      || notices === null
+      || typeof (notices as { readonly topic?: unknown }).topic !== 'string'
+      || (notices as { readonly topic: string }).topic.length === 0)
+  ) {
+    throw new TypeError(
+      "The catalog's notices block needs its topic and its copy: { topic, copy }.",
+    );
   }
   const noticeTopic = input.notices?.topic;
   // Required only where the catalog validator requires it: declared, it is a
@@ -2071,13 +2078,14 @@ export function createNotificationConformanceBackend(
           due.push({ at: first, run: () => replayStored(key, held) });
         }
       }
-      // Only a free-form provider sends a notice's own text; through any other
+      // Only a provider that can carry a notice sends one; through any other
       // the notice is not sent, so it stays owed in the game.
       if (
         rules === 'kr'
         && noticeTopic !== undefined
         && noticeTopicHere !== undefined
-        && entry?.content === 'free-form'
+        && entry !== undefined
+        && notificationProviderCarriesNotices(entry)
       ) {
         const today = toSeoulCalendarDate(clock.now());
         for (const player of [...new Set(consentRows.map((row) => row.player))]) {
@@ -3839,6 +3847,11 @@ export interface NotificationConformanceRunOptions {
   readonly createProvider?: (
     context: NotificationConformanceContext,
   ) => NotificationConformanceHarness | Promise<NotificationConformanceHarness>;
+  /**
+   * The backend's and the runtime's default locale;
+   * `notificationConformanceDefaultLocale` when absent. A vector's
+   * `notices.copy` must include it, or the vector fails at `backend`.
+   */
   readonly defaultLocale?: string;
 }
 
@@ -3972,7 +3985,11 @@ export async function runNotificationConformanceVector(
     });
   } catch (error) {
     return failed([
-      { path: 'backend', expected: 'the deployment is valid', actual: describeError(error) },
+      {
+        path: 'backend',
+        expected: 'the deployment and the notices are valid',
+        actual: describeError(error),
+      },
     ]);
   }
   const storage: NotificationConformanceRuntimeStorage = {};

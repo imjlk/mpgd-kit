@@ -2151,8 +2151,8 @@ export interface NotificationNoticeLocaleCopy {
  * Asia/Seoul date, is the only placeholder the server fills, and each
  * variant uses it. The text carries the rest of what the decree requires:
  * the sender's name and, for a result notice (art. 62-2), the processing
- * result, or, for a re-confirmation (art. 62-3), how to keep or withdraw the
- * consent.
+ * result, or, for a re-confirmation (art. 62-3(2)), how to keep or withdraw
+ * the consent.
  */
 export type NotificationNoticeCopy = Readonly<Record<string, NotificationNoticeLocaleCopy>>;
 
@@ -2328,6 +2328,40 @@ export function notificationNoticeVariantCopy(
       return text === undefined ? [] : [[locale, text] as const];
     }),
   );
+}
+
+/**
+ * Whether a provider can carry a consent notice: it sends free-form content
+ * and needs no `title` or `body` in a topic's mapping, which it would send in
+ * place of the notice's copy. The catalog validator keeps the notice topic
+ * off any other provider, and a scheduler pushes no notice through one.
+ */
+export function notificationProviderCarriesNotices(
+  entry: Pick<NotificationDeliveryProviderEntry, 'content' | 'mappingFields'>,
+): boolean {
+  return entry.content === 'free-form'
+    && !entry.mappingFields.includes('title')
+    && !entry.mappingFields.includes('body');
+}
+
+/**
+ * The notice topic as the gate renders one notice from it: its delivery
+ * settings, any `title` or `body` dropped from its mapping so nothing stands
+ * in for the copy, and the variant's `notices.copy` in place of a copy of its
+ * own (`notificationNoticeVariantCopy`).
+ */
+export function notificationNoticeTopic(
+  topic: NotificationTopicDeclaration,
+  copy: NotificationNoticeCopy,
+  variant: NotificationNoticeVariant,
+): NotificationTopicDeclaration {
+  const { mapping, copy: _ownCopy, ...delivery } = topic;
+  const { title: _title, body: _body, ...rest } = mapping ?? {};
+  return {
+    ...delivery,
+    ...(mapping === undefined ? {} : { mapping: rest }),
+    copy: notificationNoticeVariantCopy(copy, variant),
+  };
 }
 
 /** Result notice: 14 days after the record's Asia/Seoul date, counted from the next day. */

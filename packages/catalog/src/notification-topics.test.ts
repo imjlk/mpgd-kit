@@ -768,6 +768,12 @@ assert.deepEqual(
       + 'notice variant; ko lacks reconfirmation.night',
   ],
 );
+// So is an undefined topic copy entry, which a send would find before the
+// language or the default locale.
+assert.deepEqual(
+  issuesOf(catalogWith({ ...baseTopic, copy: { ...baseTopic.copy, en: undefined } })),
+  ['topics[0].copy["en"]: expected NotificationTopicCopy, a title and a body'],
+);
 for (const target of ['android', 'storefront-web']) {
   assert.deepEqual(
     issuesOf(withNotices('consent-notice', { ...noticeTopic, targets: { [target]: undefined } })),

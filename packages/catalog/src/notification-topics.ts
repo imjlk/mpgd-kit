@@ -3,6 +3,7 @@ import type { tags } from 'typia';
 import {
   findNotificationCopy,
   notificationNoticeCopyIssues,
+  notificationProviderCarriesNotices,
   notificationTopicDefinitionIssues,
   notificationTopicNeedsNoAgreement,
   resolveNotificationAdvertisingSettings,
@@ -51,8 +52,8 @@ export interface NotificationTopicCatalogNotices {
    * withdrawal's. The only placeholder is `{{consentDate}}`, the record's
    * Asia/Seoul date, which each variant uses; the text carries the rest of
    * what the decree requires, the sender's name and, for a result notice
-   * (art. 62-2), the processing result or, for a re-confirmation (art. 62-3),
-   * how to keep or withdraw the consent.
+   * (art. 62-2), the processing result or, for a re-confirmation
+   * (art. 62-3(2)), how to keep or withdraw the consent.
    */
   readonly copy: NotificationNoticeCopy;
 }
@@ -181,6 +182,16 @@ export function validateNotificationTopicCatalog(
         path: `${at}.copy`,
         message: `copy must include the default locale ${catalog.defaultLocale}`,
       });
+    }
+    // The shape check lets a locale's value be undefined, which a send would
+    // find before the language or the default locale.
+    for (const [locale, text] of Object.entries(topic.copy ?? {})) {
+      if (text === undefined) {
+        issues.push({
+          path: `${at}.copy[${JSON.stringify(locale)}]`,
+          message: 'expected NotificationTopicCopy, a title and a body',
+        });
+      }
     }
     for (const [target, mapping] of Object.entries(topic.targets ?? {})) {
       // The shape check lets a target's value be undefined.
@@ -378,9 +389,13 @@ function mappingIssues(
   return issues;
 }
 
-/** Whether a provider sends a host template, or a title and a body its mapping must carry. */
+/**
+ * Whether a provider cannot carry a consent notice
+ * (`notificationProviderCarriesNotices`): it sends a host template, or a
+ * title and a body that its mapping must carry.
+ */
 function sendsOwnText(provider: NotificationProviderRegistryEntry): boolean {
-  return provider.content === 'host-template'
+  return !notificationProviderCarriesNotices(provider)
     || provider.mapping['title']?.required === true
     || provider.mapping['body']?.required === true;
 }

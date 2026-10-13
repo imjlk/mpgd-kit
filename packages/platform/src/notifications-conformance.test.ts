@@ -485,7 +485,7 @@ describe('notifications conformance runner', () => {
     });
     expect(misconfigured.failures).toEqual([{
       path: 'backend',
-      expected: 'the deployment is valid',
+      expected: 'the deployment and the notices are valid',
       actual: 'TypeError: The notice topic energy-full is not a declared service topic.',
     }]);
   });
@@ -2474,6 +2474,18 @@ describe('notifications reference runtime and fakes: routes, registrations, and 
     }
     // The rules hold under any advertising rules: the copy is the catalog's.
     expect(create({ en: ko }, { advertisingRules: 'none' })).toThrow(/must include the default locale ko/u);
+    // A JavaScript caller gets a clear error for a block without its topic.
+    for (const malformed of [null, 'consent-notice', { copy: noticeCopy }, { topic: '', copy: noticeCopy }]) {
+      expect(() => createNotificationConformanceBackend({
+        entry,
+        catalog: [weekend, noticeTopic],
+        clock,
+        deployment: kr,
+        notices: malformed as unknown as NotificationNoticeSettings,
+        defaultLocale: 'ko',
+        defaultPlayer: 'p-1',
+      }), JSON.stringify(malformed)).toThrow(/notices block needs its topic and its copy/u);
+    }
   });
 
   it("sends each notice in its variant's copy, never the notice topic's own", async () => {
@@ -2696,6 +2708,28 @@ describe('notifications fake backend: what a notice says, and who sends it', () 
     expect(backend.providerCalls).toEqual([]);
     expect(backend.noticesGiven).toEqual([]);
     expect((await runtime.notices.list()).map((notice) => notice.kind)).toEqual(['consent-result']);
+  });
+
+  it('sends no notice through a free-form provider that needs a title and a body in the mapping', async () => {
+    const pushes = async (mappingFields: readonly string[]) => {
+      const { clock, host, backend, runtime } = setup(osProfile, [weekend, noticeTopic], {
+        deployment: kr,
+        notices,
+        entry: (entry) => ({ ...entry, mappingFields }),
+      });
+      await runtime.start();
+      backend.authenticate('p-1');
+      host.issueEndpoint({ kind: 'fcm-token', value: 'tok-1' });
+      host.queuePrompt('granted');
+      await runtime.requestPermission({ topics: ['consent-notice'], gesture: true });
+      await runtime.setAdvertisingConsent({ advertising: 'granted', textVersion: 'ad-v1' });
+      clock.set('2026-10-19T03:00:00Z');
+      await backend.runScheduler();
+      return { pushed: backend.providerCalls.length, owed: (await runtime.notices.list()).length };
+    };
+    expect(await pushes([])).toEqual({ pushed: 1, owed: 0 });
+    // Such a provider sends its mapping's own text, as the catalog validator knows it.
+    expect(await pushes(['title', 'body'])).toEqual({ pushed: 0, owed: 1 });
   });
 
   it("lists each notice with the variant the scheduler pushes, a refusal in its own text or the withdrawal's", async () => {

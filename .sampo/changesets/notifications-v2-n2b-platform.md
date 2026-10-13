@@ -22,10 +22,17 @@ it, and `recordShown` still takes the listed notice as is.
 read: the default locale, every required variant in every locale, no blank
 title or body, `{{consentDate}}` in each variant, and no other placeholder or
 brace outside one, as `readNotificationTemplate` reads a text the way
-`fillNotificationTemplate` fills it. The conformance fake backend takes the
-`notices` block, refuses copy that breaks those rules, and pushes each notice
-in its listed variant, filled with `{{consentDate}}`, through
-`notices.topic`. Vectors gain an optional `notices` block, `{ topic, copy }`,
+`fillNotificationTemplate` fills it. `notificationProviderCarriesNotices`
+(free-form content, and no title or body the mapping must carry) and
+`notificationNoticeTopic` (the notice topic as the gate renders one notice:
+no title or body from its mapping, and the variant's copy in place of its
+own) hold what a scheduler needs to send one. The conformance fake backend
+takes the `notices` block, refuses one without its topic or with copy that
+breaks those rules, and pushes each notice in its listed variant, filled
+with `{{consentDate}}`, through `notices.topic` and only through a provider
+that can carry it. A game send or reminder through the notice topic throws
+`NOTIFICATIONS_INVALID_INPUT`, and a notice whose push cannot render, first
+or replayed, is not tried again, so the game still owes it. Vectors gain an optional `notices` block, `{ topic, copy }`,
 which the loader checks by the same rules, and can expect a listed notice's
 `variant`; `advertising-notices` moves its notice text there, and the new
 `advertising-notice-variants` vector pushes both re-confirmations and every

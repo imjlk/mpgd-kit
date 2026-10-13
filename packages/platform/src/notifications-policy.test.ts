@@ -22,11 +22,13 @@ import {
   notificationKeyIssue,
   notificationNoticeCopyIssues,
   notificationNoticeSendFrom,
+  notificationNoticeTopic,
   notificationNoticeVariantCopy,
   notificationNoticeVariantFallbacks,
   notificationNoticeVariants,
   notificationPermissionConsentKind,
   notificationPermissionStateOf,
+  notificationProviderCarriesNotices,
   notificationReconfirmationDueBy,
   notificationReconfirmationListDays,
   notificationRegistryMismatch,
@@ -1159,6 +1161,35 @@ describe('notification consent notices', () => {
       ko: text('ko consent-result.night.refused'),
       en: text('en consent-result.night.withdrawn'),
     });
+  });
+
+  it('sends a notice only through a provider that can carry it, from the notice topic without its own text', () => {
+    // Free-form content, and no title or body the mapping must carry.
+    expect(notificationProviderCarriesNotices(referenceNotificationProviders.fcm)).toBe(true);
+    expect(notificationProviderCarriesNotices(referenceNotificationProviders['apps-in-toss'])).toBe(false);
+    expect(notificationProviderCarriesNotices(referenceNotificationProviders.devvit)).toBe(false);
+    const text = { title: '안내', body: '{{consentDate}}에 동의하셨어요.' };
+    const copy = {
+      ko: Object.fromEntries(notificationNoticeVariants.map((variant) => [variant, text])),
+    } as unknown as Parameters<typeof notificationNoticeTopic>[1];
+    const topic: NotificationTopicDeclaration = {
+      id: 'consent-notice',
+      purpose: 'service',
+      channels: ['remote'],
+      route: '/settings/notifications',
+      copy: { ko: { title: 'Own', body: 'Own text' } },
+      mapping: { channelId: 'notices', title: 'Mapped', body: 'Mapped text' },
+    };
+    expect(notificationNoticeTopic(topic, copy, 'reconfirmation.night')).toEqual({
+      id: 'consent-notice',
+      purpose: 'service',
+      channels: ['remote'],
+      route: '/settings/notifications',
+      copy: { ko: text },
+      mapping: { channelId: 'notices' },
+    });
+    const { mapping: _mapping, ...unmapped } = topic;
+    expect(notificationNoticeTopic(unmapped, copy, 'reconfirmation.night')).not.toHaveProperty('mapping');
   });
 
   it('keys a scheduled notice by player, kind, record kind, record time, and due date', () => {
