@@ -48,3 +48,5 @@ Removed, with the replacement:
 
 See `adapters/browser/README.md` ("Migrating from v1"),
 `docs/MICROSOFT_STORE_COMMERCE.md`, and `docs/ONEPLAY.md`.
+
+ONE play retries pre-checkout network failures with the original bound identity, and already-owned responses remain open for server reconciliation while releasing the closed native surface.

@@ -283,7 +283,6 @@ describe('ONE play H5 adapter', () => {
   });
   it.each([
     ['user_cancelled', 'cancelled', 'USER_CANCELLED'],
-    ['already_owned', 'failed', 'ALREADY_OWNED'],
     ['already_processing', 'failed', 'IN_PROGRESS'],
     ['need_login', 'failed', 'ACTION_REQUIRED'],
     ['need_update', 'failed', 'ACTION_REQUIRED'],
@@ -316,6 +315,18 @@ describe('ONE play H5 adapter', () => {
       );
     },
   );
+  it('keeps an already-owned purchase reconcilable after the SDK closes its surface', async () => {
+    const f = commerceFixture();
+    const sdk: OnePlaySdk = {
+      ...f.sdk,
+      iap: { ...f.sdk.iap!, purchase: async () => { throw { reason: 'already_owned' }; } },
+    };
+    const commerce = createOnePlayCommerceProvider({ ...f, sdk });
+    await expect(commerce.requestPurchase(purchaseInput('owned'))).resolves.toEqual({ outcome: 'launched' });
+    const ads = createOnePlayAdProvider({ sdk, placementIds });
+    expect((await ads.getAvailability({ format: 'interstitial', placementId: 'STAGE_END_INTERSTITIAL' })).state)
+      .toBe('available');
+  });
   it.each(['timeout', 'transport', 'unlisted_reason'])(
     'keeps a %s checkout launched and shares fullscreen ownership with ads',
     async (reason) => {
@@ -457,6 +468,30 @@ describe('ONE play H5 adapter', () => {
     expect(facts.map((event) => event.state)).toEqual(['not-started', 'not-started', 'not-started']);
     expect(f.purchase).not.toHaveBeenCalled();
     expect(f.server.issueIntent).not.toHaveBeenCalled();
+  });
+  it('retries offline intent issuance with the same bound identity and shares each flight', async () => {
+    const f = commerceFixture();
+    let offline = true;
+    const issueIntent = vi.fn(async () => {
+      if (offline) {
+        throw new TypeError('Failed to fetch');
+      }
+      return { developerPayload: 'server-intent' };
+    });
+    const commerce = createOnePlayCommerceProvider({ ...f, server: { issueIntent } });
+    const request = purchaseInput('offline-retry');
+    const [first, duplicate] = await Promise.all([
+      commerce.requestPurchase(request), commerce.requestPurchase(request),
+    ]);
+    expect(first).toMatchObject({ outcome: 'failed', error: { code: 'NETWORK', retryable: true } });
+    expect(duplicate).toEqual(first);
+    expect(issueIntent).toHaveBeenCalledTimes(1);
+    await expect(commerce.requestPurchase({ ...request, logicalId: 'CHANGED' })).rejects.toThrow('identity changed');
+    offline = false;
+    await expect(commerce.requestPurchase(request)).resolves.toMatchObject({ outcome: 'purchased' });
+    await expect(commerce.requestPurchase(request)).resolves.toMatchObject({ outcome: 'purchased' });
+    expect(issueIntent).toHaveBeenCalledTimes(2);
+    expect(f.purchase).toHaveBeenCalledTimes(1);
   });
   it('declares the RFC oneplay profile and reports why it cannot sell', async () => {
     const f = commerceFixture();

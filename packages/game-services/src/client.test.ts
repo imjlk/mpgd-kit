@@ -781,18 +781,15 @@ const cachedCapabilityClient = createGameServicesClient({
   backend: createVerifyingBackend(() => {}),
 });
 for (const idempotencyKey of ['cached-capability-1', 'cached-capability-2']) {
+  const beforeCheckout = capabilityReads;
   const cachedPurchase = await cachedCapabilityClient.purchase({
     productId: 'COINS_100',
     source: 'shop',
     idempotencyKey,
   });
   assertEqual(cachedPurchase.status, 'granted', `${idempotencyKey} should be granted`);
+  assertEqual(capabilityReads > beforeCheckout, true, 'each new checkout reads current readiness');
 }
-assertEqual(
-  capabilityReads,
-  1,
-  'the provider capability block is read once per reconciler, not on every checkout',
-);
 
 let retriedCapabilityReads = 0;
 let retriedVerificationCalls = 0;
@@ -821,6 +818,7 @@ const retriedFirstPurchase = await retriedCapabilityClient.purchase({
   source: 'shop',
   idempotencyKey: 'retried-capability-1',
 });
+const readsAfterFirstPurchase = retriedCapabilityReads;
 const retriedSecondPurchase = await retriedCapabilityClient.purchase({
   productId: 'COINS_100',
   source: 'shop',
@@ -833,9 +831,9 @@ assertEqual(
   'a failed capability read at start is retried before the first checkout opens',
 );
 assertEqual(
-  retriedCapabilityReads,
-  2,
-  'a failed capability read is not cached; the successful read is',
+  retriedCapabilityReads > readsAfterFirstPurchase,
+  true,
+  'the recovered capability read is refreshed for the next checkout',
 );
 assertEqual(
   retriedSecondPurchase.ledgerEntryId,
