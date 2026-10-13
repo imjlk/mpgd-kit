@@ -12,7 +12,7 @@ export type RewardedAdAvailability =
 /**
  * Read at the decision point and keep a failed read distinct from a false flag.
  * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Gets the current snapshot for this decision, if the read succeeds.
- * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f566c58 Checked the fresh boolean read and separate unknown state after a rejection; this example does not infer readiness details.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #12e3a3a Checked the fresh boolean read and separate unknown state after a rejection; this example does not infer readiness details.
  */
 export async function readRewardedAdAvailability(
   gateway: Pick<PlatformGateway, 'getCapabilities'>,
@@ -33,7 +33,7 @@ export type StoreAvailability =
 /**
  * Decide at the decision point whether to show a store, from the required `commerce` block alone.
  * @evidence docs/specs/platform-capability-snapshots.md#snapshot-shape Reads the required commerce block, the only commerce source of a snapshot.
- * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #f566c58 Checked the example reads `commerce.availability` and `commerce.purchase` and never a removed boolean flag, and keeps a rejected read distinct from an unsupported store.
+ * @evidenceReview docs/specs/platform-capability-snapshots.md#snapshot-shape #12e3a3a Checked the example reads `commerce.availability` and `commerce.purchase` and never a removed boolean flag, and keeps a rejected read distinct from an unsupported store.
  */
 export async function readStoreAvailability(
   gateway: Pick<PlatformGateway, 'getCapabilities'>,
