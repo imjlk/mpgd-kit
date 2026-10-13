@@ -9,7 +9,7 @@ import { toAdAdapter } from '@mpgd/platform/ads';
 import { createBrowserPlatformGateway, type BrowserPlatformGatewayOptions } from './index.js';
 import { createOnePlayAdProvider, type OnePlayRewardRequestPort } from './oneplay-ads.js';
 import {
-  createOnePlayCommerceAdapter,
+  createOnePlayCommerceProvider,
   type OnePlayCommerceProduct,
   type OnePlayCommerceServerPort,
 } from './oneplay-commerce.js';
@@ -30,8 +30,13 @@ export {
 export { createOnePlayAdProvider, type OnePlayRewardRequestPort } from './oneplay-ads.js';
 
 export {
-  createOnePlayCommerceAdapter,
+  createOnePlayCommerceCapabilities,
+  createOnePlayCommerceProvider,
+  onePlayCommerceStoreId,
+  onePlayManagedPurchaseEvidenceSchema,
+  type OnePlayCommerceCapabilityInput,
   type OnePlayCommerceProduct,
+  type OnePlayCommerceProvider,
   type OnePlayCommerceServerPort,
 } from './oneplay-commerce.js';
 
@@ -249,9 +254,14 @@ export async function createOnePlayPlatformGateway(options: OnePlayGatewayOption
     }),
   );
   let complete: Promise<void> | undefined;
+  // Always installed: without the SDK, the server port, or products it reports why it cannot sell.
+  const commerce = createOnePlayCommerceProvider({
+    ...(host === undefined ? {} : { sdk: host }),
+    ...(products === undefined ? {} : { products }),
+    ...(commerceServer === undefined ? {} : { server: commerceServer }),
+  });
   return {
-    ...browser, target: 'oneplay', lifecycle, storage, ads,
-    commerce: createOnePlayCommerceAdapter({ ...(host === undefined ? {} : { sdk: host }), ...(products === undefined ? {} : { products }), ...(commerceServer === undefined ? {} : { server: commerceServer }) }),
+    ...browser, target: 'oneplay', lifecycle, storage, ads, commerce,
     ...(host === undefined || ready === undefined ? {} : {
       identity: {
         getPlayer: async () => ({ playerId: ready.playerId }),
@@ -295,10 +305,8 @@ export async function createOnePlayPlatformGateway(options: OnePlayGatewayOption
       const interstitialAds = host?.ads.isSupported('interstitial') === true && Object.values(placementIds).some((placement) => placement.format === 'interstitial' && placement.platformId.trim() !== '');
       const rewardedAds = host?.ads.isSupported('rewarded') === true && rewardRequests !== undefined
         && Object.values(placementIds).some((placement) => placement.format === 'rewarded' && placement.platformId.trim() !== '');
-      const nativeIap = host?.iap?.isSupported('purchase') === true && commerceServer !== undefined && (products?.length ?? 0) > 0;
-      return { ...createUnsupportedCapabilities(), nativeIap, subscriptionIap: false, nativeAds: interstitialAds || rewardedAds, interstitialAds, rewardedAds, localizedContent: true,
+      return { ...createUnsupportedCapabilities(), commerce: await commerce.getCapabilities(), nativeAds: interstitialAds || rewardedAds, interstitialAds, rewardedAds, localizedContent: true,
         providerAvailability: {
-          nativeIap: host?.iap?.isSupported('purchase') !== true ? 'unsupported' : nativeIap ? 'available' : 'configuration-required',
           interstitialAds: host?.ads.isSupported('interstitial') !== true ? 'unsupported' : interstitialAds ? 'available' : 'configuration-required',
           rewardedAds: host?.ads.isSupported('rewarded') !== true ? 'unsupported' : rewardedAds ? 'available' : 'configuration-required',
         } };

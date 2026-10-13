@@ -36,4 +36,10 @@ Commerce, ads, native leaderboard, identity upgrades, and push require
 separately selected providers through `@mpgd/adapter-capacitor`. Installing
 this storage bridge alone never enables or configures those SDKs. The base
 plugin continues to report unsupported capabilities and reject uninstalled
-provider operations without manufacturing purchase or reward success.
+provider operations without manufacturing purchase or reward success. Its
+`runtime.getCapabilities` answer no longer carries `nativeIap` (commerce
+capabilities are the `commerce` block that `@mpgd/adapter-capacitor` sets from
+the registered commerce provider, or the unsupported block), and the six
+`commerce.v2.*` methods answer the non-retryable `COMMERCE_V2_UNAVAILABLE`
+instead of the retired v1 `commerce.*` methods' `NATIVE_IAP_UNAVAILABLE`; the
+v1 method names are now `UNSUPPORTED_METHOD`.

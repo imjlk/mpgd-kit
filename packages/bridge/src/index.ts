@@ -61,10 +61,6 @@ export type BridgeMethod =
   | BridgeNotificationsV2Method
   | 'promotions.getAvailability'
   | 'promotions.grantReward'
-  | 'commerce.getProducts'
-  | 'commerce.purchase'
-  | 'commerce.restore'
-  | 'commerce.getEntitlements'
   | BridgeCommerceV2Method
   | 'ads.preload'
   | 'ads.getAvailability'
@@ -127,9 +123,9 @@ export function isBridgeCommerceV2Method(method: string): method is BridgeCommer
 }
 
 /**
- * Answer for a commerce v2 request that reaches a transport without a v2
- * provider. Non-retryable: the caller must fall back to v1 or a server route,
- * not retry the same transport.
+ * Answer for a commerce request that reaches a transport without a commerce
+ * provider. Non-retryable: the caller must route to a transport that sells
+ * (or report the store unavailable), not retry the same transport.
  */
 export const commerceV2UnavailableBridgeErrorCode = 'COMMERCE_V2_UNAVAILABLE' as const;
 

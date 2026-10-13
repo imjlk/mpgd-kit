@@ -164,21 +164,15 @@ export function createFakePlayBillingPlugin(
   return plugin;
 }
 
-/** A plugin purchase with the Billing 9.1.0 names and the deprecated 0.1 aliases kept in step. */
+/** A plugin purchase with the Billing 9.1.0 names, as the Java plugin encodes it. */
 export function fakePlayPurchase(
   overrides: Partial<PlayPurchase> & { readonly purchaseToken: string },
 ): PlayPurchase {
-  const products = overrides.products ?? overrides.productIds ?? ['gems.small'];
-  const purchaseState = overrides.purchaseState ?? overrides.state ?? 'purchased';
-  const purchaseTime = overrides.purchaseTime ?? overrides.purchaseTimeMillis ?? 1_790_000_000_000;
   return {
-    products,
-    productIds: products,
+    products: overrides.products ?? ['gems.small'],
     purchaseToken: overrides.purchaseToken,
-    purchaseState,
-    state: purchaseState,
-    purchaseTime,
-    ...(purchaseTime > 0 ? { purchaseTimeMillis: purchaseTime } : {}),
+    purchaseState: overrides.purchaseState ?? 'purchased',
+    purchaseTime: overrides.purchaseTime ?? 1_790_000_000_000,
     isAcknowledged: overrides.isAcknowledged ?? false,
     quantity: overrides.quantity ?? 1,
     ...(overrides.orderId === undefined ? {} : { orderId: overrides.orderId }),

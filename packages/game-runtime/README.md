@@ -135,15 +135,30 @@ An eligibility change can prompt another lookup under the same identity.
 `onResult` observes backend settlement; refresh authoritative state or reconcile
 the action coordinator rather than adding rewards directly from SDK callbacks.
 
-Purchase business results do not prove that native UI closed. Without a trusted
-`classifyPurchasePresentation` function or a native `purchasePresentation`
-event source, the wrapper keeps presentation unknown. Wire actual native close
-facts before enabling the managed purchase path. Events are scoped to the
+The coordinated gateway wraps `gateway.commerce.requestPurchase` (the commerce
+provider's purchase call; the v1 `purchase` method no longer exists). A
+purchase business result does not prove that native UI closed, so the wrapper
+holds a purchase lease only when something trusted can release it: the
+provider's own `presentation` facts (a `CommerceProvider` that can prove when
+its payment surface closes offers `presentation.subscribe`), the game's
+`purchasePresentation` event source, or a `classifyPurchasePresentation`
+function. `classifyPurchasePresentation` receives the provider's
+`RequestPurchaseResult` (`launched`, `purchased`, `cancelled`, or `failed`),
+not a platform `PurchaseResult`, and answers `closed`, `not-started`, or
+`unknown`. With none of the three, the wrapper forwards `gateway.commerce`
+unchanged and acquires no lease: a result alone would leave presentation
+`unknown` for the rest of the session and block every ad. That is how every
+commerce provider ran before C4 (only the removed v1 `purchase` was wrapped),
+so a store sheet and an ad can overlap on a target without trusted close
+facts; wire the provider's `presentation` or a `purchasePresentation` source
+to take the lease. A gateway
+without a commerce provider stays without one. Events are scoped to the
 original idempotency key and a monotonic sequence; late or foreign events cannot
 release another invocation. Disposal rejects new calls and retains uncertain
 native close observation. Lightweight key history prevents retired purchase
 keys from reopening the SDK; only active/uncertain results and the last settled
-result are retained.
+result are retained. The idempotency key, `logicalId`, `source`, `offerId`, and
+`quantity` of a replayed key must match its first request.
 
 `canShow` is an injected placement policy. No target-specific branch belongs in
 the game flow. Availability and preparation gate SDK calls; a shared busy surface

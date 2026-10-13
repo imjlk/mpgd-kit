@@ -56,6 +56,10 @@ export function fixture(options: { configured?: boolean; supported?: boolean; ca
     gateway: original,
     provider: source,
     presentation,
+    // The Apps in Toss provider proves no payment-surface closure, so a game
+    // that wants purchases to share the full-screen scope supplies a
+    // classifier; `unknown` is the only honest answer from a business result.
+    classifyPurchasePresentation: () => 'unknown',
     ...(options.canShow === undefined ? {} : { canShow: options.canShow }),
     onClaimEvidence: (entry) => {
       evidence.push(entry);

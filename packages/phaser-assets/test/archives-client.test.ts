@@ -2139,7 +2139,8 @@ describe('bounded ZIP decode client', () => {
         expected: zip.expected,
         limits: { ...defaultArchiveWorkerLimits(), decodeDeadlineMs: 100 },
       });
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceUntilDecodePost(worker);
+      expect(worker.requests.some((request) => request.type === 'decode')).toBe(true);
       await vi.advanceTimersByTimeAsync(101);
       worker.emit({
         type: 'done',

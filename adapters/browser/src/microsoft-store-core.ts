@@ -1,10 +1,7 @@
 import type {
-  CommerceAdapter,
-  Entitlement,
   LogicalProductId,
   PlatformEvidenceEnvelope,
   ProductInfo,
-  PurchaseRestoreResult,
   PurchaseResult,
 } from '@mpgd/platform';
 
@@ -114,14 +111,14 @@ export interface MicrosoftStorePurchaseAuthority {
   hasRecoveryOwnership(
     input: MicrosoftStoreRecoveryAuthorityInput,
   ): Promise<MicrosoftStoreRecoveryAuthorityResult>;
+  /**
+   * Asks the game-owned backend to verify the Store purchase and write the ledger entry. The
+   * authority answers with the ledger entry id; this client never grants. Entitlements are read
+   * from the backend ledger through `@mpgd/game-services`, not from this port.
+   */
   verifyAndGrant(
     input: MicrosoftStorePurchaseAuthorityInput,
   ): Promise<MicrosoftStorePurchaseAuthorityResult>;
-  getEntitlements(): Promise<readonly Entitlement[]>;
-}
-
-export interface MicrosoftStoreCommerceAdapter extends CommerceAdapter {
-  getAvailability(): Promise<MicrosoftStoreCommerceAvailability>;
 }
 
 export interface MicrosoftStoreCommerceGatewayOptions {
@@ -142,7 +139,8 @@ interface MicrosoftStorePendingRecovery {
   readonly purchaseToken: string;
 }
 
-export interface CreateMicrosoftStoreCommerceAdapterInput {
+/** What the Digital Goods engine needs; `createMicrosoftStoreCommerceProvider` extends it. */
+export interface CreateMicrosoftStoreCommerceEngineInput {
   readonly products: readonly MicrosoftStoreCommerceProduct[];
   readonly authority: MicrosoftStorePurchaseAuthority;
   readonly getDigitalGoodsService?: () => Promise<MicrosoftStoreDigitalGoodsService>;
@@ -155,7 +153,7 @@ export interface CreateMicrosoftStoreCommerceAdapterInput {
   readonly locale?: string;
   /**
    * Returns a stable, non-secret scope for the currently authenticated player.
-   * Recreate or refresh the adapter catalog after this value changes.
+   * Recreate the provider or refresh its catalog after this value changes.
    */
   readonly getRecoveryScope: () => string;
   readonly createRecoveryId?: () => string;
@@ -164,13 +162,17 @@ export interface CreateMicrosoftStoreCommerceAdapterInput {
   readonly onError?: (error: unknown) => void;
 }
 
-export type MicrosoftStoreCheckoutRequest = Parameters<CommerceAdapter['purchase']>[0];
+/** One checkout the engine runs; the provider passes its `requestPurchase` input through. */
+export interface MicrosoftStoreCheckoutRequest {
+  readonly productId: LogicalProductId;
+  readonly source: 'shop' | 'stage_fail' | 'result' | 'event';
+  readonly idempotencyKey: string;
+}
 
 /**
  * Client-side outcome codes of the Digital Goods path. They are the
- * `storeCode` the commerce v2 provider reports and name the branch the v1
- * adapter took; the server-side `MICROSOFT_STORE_*` codes of
- * `@mpgd/game-services` stay separate.
+ * `storeCode` the commerce v2 provider reports; the server-side
+ * `MICROSOFT_STORE_*` codes of `@mpgd/game-services` stay separate.
  */
 export type MicrosoftStoreCommerceOutcomeCode =
   | 'MICROSOFT_STORE_PRODUCT_UNKNOWN'
@@ -211,7 +213,7 @@ export interface MicrosoftStoreFulfillmentReport {
   readonly product: MicrosoftStoreCommerceProduct;
   readonly purchase: MicrosoftStoreDigitalGoodsPurchase;
   readonly source: MicrosoftStorePurchaseAuthorityInput['source'];
-  /** The v1 `PurchaseResult`, unchanged. */
+  /** The engine's status vocabulary; the Payment Request completion status derives from it. */
   readonly result: PurchaseResult;
   readonly outcome: MicrosoftStoreFulfillmentOutcome;
 }
@@ -239,7 +241,7 @@ export type MicrosoftStoreCheckoutOutcome =
   | { readonly kind: 'cancelled' };
 
 export interface MicrosoftStoreCheckoutReport {
-  /** The v1 `PurchaseResult`, unchanged. */
+  /** The engine's status vocabulary; the Payment Request completion status derives from it. */
   readonly result: PurchaseResult;
   readonly outcome: MicrosoftStoreCheckoutOutcome;
   /** The player scope the checkout ran under; absent when it failed before resolving one. */
@@ -248,7 +250,7 @@ export interface MicrosoftStoreCheckoutReport {
 
 export interface MicrosoftStoreCatalogEntry {
   readonly product: MicrosoftStoreCommerceProduct;
-  /** The v1 `ProductInfo` with the localized Store title, description, and price. */
+  /** The configured `ProductInfo` with the localized Store title, description, and price. */
   readonly info: ProductInfo;
   readonly detail: MicrosoftStoreDigitalGoodsItem;
 }
@@ -258,20 +260,7 @@ export type MicrosoftStoreCatalogReport =
   | { readonly status: 'loaded'; readonly entries: readonly MicrosoftStoreCatalogEntry[] }
   | { readonly status: 'failed'; readonly cause: unknown };
 
-export interface MicrosoftStoreRestoreOptions {
-  /**
-   * Whether to finish with the v1 `authority.getEntitlements()` read. The v1
-   * adapter needs it for `restoredEntitlements`; the commerce v2 provider
-   * reports entitlements from the ledger and skips it, so an entitlement
-   * outage cannot fail a restore that already settled purchases.
-   * Defaults to true.
-   */
-  readonly readEntitlements?: boolean;
-}
-
 export interface MicrosoftStoreRestoreReport {
-  /** The v1 `PurchaseRestoreResult`, unchanged. */
-  readonly result: PurchaseRestoreResult;
   readonly fulfillments: readonly MicrosoftStoreFulfillmentReport[];
   /** The player scope the replay ran under; absent when it failed before resolving one. */
   readonly recoveryScope?: string;
@@ -297,11 +286,11 @@ export type MicrosoftStoreUnsettledReport =
   | { readonly status: 'failed'; readonly cause: unknown };
 
 /**
- * The Digital Goods checkout, recovery, and authority flow shared by the v1
- * `createMicrosoftStoreCommerceAdapter` and the commerce v2
- * `createMicrosoftStoreCommerceProvider`. Every method returns the v1 result
- * unchanged next to a structured outcome. Nothing here grants: the authority
- * decides, and this engine only reports its answer.
+ * The Digital Goods checkout, recovery, and authority flow behind the commerce
+ * v2 `createMicrosoftStoreCommerceProvider`. Checkout and fulfillment reports
+ * carry the engine's `PurchaseResult` status next to a structured outcome.
+ * Nothing here grants: the authority decides, and this engine only reports its
+ * answer. Entitlements are not read here; the backend ledger owns them.
  */
 export interface MicrosoftStoreCommerceEngine {
   readonly products: readonly MicrosoftStoreCommerceProduct[];
@@ -313,14 +302,13 @@ export interface MicrosoftStoreCommerceEngine {
   /** Opens Payment Request synchronously and runs the authority flow on its result. */
   checkout(request: MicrosoftStoreCheckoutRequest): Promise<MicrosoftStoreCheckoutReport>;
   /** Replays scoped recovery records and globally listed purchases through the authority. */
-  restore(options?: MicrosoftStoreRestoreOptions): Promise<MicrosoftStoreRestoreReport>;
+  restore(): Promise<MicrosoftStoreRestoreReport>;
   /** Store-listed purchases plus scoped recovery records, without calling the authority. */
   listUnsettledPurchases(): Promise<MicrosoftStoreUnsettledReport>;
-  getEntitlements(): Promise<readonly Entitlement[]>;
 }
 
 export function createMicrosoftStoreCommerceEngine(
-  input: CreateMicrosoftStoreCommerceAdapterInput,
+  input: CreateMicrosoftStoreCommerceEngineInput,
 ): MicrosoftStoreCommerceEngine {
   const products = normalizeProducts(input.products);
   const productsById = new Map(products.map((product) => [product.info.id, product]));
@@ -834,9 +822,9 @@ export function createMicrosoftStoreCommerceEngine(
             };
       }
     },
-    async restore(options = {}) {
+    async restore() {
       if (await getAvailability() !== 'available') {
-        return { result: { restoredEntitlements: [] }, fulfillments: [] };
+        return { fulfillments: [] };
       }
 
       const fulfillments: MicrosoftStoreFulfillmentReport[] = [];
@@ -888,14 +876,10 @@ export function createMicrosoftStoreCommerceEngine(
             }),
           ];
         }));
-        const restoredEntitlements = options.readEntitlements === false
-          ? []
-          : await input.authority.getEntitlements();
-        return { result: { restoredEntitlements }, fulfillments, recoveryScope };
+        return { fulfillments, recoveryScope };
       } catch (error) {
         input.onError?.(error);
         return {
-          result: { restoredEntitlements: [] },
           fulfillments,
           ...(resolvedScope === undefined ? {} : { recoveryScope: resolvedScope }),
           failure: { cause: error },
@@ -961,9 +945,6 @@ export function createMicrosoftStoreCommerceEngine(
         input.onError?.(error);
         return { status: 'failed', cause: error };
       }
-    },
-    async getEntitlements() {
-      return input.authority.getEntitlements();
     },
   };
 }

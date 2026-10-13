@@ -1,16 +1,20 @@
 import {
   createUnsupportedCapabilities,
   type AdAdapter,
-  type CommerceAdapter,
+  type CommerceCapabilities,
   type IdentitySession,
   type LaunchEntry,
   type LaunchIntent,
   type LifecycleAdapter,
   type PlatformGateway,
   type PlayerIdentity,
-  type ProductInfo,
   type ShareIntent,
 } from '@mpgd/platform';
+import type {
+  CommerceProvider,
+  RequestPurchaseResult,
+  StoreProduct,
+} from '@mpgd/platform/commerce';
 import { withShareIntentCheck } from '@mpgd/platform/routes';
 
 import { createUnavailableAdAdapter } from './unavailable-ads.js';
@@ -22,18 +26,10 @@ export const browserMockPurchaseEvidenceSchema = 'mpgd.browser.mock-purchase.v1'
 /** Evidence schema attached to a `mockCommerce` rewarded-ad result. Not accepted by any backend claim. */
 export const browserMockRewardEvidenceSchema = 'mpgd.browser.mock-reward.v1';
 
-const mockProducts = [
-  {
-    id: 'COINS_100',
-    type: 'consumable',
-    title: '100 Coins',
-    description: 'Adds 100 demo coins.',
-    price: {
-      formatted: '$0.99',
-      currencyCode: 'USD',
-    },
-  },
-] as const satisfies readonly ProductInfo[];
+/** Store id of the `mockCommerce` storefront. No backend registry routes it. */
+export const browserMockCommerceStoreId = 'browser-mock';
+
+const mockProductId = 'COINS_100';
 
 export interface BrowserPlatformGatewayOptions {
   /** Supply a lifecycle owner when embedding the browser adapter. */
@@ -45,18 +41,19 @@ export interface BrowserPlatformGatewayOptions {
   readonly storage?: Pick<Storage, 'getItem' | 'setItem'>;
   /**
    * Opt in to a local-demo mock storefront: a sample catalog and evidence-only
-   * results. `purchase()` resolves `status: 'completed'` with a mock
-   * `transactionId`, empty `entitlementIds`, no `authoritativeGrant`, and a
+   * results. `gateway.commerce` becomes a commerce v2 provider (store id
+   * `browser-mock`, one consumable `COINS_100`) whose `requestPurchase`
+   * answers `purchased` with a mock `transactionId` and `token` and a
    * `mpgd.browser.mock-purchase.v1` evidence envelope; `showRewarded()`
    * resolves `status: 'completed', rewardGranted: false` with no
    * `ledgerEntryId` and a `mpgd.browser.mock-reward.v1` envelope. Neither
    * schema is accepted by backend claim APIs, so no code path in this adapter
    * can grant: even an accidentally shipped opt-in only exercises the UI flow.
    *
-   * Off by default. Without it the gateway reports commerce and ads as
-   * unavailable and `purchase()` fails closed, so a gateway built from this
-   * adapter (including Microsoft Store builds that reuse it as a base) cannot
-   * be mistaken for a ledger authority.
+   * Off by default. Without it the gateway has no `commerce` provider, reports
+   * the unsupported commerce capability block and ads as unavailable, so a
+   * gateway built from this adapter (including Microsoft Store builds that
+   * reuse it as a base) cannot be mistaken for a ledger authority.
    */
   readonly mockCommerce?: boolean;
 }
@@ -68,6 +65,7 @@ export function createBrowserPlatformGateway(
   const resumeListeners = new Set<() => void>();
   const shareSupported = canShare(options);
   const mockCommerce = options.mockCommerce === true;
+  const commerce = mockCommerce ? createMockCommerceProvider() : undefined;
 
   if (options.lifecycle === undefined && typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
@@ -84,6 +82,9 @@ export function createBrowserPlatformGateway(
     async getCapabilities() {
       return {
         ...createUnsupportedCapabilities(),
+        // A fresh copy per read; the default gateway sells nothing and keeps
+        // the unsupported block from createUnsupportedCapabilities().
+        ...(commerce === undefined ? {} : { commerce: await commerce.getCapabilities() }),
         rewardedAds: mockCommerce,
         interstitialAds: mockCommerce,
         cloudSave: tryResolveBrowserStorage(options.storage) !== undefined,
@@ -140,7 +141,7 @@ export function createBrowserPlatformGateway(
         return 'unavailable';
       },
     },
-    commerce: mockCommerce ? createMockCommerce() : createUnavailableCommerce(),
+    ...(commerce === undefined ? {} : { commerce }),
     ads: mockCommerce ? createMockAds() : createUnavailableAdAdapter(),
     leaderboard: {
       async submitScore() {
@@ -175,48 +176,91 @@ export function createBrowserPlatformGateway(
   };
 }
 
-/** Default: no storefront. Purchases fail closed and never carry entitlements. */
-function createUnavailableCommerce(): CommerceAdapter {
+/**
+ * Local-demo only: a one-product commerce v2 provider whose checkout answers
+ * `purchased` as UI evidence. The `mpgd.browser.mock-purchase.v1` envelope is
+ * accepted by no backend registry, no purchase carries a `settlement`, and the
+ * provider never finishes anything (`lifecycle.finish: 'none'`), so only a
+ * backend ledger could credit a wallet and none will for this evidence.
+ */
+function createMockCommerceProvider(): CommerceProvider {
+  const store = browserMockCommerceStoreId;
+  const createProduct = (): StoreProduct => ({
+    logicalId: mockProductId,
+    store,
+    storeSku: mockProductId,
+    kind: 'consumable',
+    title: '100 Coins',
+    description: 'Adds 100 demo coins.',
+    price: { formatted: '$0.99', currencyCode: 'USD', amountMicros: 990_000 },
+  });
+
   return {
-    async getProducts() {
-      return [];
+    store,
+    async getCapabilities() {
+      return createMockCommerceCapabilities();
     },
-    async purchase() {
+    async fetchProducts(input) {
+      if (input.type === 'subscription') {
+        return [];
+      }
+      const product = createProduct();
+      return input.logicalIds === undefined || input.logicalIds.includes(product.logicalId)
+        ? [product]
+        : [];
+    },
+    async requestPurchase(input): Promise<RequestPurchaseResult> {
+      if (input.logicalId !== mockProductId || input.offerId !== undefined
+        || (input.quantity !== undefined && input.quantity > 1)) {
+        return {
+          outcome: 'failed',
+          error: {
+            code: 'ITEM_UNAVAILABLE',
+            retryable: false,
+            message: `The browser mock storefront does not sell ${input.logicalId}.`,
+          },
+        };
+      }
+      const transactionId = `browser-purchase-${crypto.randomUUID()}`;
       return {
-        status: 'failed',
-        entitlementIds: [],
+        outcome: 'purchased',
+        purchase: {
+          store,
+          transactionId,
+          storeSku: mockProductId,
+          logicalId: mockProductId,
+          quantity: 1,
+          state: 'purchased',
+          token: transactionId,
+          evidence: {
+            schema: browserMockPurchaseEvidenceSchema,
+            payload: { productId: input.logicalId },
+          },
+        },
       };
     },
-    async getEntitlements() {
+    async getAvailablePurchases() {
       return [];
+    },
+    subscribe() {
+      return () => {};
     },
   };
 }
 
-/**
- * Local-demo only: a sample catalog whose checkout completes as UI evidence.
- * The result never carries entitlements or an `authoritativeGrant`; only a
- * backend ledger may credit a wallet, and no backend accepts this schema.
- */
-function createMockCommerce(): CommerceAdapter {
+function createMockCommerceCapabilities(): CommerceCapabilities {
   return {
-    async getProducts() {
-      return mockProducts;
+    purchase: { consumable: true, durable: false, subscription: false, quantity: false },
+    catalog: { products: true, offers: false, localizedPrice: false },
+    lifecycle: {
+      availablePurchases: false,
+      pending: false,
+      restore: false,
+      events: false,
+      finish: 'none',
     },
-    async purchase(request) {
-      return {
-        status: 'completed',
-        transactionId: `browser-purchase-${crypto.randomUUID()}`,
-        entitlementIds: [],
-        evidence: {
-          schema: browserMockPurchaseEvidenceSchema,
-          payload: { productId: request.productId },
-        },
-      };
-    },
-    async getEntitlements() {
-      return [];
-    },
+    authority: { evidence: 'client-token', accountBinding: 'optional' },
+    availability: 'available',
   };
 }
 

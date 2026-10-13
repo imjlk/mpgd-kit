@@ -7,6 +7,7 @@ import {
   type BridgeRequest,
   type BridgeResponse,
 } from '@mpgd/bridge';
+import { createUnsupportedCommerceCapabilities } from '@mpgd/platform';
 
 import {
   createDevvitBridgeHandler,
@@ -350,6 +351,152 @@ test('commerce v2 methods are served by the configured commerce handler only', a
     ok: true,
     data: { __mpgdBridgeProtocol: 'mpgd.storage.load.v1', found: false },
   });
+});
+
+test('the capability snapshot carries the unsupported commerce block without a commerce handler', async () => {
+  const handler = createHandler(new FakeDevvitRedis(), playerId);
+
+  const first = await handler(request('runtime.getCapabilities', {}));
+  assert.equal(first.ok, true);
+  if (first.ok === true) {
+    const snapshot = first.data as Record<string, unknown>;
+    assert.deepEqual(snapshot.commerce, createUnsupportedCommerceCapabilities());
+    assert.equal('nativeIap' in snapshot, false);
+    assert.equal('subscriptionIap' in snapshot, false);
+    assert.equal(snapshot.cloudSave, true);
+
+    // A fresh block on every read, never shared between snapshots.
+    const second = await handler(request('runtime.getCapabilities', {}));
+    assert.equal(second.ok, true);
+    if (second.ok === true) {
+      assert.notEqual((second.data as Record<string, unknown>).commerce, snapshot.commerce);
+    }
+  }
+});
+
+test('the capability snapshot carries the commerce block the configured handler reports', async () => {
+  const block = {
+    ...createUnsupportedCommerceCapabilities(),
+    availability: 'available',
+  };
+  const asked: BridgeRequest[] = [];
+  const handler = createDevvitBridgeHandler({
+    redis: new FakeDevvitRedis(),
+    currentPlayerId: () => playerId,
+    currentDisplayName: async (id) => `u/${id}`,
+    warn: () => {},
+    commerce: {
+      async request(input) {
+        asked.push(input);
+        return {
+          id: input.id,
+          ok: true,
+          data: { protocolVersion: '2.0.0-draft.1', store: 'devvit', capabilities: block },
+        };
+      },
+    },
+  });
+
+  const response = await handler(request('runtime.getCapabilities', {}));
+  assert.deepEqual(response, {
+    id: 'req',
+    ok: true,
+    data: {
+      nativeAds: false,
+      rewardedAds: false,
+      interstitialAds: false,
+      nativeLeaderboard: false,
+      remoteLeaderboard: false,
+      achievements: false,
+      cloudSave: true,
+      socialShare: false,
+      haptics: false,
+      localizedContent: true,
+      commerce: block,
+    },
+  });
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0]?.method, 'commerce.v2.getCapabilities');
+  assert.deepEqual(asked[0]?.payload, { protocol: 'mpgd.commerce.v2' });
+});
+
+test('the capability snapshot fails closed when the commerce handler errors or answers garbage', async () => {
+  const answers: readonly (() => Promise<BridgeResponse>)[] = [
+    async () => ({
+      id: 'req',
+      ok: false,
+      error: { code: 'DEVVIT_PAYMENTS_UNAVAILABLE', message: 'down', retryable: true },
+    }),
+    async () => ({ id: 'req', ok: true, data: { nonsense: true } }),
+    async () => ({ id: 'req', ok: true, data: { capabilities: 'available' } }),
+    // Object-shaped but not a capability block: an empty object, a wrong
+    // value, a missing section, and a retired extra key.
+    async () => ({ id: 'req', ok: true, data: { capabilities: {} } }),
+    async () => ({
+      id: 'req',
+      ok: true,
+      data: {
+        capabilities: { ...createUnsupportedCommerceCapabilities(), availability: 'maybe' },
+      },
+    }),
+    async () => {
+      const { authority: _authority, ...withoutAuthority } = createUnsupportedCommerceCapabilities();
+      return { id: 'req', ok: true, data: { capabilities: withoutAuthority } };
+    },
+    async () => ({
+      id: 'req',
+      ok: true,
+      data: { capabilities: { ...createUnsupportedCommerceCapabilities(), nativeIap: true } },
+    }),
+    async () => ({
+      id: 'req',
+      ok: true,
+      data: {
+        capabilities: {
+          ...createUnsupportedCommerceCapabilities(),
+          lifecycle: { ...createUnsupportedCommerceCapabilities().lifecycle, finish: 'later' },
+        },
+      },
+    }),
+    async () => ({ id: 'req', ok: true, data: null }),
+    async () => {
+      throw new Error('handler crashed');
+    },
+  ];
+
+  for (const answer of answers) {
+    const handler = createDevvitBridgeHandler({
+      redis: new FakeDevvitRedis(),
+      currentPlayerId: () => playerId,
+      currentDisplayName: async (id) => `u/${id}`,
+      warn: () => {},
+      commerce: { request: answer },
+    });
+    const response = await handler(request('runtime.getCapabilities', {}));
+    assert.equal(response.ok, true);
+    if (response.ok === true) {
+      assert.deepEqual(
+        (response.data as Record<string, unknown>).commerce,
+        createUnsupportedCommerceCapabilities(),
+      );
+    }
+  }
+});
+
+test('the removed v1 commerce methods are unsupported', async () => {
+  const handler = createHandler(new FakeDevvitRedis(), playerId);
+
+  for (const method of [
+    'commerce.getProducts',
+    'commerce.purchase',
+    'commerce.restore',
+    'commerce.getEntitlements',
+  ]) {
+    assertError(
+      await handler(request(method as unknown as BridgeRequest['method'], {})),
+      'UNSUPPORTED_METHOD',
+    );
+  }
 });
 
 function createHandler(redis: FakeDevvitRedis, currentPlayerId: string | undefined) {

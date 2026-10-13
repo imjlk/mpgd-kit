@@ -26,14 +26,14 @@ if (app !== null) {
  * The IAP products come from the catalog (`platformProductIds.ait`) at build
  * time, so the wrapper and the game agree on every SKU. The host bridge still
  * sells nothing until the game supplies its server hooks (`prepareIap`,
- * `verifyIapProductGrant`, `readIapEntitlements`, see the mpgd-kit
- * APPS_IN_TOSS_PRODUCTION_EVIDENCE guide): without them every purchase and
- * every `commerce.v2.*` method fails closed, and the grant callback only ever
- * confirms through the game backend.
+ * `verifyIapProductGrant`, see the mpgd-kit APPS_IN_TOSS_PRODUCTION_EVIDENCE
+ * guide): without them every purchase and every `commerce.v2.*` method fails
+ * closed, and the grant callback only ever confirms through the game backend.
+ * Ownership is read from the backend ledger, not from the wrapper.
  */
 function iapBridgeOptions(): Pick<
   InstallAitHostBridgeOptions,
-  'iapProducts' | 'prepareIap' | 'verifyIapProductGrant' | 'readIapEntitlements'
+  'iapProducts' | 'prepareIap' | 'verifyIapProductGrant'
 > {
   return runtimeConfig.iapProducts.length === 0 ? {} : { iapProducts: runtimeConfig.iapProducts };
 }

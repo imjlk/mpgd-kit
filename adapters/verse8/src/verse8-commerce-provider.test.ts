@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProductCatalog } from '@mpgd/catalog';
+import { createUnsupportedCommerceCapabilities } from '@mpgd/platform';
 import { CommerceError, type CommerceEvent } from '@mpgd/platform/commerce';
 
 import { createVerse8Agent8CommerceService, type Verse8Agent8Context } from './agent8.js';
@@ -18,6 +19,7 @@ import {
   type Verse8CommerceDialogClosedPayload,
   type Verse8CommerceShopClient,
   type Verse8CommerceShopItem,
+  type Verse8PurchaseSource,
 } from './commerce-provider.js';
 import { createVerse8PlatformGateway } from './index.js';
 
@@ -406,31 +408,33 @@ describe('createVerse8CommerceProvider', () => {
   });
 });
 
-describe('Verse8 gateway commerce v2', () => {
-  it('offers commerceV2 and the capability block only with the Agent8 purchase source', async () => {
+describe('Verse8 gateway commerce', () => {
+  it('offers the provider and the capability block only with the Agent8 purchase source', async () => {
     const { client } = createFixture();
     const vxShop = {
       purchaseEventAuthority: 'agent8-server' as const,
       products: [{ id: 'COINS_100', type: 'consumable' as const, platformProductId: 'coins-100' }],
-      loadEntitlements: async () => [],
       client,
       canOpenShop: () => true,
     };
-    const without = createVerse8PlatformGateway({ vxShop });
-    expect(without.commerceV2).toBeUndefined();
-    await expect(without.getCapabilities()).resolves.toMatchObject({ nativeIap: true });
-    expect(await without.getCapabilities()).not.toHaveProperty('commerce');
+    // Without a purchase source the gateway sells nothing (the type requires one).
+    const without = createVerse8PlatformGateway({
+      vxShop: { ...vxShop, purchases: undefined as unknown as Verse8PurchaseSource },
+    });
+    expect(without.commerce).toBeUndefined();
+    const withoutCapabilities = await without.getCapabilities();
+    expect(withoutCapabilities.commerce).toEqual(createUnsupportedCommerceCapabilities());
+    expect(withoutCapabilities).not.toHaveProperty('nativeIap');
 
     const gateway = createVerse8PlatformGateway({
       vxShop: { ...vxShop, purchases: { listPurchases: async () => [] } },
     });
-    expect(gateway.commerceV2?.store).toBe('verse8');
-    await expect(gateway.getCapabilities()).resolves.toMatchObject({
-      nativeIap: true,
-      subscriptionIap: false,
-      commerce: createVerse8CommerceCapabilities('available'),
-    });
-    await expect(gateway.commerceV2?.requestPurchase(request)).resolves.toEqual({ outcome: 'launched' });
+    expect(gateway.commerce?.store).toBe('verse8');
+    const capabilities = await gateway.getCapabilities();
+    expect(capabilities.commerce).toEqual(createVerse8CommerceCapabilities('available'));
+    expect(capabilities).not.toHaveProperty('nativeIap');
+    expect(capabilities).not.toHaveProperty('subscriptionIap');
+    await expect(gateway.commerce?.requestPurchase(request)).resolves.toEqual({ outcome: 'launched' });
     expect(client.buyItem).toHaveBeenCalledWith('coins-100');
   });
 });

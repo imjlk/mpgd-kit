@@ -116,8 +116,9 @@ Non-goals:
    conformance runner live in `@mpgd/platform` and stay free of Phaser, DOM,
    network, and SDK imports. Store code stays in `adapters/*`,
    `native-plugins/*`, and `apps/target-*`.
-5. **Additive until the major.** v1 `CommerceAdapter` keeps working through a
-   wrapper until every provider implements v2; one major release removes v1.
+5. **Additive until the major.** v1 `CommerceAdapter` kept working through a
+   wrapper until every provider implemented v2; C4 removed v1 in one major
+   release (see [Migrating from v1](#migrating-from-v1)).
 
 ## Client contract {#client-contract}
 
@@ -232,6 +233,11 @@ Rules every provider follows:
 - **Token and evidence both stay.** `token` is the store's canonical proof,
   kept so a server can verify offline. `evidence` remains the envelope the
   server registry routes on.
+- **Presentation facts are optional.** A provider whose host can prove when its
+  payment surface opens or closes (ONE play) offers
+  `presentation.subscribe(listener)`; the game runtime's presentation gate
+  uses it, and without it a purchase result alone says nothing about the
+  surface. C4 added the field to the contract; it takes no part in granting.
 
 ## Capabilities {#capabilities}
 
@@ -261,12 +267,16 @@ export interface CommerceCapabilities {
 }
 ```
 
-During the transition, `PlatformCapabilities.nativeIap` is derived as
+During the transition, `PlatformCapabilities.nativeIap` was derived as
 `availability === 'available' && (purchase.consumable || purchase.durable)`,
-and `subscriptionIap` as `purchase.subscription`. The capability conformance
-rules in [platform-capability-snapshots.md](../platform-capability-snapshots.md)
-apply to the new block as well: fresh objects on every read and no unknown
-keys.
+and `subscriptionIap` as `purchase.subscription`. C4 removed both booleans and
+`deriveLegacyCommerceCapabilities`: `PlatformCapabilities.commerce` is
+required and is the only source. A gateway that sells nothing reports
+`createUnsupportedCommerceCapabilities()` rather than omitting the block, so a
+consumer never has to guess a default. The capability conformance rules in
+[platform-capability-snapshots.md](../platform-capability-snapshots.md) apply
+to the block: it is required, a fresh object on every read, and has no
+unknown keys.
 
 Profiles for the reference stores, fixed from the current code:
 
@@ -276,8 +286,9 @@ Profiles for the reference stores, fixed from the current code:
 | `app-store` | yes | yes | no | `getTransactions`, unfinished only | yes | `client`, after the ledger grant | `client-token` (signed transaction JWS) | `required` (`appAccountToken`) |
 | `microsoft-store` | yes | no | no | `listPurchases` | no | `server` (consume finalizer) | `adapter-settled` | `required` |
 | `apps-in-toss` | yes | yes | no | `getPendingOrders` | yes | `host` (`completeProductGrant`) | `host-callback` | `host` |
-| `devvit` | yes | to be verified | no | none | yes | `none` | `server-push` (fulfillment order) | `host` |
-| `verse8` | yes | to be verified | no | none | yes | `none` | `server-push` (Agent8 event) | `host` |
+| `devvit` | yes | yes | no | paid, undelivered orders | yes | `none` | `server-push` (fulfillment order) | `host` |
+| `verse8` | yes | yes | no | none | yes | `none` | `server-push` (Agent8 event) | `host` |
+| `oneplay` | yes | yes | no | none | yes | `server` (consume or acknowledge finalizer) | `client-token` (purchase token) | `host` (server-issued checkout intent) |
 | wallet (project-owned) | yes | yes | only where [billing authority](#billing-authority) is `host` | unredeemed entitlements | no | `server` (redeem) | `adapter-settled` | `host` |
 
 `subscription` is `false` for every reference store provider in the first
@@ -758,6 +769,44 @@ not in the catalog. The kit adds no wallet currency literal.
   `@mpgd/platform/commerce`), and `pnpm validate:commerce-alignment` runs in
   the root `check` chain; the module's helpers are tested against every vector
   file in `packages/platform/src/commerce-vectors.test.ts`.
+- C4 removed the four v1 bridge methods (`commerce.getProducts`,
+  `commerce.purchase`, `commerce.restore`, `commerce.getEntitlements`) and
+  renamed the transitional `PlatformGateway.commerceV2` to
+  `PlatformGateway.commerce`. The wire names (`commerce.v2.*`), the protocol
+  constant, and `COMMERCE_V2_UNAVAILABLE` keep the protocol's `v2`: they name
+  the protocol version, not a gateway field. `validate:commerce-alignment` is a
+  hard gate (it throws, never warns) on any drift between the contract types,
+  the generated schemas and vectors, the bridge method lists, and the provider
+  capability blocks; see [Alignment gate](#alignment-gate).
+
+### Alignment gate {#alignment-gate}
+
+`pnpm validate:commerce-alignment` runs in the root `check` chain and fails the
+build when any of these drift apart:
+
+- **Protocol, vectors, schemas.** `commerceProtocolVersion` equals every
+  vector's `protocol` and every schema's version, each vector's name equals its
+  file name, and the committed schemas equal what `generate:commerce-schemas`
+  renders from the contract types, byte for byte (a missing, changed, or stale
+  schema file fails).
+- **Bridge method lists.** `commerceBridgeMethods` (platform, with a compile
+  time check that it names every `CommerceBridgeMethods` key),
+  `bridgeCommerceV2Methods` and the `BridgeMethod` union (bridge), the RFC
+  bridge section, and the published `CommerceBridge*Payload`/`Result` schemas
+  name the same six methods. A non-test source under `packages/`, `adapters/`,
+  `native-plugins/`, `apps/`, or `examples/` that names two or more
+  `commerce.v2.*` methods must name all six, and no source may name a removed
+  v1 `commerce.*` method.
+- **Provider capability blocks.** Every reference provider (Google Play, App
+  Store, Microsoft Store, Apps in Toss, Devvit, Verse8, ONE play, and the
+  wallet) exposes a pure factory for its declared block. For each readiness
+  state the block passes `assertCommerceCapabilities`, only `availability`
+  changes with the state, and the block equals its row of the profile table
+  under [Capabilities](#capabilities) (`purchase.consumable`, `durable`,
+  `subscription`, `lifecycle.availablePurchases` against the "available
+  source" column being other than `none`, `pending`, `finish`,
+  `authority.evidence`, `accountBinding`). A profile row without a checked provider, or one that does
+  not parse, fails.
 
 ## Conformance vectors {#vectors}
 
@@ -956,11 +1005,14 @@ full state sequence per key), `verifyRequests`, `ledger`, `finishCalls`,
 
 ## Migration and PR plan {#pr-plan}
 
-v1 `CommerceAdapter` stays. A2 adds `toCommerceAdapter(provider)` so a v2
-provider serves v1 callers, and the game-services client moves to v2
-internally. Templates and games call game-services and do not change until
-C3. C4 removes v1 in one major release. Every PR that changes a publishable
-package carries a Sampo changeset.
+v1 `CommerceAdapter` stayed through B and C1-C3. A2 added
+`toCommerceAdapter(provider)` so a v2 provider served v1 callers, and the
+game-services client moved to v2 internally. Templates and games called
+game-services and did not change until C3. C4 removed v1 in one major release
+(see [Migrating from v1](#migrating-from-v1)). Every PR that changes a
+publishable package carries a Sampo changeset. The rows below describe each
+PR as it landed; where they mention a v1 wrapper, driver, boolean capability,
+or `commerceV2`, C4 removed it.
 
 | PR | Scope | Closes |
 | --- | --- | --- |
@@ -978,11 +1030,63 @@ package carries a Sampo changeset.
 | C1 (landed, draft) | `@mpgd/game-services/commerce-reconciler`: `createCommerceReconciler({ provider, backend, store, playerId, target, deploymentTarget?, products?, now?, onEvent? })` over any `CommerceProvider`, journaling every purchase as one `commerce-purchase` record of the shared `MonetizationOperationStore` through the lifecycle above, one compare-and-replace revision per transition, with the five-step pass as listed (match by store and transaction id, then the single open record for player, store, and product, else a derived key with the `play-token-sha256:` and `apps-in-toss:purchase:` forms kept; saved verify requests resent unchanged; `finishTransaction` for `client` and `host`, a finalization re-read for `server`, `finished` for `none`; reversed grants to `revoked` when the backend offers `getPurchaseLedgerStatus`, which the reference server gains in C2), purchases serialized per product with `IN_PROGRESS`, `OUTCOME_UNKNOWN` and `ALREADY_OWNED` left open, transport failures kept and retried, nothing granted from a provider result (adapter-settled and wallet purchases are verified like the rest). `assertCommerceFinishAllowed` is the finish gate: the v2 StoreKit SDK keeps no allow-list, and the journal revision the backend grant wrote pairs the transaction with its ledger entry id. `createGameServicesClient` purchases through it whenever `gateway.commerceV2` exists (`commerceReconciler`, `operationStore?`; the v1 path stays for gateways without a v2 provider), `createRecoverableMonetizationClient` runs it from `reconcile()`, adds `restorePurchases()`, and keeps `recoverPurchaseResult` as a deprecated wrapper, and `createGameServicesRuntime` wires it. The fourteen vectors pass through the real reconciler via the runner's `createRuntime` hook, and the Play and StoreKit plugins carry smoke tests showing the deprecated v1 drivers and the reconciler reach the same outcomes over their fake SDKs; the drivers themselves are removed in C4 | Four recovery drivers |
 | C2 (landed, draft) | `@mpgd/game-services`: `VerifyPurchaseRequest.store?: StoreId` next to the ledger `target`, `GameServicesStoreTarget` as `StoreId` with the request validator accepting any bounded kebab-case id (the closed list stays as the deprecated `GameServicesLegacyStoreTarget` until C4) and `resolveLegacyCommerceStoreId` as the v1 mapping (`android` to `google-play`, `ios` to `app-store`, `ait` to `apps-in-toss`, `reddit` to `devvit`, others themselves); `createCommerceEvidenceRegistry(entries, { unregistered? })` routing by `evidence.schema` with `EVIDENCE_SCHEMA_UNSUPPORTED` and `EVIDENCE_SCHEMA_STORE_MISMATCH` answered before any verifier runs, construction refusing a `finish: 'server'` entry without a finalizer, a schema claimed twice, a store with two finish owners, or two missing-envelope entries per store, finalization routed to the owning entry (the schema the grant recorded, then the request schema, then the store's single finalizing entry), and an optional `unregistered` fallback for a deployment's aggregate v1 verifier; the reference entries for `google-play.product-purchase.v2`, `app-store.signed-transaction.v1` (accepts a missing envelope for the Server API lookup), `mpgd.microsoft-store.digital-goods.v1`, `apps-in-toss.iap.callback.v1`, `devvit.payment-order.v1` (bound through a `DevvitPaymentOrderAuthority` port), and the server-push lookups `devvit.order.v1` and `verse8.agent8-event.v1` over `createCommerceLedgerLookupVerifier`, which answers the new `settled` decision with the grant the host's fulfillment path wrote for the same store and transaction id (checked against the requesting player, product, and target; never written from the client envelope), `pending` before that write, and `rejected` on a mismatch; `createServerPushLedgerGrant`, `createPlatformOrderLedgerGrant`, and `createPlatformOrderVerifyRequest` build the grant those lookups read, and the Verse8 Agent8 service writes it when given a ledger; `createGameServicesBackend({ commerceEvidenceRegistry })` uses the registry for purchases and keeps the v1 single verifier and finalizer without one; `getCommerceCapabilities` (`CommerceServiceCapabilities` in `@mpgd/platform/commerce`, JSON Schema published) derived from the registry over HTTP (`/game-services/purchases/capabilities`) and oRPC (`commerce.getCapabilities`), and `compareCommerceServiceCapabilities` applied by the reconciler at start so a store the backend does not accept or a finish owner that disagrees sets `configuration-required` and refuses `requestPurchase` with `CONFIGURATION_REQUIRED`; append-only `revoke` entries (`EntitlementLedgerRevocation`, `GameServicesStore.recordEntitlementRevocation?` / `findEntitlementRevocations?`, one reversal per grant, replay-safe by notification key) with `revokeEntitlementGrant`, `revokePlatformOrder` for `normalizeDevvitRefundOrder` results, `readPurchaseLedgerStatuses` behind `getPurchaseLedgerStatus` (`/game-services/purchases/ledger-status`, `commerce.getPurchaseLedgerStatus`, so the C1 revocation pass is live), `listActiveEntitlementTransactions` subtracting reversed grants, and the subscription `period` shape as a validator only; the Worker composes its registry from bindings (migration `0006_entitlement_revocations.sql` and the D1 revocation methods, the in-Worker Play boundary over `GAME_SERVICES_GOOGLE_PLAY_PACKAGE_NAME` and `GAME_SERVICES_GOOGLE_PLAY_PUBLISHER_AUTH` or a `GAME_SERVICES_ANDROID_PURCHASE_FINALIZER` service, `GAME_SERVICES_ANDROID_VERIFIER_FINALIZES` for a binding that acknowledges itself, an Android verifier with none of these closing the purchase routes while ads and leaderboards keep serving, `MPGD_COMMERCE_LOOKUP_STORES` for the server-push lookups) and keeps the aggregate verifier as the unregistered fallback with its stores declared and the undeclared ones still served, binds `devvit.payment-order.v1` through `GAME_SERVICES_DEVVIT_PAYMENT_ORDER_AUTHORITY`, and builds its store, registry, and handlers once per `env`; entries declare `targets` (a foreign target is a 400) and `acceptsUnclaimedSchemas`, every entry of a store declares the same purchase profile, ledger status reads are chunked and name their player, and a revoke key reused for another grant is a conflict. App Store Server Notifications and Play voided-purchase intake stay game-owned handlers over `revokeEntitlementGrant` | Closed targets, missing Play finalizer, no revocation |
 | C3 (landed, draft) | CLI and templates: the generated game and the private starter wire every store from the catalog's `platformProductIds` (`commerceProducts.ts`): `capacitorAndroid.ts` registers `createCapacitorPlayBillingServiceProvider` and `capacitorIos.ts` registers `createCapacitorStoreKitServiceProvider` for the one-time products with an `android` or `ios` SKU, bound through the reference `commerceAccountBinding.ts` (the hex SHA-256 of `mpgd-commerce-account:<playerId>` as Play's obfuscated account id, the same digest as a version 5 UUID `appAccountToken`; a guest binds nothing), and a shell without the native plugin still runs because both SDKs report Capacitor's `UNIMPLEMENTED` as `configuration-required`; `ait.ts` keeps `commerceV2` from the host bridge's channel while the Apps in Toss wrapper installs `iapProducts` from `extractAitIapProductConfig` (`@mpgd/adapter-ait/iap-config`, `AitIapProductConfig` per `ait` SKU) and still sells nothing without its server hooks, and `aitSandbox.ts` keeps the `ait-sandbox` build-id gate; `reddit.ts` passes `commerce` (`createDevvitCommerceProducts`, `createDevvitWebPaymentsClient` over `purchase()` with `toDevvitCheckoutResult`) and the Devvit server serves `createDevvitCommerceV2BridgeHandler` over `createDevvitCommerceBridgeProducts` (`{ productId, sku }` per `reddit` SKU) only when `devvit.json` sets `permissions.payments` and the catalog names a SKU, so the shipped default keeps failing closed; `verse8.ts` passes `vxShop.purchases` from the game's Agent8 client `listPurchases` (`verse8Agent8Client.ts`, absent by default); `microsoftStore.ts` uses `withMicrosoftStoreCommerceProvider` with the `microsoft-store` consumables; `gameServices.ts` runs the C1 reconciler over `createStorageMonetizationOperationStore` (the reference durable journal over `gateway.storage`: serialized compare-and-swap `replace`, `listRecoverable`, `listGranted`, `findByTransaction`, terminal records bounded by age and count, an unreadable document never replaced) unless the game passes its own `operationStore`, with `commerceProducts` (`createGameServicesRuntime({ commerceProducts })`) from the catalog. `mpgd target init capacitor --providers play-billing,storekit` pins one exact plugin version in the shell and the game (the installed copy, else the CLI's), lets `cap add` or `cap sync` register it, records it in `mpgd.native-shell.json`, replaces only an unwired template gateway with the wired one (a game-owned gateway gets a warning), refuses a store id without its native target, a declared but uninstalled plugin, a shell pinned to another version, and an installed plugin whose kit peers the game does not satisfy, and lists every file in the dry run; `--providers` is refused for every other target. `validate:catalog` derives both host lists, `validate:effective-config` rejects an IAP-enabled `ait` or `reddit` target whose sold products differ from its host list, `validate:starter-workflow` pins the new modules and each target's wiring, and `validate:capacitor-fail-closed` and `validate:capacitor-alignment` cover the store plugins | Template wiring |
-| C4 | Major: remove v1 adapter, deprecated drivers, and the boolean capabilities; enforce the alignment validator | |
+| C4 (landed, draft) | Major: `PlatformGateway.commerce` is the one `CommerceProvider` surface (the transitional `commerceV2` is renamed to it; optional, absent where a target sells nothing) and the v1 `CommerceAdapter`, `toCommerceAdapter`, the four v1 `commerce.*` bridge methods and every adapter's v1 wrapper are removed: the Capacitor registry's v1 methods and `app-store-server` re-export, the Apps in Toss host and sandbox v1 `commerce.*` handlers and entitlement reader, `createDevvitCommerceAdapter`/`withDevvitCommerceAdapter` and the Devvit server bridge's v1 cases, `createMicrosoftStoreCommerceAdapter`/`withMicrosoftStoreCommerceAdapter`, the Verse8 v1 wrapper, the browser base and WeChat stubs, and `createOnePlayCommerceAdapter` (replaced by `createOnePlayCommerceProvider`, the seventh reference store: `oneplay`, `client-token` evidence, server-owned finish, with the trusted `presentation` facts as the new optional `CommerceProvider.presentation`). The Play and StoreKit v1 drivers (`createCapacitorPlayBillingProvider`, `recoverOwnedPlayPurchases`, `createCapacitorStoreKitProvider`, `recoverStoreKitPurchases`, `finishGrantedTransaction`), the `createGooglePlayTokenTransactionId` aliases, and the deprecated `PlayPurchase` fields `productIds`, `purchaseTimeMillis`, and `state` (with their Android emission) are gone; so are `isAuthoritativeMicrosoftStoreCompletion` and `findAdapterSettledGrant` (settlement is the `adapter-settled` capability the reconciler verifies), `recoverPurchaseResult`, `GameServicesLegacyStoreTarget`, and the v1 purchase path of `createGameServicesClient`/`createRecoverableMonetizationClient`: the reconciler is the only purchase path, a gateway without a provider answers `rejected` (`commerce_unavailable`) and opens no store UI, a leftover v1 `purchase` journal record is read but never starts, reopens, or grants anything (a record that was mid-verification has its saved verify request sent to the backend once more and closed by the backend's answer; the reconciler finds whatever the store still lists), and rewarded ads keep their path. `PlatformCapabilities.nativeIap`, `subscriptionIap`, `deriveLegacyCommerceCapabilities`, and the `nativeIap`/`subscriptionIap` provider features are removed: `PlatformCapabilities.commerce` is required and the only source, a gateway that sells nothing reports `createUnsupportedCommerceCapabilities()`, and `withTargetAvailability`, feature availability, the runtime snapshot, and the capability conformance runner read the block alone (`withTargetAvailability` now masks the provider: catalog, new purchases, and resync obey the target configuration while `getAvailablePurchases`, `finishTransaction`, and `subscribe` always pass through, and a refused purchase answers `failed` before it reaches the store: `ITEM_UNAVAILABLE` when the target or catalog does not sell it, the provider's own `CONFIGURATION_REQUIRED`, `ACTION_REQUIRED`, or retryable `STORE_UNAVAILABLE` when only its readiness blocks it). `createCoordinatedPlatformGateway` holds the purchase lease on `requestPurchase` when a trusted release source exists. `validate:commerce-alignment` additionally checks bridge method lists and every provider capability block against the profile table, and fails the build on drift; entitlement reads move to the backend ledger | v1 adapter, deprecated drivers, boolean capabilities, unenforced alignment |
 | D1 | Optional, outside this repository: a Capacitor IAP plugin over the OpenIAP native cores | |
 
 The credit wallet implementation itself (B7's counterpart) lives in the
 consuming project, against the B7 interface.
+
+### Migrating from v1 {#migrating-from-v1}
+
+The first release that contains C4 is a major release of every changed
+package (the 0.x packages bump their minor version and mark it breaking).
+Replace each removed API as follows; TypeScript reports every remaining use
+as an unknown member or a missing `commerce` capability block.
+
+| Removed | Replacement |
+| --- | --- |
+| `PlatformGateway.commerce` as a v1 `CommerceAdapter` (`getProducts`, `purchase`, `restore`, `getEntitlements`) and the `CommerceAdapter` type | `PlatformGateway.commerce?: CommerceProvider` (`fetchProducts`, `requestPurchase`, `getAvailablePurchases`, `finishTransaction`, `restorePurchases`, `subscribe`). Games do not call it: they purchase and recover through `createGameServicesClient`, `createRecoverableMonetizationClient`, or `createGameServicesRuntime`, whose reconciler drives it |
+| `PlatformGateway.commerceV2` | `PlatformGateway.commerce` (same provider). Adapter option and bridge-channel names that carried `commerceV2` as a protocol event channel (for example Apps in Toss `GamePlatformBridge.commerceV2`) are unchanged |
+| `toCommerceAdapter`, `ToCommerceAdapterOptions` | None. A v2 provider no longer serves v1 callers |
+| `findAuthoritativePurchaseSettlement` | The journal record or `GameServicesPurchaseResult` the reconciler returns |
+| `PlatformCapabilities.nativeIap` | `capabilities.commerce.availability === 'available' && (commerce.purchase.consumable \|\| commerce.purchase.durable)` |
+| `PlatformCapabilities.subscriptionIap` | `capabilities.commerce.availability === 'available' && capabilities.commerce.purchase.subscription` |
+| `providerAvailability.nativeIap`/`subscriptionIap`, and `'nativeIap'`/`'subscriptionIap'` in `PlatformProviderFeature` | `capabilities.commerce.availability` |
+| Optional `PlatformCapabilities.commerce`; `deriveLegacyCommerceCapabilities`, `LegacyCommerceCapabilities` | `commerce` is required; a gateway that sells nothing reports `createUnsupportedCommerceCapabilities()` (from `@mpgd/platform` or `@mpgd/platform/commerce`) |
+| Bridge methods `commerce.getProducts`, `commerce.purchase`, `commerce.restore`, `commerce.getEntitlements` | The six `commerce.v2.*` methods. A host that still receives a v1 method answers `UNSUPPORTED_METHOD`; a host that sells nothing answers `COMMERCE_V2_UNAVAILABLE` to the v2 methods |
+| Entitlement reads through `gateway.commerce.getEntitlements()` and the adapter hooks behind it (`AitIapEntitlementReader`/`readIapEntitlements`, `MicrosoftStorePurchaseAuthority.getEntitlements`, `OnePlayCommerceServerPort.getEntitlements`, `DevvitPaymentsClient.getEntitlements`, `Verse8CommerceOptions.loadEntitlements`) | The backend ledger through game-services: `listActiveEntitlementTransactions` (reversed grants subtracted) and `getPurchaseLedgerStatus` on the server. There is no client entitlement list on the gateway; a game gates content on ledger-backed state |
+| `recoverPurchaseResult` | `reconcile()` and `restorePurchases()` of the recoverable client, or `reconciler.reconcile()` |
+| The v1 purchase path of `createGameServicesClient`/`createRecoverableMonetizationClient`; v1 `purchase` journal records | The reconciler (`gateway.commerce`). Without a provider `purchase()` answers `rejected` and opens no store UI. A leftover v1 `purchase` record is read; only a record that was mid-verification is finished, by sending its saved verify request to the backend once more |
+| `findAdapterSettledGrant`, `isAuthoritativeMicrosoftStoreCompletion` | The `authority.evidence: 'adapter-settled'` capability and the reconciler's backend verification |
+| `GameServicesLegacyStoreTarget` | `GameServicesStoreTarget` (an open `StoreId`) |
+| `createGooglePlayTokenTransactionId` (`@mpgd/game-services/google-play-purchase`, `@mpgd/capacitor-play-billing`) | `createGooglePlayTokenPurchaseKey` from `@mpgd/platform/commerce` |
+| `@mpgd/adapter-capacitor/app-store-server` | `@mpgd/game-services/app-store-server` |
+| Capacitor provider `features: ['nativeIap']`, `createCommerceServiceProvider({ features })`, `CapacitorCommerceFeature`, `deriveCommerceFeatureStates`, v1 provider methods | `createCommerceServiceProvider({ id, commerce })`; readiness is the provider's capability block |
+| `createCapacitorPlayBillingProvider`, `recoverOwnedPlayPurchases`, `PlayPurchase.productIds`/`purchaseTimeMillis`/`state` | `createCapacitorPlayBillingServiceProvider`; `PlayPurchase.products`/`purchaseTime`/`purchaseState` (run `cap sync` so the shell carries the matching native module) |
+| `createCapacitorStoreKitProvider`, `recoverStoreKitPurchases`, `finishGrantedTransaction` | `createCapacitorStoreKitServiceProvider`; the reconciler lists unfinished transactions and finishes after the ledger grant |
+| `createMicrosoftStoreCommerceAdapter`, `withMicrosoftStoreCommerceAdapter` | `createMicrosoftStoreCommerceProvider`, `withMicrosoftStoreCommerceProvider` |
+| `createDevvitCommerceAdapter`, `withDevvitCommerceAdapter` | `createDevvitPlatformGateway({ commerce })` or `createDevvitCommerceProvider` |
+| The Verse8 v1 commerce wrapper | `createVerse8PlatformGateway({ vxShop: { purchases } })` (`purchases` is required) |
+| `createOnePlayCommerceAdapter` | `createOnePlayCommerceProvider` |
+| The Apps in Toss host's v1 `commerce.*` handlers and the sandbox bridge's v1 `commerce.*` answers | The `commerce.v2.*` handlers; the sandbox build serves the evidence-only v2 stub |
+
+Kept on purpose:
+
+- The result vocabulary `PurchaseResult`, `PurchaseRestoreResult`,
+  `PurchaseSettlement`, `ProductInfo`, `ProductType`, `Entitlement`,
+  `CommerceDiagnostic`, and `PlatformPurchasePresentationEvent`. They are no
+  gateway surface any more, but `GameServicesPurchaseResult.purchase`, the
+  Apps in Toss and Microsoft Store engines (which the v2 providers share), and
+  the ONE play presentation facts still use them.
+- `resolveLegacyCommerceStoreId` and the `target` field of
+  `VerifyPurchaseRequest`: a server still accepts requests from clients that
+  predate `store`.
+- `@mpgd/game-services/app-store-recovery`: a server-side helper, not marked
+  deprecated; no kit client calls it any more, so a game that wired a restore
+  route to it keeps working, and a later release can retire it.
+- `@deprecated` on the AdMob compatibility helper in
+  `@mpgd/game-services/admob-client-reward`: it concerns rewarded ads, whose
+  path stays.
 
 ## OpenIAP {#openiap}
 

@@ -75,10 +75,9 @@ export function createDevvitCommerceBridgeProducts(
 }
 
 /**
- * The webview products for `createDevvitPlatformGateway({ commerce: { products } })`
- * and `createDevvitCommerceAdapter`, derived from the same catalog entries as
- * `createDevvitCommerceBridgeProducts`, so the webview and the server agree on
- * every SKU.
+ * The webview products for `createDevvitPlatformGateway({ commerce: { products } })`,
+ * derived from the same catalog entries as `createDevvitCommerceBridgeProducts`,
+ * so the webview and the server agree on every SKU.
  */
 export function createDevvitCommerceProducts(
   catalog: DevvitCatalogLike,

@@ -386,7 +386,7 @@ validate:catalog` derives both host lists and rejects a subscription with an
 validate:effective-config` rejects an IAP-enabled `ait` or `reddit` target
 whose effective products or SKUs differ from its host list. Derivation never
 enables selling: the Apps in Toss wrapper still needs its server hooks
-(`prepareIap`, `verifyIapProductGrant`, `readIapEntitlements`), the Devvit
+(`prepareIap`, `verifyIapProductGrant`), the Devvit
 server needs `permissions.payments` and a `payments` block whose SKUs match
 the `reddit` keys and whose `endpoints.fulfillOrder` names the handler that
 writes the ledger grant, and every store needs the backend evidence entries.

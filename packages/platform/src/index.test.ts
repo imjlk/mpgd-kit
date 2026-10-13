@@ -131,6 +131,7 @@ describe('main entry import closure', () => {
     }
     expect([...visited].map((file) => file.slice(root.length + 1)).sort()).toEqual([
       'ads.ts',
+      'commerce-capabilities.ts',
       'commerce-contract.ts',
       'index.ts',
       'notifications-contract.ts',

@@ -10,10 +10,6 @@ import {
   normalizeStoreSdkError,
 } from '@mpgd/adapter-capacitor';
 import { createCapacitorAdMobRewardedProvider } from '@mpgd/adapter-capacitor/admob';
-import { createAppleSignedTransactionVerifier } from '@mpgd/adapter-capacitor/app-store-server';
-import {
-  createAppleSignedTransactionVerifier as createGameServicesAppleVerifier,
-} from '@mpgd/game-services/app-store-server';
 import { createUnsupportedCapabilities } from '@mpgd/platform';
 import { getFeatureAvailability, resolveTargetViewportUsableArea } from '@mpgd/target-config';
 
@@ -28,13 +24,35 @@ const gateway = createCapacitorPlatformGateway({
   },
 });
 const capabilities = await gateway.getCapabilities();
-assert.equal(capabilities.nativeIap, false);
-assert.equal(capabilities.providerAvailability.nativeIap, 'unsupported');
+// The commerce block is the only commerce source: a gateway without a commerce
+// provider reports the unsupported block and no removed boolean flag.
+assert.equal(capabilities.commerce.availability, 'unsupported');
+assert.equal(capabilities.commerce.purchase.consumable, false);
+assert.equal('nativeIap' in capabilities, false);
+assert.equal('subscriptionIap' in capabilities, false);
+assert.equal('nativeIap' in capabilities.providerAvailability, false);
+assert.equal('commerce' in gateway, false);
 assert.equal(typeof getFeatureAvailability, 'function');
 assert.equal(typeof createCapacitorAdMobRewardedProvider, 'function');
-assert.equal(typeof createAppleSignedTransactionVerifier, 'function');
-// The deprecated adapter subpath is the game-services implementation.
-assert.equal(createAppleSignedTransactionVerifier, createGameServicesAppleVerifier);
+// The server-side App Store verifier lives in @mpgd/game-services only.
+await assert.rejects(import('@mpgd/adapter-capacitor/app-store-server'));
+
+// A native shell that still sends the removed boolean flags cannot leak them.
+const staleShell = createCapacitorPlatformGateway({
+  target: 'ios', appVersion: '1', buildId: 'packed-stale-shell',
+  bridge: {
+    async request(input) {
+      return {
+        id: input.id, ok: true,
+        data: { ...createUnsupportedCapabilities(), nativeIap: true, subscriptionIap: true },
+      };
+    },
+  },
+});
+const staleCapabilities = await staleShell.getCapabilities();
+assert.equal('nativeIap' in staleCapabilities, false);
+assert.equal('subscriptionIap' in staleCapabilities, false);
+assert.equal(staleCapabilities.commerce.availability, 'unsupported');
 
 const composed = createCapacitorPlatformGateway({
   target: 'android', appVersion: '1', buildId: 'packed-provider',
@@ -44,34 +62,24 @@ const composed = createCapacitorPlatformGateway({
     },
   },
   providers: [{
-    id: 'packed-store',
-    features: ['nativeIap'],
-    methods: [
-      'commerce.getProducts', 'commerce.purchase', 'commerce.restore',
-      'commerce.getEntitlements',
-    ],
-    async getAvailability() { return { nativeIap: 'available' }; },
+    id: 'packed-leaderboard',
+    features: ['nativeLeaderboard'],
+    methods: ['leaderboard.submitScore', 'leaderboard.open'],
+    async getAvailability() { return { nativeLeaderboard: 'available' }; },
     bridge: {
       async request(input) {
-        return {
-          id: input.id, ok: true,
-          data: input.method === 'commerce.purchase'
-            ? { status: 'pending', entitlementIds: [] }
-            : input.method === 'commerce.restore'
-              ? { restoredEntitlements: [] }
-              : [],
-        };
+        return { id: input.id, ok: true, data: { submitted: true } };
       },
     },
   }],
 });
-assert.equal((await composed.getCapabilities()).nativeIap, true);
-assert.equal((await composed.commerce.purchase({
-  productId: 'COINS_100', source: 'shop', idempotencyKey: 'packed-order',
-})).status, 'pending');
+const composedCapabilities = await composed.getCapabilities();
+assert.equal(composedCapabilities.nativeLeaderboard, true);
+assert.equal(composedCapabilities.providerAvailability.nativeLeaderboard, 'available');
+assert.equal(composedCapabilities.commerce.availability, 'unsupported');
 
-// Commerce v2: a StoreSdk provider registered through the registry serves the
-// v2 surface, the v1 wrapper, and the capability block from one declaration.
+// A StoreSdk provider registered through the registry serves the commerce
+// provider and the capability block from one declaration.
 const storeListeners = new Set();
 const storePurchases = [];
 const storeSdk = {
@@ -121,14 +129,15 @@ const storeGateway = createCapacitorPlatformGateway({
   },
   providers: [createCommerceServiceProvider({ id: 'packed-store', commerce: storeProvider })],
 });
-assert.equal(storeGateway.commerceV2.store, 'packed-store');
+assert.equal(storeGateway.commerce.store, 'packed-store');
 const storeCapabilities = await storeGateway.getCapabilities();
-assert.equal(storeCapabilities.nativeIap, true);
+assert.equal('nativeIap' in storeCapabilities, false);
 assert.equal(storeCapabilities.commerce.availability, 'available');
-assert.equal(storeCapabilities.providerAvailability.nativeIap, 'available');
+assert.equal(storeCapabilities.commerce.purchase.consumable, true);
+assert.equal('nativeIap' in storeCapabilities.providerAvailability, false);
 const storeEvents = [];
-storeGateway.commerceV2.subscribe((event) => storeEvents.push(event));
-assert.deepEqual(await storeGateway.commerceV2.requestPurchase({
+storeGateway.commerce.subscribe((event) => storeEvents.push(event));
+assert.deepEqual(await storeGateway.commerce.requestPurchase({
   logicalId: 'gems_small', idempotencyKey: 'packed-v2', source: 'shop',
 }), { outcome: 'launched' });
 const storePurchase = {
@@ -143,13 +152,10 @@ assert.equal(storeEvents.length, 1);
 assert.equal(storeEvents[0].purchase.logicalId, 'gems_small');
 assert.equal(storeEvents[0].purchase.evidence.schema, 'packed.store.v1');
 assert.equal('settlement' in storeEvents[0].purchase, false);
-assert.equal((await storeGateway.commerceV2.getAvailablePurchases())[0].transactionId, 'packed-tx');
-assert.deepEqual(await storeGateway.commerceV2.finishTransaction({
+assert.equal((await storeGateway.commerce.getAvailablePurchases())[0].transactionId, 'packed-tx');
+assert.deepEqual(await storeGateway.commerce.finishTransaction({
   transactionId: 'packed-tx', ledgerEntryId: 'packed-ledger', isConsumable: true,
 }), { finished: true });
-assert.equal((await storeGateway.commerce.purchase({
-  productId: 'gems_small', source: 'shop', idempotencyKey: 'packed-v1',
-})).status, 'pending');
 assert.equal(normalizeStoreSdkError({ code: 'PLAY_BILLING_NETWORK_ERROR' }).code, 'NETWORK');
 assert.equal(defaultStoreSdkErrorCodeMap.STOREKIT_UNAVAILABLE, 'STORE_UNAVAILABLE');
 

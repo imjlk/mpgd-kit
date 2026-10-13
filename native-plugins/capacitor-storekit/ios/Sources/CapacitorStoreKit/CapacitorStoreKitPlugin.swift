@@ -120,8 +120,8 @@ public class CapacitorStoreKitPlugin: CAPPlugin, CAPBridgedPlugin {
                     byId[id] = payload
                 }
             }
-            // Current non-consumable entitlements are listed for the v1 restore
-            // flow; `unfinished: false` lets the commerce v2 SDK exclude them.
+            // Current non-consumable entitlements are listed too;
+            // `unfinished: false` lets the commerce SDK exclude them.
             for await result in Transaction.currentEntitlements {
                 if var payload = Self.verifiedPayload(result),
                    payload["type"] as? String == "non_consumable",

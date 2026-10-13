@@ -1,10 +1,9 @@
 # Devvit Payments and Commerce v2
 
-> **The commerce v2 gateway option needs the backend's C2 pieces.** The v1
-> payments adapter and the fulfillment handler path
-> (`normalizeDevvitFulfillmentOrder` and the ledger write) keep working as
-> before. For `createDevvitPlatformGateway`'s `commerce` option the backend
-> must (1) register the `devvit.order.v1` lookup entry
+> **The commerce gateway option needs the backend's C2 pieces.** The
+> fulfillment handler path (`normalizeDevvitFulfillmentOrder` and the ledger
+> write) is unchanged. For `createDevvitPlatformGateway`'s `commerce` option the
+> backend must (1) register the `devvit.order.v1` lookup entry
 > (`createDevvitOrderLookupCommerceEvidenceEntry({ ledger })` in its
 > `createCommerceEvidenceRegistry`; the Worker does so with
 > `MPGD_COMMERCE_LOOKUP_STORES = ["devvit"]`), which answers `granted` once
@@ -22,15 +21,12 @@ Reddit settles a Devvit purchase on the server: the payment handler your app
 registers (`fulfillOrder`) runs when an order is `PAID`, and only the backend
 ledger that handler writes grants anything. The webview never grants, never
 finishes, and never trusts its own checkout result. `@mpgd/adapter-devvit`
-ships two client surfaces over that rule:
+ships one client surface over that rule, the commerce v2 `CommerceProvider`
+described below (the v1 `CommerceAdapter` is gone, see
+[Migrating from v1](#migrating-from-v1)).
 
-- the v1 `CommerceAdapter` (`createDevvitCommerceAdapter`, installed with
-  `withDevvitCommerceAdapter`), which returns the checkout result and no
-  entitlements;
-- the commerce v2 `CommerceProvider` described below.
-
-Both run over a game-owned `DevvitPaymentsClient`, a thin wrapper around
-`purchase()` from `@devvit/payments/client`
+The provider runs over a game-owned `DevvitPaymentsClient`, a thin wrapper
+around `purchase()` from `@devvit/payments/client`
 (`import { purchase } from '@devvit/payments/client'`; `@devvit/web/client`
 re-exports it). The wrapper maps the `OrderResultEvent` it returns:
 `STATUS_SUCCESS` with `orderId` to `completed`, `STATUS_CANCELLED` to
@@ -50,10 +46,11 @@ unchanged by commerce v2.
 `createDevvitCommerceProvider(input)` from `@mpgd/adapter-devvit` is the
 commerce v2 `CommerceProvider` (RFC:
 [docs/specs/commerce/commerce-v2-rfc.md](specs/commerce/commerce-v2-rfc.md))
-with `store: 'devvit'`. It takes the v1 `products` and `client`, plus an
-`orders` source (the server-push lookup, see below), an optional `store` id
+with `store: 'devvit'`. It takes `products` and `client` (a
+`DevvitPaymentsClient`, which only has `purchase(sku)`), plus an `orders`
+source (the server-push lookup, see below), an optional `store` id
 (conformance vectors name their fixture store), an optional `onOrdersChanged`
-signal, and the v1 `onCheckoutError` hook.
+signal, and an `onCheckoutError` hook.
 
 Capability block (`createDevvitCommerceCapabilities`), the RFC profile row:
 
@@ -154,19 +151,41 @@ The Devvit server bridge (`createDevvitBridgeHandler` in
 takes that handler as its optional `commerce` dependency. Without it every
 `commerce.v2.*` method keeps failing closed with `COMMERCE_V2_UNAVAILABLE`,
 and the sandbox bridge (`createDevvitSandboxBridge`) always does: it has no
-payments plugin and no order list. Wiring `payments` from
-`@devvit/web/server` and the catalog SKUs into the generated server entry is
-C3 work.
+payments plugin and no order list. Both bridges answer the removed v1
+`commerce.getProducts`, `commerce.purchase`, `commerce.restore`, and
+`commerce.getEntitlements` methods with `UNSUPPORTED_METHOD`. The bridge's
+`runtime.getCapabilities` answer carries a `commerce` block: the unsupported
+block (`createUnsupportedCommerceCapabilities()`) without the handler, the
+handler's own `commerce.v2.getCapabilities` block with it, and the unsupported
+block again if the handler fails or answers something that is not a block. It
+no longer carries `nativeIap`. Wiring `payments` from `@devvit/web/server` and
+the catalog SKUs into the generated server entry is C3 work.
 
 On the webview, `createDevvitPlatformGateway({ ..., commerce: { products,
 client, onOrdersChanged?, onCheckoutError?, store? } })` installs the provider
-as `commerceV2` over the gateway's own bridge: the order source is
+as the gateway's `commerce` over the gateway's own bridge: the order source is
 `createDevvitBridgeOrderSource(request)` (`commerce.v2.getAvailablePurchases`
-and `commerce.v2.getCapabilities`), `getCapabilities()` adds the `commerce`
-block with `nativeIap` and `subscriptionIap` derived from it, and the v1
-`commerce` surface stays the bridge's (`withDevvitCommerceAdapter` still
-installs the v1 adapter next to it). Without the option the gateway offers
-no `commerceV2` and the server snapshot is returned as is.
+and `commerce.v2.getCapabilities`), and `getCapabilities()` replaces the
+server snapshot's `commerce` block with the provider's (dropping `nativeIap`
+and `subscriptionIap` if an older server still sends them). The option keeps
+its name `commerce`; it configures the provider, and the gateway property it
+sets is `gateway.commerce`. Without the option the gateway sells nothing: it
+has no `commerce` and reports `createUnsupportedCommerceCapabilities()`,
+whatever the server answers.
+
+### Entitlements come from the backend ledger
+
+The v1 payments client had a `getEntitlements()` read, and the server bridge
+answered `commerce.getEntitlements`. Both are gone, and the commerce provider
+needs neither: `getAvailablePurchases` is the paid-order list the server
+bridge reads from `payments.getOrders`, and whether a purchase granted
+anything is the backend ledger's answer. Reddit settles on the server, so the
+fulfillment handler's ledger entry is the only grant. A game that shows what
+the player owns reads that ledger on the server, for example
+`listActiveEntitlementTransactions(store, { playerId })` from
+`@mpgd/game-services/commerce-ledger` (reversed grants subtracted), behind a
+game-owned authenticated route, and the reconciler (`@mpgd/game-services`)
+reports each purchase's journal state next to it.
 
 The backend side of the lookup is the server-push verifier C2 added
 (`createDevvitOrderLookupCommerceEvidenceEntry` in
@@ -220,7 +239,7 @@ and no payments wiring is installed.
   (the reconciler resolves it from the paid-order list), `STATUS_CANCELLED`
   to `cancelled` (`USER_CANCELLED`), `STATUS_ERROR` to `failed` with the
   platform `errorCode` as `storeCode`, and an unknown status to `pending`.
-  Without Reddit SKUs the gateway offers no `commerceV2`.
+  Without Reddit SKUs the gateway offers no `commerce`.
 - **Server.** `apps/target-devvit/src/server/index.ts` builds
   `createDevvitCommerceV2BridgeHandler({ payments, products })` with
   `createDevvitCommerceBridgeProducts(catalog)` (`{ productId, sku }`, from
@@ -243,3 +262,28 @@ and no payments wiring is installed.
 Both sides always read the `reddit` key, whatever the deployment target is
 named, and `pnpm validate:effective-config` rejects an IAP-enabled Devvit
 target whose effective products or SKUs differ from the server's list.
+
+## Migrating from v1
+
+C4 removed the commerce v1 surfaces of `@mpgd/adapter-devvit` in one major
+release. The removed exports and their replacements:
+
+| Removed | Replacement |
+| --- | --- |
+| `createDevvitCommerceAdapter(input)` | `createDevvitCommerceProvider({ products, client, orders, ... })`, or the gateway option `createDevvitPlatformGateway({ commerce })` |
+| `withDevvitCommerceAdapter(gateway, commerce)` | `createDevvitPlatformGateway({ commerce })` sets `gateway.commerce` and the `commerce` capability block |
+| `CreateDevvitCommerceAdapterInput` | `CreateDevvitCommerceProviderInput` |
+| `DevvitPaymentsClient.getEntitlements()` | The backend ledger: `listActiveEntitlementTransactions` on the server, the reconciler's journal on the client |
+| `gateway.commerceV2` | `gateway.commerce` (a `CommerceProvider`, absent when the gateway sells nothing) |
+| the v1 `gateway.commerce.getProducts`, `purchase`, `restore`, `getEntitlements` | `fetchProducts`, `requestPurchase`, `restorePurchases`, `getAvailablePurchases` of the provider; games call `@mpgd/game-services`, not the provider |
+| `capabilities.nativeIap`, `capabilities.subscriptionIap` | `capabilities.commerce` (`availability`, `purchase`, `lifecycle`, `authority`) |
+| bridge methods `commerce.getProducts`, `commerce.purchase`, `commerce.restore`, `commerce.getEntitlements` | `UNSUPPORTED_METHOD`; the six `commerce.v2.*` methods |
+
+Kept: `createDevvitCommerceProvider`, `createDevvitCommerceV2BridgeHandler`,
+the catalog helpers (`createDevvitCommerceProducts`,
+`createDevvitCommerceBridgeProducts`), `normalizeDevvitCommerceProducts`,
+`DevvitCheckoutResult`, `DevvitPaymentsClient` (now only `purchase`), and the
+web checkout client (`createDevvitWebPaymentsClient`). `ProductInfo`,
+`PurchaseResult`, and `Entitlement` stay in `@mpgd/platform` as result
+vocabulary; `DevvitCheckoutResult.status` still uses the `PurchaseResult`
+status values.

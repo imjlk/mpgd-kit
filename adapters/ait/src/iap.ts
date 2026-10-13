@@ -1,13 +1,11 @@
 import type { IAP, IapProductListItem, Storage } from '@apps-in-toss/web-framework';
 
-import { createBridgeError, type BridgeResponse } from '@mpgd/bridge';
 import type {
   CommerceDiagnostic,
   Entitlement,
   LogicalProductId,
   PlatformEvidenceEnvelope,
   ProductInfo,
-  PurchaseRestoreResult,
   PurchaseResult,
   PurchaseSettlement,
 } from '@mpgd/platform';
@@ -19,9 +17,9 @@ import {
 } from './iap-diagnostics.js';
 
 /**
- * Apps in Toss one-time in-app purchase machinery shared by the v1 host bridge
- * (`./host`, the `commerce.*` bridge methods) and the commerce v2 provider
- * (`./commerce-provider`). This module imports only types from the Apps in
+ * Apps in Toss one-time in-app purchase machinery behind the commerce provider
+ * (`./commerce-provider`), which the host bridge (`./host`) serves as the
+ * `commerce.v2.*` methods. This module imports only types from the Apps in
  * Toss SDK: the native `IAP` and `Storage` objects are injected through
  * `AitIapHostDependencies`, so the provider can be exported from the package
  * entry without loading the optional SDK peer dependency.
@@ -125,7 +123,7 @@ export interface AitIapProductGrantVerificationInput {
   /** Order-scoped server idempotency key: `apps-in-toss:purchase:<encoded order id>`. */
   readonly idempotencyKey: string;
   /**
-   * The game's own `commerce.purchase` idempotency key for the attempt that
+   * The game's own `requestPurchase` idempotency key for the attempt that
    * opened this order. It is present on every path where the bridge can link
    * the order to a client attempt (the grant callback, a direct re-verify, and
    * restore or pre-checkout recovery of an order this device started), and
@@ -149,12 +147,6 @@ export type AitIapProductGrantVerifier = (
   input: AitIapProductGrantVerificationInput,
 ) => Promise<boolean>;
 
-/**
- * Reads durable purchase entitlements from the game authority. Native product
- * callbacks are intentionally not treated as a source of ownership state.
- */
-export type AitIapEntitlementReader = () => Promise<readonly Entitlement[]>;
-
 export interface NormalizedAitIapProduct {
   readonly productId: LogicalProductId;
   readonly sku: string;
@@ -171,7 +163,6 @@ interface AitIapSupportInput {
   readonly products: NormalizedAitIapProducts;
   readonly prepare: AitIapPreparer | undefined;
   readonly verifier: AitIapProductGrantVerifier | undefined;
-  readonly entitlementReader: AitIapEntitlementReader | undefined;
   readonly timeoutMs: number;
 }
 
@@ -195,14 +186,6 @@ type AitIapCompletedAttemptRetention = (
   storageKey: string,
 ) => Promise<void>;
 
-interface AitIapRestoreInput extends AitIapSupportInput {
-  readonly reconcilePendingOrders: (
-    verifier: AitIapProductGrantVerifier,
-    timeoutMs: number,
-  ) => Promise<AitIapPendingOrderReconciliation>;
-  readonly timeoutMs: number;
-}
-
 export type AitIapGrantSource = 'process-product-grant' | 'pending-order-restore';
 
 export interface AitIapUnresolvedOrder {
@@ -224,10 +207,6 @@ export type AitIapPendingOrderReconciliation =
       /** First per-order reason when an order stayed unresolved. */
       readonly diagnostic?: CommerceDiagnostic;
     };
-
-export type AitIapRestoreOutcome =
-  | { readonly status: 'ok'; readonly result: PurchaseRestoreResult }
-  | { readonly status: 'failed'; readonly diagnostic: CommerceDiagnostic };
 
 export type AitIapCatalogOutcome<T> =
   | { readonly status: 'ok'; readonly products: T }
@@ -283,7 +262,6 @@ function isAitIapSupported(input: AitIapSupportInput): boolean {
     input.products.byProductId.size === 0
     || input.prepare === undefined
     || input.verifier === undefined
-    || input.entitlementReader === undefined
   ) {
     return false;
   }
@@ -385,29 +363,6 @@ async function readAitIapCatalog(
     };
   }
   return { status: 'ok', products };
-}
-
-/** Returns undefined when the game authority could not be read in time. */
-async function readAitIapEntitlementsIfAvailable(
-  reader: AitIapEntitlementReader | undefined,
-  timeoutMs: number,
-): Promise<readonly Entitlement[] | undefined> {
-  if (reader === undefined || timeoutMs <= 0) {
-    return undefined;
-  }
-
-  try {
-    const entitlements = await waitForAitIapNativeCall(reader, timeoutMs);
-    return entitlements === undefined ? undefined : [...entitlements];
-  } catch (error) {
-    // The game authority owns durable purchase state. A read failure must not
-    // turn stale local data into a visible entitlement.
-    console.warn(
-      'AIT IAP entitlement read failed; reporting no entitlements.',
-      errorMessage(error),
-    );
-    return undefined;
-  }
 }
 
 /**
@@ -1203,91 +1158,6 @@ function resolveAitIapCheckoutBarrier(
     return aitIapDiagnostic(aitIapDiagnosticCodes.pendingOrderRecovered, true);
   }
   return undefined;
-}
-
-async function restoreAitIapProducts(
-  input: AitIapRestoreInput,
-): Promise<AitIapRestoreOutcome> {
-  const prepare = input.prepare;
-  const verifier = input.verifier;
-  if (!isAitIapSupported(input) || prepare === undefined || verifier === undefined) {
-    return {
-      status: 'failed',
-      diagnostic: aitIapDiagnostic(aitIapDiagnosticCodes.unavailable, false),
-    };
-  }
-  const restoreStartedAt = Date.now();
-  const getRemainingRestoreTimeout = (): number => {
-    return remainingAitIapOperationTimeout(restoreStartedAt, input.timeoutMs);
-  };
-  const prepared = await prepareAitIap(
-    prepare,
-    { intent: 'restore' },
-    getRemainingRestoreTimeout(),
-  );
-  if (!prepared) {
-    return {
-      status: 'failed',
-      diagnostic: aitIapDiagnostic(aitIapDiagnosticCodes.preparationFailed, true),
-    };
-  }
-  const postPrepareTimeoutMs = getRemainingRestoreTimeout();
-  const reservedEntitlementReadTimeoutMs = Math.max(1, Math.ceil(postPrepareTimeoutMs / 3));
-  const reconciliationTimeoutMs = Math.max(
-    0,
-    postPrepareTimeoutMs - reservedEntitlementReadTimeoutMs,
-  );
-  if (reconciliationTimeoutMs === 0) {
-    return {
-      status: 'failed',
-      diagnostic: aitIapDiagnostic(aitIapDiagnosticCodes.restoreTimeout, true),
-    };
-  }
-
-  const reconciliation = await input.reconcilePendingOrders(
-    verifier,
-    Math.min(reconciliationTimeoutMs, getRemainingRestoreTimeout()),
-  );
-  if (reconciliation.status === 'unavailable') {
-    // Restore exists to settle paid orders. If the provider list cannot be
-    // read, report that instead of an empty success the game cannot tell
-    // apart from "nothing to restore".
-    return { status: 'failed', diagnostic: reconciliation.diagnostic };
-  }
-
-  const authoritativeEntitlements = await readAitIapEntitlementsIfAvailable(
-    input.entitlementReader,
-    getRemainingRestoreTimeout(),
-  );
-  const { settledPurchases } = reconciliation;
-  if (authoritativeEntitlements === undefined && settledPurchases.length === 0) {
-    return {
-      status: 'failed',
-      diagnostic: aitIapDiagnostic(aitIapDiagnosticCodes.entitlementReadFailed, true),
-    };
-  }
-  let diagnostic: CommerceDiagnostic | undefined;
-  if (authoritativeEntitlements === undefined) {
-    diagnostic = aitIapDiagnostic(aitIapDiagnosticCodes.entitlementReadFailed, true);
-  } else if (reconciliation.unresolvedOrders.length > 0) {
-    diagnostic = aitIapDiagnostic(
-      aitIapDiagnosticCodes.pendingOrderUnresolved,
-      true,
-      reconciliation.diagnostic?.providerCode,
-    );
-  }
-  return {
-    status: 'ok',
-    result: {
-      restoredEntitlements: mergeAitIapRestoredEntitlements(
-        reconciliation.restoredEntitlements,
-        authoritativeEntitlements ?? [],
-        input.products,
-      ),
-      ...(settledPurchases.length === 0 ? {} : { settledPurchases }),
-      ...(diagnostic === undefined ? {} : { diagnostic }),
-    },
-  };
 }
 
 interface AitIapPendingOrderReconciliationInput {
@@ -2169,27 +2039,6 @@ function isAitIapClientIdempotencyKey(value: unknown): value is string {
     && !/[\p{Cc}\p{Cf}]/u.test(value);
 }
 
-function mergeAitIapRestoredEntitlements(
-  restoredEntitlements: readonly Entitlement[],
-  authoritativeEntitlements: readonly Entitlement[],
-  products: NormalizedAitIapProducts,
-): readonly Entitlement[] {
-  const entitlementsById = new Map<string, Entitlement>();
-  for (const entitlement of restoredEntitlements) {
-    entitlementsById.set(entitlement.id, entitlement);
-  }
-  for (const entitlement of authoritativeEntitlements) {
-    if (
-      entitlement.source !== 'purchase'
-      || !products.byProductId.has(entitlement.id as LogicalProductId)
-    ) {
-      continue;
-    }
-    entitlementsById.set(entitlement.id, entitlement);
-  }
-  return [...entitlementsById.values()];
-}
-
 async function prepareAitIap(
   prepare: AitIapPreparer | undefined,
   input: AitIapPreparationInput,
@@ -2402,22 +2251,6 @@ export function aitIapDiagnostic(
     retryable,
     ...(providerCode === undefined ? {} : { providerCode }),
   };
-}
-
-export function createAitIapDiagnosticError(
-  id: string,
-  diagnostic: CommerceDiagnostic,
-  summary: string,
-): BridgeResponse {
-  const providerDetail = diagnostic.providerCode === undefined
-    ? ''
-    : `; provider code ${diagnostic.providerCode}`;
-  return createBridgeError(
-    id,
-    diagnostic.code,
-    `${summary} (${diagnostic.code}${providerDetail}).`,
-    diagnostic.retryable,
-  );
 }
 
 /**
@@ -2686,8 +2519,8 @@ export function normalizePendingSince(value: unknown): string | undefined {
   return Number.isFinite(Date.parse(value)) ? value : undefined;
 }
 
-// IAP controller: the per-bridge orchestration the v1 host bridge and the v2
-// provider share. One controller owns the in-flight purchase coalescing map and
+// IAP controller: the per-bridge orchestration behind the commerce provider.
+// One controller owns the in-flight purchase coalescing map and
 // the completed-attempt retention queue; the single IAP lock is module scoped
 // (see `aitIapExclusiveOperations`) so every controller built on the same
 // native IAP dependency shares it.
@@ -2711,8 +2544,6 @@ export interface AitIapControllerOptions {
   readonly iapProducts?: readonly AitIapProductConfig[] | undefined;
   readonly prepareIap?: AitIapPreparer | undefined;
   readonly verifyIapProductGrant?: AitIapProductGrantVerifier | undefined;
-  /** Required to expose native IAP so ownership survives a wrapper restart. */
-  readonly readIapEntitlements?: AitIapEntitlementReader | undefined;
   /** May be shortened, but never extended beyond the native callback-safe default. */
   readonly iapProductGrantTimeoutMs?: number | undefined;
 }
@@ -2736,11 +2567,6 @@ export type AitIapReconciledPendingOrders = Extract<
 export type AitIapRecoveryOutcome =
   | { readonly status: 'reconciled'; readonly reconciliation: AitIapReconciledPendingOrders }
   | { readonly status: 'failed'; readonly diagnostic: CommerceDiagnostic };
-
-export type AitIapEntitlementReadOutcome =
-  | { readonly status: 'unconfigured' }
-  | { readonly status: 'ok'; readonly entitlements: readonly Entitlement[] }
-  | { readonly status: 'failed' };
 
 export interface AitIapConfiguredPendingOrder {
   readonly orderId: string;
@@ -2778,21 +2604,17 @@ export interface AitIapController {
   readonly products: NormalizedAitIapProducts;
   /** The native callback-safe deadline every IAP operation is bounded by. */
   readonly timeoutMs: number;
-  /** Products, both server hooks, the entitlement reader and the four native methods are present. */
+  /** Products, both server hooks and the four native methods are present. */
   isSupported(): boolean;
   /** The running Toss app exposes the four native IAP methods. */
   areNativeMethodsSupported(): boolean;
   listProducts(): Promise<AitIapCatalogOutcome<readonly ProductInfo[]>>;
-  /** The v1 `commerce.purchase` flow: markers, the IAP lock, the checkout barrier and the grant callback. */
+  /** The purchase flow: markers, the IAP lock, the checkout barrier and the grant callback. */
   purchase(
     productId: LogicalProductId,
     idempotencyKey: string,
     options?: AitIapPurchaseOptions,
   ): Promise<PurchaseResult>;
-  /** The v1 `commerce.restore` flow, including the entitlement read. */
-  restore(): Promise<AitIapRestoreOutcome>;
-  /** The v1 `commerce.getEntitlements` read. */
-  readEntitlements(): Promise<AitIapEntitlementReadOutcome>;
   /** Pending-order recovery alone: prepare, then verify and acknowledge paid orders under the IAP lock. */
   recoverPendingOrders(): Promise<AitIapRecoveryOutcome>;
   /** Reads the provider's pending-order list without taking the IAP lock. */
@@ -2819,8 +2641,8 @@ export function createAitIapController(options: AitIapControllerOptions): AitIap
    * The single IAP lock, shared by every bridge built on the same native IAP
    * dependency (see `aitIapExclusiveOperations`). A purchase holds it from
    * its attempt-marker check until its checkout reaches a terminal result,
-   * and a restore holds it from before preparation until reconciliation and
-   * the entitlement read finish. Only one of them may read, verify or
+   * and a recovery pass holds it from before preparation until reconciliation
+   * finishes. Only one of them may read, verify or
    * acknowledge provider orders or change attempt markers at a time; the
    * other gets `AIT_IAP_CHECKOUT_IN_PROGRESS` and nothing is charged.
    */
@@ -2832,7 +2654,6 @@ export function createAitIapController(options: AitIapControllerOptions): AitIap
     products: iapProducts,
     prepare: options.prepareIap,
     verifier: options.verifyIapProductGrant,
-    entitlementReader: options.readIapEntitlements,
     timeoutMs: iapProductGrantTimeoutMs,
   });
 
@@ -2960,38 +2781,6 @@ export function createAitIapController(options: AitIapControllerOptions): AitIap
       }
     },
 
-    async restore() {
-      // Claimed before preparation and held until restore finishes, so a
-      // purchase cannot start a checkout while restore is still preparing.
-      if (aitIapExclusiveOperations.has(iapLockOwner)) {
-        return {
-          status: 'failed',
-          diagnostic: aitIapDiagnostic(aitIapDiagnosticCodes.checkoutInProgress, true),
-        };
-      }
-      aitIapExclusiveOperations.add(iapLockOwner);
-      try {
-        return await restoreAitIapProducts({
-          ...supportInput(),
-          reconcilePendingOrders: reconcilePendingIapOrders,
-        });
-      } finally {
-        aitIapExclusiveOperations.delete(iapLockOwner);
-      }
-    },
-
-    async readEntitlements() {
-      if (options.readIapEntitlements === undefined) {
-        return { status: 'unconfigured' };
-      }
-      // A failed or timed-out authority read is not proof of no ownership.
-      const entitlements = await readAitIapEntitlementsIfAvailable(
-        options.readIapEntitlements,
-        iapProductGrantTimeoutMs,
-      );
-      return entitlements === undefined ? { status: 'failed' } : { status: 'ok', entitlements };
-    },
-
     async recoverPendingOrders() {
       const prepare = options.prepareIap;
       const verifier = options.verifyIapProductGrant;
@@ -3088,14 +2877,13 @@ function areAitIapNativeMethodsSupported(dependencies: Pick<AitIapHostDependenci
 }
 
 /**
- * Host-side finish of a server-granted order (commerce v2
+ * Host-side finish of a server-granted order (commerce
  * `lifecycle.finish: 'host'`). The caller holds a ledger grant, but the game
- * side of the bridge is not trusted to say so: like the restore pass, this
+ * side of the bridge is not trusted to say so: like the recovery pass, this
  * confirms the grant for the order through `verifyIapProductGrant` before
  * anything is acknowledged or settled. That hook must therefore be idempotent
  * per order (`apps-in-toss:purchase:<orderId>` is its grant identity, as the
- * v1 restore pass already requires) and reachable from a v2-only integration;
- * a hook that refuses a grant the backend already holds leaves the order
+ * recovery pass already requires); a hook that refuses a grant the backend already holds leaves the order
  * unfinished and the reconciler record in `finishing`. While the
  * provider lists the order, the linked client attempt is marked completed
  * first, so a replay of its key cannot reopen a checkout for an order that is

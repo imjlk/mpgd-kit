@@ -141,8 +141,8 @@ export interface DevvitOrderResultEventLike {
   readonly errorMessage?: string | undefined;
 }
 
-/** The checkout half of `DevvitPaymentsClient`; the v2 provider needs nothing else. */
-export type DevvitWebPaymentsClient = Pick<DevvitPaymentsClient, 'purchase'>;
+/** The checkout client `createDevvitWebPaymentsClient` returns; the v2 provider needs nothing else. */
+export type DevvitWebPaymentsClient = DevvitPaymentsClient;
 
 const successStatuses: ReadonlySet<number | string> = new Set([1, 'STATUS_SUCCESS', 'SUCCESS']);
 const cancelledStatuses: ReadonlySet<number | string> = new Set([

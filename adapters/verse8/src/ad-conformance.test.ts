@@ -14,6 +14,7 @@ import {
   createVerse8PlatformGateway,
   type Verse8AdPresentationEvent,
   type Verse8AdsClient,
+  type Verse8VXShopClient,
 } from './index.js';
 
 // These vectors exercise presentation, not the independent server grant port.
@@ -41,6 +42,22 @@ const fixture: AdConformanceFixture = {
     const nativeListeners = new Set<(event: Verse8AdPresentationEvent) => void>();
     const requests = new Map<string, (result: AdResult) => void>();
     let sdkShows = 0;
+    let purchaseUiOpened = 0;
+    const shopItem = {
+      productId: 'continue-pack',
+      name: 'Continue pack',
+      description: 'Continue the run.',
+      price: 10,
+      purchasable: true,
+      purchaseLimitReached: false,
+    };
+    const shop: Verse8VXShopClient = {
+      init() {},
+      getItem: () => shopItem,
+      getItems: () => [shopItem],
+      buyItem() { purchaseUiOpened += 1; },
+      async refresh() {},
+    };
     const show = (input: Parameters<Verse8AdsClient['showRewarded']>[0]) => {
       sdkShows += 1;
       return new Promise<AdResult>((resolve) => { requests.set(input.requestId ?? '', resolve); });
@@ -49,12 +66,21 @@ const fixture: AdConformanceFixture = {
     const original = createVerse8PlatformGateway({ adsClient: client,
       ...(profile.configured === true ? { resolveAdPlacementId: () => 'native-placement' } : {}),
       adPresentation: { subscribe(listener) { nativeListeners.add(listener); return () => { nativeListeners.delete(listener); }; } },
+      vxShop: {
+        purchaseEventAuthority: 'agent8-server',
+        products: [{ id: 'CONTINUE', type: 'consumable', platformProductId: 'continue-pack' }],
+        purchases: { listPurchases: async () => [] },
+        client: shop,
+        canOpenShop: () => true,
+      },
     });
     const source = original.ads.provider;
     if (source === undefined) { throw new Error('Verse8 provider missing.'); }
     const execution = createGameExecutionController();
     const presentation = createFullScreenPresentationScope({ execution });
     const gateway = createCoordinatedPlatformGateway({ gateway: original, provider: source, presentation, canShow: () => profile.policyEnabled !== false,
+      // VXShop reports no closure, so the purchase result is `unknown`; the lease still arbitrates against ads.
+      classifyPurchasePresentation: () => 'unknown',
       deadline: { milliseconds: 30000, schedule(callback, milliseconds) { const timer = setTimeout(callback, milliseconds); return () => clearTimeout(timer); } },
     });
     const ads = gateway.ads.provider;
@@ -85,7 +111,8 @@ const fixture: AdConformanceFixture = {
             const id = String(step.invocationId);
             last = id;
             if (step.format === 'purchase') {
-              void gateway.commerce.purchase({ productId: String(step.placementId), source: 'shop', idempotencyKey: id }).then(() => { throw new Error('Purchase reached SDK during another presentation.'); }, (error: unknown) => {
+              if (gateway.commerce === undefined) { throw new Error('Coordinated Verse8 commerce provider missing.'); }
+              void gateway.commerce.requestPurchase({ logicalId: String(step.placementId), source: 'shop', idempotencyKey: id }).then(() => { throw new Error('Purchase reached SDK during another presentation.'); }, (error: unknown) => {
                 if (!(error instanceof Error) || !('code' in error)) { throw error; }
                 outcomes.set(id, 'unavailable');
                 reasons.set(id, String(error.code));
@@ -109,7 +136,7 @@ const fixture: AdConformanceFixture = {
       async read(): Promise<Readonly<Record<string, AdConformanceValue>>> {
         const owner = presentation.getSnapshot().owner;
         const session = sessions.get(last);
-        return { sdkShows, purchaseUiOpened: 0, ledgerGrants: 0, occupied: owner !== undefined, outcomes: Object.fromEntries(outcomes), reasons: Object.fromEntries(reasons), reason: reasons.get(last) ?? session?.reason ?? '', preparation, lateCloseObserved,
+        return { sdkShows, purchaseUiOpened, ledgerGrants: 0, occupied: owner !== undefined, outcomes: Object.fromEntries(outcomes), reasons: Object.fromEntries(reasons), reason: reasons.get(last) ?? session?.reason ?? '', preparation, lateCloseObserved,
           presentation: session?.presentation ?? 'not-started', eligibility: session?.eligibility ?? 'unknown', activeInvocationId: owner?.invocationId ?? '',
           executionOwners: execution.getSnapshot().blocks.map((block) => block.reason.startsWith('presentation:') ? `ad:${owner?.invocationId}` : block.reason),
         };

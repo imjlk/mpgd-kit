@@ -34,7 +34,7 @@ client** against its own wallet service, under its own open `StoreId`:
   and answers `purchased` only when the wallet's debits add up to that price,
   with `adapter-settled` evidence (`credit-wallet.spend.v1`, carrying the
   debits and the wallet's entitlement id) and no `settlement` pointer (see the
-  C1 note below), and the wallet's `createdAt` as `purchasedAt`,
+  paragraph on settlement below), and the wallet's `createdAt` as `purchasedAt`,
   so a replay and a later `getAvailablePurchases` read show the same
   purchase; `getAvailablePurchases` lists the title's unredeemed entitlements
   (one the wallet lists for another title is dropped), `finishTransaction`
@@ -115,17 +115,14 @@ service alone (`subscriptionUpdated` events and `getActiveSubscriptions` are
 how a client learns about them). Policy constraints come from
 [D-02](SUBSCRIPTION_COMMERCE_DECISION.md).
 
-Note for C1 (the single reconciler): a wallet purchase carries no
-`settlement` pointer. The contract defines `settlement.ledgerEntryId` as the
-authority's ledger entry, which for a wallet spend exists only after the
-backend verifies the evidence, and the wallet's own id (the entitlement id,
-derived by the reference wallet from the client-chosen idempotency key) is not
-one. `@mpgd/game-services` grants a v1 `completed` result carrying
-`authoritativeGrant` from a provider that declares
-`authority.evidence: 'adapter-settled'` without a second verification
-(`findAdapterSettledGrant`, B4) because the Microsoft Store authority has
-already written the ledger grant; `toCommerceAdapter` builds
-`authoritativeGrant` only from `settlement`, so a wallet purchase takes the
-verified path and is never granted on the declaration alone. C1 keeps it that
-way: wallet purchases are granted from the backend's verification of the
-evidence, never from a settlement pointer the wallet could supply.
+A wallet purchase carries no `settlement` pointer. The contract defines
+`settlement.ledgerEntryId` as the authority's ledger entry, which for a wallet
+spend exists only after the backend verifies the evidence, and the wallet's own
+id (the entitlement id, derived by the reference wallet from the client-chosen
+idempotency key) is not one. The commerce reconciler is the only purchase path
+(the v1 adapter wrapper, `toCommerceAdapter`, and the adapter-settled shortcut
+`findAdapterSettledGrant` were removed in commerce v2 PR C4), and it sends
+every provider result, adapter-settled included, through one verify request
+whose answer carries the ledger entry. A wallet purchase is therefore granted
+from the backend's verification of the evidence, never from a settlement
+pointer the wallet could supply.
