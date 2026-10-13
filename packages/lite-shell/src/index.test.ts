@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { collectGlyphs, createFrameLoop, TapRecognizer } from './index';
+import { collectGlyphs, createFrameLoop, TapRecognizer } from './index.js';
 
 describe('TapRecognizer', () => {
   it('accepts a short still press', () => {

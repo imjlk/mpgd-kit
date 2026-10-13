@@ -39,7 +39,7 @@ generated with `--template lite --workspace` and extended with an optional
 
 | Export | Purpose |
 | --- | --- |
-| `createLiteShell({ mount, renderer, frame, onTap })` | Mounts a renderer surface, resizes it with `ResizeObserver` and the device pixel ratio, routes taps, and drives a frame loop. |
+| `createLiteShell({ mount, renderer, frame, onTap, onFirstFrame, contentHeight })` | Mounts a renderer surface, resizes it with `ResizeObserver` and the device pixel ratio (a `matchMedia` resolution listener re-scales on zoom or monitor changes), routes taps, and drives a frame loop. `onTap(tap, event)` receives the original `PointerEvent`, so `requestExpandedMode(event, ...)` keeps its user activation. `onFirstFrame(time)` fires once after the first draw (use it for first-paint marks or to hide a placeholder). `contentHeight(width)` makes the height follow content: the mount height is set to the returned CSS px; call `shell.refit()` when content changes. Unchanged sizes never re-resize the backing store. |
 | `createCanvasRenderer({ maxDpr })` | Canvas2D renderer. Draw in CSS pixels; the backing store is scaled by DPR (capped at 3). |
 | `createFrameLoop({ tick })` | `requestAnimationFrame` loop that sleeps when `tick` returns false. Call `shell.invalidate()` after state changes. An idle inline post uses no CPU. |
 | `TapRecognizer`, `defaultTapThreshold` | A press is a tap only if it moves at most 10 CSS px and lasts at most 600 ms, so feed scrolls and long presses never become game input. |
@@ -120,8 +120,12 @@ Phaser absent from every chunk and `matter-js` loaded on demand.
 
 ## Publishing status
 
-`@mpgd/lite-shell` is `private` until its first npm publish (see
-`AGENTS.md`). Until then, lite games outside a kit checkout must be generated
-with `--workspace --kit-path <mpgd-kit>` (or use a `link:` dependency); a
-non-workspace `mpgd game create --template lite` writes `^0.1.0`, which cannot
-be installed yet.
+`@mpgd/lite-shell` 0.1.0 is publish-ready: it builds ESM JavaScript and
+`.d.ts` files to `dist/` (`pnpm --filter @mpgd/lite-shell build`), uses
+explicit `.js` relative imports so plain Node ESM can load it, and its test
+script imports the built output as a consumer would. Per `AGENTS.md`, the
+maintainer registers it with one local initial publish of `0.1.0` and then adds
+its Sampo release-group entry and npm Trusted Publishing before it rides
+automated releases. Until that publish lands, lite games outside a kit checkout
+must be generated with `--workspace --kit-path <mpgd-kit>` (or a `link:`
+dependency).

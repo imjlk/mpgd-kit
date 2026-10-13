@@ -24,8 +24,9 @@ export async function loadFontSubset(
     style: source.style ?? 'normal',
     display: 'block',
   });
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<false>((resolve) => {
-    setTimeout(() => resolve(false), options.timeoutMs ?? 1500);
+    timer = setTimeout(() => resolve(false), options.timeoutMs ?? 1500);
   });
   try {
     const loaded = await Promise.race([face.load(), timeout]);
@@ -36,6 +37,8 @@ export async function loadFontSubset(
     return true;
   } catch {
     return false;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
