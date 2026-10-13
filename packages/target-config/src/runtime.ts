@@ -1,5 +1,8 @@
+import typia from 'typia';
+
 import type { MpgdLocale } from '@mpgd/i18n';
 import type {
+  CommerceCapabilities,
   PlatformCapabilities,
   PlatformGateway,
   PlatformProviderAvailability,
@@ -7,6 +10,10 @@ import type {
 import type { CommerceBillingAuthority } from '@mpgd/platform/commerce-wallet';
 
 import type { EffectiveTargetConfig } from './effective.js';
+
+/** The notifications v2 capability block (`@mpgd/platform/notifications`). */
+type NotificationCapabilities = NonNullable<PlatformCapabilities['notifications']>;
+type NotificationProvider = NonNullable<PlatformGateway['notificationsV2']>;
 
 export type PlatformFeature =
   | 'iap'
@@ -462,10 +469,7 @@ export function applyTargetConfigToCapabilities(
 
   return {
     ...capabilities,
-    nativeIap: capabilities.nativeIap && config.features.iap,
-    ...(capabilities.subscriptionIap === undefined
-      ? {}
-      : { subscriptionIap: capabilities.subscriptionIap && isPlatformFeatureEnabled(config, 'subscriptions') }),
+    commerce: applyTargetConfigToCommerceCapabilities(requireCommerce(capabilities), config),
     nativeAds:
       capabilities.nativeAds &&
       (bannerAds || rewardedAds || interstitialAds),
@@ -476,6 +480,104 @@ export function applyTargetConfigToCapabilities(
     remoteLeaderboard: capabilities.remoteLeaderboard && isPlatformFeatureEnabled(config, 'remoteLeaderboard'),
     localizedContent: capabilities.localizedContent && config.features.localization,
   };
+}
+
+/**
+ * The commerce block as the target configuration allows it: one-time products
+ * need `features.iap`, subscriptions need `features.subscriptions`, and a
+ * target that allows neither reports the store as `unsupported`. The block is
+ * the only source: there are no boolean `nativeIap` or `subscriptionIap` flags
+ * to keep in step. A fresh object on every call.
+ */
+export function applyTargetConfigToCommerceCapabilities(
+  commerce: CommerceCapabilities,
+  config: TargetConfig,
+): CommerceCapabilities {
+  const oneTime = config.features.iap;
+  const subscriptions = isPlatformFeatureEnabled(config, 'subscriptions');
+  const declaresOneTime = commerce.purchase.consumable || commerce.purchase.durable;
+  const declaresKind = declaresOneTime || commerce.purchase.subscription;
+  // Sellable is what the configuration allows of what the provider declares.
+  // A block that declares no kind at all (the unsupported or degraded block)
+  // keeps its own availability, so a stalled provider still reads as
+  // temporarily unavailable rather than unsupported.
+  const sellable = declaresKind
+    ? (oneTime && declaresOneTime) || (subscriptions && commerce.purchase.subscription)
+    : oneTime || subscriptions;
+  return {
+    purchase: {
+      consumable: commerce.purchase.consumable && oneTime,
+      durable: commerce.purchase.durable && oneTime,
+      subscription: commerce.purchase.subscription && subscriptions,
+      quantity: commerce.purchase.quantity && oneTime,
+    },
+    catalog: {
+      products: commerce.catalog.products && sellable,
+      offers: commerce.catalog.offers && sellable,
+      localizedPrice: commerce.catalog.localizedPrice && sellable,
+    },
+    lifecycle: { ...commerce.lifecycle },
+    authority: { ...commerce.authority },
+    availability: sellable ? commerce.availability : 'unsupported',
+  };
+}
+
+/**
+ * The required commerce block of a capability snapshot. A gateway that sells
+ * nothing reports `createUnsupportedCommerceCapabilities()`; a snapshot
+ * without the block is a gateway built before the block was required, and
+ * it fails here with that reason rather than as a bare property error.
+ */
+function requireCommerce(capabilities: PlatformCapabilities): CommerceCapabilities {
+  const commerce = (capabilities as { readonly commerce?: CommerceCapabilities }).commerce;
+  if (commerce === undefined) {
+    throw new TypeError(
+      'PlatformCapabilities.commerce is required: report createUnsupportedCommerceCapabilities() '
+        + 'for a gateway that sells nothing.',
+    );
+  }
+  return commerce;
+}
+
+/**
+ * The error a masked provider answers when it refuses a purchase before it
+ * reaches the store. A purchase the target configuration or the catalog does
+ * not sell is `ITEM_UNAVAILABLE`. A purchase the configuration allows but the
+ * provider cannot take yet answers the provider's own class of error, as the
+ * provider itself would: `CONFIGURATION_REQUIRED`, `ACTION_REQUIRED`, or the
+ * retryable `STORE_UNAVAILABLE`, so the reconciler does not journal a
+ * temporary outage as a terminal, non-retryable failure.
+ */
+function purchaseRefusal(readiness: PlatformProviderAvailability | undefined): {
+  readonly code: 'ITEM_UNAVAILABLE' | 'CONFIGURATION_REQUIRED' | 'ACTION_REQUIRED' | 'STORE_UNAVAILABLE';
+  readonly retryable: boolean;
+} {
+  switch (readiness) {
+    case 'configuration-required':
+      return { code: 'CONFIGURATION_REQUIRED', retryable: false };
+    case 'action-required':
+      return { code: 'ACTION_REQUIRED', retryable: false };
+    case 'temporarily-unavailable':
+      return { code: 'STORE_UNAVAILABLE', retryable: true };
+    default:
+      return { code: 'ITEM_UNAVAILABLE', retryable: false };
+  }
+}
+
+/** One-time products are sold when the provider is available and declares a one-time kind. */
+function commerceSellsOneTime(commerce: CommerceCapabilities): boolean {
+  return commerce.availability === 'available'
+    && (commerce.purchase.consumable || commerce.purchase.durable);
+}
+
+/**
+ * Subscriptions are sold under the same readiness rule as one-time products:
+ * the provider is available and declares the kind. A provider that is not
+ * ready yet gets the retryable or configuration refusal from the mask instead
+ * of a purchase that reaches the store.
+ */
+function commerceSellsSubscriptions(commerce: CommerceCapabilities): boolean {
+  return commerce.availability === 'available' && commerce.purchase.subscription;
 }
 
 export function getFeatureAvailability(
@@ -612,6 +714,7 @@ export function withTargetAvailability(
     presentation: gatewayPresentation,
     sharing: gatewaySharing,
     notifications: gatewayNotifications,
+    notificationsV2: gatewayNotificationsV2,
     ...gatewayWithoutIntegrations
   } = gateway;
   const integrations = normalizeTargetIntegrationConfig(
@@ -654,17 +757,56 @@ export function withTargetAvailability(
           ...(exposeOutboundShare ? { share: shareOutbound } : {}),
           ...(exposeInboundShare ? { readInboundShare } : {}),
         };
-  const notifications = notificationsAvailable ? gatewayNotifications : undefined;
+  const notifications = notificationsAvailable && hasNotificationSubscriptionAdapter(gateway)
+    ? gatewayNotifications
+    : undefined;
+  // Notifications v2 passes the same gate as the v1 adapter: a release gate
+  // such as Devvit's `approval-required` stays in `integrations.notifications`
+  // (notifications RFC "Capabilities").
+  const notificationsV2 = notificationsAvailable && hasNotificationProvider(gateway)
+    ? gatewayNotificationsV2
+    : undefined;
+  const readNotificationBlock = notificationsV2 === undefined
+    ? undefined
+    : createNotificationCapabilityReader(notificationsV2);
+  // The capability snapshot describes what the game can reach: the v2 block
+  // comes from the exposed provider and is left out while it is hidden.
+  const readCapabilities = async (): Promise<PlatformCapabilities> => {
+    const [capabilities, notificationCapabilities] = await Promise.all([
+      getGatewayCapabilities(),
+      readNotificationBlock?.(),
+    ]);
+    return withNotificationCapabilities(
+      applyTargetConfigToCapabilities(capabilities, availabilityConfig),
+      notificationCapabilities,
+    );
+  };
   const getIapAvailability = async () => {
     const oneTimeEnabled = availabilityConfig.features.iap;
     const subscriptionsEnabled = isPlatformFeatureEnabled(availabilityConfig, 'subscriptions');
     if (!oneTimeEnabled && !subscriptionsEnabled) {
-      return { oneTime: false, subscriptions: false };
+      return {
+        oneTime: false,
+        subscriptions: false,
+        oneTimeEnabled,
+        subscriptionsEnabled,
+        oneTimeRoute: false,
+        subscriptionsRoute: false,
+        readiness: undefined,
+      };
     }
-    const capabilities = await getGatewayCapabilities();
+    const commerce = requireCommerce(await getGatewayCapabilities());
     return {
-      oneTime: oneTimeEnabled && capabilities.nativeIap,
-      subscriptions: subscriptionsEnabled && capabilities.subscriptionIap === true,
+      oneTime: oneTimeEnabled && commerceSellsOneTime(commerce),
+      subscriptions: subscriptionsEnabled && commerceSellsSubscriptions(commerce),
+      // What the target configuration allows, apart from what the provider can
+      // sell right now: a refusal names the provider's readiness only when the
+      // configuration would have allowed the purchase.
+      oneTimeEnabled,
+      subscriptionsEnabled,
+      oneTimeRoute: oneTimeEnabled && (commerce.purchase.consumable || commerce.purchase.durable),
+      subscriptionsRoute: subscriptionsEnabled && commerce.purchase.subscription,
+      readiness: commerce.availability,
     };
   };
   const getLeaderboardRoute = async (): Promise<'native' | 'remote' | null> => {
@@ -718,12 +860,108 @@ export function withTargetAvailability(
     );
   };
 
+  const commerceSource = gateway.commerce;
+  // Recovery reads (`getAvailablePurchases`, `finishTransaction`, `subscribe`)
+  // always pass through: an already paid purchase must stay recoverable and
+  // finishable even when the target stops selling. Catalog reads, new
+  // purchases, and a store resync obey the target configuration.
+  const commerce: PlatformGateway['commerce'] = commerceSource === undefined
+    ? undefined
+    : {
+        store: commerceSource.store,
+        ...(commerceSource.presentation === undefined
+          ? {}
+          : { presentation: commerceSource.presentation }),
+        async getCapabilities() {
+          return applyTargetConfigToCommerceCapabilities(
+            await commerceSource.getCapabilities(),
+            availabilityConfig,
+          );
+        },
+        async fetchProducts(input) {
+          const available = await getIapAvailability();
+          if (!available.oneTime && !available.subscriptions) {
+            return [];
+          }
+          return (await commerceSource.fetchProducts(input)).filter((product) =>
+            product.kind === 'subscription' ? available.subscriptions : available.oneTime,
+          );
+        },
+        async requestPurchase(input) {
+          const available = await getIapAvailability();
+          const configuredProduct = options.effectiveConfig?.monetization.products.find(
+            (product) => product.id === input.logicalId,
+          );
+          let isSubscription: boolean | undefined = configuredProduct === undefined
+            ? undefined
+            : configuredProduct.type === 'subscription';
+          if (
+            isSubscription === undefined
+            && options.effectiveConfig === undefined
+            && available.oneTimeRoute !== available.subscriptionsRoute
+          ) {
+            const kind = (await commerceSource.fetchProducts({
+              logicalIds: [input.logicalId],
+              type: 'all',
+            })).find((product) => product.logicalId === input.logicalId)?.kind;
+            isSubscription = kind === undefined ? undefined : kind === 'subscription';
+          }
+          // When only one purchase route is available, unknown product kinds
+          // must not fall through to that route. An effective catalog is binding.
+          const allowed = isSubscription === true
+            ? available.subscriptions
+            : isSubscription === undefined
+              ? available.oneTime && available.subscriptions
+              : available.oneTime;
+          const catalogRefused =
+            options.effectiveConfig !== undefined && configuredProduct?.enabled !== true;
+          if (!allowed || catalogRefused) {
+            const routeEnabled = isSubscription === true
+              ? available.subscriptionsRoute
+              : isSubscription === undefined
+                ? available.oneTimeRoute && available.subscriptionsRoute
+                : available.oneTimeRoute;
+            return {
+              outcome: 'failed',
+              error: purchaseRefusal(routeEnabled && !catalogRefused ? available.readiness : undefined),
+            };
+          }
+
+          return commerceSource.requestPurchase(input);
+        },
+        getAvailablePurchases: (input) => commerceSource.getAvailablePurchases(input),
+        ...(commerceSource.finishTransaction === undefined
+          ? {}
+          : { finishTransaction: (input) => commerceSource.finishTransaction!(input) }),
+        ...(commerceSource.restorePurchases === undefined
+          ? {}
+          : {
+              async restorePurchases() {
+                const available = await getIapAvailability();
+                if (available.oneTime || available.subscriptions) {
+                  await commerceSource.restorePurchases!();
+                }
+              },
+            }),
+        ...(commerceSource.getActiveSubscriptions === undefined
+          ? {}
+          : {
+              async getActiveSubscriptions() {
+                return (await getIapAvailability()).subscriptions
+                  ? commerceSource.getActiveSubscriptions!()
+                  : [];
+              },
+            }),
+        subscribe: (listener) => commerceSource.subscribe(listener),
+      };
+
   return {
     ...gatewayWithoutIntegrations,
     identity,
     ...(presentation === undefined ? {} : { presentation }),
     ...(sharing === undefined ? {} : { sharing }),
     ...(notifications === undefined ? {} : { notifications }),
+    ...(notificationsV2 === undefined ? {} : { notificationsV2 }),
     configTarget,
     targetConfig: config,
     ...(options.effectiveConfig === undefined
@@ -737,78 +975,13 @@ export function withTargetAvailability(
         ...(options.effectiveConfig === undefined
           ? {}
           : { effectiveConfig: options.effectiveConfig }),
-        capabilities: applyTargetConfigToCapabilities(
-          await getGatewayCapabilities(),
-          availabilityConfig,
-        ),
+        capabilities: await readCapabilities(),
         adPlacements: options.adPlacements ?? [],
         gateway,
       });
     },
-    async getCapabilities() {
-      return applyTargetConfigToCapabilities(
-        await getGatewayCapabilities(),
-        availabilityConfig,
-      );
-    },
-    commerce: {
-      async getProducts() {
-        const available = await getIapAvailability();
-        if (!available.oneTime && !available.subscriptions) {
-          return [];
-        }
-        return (await gateway.commerce.getProducts()).filter((product) =>
-          product.type === 'subscription' ? available.subscriptions : available.oneTime,
-        );
-      },
-      async purchase(input) {
-        const available = await getIapAvailability();
-        const configuredProduct = options.effectiveConfig?.monetization.products.find(
-          (product) => product.id === input.productId,
-        );
-        let productType = configuredProduct?.type;
-        if (
-          productType === undefined
-          && options.effectiveConfig === undefined
-          && available.oneTime !== available.subscriptions
-        ) {
-          productType = (await gateway.commerce.getProducts()).find(
-            (product) => product.id === input.productId,
-          )?.type;
-        }
-        // When only one purchase route is available, unknown product types
-        // must not fall through to that route. An effective catalog is binding.
-        const allowed = productType === 'subscription'
-          ? available.subscriptions
-          : productType === undefined
-            ? available.oneTime && available.subscriptions
-            : available.oneTime;
-        if (!allowed || (options.effectiveConfig !== undefined && configuredProduct?.enabled !== true)) {
-          return {
-            status: 'cancelled',
-            entitlementIds: [],
-          };
-        }
-
-        return gateway.commerce.purchase(input);
-      },
-      async restore() {
-        const available = await getIapAvailability();
-        if ((!available.oneTime && !available.subscriptions) || gateway.commerce.restore === undefined) {
-          return {
-            restoredEntitlements: [],
-          };
-        }
-
-        return gateway.commerce.restore();
-      },
-      async getEntitlements() {
-        const available = await getIapAvailability();
-        return available.oneTime || available.subscriptions
-          ? gateway.commerce.getEntitlements()
-          : [];
-      },
-    },
+    getCapabilities: readCapabilities,
+    ...(commerce === undefined ? {} : { commerce }),
     ads: {
       async preload(input) {
         if (canPreloadAdPlacement(input.placementId, input.format)) {
@@ -907,10 +1080,15 @@ function isFeatureCapabilitySupported(
   config: TargetConfig,
 ): boolean {
   switch (feature) {
-    case 'iap':
-      return capabilities.nativeIap;
+    // Whether the provider sells the kind at all; its readiness is the
+    // provider state (`commerce.availability`), so a store that is not ready
+    // yet reads as that state rather than as unsupported.
+    case 'iap': {
+      const { purchase } = requireCommerce(capabilities);
+      return purchase.consumable || purchase.durable;
+    }
     case 'subscriptions':
-      return capabilities.subscriptionIap === true;
+      return requireCommerce(capabilities).purchase.subscription;
     case 'bannerAds':
       return capabilities.bannerAds === true;
     case 'rewardedAds':
@@ -937,16 +1115,27 @@ function getFeatureProviderAvailability(
   capabilities: PlatformCapabilities,
   config: TargetConfig,
 ): PlatformProviderAvailability | undefined {
+  const commerce = requireCommerce(capabilities);
+  // The commerce block carries its own readiness. A feature the provider does
+  // not sell reads as `unsupported`, as a state the provider never reported
+  // would, so the reason stays `capability-unsupported`.
+  switch (feature) {
+    case 'iap':
+      return commerce.purchase.consumable || commerce.purchase.durable
+        ? commerce.availability
+        : 'unsupported';
+    case 'subscriptions':
+      return commerce.purchase.subscription ? commerce.availability : 'unsupported';
+    default:
+      break;
+  }
+
   const states = capabilities.providerAvailability;
   if (states === undefined) {
     return undefined;
   }
 
   switch (feature) {
-    case 'iap':
-      return states.nativeIap;
-    case 'subscriptions':
-      return states.subscriptionIap;
     case 'rewardedAds':
       return states.rewardedAds;
     case 'interstitialAds':
@@ -989,11 +1178,225 @@ function isIntegrationAdapterSupported(
     case 'inboundShare':
       return typeof gateway.sharing?.readInboundShare === 'function';
     case 'notifications':
-      return (
-        typeof gateway.notifications?.getStatus === 'function'
-        && typeof gateway.notifications?.requestSubscription === 'function'
-      );
+      return hasNotificationSubscriptionAdapter(gateway) || hasNotificationProvider(gateway);
   }
+}
+
+function hasNotificationSubscriptionAdapter(gateway: PlatformGateway): boolean {
+  return (
+    typeof gateway.notifications?.getStatus === 'function'
+    && typeof gateway.notifications?.requestSubscription === 'function'
+  );
+}
+
+/** A notifications v2 provider counts only when its required methods are functions, as v1 does. */
+function hasNotificationProvider(gateway: PlatformGateway): boolean {
+  const provider = gateway.notificationsV2;
+  return (
+    typeof provider?.getCapabilities === 'function'
+    && typeof provider.getPermission === 'function'
+    && typeof provider.requestPermission === 'function'
+    && typeof provider.subscribe === 'function'
+  );
+}
+
+/** Bound on one notifications v2 capability read, as the Capacitor registry bounds commerce. */
+const notificationCapabilityReadTimeoutMs = 3_000;
+// A local check of the same shape as `isNotificationCapabilities` from
+// `@mpgd/platform/notifications`: importing that module would put every
+// notifications validator and the delivery policy into each game bundle.
+const isNotificationCapabilitiesShape = typia.createEquals<NotificationCapabilities>();
+
+/**
+ * Reads the provider's block for every snapshot. Reads that overlap share one
+ * provider read while it is in flight; nothing is kept once it settles, so
+ * the next read asks the provider again. Each caller gets its own copy. A
+ * read that starts while another is in flight gets that read's answer, which
+ * can predate a change the caller just made (for example a login), so a game
+ * that re-reads after a change awaits any read it started before.
+ */
+function createNotificationCapabilityReader(
+  provider: NotificationProvider,
+): () => Promise<NotificationCapabilities> {
+  let inFlight: Promise<NotificationCapabilities> | undefined;
+  return async () => {
+    let read = inFlight;
+    if (read === undefined) {
+      const started = readNotificationCapabilities(provider);
+      inFlight = started;
+      // Never rejects: a failed read is a degraded block.
+      void started.finally(() => {
+        if (inFlight === started) {
+          inFlight = undefined;
+        }
+      });
+      read = started;
+    }
+    return copyNotificationCapabilities(await read);
+  };
+}
+
+/**
+ * One bounded read of the exposed provider's capabilities, copied into a
+ * fresh block with exactly the declared keys. A provider that stalls, throws,
+ * or answers a block the contract rejects yields a degraded block instead of
+ * a stalled or rejected capability read.
+ */
+async function readNotificationCapabilities(
+  provider: NotificationProvider,
+): Promise<NotificationCapabilities> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const reported: unknown = await Promise.race([
+      Promise.resolve().then(() => provider.getCapabilities()),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('Notification capabilities read timed out.')),
+          notificationCapabilityReadTimeoutMs,
+        );
+      }),
+    ]);
+    if (!isNotificationCapabilities(reported)) {
+      return createDegradedNotificationCapabilities('temporarily-unavailable');
+    }
+    // The copy is checked too: the shape check skips the holes of a sparse
+    // `purposes` list, which the copy turns into `undefined` entries.
+    const copy = copyNotificationCapabilities(reported);
+    return isNotificationCapabilities(copy)
+      ? copy
+      : createDegradedNotificationCapabilities('temporarily-unavailable');
+  } catch (error) {
+    return createDegradedNotificationCapabilities(degradedNotificationAvailability(error));
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+function isNotificationCapabilities(value: unknown): value is NotificationCapabilities {
+  // The shape, plus `remote.addressing: 'none'` exactly when remote delivery is unsupported.
+  return isNotificationCapabilitiesShape(value)
+    && value.remote.supported !== (value.remote.addressing === 'none');
+}
+
+function copyNotificationCapabilities(
+  capabilities: NotificationCapabilities,
+): NotificationCapabilities {
+  // Copied field by field: the validator lets an unknown key through when its
+  // value is `undefined`, and an optional count may be present as `undefined`.
+  // Neither reaches the snapshot, which keeps exact keys and shares nothing
+  // with the provider.
+  const { permission, remote, local } = capabilities;
+  return {
+    availability: capabilities.availability,
+    permission: {
+      scope: permission.scope,
+      prompt: permission.prompt,
+      readable: permission.readable,
+      serverReadable: permission.serverReadable,
+      allowance: permission.allowance,
+      userGesture: permission.userGesture,
+      ...(permission.promptLimit === undefined ? {} : { promptLimit: permission.promptLimit }),
+      ...(permission.maxTopicsPerPrompt === undefined
+        ? {}
+        : { maxTopicsPerPrompt: permission.maxTopicsPerPrompt }),
+      settings: permission.settings,
+    },
+    remote: {
+      supported: remote.supported,
+      purposes: [...remote.purposes],
+      addressing: remote.addressing,
+      content: remote.content,
+    },
+    local: {
+      supported: local.supported,
+      ...(local.maxPending === undefined ? {} : { maxPending: local.maxPending }),
+    },
+    open: capabilities.open,
+  };
+}
+
+/**
+ * Failures that the same host answers the same way again: a transport without
+ * notifications v2 (`NOTIFICATIONS_V2_UNAVAILABLE`, or `UNSUPPORTED_METHOD`
+ * and `INVALID_BRIDGE_REQUEST` from a bridge that predates the methods), an
+ * unimplemented method, and a host app too old for the API.
+ */
+const unsupportedNotificationReadCodes: ReadonlySet<unknown> = new Set([
+  'NOTIFICATIONS_V2_UNAVAILABLE',
+  'NOTIFICATIONS_UNSUPPORTED',
+  'NOTIFICATIONS_HOST_VERSION_UNSUPPORTED',
+  'UNSUPPORTED_METHOD',
+  'INVALID_BRIDGE_REQUEST',
+]);
+
+/**
+ * The availability a failed read reports: a lasting failure that is not
+ * retryable is `unsupported`, a missing configuration is
+ * `configuration-required`, and anything else, including a retryable
+ * transport failure and a read that timed out, may pass. The block's
+ * availability is also the push readiness (RFC "Capabilities"), so a gateway
+ * must not expose `notificationsV2` over a transport without v2, as no adapter
+ * exposes `commerce` over one; if it does, the integration reads
+ * `unsupported`.
+ */
+function degradedNotificationAvailability(error: unknown): PlatformProviderAvailability {
+  const failure = typeof error === 'object' && error !== null
+    ? error as { readonly code?: unknown; readonly retryable?: unknown }
+    : {};
+  if (failure.code === 'NOTIFICATIONS_CONFIGURATION_REQUIRED') {
+    return 'configuration-required';
+  }
+  return failure.retryable !== true && unsupportedNotificationReadCodes.has(failure.code)
+    ? 'unsupported'
+    : 'temporarily-unavailable';
+}
+
+/** A block that offers nothing, with the availability that explains why. */
+function createDegradedNotificationCapabilities(
+  availability: PlatformProviderAvailability,
+): NotificationCapabilities {
+  return {
+    availability,
+    permission: {
+      scope: 'app',
+      prompt: 'os',
+      readable: true,
+      serverReadable: false,
+      allowance: 'persistent',
+      userGesture: false,
+      settings: false,
+    },
+    remote: { supported: false, purposes: [], addressing: 'none', content: 'free-form' },
+    local: { supported: false },
+    open: 'none',
+  };
+}
+
+/**
+ * Adds the exposed provider's block, with `providerAvailability.pushNotifications`
+ * equal to its availability, or leaves any block out when no provider is exposed.
+ */
+function withNotificationCapabilities(
+  capabilities: PlatformCapabilities,
+  notifications: NotificationCapabilities | undefined,
+): PlatformCapabilities {
+  if (notifications === undefined) {
+    if (!Object.hasOwn(capabilities, 'notifications')) {
+      return capabilities;
+    }
+    const { notifications: _hidden, ...withoutNotifications } = capabilities;
+    return withoutNotifications;
+  }
+  return {
+    ...capabilities,
+    providerAvailability: {
+      ...capabilities.providerAvailability,
+      pushNotifications: notifications.availability,
+    },
+    notifications,
+  };
 }
 
 function createIntegrationAvailability(

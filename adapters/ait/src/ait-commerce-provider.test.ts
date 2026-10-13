@@ -58,7 +58,6 @@ function setup(
     iapProducts: [...products, { productId: 'vip', sku: 'vip.monthly' }],
     prepareIap: async () => true,
     verifyIapProductGrant: verifier,
-    readIapEntitlements: async () => [],
     onPendingOrdersChanged: (listener) => host.onPendingOrdersChanged(listener),
     ...overrides,
   });
@@ -655,7 +654,6 @@ describe('Apps in Toss commerce v2 provider', () => {
       iapProducts: [...products],
       prepareIap: async () => true,
       verifyIapProductGrant: async () => true,
-      readIapEntitlements: async () => [],
     });
     // A host flow that completes another configured product's order.
     const provider = createAitCommerceProviderFromController(

@@ -15,6 +15,8 @@ import { isIP } from 'node:net';
 import path from 'node:path';
 import { inflateSync } from 'node:zlib';
 
+import { normalizeRootRelativeRoute } from '@mpgd/platform/routes';
+
 import {
   escapeMarkdownInline,
   escapeMarkdownTable,
@@ -781,17 +783,19 @@ function parseListings(input: unknown): MicrosoftStoreSubmissionConfig['listing'
   }));
 }
 
+/**
+ * An artifact-relative URL: `.` and then a root-relative route already in the
+ * form `normalizeRootRelativeRoute` from `@mpgd/platform/routes` returns, the
+ * rule share links and notification routes follow, so no client reads it as
+ * another host, even once it percent-decodes the path. The manifest ships in
+ * the artifact and the Store resolves these against the manifest's own URL,
+ * so an absolute URL is never needed.
+ */
 function requireManifestUrl(input: unknown, label: string): string {
   const value = requireNonEmptyString(input, label);
-  const base = new URL('https://mpgd.invalid/');
-  const url = new URL(value, base);
+  const route = value.startsWith('./') ? value.slice(1) : undefined;
 
-  if (
-    !value.startsWith('./')
-    || url.origin !== base.origin
-    || url.pathname.startsWith('//')
-    || value !== `.${url.pathname}${url.search}${url.hash}`
-  ) {
+  if (route === undefined || normalizeRootRelativeRoute(route) !== route) {
     throw new Error(`${label} must be an artifact-relative URL beginning with ./`);
   }
 

@@ -3492,9 +3492,26 @@ function applyLiteTemplateOverlay(
     if (file.relativePath === 'agent/game-manifest.json') {
       return [{ ...file, content: liteTemplateGameManifest(file.content) }];
     }
+    if (file.relativePath === 'mpgd.targets.json') {
+      return [{ ...file, content: liteTemplateTargets(file.content) }];
+    }
     return [file];
   });
   return [...merged, ...overlay.values()];
+}
+
+function liteTemplateTargets(content: string): string {
+  const value = JSON.parse(content) as { targets: Record<string, Record<string, unknown>> };
+  const reddit = value.targets.reddit;
+  if (reddit !== undefined) {
+    reddit.inlineEntry = 'index.html';
+    reddit.inlineBudget = {
+      maxGzipKb: 40,
+      forbidModules: ['phaser', 'matter-js'],
+      deferredChunks: ['main.js', 'matter.js', 'assets/main-*.js', 'assets/matter-*.js'],
+    };
+  }
+  return `${JSON.stringify(value, null, 2)}\n`;
 }
 
 function liteTemplatePackageJson(content: string): string {
@@ -3541,6 +3558,10 @@ function createGameApp(input: {
 }): void {
   const appDir = resolveAppDirectory(input.directory);
   const gameName = path.basename(appDir);
+
+  if (input.template === 'lite' && !input.workspace) {
+    throw new Error('The lite template requires --workspace until @mpgd/lite-shell is published.');
+  }
 
   assertValidGameName(gameName);
 
@@ -3932,9 +3953,10 @@ function renderTemplate(
 }
 
 function templateOutputPath(relativePath: string): string {
-  return path.basename(relativePath) === 'gitignore'
-    ? path.join(path.dirname(relativePath), '.gitignore')
-    : relativePath;
+  const normalized = relativePath.replace(/\\/gu, '/');
+  return path.posix.basename(normalized) === 'gitignore'
+    ? path.posix.join(path.posix.dirname(normalized), '.gitignore')
+    : normalized;
 }
 
 function toPascalCase(value: string): string {

@@ -18,6 +18,8 @@ interface RuntimePlatformTargetMetadata {
   readonly authoritativeGameServices?: boolean;
   readonly integrations?: Record<string, unknown>;
   readonly remoteAssetOrigins?: readonly string[];
+  /** An Apps in Toss target's `metadata.appName`, for the sandbox bridge only. */
+  readonly aitAppName?: string;
 }
 
 // Sandbox gateways self-complete purchases and rewards without any backend
@@ -107,6 +109,7 @@ export function createGameViteSharedConfig<SharedPluginOption = PluginOption>(
       __MPGD_MINIGAME_REMOTE_ASSET_ORIGINS__: JSON.stringify(
         platformTarget?.remoteAssetOrigins ?? [],
       ),
+      __MPGD_AIT_APP_NAME__: JSON.stringify(resolveAitAppName(platformTarget)),
       __MPGD_TARGET_CONFIG_MATRIX__:
         runtimeTargetConfigMatrix === undefined
           ? 'undefined'
@@ -274,6 +277,7 @@ function readRuntimePlatformTarget(
     target.remoteAssetOrigins,
     configTarget,
   );
+  const aitAppName = readAitAppName(target);
 
   return {
     kind: target.kind,
@@ -284,12 +288,13 @@ function readRuntimePlatformTarget(
     ...(target.crazyGamesLaunch === undefined ? {} : { crazyGamesLaunch: target.crazyGamesLaunch as 'basic' | 'full' }),
     ...(target.integrations === undefined ? {} : { integrations: target.integrations }),
     ...(remoteAssetOrigins === undefined ? {} : { remoteAssetOrigins }),
+    ...(aitAppName === undefined ? {} : { aitAppName }),
   };
 }
 
 function toEffectivePlatformTargetMetadata(
   input: RuntimePlatformTargetMetadata,
-): Omit<RuntimePlatformTargetMetadata, 'remoteAssetOrigins'> {
+): Omit<RuntimePlatformTargetMetadata, 'remoteAssetOrigins' | 'aitAppName'> {
   return {
     kind: input.kind,
     adapter: input.adapter,
@@ -383,6 +388,23 @@ function normalizeRuntimeCompatibleMiniGameHttpsOrigin(value: string): string {
   }
 
   return `https://${hostname}${port === 443 ? '' : `:${String(port)}`}`;
+}
+
+/**
+ * The app name `intoss://` share links must carry in the Apps in Toss sandbox
+ * bridge, the one the wrapper's host bridge uses: `MPGD_AIT_APP_NAME`, else
+ * the target's `metadata.appName`, else `mpgd-kit`.
+ */
+function resolveAitAppName(platformTarget: RuntimePlatformTargetMetadata | undefined): string {
+  return process.env.MPGD_AIT_APP_NAME?.trim() || platformTarget?.aitAppName || 'mpgd-kit';
+}
+
+function readAitAppName(target: Record<string, unknown>): string | undefined {
+  const appName = target.kind === 'apps-in-toss' && isRecord(target.metadata)
+    ? target.metadata.appName
+    : undefined;
+
+  return typeof appName === 'string' && appName.trim().length > 0 ? appName.trim() : undefined;
 }
 
 function isRecord(input: unknown): input is Record<string, unknown> {

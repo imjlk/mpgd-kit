@@ -348,7 +348,7 @@ function createBridgedVectorProvider(context: CommerceConformanceContext): Comme
         return handler.request(input);
       }
       if (input.method === 'runtime.getCapabilities') {
-        return { id: input.id, ok: true, data: { nativeIap: false, cloudSave: true } };
+        return { id: input.id, ok: true, data: { cloudSave: true } };
       }
       return createCommerceV2UnavailableBridgeError(input, 'conformance bridge');
     },
@@ -364,10 +364,10 @@ function createBridgedVectorProvider(context: CommerceConformanceContext): Comme
       onOrdersChanged: (listener) => reddit.onOrdersChanged(listener),
     },
   });
-  if (gateway.commerceV2 === undefined) {
-    throw new Error('The gateway must expose the commerce v2 provider.');
+  if (gateway.commerce === undefined) {
+    throw new Error('The gateway must expose the commerce provider.');
   }
-  return { provider: gateway.commerceV2, store: reddit.actor };
+  return { provider: gateway.commerce, store: reddit.actor };
 }
 
 function summarize(results: readonly CommerceConformanceVectorResult[]) {

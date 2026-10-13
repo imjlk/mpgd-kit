@@ -1,8 +1,12 @@
+import { createUnsupportedCommerceCapabilities } from '@mpgd/platform/commerce';
+
 import {
   assertBridgeRequest,
   bridgeStorageLoadProtocol,
   createBridgeError,
   createCommerceV2UnavailableBridgeError,
+  createNotificationsV2UnavailableBridgeError,
+  isBridgeNotificationsV2Method,
   type BridgeRequest,
   type BridgeResponse,
   type BridgeStorageLoadData,
@@ -153,10 +157,17 @@ export function createMpgdCloudflarePagesBridgeHandler<
   TEnv extends MpgdCloudflarePagesHostEnv = MpgdCloudflarePagesHostEnv,
 >(): MpgdCloudflarePagesBridgeHandler<TEnv> {
   return async (input) => {
+    // Web targets have no notification path (notifications RFC "Provider
+    // profiles"), so the host answers every v2 method with its dedicated code.
+    if (isBridgeNotificationsV2Method(input.bridgeRequest.method)) {
+      return createNotificationsV2UnavailableBridgeError(
+        input.bridgeRequest,
+        'Cloudflare Pages host',
+      );
+    }
     switch (input.bridgeRequest.method) {
       case 'runtime.getCapabilities':
         return ok(input.bridgeRequest, {
-          nativeIap: false,
           nativeAds: false,
           rewardedAds: false,
           interstitialAds: false,
@@ -167,6 +178,7 @@ export function createMpgdCloudflarePagesBridgeHandler<
           socialShare: false,
           haptics: false,
           localizedContent: true,
+          commerce: createUnsupportedCommerceCapabilities(),
         });
 
       case 'identity.getPlayer': {
@@ -215,21 +227,6 @@ export function createMpgdCloudflarePagesBridgeHandler<
           status: 'unavailable',
         });
 
-      case 'commerce.getProducts':
-      case 'commerce.getEntitlements':
-        return ok(input.bridgeRequest, []);
-
-      case 'commerce.purchase':
-        return ok(input.bridgeRequest, {
-          status: 'cancelled',
-          entitlementIds: [],
-        });
-
-      case 'commerce.restore':
-        return ok(input.bridgeRequest, {
-          restoredEntitlements: [],
-        });
-
       case 'ads.preload':
         return ok(input.bridgeRequest, {});
 
@@ -267,8 +264,9 @@ export function createMpgdCloudflarePagesBridgeHandler<
           saved: false,
         });
 
-      // Commerce v2 providers arrive with the B-phase PRs; until then the host
-      // answers the dedicated code so a client can route around it.
+      // The Pages host sells nothing: it answers the dedicated code so a
+      // client can route around it. A v1 `commerce.*` method is no longer a
+      // bridge method and falls to `UNSUPPORTED_METHOD` below.
       case 'commerce.v2.getCapabilities':
       case 'commerce.v2.fetchProducts':
       case 'commerce.v2.requestPurchase':

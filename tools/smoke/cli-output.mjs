@@ -50,7 +50,7 @@ try {
   }
   const liteRoot = path.join(fixtureRoot, 'lite-game');
   const lite = spawnSync(process.execPath, [
-    'packages/cli/dist/bin.js', 'game', 'create', liteRoot, '--kit-path', root, '--template', 'lite',
+    'packages/cli/dist/bin.js', 'game', 'create', liteRoot, '--kit-path', root, '--template', 'lite', '--workspace',
   ], { cwd: root, encoding: 'utf8', timeout: 180_000 });
   assert.equal(lite.status, 0, lite.stderr);
   const litePackage = JSON.parse(readFileSync(path.join(liteRoot, 'package.json'), 'utf8'));
@@ -61,7 +61,19 @@ try {
   const liteSources = ['src/runtime/createGame.ts', 'src/platform/devvitEntrypoint.ts', 'src/lite/tapGame.ts']
     .map((file) => readFileSync(path.join(liteRoot, file), 'utf8')).join('\n');
   assert.doesNotMatch(liteSources, /from 'phaser'/);
+  const liteManifest = JSON.parse(readFileSync(path.join(liteRoot, 'agent/game-manifest.json'), 'utf8'));
+  assert.equal(liteManifest.game.engine, 'lite-canvas');
+  const liteTargets = JSON.parse(readFileSync(path.join(liteRoot, 'mpgd.targets.json'), 'utf8'));
+  assert.equal(liteTargets.targets.reddit.inlineEntry, 'index.html');
+  assert.equal(liteTargets.targets.reddit.inlineBudget.maxGzipKb, 40);
+  assert.deepEqual(liteTargets.targets.reddit.inlineBudget.forbidModules, ['phaser', 'matter-js']);
+  const liteGuidance = ['AGENTS.md', 'README.md', 'agent/brief.md', 'agent/acceptance.md',
+    'docs/MPGD_KIT_WORKFLOWS.md', '.agents/skills/use-mpgd-kit/SKILL.md']
+    .map((file) => readFileSync(path.join(liteRoot, file), 'utf8')).join('\n');
+  assert.doesNotMatch(liteGuidance, /Build a Phaser|Phaser scenes|src\/scenes|Keep Phaser-loadable/);
+  assert.match(liteGuidance, /Canvas2D/);
   for (const [args, message] of [
+    [['--template', 'lite'], /requires --workspace/],
     [['--template', 'pixi'], /Unsupported --template pixi/],
     [['--template', 'lite', '--renderer', 'svg'], /implemented lite renderers: canvas/],
     [['--renderer', 'canvas'], /only available with --template lite/],

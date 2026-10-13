@@ -18,7 +18,7 @@ import { resolveStarterVerse8Agent8Client } from '../verse8Agent8Client';
 const productCatalog = productCatalogJson as ProductCatalog;
 
 /**
- * Verse8 gateway. VXShop and the commerce v2 provider are installed only when
+ * Verse8 gateway. VXShop and the commerce provider are installed only when
  * the game provides its authenticated Agent8 client (`verse8Agent8Client.ts`)
  * and the catalog names VXShop product ids (`platformProductIds.verse8`):
  * `vxShop.purchases` reads the purchases the Agent8 server recorded, which is
@@ -58,7 +58,6 @@ function createVxShopOptions(runtime: RuntimeConfig): Verse8CommerceOptions | un
   return {
     purchaseEventAuthority: 'agent8-server',
     products,
-    loadEntitlements: async () => (await agent8.getCommerceSnapshot()).entitlements,
     purchases: {
       listPurchases: () => agent8.listPurchases(),
     },

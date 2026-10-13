@@ -15,9 +15,10 @@ App Store verifiers reject subscription products explicitly
 (`GOOGLE_PLAY_SUBSCRIPTION_VERIFIER_REQUIRED`,
 `APP_STORE_SUBSCRIPTION_UNSUPPORTED`); the Apps in Toss verifier does not
 check the product type and relies on the adapter hiding subscription products
-and on target configuration leaving `subscriptions` disabled. `subscriptionIap`
-is declared but never set, and no target configuration enables
-`subscriptions`. A common consumer
+and on target configuration leaving `subscriptions` disabled. The capability
+snapshot's `commerce.purchase.subscription` (the successor of the removed
+`subscriptionIap` flag) is `false` for every reference store provider, and no
+target configuration enables `subscriptions`. A common consumer
 shape is a game platform that sells prepaid credits through a merchant of
 record and lets games spend those credits for entitlements; such a platform
 typically starts without a paid recurring plan.

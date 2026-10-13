@@ -1,34 +1,27 @@
-# Generated Game Agent Instructions
+# Generated Lite Game Agent Instructions
 
-This repository is a standalone Phaser game generated with `@mpgd/create-game`.
+This is a Canvas2D game generated with the mpgd lite template.
 
 ## Start here
 
-- Read `agent/game-manifest.json` for enabled targets, capability ownership, and
-  target-specific skills.
-- Use `.agents/skills/use-mpgd-kit/SKILL.md` for game, platform, target, build,
-  acceptance, or release work.
-- Read `docs/MPGD_KIT_WORKFLOWS.md` only for the relevant capability or target.
-- Keep `agent/brief.md` and `agent/acceptance.md` aligned with material changes.
+- Read `agent/game-manifest.json`, `agent/brief.md`, and `agent/acceptance.md`.
+- Use `.agents/skills/use-mpgd-kit/SKILL.md` for platform, target, acceptance, and release work.
+- Read `docs/MPGD_KIT_WORKFLOWS.md` for capability ownership.
 
 ## Boundaries
 
-- Keep deterministic game state outside Phaser scenes.
-- Keep platform SDK imports in adapters or target wrappers.
-- Use `PlatformGateway` from game-facing code; do not call platform SDKs from
-  scenes.
-- Keep pure game packages free of Phaser, DOM, network, and platform SDKs.
-- Send purchases, rewarded-ad grants, and verified scores through backend
-  ledger or verifier APIs before changing durable state.
-- Do not put side effects inside debug calls that a production strip pass may
-  remove.
-- Do not commit secrets, signing keys, personal MCP configuration, or platform
-  authentication state.
+- Keep deterministic rules in `src/game`; rendering and input belong in `src/lite`.
+- Use `@mpgd/lite-shell` and Canvas2D. Keep the lite template free of Phaser.
+- Put platform SDK imports in adapters or target wrappers; use `PlatformGateway` from game code.
+- Keep pure game packages free of DOM, network calls, and SDK imports.
+- Purchases and rewarded-ad callbacks are evidence; backend ledger grants precede durable state changes.
+- Create one game runtime above renderer lifetimes. Renderer disposal must not release another owner's native presentation or audio.
+- Keep safe-area geometry reserved once and preserve native scrolling in Devvit inline mode.
+- Do not commit secrets, signing keys, personal MCP configuration, or platform authentication state.
 
 ## Tooling and checks
 
-- Use `ttsx`, not `tsx`, for TypeScript scripts.
-- Use `ttsc` and `@ttsc/lint`; do not add ESLint or Prettier for TypeScript.
+- Use `ttsx`, `ttsc`, and `@ttsc/lint`; do not add `tsx`, ESLint, or Prettier.
 - Run focused checks, then `pnpm check` and `pnpm build`.
-- Run `pnpm accept` before a target handoff or release. Keep its evidence and
-  any target-specific release evidence with the handoff.
+- Run `pnpm accept` for a target handoff; preserve its generated evidence.
+- Keep the manifest, brief, and acceptance guidance aligned with material changes.

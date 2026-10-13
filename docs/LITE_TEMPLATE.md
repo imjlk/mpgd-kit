@@ -12,8 +12,8 @@ the renderer changes.
 ## Create a lite game
 
 ```sh
-mpgd game create my-game --template lite              # --renderer canvas is the default
-mpgd game create my-game --template lite --renderer canvas
+mpgd game create my-game --template lite --workspace --kit-path <mpgd-kit>
+mpgd game create my-game --template lite --renderer canvas --workspace --kit-path <mpgd-kit>
 ```
 
 `--renderer` names a `LiteRenderer` implementation. `canvas` (Canvas2D) ships
@@ -97,12 +97,16 @@ the Devvit target:
 ```
 
 `mpgd target smoke reddit` then walks the inline entry's load graph (HTML
-scripts, modulepreloads, stylesheets, static imports, and dynamic `import()`
-edges) and fails when:
+scripts, preloads, stylesheets, local media, static imports, and dynamic
+`import()` edges) and fails when:
 
 - a `forbidModules` entry is reachable, matched by chunk name or a content
   signature (`phaser`, `matter-js`, `pixi`, `three`);
 - the gzip total exceeds `maxGzipKb`.
+
+HTML bytes, CSS-referenced fonts and images, and every local `srcset` or
+`imagesrcset` candidate count toward the total. Responsive candidates are
+counted conservatively because the build has no fixed viewport or DPR.
 
 `deferredChunks` (paths relative to the Devvit client output, `*` wildcards)
 mark chunks that only the expanded surface or a user interaction fetches; they
@@ -114,18 +118,20 @@ poster does not pull Phaser.
 Load time, Lighthouse, and scroll behavior still need a device or Devvit
 playtest; the smoke check only guards bundle composition and size.
 
-`examples/lite-starter` measures 11.2 KiB gzip for the inline first load
+`examples/lite-starter` measures about 12 KiB gzip for the HTML-inclusive inline first load
 (the Devvit adapter, the text-selection policy, and the lite shell), with
 Phaser absent from every chunk and `matter-js` loaded on demand.
 
 ## Publishing status
 
-`@mpgd/lite-shell` 0.1.0 is publish-ready: it builds ESM JavaScript and
-`.d.ts` files to `dist/` (`pnpm --filter @mpgd/lite-shell build`, or `pnpm build:standalone` without a full workspace install; consumers need Node >= 20), uses
+`@mpgd/lite-shell` 0.1.0 builds ESM JavaScript and
+`.d.ts` files to `dist/` (`pnpm --filter @mpgd/lite-shell build`, or
+`pnpm build:standalone` without a full workspace install; consumers need
+Node >= 20), uses
 explicit `.js` relative imports so plain Node ESM can load it, and its test
 script imports the built output as a consumer would. Per `AGENTS.md`, the
 maintainer registers it with one local initial publish of `0.1.0` and then adds
-its Sampo release-group entry and npm Trusted Publishing before it rides
-automated releases. Until that publish lands, lite games outside a kit checkout
-must be generated with `--workspace --kit-path <mpgd-kit>` (or a `link:`
-dependency).
+its Sampo release-group entry and npm Trusted Publishing before automated
+releases. The package stays private until that registration is complete.
+Until then, generate lite games with `--workspace --kit-path <mpgd-kit>`.
+The CLI rejects non-workspace lite generation before writing a project.

@@ -71,6 +71,11 @@ official `userEarnedReward` event has no impression id. The game-owned reward
 authority, not `userEarnedReward`, returns the explicit-zone verification
 timestamp. Purchase success events occur too late to grant; only the
 product-grant callback and pending-order restore are accepted.
+The wrapper reads no entitlements. The commerce v1 `getEntitlements` bridge
+method and the `readIapEntitlements` hook are gone (commerce v2 C4); the only
+commerce bridge is the six `commerce.v2.*` methods, and ownership comes from
+the game-services backend ledger (`listActiveEntitlementTransactions` on the
+server).
 See
 [Apps in Toss Production Evidence](../../docs/APPS_IN_TOSS_PRODUCTION_EVIDENCE.md)
 for pending-order restoration, product-grant completion, sandbox scenarios, and

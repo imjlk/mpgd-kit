@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { PluginListenerHandle } from '@capacitor/core';
-import type { BridgeResponse } from '@mpgd/bridge';
+import type { BridgeEvent, BridgeResponse } from '@mpgd/bridge';
 
 import { createFakeStoreSdk, fakePurchase } from '../test/store-sdk-fixture.js';
 import { createCommerceServiceProvider } from './commerce-bridge.js';
@@ -200,6 +200,7 @@ describe('Capacitor App event ownership', () => {
     expect(await events.getInitialGameUrl?.()).toEqual({
       url: 'mpgd://game/daily',
       source: 'cold',
+      route: '/daily',
     });
     expect(await events.getInitialOAuthRedirect?.()).toBeNull();
     fake.emit('appUrlOpen', { url: 'mpgd://game/daily' });
@@ -210,6 +211,63 @@ describe('Capacitor App event ownership', () => {
     expect(oauth).toEqual(['mpgd://oauth/callback?code=secret']);
     fake.emit('appUrlOpen', { url: 'mpgd://game/daily' });
     expect(game).toEqual(['mpgd://game/daily']);
+    await events.dispose?.();
+  });
+
+  it('delivers a game link only with a route the shared route rule accepts', async () => {
+    const fake = new FakeApp();
+    fake.launchUrl = 'mpgd://game//evil.example/x';
+    const events = createCapacitorAppEvents({
+      target: 'android',
+      app: asApp(fake),
+      visibility: null,
+      classifyIncomingUrl: (url) => (url.includes('oauth') ? 'oauth' : 'game'),
+    });
+    const game: unknown[] = [];
+    const oauth: string[] = [];
+    events.onGameUrlOpen?.((event) => game.push(event));
+    events.onOAuthRedirect?.((event) => oauth.push(event.url));
+    // A cold link whose path names another host is not delivered either.
+    await expect(events.getInitialGameUrl?.()).resolves.toBeNull();
+    await settle();
+    for (const url of [
+      'mpgd://game//evil.example/x',
+      'mpgd://game/.//evil.example/x',
+      'mpgd://game/%2F%2Fevil.example/x',
+      'mpgd://game/.%2F/evil.example/x',
+      'https://game.example/%5Cevil.example/x',
+      'https://game.example/%3F%2F..%2F%2Fevil.example/x',
+      'mpgd://game/daily\u0000',
+      'not a url',
+    ]) {
+      fake.emit('appUrlOpen', { url });
+    }
+    expect(game).toEqual([]);
+    fake.emit('appUrlOpen', { url: 'mpgd://game/levels/../daily?from=push#top' });
+    fake.emit('appUrlOpen', { url: 'https://game.example/a%20b/%C3%A9' });
+    // The host is not part of the route.
+    fake.emit('appUrlOpen', { url: 'mpgd://level/3' });
+    fake.emit('appUrlOpen', { url: 'mpgd://game?entry=daily' });
+    fake.emit('appUrlOpen', { url: 'mpgd://game#top' });
+    // No path to check: the router maps these itself and checks what it derives.
+    fake.emit('appUrlOpen', { url: 'mpgd://daily' });
+    fake.emit('appUrlOpen', { url: 'mpgd:daily' });
+    expect(game).toEqual([
+      {
+        url: 'mpgd://game/levels/../daily?from=push#top',
+        source: 'warm',
+        route: '/daily?from=push#top',
+      },
+      { url: 'https://game.example/a%20b/%C3%A9', source: 'warm', route: '/a%20b/%C3%A9' },
+      { url: 'mpgd://level/3', source: 'warm', route: '/3' },
+      { url: 'mpgd://game?entry=daily', source: 'warm', route: '/?entry=daily' },
+      { url: 'mpgd://game#top', source: 'warm', route: '/#top' },
+      { url: 'mpgd://daily', source: 'warm' },
+      { url: 'mpgd:daily', source: 'warm' },
+    ]);
+    // OAuth redirects are not routes and keep their own path.
+    fake.emit('appUrlOpen', { url: 'mpgd://oauth//callback?code=secret' });
+    expect(oauth).toEqual(['mpgd://oauth//callback?code=secret']);
     await events.dispose?.();
   });
 
@@ -224,7 +282,9 @@ describe('Capacitor App event ownership', () => {
     const cold = events.getInitialGameUrl?.();
     fake.emit('appUrlOpen', { url: 'mpgd://game/unread' });
     finishLaunch?.({ url: 'mpgd://game/unread' });
-    await expect(cold).resolves.toEqual({ url: 'mpgd://game/unread', source: 'cold' });
+    await expect(cold).resolves.toEqual({
+      url: 'mpgd://game/unread', source: 'cold', route: '/unread',
+    });
     await events.dispose?.();
   });
 
@@ -276,7 +336,7 @@ describe('Capacitor App event ownership', () => {
       classifyIncomingUrl: () => 'game',
     });
     await expect(events.getInitialGameUrl?.()).resolves.toEqual({
-      url: 'mpgd://game/first', source: 'cold',
+      url: 'mpgd://game/first', source: 'cold', route: '/first',
     });
     await events.dispose?.();
     fake.releaseRegistrations();
@@ -350,17 +410,14 @@ describe('Capacitor App event ownership', () => {
     expect(fake.listenerCount()).toBe(0);
   });
 
-  it('keeps a native purchase UI pause until the provider settles', async () => {
+  it('keeps a native external UI pause until the provider settles', async () => {
     const fake = new FakeApp();
     let finish: ((response: BridgeResponse) => void) | undefined;
     const provider: CapacitorServiceProvider = {
-      id: 'purchase-ui',
-      features: ['nativeIap'],
-      methods: [
-        'commerce.getProducts', 'commerce.purchase', 'commerce.restore',
-        'commerce.getEntitlements',
-      ],
-      async getAvailability() { return { nativeIap: 'available' }; },
+      id: 'rewarded-ui',
+      features: ['rewardedAds'],
+      methods: ['ads.preload', 'ads.showRewarded'],
+      async getAvailability() { return { rewardedAds: 'available' }; },
       bridge: {
         async request(input) {
           return await new Promise<BridgeResponse>((resolve) => {
@@ -370,7 +427,7 @@ describe('Capacitor App event ownership', () => {
       },
     };
     const gateway = createCapacitorPlatformGateway({
-      target: 'android', appVersion: '1', buildId: 'purchase-ui',
+      target: 'android', appVersion: '1', buildId: 'rewarded-ui',
       app: asApp(fake), visibility: null, providers: [provider],
       bridge: { async request(input) { return { id: input.id, ok: true, data: null }; } },
     });
@@ -379,8 +436,8 @@ describe('Capacitor App event ownership', () => {
     gateway.lifecycle.onPause(() => { pauses += 1; });
     gateway.lifecycle.onResume(() => { resumes += 1; });
     await settle();
-    const purchase = gateway.commerce.purchase({
-      productId: 'COINS_100', source: 'shop', idempotencyKey: 'purchase-ui',
+    const shown = gateway.ads.showRewarded({
+      placementId: 'CONTINUE', idempotencyKey: 'rewarded-ui',
     });
     await settle();
     expect(pauses).toBe(1);
@@ -388,8 +445,8 @@ describe('Capacitor App event ownership', () => {
     fake.emit('appStateChange', { isActive: true });
     expect(resumes).toBe(0);
     expect(finish).toBeDefined();
-    finish?.({ id: '', ok: true, data: { status: 'pending', entitlementIds: [] } });
-    await expect(purchase).resolves.toMatchObject({ status: 'pending' });
+    finish?.({ id: '', ok: true, data: { status: 'unavailable', rewardGranted: false } });
+    await expect(shown).resolves.toMatchObject({ status: 'unavailable' });
     expect(resumes).toBe(1);
     await gateway.lifecycle.dispose?.();
   });
@@ -427,12 +484,12 @@ describe('commerce v2 launched purchase activity', () => {
     const fake = new FakeApp();
     const { sdk, gateway, counts } = createLaunchedGateway(fake);
     await settle();
-    const commerceV2 = gateway.commerceV2;
-    if (commerceV2 === undefined) {
-      throw new Error('expected commerceV2');
+    const commerce = gateway.commerce;
+    if (commerce === undefined) {
+      throw new Error('expected a commerce provider');
     }
-    commerceV2.subscribe(() => undefined);
-    await expect(commerceV2.requestPurchase({
+    commerce.subscribe(() => undefined);
+    await expect(commerce.requestPurchase({
       logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop',
     })).resolves.toEqual({ outcome: 'launched' });
     await settle();
@@ -456,26 +513,26 @@ describe('commerce v2 launched purchase activity', () => {
     const fake = new FakeApp();
     const { sdk, gateway, counts } = createLaunchedGateway(fake);
     await vi.advanceTimersByTimeAsync(0);
-    const commerceV2 = gateway.commerceV2;
-    if (commerceV2 === undefined) {
-      throw new Error('expected commerceV2');
+    const commerce = gateway.commerce;
+    if (commerce === undefined) {
+      throw new Error('expected a commerce provider');
     }
-    commerceV2.subscribe(() => undefined);
+    commerce.subscribe(() => undefined);
     const request = { logicalId: 'gems_small', idempotencyKey: 'op', source: 'shop' } as const;
 
-    await commerceV2.requestPurchase(request);
+    await commerce.requestPurchase(request);
     expect(counts).toEqual({ pauses: 1, resumes: 0 });
     sdk.emit({ type: 'purchaseError', sku: 'gems.small', error: { code: 'NETWORK' } });
     expect(counts).toEqual({ pauses: 1, resumes: 1 });
 
-    await commerceV2.requestPurchase(request);
+    await commerce.requestPurchase(request);
     expect(counts).toEqual({ pauses: 2, resumes: 1 });
     await vi.advanceTimersByTimeAsync(launchedPurchaseActivityTimeoutMs - 1);
     expect(counts.resumes).toBe(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(counts).toEqual({ pauses: 2, resumes: 2 });
 
-    await commerceV2.requestPurchase(request);
+    await commerce.requestPurchase(request);
     expect(counts).toEqual({ pauses: 3, resumes: 2 });
     await gateway.lifecycle.dispose?.();
     expect(counts.resumes).toBe(3);
@@ -483,12 +540,64 @@ describe('commerce v2 launched purchase activity', () => {
     expect(sdk.listenerCount).toBe(2);
   });
 
+  it('ends a launched purchase hold on commerce envelopes only', async () => {
+    const fake = new FakeApp();
+    const sdk = createFakeStoreSdk();
+    const commerce = createStoreCommerceProvider({
+      sdk,
+      products: [{ logicalId: 'gems_small', storeSku: 'gems.small', kind: 'consumable' }],
+      evidenceSchema: 'fixture.store.v1',
+      authority: { evidence: 'client-token', accountBinding: 'optional' },
+    });
+    const service = createCommerceServiceProvider({ id: 'store', commerce });
+    // The provider's channel may carry another protocol's envelopes.
+    const listeners = new Set<(event: BridgeEvent) => void>();
+    const provider: CapacitorServiceProvider = {
+      ...service,
+      bridge: {
+        request: (input) => service.bridge.request(input),
+        subscribe(listener) {
+          listeners.add(listener);
+          const unsubscribe = service.bridge.subscribe(listener);
+          return () => {
+            listeners.delete(listener);
+            unsubscribe();
+          };
+        },
+      },
+    };
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android', appVersion: '1', buildId: 'launched-ui',
+      app: asApp(fake), visibility: null, providers: [provider],
+      bridge: { async request(input) { return { id: input.id, ok: true, data: null }; } },
+    });
+    const counts = { pauses: 0, resumes: 0 };
+    gateway.lifecycle.onPause(() => { counts.pauses += 1; });
+    gateway.lifecycle.onResume(() => { counts.resumes += 1; });
+    await settle();
+    await expect(gateway.commerce?.requestPurchase({
+      logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop',
+    })).resolves.toEqual({ outcome: 'launched' });
+    expect(counts).toEqual({ pauses: 1, resumes: 0 });
+    for (const listener of [...listeners]) {
+      listener({
+        protocol: 'mpgd.notifications.v2',
+        sequence: 0,
+        event: { type: 'opened', channel: 'local', source: 'warm', topic: 'energy-full' },
+      });
+    }
+    expect(counts.resumes).toBe(0);
+    sdk.report(fakePurchase({ transactionId: 'tx-1', sku: 'gems.small' }));
+    expect(counts).toEqual({ pauses: 1, resumes: 1 });
+    await gateway.lifecycle.dispose?.();
+  });
+
   it('releases a synchronous v2 result when the request returns', async () => {
     const fake = new FakeApp();
     const { sdk, gateway, counts } = createLaunchedGateway(fake);
     await settle();
     sdk.queueRequest({ outcome: 'purchased', purchase: fakePurchase({ transactionId: 'tx-1' }) });
-    await gateway.commerceV2?.requestPurchase({
+    await gateway.commerce?.requestPurchase({
       logicalId: 'gems_small', idempotencyKey: 'op-1', source: 'shop',
     });
     expect(counts).toEqual({ pauses: 1, resumes: 1 });

@@ -14,6 +14,8 @@ export interface LiteRenderer<Surface = unknown> {
   readonly kind: LiteRendererKind;
   readonly element: HTMLElement | SVGElement;
   readonly surface: Surface;
+  /** Effective stage size after resize, when a renderer applies constraints such as a DPR cap. */
+  readonly size?: StageSize;
   resize(size: StageSize): void;
   dispose(): void;
 }
@@ -28,12 +30,15 @@ export interface CanvasSurface {
 }
 
 export function createCanvasRenderer(options: { readonly maxDpr?: number } = {}): LiteRenderer<CanvasSurface> {
+  const maxDpr = options.maxDpr ?? 3;
+  if (!Number.isFinite(maxDpr) || maxDpr <= 0) {
+    throw new RangeError('Canvas maxDpr must be a positive finite number.');
+  }
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d');
   if (context === null) {
     throw new Error('Canvas2D is unavailable.');
   }
-  const maxDpr = options.maxDpr ?? 3;
   let size: StageSize = { width: 0, height: 0, dpr: 1 };
   canvas.style.display = 'block';
   canvas.style.width = '100%';
@@ -42,6 +47,9 @@ export function createCanvasRenderer(options: { readonly maxDpr?: number } = {})
   return {
     kind: 'canvas',
     element: canvas,
+    get size() {
+      return size;
+    },
     surface: {
       canvas,
       context,

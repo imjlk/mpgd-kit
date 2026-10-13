@@ -2,7 +2,7 @@
 
 Verse8 commerce has two deliberately separate halves:
 
-- The iframe client opens VXShop and returns `pending`.
+- The iframe client opens VXShop and answers `launched`.
 - Agent8 Game Server receives the reserved `$onItemPurchased` event and applies
   the catalog grant exactly once.
 
@@ -105,29 +105,36 @@ const gateway = createVerse8PlatformGateway({
   vxShop: {
     purchaseEventAuthority: 'agent8-server',
     products: createVerse8CommerceProducts(catalogJson as ProductCatalog),
-    async loadEntitlements() {
-      const snapshot = await gameOwnedAgent8Client.call('getMpgdCommerceSnapshot');
-      return snapshot.entitlements;
+    purchases: {
+      listPurchases: () => gameOwnedAgent8Client.call('listMpgdPurchases'),
     },
   },
 });
 ```
 
-The `nativeIap` capability remains false until this explicit configuration is
-present. `purchase()` opens VXShop only inside an iframe, checks the live shop
-item, and returns `pending` without an entitlement or transaction ID. The
-GameServices client forwards that pending state but never sends Verse8
-purchases to its external store verifier; Agent8 remains the sole purchase
-authority.
+`listMpgdPurchases` is the game-owned Agent8 method defined in
+[Commerce v2 provider](#commerce-v2-provider). Without this explicit
+configuration (`vxShop` with the `agent8-server`
+acknowledgement, at least one product, and the `purchases` source) the
+gateway sells nothing: it has no `commerce`, and `getCapabilities()` reports
+`createUnsupportedCommerceCapabilities()`. With it, the provider's
+`requestPurchase` opens VXShop only inside an iframe, checks the live shop
+item, and answers `launched` without an entitlement or transaction ID. The
+GameServices client forwards that open state but never sends Verse8 purchases
+to its external store verifier; Agent8 remains the sole purchase authority.
 
 Use `getMpgdCommerceSnapshot` (or an equivalent authenticated read method) to
 refresh server-owned balances and entitlements after the platform purchase
-event has arrived. Do not poll `VXShop.onClose` as proof of completion.
+event has arrived. Do not poll `VXShop.onClose` as proof of completion. The
+gateway has no entitlement read of its own (the v1 `loadEntitlements` option
+and `getEntitlements()` are gone): the Agent8 record and the backend ledger
+the Agent8 service writes are the sources, and the snapshot method above stays
+a game-owned server read.
 
 ## Commerce v2 provider
 
-> **Needs the backend's C2 pieces.** Configure `vxShop.purchases` only when
-> the backend (1) registers the `verse8.agent8-event.v1` lookup entry
+> **Needs the backend's C2 pieces.** `vxShop.purchases` installs the provider,
+> so configure it only when the backend (1) registers the `verse8.agent8-event.v1` lookup entry
 > (`createVerse8Agent8EventLookupCommerceEvidenceEntry({ ledger })` in its
 > `createCommerceEvidenceRegistry`; the Worker does so with
 > `MPGD_COMMERCE_LOOKUP_STORES = ["verse8"]`), which answers `granted` once
@@ -140,8 +147,8 @@ event has arrived. Do not poll `VXShop.onClose` as proof of completion.
 `createVerse8CommerceProvider(input)` from `@mpgd/adapter-verse8` is the
 commerce v2 `CommerceProvider` (RFC:
 [docs/specs/commerce/commerce-v2-rfc.md](specs/commerce/commerce-v2-rfc.md))
-with `store: 'verse8'`. It drives the same VXShop client as the v1 adapter
-(`products`, `client`, `init`, `canOpenShop`) and takes a `purchases` source:
+with `store: 'verse8'`. It drives the VXShop client (`products`, `client`,
+`init`, `canOpenShop`) and takes a `purchases` source:
 the purchases the Agent8 server recorded, read through a game-owned
 authenticated method. `createVerse8Agent8CommerceService` now exposes
 `listPurchases(account, context)` for that read; expose it for the sender's
@@ -159,24 +166,14 @@ export class Server {
 }
 ```
 
-```ts
-const gateway = createVerse8PlatformGateway({
-  vxShop: {
-    purchaseEventAuthority: 'agent8-server',
-    products: createVerse8CommerceProducts(catalogJson as ProductCatalog),
-    loadEntitlements: () => gameOwnedAgent8Client.call('getMpgdCommerceSnapshot')
-      .then((snapshot) => snapshot.entitlements),
-    purchases: {
-      listPurchases: () => gameOwnedAgent8Client.call('listMpgdPurchases'),
-    },
-  },
-});
-```
-
-With `purchases` configured the gateway exposes the provider as `commerceV2`
-and adds the `commerce` capability block to `getCapabilities()` (with
-`nativeIap` and `subscriptionIap` derived from it); without it only the v1
-adapter is offered, exactly as before.
+The gateway code is the `vxShop` configuration shown in the iframe client
+section: `createVerse8PlatformGateway({ vxShop: { purchaseEventAuthority:
+'agent8-server', products, purchases } })` exposes the provider as
+`gateway.commerce` and reports its block as `getCapabilities().commerce`. The
+snapshot carries no `nativeIap` or `subscriptionIap`. Without `vxShop` (or
+with an unacknowledged authority, no product, or no `purchases` source) there
+is no `gateway.commerce` and the snapshot's `commerce` is the unsupported
+block.
 
 Capability block (`createVerse8CommerceCapabilities`), the RFC profile row:
 
@@ -246,3 +243,24 @@ skipped by the runner, `cancelled-and-failed` (no later `store.error` event)
 and `purchase-pending-then-purchased` (store-side pending) are listed as not
 applicable, and `adapter-settled` and the wallet vectors belong to other
 profiles.
+
+## Migrating from v1
+
+C4 removed the commerce v1 surfaces of `@mpgd/adapter-verse8` in one major
+release. The removed APIs and their replacements:
+
+| Removed | Replacement |
+| --- | --- |
+| the v1 `gateway.commerce` adapter (`getProducts`, `purchase`, `restore`, `getEntitlements`, always present, a failing stub without `vxShop`) | `gateway.commerce` is now the commerce provider (`fetchProducts`, `requestPurchase`, `restorePurchases`, `getAvailablePurchases`), present only with `vxShop.purchases`; games call `@mpgd/game-services`, not the provider |
+| `gateway.commerceV2` | `gateway.commerce` |
+| `Verse8CommerceOptions.loadEntitlements` | none: read entitlements from the backend ledger, or from your Agent8 snapshot method (`getMpgdCommerceSnapshot`) in game code |
+| `Verse8CommerceOptions.purchases` optional | required: the provider is the only commerce path, so `vxShop` without a purchase source sells nothing |
+| `capabilities.nativeIap`, `capabilities.subscriptionIap` | `capabilities.commerce` (`availability`, `purchase`, `lifecycle`, `authority`) |
+
+Kept: `createVerse8CommerceProvider`, `createVerse8CommerceProducts`,
+`createVerse8Agent8CommerceService` (including `getEntitlements`,
+`getSnapshot`, and `listPurchases`, which are the Agent8 server's own state
+reads), the commerce contract helpers, and `createVerse8PlatformGateway`
+(`vxShop`: `purchaseEventAuthority`, `products`, `purchases`, `client`,
+`init`, `canOpenShop`, `onPurchasesChanged`). `ProductInfo`, `PurchaseResult`,
+and `Entitlement` stay in `@mpgd/platform` as result vocabulary.

@@ -258,10 +258,10 @@ function createBridgedVectorProvider(context: CommerceConformanceContext): Comme
     },
     providers: [createCapacitorStoreKitServiceProvider(providerInput(context, plugin))],
   });
-  if (gateway.commerceV2 === undefined) {
-    throw new Error('The gateway must expose the registered StoreKit commerce v2 provider.');
+  if (gateway.commerce === undefined) {
+    throw new Error('The gateway must expose the registered StoreKit commerce provider.');
   }
-  return { provider: gateway.commerceV2, store: actor };
+  return { provider: gateway.commerce, store: actor };
 }
 
 function summarize(results: readonly CommerceConformanceVectorResult[]) {

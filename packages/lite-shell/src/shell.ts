@@ -71,6 +71,7 @@ export function createLiteShell<Surface>(options: LiteShellOptions<Surface>): Li
   }
 
   let size: StageSize = { width: 0, height: 0, dpr: 1 };
+  let measuredSize: StageSize | undefined;
   let firstFrameDone = options.onFirstFrame === undefined;
   let disposed = false;
   const loop = createFrameLoop({
@@ -101,11 +102,12 @@ export function createLiteShell<Surface>(options: LiteShellOptions<Surface>): Li
       }
     }
     const dpr = currentDpr();
-    if (width === size.width && height === size.height && dpr === size.dpr) {
+    if (measuredSize !== undefined && width === measuredSize.width && height === measuredSize.height && dpr === measuredSize.dpr) {
       return; // no change: avoid clearing the backing store twice
     }
-    size = { width, height, dpr };
-    renderer.resize(size);
+    measuredSize = { width, height, dpr };
+    renderer.resize(measuredSize);
+    size = renderer.size ?? measuredSize;
     options.onResize?.(size);
     loop.wake();
   };
@@ -116,10 +118,18 @@ export function createLiteShell<Surface>(options: LiteShellOptions<Surface>): Li
     y: event.clientY,
     time: event.timeStamp,
   });
-  const onDown = (event: PointerEvent) => recognizer.down(event.pointerId, point(event));
+  const onDown = (event: PointerEvent) => {
+    if (event.isPrimary && event.button === 0) {
+      recognizer.down(event.pointerId, point(event));
+    }
+  };
   const onMove = (event: PointerEvent) => recognizer.move(event.pointerId, point(event));
   const onCancel = (event: PointerEvent) => recognizer.cancel(event.pointerId);
   const onUp = (event: PointerEvent) => {
+    if (!event.isPrimary || event.button !== 0) {
+      recognizer.cancel(event.pointerId);
+      return;
+    }
     if (recognizer.up(event.pointerId, point(event))) {
       const rect = element.getBoundingClientRect();
       options.onTap?.({ x: event.clientX - rect.left, y: event.clientY - rect.top }, event);

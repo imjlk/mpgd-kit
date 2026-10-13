@@ -17,6 +17,7 @@ interface RuntimePlatformTargetMetadata {
   readonly crazyGamesLaunch?: 'basic' | 'full';
   readonly authoritativeGameServices?: boolean;
   readonly integrations?: Record<string, unknown>;
+  readonly aitAppName?: string;
 }
 
 // Sandbox gateways self-complete purchases and rewards without any backend
@@ -100,7 +101,8 @@ export function createGameViteSharedConfig<SharedPluginOption = PluginOption>(
       __APP_TARGET__: JSON.stringify(appTarget),
       __MPGD_CONFIG_TARGET__: JSON.stringify(configTarget),
       __MPGD_PLATFORM_TARGET__:
-        platformTarget === undefined ? 'undefined' : JSON.stringify(platformTarget),
+        platformTarget === undefined ? 'undefined' : JSON.stringify(toEffectivePlatformTargetMetadata(platformTarget)),
+      __MPGD_AIT_APP_NAME__: JSON.stringify(resolveAitAppName(platformTarget)),
       __MPGD_TARGET_CONFIG_MATRIX__:
         runtimeTargetConfigMatrix === undefined
           ? 'undefined'
@@ -262,6 +264,7 @@ function readRuntimePlatformTarget(
     throw new Error(`Platform target ${configTarget} authoritativeGameServices must be a boolean.`);
   }
 
+  const aitAppName = readAitAppName(target);
   return {
     kind: target.kind,
     adapter: target.adapter,
@@ -270,7 +273,26 @@ function readRuntimePlatformTarget(
       : { authoritativeGameServices: target.authoritativeGameServices }),
     ...(target.crazyGamesLaunch === undefined ? {} : { crazyGamesLaunch: target.crazyGamesLaunch as 'basic' | 'full' }),
     ...(target.integrations === undefined ? {} : { integrations: target.integrations }),
+    ...(aitAppName === undefined ? {} : { aitAppName }),
   };
+}
+
+function toEffectivePlatformTargetMetadata(
+  input: RuntimePlatformTargetMetadata,
+): Omit<RuntimePlatformTargetMetadata, 'aitAppName'> {
+  const { aitAppName: _appName, ...metadata } = input;
+  return metadata;
+}
+
+function resolveAitAppName(platformTarget: RuntimePlatformTargetMetadata | undefined): string {
+  return process.env.MPGD_AIT_APP_NAME?.trim() || platformTarget?.aitAppName || 'mpgd-kit';
+}
+
+function readAitAppName(target: Record<string, unknown>): string | undefined {
+  const appName = target.kind === 'apps-in-toss' && isRecord(target.metadata)
+    ? target.metadata.appName
+    : undefined;
+  return typeof appName === 'string' && appName.trim().length > 0 ? appName.trim() : undefined;
 }
 
 function isRecord(input: unknown): input is Record<string, unknown> {

@@ -69,11 +69,13 @@ public class CapacitorGameServicesPlugin extends Plugin {
             case "notifications.requestSubscription":
                 call.resolve(okResponse(id, "unavailable"));
                 return;
-            case "commerce.getProducts":
-            case "commerce.purchase":
-            case "commerce.restore":
-            case "commerce.getEntitlements":
-                call.resolve(errorResponse(id, "NATIVE_IAP_UNAVAILABLE", "No native store provider is installed."));
+            case "commerce.v2.getCapabilities":
+            case "commerce.v2.fetchProducts":
+            case "commerce.v2.requestPurchase":
+            case "commerce.v2.getAvailablePurchases":
+            case "commerce.v2.finishTransaction":
+            case "commerce.v2.restorePurchases":
+                call.resolve(errorResponse(id, "COMMERCE_V2_UNAVAILABLE", "No native store provider is installed."));
                 return;
             case "ads.preload":
             case "ads.showRewarded":
@@ -338,7 +340,6 @@ public class CapacitorGameServicesPlugin extends Plugin {
 
     private JSObject capabilities() {
         return new JSObject()
-            .put("nativeIap", false)
             .put("nativeAds", false)
             .put("rewardedAds", false)
             .put("interstitialAds", false)

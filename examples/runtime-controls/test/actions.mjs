@@ -101,17 +101,21 @@ try {
     ['purchase', 'purchaseOwner', 'verify'], ['rewarded-ad', 'adOwner', 'claim'],
   ]) {
     for (const outcome of ['rejected', 'exception']) {
+      // The commerce reconciler journals a purchase whose backend call threw as
+      // recoverable `pending` rather than failing the operation; a rewarded-ad
+      // claim still surfaces the exception.
+      const settled = button === 'purchase' && outcome === 'exception' ? 'pending' : outcome;
       await open();
       await page.locator('#action-mode').selectOption(outcome);
       await page.locator(`#${button}`).click();
       await waitServer();
       await page.locator('#settle').click();
-      await waitOwner(owner, outcome);
+      await waitOwner(owner, settled);
       current = await state();
       assert.equal(current.blocked.simulation, false);
       assert.equal(current.monetization[counter], 1);
       assert.equal(current.monetization.ownerResults, 1);
-      assert.equal(current.monetization.ui.status, outcome);
+      assert.equal(current.monetization.ui.status, settled);
       assert.equal(current.monetization.availability, outcome === 'exception' ? 'reconciliation-required' : 'ready');
     }
   }

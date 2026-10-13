@@ -8,7 +8,7 @@ Store operations when a game is hosted in WebView2 instead of the Edge hosted-ap
 
 `@mpgd/adapter-browser/microsoft-store-native` defines the web half of that host contract. It uses
 `window.chrome.webview.postMessage`-compatible messages and adapts the native catalog and purchase
-operations to `createMicrosoftStoreCommerceAdapter`. The game still sends purchase evidence to its
+operations to `createMicrosoftStoreCommerceProvider`. The game still sends purchase evidence to its
 authoritative backend; the native callback never grants a product by itself.
 
 ## Host requirements

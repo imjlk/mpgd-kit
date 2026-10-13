@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { PlatformOperationError } from '@mpgd/platform';
+import { createUnsupportedCommerceCapabilities } from '@mpgd/platform/commerce';
 
 import {
   createWechatPlatformGateway,
@@ -138,11 +139,8 @@ describe('WeChat platform gateway', () => {
       identityLevel: 'guest',
       trustLevel: 'local',
     });
-    await expect(gateway.commerce.purchase({
-      productId: 'COINS_100',
-      source: 'shop',
-      idempotencyKey: 'purchase-1',
-    })).resolves.toEqual({ status: 'failed', entitlementIds: [] });
+    // WeChat sells nothing: no commerce provider exists to complete or grant a purchase.
+    expect(gateway.commerce).toBeUndefined();
     await expect(gateway.ads.showRewarded({
       placementId: 'CONTINUE_AFTER_FAIL',
       idempotencyKey: 'ad-1',
@@ -163,8 +161,8 @@ describe('WeChat platform gateway', () => {
     const shareGateway = createWechatPlatformGateway({ api: withShare.api });
     const noShareGateway = createWechatPlatformGateway({ api: withoutShare.api });
 
-    await expect(shareGateway.getCapabilities()).resolves.toMatchObject({
-      nativeIap: false,
+    const shareCapabilities = await shareGateway.getCapabilities();
+    expect(shareCapabilities).toMatchObject({
       nativeAds: false,
       rewardedAds: false,
       interstitialAds: false,
@@ -172,6 +170,10 @@ describe('WeChat platform gateway', () => {
       socialShare: true,
       localizedContent: true,
     });
+    expect(shareGateway.commerce).toBeUndefined();
+    expect(shareCapabilities.commerce).toEqual(createUnsupportedCommerceCapabilities());
+    expect(shareCapabilities).not.toHaveProperty('nativeIap');
+    expect(shareCapabilities).not.toHaveProperty('subscriptionIap');
     await expect(noShareGateway.getCapabilities()).resolves.toMatchObject({ socialShare: false });
     expect(noShareGateway.sharing).toBeUndefined();
   });

@@ -1,20 +1,20 @@
 # Recovering purchases and rewarded ads
 
-`@mpgd/game-services` can journal a purchase or rewarded-ad operation before it opens the platform UI. Supply a durable `MonetizationOperationStore` to `createGameServicesRuntime({ operationStore })`, or use `createRecoverableMonetizationClient` directly. The runtime routes its purchase and rewarded-ad methods through the journal and exposes `monetizationRecovery.reconcile()` for app startup and resume.
+`@mpgd/game-services` journals every purchase and rewarded-ad operation before it opens the platform UI. Purchases go through the commerce reconciler (below), the only purchase path since commerce v2 PR C4; rewarded ads keep their per-operation journal record. Supply a durable `MonetizationOperationStore` to `createGameServicesRuntime({ operationStore })`, or use `createRecoverableMonetizationClient` directly. The runtime routes its purchase and rewarded-ad methods through the journal and exposes `monetizationRecovery.reconcile()` for app startup and resume.
 
 The game owns the journal implementation. Its `reserve` must atomically insert or return a globally unique operation key; `replace` must compare revisions atomically; and `listRecoverable` must return only the requested player's unresolved operations. Keep terminal records addressable by `read` for duplicate-key protection, but index or archive them out of `listRecoverable` so startup reconciliation does not scan a player's entire history. Persist records across restarts in encrypted, access-controlled storage. They may contain purchase receipts, transaction IDs, and ad proof. An in-memory map is suitable only for tests, not production recovery.
 
 Use one idempotency key for one player, target, and logical product or placement. Do not derive a fresh key when retrying a server call. The coordinator saves a platform result before it requests the authoritative backend grant, and saves the backend request before sending it. If a response is lost, `reconcile()` repeats that same request; the backend ledger remains responsible for deduplication. A verified purchase may still have `finalization.status: 'pending'` while consume, acknowledge, or finish needs another attempt. This is not another grant.
 
-If the process stops before a platform result is saved, the journal stays pending and **does not reopen the purchase or ad UI**. A failed journal write keeps the returned platform evidence in this runtime for a same-process retry and exposes it with the pending result; it cannot make that evidence durable across a process crash. A Microsoft Store completion whose adapter already finished the authoritative grant is reported as granted, just as it is without a journal. The installed native provider must enumerate unfinished transactions or deliver the original callback after restart and call `recoverPurchaseResult(idempotencyKey, result)` or `recoverRewardResult(idempotencyKey, result)`. A recorded platform `pending` result can advance to a later terminal callback; a conflicting already-terminal result is rejected. The Capacitor adapter also accepts a pending rewarded-ad provider result without treating it as a grant. Delayed SSV may likewise leave a rewarded-ad claim pending until the backend sees its callback. A provider without replay/recovery cannot promise automatic settlement for that window; keep the operation visible for operator/support reconciliation.
+If the process stops before a platform result is saved, the journal stays pending and **does not reopen the purchase or ad UI**. A failed journal write keeps the returned platform evidence in this runtime for a same-process retry and exposes it with the pending result; it cannot make that evidence durable across a process crash. For a rewarded ad, the installed native provider must deliver the original callback after restart and call `recoverRewardResult(idempotencyKey, result)`. A recorded platform `pending` result can advance to a later terminal callback; a conflicting already-terminal result is rejected. The Capacitor adapter also accepts a pending rewarded-ad provider result without treating it as a grant. Delayed SSV may likewise leave a rewarded-ad claim pending until the backend sees its callback. A provider without replay/recovery cannot promise automatic settlement for that window; keep the operation visible for operator/support reconciliation. A purchase has no callback to replay: the commerce provider lists the store's unfinished purchases (`getAvailablePurchases`) and emits `purchaseUpdated`, and the reconciler decides from those (below). `recoverPurchaseResult` was removed in commerce v2 PR C4.
 
-`pending` means no client-side grant is allowed. `rejected` means the backend returned a definitive non-grant decision. The backend makes that decision one request at a time per operation key within one backend process, including the awaited analytics call, so a concurrent same-key grant there wins. Across backend processes, a rejection can still race another process's grant; route a player's monetization requests to one process where that matters. Handled verifier, backend, and per-record journal read/write failures remain retryable or pending; malformed verifier decisions are rejected rather than retried forever. Initial `store.reserve()` failures in `purchase()` or `claimRewardedAd()`, and `store.listRecoverable()` failures in `reconcile()`, reject the call instead: callers must catch these outages and retry rather than interpreting them as a pending result. An already-recorded purchase or ad grant remains granted when a later retry is unavailable or the result journal write collides. When this runtime persists a backend grant that an earlier journal write lost, it also discards any non-grant result another runtime recorded meanwhile, so the operation is re-settled as granted instead of staying rejected. Calls for the same operation key are serialized within one runtime, and `reconcile()` skips an operation already running there. Progress observers see the whole journaled call. When a journal failure is resolved into a pending or already-known granted result, the call still ends with `completed` for the status it returns; `exception` means the call itself rejected. Cross-process deduplication still depends on the atomic store and authoritative backend ledger. `reconcile()` reports a malformed same-player journal entry as `action-required` without blocking other entries; records for another target are not processed. Purchase settlement helpers such as `findAuthoritativePurchaseSettlement` remain UI evidence only and must not credit a wallet. Account switching cannot adopt a journaled operation: its key remains bound to the original player.
+`pending` means no client-side grant is allowed. `rejected` means the backend returned a definitive non-grant decision. The backend makes that decision one request at a time per operation key within one backend process, including the awaited analytics call, so a concurrent same-key grant there wins. Across backend processes, a rejection can still race another process's grant; route a player's monetization requests to one process where that matters. Handled verifier, backend, and per-record journal read/write failures remain retryable or pending; malformed verifier decisions are rejected rather than retried forever. Initial `store.reserve()` failures in `purchase()` or `claimRewardedAd()`, and `store.listRecoverable()` failures in `reconcile()`, reject the call instead: callers must catch these outages and retry rather than interpreting them as a pending result. An already-recorded purchase or ad grant remains granted when a later retry is unavailable or the result journal write collides. When this runtime persists a backend grant that an earlier journal write lost, it also discards any non-grant result another runtime recorded meanwhile, so the operation is re-settled as granted instead of staying rejected. Calls for the same operation key are serialized within one runtime, and `reconcile()` skips an operation already running there. Progress observers see the whole journaled call. When a journal failure is resolved into a pending or already-known granted result, the call still ends with `completed` for the status it returns; `exception` means the call itself rejected. Cross-process deduplication still depends on the atomic store and authoritative backend ledger. `reconcile()` reports a malformed same-player journal entry as `action-required` without blocking other entries; records for another target are not processed. No client-side purchase result is a grant: the helpers that read a settlement from a platform purchase result (`findAuthoritativePurchaseSettlement`, `findAdapterSettledGrant`) were removed in C4, and a provider's `settlement` pointer is a reconciler hint the backend still confirms. Account switching cannot adopt a journaled operation: its key remains bound to the original player.
 
-## Commerce v2 reconciler
+## The commerce reconciler
 
-A gateway that exposes a commerce v2 provider (`gateway.commerceV2`; the
+A gateway that exposes a commerce provider (`gateway.commerce`; the
 Capacitor store providers, Microsoft Store, Apps in Toss, Devvit, Verse8, and
-a project's credit wallet) no longer needs a per-store recovery driver.
+a project's credit wallet) needs no per-store recovery driver.
 `createGameServicesClient` purchases through `createCommerceReconciler`
 (`@mpgd/game-services/commerce-reconciler`), one reconciler per provider that
 journals every purchase the game starts or the store reports as a
@@ -25,10 +25,20 @@ through the RFC lifecycle (`requested`, `launched`, `pending`, `purchased`,
 The client exposes it as `commerceReconciler`; the recovery client and
 `createGameServicesRuntime` share one over the durable journal.
 
-Call `monetizationRecovery.reconcile()` at startup and on app resume as
-before: with a v2 provider it starts the reconciler (subscribe, read
+It is the only purchase path. A gateway without `gateway.commerce` sells
+nothing through this client: `purchase()` answers `rejected` with a failed
+platform result (`purchase.status: 'failed'`, no entitlements), reports the
+`purchase_rejected` analytics event with the reason `commerce_unavailable`,
+opens no store UI, sends nothing to the backend, and there is no
+`commerceReconciler`. The same holds for a target whose build configuration
+removed the provider.
+
+Call `monetizationRecovery.reconcile()` at startup and on app resume: with a
+provider it starts the reconciler (subscribe, read
 `getAvailablePurchases` when declared, reconcile until idle) and runs a pass
-on every later call, while v1 records keep their existing resume path. Every
+on every later call, and it resumes any open rewarded-ad record. Without a
+provider `reconcile()` and `restorePurchases()` only resume rewarded-ad records.
+Every
 `purchaseUpdated` or `purchaseError` event and the end of every `purchase()`
 call run a pass too, and `restorePurchases()` is the manual restore trigger
 (`provider.restorePurchases` when offered, then a pass). A `purchase()` call
@@ -40,7 +50,7 @@ One pass matches each reported purchase by store and transaction id, then to
 the single open (`launched` or `pending`) record for the player, store, and
 product, otherwise under a derived key (`store:<store>:<transactionId>`, with
 `play-token-sha256:<hex>` for Google Play and `apps-in-toss:purchase:<orderId>`
-kept so ledgers written by the v1 drivers still deduplicate); builds and saves
+kept so ledgers written by the former v1 drivers still deduplicate); builds and saves
 the verify request once and resends it unchanged while `purchased`,
 `verifying`, or server-side `pending`; finishes `granted` records according
 to the provider's `lifecycle.finish` (`client` and `host` call
@@ -96,11 +106,44 @@ unique index remains the backstop when it is not). A
 `createGameServicesClient` without an `operationStore` keeps the v2 journal
 in memory for the session only and warns once (`warn`, default
 `console.warn`); duplicates are then caught by the backend ledger, not by
-the client. The deprecated v1 drivers
-(`recoverOwnedPlayPurchases`, `recoverStoreKitPurchases`, the Microsoft Store
-recovery records, and the Apps in Toss pending-order pass) keep working for
-v1 gateways and are removed in C4; `recoverPurchaseResult` on a v2 gateway
-reconciles and answers from the journal instead of replaying the callback.
+the client.
+
+### The retired v1 purchase record
+
+Releases before commerce v2 C4 wrote a `purchase` journal record for every
+purchase, with the store result embedded. The reconciler replaced that path
+and no code starts or resumes a purchase from those records any more, but a
+durable journal may still hold them, so the record type stays readable
+(`RetiredPurchaseOperationRecord`, part of `LegacyMonetizationOperationRecord`)
+and `read` returns it unchanged. The store UI is never reopened for one and the
+client never grants from one. The only thing left is finishing a verification
+the record was in the middle of: `isMonetizationOperationRecoverable` answers
+`true` for a retired record that holds a completed platform result and no
+terminal result, and `reconcile()`/`restorePurchases()` of the recoverable
+client send its saved verify request (or the one its own fields describe) to
+the backend once more under the same idempotency key, journal the backend's
+answer as the closing result (`granted` or `rejected`), and report it. A
+backend outage leaves the record open for the next pass. A retired record whose
+platform result never completed is not open and is never sent. Whatever the
+store still holds is found again by the reconciler under a derived key
+(`store:<store>:<transactionId>`, `play-token-sha256:<hex>`,
+`apps-in-toss:purchase:<orderId>`), and the backend's platform-evidence index
+keeps a repeated verification from granting twice. Stores without an
+unfinished-purchase list (ONE play) rely on this drain and on the server-side
+PNS recovery the game owns. A store may purge closed retired records at any
+time. Rewarded-ad records are unchanged.
+
+### Reading entitlements
+
+The v1 gateway offered `gateway.commerce.getEntitlements()` and a client-side
+entitlement list built from store receipts. Both are gone: a client list is
+not a grant. The backend ledger owns ownership. Read it on the server with
+`listActiveEntitlementTransactions(store, { playerId })` from
+`@mpgd/game-services/commerce-ledger` (reversed grants are subtracted) or the
+batched `getPurchaseLedgerStatus`, and serve the result to the game through
+its own authenticated endpoint. On the client, `purchase()` and the
+reconciler's journal report what this session bought and whether the grant was
+confirmed; the recovery summaries report open work only.
 
 This contract and its mock tests do not prove that a native Billing, StoreKit, or AdMob provider can recover its callbacks on a device. Provider-specific replay, secure storage, SSV delivery, and real account/device evidence are separate release gates.
 

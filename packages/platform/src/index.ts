@@ -2,7 +2,10 @@ import type { AdProvider } from './ads.js';
 // Only the typia-free contract modules may be imported here: headless
 // consumers type-check this entry with `skipLibCheck: false` and no DOM lib.
 import type { CommerceProvider } from './commerce-contract.js';
-import type { NotificationProvider } from './notifications-contract.js';
+import { createUnsupportedCommerceCapabilities } from './commerce-capabilities.js';
+import type { NotificationCapabilities, NotificationProvider } from './notifications-contract.js';
+
+export { createUnsupportedCommerceCapabilities };
 
 export type PlatformTarget =
   | 'browser'
@@ -123,12 +126,23 @@ export interface CommerceDiagnostic extends PlatformOperationFailure {
   readonly providerCode?: string;
 }
 
+/**
+ * Purchase result vocabulary of the adapter engines and of
+ * `GameServicesPurchaseResult.purchase`. It is no gateway surface: a gateway
+ * sells through `PlatformGateway.commerce`, and nothing here is ever an input
+ * to a grant.
+ */
 export interface PurchaseResult {
   readonly status: 'completed' | 'cancelled' | 'pending' | 'failed';
   readonly transactionId?: string;
   readonly entitlementIds: readonly string[];
   readonly evidence?: PlatformEvidenceEnvelope;
-  /** Present only when the adapter already completed the authoritative server grant. */
+  /**
+   * An adapter engine's record that its own authority already wrote a ledger
+   * entry. Informational only: no client code reads it to grant, and a
+   * provider's `settlement` pointer is verified through the backend by the
+   * reconciler like any other evidence.
+   */
   readonly authoritativeGrant?: Readonly<{
     readonly ledgerEntryId: string;
     readonly alreadyProcessed?: boolean;
@@ -153,51 +167,6 @@ export interface PurchaseSettlement {
   readonly alreadyProcessed?: boolean;
   /** Client purchase idempotency key the order was started with, when the adapter can link it. */
   readonly idempotencyKey?: string;
-}
-
-/**
- * Resolve a specific purchase from authoritative checkout or restore evidence.
- * A completed native checkout without authoritativeGrant is still unconfirmed.
- * This is UI status evidence, never permission to credit a wallet locally.
- * The caller must pair `purchase` with its requested `productId` because
- * PurchaseResult itself does not carry a product identifier.
- */
-export function findAuthoritativePurchaseSettlement(input: {
-  readonly productId: LogicalProductId;
-  readonly transactionId?: string;
-  readonly purchase?: PurchaseResult;
-  readonly restore?: PurchaseRestoreResult;
-}): PurchaseSettlement | null {
-  const effectiveTransactionId = input.transactionId ?? input.purchase?.transactionId;
-  const matchingRestored = input.restore?.settledPurchases?.filter((settlement) =>
-    settlement.productId === input.productId
-    && (effectiveTransactionId === undefined || settlement.transactionId === effectiveTransactionId),
-  );
-  // Without an order ID, multiple historical outcomes are ambiguous.
-  if (matchingRestored !== undefined && matchingRestored.length > 1) {
-    return null;
-  }
-  if (matchingRestored?.[0] !== undefined) {
-    return matchingRestored[0];
-  }
-  const purchase = input.purchase;
-  if (
-    purchase?.status !== 'completed'
-    || purchase.transactionId === undefined
-    || purchase.authoritativeGrant === undefined
-    || (effectiveTransactionId !== undefined && effectiveTransactionId !== purchase.transactionId)
-  ) {
-    return null;
-  }
-  return {
-    transactionId: purchase.transactionId,
-    productId: input.productId,
-    status: 'granted',
-    ledgerEntryId: purchase.authoritativeGrant.ledgerEntryId,
-    ...(purchase.authoritativeGrant.alreadyProcessed === undefined
-      ? {}
-      : { alreadyProcessed: purchase.authoritativeGrant.alreadyProcessed }),
-  };
 }
 
 export interface RewardedAdResult {
@@ -226,20 +195,6 @@ export interface PlatformPurchasePresentationEvent {
   readonly idempotencyKey: string;
   readonly sequence: number;
   readonly state: 'open' | 'closed' | 'not-started' | 'unknown';
-}
-
-export interface CommerceAdapter {
-  /** Trusted native presentation facts, independent of the purchase grant result. */
-  readonly presentation?: { subscribe(listener: (event: PlatformPurchasePresentationEvent) => void): () => void };
-
-  getProducts(): Promise<readonly ProductInfo[]>;
-  purchase(input: {
-    readonly productId: LogicalProductId;
-    readonly source: 'shop' | 'stage_fail' | 'result' | 'event';
-    readonly idempotencyKey: string;
-  }): Promise<PurchaseResult>;
-  restore?(): Promise<PurchaseRestoreResult>;
-  getEntitlements(): Promise<readonly Entitlement[]>;
 }
 
 export interface AdAdapter {
@@ -327,8 +282,6 @@ export type PlatformProviderAvailability =
 
 /** Existing capabilities and integrations annotated by optional providers. */
 export type PlatformProviderFeature =
-  | 'nativeIap'
-  | 'subscriptionIap'
   | 'rewardedAds'
   | 'interstitialAds'
   | 'bannerAds'
@@ -386,9 +339,6 @@ export interface CommerceCapabilities {
 }
 
 export interface PlatformCapabilities {
-  readonly nativeIap: boolean;
-  /** Optional for adapters published before subscription-specific support. */
-  readonly subscriptionIap?: boolean;
   readonly nativeAds: boolean;
   readonly rewardedAds: boolean;
   readonly interstitialAds: boolean;
@@ -408,11 +358,23 @@ export interface PlatformCapabilities {
     PlatformProviderAvailability
   >>>;
   /**
-   * Optional commerce v2 capability block. When present it must be a fresh
-   * object on every read with no unknown keys, and `nativeIap` and
-   * `subscriptionIap` must equal `deriveLegacyCommerceCapabilities(commerce)`.
+   * The one source of commerce capabilities: what the gateway's commerce
+   * provider sells, who finishes a purchase, and what evidence authorizes a
+   * grant. A gateway without a commerce provider reports
+   * `createUnsupportedCommerceCapabilities()`. The block must be a fresh object
+   * on every read with no unknown keys.
    */
-  readonly commerce?: CommerceCapabilities;
+  readonly commerce: CommerceCapabilities;
+  /**
+   * Optional notifications v2 capability block of the `notificationsV2`
+   * provider the gateway exposes: present exactly when the gateway exposes
+   * one, raw adapters included. `withTargetAvailability` in
+   * `@mpgd/target-config` adds it from that provider and leaves it out while
+   * the provider is hidden. When present it must be a fresh object on every
+   * read with no unknown keys, and `providerAvailability.pushNotifications`
+   * must equal its `availability`.
+   */
+  readonly notifications?: NotificationCapabilities;
 }
 
 export interface PlayerIdentity {
@@ -479,12 +441,15 @@ export interface ShareIntent {
   readonly text: string;
   /**
    * A root-relative link on the game's origin (`/daily?challengeToken=…`) or an
-   * absolute `https://` (or `http://`) link. Adapters that build a share URL
-   * from it (Apps in Toss and web) check it with `@mpgd/platform/routes` and
-   * answer `unavailable` when it could name another host, contains a control
+   * absolute `https://` (or `http://`) link. Every adapter whose host builds or
+   * receives a share URL checks it with `normalizeShareLink` from
+   * `@mpgd/platform/routes`, most through that module's `withShareIntentCheck`,
+   * hands the host the normalized link, and answers `unavailable` when the rule
+   * refuses it: a link that could name another host, contains a control
    * character, or has another form, such as a page-relative link. Apps in Toss
-   * also accepts its own `intoss://<app>` links. Adapters whose host shares no
-   * link ignore it.
+   * also accepts its own `intoss://<app>` links. An adapter whose host shares
+   * no link ignores it: WeChat's card reopens the game with `query` built from
+   * `kind` and `payload`.
    */
   readonly deepLink: string;
   readonly payload?: SharePayload;
@@ -550,6 +515,18 @@ export interface NotificationSubscriptionAdapter {
 export interface NativeOpenUrlEvent {
   readonly url: string;
   readonly source: 'cold' | 'warm';
+  /**
+   * For a game link, the URL's path, query, and fragment, normalized with
+   * `normalizeRootRelativeRoute` from `@mpgd/platform/routes`. The host is not
+   * part of it: `mygame://game/daily` and `https://game.example/daily` give
+   * `/daily`, and `mygame://level/3` gives `/3`. Adapters do not deliver a game
+   * link whose path that rule refuses, so a router that routes by path opens
+   * this route as is. It is absent when the URL has no path to check, such as
+   * `mygame:daily` or `mygame://daily`. A router that builds its route from
+   * anything else in the URL, such as a custom-scheme host, checks that route
+   * with `normalizeRootRelativeRoute` and opens only what it returns.
+   */
+  readonly route?: string;
 }
 
 export interface NativeBackButtonEvent {
@@ -615,7 +592,11 @@ export interface LifecycleAdapter {
   onBackButton?(
     handler: (event: NativeBackButtonEvent) => boolean | Promise<boolean>,
   ): () => void;
-  /** Game links and OAuth redirects use separate callbacks. */
+  /**
+   * Game links and OAuth redirects use separate callbacks. A game link is
+   * untrusted input: open its checked `route`, or check any route built from
+   * `url` with `normalizeRootRelativeRoute` (see `NativeOpenUrlEvent.route`).
+   */
   onGameUrlOpen?(callback: (event: NativeOpenUrlEvent) => void): () => void;
   onOAuthRedirect?(callback: (event: NativeOpenUrlEvent) => void): () => void;
   getInitialGameUrl?(): Promise<NativeOpenUrlEvent | null>;
@@ -674,14 +655,14 @@ export interface PlatformGateway {
   readonly gameLoading?: GameLoadingAdapter;
   getCapabilities(): Promise<PlatformCapabilities>;
   readonly identity: IdentityAdapter;
-  readonly commerce: CommerceAdapter;
   /**
-   * Optional commerce v2 provider (`@mpgd/platform/commerce`). Transitional:
-   * adapters expose it next to the v1 `commerce` adapter until C4 removes v1,
-   * and the game-services reconciler (C1) prefers it when present. Absent on
-   * gateways whose target has no v2 provider.
+   * The commerce provider (`@mpgd/platform/commerce`), the only commerce
+   * surface of a gateway. Games purchase through `@mpgd/game-services`, whose
+   * reconciler drives it; a scene never calls it directly. Absent on gateways
+   * whose target sells nothing, which then report
+   * `createUnsupportedCommerceCapabilities()`.
    */
-  readonly commerceV2?: CommerceProvider;
+  readonly commerce?: CommerceProvider;
   readonly ads: AdAdapter;
   readonly leaderboard: LeaderboardAdapter;
   readonly lifecycle: LifecycleAdapter;
@@ -699,8 +680,10 @@ export interface PlatformGateway {
    * the game-services client composes it with the backend into the
    * notifications runtime, and `toNotificationSubscriptionAdapter` serves v1
    * callers from that runtime with the topics resolved for the target. Absent
-   * on gateways whose target has no v2 provider; N3 gates it on
-   * `integrations.notifications` in the target-config runtime.
+   * on gateways whose target has no v2 provider. `withTargetAvailability` in
+   * `@mpgd/target-config` exposes it only while `integrations.notifications`
+   * lets the game call notifications, as it does the v1 adapter, and then
+   * adds `PlatformCapabilities.notifications` from it.
    */
   readonly notificationsV2?: NotificationProvider;
   readonly promotions?: PromotionRewardAdapter;
@@ -710,7 +693,6 @@ export interface PlatformGateway {
 
 export function createUnsupportedCapabilities(): PlatformCapabilities {
   return {
-    nativeIap: false,
     nativeAds: false,
     rewardedAds: false,
     interstitialAds: false,
@@ -721,5 +703,6 @@ export function createUnsupportedCapabilities(): PlatformCapabilities {
     socialShare: false,
     haptics: false,
     localizedContent: false,
+    commerce: createUnsupportedCommerceCapabilities(),
   };
 }

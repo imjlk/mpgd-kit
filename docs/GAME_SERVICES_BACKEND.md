@@ -116,8 +116,8 @@ certificate chain and signature before returning the decoded transaction
 payload; `createAppleSignedTransactionVerifier` from
 `@mpgd/game-services/app-store-server` (over the optional
 `@apple/app-store-server-library` peer) is that production implementation. The
-former `@mpgd/adapter-capacitor/app-store-server` path is a deprecated
-re-export.
+former `@mpgd/adapter-capacitor/app-store-server` re-export was removed in
+commerce v2 PR C4; import it from `@mpgd/game-services/app-store-server`.
 The bearer-token provider receives the request `AbortSignal`; it should throw
 `AppStoreDependencyUnavailableError` only for a transient signing dependency
 outage and let cancellation, invalid credentials, and programming errors
@@ -198,6 +198,42 @@ Notifications V2 before enabling catalog products of type `subscription`.
 Provider adapters can use
 `@mpgd/game-services/app-store-verifier-conformance` for deterministic decoded
 JWS fixtures without copying credentials or live signed transactions.
+
+## Client Purchase Path
+
+The client has one purchase path since commerce v2 PR C4. A gateway with a
+commerce provider (`gateway.commerce`, a `CommerceProvider`) buys through the
+commerce reconciler: `createGameServicesClient` and
+`createRecoverableMonetizationClient` open the store through
+`provider.requestPurchase`, journal every lifecycle transition, send the
+store evidence to `verifyPurchase`, and report a grant only from the backend's
+answer. See [Recovering purchases and rewarded ads](MONETIZATION_RECOVERY.md)
+for the journal and recovery rules.
+
+- A gateway without a commerce provider sells nothing: `purchase()` answers
+  `{ status: 'rejected', purchase: { status: 'failed', entitlementIds: [] } }`
+  with the analytics reason `commerce_unavailable`, opens no store UI, and
+  never reaches `verifyPurchase`. There is no client-side grant fallback.
+- The v1 purchase path is gone: a platform `PurchaseResult` is not an input to
+  the client any more, so `recoverPurchaseResult`, the target-name allow-list
+  (`GameServicesLegacyStoreTarget`), and the adapter-settled shortcut
+  (`findAdapterSettledGrant`, `isAuthoritativeMicrosoftStoreCompletion`) were
+  removed. A provider that settles on its own still sends one verify request,
+  and the ledger entry comes from the backend's answer.
+- A leftover v1 `purchase` journal record is retired: it stays readable, and
+  nothing reopens the store UI or grants from it. A record that was
+  mid-verification (a completed platform result and no terminal result) has
+  its saved verify request sent to this backend once more by the recoverable
+  client under the same idempotency key, and the backend's answer closes it.
+  The store also lists the purchase it covered again and the reconciler
+  verifies it under a derived key; the platform-evidence unique index
+  (`findEntitlementTransactionByPlatformEvidence` where the store offers it)
+  keeps the repeated verification from granting twice.
+- Entitlements are read from the ledger. The v1
+  `gateway.commerce.getEntitlements()` has no replacement on the gateway: read
+  `listActiveEntitlementTransactions(store, { playerId })` (reversed grants are
+  subtracted) or `getPurchaseLedgerStatus` on the server and expose the result
+  through the game's own authenticated endpoint.
 
 ## Ledger Idempotency Contract
 
@@ -676,8 +712,8 @@ Google may omit `orderId`, so a missing provider order is accepted while a
 present order must match the request. The optional Capacitor Play Billing
 provider uses `createGooglePlayTokenPurchaseKey(purchaseToken)` from
 `@mpgd/platform/commerce` when the device has not yet received an order ID
-(`createGooglePlayTokenTransactionId` remains as a deprecated alias of the same
-helper in both packages). The server recomputes that digest with the same
+(the former `createGooglePlayTokenTransactionId` alias was removed in commerce
+v2 PR C4). The server recomputes that digest with the same
 helper from the evidence token before allowing token-only order matching; an
 unrelated client-supplied ID still fails when Google reports an order. The
 client-reported `purchasedAt` is not

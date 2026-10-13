@@ -116,11 +116,6 @@ function fixture() {
     target: 'ait',
     getCapabilities: async () => createUnsupportedCapabilities(),
     identity: { getPlayer: async () => null },
-    commerce: {
-      getProducts: async () => [],
-      purchase: async () => ({ status: 'failed', entitlementIds: [] }),
-      getEntitlements: async () => [],
-    },
     ads: {
       provider,
       preload: async () => {},

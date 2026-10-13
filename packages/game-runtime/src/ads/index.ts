@@ -2,7 +2,6 @@ import type {
   PlatformEvidenceEnvelope,
   PlatformGateway,
   PlatformPurchasePresentationEvent,
-  PurchaseResult,
 } from '@mpgd/platform';
 import type { GameServicesRewardedAdResult } from '@mpgd/game-services/operations';
 import {
@@ -516,9 +515,14 @@ export type PurchasePresentationEvent = PlatformPurchasePresentationEvent;
 export interface CoordinatedPlatformGateway extends PlatformGateway {
   dispose(): void;
 }
+// Derived from the gateway so this entry never imports the typia-backed
+// `@mpgd/platform/commerce` module (see the headless type-check).
+type CommerceProviderSource = NonNullable<PlatformGateway['commerce']>;
+type PurchaseRequestInput = Parameters<CommerceProviderSource['requestPurchase']>[0];
+type PurchaseOutcome = Awaited<ReturnType<CommerceProviderSource['requestPurchase']>>;
 interface PurchaseFlight {
   readonly key: string;
-  readonly promise: Promise<PurchaseResult>;
+  readonly promise: Promise<PurchaseOutcome>;
   lease?: FullScreenPresentationLease;
   called: boolean;
   settled: boolean;
@@ -531,11 +535,19 @@ interface PurchaseFlight {
 export function createCoordinatedPlatformGateway(input: Parameters<typeof createCoordinatedAdProvider>[0] & {
   readonly gateway: PlatformGateway;
   /** Trusted native facts only. A purchase business result alone defaults to unknown. */
-  readonly classifyPurchasePresentation?: (result: PurchaseResult) => 'closed' | 'not-started' | 'unknown';
+  readonly classifyPurchasePresentation?: (result: PurchaseOutcome) => 'closed' | 'not-started' | 'unknown';
   readonly purchasePresentation?: { subscribe(listener: (event: PurchasePresentationEvent) => void): () => void };
 }): CoordinatedPlatformGateway {
   const ads = createCoordinatedAdProvider(input);
   const source = input.gateway.commerce;
+  const purchasePresentation = input.purchasePresentation ?? source?.presentation;
+  // The purchase lease is held only when something trusted can release it: the
+  // provider's own presentation facts, the game's `purchasePresentation`, or a
+  // `classifyPurchasePresentation`. A purchase result alone proves nothing
+  // about the payment surface, so without any of them a lease would stay
+  // `unknown` for the rest of the session and block every ad.
+  const coordinatesPurchases = source !== undefined
+    && (purchasePresentation !== undefined || input.classifyPurchasePresentation !== undefined);
   const history = new Map<string, string>();
   const purchases = new Map<string, PurchaseFlight>();
   let last: PurchaseFlight | undefined;
@@ -558,7 +570,6 @@ export function createCoordinatedPlatformGateway(input: Parameters<typeof create
     }
     maybeDetach();
   }
-  const purchasePresentation = input.purchasePresentation ?? input.gateway.commerce.presentation;
   const unsubscribe = purchasePresentation?.subscribe((event) => {
     observe(() => {
       const flight = purchases.get(event.idempotencyKey);
@@ -586,17 +597,23 @@ export function createCoordinatedPlatformGateway(input: Parameters<typeof create
       }
     }, input.onObserverError);
   });
-  const commerce = forward(source, {
-    purchase(supplied: Parameters<typeof source.purchase>[0]): Promise<PurchaseResult> {
+  const commerce = source === undefined || !coordinatesPurchases ? source : forward(source, {
+    requestPurchase(supplied: PurchaseRequestInput): Promise<PurchaseOutcome> {
       if (disposed) { return Promise.reject(new PresentationExecutionError('disposed')); }
-      const request = Object.freeze({ productId: supplied.productId, source: supplied.source, idempotencyKey: supplied.idempotencyKey });
+      const request: PurchaseRequestInput = Object.freeze({
+        logicalId: supplied.logicalId,
+        source: supplied.source,
+        idempotencyKey: supplied.idempotencyKey,
+        ...(supplied.offerId === undefined ? {} : { offerId: supplied.offerId }),
+        ...(supplied.quantity === undefined ? {} : { quantity: supplied.quantity }),
+      });
       if (typeof request.idempotencyKey !== 'string' || request.idempotencyKey.trim() === '' || request.idempotencyKey.length > 512
-        || typeof request.productId !== 'string' || request.productId.trim() === '' || request.productId.length > 512
+        || typeof request.logicalId !== 'string' || request.logicalId.trim() === '' || request.logicalId.length > 512
         || !['shop', 'stage_fail', 'result', 'event'].includes(request.source)) {
         return Promise.reject(new TypeError('Invalid purchase presentation input.'));
       }
       const key = request.idempotencyKey;
-      const fingerprint = JSON.stringify([request.productId, request.source]);
+      const fingerprint = JSON.stringify([request.logicalId, request.source, request.offerId ?? null, request.quantity ?? null]);
       const prior = history.get(key);
       if (prior !== undefined) {
         if (prior !== fingerprint) { return Promise.reject(new PresentationExecutionError('key-conflict')); }
@@ -614,7 +631,7 @@ export function createCoordinatedPlatformGateway(input: Parameters<typeof create
             flight.lease = input.presentation.acquire({ kind: 'purchase', invocationId: key });
             if (disposed) { close(flight); throw new PresentationExecutionError('disposed'); }
             flight.called = true;
-            const result = await source.purchase(request);
+            const result = await source.requestPurchase(request);
             const state = input.classifyPurchasePresentation?.(result) ?? 'unknown';
             if (state !== 'closed' && state !== 'not-started' && state !== 'unknown') {
               throw new TypeError('Invalid purchase presentation observation.');
@@ -645,7 +662,7 @@ export function createCoordinatedPlatformGateway(input: Parameters<typeof create
   });
   return forward(input.gateway, {
     ads: forward(input.gateway.ads, toAdAdapter(ads)),
-    commerce,
+    ...(commerce === undefined ? {} : { commerce }),
     dispose(): void {
       disposed = true;
       ads.dispose();

@@ -1,6 +1,7 @@
 import { App, type AppPlugin } from '@capacitor/app';
 import type { PluginListenerHandle } from '@capacitor/core';
 import type { LifecycleAdapter, NativeBackButtonEvent, NativeOpenUrlEvent } from '@mpgd/platform';
+import { hasRouteControlCharacter, normalizeRootRelativeRoute } from '@mpgd/platform/routes';
 
 export type CapacitorIncomingUrlKind = 'game' | 'oauth';
 
@@ -19,7 +20,11 @@ export interface CreateCapacitorAppEventsInput {
   readonly target: 'android' | 'ios';
   readonly app?: CapacitorAppEventsApi;
   readonly visibility?: CapacitorVisibilitySource | null;
-  /** Return null for URLs that this game does not own. Never default OAuth to game. */
+  /**
+   * Return null for URLs that this game does not own. Never default OAuth to
+   * game. A game link is then delivered only when its path passes the shared
+   * route rule (see `NativeOpenUrlEvent.route`).
+   */
   readonly classifyIncomingUrl?: (url: string) => CapacitorIncomingUrlKind | null;
   readonly historyBack?: () => void;
   readonly onError?: (error: unknown) => void;
@@ -31,6 +36,45 @@ const coldUrlDedupeWindowMs = 2_000;
 
 function defaultVisibility(): CapacitorVisibilitySource | null {
   return typeof document === 'undefined' ? null : document;
+}
+
+/**
+ * Reads a game link the way `NativeOpenUrlEvent.route` describes: its path,
+ * query, and fragment as a normalized route (the host is not part of it),
+ * `undefined` when the URL has no path to check (`mygame:daily`,
+ * `mygame://daily`), or `null` when the link is not delivered: it does not
+ * parse, carries a control character, or has a path `normalizeRootRelativeRoute`
+ * refuses because a client could read it as another host.
+ */
+function readGameLinkRoute(url: string): string | null | undefined {
+  if (hasRouteControlCharacter(url)) {
+    return null;
+  }
+
+  let parsed: URL;
+
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+
+  const pathname = parsed.pathname === '' && (parsed.search !== '' || parsed.hash !== '')
+    ? '/'
+    : parsed.pathname;
+  if (!pathname.startsWith('/')) {
+    return undefined;
+  }
+
+  return normalizeRootRelativeRoute(`${pathname}${parsed.search}${parsed.hash}`) ?? null;
+}
+
+function toOpenUrlEvent(
+  url: string,
+  source: NativeOpenUrlEvent['source'],
+  route: string | undefined,
+): NativeOpenUrlEvent {
+  return route === undefined ? { url, source } : { url, source, route };
 }
 
 /**
@@ -128,6 +172,12 @@ export function createCapacitorAppEvents(input: CreateCapacitorAppEventsInput): 
     if (kind === null) {
       return;
     }
+    const route = kind === 'game' ? readGameLinkRoute(url) : undefined;
+    if (route === null) {
+      // A game link whose path could name another host is discarded like an
+      // unknown URL: no router may open it.
+      return;
+    }
     const callbacks = kind === 'game' ? gameUrlCallbacks : oauthCallbacks;
     if (!initialResolved && callbacks.size > 0) {
       // Keep enough recent entries to suppress a cold/warm duplicate without
@@ -140,7 +190,7 @@ export function createCapacitorAppEvents(input: CreateCapacitorAppEventsInput): 
       }
       warmUrlsBeforeInitial.add(url);
     }
-    const event = { url, source: 'warm' } as const;
+    const event = toOpenUrlEvent(url, 'warm', route);
     for (const callback of [...callbacks]) {
       try {
         callback(event);
@@ -272,9 +322,13 @@ export function createCapacitorAppEvents(input: CreateCapacitorAppEventsInput): 
       if (kind === null) {
         return null;
       }
+      const route = kind === 'game' ? readGameLinkRoute(url) : undefined;
+      if (route === null) {
+        return null;
+      }
       recentColdUrl = url;
       recentColdUntil = Date.now() + coldUrlDedupeWindowMs;
-      return { kind, event: { url, source: 'cold' } };
+      return { kind, event: toOpenUrlEvent(url, 'cold', route) };
     }, (error: unknown) => {
       initialResolved = true;
       warmUrlsBeforeInitial.clear();

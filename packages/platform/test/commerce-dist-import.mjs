@@ -12,9 +12,7 @@ import {
   createCommerceEventBuffer,
   createDerivedPurchaseIdempotencyKey,
   createUnsupportedCommerceCapabilities,
-  deriveLegacyCommerceCapabilities,
   summarizeCommercePurchaseState,
-  toCommerceAdapter,
 } from '@mpgd/platform/commerce';
 import {
   assertCommerceConformanceVector,
@@ -28,9 +26,7 @@ assert.equal(canTransitionCommercePurchase('finished', 'granted'), false);
 assert.equal(summarizeCommercePurchaseState('finishing'), 'granted');
 
 const unsupported = createUnsupportedCommerceCapabilities();
-assert.deepEqual(deriveLegacyCommerceCapabilities(unsupported), {
-  nativeIap: false, subscriptionIap: false,
-});
+assert.equal(unsupported.availability, 'unsupported');
 assert.notEqual(createUnsupportedCommerceCapabilities(), unsupported);
 assertCommerceCapabilities(unsupported);
 assert.throws(() => assertCommerceCapabilities({ ...unsupported, extra: true }));
@@ -73,19 +69,14 @@ const drained = [];
 buffer.drain((event) => drained.push(event.type));
 assert.deepEqual(drained, ['purchaseError']);
 
-const adapter = toCommerceAdapter({
-  store: 'packed',
-  async getCapabilities() { return unsupported; },
-  async fetchProducts() { return []; },
-  async requestPurchase() { return { outcome: 'purchased', purchase }; },
-  async getAvailablePurchases() { return [purchase]; },
-  subscribe() { return () => {}; },
-});
-const result = await adapter.purchase({ productId: 'gems_small', source: 'shop', idempotencyKey: 'op-1' });
-assert.equal(result.status, 'completed');
-assert.equal(result.authoritativeGrant, undefined);
-assert.deepEqual(result.entitlementIds, []);
-assert.deepEqual(await adapter.restore(), { restoredEntitlements: [], settledPurchases: [] });
+const commerceModule = await import('@mpgd/platform/commerce');
+for (const removed of ['toCommerceAdapter', 'deriveLegacyCommerceCapabilities']) {
+  assert.equal(removed in commerceModule, false, `${removed} was removed in C4`);
+}
+const platformModule = await import('@mpgd/platform');
+assert.equal('findAuthoritativePurchaseSettlement' in platformModule, false);
+assert.equal(platformModule.createUnsupportedCapabilities().commerce.availability, 'unsupported');
+assert.equal('nativeIap' in platformModule.createUnsupportedCapabilities(), false);
 
 const vectorPath = new URL(
   '../../../docs/specs/commerce/vectors/purchase-client-finish.json', import.meta.url,

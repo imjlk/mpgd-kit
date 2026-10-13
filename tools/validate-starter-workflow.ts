@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 
 import {
   microsoftStoreBlockEnd,
@@ -177,6 +177,24 @@ const requiredMcpRequirements = [
     name: 'Devvit',
   },
 ] as const;
+
+/** Commerce v1 surfaces C4 removed; starter wiring must not name them. */
+const removedCommerceV1Names = [
+  'nativeIap',
+  'subscriptionIap',
+  'CommerceAdapter',
+  'toCommerceAdapter',
+  'getEntitlements',
+  'loadEntitlements',
+  'recoverPurchaseResult',
+  'createMicrosoftStoreCommerceAdapter',
+  'withMicrosoftStoreCommerceAdapter',
+  'createDevvitCommerceAdapter',
+  'withDevvitCommerceAdapter',
+  'createCapacitorPlayBillingProvider',
+  'createCapacitorStoreKitProvider',
+] as const;
+const removedCommerceV1Pattern = new RegExp(`\\b(?:${removedCommerceV1Names.join('|')})\\b`, 'u');
 
 const failures: string[] = [];
 validatePeerDependencyRuleParser();
@@ -747,6 +765,20 @@ function validatePhaserTemplateBuildGateways(): void {
  * wrapper and the Devvit server) read their products from the catalog with a
  * fail-closed default.
  */
+/** Every non-test TypeScript source under a starter or template `src`. */
+function listStarterSources(directory: string): readonly string[] {
+  if (!existsSync(directory)) {
+    return [];
+  }
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = `${directory}/${entry.name}`;
+    if (entry.isDirectory()) {
+      return listStarterSources(path);
+    }
+    return /\.tsx?$/u.test(entry.name) && !/\.test\.tsx?$/u.test(entry.name) ? [path] : [];
+  });
+}
+
 function validatePhaserTemplateCommerceWiring(): void {
   const exampleRoot = 'examples/phaser-starter';
   const templateRoot = 'packages/cli/templates/phaser-game';
@@ -782,7 +814,10 @@ function validatePhaserTemplateCommerceWiring(): void {
       '    providers,\n',
     ],
     'src/platform/buildGateways/aitSandbox.ts': [
-      'fallbackBridge: createAitSandboxBridge({ buildId: runtime.buildId })',
+      'fallbackBridge: createAitSandboxBridge({',
+      // The sandbox requires the game's app name in `intoss://` share links.
+      'appName: __MPGD_AIT_APP_NAME__,',
+      'buildId: runtime.buildId,',
     ],
     'src/platform/buildGateways/reddit.ts': [
       'createDevvitCommerceProducts(productCatalog)',
@@ -822,6 +857,24 @@ function validatePhaserTemplateCommerceWiring(): void {
             );
           }
         }
+      }
+    }
+    // No starter or template source names a commerce v1 surface removed in C4,
+    // and only the platform wiring may touch the commerce provider: scenes
+    // purchase through game-services, whose reconciler drives it.
+    for (const sourceFile of listStarterSources(`${root}/src`)) {
+      const sourceText = readText(sourceFile);
+      const removedV1 = removedCommerceV1Pattern.exec(sourceText);
+      if (removedV1 !== null) {
+        failures.push(
+          `${sourceFile}: names ${removedV1[0]}, a commerce v1 surface removed in C4; use gateway.commerce and the reconciler.`,
+        );
+      }
+      if (!sourceFile.startsWith(`${root}/src/platform/`)
+        && /\.commerce\??\.(?:requestPurchase|finishTransaction|restorePurchases)\b/u.test(sourceText)) {
+        failures.push(
+          `${sourceFile}: only src/platform may call the commerce provider; purchase through game-services.`,
+        );
       }
     }
     const packageJson = readJson(`${root}/package.json`) as {

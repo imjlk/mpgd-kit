@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, normalize, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
 
 import type { DevvitInlineBudget } from './schemas';
@@ -27,14 +27,20 @@ const moduleSignatures: Readonly<Record<string, RegExp>> = {
 
 const dynamicImportPattern = /\bimport\(\s*["']([^"']+)["']\s*\)/g;
 const staticImportPattern = /(?:^|[;\s}])(?:import|export)\s*(?:[\w*{}\s,$]+\s*from\s*)?["']([^"']+)["']/g;
-const htmlAssetPattern = /<(?:script[^>]*\ssrc|link[^>]*\srel=["'](?:modulepreload|stylesheet)["'][^>]*\shref)=["']([^"']+)["']/g;
-const htmlAssetPatternReversed = /<link[^>]*\shref=["']([^"']+)["'][^>]*\srel=["'](?:modulepreload|stylesheet)["']/g;
+const htmlAssetPattern = /<(?:script[^>]*\ssrc|link[^>]*\srel=["'](?:modulepreload|stylesheet|preload)["'][^>]*\shref)=["']([^"']+)["']/giu;
+const htmlAssetPatternReversed = /<link[^>]*\shref=["']([^"']+)["'][^>]*\srel=["'](?:modulepreload|stylesheet|preload)["']/giu;
+const htmlMediaTagPattern = /<(?:img|audio|video|source|track|input|embed|object)\b[^>]*>/giu;
+const htmlMediaUrlPattern = /\s(?:src|poster|data)=["']([^"']+)["']/giu;
+const htmlImageCandidateTagPattern = /<(?:img|source|link)\b[^>]*>/giu;
+const htmlImageCandidatePattern = /\s(?:srcset|imagesrcset)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/giu;
+const cssImportPattern = /@import\s+(?:url\(\s*["']?([^\s"')]+)["']?\s*\)|["']([^"']+)["'])/gi;
+const cssUrlPattern = /url\(\s*(?:"([^"]+)"|'([^']+)'|([^\s)]+))\s*\)/giu;
 
 /**
  * Walk the inline entry's load graph: HTML scripts, modulepreloads and
  * stylesheets, static `import`/`export from` edges, and dynamic `import()`
  * edges (an inline entry often awaits its surface router dynamically).
- * Chunks matching `deferredChunks` are boundaries: neither they nor what is
+ * Dynamically imported chunks matching `deferredChunks` are boundaries: neither they nor what is
  * reachable only through them count toward the inline first load.
  */
 export function collectDevvitInlineGraph(
@@ -56,51 +62,128 @@ function walkInlineGraph(
   deferredChunks: readonly string[],
 ): DevvitInlineReport & { readonly contents: readonly { readonly path: string; readonly content: string }[] } {
   const root = resolve(clientDir);
+  if (isAbsolute(inlineEntry)) {
+    throw new Error('Devvit inlineEntry must be relative to the client artifact.');
+  }
   const entryPath = resolve(root, inlineEntry);
+  assertClientPath(root, entryPath);
   if (!existsSync(entryPath)) {
     throw new Error(`Devvit inlineEntry ${inlineEntry} does not exist in ${clientDir}.`);
   }
   const html = readFileSync(entryPath, 'utf8');
-  const queue: string[] = [];
+  const queue: { readonly file: string; readonly dynamic: boolean }[] = [];
   for (const pattern of [htmlAssetPattern, htmlAssetPatternReversed]) {
     for (const match of html.matchAll(pattern)) {
       const reference = match[1];
       if (reference !== undefined && isLocalReference(reference)) {
-        queue.push(resolveReference(root, dirname(entryPath), reference));
+        queue.push({ file: resolveReference(root, dirname(entryPath), reference), dynamic: false });
+      }
+    }
+  }
+  for (const tag of html.matchAll(htmlMediaTagPattern)) {
+    for (const match of tag[0].matchAll(htmlMediaUrlPattern)) {
+      const reference = match[1];
+      if (reference !== undefined && isLocalReference(reference)) {
+        queue.push({ file: resolveReference(root, dirname(entryPath), reference), dynamic: false });
+      }
+    }
+  }
+  // Charge every possible responsive candidate conservatively: the built
+  // artifact has no fixed viewport or DPR with which to select one image.
+  for (const tag of html.matchAll(htmlImageCandidateTagPattern)) {
+    for (const match of tag[0].matchAll(htmlImageCandidatePattern)) {
+      for (const reference of srcsetReferences(match[1] ?? match[2] ?? match[3] ?? '')) {
+        if (isLocalReference(reference)) {
+          queue.push({
+            file: resolveReference(root, dirname(entryPath), reference),
+            dynamic: false,
+          });
+        }
+      }
+    }
+  }
+  for (const block of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/giu)) {
+    for (const [pattern, dynamic] of [
+      [staticImportPattern, false],
+      [dynamicImportPattern, true],
+    ] as const) {
+      for (const match of (block[1] ?? '').matchAll(pattern)) {
+        const reference = match[1];
+        if (reference !== undefined && isLocalReference(reference)) {
+          queue.push({ file: resolveReference(root, dirname(entryPath), reference), dynamic });
+        }
+      }
+    }
+  }
+  for (const block of html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/giu)) {
+    for (const pattern of [cssImportPattern, cssUrlPattern]) {
+      for (const match of (block[1] ?? '').matchAll(pattern)) {
+        const reference = match[1] ?? match[2] ?? match[3];
+        if (reference !== undefined && isLocalReference(reference)) {
+          queue.push({
+            file: resolveReference(root, dirname(entryPath), reference),
+            dynamic: false,
+          });
+        }
       }
     }
   }
   const deferred = deferredChunks.map(globToRegExp);
-  const seen = new Set<string>();
-  const files: DevvitInlineGraphFile[] = [];
+  const seen = new Set<string>([entryPath]);
+  const entryBytes = Buffer.from(html);
+  const entryName = relative(root, entryPath).replace(/\\/gu, '/');
+  const files: DevvitInlineGraphFile[] = [
+    {
+      path: entryName,
+      bytes: entryBytes.length,
+      gzipBytes: gzipSync(entryBytes, { level: 9 }).length,
+    },
+  ];
   const forbiddenHits: readonly { module: string; file: string }[] = [];
-  const allContents: { path: string; content: string }[] = [];
+  const allContents: { path: string; content: string }[] = [{ path: entryName, content: html }];
   while (queue.length > 0) {
-    const file = queue.shift();
-    if (file === undefined || seen.has(file) || !existsSync(file)) {
+    const edge = queue.shift();
+    if (edge === undefined || seen.has(edge.file)) {
       continue;
     }
-    if (deferred.some((pattern) => pattern.test(relative(root, file).split('\\').join('/')))) {
-      seen.add(file);
+    assertClientPath(root, edge.file);
+    if (!existsSync(edge.file)) {
+      throw new Error(`Devvit inline dependency ${edge.file} does not exist.`);
+    }
+    const { file, dynamic } = edge;
+    const filePath = relative(root, file).replace(/\\/gu, '/');
+    if (dynamic && deferred.some((pattern) => pattern.test(filePath))) {
+      // A later static edge must still include this file in the first load.
       continue;
     }
     seen.add(file);
     const buffer = readFileSync(file);
     files.push({
-      path: relative(root, file),
+      path: filePath,
       bytes: buffer.length,
       gzipBytes: gzipSync(buffer, { level: 9 }).length,
     });
     const content = buffer.toString('utf8');
-    allContents.push({ path: relative(root, file), content });
+    allContents.push({ path: filePath, content });
     if (file.endsWith('.js') || file.endsWith('.mjs')) {
-      const references = [
-        ...[...content.matchAll(staticImportPattern)].map((match) => match[1]),
-        ...[...content.matchAll(dynamicImportPattern)].map((match) => match[1]),
-      ];
-      for (const reference of references) {
-        if (reference !== undefined && isLocalReference(reference)) {
-          queue.push(resolveReference(root, dirname(file), reference));
+      for (const [pattern, dynamic] of [
+        [staticImportPattern, false],
+        [dynamicImportPattern, true],
+      ] as const) {
+        for (const match of content.matchAll(pattern)) {
+          const reference = match[1];
+          if (reference !== undefined && isLocalReference(reference)) {
+            queue.push({ file: resolveReference(root, dirname(file), reference), dynamic });
+          }
+        }
+      }
+    } else if (file.endsWith('.css')) {
+      for (const pattern of [cssImportPattern, cssUrlPattern]) {
+        for (const match of content.matchAll(pattern)) {
+          const reference = match[1] ?? match[2] ?? match[3];
+          if (reference !== undefined && isLocalReference(reference)) {
+            queue.push({ file: resolveReference(root, dirname(file), reference), dynamic: false });
+          }
         }
       }
     }
@@ -112,6 +195,44 @@ function walkInlineGraph(
     forbiddenHits,
     contents: allContents,
   };
+}
+
+/** URL tokenization from the HTML srcset algorithm; descriptors are not size-selection inputs here. */
+function srcsetReferences(input: string): readonly string[] {
+  const references: string[] = [];
+  const whitespace = /[\t\n\f\r ]/u;
+  let position = 0;
+  while (position < input.length) {
+    while (position < input.length && (whitespace.test(input.charAt(position)) || input[position] === ',')) {
+      position += 1;
+    }
+    const start = position;
+    while (position < input.length && !whitespace.test(input.charAt(position))) {
+      position += 1;
+    }
+    const url = input.slice(start, position);
+    if (url.length === 0) {
+      break;
+    }
+    references.push(url.replace(/,+$/u, ''));
+    // A data URL may contain commas. Only trailing commas or a descriptor
+    // separator end a candidate; splitting the whole attribute on ',' is wrong.
+    if (url.endsWith(',')) {
+      continue;
+    }
+    let inParens = false;
+    while (position < input.length) {
+      const character = input[position++];
+      if (character === '(') {
+        inParens = true;
+      } else if (character === ')') {
+        inParens = false;
+      } else if (character === ',' && !inParens) {
+        break;
+      }
+    }
+  }
+  return references;
 }
 
 export function assertDevvitInlineBudget(input: {
@@ -126,11 +247,6 @@ export function assertDevvitInlineBudget(input: {
     input.budget?.deferredChunks ?? [],
   );
   const contents = report.contents;
-  if (report.files.length === 0) {
-    throw new Error(
-      `${input.target} inlineEntry ${input.inlineEntry} references no local scripts.`,
-    );
-  }
   const hits: { module: string; file: string }[] = [];
   for (const moduleName of input.budget?.forbidModules ?? []) {
     const signature = moduleSignatures[moduleName];
@@ -164,12 +280,20 @@ export function assertDevvitInlineBudget(input: {
 }
 
 function isLocalReference(reference: string): boolean {
-  return !/^(?:[a-z]+:)?\/\//i.test(reference) && !reference.startsWith('data:');
+  return reference !== '' && !reference.startsWith('#')
+    && !/^(?:[a-z][a-z\d+.-]*:|\/\/)/iu.test(reference);
 }
 
 function resolveReference(root: string, fromDir: string, reference: string): string {
   const clean = reference.split(/[?#]/)[0] ?? reference;
   return normalize(clean.startsWith('/') ? join(root, clean) : resolve(fromDir, clean));
+}
+
+function assertClientPath(root: string, file: string): void {
+  const fromRoot = relative(root, file).replace(/\\/gu, '/');
+  if (fromRoot === '..' || fromRoot.startsWith('../') || isAbsolute(fromRoot)) {
+    throw new Error(`Devvit inline path ${file} escapes the client artifact.`);
+  }
 }
 
 function globToRegExp(pattern: string): RegExp {

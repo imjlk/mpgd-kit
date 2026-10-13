@@ -1,3 +1,5 @@
+import { createUnsupportedCommerceCapabilities } from '@mpgd/platform/commerce';
+
 import {
   createMpgdCloudflarePagesHostFetchHandler,
   defaultCloudflarePagesBridgeEndpoint,
@@ -6,8 +8,10 @@ import {
   type CloudflarePagesServiceBinding,
   type MpgdCloudflarePagesHostEnv,
 } from './cloudflare-pages';
+import { validNotificationsV2BridgeRequests } from './fixtures';
 import {
   bridgeCommerceV2Methods,
+  bridgeNotificationsV2Methods,
   bridgeStorageLoadProtocol,
   type BridgeRequest,
   type BridgeResponse,
@@ -64,6 +68,43 @@ assertEqual(
   false,
   'default capabilities should not advertise unavailable server-side sharing',
 );
+
+// The Pages host sells nothing: its snapshot carries the unsupported commerce block and none of the
+// removed boolean flags, and a v1 commerce method is not a bridge method any more.
+const pagesCapabilities = (capabilities as { readonly data: Record<string, unknown> }).data;
+assertDeepEqual(
+  pagesCapabilities['commerce'],
+  createUnsupportedCommerceCapabilities(),
+  'the Pages host should report the unsupported commerce block',
+);
+assertEqual('nativeIap' in pagesCapabilities, false, 'the removed nativeIap flag is not reported');
+assertEqual(
+  'subscriptionIap' in pagesCapabilities,
+  false,
+  'the removed subscriptionIap flag is not reported',
+);
+for (const removed of [
+  'commerce.getProducts',
+  'commerce.purchase',
+  'commerce.restore',
+  'commerce.getEntitlements',
+]) {
+  const rejected = await fetchHandler(
+    new Request(`${baseUrl}${defaultCloudflarePagesBridgeEndpoint}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        id: `removed-${removed}`,
+        method: removed,
+        payload: {},
+        meta: requestMeta(),
+      }),
+    }),
+    env,
+  );
+  const body = await rejected.json() as { readonly ok?: boolean };
+  assertEqual(body.ok === true, false, `${removed} should not be answered by the Pages host`);
+}
 
 const client = createBridgeOrpcClient({
   fetch: (url, init) => fetchHandler(new Request(new URL(String(url), baseUrl), init), env),
@@ -200,6 +241,48 @@ for (const method of bridgeCommerceV2Methods) {
       `${method} should answer COMMERCE_V2_UNAVAILABLE`,
     );
     assertEqual(response.error.retryable, false, `${method} should not be retryable`);
+  }
+}
+
+// Notifications v2: web targets have no notification path. Every method fails
+// closed over both the JSON endpoint and oRPC, whatever its payload.
+assertEqual(
+  validNotificationsV2BridgeRequests.length,
+  bridgeNotificationsV2Methods.length,
+  'every notifications v2 method should be exercised',
+);
+for (const fixture of validNotificationsV2BridgeRequests) {
+  for (const payload of [fixture.payload, { protocol: 'mpgd.notifications.v2' }, null]) {
+    const request = {
+      id: `notifications-v2-${fixture.method}`,
+      method: fixture.method,
+      payload,
+      meta: requestMeta(),
+    } satisfies BridgeRequest;
+    for (const [transport, response] of [
+      ['JSON endpoint', await postBridge(request)],
+      ['oRPC', await client.request(request)],
+    ] as const) {
+      assertEqual(response.ok, false, `${fixture.method} should fail closed over ${transport}`);
+      if (!response.ok) {
+        assertEqual(
+          response.error.code,
+          'NOTIFICATIONS_V2_UNAVAILABLE',
+          `${fixture.method} should answer NOTIFICATIONS_V2_UNAVAILABLE over ${transport}`,
+        );
+        assertEqual(
+          response.error.retryable,
+          false,
+          `${fixture.method} should not be retryable over ${transport}`,
+        );
+        assertEqual(
+          response.error.message.includes(fixture.method),
+          true,
+          `${fixture.method} answer should name the method over ${transport}`,
+        );
+        assertEqual(response.id, request.id, `${fixture.method} answer keeps the request id`);
+      }
+    }
   }
 }
 

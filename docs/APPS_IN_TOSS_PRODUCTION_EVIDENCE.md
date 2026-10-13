@@ -37,27 +37,28 @@ browser playtest, this command sets `MPGD_AIT_LOCAL_MOCK=0` and
 Pass game-owned staging endpoints and SKU/authority settings to the process.
 Never use the command as evidence that a plain desktop browser supports IAP.
 
-`@mpgd/adapter-ait` preserves bridge rejection metadata as a
-`PlatformOperationError`. Game UI can report a safe code without importing the
-Apps in Toss SDK or parsing a localized provider message:
+The commerce provider `@mpgd/adapter-ait` exposes as `gateway.commerce` turns a
+bridge rejection into a `CommerceError` that keeps the Apps in Toss diagnostic
+code as `storeCode`. Game UI can report a safe code without importing the Apps
+in Toss SDK or parsing a localized provider message:
 
 ```ts
-import { readPlatformOperationFailure } from '@mpgd/platform';
+import { commerceErrorInfoOf } from '@mpgd/platform/commerce';
 
 try {
-  const products = await gateway.commerce.getProducts();
+  const products = await gateway.commerce?.fetchProducts({});
   // Render only provider-returned products and prices.
 } catch (error) {
-  const failure = readPlatformOperationFailure(error);
-  reportCommerceDiagnostic(
-    failure?.code ?? 'COMMERCE_CATALOG_FAILED',
-    failure?.retryable ?? true,
-  );
+  const failure = commerceErrorInfoOf(error);
+  reportCommerceDiagnostic(failure.storeCode ?? failure.code, failure.retryable);
 }
 ```
 
+Purchases themselves go through `@mpgd/game-services`, whose reconciler drives
+the provider; a scene does not call `requestPurchase()` directly.
+
 Share one session-scoped AIT identity provider between platform bootstrap,
-promotion, IAP preparation, verification, and entitlement reads. The helper
+promotion, IAP preparation, and verification. The helper
 coalesces concurrent native reads and evicts a rejected read so a resumed
 mobile host can retry:
 
@@ -81,35 +82,39 @@ const bridge = createAitHostBridge({
 ## Built-in host bridge recovery
 
 `createAitHostBridge()` from `@mpgd/adapter-ait/host` owns the one-time order
-flow when a game passes `iapProducts`, `prepareIap`, `verifyIapProductGrant`
-and `readIapEntitlements`. It keeps the server authoritative and adds these
-recovery rules:
+flow when a game passes `iapProducts`, `prepareIap` and
+`verifyIapProductGrant`; the game reaches it through the `commerce.v2.*` bridge
+methods and `gateway.commerce` (see [Commerce v2 provider](#commerce-v2-provider)).
+It keeps the server authoritative and adds these recovery rules:
 
 - **Client purchase key.** `verifyIapProductGrant` always receives the
   order-scoped `idempotencyKey` (`apps-in-toss:purchase:<encoded order id>`)
   as the grant identity. It also receives `clientIdempotencyKey`, the key the
-  game passed to `commerce.purchase`, whenever the bridge can link the order to
-  that attempt: the grant callback, a direct re-verify, and restore or
-  pre-checkout recovery of an order this device started. The link is stored in
+  game passed to `requestPurchase`, whenever the bridge can link the order to
+  that attempt: the grant callback, a direct re-verify, and `restorePurchases`
+  or pre-checkout recovery of an order this device started. The link is stored in
   adapter-reserved native storage, so it survives a reload. Use the client key
   to associate the order with a game operation; do not replace the order key
   with it.
 - **No second charge.** Before opening a checkout, the bridge reads
   `getPendingOrders()` and reconciles configured SKUs. If an order for the same
   product is still ungranted, or was just granted by this check, the purchase
-  returns `failed` without opening a checkout, with `diagnostic.code`
-  `AIT_IAP_PENDING_ORDER_UNRESOLVED` or `AIT_IAP_PENDING_ORDER_RECOVERED`.
+  ends without opening a checkout, with the diagnostic code
+  `AIT_IAP_PENDING_ORDER_UNRESOLVED` or `AIT_IAP_PENDING_ORDER_RECOVERED`
+  (`requestPurchase` answers `launched` for these `ALREADY_OWNED`-class codes,
+  and the reconciler resolves the paid order from the pending list).
   Nothing was charged for that request. If the list cannot be read, or it or
-  any entry that could belong to a configured SKU is malformed, the result is
-  `failed` with `AIT_IAP_PENDING_ORDER_CHECK_FAILED`.
+  any entry that could belong to a configured SKU is malformed, the purchase
+  fails with `AIT_IAP_PENDING_ORDER_CHECK_FAILED`.
 - **One IAP operation at a time.** Every bridge built on the same native IAP
   dependency shares one lock, so a reinstalled bridge cannot run a second
   checkout beside an old one. A purchase holds it from its
-  attempt-marker check until its checkout result, and a restore holds it from
-  before `prepareIap` until it finishes. While the lock is held, another
-  purchase returns `failed` and `commerce.restore` rejects, both with the
-  retryable `AIT_IAP_CHECKOUT_IN_PROGRESS`. No other operation can then
-  verify, acknowledge or change markers for the same order. A purchase
+  attempt-marker check until its checkout result, and a `restorePurchases`
+  recovery pass holds it from before `prepareIap` until it finishes. While the
+  lock is held, another purchase fails and `restorePurchases` rejects, both
+  with the retryable `AIT_IAP_CHECKOUT_IN_PROGRESS` (the `IN_PROGRESS` class).
+  No other operation can then verify, acknowledge or change markers for the
+  same order. A purchase
   releases the lock only after its grant callbacks, direct recovery and order
   link writes have settled.
 - **Acknowledgement barrier.** Before every `completeProductGrant()` call, the
@@ -120,7 +125,7 @@ recovery rules:
   for that order again. The order's absence alone never clears it, because
   a record write can land late without any dispatch and the list can lag.
   A cleared absent order is reported as settled, so a same-product purchase
-  returns `AIT_IAP_PENDING_ORDER_RECOVERED`. Otherwise the record stays an
+  ends with `AIT_IAP_PENDING_ORDER_RECOVERED`. Otherwise the record stays an
   unresolved same-product barrier. A timeout, `false` or an error never
   clears a record. A retry while an earlier `completeProductGrant()` for the
   same order is still running joins that call instead of dispatching again.
@@ -172,36 +177,49 @@ recovery rules:
   itself, because the pending-order list can lag right after checkout. If the
   check or the marker write fails, the order stays `pending` and
   unacknowledged.
-- **Restore.** `commerce.restore` returns `settledPurchases` for orders it
-  granted and acknowledged, including `idempotencyKey` when the order is linked
-  to a client attempt. It rejects with a coded `PlatformOperationError` when it
-  could not do its job (IAP unavailable, preparation rejected, pending orders
-  unreadable, or the entitlement read failed with nothing settled). A partial
-  restore resolves with `diagnostic`, for example
-  `AIT_IAP_PENDING_ORDER_UNRESOLVED`. For a linked order, restore marks the
-  client attempt completed before calling `completeProductGrant()`. If the
+- **Restore.** `restorePurchases` verifies and acknowledges the paid orders
+  it finds and reports the settled orders, and the orders still awaiting a
+  server grant, as `purchaseUpdated` events. It rejects with a coded
+  `CommerceError` (the `AIT_IAP_*` code as `storeCode`) when it could not do
+  its job: IAP unavailable, preparation rejected, or pending orders
+  unreadable. A pass that leaves an order ungranted still resolves; that order
+  stays in `getAvailablePurchases` and is the `AIT_IAP_PENDING_ORDER_UNRESOLVED`
+  barrier of the next same-product purchase. For a linked order, restore marks
+  the client attempt completed before calling `completeProductGrant()`. If the
   link or the marker cannot be read or written, the order stays
   unacknowledged for a later retry, as it does when the linked marker is
   corrupted; only a link that is confirmed absent lets an unlinked order be
   acknowledged. A linked attempt without a marker gets a completed marker.
   Replaying the original client key then returns the completed purchase.
-- **Startup recovery.** Call `gateway.commerce.restore()` once the game session
-  exists (after the account or identity that `prepareIap` checks is ready).
-  A purchase tapped while that restore runs gets
-  `AIT_IAP_CHECKOUT_IN_PROGRESS` and can be retried right after it.
+- **Startup recovery.** The game-services reconciler reads the available
+  purchases (the pending orders) when it starts, and its manual
+  `restorePurchases()` trigger runs the provider's recovery pass first. Start
+  it, and call that trigger, once the game session exists, after the account
+  or identity that `prepareIap` checks is ready. A purchase tapped while a
+  recovery pass runs gets `AIT_IAP_CHECKOUT_IN_PROGRESS` and can be retried
+  right after it.
 
-Non-completed purchase results carry `diagnostic: { code, retryable,
-providerCode? }`. The codes are exported as `aitIapDiagnosticCodes` from
-`@mpgd/adapter-ait`, which does not import the Apps in Toss SDK.
-`providerCode` comes only from a structured `code` or `errorCode` field, or
-from an exact allowlisted SDK code such as `PRODUCT_NOT_GRANTED_BY_PARTNER`;
-other message text is never copied. `commerce.getProducts` still
-returns an empty list when IAP is not configured or not supported, and rejects
-with `AIT_IAP_CATALOG_EMPTY`, `AIT_IAP_CONFIGURED_SKUS_NOT_VISIBLE`,
-`AIT_IAP_UNSUPPORTED_APP_VERSION` or `AIT_IAP_CATALOG_UNAVAILABLE` when the
-configured catalog cannot be shown. `commerce.getEntitlements` rejects with
-`AIT_IAP_ENTITLEMENT_READ_FAILED` when the configured `readIapEntitlements`
-fails or times out, instead of reporting no entitlements.
+A purchase that did not complete carries the `AIT_IAP_*` diagnostic code as the
+`storeCode` of its failed result or `CommerceError` (`aitIapCommerceErrorCodeMap`
+lists the normalized class of each code), with `retryable` alongside. The codes
+are exported as `aitIapDiagnosticCodes` from `@mpgd/adapter-ait`, which does not
+import the Apps in Toss SDK. A native SDK code is the diagnostic's
+`providerCode` only when it comes from a structured `code` or `errorCode`
+field, or is an exact allowlisted SDK code such as
+`PRODUCT_NOT_GRANTED_BY_PARTNER`; other message text is never copied.
+`fetchProducts` still returns an empty list when IAP is not configured or not
+supported, and rejects with `AIT_IAP_CATALOG_EMPTY`,
+`AIT_IAP_CONFIGURED_SKUS_NOT_VISIBLE`, `AIT_IAP_UNSUPPORTED_APP_VERSION` or
+`AIT_IAP_CATALOG_UNAVAILABLE` when the configured catalog cannot be shown.
+
+**Entitlements come from the backend ledger.** The adapter reads no
+entitlements: the commerce v1 `commerce.getEntitlements` bridge method and the
+`readIapEntitlements` hook (with its `AIT_IAP_ENTITLEMENT_READ_FAILED` code)
+were removed in commerce v2 C4, and Apps in Toss no longer needs the hook to
+sell. Ownership that survives a wrapper restart is the game-services ledger:
+read it on the server with `listActiveEntitlementTransactions` (reversed
+grants are subtracted) and expose the result through the game's own
+authenticated endpoint, instead of asking the client adapter for it.
 
 ## Purchase flow
 
@@ -245,9 +263,10 @@ therefore the callback/grant-attempt observation time provided by `now`, not an
 authoritative financial timestamp. Use the purchase authority's normalized
 `statusDeterminedAt` for reconciliation and other time-sensitive decisions.
 
-The generic `createGameServicesClient().purchase()` flow verifies after
-`gateway.commerce.purchase()` returns, so it cannot satisfy this callback
-timing by itself. Wire the callback-specific API directly into the AIT SDK:
+The generic `createGameServicesClient().purchase()` flow (the reconciler)
+verifies the evidence after `requestPurchase()` answers, replaying the grant
+the callback already made, so it cannot satisfy this callback timing by
+itself. Wire the callback-specific API directly into the AIT SDK:
 
 When an AIT WebView sends callback evidence to the game authority, use
 `fetchAitAuthority()` for the HTTP call. It invokes an injected/native `fetch`
@@ -406,14 +425,21 @@ closed instead of relying on deployment-local `Date.parse()` behavior.
 `CommerceProvider` for Apps in Toss (store id `apps-in-toss`, RFC profile:
 consumable and durable one-time products, no subscription, no quantity,
 `lifecycle.finish: 'host'`, `authority.evidence: 'host-callback'`,
-`accountBinding: 'host'`). `createAitHostBridge()` builds it from the same
-`iapProducts`, `prepareIap`, `verifyIapProductGrant` and `readIapEntitlements`
-options as the v1 flow and serves the six `commerce.v2.*` bridge methods from
-it; `createAitPlatformGateway()` exposes it as `gateway.commerceV2` whenever the
-installed bridge has the `commerceV2` event channel. Both flows run one IAP
-controller, so a v1 `commerce.purchase` and a v2 `requestPurchase` hold the
-same IAP lock, attempt markers, pre-checkout barrier and acknowledgement
-barriers described above.
+`accountBinding: 'host'`). `createAitHostBridge()` builds it from the
+`iapProducts`, `prepareIap` and `verifyIapProductGrant` options and serves the
+six `commerce.v2.*` bridge methods from it; `createAitPlatformGateway()`
+exposes it as `gateway.commerce` whenever the installed bridge has the
+`commerceV2` event channel (the bridge field keeps that name: it is the
+commerce v2 protocol's channel, not the gateway property). It is the only
+commerce surface of the gateway: the v1 `commerce.getProducts`, `purchase`,
+`restore` and `getEntitlements` bridge methods, the `nativeIap` and
+`subscriptionIap` capability flags and the `readIapEntitlements` option were
+removed in commerce v2 C4. The gateway's `getCapabilities()` reports the
+host's `commerce` block (availability `available`, `configuration-required`
+or `unsupported`), and the unsupported block when the gateway has no
+commerce provider or the host sent no valid block. Every purchase and recovery
+runs one IAP controller, holding the IAP lock, attempt markers, pre-checkout
+barrier and acknowledgement barriers described above.
 
 - **Server confirmation does not move.** `requestPurchase` opens the same
   `createOneTimePurchaseOrder()` checkout, and `verifyIapProductGrant` inside
@@ -463,8 +489,8 @@ barriers described above.
   provider re-read the list and emit `purchaseUpdated` once per paid order it
   has not reported; a host that already knows an order may pass it with the
   signal, and a `launched` purchase that observed an order triggers a read at
-  once. The signal is observed only while a v2 listener exists, so a v1-only
-  integration never reads pending orders on resume. Orders the host finished
+  once. The signal is observed only while a listener exists, so a host with
+  no game listening never reads pending orders on resume. Orders the host finished
   stay in `getAvailablePurchases` until the reconciler finishes their record,
   so a buffered event the provider had to drop is still recoverable. The
   provider emits no `purchaseError`: every checkout outcome is a synchronous
@@ -479,12 +505,12 @@ for the ad groups; the target build forwards both) with
 per one-time product whose `platformProductIds.ait` names the console SKU,
 with subscriptions skipped and blank, padded, or duplicate SKUs rejected.
 `src/main.ts` passes that list as `installAitHostBridge({ iapProducts })`.
-Products alone sell nothing: until the game supplies `prepareIap`,
-`verifyIapProductGrant`, and `readIapEntitlements`, every purchase and every
-`commerce.v2.*` method fails closed, and the grant callback only confirms
-through the game backend. The generated `buildGateways/ait.ts` needs no
-commerce code, since `createAitPlatformGateway()` exposes `commerceV2` from
-the bridge's event channel, and the game's reconciler gets the same kinds
+Products alone sell nothing: until the game supplies `prepareIap` and
+`verifyIapProductGrant`, every purchase and every `commerce.v2.*` method fails
+closed, and the grant callback only confirms through the game backend. The
+generated `buildGateways/ait.ts` needs no commerce code, since
+`createAitPlatformGateway()` exposes `commerce` from the bridge's event
+channel, and the game's reconciler gets the same kinds
 and SKUs from `commerceProducts`. `pnpm validate:catalog` derives the list,
 and `pnpm validate:effective-config` rejects an IAP-enabled `ait` target
 whose effective products differ from it. Without a configured catalog file
@@ -496,8 +522,10 @@ The sandbox bridge answers commerce v2 only when it is created with
 `runtime.buildId`, so only `pnpm dev:ait` builds get it), with an
 evidence-only stub for `COINS_100` whose order ids no backend authority knows,
 so a verify request for them fails closed; it exposes the commerce v2 event
-channel only then, so a gateway over any other build has no `commerceV2` and
-the v2 methods keep the `COMMERCE_V2_UNAVAILABLE` bridge error.
+channel only then, so a gateway over any other build has no `commerce`
+provider and reports the unsupported commerce block, and the v2 methods keep
+the `COMMERCE_V2_UNAVAILABLE` bridge error. The v1 sandbox purchase that
+completed with entitlement ids is gone with the v1 methods.
 
 `adapters/ait/src/ait-commerce-provider.conformance.test.ts` runs the RFC vectors
 through `runCommerceConformanceVectors` with a fake Apps in Toss host, directly
@@ -554,8 +582,12 @@ Create one game-owned `createFullScreenPresentationScope({ execution })` and
 wrap the gateway with `createCoordinatedPlatformGateway` from
 `@mpgd/game-runtime/ads`, passing `gateway.ads.provider` as `provider`.
 Use that coordinated gateway in scenes and service operations so purchases,
-rewarded ads, and interstitials share the same full-screen owner. Keep the
-scope and the claim recovery observer alive above scene lifetimes.
+rewarded ads, and interstitials share the same full-screen owner. The
+coordinator wraps `gateway.commerce.requestPurchase` only when a trusted
+release source exists: the Apps in Toss provider proves no payment-surface
+closure, so pass `classifyPurchasePresentation` (or `purchasePresentation`)
+for purchases to take part. Keep the scope and the claim recovery observer
+alive above scene lifetimes.
 
 AIT reports delayed reward eligibility because the SDK does not guarantee that
 `userEarnedReward` precedes `dismissed`. Dismissal releases physical ownership;

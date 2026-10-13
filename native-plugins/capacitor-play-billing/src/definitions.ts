@@ -21,26 +21,18 @@ export interface PlayProduct {
 /**
  * One Play purchase as the plugin encodes `com.android.billingclient.api.Purchase`.
  * `products`, `purchaseState`, `purchaseTime`, `quantity`, `isAcknowledged`, and
- * `obfuscatedAccountId` follow the Billing Library 9.1.0 getters; `productIds`,
- * `state`, and `purchaseTimeMillis` are the 0.1 names and carry the same values
- * until the next major version.
+ * `obfuscatedAccountId` follow the Billing Library 9.1.0 getters.
  */
 export interface PlayPurchase {
   /** `Purchase.getProducts()`: the product ids this purchase covers (one for a single-line purchase). */
   readonly products: readonly string[];
-  /** @deprecated Same value as `products`; removed in the next major version. */
-  readonly productIds: readonly string[];
   readonly purchaseToken: string;
   /** `Purchase.getOrderId()`; absent while Play has not assigned one (for example a pending purchase). */
   readonly orderId?: string;
   /** `Purchase.getPurchaseTime()` in milliseconds since the epoch. */
   readonly purchaseTime: number;
-  /** @deprecated Same value as `purchaseTime` when it is positive; removed in the next major version. */
-  readonly purchaseTimeMillis?: number;
   /** `Purchase.getPurchaseState()`; the plugin never reports `UNSPECIFIED_STATE`. */
   readonly purchaseState: PlayPurchaseState;
-  /** @deprecated Same value as `purchaseState`; removed in the next major version. */
-  readonly state: PlayPurchaseState;
   /**
    * `Purchase.isAcknowledged()`. The plugin never acknowledges or consumes; the
    * backend finalizer does after the ledger grant, so `false` on a purchased

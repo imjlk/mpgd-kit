@@ -628,17 +628,6 @@ function createGooglePlayObservedOrderMatch(
     : { mode: 'if-present', orderId: observedTransactionId };
 }
 
-/**
- * A non-secret transaction ID for purchases whose Google order ID is absent or
- * delayed: `play-token-sha256:<hex>` of the purchase token.
- *
- * @deprecated Use `createGooglePlayTokenPurchaseKey` from `@mpgd/platform/commerce`;
- * this alias is byte-for-byte the same helper (same key, same `TypeError` for
- * an invalid token) and will be removed in the next major version.
- */
-export const createGooglePlayTokenTransactionId: (purchaseToken: string) => Promise<string> =
-  createGooglePlayTokenPurchaseKey;
-
 function readGooglePlayVerifiedContext(
   payload: EntitlementLedgerPayload | undefined,
   packageName: string,

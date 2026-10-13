@@ -35,7 +35,6 @@ describe('Apps in Toss commerce v2 provider with an order the contract rejects',
       iapProducts: [{ productId: 'gems_small', sku: 'gems.small' }],
       prepareIap: async () => true,
       verifyIapProductGrant: async () => false,
-      readIapEntitlements: async () => [],
       onPendingOrdersChanged: (listener) => host.onPendingOrdersChanged(listener),
     });
     host.pendingOrders.push(

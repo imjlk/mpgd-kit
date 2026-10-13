@@ -30,9 +30,10 @@ export function createFrameLoop(options: FrameLoopOptions): FrameLoop {
     handle = undefined;
     const delta = last === undefined ? 0 : Math.min(time - last, 100);
     last = time;
-    if (!disposed && options.tick(delta, time)) {
+    const more = !disposed && options.tick(delta, time);
+    if (!disposed && more && handle === undefined) {
       handle = scheduler.request(step);
-    } else {
+    } else if (handle === undefined) {
       last = undefined;
     }
   };

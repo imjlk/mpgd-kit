@@ -2,17 +2,17 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 
 import { createAppsInTossPurchaseIdempotencyKey } from '@mpgd/game-services/apps-in-toss-evidence-verification';
-import { createGooglePlayTokenTransactionId } from '@mpgd/game-services/google-play-purchase';
+import * as googlePlayPurchase from '@mpgd/game-services/google-play-purchase';
 import {
   createDerivedPurchaseIdempotencyKey,
   createGooglePlayTokenPurchaseKey,
 } from '@mpgd/platform/commerce';
 
 // A4 replaced the two `createGooglePlayTokenTransactionId` copies with the
-// platform helper. The aliases must be that helper, and the helper must keep
-// the v1 `play-token-sha256:<hex>` form byte for byte so ledgers written by v1
-// keep deduplicating; the expected digest comes from Node's own SHA-256.
-assert.equal(createGooglePlayTokenTransactionId, createGooglePlayTokenPurchaseKey);
+// platform helper and C4 removed the aliases. The helper must keep the v1
+// `play-token-sha256:<hex>` form byte for byte so ledgers written by v1 keep
+// deduplicating; the expected digest comes from Node's own SHA-256.
+assert.equal('createGooglePlayTokenTransactionId' in googlePlayPurchase, false);
 
 const tokens = [
   'abc.def-ghi_123',
@@ -26,7 +26,6 @@ const tokens = [
 for (const token of tokens) {
   const expected = `play-token-sha256:${createHash('sha256').update(token, 'utf8').digest('hex')}`;
   assert.equal(await createGooglePlayTokenPurchaseKey(token), expected);
-  assert.equal(await createGooglePlayTokenTransactionId(token), expected);
   assert.equal(
     await createDerivedPurchaseIdempotencyKey({
       store: 'google-play',
@@ -46,7 +45,6 @@ for (const invalid of [
   'line\nbreak',
   'control\u0001byte',
 ]) {
-  await assert.rejects(createGooglePlayTokenTransactionId(invalid), TypeError);
   await assert.rejects(createGooglePlayTokenPurchaseKey(invalid), TypeError);
 }
 

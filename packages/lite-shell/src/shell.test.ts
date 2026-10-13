@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { LiteRenderer, StageSize } from './renderer.js';
+import { createCanvasRenderer, type LiteRenderer, type StageSize } from './renderer.js';
 import { createLiteShell } from './shell.js';
 import { loadFontSubset } from './font.js';
 
@@ -47,15 +47,44 @@ afterEach(() => {
 });
 
 describe('createLiteShell', () => {
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    'rejects an unusable Canvas maxDpr %s before constructing a surface',
+    (maxDpr) => {
+      vi.stubGlobal('document', undefined);
+      expect(() => createCanvasRenderer({ maxDpr })).toThrow(
+        'Canvas maxDpr must be a positive finite number',
+      );
+    },
+  );
   it('passes the original PointerEvent to onTap', () => {
     const onTap = vi.fn();
     const { element } = setup({ onTap });
-    const event = { pointerId: 1, clientX: 30, clientY: 40, timeStamp: 0 };
+    const event = {
+      pointerId: 1,
+      clientX: 30,
+      clientY: 40,
+      timeStamp: 0,
+      button: 0,
+      isPrimary: true,
+    };
     (element.listeners.get('pointerdown') as (e: unknown) => void)(event);
     const up = { ...event, timeStamp: 50 };
     (element.listeners.get('pointerup') as (e: unknown) => void)(up);
     expect(onTap).toHaveBeenCalledWith({ x: 20, y: 20 }, up);
   });
+
+  it.each([{ button: 2, isPrimary: true }, { button: 0, isPrimary: false }])(
+    'ignores secondary pointer input %o',
+    (input) => {
+      const onTap = vi.fn();
+      const { element, shell } = setup({ onTap });
+      const event = { pointerId: 1, clientX: 30, clientY: 40, timeStamp: 0, ...input };
+      (element.listeners.get('pointerdown') as (e: unknown) => void)(event);
+      (element.listeners.get('pointerup') as (e: unknown) => void)({ ...event, timeStamp: 50 });
+      expect(onTap).not.toHaveBeenCalled();
+      shell.dispose();
+    },
+  );
 
   it('calls onFirstFrame exactly once', () => {
     const onFirstFrame = vi.fn();
@@ -156,6 +185,28 @@ describe('createLiteShell', () => {
     expect(queries[1]?.media).toBe('(resolution: 2dppx)');
     shell.dispose();
     expect(queries[1]?.removed).toBe(true);
+  });
+
+  it('reports the Canvas backing-store DPR cap without redundant resizes', () => {
+    vi.stubGlobal('devicePixelRatio', 4);
+    const canvas = {
+      ...fakeElement(),
+      width: 0,
+      height: 0,
+      getContext: () => ({ setTransform: vi.fn() }),
+    };
+    vi.stubGlobal('document', { createElement: () => canvas });
+    const renderer = createCanvasRenderer();
+    const resize = vi.spyOn(renderer, 'resize');
+    const onResize = vi.fn();
+    const { shell } = setup({ renderer, onResize });
+    expect(shell.size).toEqual({ width: 300, height: 200, dpr: 3 });
+    expect(shell.size).toBe(renderer.surface.size);
+    expect(canvas.width).toBe(900);
+    expect(onResize).toHaveBeenCalledWith(shell.size);
+    shell.refit();
+    expect(resize).toHaveBeenCalledTimes(1);
+    shell.dispose();
   });
 });
 

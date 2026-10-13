@@ -1,6 +1,8 @@
 import {
+  bridgeCommerceEventProtocol,
   decodeBridgeCredentialLoadData,
   decodeBridgeStorageLoadData,
+  type BridgeCommerceEvent,
   type BridgeMethod,
 } from '@mpgd/bridge';
 import { CapacitorGameServices } from '@mpgd/capacitor-game-services';
@@ -16,12 +18,10 @@ import {
   type PlatformGateway,
   type PlatformTarget,
   type PresentationResult,
-  type ProductInfo,
-  type ProductType,
   type ShareResult,
   type ViewportAdapter,
 } from '@mpgd/platform';
-import { deriveLegacyCommerceCapabilities } from '@mpgd/platform/commerce';
+import { withShareIntentCheck } from '@mpgd/platform/routes';
 import {
   createCapacitorAppEvents,
   type CapacitorAppEventsApi,
@@ -36,12 +36,12 @@ import {
   type CapacitorServiceProvider,
   type NativeBridge,
 } from './providers.js';
+import { assertNotificationsV2Served, externalActivityMethods } from './request-policy.js';
 import { createCapacitorViewport } from './viewport.js';
 
 export {
   createCapacitorProviderRegistry,
   createDegradedCommerceCapabilities,
-  deriveCommerceFeatureStates,
   type CapacitorCommerceServiceProvider,
   type CapacitorProviderCapabilitySnapshot,
   type CapacitorProviderRegistry,
@@ -55,7 +55,6 @@ export {
   createBridgeCommerceProvider,
   createCommerceProviderBridge,
   createCommerceServiceProvider,
-  type CapacitorCommerceFeature,
   type CommerceProviderBridge,
   type CreateBridgeCommerceProviderInput,
   type CreateCommerceProviderBridgeInput,
@@ -110,15 +109,6 @@ export {
   type CapacitorViewportController,
   type CapacitorViewportHost,
 } from './viewport.js';
-
-const externalActivityMethods = new Set<BridgeMethod>([
-  'commerce.purchase',
-  'commerce.v2.requestPurchase',
-  'ads.showRewarded',
-  'ads.showInterstitial',
-  'identity.requestUpgrade',
-  'notifications.requestSubscription',
-]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -176,15 +166,28 @@ export function createCapacitorPlatformGateway(input: {
   const adProvider = providers.byMethod.get('ads.showRewarded')?.adProvider
     ?? providers.byMethod.get('ads.showInterstitial')?.adProvider;
   const commerceProvider: CapacitorCommerceServiceProvider | undefined = providers.commerce;
-  // The v2 surface is served through the same request path as every other
-  // provider method, so the bridge envelope, response validation, and external
-  // activity bookkeeping are exercised in process exactly as over a transport.
-  const commerceV2 = commerceProvider === undefined
+  // The commerce provider is served through the same request path as every
+  // other provider method, so the bridge envelope, response validation, and
+  // external activity bookkeeping are exercised in process exactly as over a
+  // transport.
+  const commerce = commerceProvider === undefined
     ? undefined
     : createBridgeCommerceProvider({
         store: commerceProvider.commerce.store,
         request: (method, payload) => request(method, payload),
-        subscribe: (listener) => commerceProvider.bridge.subscribe(listener),
+        // The provider's channel (`NativeBridge`) may carry other protocols.
+        // Only an envelope that names another protocol is dropped; anything
+        // else, a malformed envelope included, reaches the commerce
+        // provider's validator.
+        subscribe: (listener) => commerceProvider.bridge.subscribe((envelope) => {
+          const protocol: unknown = typeof envelope === 'object' && envelope !== null
+            ? (envelope as { readonly protocol?: unknown }).protocol
+            : undefined;
+          if (typeof protocol === 'string' && protocol !== bridgeCommerceEventProtocol) {
+            return;
+          }
+          listener(envelope as BridgeCommerceEvent);
+        }),
       });
   const lifecycle = createCapacitorAppEvents({
     target: input.target,
@@ -221,6 +224,9 @@ export function createCapacitorPlatformGateway(input: {
     payload: unknown,
     leaderboardRoute?: 'native' | 'remote',
   ): Promise<TData> {
+    // Before any pause: an unserved notifications v2 method never reaches the
+    // base plugin, which speaks no v2.
+    assertNotificationsV2Served(method, providers.byMethod.has(method));
     const releaseExternalActivity = externalActivityMethods.has(method)
       ? lifecycle.beginExternalActivity?.()
       : undefined;
@@ -231,29 +237,14 @@ export function createCapacitorPlatformGateway(input: {
         ? undefined
         : providers.byMethod.get(method);
       if (provider !== undefined) {
-        let productType: ProductType | undefined;
-        if (method === 'commerce.purchase'
-          && provider.features.includes('nativeIap')
-          && provider.features.includes('subscriptionIap')) {
-          // The caller supplies only an ID. Resolve its provider-owned type before
-          // selecting a store route; a forged or unknown ID must not bypass it.
-          const products = await request<ProductInfo[]>('commerce.getProducts', {});
-          const productId = isRecord(payload) ? payload.productId : undefined;
-          const matches = products.filter((product) => product.id === productId);
-          if (matches.length !== 1) {
-            throw new PlatformOperationError({ code: 'NATIVE_PROVIDER_PRODUCT_UNKNOWN' });
-          }
-          productType = matches[0]?.type;
-        }
         try {
-          await providers.assertMethodReady(method, payload, productType);
+          await providers.assertMethodReady(method, payload);
           const data = await sendRequest<TData>(method, payload, provider);
           if (releaseExternalActivity !== undefined
             && method === 'commerce.v2.requestPurchase'
             && isRecord(data) && data.outcome === 'launched') {
             // The store UI is still open: stay paused until this product's
-            // purchase event arrives or the safety timeout ends. The v1 path
-            // has no event to wait for and releases when its request returns.
+            // purchase event arrives or the safety timeout ends.
             holdActivity = true;
             holdLaunchedPurchaseActivity(
               releaseExternalActivity,
@@ -302,7 +293,13 @@ export function createCapacitorPlatformGateway(input: {
     if (commerceProvider === undefined) {
       return;
     }
-    const subscription = commerceProvider.bridge.subscribe(({ event }) => {
+    const subscription = commerceProvider.bridge.subscribe((envelope) => {
+      // Only this purchase's commerce events end the hold; the channel may
+      // carry other protocols.
+      if (envelope.protocol !== bridgeCommerceEventProtocol) {
+        return;
+      }
+      const { event } = envelope;
       if (event.type === 'subscriptionUpdated') {
         return;
       }
@@ -379,28 +376,37 @@ export function createCapacitorPlatformGateway(input: {
     target: input.target,
     async getCapabilities() {
       const base = await request<PlatformCapabilities>('runtime.getCapabilities', {});
+      // A native shell built before the commerce v2 removals may still send the
+      // retired boolean flags; the commerce block is the only commerce source.
+      const {
+        nativeIap: _retiredNativeIap,
+        subscriptionIap: _retiredSubscriptionIap,
+        ...native
+      } = (isRecord(base) ? base : {}) as PlatformCapabilities & {
+        readonly nativeIap?: unknown;
+        readonly subscriptionIap?: unknown;
+      };
       // One bounded registry read serves the feature states and the commerce
       // block, so a stalled or invalid provider degrades the snapshot instead
-      // of rejecting it, and the boolean flags always follow the block.
-      const { availability: states, commerce } = await providers.getCapabilitySnapshot();
+      // of rejecting it, and a missing or invalid native `commerce` answer is
+      // always replaced by the provider's block or the unsupported block.
+      const { availability: states, commerce: commerceCapabilities } =
+        await providers.getCapabilitySnapshot();
       const rewardedAds = states.rewardedAds === 'available';
       const interstitialAds = states.interstitialAds === 'available';
       const bannerAds = states.bannerAds === 'available';
-      const legacy = commerce === undefined ? undefined : deriveLegacyCommerceCapabilities(commerce);
       return {
-        ...base,
-        nativeIap: legacy?.nativeIap ?? states.nativeIap === 'available',
-        subscriptionIap: legacy?.subscriptionIap ?? states.subscriptionIap === 'available',
+        ...native,
         nativeAds: rewardedAds || interstitialAds || bannerAds,
         rewardedAds,
         interstitialAds,
         bannerAds,
         nativeLeaderboard: states.nativeLeaderboard === 'available',
         providerAvailability: states,
-        ...(commerce === undefined ? {} : { commerce }),
+        commerce: commerceCapabilities,
       };
     },
-    ...(commerceV2 === undefined ? {} : { commerceV2 }),
+    ...(commerce === undefined ? {} : { commerce }),
     identity: {
       getPlayer: () => request('identity.getPlayer', {}),
       getSession: () => request<IdentitySession>('identity.getSession', {}),
@@ -412,21 +418,17 @@ export function createCapacitorPlatformGateway(input: {
       requestGameSurface: (payload) =>
         request<PresentationResult>('presentation.requestGameSurface', payload),
     },
-    sharing: {
+    // The bridge's host may build a share URL from the link, so it only ever
+    // sees an intent the ShareIntent contract accepts, with the link normalized.
+    sharing: withShareIntentCheck({
       share: (payload) => request<ShareResult>('share.share', payload),
       readInboundShare: () => request<InboundShare | null>('share.readInboundShare', {}),
-    },
+    }),
     notifications: {
       getStatus: (topic) =>
         request<NotificationSubscriptionStatus>('notifications.getStatus', { topic }),
       requestSubscription: (topic) =>
         request<NotificationSubscriptionResult>('notifications.requestSubscription', { topic }),
-    },
-    commerce: {
-      getProducts: () => request('commerce.getProducts', {}),
-      purchase: (payload) => request('commerce.purchase', payload),
-      restore: () => request('commerce.restore', {}),
-      getEntitlements: () => request('commerce.getEntitlements', {}),
     },
     ads: {
       ...(adProvider === undefined ? {} : { provider: adProvider }),

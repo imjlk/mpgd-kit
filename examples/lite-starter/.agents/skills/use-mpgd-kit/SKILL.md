@@ -1,47 +1,22 @@
 ---
 name: use-mpgd-kit
-description: Route Phaser game development, platform integration, target builds, icons, localization, analytics, game services, acceptance, and release work through this generated game's mpgd-kit contracts. Use for any change that adds gameplay-facing platform behavior, configures a distribution target, prepares release evidence, or needs to discover which mpgd capability and validation flow applies.
+description: Route lite Canvas2D game development, platform integration, target builds, acceptance, and release work through this generated game's mpgd-kit contracts.
 ---
 
 # Use mpgd-kit
 
-Read `AGENTS.md`, `agent/game-manifest.json`, and
-`docs/MPGD_KIT_WORKFLOWS.md` before editing. Treat the manifest as the list of
-enabled targets and the workflow guide as the routing reference.
+Read `AGENTS.md`, `agent/game-manifest.json`, and `docs/MPGD_KIT_WORKFLOWS.md` before editing.
 
-## Route the request
+1. Identify capability ownership and configured targets from the manifest.
+2. Keep deterministic rules in `src/game` and Canvas2D rendering/input in `src/lite` through `@mpgd/lite-shell`.
+3. Use `PlatformGateway`; keep SDK calls in adapters or target wrappers.
+4. Use backend ledger or verifier APIs before mutating durable purchases, rewarded grants, or verified scores.
+5. Keep runtime, presentation, recovery, and audio ownership above renderer lifetimes; preserve durable encrypted journals and late observers.
+6. Update the manifest, brief, and acceptance guidance when capabilities or handoff contracts change.
+7. Run focused checks, then `pnpm check`, `pnpm build`, and `pnpm accept` for target handoffs.
+8. Preserve generated JSON/Markdown acceptance and release evidence.
 
-- Put deterministic state and rules in game/simulation modules.
-- Keep Phaser scenes limited to rendering and input glue.
-- Route identity, storage, commerce, ads, leaderboard, lifecycle, and host
-  presentation through `PlatformGateway`.
-- Keep SDK imports in adapters or target wrappers.
-- Route purchases, rewarded-ad grants, and verified scores through a backend
-  ledger or verifier before mutating durable state.
-- Use `@mpgd/target-config` for target-owned runtime configuration and
-  `mpgd.targets.json` for build ownership.
-- Use the generated icon, localization, analytics, acceptance, and evidence
-  flows instead of creating target-specific copies.
-- Ship stretchable UI art as untrimmed atlas frames with `scale9Borders`, as
-  described under Assets and icons in the workflow guide.
-- For a configured target with a target skill in `agent/game-manifest.json`,
-  read that skill before changing its release flow.
-
-## Work in order
-
-1. Identify the owning capability and files from the manifest and workflow
-   guide.
-2. Inspect the target entry and effective configuration; do not assume a target
-   is enabled.
-3. Implement the smallest change that preserves `PlatformGateway` and backend
-   authority boundaries.
-4. Update `agent/game-manifest.json`, `agent/brief.md`, and acceptance guidance
-   when the game's capabilities or handoff contract changes.
-5. Run the focused check first, then `pnpm check`, `pnpm build`, and
-   `pnpm accept` when the change affects a handoff or target release.
-6. Preserve generated JSON/Markdown evidence under `artifacts/acceptance` or
-   the target's `release-output` directory.
-
-Use official target documentation or the target's configured MCP for SDK and
-submission requirements. Do not commit personal MCP configuration, tokens,
-credentials, signing material, or platform login state.
+Read a target skill declared in the manifest before changing its release flow.
+Use official target documentation or the configured MCP for SDK and submission requirements.
+Keep the lite game free of Phaser, preserve native scrolling and history restoration, and verify Devvit inline budget.
+Do not commit tokens, credentials, signing material, personal MCP configuration, or platform login state.

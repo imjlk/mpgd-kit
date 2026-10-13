@@ -1,13 +1,44 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { Entitlement, PlatformGateway, ProductInfo } from '@mpgd/platform';
+import {
+  createUnsupportedCapabilities,
+  type PlatformGateway,
+  type ProductInfo,
+} from '@mpgd/platform';
 
 import {
-  createMicrosoftStoreCommerceAdapter,
+  createMicrosoftStoreCommerceProvider,
   microsoftStoreBillingMethod,
   microsoftStoreDigitalGoodsEvidenceSchema,
-  withMicrosoftStoreCommerceAdapter,
+  withMicrosoftStoreCommerceProvider,
 } from './microsoft-store';
+import {
+  createMicrosoftStoreCommerceEngine,
+  type CreateMicrosoftStoreCommerceEngineInput,
+} from './microsoft-store-core';
+
+/**
+ * The shared Digital Goods engine drives checkout, recovery, and the authority
+ * flow behind `createMicrosoftStoreCommerceProvider`. These tests pin the
+ * engine's own reports: its `PurchaseResult` status vocabulary decides the
+ * Payment Request completion status, so they read `result` directly. The
+ * provider's RFC mapping has its own suite
+ * (`microsoft-store-commerce-provider.test.ts`).
+ */
+function createEngineHarness(input: CreateMicrosoftStoreCommerceEngineInput) {
+  const engine = createMicrosoftStoreCommerceEngine(input);
+  return {
+    getAvailability: engine.getAvailability,
+    async getProducts() {
+      const catalog = await engine.loadCatalog();
+      return catalog.status === 'loaded' ? catalog.entries.map((entry) => entry.info) : [];
+    },
+    async purchase(request: Parameters<typeof engine.checkout>[0]) {
+      return (await engine.checkout(request)).result;
+    },
+    restore: engine.restore,
+  };
+}
 
 const product = Object.freeze({
   id: 'HINT_PACK_20',
@@ -16,11 +47,6 @@ const product = Object.freeze({
   description: 'Adds 20 hints.',
   price: Object.freeze({ formatted: '$0.99', currencyCode: 'USD' }),
 }) satisfies ProductInfo;
-const entitlement = Object.freeze({
-  id: 'hint-balance',
-  source: 'purchase',
-  grantedAt: '2026-08-11T00:00:00.000Z',
-}) satisfies Entitlement;
 const getRecoveryScope = () => 'player-1';
 const grantRecoveryOwnership = (input: { readonly idempotencyKey?: string }) => ({
   status: 'granted' as const,
@@ -75,7 +101,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
         return { details: { purchaseToken: 'ttokdoku_hint_pack_20' }, complete };
       },
     }));
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
@@ -85,9 +111,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
         },
         claimRecoveryOwnership,
         verifyAndGrant,
-        async getEntitlements() {
-          return [entitlement];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -156,7 +179,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
   });
 
   it('fails closed when authoritative fulfillment is not configured', async () => {
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
@@ -166,9 +189,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
         },
         async verifyAndGrant() {
           throw new Error('must not run');
-        },
-        async getEntitlements() {
-          return [];
         },
       },
       async getDigitalGoodsService() {
@@ -186,7 +206,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
   });
 
   it('rejects empty Store price values instead of presenting them as free', async () => {
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
@@ -196,9 +216,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
         },
         async verifyAndGrant() {
           throw new Error('must not run');
-        },
-        async getEntitlements() {
-          return [];
         },
       },
       async getDigitalGoodsService() {
@@ -231,7 +248,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       transactionId: 'ledger-recovered',
     }));
     const recovery = memoryRecoveryStorage();
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
@@ -243,9 +260,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
           return grantRecoveryOwnership(input);
         },
         verifyAndGrant,
-        async getEntitlements() {
-          return [entitlement];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -264,9 +278,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       recoveryIdStorage: recovery.storage,
     });
 
-    await expect(adapter.restore?.()).resolves.toEqual({
-      restoredEntitlements: [entitlement],
-    });
+    expect((await adapter.restore()).failure).toBeUndefined();
     expect(verifyAndGrant).toHaveBeenCalledWith(expect.objectContaining({
       idempotencyKey: 'durable-recovery-id',
       source: 'recovery',
@@ -309,7 +321,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
         return [storePurchase];
       },
     });
-    const firstAdapter = createMicrosoftStoreCommerceAdapter({
+    const firstAdapter = createEngineHarness({
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: legacyInAppOfferToken }],
       authority: {
@@ -318,9 +330,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
           return 'available';
         },
         verifyAndGrant: firstAuthority,
-        async getEntitlements() {
-          return [];
-        },
       },
       async getDigitalGoodsService() {
         return createService();
@@ -362,7 +371,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       transactionId: 'ledger-pending-consume',
       alreadyProcessed: true,
     }));
-    const restartedAdapter = createMicrosoftStoreCommerceAdapter({
+    const restartedAdapter = createEngineHarness({
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: currentInAppOfferToken }],
       authority: {
@@ -374,9 +383,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
           return grantRecoveryOwnership(input);
         },
         verifyAndGrant: resumedAuthority,
-        async getEntitlements() {
-          return [entitlement];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -390,9 +396,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       recoveryIdStorage,
     });
 
-    await expect(restartedAdapter.restore?.()).resolves.toEqual({
-      restoredEntitlements: [entitlement],
-    });
+    expect((await restartedAdapter.restore()).failure).toBeUndefined();
     expect(resumedAuthority).toHaveBeenCalledWith(expect.objectContaining({
       idempotencyKey: exactCheckoutIdempotencyKey,
       inAppOfferToken: legacyInAppOfferToken,
@@ -419,7 +423,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
     }])]]);
     const verifyAndGrant = vi.fn();
     const createAdapter = (status: 'denied' | 'unavailable') => (
-      createMicrosoftStoreCommerceAdapter({
+      createEngineHarness({
         getRecoveryScope,
         products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
         authority: {
@@ -431,9 +435,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
             return { status } as const;
           },
           verifyAndGrant,
-          async getEntitlements() {
-            return [];
-          },
         },
         async getDigitalGoodsService() {
           return {
@@ -449,11 +450,11 @@ describe('Microsoft Store Digital Goods commerce', () => {
       })
     );
 
-    await createAdapter('unavailable').restore?.();
+    await createAdapter('unavailable').restore();
     expect(recovery.values.has(storageKey)).toBe(true);
     expect(verifyAndGrant).not.toHaveBeenCalled();
 
-    await createAdapter('denied').restore?.();
+    await createAdapter('denied').restore();
     expect(recovery.values.has(storageKey)).toBe(false);
     expect(verifyAndGrant).not.toHaveBeenCalled();
   });
@@ -476,7 +477,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       status: 'completed' as const,
       transactionId: 'fresh-ledger-entry',
     }));
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: storeIdentity }],
       authority: {
@@ -486,9 +487,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
         },
         hasRecoveryOwnership,
         verifyAndGrant,
-        async getEntitlements() {
-          return [entitlement];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -503,7 +501,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       recoveryIdStorage: recovery.storage,
     });
 
-    await expect(adapter.restore?.()).resolves.toEqual({ restoredEntitlements: [entitlement] });
+    expect((await adapter.restore()).failure).toBeUndefined();
     expect(hasRecoveryOwnership).toHaveBeenCalledTimes(2);
     expect(verifyAndGrant).toHaveBeenCalledOnce();
     expect(verifyAndGrant).toHaveBeenCalledWith(expect.objectContaining({
@@ -526,7 +524,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       status: 'completed' as const,
       transactionId: 'fresh-ledger-entry',
     }));
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: storeIdentity }],
       authority: {
@@ -535,9 +533,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
           return 'available';
         },
         verifyAndGrant,
-        async getEntitlements() {
-          return [];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -607,7 +602,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       },
     };
     const firstAuthority = vi.fn();
-    const firstAdapter = createMicrosoftStoreCommerceAdapter({
+    const firstAdapter = createEngineHarness({
       getRecoveryScope: () => 'player-a',
       products: [{ info: product, inAppOfferToken: legacyInAppOfferToken }],
       authority: {
@@ -616,9 +611,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
           return 'available';
         },
         verifyAndGrant: firstAuthority,
-        async getEntitlements() {
-          return [];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -664,7 +656,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
     ]);
 
     const otherPlayerAuthority = vi.fn();
-    const otherPlayerAdapter = createMicrosoftStoreCommerceAdapter({
+    const otherPlayerAdapter = createEngineHarness({
       getRecoveryScope: () => 'player-b',
       products: [{
         info: product,
@@ -680,9 +672,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
           return { status: 'denied' } as const;
         },
         verifyAndGrant: otherPlayerAuthority,
-        async getEntitlements() {
-          return [];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -700,7 +689,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       recoveryIdStorage,
     });
 
-    await expect(otherPlayerAdapter.restore?.()).resolves.toEqual({ restoredEntitlements: [] });
+    expect((await otherPlayerAdapter.restore()).failure).toBeUndefined();
     expect(otherPlayerAuthority).not.toHaveBeenCalled();
     expect(storedRecoveries.size).toBe(1);
 
@@ -708,7 +697,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       status: 'completed' as const,
       transactionId: 'ledger-after-propagation',
     }));
-    const restartedAdapter = createMicrosoftStoreCommerceAdapter({
+    const restartedAdapter = createEngineHarness({
       getRecoveryScope: () => 'player-a',
       products: [{ info: product, inAppOfferToken: currentInAppOfferToken }],
       authority: {
@@ -720,9 +709,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
           return grantRecoveryOwnership(input);
         },
         verifyAndGrant: resumedAuthority,
-        async getEntitlements() {
-          return [entitlement];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -737,9 +723,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       recoveryIdStorage,
     });
 
-    await expect(restartedAdapter.restore?.()).resolves.toEqual({
-      restoredEntitlements: [entitlement],
-    });
+    expect((await restartedAdapter.restore()).failure).toBeUndefined();
     expect(resumedAuthority).toHaveBeenCalledWith(expect.objectContaining({
       idempotencyKey: exactCheckoutIdempotencyKey,
       inAppOfferToken: legacyInAppOfferToken,
@@ -776,7 +760,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       status: 'completed' as const,
       transactionId: `ledger-${input.purchaseToken}`,
     }));
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope: () => 'player-a',
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
@@ -788,9 +772,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
           return grantRecoveryOwnership(input);
         },
         verifyAndGrant,
-        async getEntitlements() {
-          return [entitlement];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -815,7 +796,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       },
     });
 
-    await expect(adapter.restore?.()).resolves.toEqual({ restoredEntitlements: [entitlement] });
+    expect((await adapter.restore()).failure).toBeUndefined();
     expect(verifyAndGrant).toHaveBeenCalledTimes(2);
     expect(verifyAndGrant.mock.calls.map(([input]) => input.purchaseToken).sort()).toEqual([
       'ttokdoku_hint_pack_20',
@@ -830,7 +811,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       transactionId: 'ledger-historical-listing',
     }));
     const recovery = memoryRecoveryStorage();
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope: () => 'player-a',
       products: [{
         info: product,
@@ -846,9 +827,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
           return grantRecoveryOwnership(input);
         },
         verifyAndGrant,
-        async getEntitlements() {
-          return [entitlement];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -867,7 +845,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       recoveryIdStorage: recovery.storage,
     });
 
-    await expect(adapter.restore?.()).resolves.toEqual({ restoredEntitlements: [entitlement] });
+    expect((await adapter.restore()).failure).toBeUndefined();
     expect(verifyAndGrant).toHaveBeenCalledWith(expect.objectContaining({
       productId: 'HINT_PACK_20',
       inAppOfferToken: 'ttokdoku_hint_pack_20_legacy',
@@ -879,7 +857,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
 
   it('does not let another player claim an unowned listed Store purchase', async () => {
     const verifyAndGrant = vi.fn();
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope: () => 'player-b',
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
@@ -891,9 +869,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
           return { status: 'denied' } as const;
         },
         verifyAndGrant,
-        async getEntitlements() {
-          return [];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -911,7 +886,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       recoveryIdStorage: memoryRecoveryStorage().storage,
     });
 
-    await expect(adapter.restore?.()).resolves.toEqual({ restoredEntitlements: [] });
+    expect((await adapter.restore()).failure).toBeUndefined();
     expect(verifyAndGrant).not.toHaveBeenCalled();
   });
 
@@ -934,7 +909,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
     ]);
     const verifyAndGrant = vi.fn();
     const hasRecoveryOwnership = vi.fn(async () => ({ status: 'denied' } as const));
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope: () => 'player-b',
       products: [{ info: product, inAppOfferToken: storeIdentity }],
       authority: {
@@ -944,9 +919,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
         },
         hasRecoveryOwnership,
         verifyAndGrant,
-        async getEntitlements() {
-          return [];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -961,7 +933,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       recoveryIdStorage: storage.storage,
     });
 
-    await expect(adapter.restore?.()).resolves.toEqual({ restoredEntitlements: [] });
+    expect((await adapter.restore()).failure).toBeUndefined();
     expect(hasRecoveryOwnership).toHaveBeenCalledWith(expect.objectContaining({
       productId: 'HINT_PACK_20',
       purchaseToken: storeIdentity,
@@ -976,7 +948,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
     const onError = vi.fn();
     const claimRecoveryOwnership = vi.fn(async () => ({ status: 'denied' } as const));
     const verifyAndGrant = vi.fn();
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: storeIdentity }],
       authority: {
@@ -986,9 +958,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
         },
         claimRecoveryOwnership,
         verifyAndGrant,
-        async getEntitlements() {
-          return [];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -1048,7 +1017,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       };
     });
     const recovery = memoryRecoveryStorage();
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope,
       products: [
         { info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' },
@@ -1063,9 +1032,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
           return grantRecoveryOwnership(input);
         },
         verifyAndGrant,
-        async getEntitlements() {
-          return [entitlement];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -1090,18 +1056,17 @@ describe('Microsoft Store Digital Goods commerce', () => {
       recoveryIdStorage: recovery.storage,
     });
 
-    const restoration = adapter.restore?.();
-    expect(restoration).toBeDefined();
+    const restoration = adapter.restore();
     await vi.waitFor(() => {
       expect(verifyAndGrant).toHaveBeenCalledTimes(2);
     });
     releaseAuthority?.();
-    await expect(restoration).resolves.toEqual({ restoredEntitlements: [entitlement] });
+    expect((await restoration).failure).toBeUndefined();
   });
 
   it('maps user cancellation without calling the authority', async () => {
     const verifyAndGrant = vi.fn();
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
@@ -1110,9 +1075,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
           return 'available';
         },
         verifyAndGrant,
-        async getEntitlements() {
-          return [];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -1155,7 +1117,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
     let recoveryScope = 'player-a';
     const createPaymentRequest = vi.fn();
     const onError = vi.fn();
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope: () => recoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
@@ -1165,9 +1127,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
         },
         async verifyAndGrant() {
           throw new Error('must not run');
-        },
-        async getEntitlements() {
-          return [];
         },
       },
       async getDigitalGoodsService() {
@@ -1209,7 +1168,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       throw new Error('must not query ownership for a changed player');
     });
     const storedRecoveries = new Map<string, string>();
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope: () => recoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
@@ -1218,9 +1177,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
           return 'available';
         },
         verifyAndGrant,
-        async getEntitlements() {
-          return [];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -1282,7 +1238,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
     const complete = vi.fn(async () => {});
     const verifyAndGrant = vi.fn();
     const recovery = memoryRecoveryStorage();
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope: () => recoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
@@ -1291,9 +1247,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
           return 'available';
         },
         verifyAndGrant,
-        async getEntitlements() {
-          return [];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -1336,7 +1289,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
 
   it('reports reconciliation pending without completing a paid response twice', async () => {
     const complete = vi.fn(async () => {});
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
@@ -1346,9 +1299,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
         },
         async verifyAndGrant() {
           throw new Error('must not run');
-        },
-        async getEntitlements() {
-          return [];
         },
       },
       async getDigitalGoodsService() {
@@ -1399,7 +1349,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
     const onError = vi.fn();
     const recovery = memoryRecoveryStorage();
     const verifyAndGrant = vi.fn();
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
@@ -1411,9 +1361,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
           return { status: 'granted', idempotencyKey: 'authority-replaced-generation' };
         },
         verifyAndGrant,
-        async getEntitlements() {
-          return [];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -1457,7 +1404,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
 
   it('dismisses the paid response even when the error reporter throws', async () => {
     const complete = vi.fn(async () => {});
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
@@ -1467,9 +1414,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
         },
         async verifyAndGrant() {
           throw new Error('must not run');
-        },
-        async getEntitlements() {
-          return [];
         },
       },
       async getDigitalGoodsService() {
@@ -1510,7 +1454,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
 
   it('reports failed authoritative fulfillment to the payment UI', async () => {
     const complete = vi.fn(async () => {});
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
@@ -1520,9 +1464,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
         },
         async verifyAndGrant() {
           return { status: 'failed' };
-        },
-        async getEntitlements() {
-          return [];
         },
       },
       async getDigitalGoodsService() {
@@ -1567,7 +1508,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       status: 'completed' as const,
       transactionId: 'ledger-recovered-response',
     }));
-    const adapter = createMicrosoftStoreCommerceAdapter({
+    const adapter = createEngineHarness({
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
@@ -1576,9 +1517,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
           return 'available';
         },
         verifyAndGrant,
-        async getEntitlements() {
-          return [];
-        },
       },
       async getDigitalGoodsService() {
         return {
@@ -1622,89 +1560,38 @@ describe('Microsoft Store Digital Goods commerce', () => {
     }));
   });
 
-  it('only installs on a first-class Microsoft Store gateway', async () => {
-    const adapter = createMicrosoftStoreCommerceAdapter({
-      getRecoveryScope,
-      products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
-      authority: {
-        ...allowRecoveryOwnership,
-        async getAvailability() {
-          return 'available';
-        },
-        async verifyAndGrant() {
-          return { status: 'pending' };
-        },
-        async getEntitlements() {
-          return [];
-        },
-      },
-      async getDigitalGoodsService() {
-        return {
-          async getDetails() {
-            return [];
-          },
-          async listPurchases() {
-            return [];
-          },
-        };
-      },
-    });
+  it('installs the provider on a first-class Microsoft Store gateway only', async () => {
+    const provider = createGatewayProvider();
 
-    const commerceOnlyGateway = withMicrosoftStoreCommerceAdapter(
+    const commerceOnlyGateway = withMicrosoftStoreCommerceProvider(
       createGateway('microsoft-store'),
-      adapter,
+      provider,
     );
-    await expect(commerceOnlyGateway.getCapabilities()).resolves.toMatchObject({
-      nativeIap: true,
+    expect(commerceOnlyGateway.commerce).toBe(provider);
+    const commerceOnlyCapabilities = await commerceOnlyGateway.getCapabilities();
+    expect(commerceOnlyCapabilities).toMatchObject({
       nativeLeaderboard: false,
       remoteLeaderboard: false,
     });
-    const gateway = withMicrosoftStoreCommerceAdapter(
+    expect(commerceOnlyCapabilities.commerce).toMatchObject({
+      purchase: { consumable: true, durable: false },
+      availability: 'available',
+    });
+    const gateway = withMicrosoftStoreCommerceProvider(
       createGateway('microsoft-store'),
-      adapter,
+      provider,
       { remoteLeaderboard: true },
     );
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
-      nativeIap: true,
       nativeLeaderboard: false,
       remoteLeaderboard: true,
     });
-    expect(() => withMicrosoftStoreCommerceAdapter(createGateway('browser'), adapter))
+    expect(() => withMicrosoftStoreCommerceProvider(createGateway('browser'), provider))
       .toThrow('only be installed on a microsoft-store gateway');
   });
 
   it('replaces the base ads surface so Store builds never expose a mock reward', async () => {
-    const adapter = createMicrosoftStoreCommerceAdapter({
-      getRecoveryScope: () => 'player-1',
-      products: [],
-      authority: {
-        async getAvailability() {
-          return 'available';
-        },
-        async claimRecoveryOwnership() {
-          return { status: 'denied' } as const;
-        },
-        async hasRecoveryOwnership() {
-          return { status: 'denied' } as const;
-        },
-        async verifyAndGrant() {
-          return { status: 'failed' };
-        },
-        async getEntitlements() {
-          return [];
-        },
-      },
-      async getDigitalGoodsService() {
-        return {
-          async getDetails() {
-            return [];
-          },
-          async listPurchases() {
-            return [];
-          },
-        };
-      },
-    });
+    const provider = createGatewayProvider();
     const grantShapedBase: PlatformGateway = {
       ...createGateway('microsoft-store'),
       async getCapabilities() {
@@ -1730,10 +1617,9 @@ describe('Microsoft Store Digital Goods commerce', () => {
       },
     };
 
-    const gateway = withMicrosoftStoreCommerceAdapter(grantShapedBase, adapter);
+    const gateway = withMicrosoftStoreCommerceProvider(grantShapedBase, provider);
 
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
-      nativeIap: true,
       nativeAds: false,
       rewardedAds: false,
       interstitialAds: false,
@@ -1750,38 +1636,46 @@ describe('Microsoft Store Digital Goods commerce', () => {
   });
 });
 
+function createGatewayProvider() {
+  return createMicrosoftStoreCommerceProvider({
+    getRecoveryScope,
+    products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
+    authority: {
+      ...allowRecoveryOwnership,
+      async getAvailability() {
+        return 'available';
+      },
+      async verifyAndGrant() {
+        return { status: 'pending' };
+      },
+    },
+    async getDigitalGoodsService() {
+      return {
+        async getDetails() {
+          return [];
+        },
+        async listPurchases() {
+          return [];
+        },
+      };
+    },
+  });
+}
+
 function createGateway(target: PlatformGateway['target']): PlatformGateway {
   return {
     target,
     async getCapabilities() {
       return {
-        nativeIap: false,
-        nativeAds: false,
-        rewardedAds: false,
-        interstitialAds: false,
-        nativeLeaderboard: false,
-        remoteLeaderboard: false,
-        achievements: false,
+        ...createUnsupportedCapabilities(),
         cloudSave: true,
         socialShare: true,
-        haptics: false,
         localizedContent: true,
       };
     },
     identity: {
       async getPlayer() {
         return null;
-      },
-    },
-    commerce: {
-      async getProducts() {
-        return [];
-      },
-      async purchase() {
-        return { status: 'cancelled', entitlementIds: [] };
-      },
-      async getEntitlements() {
-        return [];
       },
     },
     ads: {

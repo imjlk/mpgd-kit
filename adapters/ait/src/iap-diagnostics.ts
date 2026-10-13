@@ -1,10 +1,11 @@
 /**
  * Stable diagnostic codes for Apps in Toss in-app purchases.
  *
- * The host bridge attaches one of these codes to a non-completed
- * `PurchaseResult.diagnostic`, a partial `PurchaseRestoreResult.diagnostic`, or
- * a rejected `commerce.getProducts`/`commerce.restore` bridge call. Native SDK
- * error codes are passed through separately as `providerCode`. Codes never
+ * The host bridge's commerce provider carries one of these codes as the
+ * `storeCode` of the `CommerceError` it raises or reports for a purchase,
+ * catalog, pending-order or recovery failure that did not complete (see
+ * `aitIapCommerceErrorCodeMap` for the normalized class of each code). Native
+ * SDK error codes are passed through separately as `providerCode`. Codes never
  * carry order ids, player ids, tokens or other personal data.
  *
  * This module is SDK-free so game UI code can compare codes without importing
@@ -49,9 +50,7 @@ export const aitIapDiagnosticCodes = {
   grantPending: 'AIT_IAP_GRANT_PENDING',
   /** The server grant succeeded but the native acknowledgement failed or was not observed. */
   grantCompletionFailed: 'AIT_IAP_GRANT_COMPLETION_FAILED',
-  /** The game-owned entitlement reader failed or did not settle in time. */
-  entitlementReadFailed: 'AIT_IAP_ENTITLEMENT_READ_FAILED',
-  /** Restore ran out of time before reconciling pending orders. */
+  /** Recovery ran out of time before reconciling pending orders. */
   restoreTimeout: 'AIT_IAP_RESTORE_TIMEOUT',
 } as const;
 

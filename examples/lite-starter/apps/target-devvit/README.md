@@ -28,7 +28,7 @@ game root.
 The official `@devvit/start/vite` plugin builds the game client into
 `dist/client` and the CommonJS server bridge into `dist/server/index.cjs` in one
 pass. The mpgd target build wraps that unified build with release provenance and
-effective-target evidence while keeping Devvit SDK imports out of Phaser scenes.
+effective-target evidence while keeping Devvit SDK imports behind the platform gateway.
 The game root pins `@mpgd/cli`, so these commands use the same CLI version as the
 generated starter's other `@mpgd/*` dependencies.
 
@@ -41,10 +41,10 @@ replace the `devvit.json` scheduler endpoint and should not use process-local
 memory when delivery must cross instances. The generated target exposes only
 the oRPC bridge route; the former JSON compatibility route is not generated.
 
-The default post entry uses `index.html` for a fixed, non-scrolling preview.
-Play full screen requests the `game` entrypoint, which loads Phaser from the
-separate `game.html` document. Keep preview UI free of game runtime imports so
-the post cannot trap feed scrolling.
+The default post entry uses `index.html` for a playable Canvas2D surface.
+Play full screen requests the `game` entrypoint, which loads the full game from
+the separate `game.html` document. Keep heavy imports behind the expanded entry
+and preserve native feed scrolling in the inline surface.
 
 Games that intentionally support inline gameplay can opt in through
 `startDevvitWebView`; the generated default uses `startDevvitPreviewWebView`.
