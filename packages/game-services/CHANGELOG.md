@@ -1,5 +1,112 @@
 # @mpgd/game-services
 
+## 0.24.0 — 2026-10-15
+
+### Minor changes
+
+- [3dc12fde](https://github.com/imjlk/mpgd-kit/commit/3dc12fde93056d225400d5d0a770a98c2fe2209b) BREAKING: commerce v2, PR C4 removes the v1 purchase path from the game-services
+  client. The commerce reconciler over `gateway.commerce` (a `CommerceProvider`)
+  is the only purchase path, and nothing is granted from a client callback.
+  
+  - `createGameServicesClient` and `createRecoverableMonetizationClient` buy only
+    through the reconciler. A gateway without `gateway.commerce` sells nothing:
+    `purchase()` answers `{ status: 'rejected', purchase: { status: 'failed',
+    entitlementIds: [] } }`, reports `purchase_rejected` with the analytics reason
+    `commerce_unavailable`, opens no store UI, sends nothing to the backend, and
+    the client has no `commerceReconciler`. It reads `gateway.commerce` (it read
+    `gateway.commerceV2`).
+  - Removed: `RecoverableMonetizationClient.recoverPurchaseResult` (the reconciler
+    learns results from the provider's `getAvailablePurchases` and
+    `purchaseUpdated` events; `recoverRewardResult` is unchanged),
+    `authoritative-purchase.ts` (`findAdapterSettledGrant`,
+    `isAuthoritativeMicrosoftStoreCompletion`; a settling provider is now verified
+    through one request like any other and the ledger entry comes from the
+    backend's answer), `GameServicesLegacyStoreTarget`, and
+    `createGooglePlayTokenTransactionId` from
+    `@mpgd/game-services/google-play-purchase` (use
+    `createGooglePlayTokenPurchaseKey` from `@mpgd/platform/commerce`).
+  - A leftover v1 `purchase` journal record is retired. It is still a valid
+    `MonetizationOperationRecord` (`RetiredPurchaseOperationRecord`, part of
+    `LegacyMonetizationOperationRecord`) so a durable journal parses it. Nothing
+    starts, reopens, or grants from it, and the store UI is never reopened. The
+    one thing `reconcile()` and `restorePurchases()` still do is finish an
+    in-flight verification: a record with a completed platform result and no
+    terminal result (`isMonetizationOperationRecoverable` answers `true` for
+    exactly that) sends its saved verify request, or the one its own fields
+    describe, to the backend once more under the same idempotency key, journals
+    the backend's answer as the closing result (`granted` or `rejected`), and
+    reports it; a backend outage leaves it open for the next pass. A retired
+    record whose platform never completed is closed without a request (the
+    store lists whatever it still holds, and the reconciler verifies that under
+    a derived key). Rewarded-ad records are unchanged.
+  - Entitlement reads: the v1 `gateway.commerce.getEntitlements()` has no client
+    replacement. Read the backend ledger on the server with
+    `listActiveEntitlementTransactions` (reversed grants subtracted) or
+    `getPurchaseLedgerStatus`.
+  - Progress: a store failure now ends a purchase as a journaled `failed` result,
+    and a backend outage as `pending`, so those calls complete instead of ending
+    in an `exception` progress event; `exception` marks a failure of the call
+    itself, such as a journal write that rejects before the store opens.
+  
+  Retired purchase recovery rejects a saved verifier request that selects a
+  different deployment from the durable journal before contacting the backend.
+  
+  Transient store readiness is refused before reserving a purchase journal entry,
+  so the same idempotency key can be retried when the store becomes available.
+  
+  Provider readiness is checked before optional catalog resolution. A retryable provider failure whose presentation source proves checkout never started stays requested with its diagnostic, so the original bound key can be retried across restarts. Recovery does not reopen the payment surface; failures without that proof retain their prior terminal behavior. — Thanks @imjlk!
+
+### Added
+
+- [295435cd](https://github.com/imjlk/mpgd-kit/commit/295435cd3f960901596f21c6e60df4edfc749825) Reuse ait-kit for SDK 3.6 single-use anonymous authentication: expose a host code issuer and a server mTLS exchange method while retaining response bounds, cancellation, and authoritative session boundaries.
+  
+  Align generated AIT hosts and starter validation on official WebView SDK and CLI 3.6.0 so new projects can issue anonymous authentication codes. — Thanks @imjlk!
+
+### Patch changes
+
+- [dd76b8d7](https://github.com/imjlk/mpgd-kit/commit/dd76b8d736cc90b1e1d810d18745b2cd043d2c55) `@mpgd/platform/routes` exports one route-safety rule for links a game hands
+  to the kit, and `@mpgd/platform/route-vectors` exports the shared `normalized`
+  and `rejected` vectors that every package mapping such links runs:
+  
+  - `normalizeRootRelativeRoute(input)` returns the path, query, and hash a
+    root-relative link names on the game's origin. It answers `undefined` when a
+    client could read the link as another host: a second slash or a backslash
+    after the leading slash, a control character, or a path that begins with an
+    empty segment after dot segments collapse. The same holds when the path is
+    percent-decoded once and parsed again, with the path ending at any decoded
+    `?` or `#` or keeping them all. A path with more than 16 decoded `?` and `#`
+    is refused.
+  - `hasNetworkPathPrefix(pathname)` and `hasRouteControlCharacter(value)` are the
+    checks it builds on. `hasNetworkPathPrefix` answers `true` for anything that
+    is not a URL path.
+  
+  Notification delivery in `@mpgd/game-services` and Apps in Toss sharing in
+  `@mpgd/adapter-ait` use this rule instead of their own copies. They now also
+  refuse a path that reaches another host when a decoded `?` or `#` stays in the
+  path instead of ending it, such as `/%3F%2F..%2F%2Fhost`, and a path with more
+  than 16 decoded `?` and `#`.
+  
+  Web sharing in `@mpgd/adapter-browser` now follows the `ShareIntent.deepLink`
+  contract:
+  
+  - A root-relative link is normalized and stays relative, so Web Share resolves
+    it against the document as before.
+  - An absolute link must spell out `https://` or `http://`, carry no
+    credentials, and keep a path no client can read as another host.
+  - It answers `unavailable` for anything else, including page-relative links
+    (`./daily`, `?x=1`), `javascript:`, `data:`, and `intoss:` links, and a
+    `text` or `deepLink` that is not a string. Before, it passed any string on.
+  
+  The Apps in Toss sandbox bridge now reads share requests exactly as the host
+  bridge does:
+  
+  - It answers `unavailable` for a request the host refuses, and
+    `{ status: 'shared', completion: 'presented' }` otherwise. Before, it
+    answered `{ status: 'shared' }` for any request, which reads as completed.
+  - A new optional `appName` option sets the app name `intoss://` links must
+    carry. It defaults to `mpgd-kit`, as on the host. — Thanks @imjlk!
+- Updated dependencies: analytics@0.4.9, catalog@0.10.0, platform@0.23.0
+
 ## 0.23.0 — 2026-10-12
 
 ### Minor changes

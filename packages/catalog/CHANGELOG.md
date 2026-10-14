@@ -1,5 +1,91 @@
 # @mpgd/catalog
 
+## 0.10.0 — 2026-10-15
+
+### Minor changes
+
+- [0234f853](https://github.com/imjlk/mpgd-kit/commit/0234f853cffff19e181587cef79fd0465144ed61) `isRootRelativeNotificationRoute` now accepts a route only when it is at most
+  2,048 characters and `normalizeRootRelativeRoute(route) === route`, the rule
+  share links and v1 notification deep links follow, instead of its own copy.
+  Topic `route` and `optOutRoute` in a catalog, a local reminder's `route`, and
+  the route a router opens all follow it.
+  
+  Root-relative normalization uses string operations, so catalog and notification
+  policy validation works in runtimes without the DOM `URL` constructor.
+  
+  - A route that is not already in its normalized form is refused, and the
+    catalog issue and the thrown error name that form. Examples are `/é`
+    (`/%C3%A9`), `/a b` (`/a%20b`), a backslash in the path, and an empty `?` or
+    `#` (`/a?`). A local reminder whose route is built at run time, such as
+    `/?name=Ada Lovelace`, now throws until the game writes it in that form
+    (`/?name=Ada%20Lovelace`).
+  - Escapes that stay on the game's origin once decoded are no longer refused,
+    because no client can read them as another host. Examples are
+    `/levels/%252e%252e`, `/a/%2E%2E%2Fb`, `/a/%09b`, a malformed escape such as
+    `/50%`, and a backslash in the query or fragment. A route a client could read
+    as another host is still refused. — Thanks @imjlk!
+- [0f3614e2](https://github.com/imjlk/mpgd-kit/commit/0f3614e2180c0c11e2ce89798b29ae8e4f1c528a) `@mpgd/catalog` gives the topic catalog's `notices.copy` a title and a body
+  per notice variant for each locale (`consent-result.advertising.granted`,
+  `consent-result.advertising.withdrawn`, `consent-result.night.granted`,
+  `consent-result.night.withdrawn`, `reconfirmation.advertising`, and
+  `reconfirmation.night`, with optional `consent-result.advertising.refused`
+  and `consent-result.night.refused`, which fall back to the withdrawal's
+  text), filled only with `{{consentDate}}`, which each variant uses. The text
+  carries the rest of what the decree requires: the sender's name, and the
+  processing result for a result notice (art. 62-2) or how to keep or withdraw
+  the consent for a re-confirmation (art. 62-3(2)). The notice topic keeps only
+  the delivery settings, and a backend takes the whole `notices` block,
+  `{ topic, copy }`, as its one notice setting.
+  `validateNotificationTopicCatalog` reports a notice topic that declares
+  `copy` or the `local` channel, carries a title or body in a mapping, even one
+  alone, or maps to a provider that sends a host template or its mapping's own
+  text; and, by the platform's `notificationNoticeCopyIssues`, a missing
+  `notices.copy`, or one without the default locale; a locale without one of
+  the six required variants, an unknown variant, a blank title or body, a
+  variant without `{{consentDate}}`, any other placeholder, and a brace outside
+  one. Under the Korean rules it reports an advertising topic mapped to a
+  provider that sends its mapping's own text, which cannot carry the notice
+  topic, once, at that mapping. Issue paths spell locale and variant keys in
+  brackets, shape issues name the public types, and an undefined
+  `notices.copy` entry, topic `copy` entry, or target mapping is an issue
+  rather than an exception. The free-form text rule does not ask the notice
+  topic for copy. A catalog that gave its notice topic its own copy moves that
+  text into `notices.copy`, one entry per variant; no released version had
+  notice topics, since they arrive in this same release. — Thanks @imjlk!
+- [5889d88a](https://github.com/imjlk/mpgd-kit/commit/5889d88a16b45e8b304ca509723d4913da39bfcd) `@mpgd/catalog` adds the notification topic catalog:
+  `NotificationTopicCatalog` types (`version`, `defaultLocale`, an optional
+  `notices` block, `{ topic, copy }`, which names the topic consent notices go
+  out through and gives their copy, and topics with `id`, `purpose`,
+  `channels`, `route`, `optOutRoute`, `copy` per locale, optional `frequency`,
+  `quietHours`, and `deferrable`, and open-keyed `targets` mappings),
+  `validateNotificationTopicCatalog` and `assertNotificationTopicCatalog`, which
+  report every issue with its path: routes that stay on the game's origin and
+  never resolve to a protocol-relative path, an `optOutRoute` and no `local`
+  channel for advertising topics, the default locale in every `copy`, matched
+  without regard to case, a notice topic that is a declared remote `service`
+  topic, and, for targets with a provider registry entry, each mapping field's
+  rule (required, length, accepted values such as the Apps in Toss `agreement`,
+  and patterns such as the Devvit `link`, read with the `u` flag; a pattern that
+  does not compile is an issue, not an exception), no agreement only for
+  `service` templates and never on a per-send provider, a topic with the remote
+  channel only on providers whose purposes include its purpose, advertising only
+  on providers that deliver it as free-form content (with an expiry and the
+  opt-out action under the Korean rules), and the text a free-form provider
+  shows. Given the deployment settings, a catalog with an advertising topic
+  needs `advertisingRules`, and under the Korean rules the notice topic and an
+  advertising sender and opt-out line that the policy gate can use: no blank
+  contact, name, or opt-out line. It also re-exports
+  `isRootRelativeNotificationRoute` from `@mpgd/platform/notifications` and adds
+  `resolveNotificationTopicsForTarget`. The root `pnpm validate:notifications
+  [catalog] [deployment]` checks a catalog file against the reference Android,
+  iOS, Apps in Toss, and Devvit targets and the deployment settings file. The
+  kit ships no topic catalog of its own; the starter topics' purposes are still
+  undecided. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: platform@0.23.0
+
 ## 0.9.3 — 2026-10-12
 
 ### Patch changes

@@ -1,5 +1,114 @@
 # @mpgd/adapter-devvit
 
+## 0.12.0 — 2026-10-15
+
+### Minor changes
+
+- [0234f853](https://github.com/imjlk/mpgd-kit/commit/0234f853cffff19e181587cef79fd0465144ed61) Every target whose host builds or receives a share URL now checks
+  `ShareIntent.deepLink` with one rule before the host sees the intent.
+  
+  - `@mpgd/platform/routes` adds `normalizeShareLink(deepLink)`, the share-link
+    rule web sharing already followed. A root-relative link becomes the route
+    `normalizeRootRelativeRoute` returns. An absolute link must spell out
+    `https://` or `http://`, carry no credentials, and keep a path no client
+    reads as another host. Anything else answers `undefined`.
+  - `@mpgd/platform/routes` also adds `readShareIntent(intent)` and
+    `withShareIntentCheck(sharing)`. The wrapper answers
+    `{ status: 'unavailable' }` for an intent that is not an object, has no
+    string `text`, or has a link the rule refuses, without calling the adapter.
+    An accepted intent reaches the adapter with its link normalized. They stay
+    out of the main entry, which headless consumers type-check without the
+    `URL` global.
+  - `@mpgd/platform/share-link-conformance` adds `runShareLinkConformance`. It
+    shares every vector in `rootRelativeRouteVectors` and the new
+    `shareLinkVectors` (`@mpgd/platform/route-vectors`), plus malformed intents,
+    through an adapter's `share`. It checks the answers and the link the host
+    was handed, and it throws one error that lists every failure. Each adapter
+    that maps share links runs it, and the root
+    `pnpm validate:share-link-conformance` fails for an adapter that defines a
+    share without running it. WeChat is listed as exempt: its share card carries
+    no link, and mini-game runtimes have no `URL` global.
+  - The Capacitor and Devvit gateways wrap `sharing` with
+    `withShareIntentCheck`. A link outside the contract, such as
+    `mygame://invite`, `./daily`, or `/%2F%2Fevil.example/x`, now answers
+    `unavailable` without reaching the native or server bridge, and the bridge
+    receives the normalized link. Before, they passed every intent on as is.
+    The common reader also requires a supported `kind` and string `title` and
+    `text` before dispatching to these adapters.
+  - Apps in Toss reads links that are not `intoss://<app>` links with
+    `normalizeShareLink` before reducing them to their path. It now also refuses
+    `https:/daily`, `https:evil.example/x`, and links with credentials, which it
+    used to reduce to a path. — Thanks @imjlk!
+- [3dc12fde](https://github.com/imjlk/mpgd-kit/commit/3dc12fde93056d225400d5d0a770a98c2fe2209b) BREAKING: commerce v2, PR C4 removes the commerce v1 surfaces from the Devvit
+  adapter. The commerce v2 provider (`createDevvitCommerceProvider`) is the only
+  commerce path.
+  
+  - `createDevvitCommerceAdapter`, `withDevvitCommerceAdapter`, and
+    `CreateDevvitCommerceAdapterInput` are removed from
+    `@mpgd/adapter-devvit` and `@mpgd/adapter-devvit/payments`. Use
+    `createDevvitPlatformGateway({ commerce: { products, client } })`, which
+    installs the provider, or `createDevvitCommerceProvider` directly.
+  - `createDevvitPlatformGateway()` no longer builds the v1 `gateway.commerce`
+    adapter (`getProducts`, `purchase`, `restore`, `getEntitlements`). The
+    provider the `commerce` option builds is now `gateway.commerce` (it was
+    `gateway.commerceV2`); without the option the gateway sells nothing, has no
+    `commerce`, and reports `createUnsupportedCommerceCapabilities()`. The option
+    keeps its name `commerce`.
+  - `gateway.getCapabilities()` returns the server snapshot without the removed
+    `nativeIap` and `subscriptionIap` flags (dropped if an older server still
+    sends them) and with a `commerce` block that is always valid: the provider's
+    when the gateway has one, otherwise the unsupported block (a fresh object on
+    every read).
+  - `DevvitPaymentsClient` loses `getEntitlements()`; it is now only
+    `purchase(sku)`, and `DevvitWebPaymentsClient` is that same type. Nothing in
+    the provider read entitlements: `getAvailablePurchases` is the paid-order
+    list from the server bridge. Owned entitlements come from the backend ledger
+    (server-side `listActiveEntitlementTransactions` in `@mpgd/game-services`).
+  - `createDevvitSandboxBridge()` drops the v1 `commerce.*` cases and the
+    `nativeIap` flag; its `runtime.getCapabilities` carries the unsupported
+    `commerce` block. A request for a removed `commerce.getProducts`,
+    `commerce.purchase`, `commerce.restore`, or `commerce.getEntitlements` method
+    answers `UNSUPPORTED_METHOD` (the bridge protocol dropped them); the six
+    `commerce.v2.*` methods keep answering `COMMERCE_V2_UNAVAILABLE`.
+  - The `@mpgd/adapter-devvit/payments` entry keeps `normalizeDevvitCommerceProducts`
+    and the checkout types (`DevvitCheckoutResult`, `DevvitCheckoutFailure`,
+    `DevvitCommerceProduct`).
+  
+  Retired commerce flags are also removed from nested `providerAvailability`
+  records returned by older Devvit bridges while current feature entries remain. — Thanks @imjlk!
+
+### Patch changes
+
+- [d8486b02](https://github.com/imjlk/mpgd-kit/commit/d8486b0279dd6b1e6d83e4bef192e62413aa1636) Notifications v2, PR N3: transports without v2 answer every
+  `notifications.v2.*` method with `NOTIFICATIONS_V2_UNAVAILABLE`, which is not
+  retryable, instead of `UNSUPPORTED_METHOD`. No adapter serves notifications v2
+  yet; P1–P3 add the providers.
+  
+  - `@mpgd/adapter-ait`: the host bridge and the sandbox bridge, in every build,
+    answer the code without reaching the host's agreement API. The commerce v2
+    provider over the bridge validates events with the commerce envelope and
+    ignores notifications envelopes. The commerce event channel
+    (`GamePlatformBridge.commerceV2`), `AitCommerceV2BridgeHandler`, and
+    `CreateAitBridgeCommerceProviderInput.subscribe` keep the commerce envelope
+    type (`BridgeCommerceEvent`) they had before `BridgeEvent` became a union.
+  - `@mpgd/adapter-capacitor`: the gateway's request path answers the code for
+    a method no registered provider serves, before it pauses the game or
+    reaches the base plugin, and a provider cannot declare those methods. For
+    the provider P2 adds, `notifications.v2.requestPermission` and
+    `notifications.v2.openSettings` pause the game, and the registry passes
+    `notifications.v2.*` through `assertMethodReady` as it does `commerce.v2.*`.
+    A launched commerce v2 purchase ends its pause on commerce events only, and
+    the gateway hands its commerce provider only the commerce envelopes of the
+    provider's channel. The commerce v2 provider over the bridge reports an
+    envelope that names no protocol as a purchase error, as the Apps in Toss
+    provider does, instead of dropping it. `CommerceProviderBridge.subscribe` and
+    `CreateBridgeCommerceProviderInput.subscribe` keep the commerce envelope
+    type (`BridgeCommerceEvent`) they had before `BridgeEvent` became a union.
+  - `@mpgd/adapter-devvit`: the sandbox bridge answers the code.
+  - `@mpgd/cli` and `@mpgd/create-game`: the generated Devvit server bridge
+    answers the code, and the Apps in Toss sandbox gateway says so. — Thanks @imjlk!
+- Updated dependencies: bridge@0.13.0, game-services@0.24.0, platform@0.23.0
+
 ## 0.11.0 — 2026-10-12
 
 ### Minor changes

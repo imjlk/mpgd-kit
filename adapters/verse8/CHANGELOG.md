@@ -1,5 +1,35 @@
 # @mpgd/adapter-verse8
 
+## 0.7.0 — 2026-10-15
+
+### Minor changes
+
+- [3dc12fde](https://github.com/imjlk/mpgd-kit/commit/3dc12fde93056d225400d5d0a770a98c2fe2209b) BREAKING: commerce v2, PR C4 removes the commerce v1 surfaces from the Verse8
+  adapter. The commerce v2 provider (`createVerse8CommerceProvider`) is the only
+  commerce path.
+  
+  - `createVerse8PlatformGateway()` no longer builds the v1 `gateway.commerce`
+    adapter (`getProducts`, `purchase`, `restore`, `getEntitlements`, a failing
+    stub when `vxShop` was absent). The provider that
+    `createVerse8PlatformGateway({ vxShop: { purchases } })` builds is now
+    `gateway.commerce` (it was `gateway.commerceV2`); without `vxShop`, the
+    `agent8-server` acknowledgement, a product, or a purchase source the gateway
+    sells nothing, has no `commerce`, and reports
+    `createUnsupportedCommerceCapabilities()`.
+  - `Verse8CommerceOptions.loadEntitlements` is removed (only the v1 adapter read
+    it), and `Verse8CommerceOptions.purchases` is now required, so a `vxShop`
+    configured for v1 only fails to compile instead of silently selling nothing.
+    The Agent8 service keeps its own server-side reads (`getEntitlements`,
+    `getSnapshot`, `listPurchases`); the backend ledger the service writes (the
+    `ledger` option) is the commerce record.
+  - `gateway.getCapabilities()` no longer reports `nativeIap` or `subscriptionIap`;
+    `commerce` is always present: the provider's block when `vxShop.purchases` is
+    configured, otherwise the unsupported block (a fresh object on every read). — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: catalog@0.10.0, game-runtime@0.7.0, game-services@0.24.0, platform@0.23.0
+
 ## 0.6.1 — 2026-10-12
 
 ### Patch changes

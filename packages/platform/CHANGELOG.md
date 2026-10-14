@@ -1,5 +1,288 @@
 # @mpgd/platform
 
+## 0.23.0 — 2026-10-15
+
+### Minor changes
+
+- [d8486b02](https://github.com/imjlk/mpgd-kit/commit/d8486b0279dd6b1e6d83e4bef192e62413aa1636) Notifications v2, PR N3: the capability snapshot block and stricter bridge
+  answers and events.
+  
+  - `PlatformCapabilities.notifications` is the optional notifications v2
+    capability block of the `notificationsV2` provider a gateway exposes. Like
+    the commerce block, it is a fresh object on every read with no unknown keys,
+    and `providerAvailability.pushNotifications` equals its `availability`.
+  - `@mpgd/platform/capability-conformance` checks the block the way it checks
+    the commerce block: exact keys, known values, positive integer counts,
+    `remote.addressing` `'none'` exactly when remote delivery is unsupported,
+    and no record or purposes list, empty or not, shared across reads. The block
+    must be present exactly when the gateway exposes `notificationsV2`, with the
+    push readiness equal to its availability. A fixture may now expect a
+    malformed block or commerce block as is: the runner copies the expected
+    state whatever its shape, so only the block checks reject it.
+  - `assertNotificationBridgeGetCapabilitiesResult` now also checks the block's
+    `remote.addressing` rule, as `assertNotificationCapabilities` does, and
+    `assertNotificationBridgeRegisterResult` checks the registration's time zone,
+    as `assertNotificationEndpointRegistration` does.
+  - `assertNotificationEvent`, `assertNotificationEventEnvelope`,
+    `isNotificationEvent`, and `isNotificationEventEnvelope` apply the same time
+    zone rule to an `endpoint-changed` registration.
+  
+  The conformance runner rejects reused notification blocks, nested records,
+  and purposes lists even when frozen, and rejects holes in purposes arrays. — Thanks @imjlk!
+- [0234f853](https://github.com/imjlk/mpgd-kit/commit/0234f853cffff19e181587cef79fd0465144ed61) `isRootRelativeNotificationRoute` now accepts a route only when it is at most
+  2,048 characters and `normalizeRootRelativeRoute(route) === route`, the rule
+  share links and v1 notification deep links follow, instead of its own copy.
+  Topic `route` and `optOutRoute` in a catalog, a local reminder's `route`, and
+  the route a router opens all follow it.
+  
+  Root-relative normalization uses string operations, so catalog and notification
+  policy validation works in runtimes without the DOM `URL` constructor.
+  
+  - A route that is not already in its normalized form is refused, and the
+    catalog issue and the thrown error name that form. Examples are `/é`
+    (`/%C3%A9`), `/a b` (`/a%20b`), a backslash in the path, and an empty `?` or
+    `#` (`/a?`). A local reminder whose route is built at run time, such as
+    `/?name=Ada Lovelace`, now throws until the game writes it in that form
+    (`/?name=Ada%20Lovelace`).
+  - Escapes that stay on the game's origin once decoded are no longer refused,
+    because no client can read them as another host. Examples are
+    `/levels/%252e%252e`, `/a/%2E%2E%2Fb`, `/a/%09b`, a malformed escape such as
+    `/50%`, and a backslash in the query or fragment. A route a client could read
+    as another host is still refused. — Thanks @imjlk!
+- [0f3614e2](https://github.com/imjlk/mpgd-kit/commit/0f3614e2180c0c11e2ce89798b29ae8e4f1c528a) `@mpgd/platform/notifications` gives consent notices one copy per variant, so
+  a result notice can say whether the player consented, refused, or withdrew,
+  and to advertising or to night sending (decree art. 62-2), and a
+  re-confirmation which consent it confirms (decree art. 62-3). It adds
+  `NotificationNoticeVariant` with `notificationNoticeVariants`, including the
+  two optional refusal variants, whose text falls back to the withdrawal's
+  (`notificationNoticeVariantFallbacks`); `NotificationNoticeCopy` (the
+  catalog's `notices.copy`: per locale, a `NotificationNoticeLocaleCopy` with a
+  title and a body per variant); and `notificationNoticeVariantCopy`, which
+  reads one variant's copy per locale as a topic's copy. A listed
+  `NotificationNotice` carries its `variant`, which `listNotificationNotices`
+  sets: a `withdrawn` record whose latest earlier record of its kind is not a
+  consent reports a refusal. The game shows that variant, the scheduler pushes
+  it, and `recordShown` still takes the listed notice as is.
+  `NotificationNoticeSettings` is the catalog's whole `notices` block,
+  `{ topic, copy }`, the one notice setting a backend takes, and
+  `notificationNoticeCopyIssues` holds the rules its copy follows wherever it is
+  read: the default locale, every required variant in every locale, no blank
+  title or body, `{{consentDate}}` in each variant, and no other placeholder or
+  brace outside one, as `readNotificationTemplate` reads a text the way
+  `fillNotificationTemplate` fills it. `notificationProviderCarriesNotices`
+  (free-form content, and no title or body the mapping must carry) and
+  `notificationNoticeTopic` (the notice topic as the gate renders one notice:
+  no title or body from its mapping, and the variant's copy in place of its
+  own) hold what a scheduler needs to send one. The conformance fake backend
+  takes the `notices` block, refuses one without its topic or with copy that
+  breaks those rules, and pushes each notice in its listed variant, filled
+  with `{{consentDate}}`, through `notices.topic` and only through a provider
+  that can carry it. A game send or reminder through the notice topic throws
+  `NOTIFICATIONS_INVALID_INPUT`, and a notice whose push cannot render, first
+  or replayed, is not tried again, so the game still owes it. Vectors gain an optional `notices` block, `{ topic, copy }`,
+  which the loader checks by the same rules, and can expect a listed notice's
+  `variant`; `advertising-notices` moves its notice text there, and the new
+  `advertising-notice-variants` vector pushes both re-confirmations and every
+  kind of result notice, one refusal in its own text and one in the
+  withdrawal's. — Thanks @imjlk!
+- [3dc12fde](https://github.com/imjlk/mpgd-kit/commit/3dc12fde93056d225400d5d0a770a98c2fe2209b) BREAKING: commerce v2, PR C4 removes the commerce v1 surfaces from the platform
+  contract. `CommerceProvider` (`@mpgd/platform/commerce`) is the only commerce
+  surface of a gateway, and the `commerce` capability block is the only commerce
+  capability source.
+  
+  - `CommerceAdapter` is removed. `PlatformGateway.commerceV2` is renamed to
+    `PlatformGateway.commerce` and is now `CommerceProvider | undefined`: a
+    gateway whose target sells nothing omits it. The v1 methods map to the
+    provider as `getProducts` to `fetchProducts`, `purchase` to `requestPurchase`
+    (a `RequestPurchaseResult`, never a grant), `restore` to `restorePurchases`
+    and `getAvailablePurchases`. `getEntitlements` has no replacement on the
+    gateway: ownership comes from the backend ledger (server-side
+    `listActiveEntitlementTransactions` in `@mpgd/game-services`), and
+    `@mpgd/game-services` drives the provider, so a scene never calls it.
+  - `PlatformCapabilities.nativeIap` and `.subscriptionIap` are removed, and
+    `PlatformCapabilities.commerce: CommerceCapabilities` is now required. Read
+    `commerce.availability` and `commerce.purchase` instead (`nativeIap` was
+    `availability === 'available'` with a consumable or durable kind;
+    `subscriptionIap` was `purchase.subscription`).
+    `PlatformProviderFeature` no longer contains `'nativeIap'` or
+    `'subscriptionIap'`, so `providerAvailability.nativeIap` and
+    `.subscriptionIap` are gone too: the block's own `availability` carries
+    commerce readiness. `deriveLegacyCommerceCapabilities` and
+    `LegacyCommerceCapabilities` are removed.
+  - `createUnsupportedCapabilities()` now includes
+    `commerce: createUnsupportedCommerceCapabilities()`, which is exported from
+    both `@mpgd/platform` and `@mpgd/platform/commerce` and returns a fresh object
+    on every call. A gateway that sells nothing reports it instead of omitting the
+    block.
+  - `toCommerceAdapter`, `ToCommerceAdapterOptions` (`@mpgd/platform/commerce`)
+    and `findAuthoritativePurchaseSettlement` are removed. The result vocabulary
+    adapters and `GameServicesPurchaseResult` still use is kept: `PurchaseResult`,
+    `PurchaseRestoreResult`, `PurchaseSettlement`, `ProductInfo`, `ProductType`,
+    `Entitlement`, `CommerceDiagnostic`, and `PlatformPurchasePresentationEvent`.
+    A platform purchase result is never an input to a grant.
+  - `CommerceProvider` gains an optional `presentation.subscribe(listener)` of
+    trusted native facts about the payment surface (opened, closed, never
+    started), for providers whose host can prove closure; the game runtime's
+    presentation gate uses it. Providers that cannot prove closure omit it.
+  - `@mpgd/platform/capability-conformance` requires the `commerce` block and
+    rejects `nativeIap` and `subscriptionIap` as unknown keys.
+    `optionalPlatformCapabilityKeys` is now `['bannerAds']`, and
+    `platformCapabilityKeys` no longer lists `nativeIap`.
+  - `createGooglePlayTokenPurchaseKey` is the only Play token key helper. — Thanks @imjlk!
+- [0234f853](https://github.com/imjlk/mpgd-kit/commit/0234f853cffff19e181587cef79fd0465144ed61) Every target whose host builds or receives a share URL now checks
+  `ShareIntent.deepLink` with one rule before the host sees the intent.
+  
+  - `@mpgd/platform/routes` adds `normalizeShareLink(deepLink)`, the share-link
+    rule web sharing already followed. A root-relative link becomes the route
+    `normalizeRootRelativeRoute` returns. An absolute link must spell out
+    `https://` or `http://`, carry no credentials, and keep a path no client
+    reads as another host. Anything else answers `undefined`.
+  - `@mpgd/platform/routes` also adds `readShareIntent(intent)` and
+    `withShareIntentCheck(sharing)`. The wrapper answers
+    `{ status: 'unavailable' }` for an intent that is not an object, has no
+    string `text`, or has a link the rule refuses, without calling the adapter.
+    An accepted intent reaches the adapter with its link normalized. They stay
+    out of the main entry, which headless consumers type-check without the
+    `URL` global.
+  - `@mpgd/platform/share-link-conformance` adds `runShareLinkConformance`. It
+    shares every vector in `rootRelativeRouteVectors` and the new
+    `shareLinkVectors` (`@mpgd/platform/route-vectors`), plus malformed intents,
+    through an adapter's `share`. It checks the answers and the link the host
+    was handed, and it throws one error that lists every failure. Each adapter
+    that maps share links runs it, and the root
+    `pnpm validate:share-link-conformance` fails for an adapter that defines a
+    share without running it. WeChat is listed as exempt: its share card carries
+    no link, and mini-game runtimes have no `URL` global.
+  - The Capacitor and Devvit gateways wrap `sharing` with
+    `withShareIntentCheck`. A link outside the contract, such as
+    `mygame://invite`, `./daily`, or `/%2F%2Fevil.example/x`, now answers
+    `unavailable` without reaching the native or server bridge, and the bridge
+    receives the normalized link. Before, they passed every intent on as is.
+    The common reader also requires a supported `kind` and string `title` and
+    `text` before dispatching to these adapters.
+  - Apps in Toss reads links that are not `intoss://<app>` links with
+    `normalizeShareLink` before reducing them to their path. It now also refuses
+    `https:/daily`, `https:evil.example/x`, and links with credentials, which it
+    used to reduce to a path. — Thanks @imjlk!
+- [dd76b8d7](https://github.com/imjlk/mpgd-kit/commit/dd76b8d736cc90b1e1d810d18745b2cd043d2c55) `@mpgd/platform/routes` exports one route-safety rule for links a game hands
+  to the kit, and `@mpgd/platform/route-vectors` exports the shared `normalized`
+  and `rejected` vectors that every package mapping such links runs:
+  
+  - `normalizeRootRelativeRoute(input)` returns the path, query, and hash a
+    root-relative link names on the game's origin. It answers `undefined` when a
+    client could read the link as another host: a second slash or a backslash
+    after the leading slash, a control character, or a path that begins with an
+    empty segment after dot segments collapse. The same holds when the path is
+    percent-decoded once and parsed again, with the path ending at any decoded
+    `?` or `#` or keeping them all. A path with more than 16 decoded `?` and `#`
+    is refused.
+  - `hasNetworkPathPrefix(pathname)` and `hasRouteControlCharacter(value)` are the
+    checks it builds on. `hasNetworkPathPrefix` answers `true` for anything that
+    is not a URL path.
+  
+  Notification delivery in `@mpgd/game-services` and Apps in Toss sharing in
+  `@mpgd/adapter-ait` use this rule instead of their own copies. They now also
+  refuse a path that reaches another host when a decoded `?` or `#` stays in the
+  path instead of ending it, such as `/%3F%2F..%2F%2Fhost`, and a path with more
+  than 16 decoded `?` and `#`.
+  
+  Web sharing in `@mpgd/adapter-browser` now follows the `ShareIntent.deepLink`
+  contract:
+  
+  - A root-relative link is normalized and stays relative, so Web Share resolves
+    it against the document as before.
+  - An absolute link must spell out `https://` or `http://`, carry no
+    credentials, and keep a path no client can read as another host.
+  - It answers `unavailable` for anything else, including page-relative links
+    (`./daily`, `?x=1`), `javascript:`, `data:`, and `intoss:` links, and a
+    `text` or `deepLink` that is not a string. Before, it passed any string on.
+  
+  The Apps in Toss sandbox bridge now reads share requests exactly as the host
+  bridge does:
+  
+  - It answers `unavailable` for a request the host refuses, and
+    `{ status: 'shared', completion: 'presented' }` otherwise. Before, it
+    answered `{ status: 'shared' }` for any request, which reads as completed.
+  - A new optional `appName` option sets the app name `intoss://` links must
+    carry. It defaults to `mpgd-kit`, as on the host. — Thanks @imjlk!
+- [0234f853](https://github.com/imjlk/mpgd-kit/commit/0234f853cffff19e181587cef79fd0465144ed61) Game links a native app opens are checked with the shared route rule before
+  any router sees them.
+  
+  - `NativeOpenUrlEvent` gains an optional `route`: for a game link, the path,
+    query, and fragment of its URL, normalized with `normalizeRootRelativeRoute`
+    from `@mpgd/platform/routes`. The URL's host is not part of it
+    (`mygame://level/3` gives `/3`). The `LifecycleAdapter.onGameUrlOpen` and
+    `NativeOpenUrlEvent` docs say a router that builds its route from anything
+    else in the URL, such as a custom-scheme host, must check it with
+    `normalizeRootRelativeRoute`.
+  - Query-only or fragment-only hierarchical links preserve a root route:
+    `mygame://game?entry=daily` gives `/?entry=daily` and `mygame://game#top`
+    gives `/#top`.
+  - The Capacitor adapter discards a game link, cold or warm, whose path that
+    rule refuses, such as `mygame://game//evil.example/x` or
+    `https://game.example/%2F%2Fevil.example/x`. It also discards one with a
+    control character or one that does not parse as a URL. A delivered game link
+    carries its `route` (`/daily` for `mygame://game/daily`). A link with no path
+    to check, such as `mygame://daily`, is delivered without one, and OAuth
+    redirects are unchanged. — Thanks @imjlk!
+- [5889d88a](https://github.com/imjlk/mpgd-kit/commit/5889d88a16b45e8b304ca509723d4913da39bfcd) `@mpgd/platform` adds the notifications v2 contract as three new subpaths.
+  `./notifications` holds the client contract types (`NotificationProvider` with
+  `revokePermission` for game-rendered consent, `NotificationCapabilities` with
+  `permission.promptLimit` and `remote.addressing: 'none'` exactly when remote
+  delivery is unsupported, permission snapshots and results with
+  `requiredAction`, endpoint registrations without an installation id, local
+  reminders, events, consent records including provider answers, consent
+  notices, and the `NotificationRuntime` surface with `revokePermission`,
+  `unregister()`, and `notices`, whose `recordShown` takes a listed notice as
+  is, or its kind, its record's kind and time, and its `dueBy`, and records the
+  notice only while it is listed, so a retry changes nothing), `NotificationError`
+  with the `NOTIFICATIONS_*` codes including `NOTIFICATIONS_INVALID_INPUT` and
+  `NOTIFICATIONS_IDEMPOTENCY_CONFLICT` and the host's own `hostCode`, the bridge
+  v2 payload shapes and event envelope, typia validators that reject unknown
+  keys and read every timestamp and date strictly (`isNotificationTimestamp`: a
+  date that exists, `T`, and an offset), the delivery provider registry entry
+  with reference entries for FCM, Apps in Toss, and Devvit, the backend
+  deployment settings (`advertisingRules`, the advertising sender and opt-out
+  line, the zone), and the pure policy gate
+  `evaluateNotificationDelivery`: an unknown topic, channel, and purpose;
+  recipients and the Devvit link; positively granted permission per provider
+  kind, host agreements unless a topic needs none (then the host decides each
+  send, after a provider's denial too), and per-send acceptances; the topic
+  preference; advertising consent; the Korean night window with an expiry at the
+  next 21:00 and quiet hours in the recipient's zone; frequency caps and
+  provider limits over rolling windows, deferring short ones; and, under the
+  Korean rules, the advertising sender, the `(광고)` label, the opt-out line, and
+  the opt-out action, read by `resolveNotificationAdvertisingSettings`: a blank
+  sender contact suppresses the send, and a blank sender name or opt-out line is
+  left out or replaced by the default. It also holds send bounds, reserved key
+  prefixes, request fingerprints, reminder routing and the client-evaluable
+  local and set-time server reminder checks (a local reminder of a topic that is
+  not deferrable answers `quiet-hours` inside its quiet hours), consent notice
+  due dates with the re-confirmation series (each re-confirmation listed from 60
+  days before its `dueBy`), canonical reminder keys and notice keys that name
+  each notice by its kind, its record's kind and time, and its `dueBy`,
+  root-relative route checks that refuse any route a URL parser or a decoding
+  client would resolve to a protocol-relative path, and the v1
+  `toNotificationSubscriptionAdapter` wrapper over the runtime and the topics
+  resolved for its target, which reads any failure with the configuration code
+  as `configuration-required`. `./notifications-vectors` fixes the conformance
+  vector format, and `./notifications-conformance` runs the vectors with a
+  reference runtime (which also cancels a pending local reminder whose topic an
+  app update took off the local route, cancels a reminder key on both routes,
+  re-sends a registration older than 7 days at start and on reads, and keeps an
+  unregistered installation unbound across restarts), fake host, fake backend
+  (sessions, an idempotency ledger with fingerprints and leases, device fan-out
+  under derived keys, the five provider answers, deferred replay with backoff, a
+  paced scheduler, and notices pushed through the catalog's `notices` block,
+  `{ topic, copy }`), and clock, substituting the fixture provider id
+  and evidence schema in the fields that name them for a provider under test,
+  failing prompt and local expectations without a host actor, comparing
+  timestamps as strict instants, and skipping a vector whose `appliesTo` its
+  capabilities do not satisfy; all forty vectors pass. `PlatformGateway`
+  gains an optional `notificationsV2` provider, declared through a typia-free
+  contract module so the main entry stays free of typia. This is additive: no
+  provider implements v2 yet, and the protocol version stays `2.0.0-draft.1`. — Thanks @imjlk!
+
 ## 0.22.0 — 2026-10-12
 
 ### Minor changes

@@ -1,5 +1,39 @@
 # @mpgd/create-game
 
+## 0.47.0 — 2026-10-15
+
+### Patch changes
+
+- [d8486b02](https://github.com/imjlk/mpgd-kit/commit/d8486b0279dd6b1e6d83e4bef192e62413aa1636) Notifications v2, PR N3: transports without v2 answer every
+  `notifications.v2.*` method with `NOTIFICATIONS_V2_UNAVAILABLE`, which is not
+  retryable, instead of `UNSUPPORTED_METHOD`. No adapter serves notifications v2
+  yet; P1–P3 add the providers.
+  
+  - `@mpgd/adapter-ait`: the host bridge and the sandbox bridge, in every build,
+    answer the code without reaching the host's agreement API. The commerce v2
+    provider over the bridge validates events with the commerce envelope and
+    ignores notifications envelopes. The commerce event channel
+    (`GamePlatformBridge.commerceV2`), `AitCommerceV2BridgeHandler`, and
+    `CreateAitBridgeCommerceProviderInput.subscribe` keep the commerce envelope
+    type (`BridgeCommerceEvent`) they had before `BridgeEvent` became a union.
+  - `@mpgd/adapter-capacitor`: the gateway's request path answers the code for
+    a method no registered provider serves, before it pauses the game or
+    reaches the base plugin, and a provider cannot declare those methods. For
+    the provider P2 adds, `notifications.v2.requestPermission` and
+    `notifications.v2.openSettings` pause the game, and the registry passes
+    `notifications.v2.*` through `assertMethodReady` as it does `commerce.v2.*`.
+    A launched commerce v2 purchase ends its pause on commerce events only, and
+    the gateway hands its commerce provider only the commerce envelopes of the
+    provider's channel. The commerce v2 provider over the bridge reports an
+    envelope that names no protocol as a purchase error, as the Apps in Toss
+    provider does, instead of dropping it. `CommerceProviderBridge.subscribe` and
+    `CreateBridgeCommerceProviderInput.subscribe` keep the commerce envelope
+    type (`BridgeCommerceEvent`) they had before `BridgeEvent` became a union.
+  - `@mpgd/adapter-devvit`: the sandbox bridge answers the code.
+  - `@mpgd/cli` and `@mpgd/create-game`: the generated Devvit server bridge
+    answers the code, and the Apps in Toss sandbox gateway says so. — Thanks @imjlk!
+- Updated dependencies: cli@0.48.0
+
 ## 0.46.0 — 2026-10-12
 
 ### Minor changes
