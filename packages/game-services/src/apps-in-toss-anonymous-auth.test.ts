@@ -21,7 +21,7 @@ assert.equal(
   calls[0]?.url,
   'https://apps-in-toss-api.toss.im/api-partner/v1/apps-in-toss/users/anon-key/exchange',
 );
-assert.equal(calls[0]?.init?.redirect, 'error');
+assert.equal(calls[0]?.init?.redirect, 'manual');
 assert.deepEqual(JSON.parse(String(calls[0]?.init?.body)), { code: 'sdk-issued-code' });
 
 for (const body of [
@@ -111,3 +111,24 @@ const prefixed = createAppsInTossPartnerApiClient({
 assert.deepEqual(await prefixed.exchangeAnonymousAuthorizationCode({ code: 'code' }), {
   anonymousKey: 'identity',
 });
+
+let redirectCalls = 0;
+const redirect = createAppsInTossPartnerApiClient({
+  mtls: {
+    async fetch(_url, init) {
+      redirectCalls++;
+      assert.equal(init?.redirect, 'manual');
+      return Response.json(
+        { resultType: 'SUCCESS', success: { anonKey: 'untrusted' } },
+        {
+          status: 302,
+          headers: { location: 'https://untrusted.example/exchange' },
+        },
+      );
+    },
+  },
+});
+await assert.rejects(redirect.exchangeAnonymousAuthorizationCode({ code: 'code' }), {
+  code: 'EXCHANGE_REJECTED',
+});
+assert.equal(redirectCalls, 1);

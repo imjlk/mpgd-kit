@@ -155,7 +155,9 @@ export function createAppsInTossPartnerApiClient(
               // ait-kit endpoints are origin-relative; retain this client's configured proxy prefix.
               const upstream = new URL(url);
               const target = new URL(upstream.pathname.slice(1) + upstream.search, baseUrl);
-              const response = await input.mtls.fetch(target.href, { ...init, redirect: 'error' });
+              // Older workerd rejects redirect: 'error'; manual keeps codes on this origin.
+              // ait-kit rejects every non-2xx response, including redirects with SUCCESS bodies.
+              const response = await input.mtls.fetch(target.href, { ...init, redirect: 'manual' });
               const text = await readBoundedResponseText(response);
               return new Response(text || null, { status: response.status, headers: response.headers });
             },
