@@ -27,7 +27,8 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "build": "cd ../.. && node tools/run-ttsx.mjs tools/package/build-packages.ts @mpgd/lite-shell"
+    "build": "cd ../.. && node tools/run-ttsx.mjs tools/package/build-packages.ts @mpgd/lite-shell",
+    "build:standalone": "tsc -p tsconfig.build.json"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -49,5 +50,8 @@
   "bugs": {
     "url": "https://github.com/imjlk/mpgd-kit/issues"
   },
-  "homepage": "https://github.com/imjlk/mpgd-kit/tree/main/packages/lite-shell#readme"
+  "homepage": "https://github.com/imjlk/mpgd-kit/tree/main/packages/lite-shell#readme",
+  "engines": {
+    "node": ">=20"
+  }
 }

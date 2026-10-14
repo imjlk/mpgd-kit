@@ -39,11 +39,11 @@ generated with `--template lite --workspace` and extended with an optional
 
 | Export | Purpose |
 | --- | --- |
-| `createLiteShell({ mount, renderer, frame, onTap, onFirstFrame, contentHeight })` | Mounts a renderer surface, resizes it with `ResizeObserver` and the device pixel ratio (a `matchMedia` resolution listener re-scales on zoom or monitor changes), routes taps, and drives a frame loop. `onTap(tap, event)` receives the original `PointerEvent`, so `requestExpandedMode(event, ...)` keeps its user activation. `onFirstFrame(time)` fires once after the first draw (use it for first-paint marks or to hide a placeholder). `contentHeight(width)` makes the height follow content: the mount height is set to the returned CSS px; call `shell.refit()` when content changes. Unchanged sizes never re-resize the backing store. |
+| `createLiteShell({ mount, renderer, frame, onTap, onFirstFrame, contentHeight, initialHeight })` | Mounts a renderer surface, resizes it with `ResizeObserver` and the device pixel ratio (a `matchMedia` resolution listener plus the window `resize` event re-scale on zoom or monitor changes; engines that only fire `resize` are covered), routes taps, and drives a frame loop. `onTap(tap, event)` receives the original `PointerEvent`, so `requestExpandedMode(event, ...)` keeps its user activation. `onFirstFrame(time, size)` fires once after the first draw on a stage with width > 0 (use it for first-paint marks or to hide a placeholder). `contentHeight(width)` makes the height follow content: the mount height is set to the returned CSS px; call `shell.refit()` when content changes. Pass `initialHeight` (or set the same CSS height on the mount) to reserve the expected height so the host page does not shift when the real height is applied. Unchanged sizes never re-resize the backing store. |
 | `createCanvasRenderer({ maxDpr })` | Canvas2D renderer. Draw in CSS pixels; the backing store is scaled by DPR (capped at 3). |
 | `createFrameLoop({ tick })` | `requestAnimationFrame` loop that sleeps when `tick` returns false. Call `shell.invalidate()` after state changes. An idle inline post uses no CPU. |
 | `TapRecognizer`, `defaultTapThreshold` | A press is a tap only if it moves at most 10 CSS px and lasts at most 600 ms, so feed scrolls and long presses never become game input. |
-| `loadFontSubset`, `collectGlyphs` | Load a bundled woff2 subset with a timeout before first paint (so text measurement matches rendering) and list the glyphs to subset. |
+| `loadFontSubset`, `collectGlyphs` | Load a bundled woff2 subset with a timeout before first paint (so text measurement matches rendering). `display` sets the FontFace descriptor (default `block`); a font that loads after the timeout is still added and reported through `onLateLoad` and list the glyphs to subset. |
 
 The stage element uses `touch-action: manipulation`: the browser keeps
 vertical panning (the host feed scrolls) and only taps reach the game.
@@ -143,7 +143,9 @@ installation runs on isolated CI machines.
 ## Publishing status
 
 `@mpgd/lite-shell` 0.1.0 builds ESM JavaScript and
-`.d.ts` files to `dist/` (`pnpm --filter @mpgd/lite-shell build`), uses
+`.d.ts` files to `dist/` (`pnpm --filter @mpgd/lite-shell build`, or
+`pnpm build:standalone` without a full workspace install; consumers need
+Node >= 20), uses
 explicit `.js` relative imports so plain Node ESM can load it, and its test
 script imports the built output as a consumer would. Per `AGENTS.md`, the
 maintainer registers it with one local initial publish of `0.1.0` and then adds

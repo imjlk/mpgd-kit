@@ -12,9 +12,21 @@ export interface FontSubsetSource {
  * the FontFace API is unavailable or the font times out, so the game still
  * starts with a fallback font.
  */
+export interface LoadFontSubsetOptions {
+  /** Give up waiting after this many ms (default 1500). */
+  readonly timeoutMs?: number;
+  /** FontFace `display` descriptor (default `'block'`). */
+  readonly display?: 'auto' | 'block' | 'swap' | 'fallback' | 'optional';
+  /**
+   * The font finished loading after the timeout. It has already been added to
+   * `document.fonts`; use this to re-measure text and redraw.
+   */
+  readonly onLateLoad?: (face: FontFace) => void;
+}
+
 export async function loadFontSubset(
   source: FontSubsetSource,
-  options: { readonly timeoutMs?: number } = {},
+  options: LoadFontSubsetOptions = {},
 ): Promise<boolean> {
   if (typeof FontFace !== 'function' || typeof document === 'undefined') {
     return false;
@@ -22,15 +34,24 @@ export async function loadFontSubset(
   const face = new FontFace(source.family, `url(${JSON.stringify(source.url)})`, {
     weight: source.weight ?? '400',
     style: source.style ?? 'normal',
-    display: 'block',
+    display: options.display ?? 'block',
   });
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<false>((resolve) => {
     timer = setTimeout(() => resolve(false), options.timeoutMs ?? 1500);
   });
+  const loading = face.load();
   try {
-    const loaded = await Promise.race([face.load(), timeout]);
+    const loaded = await Promise.race([loading, timeout]);
     if (loaded === false) {
+      // Keep the late font instead of discarding it.
+      loading.then(
+        (late) => {
+          document.fonts.add(late);
+          options.onLateLoad?.(late);
+        },
+        () => undefined,
+      );
       return false;
     }
     document.fonts.add(loaded);

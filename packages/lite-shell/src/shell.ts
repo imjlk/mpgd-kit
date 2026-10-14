@@ -19,8 +19,19 @@ export interface LiteShellOptions<Surface> {
    */
   readonly onTap?: (tap: LiteTap, event: PointerEvent) => void;
   readonly onResize?: (size: StageSize) => void;
-  /** Called once, right after the first frame has been drawn. */
-  readonly onFirstFrame?: (time: number) => void;
+  /**
+   * Called once, right after the first frame drawn on a non-empty stage
+   * (width > 0), with that stage size. Frames drawn while the mount is still
+   * zero-width (hidden, not yet laid out) do not count.
+   */
+  readonly onFirstFrame?: (time: number, size: StageSize) => void;
+  /**
+   * CSS height (px) reserved until `contentHeight` returns a positive height
+   * at a positive mount width. After that first usable measurement, zero
+   * heights are applied normally. Set CSS before mounting to reserve space
+   * before shell initialization as well.
+   */
+  readonly initialHeight?: number;
   /**
    * Content-driven height. When set, the stage width follows the mount and the
    * height is `contentHeight(width)` CSS px (the mount's height is set to it).
@@ -56,6 +67,13 @@ export function createLiteShell<Surface>(options: LiteShellOptions<Surface>): Li
   element.style.userSelect = 'none';
   mount.append(element);
 
+  let reservedHeight = options.contentHeight !== undefined && options.initialHeight !== undefined
+    ? Math.max(0, Math.ceil(options.initialHeight))
+    : undefined;
+  if (reservedHeight !== undefined && !mount.style.height) {
+    mount.style.height = `${reservedHeight}px`;
+  }
+
   let size: StageSize = { width: 0, height: 0, dpr: 1 };
   let measuredSize: StageSize | undefined;
   let firstFrameDone = options.onFirstFrame === undefined;
@@ -63,9 +81,9 @@ export function createLiteShell<Surface>(options: LiteShellOptions<Surface>): Li
   const loop = createFrameLoop({
     tick: (delta, time) => {
       const more = options.frame(renderer.surface, delta, time);
-      if (!firstFrameDone) {
+      if (!firstFrameDone && size.width > 0) {
         firstFrameDone = true;
-        options.onFirstFrame?.(time);
+        options.onFirstFrame?.(time, size);
       }
       return more;
     },
@@ -80,7 +98,13 @@ export function createLiteShell<Surface>(options: LiteShellOptions<Surface>): Li
     const width = rect.width;
     let height = rect.height;
     if (options.contentHeight !== undefined) {
-      height = Math.max(0, Math.ceil(options.contentHeight(width)));
+      const contentHeight = Math.max(0, Math.ceil(options.contentHeight(width)));
+      if (reservedHeight !== undefined && (width <= 0 || contentHeight <= 0)) {
+        height = reservedHeight;
+      } else {
+        reservedHeight = undefined;
+        height = contentHeight;
+      }
       const css = `${height}px`;
       // Setting the same value does not trigger another observer callback.
       if (mount.style.height !== css) {
@@ -142,6 +166,15 @@ export function createLiteShell<Surface>(options: LiteShellOptions<Surface>): Li
     dprQuery?.addEventListener('change', onDprChange);
   };
   watchDpr();
+  // Some engines (and headless browsers) only report a DPR change through a
+  // window resize; `measure` is a no-op when nothing changed.
+  const onWindowResize = (): void => {
+    if (dprQuery !== undefined && !dprQuery.media.includes(`${currentDpr()}dppx`)) {
+      watchDpr();
+    }
+    measure();
+  };
+  globalThis.addEventListener?.('resize', onWindowResize);
 
   const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : undefined;
   observer?.observe(mount);
@@ -159,6 +192,7 @@ export function createLiteShell<Surface>(options: LiteShellOptions<Surface>): Li
       disposed = true;
       observer?.disconnect();
       dprQuery?.removeEventListener('change', onDprChange);
+      globalThis.removeEventListener?.('resize', onWindowResize);
       element.removeEventListener('pointerdown', onDown);
       element.removeEventListener('pointermove', onMove);
       element.removeEventListener('pointerup', onUp);

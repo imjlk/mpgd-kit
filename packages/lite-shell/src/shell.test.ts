@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createCanvasRenderer, type LiteRenderer, type StageSize } from './renderer.js';
 import { createLiteShell } from './shell.js';
 import { loadFontSubset } from './font.js';
+import type { LoadFontSubsetOptions } from './index.js';
 
 type Listener = (event: never) => void;
 
@@ -93,7 +94,79 @@ describe('createLiteShell', () => {
     shell.invalidate();
     frames.shift()?.(32);
     expect(onFirstFrame).toHaveBeenCalledTimes(1);
-    expect(onFirstFrame).toHaveBeenCalledWith(16);
+    expect(onFirstFrame).toHaveBeenCalledWith(16, { width: 300, height: 200, dpr: 1 });
+  });
+
+  it('waits for a non-zero stage width before onFirstFrame', () => {
+    const onFirstFrame = vi.fn();
+    const { shell, frames, mount } = setup({ onFirstFrame, contentHeight: () => 100 });
+    mount.rect.width = 0;
+    shell.refit();
+    frames.shift()?.(16);
+    expect(onFirstFrame).not.toHaveBeenCalled();
+    mount.rect.width = 320;
+    shell.refit();
+    frames.shift()?.(32);
+    expect(onFirstFrame).toHaveBeenCalledWith(32, { width: 320, height: 100, dpr: 1 });
+  });
+
+  it('applies initialHeight before measuring content', () => {
+    const heights: string[] = [];
+    const mount = fakeElement();
+    const style = new Proxy({} as Record<string, string>, {
+      set: (t, k: string, v: string) => {
+        if (k === 'height') {
+          heights.push(v);
+        }
+        t[k] = v;
+        return true;
+      },
+    });
+    (mount as { style: Record<string, string> }).style = style;
+    const element = fakeElement();
+    createLiteShell({
+      mount: mount as unknown as HTMLElement,
+      renderer: { kind: 'canvas', element: element as unknown as HTMLElement, surface: null, resize: () => undefined, dispose: () => undefined },
+      frame: () => false,
+      scheduler: { request: () => 0, cancel: () => undefined },
+      contentHeight: () => 206,
+      initialHeight: 206,
+    });
+    expect(heights).toEqual(['206px']);
+  });
+
+  it('re-scales on a window resize that only changes DPR', () => {
+    const win = new Map<string, () => void>();
+    vi.stubGlobal('devicePixelRatio', 1);
+    vi.stubGlobal('addEventListener', (t: string, fn: () => void) => win.set(t, fn));
+    vi.stubGlobal('removeEventListener', (t: string) => win.delete(t));
+    const { resizes, shell } = setup();
+    expect(resizes).toHaveLength(1);
+    win.get('resize')?.();
+    expect(resizes).toHaveLength(1); // unchanged: skipped
+    vi.stubGlobal('devicePixelRatio', 2);
+    win.get('resize')?.();
+    expect(resizes.at(-1)).toEqual({ width: 300, height: 200, dpr: 2 });
+    shell.dispose();
+    expect(win.has('resize')).toBe(false);
+  });
+
+  it.each([0, 300])('keeps initialHeight while content is unavailable at width %s', (width) => {
+    const mount = fakeElement({ left: 0, top: 0, width, height: 0 });
+    let contentHeight = 0;
+    const { shell, resizes } = setup({ mount, initialHeight: 240, contentHeight: () => contentHeight });
+    expect(mount.style.height).toBe('240px');
+    expect(resizes.at(-1)?.height).toBe(240);
+    contentHeight = 180;
+    shell.refit();
+    expect(mount.style.height).toBe(width === 0 ? '240px' : '180px');
+    mount.rect.width = 320;
+    shell.refit();
+    expect(mount.style.height).toBe('180px');
+    contentHeight = 0;
+    shell.refit();
+    expect(mount.style.height).toBe('0px');
+    shell.dispose();
   });
 
   it('sizes height from content and skips redundant resizes', () => {
@@ -171,5 +244,29 @@ describe('loadFontSubset', () => {
     expect(added).toHaveLength(1);
     expect(clear).toHaveBeenCalled();
     clear.mockRestore();
+  });
+
+  it('uses the display option and keeps a font that loads after the timeout', async () => {
+    vi.useFakeTimers();
+    const added: unknown[] = [];
+    let release: (v: unknown) => void = () => undefined;
+    let descriptors: Record<string, string> = {};
+    vi.stubGlobal('document', { fonts: { add: (f: unknown) => added.push(f) } });
+    vi.stubGlobal('FontFace', class {
+      constructor(_f: string, _s: string, d: Record<string, string>) { descriptors = d; }
+      load() { return new Promise((r) => { release = () => r(this); }); }
+    });
+    const onLateLoad = vi.fn();
+    const options: LoadFontSubsetOptions = { timeoutMs: 100, display: 'swap', onLateLoad };
+    const result = loadFontSubset({ family: 'X', url: 'x.woff2' }, options);
+    expect(descriptors.display).toBe('swap');
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(result).resolves.toBe(false);
+    expect(added).toHaveLength(0);
+    release(undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(added).toHaveLength(1);
+    expect(onLateLoad).toHaveBeenCalledWith(added[0]);
+    vi.useRealTimers();
   });
 });
