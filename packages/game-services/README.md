@@ -272,3 +272,17 @@ Headless consumers can import operation input/result/progress types and the two-
 `GameServicesOperationClient` port from `@mpgd/game-services/operations`. This entrypoint
 has no runtime implementation and its declarations require no DOM or fetch globals.
 The full client continues to re-export the same operation types for compatibility.
+
+## Apps in Toss anonymous authentication
+
+`createAppsInTossPartnerApiClient({ mtls, timeoutMs })` exposes
+`exchangeAnonymousAuthorizationCode({ code, signal })`, returning
+`{ anonymousKey }` only after `@ait-kit/api-core` authenticates the SDK 3.6
+single-use code through mTLS. The existing response-size limit, timeout, caller
+cancellation, and configured proxy path are preserved. Redirects are rejected.
+
+Create a game-scoped session from the verified key on the server; never accept
+a client-supplied key as the account authority. `verifyAnonymousKey()` remains
+available for existence checks, but does not authenticate the caller. Codes are
+not retried automatically: an indeterminate request needs a fresh SDK code.
+Purchase account binding and ledger idempotency remain the application's job.

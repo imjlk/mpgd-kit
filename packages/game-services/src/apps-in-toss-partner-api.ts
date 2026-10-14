@@ -1,3 +1,4 @@
+import { exchangeAnonAuthCode } from '@ait-kit/api-core';
 import type { NotificationTemplateData } from './notification-delivery.js';
 
 export const appsInTossPartnerApiBaseUrl = 'https://apps-in-toss-api.toss.im';
@@ -82,6 +83,11 @@ export interface AppsInTossIapOrderStatusResult {
 }
 
 export interface AppsInTossPartnerApiClient {
+  /** Authenticate with a fresh SDK 3.6 code; key existence checks are not login. */
+  exchangeAnonymousAuthorizationCode(input: {
+    readonly code: string;
+    readonly signal?: AbortSignal;
+  }): Promise<{ readonly anonymousKey: string }>;
   verifyAnonymousKey(input: {
     readonly anonymousKey: string;
     readonly signal?: AbortSignal;
@@ -136,6 +142,40 @@ export function createAppsInTossPartnerApiClient(
   const timeoutMs = normalizeTimeout(input.timeoutMs);
 
   return {
+    async exchangeAnonymousAuthorizationCode(request) {
+      const code = normalizeOpaqueValue(request.code, 'code', 4096);
+      const timeout = createTimeoutSignal(request.signal, timeoutMs);
+      try {
+        const result = await exchangeAnonAuthCode({ code }, {
+          mode: 'forward',
+          upstreamBaseUrl: baseUrl.href,
+          signal: timeout.signal,
+          mtlsClient: {
+            async request(url, init) {
+              // ait-kit endpoints are origin-relative; retain this client's configured proxy prefix.
+              const upstream = new URL(url);
+              const target = new URL(upstream.pathname.slice(1) + upstream.search, baseUrl);
+              const response = await input.mtls.fetch(target.href, { ...init, redirect: 'error' });
+              const text = await readBoundedResponseText(response);
+              return new Response(text || null, { status: response.status, headers: response.headers });
+            },
+          },
+        });
+        if (timeout.signal.aborted) {
+          throw normalizeTransportError(undefined, request.signal, timeout.signal);
+        }
+        if (!result.ok) {
+          throw new AppsInTossPartnerApiError(
+            'Apps in Toss anonymous authentication failed.',
+            result.upstreamStatus ?? 0,
+            result.error,
+          );
+        }
+        return { anonymousKey: result.anonKey };
+      } finally {
+        timeout.cleanup();
+      }
+    },
     async verifyAnonymousKey(request) {
       const anonymousKey = normalizeIdentifier(request.anonymousKey, 'anonymousKey');
       const response = await requestJson({
