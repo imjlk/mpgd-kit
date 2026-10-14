@@ -1,5 +1,126 @@
 # @mpgd/cli
 
+## 0.48.0 — 2026-10-15
+
+### Patch changes
+
+- [d8486b02](https://github.com/imjlk/mpgd-kit/commit/d8486b0279dd6b1e6d83e4bef192e62413aa1636) Notifications v2, PR N3: transports without v2 answer every
+  `notifications.v2.*` method with `NOTIFICATIONS_V2_UNAVAILABLE`, which is not
+  retryable, instead of `UNSUPPORTED_METHOD`. No adapter serves notifications v2
+  yet; P1–P3 add the providers.
+  
+  - `@mpgd/adapter-ait`: the host bridge and the sandbox bridge, in every build,
+    answer the code without reaching the host's agreement API. The commerce v2
+    provider over the bridge validates events with the commerce envelope and
+    ignores notifications envelopes. The commerce event channel
+    (`GamePlatformBridge.commerceV2`), `AitCommerceV2BridgeHandler`, and
+    `CreateAitBridgeCommerceProviderInput.subscribe` keep the commerce envelope
+    type (`BridgeCommerceEvent`) they had before `BridgeEvent` became a union.
+  - `@mpgd/adapter-capacitor`: the gateway's request path answers the code for
+    a method no registered provider serves, before it pauses the game or
+    reaches the base plugin, and a provider cannot declare those methods. For
+    the provider P2 adds, `notifications.v2.requestPermission` and
+    `notifications.v2.openSettings` pause the game, and the registry passes
+    `notifications.v2.*` through `assertMethodReady` as it does `commerce.v2.*`.
+    A launched commerce v2 purchase ends its pause on commerce events only, and
+    the gateway hands its commerce provider only the commerce envelopes of the
+    provider's channel. The commerce v2 provider over the bridge reports an
+    envelope that names no protocol as a purchase error, as the Apps in Toss
+    provider does, instead of dropping it. `CommerceProviderBridge.subscribe` and
+    `CreateBridgeCommerceProviderInput.subscribe` keep the commerce envelope
+    type (`BridgeCommerceEvent`) they had before `BridgeEvent` became a union.
+  - `@mpgd/adapter-devvit`: the sandbox bridge answers the code.
+  - `@mpgd/cli` and `@mpgd/create-game`: the generated Devvit server bridge
+    answers the code, and the Apps in Toss sandbox gateway says so. — Thanks @imjlk!
+- [785fd583](https://github.com/imjlk/mpgd-kit/commit/785fd58375ae9e60498a480317dbc26cd5fb6fbd) Fix Windows target builds by launching the active pnpm executable or JavaScript
+  entrypoint directly instead of a global pnpm.cmd shim. Generated Phaser games
+  enable pnpm's shell emulator so Microsoft Store scripts resolve their KIT path
+  and POSIX environment defaults correctly on Windows. — Thanks @imjlk!
+- [57862a64](https://github.com/imjlk/mpgd-kit/commit/57862a649f03c359a149ed9540a5fce58a320864) Make Devvit inline budget checks follow HTML attributes, JavaScript imports and
+  CSS values instead of matching source text. Count inline style assets and distinct
+  query URLs, and reject unverifiable external first-load resources when an inline
+  budget is configured. Inspection reports external references without enforcing a
+  budget. Entries with base href must emit artifact-relative URLs instead. — Thanks @imjlk!
+- Updated dependencies: adapter-ait@0.17.0, adapter-browser@0.11.0, adapter-capacitor@0.10.0, adapter-devvit@0.12.0, adapter-verse8@0.7.0, analytics@0.4.9, bridge@0.13.0, capacitor-play-billing@0.3.0, capacitor-storekit@0.3.0, catalog@0.10.0, game-runtime@0.7.0, game-services@0.24.0, i18n@0.6.14, platform@0.23.0, target-config@0.23.0
+
+### Minor changes
+
+- [0234f853](https://github.com/imjlk/mpgd-kit/commit/0234f853cffff19e181587cef79fd0465144ed61) - The Microsoft Store submission preflight now checks the manifest's
+    `start_url`, `scope`, and icon `src` with `normalizeRootRelativeRoute` from
+    `@mpgd/platform/routes`: `.` followed by a route already in its normalized
+    form. It now also refuses a URL whose path a client that percent-decodes it
+    could read as another host, such as `./%2F%2Fevil.example/`. `@mpgd/platform`
+    is now a dependency of the CLI.
+  - Generated games pass the game's Apps in Toss app name to
+    `createAitSandboxBridge({ appName })` in `pnpm dev:ait`. It is
+    `MPGD_AIT_APP_NAME`, else the `ait` target's `metadata.appName`, else the game
+    name, the same name the wrapper's host bridge uses. Before, the sandbox
+    defaulted to `mpgd-kit` and refused the game's own `intoss://<app>` share
+    links. — Thanks @imjlk!
+- [8de63811](https://github.com/imjlk/mpgd-kit/commit/8de6381120ab6c7393cec3d6ec65190d3b63873d) Ship reusable C# Microsoft Store native bridge sources and a public locator.
+  Game-owned callbacks provide login and commerce policy; common helpers validate
+  the protocol and typed results, dispatch on the window UI thread, and cancel
+  queued operations and suppress stale responses after navigation or closure.
+  Align native catalog display-text validation with localized joiners, emoji and
+  RTL price marks while preserving strict identifiers and rejecting unsafe controls. — Thanks @imjlk!
+- [0b8cef09](https://github.com/imjlk/mpgd-kit/commit/0b8cef09fbcbc35bfc9982626f2ce5b873364425) Ship reusable PowerShell MSIX native acceptance helpers and expose their installed
+  module path through @mpgd/cli/windows-native-tools. Consumers supply package
+  identity, verified source metadata and optional payload/readiness/evidence callbacks.
+  KIT and game CI share installation, process/runtime checks, receipts and cleanup. — Thanks @imjlk!
+- [10199c08](https://github.com/imjlk/mpgd-kit/commit/10199c08b193a0cb01917f24d0b9760845062063) `mpgd game create` adds `--template lite` (default `phaser`) and
+  `--renderer canvas` for a Phaser-free starter. The lite template reuses every
+  platform gateway, target wrapper, and release workflow of the Phaser template,
+  drops the Phaser scenes and asset manifest, depends on `@mpgd/lite-shell`, and
+  makes the Devvit inline surface playable with the same lite shell. Devvit
+  targets accept optional `inlineEntry` and `inlineBudget`
+  (`maxGzipKb`, `forbidModules`, `deferredChunks`); `mpgd target smoke` checks
+  the inline first-load graph only when `inlineEntry` is set, so existing
+  targets are unchanged.
+  
+  Until the private lite-shell package is initially published, lite generation
+  requires `--workspace`. Generated lite guidance identifies Canvas2D ownership.
+  
+  Lite generation configures its Reddit inline budget, preserves feed and history
+  lifecycle, removes visibility listeners on disposal, and verifies HTML content
+  and artifact boundaries along with linked first-load resources.
+  Windows template paths are normalized before overlay selection, and persisted
+  browser history navigation keeps the game alive. Inline budgets include static
+  and stylesheet imports even when a filename appears in `deferredChunks`; only
+  dynamic-import edges can be deferred.
+  
+  Explicit game disposal releases its owned audio binding, runtime and shell once. HTML first-load asset tags and attributes are matched case-insensitively.
+  
+  HTML media and preload bytes count toward the inline budget. LiteShell size and resize notifications report the Canvas renderer's effective DPR, and repeated fits skip redundant backing-store resizes.
+  
+  Responsive image candidates count conservatively toward the first-load budget, while data URLs remain embedded in the HTML byte count. Canvas DPR caps must be positive and finite. Inline layouts reserve all four native safe-area insets, including short screens, in both the example and generated lite template.
+  
+  Only primary pointer activations trigger gameplay taps. Generated Devvit guides substitute the game's title and slug. — Thanks @imjlk!
+- [3dc12fde](https://github.com/imjlk/mpgd-kit/commit/3dc12fde93056d225400d5d0a770a98c2fe2209b) BREAKING: Commerce v2, PR C4: the generated game template (and the private
+  starter it mirrors) follows the removal of the commerce v1 surface. A game
+  created or upgraded with this release builds against `gateway.commerce` (the
+  renamed `commerceV2`) and the required `commerce` capability block.
+  
+  - The Microsoft Store build gateway's purchase authority no longer declares
+    `getEntitlements()`; entitlements come from the backend ledger through
+    game-services.
+  - The Verse8 build gateway no longer passes `loadEntitlements`, and the
+    game-owned `StarterVerse8Agent8Client` port lost `getCommerceSnapshot()`;
+    only `listPurchases()` is read.
+  - The Apps in Toss wrapper (`apps/target-ait`) no longer passes the removed
+    `readIapEntitlements` host option, and the Devvit server bridge
+    (`apps/target-devvit/src/server/bridge.ts`) drops the `commerce.getEntitlements`
+    case and the `nativeIap` capability key; its `runtime.getCapabilities` answer
+    carries the `commerce` block.
+  - `pnpm validate:starter-workflow` fails a starter or template that names a
+    removed v1 commerce API (`nativeIap`, `getEntitlements`,
+    `createMicrosoftStoreCommerceAdapter`, ...). — Thanks @imjlk!
+
+### Changed
+
+- [295435cd](https://github.com/imjlk/mpgd-kit/commit/295435cd3f960901596f21c6e60df4edfc749825) Reuse ait-kit for SDK 3.6 single-use anonymous authentication: expose a host code issuer and a server mTLS exchange method while retaining response bounds, cancellation, and authoritative session boundaries.
+  
+  Align generated AIT hosts and starter validation on official WebView SDK and CLI 3.6.0 so new projects can issue anonymous authentication codes. — Thanks @imjlk!
+
 ## 0.47.0 — 2026-10-12
 
 ### Minor changes
