@@ -36,6 +36,11 @@ function run(command, args, cwd = repoRoot, environment = process.env) {
 run(process.execPath, [join(repoRoot, 'packages/cli/dist/bin.js'),
   'game', 'create', gameRoot, '--kit-path', repoRoot, '--microsoft-store',
   ...(template === 'lite' ? ['--template', 'lite', '--workspace'] : [])]);
+if (template === 'lite') {
+  const manifest = JSON.parse(readFileSync(join(gameRoot, 'package.json'), 'utf8'));
+  assert.equal(manifest.dependencies['@mpgd/lite-shell'], 'workspace:*');
+  assert.equal(manifest.dependencies.phaser, undefined, 'Lite consumer must not depend on Phaser');
+}
 
 // Install the current PR's publishable artifacts, without workspace links or
 // depending on their versions already existing in the public registry.
@@ -60,11 +65,6 @@ appendFileSync(join(gameRoot, 'pnpm-workspace.yaml'), `${overrides.join('\n')}\n
 run('pnpm', ['install', '--no-frozen-lockfile'], gameRoot);
 // A second frozen install checks that the standalone lockfile is usable.
 run('pnpm', ['install', '--frozen-lockfile'], gameRoot);
-if (template === 'lite') {
-  const manifest = JSON.parse(readFileSync(join(gameRoot, 'package.json'), 'utf8'));
-  assert.equal(manifest.dependencies['@mpgd/lite-shell'], 'workspace:*');
-  assert.equal(manifest.dependencies.phaser, undefined, 'Lite consumer must not depend on Phaser');
-}
 const requireFromGame = createRequire(join(gameRoot, 'package.json'));
 const nativeTools = await import(pathToFileURL(requireFromGame.resolve('@mpgd/cli/windows-native-tools')).href);
 const nativeModule = nativeTools.getMicrosoftStoreNativeAcceptanceModulePath();
