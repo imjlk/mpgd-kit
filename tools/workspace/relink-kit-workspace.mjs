@@ -1,11 +1,12 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, realpathSync, rmSync } from 'node:fs';
-import { dirname, join, relative, sep } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
   describeForeignKitDependencyLinks,
   findForeignKitDependencyLinks,
+  isKitDependencyLinkOwnedBy,
   kitPackageGlobs,
 } from './kit-dependency-links.mjs';
 
@@ -21,10 +22,8 @@ const warnIndex = process.argv.indexOf('--warn-unless-owner');
 // any other install mean this build may use another game's dependencies.
 if (warnIndex !== -1) {
   const owner = realpathSync(process.argv[warnIndex + 1] ?? process.cwd());
-  const foreign = findForeignKitDependencyLinks(kitRoot).filter((entry) => {
-    const rel = relative(entry.installRoot, owner);
-    return !(rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`)));
-  });
+  const foreign = findForeignKitDependencyLinks(kitRoot)
+    .filter((entry) => !isKitDependencyLinkOwnedBy(entry, owner));
   const message = describeForeignKitDependencyLinks(kitRoot, foreign);
   if (message !== undefined) {
     console.warn(`warning: ${message}`);

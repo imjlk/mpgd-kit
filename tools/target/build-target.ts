@@ -38,7 +38,6 @@ import {
 } from '../icons/staging';
 import { requireCanonicalAppVersion } from './app-version';
 import { assertCrazyGamesArtifact } from './crazygames-artifact';
-import { assertNoDevvitOutputCollisions } from './devvit-output-collisions';
 import { writeOnePlayHostingHeaders } from './oneplay-artifact';
 import { embeddedTargetConfigFileName, writeEffectiveTargetConfigs } from './effective-config';
 import { createReleaseManifestWriter, resolveReleaseProvenance } from './generate-release-manifest';
@@ -436,11 +435,18 @@ try {
       const wrapperApp = targetPath(wrapperAppConfigPath);
       stageWrapperIcon(generatedIcons, wrapperApp);
 
-      run('pnpm', ['--dir', wrapperApp, 'exec', 'vite', 'build', '--mode', profile], env);
-      // Devvit client output uses unhashed names, and Vite silently writes a
-      // bundle file over a public file of the same name. Fail instead. The
-      // shipped Devvit wrappers set Vite's publicDir to the game's public/.
-      assertNoDevvitOutputCollisions(webDir, [join(configBaseDir, 'public')]);
+      run(
+        process.execPath,
+        [
+          resolve('tools/run-ttsx.mjs'),
+          '--project',
+          resolve('tsconfig.tools.json'),
+          resolve('tools/target/build-devvit.ts'),
+          profile,
+        ],
+        env,
+        wrapperApp,
+      );
       embedEffectiveTargetConfig(targetName, webDir, env);
       await stageTargetAssetPacks(webDir);
       stageWebIconEvidence(generatedIcons, webDir);

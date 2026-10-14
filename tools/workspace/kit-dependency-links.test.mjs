@@ -7,7 +7,18 @@ import test from 'node:test';
 import {
   describeForeignKitDependencyLinks,
   findForeignKitDependencyLinks,
+  isKitDependencyLinkOwnedBy,
 } from './kit-dependency-links.mjs';
+
+test('only the exact install owner suppresses the warning', () => {
+  const installRoot = join(tmpdir(), 'game');
+  assert.equal(isKitDependencyLinkOwnedBy({ installRoot }, installRoot), true);
+  assert.equal(isKitDependencyLinkOwnedBy({ installRoot }, join(installRoot, 'nested-game')), false);
+  assert.equal(isKitDependencyLinkOwnedBy({ installRoot, broken: true }, installRoot), false);
+  if (process.platform === 'win32') {
+    assert.equal(isKitDependencyLinkOwnedBy({ installRoot: 'D:\\game' }, 'C:\\kit'), false);
+  }
+});
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'mpgd-kit-links-'));

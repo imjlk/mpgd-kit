@@ -148,9 +148,10 @@ The last game installed owns those links.
 The Devvit client build writes unhashed `[name].js` files, and Vite writes the
 bundle over any `public/` file of the same name without a warning.
 `build:target reddit` now fails with a list of the conflicting paths when a
-file from the game's `public/` directory (the Vite `publicDir` of the shipped wrappers) was overwritten, or when
-two output files differ only by letter case (detectable only on case-sensitive
-filesystems such as Linux CI). Rename the public file or the
+file from the configured Vite `publicDir` conflicts with a bundle file, or when
+two output files differ only by letter case. Bundle names and the resolved Vite
+public directory are checked before bundle files are written, including on
+Windows and macOS. Rename the public file or the
 entry and rebuild.
 
 ## Upgrade Published Kit Dependencies

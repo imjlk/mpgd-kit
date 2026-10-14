@@ -16,6 +16,12 @@ function isInside(root, path) {
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
+// Only the install root itself owns its store. A nested game can have a
+// separate node_modules, and paths on another Windows drive are never owners.
+export function isKitDependencyLinkOwnedBy(entry, owner) {
+  return entry.broken !== true && relative(entry.installRoot, owner) === '';
+}
+
 function linkEntries(nodeModules) {
   const out = [];
   for (const entry of readdirSync(nodeModules, { withFileTypes: true })) {

@@ -1,20 +1,67 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
+import type { Plugin } from 'vite';
+
 /**
  * One output path written by more than one source in a Devvit web build.
  *
  * `public` means a file from a public directory was silently replaced by a
  * Vite-emitted file of the same name (Vite copies `publicDir` first and then
  * writes the bundle over it). `case` means two output files differ only by
- * letter case. That check only sees both names on a case-sensitive
- * filesystem (Linux CI); on Windows/macOS defaults they have already collapsed
- * into one file by the time the directory is read.
+ * letter case. The build plugin checks bundle names before writing so this
+ * also works on case-insensitive filesystems.
  */
 export interface DevvitOutputCollision {
   readonly kind: 'public' | 'case';
   readonly path: string;
   readonly sources: readonly string[];
+}
+
+/** Validate logical output names before the filesystem can collapse them. */
+export function assertDevvitOutputNames(
+  bundleNames: readonly string[],
+  publicNames: readonly string[],
+  outDir: string,
+): void {
+  const collisions: DevvitOutputCollision[] = [];
+  const names = new Map<string, string>();
+  for (const name of [...publicNames, ...bundleNames]) {
+    const previous = names.get(name.toLowerCase());
+    if (previous !== undefined) {
+      collisions.push({
+        kind: previous === name ? 'public' : 'case',
+        path: name,
+        sources: [previous, name],
+      });
+    }
+    names.set(name.toLowerCase(), name);
+  }
+  throwCollisions(collisions, outDir);
+}
+
+export function devvitOutputCollisionPlugin(): Plugin {
+  let publicDir = '';
+  return {
+    name: 'mpgd-devvit-output-collisions',
+    apply: 'build',
+    enforce: 'post',
+    configResolved(config) {
+      publicDir = config.publicDir;
+    },
+    generateBundle: {
+      order: 'post',
+      handler(options, bundle) {
+        const publicNames = this.environment.config.build.copyPublicDir
+          && publicDir !== '' && existsSync(publicDir) ? listFiles(publicDir) : [];
+        assertDevvitOutputNames(
+          Object.values(bundle).map((output) => output.fileName),
+          publicNames,
+          options.dir ?? this.environment.config.build.outDir,
+        );
+      },
+    },
+  };
 }
 
 function listFiles(root: string): string[] {
@@ -91,12 +138,18 @@ export function assertNoDevvitOutputCollisions(
   publicDirs: readonly string[],
 ): void {
   const collisions = findDevvitOutputCollisions(outDir, publicDirs);
+  throwCollisions(collisions, outDir);
+}
+
+function throwCollisions(collisions: readonly DevvitOutputCollision[], outDir: string): void {
   if (collisions.length === 0) {
     return;
   }
-  const lines = collisions.map((collision) => collision.kind === 'public'
-    ? `  - ${collision.path}: ${collision.sources[0]} was overwritten by a bundle file of the same name`
-    : `  - ${collision.sources.join(', ')}: names differ only by case`);
+  const lines = collisions.map((collision) =>
+    collision.kind === 'public'
+      ? `  - ${collision.path}: public and bundle files use the same output name`
+      : `  - ${collision.sources.join(', ')}: names differ only by case`,
+  );
   throw new Error([
     `Devvit build output has ${collisions.length} conflicting file name(s) in ${outDir}:`,
     ...lines,
