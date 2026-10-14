@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
 /**
@@ -7,8 +7,9 @@ import { join, relative, sep } from 'node:path';
  * `public` means a file from a public directory was silently replaced by a
  * Vite-emitted file of the same name (Vite copies `publicDir` first and then
  * writes the bundle over it). `case` means two output files differ only by
- * letter case, which collapse into one on case-insensitive filesystems and in
- * the Devvit upload.
+ * letter case. That check only sees both names on a case-sensitive
+ * filesystem (Linux CI); on Windows/macOS defaults they have already collapsed
+ * into one file by the time the directory is read.
  */
 export interface DevvitOutputCollision {
   readonly kind: 'public' | 'case';
@@ -23,9 +24,14 @@ function listFiles(root: string): string[] {
     const directory = pending.pop() as string;
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const absolute = join(directory, entry.name);
-      if (entry.isDirectory()) {
+      // Follow symlinks: a linked directory is traversed, a linked file listed.
+      const stats = entry.isSymbolicLink() ? statSync(absolute, { throwIfNoEntry: false }) : entry;
+      if (stats === undefined) {
+        continue;
+      }
+      if (stats.isDirectory()) {
         pending.push(absolute);
-      } else if (entry.isFile() || (entry.isSymbolicLink() && !lstatSync(absolute).isDirectory())) {
+      } else if (stats.isFile()) {
         out.push(relative(root, absolute).split(sep).join('/'));
       }
     }

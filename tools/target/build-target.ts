@@ -438,11 +438,9 @@ try {
 
       run('pnpm', ['--dir', wrapperApp, 'exec', 'vite', 'build', '--mode', profile], env);
       // Devvit client output uses unhashed names, and Vite silently writes a
-      // bundle file over a public file of the same name. Fail instead.
-      assertNoDevvitOutputCollisions(webDir, [
-        join(configBaseDir, 'public'),
-        join(wrapperApp, 'public'),
-      ]);
+      // bundle file over a public file of the same name. Fail instead. The
+      // shipped Devvit wrappers set Vite's publicDir to the game's public/.
+      assertNoDevvitOutputCollisions(webDir, [join(configBaseDir, 'public')]);
       embedEffectiveTargetConfig(targetName, webDir, env);
       await stageTargetAssetPacks(webDir);
       stageWebIconEvidence(generatedIcons, webDir);

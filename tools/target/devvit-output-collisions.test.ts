@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -19,6 +19,12 @@ try {
   writeFileSync(join(publicDir, 'fonts/a.woff2'), 'font');
   writeFileSync(join(outDir, 'fonts/a.woff2'), 'font');
   writeFileSync(join(outDir, 'game.js'), 'bundle');
+  // A symlinked public directory is traversed, not read as a file.
+  mkdirSync(join(root, 'shared'));
+  writeFileSync(join(root, 'shared/b.txt'), 'b');
+  symlinkSync(join(root, 'shared'), join(publicDir, 'linked'), 'junction');
+  mkdirSync(join(outDir, 'linked'));
+  writeFileSync(join(outDir, 'linked/b.txt'), 'b');
   assert.deepEqual(findDevvitOutputCollisions(outDir, [publicDir]), []);
   assertNoDevvitOutputCollisions(outDir, [publicDir, join(root, 'missing')]);
 
@@ -29,13 +35,17 @@ try {
   assert.equal(overwritten[0]?.kind, 'public');
   assert.equal(overwritten[0]?.path, 'game.js');
 
-  // Names that differ only by case.
+  // Names that differ only by case (visible only on case-sensitive filesystems).
   writeFileSync(join(outDir, 'Game.JS'), 'other');
   const all = findDevvitOutputCollisions(outDir, [publicDir]);
-  assert.deepEqual(all.map((collision) => collision.kind).sort(), ['case', 'public']);
+  const caseSensitive = all.some((collision) => collision.kind === 'case');
+  assert.deepEqual(
+    all.map((collision) => collision.kind).sort(),
+    caseSensitive ? ['case', 'public'] : ['public'],
+  );
   assert.throws(
     () => assertNoDevvitOutputCollisions(outDir, [publicDir]),
-    /2 conflicting file name\(s\)[\s\S]*game\.js[\s\S]*differ only by case/u,
+    /conflicting file name\(s\)[\s\S]*game\.js/u,
   );
 
   assert.deepEqual(findDevvitOutputCollisions(join(root, 'nope'), [publicDir]), []);

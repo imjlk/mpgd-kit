@@ -48,3 +48,32 @@ test('links into a game install are reported with the fix command', () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('links into a game nested inside the kit are reported', () => {
+  const { root, kit, nodeModules } = fixture();
+  try {
+    const nested = join(kit, 'examples/my-game');
+    const store = join(nested, 'node_modules/.pnpm/x@1/node_modules/x');
+    mkdirSync(store, { recursive: true });
+    symlinkSync(store, join(nodeModules, 'x'), 'junction');
+    const foreign = findForeignKitDependencyLinks(kit);
+    assert.equal(foreign.length, 1);
+    assert.equal(foreign[0].installRoot, realpathSync(nested));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('broken links are reported', () => {
+  const { root, kit, game, gameStore, nodeModules } = fixture();
+  try {
+    symlinkSync(gameStore, join(nodeModules, '@scope/dep'), 'junction');
+    rmSync(game, { recursive: true, force: true });
+    const foreign = findForeignKitDependencyLinks(kit);
+    assert.equal(foreign.length, 1);
+    assert.equal(foreign[0].broken, true);
+    assert.match(describeForeignKitDependencyLinks(kit, foreign), /workspace:relink/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

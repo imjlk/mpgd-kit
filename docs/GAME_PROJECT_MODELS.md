@@ -137,7 +137,7 @@ The last game installed owns those links.
   sources from `../<game>/node_modules` are no longer linted and no longer
   fail `build:devvit` or `build:ait`.
 - `build:target` prints a warning when the links belong to a different install
-  than the game being built.
+  than the game being built, or are broken because that game moved.
 - Before kit-only work, or after switching games, restore kit-owned links from
   the kit root with `pnpm workspace:relink`. `pnpm install --force` alone is not
   enough: it reports "Already up to date" and keeps the game's links.
@@ -148,8 +148,9 @@ The last game installed owns those links.
 The Devvit client build writes unhashed `[name].js` files, and Vite writes the
 bundle over any `public/` file of the same name without a warning.
 `build:target reddit` now fails with a list of the conflicting paths when a
-file from the game's or wrapper's `public/` directory was overwritten, or when
-two output files differ only by letter case. Rename the public file or the
+file from the game's `public/` directory (the Vite `publicDir` of the shipped wrappers) was overwritten, or when
+two output files differ only by letter case (detectable only on case-sensitive
+filesystems such as Linux CI). Rename the public file or the
 entry and rebuild.
 
 ## Upgrade Published Kit Dependencies
