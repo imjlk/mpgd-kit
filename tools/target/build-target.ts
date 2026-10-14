@@ -38,6 +38,7 @@ import {
 } from '../icons/staging';
 import { requireCanonicalAppVersion } from './app-version';
 import { assertCrazyGamesArtifact } from './crazygames-artifact';
+import { assertNoDevvitOutputCollisions } from './devvit-output-collisions';
 import { writeOnePlayHostingHeaders } from './oneplay-artifact';
 import { embeddedTargetConfigFileName, writeEffectiveTargetConfigs } from './effective-config';
 import { createReleaseManifestWriter, resolveReleaseProvenance } from './generate-release-manifest';
@@ -96,6 +97,14 @@ const releaseManifestEnvKeys = [
 
 const platformTargets = loadPlatformTargetsConfig();
 const configBaseDir = platformTargets.baseDir;
+// In --workspace games, warn when kit package links belong to another install.
+// build:target runs from the kit root (also when emitted to a cache dir).
+const kitLinkCheck = resolve('tools/workspace/relink-kit-workspace.mjs');
+if (existsSync(kitLinkCheck)) {
+  spawnSync(process.execPath, [kitLinkCheck, '--warn-unless-owner', configBaseDir], {
+    stdio: 'inherit',
+  });
+}
 const config = platformTargets.config;
 const target = config.targets[targetName];
 
@@ -428,6 +437,12 @@ try {
       stageWrapperIcon(generatedIcons, wrapperApp);
 
       run('pnpm', ['--dir', wrapperApp, 'exec', 'vite', 'build', '--mode', profile], env);
+      // Devvit client output uses unhashed names, and Vite silently writes a
+      // bundle file over a public file of the same name. Fail instead.
+      assertNoDevvitOutputCollisions(webDir, [
+        join(configBaseDir, 'public'),
+        join(wrapperApp, 'public'),
+      ]);
       embedEffectiveTargetConfig(targetName, webDir, env);
       await stageTargetAssetPacks(webDir);
       stageWebIconEvidence(generatedIcons, webDir);
