@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -19,7 +19,7 @@ function fixture() {
   mkdirSync(gameStore, { recursive: true });
   const nodeModules = join(kit, 'adapters/devvit/node_modules');
   mkdirSync(join(nodeModules, '@scope'), { recursive: true });
-  symlinkSync(kitStore, join(nodeModules, 'dep'));
+  symlinkSync(kitStore, join(nodeModules, 'dep'), 'junction');
   return { root, kit, game, gameStore, nodeModules };
 }
 
@@ -36,14 +36,14 @@ test('kit-owned links are not reported', () => {
 test('links into a game install are reported with the fix command', () => {
   const { root, kit, game, gameStore, nodeModules } = fixture();
   try {
-    symlinkSync(gameStore, join(nodeModules, '@scope/dep'));
+    symlinkSync(gameStore, join(nodeModules, '@scope/dep'), 'junction');
     const foreign = findForeignKitDependencyLinks(kit);
     assert.equal(foreign.length, 1);
     assert.equal(foreign[0].link, join('adapters/devvit/node_modules/@scope/dep'));
-    assert.equal(foreign[0].installRoot, game);
+    assert.equal(foreign[0].installRoot, realpathSync(game));
     const message = describeForeignKitDependencyLinks(kit, foreign);
     assert.match(message, /pnpm workspace:relink/u);
-    assert.match(message, new RegExp(game.replaceAll('/', '\\/'), 'u'));
+    assert.ok(message.includes(realpathSync(game)));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
