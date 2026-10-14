@@ -122,6 +122,24 @@ playtest; the smoke check only guards bundle composition and size.
 (the Devvit adapter, the text-selection policy, and the lite shell), with
 Phaser absent from every chunk and `matter-js` loaded on demand.
 
+## Windows consumer verification
+
+The Windows CI matrix generates both the Phaser packed consumer and the lite
+workspace consumer with `--microsoft-store`. Each goes through dependency install,
+frozen install, type checking, web/PWA build, and native WinUI packaging. Separate
+x64 and ARM64 runners install and activate each generated MSIX, checking its game
+bundle hash, non-empty canvas, boot errors, and native bridge contracts. Native
+artifacts and receipts include the template name so results cannot be mixed.
+
+The lite lane uses `--template lite --workspace --kit-path ...` while
+`@mpgd/lite-shell` remains private. Run the generation/build portion locally with
+`MPGD_WINDOWS_SMOKE_TEMPLATE=lite pnpm smoke:windows-starter` in a disposable
+checkout after building KIT packages. The generated workspace install rewrites
+dependency links in that checkout's workspace packages. The smoke command checks
+and compiles KIT tools before installation, then reuses that checked emit for
+nested target commands. Native package
+installation runs on isolated CI machines.
+
 ## Publishing status
 
 `@mpgd/lite-shell` 0.1.0 builds ESM JavaScript and

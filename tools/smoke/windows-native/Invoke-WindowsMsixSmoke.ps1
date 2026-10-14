@@ -17,7 +17,9 @@ Import-Module (Join-Path $PSScriptRoot 'WindowsMsixSmoke.psm1') -Force
 Import-Module $ModulePath -Force
 $build = Get-Content -LiteralPath $SourceMetadata -Raw | ConvertFrom-Json
 if ($build.sourceGitSha -cne $env:GITHUB_SHA -or $build.runId -ne $env:GITHUB_RUN_ID -or
-    $build.architecture -cne $Architecture) { throw 'KIT acceptance requires this run and exact checkout.' }
+    $build.architecture -cne $Architecture -or $build.template -cne $env:MPGD_WINDOWS_SMOKE_TEMPLATE) {
+    throw 'KIT acceptance requires this run, template and exact checkout.'
+}
 if ((Get-FileHash -LiteralPath $ModulePath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $build.toolingSha256) {
     throw 'Acceptance tooling differs from the packed CLI consumer artifact.'
 }
@@ -52,4 +54,4 @@ $collect = {
     $readyLog = Join-Path $env:LOCALAPPDATA "Packages\$($Installed.PackageFamilyName)\LocalState\starter-ready.json"
     Copy-Item -LiteralPath $readyLog -Destination (Join-Path $Directory 'starter-ready.json')
 }
-Invoke-MsixNativeAcceptance -PackageDirectory $PackageDirectory -OutputDirectory $OutputDirectory -Architecture $Architecture -Source $source -Identity MPGD.KitStarterSmoke -Publisher "CN=MPGD Kit CI" -ObserveSeconds $ObserveSeconds -InspectPayload $inspect -TestReadiness $readiness -CollectEvidence $collect -ReceiptFields @{ generatedGameBundleSha256 = $build.gameBundleSha256; generatedGameLoaded = $false; acceptanceToolingSha256 = $build.toolingSha256 }
+Invoke-MsixNativeAcceptance -PackageDirectory $PackageDirectory -OutputDirectory $OutputDirectory -Architecture $Architecture -Source $source -Identity MPGD.KitStarterSmoke -Publisher "CN=MPGD Kit CI" -ObserveSeconds $ObserveSeconds -InspectPayload $inspect -TestReadiness $readiness -CollectEvidence $collect -ReceiptFields @{ template = $build.template; generatedGameBundleSha256 = $build.gameBundleSha256; generatedGameLoaded = $false; acceptanceToolingSha256 = $build.toolingSha256 }
