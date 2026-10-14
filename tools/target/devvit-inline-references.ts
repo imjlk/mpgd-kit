@@ -7,6 +7,7 @@ export interface InlineReference {
   readonly url: string;
   readonly dynamic: boolean;
   readonly scriptKind?: 'script' | 'module';
+  readonly document?: boolean;
 }
 
 /** Parse executable syntax so tutorial strings and comments cannot create edges. */
@@ -53,6 +54,13 @@ export function styleReferences(content: string): readonly InlineReference[] {
       references.push({ url: first.value, dynamic: false });
     }
     parsed.walk((node) => {
+      if (node.type === 'function' && ['image-set', '-webkit-image-set'].includes(node.value.toLowerCase())) {
+        for (const candidate of node.nodes) {
+          if (candidate.type === 'string') {
+            references.push({ url: candidate.value, dynamic: false });
+          }
+        }
+      }
       if (node.type === 'function' && node.value.toLowerCase() === 'url') {
         const url = node.nodes.find((part) => part.type === 'string' || part.type === 'word');
         if (url !== undefined) {
@@ -114,6 +122,16 @@ export function htmlReferences(content: string): readonly InlineReference[] {
           references.push(...scriptReferences(textContent(node), kind));
         }
       }
+    } else if (tag === 'iframe' && attrs.get('loading')?.toLowerCase() !== 'lazy') {
+      const srcdoc = attrs.get('srcdoc');
+      if (srcdoc !== undefined) {
+        references.push(...htmlReferences(srcdoc));
+      } else {
+        const url = attrs.get('src');
+        if (url !== undefined) {
+          references.push({ url, dynamic: false, document: true });
+        }
+      }
     } else if (tag === 'link') {
       const rel = (attrs.get('rel') ?? '').toLowerCase().split(/\s+/u);
       if (rel.some((value) => ['stylesheet', 'preload', 'modulepreload'].includes(value))) {
@@ -159,6 +177,32 @@ const javascriptMimeTypes = new Set([
   'text/x-ecmascript',
   'text/x-javascript',
 ]);
+
+/** Payload bytes are already charged to their containing resource. Follow only their dependencies. */
+export function dataReferences(url: string, scriptKind?: 'script' | 'module'): {
+  readonly content: string;
+  readonly references: readonly InlineReference[];
+} | undefined {
+  const comma = url.indexOf(',');
+  if (comma < 0) {
+    throw new Error('Malformed Devvit inline data URL.');
+  }
+  const header = url.slice(5, comma).toLowerCase();
+  const mime = header.split(';')[0] ?? '';
+  if (scriptKind === undefined && !javascriptMimeTypes.has(mime) && !['text/css', 'text/html'].includes(mime)) {
+    return undefined;
+  }
+  const payload = decodeURIComponent(url.slice(comma + 1).split('#')[0] ?? '');
+  const content = header.endsWith(';base64')
+    ? Buffer.from(payload, 'base64').toString('utf8')
+    : payload;
+  const references = scriptKind !== undefined || javascriptMimeTypes.has(mime)
+    ? scriptReferences(content, scriptKind)
+    : mime === 'text/css'
+      ? styleReferences(content)
+      : htmlReferences(content);
+  return { content, references };
+}
 
 function textContent(node: DefaultTreeAdapterTypes.Element): string {
   return node.childNodes.map((child) => child.nodeName === '#text' && 'value' in child ? child.value : '').join(

@@ -358,7 +358,15 @@ try {
   );
 
   // External bytes cannot be verified locally. Inspection reports them; enforcement rejects them.
+  const externalImport = 'import "https://example.invalid/game.js";';
+  const dataScript = `data:text/javascript,${encodeURIComponent(externalImport)}`;
+  const dataBase64 = `data:text/javascript;base64,${Buffer.from(externalImport).toString('base64')}`;
   for (const html of [
+    `<script type=module src="${dataScript}"></script>`,
+    `<script type=module src="${dataBase64}"></script>`,
+    '<link rel=stylesheet href="data:text/css,body%7Bbackground:url(https://example.invalid/image.png)%7D">',
+    '<style>body{background:image-set("https://example.invalid/image.png" 1x)}</style>',
+    '<iframe src="https://example.invalid/frame.html"></iframe>',
     '<script type=module src=https://example.invalid/game.js></script>',
     '<link rel=stylesheet href=//example.invalid/game.css>',
     '<div style="background:url(https://example.invalid/image.png)"></div>',
@@ -379,6 +387,43 @@ try {
       /cannot verify external/,
     );
   }
+  // Local image-set candidates and nested documents are counted; srcdoc overrides src.
+  writeFileSync(join(root, 'frame.html'), '<script type=module src="./assets/real.js"></script>');
+  writeFileSync(join(root, 'index.html'), [
+    '<iframe src="./frame.html"></iframe>',
+    '<iframe loading=lazy src="./missing-frame.html"></iframe>',
+    '<iframe src="./missing-override.html" srcdoc="&lt;img src=./assets/poster.png&gt;"></iframe>',
+    '<style>body{background:-webkit-image-set("./assets/image.png" 1x, url(./assets/poster.png) 2x)}</style>',
+  ].join(''));
+  assert.deepEqual(
+    collectDevvitInlineGraph(root, 'index.html').files.map((file) => file.path).sort(),
+    ['assets/image.png', 'assets/poster.png', 'assets/real.js', 'frame.html', 'index.html'],
+  );
+  // Script type attributes use essence matching, not Content-Type header parsing.
+  writeFileSync(
+    join(root, 'index.html'),
+    '<script type="text/javascript; charset=utf-8" src="./missing-inert.js"></script>',
+  );
+  assert.equal(collectDevvitInlineGraph(root, 'index.html').files.length, 1);
+  writeFileSync(
+    join(root, 'index.html'),
+    '<script type=module src="data:text/javascript,console.log(%27Phaser%20v4.2.0%27)"></script>',
+  );
+  assert.throws(
+    () =>
+      assertDevvitInlineBudget({
+        target: 'reddit',
+        clientDir: root,
+        inlineEntry: 'index.html',
+        budget: { forbidModules: ['phaser'] },
+      }),
+    /forbidden module/,
+  );
+  writeFileSync(
+    join(root, 'index.html'),
+    '<script type=module src="data:text/javascript,import%20%27./relative.js%27"></script>',
+  );
+  assert.throws(() => collectDevvitInlineGraph(root, 'index.html'), /Relative dependencies inside/);
   writeFileSync(
     join(root, 'index.html'),
     '<base href="https://example.invalid/"><script type=module src=assets/real.js></script>',

@@ -4,6 +4,7 @@ import { gzipSync } from 'node:zlib';
 
 import type { DevvitInlineBudget } from './schemas';
 import {
+  dataReferences,
   htmlReferences,
   scriptReferences,
   styleReferences,
@@ -67,17 +68,40 @@ function walkInlineGraph(
     throw new Error(`Devvit inlineEntry ${inlineEntry} does not exist in ${clientDir}.`);
   }
   const html = readFileSync(entryPath, 'utf8');
-  const queue: { readonly file: string; readonly key: string; readonly dynamic: boolean; readonly scriptKind?: 'script' | 'module' }[] = [];
+  const queue: (InlineReference & { readonly file: string; readonly key: string })[] = [];
   const externalReferences = new Set<string>();
-  const enqueue = (references: readonly InlineReference[], fromFile: string): void => {
+  const dataSeen = new Set<string>();
+  const allContents: { path: string; content: string }[] = [];
+  const enqueue = (references: readonly InlineReference[], fromFile: string, fromData = false): void => {
     const fromDir = dirname(fromFile);
-    for (const { url, dynamic, scriptKind } of references) {
+    for (const edge of references) {
+      const { url, scriptKind } = edge;
       let reference = url.trim();
-      if (reference === '' || reference.startsWith('#') || /^data:/iu.test(reference)) {
+      if (reference === '' || reference.startsWith('#')) {
         continue;
       }
+      if (/^data:/iu.test(reference)) {
+        const identity = `${scriptKind ?? ''}:${reference}`;
+        if (!dataSeen.has(identity)) {
+          dataSeen.add(identity);
+          const data = dataReferences(reference, scriptKind);
+          if (data !== undefined) {
+            allContents.push({
+              path: `${relative(root, fromFile)}#data-${dataSeen.size}`,
+              content: data.content,
+            });
+            enqueue(data.references, fromFile, true);
+          }
+        }
+        continue;
+      }
+      if (fromData && !/^[a-z][a-z\d+.-]*:/iu.test(reference)) {
+        throw new Error(
+          'Relative dependencies inside Devvit inline data URLs are unsupported; use artifact files.',
+        );
+      }
       // Same-scheme references without an authority are relative on HTTPS deployments.
-      if (/^https:(?![/\\]{2})/iu.test(reference)) {
+      if (!fromData && /^https:(?![/\\]{2})/iu.test(reference)) {
         const sourcePath = relative(root, fromFile).replace(/\\/gu, '/').split('/').map(encodeURIComponent).join(
           '/',
         );
@@ -92,10 +116,9 @@ function walkInlineGraph(
       const file = resolveReference(root, fromDir, reference);
       const query = reference.split('#')[0]?.match(/\?.*/u)?.[0] ?? '';
       queue.push({
+        ...edge,
         file,
         key: file + query,
-        dynamic,
-        ...(scriptKind === undefined ? {} : { scriptKind }),
       });
     }
   };
@@ -112,7 +135,7 @@ function walkInlineGraph(
     },
   ];
   const forbiddenHits: readonly { module: string; file: string }[] = [];
-  const allContents: { path: string; content: string }[] = [{ path: entryName, content: html }];
+  allContents.push({ path: entryName, content: html });
   while (queue.length > 0) {
     const edge = queue.shift();
     if (edge === undefined || seen.has(edge.key)) {
@@ -138,7 +161,9 @@ function walkInlineGraph(
     });
     const content = buffer.toString('utf8');
     allContents.push({ path: resourcePath, content });
-    if (file.endsWith('.js') || file.endsWith('.mjs')) {
+    if (edge.document === true) {
+      enqueue(htmlReferences(content), file);
+    } else if (file.endsWith('.js') || file.endsWith('.mjs')) {
       enqueue(scriptReferences(content, edge.scriptKind), file);
     } else if (file.endsWith('.css')) {
       enqueue(styleReferences(content), file);
