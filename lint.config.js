@@ -1,5 +1,7 @@
 import { evidence } from '@ttsc/evidence';
 
+import { ignoredSourceFiles } from './lint.source.config.js';
+
 // Evidence is run once through docs:evidence, not during every ttsc/ttsx
 // invocation in the large prepared-test suite.
 const evidenceEnabled = process.env.MPGD_EVIDENCE === '1';
@@ -71,41 +73,18 @@ const evidenceGraph = {
   ],
 };
 
+// Source-scoped rules and formatting live in lint.source.config.js (see the
+// note there on files outside the kit). This root entry carries only the
+// global ignores and the project-level evidence rules, which ttsc accepts only
+// in an entry without `files`.
 export default {
-  ...(evidenceEnabled ? { plugins: { evidence } } : {}),
-  ignores: ['**/node_modules/**', 'packages/i18n/src/paraglide/**'],
-  format: {
-    severity: 'error',
-    printWidth: 100,
-    singleQuote: true,
-    trailingComma: 'all',
-    semi: true,
-    sortImports: {
-      order: [
-        '<BUILTIN_MODULES>',
-        '',
-        '<THIRD_PARTY_MODULES>',
-        '',
-        '^@mpgd/',
-        '',
-        '^[./]',
-      ],
-    },
-    jsDoc: false,
-  },
-  rules: {
-    'no-var': 'error',
-    'prefer-const': 'error',
-    eqeqeq: 'error',
-    curly: 'error',
-    'no-debugger': 'error',
-    'no-duplicate-imports': 'error',
-    'typescript/no-explicit-any': 'warning',
-    'typescript/no-floating-promises': 'error',
-    'typescript/no-non-null-assertion': 'warning',
-    ...(evidenceEnabled ? {
+  extends: './lint.source.config.js',
+  ignores: ignoredSourceFiles,
+  ...(evidenceEnabled ? {
+    plugins: { evidence },
+    rules: {
       'evidence/graph': ['error', evidenceGraph],
       'evidence/review': 'error',
-    } : {}),
-  },
+    },
+  } : {}),
 };
