@@ -1,5 +1,7 @@
 import { parse as parseJavaScript } from 'acorn';
 import { parse as parseHtml, type DefaultTreeAdapterTypes } from 'parse5';
+import { parse as parseCss } from 'postcss';
+import valueParser from 'postcss-value-parser';
 
 export interface InlineReference {
   readonly url: string;
@@ -39,17 +41,26 @@ export function scriptReferences(content: string): readonly InlineReference[] {
 
 export function styleReferences(content: string): readonly InlineReference[] {
   const references: InlineReference[] = [];
-  for (const pattern of [
-    /@import\s+(?:url\(\s*["']?([^\s"')]+)["']?\s*\)|["']([^"']+)["'])/giu,
-    /url\(\s*(?:"([^"]+)"|'([^']+)'|([^\s)]+))\s*\)/giu,
-  ]) {
-    for (const match of content.matchAll(pattern)) {
-      const url = match[1] ?? match[2] ?? match[3];
-      if (url !== undefined) {
-        references.push({ url, dynamic: false });
-      }
+  const collect = (value: string, isImport = false): void => {
+    const parsed = valueParser(value);
+    const first = parsed.nodes.find((node) => node.type !== 'space' && node.type !== 'comment');
+    if (isImport && first?.type === 'string') {
+      references.push({ url: first.value, dynamic: false });
     }
-  }
+    parsed.walk((node) => {
+      if (node.type === 'function' && node.value.toLowerCase() === 'url') {
+        const url = node.nodes.find((part) => part.type === 'string' || part.type === 'word');
+        if (url !== undefined) {
+          references.push({ url: url.value, dynamic: false });
+        }
+        return false;
+      }
+      return undefined;
+    });
+  };
+  const stylesheet = parseCss(content);
+  stylesheet.walkDecls((declaration) => collect(declaration.value));
+  stylesheet.walkAtRules((rule) => collect(rule.params, rule.name.toLowerCase() === 'import'));
   return references;
 }
 

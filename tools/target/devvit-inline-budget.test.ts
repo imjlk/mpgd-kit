@@ -230,7 +230,10 @@ try {
       (file) => file.path === 'assets/nested.css',
     ),
   );
-  writeFileSync(join(root, 'index.html'), `<style>${randomBytes(4096).toString('base64')}</style>`);
+  writeFileSync(
+    join(root, 'index.html'),
+    `<style>/*${randomBytes(4096).toString('base64')}*/</style>`,
+  );
   assert.throws(
     () =>
       assertDevvitInlineBudget({
@@ -263,6 +266,23 @@ try {
     collectDevvitInlineGraph(root, 'index.html').files.map((file) => file.path).sort(),
     ['assets/image.png', 'assets/real.js', 'assets/real.js?v=2', 'assets/syntax.js', 'index.html'],
   );
+
+  // CSS comments and quoted examples do not create first-load edges.
+  writeFileSync(join(root, 'index.html'), [
+    '<style>/* url(https://example.invalid/comment.png) */',
+    'div::after { content: "url(https://example.invalid/text.png)"; background: url(./assets/image.png) }</style>',
+  ].join(''));
+  const cssSyntax = assertDevvitInlineBudget({
+    target: 'reddit',
+    clientDir: root,
+    inlineEntry: 'index.html',
+    budget: { maxGzipKb: 40 },
+  });
+  assert.deepEqual(cssSyntax.files.map((file) => file.path).sort(), [
+    'assets/image.png',
+    'index.html',
+  ]);
+  assert.deepEqual(cssSyntax.externalReferences, []);
 
   // URL identities retain query strings; identical references still deduplicate.
   writeFileSync(join(root, 'index.html'), [
