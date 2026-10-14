@@ -56,7 +56,7 @@
   },
   "dependencies": {
     "@ait-co/polyfill": "^0.1.19",
-    "@apps-in-toss/web-framework": "3.5.0",
+    "@apps-in-toss/web-framework": "3.6.0",
     "@capacitor/app": "8.1.1",
     "@capacitor/core": "8.5.2",
     "@mpgd/adapter-ait": "__MPGD_DEPENDENCY_VERSION_ADAPTER_AIT__",
