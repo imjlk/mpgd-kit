@@ -13,4 +13,9 @@ export {
   type FrameScheduler,
 } from './loop.js';
 export { defaultTapThreshold, TapRecognizer, type TapPoint, type TapThreshold } from './tap.js';
-export { collectGlyphs, loadFontSubset, type FontSubsetSource, type LoadFontSubsetOptions } from './font.js';
+export {
+  collectGlyphs,
+  loadFontSubset,
+  type FontSubsetSource,
+  type LoadFontSubsetOptions,
+} from './font.js';
