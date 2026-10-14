@@ -5,7 +5,7 @@ tap input, idle-sleeping frame loop, font subset loading, and a Canvas2D rendere
 Built for inline surfaces such as Reddit Devvit posts.
 
 ```ts
-import { createCanvasRenderer, createLiteShell } from '@mpgd/lite-shell';
+import { createCanvasRenderer, createLiteShell, loadFontSubset } from '@mpgd/lite-shell';
 
 const shell = createLiteShell({
   mount: document.getElementById('app')!,
