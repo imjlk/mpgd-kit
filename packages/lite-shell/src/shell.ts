@@ -26,9 +26,10 @@ export interface LiteShellOptions<Surface> {
    */
   readonly onFirstFrame?: (time: number, size: StageSize) => void;
   /**
-   * CSS height (px) applied to the mount before the first measure when
-   * `contentHeight` is used. Set it to your expected content height so the
-   * host page does not shift when the real height is applied.
+   * CSS height (px) reserved until `contentHeight` returns a positive height
+   * at a positive mount width. After that first usable measurement, zero
+   * heights are applied normally. Set CSS before mounting to reserve space
+   * before shell initialization as well.
    */
   readonly initialHeight?: number;
   /**
@@ -66,8 +67,11 @@ export function createLiteShell<Surface>(options: LiteShellOptions<Surface>): Li
   element.style.userSelect = 'none';
   mount.append(element);
 
-  if (options.contentHeight !== undefined && options.initialHeight !== undefined && !mount.style.height) {
-    mount.style.height = `${Math.max(0, Math.ceil(options.initialHeight))}px`;
+  let reservedHeight = options.contentHeight !== undefined && options.initialHeight !== undefined
+    ? Math.max(0, Math.ceil(options.initialHeight))
+    : undefined;
+  if (reservedHeight !== undefined && !mount.style.height) {
+    mount.style.height = `${reservedHeight}px`;
   }
 
   let size: StageSize = { width: 0, height: 0, dpr: 1 };
@@ -94,7 +98,13 @@ export function createLiteShell<Surface>(options: LiteShellOptions<Surface>): Li
     const width = rect.width;
     let height = rect.height;
     if (options.contentHeight !== undefined) {
-      height = Math.max(0, Math.ceil(options.contentHeight(width)));
+      const contentHeight = Math.max(0, Math.ceil(options.contentHeight(width)));
+      if (reservedHeight !== undefined && (width <= 0 || contentHeight <= 0)) {
+        height = reservedHeight;
+      } else {
+        reservedHeight = undefined;
+        height = contentHeight;
+      }
       const css = `${height}px`;
       // Setting the same value does not trigger another observer callback.
       if (mount.style.height !== css) {

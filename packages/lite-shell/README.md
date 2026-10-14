@@ -24,12 +24,16 @@ window `resize` event (unchanged sizes are skipped).
 ```ts
 await loadFontSubset(
   { family: 'Game', url: fontUrl, weight: '700' },
-  { timeoutMs: 1500, display: 'block', onLateLoad: () => shell.refit() },
+  { timeoutMs: 1500, display: 'block', onLateLoad: () => { shell.refit(); shell.invalidate(); } },
 );
 ```
 
 A font that arrives after the timeout is still added to `document.fonts`, and
 `onLateLoad` lets you re-measure and redraw.
+
+`initialHeight` remains reserved until both mount width and content height are
+positive. Later zero content heights collapse normally. Reserve height with CSS
+before initializing the shell if the host page can paint before initialization.
 
 ## Building
 
