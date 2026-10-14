@@ -102,11 +102,22 @@ scripts, preloads, stylesheets, local media, static imports, and dynamic
 
 - a `forbidModules` entry is reachable, matched by chunk name or a content
   signature (`phaser`, `matter-js`, `pixi`, `three`);
-- the gzip total exceeds `maxGzipKb`.
+- the gzip total exceeds `maxGzipKb`;
+- an inline budget is configured and a first-load resource uses an external URL
+  whose bytes cannot be verified from the artifact. Bundle those resources locally.
 
 HTML bytes, CSS-referenced fonts and images, and every local `srcset` or
 `imagesrcset` candidate count toward the total. Responsive candidates are
 counted conservatively because the build has no fixed viewport or DPR.
+HTML attributes may be quoted or unquoted; inline `style` URLs also count.
+Eager iframe documents (including `srcdoc`) and CSS `image-set` candidates count.
+Executable and stylesheet data URLs have their dependencies inspected; their payload
+bytes are already included in the containing resource. Relative dependencies inside
+data URLs are unsupported; emit artifact files for those dependencies.
+JavaScript imports and CSS values are parsed as syntax, so imports or URLs shown
+in strings or comments do not add dependencies. Distinct query URLs are charged separately, even when
+they use the same local file. A `base href` is unsupported; emit artifact-relative
+URLs instead. Inspection without a budget reports external references.
 
 `deferredChunks` (paths relative to the Devvit client output, `*` wildcards)
 mark chunks that only the expanded surface or a user interaction fetches; they
