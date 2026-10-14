@@ -30,6 +30,8 @@ try {
   ]);
 
   for (const html of [
+    '<script src=/assets/preview.js></script><link rel=stylesheet href=./assets/preview.css>',
+    '<script src = /assets/preview.js></script><link rel="alternate stylesheet" href=./assets/preview.css>',
     '<SCRIPT SRC="/assets/preview.js"></SCRIPT><LINK REL="STYLESHEET" HREF="./assets/preview.css">',
     '<ScRiPt SrC="/assets/preview.js"></ScRiPt><LiNk HrEf="./assets/preview.css" ReL="stylesheet">',
   ]) {
@@ -239,6 +241,70 @@ try {
       }),
     /exceeds inlineBudget/,
   );
+
+  // Parse actual syntax rather than code-shaped strings, comments or inert HTML.
+  writeFileSync(join(root, 'assets/real.js'), 'export const value = 1;');
+  writeFileSync(join(root, 'assets/syntax.js'), [
+    '// import("./missing-comment.js")',
+    'const tutorial = \'import("./missing-string.js")\';',
+    'const template = `import("./missing-template.js")`;',
+    'const pattern = /import\\(".\\/missing-regex.js"\\)/;',
+    'export { value } from "./real.js";',
+    'const lazy = import /* allowed comment */ ("./real.js?v=2");',
+  ].join('\n'));
+  writeFileSync(join(root, 'index.html'), [
+    '<!-- <script src=./missing-comment.js></script> -->',
+    '<template><script src=./missing-template.js></script></template>',
+    '<script type=application/json>{"text":"import(\\"./missing-json.js\\")"}</script>',
+    '<script src=./assets/syntax.js></script>',
+    '<div style="background: url(&quot;./assets/image.png&quot;)"></div>',
+  ].join(''));
+  assert.deepEqual(
+    collectDevvitInlineGraph(root, 'index.html').files.map((file) => file.path).sort(),
+    ['assets/image.png', 'assets/real.js', 'assets/real.js?v=2', 'assets/syntax.js', 'index.html'],
+  );
+
+  // URL identities retain query strings; identical references still deduplicate.
+  writeFileSync(join(root, 'index.html'), [
+    '<script src="./assets/real.js?v=1&amp;x=2"></script>',
+    '<script src="./assets/real.js?v=1&#38;x=2"></script>',
+    '<script src="./assets/real.js?v=2"></script>',
+  ].join(''));
+  const queries = collectDevvitInlineGraph(root, 'index.html');
+  assert.deepEqual(queries.files.map((file) => file.path).sort(), [
+    'assets/real.js?v=1&x=2',
+    'assets/real.js?v=2',
+    'index.html',
+  ]);
+  assert.equal(queries.files[1]?.gzipBytes, queries.files[2]?.gzipBytes);
+
+  // External bytes cannot be verified locally. Inspection reports them; enforcement rejects them.
+  for (const html of [
+    '<script src=https://example.invalid/game.js></script>',
+    '<link rel=stylesheet href=//example.invalid/game.css>',
+    '<div style="background:url(https://example.invalid/image.png)"></div>',
+    '<style>@font-face{src:url(https://example.invalid/font.woff2)}</style>',
+    '<img srcset="//example.invalid/image.png 2x">',
+    '<script type=module>import "https://example.invalid/game.js";</script>',
+  ]) {
+    writeFileSync(join(root, 'index.html'), html);
+    assert.equal(collectDevvitInlineGraph(root, 'index.html').externalReferences.length, 1);
+    assert.throws(
+      () =>
+        assertDevvitInlineBudget({
+          target: 'reddit',
+          clientDir: root,
+          inlineEntry: 'index.html',
+          budget: { maxGzipKb: 40 },
+        }),
+      /cannot verify external/,
+    );
+  }
+  writeFileSync(
+    join(root, 'index.html'),
+    '<base href="https://example.invalid/"><script src=assets/real.js></script>',
+  );
+  assert.throws(() => collectDevvitInlineGraph(root, 'index.html'), /base href/);
 
   assert.throws(() => collectDevvitInlineGraph(root, join(root, 'index.html')), /must be relative/);
   assert.throws(
