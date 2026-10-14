@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createCanvasRenderer, type LiteRenderer, type StageSize } from './renderer.js';
 import { createLiteShell } from './shell.js';
 import { loadFontSubset } from './font.js';
+import type { LoadFontSubsetOptions } from './index.js';
 
 type Listener = (event: never) => void;
 
@@ -150,6 +151,24 @@ describe('createLiteShell', () => {
     expect(win.has('resize')).toBe(false);
   });
 
+  it.each([0, 300])('keeps initialHeight while content is unavailable at width %s', (width) => {
+    const mount = fakeElement({ left: 0, top: 0, width, height: 0 });
+    let contentHeight = 0;
+    const { shell, resizes } = setup({ mount, initialHeight: 240, contentHeight: () => contentHeight });
+    expect(mount.style.height).toBe('240px');
+    expect(resizes.at(-1)?.height).toBe(240);
+    contentHeight = 180;
+    shell.refit();
+    expect(mount.style.height).toBe(width === 0 ? '240px' : '180px');
+    mount.rect.width = 320;
+    shell.refit();
+    expect(mount.style.height).toBe('180px');
+    contentHeight = 0;
+    shell.refit();
+    expect(mount.style.height).toBe('0px');
+    shell.dispose();
+  });
+
   it('sizes height from content and skips redundant resizes', () => {
     const { shell, mount, resizes } = setup({ contentHeight: (w: number) => w / 2 });
     expect(mount.style.height).toBe('150px');
@@ -238,7 +257,8 @@ describe('loadFontSubset', () => {
       load() { return new Promise((r) => { release = () => r(this); }); }
     });
     const onLateLoad = vi.fn();
-    const result = loadFontSubset({ family: 'X', url: 'x.woff2' }, { timeoutMs: 100, display: 'swap', onLateLoad });
+    const options: LoadFontSubsetOptions = { timeoutMs: 100, display: 'swap', onLateLoad };
+    const result = loadFontSubset({ family: 'X', url: 'x.woff2' }, options);
     expect(descriptors.display).toBe('swap');
     await vi.advanceTimersByTimeAsync(100);
     await expect(result).resolves.toBe(false);

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { setTimeout as waitForNativeIo } from 'node:timers/promises';
 import vm from 'node:vm';
 
 import { describe, expect, it, vi } from 'vitest';
@@ -162,16 +163,17 @@ const waitForDecodePost = async (worker: FakeWorker): Promise<void> => {
     await tick(1);
   }
 };
-/** Advance fake time until the decode request lands: a gated digest that
- * was just released resolves on the event loop, and crafted messages must
- * not race the submission they claim to answer. */
+/** Keep fake time fixed while giving native digest I/O time to complete.
+ * Crafted messages must not race the submission they claim to answer. */
 const advanceUntilDecodePost = async (worker: FakeWorker): Promise<void> => {
-  for (let attempt = 0; attempt < 50; attempt++) {
+  for (let attempt = 0; attempt < 100; attempt++) {
     if (worker.requests.some((request) => request.type === 'decode')) {
       return;
     }
     await vi.advanceTimersByTimeAsync(0);
+    await waitForNativeIo(10);
   }
+  throw new Error('The archive decode request was not posted after waiting for native digest I/O.');
 };
 /** Wait until the real dispatch has posted the given number of entries;
  * native digests settle on the event loop, so a fixed number of turns is

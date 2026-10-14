@@ -3,6 +3,13 @@ import { dirname, isAbsolute, join, normalize, relative, resolve } from 'node:pa
 import { gzipSync } from 'node:zlib';
 
 import type { DevvitInlineBudget } from './schemas';
+import {
+  dataReferences,
+  htmlReferences,
+  scriptReferences,
+  styleReferences,
+  type InlineReference,
+} from './devvit-inline-references';
 
 export interface DevvitInlineGraphFile {
   readonly path: string;
@@ -12,6 +19,7 @@ export interface DevvitInlineGraphFile {
 
 export interface DevvitInlineReport {
   readonly entry: string;
+  readonly externalReferences: readonly string[];
   readonly files: readonly DevvitInlineGraphFile[];
   readonly gzipBytes: number;
   readonly forbiddenHits: readonly { readonly module: string; readonly file: string }[];
@@ -24,17 +32,6 @@ const moduleSignatures: Readonly<Record<string, RegExp>> = {
   pixi: /PIXI\.Application|pixi\.js/,
   three: /REVISION\s*=\s*["']\d+["'].*three/,
 };
-
-const dynamicImportPattern = /\bimport\(\s*["']([^"']+)["']\s*\)/g;
-const staticImportPattern = /(?:^|[;\s}])(?:import|export)\s*(?:[\w*{}\s,$]+\s*from\s*)?["']([^"']+)["']/g;
-const htmlAssetPattern = /<(?:script[^>]*\ssrc|link[^>]*\srel=["'](?:modulepreload|stylesheet|preload)["'][^>]*\shref)=["']([^"']+)["']/giu;
-const htmlAssetPatternReversed = /<link[^>]*\shref=["']([^"']+)["'][^>]*\srel=["'](?:modulepreload|stylesheet|preload)["']/giu;
-const htmlMediaTagPattern = /<(?:img|audio|video|source|track|input|embed|object)\b[^>]*>/giu;
-const htmlMediaUrlPattern = /\s(?:src|poster|data)=["']([^"']+)["']/giu;
-const htmlImageCandidateTagPattern = /<(?:img|source|link)\b[^>]*>/giu;
-const htmlImageCandidatePattern = /\s(?:srcset|imagesrcset)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/giu;
-const cssImportPattern = /@import\s+(?:url\(\s*["']?([^\s"')]+)["']?\s*\)|["']([^"']+)["'])/gi;
-const cssUrlPattern = /url\(\s*(?:"([^"]+)"|'([^']+)'|([^\s)]+))\s*\)/giu;
 
 /**
  * Walk the inline entry's load graph: HTML scripts, modulepreloads and
@@ -71,65 +68,70 @@ function walkInlineGraph(
     throw new Error(`Devvit inlineEntry ${inlineEntry} does not exist in ${clientDir}.`);
   }
   const html = readFileSync(entryPath, 'utf8');
-  const queue: { readonly file: string; readonly dynamic: boolean }[] = [];
-  for (const pattern of [htmlAssetPattern, htmlAssetPatternReversed]) {
-    for (const match of html.matchAll(pattern)) {
-      const reference = match[1];
-      if (reference !== undefined && isLocalReference(reference)) {
-        queue.push({ file: resolveReference(root, dirname(entryPath), reference), dynamic: false });
+  const queue: (InlineReference & { readonly file: string; readonly key: string })[] = [];
+  const externalReferences = new Set<string>();
+  const dataSeen = new Set<string>();
+  const allContents: { path: string; content: string }[] = [];
+  const enqueue = (references: readonly InlineReference[], fromFile: string, fromData = false): void => {
+    const fromDir = dirname(fromFile);
+    for (const edge of references) {
+      const { url, scriptKind } = edge;
+      let reference = url.trim();
+      if (edge.document === true && /^about:blank(?:#.*)?$/iu.test(reference)) {
+        continue;
       }
-    }
-  }
-  for (const tag of html.matchAll(htmlMediaTagPattern)) {
-    for (const match of tag[0].matchAll(htmlMediaUrlPattern)) {
-      const reference = match[1];
-      if (reference !== undefined && isLocalReference(reference)) {
-        queue.push({ file: resolveReference(root, dirname(entryPath), reference), dynamic: false });
+      if (reference === '' || reference.startsWith('#')) {
+        continue;
       }
-    }
-  }
-  // Charge every possible responsive candidate conservatively: the built
-  // artifact has no fixed viewport or DPR with which to select one image.
-  for (const tag of html.matchAll(htmlImageCandidateTagPattern)) {
-    for (const match of tag[0].matchAll(htmlImageCandidatePattern)) {
-      for (const reference of srcsetReferences(match[1] ?? match[2] ?? match[3] ?? '')) {
-        if (isLocalReference(reference)) {
-          queue.push({
-            file: resolveReference(root, dirname(entryPath), reference),
-            dynamic: false,
-          });
+      if (/^data:/iu.test(reference)) {
+        if (edge.traverse === false) {
+          continue;
         }
-      }
-    }
-  }
-  for (const block of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/giu)) {
-    for (const [pattern, dynamic] of [
-      [staticImportPattern, false],
-      [dynamicImportPattern, true],
-    ] as const) {
-      for (const match of (block[1] ?? '').matchAll(pattern)) {
-        const reference = match[1];
-        if (reference !== undefined && isLocalReference(reference)) {
-          queue.push({ file: resolveReference(root, dirname(entryPath), reference), dynamic });
+        const identity = `${scriptKind ?? ''}:${reference}`;
+        if (!dataSeen.has(identity)) {
+          dataSeen.add(identity);
+          const data = dataReferences(reference, scriptKind);
+          if (data !== undefined) {
+            allContents.push({
+              path: `${relative(root, fromFile)}#data-${dataSeen.size}`,
+              content: data.content,
+            });
+            enqueue(data.references, fromFile, true);
+          }
         }
+        continue;
       }
-    }
-  }
-  for (const block of html.matchAll(/<style\b[^>]*>([\s\S]*?)<\/style>/giu)) {
-    for (const pattern of [cssImportPattern, cssUrlPattern]) {
-      for (const match of (block[1] ?? '').matchAll(pattern)) {
-        const reference = match[1] ?? match[2] ?? match[3];
-        if (reference !== undefined && isLocalReference(reference)) {
-          queue.push({
-            file: resolveReference(root, dirname(entryPath), reference),
-            dynamic: false,
-          });
-        }
+      if (fromData && !/^[a-z][a-z\d+.-]*:/iu.test(reference)) {
+        throw new Error(
+          'Relative dependencies inside Devvit inline data URLs are unsupported; use artifact files.',
+        );
       }
+      // Same-scheme references without an authority are relative on HTTPS deployments.
+      if (!fromData && /^https:(?![/\\]{2})/iu.test(reference)) {
+        const sourcePath = relative(root, fromFile).replace(/\\/gu, '/').split('/').map(encodeURIComponent).join(
+          '/',
+        );
+        const base = new URL(sourcePath, 'https://artifact.invalid/');
+        const resolved = new URL(reference, base);
+        reference = resolved.pathname + resolved.search + resolved.hash;
+      }
+      if (/^(?:[a-z][a-z\d+.-]*:|\/\/)/iu.test(reference)) {
+        externalReferences.add(reference);
+        continue;
+      }
+      const file = resolveReference(root, fromDir, reference);
+      const query = reference.split('#')[0]?.match(/\?.*/u)?.[0] ?? '';
+      queue.push({
+        ...edge,
+        file,
+        key: file + query,
+      });
     }
-  }
+  };
+  enqueue(htmlReferences(html), entryPath);
   const deferred = deferredChunks.map(globToRegExp);
   const seen = new Set<string>([entryPath]);
+  const traversed = new Set<string>([entryPath]);
   const entryBytes = Buffer.from(html);
   const entryName = relative(root, entryPath).replace(/\\/gu, '/');
   const files: DevvitInlineGraphFile[] = [
@@ -140,10 +142,10 @@ function walkInlineGraph(
     },
   ];
   const forbiddenHits: readonly { module: string; file: string }[] = [];
-  const allContents: { path: string; content: string }[] = [{ path: entryName, content: html }];
+  allContents.push({ path: entryName, content: html });
   while (queue.length > 0) {
     const edge = queue.shift();
-    if (edge === undefined || seen.has(edge.file)) {
+    if (edge === undefined || (seen.has(edge.key) && (edge.traverse === false || traversed.has(edge.key)))) {
       continue;
     }
     assertClientPath(root, edge.file);
@@ -156,83 +158,39 @@ function walkInlineGraph(
       // A later static edge must still include this file in the first load.
       continue;
     }
-    seen.add(file);
+    const resourcePath = filePath + edge.key.slice(file.length);
     const buffer = readFileSync(file);
-    files.push({
-      path: filePath,
-      bytes: buffer.length,
-      gzipBytes: gzipSync(buffer, { level: 9 }).length,
-    });
     const content = buffer.toString('utf8');
-    allContents.push({ path: filePath, content });
-    if (file.endsWith('.js') || file.endsWith('.mjs')) {
-      for (const [pattern, dynamic] of [
-        [staticImportPattern, false],
-        [dynamicImportPattern, true],
-      ] as const) {
-        for (const match of content.matchAll(pattern)) {
-          const reference = match[1];
-          if (reference !== undefined && isLocalReference(reference)) {
-            queue.push({ file: resolveReference(root, dirname(file), reference), dynamic });
-          }
-        }
-      }
+    if (!seen.has(edge.key)) {
+      seen.add(edge.key);
+      files.push({
+        path: resourcePath,
+        bytes: buffer.length,
+        gzipBytes: gzipSync(buffer, { level: 9 }).length,
+      });
+      allContents.push({ path: resourcePath, content });
+    }
+    if (edge.traverse === false) {
+      continue;
+    }
+    traversed.add(edge.key);
+    if (edge.document === true) {
+      enqueue(htmlReferences(content), file);
+    } else if (file.endsWith('.js') || file.endsWith('.mjs')) {
+      enqueue(scriptReferences(content, edge.scriptKind), file);
     } else if (file.endsWith('.css')) {
-      for (const pattern of [cssImportPattern, cssUrlPattern]) {
-        for (const match of content.matchAll(pattern)) {
-          const reference = match[1] ?? match[2] ?? match[3];
-          if (reference !== undefined && isLocalReference(reference)) {
-            queue.push({ file: resolveReference(root, dirname(file), reference), dynamic: false });
-          }
-        }
-      }
+      enqueue(styleReferences(content), file);
     }
   }
+
   return {
     entry: inlineEntry,
+    externalReferences: [...externalReferences].sort(),
     files,
     gzipBytes: files.reduce((total, file) => total + file.gzipBytes, 0),
     forbiddenHits,
     contents: allContents,
   };
-}
-
-/** URL tokenization from the HTML srcset algorithm; descriptors are not size-selection inputs here. */
-function srcsetReferences(input: string): readonly string[] {
-  const references: string[] = [];
-  const whitespace = /[\t\n\f\r ]/u;
-  let position = 0;
-  while (position < input.length) {
-    while (position < input.length && (whitespace.test(input.charAt(position)) || input[position] === ',')) {
-      position += 1;
-    }
-    const start = position;
-    while (position < input.length && !whitespace.test(input.charAt(position))) {
-      position += 1;
-    }
-    const url = input.slice(start, position);
-    if (url.length === 0) {
-      break;
-    }
-    references.push(url.replace(/,+$/u, ''));
-    // A data URL may contain commas. Only trailing commas or a descriptor
-    // separator end a candidate; splitting the whole attribute on ',' is wrong.
-    if (url.endsWith(',')) {
-      continue;
-    }
-    let inParens = false;
-    while (position < input.length) {
-      const character = input[position++];
-      if (character === '(') {
-        inParens = true;
-      } else if (character === ')') {
-        inParens = false;
-      } else if (character === ',' && !inParens) {
-        break;
-      }
-    }
-  }
-  return references;
 }
 
 export function assertDevvitInlineBudget(input: {
@@ -246,13 +204,18 @@ export function assertDevvitInlineBudget(input: {
     input.inlineEntry,
     input.budget?.deferredChunks ?? [],
   );
+  if (input.budget !== undefined && report.externalReferences.length > 0) {
+    throw new Error('Devvit inline budget cannot verify external first-load resources: '
+      + report.externalReferences.join(', ') + '. Bundle these resources into the client artifact.');
+  }
   const contents = report.contents;
   const hits: { module: string; file: string }[] = [];
   for (const moduleName of input.budget?.forbidModules ?? []) {
     const signature = moduleSignatures[moduleName];
     const namePattern = new RegExp(`(?:^|[/._-])${escapeRegExp(moduleName)}(?:[._-]|$)`, 'i');
     for (const file of contents) {
-      if (namePattern.test(file.path.replace(/\.[a-z0-9]+$/i, '')) || signature?.test(file.content) === true) {
+      const pathname = file.path.split('?')[0] ?? file.path;
+      if (namePattern.test(pathname.replace(/\.[a-z0-9]+$/i, '')) || signature?.test(file.content) === true) {
         hits.push({ module: moduleName, file: file.path });
       }
     }
@@ -273,19 +236,15 @@ export function assertDevvitInlineBudget(input: {
   }
   return {
     entry: report.entry,
+    externalReferences: report.externalReferences,
     files: report.files,
     gzipBytes: report.gzipBytes,
     forbiddenHits: hits,
   };
 }
 
-function isLocalReference(reference: string): boolean {
-  return reference !== '' && !reference.startsWith('#')
-    && !/^(?:[a-z][a-z\d+.-]*:|\/\/)/iu.test(reference);
-}
-
 function resolveReference(root: string, fromDir: string, reference: string): string {
-  const clean = reference.split(/[?#]/)[0] ?? reference;
+  const clean = decodeURIComponent(reference.split(/[?#]/)[0] ?? reference);
   return normalize(clean.startsWith('/') ? join(root, clean) : resolve(fromDir, clean));
 }
 

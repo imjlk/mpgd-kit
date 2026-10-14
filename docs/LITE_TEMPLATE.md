@@ -102,11 +102,22 @@ scripts, preloads, stylesheets, local media, static imports, and dynamic
 
 - a `forbidModules` entry is reachable, matched by chunk name or a content
   signature (`phaser`, `matter-js`, `pixi`, `three`);
-- the gzip total exceeds `maxGzipKb`.
+- the gzip total exceeds `maxGzipKb`;
+- an inline budget is configured and a first-load resource uses an external URL
+  whose bytes cannot be verified from the artifact. Bundle those resources locally.
 
 HTML bytes, CSS-referenced fonts and images, and every local `srcset` or
 `imagesrcset` candidate count toward the total. Responsive candidates are
 counted conservatively because the build has no fixed viewport or DPR.
+HTML attributes may be quoted or unquoted; inline `style` URLs also count.
+Eager iframe documents (including `srcdoc`) and CSS `image-set` candidates count.
+Executable and stylesheet data URLs have their dependencies inspected; their payload
+bytes are already included in the containing resource. Relative dependencies inside
+data URLs are unsupported; emit artifact files for those dependencies.
+JavaScript imports and CSS values are parsed as syntax, so imports or URLs shown
+in strings or comments do not add dependencies. Distinct query URLs are charged separately, even when
+they use the same local file. A `base href` is unsupported; emit artifact-relative
+URLs instead. Inspection without a budget reports external references.
 
 `deferredChunks` (paths relative to the Devvit client output, `*` wildcards)
 mark chunks that only the expanded surface or a user interaction fetches; they
@@ -121,6 +132,24 @@ playtest; the smoke check only guards bundle composition and size.
 `examples/lite-starter` measures about 12 KiB gzip for the HTML-inclusive inline first load
 (the Devvit adapter, the text-selection policy, and the lite shell), with
 Phaser absent from every chunk and `matter-js` loaded on demand.
+
+## Windows consumer verification
+
+The Windows CI matrix generates both the Phaser packed consumer and the lite
+workspace consumer with `--microsoft-store`. Each goes through dependency install,
+frozen install, type checking, web/PWA build, and native WinUI packaging. Separate
+x64 and ARM64 runners install and activate each generated MSIX, checking its game
+bundle hash, non-empty canvas, boot errors, and native bridge contracts. Native
+artifacts and receipts include the template name so results cannot be mixed.
+
+The lite lane uses `--template lite --workspace --kit-path ...` while
+`@mpgd/lite-shell` remains private. Run the generation/build portion locally with
+`MPGD_WINDOWS_SMOKE_TEMPLATE=lite pnpm smoke:windows-starter` in a disposable
+checkout after building KIT packages. The generated workspace install rewrites
+dependency links in that checkout's workspace packages. The smoke command checks
+and compiles KIT tools before installation, then reuses that checked emit for
+nested target commands. Native package
+installation runs on isolated CI machines.
 
 ## Publishing status
 
