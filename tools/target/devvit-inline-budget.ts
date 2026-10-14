@@ -67,24 +67,39 @@ function walkInlineGraph(
     throw new Error(`Devvit inlineEntry ${inlineEntry} does not exist in ${clientDir}.`);
   }
   const html = readFileSync(entryPath, 'utf8');
-  const queue: { readonly file: string; readonly key: string; readonly dynamic: boolean }[] = [];
+  const queue: { readonly file: string; readonly key: string; readonly dynamic: boolean; readonly scriptKind?: 'script' | 'module' }[] = [];
   const externalReferences = new Set<string>();
-  const enqueue = (references: readonly InlineReference[], fromDir: string): void => {
-    for (const { url, dynamic } of references) {
-      const reference = url.trim();
+  const enqueue = (references: readonly InlineReference[], fromFile: string): void => {
+    const fromDir = dirname(fromFile);
+    for (const { url, dynamic, scriptKind } of references) {
+      let reference = url.trim();
       if (reference === '' || reference.startsWith('#') || /^data:/iu.test(reference)) {
         continue;
+      }
+      // Same-scheme references without an authority are relative on HTTPS deployments.
+      if (/^https:(?![/\\]{2})/iu.test(reference)) {
+        const sourcePath = relative(root, fromFile).replace(/\\/gu, '/').split('/').map(encodeURIComponent).join(
+          '/',
+        );
+        const base = new URL(sourcePath, 'https://artifact.invalid/');
+        const resolved = new URL(reference, base);
+        reference = resolved.pathname + resolved.search + resolved.hash;
       }
       if (/^(?:[a-z][a-z\d+.-]*:|\/\/)/iu.test(reference)) {
         externalReferences.add(reference);
         continue;
       }
       const file = resolveReference(root, fromDir, reference);
-      const query = reference.match(/\?[^#]*/u)?.[0] ?? '';
-      queue.push({ file, key: file + query, dynamic });
+      const query = reference.split('#')[0]?.match(/\?.*/u)?.[0] ?? '';
+      queue.push({
+        file,
+        key: file + query,
+        dynamic,
+        ...(scriptKind === undefined ? {} : { scriptKind }),
+      });
     }
   };
-  enqueue(htmlReferences(html), dirname(entryPath));
+  enqueue(htmlReferences(html), entryPath);
   const deferred = deferredChunks.map(globToRegExp);
   const seen = new Set<string>([entryPath]);
   const entryBytes = Buffer.from(html);
@@ -124,9 +139,9 @@ function walkInlineGraph(
     const content = buffer.toString('utf8');
     allContents.push({ path: resourcePath, content });
     if (file.endsWith('.js') || file.endsWith('.mjs')) {
-      enqueue(scriptReferences(content), dirname(file));
+      enqueue(scriptReferences(content, edge.scriptKind), file);
     } else if (file.endsWith('.css')) {
-      enqueue(styleReferences(content), dirname(file));
+      enqueue(styleReferences(content), file);
     }
   }
 

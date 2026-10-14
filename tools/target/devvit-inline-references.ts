@@ -6,13 +6,14 @@ import valueParser from 'postcss-value-parser';
 export interface InlineReference {
   readonly url: string;
   readonly dynamic: boolean;
+  readonly scriptKind?: 'script' | 'module';
 }
 
 /** Parse executable syntax so tutorial strings and comments cannot create edges. */
-export function scriptReferences(content: string): readonly InlineReference[] {
+export function scriptReferences(content: string, sourceType: 'script' | 'module' = 'module'): readonly InlineReference[] {
   const references: InlineReference[] = [];
   const pending: unknown[] = [
-    parseJavaScript(content, { ecmaVersion: 'latest', sourceType: 'module', allowHashBang: true }),
+    parseJavaScript(content, { ecmaVersion: 'latest', sourceType, allowHashBang: true }),
   ];
   while (pending.length > 0) {
     const value = pending.pop();
@@ -25,7 +26,11 @@ export function scriptReferences(content: string): readonly InlineReference[] {
     )) {
       const source = node.source as { readonly type?: string; readonly value?: unknown } | null | undefined;
       if (source?.type === 'Literal' && typeof source.value === 'string') {
-        references.push({ url: source.value, dynamic: node.type === 'ImportExpression' });
+        references.push({
+          url: source.value,
+          dynamic: node.type === 'ImportExpression',
+          scriptKind: 'module',
+        });
       }
     }
     for (const child of Object.values(node)) {
@@ -60,7 +65,11 @@ export function styleReferences(content: string): readonly InlineReference[] {
   };
   const stylesheet = parseCss(content);
   stylesheet.walkDecls((declaration) => collect(declaration.value));
-  stylesheet.walkAtRules((rule) => collect(rule.params, rule.name.toLowerCase() === 'import'));
+  stylesheet.walkAtRules((rule) => {
+    if (rule.name.toLowerCase() === 'import') {
+      collect(rule.params, true);
+    }
+  });
   return references;
 }
 
@@ -68,9 +77,9 @@ export function styleReferences(content: string): readonly InlineReference[] {
 export function htmlReferences(content: string): readonly InlineReference[] {
   const references: InlineReference[] = [];
   const pending: DefaultTreeAdapterTypes.Node[] = [parseHtml(content)];
-  const add = (url: string | undefined): void => {
+  const add = (url: string | undefined, scriptKind?: 'script' | 'module'): void => {
     if (url !== undefined) {
-      references.push({ url, dynamic: false });
+      references.push({ url, dynamic: false, ...(scriptKind === undefined ? {} : { scriptKind }) });
     }
   };
   while (pending.length > 0) {
@@ -92,10 +101,18 @@ export function htmlReferences(content: string): readonly InlineReference[] {
       );
     }
     if (tag === 'script') {
-      add(attrs.get('src'));
-      const type = (attrs.get('type') ?? '').trim().toLowerCase();
-      if (!attrs.has('src') && ['', 'module', 'text/javascript', 'application/javascript'].includes(type)) {
-        references.push(...scriptReferences(textContent(node)));
+      const language = attrs.get('language') ?? '';
+      const type = (attrs.get('type') ?? (language === '' ? '' : `text/${language}`)).trim().toLowerCase();
+      const kind = type === 'module'
+        ? 'module'
+        : type === '' || javascriptMimeTypes.has(type)
+          ? 'script'
+          : undefined;
+      if (kind !== undefined) {
+        add(attrs.get('src'), kind);
+        if (!attrs.has('src')) {
+          references.push(...scriptReferences(textContent(node), kind));
+        }
       }
     } else if (tag === 'link') {
       const rel = (attrs.get('rel') ?? '').toLowerCase().split(/\s+/u);
@@ -122,6 +139,26 @@ export function htmlReferences(content: string): readonly InlineReference[] {
   }
   return references;
 }
+
+// https://mimesniff.spec.whatwg.org/#javascript-mime-type
+const javascriptMimeTypes = new Set([
+  'application/ecmascript',
+  'application/javascript',
+  'application/x-ecmascript',
+  'application/x-javascript',
+  'text/ecmascript',
+  'text/javascript',
+  'text/javascript1.0',
+  'text/javascript1.1',
+  'text/javascript1.2',
+  'text/javascript1.3',
+  'text/javascript1.4',
+  'text/javascript1.5',
+  'text/jscript',
+  'text/livescript',
+  'text/x-ecmascript',
+  'text/x-javascript',
+]);
 
 function textContent(node: DefaultTreeAdapterTypes.Element): string {
   return node.childNodes.map((child) => child.nodeName === '#text' && 'value' in child ? child.value : '').join(

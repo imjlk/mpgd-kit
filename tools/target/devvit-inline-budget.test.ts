@@ -30,10 +30,10 @@ try {
   ]);
 
   for (const html of [
-    '<script src=/assets/preview.js></script><link rel=stylesheet href=./assets/preview.css>',
-    '<script src = /assets/preview.js></script><link rel="alternate stylesheet" href=./assets/preview.css>',
-    '<SCRIPT SRC="/assets/preview.js"></SCRIPT><LINK REL="STYLESHEET" HREF="./assets/preview.css">',
-    '<ScRiPt SrC="/assets/preview.js"></ScRiPt><LiNk HrEf="./assets/preview.css" ReL="stylesheet">',
+    '<script type=module src=/assets/preview.js></script><link rel=stylesheet href=./assets/preview.css>',
+    '<script type=module src = /assets/preview.js></script><link rel="alternate stylesheet" href=./assets/preview.css>',
+    '<SCRIPT TYPE=module SRC="/assets/preview.js"></SCRIPT><LINK REL="STYLESHEET" HREF="./assets/preview.css">',
+    '<ScRiPt TyPe=module SrC="/assets/preview.js"></ScRiPt><LiNk HrEf="./assets/preview.css" ReL="stylesheet">',
   ]) {
     writeFileSync(join(root, 'index.html'), html);
     assert.deepEqual(
@@ -179,7 +179,7 @@ try {
   );
 
   // An HTML entry cannot defer a script or preload by giving its filename.
-  writeFileSync(join(root, 'index.html'), '<script src="/assets/phaser.js"></script>');
+  writeFileSync(join(root, 'index.html'), '<script type=module src="/assets/phaser.js"></script>');
   writeFileSync(join(root, 'assets/phaser.js'), 'export const opaque=1;');
   assert.throws(
     () =>
@@ -256,10 +256,10 @@ try {
     'const lazy = import /* allowed comment */ ("./real.js?v=2");',
   ].join('\n'));
   writeFileSync(join(root, 'index.html'), [
-    '<!-- <script src=./missing-comment.js></script> -->',
-    '<template><script src=./missing-template.js></script></template>',
+    '<!-- <script type=module src=./missing-comment.js></script> -->',
+    '<template><script type=module src=./missing-template.js></script></template>',
     '<script type=application/json>{"text":"import(\\"./missing-json.js\\")"}</script>',
-    '<script src=./assets/syntax.js></script>',
+    '<script type=module src=./assets/syntax.js></script>',
     '<div style="background: url(&quot;./assets/image.png&quot;)"></div>',
   ].join(''));
   assert.deepEqual(
@@ -286,9 +286,9 @@ try {
 
   // URL identities retain query strings; identical references still deduplicate.
   writeFileSync(join(root, 'index.html'), [
-    '<script src="./assets/real.js?v=1&amp;x=2"></script>',
-    '<script src="./assets/real.js?v=1&#38;x=2"></script>',
-    '<script src="./assets/real.js?v=2"></script>',
+    '<script type=module src="./assets/real.js?v=1&amp;x=2"></script>',
+    '<script type=module src="./assets/real.js?v=1&#38;x=2"></script>',
+    '<script type=module src="./assets/real.js?v=2"></script>',
   ].join(''));
   const queries = collectDevvitInlineGraph(root, 'index.html');
   assert.deepEqual(queries.files.map((file) => file.path).sort(), [
@@ -298,9 +298,68 @@ try {
   ]);
   assert.equal(queries.files[1]?.gzipBytes, queries.files[2]?.gzipBytes);
 
+  // Classic scripts retain sloppy syntax, while imported children are modules.
+  const classic = 'with (Math) { console.log(010); } import("./real.js");';
+  writeFileSync(join(root, 'assets/classic.js'), classic);
+  writeFileSync(join(root, 'index.html'), '<script src="./assets/classic.js"></script>');
+  assert.deepEqual(
+    collectDevvitInlineGraph(root, 'index.html').files.map((file) => file.path).sort(),
+    ['assets/classic.js', 'assets/real.js', 'index.html'],
+  );
+  for (const type of ['', 'text/ecmascript', 'application/x-javascript', 'text/javascript1.5']) {
+    writeFileSync(
+      join(root, 'index.html'),
+      `<script type="${type}">${classic.replace('./real.js', './assets/real.js')}</script>`,
+    );
+    assert.deepEqual(
+      collectDevvitInlineGraph(root, 'index.html').files.map((file) => file.path).sort(),
+      ['assets/real.js', 'index.html'],
+    );
+  }
+  writeFileSync(
+    join(root, 'index.html'),
+    '<script type="application/json" src="./missing.json"></script>',
+  );
+  assert.equal(collectDevvitInlineGraph(root, 'index.html').files.length, 1);
+
+  // Fragments never distinguish requests, including question marks within fragments.
+  writeFileSync(join(root, 'index.html'), [
+    '<script type=module src="./assets/real.js#preview?v=1"></script>',
+    '<script type=module src="./assets/real.js#preview?v=2"></script>',
+    '<script type=module src="./assets/real.js?v=3#preview?v=4"></script>',
+  ].join(''));
+  assert.deepEqual(
+    collectDevvitInlineGraph(root, 'index.html').files.map((file) => file.path).sort(),
+    ['assets/real.js', 'assets/real.js?v=3', 'index.html'],
+  );
+
+  // A namespace URL identifies a namespace; it is not fetched.
+  writeFileSync(
+    join(root, 'index.html'),
+    '<style>@namespace svg url("http://www.w3.org/2000/svg");svg|a{background:url(./assets/image.png)}</style>',
+  );
+  const namespace = assertDevvitInlineBudget({
+    target: 'reddit',
+    clientDir: root,
+    inlineEntry: 'index.html',
+    budget: { maxGzipKb: 40 },
+  });
+  assert.deepEqual(namespace.externalReferences, []);
+  assert.equal(namespace.files.length, 2);
+
+  // HTTPS references without an authority resolve against the deployment URL.
+  writeFileSync(join(root, 'index.html'), [
+    '<script type=module src="https:./assets/real.js"></script>',
+    '<script type=module src="https:/assets/real.js"></script>',
+  ].join(''));
+  assert.deepEqual(
+    collectDevvitInlineGraph(root, 'index.html').files.map((file) => file.path).sort(),
+    ['assets/real.js', 'index.html'],
+  );
+
   // External bytes cannot be verified locally. Inspection reports them; enforcement rejects them.
   for (const html of [
-    '<script src=https://example.invalid/game.js></script>',
+    '<script type=module src=https://example.invalid/game.js></script>',
     '<link rel=stylesheet href=//example.invalid/game.css>',
     '<div style="background:url(https://example.invalid/image.png)"></div>',
     '<style>@font-face{src:url(https://example.invalid/font.woff2)}</style>',
@@ -322,7 +381,7 @@ try {
   }
   writeFileSync(
     join(root, 'index.html'),
-    '<base href="https://example.invalid/"><script src=assets/real.js></script>',
+    '<base href="https://example.invalid/"><script type=module src=assets/real.js></script>',
   );
   assert.throws(() => collectDevvitInlineGraph(root, 'index.html'), /base href/);
 
@@ -331,7 +390,7 @@ try {
     () => collectDevvitInlineGraph(root, '../index.html'),
     /escapes the client artifact/,
   );
-  writeFileSync(join(root, 'index.html'), '<script src="../outside.js"></script>');
+  writeFileSync(join(root, 'index.html'), '<script type=module src="../outside.js"></script>');
   assert.throws(() => collectDevvitInlineGraph(root, 'index.html'), /escapes the client artifact/);
 } finally {
   rmSync(root, { recursive: true, force: true });
