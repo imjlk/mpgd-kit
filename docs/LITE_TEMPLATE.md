@@ -135,7 +135,9 @@ The lite lane uses `--template lite --workspace --kit-path ...` while
 `@mpgd/lite-shell` remains private. Run the generation/build portion locally with
 `MPGD_WINDOWS_SMOKE_TEMPLATE=lite pnpm smoke:windows-starter` in a disposable
 checkout after building KIT packages. The generated workspace install rewrites
-dependency links in that checkout's workspace packages. Native package
+dependency links in that checkout's workspace packages. The smoke command checks
+and compiles KIT tools before installation, then reuses that checked emit for
+nested target commands. Native package
 installation runs on isolated CI machines.
 
 ## Publishing status

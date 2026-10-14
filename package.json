@@ -138,7 +138,7 @@
     "smoke:cli-play-internal-submission": "node tools/run-ttsx.mjs adapters/play-publisher/src/play-internal-submission.test.ts",
     "smoke:cli-capacitor-shell-materialize": "node tools/run-ttsx.mjs tools/smoke/cli-capacitor-shell-materialize.ts",
     "smoke:native-packed-consumer": "node tools/smoke/native-packed-consumer.mjs",
-    "smoke:windows-starter": "node tools/smoke/windows-starter-consumer.mjs",
+    "smoke:windows-starter": "node tools/run-ttsx.mjs --compile-once tools/smoke/windows-starter.ts",
     "smoke:native-cli-packed-consumer": "node tools/smoke/native-cli-packed-consumer.mjs",
     "smoke:native-deploy-packed-release": "pnpm build:packages && node tools/smoke/native-cli-packed-consumer.mjs --release-simulation",
     "smoke:native-cli-packed-sync-ios": "node tools/smoke/native-cli-packed-consumer.mjs --sync-ios",
