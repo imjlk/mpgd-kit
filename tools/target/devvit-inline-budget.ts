@@ -77,10 +77,16 @@ function walkInlineGraph(
     for (const edge of references) {
       const { url, scriptKind } = edge;
       let reference = url.trim();
+      if (edge.document === true && /^about:blank(?:#.*)?$/iu.test(reference)) {
+        continue;
+      }
       if (reference === '' || reference.startsWith('#')) {
         continue;
       }
       if (/^data:/iu.test(reference)) {
+        if (edge.traverse === false) {
+          continue;
+        }
         const identity = `${scriptKind ?? ''}:${reference}`;
         if (!dataSeen.has(identity)) {
           dataSeen.add(identity);
@@ -125,6 +131,7 @@ function walkInlineGraph(
   enqueue(htmlReferences(html), entryPath);
   const deferred = deferredChunks.map(globToRegExp);
   const seen = new Set<string>([entryPath]);
+  const traversed = new Set<string>([entryPath]);
   const entryBytes = Buffer.from(html);
   const entryName = relative(root, entryPath).replace(/\\/gu, '/');
   const files: DevvitInlineGraphFile[] = [
@@ -138,7 +145,7 @@ function walkInlineGraph(
   allContents.push({ path: entryName, content: html });
   while (queue.length > 0) {
     const edge = queue.shift();
-    if (edge === undefined || seen.has(edge.key)) {
+    if (edge === undefined || (seen.has(edge.key) && (edge.traverse === false || traversed.has(edge.key)))) {
       continue;
     }
     assertClientPath(root, edge.file);
@@ -151,16 +158,22 @@ function walkInlineGraph(
       // A later static edge must still include this file in the first load.
       continue;
     }
-    seen.add(edge.key);
     const resourcePath = filePath + edge.key.slice(file.length);
     const buffer = readFileSync(file);
-    files.push({
-      path: resourcePath,
-      bytes: buffer.length,
-      gzipBytes: gzipSync(buffer, { level: 9 }).length,
-    });
     const content = buffer.toString('utf8');
-    allContents.push({ path: resourcePath, content });
+    if (!seen.has(edge.key)) {
+      seen.add(edge.key);
+      files.push({
+        path: resourcePath,
+        bytes: buffer.length,
+        gzipBytes: gzipSync(buffer, { level: 9 }).length,
+      });
+      allContents.push({ path: resourcePath, content });
+    }
+    if (edge.traverse === false) {
+      continue;
+    }
+    traversed.add(edge.key);
     if (edge.document === true) {
       enqueue(htmlReferences(content), file);
     } else if (file.endsWith('.js') || file.endsWith('.mjs')) {

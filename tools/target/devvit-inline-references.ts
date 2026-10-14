@@ -8,6 +8,7 @@ export interface InlineReference {
   readonly dynamic: boolean;
   readonly scriptKind?: 'script' | 'module';
   readonly document?: boolean;
+  readonly traverse?: boolean;
 }
 
 /** Parse executable syntax so tutorial strings and comments cannot create edges. */
@@ -132,10 +133,22 @@ export function htmlReferences(content: string): readonly InlineReference[] {
           references.push({ url, dynamic: false, document: true });
         }
       }
+    } else if (node.namespaceURI === 'http://www.w3.org/2000/svg' && ['image', 'use'].includes(tag)) {
+      const url = attrs.get('href');
+      if (url !== undefined) {
+        references.push({ url, dynamic: false, traverse: tag === 'use', document: tag === 'use' });
+      }
     } else if (tag === 'link') {
       const rel = (attrs.get('rel') ?? '').toLowerCase().split(/\s+/u);
       if (rel.some((value) => ['stylesheet', 'preload', 'modulepreload'].includes(value))) {
-        add(attrs.get('href'));
+        const url = attrs.get('href');
+        if (url !== undefined) {
+          references.push({
+            url,
+            dynamic: false,
+            traverse: rel.includes('stylesheet') || rel.includes('modulepreload'),
+          });
+        }
         for (const url of srcsetReferences(attrs.get('imagesrcset') ?? '')) {
           add(url);
         }
@@ -192,10 +205,22 @@ export function dataReferences(url: string, scriptKind?: 'script' | 'module'): {
   if (scriptKind === undefined && !javascriptMimeTypes.has(mime) && !['text/css', 'text/html'].includes(mime)) {
     return undefined;
   }
-  const payload = decodeURIComponent(url.slice(comma + 1).split('#')[0] ?? '');
+  const encoded = Buffer.from(url.slice(comma + 1).split('#')[0] ?? '');
+  const decoded: number[] = [];
+  for (let index = 0; index < encoded.length; index++) {
+    const byte = encoded[index];
+    const pair = encoded.subarray(index + 1, index + 3).toString('ascii');
+    if (byte === 37 && /^[\da-f]{2}$/iu.test(pair)) {
+      decoded.push(Number.parseInt(pair, 16));
+      index += 2;
+    } else if (byte !== undefined) {
+      decoded.push(byte);
+    }
+  }
+  const payload = Buffer.from(decoded);
   const content = header.endsWith(';base64')
-    ? Buffer.from(payload, 'base64').toString('utf8')
-    : payload;
+    ? Buffer.from(payload.toString('ascii'), 'base64').toString('utf8')
+    : payload.toString('utf8');
   const references = scriptKind !== undefined || javascriptMimeTypes.has(mime)
     ? scriptReferences(content, scriptKind)
     : mime === 'text/css'

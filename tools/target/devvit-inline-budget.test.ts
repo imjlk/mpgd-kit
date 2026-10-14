@@ -358,11 +358,35 @@ try {
   );
 
   // External bytes cannot be verified locally. Inspection reports them; enforcement rejects them.
+  writeFileSync(
+    join(root, 'index.html'),
+    '<script src="data:text/javascript,console.log(5%2)"></script><iframe src="about:blank#preview"></iframe>',
+  );
+  assert.deepEqual(collectDevvitInlineGraph(root, 'index.html').externalReferences, []);
+  writeFileSync(join(root, 'assets/later.js'), 'import "https://example.invalid/later.js";');
+  writeFileSync(join(root, 'index.html'), '<link rel=preload as=script href="./assets/later.js">');
+  assert.deepEqual(collectDevvitInlineGraph(root, 'index.html').externalReferences, []);
+  writeFileSync(
+    join(root, 'index.html'),
+    '<script type=module src="./assets/later.js"></script><link rel=preload as=script href="./assets/later.js">',
+  );
+  const preloadedScript = collectDevvitInlineGraph(root, 'index.html');
+  assert.equal(preloadedScript.externalReferences.length, 1);
+  assert.equal(preloadedScript.files.length, 2);
+  writeFileSync(
+    join(root, 'index.html'),
+    '<svg><image href="./assets/image.png"/><image xlink:href="./assets/poster.png"/></svg>',
+  );
+  assert.deepEqual(
+    collectDevvitInlineGraph(root, 'index.html').files.map((file) => file.path).sort(),
+    ['assets/image.png', 'assets/poster.png', 'index.html'],
+  );
   const externalImport = 'import "https://example.invalid/game.js";';
   const dataScript = `data:text/javascript,${encodeURIComponent(externalImport)}`;
   const dataBase64 = `data:text/javascript;base64,${Buffer.from(externalImport).toString('base64')}`;
   for (const html of [
     `<script type=module src="${dataScript}"></script>`,
+    '<svg><image href="https://example.invalid/image.png"/></svg>',
     `<script type=module src="${dataBase64}"></script>`,
     '<link rel=stylesheet href="data:text/css,body%7Bbackground:url(https://example.invalid/image.png)%7D">',
     '<style>body{background:image-set("https://example.invalid/image.png" 1x)}</style>',
