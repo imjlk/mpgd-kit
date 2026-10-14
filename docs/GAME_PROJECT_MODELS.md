@@ -142,6 +142,11 @@ The last game installed owns those links.
   the kit root with `pnpm workspace:relink`. `pnpm install --force` alone is not
   enough: it reports "Already up to date" and keeps the game's links.
   `pnpm workspace:check-links` exits non-zero while foreign links remain.
+  Relinking first verifies the frozen root install without lifecycle scripts;
+  if a nested independent game makes the root lockfile stale, it exits before
+  removing any dependency link folders. Resolve the reported workspace/lockfile
+  mismatch before retrying. Independent installs in `apps/` and `examples/`
+  are not removed.
 
 ## Devvit output file names
 

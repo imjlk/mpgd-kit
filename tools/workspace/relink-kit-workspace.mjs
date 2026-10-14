@@ -1,11 +1,12 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
   describeForeignKitDependencyLinks,
   findForeignKitDependencyLinks,
+  findKitBuildInstallRoot,
   isKitDependencyLinkOwnedBy,
   kitPackageGlobs,
 } from './kit-dependency-links.mjs';
@@ -21,7 +22,7 @@ const warnIndex = process.argv.indexOf('--warn-unless-owner');
 // owned by the game being built are expected in workspace mode; links owned by
 // any other install mean this build may use another game's dependencies.
 if (warnIndex !== -1) {
-  const owner = realpathSync(process.argv[warnIndex + 1] ?? process.cwd());
+  const owner = findKitBuildInstallRoot(process.argv[warnIndex + 1] ?? process.cwd());
   const foreign = findForeignKitDependencyLinks(kitRoot)
     .filter((entry) => !isKitDependencyLinkOwnedBy(entry, owner));
   const message = describeForeignKitDependencyLinks(kitRoot, foreign);
@@ -42,6 +43,15 @@ if (checkOnly) {
   process.exit(0);
 }
 
+// A nested independent game may match the root's workspace globs but not its
+// frozen lockfile. Check installation first so a failure cannot leave all kit
+// packages without dependency links. Skip lifecycle scripts during this pass.
+const preflight = install(['--ignore-scripts']);
+if (preflight.status !== 0) {
+  console.error('mpgd-kit: frozen install preflight failed; no dependency link folders were removed.');
+  process.exit(preflight.status ?? 1);
+}
+
 // A generated game's workspace only relinks these shared package groups.
 // Apps and examples may contain independent game installs: leave them intact.
 for (const group of kitPackageGlobs) {
@@ -55,9 +65,13 @@ for (const group of kitPackageGlobs) {
     }
   }
 }
-const result = spawnSync('pnpm', ['install', '--frozen-lockfile', '--prefer-offline'], {
-  cwd: kitRoot,
-  stdio: 'inherit',
-  shell: process.platform === 'win32',
-});
+const result = install([]);
 process.exit(result.status ?? 1);
+
+function install(extraArgs) {
+  return spawnSync('pnpm', ['install', '--frozen-lockfile', '--prefer-offline', ...extraArgs], {
+    cwd: kitRoot,
+    stdio: 'inherit',
+    shell: process.platform === 'win32',
+  });
+}

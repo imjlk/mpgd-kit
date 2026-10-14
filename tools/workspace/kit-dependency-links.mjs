@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readlinkSync, realpathSync } from 'node:fs';
-import { isAbsolute, join, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 
 // Kit workspace package roots. A `--workspace` game lists the same globs (with
 // a ../mpgd-kit prefix) in its pnpm-workspace.yaml, so `pnpm install` in the
@@ -20,6 +20,23 @@ function isInside(root, path) {
 // separate node_modules, and paths on another Windows drive are never owners.
 export function isKitDependencyLinkOwnedBy(entry, owner) {
   return entry.broken !== true && relative(entry.installRoot, owner) === '';
+}
+
+/** The nearest pnpm workspace owns nested games, unless they declare their own. */
+export function findKitBuildInstallRoot(gameDirectory) {
+  const gameRoot = realpathSync(gameDirectory);
+  let packageRoot;
+  for (let directory = gameRoot; ; directory = dirname(directory)) {
+    if (existsSync(join(directory, 'pnpm-workspace.yaml'))) {
+      return directory;
+    }
+    if (packageRoot === undefined && existsSync(join(directory, 'package.json'))) {
+      packageRoot = directory;
+    }
+    if (dirname(directory) === directory) {
+      return packageRoot ?? gameRoot;
+    }
+  }
 }
 
 function linkEntries(nodeModules) {

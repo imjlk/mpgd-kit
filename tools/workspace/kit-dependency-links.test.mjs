@@ -11,6 +11,7 @@ import test from 'node:test';
 import {
   describeForeignKitDependencyLinks,
   findForeignKitDependencyLinks,
+  findKitBuildInstallRoot,
   isKitDependencyLinkOwnedBy,
 } from './kit-dependency-links.mjs';
 
@@ -113,21 +114,47 @@ test('relink preserves independent apps and examples installs', () => {
     const pnpm = join(bin, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm');
     writeFileSync(
       pnpm,
-      process.platform === 'win32' ? '@echo off\r\nexit /b 0\r\n' : '#!/bin/sh\nexit 0\n',
+      process.platform === 'win32' ? '@echo off\r\nexit /b 1\r\n' : '#!/bin/sh\nexit 1\n',
     );
     chmodSync(pnpm, 0o755);
     const environment = { ...process.env };
     const pathKey = Object.keys(environment).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
     environment[pathKey] = bin;
-    const result = spawnSync(process.execPath, [join(scriptDir, 'relink-kit-workspace.mjs')], {
+    const runRelink = () => spawnSync(process.execPath, [join(scriptDir, 'relink-kit-workspace.mjs')], {
       env: environment,
       encoding: 'utf8',
     });
+    const failed = runRelink();
+    assert.equal(failed.status, 1);
+    assert.match(failed.stderr, /no dependency link folders were removed/u);
+    assert.equal(existsSync(join(nodeModules, 'dep')), true);
+    writeFileSync(
+      pnpm,
+      process.platform === 'win32' ? '@echo off\r\nexit /b 0\r\n' : '#!/bin/sh\nexit 0\n',
+    );
+    const result = runRelink();
     assert.equal(result.status, 0, result.stderr);
     assert.equal(existsSync(nodeModules), false);
     for (const marker of markers) {
       assert.equal(readFileSync(marker, 'utf8'), 'independent install');
     }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('nested games use the nearest workspace install owner', () => {
+  const root = mkdtempSync(join(tmpdir(), 'mpgd-workspace-owner-'));
+  try {
+    const game = join(root, 'games/puzzle-one');
+    mkdirSync(game, { recursive: true });
+    writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - games/*\n');
+    writeFileSync(join(game, 'package.json'), '{"name":"puzzle-one"}');
+    const entry = { installRoot: realpathSync(root) };
+    assert.equal(isKitDependencyLinkOwnedBy(entry, findKitBuildInstallRoot(game)), true);
+    writeFileSync(join(game, 'pnpm-workspace.yaml'), 'packages: []\n');
+    assert.equal(findKitBuildInstallRoot(game), realpathSync(game));
+    assert.equal(isKitDependencyLinkOwnedBy(entry, findKitBuildInstallRoot(game)), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
