@@ -41,6 +41,6 @@ foreach ($arch in @('x64', 'ARM64')) {
     @{
         architecture = $arch; sourceGitSha = $env:GITHUB_SHA; runId = $env:GITHUB_RUN_ID
         gameBundleSha256 = $gameHash; toolingSha256 = $toolingHash
-        origin = 'KIT CLI packed consumer generated game'
+        origin = 'KIT CLI generated game'; template = $env:MPGD_WINDOWS_SMOKE_TEMPLATE
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $destination 'package-build.json') -Encoding UTF8
 }
