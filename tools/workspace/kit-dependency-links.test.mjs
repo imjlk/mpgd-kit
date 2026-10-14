@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import {
+  chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync,
+  realpathSync, rmSync, symlinkSync, writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -84,6 +88,46 @@ test('broken links are reported', () => {
     assert.equal(foreign.length, 1);
     assert.equal(foreign[0].broken, true);
     assert.match(describeForeignKitDependencyLinks(kit, foreign), /workspace:relink/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('relink preserves independent apps and examples installs', () => {
+  const { root, kit, nodeModules } = fixture();
+  try {
+    const scriptDir = join(kit, 'tools/workspace');
+    mkdirSync(scriptDir, { recursive: true });
+    for (const name of ['kit-dependency-links.mjs', 'relink-kit-workspace.mjs']) {
+      copyFileSync(new URL(name, import.meta.url), join(scriptDir, name));
+    }
+    const markers = ['apps/independent', 'examples/independent'].map((game) => {
+      const directory = join(kit, game, 'node_modules/local-data');
+      mkdirSync(directory, { recursive: true });
+      const marker = join(directory, 'keep.txt');
+      writeFileSync(marker, 'independent install');
+      return marker;
+    });
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    const pnpm = join(bin, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm');
+    writeFileSync(
+      pnpm,
+      process.platform === 'win32' ? '@echo off\r\nexit /b 0\r\n' : '#!/bin/sh\nexit 0\n',
+    );
+    chmodSync(pnpm, 0o755);
+    const environment = { ...process.env };
+    const pathKey = Object.keys(environment).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
+    environment[pathKey] = bin;
+    const result = spawnSync(process.execPath, [join(scriptDir, 'relink-kit-workspace.mjs')], {
+      env: environment,
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(nodeModules), false);
+    for (const marker of markers) {
+      assert.equal(readFileSync(marker, 'utf8'), 'independent install');
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

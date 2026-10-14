@@ -42,7 +42,9 @@ if (checkOnly) {
   process.exit(0);
 }
 
-for (const group of [...kitPackageGlobs, 'apps', 'examples']) {
+// A generated game's workspace only relinks these shared package groups.
+// Apps and examples may contain independent game installs: leave them intact.
+for (const group of kitPackageGlobs) {
   const groupDir = join(kitRoot, group);
   if (!existsSync(groupDir)) {
     continue;
