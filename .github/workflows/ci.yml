@@ -197,7 +197,7 @@ jobs:
 
           for path in "${changed_files[@]}"; do
             case "${path}" in
-              docs/*|README.md|rspress.config.ts|lint.config.ts|tsconfig.base.json|tsconfig.evidence.json|tsconfig.docs-examples.json|tools/docs/*|packages/platform/*|package.json|pnpm-lock.yaml|.github/workflows/ci.yml)
+              docs/*|README.md|rspress.config.ts|lint.config.js|tools/config/*|tsconfig.base.json|tsconfig.evidence.json|tsconfig.docs-examples.json|tools/docs/*|packages/platform/*|package.json|pnpm-lock.yaml|.github/workflows/ci.yml)
                 docs_validation=true
                 ;;
             esac

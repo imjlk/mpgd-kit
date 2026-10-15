@@ -11,8 +11,7 @@
     "examples/**/*.ts",
     "native-plugins/**/*.ts",
     "packages/**/*.ts",
-    "tools/**/*.ts",
-    "lint.config.ts"
+    "tools/**/*.ts"
   ],
   "exclude": [
     "**/node_modules/**",

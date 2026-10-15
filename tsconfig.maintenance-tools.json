@@ -3,12 +3,15 @@
   "compilerOptions": {
     "types": ["node"],
     "noEmit": true,
-    "allowJs": true
+    "allowJs": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true
   },
   "include": [
     "tools/validate-share-link-conformance*.ts",
     "tools/docs/verify-evidence-entrypoints.ts",
-    "lint.config.ts",
+    "tools/config/lint.ts",
+    "lint.config.js",
     "strip.config.js",
     "tools/fixtures/typed-config-canary.ts"
   ]

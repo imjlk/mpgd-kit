@@ -21,7 +21,7 @@ This checklist tracks the Codex roadmap from the initial project brief.
 - [x] AGENTS.md written
 - [x] README.md draft written
 
-Note: `lint.config.ts` uses published config types under ttsc 0.32.1.
+Note: `tools/config/lint.ts` uses published config types under ttsc 0.32.1.
 `strip.config.js` remains a checked-JSDoc exception for the symlinked macOS
 temporary-directory loader issue; see `TTSC_TOOLCHAIN.md`.
 

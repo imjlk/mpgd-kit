@@ -18,7 +18,7 @@ tests to cite each confirmed section of
 Claim 5 uses a checklist so each selected guide must acknowledge each
 applicable [documentation principle](standards/documentation-principles.md).
 The source of truth for the claim definitions is the Evidence block in
-[`lint.config.ts`](https://github.com/imjlk/mpgd-kit/blob/main/lint.config.ts).
+[`tools/config/lint.ts`](https://github.com/imjlk/mpgd-kit/blob/main/tools/config/lint.ts).
 
 This scope does **not** cover every `@mpgd/platform` export or the historical
 documents in `docs/`. It does not treat roadmap, proposal, operational, or
