@@ -11,7 +11,7 @@
     "tools/validate-share-link-conformance*.ts",
     "tools/docs/verify-evidence-entrypoints.ts",
     "tools/config/lint.ts",
-    "lint.config.js",
+    "lint.config.ts",
     "strip.config.js",
     "tools/fixtures/typed-config-canary.ts"
   ]

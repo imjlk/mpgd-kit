@@ -17,7 +17,7 @@ export const packageBuildToolchainFiles = [
   'pnpm-lock.yaml',
   'package.json',
   'tsconfig.base.json',
-  'lint.config.js',
+  'lint.config.ts',
   'tools/config/lint.ts',
   'strip.config.js',
 ] as const;
