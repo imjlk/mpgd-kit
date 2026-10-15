@@ -4,13 +4,13 @@
 server, so CI can check that the graph still answers a fixed set of
 architecture questions about this repository.
 
-- `tools/graph/local-graph-runtime.mjs` dumps the graph with the native
+- `tools/graph/local-graph-runtime.ts` dumps the graph with the native
   `ttscgraph` binary for a `cwd`/`tsconfig` pair, loads it into the in-process
   graph application, and validates preset results.
-- `tools/graph/run-graph-presets.mjs` (`pnpm graph:preflight`) runs every
+- `tools/graph/run-graph-presets.ts` (`pnpm graph:preflight`) runs every
   preset under `tools/graph/requests/` and fails the build when a preset's
   contract is not met. CI runs it in the `build-web-targets` job.
-- `tools/graph/inspect-local-graph.mjs` (`pnpm graph:inspect --preset <name>`,
+- `tools/graph/inspect-local-graph.ts` (`pnpm graph:inspect --preset <name>`,
   `pnpm graph:dump`) prints a preset's raw answer or the dump for debugging.
 
 ## What a preset is

@@ -298,31 +298,6 @@ export const javascriptInventory = [
     reason: 'Authored JavaScript sibling fixture proves the TS runner never overwrites an existing JS source.',
   },
   {
-    file: 'tools/graph-runtime.test.mjs',
-    disposition: 'migration-backlog',
-    reason: 'Existing JavaScript orchestration or test awaiting a typed migration; this is not a runtime exception.',
-  },
-  {
-    file: 'tools/graph/inspect-local-graph.mjs',
-    disposition: 'migration-backlog',
-    reason: 'Existing JavaScript orchestration or test awaiting a typed migration; this is not a runtime exception.',
-  },
-  {
-    file: 'tools/graph/local-graph-runtime.mjs',
-    disposition: 'migration-backlog',
-    reason: 'Existing JavaScript orchestration or test awaiting a typed migration; this is not a runtime exception.',
-  },
-  {
-    file: 'tools/graph/run-graph-presets.mjs',
-    disposition: 'migration-backlog',
-    reason: 'Existing JavaScript orchestration or test awaiting a typed migration; this is not a runtime exception.',
-  },
-  {
-    file: 'tools/graph/run-graph-presets.test.mjs',
-    disposition: 'migration-backlog',
-    reason: 'Existing JavaScript orchestration or test awaiting a typed migration; this is not a runtime exception.',
-  },
-  {
     file: 'tools/package/packed-dependency-closure.mjs',
     disposition: 'migration-backlog',
     reason: 'Existing JavaScript orchestration or test awaiting a typed migration; this is not a runtime exception.',
@@ -396,16 +371,6 @@ export const javascriptInventory = [
     file: 'tools/ttsx-project-entry.mjs',
     disposition: 'runtime-exception',
     reason: 'Installs the TypeScript runtime entry before the selected typed script runs.',
-  },
-  {
-    file: 'tools/validate-capacitor-alignment.mjs',
-    disposition: 'migration-backlog',
-    reason: 'Existing JavaScript orchestration or test awaiting a typed migration; this is not a runtime exception.',
-  },
-  {
-    file: 'tools/validate-capacitor-fail-closed.mjs',
-    disposition: 'migration-backlog',
-    reason: 'Existing JavaScript orchestration or test awaiting a typed migration; this is not a runtime exception.',
   },
   {
     file: 'tools/validate-toolchain.mjs',

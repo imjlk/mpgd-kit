@@ -8,7 +8,7 @@ import {
   readPreset,
   readRequestFile,
   repoRoot,
-} from './local-graph-runtime.mjs';
+} from './local-graph-runtime.js';
 
 const args = process.argv.slice(2);
 const dumpOnly = args.includes('--dump');
@@ -27,7 +27,9 @@ if (requestPath !== undefined && presetName !== undefined) {
 }
 
 const requestBundle =
-  requestPath === undefined ? readPreset(presetName ?? 'target-release') : readRequestFile(requestPath);
+  requestPath === undefined
+    ? readPreset(presetName ?? 'target-release')
+    : readRequestFile(requestPath);
 const tsconfig = explicitTsconfig ?? requestBundle.tsconfig ?? 'tsconfig.graph.json';
 const cwd = resolve(readOption('--cwd') ?? requestBundle.cwd ?? repoRoot);
 
@@ -42,7 +44,7 @@ const response = await inspectWithDump(dump, requestBundle.props);
 
 process.stdout.write(`${JSON.stringify(response, null, 2)}\n`);
 
-function readOption(name) {
+function readOption(name: string): string | undefined {
   const index = args.indexOf(name);
 
   if (index === -1) {

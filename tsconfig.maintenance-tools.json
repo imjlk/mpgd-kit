@@ -16,6 +16,10 @@
     "lint.config.ts",
     "strip.config.js",
     "tools/fixtures/typed-config-canary.ts",
-    "tools/policy/**/*.ts"
+    "tools/policy/**/*.ts",
+    "tools/graph/*.ts",
+    "tools/validate-capacitor-*.ts",
+    "tools/validation/**/*.ts",
+    "tools/graph-runtime.test.ts"
   ]
 }

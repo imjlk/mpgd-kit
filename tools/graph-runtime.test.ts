@@ -7,20 +7,24 @@ import {
   normalizeRequest,
   readPreset,
   summarizeGraphResult,
-} from './graph/local-graph-runtime.mjs';
+} from './graph/local-graph-runtime.js';
 
-test('all checked-in presets use the current draft and tour request contracts', () => {
+await test('all checked-in presets use the current draft and tour request contracts', () => {
   for (const name of listPresetNames()) {
     const { props } = readPreset(name);
     assert.equal(props.draft.type, props.request.type, name);
     if (props.request.type === 'tour') {
-      assert.ok(props.request.reinterpretations.every((value) => typeof value === 'string'), name);
+      assert.ok(Array.isArray(props.request.reinterpretations));
+      assert.ok(
+        props.request.reinterpretations.every((value: unknown) => typeof value === 'string'),
+        name,
+      );
       assert.equal(props.request.query, undefined, name);
     }
   }
 });
 
-test('rejects legacy tour requests before invoking the graph application', () => {
+await test('rejects legacy tour requests before invoking the graph application', () => {
   assert.throws(() => normalizeRequest({
     question: 'What runs?', draft: 'Use a tour.', request: { type: 'tour', query: 'run' },
   }, 'legacy.json'), /draft with reason and type/);
@@ -36,10 +40,17 @@ test('rejects legacy tour requests before invoking the graph application', () =>
   }, 'legacy.json', { requireNamedEntrypoints: false }), /reinterpretations array/);
 });
 
-test('uses the envelope next action and counts trace anchors only after resolving the start', () => {
+await test('uses the envelope next action and counts trace anchors only after resolving the start', () => {
   const result = { type: 'trace', start: { id: 'a' }, reached: [{ id: 'b' }] };
   assert.equal(graphResultAnchorCount(result), 2);
   assert.match(summarizeGraphResult(result, 'answer'), /2 anchors, next=answer$/);
   assert.equal(graphResultAnchorCount({ type: 'trace', candidates: [{ id: 'a' }], reached: [] }), 0);
   assert.equal(graphResultAnchorCount({ type: 'details', nodes: [] }), 0);
+});
+
+await test('rejects malformed external graph metadata before executing the native graph', () => {
+  for (const value of [null, [], 42]) {
+    assert.throws(() => normalizeRequest(value, 'bad.json'), /must be an object/);
+  }
+  assert.throws(() => normalizeRequest({ cwd: 42 }, 'bad.json'), /metadata must use strings/);
 });

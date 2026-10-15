@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 
-const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
+import { manifest } from './validation/json.js';
+
+const read = (path: string): string => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 // The six commerce v2 bridge methods are the whole commerce bridge (the v1
 // `commerce.*` methods were removed in commerce v2 PR C4).
 const commerceV2Methods = [
@@ -21,11 +23,11 @@ const retiredCommerceMethods = [
 const implementations = [
   {
     path: 'native-plugins/capacitor-game-services/android/src/main/java/dev/mpgd/capacitor/CapacitorGameServicesPlugin.java',
-    capability: (name, enabled) => new RegExp(`\\.put\\("${name}", ${enabled}\\)`),
+    capability: (name: string, enabled: boolean) => new RegExp(`\\.put\\("${name}", ${enabled}\\)`),
   },
   {
     path: 'native-plugins/capacitor-game-services/ios/Sources/CapacitorGameServices/CapacitorGameServicesPlugin.swift',
-    capability: (name, enabled) => new RegExp(`"${name}": ${enabled}`),
+    capability: (name: string, enabled: boolean) => new RegExp(`"${name}": ${enabled}`),
   },
 ];
 
@@ -39,7 +41,11 @@ for (const implementation of implementations) {
     'bannerAds',
     'nativeLeaderboard',
   ]) {
-    assert.match(source, implementation.capability(name, false), `${implementation.path}: ${name} must be disabled without a provider`);
+    assert.match(
+      source,
+      implementation.capability(name, false),
+      `${implementation.path}: ${name} must be disabled without a provider`,
+    );
   }
   // The commerce capability block is the gateway's: the native base answer
   // carries none of the retired boolean flags.
@@ -56,8 +62,15 @@ for (const implementation of implementations) {
     `${implementation.path}: WebView localization remains available without native providers`,
   );
 
-  for (const code of ['COMMERCE_V2_UNAVAILABLE', 'NATIVE_ADS_UNAVAILABLE', 'NATIVE_LEADERBOARD_UNAVAILABLE']) {
-    assert.ok(source.includes(code), `${implementation.path}: missing fail-closed ${code} response`);
+  for (const code of [
+    'COMMERCE_V2_UNAVAILABLE',
+    'NATIVE_ADS_UNAVAILABLE',
+    'NATIVE_LEADERBOARD_UNAVAILABLE',
+  ]) {
+    assert.ok(
+      source.includes(code),
+      `${implementation.path}: missing fail-closed ${code} response`,
+    );
   }
 
   for (const method of retiredCommerceMethods) {
@@ -83,7 +96,11 @@ for (const implementation of implementations) {
   const routedResolves = source.match(
     /case "(?:commerce|ads|leaderboard)\.[^"]+"[\s\S]*?call\.resolve\((?:ok|error)Response/gu,
   ) ?? [];
-  assert.equal(routedResolves.length, 3, `${implementation.path}: expected one fail-closed route group per service`);
+  assert.equal(
+    routedResolves.length,
+    3,
+    `${implementation.path}: expected one fail-closed route group per service`,
+  );
   for (const resolve of routedResolves) {
     assert.ok(
       resolve.endsWith('call.resolve(errorResponse'),
@@ -97,7 +114,11 @@ for (const implementation of implementations) {
 const playBilling = read(
   'native-plugins/capacitor-play-billing/android/src/main/java/dev/mpgd/capacitor/playbilling/CapacitorPlayBillingPlugin.java',
 );
-assert.match(playBilling, /queryPurchasesAsync\(/u, 'Play Billing must support owned-purchase requery');
+assert.match(
+  playBilling,
+  /queryPurchasesAsync\(/u,
+  'Play Billing must support owned-purchase requery',
+);
 assert.doesNotMatch(
   playBilling,
   /\b(?:acknowledgePurchase|consumeAsync)\s*\(/u,
@@ -112,14 +133,26 @@ assert.match(storeKit, /Transaction\.updates/u, 'StoreKit must listen for delaye
 const storeKitPurchase = storeKit.split('@objc func purchase')[1]
   ?.split('@objc func getTransactions')[0] ?? '';
 assert.match(storeKitPurchase, /case \.success/u, 'StoreKit must handle successful purchases');
-assert.match(storeKitPurchase, /call\.resolve\(\["status": "purchased", "transaction": payload\]\)/u,
-  'StoreKit purchase must return provisional transaction evidence');
-assert.doesNotMatch(storeKit.split('@objc func finishTransaction')[0], /transaction\.finish\(/u,
-  'StoreKit must not finish a transaction during checkout or event delivery');
-assert.match(storeKit, /@objc func finishTransaction[\s\S]*?transaction\.finish\(\)/u,
-  'StoreKit finish must be a separate post-grant operation');
-assert.equal((storeKit.match(/transaction\.finish\(\)/gu) ?? []).length, 1,
-  'Only the explicit post-grant method may finish StoreKit transactions');
+assert.match(
+  storeKitPurchase,
+  /call\.resolve\(\["status": "purchased", "transaction": payload\]\)/u,
+  'StoreKit purchase must return provisional transaction evidence',
+);
+assert.doesNotMatch(
+  storeKit.split('@objc func finishTransaction')[0] ?? '',
+  /transaction\.finish\(/u,
+  'StoreKit must not finish a transaction during checkout or event delivery',
+);
+assert.match(
+  storeKit,
+  /@objc func finishTransaction[\s\S]*?transaction\.finish\(\)/u,
+  'StoreKit finish must be a separate post-grant operation',
+);
+assert.equal(
+  (storeKit.match(/transaction\.finish\(\)/gu) ?? []).length,
+  1,
+  'Only the explicit post-grant method may finish StoreKit transactions',
+);
 
 // Commerce v2 store providers (RFC C3). A shell built without the native
 // plugin answers Capacitor's UNIMPLEMENTED, which both SDKs report as
@@ -127,9 +160,13 @@ assert.equal((storeKit.match(/transaction\.finish\(\)/gu) ?? []).length, 1,
 for (const [path, label] of [
   ['native-plugins/capacitor-play-billing/src/store-sdk.ts', 'Play Billing'],
   ['native-plugins/capacitor-storekit/src/store-sdk.ts', 'StoreKit'],
-]) {
+] as const) {
   const sdk = read(path);
-  assert.match(sdk, /'UNIMPLEMENTED'/u, `${label}: a missing native plugin must map to configuration-required`);
+  assert.match(
+    sdk,
+    /'UNIMPLEMENTED'/u,
+    `${label}: a missing native plugin must map to configuration-required`,
+  );
 }
 
 // Commerce v2 PR C4 removed the v1 recovery drivers and bridge providers: a
@@ -143,24 +180,47 @@ for (const name of ['capacitor-play-billing', 'capacitor-storekit']) {
 
 // The reference shell does not bundle a store plugin: `mpgd target init
 // capacitor --providers` installs one into a game-owned shell on request.
-const referenceShell = JSON.parse(read('apps/mobile-capacitor/package.json'));
+const referenceShell = manifest(read('apps/mobile-capacitor/package.json'), 'reference shell');
 for (const name of ['@mpgd/capacitor-play-billing', '@mpgd/capacitor-storekit']) {
-  assert.equal(referenceShell.dependencies?.[name], undefined, `The reference shell must not bundle ${name}`);
+  assert.equal(
+    referenceShell.dependencies?.[name],
+    undefined,
+    `The reference shell must not bundle ${name}`,
+  );
 }
 
 // The generated and private starter gateways register the store providers
 // through the plugins' service-provider factories and never finish, consume,
 // or grant on their own; the reconciler does that after the ledger grant.
 const wiredGateways = [
-  ['src/platform/buildGateways/capacitorAndroid.ts', 'createCapacitorPlayBillingServiceProvider', '@mpgd/capacitor-play-billing'],
-  ['src/platform/buildGateways/capacitorIos.ts', 'createCapacitorStoreKitServiceProvider', '@mpgd/capacitor-storekit'],
-];
+  [
+    'src/platform/buildGateways/capacitorAndroid.ts',
+    'createCapacitorPlayBillingServiceProvider',
+    '@mpgd/capacitor-play-billing',
+  ],
+  [
+    'src/platform/buildGateways/capacitorIos.ts',
+    'createCapacitorStoreKitServiceProvider',
+    '@mpgd/capacitor-storekit',
+  ],
+] as const;
 for (const root of ['packages/cli/templates/phaser-game', 'examples/phaser-starter']) {
   for (const [file, factory, packageName] of wiredGateways) {
     const gateway = read(`${root}/${file}`);
-    assert.ok(gateway.includes(`from '${packageName}'`), `${root}/${file}: must import ${packageName}`);
-    assert.match(gateway, new RegExp(`${factory}\\(\\{`, 'u'), `${root}/${file}: must register ${factory}`);
-    assert.match(gateway, /\n {4}providers,\n/u, `${root}/${file}: must pass the providers to the gateway`);
+    assert.ok(
+      gateway.includes(`from '${packageName}'`),
+      `${root}/${file}: must import ${packageName}`,
+    );
+    assert.match(
+      gateway,
+      new RegExp(`${factory}\\(\\{`, 'u'),
+      `${root}/${file}: must register ${factory}`,
+    );
+    assert.match(
+      gateway,
+      /\n {4}providers,\n/u,
+      `${root}/${file}: must pass the providers to the gateway`,
+    );
     assert.doesNotMatch(
       gateway,
       /\b(?:finishTransaction|acknowledgePurchase|consumePurchase|completeProductGrant|grantEntitlement)\s*\(/u,
@@ -173,14 +233,23 @@ for (const root of ['packages/cli/templates/phaser-game', 'examples/phaser-start
 // code targets, and wires the same gateway files.
 const shellStarter = read('packages/cli/src/capacitor-shell-starter.ts');
 for (const [file, factory, packageName] of wiredGateways) {
-  const plugin = JSON.parse(read(`native-plugins/${packageName.slice('@mpgd/'.length)}/package.json`));
+  const plugin = manifest(
+    read(`native-plugins/${packageName.slice('@mpgd/'.length)}/package.json`),
+    'native plugin',
+  );
   const platform = Object.keys(plugin.capacitor ?? {});
   assert.equal(platform.length, 1, `${packageName}: must declare exactly one Capacitor platform`);
   const entry = new RegExp(
     `packageName: '${packageName}',[\\s\\S]*?platform: '${platform[0]}',\\s*gatewayFile: '${file}',\\s*gatewayFactory: '${factory}'`,
     'u',
   );
-  assert.match(shellStarter, entry, `capacitor-shell-starter.ts: ${packageName} must install for ${platform[0]} and wire ${file}`);
+  assert.match(
+    shellStarter,
+    entry,
+    `capacitor-shell-starter.ts: ${packageName} must install for ${platform[0]} and wire ${file}`,
+  );
 }
 
-console.log('Capacitor reference native services fail closed without providers, and store providers stay opt-in.');
+console.info(
+  'Capacitor reference native services fail closed without providers, and store providers stay opt-in.',
+);

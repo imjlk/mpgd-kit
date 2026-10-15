@@ -4,6 +4,40 @@ import { createRequire } from 'node:module';
 import { dirname, join, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { resolveGraphBinary } from '@ttsc/graph';
+import { isObject, object } from '../validation/json.js';
+
+type JsonObject = Record<string, unknown>;
+export interface NamedEntrypoint {
+  readonly name: string;
+  readonly file: string;
+  readonly kind?: string;
+}
+interface GraphSymbol {
+  readonly id: string;
+  readonly file: string;
+  readonly symbol: string;
+  readonly kind: string | undefined;
+}
+interface RequestBundle {
+  readonly name: string;
+  readonly description: string;
+  readonly namedEntrypoints: NamedEntrypoint[];
+  readonly tsconfig: string | undefined;
+  readonly cwd: string | undefined;
+  readonly props: JsonObject & { question: string; draft: JsonObject; request: JsonObject };
+}
+// The package does not export its application or identity decoder publicly.
+// Keep this version-pinned dynamic bridge narrow: requests and answers stay unknown
+// at the dependency boundary and our checked contracts validate the parts we use.
+interface GraphApplication {
+  inspect_typescript_graph(props: unknown): Promise<unknown>;
+}
+interface GraphInternals {
+  TtscGraphApplication: new (memory: unknown) => GraphApplication;
+  TtscGraphMemory: { from(dump: unknown): unknown };
+  parseTtscGraphNodeId(id: string): { path: string; name: string; kind?: string } | undefined;
+}
 const require = createRequire(import.meta.url);
 
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -12,10 +46,15 @@ export const requestDir = join(repoRoot, 'tools/graph/requests');
 // These are internal @ttsc/graph module paths, not public exports. Re-check them
 // whenever the pinned @ttsc/graph version changes (pnpm validate:toolchain pins it).
 const graphRoot = dirname(require.resolve('@ttsc/graph/package.json'));
-const { resolveGraphBinary } = require(join(graphRoot, 'lib/resolveGraphBinary.js'));
-const { TtscGraphApplication } = require(join(graphRoot, 'lib/TtscGraphApplication.js'));
-const { TtscGraphMemory } = require(join(graphRoot, 'lib/model/TtscGraphMemory.js'));
-const { parseTtscGraphNodeId } = require(join(graphRoot, 'lib/model/TtscGraphNodeId.js'));
+const { TtscGraphApplication } = require(
+  join(graphRoot, 'lib/TtscGraphApplication.js'),
+) as Pick<GraphInternals, 'TtscGraphApplication'>;
+const { TtscGraphMemory } = require(
+  join(graphRoot, 'lib/model/TtscGraphMemory.js'),
+) as Pick<GraphInternals, 'TtscGraphMemory'>;
+const { parseTtscGraphNodeId } = require(
+  join(graphRoot, 'lib/model/TtscGraphNodeId.js'),
+) as Pick<GraphInternals, 'parseTtscGraphNodeId'>;
 
 export function listPresetNames() {
   return readdirSync(requestDir)
@@ -25,18 +64,19 @@ export function listPresetNames() {
 }
 
 /** A checked-in preset: must declare the named entrypoints the preflight asserts. */
-export function readPreset(name) {
+export function readPreset(name: string) {
   const path = join(requestDir, `${name}.json`);
   return normalizeRequest(JSON.parse(readFileSync(path, 'utf8')), path);
 }
 
-/** An ad-hoc request file for `inspect-local-graph.mjs --request`: named entrypoints are optional. */
-export function readRequestFile(path) {
+/** An ad-hoc request file for `inspect-local-graph.ts --request`: named entrypoints are optional. */
+export function readRequestFile(path: string) {
   const request = JSON.parse(readFileSync(path, 'utf8'));
   return normalizeRequest(request, path, { requireNamedEntrypoints: false });
 }
 
-export function normalizeRequest(request, source, { requireNamedEntrypoints = true } = {}) {
+export function normalizeRequest(value: unknown, source: string, { requireNamedEntrypoints = true } = {}): RequestBundle {
+  const request = object(value, `Graph request ${source}`);
   const {
     name = source,
     description = '',
@@ -46,6 +86,10 @@ export function normalizeRequest(request, source, { requireNamedEntrypoints = tr
     cwd = undefined,
     ...props
   } = request;
+
+  if (typeof name !== 'string' || typeof description !== 'string' || (tsconfig !== undefined && typeof tsconfig !== 'string') || (cwd !== undefined && typeof cwd !== 'string')) {
+    throw new Error(`Graph request metadata must use strings: ${source}`);
+  }
 
   if (expectedFiles !== undefined) {
     throw new Error(
@@ -57,12 +101,12 @@ export function normalizeRequest(request, source, { requireNamedEntrypoints = tr
     throw new Error(`Graph request is missing question: ${source}`);
   }
 
-  if (typeof props.request !== 'object' || props.request === null) {
+  if (!isObject(props.request)) {
     throw new Error(`Graph request is missing request payload: ${source}`);
   }
 
   if (
-    typeof props.draft !== 'object' || props.draft === null ||
+    !isObject(props.draft) ||
     typeof props.draft.reason !== 'string' || typeof props.draft.type !== 'string'
   ) {
     throw new Error(`Graph request needs a draft with reason and type: ${source}`);
@@ -88,7 +132,12 @@ export function normalizeRequest(request, source, { requireNamedEntrypoints = tr
     namedEntrypoints: normalizedEntrypoints,
     tsconfig,
     cwd,
-    props,
+    props: {
+      ...props,
+      question: props.question,
+      draft: props.draft,
+      request: object(props.request, 'Graph request payload'),
+    },
   };
 }
 
@@ -100,7 +149,7 @@ export function normalizeRequest(request, source, { requireNamedEntrypoints = tr
  * is that same list; a request without named entrypoints (an ad-hoc file) must
  * spell it out.
  */
-function tourReinterpretationsOf(graphRequest, namedEntrypoints, source) {
+function tourReinterpretationsOf(graphRequest: JsonObject, namedEntrypoints: readonly NamedEntrypoint[], source: string): string[] {
   const explicit = graphRequest.reinterpretations;
 
   if (namedEntrypoints.length === 0) {
@@ -116,7 +165,9 @@ function tourReinterpretationsOf(graphRequest, namedEntrypoints, source) {
   // tour resolves a name once, so it is seeded once.
   const derived = [...new Set(namedEntrypoints.map((entry) => entry.name))];
   if (explicit !== undefined) {
-    const given = Array.isArray(explicit) ? explicit.map((value) => String(value).trim()) : undefined;
+    const given = Array.isArray(explicit)
+      ? explicit.map((value) => String(value).trim())
+      : undefined;
     if (given === undefined || given.length !== derived.length || given.some((value, index) => value !== derived[index])) {
       throw new Error(
         `Graph tour request.reinterpretations is derived from namedEntrypoints; omit it or list exactly ${derived.join(', ')}: ${source}`,
@@ -135,12 +186,12 @@ function tourReinterpretationsOf(graphRequest, namedEntrypoints, source) {
  * details request may use bare-name handles, which are simply not asserted.
  * An entry may carry an optional `kind` to pin the node kind as well.
  */
-function normalizeNamedEntrypoints(namedEntrypoints, graphRequest, source, required) {
+function normalizeNamedEntrypoints(namedEntrypoints: unknown, graphRequest: JsonObject, source: string, required: boolean): NamedEntrypoint[] {
   let declared = namedEntrypoints;
 
   if (declared === undefined && graphRequest.type === 'details') {
     declared = namedEntrypointsFromHandles(graphRequest.handles, source, required);
-    if (declared.length === 0 && !required) {
+    if (Array.isArray(declared) && declared.length === 0 && !required) {
       return [];
     }
   }
@@ -153,9 +204,9 @@ function normalizeNamedEntrypoints(namedEntrypoints, graphRequest, source, requi
     throw new Error(`Graph request needs a non-empty namedEntrypoints array: ${source}`);
   }
 
-  return declared.map((entry, index) => {
+  return declared.map((entry: unknown, index) => {
     if (
-      typeof entry !== 'object' || entry === null ||
+      !isObject(entry) ||
       typeof entry.name !== 'string' || entry.name.trim() === '' ||
       typeof entry.file !== 'string' || entry.file.trim() === '' ||
       (entry.kind !== undefined && (typeof entry.kind !== 'string' || entry.kind.trim() === ''))
@@ -177,7 +228,7 @@ function normalizeNamedEntrypoints(namedEntrypoints, graphRequest, source, requi
  * (`required`) must pin `file#name:kind` ids; an ad-hoc request may also use
  * bare names, which are skipped here because there is no file to assert.
  */
-function namedEntrypointsFromHandles(handles, source, required) {
+function namedEntrypointsFromHandles(handles: unknown, source: string, required: boolean): NamedEntrypoint[] {
   if (!Array.isArray(handles) || (required && handles.length === 0)) {
     if (required) {
       throw new Error(`Graph details request needs at least one handle: ${source}`);
@@ -185,21 +236,27 @@ function namedEntrypointsFromHandles(handles, source, required) {
     return [];
   }
 
-  const entries = [];
+  const entries: NamedEntrypoint[] = [];
   for (const handle of handles) {
     const parsed = typeof handle === 'string' ? parseTtscGraphNodeId(handle) : undefined;
     if (parsed === undefined) {
       if (required) {
-        throw new Error(`Graph details handle is not a file#name:kind node id: ${String(handle)} (${source})`);
+        throw new Error(
+          `Graph details handle is not a file#name:kind node id: ${String(handle)} (${source})`,
+        );
       }
       continue;
     }
-    entries.push({ name: parsed.name, file: parsed.path, ...(parsed.kind === undefined ? {} : { kind: parsed.kind }) });
+    entries.push({
+      name: parsed.name,
+      file: parsed.path,
+      ...(parsed.kind === undefined ? {} : { kind: parsed.kind }),
+    });
   }
   return entries;
 }
 
-export function dumpGraph({ cwd, tsconfig }) {
+export function dumpGraph({ cwd, tsconfig }: { cwd: string; tsconfig: string }): string {
   const binary = resolveGraphBinary(process.env, cwd);
 
   if (binary === null) {
@@ -228,29 +285,29 @@ export function dumpGraph({ cwd, tsconfig }) {
   return dump.stdout;
 }
 
-export async function inspectWithDump(dump, props) {
+export async function inspectWithDump(dump: string, props: RequestBundle['props']): Promise<unknown> {
   const memory = TtscGraphMemory.from(JSON.parse(dump));
   const app = new TtscGraphApplication(memory);
   return app.inspect_typescript_graph(props);
 }
 
-export function summarizeGraphResult(result, nextAction = 'unknown') {
-  const entrypointCount = result.entrypoints?.length ?? 0;
+export function summarizeGraphResult(result: JsonObject, nextAction = 'unknown') {
+  const entrypointCount = arrayLength(result.entrypoints) ?? 0;
   const anchorCount = graphResultAnchorCount(result);
   return `${entrypointCount} entrypoints, ${anchorCount} anchors, next=${nextAction}`;
 }
 
-export function graphResultAnchorCount(result) {
+export function graphResultAnchorCount(result: JsonObject): number {
   if (result.type === 'trace') {
     return result.start !== undefined && result.start !== null
-      ? 1 + (result.reached?.length ?? 0)
+      ? 1 + (arrayLength(result.reached) ?? 0)
       : 0;
   }
   return (
-    result.answerAnchors?.length ??
-    result.anchors?.length ??
-    result.nodes?.length ??
-    result.hits?.length ??
+    arrayLength(result.answerAnchors) ??
+    arrayLength(result.anchors) ??
+    arrayLength(result.nodes) ??
+    arrayLength(result.hits) ??
     0
   );
 }
@@ -261,7 +318,7 @@ export function graphResultAnchorCount(result) {
  * and surrounding whitespace is dropped. `../../x.ts` stays relative, which is
  * how a `cwd`-scoped graph reports files outside its root.
  */
-export function normalizeGraphFile(file) {
+export function normalizeGraphFile(file: string): string {
   return posix.normalize(file.trim().replaceAll('\\', '/'));
 }
 
@@ -278,10 +335,10 @@ export function normalizeGraphFile(file) {
  * names a symbol with the call-site file and no id at all. Neither is
  * evidence that `foo` is declared where a preset says it is.
  */
-export function graphResultSymbols(result) {
-  const symbols = [];
+export function graphResultSymbols(result: JsonObject): GraphSymbol[] {
+  const symbols: GraphSymbol[] = [];
   for (const entry of answerSurfaceOf(result)) {
-    if (typeof entry !== 'object' || entry === null || typeof entry.id !== 'string') {
+    if (!isObject(entry) || typeof entry.id !== 'string') {
       continue;
     }
     const parsed = parseTtscGraphNodeId(entry.id);
@@ -298,13 +355,13 @@ export function graphResultSymbols(result) {
   return symbols;
 }
 
-function answerSurfaceOf(result) {
-  const list = (value) => (Array.isArray(value) ? value : []);
+function answerSurfaceOf(result: JsonObject): unknown[] {
+  const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
   switch (result.type) {
     case 'tour':
       return [
         ...list(result.entrypoints),
-        ...list(result.primaryFlow).flatMap((flow) => [flow?.start, ...list(flow?.reached)]),
+        ...list(result.primaryFlow).flatMap((flow) => isObject(flow) ? [flow.start, ...list(flow.reached)] : []),
         ...list(result.nearby),
         ...list(result.tests),
         ...list(result.answerAnchors),
@@ -329,7 +386,7 @@ function answerSurfaceOf(result) {
  * when the entrypoint pins one. Both sides are already normalized: symbols by
  * `graphResultSymbols`, entrypoints by `normalizeRequest`.
  */
-export function matchesNamedEntrypoint(symbol, entrypoint) {
+export function matchesNamedEntrypoint(symbol: GraphSymbol, entrypoint: NamedEntrypoint): boolean {
   return (
     symbol.file === entrypoint.file &&
     symbol.symbol === entrypoint.name &&
@@ -338,14 +395,14 @@ export function matchesNamedEntrypoint(symbol, entrypoint) {
 }
 
 /** The preset's named entrypoints the result does not cite, in declaration order. */
-export function missingNamedEntrypoints(result, namedEntrypoints) {
+export function missingNamedEntrypoints(result: JsonObject, namedEntrypoints: readonly NamedEntrypoint[]): NamedEntrypoint[] {
   const symbols = graphResultSymbols(result);
   return namedEntrypoints.filter(
     (entrypoint) => !symbols.some((symbol) => matchesNamedEntrypoint(symbol, entrypoint)),
   );
 }
 
-export function formatNamedEntrypoint(entrypoint) {
+export function formatNamedEntrypoint(entrypoint: NamedEntrypoint): string {
   const kind = entrypoint.kind === undefined ? '' : `:${entrypoint.kind}`;
   return `${entrypoint.name}${kind} (${entrypoint.file})`;
 }
@@ -363,17 +420,17 @@ export function formatNamedEntrypoint(entrypoint) {
  * error names every missing symbol and file so the failure points at the
  * preset contract instead of at a heuristic ranking.
  */
-export function assertGraphPresetResponse(presetName, preset, response) {
-  if (typeof response !== 'object' || response === null || Array.isArray(response)) {
+export function assertGraphPresetResponse(presetName: string, preset: Pick<RequestBundle, 'namedEntrypoints'>, response: unknown) {
+  if (!isObject(response)) {
     throw new Error(`Graph preset ${presetName} returned an invalid response envelope.`);
   }
 
   const { result } = response;
-  if (typeof result !== 'object' || result === null || Array.isArray(result)) {
+  if (!isObject(result)) {
     throw new Error(`Graph preset ${presetName} returned no graph result.`);
   }
 
-  const nextAction = response.next?.action;
+  const nextAction = isObject(response.next) ? response.next.action : undefined;
   if (nextAction !== 'answer') {
     throw new Error(`Graph preset ${presetName} did not produce answer-ready evidence.`);
   }
@@ -396,4 +453,8 @@ export function assertGraphPresetResponse(presetName, preset, response) {
   }
 
   return { result, nextAction, anchorCount };
+}
+
+function arrayLength(value: unknown): number | undefined {
+  return Array.isArray(value) ? value.length : undefined;
 }

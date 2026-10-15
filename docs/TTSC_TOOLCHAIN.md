@@ -256,3 +256,19 @@ as a permanent exception. Do not add new files to that backlog. Remove the entry
 when a file is migrated or deleted. The validator rejects new unregistered files,
 stale entries, duplicate entries, globs, and empty reasons; review must still
 assess whether the claimed runtime constraint is valid.
+
+## Typed maintenance and bootstrap boundaries
+
+Capacitor alignment/fail-closed validators, graph request normalization, graph
+answer checks, graph commands, and their ordinary regression tests are checked
+through `tsconfig.maintenance-tools.json`. External JSON enters as `unknown`;
+manifest dependency maps, preset metadata, entrypoints and answer surfaces are
+narrowed before use. The graph's version-pinned internal application/identity
+bridge is isolated from those contracts; its public binary resolver is imported
+from `@ttsc/graph`. Keep the real preset smoke tests when upgrading that package.
+
+`tools/ci/native-scope.mjs` runs before dependency installation, and
+`tools/ci/verify-coverage.mjs` runs in the checkout-only CI gate. They therefore
+remain dependency-free JS with JSDoc, `@ts-check`, and a strict
+`tsconfig.bootstrap-js.json` check in `pnpm check`. Their plain-Node tests keep
+covering the environment in which CI actually executes them.
