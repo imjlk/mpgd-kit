@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { devvit } from '@devvit/start/vite';
 import { defineConfig, type PluginOption } from 'vite';
 
+import { devvitOutputCollisionPlugin } from '../../../../packages/cli/src/devvit-output-collisions';
 import { createGameViteSharedConfig } from '../../vite.shared';
 
 const wrapperRoot = fileURLToPath(new URL('.', import.meta.url));
@@ -24,6 +25,7 @@ export default defineConfig(({ mode }) => {
     publicDir: resolve(gameRoot, 'public'),
     plugins: [
       ...(shared.plugins ?? []),
+      devvitOutputCollisionPlugin(),
       devvit({
         client: {
           build: {

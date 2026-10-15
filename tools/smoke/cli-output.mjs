@@ -35,6 +35,13 @@ try {
       continue;
     }
     assert.equal(result.status, 0, result.stderr);
+    const devvitConfig = readFileSync(path.join(gameRoot, 'apps/target-devvit/vite.config.ts'), 'utf8');
+    if (workspace) {
+      assert.doesNotMatch(devvitConfig, /from '@mpgd\/cli\/devvit'/);
+      assert.match(devvitConfig, /packages\/cli\/src\/devvit-output-collisions/);
+    } else {
+      assert.match(devvitConfig, /from '@mpgd\/cli\/devvit'/);
+    }
     const config = JSON.parse(readFileSync(path.join(gameRoot, 'tsconfig.json'), 'utf8'));
     assert.equal(typeof config.compilerOptions.rootDir, 'string', 'generated games need an explicit source root');
     const sourceRoot = path.resolve(gameRoot, config.compilerOptions.rootDir);

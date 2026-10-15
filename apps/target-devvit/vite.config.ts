@@ -2,6 +2,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { devvit } from '@devvit/start/vite';
+import { devvitOutputCollisionPlugin } from '../../packages/cli/src/devvit-output-collisions';
 import { defineConfig, type PluginOption } from 'vite';
 
 import { createGameViteSharedConfig } from '../../examples/phaser-starter/vite.shared';
@@ -24,6 +25,7 @@ export default defineConfig(({ mode }) => {
     publicDir: resolve(gameRoot, 'public'),
     plugins: [
       ...(shared.plugins ?? []),
+      devvitOutputCollisionPlugin(),
       devvit({
         client: {
           build: {

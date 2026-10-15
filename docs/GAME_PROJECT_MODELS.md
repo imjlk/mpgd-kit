@@ -123,6 +123,45 @@ Shared code does not imply shared product identity. Each game continues to own:
 - release artifacts, target smoke evidence, and deployment history;
 - game-specific server verification and authoritative grant policy.
 
+## Workspace games and kit dependency links
+
+A `--workspace` game lists `../mpgd-kit/packages/*` (and the adapter, plugin
+and backend globs) in its own `pnpm-workspace.yaml`. Running `pnpm install` in
+the game therefore re-links each kit package's `node_modules` into the game's
+store, for example
+`mpgd-kit/adapters/devvit/node_modules/@devvit/web -> ../nem-demo/node_modules/...`.
+The last game installed owns those links.
+
+- Builds started from that game work. Kit lint is scoped to files inside the
+  kit checkout (`lint.source.config.js`), so dependencies that ship raw `.ts`
+  sources from `../<game>/node_modules` are no longer linted and no longer
+  fail `build:devvit` or `build:ait`.
+- `build:target` prints a warning when the links belong to a different install
+  than the game being built, or are broken because that game moved.
+- Before kit-only work, or after switching games, restore kit-owned links from
+  the kit root with `pnpm workspace:relink`. `pnpm install --force` alone is not
+  enough: it reports "Already up to date" and keeps the game's links.
+  `pnpm workspace:check-links` exits non-zero while foreign links remain.
+  Relinking first verifies the frozen root install without lifecycle scripts;
+  if a nested independent game makes the root lockfile stale, it exits before
+  removing any dependency link folders. Resolve the reported workspace/lockfile
+  mismatch before retrying. Independent installs in `apps/` and `examples/`
+  are not removed. To return shared packages to a game workspace, run
+  `pnpm workspace:relink --owner /path/to/game` from the Kit root. It finds the
+  nearest workspace, checks its frozen install, removes only shared Kit package
+  link folders listed by that workspace, and reinstalls from that owner.
+
+## Devvit output file names
+
+The Devvit client build writes unhashed `[name].js` files, and Vite writes the
+bundle over any `public/` file of the same name without a warning.
+`build:target reddit` now fails with a list of the conflicting paths when a
+file from the configured Vite `publicDir` conflicts with a bundle file, or when
+two output files differ only by letter case. Bundle names and the resolved Vite
+public directory are checked before bundle files are written, including on
+Windows and macOS. Rename the public file or the
+entry and rebuild.
+
 ## Upgrade Published Kit Dependencies
 
 Run the public CLI from the owning game or workspace. Planning is read-only;
@@ -234,3 +273,10 @@ Regardless of repository model:
 See the target-specific runbooks for platform requirements. Repository layout
 changes command routing and ownership organization; it does not weaken any
 target's release gates.
+
+Generated Devvit wrappers register the shared `devvitOutputCollisionPlugin` in
+their Vite config. Workspace-generated wrappers and the checked-in Lite starter
+import Kit TypeScript source, so a fresh checkout needs no prebuilt CLI output.
+Standalone games use `@mpgd/cli/devvit` from the published package. Keep that
+registration when customizing the wrapper: Devvit playtests invoke the staging
+watch script directly and must check output collisions like production builds.

@@ -24,7 +24,7 @@ This repository is `mpgd-kit`: a Multi-Platform Game Distribution / Development 
 - Do not introduce ESLint or Prettier for TypeScript files. Use `@ttsc/lint`.
 - Keep root/workspace/template ttsc pins aligned and run `pnpm validate:toolchain` after toolchain edits.
 - Use `pnpm format` to include tools, target configs, and shipped template sources; cache ownership is documented in `docs/TTSC_TOOLCHAIN.md`.
-- The active `@ttsc/lint` config is `lint.config.js`; keep it as the single lint config file unless ttsc config loading changes.
+- The active `@ttsc/lint` entry point is `lint.config.js`. Its source rules live in `lint.source.config.js` with a checkout-relative `files` scope because ttsc global ignores do not exclude dependencies outside the config directory. Keep this scope when editing lint rules for linked workspace games.
 - The active `@ttsc/strip` config is `strip.config.js` for the same reason.
 - Do not put Phaser, Capacitor, Apps in Toss, Google Play Billing, StoreKit, or ad SDK imports in pure packages.
 - Do not call platform SDKs directly from Phaser scenes. Use `PlatformGateway`.
