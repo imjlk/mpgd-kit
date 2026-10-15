@@ -45,7 +45,7 @@
     "test:cli-output": "node tools/smoke/lite-template-lifecycle.mjs && node tools/smoke/cli-output.mjs",
     "workspace:relink": "node tools/workspace/relink-kit-workspace.mjs",
     "workspace:check-links": "node tools/workspace/relink-kit-workspace.mjs --check",
-    "test:tooling": "node --test tools/toolchain.test.mjs tools/run-ttsx.test.mjs tools/graph-runtime.test.mjs tools/graph/run-graph-presets.test.mjs tools/ci/prepared-suite.test.mjs tools/ci/native-scope.test.mjs tools/ci/verify-coverage.test.mjs tools/ci/attest-pr-merge.test.mjs tools/workspace/kit-dependency-links.test.mjs && node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/validate-share-link-conformance.test.ts",
+    "test:tooling": "node --test tools/toolchain.test.mjs tools/run-ttsx.test.mjs tools/graph-runtime.test.mjs tools/graph/run-graph-presets.test.mjs tools/ci/prepared-suite.test.mjs tools/ci/native-scope.test.mjs tools/ci/verify-coverage.test.mjs tools/ci/attest-pr-merge.test.mjs && node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/validate-share-link-conformance.test.ts && node tools/run-ttsx.mjs tools/workspace/kit-dependency-links.test.ts",
     "validate:toolchain": "node tools/validate-toolchain.mjs",
     "validate:capacitor-alignment": "node tools/validate-capacitor-alignment.mjs",
     "validate:capacitor-fail-closed": "node tools/validate-capacitor-fail-closed.mjs",

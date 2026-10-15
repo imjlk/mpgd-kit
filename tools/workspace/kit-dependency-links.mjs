@@ -1,5 +1,8 @@
+// @ts-check
 import { existsSync, readdirSync, readlinkSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+
+/** @typedef {{ link: string; target: string; installRoot: string; broken?: boolean }} KitDependencyLink */
 
 // Dependency repair must run even when compiler dependency links are broken.
 // Keep this Node bootstrap independent of the TypeScript toolchain.
@@ -14,6 +17,7 @@ export const kitPackageGlobs = Object.freeze(['packages', 'adapters', 'native-pl
 // first.
 export const kitRelinkCommand = 'pnpm workspace:relink';
 
+/** @param {string} root @param {string} path */
 function isInside(root, path) {
   const rel = relative(root, path);
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
@@ -21,11 +25,14 @@ function isInside(root, path) {
 
 // Only the install root itself owns its store. A nested game can have a
 // separate node_modules, and paths on another Windows drive are never owners.
+/** @param {Pick<KitDependencyLink, 'installRoot' | 'broken'>} entry @param {string} owner */
 export function isKitDependencyLinkOwnedBy(entry, owner) {
   return entry.broken !== true && relative(entry.installRoot, owner) === '';
 }
 
-/** The nearest pnpm workspace owns nested games, unless they declare their own. */
+/** The nearest pnpm workspace owns nested games, unless they declare their own.
+ * @param {string} gameDirectory
+ */
 export function findKitBuildInstallRoot(gameDirectory) {
   const gameRoot = realpathSync(gameDirectory);
   let packageRoot;
@@ -42,6 +49,7 @@ export function findKitBuildInstallRoot(gameDirectory) {
   }
 }
 
+/** @param {string} nodeModules @returns {string[]} */
 function linkEntries(nodeModules) {
   const out = [];
   for (const entry of readdirSync(nodeModules, { withFileTypes: true })) {
@@ -66,9 +74,12 @@ function linkEntries(nodeModules) {
  * Lists dependency install owners, including the Kit store and dangling links.
  * Internal workspace source links do not belong to a dependency store and are
  * intentionally excluded; they are shared by both Kit and game installations.
+ * @param {string} kitRoot
+ * @returns {KitDependencyLink[]}
  */
 export function findKitDependencyLinks(kitRoot) {
   const root = realpathSync(kitRoot);
+  /** @type {KitDependencyLink[]} */
   const links = [];
   for (const group of kitPackageGlobs) {
     const groupDir = join(root, group);
@@ -98,7 +109,9 @@ export function findKitDependencyLinks(kitRoot) {
         // whether it sits under the kit: a game nested in the kit (for example
         // examples/my-game) has its own node_modules inside the checkout.
         const marker = `${sep}node_modules${sep}`;
-        const installRoot = target.includes(marker) ? target.slice(0, target.indexOf(marker)) : target;
+        const installRoot = target.includes(marker)
+          ? target.slice(0, target.indexOf(marker))
+          : target;
         if (!target.includes(marker) && isInside(root, target)) {
           continue;
         }
@@ -109,15 +122,26 @@ export function findKitDependencyLinks(kitRoot) {
   return links;
 }
 
-/** Kit-only checks compare all dependency stores against the Kit install. */
+/** Kit-only checks compare all dependency stores against the Kit install.
+ * @param {string} kitRoot
+ */
 export function findForeignKitDependencyLinks(kitRoot) {
   const owner = realpathSync(kitRoot);
-  return findKitDependencyLinks(kitRoot).filter((entry) => !isKitDependencyLinkOwnedBy(entry, owner));
+  return findKitDependencyLinks(kitRoot).filter(
+    (entry) => !isKitDependencyLinkOwnedBy(entry, owner),
+  );
 }
 
-/** Describe mismatched install owners; default checks compare against the Kit. */
-export function describeForeignKitDependencyLinks(kitRoot, foreign = findForeignKitDependencyLinks(kitRoot), expectedOwner = realpathSync(kitRoot)) {
-  if (foreign.length === 0) {
+/** Describe mismatched install owners; default checks compare against the Kit.
+ * @param {string} kitRoot
+ * @param {KitDependencyLink[]} [foreign]
+ * @param {string} [expectedOwner]
+ */
+export function describeForeignKitDependencyLinks(kitRoot, foreign = findForeignKitDependencyLinks(
+  kitRoot,
+), expectedOwner = realpathSync(kitRoot)) {
+  const example = foreign[0];
+  if (example === undefined) {
     return undefined;
   }
   const kitOwnedBuild = relative(realpathSync(kitRoot), expectedOwner) === '';
@@ -126,13 +150,13 @@ export function describeForeignKitDependencyLinks(kitRoot, foreign = findForeign
     `mpgd-kit: ${foreign.length} kit package dependency link(s) are not owned by ${kitOwnedBuild ? 'the kit install' : 'the selected build install'}`,
     `(expected ${expectedOwner}; links point into another install, or are broken),`,
     `into the install of: ${owners.join(', ')}.`,
-    'A --workspace game\'s `pnpm install` re-links kit packages to its own store. Builds run from',
-    'that game still work, but kit-only commands (and other games) then use that game\'s dependencies.',
+    "A --workspace game's `pnpm install` re-links kit packages to its own store. Builds run from",
+    "that game still work, but kit-only commands (and other games) then use that game's dependencies.",
     ...(kitOwnedBuild ? [] : [
       `Restore selected build links from the kit root with: ${kitRelinkCommand} --owner <workspace-directory>`,
       `Use this workspace directory as the --owner argument: ${expectedOwner}`,
     ]),
     `Restore kit-owned links from the kit root with: ${kitRelinkCommand}`,
-    `Example: ${foreign[0].link} -> ${foreign[0].target}`,
+    `Example: ${example.link} -> ${example.target}`,
   ].join('\n');
 }
