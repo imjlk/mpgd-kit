@@ -1032,6 +1032,9 @@ importers:
       '@mpgd/i18n':
         specifier: workspace:*
         version: link:../i18n
+      '@mpgd/lite-shell':
+        specifier: workspace:*
+        version: link:../lite-shell
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.2

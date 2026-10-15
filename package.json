@@ -42,7 +42,7 @@
     "test:prepared:cli": "node tools/run-ttsx.mjs tools/ci/prepared-suite.ts cli --checked",
     "test:prepared:services": "node tools/run-ttsx.mjs tools/ci/prepared-suite.ts services --checked",
     "ci:emit-tools:prepared": "ttsc -p tsconfig.ci-tools.json",
-    "test:cli-output": "node tools/smoke/lite-template-lifecycle.mjs && node tools/smoke/cli-output.mjs",
+    "test:cli-output": "node tools/smoke/lite-template-lifecycle.mjs && node tools/smoke/cli-output.mjs && pnpm smoke:lite-shell:package",
     "workspace:relink": "node tools/workspace/relink-kit-workspace.mjs",
     "workspace:check-links": "node tools/workspace/relink-kit-workspace.mjs --check",
     "test:tooling": "node --test tools/toolchain.test.mjs tools/run-ttsx.test.mjs tools/ci/native-scope.test.mjs tools/ci/verify-coverage.test.mjs tools/ci/attest-pr-merge.test.mjs && node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/validate-share-link-conformance.test.ts && node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/policy/javascript-policy.test.ts && node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/graph-runtime.test.ts && node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/graph/run-graph-presets.test.ts && node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/validation/json.test.ts && node tools/run-ttsx.mjs tools/workspace/kit-dependency-links.test.ts && node tools/run-ttsx.mjs tools/ci/prepared-suite.test.ts",
@@ -95,7 +95,7 @@
     "game:icons:inspect": "MPGD_PLATFORM_TARGETS_FILE=${MPGD_PLATFORM_TARGETS_FILE:-examples/phaser-starter/mpgd.targets.json} node tools/run-ttsx.mjs tools/icons/run.ts inspect",
     "build:packages": "pnpm i18n:build && node tools/run-ttsx.mjs tools/package/build-packages.ts",
     "pack:packages": "pnpm build:packages && pnpm pack:packages:prepared",
-    "pack:packages:prepared": "node tools/run-ttsx.mjs tools/package/pack-packages.ts && pnpm smoke:tutorial:package",
+    "pack:packages:prepared": "node tools/run-ttsx.mjs tools/package/pack-packages.ts && pnpm smoke:tutorial:package && pnpm smoke:lite-shell:package",
     "smoke:target": "MPGD_PLATFORM_TARGETS_FILE=${MPGD_PLATFORM_TARGETS_FILE:-examples/phaser-starter/mpgd.targets.json} node tools/run-ttsx.mjs tools/smoke/verify-target-artifacts.ts",
     "smoke:wechat": "pnpm smoke:target wechat",
     "smoke:wechat:devtool": "node tools/run-ttsx.mjs tools/smoke/wechat-devtool.ts",
@@ -188,7 +188,8 @@
     "build:oneplay": "pnpm build:target oneplay production",
     "smoke:cli-tooling-migration": "node tools/run-ttsx.mjs packages/cli/src/tooling-migration.test.ts",
     "test:template-tools": "node tools/run-ttsx.mjs tools/smoke/template-typescript-tools.ts",
-    "validate:javascript-policy": "node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/policy/javascript-policy.ts"
+    "validate:javascript-policy": "node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/policy/javascript-policy.ts",
+    "smoke:lite-shell:package": "node tools/run-ttsx.mjs tools/smoke/lite-shell-package.ts"
   },
   "devDependencies": {
     "@mpgd/adapter-devvit": "workspace:*",
