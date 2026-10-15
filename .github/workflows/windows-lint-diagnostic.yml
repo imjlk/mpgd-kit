@@ -1,10 +1,17 @@
 name: windows-lint-diagnostic
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-lint-diagnostic.yml'
 permissions:
   contents: read
+concurrency:
+  group: windows-lint-diagnostic-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   diagnose:
+    if: github.event_name == 'workflow_dispatch' || github.head_ref == 'codex/typescript-default-tooling'
     runs-on: windows-latest
     timeout-minutes: 15
     strategy:
