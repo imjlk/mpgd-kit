@@ -10,6 +10,8 @@
   },
   "include": [
     "tools/ci/native-scope.mjs",
-    "tools/ci/verify-coverage.mjs"
+    "tools/ci/verify-coverage.mjs",
+    "tools/workspace/kit-dependency-links.mjs",
+    "tools/workspace/relink-kit-workspace.mjs"
   ]
 }

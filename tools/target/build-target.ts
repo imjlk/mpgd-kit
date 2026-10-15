@@ -96,6 +96,14 @@ const releaseManifestEnvKeys = [
 
 const platformTargets = loadPlatformTargetsConfig();
 const configBaseDir = platformTargets.baseDir;
+// In --workspace games, warn when kit package links belong to another install.
+// build:target runs from the kit root (also when emitted to a cache dir).
+const kitLinkCheck = resolve('tools/workspace/relink-kit-workspace.mjs');
+if (existsSync(kitLinkCheck)) {
+  spawnSync(process.execPath, [kitLinkCheck, '--warn-unless-owner', configBaseDir], {
+    stdio: 'inherit',
+  });
+}
 const config = platformTargets.config;
 const target = config.targets[targetName];
 
@@ -427,7 +435,18 @@ try {
       const wrapperApp = targetPath(wrapperAppConfigPath);
       stageWrapperIcon(generatedIcons, wrapperApp);
 
-      run('pnpm', ['--dir', wrapperApp, 'exec', 'vite', 'build', '--mode', profile], env);
+      run(
+        process.execPath,
+        [
+          resolve('tools/run-ttsx.mjs'),
+          '--project',
+          resolve('tsconfig.tools.json'),
+          resolve('tools/target/build-devvit.ts'),
+          profile,
+        ],
+        env,
+        wrapperApp,
+      );
       embedEffectiveTargetConfig(targetName, webDir, env);
       await stageTargetAssetPacks(webDir);
       stageWebIconEvidence(generatedIcons, webDir);

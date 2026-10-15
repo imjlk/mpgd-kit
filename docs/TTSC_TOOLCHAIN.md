@@ -46,8 +46,9 @@ boundaries, not a precedent for unrelated scripts:
   native strip loader resolves the config under the wrong root when macOS
   `TMPDIR` is a symlink. Its `@satisfies` contract is checked by the maintenance
   project. Do not normalize users' environments just to hide this limitation.
-  The lint body is `tools/config/lint.ts` with `satisfies`, including exact
-  Evidence rule option types, re-exported by `lint.config.ts`.
+  The lint entry is `lint.config.ts` with typed Evidence options. Source rules
+  live in `lint.source.config.ts` with `satisfies` and a checkout-relative
+  `files` scope so external workspace dependencies are not linted as Kit sources.
 
 Windows package builds default to one compiler process. The 0.32.1 isolated
 config evaluator uses ttsx for JS as well as TS, so a JS wrapper does not avoid
@@ -272,3 +273,8 @@ from `@ttsc/graph`. Keep the real preset smoke tests when upgrading that package
 remain dependency-free JS with JSDoc, `@ts-check`, and a strict
 `tsconfig.bootstrap-js.json` check in `pnpm check`. Their plain-Node tests keep
 covering the environment in which CI actually executes them.
+
+Dependency ownership inspection and relinking also remain dependency-free Node
+entries: the compiler may be unavailable until those links are repaired. They
+are covered by the bootstrap JS type check. Their plain-Node observer verifies
+the no-compiler recovery path; the exception inventory records all three paths.

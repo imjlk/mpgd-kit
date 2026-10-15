@@ -10,7 +10,7 @@ const exports = platformManifest.exports;
 assert.ok(typeof exports === 'object' && exports !== null);
 assert.ok('./capability-conformance' in exports);
 
-// Claim 1 in tools/config/lint.ts reads the source behind this published subpath.
+// Claim 1 in lint.config.ts reads the source behind this published subpath.
 // Fail if the package stops exporting it or repoints it without revisiting
 // the Evidence population and its guide.
 assert.deepEqual(

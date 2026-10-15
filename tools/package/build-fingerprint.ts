@@ -18,7 +18,7 @@ export const packageBuildToolchainFiles = [
   'package.json',
   'tsconfig.base.json',
   'lint.config.ts',
-  'tools/config/lint.ts',
+  'lint.source.config.ts',
   'strip.config.js',
 ] as const;
 
