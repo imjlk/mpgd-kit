@@ -146,7 +146,10 @@ The last game installed owns those links.
   if a nested independent game makes the root lockfile stale, it exits before
   removing any dependency link folders. Resolve the reported workspace/lockfile
   mismatch before retrying. Independent installs in `apps/` and `examples/`
-  are not removed.
+  are not removed. To return shared packages to a game workspace, run
+  `pnpm workspace:relink --owner /path/to/game` from the Kit root. It finds the
+  nearest workspace, checks its frozen install, removes only shared Kit package
+  link folders listed by that workspace, and reinstalls from that owner.
 
 ## Devvit output file names
 
@@ -271,7 +274,9 @@ See the target-specific runbooks for platform requirements. Repository layout
 changes command routing and ownership organization; it does not weaken any
 target's release gates.
 
-The generated Devvit wrapper registers `devvitOutputCollisionPlugin` from
-`@mpgd/cli/devvit` in its Vite config. Keep that registration when customizing
-the wrapper: Devvit playtests invoke the staging watch script directly, and
-must check output collisions just like the production target command.
+Generated Devvit wrappers register the shared `devvitOutputCollisionPlugin` in
+their Vite config. Workspace-generated wrappers and the checked-in Lite starter
+import Kit TypeScript source, so a fresh checkout needs no prebuilt CLI output.
+Standalone games use `@mpgd/cli/devvit` from the published package. Keep that
+registration when customizing the wrapper: Devvit playtests invoke the staging
+watch script directly and must check output collisions like production builds.

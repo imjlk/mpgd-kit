@@ -3781,6 +3781,12 @@ function createTemplateContext(input: {
     workspaceI18nBuildPrefix: input.workspace
       ? `pnpm --dir ${workspacePrefix} i18n:build && `
       : '',
+    devvitOutputPluginImport: input.workspace
+      ? toJavaScriptStringLiteral(`./${toTemplatePath(path.relative(
+          path.join(input.appDir, 'apps/target-devvit'),
+          path.resolve(kitPath ?? input.appDir, 'packages/cli/src/devvit-output-collisions'),
+        ))}`)
+      : "'@mpgd/cli/devvit'",
     defaultKitPath: kitPath === undefined ? defaultMpgdKitPath : workspacePrefix,
     recommendedMatrixTargets: input.microsoftStore
       ? recommendedMatrixTargets
@@ -3927,6 +3933,7 @@ function renderTemplate(
   context: ReturnType<typeof createTemplateContext>,
 ): string {
   let rendered = content
+    .replaceAll("from '@mpgd/cli/devvit'", `from ${context.devvitOutputPluginImport}`)
     .replaceAll('__GAME_NAME__', context.gameName)
     .replaceAll('__DEVVIT_APP_NAME__', context.devvitAppName)
     .replaceAll('__GAME_TITLE_TS_LITERAL__', context.gameTitleTsLiteral)
