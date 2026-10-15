@@ -1,5 +1,42 @@
 # @mpgd/cli
 
+## 0.49.0 — 2026-10-16
+
+### Changed
+
+- [d11a2f9b](https://github.com/imjlk/mpgd-kit/commit/d11a2f9b083c11ef9602f5afa4bfe74859089f9d) Generate TypeScript acceptance tools and a dedicated strict tools project for Phaser and Lite games. Include tools in check, lint, format, and fix commands, and document runtime-based JavaScript exceptions instead of using `.mjs` as the scripting default. — Thanks @imjlk!
+- [d11a2f9b](https://github.com/imjlk/mpgd-kit/commit/d11a2f9b083c11ef9602f5afa4bfe74859089f9d) Align the compiler, typed script runner, lint, Evidence, graph, paths, and bundler toolchain on ttsc 0.32.1. Preserve runtime assertion checks and use the graph-specific native packages. — Thanks @imjlk!
+
+### Added
+
+- [143326c5](https://github.com/imjlk/mpgd-kit/commit/143326c5c36ddcfee0fe20522119fc6f5a3605af) Validate Devvit bundle names before writing files, including case collisions on
+  Windows and conflicts with the configured public directory. Improve workspace
+  build diagnostics for dependencies linked to another game's installation or the
+  Kit store when a different workspace owns the active build.
+  
+  Expose the shared collision guard through `@mpgd/cli/devvit` and register it in
+  shipped wrapper Vite configurations so staging watch/playtest builds enforce the
+  same output rules as production builds.
+  
+  Workspace-generated wrappers load the guard from Kit TypeScript source without
+  requiring prebuilt CLI output; standalone wrappers use the published subpath. — Thanks @imjlk!
+- [7e495bc1](https://github.com/imjlk/mpgd-kit/commit/7e495bc140c0802374eb245beb425aa19b5cf1e7) Add a preview-first TypeScript tooling migration for existing generated games, with JavaScript and TypeScript runner customization detection, stale-plan protection, rollback limited to migration-owned lockfile updates, and parent-workspace boundaries.
+  
+  Block mixed child-package compiler versions and conflicting non-dev or peer
+  toolchain declarations; recheck nested manifests and workspace configuration
+  before applying a preview.
+  
+  Preserve untouched and concurrently edited files during rollback. Record lock
+  ownership and explain safe manual recovery after an interrupted migration.
+  
+  Preserve modified lockfiles for inspection after refresh failure, reject nested
+  parent-workspace migrations whose shared toolchain is not verified, and isolate
+  lockfile refresh from inherited pnpm workspace selection. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: adapter-ait@0.17.1, adapter-browser@0.11.1, adapter-capacitor@0.10.1, adapter-devvit@0.12.1, adapter-verse8@0.7.1, analytics@0.4.10, bridge@0.13.1, capacitor-play-billing@0.3.1, capacitor-storekit@0.3.1, catalog@0.10.1, game-runtime@0.7.1, game-services@0.24.1, i18n@0.6.15, phaser-assets@0.9.1, platform@0.23.1, target-config@0.23.1
+
 ## 0.48.0 — 2026-10-15
 
 ### Patch changes

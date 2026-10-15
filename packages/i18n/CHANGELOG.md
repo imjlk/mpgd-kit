@@ -1,5 +1,15 @@
 # @mpgd/i18n
 
+## 0.6.15 — 2026-10-16
+
+### Changed
+
+- [d11a2f9b](https://github.com/imjlk/mpgd-kit/commit/d11a2f9b083c11ef9602f5afa4bfe74859089f9d) Align the compiler, typed script runner, lint, Evidence, graph, paths, and bundler toolchain on ttsc 0.32.1. Preserve runtime assertion checks and use the graph-specific native packages. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: platform@0.23.1
+
 ## 0.6.14 — 2026-10-15
 
 ### Patch changes
