@@ -1,0 +1,41 @@
+name: windows-lint-diagnostic
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [extends, flat]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
+      - run: mise exec -- pnpm install --frozen-lockfile
+      - name: Select config shape
+        if: matrix.config == 'flat'
+        shell: pwsh
+        run: |
+          $source = Get-Content lint.config.ts -Raw
+          $source = $source.Replace("import { ignoredSourceFiles }", "import sourceConfig, { ignoredSourceFiles }")
+          $source = $source.Replace("export default {", "export default [sourceConfig, {")
+          $source = $source.Replace("  extends: './lint.source.config.ts',", "")
+          $source = $source.Replace("} satisfies ITtscLintConfig<ITtscEvidenceRules>;", "}] satisfies readonly ITtscLintConfig<ITtscEvidenceRules>[];")
+          Set-Content lint.config.ts $source
+      - name: Run isolated lint scope regression
+        shell: pwsh
+        run: |
+          $env:TTSC_E2E_TRACE = Join-Path $env:RUNNER_TEMP 'lint-trace'
+          New-Item -ItemType Directory -Force $env:TTSC_E2E_TRACE | Out-Null
+          mise exec -- node --test --test-name-pattern='typed lint config scopes' tools/run-ttsx.test.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: lint-trace-${{ matrix.config }}
+          path: ${{ runner.temp }}/lint-trace
+          retention-days: 1
