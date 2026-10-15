@@ -34,6 +34,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./devvit": {
+      "types": "./dist/devvit-output-collisions.d.ts",
+      "default": "./dist/devvit-output-collisions.js"
     }
   },
   "files": [
