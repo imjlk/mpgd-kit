@@ -376,3 +376,29 @@ await test('detects child-package and workspace changes after preview', () => {
     }
   }
 });
+
+await test('rejects a removed or changed base project without writing migration outputs', () => {
+  for (const remove of [false, true]) {
+    const f = fixture();
+    try {
+      const before = f.read('package.json');
+      const plan = planToolingMigration(f.game, template);
+      if (remove) {
+        rmSync(path.join(f.game, 'tsconfig.json'));
+      } else {
+        f.write('tsconfig.json', '{"include":["custom/**/*.ts"]}');
+      }
+      assert.throws(() => applyToolingMigration(plan), /File changed after planning: tsconfig.json/);
+      assert.equal(f.read('package.json'), before);
+      assert.equal(f.read('pnpm-lock.yaml'), '# original lock\n');
+      assert.equal(existsSync(path.join(f.game, 'tsconfig.tools.json')), false);
+      assert.equal(existsSync(path.join(f.game, 'tools/run-game-acceptance.ts')), false);
+      assert.equal(existsSync(path.join(f.game, 'tsconfig.json')), !remove);
+      if (!remove) {
+        assert.equal(f.read('tsconfig.json'), '{"include":["custom/**/*.ts"]}');
+      }
+    } finally {
+      f.cleanup();
+    }
+  }
+});

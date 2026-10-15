@@ -25,9 +25,10 @@ const managedPaths = [
   'tools/run-game-acceptance.mjs',
   'tools/run-game-acceptance.ts',
   'pnpm-lock.yaml',
-  'pnpm-workspace.yaml',
 ] as const;
 type ManagedPath = typeof managedPaths[number];
+const snapshotPaths = [...managedPaths, 'pnpm-workspace.yaml', 'tsconfig.json'] as const;
+type SnapshotPath = typeof snapshotPaths[number];
 export interface ToolingMigrationEdit {
   readonly file: ManagedPath;
   readonly before: string | null;
@@ -36,7 +37,7 @@ export interface ToolingMigrationEdit {
 export interface ToolingMigrationPlan {
   readonly gameRoot: string;
   readonly edits: readonly ToolingMigrationEdit[];
-  readonly snapshots: Readonly<Record<ManagedPath, string | null>>;
+  readonly snapshots: Readonly<Record<SnapshotPath, string | null>>;
   readonly childManifests: Readonly<Record<string, string>>;
   readonly updateLockfile: boolean;
   readonly blockers: readonly string[];
@@ -48,8 +49,8 @@ const defaultTemplateRoot = fileURLToPath(new URL('../templates/phaser-game/', i
 export function planToolingMigration(gameDirectory: string, templateRoot = defaultTemplateRoot): ToolingMigrationPlan {
   const gameRoot = realpathSync(path.resolve(gameDirectory));
   const snapshots = Object.fromEntries(
-    managedPaths.map((file) => [file, readOwnedFile(gameRoot, file)]),
-  ) as Record<ManagedPath, string | null>;
+    snapshotPaths.map((file) => [file, readOwnedFile(gameRoot, file)]),
+  ) as Record<SnapshotPath, string | null>;
   const blockers: string[] = [];
   const childManifests = readChildManifests(gameRoot);
   const notes: string[] = [];
@@ -317,7 +318,7 @@ function assertFreshPlan(plan: ToolingMigrationPlan): void {
   if (realpathSync(plan.gameRoot) !== plan.gameRoot) {
     throw new Error('Game root changed after planning.');
   }
-  for (const file of managedPaths) {
+  for (const file of snapshotPaths) {
     if (readOwnedFile(plan.gameRoot, file) !== plan.snapshots[file]) {
       throw new Error(`File changed after planning: ${file}`);
     }
@@ -433,12 +434,12 @@ function migrateKnownRunner(source: string, template: string): string | undefine
     return undefined;
   }
 }
-function readOwnedFile(root: string, file: ManagedPath): string | null {
+function readOwnedFile(root: string, file: SnapshotPath): string | null {
   const full = ownedPath(root, file);
   return existsSync(full) ? readFileSync(full, 'utf8') : null;
 }
-function ownedPath(root: string, file: ManagedPath): string {
-  if (!managedPaths.includes(file)) {
+function ownedPath(root: string, file: SnapshotPath): string {
+  if (!snapshotPaths.includes(file)) {
     throw new Error('Path is not owned by tooling migration.');
   }
   let current = root;
