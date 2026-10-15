@@ -270,3 +270,8 @@ Regardless of repository model:
 See the target-specific runbooks for platform requirements. Repository layout
 changes command routing and ownership organization; it does not weaken any
 target's release gates.
+
+The generated Devvit wrapper registers `devvitOutputCollisionPlugin` from
+`@mpgd/cli/devvit` in its Vite config. Keep that registration when customizing
+the wrapper: Devvit playtests invoke the staging watch script directly, and
+must check output collisions just like the production target command.

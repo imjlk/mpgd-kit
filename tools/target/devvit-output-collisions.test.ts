@@ -120,6 +120,64 @@ try {
     // Server builds with copying disabled must not inherit client collisions.
     await build(false, false);
     assert.equal(existsSync(join(buildOut, 'main.js')), true);
+
+    // Load the published subpath through a Vite config, exactly as scripts.dev
+    // does. A valid first build must reject a newly introduced watch collision.
+    const consumerRequire = createRequire(resolve('examples/lite-starter/package.json'));
+    const pluginUrl = pathToFileURL(consumerRequire.resolve('@mpgd/cli/devvit')).href;
+    const watchConfig = join(buildRoot, 'vite.config.mjs');
+    const watchEntry = join(buildRoot, 'watch-entry.js');
+    writeFileSync(
+      watchConfig,
+      `import { devvitOutputCollisionPlugin } from ${JSON.stringify(pluginUrl)};\nexport default { plugins: [devvitOutputCollisionPlugin()] };\n`,
+    );
+    writeFileSync(watchEntry, 'export const generation = 1;');
+    rmSync(join(customPublic, 'main.js'));
+    const watchBuilder = await createBuilder(
+      {
+        configFile: watchConfig,
+        root: buildRoot,
+        publicDir: customPublic,
+        logLevel: 'silent',
+        build: {
+          outDir: join(buildRoot, 'watch-dist'),
+          watch: {},
+          rollupOptions: { input: watchEntry, output: { entryFileNames: 'main.js' } },
+        },
+      },
+      null,
+    );
+    const client = watchBuilder.environments.client;
+    assert.ok(client);
+    const watcher = await watchBuilder.build(client);
+    assert.ok(!Array.isArray(watcher) && 'on' in watcher);
+    try {
+      await new Promise<void>((resolveWatch, rejectWatch) => {
+        let built = false;
+        const timeout = setTimeout(
+          () => rejectWatch(new Error('Devvit watch collision was not reported')),
+          60_000,
+        );
+        watcher.on('event', (event) => {
+          if (event.code === 'BUNDLE_END' && !built) {
+            built = true;
+            writeFileSync(join(customPublic, 'main.js'), 'conflicting public output');
+            writeFileSync(watchEntry, 'export const generation = 2;');
+          } else if (event.code === 'ERROR') {
+            clearTimeout(timeout);
+            try {
+              assert.equal(built, true, 'watcher must first complete a valid build');
+              assert.match(String(event.error), /public and bundle files use the same output name/u);
+              resolveWatch();
+            } catch (error) {
+              rejectWatch(error);
+            }
+          }
+        });
+      });
+    } finally {
+      await watcher.close();
+    }
   }
 } finally {
   rmSync(root, { recursive: true, force: true });
