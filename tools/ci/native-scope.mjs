@@ -1,3 +1,5 @@
+// @ts-check
+// Runs before dependency installation in CI; keep this entry dependency-free.
 import { fileURLToPath } from 'node:url';
 
 const nativeRoots = [
@@ -8,6 +10,7 @@ const nativeRoots = [
   'apps/mobile-capacitor/',
 ];
 
+/** @param {readonly string[]} files */
 export function isNativeOnlyChange(files) {
   let hasNativeChange = false;
   for (const file of files) {
@@ -15,7 +18,9 @@ export function isNativeOnlyChange(files) {
       hasNativeChange = true;
       continue;
     }
-    if (/^\.sampo\/changesets\/[^/]+\.md$/.test(file)) continue;
+    if (/^\.sampo\/changesets\/[^/]+\.md$/.test(file)) {
+      continue;
+    }
     return false;
   }
   return hasNativeChange;

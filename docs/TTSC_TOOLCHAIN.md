@@ -222,3 +222,77 @@ The upstream resident graph session supports incremental refreshes, but this
 runner does not claim persistent cross-worktree sharing. A future shared graph
 store must account for compiler/schema versions, config and dependency changes,
 uncommitted inputs, and reference-document changes before reusing graph shards.
+
+## Migrating existing generated games
+
+Run the installed CLI from the game's workspace (Node 24.11 or newer):
+
+```sh
+pnpm exec mpgd kit migrate-tools --game ./games/puzzle-one --json
+pnpm exec mpgd kit migrate-tools --game ./games/puzzle-one --apply
+```
+
+The first command only prints the plan. The second recomputes and applies it.
+The command recognizes the generated acceptance runner and standard check/lint/
+format/fix scripts, adds a strict tools project, and aligns compiler dependencies
+with the shipped template. It preserves the runner's Kit location and unrelated
+scripts. Custom runners, comments, scripts, configurations, or version specifiers
+block automatic application; migrate those manually without discarding changes.
+
+Standalone dependency changes refresh the game lockfile with lifecycle scripts
+disabled. Failure restores this invocation's unchanged outputs and, if it
+attempted a lockfile update, checks that the previous lockfile is unchanged.
+Changed lockfiles are preserved and reported for manual inspection: an ordinary
+pnpm install does not honor the migration lock, so ownership cannot be inferred.
+Concurrent output edits are preserved and reported. Concurrent migrations, changed plan inputs, and linked
+managed paths are rejected. A game nested in a parent pnpm workspace is blocked
+even when its local pins match; migrate its tools manually after verifying the
+parent and sibling toolchains and shared lockfile. This command does not change
+parent workspace files. Game-owned child package
+manifests are inspected too; mismatched compiler pins block application until
+you align them manually. Custom non-dev compiler declarations and incompatible
+peer toolchain declarations also block application. After applying, install the
+updated dependencies normally and run `pnpm check` and `pnpm accept --help`.
+
+If an interrupted process leaves `.mpgd-tooling-migration.lock`, inspect its
+host, PID and start time. Verify that migration and its pnpm child have stopped
+on that host; do not remove the lock of a live or uncertain owner. Inspect the
+game's Git diff and reconcile any partially applied files and lockfile before
+removing only `.mpgd-tooling-migration.lock`. Then run a new preview followed by
+`--apply`. Legacy token-only locks require the same manual process check. Locks
+are never automatically reaped based on age or PID reuse. On ordinary failure,
+rollback restores only files this invocation wrote and preserves concurrent
+edits to its outputs, reporting those paths as incomplete rollback.
+
+## JavaScript exception inventory
+
+`pnpm validate:javascript-policy` checks authored JS tracked by Git and untracked,
+non-ignored JS. Every file must have an exact entry in
+`tools/policy/javascript-inventory.ts`. New ordinary scripts must be TypeScript;
+a genuine runtime constraint requires an explained `runtime-exception` entry.
+Existing ordinary JS is separately marked `migration-backlog`, not grandfathered
+as a permanent exception. Do not add new files to that backlog. Remove the entry
+when a file is migrated or deleted. The validator rejects new unregistered files,
+stale entries, duplicate entries, globs, and empty reasons; review must still
+assess whether the claimed runtime constraint is valid.
+
+## Typed maintenance and bootstrap boundaries
+
+Capacitor alignment/fail-closed validators, graph request normalization, graph
+answer checks, graph commands, and their ordinary regression tests are checked
+through `tsconfig.maintenance-tools.json`. External JSON enters as `unknown`;
+manifest dependency maps, preset metadata, entrypoints and answer surfaces are
+narrowed before use. The graph's version-pinned internal application/identity
+bridge is isolated from those contracts; its public binary resolver is imported
+from `@ttsc/graph`. Keep the real preset smoke tests when upgrading that package.
+
+`tools/ci/native-scope.mjs` runs before dependency installation, and
+`tools/ci/verify-coverage.mjs` runs in the checkout-only CI gate. They therefore
+remain dependency-free JS with JSDoc, `@ts-check`, and a strict
+`tsconfig.bootstrap-js.json` check in `pnpm check`. Their plain-Node tests keep
+covering the environment in which CI actually executes them.
+
+Dependency ownership inspection and relinking also remain dependency-free Node
+entries: the compiler may be unavailable until those links are repaired. They
+are covered by the bootstrap JS type check. Their plain-Node observer verifies
+the no-compiler recovery path; the exception inventory records all three paths.

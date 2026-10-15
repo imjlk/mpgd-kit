@@ -23,11 +23,11 @@ import {
   readPreset,
   repoRoot,
   summarizeGraphResult,
-} from './local-graph-runtime.mjs';
+} from './local-graph-runtime.js';
 
 const args = process.argv.slice(2);
 const requestedPresets = args.length === 0 ? listPresetNames() : args;
-const dumps = new Map();
+const dumps = new Map<string, string>();
 
 for (const presetName of requestedPresets) {
   const preset = readPreset(presetName);
@@ -44,7 +44,7 @@ for (const presetName of requestedPresets) {
   const response = await inspectWithDump(dump, preset.props);
   const { result, nextAction } = assertGraphPresetResponse(presetName, preset, response);
 
-  console.log(
+  console.info(
     `Graph preset passed ${presetName}: ${summarizeGraphResult(result, nextAction)}, ` +
       `named entrypoints ${preset.namedEntrypoints.map((entry) => entry.name).join(', ')}`,
   );
