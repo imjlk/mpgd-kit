@@ -20,6 +20,8 @@
     "tools/graph/*.ts",
     "tools/validate-capacitor-*.ts",
     "tools/validation/**/*.ts",
-    "tools/graph-runtime.test.ts"
+    "tools/graph-runtime.test.ts",
+    "tools/workspace/kit-dependency-links.mjs",
+    "tools/workspace/relink-kit-workspace.mjs"
   ]
 }

@@ -13,11 +13,6 @@ export const javascriptInventory = [
     reason: 'Dependency repair cannot require the compiler whose installation it repairs; checked by the bootstrap JS project.',
   },
   {
-    file: 'tools/workspace/kit-dependency-links.test.mjs',
-    disposition: 'runtime-exception',
-    reason: 'Plain Node observer verifies dependency repair without assuming a working compiler installation.',
-  },
-  {
     file: 'adapters/capacitor/test/native-http-runtime.mjs',
     disposition: 'migration-backlog',
     reason: 'Existing JavaScript orchestration or test awaiting a typed migration; this is not a runtime exception.',

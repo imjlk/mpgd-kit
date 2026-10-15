@@ -27,7 +27,8 @@ This starter is the minimal private template for new mpgd Phaser games.
 ## TypeScript tooling
 
 - Author game code, tests, and development tools in TypeScript (`.ts`). Include every tool in
-  `tsconfig.tools.json` and run it with `ttsx --project tsconfig.tools.json`.
+  the owning TypeScript project and pass that project to `ttsx`. This checked-in
+  example uses `tsconfig.json`; generated games also have `tsconfig.tools.json`.
 - Use `.mjs`, `.cjs`, or authored `.js` only when a concrete consumer cannot run TypeScript
   (for example a browser fixture or a JavaScript-only config loader). Document that constraint
   beside the file. Convenience or avoiding type errors is not an exception.

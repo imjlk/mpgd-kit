@@ -2,7 +2,7 @@
 // Repair runs before compiler dependencies are usable; keep this entry in Node.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync, realpathSync, rmSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -30,7 +30,11 @@ const installRoot = ownerIndex === -1 ? kitRoot : findKitBuildInstallRoot(ownerA
 // owned by the game being built are expected in workspace mode; links owned by
 // any other install mean this build may use another game's dependencies.
 if (warnIndex !== -1) {
-  const owner = findKitBuildInstallRoot(process.argv[warnIndex + 1] ?? process.cwd());
+  const candidate = findKitBuildInstallRoot(process.argv[warnIndex + 1] ?? process.cwd());
+  // Standalone games consume published packages and do not own Kit links.
+  const owner = candidate === realpathSync(kitRoot) || includesKitPackages(workspacePackagePaths(candidate))
+    ? candidate
+    : realpathSync(kitRoot);
   const foreign = findKitDependencyLinks(kitRoot)
     .filter((entry) => !isKitDependencyLinkOwnedBy(entry, owner));
   const message = describeForeignKitDependencyLinks(kitRoot, foreign, owner);
@@ -40,14 +44,18 @@ if (warnIndex !== -1) {
   process.exit(0);
 }
 
-const warning = describeForeignKitDependencyLinks(kitRoot);
+const warning = describeForeignKitDependencyLinks(
+  kitRoot,
+  findKitDependencyLinks(kitRoot).filter((entry) => !isKitDependencyLinkOwnedBy(entry, installRoot)),
+  installRoot,
+);
 
 if (checkOnly) {
   if (warning !== undefined) {
     console.error(warning);
     process.exit(1);
   }
-  console.info('mpgd-kit: all kit package dependency links resolve inside the kit.');
+  console.info(`mpgd-kit: all kit package dependency links are owned by ${installRoot}.`);
   process.exit(0);
 }
 
@@ -57,19 +65,12 @@ if (checkOnly) {
 /** @type {Set<string> | undefined} */
 let workspacePackages;
 if (ownerIndex !== -1) {
-  const listing = spawnSync('pnpm', ['list', '--recursive', '--depth', '-1', '--json'], {
-    cwd: installRoot,
-    encoding: 'utf8',
-    shell: process.platform === 'win32',
-  });
-  if (listing.status !== 0) {
-    throw new Error('Could not list the selected workspace; no dependency links were removed.');
+  workspacePackages = workspacePackagePaths(installRoot);
+  if (!includesKitPackages(workspacePackages)) {
+    throw new Error(
+      'The selected workspace does not include Kit packages; no dependency links were removed.',
+    );
   }
-  const packages = JSON.parse(listing.stdout);
-  if (!Array.isArray(packages) || packages.some((pkg) => typeof pkg?.path !== 'string')) {
-    throw new Error('Invalid workspace package listing; no dependency links were removed.');
-  }
-  workspacePackages = new Set(packages.map((pkg) => realpathSync(pkg.path)));
 }
 const preflight = install(['--ignore-scripts']);
 if (preflight.status !== 0) {
@@ -101,5 +102,38 @@ function install(extraArgs) {
     cwd: installRoot,
     stdio: 'inherit',
     shell: process.platform === 'win32',
+  });
+}
+
+/** @param {string} owner @returns {Set<string>} */
+function workspacePackagePaths(owner) {
+  const listing = spawnSync('pnpm', ['list', '--recursive', '--depth', '-1', '--json'], {
+    cwd: owner,
+    encoding: 'utf8',
+    shell: process.platform === 'win32',
+  });
+  if (listing.status !== 0) {
+    throw new Error('Could not list the selected workspace; no dependency links were removed.');
+  }
+  /** @type {unknown} */
+  const packages = JSON.parse(listing.stdout);
+  if (!Array.isArray(packages)) {
+    throw new Error('Invalid workspace package listing; no dependency links were removed.');
+  }
+  return new Set(
+    packages.map((pkg) => {
+      if (typeof pkg?.path !== 'string') {
+        throw new Error('Invalid workspace package path; no dependency links were removed.');
+      }
+      return realpathSync(pkg.path);
+    }),
+  );
+}
+
+/** @param {Set<string>} packages */
+function includesKitPackages(packages) {
+  return [...packages].some((directory) => {
+    const parts = relative(realpathSync(kitRoot), directory).split(sep);
+    return parts.length === 2 && parts[0] !== undefined && kitPackageGlobs.includes(parts[0]);
   });
 }
