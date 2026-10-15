@@ -244,3 +244,15 @@ migrations, changed plan inputs, and linked managed paths are rejected. A game
 inside a parent pnpm workspace must have its toolchain aligned first: this command
 does not modify the parent's manifest or lockfile. After applying, install the
 updated dependencies normally and run `pnpm check` and `pnpm accept --help`.
+
+## JavaScript exception inventory
+
+`pnpm validate:javascript-policy` checks authored JS tracked by Git and untracked,
+non-ignored JS. Every file must have an exact entry in
+`tools/policy/javascript-inventory.ts`. New ordinary scripts must be TypeScript;
+a genuine runtime constraint requires an explained `runtime-exception` entry.
+Existing ordinary JS is separately marked `migration-backlog`, not grandfathered
+as a permanent exception. Do not add new files to that backlog. Remove the entry
+when a file is migrated or deleted. The validator rejects new unregistered files,
+stale entries, duplicate entries, globs, and empty reasons; review must still
+assess whether the claimed runtime constraint is valid.
