@@ -100,6 +100,7 @@ process.exit(result.status ?? 1);
 function install(extraArgs) {
   return spawnSync('pnpm', ['install', '--frozen-lockfile', '--prefer-offline', ...extraArgs], {
     cwd: installRoot,
+    env: workspaceEnvironment(),
     stdio: 'inherit',
     shell: process.platform === 'win32',
   });
@@ -109,6 +110,7 @@ function install(extraArgs) {
 function workspacePackagePaths(owner) {
   const listing = spawnSync('pnpm', ['list', '--recursive', '--depth', '-1', '--json'], {
     cwd: owner,
+    env: workspaceEnvironment(),
     encoding: 'utf8',
     shell: process.platform === 'win32',
   });
@@ -136,4 +138,16 @@ function includesKitPackages(packages) {
     const parts = relative(realpathSync(kitRoot), directory).split(sep);
     return parts.length === 2 && parts[0] !== undefined && kitPackageGlobs.includes(parts[0]);
   });
+}
+
+// pnpm lifecycle environments can pin their caller's workspace even when cwd
+// changes. Resolve the selected owner from its own directory for list/install.
+function workspaceEnvironment() {
+  const environment = { ...process.env };
+  for (const key of Object.keys(environment)) {
+    if (key.toLowerCase() === 'npm_config_workspace_dir') {
+      delete environment[key];
+    }
+  }
+  return environment;
 }

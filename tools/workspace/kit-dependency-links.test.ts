@@ -156,6 +156,8 @@ await test('relink preserves independent apps and examples installs', () => {
     const environment = { ...process.env };
     const pathKey = Object.keys(environment).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
     environment[pathKey] = bin;
+    environment.NPM_CONFIG_WORKSPACE_DIR = process.cwd();
+    environment.npm_config_workspace_dir = process.cwd();
     const runRelink = () =>
       spawnSync(process.execPath, [join(scriptDir, 'relink-kit-workspace.mjs')], {
         env: environment,
@@ -217,6 +219,8 @@ await test('owner relink rebuilds shared links from the game workspace and prese
       const fs = require('node:fs');
       const assert = require('node:assert/strict');
       assert.equal(fs.realpathSync(process.cwd()), ${JSON.stringify(realpathSync(game))});
+      assert.equal(process.env.NPM_CONFIG_WORKSPACE_DIR, undefined);
+      assert.equal(process.env.npm_config_workspace_dir, undefined);
       if (process.argv[2] === 'list') {
         console.log(JSON.stringify([{ path: ${JSON.stringify(join(kit, 'adapters/devvit'))} }]));
       } else if (!process.argv.includes('--ignore-scripts')) {
@@ -233,6 +237,8 @@ await test('owner relink rebuilds shared links from the game workspace and prese
     const environment = { ...process.env };
     const pathKey = Object.keys(environment).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
     environment[pathKey] = bin;
+    environment.NPM_CONFIG_WORKSPACE_DIR = process.cwd();
+    environment.npm_config_workspace_dir = process.cwd();
     const result = spawnSync(process.execPath, [join(scriptDir, 'relink-kit-workspace.mjs'), '--owner', nested], {
       env: environment, encoding: 'utf8',
     });
@@ -267,6 +273,7 @@ await test('selected workspace warnings include Kit stores but not shared source
     const run = (...args: string[]) =>
       spawnSync(process.execPath, [join(scriptDir, 'relink-kit-workspace.mjs'), ...args], {
         encoding: 'utf8',
+        env: { ...process.env, NPM_CONFIG_WORKSPACE_DIR: process.cwd() },
       });
     assert.equal(findKitDependencyLinks(kit).length, 1);
     const mismatched = run('--warn-unless-owner', nested);
