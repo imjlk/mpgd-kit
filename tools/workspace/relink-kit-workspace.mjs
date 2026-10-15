@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   describeForeignKitDependencyLinks,
-  findForeignKitDependencyLinks,
+  findKitDependencyLinks,
   findKitBuildInstallRoot,
   isKitDependencyLinkOwnedBy,
   kitPackageGlobs,
@@ -23,9 +23,9 @@ const warnIndex = process.argv.indexOf('--warn-unless-owner');
 // any other install mean this build may use another game's dependencies.
 if (warnIndex !== -1) {
   const owner = findKitBuildInstallRoot(process.argv[warnIndex + 1] ?? process.cwd());
-  const foreign = findForeignKitDependencyLinks(kitRoot)
+  const foreign = findKitDependencyLinks(kitRoot)
     .filter((entry) => !isKitDependencyLinkOwnedBy(entry, owner));
-  const message = describeForeignKitDependencyLinks(kitRoot, foreign);
+  const message = describeForeignKitDependencyLinks(kitRoot, foreign, owner);
   if (message !== undefined) {
     console.warn(`warning: ${message}`);
   }

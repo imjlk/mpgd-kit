@@ -1,6 +1,9 @@
 import { existsSync, readdirSync, readlinkSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 
+// Dependency repair must run even when compiler dependency links are broken.
+// Keep this Node bootstrap independent of the TypeScript toolchain.
+
 // Kit workspace package roots. A `--workspace` game lists the same globs (with
 // a ../mpgd-kit prefix) in its pnpm-workspace.yaml, so `pnpm install` in the
 // game rewrites these packages' node_modules links into the game's store.
@@ -60,12 +63,13 @@ function linkEntries(nodeModules) {
 }
 
 /**
- * Lists kit package dependency links that resolve outside the kit checkout,
- * grouped by the external install root (the directory owning `node_modules`).
+ * Lists dependency install owners, including the Kit store and dangling links.
+ * Internal workspace source links do not belong to a dependency store and are
+ * intentionally excluded; they are shared by both Kit and game installations.
  */
-export function findForeignKitDependencyLinks(kitRoot) {
+export function findKitDependencyLinks(kitRoot) {
   const root = realpathSync(kitRoot);
-  const foreign = [];
+  const links = [];
   for (const group of kitPackageGlobs) {
     const groupDir = join(root, group);
     if (!existsSync(groupDir)) {
@@ -82,7 +86,7 @@ export function findForeignKitDependencyLinks(kitRoot) {
           target = realpathSync(link);
         } catch {
           // A dangling link usually means the owning game moved or was deleted.
-          foreign.push({
+          links.push({
             link: relative(root, link),
             target: readlinkSync(link),
             installRoot: '<missing>',
@@ -95,28 +99,36 @@ export function findForeignKitDependencyLinks(kitRoot) {
         // examples/my-game) has its own node_modules inside the checkout.
         const marker = `${sep}node_modules${sep}`;
         const installRoot = target.includes(marker) ? target.slice(0, target.indexOf(marker)) : target;
-        const owned = target.includes(marker) ? installRoot === root : isInside(root, target);
-        if (!owned) {
-          foreign.push({ link: relative(root, link), target, installRoot });
+        if (!target.includes(marker) && isInside(root, target)) {
+          continue;
         }
+        links.push({ link: relative(root, link), target, installRoot });
       }
     }
   }
-  return foreign;
+  return links;
 }
 
-/** Human-readable warning, or undefined when every link stays inside the kit. */
-export function describeForeignKitDependencyLinks(kitRoot, foreign = findForeignKitDependencyLinks(kitRoot)) {
+/** Kit-only checks compare all dependency stores against the Kit install. */
+export function findForeignKitDependencyLinks(kitRoot) {
+  const owner = realpathSync(kitRoot);
+  return findKitDependencyLinks(kitRoot).filter((entry) => !isKitDependencyLinkOwnedBy(entry, owner));
+}
+
+/** Describe mismatched install owners; default checks compare against the Kit. */
+export function describeForeignKitDependencyLinks(kitRoot, foreign = findForeignKitDependencyLinks(kitRoot), expectedOwner = realpathSync(kitRoot)) {
   if (foreign.length === 0) {
     return undefined;
   }
+  const kitOwnedBuild = relative(realpathSync(kitRoot), expectedOwner) === '';
   const owners = [...new Set(foreign.map((entry) => entry.installRoot))].sort();
   return [
-    `mpgd-kit: ${foreign.length} kit package dependency link(s) are not owned by the kit install`,
-    '(they point into another install, or are broken),',
+    `mpgd-kit: ${foreign.length} kit package dependency link(s) are not owned by ${kitOwnedBuild ? 'the kit install' : 'the selected build install'}`,
+    `(expected ${expectedOwner}; links point into another install, or are broken),`,
     `into the install of: ${owners.join(', ')}.`,
     'A --workspace game\'s `pnpm install` re-links kit packages to its own store. Builds run from',
     'that game still work, but kit-only commands (and other games) then use that game\'s dependencies.',
+    ...(kitOwnedBuild ? [] : [`Restore selected build links by running pnpm install from: ${expectedOwner}`]),
     `Restore kit-owned links from the kit root with: ${kitRelinkCommand}`,
     `Example: ${foreign[0].link} -> ${foreign[0].target}`,
   ].join('\n');
