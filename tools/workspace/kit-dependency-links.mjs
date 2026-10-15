@@ -6,6 +6,7 @@ import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 
 // Dependency repair must run even when compiler dependency links are broken.
 // Keep this Node bootstrap independent of the TypeScript toolchain.
+// Match pnpm's native realpath identity, including Windows short-name aliases.
 
 // Kit workspace package roots. A `--workspace` game lists the same globs (with
 // a ../mpgd-kit prefix) in its pnpm-workspace.yaml, so `pnpm install` in the
@@ -34,7 +35,7 @@ export function isKitDependencyLinkOwnedBy(entry, owner) {
  * @param {string} gameDirectory
  */
 export function findKitBuildInstallRoot(gameDirectory) {
-  const gameRoot = realpathSync(gameDirectory);
+  const gameRoot = realpathSync.native(gameDirectory);
   let packageRoot;
   for (let directory = gameRoot; ; directory = dirname(directory)) {
     if (existsSync(join(directory, 'pnpm-workspace.yaml'))) {
@@ -78,7 +79,7 @@ function linkEntries(nodeModules) {
  * @returns {KitDependencyLink[]}
  */
 export function findKitDependencyLinks(kitRoot) {
-  const root = realpathSync(kitRoot);
+  const root = realpathSync.native(kitRoot);
   /** @type {KitDependencyLink[]} */
   const links = [];
   for (const group of kitPackageGlobs) {
@@ -94,7 +95,7 @@ export function findKitDependencyLinks(kitRoot) {
       for (const link of linkEntries(nodeModules)) {
         let target;
         try {
-          target = realpathSync(link);
+          target = realpathSync.native(link);
         } catch {
           // A dangling link usually means the owning game moved or was deleted.
           links.push({
@@ -126,7 +127,7 @@ export function findKitDependencyLinks(kitRoot) {
  * @param {string} kitRoot
  */
 export function findForeignKitDependencyLinks(kitRoot) {
-  const owner = realpathSync(kitRoot);
+  const owner = realpathSync.native(kitRoot);
   return findKitDependencyLinks(kitRoot).filter(
     (entry) => !isKitDependencyLinkOwnedBy(entry, owner),
   );
@@ -139,12 +140,12 @@ export function findForeignKitDependencyLinks(kitRoot) {
  */
 export function describeForeignKitDependencyLinks(kitRoot, foreign = findForeignKitDependencyLinks(
   kitRoot,
-), expectedOwner = realpathSync(kitRoot)) {
+), expectedOwner = realpathSync.native(kitRoot)) {
   const example = foreign[0];
   if (example === undefined) {
     return undefined;
   }
-  const kitOwnedBuild = relative(realpathSync(kitRoot), expectedOwner) === '';
+  const kitOwnedBuild = relative(realpathSync.native(kitRoot), expectedOwner) === '';
   const owners = [...new Set(foreign.map((entry) => entry.installRoot))].sort();
   return [
     `mpgd-kit: ${foreign.length} kit package dependency link(s) are not owned by ${kitOwnedBuild ? 'the kit install' : 'the selected build install'}`,

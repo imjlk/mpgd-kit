@@ -2,8 +2,12 @@
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "rootDir": ".",
-    "types": ["node", "vite/client"],
-    "noEmit": true
+    "types": [
+      "node",
+      "vite/client"
+    ],
+    "noEmit": true,
+    "allowJs": true
   },
   "include": [
     "tools/**/*.ts",

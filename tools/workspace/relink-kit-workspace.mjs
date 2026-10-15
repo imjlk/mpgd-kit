@@ -32,9 +32,9 @@ const installRoot = ownerIndex === -1 ? kitRoot : findKitBuildInstallRoot(ownerA
 if (warnIndex !== -1) {
   const candidate = findKitBuildInstallRoot(process.argv[warnIndex + 1] ?? process.cwd());
   // Standalone games consume published packages and do not own Kit links.
-  const owner = candidate === realpathSync(kitRoot) || includesKitPackages(workspacePackagePaths(candidate))
+  const owner = candidate === realpathSync.native(kitRoot) || includesKitPackages(workspacePackagePaths(candidate))
     ? candidate
-    : realpathSync(kitRoot);
+    : realpathSync.native(kitRoot);
   const foreign = findKitDependencyLinks(kitRoot)
     .filter((entry) => !isKitDependencyLinkOwnedBy(entry, owner));
   const message = describeForeignKitDependencyLinks(kitRoot, foreign, owner);
@@ -88,7 +88,7 @@ for (const group of kitPackageGlobs) {
     continue;
   }
   for (const entry of readdirSync(groupDir, { withFileTypes: true })) {
-    if (entry.isDirectory() && (workspacePackages === undefined || workspacePackages.has(realpathSync(join(groupDir, entry.name))))) {
+    if (entry.isDirectory() && (workspacePackages === undefined || workspacePackages.has(realpathSync.native(join(groupDir, entry.name))))) {
       rmSync(join(groupDir, entry.name, 'node_modules'), { recursive: true, force: true });
     }
   }
@@ -127,7 +127,7 @@ function workspacePackagePaths(owner) {
       if (typeof pkg?.path !== 'string') {
         throw new Error('Invalid workspace package path; no dependency links were removed.');
       }
-      return realpathSync(pkg.path);
+      return realpathSync.native(pkg.path);
     }),
   );
 }
@@ -135,7 +135,7 @@ function workspacePackagePaths(owner) {
 /** @param {Set<string>} packages */
 function includesKitPackages(packages) {
   return [...packages].some((directory) => {
-    const parts = relative(realpathSync(kitRoot), directory).split(sep);
+    const parts = relative(realpathSync.native(kitRoot), directory).split(sep);
     return parts.length === 2 && parts[0] !== undefined && kitPackageGlobs.includes(parts[0]);
   });
 }
