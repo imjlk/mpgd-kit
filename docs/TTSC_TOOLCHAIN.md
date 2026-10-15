@@ -240,14 +240,26 @@ scripts. Custom runners, comments, scripts, configurations, or version specifier
 block automatic application; migrate those manually without discarding changes.
 
 Standalone dependency changes refresh the game lockfile with lifecycle scripts
-disabled. Failure restores managed files and the previous lockfile. Concurrent
-migrations, changed plan inputs, and linked managed paths are rejected. A game
+disabled. Failure restores this invocation's unchanged outputs and, if it
+attempted a lockfile update, the previous lockfile. Concurrent output edits are
+preserved and reported. Concurrent migrations, changed plan inputs, and linked
+managed paths are rejected. A game
 inside a parent pnpm workspace must have its toolchain aligned first: this command
 does not modify the parent's manifest or lockfile. Game-owned child package
 manifests are inspected too; mismatched compiler pins block application until
 you align them manually. Custom non-dev compiler declarations and incompatible
 peer toolchain declarations also block application. After applying, install the
 updated dependencies normally and run `pnpm check` and `pnpm accept --help`.
+
+If an interrupted process leaves `.mpgd-tooling-migration.lock`, inspect its
+host, PID and start time. Verify that migration and its pnpm child have stopped
+on that host; do not remove the lock of a live or uncertain owner. Inspect the
+game's Git diff and reconcile any partially applied files and lockfile before
+removing only `.mpgd-tooling-migration.lock`. Then run a new preview followed by
+`--apply`. Legacy token-only locks require the same manual process check. Locks
+are never automatically reaped based on age or PID reuse. On ordinary failure,
+rollback restores only files this invocation wrote and preserves concurrent
+edits to its outputs, reporting those paths as incomplete rollback.
 
 ## JavaScript exception inventory
 

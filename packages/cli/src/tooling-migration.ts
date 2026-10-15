@@ -10,6 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { hostname } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -267,16 +268,36 @@ export function applyToolingMigration(plan: ToolingMigrationPlan, updateLockfile
     return [];
   }
   const lockPath = path.join(plan.gameRoot, '.mpgd-tooling-migration.lock');
-  const lock = randomUUID();
-  writeFileSync(lockPath, lock, { flag: 'wx', mode: 0o600 });
+  const lock = JSON.stringify({
+    token: randomUUID(),
+    pid: process.pid,
+    host: hostname(),
+    startedAt: new Date().toISOString(),
+  });
+  try {
+    writeFileSync(lockPath, lock, { flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    if (isObject(error) && error.code === 'EEXIST') {
+      throw new Error(
+        `Migration lock exists (EEXIST): ${lockPath}. If an earlier run was interrupted, verify its process and pnpm child have exited, inspect partial changes, then remove only this lock and run a fresh preview.`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
   let writesStarted = false;
   let lockfileUpdateAttempted = false;
+  const written: ToolingMigrationEdit[] = [];
   try {
     // Another migration may have completed between the initial check and lock acquisition.
     assertFreshPlan(plan);
     writesStarted = true;
     for (const edit of plan.edits) {
+      if (readOwnedFile(plan.gameRoot, edit.file) !== edit.before) {
+        throw new Error(`File changed during migration: ${edit.file}`);
+      }
       writeOwnedFile(plan.gameRoot, edit.file, edit.after);
+      written.push(edit);
     }
     if (plan.updateLockfile) {
       lockfileUpdateAttempted = true;
@@ -287,16 +308,21 @@ export function applyToolingMigration(plan: ToolingMigrationPlan, updateLockfile
       throw error;
     }
     const failures: string[] = [];
-    for (const file of [
-      ...new Set([
-        ...plan.edits.map((edit) => edit.file),
-        ...(lockfileUpdateAttempted ? ['pnpm-lock.yaml' as const] : []),
-      ]),
-    ]) {
+    for (const edit of [...written].reverse()) {
       try {
-        writeOwnedFile(plan.gameRoot, file, plan.snapshots[file]);
+        if (readOwnedFile(plan.gameRoot, edit.file) !== edit.after) {
+          throw new Error('A concurrent writer changed the migration output.');
+        }
+        writeOwnedFile(plan.gameRoot, edit.file, edit.before);
       } catch {
-        failures.push(file);
+        failures.push(edit.file);
+      }
+    }
+    if (lockfileUpdateAttempted) {
+      try {
+        writeOwnedFile(plan.gameRoot, 'pnpm-lock.yaml', plan.snapshots['pnpm-lock.yaml']);
+      } catch {
+        failures.push('pnpm-lock.yaml');
       }
     }
     let rollbackStatus = lockfileUpdateAttempted

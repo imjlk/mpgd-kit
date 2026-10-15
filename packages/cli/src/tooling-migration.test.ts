@@ -402,3 +402,72 @@ await test('rejects a removed or changed base project without writing migration 
     }
   }
 });
+
+await test('does not restore an untouched later file when an earlier write fails', (context) => {
+  const f = fixture();
+  const rename = fs.renameSync;
+  try {
+    const plan = planToolingMigration(f.game, template);
+    context.mock.method(fs, 'renameSync', (...args: Parameters<typeof rename>) => {
+      if (String(args[1]) === path.join(f.game, 'tools/run-game-acceptance.ts')) {
+        f.write('package.json', '{"concurrent":"keep"}');
+        throw new Error('first write failed');
+      }
+      return rename(...args);
+    });
+    syncBuiltinESMExports();
+    assert.throws(() => applyToolingMigration(plan), /Tooling migration failed/);
+    assert.equal(f.read('package.json'), '{"concurrent":"keep"}');
+    assert.equal(existsSync(path.join(f.game, 'tools/run-game-acceptance.ts')), false);
+    assert.equal(existsSync(path.join(f.game, 'tools/run-game-acceptance.mjs')), true);
+    assert.equal(f.read('pnpm-lock.yaml'), '# original lock\n');
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
+    f.cleanup();
+  }
+});
+
+await test('preserves concurrent output edits during rollback', () => {
+  const f = fixture();
+  try {
+    const plan = planToolingMigration(f.game, template);
+    assert.throws(
+      () =>
+        applyToolingMigration(plan, () => {
+          f.write('package.json', '{"concurrent":"keep"}');
+          throw new Error('install failed');
+        }),
+      /Rollback incomplete: package.json/,
+    );
+    assert.equal(f.read('package.json'), '{"concurrent":"keep"}');
+    assert.equal(existsSync(path.join(f.game, 'tools/run-game-acceptance.ts')), false);
+    assert.equal(existsSync(path.join(f.game, 'tools/run-game-acceptance.mjs')), true);
+  } finally {
+    f.cleanup();
+  }
+});
+
+await test('provides manual recovery for interrupted migration locks', () => {
+  const f = fixture();
+  try {
+    const plan = planToolingMigration(f.game, template);
+    f.write('.mpgd-tooling-migration.lock', 'interrupted legacy run');
+    assert.throws(
+      () => applyToolingMigration(plan),
+      /verify its process and pnpm child have exited/,
+    );
+    assert.equal(f.read('.mpgd-tooling-migration.lock'), 'interrupted legacy run');
+    rmSync(path.join(f.game, '.mpgd-tooling-migration.lock'));
+    applyToolingMigration(plan, () => {
+      const owner = JSON.parse(f.read('.mpgd-tooling-migration.lock'));
+      assert.equal(owner.pid, process.pid);
+      assert.equal(typeof owner.host, 'string');
+      assert.equal(typeof owner.token, 'string');
+      assert.ok(Number.isFinite(Date.parse(owner.startedAt)));
+    });
+    assert.equal(existsSync(path.join(f.game, '.mpgd-tooling-migration.lock')), false);
+  } finally {
+    f.cleanup();
+  }
+});
