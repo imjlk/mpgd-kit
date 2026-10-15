@@ -284,7 +284,9 @@ test('typed lint config scopes style rules to Kit sources', (t) => {
     files: [localSource, externalSource],
   }));
   const check = () => spawnSync(process.execPath, [join(repoRoot, 'node_modules/ttsc/lib/launcher/ttsc.js'), '--noEmit', '-p', project], {
-    cwd: repoRoot, encoding: 'utf8', timeout: 120_000,
+    // A Windows cache miss compiles the native Go plugins before checking.
+    // Keep a bounded allowance for that cold build, without skipping the check.
+    cwd: repoRoot, encoding: 'utf8', timeout: process.platform === 'win32' ? 600_000 : 120_000,
     env: { ...runnerEnv(), TTSC_TSGO_BINARY: tsgoBinary },
   });
   const externalOnly = check();

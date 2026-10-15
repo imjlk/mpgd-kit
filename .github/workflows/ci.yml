@@ -966,13 +966,13 @@ jobs:
       # TTSC_GO_BINARY, instead of the Windows image's preinstalled versions.
       - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
       - run: mise exec -- pnpm install --frozen-lockfile
-      - run: mise exec -- pnpm test:tooling
       - name: Cache Windows ttsc plugins
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules/.cache/ttsc/plugins
           key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml', '.mise.toml') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
+      - run: mise exec -- pnpm test:tooling
       # Build on Windows: Linux-produced dist would hide path regressions.
       - run: mise exec -- pnpm build:packages
       - name: Generate, install, check and build the Store starter
