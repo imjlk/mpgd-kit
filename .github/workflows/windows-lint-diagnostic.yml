@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        config: [extends, flat]
+        config: [extends, direct]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -25,14 +25,12 @@ jobs:
       - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db
       - run: mise exec -- pnpm install --frozen-lockfile
       - name: Select config shape
-        if: matrix.config == 'flat'
+        if: matrix.config == 'direct'
         shell: pwsh
         run: |
           $source = Get-Content lint.config.ts -Raw
           $source = $source.Replace("import { ignoredSourceFiles }", "import sourceConfig, { ignoredSourceFiles }")
-          $source = $source.Replace("export default {", "export default [sourceConfig, {")
-          $source = $source.Replace("  extends: './lint.source.config.ts',", "")
-          $source = $source.Replace("} satisfies ITtscLintConfig<ITtscEvidenceRules>;", "}] satisfies readonly ITtscLintConfig<ITtscEvidenceRules>[];")
+          $source = [regex]::Replace($source, '(?s)export default \{.*?satisfies ITtscLintConfig<ITtscEvidenceRules>;', 'export default sourceConfig;')
           Set-Content lint.config.ts $source
       - name: Run isolated lint scope regression
         shell: pwsh
