@@ -283,6 +283,7 @@ test('typed lint config scopes style rules to Kit sources', (t) => {
   }));
   const check = () => spawnSync(process.execPath, [join(repoRoot, 'node_modules/ttsc/lib/launcher/ttsc.js'), '--noEmit', '-p', project], {
     cwd: repoRoot, encoding: 'utf8', timeout: 120_000,
+    env: { ...runnerEnv(), TTSC_TSGO_BINARY: tsgoBinary },
   });
   const externalOnly = check();
   assert.ifError(externalOnly.error);
