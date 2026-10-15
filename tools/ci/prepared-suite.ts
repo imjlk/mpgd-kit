@@ -3,6 +3,15 @@ import { appendFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { resolveNativeCommandLaunch } from '../../packages/cli/src/command-launcher.js';
+
+interface PreparedResult {
+  readonly group: string;
+  readonly script: string;
+  readonly seconds: number;
+  readonly exitCode: number;
+}
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 // Keep the local prepared command and the isolated CI jobs on one manifest.
@@ -76,7 +85,7 @@ export const preparedGroups = Object.freeze({
   ],
 });
 
-export function resolvePreparedScript(script, checked) {
+export function resolvePreparedScript(script: string, checked: boolean): string {
   if (script === 'test:workspaces') {
     // The worker gets its own build/test below, not a second workspace test.
     return 'test:workspaces:prepared';
@@ -92,31 +101,38 @@ export function resolvePreparedScript(script, checked) {
 // configs with extensionless imports that Node's compiled runner cannot load.
 const scriptsRequiringTtsx = new Set(['test:ttsx-assertions', 'smoke:game-config']);
 
-export function requiresTtsx(script) {
+export function requiresTtsx(script: string): boolean {
   return scriptsRequiringTtsx.has(script);
 }
 
-function run() {
+function run(): void {
   const requestedGroup = process.argv[2] ?? 'all';
   const checked = process.argv.slice(3).includes('--checked');
   if (requestedGroup === '--list') {
     process.stdout.write(`${JSON.stringify(preparedGroups, null, 2)}\n`);
     return;
   }
-  const groups = requestedGroup === 'all'
-    ? Object.entries(preparedGroups)
-    : [[requestedGroup, preparedGroups[requestedGroup]]];
-  if (groups.some(([, scripts]) => scripts === undefined)) {
+  const groups = Object.entries(preparedGroups).filter(
+    ([group]) => requestedGroup === 'all' || group === requestedGroup,
+  );
+  if (groups.length === 0) {
     throw new Error(`Unknown prepared test group: ${requestedGroup}`);
   }
 
-  const results = [];
+  const results: PreparedResult[] = [];
   for (const [group, scripts] of groups) {
     for (const script of scripts) {
       const invokedScript = resolvePreparedScript(script, checked);
       const start = process.hrtime.bigint();
-      process.stdout.write(`\n${process.env.GITHUB_ACTIONS ? '::group::' : ''}${group}: ${invokedScript}\n`);
-      const child = spawnSync(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['run', invokedScript], {
+      process.stdout.write(
+        `\n${process.env.GITHUB_ACTIONS ? '::group::' : ''}${group}: ${invokedScript}\n`,
+      );
+      const launch = resolveNativeCommandLaunch({
+        command: 'pnpm',
+        args: ['run', invokedScript],
+        environment: process.env,
+      });
+      const child = spawnSync(launch.command, [...launch.args], {
         cwd: repoRoot,
         // Preserve ttsx semantics where a smoke needs its runtime hooks.
         env: requiresTtsx(script)
@@ -124,12 +140,18 @@ function run() {
           : process.env,
         stdio: 'inherit',
       });
-      if (process.env.GITHUB_ACTIONS) process.stdout.write('::endgroup::\n');
+      if (process.env.GITHUB_ACTIONS) {
+        process.stdout.write('::endgroup::\n');
+      }
       const seconds = Number(process.hrtime.bigint() - start) / 1e9;
       const exitCode = child.status ?? 1;
       results.push({ group, script: invokedScript, seconds, exitCode });
-      process.stdout.write(`Prepared test ${invokedScript}: ${seconds.toFixed(1)}s, exit ${exitCode}\n`);
-      if (child.error) process.stderr.write(`${child.error.message}\n`);
+      process.stdout.write(
+        `Prepared test ${invokedScript}: ${seconds.toFixed(1)}s, exit ${exitCode}\n`,
+      );
+      if (child.error) {
+        process.stderr.write(`${child.error.message}\n`);
+      }
       if (exitCode !== 0) {
         writeSummary(results);
         process.exitCode = exitCode;
@@ -140,8 +162,10 @@ function run() {
   writeSummary(results);
 }
 
-function writeSummary(results) {
-  if (!process.env.GITHUB_STEP_SUMMARY) return;
+function writeSummary(results: readonly PreparedResult[]): void {
+  if (!process.env.GITHUB_STEP_SUMMARY) {
+    return;
+  }
   const rows = results.map(({ group, script, seconds, exitCode }) =>
     `| ${group} | \`${script}\` | ${seconds.toFixed(1)} | ${exitCode} |`);
   appendFileSync(process.env.GITHUB_STEP_SUMMARY, [

@@ -268,16 +268,6 @@ export const javascriptInventory = [
     reason: 'Existing JavaScript orchestration or test awaiting a typed migration; this is not a runtime exception.',
   },
   {
-    file: 'tools/ci/prepared-suite.mjs',
-    disposition: 'migration-backlog',
-    reason: 'Existing JavaScript orchestration or test awaiting a typed migration; this is not a runtime exception.',
-  },
-  {
-    file: 'tools/ci/prepared-suite.test.mjs',
-    disposition: 'migration-backlog',
-    reason: 'Existing JavaScript orchestration or test awaiting a typed migration; this is not a runtime exception.',
-  },
-  {
     file: 'tools/ci/run-compiled.mjs',
     disposition: 'runtime-exception',
     reason: 'Bootstraps the native Node loader for the precompiled CI suite.',

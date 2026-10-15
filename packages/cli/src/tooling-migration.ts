@@ -235,9 +235,9 @@ export function planToolingMigration(gameDirectory: string, templateRoot = defau
       }
     }
   }
-  if (updateLockfile && hasAncestorWorkspace(gameRoot)) {
+  if (hasAncestorWorkspace(gameRoot)) {
     blockers.push(
-      'This game belongs to a parent pnpm workspace. Upgrade its shared toolchain first; this migration will not change the parent lockfile.',
+      'This game belongs to a parent pnpm workspace. Automatic migration cannot verify its shared toolchain and lockfile; migrate the tools manually after aligning the owning workspace.',
     );
   }
   if (updateLockfile) {
@@ -320,13 +320,17 @@ export function applyToolingMigration(plan: ToolingMigrationPlan, updateLockfile
     }
     if (lockfileUpdateAttempted) {
       try {
-        writeOwnedFile(plan.gameRoot, 'pnpm-lock.yaml', plan.snapshots['pnpm-lock.yaml']);
+        // pnpm does not honor our migration lock. A changed lockfile might be
+        // another install's output; preserve it and require manual inspection.
+        if (readOwnedFile(plan.gameRoot, 'pnpm-lock.yaml') !== plan.snapshots['pnpm-lock.yaml']) {
+          failures.push('pnpm-lock.yaml');
+        }
       } catch {
         failures.push('pnpm-lock.yaml');
       }
     }
     let rollbackStatus = lockfileUpdateAttempted
-      ? 'Managed files and lockfile restored.'
+      ? 'Managed files restored; lockfile unchanged.'
       : 'Managed files restored; lockfile untouched.';
     if (failures.length) {
       rollbackStatus = `Rollback incomplete: ${failures.join(', ')}`;
@@ -352,7 +356,7 @@ function assertFreshPlan(plan: ToolingMigrationPlan): void {
   if (stable(readChildManifests(plan.gameRoot)) !== stable(plan.childManifests)) {
     throw new Error('Child package manifests changed after planning.');
   }
-  if (plan.updateLockfile && hasAncestorWorkspace(plan.gameRoot)) {
+  if (hasAncestorWorkspace(plan.gameRoot)) {
     throw new Error('Parent workspace changed after planning.');
   }
 }
@@ -514,16 +518,23 @@ function hasAncestorWorkspace(root: string): boolean {
   }
 }
 function refreshLockfile(gameRoot: string): void {
+  const environment = { ...process.env };
+  for (const key of Object.keys(environment)) {
+    if (key.toLowerCase() === 'npm_config_workspace_dir') {
+      delete environment[key];
+    }
+  }
   const launch = resolveNativeCommandLaunch({
     command: 'pnpm',
     args: ['install', '--lockfile-only', '--ignore-scripts', '--lockfile-dir', gameRoot],
-    environment: process.env,
+    environment,
   });
   const result = spawnSync(launch.command, [...launch.args], {
     cwd: gameRoot,
-    env: process.env,
+    env: environment,
     encoding: 'utf8',
     timeout: 120_000,
+    maxBuffer: 8 * 1024 * 1024,
   });
   if (result.error || result.status !== 0) {
     throw new Error(`Could not refresh game lockfile: ${result.error?.message ?? result.stderr}`);

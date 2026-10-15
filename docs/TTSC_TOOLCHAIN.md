@@ -241,11 +241,14 @@ block automatic application; migrate those manually without discarding changes.
 
 Standalone dependency changes refresh the game lockfile with lifecycle scripts
 disabled. Failure restores this invocation's unchanged outputs and, if it
-attempted a lockfile update, the previous lockfile. Concurrent output edits are
-preserved and reported. Concurrent migrations, changed plan inputs, and linked
-managed paths are rejected. A game
-inside a parent pnpm workspace must have its toolchain aligned first: this command
-does not modify the parent's manifest or lockfile. Game-owned child package
+attempted a lockfile update, checks that the previous lockfile is unchanged.
+Changed lockfiles are preserved and reported for manual inspection: an ordinary
+pnpm install does not honor the migration lock, so ownership cannot be inferred.
+Concurrent output edits are preserved and reported. Concurrent migrations, changed plan inputs, and linked
+managed paths are rejected. A game nested in a parent pnpm workspace is blocked
+even when its local pins match; migrate its tools manually after verifying the
+parent and sibling toolchains and shared lockfile. This command does not change
+parent workspace files. Game-owned child package
 manifests are inspected too; mismatched compiler pins block application until
 you align them manually. Custom non-dev compiler declarations and incompatible
 peer toolchain declarations also block application. After applying, install the

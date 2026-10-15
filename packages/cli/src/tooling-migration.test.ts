@@ -193,7 +193,7 @@ await test('preserves another install lockfile when a managed-file write fails b
   }
 });
 
-await test('restores managed files and existing or newly-created lockfiles after installation failure', () => {
+await test('preserves changed lockfiles after installation failure for manual inspection', () => {
   for (const hasLock of [true, false]) {
     const f = fixture();
     try {
@@ -209,16 +209,13 @@ await test('restores managed files and existing or newly-created lockfiles after
             f.write('pnpm-lock.yaml', 'partial lock');
             throw new Error('registry unavailable');
           }),
-        /Managed files and lockfile restored/,
+        /Rollback incomplete: pnpm-lock.yaml/,
       );
       assert.equal(f.read('package.json'), before);
       assert.equal(f.read('tools/run-game-acceptance.mjs'), runner);
       assert.equal(existsSync(path.join(f.game, 'tools/run-game-acceptance.ts')), false);
       assert.equal(existsSync(path.join(f.game, 'tsconfig.tools.json')), false);
-      assert.equal(existsSync(path.join(f.game, 'pnpm-lock.yaml')), hasLock);
-      if (hasLock) {
-        assert.equal(f.read('pnpm-lock.yaml'), '# original lock\n');
-      }
+      assert.equal(f.read('pnpm-lock.yaml'), 'partial lock');
       assert.equal(existsSync(path.join(f.game, '.mpgd-tooling-migration.lock')), false);
     } finally {
       f.cleanup();
@@ -245,15 +242,15 @@ await test('does not upgrade parent workspaces or follow symlinks outside a game
   }
 });
 
-await test('allows a parent-workspace game when its toolchain is already aligned', () => {
+await test('blocks parent-workspace games even when local pins are already aligned', () => {
   const f = fixture();
   try {
     writeFileSync(path.join(f.root, 'pnpm-workspace.yaml'), 'packages: ["*"]\n');
     f.write('package.json', f.read('package.json').replaceAll('0.30.4', '0.32.1'));
     const plan = planToolingMigration(f.game, template);
-    assert.deepEqual(plan.blockers, []);
+    assert.match(plan.blockers.join('\n'), /parent pnpm workspace/);
     assert.equal(plan.updateLockfile, false);
-    applyToolingMigration(plan, () => assert.fail('Do not change parent lockfiles'));
+    assert.throws(() => applyToolingMigration(plan), /blocked/);
   } finally {
     f.cleanup();
   }

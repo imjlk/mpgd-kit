@@ -10,3 +10,7 @@ before applying a preview.
 
 Preserve untouched and concurrently edited files during rollback. Record lock
 ownership and explain safe manual recovery after an interrupted migration.
+
+Preserve modified lockfiles for inspection after refresh failure, reject nested
+parent-workspace migrations whose shared toolchain is not verified, and isolate
+lockfile refresh from inherited pnpm workspace selection.
