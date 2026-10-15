@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/adapter-ait",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "Apps in Toss WebView platform adapter for mpgd games.",
   "license": "MIT",
   "repository": {
@@ -61,7 +61,11 @@
       "types": "./dist/origins.d.ts",
       "default": "./dist/origins.js"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./anonymous-auth": {
+      "types": "./dist/anonymous-auth.d.ts",
+      "default": "./dist/anonymous-auth.js"
+    }
   },
   "files": [
     "dist"
@@ -74,6 +78,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@ait-kit/sdk": "0.7.0",
     "@mpgd/bridge": "workspace:*",
     "@mpgd/platform": "workspace:*"
   },
@@ -86,9 +91,9 @@
     }
   },
   "devDependencies": {
+    "@apps-in-toss/web-framework": "3.6.0",
     "@mpgd/game-runtime": "workspace:*",
     "@types/node": "^24.0.0",
-    "@apps-in-toss/web-framework": "3.5.0",
     "ttsc": "0.30.4",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"

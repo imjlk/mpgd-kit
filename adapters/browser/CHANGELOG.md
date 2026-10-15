@@ -1,5 +1,120 @@
 # @mpgd/adapter-browser
 
+## 0.11.0 — 2026-10-15
+
+### Minor changes
+
+- [3dc12fde](https://github.com/imjlk/mpgd-kit/commit/3dc12fde93056d225400d5d0a770a98c2fe2209b) BREAKING: commerce v2, PR C4: the browser adapter drops the v1 commerce
+  surface and the boolean capabilities. Every gateway now exposes at most one
+  commerce surface, `gateway.commerce`, a commerce v2 `CommerceProvider`; a
+  gateway that sells nothing omits it and reports the unsupported commerce block.
+  
+  Removed, with the replacement:
+  
+  - The v1 `CommerceAdapter` on every gateway. `createBrowserPlatformGateway()`
+    (and the CrazyGames gateway) now has no `commerce` provider and reports
+    `createUnsupportedCommerceCapabilities()` (`commerce.availability:
+    'unsupported'`) instead of a failing `getProducts` / `purchase` stub.
+    `createBrowserPlatformGateway({ mockCommerce: true })` keeps its documented
+    invariant (no code path can grant) but is now a small commerce v2 provider:
+    store id `browser-mock` (`browserMockCommerceStoreId`), one consumable
+    `COINS_100`, `finish: 'none'`, `authority.evidence: 'client-token'`; its
+    `requestPurchase` answers `purchased` with a mock `transactionId` and `token`
+    and `mpgd.browser.mock-purchase.v1` evidence, with no `settlement`.
+  - `createMicrosoftStoreCommerceAdapter`, `withMicrosoftStoreCommerceAdapter`,
+    `MicrosoftStoreCommerceAdapter`, and `CreateMicrosoftStoreCommerceAdapterInput`
+    from `@mpgd/adapter-browser/microsoft-store`. Use
+    `createMicrosoftStoreCommerceProvider` and
+    `withMicrosoftStoreCommerceProvider` (same input; the wrapper now sets
+    `gateway.commerce` and the `commerce` capability block only, with no
+    `nativeIap` or `subscriptionIap`) and
+    `CreateMicrosoftStoreCommerceProviderInput`.
+    `MicrosoftStorePurchaseAuthority.getEntitlements()` is removed: entitlements
+    come from the backend ledger, so delete that method from your authority.
+    New: `createMicrosoftStoreCommerceCapabilities(availability)`, the pure
+    capability declaration the provider returns.
+  - `createOnePlayCommerceAdapter` from `@mpgd/adapter-browser/oneplay`. Use
+    `createOnePlayCommerceProvider({ sdk?, products?, server? })` (store id
+    `oneplay`: `purchased` with `oneplay.managed-purchase.v1` evidence, `cancelled`
+    for a user cancel, `failed` for the SDK's hard failures, `launched` for an
+    unknown, transport, or timeout outcome; `presentation` facts and the
+    single-flight rule are unchanged). `OnePlayCommerceServerPort.getEntitlements`
+    and `restore` are removed: read the backend ledger, and keep server-record
+    restore a game-owned backend concern. `createOnePlayPlatformGateway` always
+    installs the provider as `gateway.commerce`. New:
+    `createOnePlayCommerceCapabilities(input)`, `onePlayCommerceStoreId`,
+    `onePlayManagedPurchaseEvidenceSchema`, and `OnePlayCommerceProvider`.
+  - The gateways no longer report `nativeIap`, `subscriptionIap`, or
+    `providerAvailability.nativeIap`; read `capabilities.commerce`
+    (`availability`, `purchase`, `lifecycle`, `authority`).
+  
+  See `adapters/browser/README.md` ("Migrating from v1"),
+  `docs/MICROSOFT_STORE_COMMERCE.md`, and `docs/ONEPLAY.md`.
+  
+  ONE play retries pre-checkout network failures with the original bound identity, and already-owned responses remain open for server reconciliation while releasing the closed native surface. — Thanks @imjlk!
+- [dd76b8d7](https://github.com/imjlk/mpgd-kit/commit/dd76b8d736cc90b1e1d810d18745b2cd043d2c55) `@mpgd/platform/routes` exports one route-safety rule for links a game hands
+  to the kit, and `@mpgd/platform/route-vectors` exports the shared `normalized`
+  and `rejected` vectors that every package mapping such links runs:
+  
+  - `normalizeRootRelativeRoute(input)` returns the path, query, and hash a
+    root-relative link names on the game's origin. It answers `undefined` when a
+    client could read the link as another host: a second slash or a backslash
+    after the leading slash, a control character, or a path that begins with an
+    empty segment after dot segments collapse. The same holds when the path is
+    percent-decoded once and parsed again, with the path ending at any decoded
+    `?` or `#` or keeping them all. A path with more than 16 decoded `?` and `#`
+    is refused.
+  - `hasNetworkPathPrefix(pathname)` and `hasRouteControlCharacter(value)` are the
+    checks it builds on. `hasNetworkPathPrefix` answers `true` for anything that
+    is not a URL path.
+  
+  Notification delivery in `@mpgd/game-services` and Apps in Toss sharing in
+  `@mpgd/adapter-ait` use this rule instead of their own copies. They now also
+  refuse a path that reaches another host when a decoded `?` or `#` stays in the
+  path instead of ending it, such as `/%3F%2F..%2F%2Fhost`, and a path with more
+  than 16 decoded `?` and `#`.
+  
+  Web sharing in `@mpgd/adapter-browser` now follows the `ShareIntent.deepLink`
+  contract:
+  
+  - A root-relative link is normalized and stays relative, so Web Share resolves
+    it against the document as before.
+  - An absolute link must spell out `https://` or `http://`, carry no
+    credentials, and keep a path no client can read as another host.
+  - It answers `unavailable` for anything else, including page-relative links
+    (`./daily`, `?x=1`), `javascript:`, `data:`, and `intoss:` links, and a
+    `text` or `deepLink` that is not a string. Before, it passed any string on.
+  
+  The Apps in Toss sandbox bridge now reads share requests exactly as the host
+  bridge does:
+  
+  - It answers `unavailable` for a request the host refuses, and
+    `{ status: 'shared', completion: 'presented' }` otherwise. Before, it
+    answered `{ status: 'shared' }` for any request, which reads as completed.
+  - A new optional `appName` option sets the app name `intoss://` links must
+    carry. It defaults to `mpgd-kit`, as on the host. — Thanks @imjlk!
+- [0234f853](https://github.com/imjlk/mpgd-kit/commit/0234f853cffff19e181587cef79fd0465144ed61) The web share clipboard fallback copies a link a paste can open. A
+  root-relative share link, such as `/daily`, used to be copied as is
+  (`Join me\n/daily`). It is now resolved against the explicit game page URL
+  (`locationHref`) first, then `document.baseURI` or the ambient location. Without
+  an HTTP(S) page to resolve it against, the share answers `unavailable`. Web Share
+  still receives the normalized route unchanged. Web sharing now reads its intent
+  through `withShareIntentCheck` from `@mpgd/platform/routes`, with the same rule
+  as before.
+  
+  Clipboard bases carrying a username or password are rejected, so resolving a
+  root-relative link cannot copy URL credentials into a shared link. — Thanks @imjlk!
+
+### Patch changes
+
+- [8de63811](https://github.com/imjlk/mpgd-kit/commit/8de6381120ab6c7393cec3d6ec65190d3b63873d) Ship reusable C# Microsoft Store native bridge sources and a public locator.
+  Game-owned callbacks provide login and commerce policy; common helpers validate
+  the protocol and typed results, dispatch on the window UI thread, and cancel
+  queued operations and suppress stale responses after navigation or closure.
+  Align native catalog display-text validation with localized joiners, emoji and
+  RTL price marks while preserving strict identifiers and rejecting unsafe controls. — Thanks @imjlk!
+- Updated dependencies: platform@0.23.0
+
 ## 0.10.2 — 2026-10-12
 
 ### Patch changes

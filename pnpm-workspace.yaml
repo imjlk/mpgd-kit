@@ -18,6 +18,9 @@ allowBuilds:
 minimumReleaseAge: 1440
 minimumReleaseAgeStrict: true
 minimumReleaseAgeExclude:
+  # Reviewed first-party releases: imjlk/ait-kit PRs #52 and #53.
+  - '@ait-kit/api-core@0.6.0'
+  - '@ait-kit/sdk@0.7.0'
   - '@ttsc/darwin-arm64@0.30.4'
   - '@ttsc/darwin-x64@0.30.4'
   - '@ttsc/graph@0.30.4'

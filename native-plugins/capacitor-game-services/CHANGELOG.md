@@ -1,5 +1,24 @@
 # @mpgd/capacitor-game-services
 
+## 0.7.0 — 2026-10-15
+
+### Minor changes
+
+- [3dc12fde](https://github.com/imjlk/mpgd-kit/commit/3dc12fde93056d225400d5d0a770a98c2fe2209b) BREAKING: Commerce v2, PR C4: the base native plugin drops the v1 commerce stubs.
+  
+  - The Android and iOS `runtime.getCapabilities` answers no longer carry
+    `nativeIap`; the commerce capability block is set by
+    `@mpgd/adapter-capacitor` from the registered commerce provider (or the
+    unsupported block).
+  - The retired `commerce.getProducts`, `commerce.purchase`, `commerce.restore`,
+    and `commerce.getEntitlements` routes (which answered `NATIVE_IAP_UNAVAILABLE`)
+    are removed and now answer `UNSUPPORTED_METHOD`. The six `commerce.v2.*`
+    methods fail closed with the non-retryable `COMMERCE_V2_UNAVAILABLE`. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: bridge@0.13.0
+
 ## 0.6.5 — 2026-10-12
 
 ### Patch changes

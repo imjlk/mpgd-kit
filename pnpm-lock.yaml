@@ -111,6 +111,9 @@ importers:
 
   adapters/ait:
     dependencies:
+      '@ait-kit/sdk':
+        specifier: 0.7.0
+        version: 0.7.0(@apps-in-toss/web-framework@3.6.0(typescript@7.0.2))
       '@mpgd/bridge':
         specifier: workspace:*
         version: link:../../packages/bridge
@@ -119,8 +122,8 @@ importers:
         version: link:../../packages/platform
     devDependencies:
       '@apps-in-toss/web-framework':
-        specifier: 3.5.0
-        version: 3.5.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
+        specifier: 3.6.0
+        version: 3.6.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
       '@mpgd/game-runtime':
         specifier: workspace:*
         version: link:../../packages/game-runtime
@@ -345,15 +348,15 @@ importers:
   apps/target-ait:
     dependencies:
       '@apps-in-toss/web-framework':
-        specifier: 3.5.0
-        version: 3.5.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
+        specifier: 3.6.0
+        version: 3.6.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
       '@mpgd/adapter-ait':
         specifier: workspace:*
         version: link:../../adapters/ait
     devDependencies:
       '@apps-in-toss/cli':
-        specifier: 3.5.0
-        version: 3.5.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)
+        specifier: 3.6.0
+        version: 3.6.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)
       '@ttsc/unplugin':
         specifier: 0.30.4
         version: 0.30.4(ttsc@0.30.4)
@@ -467,10 +470,10 @@ importers:
     dependencies:
       '@ait-co/polyfill':
         specifier: ^0.1.19
-        version: 0.1.19(@apps-in-toss/web-framework@3.5.0(typescript@7.0.2))
+        version: 0.1.19(@apps-in-toss/web-framework@3.6.0(typescript@7.0.2))
       '@apps-in-toss/web-framework':
-        specifier: 3.5.0
-        version: 3.5.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
+        specifier: 3.6.0
+        version: 3.6.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
       '@capacitor/app':
         specifier: 8.1.1
         version: 8.1.1(@capacitor/core@8.5.2)
@@ -563,15 +566,15 @@ importers:
   examples/lite-starter/apps/target-ait:
     dependencies:
       '@apps-in-toss/web-framework':
-        specifier: 3.5.0
-        version: 3.5.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
+        specifier: 3.6.0
+        version: 3.6.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
       '@mpgd/adapter-ait':
         specifier: workspace:*
         version: link:../../../../adapters/ait
     devDependencies:
       '@apps-in-toss/cli':
-        specifier: 3.5.0
-        version: 3.5.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)
+        specifier: 3.6.0
+        version: 3.6.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)
       '@ttsc/unplugin':
         specifier: 0.30.4
         version: 0.30.4(ttsc@0.30.4)
@@ -1131,6 +1134,9 @@ importers:
 
   packages/game-services:
     dependencies:
+      '@ait-kit/api-core':
+        specifier: 0.6.0
+        version: 0.6.0
       '@mpgd/analytics':
         specifier: workspace:*
         version: link:../analytics
@@ -1365,6 +1371,20 @@ packages:
       '@apps-in-toss/web-framework':
         optional: true
 
+  '@ait-kit/api-core@0.6.0':
+    resolution: {integrity: sha512-10dH9dTI6j642iHMar7JLOoRjZEpfAKFlHCFUItKDQnrYPIG/YunQwfzo6GrdxUSFxEP1dLDZIvmTn6zVycVFA==}
+
+  '@ait-kit/sdk@0.7.0':
+    resolution: {integrity: sha512-Tw7g9OEiT1bFX141fzt5IkMwaqnxDdgQw98DHEtSXOr8XFF4TjR6aqHb0W/6d1MLYWYqjb8YCgVApCLMwnV0YA==}
+    peerDependencies:
+      '@apps-in-toss/framework': '>=2.10.10'
+      '@apps-in-toss/web-framework': '>=3.4.0'
+    peerDependenciesMeta:
+      '@apps-in-toss/framework':
+        optional: true
+      '@apps-in-toss/web-framework':
+        optional: true
+
   '@apple/app-store-server-library@3.1.0':
     resolution: {integrity: sha512-d26SICRz8BwCV2qPR0BSXBMxmw0NEvJLwsdREcBmCrus8NmyHw2XgOOP0fiFjcctPn/JXtmSDuGVnaHe+dqO+A==}
 
@@ -1375,12 +1395,12 @@ packages:
     resolution: {integrity: sha512-1no0CXOhPEeSCrGduT37KMmCqA6irhowXa0S7AaPHb4RQSHGioR3wvvD7HHBCaUriMYs0EvtqRJfOgYd0ycKlQ==}
     engines: {node: '>=24'}
 
-  '@apps-in-toss/cli@3.5.0':
-    resolution: {integrity: sha512-tnq5CSnWagx/4ToRFgfOABGD1ElTuPqLzDsqbKjB40MX3cbPM3j8aYb83AjzPbGJYLJVI7MPI2StIV0l5cn3+A==}
+  '@apps-in-toss/cli@3.6.0':
+    resolution: {integrity: sha512-2XK3uvMtqbEJQ3Pke8afytQP1gLsk57O8u23K3mQBNi2J9C2fdtCguMYZl/LUxUcUb1onQklO0wHbIz1UTpEdw==}
     hasBin: true
 
-  '@apps-in-toss/web-framework@3.5.0':
-    resolution: {integrity: sha512-ClMN3i4fvhxvxXE+idm3bU44V3Uvej596cN1LKbmvR0uUNyi5E5FU1ZIa4PI3XYz0iubR0JHYryYGuMqugECnw==}
+  '@apps-in-toss/web-framework@3.6.0':
+    resolution: {integrity: sha512-k8v3RKO4Lf749ZUyGRB0cx4/gW8IX/9xda/W/FhTsy1UGFLX11Qs+tvRXQYljKPYWc/SVMsTEcBLgq/1quDzMA==}
     hasBin: true
 
   '@asamuzakjp/css-color@3.2.0':
@@ -7559,9 +7579,15 @@ snapshots:
     transitivePeerDependencies:
       - '@types/node'
 
-  '@ait-co/polyfill@0.1.19(@apps-in-toss/web-framework@3.5.0(typescript@7.0.2))':
+  '@ait-co/polyfill@0.1.19(@apps-in-toss/web-framework@3.6.0(typescript@7.0.2))':
     optionalDependencies:
-      '@apps-in-toss/web-framework': 3.5.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
+      '@apps-in-toss/web-framework': 3.6.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
+
+  '@ait-kit/api-core@0.6.0': {}
+
+  '@ait-kit/sdk@0.7.0(@apps-in-toss/web-framework@3.6.0(typescript@7.0.2))':
+    optionalDependencies:
+      '@apps-in-toss/web-framework': 3.6.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
 
   '@apple/app-store-server-library@3.1.0':
     dependencies:
@@ -7586,7 +7612,7 @@ snapshots:
       '@apps-in-toss/ait-format-proto': 1.0.0
       fflate: 0.8.3
 
-  '@apps-in-toss/cli@3.5.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)':
+  '@apps-in-toss/cli@3.6.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)':
     dependencies:
       '@apps-in-toss/ait-format': 1.0.0
       '@clack/prompts': 1.7.0
@@ -7601,9 +7627,9 @@ snapshots:
       - supports-color
       - typanion
 
-  '@apps-in-toss/web-framework@3.5.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)':
+  '@apps-in-toss/web-framework@3.6.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)':
     dependencies:
-      '@apps-in-toss/cli': 3.5.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)
+      '@apps-in-toss/cli': 3.6.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)
       '@webview-bridge/web': 1.7.10
       semver: 7.8.5
       valibot: 1.4.2(typescript@7.0.2)
