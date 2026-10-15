@@ -267,7 +267,9 @@ test('native Node loads the typed lint configuration through native type strippi
 // for types without inheriting Kit-only style rules.
 test('typed lint config scopes style rules to Kit sources', (t) => {
   const local = mkdtempSync(join(repoRoot, 'tools/lint-scope-fixture-'));
-  const external = mkdtempSync(join(tmpdir(), 'mpgd-external-lint-scope-'));
+  // Workspace games share a filesystem root with Kit. Windows runners put the
+  // checkout on D: and OS temp on C:, which cannot represent that source tree.
+  const external = mkdtempSync(join(repoRoot, '..', 'mpgd-external-lint-scope-'));
   t.after(() => {
     rmSync(local, { recursive: true, force: true });
     rmSync(external, { recursive: true, force: true });
