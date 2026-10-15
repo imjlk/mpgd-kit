@@ -164,3 +164,5 @@ its Sampo release-group entry and npm Trusted Publishing before automated
 releases. The package stays private until that registration is complete.
 Until then, generate lite games with `--workspace --kit-path <mpgd-kit>`.
 The CLI rejects non-workspace lite generation before writing a project.
+See [Game Project Models](./GAME_PROJECT_MODELS.md#workspace-games-and-kit-dependency-links)
+for how a workspace game's install re-links kit packages and how to restore them.

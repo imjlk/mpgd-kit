@@ -10,7 +10,7 @@
   "include": [
     "tools/validate-share-link-conformance*.ts",
     "tools/docs/verify-evidence-entrypoints.ts",
-    "tools/config/lint.ts",
+    "lint.source.config.ts",
     "lint.config.ts",
     "strip.config.js",
     "tools/fixtures/typed-config-canary.ts"

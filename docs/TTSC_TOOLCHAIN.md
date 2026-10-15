@@ -46,8 +46,9 @@ boundaries, not a precedent for unrelated scripts:
   native strip loader resolves the config under the wrong root when macOS
   `TMPDIR` is a symlink. Its `@satisfies` contract is checked by the maintenance
   project. Do not normalize users' environments just to hide this limitation.
-  The lint body is `tools/config/lint.ts` with `satisfies`, including exact
-  Evidence rule option types, re-exported by `lint.config.ts`.
+  The lint entry is `lint.config.ts` with typed Evidence options. Source rules
+  live in `lint.source.config.ts` with `satisfies` and a checkout-relative
+  `files` scope so external workspace dependencies are not linted as Kit sources.
 
 Windows package builds default to one compiler process. The 0.32.1 isolated
 config evaluator uses ttsx for JS as well as TS, so a JS wrapper does not avoid

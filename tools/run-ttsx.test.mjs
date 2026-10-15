@@ -256,9 +256,42 @@ test('tools entries stay inside the default project', () => {
 test('native Node loads the typed lint configuration through native type stripping', () => {
   const configUrl = new URL('../lint.config.ts', import.meta.url).href;
   const result = spawnSync(process.execPath, ['--input-type=module', '--eval',
-    `import assert from 'node:assert/strict'; const { default: config } = await import(${JSON.stringify(configUrl)}); assert.equal(config.rules['no-var'], 'error');`,
+    `import assert from 'node:assert/strict'; const { default: config } = await import(${JSON.stringify(configUrl)}); assert.equal(config.extends, './lint.source.config.ts'); const { default: source } = await import(new URL(config.extends, ${JSON.stringify(configUrl)})); assert.equal(source.rules['no-var'], 'error'); assert.deepEqual(source.files, ['**/*']);`,
   ], { cwd: repoRoot, encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '' }, timeout: 30_000 });
   assert.ifError(result.error);
   assert.equal(result.signal, null);
   assert.equal(result.status, 0, result.stderr);
+});
+
+// Keep this compiler observer untransformed: linked external TS must be checked
+// for types without inheriting Kit-only style rules.
+test('typed lint config scopes style rules to Kit sources', (t) => {
+  const local = mkdtempSync(join(repoRoot, 'tools/lint-scope-fixture-'));
+  const external = mkdtempSync(join(tmpdir(), 'mpgd-external-lint-scope-'));
+  t.after(() => {
+    rmSync(local, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
+  });
+  const localSource = join(local, 'local.ts');
+  const externalSource = join(external, 'dependency.ts');
+  const project = join(local, 'tsconfig.json');
+  writeFileSync(localSource, "export const local = 1;\n");
+  writeFileSync(externalSource, "export var external = 1;\n");
+  writeFileSync(project, JSON.stringify({
+    compilerOptions: { noEmit: true, target: 'ES2022', module: 'ESNext', moduleResolution: 'Bundler', types: [], skipLibCheck: true },
+    files: [localSource, externalSource],
+  }));
+  const check = () => spawnSync(process.execPath, [join(repoRoot, 'node_modules/ttsc/lib/launcher/ttsc.js'), '--noEmit', '-p', project], {
+    cwd: repoRoot, encoding: 'utf8', timeout: 120_000,
+  });
+  const externalOnly = check();
+  assert.ifError(externalOnly.error);
+  assert.equal(externalOnly.status, 0, externalOnly.stdout + externalOnly.stderr);
+  writeFileSync(localSource, "export var local = 1;\n");
+  const kitViolation = check();
+  assert.ifError(kitViolation.error);
+  assert.notEqual(kitViolation.status, 0);
+  const diagnostics = kitViolation.stdout + kitViolation.stderr;
+  assert.match(diagnostics, /no-var/);
+  assert.doesNotMatch(diagnostics, /dependency\.ts.*error/);
 });
