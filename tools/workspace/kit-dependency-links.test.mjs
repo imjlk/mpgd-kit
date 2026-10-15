@@ -161,6 +161,54 @@ test('nested games use the nearest workspace install owner', () => {
   }
 });
 
+test('owner relink rebuilds shared links from the game workspace and preserves unrelated packages', () => {
+  const { root, kit, game, gameStore, nodeModules } = fixture();
+  try {
+    const scriptDir = join(kit, 'tools/workspace');
+    mkdirSync(scriptDir, { recursive: true });
+    for (const name of ['kit-dependency-links.mjs', 'relink-kit-workspace.mjs']) {
+      copyFileSync(new URL(name, import.meta.url), join(scriptDir, name));
+    }
+    const nested = join(game, 'games/puzzle');
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(game, 'pnpm-workspace.yaml'), 'packages: [games/*, ../mpgd-kit/adapters/*]\n');
+    const unrelated = join(kit, 'packages/unlisted/node_modules/keep');
+    mkdirSync(unrelated, { recursive: true });
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    const stub = join(bin, 'pnpm-stub.cjs');
+    writeFileSync(stub, `
+      const fs = require('node:fs');
+      const assert = require('node:assert/strict');
+      assert.equal(fs.realpathSync(process.cwd()), ${JSON.stringify(realpathSync(game))});
+      if (process.argv[2] === 'list') {
+        console.log(JSON.stringify([{ path: ${JSON.stringify(join(kit, 'adapters/devvit'))} }]));
+      } else if (!process.argv.includes('--ignore-scripts')) {
+        assert.equal(fs.existsSync(${JSON.stringify(nodeModules)}), false);
+        fs.mkdirSync(${JSON.stringify(nodeModules)}, { recursive: true });
+        fs.symlinkSync(${JSON.stringify(gameStore)}, ${JSON.stringify(join(nodeModules, 'dep'))}, 'junction');
+      }
+    `);
+    const pnpm = join(bin, process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm');
+    writeFileSync(pnpm, process.platform === 'win32'
+      ? `@echo off\r\n"${process.execPath}" "${stub}" %*\r\n`
+      : `#!/bin/sh\nexec "${process.execPath}" "${stub}" "$@"\n`);
+    chmodSync(pnpm, 0o755);
+    const environment = { ...process.env };
+    const pathKey = Object.keys(environment).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
+    environment[pathKey] = bin;
+    const result = spawnSync(process.execPath, [join(scriptDir, 'relink-kit-workspace.mjs'), '--owner', nested], {
+      env: environment, encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(unrelated), true);
+    assert.equal(realpathSync(join(nodeModules, 'dep')), realpathSync(gameStore));
+    assert.ok(findKitDependencyLinks(kit).every((entry) => isKitDependencyLinkOwnedBy(entry, realpathSync(game))));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 
 test('selected workspace warnings include Kit stores but not shared source links', () => {
   const { root, kit, game, nodeModules } = fixture();
@@ -180,7 +228,7 @@ test('selected workspace warnings include Kit stores but not shared source links
     assert.equal(mismatched.status, 0, mismatched.stderr);
     assert.match(mismatched.stderr, /not owned by the selected build install/);
     assert.ok(mismatched.stderr.includes(realpathSync(game)));
-    assert.match(mismatched.stderr, /Restore selected build links by running pnpm install from/);
+    assert.match(mismatched.stderr, /workspace:relink --owner/);
     const kitCheck = run('--check');
     assert.equal(kitCheck.status, 0, kitCheck.stderr);
     assert.equal(kitCheck.stderr, '');
