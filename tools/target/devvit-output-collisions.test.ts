@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -29,6 +37,7 @@ assertDevvitOutputNames(['game.js'], ['font.woff2'], 'dist');
 
 const root = mkdtempSync(join(tmpdir(), 'mpgd-devvit-collisions-'));
 try {
+  writeFileSync(join(root, 'package.json'), '{"type":"module"}');
   const publicDir = join(root, 'public');
   const outDir = join(root, 'dist/client');
   mkdirSync(join(publicDir, 'fonts'), { recursive: true });
@@ -68,6 +77,11 @@ try {
   );
 
   assert.deepEqual(findDevvitOutputCollisions(join(root, 'nope'), [publicDir]), []);
+
+  const cleanPlugin = join(root, 'clean-kit/packages/cli/src/devvit-output-collisions.ts');
+  mkdirSync(join(root, 'clean-kit/packages/cli/src'), { recursive: true });
+  copyFileSync(resolve('packages/cli/src/devvit-output-collisions.ts'), cleanPlugin);
+  assert.equal(existsSync(join(root, 'clean-kit/packages/cli/dist')), false);
 
   // Exercise the actual pre-write hook with the kit's Vite 8 and Devvit's
   // Vite 7. Explicit emitted names must survive until the hook on Windows.
@@ -124,59 +138,66 @@ try {
     // Load the published subpath through a Vite config, exactly as scripts.dev
     // does. A valid first build must reject a newly introduced watch collision.
     const consumerRequire = createRequire(resolve('examples/lite-starter/package.json'));
-    const pluginUrl = pathToFileURL(consumerRequire.resolve('@mpgd/cli/devvit')).href;
-    const watchConfig = join(buildRoot, 'vite.config.mjs');
-    const watchEntry = join(buildRoot, 'watch-entry.js');
-    writeFileSync(
-      watchConfig,
-      `import { devvitOutputCollisionPlugin } from ${JSON.stringify(pluginUrl)};\nexport default { plugins: [devvitOutputCollisionPlugin()] };\n`,
-    );
-    writeFileSync(watchEntry, 'export const generation = 1;');
-    rmSync(join(customPublic, 'main.js'));
-    const watchBuilder = await createBuilder(
-      {
-        configFile: watchConfig,
-        root: buildRoot,
-        publicDir: customPublic,
-        logLevel: 'silent',
-        build: {
-          outDir: join(buildRoot, 'watch-dist'),
-          watch: {},
-          rollupOptions: { input: watchEntry, output: { entryFileNames: 'main.js' } },
+    for (const pluginUrl of [
+      pathToFileURL(consumerRequire.resolve('@mpgd/cli/devvit')).href,
+      '../clean-kit/packages/cli/src/devvit-output-collisions.ts',
+    ]) {
+      const watchConfig = join(buildRoot, 'vite.config.ts');
+      const watchEntry = join(buildRoot, 'watch-entry.js');
+      writeFileSync(
+        watchConfig,
+        `import { devvitOutputCollisionPlugin } from ${JSON.stringify(pluginUrl)};\nexport default { plugins: [devvitOutputCollisionPlugin()] };\n`,
+      );
+      writeFileSync(watchEntry, 'export const generation = 1;');
+      rmSync(join(customPublic, 'main.js'), { force: true });
+      const watchBuilder = await createBuilder(
+        {
+          configFile: watchConfig,
+          root: buildRoot,
+          publicDir: customPublic,
+          logLevel: 'silent',
+          build: {
+            outDir: join(buildRoot, 'watch-dist'),
+            watch: {},
+            rollupOptions: { input: watchEntry, output: { entryFileNames: 'main.js' } },
+          },
         },
-      },
-      null,
-    );
-    const client = watchBuilder.environments.client;
-    assert.ok(client);
-    const watcher = await watchBuilder.build(client);
-    assert.ok(!Array.isArray(watcher) && 'on' in watcher);
-    try {
-      await new Promise<void>((resolveWatch, rejectWatch) => {
-        let built = false;
-        const timeout = setTimeout(
-          () => rejectWatch(new Error('Devvit watch collision was not reported')),
-          60_000,
-        );
-        watcher.on('event', (event) => {
-          if (event.code === 'BUNDLE_END' && !built) {
-            built = true;
-            writeFileSync(join(customPublic, 'main.js'), 'conflicting public output');
-            writeFileSync(watchEntry, 'export const generation = 2;');
-          } else if (event.code === 'ERROR') {
-            clearTimeout(timeout);
-            try {
-              assert.equal(built, true, 'watcher must first complete a valid build');
-              assert.match(String(event.error), /public and bundle files use the same output name/u);
-              resolveWatch();
-            } catch (error) {
-              rejectWatch(error);
+        null,
+      );
+      const client = watchBuilder.environments.client;
+      assert.ok(client);
+      const watcher = await watchBuilder.build(client);
+      assert.ok(!Array.isArray(watcher) && 'on' in watcher);
+      try {
+        await new Promise<void>((resolveWatch, rejectWatch) => {
+          let built = false;
+          const timeout = setTimeout(
+            () => rejectWatch(new Error('Devvit watch collision was not reported')),
+            60_000,
+          );
+          watcher.on('event', (event) => {
+            if (event.code === 'BUNDLE_END' && !built) {
+              built = true;
+              writeFileSync(join(customPublic, 'main.js'), 'conflicting public output');
+              writeFileSync(watchEntry, 'export const generation = 2;');
+            } else if (event.code === 'ERROR') {
+              clearTimeout(timeout);
+              try {
+                assert.equal(built, true, 'watcher must first complete a valid build');
+                assert.match(
+                  String(event.error),
+                  /public and bundle files use the same output name/u,
+                );
+                resolveWatch();
+              } catch (error) {
+                rejectWatch(error);
+              }
             }
-          }
+          });
         });
-      });
-    } finally {
-      await watcher.close();
+      } finally {
+        await watcher.close();
+      }
     }
   }
 } finally {

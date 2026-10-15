@@ -152,7 +152,10 @@ export function describeForeignKitDependencyLinks(kitRoot, foreign = findForeign
     `into the install of: ${owners.join(', ')}.`,
     "A --workspace game's `pnpm install` re-links kit packages to its own store. Builds run from",
     "that game still work, but kit-only commands (and other games) then use that game's dependencies.",
-    ...(kitOwnedBuild ? [] : [`Restore selected build links by running pnpm install from: ${expectedOwner}`]),
+    ...(kitOwnedBuild ? [] : [
+      `Restore selected build links from the kit root with: ${kitRelinkCommand} --owner <workspace-directory>`,
+      `Use this workspace directory as the --owner argument: ${expectedOwner}`,
+    ]),
     `Restore kit-owned links from the kit root with: ${kitRelinkCommand}`,
     `Example: ${example.link} -> ${example.target}`,
   ].join('\n');
