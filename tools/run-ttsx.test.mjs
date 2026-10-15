@@ -253,8 +253,8 @@ test('tools entries stay inside the default project', () => {
 });
 
 // Configuration must load before the compiler is available; keep this observer in plain Node.
-test('native Node loads the typed lint configuration without the ttsx config loader', () => {
-  const configUrl = new URL('../lint.config.js', import.meta.url).href;
+test('native Node loads the typed lint configuration through native type stripping', () => {
+  const configUrl = new URL('../lint.config.ts', import.meta.url).href;
   const result = spawnSync(process.execPath, ['--input-type=module', '--eval',
     `import assert from 'node:assert/strict'; const { default: config } = await import(${JSON.stringify(configUrl)}); assert.equal(config.rules['no-var'], 'error');`,
   ], { cwd: repoRoot, encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '' }, timeout: 30_000 });

@@ -47,9 +47,13 @@ boundaries, not a precedent for unrelated scripts:
   `TMPDIR` is a symlink. Its `@satisfies` contract is checked by the maintenance
   project. Do not normalize users' environments just to hide this limitation.
   The lint body is `tools/config/lint.ts` with `satisfies`, including exact
-  Evidence rule option types. A minimal `lint.config.js` re-export lets Node 24
-  load it directly: the 0.32.1 TS lint-config loader fails emitted-source
-  ownership checks during concurrent Windows package builds.
+  Evidence rule option types, re-exported by `lint.config.ts`.
+
+Windows package builds default to one compiler process. The 0.32.1 isolated
+config evaluator uses ttsx for JS as well as TS, so a JS wrapper does not avoid
+its parallel emitted-source ownership race. Keep TS configs and ownership
+checks; restore Windows parallelism only after the upstream race is fixed and
+both installed starter variants pass. Other platforms retain parallel builds.
 
 Existing JavaScript is not automatically an approved exception. Review ordinary
 scripts when touching them and convert those without a runtime constraint. This

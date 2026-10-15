@@ -26,12 +26,14 @@ This repository is `mpgd-kit`: a Multi-Platform Game Distribution / Development 
 - Do not introduce ESLint or Prettier for TypeScript files. Use `@ttsc/lint`.
 - Keep root/workspace/template ttsc pins aligned and run `pnpm validate:toolchain` after toolchain edits.
 - Use `pnpm format` to include tools, target configs, and shipped template sources; cache ownership is documented in `docs/TTSC_TOOLCHAIN.md`.
-- The lint configuration lives in `tools/config/lint.ts`, loaded through a minimal `lint.config.js` Node 24 bridge to avoid the 0.32.1 Windows parallel config-loader race; keep its published config and Evidence option types checked with `satisfies`.
+- The lint configuration lives in `tools/config/lint.ts`, re-exported from `lint.config.ts`; keep its published config and Evidence option types checked with `satisfies`.
 - The active `@ttsc/strip` config is `strip.config.js` with checked JSDoc types. Its 0.32.1 TS loader fails with symlinked macOS temporary directories; retain this narrow exception until that case passes without environment overrides. Preserve assertion calls in tests.
 - Do not put Phaser, Capacitor, Apps in Toss, Google Play Billing, StoreKit, or ad SDK imports in pure packages.
 - Do not call platform SDKs directly from Phaser scenes. Use `PlatformGateway`.
 - Do not grant purchases or ad rewards solely from client callbacks. All grants must go through backend ledger APIs.
 - Do not put side effects inside debug calls that may be removed by `@ttsc/strip`.
+
+Windows package builds default to one compiler process because the 0.32.1 config loader races on source ownership during parallel emission. Do not bypass ownership checks.
 
 ## Pure Packages
 
