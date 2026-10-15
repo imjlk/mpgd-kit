@@ -106,6 +106,13 @@ export function planToolingMigration(gameDirectory: string, templateRoot = defau
     }
   } else if (newRunner === null) {
     blockers.push('No generated acceptance runner was found.');
+  } else if (migrateKnownRunner(newRunner, readFileSync(
+    path.join(templateRoot, 'tools/run-game-acceptance.ts'),
+    'utf8',
+  )) === undefined) {
+    blockers.push(
+      'The TypeScript acceptance runner is customized; preserve it and migrate it manually.',
+    );
   }
 
   const toolsTemplate = parseObject(
@@ -224,6 +231,7 @@ export function applyToolingMigration(plan: ToolingMigrationPlan, updateLockfile
   const lock = randomUUID();
   writeFileSync(lockPath, lock, { flag: 'wx', mode: 0o600 });
   let writesStarted = false;
+  let lockfileUpdateAttempted = false;
   try {
     // Another migration may have completed between the initial check and lock acquisition.
     assertFreshPlan(plan);
@@ -232,6 +240,7 @@ export function applyToolingMigration(plan: ToolingMigrationPlan, updateLockfile
       writeOwnedFile(plan.gameRoot, edit.file, edit.after);
     }
     if (plan.updateLockfile) {
+      lockfileUpdateAttempted = true;
       updateLockfile(plan.gameRoot);
     }
   } catch (error) {
@@ -240,7 +249,10 @@ export function applyToolingMigration(plan: ToolingMigrationPlan, updateLockfile
     }
     const failures: string[] = [];
     for (const file of [
-      ...new Set([...plan.edits.map((edit) => edit.file), 'pnpm-lock.yaml' as const]),
+      ...new Set([
+        ...plan.edits.map((edit) => edit.file),
+        ...(lockfileUpdateAttempted ? ['pnpm-lock.yaml' as const] : []),
+      ]),
     ]) {
       try {
         writeOwnedFile(plan.gameRoot, file, plan.snapshots[file]);
@@ -248,10 +260,13 @@ export function applyToolingMigration(plan: ToolingMigrationPlan, updateLockfile
         failures.push(file);
       }
     }
-    throw new Error(
-      `Tooling migration failed. ${failures.length ? `Rollback incomplete: ${failures.join(', ')}` : 'Managed files and lockfile restored.'}`,
-      { cause: error },
-    );
+    let rollbackStatus = lockfileUpdateAttempted
+      ? 'Managed files and lockfile restored.'
+      : 'Managed files restored; lockfile untouched.';
+    if (failures.length) {
+      rollbackStatus = `Rollback incomplete: ${failures.join(', ')}`;
+    }
+    throw new Error(`Tooling migration failed. ${rollbackStatus}`, { cause: error });
   } finally {
     if (existsSync(lockPath) && readFileSync(lockPath, 'utf8') === lock) {
       rmSync(lockPath);

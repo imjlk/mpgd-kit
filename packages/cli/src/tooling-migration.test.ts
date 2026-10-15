@@ -127,6 +127,72 @@ await test('rejects stale plans, concurrent migrations and overlapping old/new r
   }
 });
 
+await test('recognizes only canonical existing TypeScript runners and preserves customized runners', () => {
+  for (const suffix of ['', '\n// user note\n', '\nexport const custom: boolean = true;\n']) {
+    const f = fixture();
+    try {
+      const runner = f.read('tools/run-game-acceptance.mjs') + suffix;
+      rmSync(path.join(f.game, 'tools/run-game-acceptance.mjs'));
+      f.write('tools/run-game-acceptance.ts', runner);
+      const manifest = f.read('package.json');
+      const plan = planToolingMigration(f.game, template);
+      if (suffix) {
+        assert.match(plan.blockers.join('\n'), /TypeScript acceptance runner is customized/);
+        assert.throws(() => applyToolingMigration(plan), /blocked/);
+        assert.equal(f.read('package.json'), manifest);
+        assert.equal(f.read('pnpm-lock.yaml'), '# original lock\n');
+        assert.equal(existsSync(path.join(f.game, 'tsconfig.tools.json')), false);
+      } else {
+        assert.deepEqual(plan.blockers, []);
+        applyToolingMigration(plan, () => {});
+      }
+      assert.equal(f.read('tools/run-game-acceptance.ts'), runner);
+    } finally {
+      f.cleanup();
+    }
+  }
+});
+
+await test('preserves another install lockfile when a managed-file write fails before lockfile updates', (context) => {
+  for (const needsUpgrade of [false, true]) {
+    const f = fixture();
+    const rename = fs.renameSync;
+    try {
+      if (!needsUpgrade) {
+        f.write('package.json', f.read('package.json').replaceAll('0.30.4', '0.32.1'));
+      }
+      const manifest = f.read('package.json');
+      const runner = f.read('tools/run-game-acceptance.mjs');
+      const plan = planToolingMigration(f.game, template);
+      assert.equal(plan.updateLockfile, needsUpgrade);
+      let failed = false;
+      context.mock.method(fs, 'renameSync', (...args: Parameters<typeof rename>) => {
+        if (!failed && String(args[1]) === path.join(f.game, 'tsconfig.tools.json')) {
+          failed = true;
+          f.write('pnpm-lock.yaml', '# concurrent install\n');
+          throw new Error('managed-file write failed');
+        }
+        return rename(...args);
+      });
+      syncBuiltinESMExports();
+      assert.throws(
+        () => applyToolingMigration(plan, () => assert.fail('Lockfile updater must not run')),
+        /Managed files restored; lockfile untouched/,
+      );
+      assert.equal(f.read('pnpm-lock.yaml'), '# concurrent install\n');
+      assert.equal(f.read('package.json'), manifest);
+      assert.equal(f.read('tools/run-game-acceptance.mjs'), runner);
+      assert.equal(existsSync(path.join(f.game, 'tools/run-game-acceptance.ts')), false);
+      assert.equal(existsSync(path.join(f.game, 'tsconfig.tools.json')), false);
+      assert.equal(existsSync(path.join(f.game, '.mpgd-tooling-migration.lock')), false);
+    } finally {
+      context.mock.restoreAll();
+      syncBuiltinESMExports();
+      f.cleanup();
+    }
+  }
+});
+
 await test('restores managed files and existing or newly-created lockfiles after installation failure', () => {
   for (const hasLock of [true, false]) {
     const f = fixture();

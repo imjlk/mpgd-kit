@@ -155,11 +155,11 @@ them in a tooling PR that says so.
 
 ## Tests
 
-`tools/graph/run-graph-presets.test.mjs` runs the preset check against a
+`tools/graph/run-graph-presets.test.ts` runs the preset check against a
 synthetic tour answer whose ranked anchors have all drifted out of the
 preset's directories: it passes while the named entrypoints are cited and
 fails, naming the missing symbol and file, when one is absent. It also covers
 Windows path separators, edge anchors without ids, same-name symbols in other
 files, details handle derivation, and the on-disk existence of every
-checked-in preset's named entrypoints. `tools/graph-runtime.test.mjs` keeps the
+checked-in preset's named entrypoints. `tools/graph-runtime.test.ts` keeps the
 request-shape checks. Both run under `pnpm test:tooling`.
