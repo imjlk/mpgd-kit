@@ -984,6 +984,12 @@ jobs:
         with:
           dotnet-version: 8.0.425
       - uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2.0.0
+      - name: Test readiness snapshot publication and Windows file contention
+        shell: pwsh
+        run: |
+          dotnet build tools/smoke/windows-readiness-contracts/ReadinessContracts.csproj --configuration Release --artifacts-path "$env:RUNNER_TEMP/readiness-contracts"
+          if ($LASTEXITCODE -ne 0) { throw 'Readiness publication contract fixture failed to compile.' }
+          dotnet "$env:RUNNER_TEMP/readiness-contracts/bin/ReadinessContracts/release/ReadinessContracts.dll"
       - name: Test the C# host contract from the installed CLI tarball
         shell: powershell
         env:

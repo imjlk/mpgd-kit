@@ -191,8 +191,7 @@ public sealed partial class MainWindow : Window
             state["bundleSha256"] = JsonSerializer.SerializeToElement(bundleSha256);
             state["observedAt"] = JsonSerializer.SerializeToElement(DateTime.UtcNow.ToString("o"));
             var path = Path.Combine(ApplicationData.Current.LocalFolder.Path, "starter-ready.json");
-            File.WriteAllText(path + ".tmp", JsonSerializer.Serialize(state));
-            File.Move(path + ".tmp", path, true);
+            await ReadinessFile.WriteAsync(path, JsonSerializer.Serialize(state));
         }
         catch (Exception error) { RecordFailure(error); }
         finally { probing = false; }
