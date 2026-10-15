@@ -210,29 +210,24 @@ export function applyToolingMigration(plan: ToolingMigrationPlan, updateLockfile
   if (plan.blockers.length) {
     throw new Error(`Tooling migration blocked:\n${plan.blockers.join('\n')}`);
   }
-  if (realpathSync(plan.gameRoot) !== plan.gameRoot) {
-    throw new Error('Game root changed after planning.');
-  }
-  for (const file of managedPaths) {
-    if (readOwnedFile(plan.gameRoot, file) !== plan.snapshots[file]) {
-      throw new Error(`File changed after planning: ${file}`);
-    }
-  }
+  assertFreshPlan(plan);
   for (const edit of plan.edits) {
     if (!managedPaths.includes(edit.file) || edit.before !== plan.snapshots[edit.file]) {
       throw new Error('Invalid tooling migration edit.');
     }
   }
-  if (plan.updateLockfile && hasAncestorWorkspace(plan.gameRoot)) {
-    throw new Error('Parent workspace changed after planning.');
-  }
+
   if (!plan.edits.length) {
     return [];
   }
   const lockPath = path.join(plan.gameRoot, '.mpgd-tooling-migration.lock');
   const lock = randomUUID();
   writeFileSync(lockPath, lock, { flag: 'wx', mode: 0o600 });
+  let writesStarted = false;
   try {
+    // Another migration may have completed between the initial check and lock acquisition.
+    assertFreshPlan(plan);
+    writesStarted = true;
     for (const edit of plan.edits) {
       writeOwnedFile(plan.gameRoot, edit.file, edit.after);
     }
@@ -240,6 +235,9 @@ export function applyToolingMigration(plan: ToolingMigrationPlan, updateLockfile
       updateLockfile(plan.gameRoot);
     }
   } catch (error) {
+    if (!writesStarted) {
+      throw error;
+    }
     const failures: string[] = [];
     for (const file of [
       ...new Set([...plan.edits.map((edit) => edit.file), 'pnpm-lock.yaml' as const]),
@@ -260,6 +258,20 @@ export function applyToolingMigration(plan: ToolingMigrationPlan, updateLockfile
     }
   }
   return plan.edits.map((edit) => edit.file);
+}
+
+function assertFreshPlan(plan: ToolingMigrationPlan): void {
+  if (realpathSync(plan.gameRoot) !== plan.gameRoot) {
+    throw new Error('Game root changed after planning.');
+  }
+  for (const file of managedPaths) {
+    if (readOwnedFile(plan.gameRoot, file) !== plan.snapshots[file]) {
+      throw new Error(`File changed after planning: ${file}`);
+    }
+  }
+  if (plan.updateLockfile && hasAncestorWorkspace(plan.gameRoot)) {
+    throw new Error('Parent workspace changed after planning.');
+  }
 }
 
 function parseObject(source: string | null, label: string): JsonObject {

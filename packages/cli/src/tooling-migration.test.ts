@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import {
+import fs, {
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -10,6 +10,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -208,6 +209,29 @@ await test('the packaged CLI previews migration without installing or writing fi
     assert.equal(report.result, null);
     assert.equal(f.read('package.json'), before);
   } finally {
+    f.cleanup();
+  }
+});
+
+await test('rechecks inputs under the lock without rolling back a concurrent writer', (context) => {
+  const f = fixture();
+  const write = fs.writeFileSync;
+  try {
+    const plan = planToolingMigration(f.game, template);
+    context.mock.method(fs, 'writeFileSync', (...args: Parameters<typeof write>) => {
+      write(...args);
+      if (String(args[0]).endsWith('.mpgd-tooling-migration.lock')) {
+        write(path.join(f.game, 'package.json'), '{"concurrent":"keep"}');
+      }
+    });
+    syncBuiltinESMExports();
+    assert.throws(() => applyToolingMigration(plan), /File changed after planning/);
+    assert.equal(f.read('package.json'), '{"concurrent":"keep"}');
+    assert.equal(existsSync(path.join(f.game, 'tools/run-game-acceptance.ts')), false);
+    assert.equal(existsSync(path.join(f.game, '.mpgd-tooling-migration.lock')), false);
+  } finally {
+    context.mock.restoreAll();
+    syncBuiltinESMExports();
     f.cleanup();
   }
 });
