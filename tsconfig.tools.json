@@ -10,6 +10,7 @@
   },
   "include": [
     "tools/**/*.ts",
+    "tools/workspace/*.mjs",
     "backend/**/*.ts",
     "packages/**/*.ts",
     "adapters/**/*.ts",
