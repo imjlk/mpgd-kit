@@ -217,3 +217,26 @@ The upstream resident graph session supports incremental refreshes, but this
 runner does not claim persistent cross-worktree sharing. A future shared graph
 store must account for compiler/schema versions, config and dependency changes,
 uncommitted inputs, and reference-document changes before reusing graph shards.
+
+## Migrating existing generated games
+
+Run the installed CLI from the game's workspace (Node 24.11 or newer):
+
+```sh
+pnpm exec mpgd kit migrate-tools --game ./games/puzzle-one --json
+pnpm exec mpgd kit migrate-tools --game ./games/puzzle-one --apply
+```
+
+The first command only prints the plan. The second recomputes and applies it.
+The command recognizes the generated acceptance runner and standard check/lint/
+format/fix scripts, adds a strict tools project, and aligns compiler dependencies
+with the shipped template. It preserves the runner's Kit location and unrelated
+scripts. Custom runners, comments, scripts, configurations, or version specifiers
+block automatic application; migrate those manually without discarding changes.
+
+Standalone dependency changes refresh the game lockfile with lifecycle scripts
+disabled. Failure restores managed files and the previous lockfile. Concurrent
+migrations, changed plan inputs, and linked managed paths are rejected. A game
+inside a parent pnpm workspace must have its toolchain aligned first: this command
+does not modify the parent's manifest or lockfile. After applying, install the
+updated dependencies normally and run `pnpm check` and `pnpm accept --help`.

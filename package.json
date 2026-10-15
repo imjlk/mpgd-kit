@@ -184,6 +184,7 @@
     "smoke:cli-asset-pack-verify": "node tools/run-ttsx.mjs tools/smoke/cli-asset-pack-verify.ts",
     "build:crazygames": "pnpm build:target crazygames production",
     "build:oneplay": "pnpm build:target oneplay production",
+    "smoke:cli-tooling-migration": "node tools/run-ttsx.mjs packages/cli/src/tooling-migration.test.ts",
     "test:template-tools": "node tools/run-ttsx.mjs tools/smoke/template-typescript-tools.ts"
   },
   "devDependencies": {

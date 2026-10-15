@@ -1,0 +1,213 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+
+import { applyToolingMigration, planToolingMigration } from './tooling-migration.js';
+
+const template = path.resolve('packages/cli/templates/phaser-game');
+const currentRunner = readFileSync(path.join(template, 'tools/run-game-acceptance.ts'), 'utf8');
+const legacyCommands = {
+  accept: 'node ./tools/run-game-acceptance.mjs',
+  check: 'ttsc --noEmit -p tsconfig.json',
+  lint: 'ttsc --noEmit -p tsconfig.json',
+  format: 'ttsc format',
+  fix: 'ttsc fix',
+};
+function fixture(): { root: string; game: string; read: (file: string) => string; write: (file: string, text: string) => void; cleanup: () => void } {
+  const root = realpathSync(mkdtempSync(path.join(tmpdir(), 'mpgd-tooling-migration-')));
+  const game = path.join(root, 'game with spaces');
+  mkdirSync(path.join(game, 'tools'), { recursive: true });
+  const write = (file: string, text: string): void => writeFileSync(path.join(game, file), text);
+  write('package.json', JSON.stringify({
+    name: 'migration-game', type: 'module', scripts: { ...legacyCommands, custom: 'keep me' },
+    devDependencies: { ttsc: '0.30.4', '@ttsc/unplugin': '0.30.4', typescript: '7.0.2', '@types/node': '^24.0.0' },
+  }, null, 2) + '\n');
+  write('tsconfig.json', '{"compilerOptions":{"strict":true}}\n');
+  write(
+    'tools/run-game-acceptance.mjs',
+    currentRunner.replace("'__DEFAULT_KIT_PATH__'", "'../../kit with spaces'"),
+  );
+  write('pnpm-lock.yaml', '# original lock\n');
+  return {
+    root,
+    game,
+    read: (file) => readFileSync(path.join(game, file), 'utf8'),
+    write,
+    cleanup: () => rmSync(root, { recursive: true, force: true }),
+  };
+}
+
+await test('preview is read-only; application preserves kit paths, aligns tools and is idempotent', () => {
+  const f = fixture();
+  try {
+    const before = f.read('package.json');
+    const plan = planToolingMigration(f.game, template);
+    assert.deepEqual(plan.blockers, []);
+    assert.equal(plan.updateLockfile, true);
+    assert.equal(f.read('package.json'), before);
+    assert.equal(existsSync(path.join(f.game, 'tools/run-game-acceptance.ts')), false);
+    let refreshed = 0;
+    applyToolingMigration(plan, (cwd) => {
+      assert.equal(cwd, f.game);
+      refreshed++;
+      f.write('pnpm-lock.yaml', '# updated lock\n');
+    });
+    assert.equal(refreshed, 1);
+    assert.equal(existsSync(path.join(f.game, 'tools/run-game-acceptance.mjs')), false);
+    assert.match(f.read('tools/run-game-acceptance.ts'), /\.\.\/\.\.\/kit with spaces/);
+    const manifest = JSON.parse(f.read('package.json'));
+    assert.equal(manifest.scripts.custom, 'keep me');
+    assert.equal(manifest.devDependencies.ttsc, '0.32.1');
+    assert.equal(manifest.devDependencies['@ttsc/unplugin'], '0.32.1');
+    assert.equal(JSON.parse(f.read('tsconfig.tools.json')).compilerOptions.strict, true);
+    const again = planToolingMigration(f.game, template);
+    assert.deepEqual(again.edits, []);
+    assert.deepEqual(again.blockers, []);
+    assert.deepEqual(
+      applyToolingMigration(again, () => assert.fail('No second lockfile update')),
+      [],
+    );
+  } finally {
+    f.cleanup();
+  }
+});
+
+await test('preserves customized scripts, source, and tools config by blocking automatic apply', () => {
+  for (const customize of [
+    (f: ReturnType<typeof fixture>) => { const m = JSON.parse(f.read('package.json')); m.scripts.check = 'custom-check'; f.write('package.json', JSON.stringify(m)); },
+    (f: ReturnType<typeof fixture>) => f.write('tools/run-game-acceptance.mjs', f.read('tools/run-game-acceptance.mjs') + '\n// user note\n'),
+    (f: ReturnType<typeof fixture>) => f.write('tools/run-game-acceptance.mjs', f.read('tools/run-game-acceptance.mjs').replace('process.argv.slice(2)', '[]')),
+    (f: ReturnType<typeof fixture>) => f.write('tsconfig.tools.json', '{"include":["custom/**/*.ts"]}'),
+  ]) {
+    const f = fixture();
+    try {
+      customize(f);
+      const source = f.read('tools/run-game-acceptance.mjs');
+      const manifest = f.read('package.json');
+      const plan = planToolingMigration(f.game, template);
+      assert.ok(plan.blockers.length > 0);
+      assert.throws(() => applyToolingMigration(plan), /blocked/);
+      assert.equal(f.read('package.json'), manifest);
+      assert.equal(f.read('tools/run-game-acceptance.mjs'), source);
+    } finally { f.cleanup(); }
+  }
+});
+
+await test('rejects stale plans, concurrent migrations and overlapping old/new runners', () => {
+  const f = fixture();
+  try {
+    const plan = planToolingMigration(f.game, template);
+    f.write('pnpm-lock.yaml', '# user changed lock\n');
+    assert.throws(() => applyToolingMigration(plan), /changed after planning/);
+    const fresh = planToolingMigration(f.game, template);
+    f.write('.mpgd-tooling-migration.lock', 'another process');
+    assert.throws(() => applyToolingMigration(fresh), /EEXIST/);
+    assert.equal(existsSync(path.join(f.game, 'tools/run-game-acceptance.ts')), false);
+    rmSync(path.join(f.game, '.mpgd-tooling-migration.lock'));
+    f.write('tools/run-game-acceptance.ts', 'export {};');
+    assert.match(
+      planToolingMigration(f.game, template).blockers.join('\n'),
+      /Both acceptance runners/,
+    );
+  } finally {
+    f.cleanup();
+  }
+});
+
+await test('restores managed files and existing or newly-created lockfiles after installation failure', () => {
+  for (const hasLock of [true, false]) {
+    const f = fixture();
+    try {
+      if (!hasLock) {
+        rmSync(path.join(f.game, 'pnpm-lock.yaml'));
+      }
+      const before = f.read('package.json');
+      const runner = f.read('tools/run-game-acceptance.mjs');
+      const plan = planToolingMigration(f.game, template);
+      assert.throws(
+        () =>
+          applyToolingMigration(plan, () => {
+            f.write('pnpm-lock.yaml', 'partial lock');
+            throw new Error('registry unavailable');
+          }),
+        /Managed files and lockfile restored/,
+      );
+      assert.equal(f.read('package.json'), before);
+      assert.equal(f.read('tools/run-game-acceptance.mjs'), runner);
+      assert.equal(existsSync(path.join(f.game, 'tools/run-game-acceptance.ts')), false);
+      assert.equal(existsSync(path.join(f.game, 'tsconfig.tools.json')), false);
+      assert.equal(existsSync(path.join(f.game, 'pnpm-lock.yaml')), hasLock);
+      if (hasLock) {
+        assert.equal(f.read('pnpm-lock.yaml'), '# original lock\n');
+      }
+      assert.equal(existsSync(path.join(f.game, '.mpgd-tooling-migration.lock')), false);
+    } finally {
+      f.cleanup();
+    }
+  }
+});
+
+await test('does not upgrade parent workspaces or follow symlinks outside a game', () => {
+  const f = fixture();
+  try {
+    writeFileSync(path.join(f.root, 'pnpm-workspace.yaml'), 'packages: ["*"]\n');
+    assert.match(
+      planToolingMigration(f.game, template).blockers.join('\n'),
+      /parent pnpm workspace/,
+    );
+    const external = path.join(f.root, 'external.json');
+    writeFileSync(external, f.read('package.json'));
+    rmSync(path.join(f.game, 'package.json'));
+    symlinkSync(external, path.join(f.game, 'package.json'));
+    assert.throws(() => planToolingMigration(f.game, template), /linked migration path/);
+    assert.match(readFileSync(external, 'utf8'), /0.30.4/);
+  } finally {
+    f.cleanup();
+  }
+});
+
+await test('allows a parent-workspace game when its toolchain is already aligned', () => {
+  const f = fixture();
+  try {
+    writeFileSync(path.join(f.root, 'pnpm-workspace.yaml'), 'packages: ["*"]\n');
+    f.write('package.json', f.read('package.json').replaceAll('0.30.4', '0.32.1'));
+    const plan = planToolingMigration(f.game, template);
+    assert.deepEqual(plan.blockers, []);
+    assert.equal(plan.updateLockfile, false);
+    applyToolingMigration(plan, () => assert.fail('Do not change parent lockfiles'));
+  } finally {
+    f.cleanup();
+  }
+});
+
+await test('the packaged CLI previews migration without installing or writing files', () => {
+  const f = fixture();
+  try {
+    const before = f.read('package.json');
+    const result = spawnSync(
+      process.execPath,
+      ['packages/cli/dist/bin.js', 'kit', 'migrate-tools', '--game', f.game, '--json'],
+      { cwd: process.cwd(), encoding: 'utf8', timeout: 30_000 },
+    );
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.ok(report.plan.edits.length > 0);
+    assert.equal(report.result, null);
+    assert.equal(f.read('package.json'), before);
+  } finally {
+    f.cleanup();
+  }
+});

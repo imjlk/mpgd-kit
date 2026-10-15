@@ -78,6 +78,7 @@ import {
   resolveMicrosoftStoreAdapterDependencyVersion,
 } from './microsoft-store-starter.js';
 import { applyKitUpgrade, planKitUpgrade } from './kit-upgrade.js';
+import { applyToolingMigration, planToolingMigration } from './tooling-migration.js';
 import { runMicrosoftStoreSubmissionPreflight } from './microsoft-store-submission.js';
 import {
   defaultOfflinePlaytestArtifactDir,
@@ -452,7 +453,7 @@ export async function runMpgdCli(args: readonly string[]): Promise<void> {
     // partial document. Every other command keeps the default rendering.
     renderHeader: async (ctx) => {
       const values = ctx.values as Record<string, unknown>;
-      if ((ctx.name === 'verify-delivery' || ctx.name === 'stage-target' || ctx.name === 'publish-s3' || ctx.name === 'upgrade') && values.json === true) {
+      if ((ctx.name === 'verify-delivery' || ctx.name === 'stage-target' || ctx.name === 'publish-s3' || ctx.name === 'upgrade' || ctx.name === 'migrate-tools') && values.json === true) {
         return '';
       }
       const title = ctx.env.description || ctx.env.name || '';
@@ -463,7 +464,7 @@ export async function runMpgdCli(args: readonly string[]): Promise<void> {
     renderValidationErrors: async (ctx, error) => {
       const messages = error.errors.map((entry) => String((entry as Error).message)).join('\n');
       const values = ctx.values as Record<string, unknown>;
-      if ((ctx.name === 'verify-delivery' || ctx.name === 'stage-target' || ctx.name === 'publish-s3' || ctx.name === 'upgrade') && values.json === true) {
+      if ((ctx.name === 'verify-delivery' || ctx.name === 'stage-target' || ctx.name === 'publish-s3' || ctx.name === 'upgrade' || ctx.name === 'migrate-tools') && values.json === true) {
         process.stderr.write(`${messages}\n`);
         return '';
       }
@@ -3174,6 +3175,41 @@ const kitCommand = defineI18n({
         }
       },
     }),
+    'migrate-tools': defineI18n({
+      name: 'migrate-tools',
+      description: 'Plan or apply the TypeScript tools migration for an existing generated game.',
+      resource: commandResource({
+        base: {
+          en: 'Plan or apply the TypeScript tools migration for an existing generated game.',
+          ko: '기존 생성 게임의 TypeScript 도구 이전을 계획하거나 적용합니다.',
+        },
+        args: {
+          game: { en: 'Existing generated game directory.', ko: '기존 생성 게임 디렉터리.' },
+          apply: { en: 'Apply the reviewed local migration plan.', ko: '검토한 로컬 이전 계획을 적용합니다.' },
+          json: { en: 'Print the complete plan as JSON.', ko: '전체 계획을 JSON으로 출력합니다.' },
+        },
+      }),
+      args: {
+        game: { type: 'string', required: false, default: '.', description: 'Game directory.' },
+        apply: { type: 'boolean', required: false, description: 'Apply the local plan.' },
+        json: { type: 'boolean', required: false, description: 'Print JSON.' },
+      },
+      run: (ctx) => {
+        const plan = planToolingMigration(readOptionalString(ctx.values.game) ?? '.', gameTemplateDir);
+        const result = ctx.values.apply === true && plan.blockers.length === 0
+          ? applyToolingMigration(plan) : undefined;
+        if (ctx.values.json === true) {
+          process.stdout.write(JSON.stringify({ plan, result: result ?? null }, null, 2) + '\n');
+        } else {
+          console.info('TypeScript tooling plan for ' + plan.gameRoot);
+          for (const edit of plan.edits) { console.info('  ' + (edit.after === null ? 'Remove ' : 'Write ') + edit.file); }
+          for (const note of plan.notes) { console.info('Note: ' + note); }
+          for (const blocker of plan.blockers) { console.error('Blocked: ' + blocker); }
+          if (result !== undefined) { console.info('Applied ' + result.length + ' file change(s).'); } else if (!plan.edits.length && !plan.blockers.length) { console.info('TypeScript tooling is already current.'); } else if (!plan.blockers.length) { console.info('Run again with --apply after reviewing the plan.'); }
+        }
+        if (plan.blockers.length) { process.exitCode = 1; }
+      },
+    }),
     doctor: defineI18n({
       name: 'doctor',
       description: 'Print CLI, kit, template, and target-wrapper status.',
@@ -3192,7 +3228,7 @@ const kitCommand = defineI18n({
     }),
   },
   run: () => {
-    console.info('Use "mpgd kit doctor" or "mpgd kit upgrade --game <directory> [--apply]".');
+    console.info('Use "mpgd kit doctor", "mpgd kit upgrade --game <directory> [--apply]", or "mpgd kit migrate-tools --game <directory> [--apply]".');
   },
 });
 
