@@ -29,6 +29,7 @@ linked = [
   ["npm/@mpgd/adapter-verse8"],
   ["npm/@mpgd/game-runtime"],
   ["npm/@mpgd/input-controls"],
+  ["npm/@mpgd/lite-shell"],
   ["npm/@mpgd/runtime-diagnostics"],
   ["npm/@mpgd/tutorial"],
 ]
