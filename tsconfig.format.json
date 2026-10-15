@@ -2,7 +2,11 @@
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "types": ["node", "vite/client"]
+    "types": [
+      "node",
+      "vite/client"
+    ],
+    "allowJs": true
   },
   "include": [
     "adapters/**/*.ts",
@@ -11,7 +15,9 @@
     "examples/**/*.ts",
     "native-plugins/**/*.ts",
     "packages/**/*.ts",
-    "tools/**/*.ts"
+    "tools/**/*.ts",
+    "lint.config.ts",
+    "lint.source.config.ts"
   ],
   "exclude": [
     "**/node_modules/**",

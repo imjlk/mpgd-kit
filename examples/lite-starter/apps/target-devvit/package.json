@@ -26,10 +26,10 @@
   },
   "devDependencies": {
     "@devvit/start": "0.14.1",
-    "@ttsc/unplugin": "0.30.4",
+    "@ttsc/unplugin": "0.32.1",
     "@types/node": "^24.0.0",
     "devvit": "0.14.1",
-    "ttsc": "0.30.4",
+    "ttsc": "0.32.1",
     "typescript": "7.0.2",
     "vite": "7.3.6"
   }

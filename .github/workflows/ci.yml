@@ -197,7 +197,7 @@ jobs:
 
           for path in "${changed_files[@]}"; do
             case "${path}" in
-              docs/*|README.md|rspress.config.ts|lint.config.js|tsconfig.base.json|tsconfig.evidence.json|tsconfig.docs-examples.json|tools/docs/*|packages/platform/*|package.json|pnpm-lock.yaml|.github/workflows/ci.yml)
+              docs/*|README.md|rspress.config.ts|lint.config.ts|lint.source.config.ts|tsconfig.base.json|tsconfig.evidence.json|tsconfig.docs-examples.json|tools/docs/*|packages/platform/*|package.json|pnpm-lock.yaml|.github/workflows/ci.yml)
                 docs_validation=true
                 ;;
             esac
@@ -966,13 +966,13 @@ jobs:
       # TTSC_GO_BINARY, instead of the Windows image's preinstalled versions.
       - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
       - run: mise exec -- pnpm install --frozen-lockfile
-      - run: mise exec -- pnpm test:tooling
       - name: Cache Windows ttsc plugins
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: node_modules/.cache/ttsc/plugins
           key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml', '.mise.toml') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
+      - run: mise exec -- pnpm test:tooling
       # Build on Windows: Linux-produced dist would hide path regressions.
       - run: mise exec -- pnpm build:packages
       - name: Generate, install, check and build the Store starter
@@ -984,6 +984,12 @@ jobs:
         with:
           dotnet-version: 8.0.425
       - uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2.0.0
+      - name: Test readiness snapshot publication and Windows file contention
+        shell: pwsh
+        run: |
+          dotnet build tools/smoke/windows-readiness-contracts/ReadinessContracts.csproj --configuration Release --artifacts-path "$env:RUNNER_TEMP/readiness-contracts"
+          if ($LASTEXITCODE -ne 0) { throw 'Readiness publication contract fixture failed to compile.' }
+          dotnet "$env:RUNNER_TEMP/readiness-contracts/bin/ReadinessContracts/release/ReadinessContracts.dll"
       - name: Test the C# host contract from the installed CLI tarball
         shell: powershell
         env:

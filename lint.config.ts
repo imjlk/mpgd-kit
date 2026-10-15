@@ -1,6 +1,12 @@
-import { evidence } from '@ttsc/evidence';
+import {
+  evidence,
+  type ITtscEvidenceGraphConfig,
+  type ITtscEvidenceGraphMarkdownReference,
+  type ITtscEvidenceRules,
+} from '@ttsc/evidence';
+import type { ITtscLintConfig } from '@ttsc/lint';
 
-import { ignoredSourceFiles } from './lint.source.config.js';
+import { ignoredSourceFiles } from './lint.source.config.ts';
 
 // Evidence is run once through docs:evidence, not during every ttsc/ttsx
 // invocation in the large prepared-test suite.
@@ -11,7 +17,7 @@ const capabilitySpec = {
   symbol: 'h2',
   noEvidenceExclude: true,
   requireReview: true,
-};
+} satisfies ITtscEvidenceGraphMarkdownReference;
 const evidenceGraph = {
   claims: [
     {
@@ -71,14 +77,14 @@ const evidenceGraph = {
       },
     },
   ],
-};
+} satisfies ITtscEvidenceGraphConfig;
 
-// Source-scoped rules and formatting live in lint.source.config.js (see the
+// Source-scoped rules and formatting live in lint.source.config.ts (see the
 // note there on files outside the kit). This root entry carries only the
 // global ignores and the project-level evidence rules, which ttsc accepts only
 // in an entry without `files`.
 export default {
-  extends: './lint.source.config.js',
+  extends: './lint.source.config.ts',
   ignores: ignoredSourceFiles,
   ...(evidenceEnabled ? {
     plugins: { evidence },
@@ -87,4 +93,4 @@ export default {
       'evidence/review': 'error',
     },
   } : {}),
-};
+} satisfies ITtscLintConfig<ITtscEvidenceRules>;

@@ -133,7 +133,7 @@ store, for example
 The last game installed owns those links.
 
 - Builds started from that game work. Kit lint is scoped to files inside the
-  kit checkout (`lint.source.config.js`), so dependencies that ship raw `.ts`
+  kit checkout (`lint.source.config.ts`), so dependencies that ship raw `.ts`
   sources from `../<game>/node_modules` are no longer linted and no longer
   fail `build:devvit` or `build:ait`.
 - `build:target` prints a warning when the links belong to a different install

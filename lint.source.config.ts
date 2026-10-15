@@ -1,3 +1,5 @@
+import type { ITtscLintConfig } from '@ttsc/lint';
+
 // Per-file lint and format settings for kit sources.
 //
 // `files` scopes this entry to files under the kit checkout. ttsc compares a
@@ -22,15 +24,7 @@ export default {
     trailingComma: 'all',
     semi: true,
     sortImports: {
-      order: [
-        '<BUILTIN_MODULES>',
-        '',
-        '<THIRD_PARTY_MODULES>',
-        '',
-        '^@mpgd/',
-        '',
-        '^[./]',
-      ],
+      order: ['<BUILTIN_MODULES>', '', '<THIRD_PARTY_MODULES>', '', '^@mpgd/', '', '^[./]'],
     },
     jsDoc: false,
   },
@@ -45,4 +39,4 @@ export default {
     'typescript/no-floating-promises': 'error',
     'typescript/no-non-null-assertion': 'warning',
   },
-};
+} satisfies ITtscLintConfig;

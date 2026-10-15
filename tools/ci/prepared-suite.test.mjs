@@ -7,11 +7,12 @@ import { preparedGroups, requiresTtsx, resolvePreparedScript } from './prepared-
 
 const packageJson = JSON.parse(readFileSync(resolve('package.json'), 'utf8'));
 
-test('prepared groups retain all 56 commands exactly once', () => {
+test('prepared groups retain all 57 commands exactly once', () => {
   const scripts = Object.values(preparedGroups).flat();
-  assert.equal(scripts.length, 56);
+  assert.equal(scripts.length, 57);
   assert.ok(preparedGroups.cli.includes('smoke:cli-asset-pack-publish'));
   assert.ok(preparedGroups.cli.includes('smoke:cli-asset-pack-target'));
+  assert.ok(preparedGroups.cli.includes('test:template-tools'));
   assert.equal(new Set(scripts).size, scripts.length);
   assert.deepEqual(Object.keys(preparedGroups), ['contracts', 'cli', 'services']);
   for (const script of scripts) {

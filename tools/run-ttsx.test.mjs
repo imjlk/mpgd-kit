@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, sep } from 'node:path';
 import { test } from 'node:test';
@@ -18,12 +18,14 @@ const runner = fileURLToPath(new URL('./run-ttsx.mjs', import.meta.url));
 const tsgoBinary = resolveTsgoBinary(repoRoot);
 
 // A project that selects `src/**` next to a same-named file it does not select.
-// Without the runner's gate, ttsx answers the out-of-project entry with the
-// emit of the in-project file (trailing-path-stem recovery) and runs that file
-// under the requested entry's URL.
+// ttsx 0.30.x substituted the in-project emit here. The pinned 0.32.1
+// runtime must execute the requested source; our wrapper separately requires
+// entries to be selected by their check project.
 function stemCollisionFixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'mpgd-run-ttsx-gate-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'node_modules'));
+  symlinkSync(join(repoRoot, 'node_modules/typescript'), join(root, 'node_modules/typescript'), process.platform === 'win32' ? 'junction' : 'dir');
   const write = (path, value) => {
     const fullPath = join(root, path);
     mkdirSync(dirname(fullPath), { recursive: true });
@@ -52,6 +54,36 @@ function runnerEnv() {
   delete env.TTSC_PROJECT;
   return env;
 }
+
+test('pinned ttsx executes the requested same-named out-of-project source', (t) => {
+  const fixture = stemCollisionFixture(t);
+  const result = spawnSync(process.execPath, [
+    join(repoRoot, 'node_modules/ttsc/lib/launcher/ttsx.js'),
+    '--project', fixture.project, fixture.outside,
+  ], { cwd: fixture.root, encoding: 'utf8', env: runnerEnv(), timeout: 180_000 });
+  assert.ifError(result.error);
+  assert.equal(result.signal, null);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /REQUESTED_ENTRY_RAN/);
+  assert.doesNotMatch(result.stdout, /STEM_MATCHED_FILE_RAN/);
+});
+
+test('pinned ttsx forwards terminal flags and later separators to the typed program', (t) => {
+  const fixture = stemCollisionFixture(t);
+  fixture.write('src/args.ts', [
+    'declare const process: { argv: string[]; stdout: { write(text: string): void } };',
+    'process.stdout.write(JSON.stringify(process.argv.slice(2)));',
+  ].join('\n'));
+  const args = ['--help', '--version', '-r', 'literal', '--', 'tail with spaces'];
+  const result = spawnSync(process.execPath, [
+    join(repoRoot, 'node_modules/ttsc/lib/launcher/ttsx.js'),
+    '--project', fixture.project, join(fixture.root, 'src/args.ts'), '--', ...args,
+  ], { cwd: fixture.root, encoding: 'utf8', env: runnerEnv(), timeout: 180_000 });
+  assert.ifError(result.error);
+  assert.equal(result.signal, null);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), args);
+});
 
 test('resolves the root file set of a project through tsgo --showConfig', (t) => {
   const fixture = stemCollisionFixture(t);
@@ -218,4 +250,53 @@ test('tools entries stay inside the default project', () => {
   for (const entry of ['tools/validate-product-catalog.ts', 'packages/cli/src/bin.ts', 'tools/fixtures/ttsx-assertion-canary.ts']) {
     assert.doesNotThrow(() => assertEntryInProject({ tsgoBinary, project: 'tsconfig.tools.json', entry, cwd: repoRoot }));
   }
+});
+
+// Configuration must load before the compiler is available; keep this observer in plain Node.
+test('native Node loads the typed lint configuration through native type stripping', () => {
+  const configUrl = new URL('../lint.config.ts', import.meta.url).href;
+  const result = spawnSync(process.execPath, ['--input-type=module', '--eval',
+    `import assert from 'node:assert/strict'; const { default: config } = await import(${JSON.stringify(configUrl)}); assert.equal(config.extends, './lint.source.config.ts'); const { default: source } = await import(new URL(config.extends, ${JSON.stringify(configUrl)})); assert.equal(source.rules['no-var'], 'error'); assert.deepEqual(source.files, ['**/*']);`,
+  ], { cwd: repoRoot, encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '' }, timeout: 30_000 });
+  assert.ifError(result.error);
+  assert.equal(result.signal, null);
+  assert.equal(result.status, 0, result.stderr);
+});
+
+// Keep this compiler observer untransformed: linked external TS must be checked
+// for types without inheriting Kit-only style rules.
+test('typed lint config scopes style rules to Kit sources', (t) => {
+  const local = mkdtempSync(join(repoRoot, 'tools/lint-scope-fixture-'));
+  // Workspace games share a filesystem root with Kit. Windows runners put the
+  // checkout on D: and OS temp on C:, which cannot represent that source tree.
+  const external = mkdtempSync(join(repoRoot, '..', 'mpgd-external-lint-scope-'));
+  t.after(() => {
+    rmSync(local, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
+  });
+  const localSource = join(local, 'local.ts');
+  const externalSource = join(external, 'dependency.ts');
+  const project = join(local, 'tsconfig.json');
+  writeFileSync(localSource, "export const local = 1;\n");
+  writeFileSync(externalSource, "export var external = 1;\n");
+  writeFileSync(project, JSON.stringify({
+    compilerOptions: { noEmit: true, target: 'ES2022', module: 'ESNext', moduleResolution: 'Bundler', types: [], skipLibCheck: true },
+    files: [localSource, externalSource],
+  }));
+  const check = () => spawnSync(process.execPath, [join(repoRoot, 'node_modules/ttsc/lib/launcher/ttsc.js'), '--noEmit', '-p', project], {
+    // A Windows cache miss compiles the native Go plugins before checking.
+    // Keep a bounded allowance for that cold build, without skipping the check.
+    cwd: repoRoot, encoding: 'utf8', timeout: process.platform === 'win32' ? 600_000 : 120_000,
+    env: { ...runnerEnv(), TTSC_TSGO_BINARY: tsgoBinary },
+  });
+  const externalOnly = check();
+  assert.ifError(externalOnly.error);
+  assert.equal(externalOnly.status, 0, externalOnly.stdout + externalOnly.stderr);
+  writeFileSync(localSource, "export var local = 1;\n");
+  const kitViolation = check();
+  assert.ifError(kitViolation.error);
+  assert.notEqual(kitViolation.status, 0);
+  const diagnostics = kitViolation.stdout + kitViolation.stderr;
+  assert.match(diagnostics, /no-var/);
+  assert.doesNotMatch(diagnostics, /dependency\.ts.*error/);
 });

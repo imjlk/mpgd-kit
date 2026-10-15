@@ -1,8 +1,17 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import {
-  chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync,
-  realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync,
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,12 +20,12 @@ import test from 'node:test';
 import {
   describeForeignKitDependencyLinks,
   findForeignKitDependencyLinks,
-  findKitDependencyLinks,
   findKitBuildInstallRoot,
+  findKitDependencyLinks,
   isKitDependencyLinkOwnedBy,
 } from './kit-dependency-links.mjs';
 
-test('only the exact install owner suppresses the warning', () => {
+await test('only the exact install owner suppresses the warning', () => {
   const installRoot = join(tmpdir(), 'game');
   assert.equal(isKitDependencyLinkOwnedBy({ installRoot }, installRoot), true);
   assert.equal(isKitDependencyLinkOwnedBy({ installRoot }, join(installRoot, 'nested-game')), false);
@@ -27,7 +36,7 @@ test('only the exact install owner suppresses the warning', () => {
 });
 
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), 'mpgd-kit-links-'));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'mpgd-kit-links-')));
   const kit = join(root, 'mpgd-kit');
   const game = join(root, 'game');
   const kitStore = join(kit, 'node_modules/.pnpm/dep@1/node_modules/dep');
@@ -40,7 +49,7 @@ function fixture() {
   return { root, kit, game, gameStore, nodeModules };
 }
 
-test('kit-owned links are not reported', () => {
+await test('kit-owned links are not reported', () => {
   const { root, kit } = fixture();
   try {
     assert.deepEqual(findForeignKitDependencyLinks(kit), []);
@@ -50,23 +59,48 @@ test('kit-owned links are not reported', () => {
   }
 });
 
-test('links into a game install are reported with the fix command', () => {
-  const { root, kit, game, gameStore, nodeModules } = fixture();
+await test('standalone games do not claim ownership of healthy Kit links', () => {
+  const { root, kit, game } = fixture();
   try {
-    symlinkSync(gameStore, join(nodeModules, '@scope/dep'), 'junction');
-    const foreign = findForeignKitDependencyLinks(kit);
-    assert.equal(foreign.length, 1);
-    assert.equal(foreign[0].link, join('adapters/devvit/node_modules/@scope/dep'));
-    assert.equal(foreign[0].installRoot, realpathSync(game));
-    const message = describeForeignKitDependencyLinks(kit, foreign);
-    assert.match(message, /pnpm workspace:relink/u);
-    assert.ok(message.includes(realpathSync(game)));
+    const scriptDir = join(kit, 'tools/workspace');
+    mkdirSync(scriptDir, { recursive: true });
+    for (const name of ['kit-dependency-links.mjs', 'relink-kit-workspace.mjs']) {
+      copyFileSync(new URL(name, import.meta.url), join(scriptDir, name));
+    }
+    writeFileSync(join(game, 'package.json'), '{"name":"standalone-game"}');
+    writeFileSync(join(game, 'pnpm-workspace.yaml'), 'packages: [apps/*]\n');
+    const result = spawnSync(
+      process.execPath,
+      [join(scriptDir, 'relink-kit-workspace.mjs'), '--warn-unless-owner', game],
+      { encoding: 'utf8' },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, '');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('links into a game nested inside the kit are reported', () => {
+await test('links into a game install are reported with the fix command', () => {
+  const { root, kit, game, gameStore, nodeModules } = fixture();
+  try {
+    symlinkSync(gameStore, join(nodeModules, '@scope/dep'), 'junction');
+    const foreign = findForeignKitDependencyLinks(kit);
+    assert.equal(foreign.length, 1);
+    const first = foreign[0];
+    assert.ok(first);
+    assert.equal(first.link, join('adapters/devvit/node_modules/@scope/dep'));
+    assert.equal(foreign[0]?.installRoot, realpathSync.native(game));
+    const message = describeForeignKitDependencyLinks(kit, foreign);
+    assert.ok(message);
+    assert.match(message, /pnpm workspace:relink/u);
+    assert.ok(message.includes(realpathSync.native(game)));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+await test('links into a game nested inside the kit are reported', () => {
   const { root, kit, nodeModules } = fixture();
   try {
     const nested = join(kit, 'examples/my-game');
@@ -75,27 +109,27 @@ test('links into a game nested inside the kit are reported', () => {
     symlinkSync(store, join(nodeModules, 'x'), 'junction');
     const foreign = findForeignKitDependencyLinks(kit);
     assert.equal(foreign.length, 1);
-    assert.equal(foreign[0].installRoot, realpathSync(nested));
+    assert.equal(foreign[0]?.installRoot, realpathSync.native(nested));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('broken links are reported', () => {
+await test('broken links are reported', () => {
   const { root, kit, game, gameStore, nodeModules } = fixture();
   try {
     symlinkSync(gameStore, join(nodeModules, '@scope/dep'), 'junction');
     rmSync(game, { recursive: true, force: true });
     const foreign = findForeignKitDependencyLinks(kit);
     assert.equal(foreign.length, 1);
-    assert.equal(foreign[0].broken, true);
-    assert.match(describeForeignKitDependencyLinks(kit, foreign), /workspace:relink/u);
+    assert.equal(foreign[0]?.broken, true);
+    assert.match(describeForeignKitDependencyLinks(kit, foreign) ?? '', /workspace:relink/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('relink preserves independent apps and examples installs', () => {
+await test('relink preserves independent apps and examples installs', () => {
   const { root, kit, nodeModules } = fixture();
   try {
     const scriptDir = join(kit, 'tools/workspace');
@@ -121,10 +155,13 @@ test('relink preserves independent apps and examples installs', () => {
     const environment = { ...process.env };
     const pathKey = Object.keys(environment).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
     environment[pathKey] = bin;
-    const runRelink = () => spawnSync(process.execPath, [join(scriptDir, 'relink-kit-workspace.mjs')], {
-      env: environment,
-      encoding: 'utf8',
-    });
+    environment.NPM_CONFIG_WORKSPACE_DIR = process.cwd();
+    environment.npm_config_workspace_dir = process.cwd();
+    const runRelink = () =>
+      spawnSync(process.execPath, [join(scriptDir, 'relink-kit-workspace.mjs')], {
+        env: environment,
+        encoding: 'utf8',
+      });
     const failed = runRelink();
     assert.equal(failed.status, 1);
     assert.match(failed.stderr, /no dependency link folders were removed/u);
@@ -144,24 +181,24 @@ test('relink preserves independent apps and examples installs', () => {
   }
 });
 
-test('nested games use the nearest workspace install owner', () => {
-  const root = mkdtempSync(join(tmpdir(), 'mpgd-workspace-owner-'));
+await test('nested games use the nearest workspace install owner', () => {
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'mpgd-workspace-owner-')));
   try {
     const game = join(root, 'games/puzzle-one');
     mkdirSync(game, { recursive: true });
     writeFileSync(join(root, 'pnpm-workspace.yaml'), 'packages:\n  - games/*\n');
     writeFileSync(join(game, 'package.json'), '{"name":"puzzle-one"}');
-    const entry = { installRoot: realpathSync(root) };
+    const entry = { installRoot: realpathSync.native(root) };
     assert.equal(isKitDependencyLinkOwnedBy(entry, findKitBuildInstallRoot(game)), true);
     writeFileSync(join(game, 'pnpm-workspace.yaml'), 'packages: []\n');
-    assert.equal(findKitBuildInstallRoot(game), realpathSync(game));
+    assert.equal(findKitBuildInstallRoot(game), realpathSync.native(game));
     assert.equal(isKitDependencyLinkOwnedBy(entry, findKitBuildInstallRoot(game)), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('owner relink rebuilds shared links from the game workspace and preserves unrelated packages', () => {
+await test('owner relink rebuilds shared links from the game workspace and preserves unrelated packages', () => {
   const { root, kit, game, gameStore, nodeModules } = fixture();
   try {
     const scriptDir = join(kit, 'tools/workspace');
@@ -180,7 +217,9 @@ test('owner relink rebuilds shared links from the game workspace and preserves u
     writeFileSync(stub, `
       const fs = require('node:fs');
       const assert = require('node:assert/strict');
-      assert.equal(fs.realpathSync(process.cwd()), ${JSON.stringify(realpathSync(game))});
+      assert.equal(fs.realpathSync.native(process.cwd()), ${JSON.stringify(realpathSync.native(game))});
+      assert.equal(process.env.NPM_CONFIG_WORKSPACE_DIR, undefined);
+      assert.equal(process.env.npm_config_workspace_dir, undefined);
       if (process.argv[2] === 'list') {
         console.log(JSON.stringify([{ path: ${JSON.stringify(join(kit, 'adapters/devvit'))} }]));
       } else if (!process.argv.includes('--ignore-scripts')) {
@@ -197,20 +236,21 @@ test('owner relink rebuilds shared links from the game workspace and preserves u
     const environment = { ...process.env };
     const pathKey = Object.keys(environment).find((key) => key.toLowerCase() === 'path') ?? 'PATH';
     environment[pathKey] = bin;
+    environment.NPM_CONFIG_WORKSPACE_DIR = process.cwd();
+    environment.npm_config_workspace_dir = process.cwd();
     const result = spawnSync(process.execPath, [join(scriptDir, 'relink-kit-workspace.mjs'), '--owner', nested], {
       env: environment, encoding: 'utf8',
     });
     assert.equal(result.status, 0, result.stderr);
     assert.equal(existsSync(unrelated), true);
-    assert.equal(realpathSync(join(nodeModules, 'dep')), realpathSync(gameStore));
-    assert.ok(findKitDependencyLinks(kit).every((entry) => isKitDependencyLinkOwnedBy(entry, realpathSync(game))));
+    assert.equal(realpathSync.native(join(nodeModules, 'dep')), realpathSync.native(gameStore));
+    assert.ok(findKitDependencyLinks(kit).every((entry) => isKitDependencyLinkOwnedBy(entry, realpathSync.native(game))));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-
-test('selected workspace warnings include Kit stores but not shared source links', () => {
+await test('selected workspace warnings include Kit stores but not shared source links', () => {
   const { root, kit, game, nodeModules } = fixture();
   try {
     const scriptDir = join(kit, 'tools/workspace');
@@ -220,14 +260,38 @@ test('selected workspace warnings include Kit stores but not shared source links
     }
     const nested = join(game, 'games/puzzle-one');
     mkdirSync(nested, { recursive: true });
-    writeFileSync(join(game, 'pnpm-workspace.yaml'), 'packages: [games/*]\n');
+    writeFileSync(
+      join(game, 'pnpm-workspace.yaml'),
+      'packages: [games/*, ../mpgd-kit/adapters/*]\n',
+    );
+    writeFileSync(
+      join(kit, 'adapters/devvit/package.json'),
+      '{"name":"test-kit-adapter","version":"1.0.0"}',
+    );
     writeFileSync(join(nested, 'package.json'), '{"name":"puzzle-one"}');
-    const run = (...args) => spawnSync(process.execPath, [join(scriptDir, 'relink-kit-workspace.mjs'), ...args], { encoding: 'utf8' });
+    const run = (...args: string[]) =>
+      spawnSync(process.execPath, [join(scriptDir, 'relink-kit-workspace.mjs'), ...args], {
+        encoding: 'utf8',
+        env: { ...process.env, NPM_CONFIG_WORKSPACE_DIR: process.cwd() },
+      });
     assert.equal(findKitDependencyLinks(kit).length, 1);
     const mismatched = run('--warn-unless-owner', nested);
     assert.equal(mismatched.status, 0, mismatched.stderr);
-    assert.match(mismatched.stderr, /not owned by the selected build install/);
-    assert.ok(mismatched.stderr.includes(realpathSync(game)));
+    if (!/not owned by the selected build install/.test(mismatched.stderr)) {
+      const environment = Object.fromEntries(
+        Object.entries(process.env).filter(
+          ([key]) => key.toLowerCase() !== 'npm_config_workspace_dir',
+        ),
+      );
+      const listing = spawnSync('pnpm', ['list', '--recursive', '--depth', '-1', '--json'], {
+        cwd: game,
+        env: environment,
+        encoding: 'utf8',
+        shell: process.platform === 'win32',
+      });
+      assert.fail(JSON.stringify({ kit, game, listing: listing.stdout, error: listing.stderr }));
+    }
+    assert.ok(mismatched.stderr.includes(realpathSync.native(game)));
     assert.match(mismatched.stderr, /workspace:relink --owner/);
     const kitCheck = run('--check');
     assert.equal(kitCheck.status, 0, kitCheck.stderr);
@@ -241,11 +305,13 @@ test('selected workspace warnings include Kit stores but not shared source links
     mkdirSync(owned, { recursive: true });
     unlinkSync(join(nodeModules, 'dep'));
     symlinkSync(owned, join(nodeModules, 'dep'), 'junction');
+    const ownedCheck = run('--check', '--owner', nested);
+    assert.equal(ownedCheck.status, 0, ownedCheck.stderr);
     const matched = run('--warn-unless-owner', nested);
     assert.equal(matched.status, 0, matched.stderr);
     assert.equal(matched.stderr, '', 'the enclosing workspace owns this game install');
     writeFileSync(join(nested, 'pnpm-workspace.yaml'), 'packages: []\n');
-    assert.match(run('--warn-unless-owner', nested).stderr, /not owned by the selected build install/);
+    assert.match(run('--warn-unless-owner', nested).stderr, /not owned by the kit install/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

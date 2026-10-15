@@ -19,17 +19,21 @@ This repository is `mpgd-kit`: a Multi-Platform Game Distribution / Development 
 
 - Do not introduce Cocos Creator.
 - Do not introduce React Native as the mobile baseline.
+- Author game code, tests, templates, and ordinary development tools in `.ts`; include them in the owning type-check project.
+- Use authored `.mjs`, `.cjs`, or `.js` only for a documented runtime or tool constraint, such as a compiler bootstrap, a JavaScript-only config loader, or a no-loader published-JavaScript consumer test. Convenience and bypassing type errors are not exceptions. See `docs/TTSC_TOOLCHAIN.md`.
 - Do not use `tsx` for TypeScript scripts. Use `ttsx`.
 - Root scripts invoke `ttsx` through `node tools/run-ttsx.mjs` so TypeScript-Go's native binary is resolved consistently under pnpm.
 - Do not introduce ESLint or Prettier for TypeScript files. Use `@ttsc/lint`.
 - Keep root/workspace/template ttsc pins aligned and run `pnpm validate:toolchain` after toolchain edits.
 - Use `pnpm format` to include tools, target configs, and shipped template sources; cache ownership is documented in `docs/TTSC_TOOLCHAIN.md`.
-- The active `@ttsc/lint` entry point is `lint.config.js`. Its source rules live in `lint.source.config.js` with a checkout-relative `files` scope because ttsc global ignores do not exclude dependencies outside the config directory. Keep this scope when editing lint rules for linked workspace games.
-- The active `@ttsc/strip` config is `strip.config.js` for the same reason.
+- The typed lint entry is `lint.config.ts`; checkout-scoped source rules live in `lint.source.config.ts`. Keep the source `files` scope to exclude external linked dependency sources, and check both configs and Evidence options with `satisfies`.
+- The active `@ttsc/strip` config is `strip.config.js` with checked JSDoc types. Its 0.32.1 TS loader fails with symlinked macOS temporary directories; retain this narrow exception until that case passes without environment overrides. Preserve assertion calls in tests.
 - Do not put Phaser, Capacitor, Apps in Toss, Google Play Billing, StoreKit, or ad SDK imports in pure packages.
 - Do not call platform SDKs directly from Phaser scenes. Use `PlatformGateway`.
 - Do not grant purchases or ad rewards solely from client callbacks. All grants must go through backend ledger APIs.
 - Do not put side effects inside debug calls that may be removed by `@ttsc/strip`.
+
+Windows package builds default to one compiler process because the 0.32.1 config loader races on source ownership during parallel emission. Do not bypass ownership checks.
 
 ## Pure Packages
 

@@ -42,6 +42,7 @@ export const preparedGroups = Object.freeze({
     'smoke:cli-configured-web-targets',
     'smoke:cli-game-release-inputs',
     'smoke:cli-game-acceptance',
+    'test:template-tools',
     'smoke:cli-gameplay-e2e',
     'smoke:cli-browser-gameplay-e2e',
     'smoke:cli-offline-playtest',

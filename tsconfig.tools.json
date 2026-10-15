@@ -2,11 +2,15 @@
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "rootDir": ".",
-    "types": ["node"],
-    "noEmit": true
+    "types": [
+      "node"
+    ],
+    "noEmit": true,
+    "allowJs": true
   },
   "include": [
     "tools/**/*.ts",
+    "tools/workspace/*.mjs",
     "backend/**/*.ts",
     "packages/**/*.ts",
     "adapters/**/*.ts",

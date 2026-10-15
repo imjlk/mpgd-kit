@@ -333,7 +333,8 @@ function selectBuildablePackages(
 
 function packageBuildConcurrency(value: string | undefined): number {
   if (value === undefined || value === '') {
-    return availableParallelism();
+    // ttsc 0.32.1 config evaluators race on Windows source ctime during parallel emission.
+    return process.platform === 'win32' ? 1 : availableParallelism();
   }
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1) {

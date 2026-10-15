@@ -31,6 +31,7 @@ function run(command, args, cwd = repoRoot, environment = process.env) {
   appendFileSync(join(outputRoot, 'commands.log'), log);
   assert.equal(result.error, undefined, result.error?.message);
   assert.equal(result.status, 0, log);
+  return result;
 }
 
 run(process.execPath, [join(repoRoot, 'packages/cli/dist/bin.js'),
@@ -73,6 +74,8 @@ mkdirSync(nativeToolingRoot, { recursive: true });
 copyFileSync(nativeModule, join(nativeToolingRoot, 'WindowsMsixAcceptance.psm1'));
 cpSync(nativeTools.getMicrosoftStoreNativeHostSourceDirectory(), join(nativeToolingRoot, 'windows-host'), { recursive: true });
 run('pnpm', ['check'], gameRoot);
+const acceptanceHelp = run('pnpm', ['accept', '--help'], gameRoot);
+assert.match(acceptanceHelp.stdout, /mpgd game accept/, 'Installed starter must run application help through ttsx');
 run('pnpm', ['build'], gameRoot);
 assert.ok(existsSync(join(gameRoot, 'dist/index.html')), 'Missing web entry point');
 assert.ok(existsSync(join(gameRoot, 'dist/assets/game.js')), 'Missing web game bundle');

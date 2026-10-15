@@ -6,6 +6,67 @@ templates use the same version. `pnpm validate:toolchain` detects drift before
 `pnpm check` starts compiling, including nested generated target templates and
 `pnpm-workspace.yaml` native-package age exceptions.
 
+## TypeScript is the authored-source default
+
+Author game code, tests, templates, and ordinary development tools in `.ts`.
+Select them in an owning strict TypeScript project and include that project in
+`check`. Execute scripts with `ttsx`; when a consumer needs JavaScript, build
+JavaScript from the typed source instead of maintaining a second implementation.
+An extension rename without type-check coverage is not a migration. Avoid `any`,
+blanket assertions, and ignored diagnostics to get a green check: parse external
+JSON as `unknown`, narrow it at the boundary, and use concrete internal contracts.
+
+Generated Phaser and Lite games have a `tsconfig.tools.json` selecting
+`tools/**/*.ts`. Their `check`, `lint`, `format`, and `fix` commands include both
+the game and tools projects. `pnpm accept` executes the typed acceptance entry
+through that project with no authored JavaScript bootstrap. The pinned ttsx
+0.32.1 forwards terminal flags such as `--help` after the entry; the old 0.30.4
+runner intercepted them even after `--`. Keep the argument-forwarding regression
+check when changing the runner.
+`pnpm test:template-tools` creates both templates in
+supported standalone/workspace modes (Lite currently requires workspace), checks
+the tools, introduces deliberate type errors in a nested tool, and verifies successful and failed assertions at runtime.
+This does not migrate existing consumer checkouts automatically.
+
+Authored `.mjs`, `.cjs`, or `.js` needs a concrete constraint and a nearby comment
+explaining why it cannot use the normal typed path. The following are intentional
+boundaries, not a precedent for unrelated scripts:
+
+- `tools/run-ttsx.mjs`, `tools/ttsx-project-entry.mjs`, and the compiled runner/loader
+  must start or select the TypeScript execution path before that path can run.
+- The untransformed `tools/smoke/ttsx-assertions.mjs` must independently detect
+  when compilation strips a failing assertion. Running that observer through
+  the compiler under test could hide the same failure. Keep its source and
+  compiled-path checks; see the assertion-preservation fix `8aa896f2`.
+- Published-JavaScript import tests run in a plain Node consumer without TS
+  loaders or source aliases. Browser-executed JS fixtures test that same boundary.
+- The authored `.js` sibling fixture tests that runners preserve existing
+  JavaScript sources.
+- `strip.config.js` remains a small, type-checked loader boundary: the 0.32.1
+  native strip loader resolves the config under the wrong root when macOS
+  `TMPDIR` is a symlink. Its `@satisfies` contract is checked by the maintenance
+  project. Do not normalize users' environments just to hide this limitation.
+  The lint entry is `lint.config.ts` with typed Evidence options. Source rules
+  live in `lint.source.config.ts` with `satisfies` and a checkout-relative
+  `files` scope so external workspace dependencies are not linted as Kit sources.
+
+Windows package builds default to one compiler process. The 0.32.1 isolated
+config evaluator uses ttsx for JS as well as TS, so a JS wrapper does not avoid
+its parallel emitted-source ownership race. Keep TS configs and ownership
+checks; restore Windows parallelism only after the upstream race is fixed and
+both installed starter variants pass. Other platforms retain parallel builds.
+
+Existing JavaScript is not automatically an approved exception. Review ordinary
+scripts when touching them and convert those without a runtime constraint. This
+change converts the share-link validator/tests and Evidence export validator;
+other existing CI and browser-test orchestration remains a migration backlog,
+not a claim that all `.mjs` files are required. New shipped game tools have no
+JavaScript exceptions; `validate:starter-workflow` rejects them.
+
+`tsconfig.maintenance-tools.json` keeps the converted metadata-only validators
+and tests independent of generated i18n or built package output, so pre-build CI
+can still run them. They also remain included in the full tools check.
+
 ## Updating the toolchain
 
 1. Start from the current integration branch in an isolated worktree. Read its
@@ -88,28 +149,14 @@ reported as a project problem (`tsgo --showConfig` exits 0 and prints no
 `files`); other config errors, such as unreadable JSON or a missing `extends`
 target, still yield a file set and are reported by ttsx when it builds.
 
-The rule exists because ttsx compiles the whole project and then looks up the
-entry's emitted JavaScript. The ttsc launcher documents an entry-only build for
-files the project does not select, but its lookup first falls back to
-trailing-path-stem matching across the project emit
-(`resolveEmittedJavaScript` in `ttsc/lib/compiler/internal`, reached from
-`prepareExecution`). With `rootDir` at the repository root, an entry such as
-`native-plugins/capacitor-storekit/src/commerce-provider.test.ts` run through
-`tsconfig.tools.json` is answered with the emit of
-`adapters/ait/src/commerce-provider.test.ts`, and that unrelated file executes
-under the requested entry's URL (its relative imports then fail with
-`ERR_MODULE_NOT_FOUND` against the wrong directory, or worse, succeed). The
-runner's gate makes that substitution impossible. It is deliberately narrower
-than ttsc's own behaviour: ttsx would also build an entry outside the project's
-`rootDir` through a synthesized entry-only project, and this repository turns
-that lane off on purpose so every entry runs inside a project that selects it.
-The compiled `--compile-once`/`MPGD_CI_EMIT_ROOT` lane is unaffected because it
-only runs an emit at the entry's own mirrored path; the gate runs before a
-`--compile-once` emit is spent on an entry, and a refused entry still records a
-`refused` row in the CI timing summary. The gate guards a ttsc launcher
-behaviour (ttsc 0.30.x); when upstream stops answering an out-of-project entry
-with a stem match, revisit whether it can be narrowed to the documented
-entry-only lane. `tools/run-ttsx.test.mjs` holds the reproduction.
+The gate originally protected against ttsx 0.30.x's trailing-path-stem fallback:
+an excluded `commerce-provider.test.ts` could run another project's same-named
+file. The pinned 0.32.1 runtime fixes source ownership. An untransformed test in
+`tools/run-ttsx.test.mjs` now proves the raw runner executes the requested source.
+We retain the wrapper's narrower inclusion rule as repository policy: scripts
+must also be covered by the selected project during ordinary `check`, not just
+checked opportunistically when executed. The compiled lane already uses the
+entry's exact mirrored path. Refused entries continue to record their CI timing.
 
 Workspace packages whose sources are outside `tsconfig.tools.json` (the
 `native-plugins/capacitor-storekit` and `native-plugins/capacitor-play-billing`
@@ -152,6 +199,12 @@ as a separate change from the toolchain upgrade; do not symlink entire
 [Go cache lifecycle issue](https://github.com/samchon/ttsc/issues/1185).
 
 ## Graph compatibility
+
+Starting with 0.32, `ttscgraph` belongs to the exact-version
+`@ttsc/graph-<platform>-<arch>` dependency of `@ttsc/graph`, not the compiler's
+platform package. Keep those native packages in the lockfile and scoped release-age
+exceptions. The local resolver delegates to the installed graph package;
+`graph:preflight` exercises the JavaScript client and native producer together.
 
 Local presets carry `{ reason, type }` in `draft`. Tours use the question plus
 `request.reinterpretations` symbol names; details and traces keep their selected

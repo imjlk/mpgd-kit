@@ -693,7 +693,7 @@ describe('bounded ZIP decode core', () => {
 
   it('requires a secure context for SHA-256 verification', async () => {
     const subtle = crypto.subtle;
-    vi.stubGlobal('crypto', { });
+    vi.stubGlobal('crypto', {});
     try {
       await expect(collect(buildV1Zip(mixedEntries))).rejects.toMatchObject({ code: 'unsupported' });
     } finally {

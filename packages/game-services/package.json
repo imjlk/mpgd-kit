@@ -230,7 +230,7 @@
   "devDependencies": {
     "@apple/app-store-server-library": "3.1.0",
     "@opentelemetry/api": "1.9.0",
-    "ttsc": "0.30.4",
+    "ttsc": "0.32.1",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"
   },

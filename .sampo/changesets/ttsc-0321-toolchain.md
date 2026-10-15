@@ -1,0 +1,26 @@
+---
+npm/@mpgd/adapter-ait: patch (Changed)
+npm/@mpgd/adapter-browser: patch (Changed)
+npm/@mpgd/adapter-capacitor: patch (Changed)
+npm/@mpgd/adapter-devvit: patch (Changed)
+npm/@mpgd/adapter-verse8: patch (Changed)
+npm/@mpgd/analytics: patch (Changed)
+npm/@mpgd/bridge: patch (Changed)
+npm/@mpgd/capacitor-game-services: patch (Changed)
+npm/@mpgd/capacitor-play-billing: patch (Changed)
+npm/@mpgd/capacitor-storekit: patch (Changed)
+npm/@mpgd/catalog: patch (Changed)
+npm/@mpgd/cli: patch (Changed)
+npm/@mpgd/create-game: patch (Changed)
+npm/@mpgd/game-runtime: patch (Changed)
+npm/@mpgd/game-services: patch (Changed)
+npm/@mpgd/i18n: patch (Changed)
+npm/@mpgd/input-controls: patch (Changed)
+npm/@mpgd/phaser-assets: patch (Changed)
+npm/@mpgd/platform: patch (Changed)
+npm/@mpgd/runtime-diagnostics: patch (Changed)
+npm/@mpgd/target-config: patch (Changed)
+npm/@mpgd/tutorial: patch (Changed)
+---
+
+Align the compiler, typed script runner, lint, Evidence, graph, paths, and bundler toolchain on ttsc 0.32.1. Preserve runtime assertion checks and use the graph-specific native packages.

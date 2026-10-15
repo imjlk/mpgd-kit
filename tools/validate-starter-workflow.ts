@@ -518,18 +518,27 @@ function assertSingleMicrosoftStoreBlock(file: string, anchor: string | undefine
 
 function validatePhaserTemplateAcceptanceCommand(): void {
   const templateRoot = 'packages/cli/templates/phaser-game';
-  const packageFile = `${templateRoot}/package.json`;
   const acceptanceFile = `${templateRoot}/agent/acceptance.md`;
   const manifestFile = `${templateRoot}/agent/game-manifest.json`;
-  const runnerFile = `${templateRoot}/tools/run-game-acceptance.mjs`;
-  const packageJson = readJson(packageFile);
-  const scripts = isJsonObject(packageJson) && isJsonObject(packageJson.scripts)
-    ? packageJson.scripts
-    : null;
-  const acceptScript = scripts?.accept;
+  const runnerFile = `${templateRoot}/tools/run-game-acceptance.ts`;
+  validateTypedStarterTools(templateRoot);
+  validateTypedStarterTools('examples/lite-starter');
 
-  if (acceptScript !== 'node ./tools/run-game-acceptance.mjs') {
-    failures.push(`${packageFile}: must expose the reusable mpgd game accept command.`);
+  // No shipped game tool needs a non-TypeScript runtime on the pinned ttsx.
+  // Any future exception needs an explicit file and runtime reason, not a glob.
+  for (const root of [
+    'packages/cli/templates/phaser-game/tools',
+    'packages/cli/templates/lite-overlay/tools',
+    'examples/lite-starter/tools',
+  ]) {
+    if (!existsSync(root)) {
+      continue;
+    }
+    for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
+      if (entry.isFile() && /\.[cm]?jsx?$/u.test(entry.name)) {
+        failures.push(`${root}/${entry.name}: author game tools in TypeScript.`);
+      }
+    }
   }
 
   const runnerSource = readText(runnerFile);
@@ -548,6 +557,36 @@ function validatePhaserTemplateAcceptanceCommand(): void {
   for (const file of [acceptanceFile, manifestFile]) {
     if (!readText(file).includes('pnpm accept')) {
       failures.push(`${file}: must use the reusable pnpm accept handoff command.`);
+    }
+  }
+}
+
+function validateTypedStarterTools(templateRoot: string): void {
+  const packageFile = `${templateRoot}/package.json`;
+  const packageJson = readJson(packageFile);
+  const scripts = isJsonObject(packageJson) && isJsonObject(packageJson.scripts)
+    ? packageJson.scripts
+    : null;
+  const acceptScript = scripts?.accept;
+
+  if (acceptScript !== 'ttsx --project tsconfig.tools.json tools/run-game-acceptance.ts --') {
+    failures.push(`${packageFile}: must expose the reusable mpgd game accept command.`);
+  }
+
+  const toolsConfigFile = `${templateRoot}/tsconfig.tools.json`;
+  const toolsConfig = readJson(toolsConfigFile);
+  if (
+    !isJsonObject(toolsConfig)
+    || toolsConfig.extends !== './tsconfig.json'
+    || !Array.isArray(toolsConfig.include)
+    || !toolsConfig.include.includes('tools/**/*.ts')
+  ) {
+    failures.push(`${toolsConfigFile}: must select authored TypeScript tools.`);
+  }
+  for (const command of ['check', 'lint', 'format', 'fix']) {
+    const script = scripts?.[command];
+    if (typeof script !== 'string' || !script.includes('-p tsconfig.tools.json')) {
+      failures.push(`${packageFile}: ${command} must include tsconfig.tools.json.`);
     }
   }
 }

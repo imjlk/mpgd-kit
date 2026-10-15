@@ -21,8 +21,9 @@ This checklist tracks the Codex roadmap from the initial project brief.
 - [x] AGENTS.md written
 - [x] README.md draft written
 
-Note: active lint and strip config files use `lint.config.js` and `strip.config.js`
-because the current ttsc RC config loader path is more reliable with JS config files.
+Note: `lint.config.ts` uses published config types under ttsc 0.32.1.
+`strip.config.js` remains a checked-JSDoc exception for the symlinked macOS
+temporary-directory loader issue; see `TTSC_TOOLCHAIN.md`.
 
 ## Phase 1 - Phaser 4 App
 

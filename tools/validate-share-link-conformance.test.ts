@@ -1,22 +1,23 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { findShareLinkConformanceGaps } from './validate-share-link-conformance.mjs';
+import { findShareLinkConformanceGaps } from './validate-share-link-conformance';
 
 const runnerImport = "import { runShareLinkConformance } from '@mpgd/platform/share-link-conformance';\n";
 
-function writeAdapters(root, files) {
+function writeAdapters(root: string, files: Readonly<Record<string, string>>): void {
   for (const [path, content] of Object.entries(files)) {
     mkdirSync(dirname(join(root, path)), { recursive: true });
     writeFileSync(join(root, path), content);
   }
 }
 
-test('finds an adapter that defines a share but runs no share link conformance', () => {
+await test('finds an adapter that defines a share but runs no share link conformance', () => {
   const root = mkdtempSync(join(tmpdir(), 'mpgd-share-link-conformance-'));
 
   try {
@@ -49,7 +50,7 @@ test('finds an adapter that defines a share but runs no share link conformance',
       'linkless/src/sharing.ts': 'export const sharing = { async share(intent) { card(intent.title); } };\n',
     });
 
-    const gaps = (exemptions) => findShareLinkConformanceGaps(root, exemptions)
+    const gaps = (exemptions: ReadonlyMap<string, string>) => findShareLinkConformanceGaps(root, exemptions)
       .map((gap) => gap.adapter)
       .sort();
 
@@ -73,9 +74,26 @@ test('finds an adapter that defines a share but runs no share link conformance',
   }
 });
 
-test('every repository adapter that defines a share runs the share link conformance', () => {
+await test('every repository adapter that defines a share runs the share link conformance', () => {
   assert.deepEqual(
     findShareLinkConformanceGaps(fileURLToPath(new URL('../adapters', import.meta.url))),
     [],
   );
+});
+
+await test('the TypeScript CLI executes its check and preserves its diagnostic output', () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      'tools/run-ttsx.mjs',
+      '--project',
+      'tsconfig.maintenance-tools.json',
+      'tools/validate-share-link-conformance.ts',
+    ],
+    { cwd: fileURLToPath(new URL('..', import.meta.url)), encoding: 'utf8', timeout: 180_000 },
+  );
+  assert.ifError(result.error);
+  assert.equal(result.signal, null);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Every adapter that defines a share runs the share link conformance/u);
 });
