@@ -2063,6 +2063,7 @@ function validatePhaserTemplateDevvitVitePlugin(): void {
   const wrapperRoots = [
     'apps/target-devvit',
     'packages/cli/templates/phaser-game/apps/target-devvit',
+    'examples/lite-starter/apps/target-devvit',
   ] as const;
 
   for (const root of wrapperRoots) {
@@ -2092,6 +2093,7 @@ function validatePhaserTemplateDevvitVitePlugin(): void {
       for (const requiredText of [
         "from '@devvit/start/vite'",
         'createGameViteSharedConfig',
+        'devvitOutputCollisionPlugin()',
         "sourcemap: mode !== 'production'",
       ]) {
         assertIncludesText(source, requiredText, `${vitePath}: official Devvit Vite plugin.`);

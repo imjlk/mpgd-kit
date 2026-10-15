@@ -16,6 +16,7 @@
     "isolatedModules": true,
     "declaration": true,
     "paths": {
+      "@mpgd/cli/devvit": ["./packages/cli/src/devvit-output-collisions.ts"],
       "@mpgd/bridge/cloudflare-pages": ["./packages/bridge/src/cloudflare-pages.ts"],
       "@mpgd/bridge/notifications": ["./packages/bridge/src/notifications.ts"],
       "@mpgd/bridge/orpc": ["./packages/bridge/src/orpc.ts"],
