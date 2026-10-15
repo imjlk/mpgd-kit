@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import {
   existsSync,
   lstatSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -24,6 +25,7 @@ const managedPaths = [
   'tools/run-game-acceptance.mjs',
   'tools/run-game-acceptance.ts',
   'pnpm-lock.yaml',
+  'pnpm-workspace.yaml',
 ] as const;
 type ManagedPath = typeof managedPaths[number];
 export interface ToolingMigrationEdit {
@@ -35,6 +37,7 @@ export interface ToolingMigrationPlan {
   readonly gameRoot: string;
   readonly edits: readonly ToolingMigrationEdit[];
   readonly snapshots: Readonly<Record<ManagedPath, string | null>>;
+  readonly childManifests: Readonly<Record<string, string>>;
   readonly updateLockfile: boolean;
   readonly blockers: readonly string[];
   readonly notes: readonly string[];
@@ -48,6 +51,7 @@ export function planToolingMigration(gameDirectory: string, templateRoot = defau
     managedPaths.map((file) => [file, readOwnedFile(gameRoot, file)]),
   ) as Record<ManagedPath, string | null>;
   const blockers: string[] = [];
+  const childManifests = readChildManifests(gameRoot);
   const notes: string[] = [];
   const edits: ToolingMigrationEdit[] = [];
   const add = (file: ManagedPath, after: string | null): void => {
@@ -137,11 +141,13 @@ export function planToolingMigration(gameDirectory: string, templateRoot = defau
 
   const dev = objectField(manifest, 'devDependencies');
   const templateDev = objectField(template, 'devDependencies');
-  for (const section of ['dependencies', 'optionalDependencies']) {
-    if (objectField(manifest, section).ttsc !== undefined) {
-      blockers.push(
-      `Custom ${section}.ttsc: keep one compiler declaration in devDependencies before migrating.`,
-    );
+  for (const section of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+    for (const name of ['ttsc', 'typescript', '@types/node']) {
+      if (objectField(manifest, section)[name] !== undefined) {
+        blockers.push(
+          `Custom ${section}.${name}: keep toolchain declarations in devDependencies before migrating.`,
+        );
+      }
     }
   }
   const compilerFloor = templateDev.ttsc;
@@ -195,6 +201,38 @@ export function planToolingMigration(gameDirectory: string, templateRoot = defau
       manifest[section] = dependencies;
     }
   }
+  for (const [name, version] of Object.entries(objectField(manifest, 'peerDependencies'))) {
+    if (name.startsWith('@ttsc/') && version !== compilerVersion) {
+      blockers.push(`Custom peerDependencies.${name}: align the peer toolchain manually first.`);
+    }
+  }
+  for (const [file, source] of Object.entries(childManifests)) {
+    const child = parseObject(source, file);
+    for (const section of [
+      'dependencies',
+      'devDependencies',
+      'optionalDependencies',
+      'peerDependencies',
+    ]) {
+      for (const [name, version] of Object.entries(objectField(child, section))) {
+        if (name === 'ttsc' || name.startsWith('@ttsc/')) {
+          if (version !== compilerVersion) {
+            blockers.push(
+              `${file}: align ${section}.${name} with ttsc ${compilerVersion} manually first.`,
+            );
+          }
+        } else if (name === 'typescript' || name === '@types/node') {
+          const minimum = versionFloor(templateDev[name]);
+          const current = versionFloor(version);
+          if (minimum === null || current === null || !gte(current, minimum)) {
+            blockers.push(
+              `${file}: align ${section}.${name} with the template toolchain manually first.`,
+            );
+          }
+        }
+      }
+    }
+  }
   if (updateLockfile && hasAncestorWorkspace(gameRoot)) {
     blockers.push(
       'This game belongs to a parent pnpm workspace. Upgrade its shared toolchain first; this migration will not change the parent lockfile.',
@@ -209,7 +247,7 @@ export function planToolingMigration(gameDirectory: string, templateRoot = defau
   if (stable(manifest) !== stable(parseObject(snapshots['package.json'], 'package.json'))) {
     add('package.json', stringify(manifest, snapshots['package.json'] ?? undefined));
   }
-  return { gameRoot, edits, snapshots, updateLockfile, blockers, notes };
+  return { gameRoot, edits, snapshots, childManifests, updateLockfile, blockers, notes };
 }
 
 /** Applies a fresh local plan, rolling back managed files and the game lockfile on failure. */
@@ -284,9 +322,38 @@ function assertFreshPlan(plan: ToolingMigrationPlan): void {
       throw new Error(`File changed after planning: ${file}`);
     }
   }
+  if (stable(readChildManifests(plan.gameRoot)) !== stable(plan.childManifests)) {
+    throw new Error('Child package manifests changed after planning.');
+  }
   if (plan.updateLockfile && hasAncestorWorkspace(plan.gameRoot)) {
     throw new Error('Parent workspace changed after planning.');
   }
+}
+
+// Conservatively inspect game-owned nested packages, including custom workspace
+// layouts. Never traverse dependency installs, generated builds or linked trees.
+function readChildManifests(root: string): Record<string, string> {
+  const manifests: Record<string, string> = {};
+  const ignored = new Set(['node_modules', 'dist', 'build', 'coverage']);
+  function visit(directory: string): void {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      if (entry.name.startsWith('.') || ignored.has(entry.name)) {
+        continue;
+      }
+      const full = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) {
+        if (entry.name === 'package.json' || existsSync(path.join(full, 'package.json'))) {
+          throw new Error(`Refusing linked child package: ${path.relative(root, full)}`);
+        }
+      } else if (entry.isDirectory()) {
+        visit(full);
+      } else if (directory !== root && entry.name === 'package.json') {
+        manifests[path.relative(root, full)] = readFileSync(full, 'utf8');
+      }
+    }
+  }
+  visit(root);
+  return manifests;
 }
 
 function parseObject(source: string | null, label: string): JsonObject {

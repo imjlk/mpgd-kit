@@ -243,7 +243,10 @@ Standalone dependency changes refresh the game lockfile with lifecycle scripts
 disabled. Failure restores managed files and the previous lockfile. Concurrent
 migrations, changed plan inputs, and linked managed paths are rejected. A game
 inside a parent pnpm workspace must have its toolchain aligned first: this command
-does not modify the parent's manifest or lockfile. After applying, install the
+does not modify the parent's manifest or lockfile. Game-owned child package
+manifests are inspected too; mismatched compiler pins block application until
+you align them manually. Custom non-dev compiler declarations and incompatible
+peer toolchain declarations also block application. After applying, install the
 updated dependencies normally and run `pnpm check` and `pnpm accept --help`.
 
 ## JavaScript exception inventory

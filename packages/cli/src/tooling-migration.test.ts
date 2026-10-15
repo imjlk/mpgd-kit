@@ -301,3 +301,78 @@ await test('rechecks inputs under the lock without rolling back a concurrent wri
     f.cleanup();
   }
 });
+
+await test('blocks duplicate non-dev toolchain declarations and incompatible peer plugins', () => {
+  for (const section of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+    for (const name of ['ttsc', 'typescript', '@types/node', '@ttsc/unplugin']) {
+      if (name.startsWith('@ttsc/') && section !== 'peerDependencies') {
+        continue;
+      }
+      const f = fixture();
+      try {
+        const manifest = JSON.parse(f.read('package.json'));
+        manifest[section] = { [name]: '0.30.4' };
+        f.write('package.json', JSON.stringify(manifest));
+        const before = f.read('package.json');
+        const plan = planToolingMigration(f.game, template);
+        assert.ok(plan.blockers.some((blocker) => blocker.includes(`${section}.${name}`)));
+        assert.throws(() => applyToolingMigration(plan), /blocked/);
+        assert.equal(f.read('package.json'), before);
+        assert.equal(f.read('pnpm-lock.yaml'), '# original lock\n');
+      } finally {
+        f.cleanup();
+      }
+    }
+  }
+});
+
+await test('blocks mismatched child toolchains and applies after child pins are aligned', () => {
+  const f = fixture();
+  try {
+    f.write('pnpm-workspace.yaml', 'packages: [apps/*]\n');
+    mkdirSync(path.join(f.game, 'apps/target-ait'), { recursive: true });
+    mkdirSync(path.join(f.game, 'apps/target-devvit'), { recursive: true });
+    f.write('apps/target-ait/package.json', '{"devDependencies":{"ttsc":"0.30.4"}}');
+    f.write('apps/target-devvit/package.json', '{"devDependencies":{"@ttsc/unplugin":"0.30.4"}}');
+    const before = f.read('package.json');
+    const blocked = planToolingMigration(f.game, template);
+    assert.ok(blocked.blockers.some((message) => message.includes('target-ait')));
+    assert.ok(blocked.blockers.some((message) => message.includes('target-devvit')));
+    assert.throws(() => applyToolingMigration(blocked), /blocked/);
+    assert.equal(f.read('package.json'), before);
+    assert.equal(f.read('pnpm-lock.yaml'), '# original lock\n');
+    for (const target of ['target-ait', 'target-devvit']) {
+      const file = `apps/${target}/package.json`;
+      f.write(file, f.read(file).replaceAll('0.30.4', '0.32.1'));
+    }
+    const ready = planToolingMigration(f.game, template);
+    assert.deepEqual(ready.blockers, []);
+    applyToolingMigration(ready, () => {});
+  } finally {
+    f.cleanup();
+  }
+});
+
+await test('detects child-package and workspace changes after preview', () => {
+  for (const change of ['new', 'modified', 'workspace']) {
+    const f = fixture();
+    try {
+      mkdirSync(path.join(f.game, 'custom/nested'), { recursive: true });
+      if (change === 'modified') {
+        f.write('custom/nested/package.json', '{"devDependencies":{"ttsc":"0.32.1"}}');
+      }
+      const plan = planToolingMigration(f.game, template);
+      const before = f.read('package.json');
+      if (change === 'workspace') {
+        f.write('pnpm-workspace.yaml', 'packages: [custom/*]\n');
+      } else {
+        f.write('custom/nested/package.json', '{"devDependencies":{"ttsc":"0.30.4"}}');
+      }
+      assert.throws(() => applyToolingMigration(plan), /changed after planning/);
+      assert.equal(f.read('package.json'), before);
+      assert.equal(f.read('pnpm-lock.yaml'), '# original lock\n');
+    } finally {
+      f.cleanup();
+    }
+  }
+});
