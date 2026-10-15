@@ -22,9 +22,9 @@
   },
   "devDependencies": {
     "@apps-in-toss/cli": "3.6.0",
-    "@ttsc/unplugin": "0.30.4",
+    "@ttsc/unplugin": "0.32.1",
     "@types/node": "^24.0.0",
-    "ttsc": "0.30.4",
+    "ttsc": "0.32.1",
     "typescript": "7.0.2",
     "vite": "^8.1.3"
   }

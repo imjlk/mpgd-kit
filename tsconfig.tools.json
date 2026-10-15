@@ -10,7 +10,8 @@
     "backend/**/*.ts",
     "packages/**/*.ts",
     "adapters/**/*.ts",
-    "native-plugins/capacitor-game-services/src/**/*.ts"
+    "native-plugins/capacitor-game-services/src/**/*.ts",
+    "lint.config.ts"
   ],
   "exclude": [
     "**/dist/**",

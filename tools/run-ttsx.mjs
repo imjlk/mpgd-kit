@@ -32,13 +32,10 @@ const inheritedEmitRoot = readInheritedEmitRoot(compileOnce);
 const inheritedEntry = emittedEntryIn(inheritedEmitRoot);
 const useInheritedEmit = !forceTtsx && toolsEntry && inheritedEntry !== undefined && existsSync(inheritedEntry);
 
-// ttsx must only see an entry its project selects. For an entry outside the
-// project's file set, the launcher's emitted-entry lookup falls back to
-// trailing-path-stem matching and can run an unrelated same-named file under
-// the requested entry's URL (see tools/ttsx-project-entry.mjs). The compiled
-// lane is exact by construction: it runs the emit at the entry's own path, so
-// an entry already present in an inherited emit needs no gate. Everything else
-// is gated here, before --compile-once spends an emit on it.
+// Require the entry in its check project so ordinary checks also cover it.
+// ttsx 0.32.1 fixes the old same-name emit substitution, but this repository
+// deliberately keeps the narrower inclusion policy (tools/ttsx-project-entry.mjs).
+// The compiled lane already selects the entry's exact mirrored output.
 if (!useInheritedEmit && sourceEntry !== undefined && /\.[cm]?tsx?$/i.test(sourceEntry)) {
   try {
     assertEntryInProject({ tsgoBinary, project, entry: sourceEntry });

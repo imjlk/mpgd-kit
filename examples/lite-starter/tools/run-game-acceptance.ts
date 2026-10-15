@@ -7,16 +7,7 @@ const gameRoot = fileURLToPath(new URL('../', import.meta.url));
 const configuredKitPath = process.env.MPGD_KIT_PATH;
 const kitPath = path.resolve(
   gameRoot,
-  configuredKitPath === undefined || configuredKitPath.length === 0
-    ? '__DEFAULT_KIT_PATH__'
-    : configuredKitPath,
+  configuredKitPath === undefined || configuredKitPath.length === 0 ? '../..' : configuredKitPath,
 );
 
-await runMpgdCli([
-  'game',
-  'accept',
-  gameRoot,
-  '--kit-path',
-  kitPath,
-  ...process.argv.slice(2),
-]);
+await runMpgdCli(['game', 'accept', gameRoot, '--kit-path', kitPath, ...process.argv.slice(2)]);

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, sep } from 'node:path';
 import { test } from 'node:test';
@@ -18,12 +18,14 @@ const runner = fileURLToPath(new URL('./run-ttsx.mjs', import.meta.url));
 const tsgoBinary = resolveTsgoBinary(repoRoot);
 
 // A project that selects `src/**` next to a same-named file it does not select.
-// Without the runner's gate, ttsx answers the out-of-project entry with the
-// emit of the in-project file (trailing-path-stem recovery) and runs that file
-// under the requested entry's URL.
+// ttsx 0.30.x substituted the in-project emit here. The pinned 0.32.1
+// runtime must execute the requested source; our wrapper separately requires
+// entries to be selected by their check project.
 function stemCollisionFixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'mpgd-run-ttsx-gate-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
+  mkdirSync(join(root, 'node_modules'));
+  symlinkSync(join(repoRoot, 'node_modules/typescript'), join(root, 'node_modules/typescript'), process.platform === 'win32' ? 'junction' : 'dir');
   const write = (path, value) => {
     const fullPath = join(root, path);
     mkdirSync(dirname(fullPath), { recursive: true });
@@ -52,6 +54,36 @@ function runnerEnv() {
   delete env.TTSC_PROJECT;
   return env;
 }
+
+test('pinned ttsx executes the requested same-named out-of-project source', (t) => {
+  const fixture = stemCollisionFixture(t);
+  const result = spawnSync(process.execPath, [
+    join(repoRoot, 'node_modules/ttsc/lib/launcher/ttsx.js'),
+    '--project', fixture.project, fixture.outside,
+  ], { cwd: fixture.root, encoding: 'utf8', env: runnerEnv(), timeout: 180_000 });
+  assert.ifError(result.error);
+  assert.equal(result.signal, null);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /REQUESTED_ENTRY_RAN/);
+  assert.doesNotMatch(result.stdout, /STEM_MATCHED_FILE_RAN/);
+});
+
+test('pinned ttsx forwards terminal flags and later separators to the typed program', (t) => {
+  const fixture = stemCollisionFixture(t);
+  fixture.write('src/args.ts', [
+    'declare const process: { argv: string[]; stdout: { write(text: string): void } };',
+    'process.stdout.write(JSON.stringify(process.argv.slice(2)));',
+  ].join('\n'));
+  const args = ['--help', '--version', '-r', 'literal', '--', 'tail with spaces'];
+  const result = spawnSync(process.execPath, [
+    join(repoRoot, 'node_modules/ttsc/lib/launcher/ttsx.js'),
+    '--project', fixture.project, join(fixture.root, 'src/args.ts'), '--', ...args,
+  ], { cwd: fixture.root, encoding: 'utf8', env: runnerEnv(), timeout: 180_000 });
+  assert.ifError(result.error);
+  assert.equal(result.signal, null);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), args);
+});
 
 test('resolves the root file set of a project through tsgo --showConfig', (t) => {
   const fixture = stemCollisionFixture(t);

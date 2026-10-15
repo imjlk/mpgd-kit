@@ -21,6 +21,11 @@ This is a Canvas2D game generated with the mpgd lite template.
 
 ## Tooling and checks
 
+- Author game code, tests, and development tools in TypeScript (`.ts`). Include every tool in
+  `tsconfig.tools.json` and run it with `ttsx --project tsconfig.tools.json`.
+- Use `.mjs`, `.cjs`, or authored `.js` only when a concrete consumer cannot run TypeScript
+  (for example a browser fixture or a JavaScript-only config loader). Document that constraint
+  beside the file. Convenience or avoiding type errors is not an exception.
 - Use `ttsx`, `ttsc`, and `@ttsc/lint`; do not add `tsx`, ESLint, or Prettier.
 - Run focused checks, then `pnpm check` and `pnpm build`.
 - Run `pnpm accept` for a target handoff; preserve its generated evidence.

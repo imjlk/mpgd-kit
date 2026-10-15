@@ -8,7 +8,7 @@
     "dev": "__WORKSPACE_I18N_BUILD_PREFIX__vite --host 0.0.0.0",
     "dev:ait": "APP_TARGET=ait MPGD_CONFIG_TARGET=ait MPGD_PLATFORM_TARGETS_FILE=./mpgd.targets.json APP_VERSION=0.0.0-dev BUILD_ID=ait-sandbox sh -c '__WORKSPACE_I18N_BUILD_PREFIX__vite --host 0.0.0.0'",
     "build": "__WORKSPACE_I18N_BUILD_PREFIX__vite build",
-    "accept": "node ./tools/run-game-acceptance.mjs",
+    "accept": "ttsx --project tsconfig.tools.json tools/run-game-acceptance.ts --",
     "icons:generate": "pnpm exec mpgd game icons generate . --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
     "icons:generate:devvit": "pnpm exec mpgd game icons generate . --targets reddit --profile development --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
     "icons:generate:devvit:production": "pnpm exec mpgd game icons generate . --targets reddit --profile production --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
@@ -49,10 +49,10 @@
     "pages:dev": "pnpm legal:build && pnpm --dir apps/target-cloudflare-pages run dev",
     "pages:preview": "pnpm legal:build && pnpm --dir apps/target-cloudflare-pages run preview",
     "pages:types": "pnpm --dir apps/target-cloudflare-pages run types",
-    "check": "ttsc --noEmit -p tsconfig.json",
-    "lint": "ttsc --noEmit -p tsconfig.json",
-    "format": "ttsc format",
-    "fix": "ttsc fix"
+    "check": "ttsc --noEmit -p tsconfig.json && ttsc --noEmit -p tsconfig.tools.json",
+    "lint": "ttsc --noEmit -p tsconfig.json && ttsc --noEmit -p tsconfig.tools.json",
+    "format": "ttsc format -p tsconfig.json && ttsc format -p tsconfig.tools.json",
+    "fix": "ttsc fix -p tsconfig.json && ttsc fix -p tsconfig.tools.json"
   },
   "dependencies": {
     "@ait-co/polyfill": "^0.1.19",
@@ -81,9 +81,9 @@
     "@ait-co/console-cli": "^0.1.49",
     "@cloudflare/workers-types": "^5.20260707.1",
     "@mpgd/cli": "__MPGD_DEPENDENCY_VERSION_CLI__",
-    "@ttsc/unplugin": "0.30.4",
+    "@ttsc/unplugin": "0.32.1",
     "@types/node": "^24.0.0",
-    "ttsc": "0.30.4",
+    "ttsc": "0.32.1",
     "typescript": "7.0.2",
     "vite": "8.1.3",
     "wrangler": "^4.107.0"

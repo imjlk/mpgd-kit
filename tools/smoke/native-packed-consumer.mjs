@@ -146,7 +146,7 @@ function writeConsumer(packed) {
       '@capacitor/app': '8.1.1',
     },
     devDependencies: {
-      ttsc: '0.30.4',
+      ttsc: '0.32.1',
       typescript: '7.0.2',
       vite: '8.1.3',
     },

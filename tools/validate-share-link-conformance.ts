@@ -2,6 +2,8 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { isCliEntrypoint } from './io';
+
 // An adapter that implements `ShareAdapter.share` hands share links to a host,
 // so its tests must run `runShareLinkConformance` from
 // `@mpgd/platform/share-link-conformance` over the shared route vectors. This
@@ -43,9 +45,9 @@ export const shareLinkConformanceExemptions = new Map([
  * `exemptions` are skipped.
  */
 export function findShareLinkConformanceGaps(
-  adaptersRoot,
-  exemptions = shareLinkConformanceExemptions,
-) {
+  adaptersRoot: string,
+  exemptions: ReadonlyMap<string, string> = shareLinkConformanceExemptions,
+): { adapter: string; files: string[] }[] {
   const gaps = [];
 
   for (const entry of readdirSync(adaptersRoot, { withFileTypes: true })) {
@@ -86,8 +88,8 @@ export function findShareLinkConformanceGaps(
   return gaps;
 }
 
-function listTypeScriptFiles(directory) {
-  const files = [];
+function listTypeScriptFiles(directory: string): string[] {
+  const files: string[] = [];
 
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
@@ -105,17 +107,17 @@ function listTypeScriptFiles(directory) {
 }
 
 // Drops block and line comments; `://` in a URL is not a comment.
-function withoutComments(source) {
+function withoutComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//gu, '').replace(/(^|[^:])\/\/.*$/gmu, '$1');
 }
 
-function isTestFile(adapterRoot, file) {
+function isTestFile(adapterRoot: string, file: string): boolean {
   const path = relative(adapterRoot, file).split(sep).join('/');
 
   return /\.test\.(?:m|c)?ts$/u.test(path) || path.startsWith('test/');
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (isCliEntrypoint(import.meta.url)) {
   const adaptersRoot = fileURLToPath(new URL('../adapters', import.meta.url));
   const gaps = findShareLinkConformanceGaps(adaptersRoot);
 
@@ -128,7 +130,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     }
     process.exitCode = 1;
   } else {
-    console.log(
+    console.info(
       'Every adapter that defines a share runs the share link conformance (exempt: '
         + `${[...shareLinkConformanceExemptions.keys()].join(', ')}).`,
     );

@@ -113,7 +113,7 @@ check('a recorded build is reused only with the same input and an untouched dist
 
 check('every root ttsc config and the shared tsconfig are toolchain inputs', () => {
   const rootTtscConfigs = readdirSync('.').filter((name) =>
-    /^(?:lint|strip)\.config\.[cm]?js$/u.test(name),
+    /^(?:lint|strip)\.config\.[cm]?[jt]s$/u.test(name),
   );
   assert.ok(rootTtscConfigs.length >= 2, 'expected the root lint and strip configs');
   for (const file of [...rootTtscConfigs, 'tsconfig.base.json', 'pnpm-lock.yaml']) {

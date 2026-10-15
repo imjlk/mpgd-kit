@@ -13,6 +13,13 @@ import {
 import { normalizeMonetizationCatalogEnv } from '../target/monetization-catalog-env';
 
 const tempDir = mkdtempSync(join(tmpdir(), 'mpgd-game-catalog-'));
+// Import a rendered game, not the raw template's placeholder tsconfig. Keep the
+// fixture under Kit so normal dependency resolution uses the installed packages.
+const artifactsRoot = resolve('artifacts');
+mkdirSync(artifactsRoot, { recursive: true });
+const templateFixtureRoot = mkdtempSync(join(artifactsRoot, 'game-catalog-template-'));
+const generatedGameRoot = join(templateFixtureRoot, 'game');
+const generatedViteConfig = join(generatedGameRoot, 'vite.config.ts');
 const catalogFile = join(tempDir, 'mpgd.catalog.json');
 const placementsFile = join(tempDir, 'mpgd.ad-placements.json');
 const blankCatalogFile = join(tempDir, 'blank.catalog.json');
@@ -28,6 +35,23 @@ const previousConfigTarget = process.env.MPGD_CONFIG_TARGET;
 const previousAitAppName = process.env.MPGD_AIT_APP_NAME;
 
 try {
+  const generated = spawnSync(
+    process.execPath,
+    [
+      'packages/cli/dist/bin.js',
+      'game',
+      'create',
+      generatedGameRoot,
+      '--workspace',
+      '--kit-path',
+      process.cwd(),
+    ],
+    { cwd: process.cwd(), encoding: 'utf8', timeout: 180_000 },
+  );
+  assert.ifError(generated.error);
+  assert.equal(generated.signal, null);
+  assert.equal(generated.status, 0, `${generated.stdout}\n${generated.stderr}`);
+
   writeFileSync(
     catalogFile,
     `${JSON.stringify({
@@ -318,6 +342,7 @@ try {
   restoreEnv('MPGD_CONFIG_TARGET', previousConfigTarget);
   restoreEnv('MPGD_AIT_APP_NAME', previousAitAppName);
   rmSync(tempDir, { force: true, recursive: true });
+  rmSync(templateFixtureRoot, { force: true, recursive: true });
 }
 
 console.log('Game-owned product catalog and ad placements smoke passed.');
@@ -405,7 +430,7 @@ async function assertViteCatalogAliasesWithRelativeEnv(): Promise<void> {
 
   try {
     await assertViteCatalogAliases('examples/phaser-starter/vite.config.ts');
-    await assertViteCatalogAliases('packages/cli/templates/phaser-game/vite.config.ts');
+    await assertViteCatalogAliases(generatedViteConfig);
   } finally {
     process.env.MPGD_PRODUCT_CATALOG_FILE = catalogFile;
     process.env.MPGD_AD_PLACEMENTS_FILE = placementsFile;
@@ -422,7 +447,7 @@ async function assertViteCatalogAliasesFallBackWhenInitCwdMisses(): Promise<void
 
   try {
     await assertViteCatalogAliases('examples/phaser-starter/vite.config.ts');
-    await assertViteCatalogAliases('packages/cli/templates/phaser-game/vite.config.ts');
+    await assertViteCatalogAliases(generatedViteConfig);
   } finally {
     process.env.MPGD_PRODUCT_CATALOG_FILE = catalogFile;
     process.env.MPGD_AD_PLACEMENTS_FILE = placementsFile;
@@ -458,7 +483,7 @@ async function assertViteCatalogAliasesPreferGameRoot(): Promise<void> {
       join(resolvedGameRoot, 'mpgd.ad-placements.json'),
     );
     await assertViteCatalogAliases(
-      join(repoRoot, 'packages/cli/templates/phaser-game/vite.config.ts'),
+      generatedViteConfig,
       join(resolvedGameRoot, 'mpgd.catalog.json'),
       join(resolvedGameRoot, 'mpgd.ad-placements.json'),
     );
@@ -475,10 +500,7 @@ async function assertVitePlatformTargetMetadata(): Promise<void> {
   const targetsFile = join(tempDir, 'runtime-platform-targets.json');
   const malformedTargetsFile = join(tempDir, 'malformed-runtime-platform-targets.json');
   const missingTargetsFile = join(tempDir, 'missing-runtime-platform-targets.json');
-  const configPaths = [
-    'examples/phaser-starter/vite.config.ts',
-    'packages/cli/templates/phaser-game/vite.config.ts',
-  ];
+  const configPaths = ['examples/phaser-starter/vite.config.ts', generatedViteConfig];
   const expectedMetadata = {
     kind: 'apps-in-toss',
     adapter: 'ait',

@@ -1,15 +1,20 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const platformManifest = JSON.parse(
+const platformManifest: unknown = JSON.parse(
   readFileSync(new URL('../../packages/platform/package.json', import.meta.url), 'utf8'),
 );
+assert.ok(typeof platformManifest === 'object' && platformManifest !== null);
+assert.ok('exports' in platformManifest);
+const exports = platformManifest.exports;
+assert.ok(typeof exports === 'object' && exports !== null);
+assert.ok('./capability-conformance' in exports);
 
-// Claim 1 in lint.config.js reads the source behind this published subpath.
+// Claim 1 in lint.config.ts reads the source behind this published subpath.
 // Fail if the package stops exporting it or repoints it without revisiting
 // the Evidence population and its guide.
 assert.deepEqual(
-  platformManifest.exports?.['./capability-conformance'],
+  exports['./capability-conformance'],
   {
     types: './dist/capability-conformance.d.ts',
     default: './dist/capability-conformance.js',

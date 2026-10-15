@@ -1,4 +1,10 @@
-import { evidence } from '@ttsc/evidence';
+import {
+  evidence,
+  type ITtscEvidenceGraphConfig,
+  type ITtscEvidenceGraphMarkdownReference,
+  type ITtscEvidenceRules,
+} from '@ttsc/evidence';
+import type { ITtscLintConfig } from '@ttsc/lint';
 
 // Evidence is run once through docs:evidence, not during every ttsc/ttsx
 // invocation in the large prepared-test suite.
@@ -9,7 +15,7 @@ const capabilitySpec = {
   symbol: 'h2',
   noEvidenceExclude: true,
   requireReview: true,
-};
+} satisfies ITtscEvidenceGraphMarkdownReference;
 const evidenceGraph = {
   claims: [
     {
@@ -69,7 +75,7 @@ const evidenceGraph = {
       },
     },
   ],
-};
+} satisfies ITtscEvidenceGraphConfig;
 
 export default {
   ...(evidenceEnabled ? { plugins: { evidence } } : {}),
@@ -108,4 +114,4 @@ export default {
       'evidence/review': 'error',
     } : {}),
   },
-};
+} satisfies ITtscLintConfig<ITtscEvidenceRules>;

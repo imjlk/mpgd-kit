@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "noEmit": true,
+    "allowJs": true
+  },
+  "include": [
+    "tools/validate-share-link-conformance*.ts",
+    "tools/docs/verify-evidence-entrypoints.ts",
+    "lint.config.ts",
+    "strip.config.js",
+    "tools/fixtures/typed-config-canary.ts"
+  ]
+}
