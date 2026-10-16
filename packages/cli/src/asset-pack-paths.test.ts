@@ -17,9 +17,13 @@ mkdirSync(cache, { recursive: true });
 const fixture = mkdtempSync(join(cache, 'asset-pack-paths-'));
 const source = join(fixture, 'source files');
 const configPath = join(fixture, 'packs.json');
+const image = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  'base64',
+);
 try {
   mkdirSync(source);
-  writeFileSync(join(source, 'data.json'), '{"value":1}');
+  writeFileSync(join(source, 'pixel.png'), image);
   writeFileSync(
     configPath,
     JSON.stringify({
@@ -29,7 +33,7 @@ try {
           id: 'data',
           revision: '1',
           delivery: 'files',
-          assets: [{ kind: 'json', key: 'data', file: 'data.json' }],
+          assets: [{ kind: 'image', key: 'pixel', file: 'pixel.png' }],
         },
       ],
     }),
@@ -52,7 +56,7 @@ try {
   const link = join(fixture, 'source-link');
   symlinkSync(source, link, process.platform === 'win32' ? 'junction' : 'dir');
   assert.throws(() => build(join(link, 'nested output')), /outside the pack source root/u);
-  assert.equal(readFileSync(join(source, 'data.json'), 'utf8'), '{"value":1}');
+  assert.deepEqual(readFileSync(join(source, 'pixel.png')), image);
   console.log(
     'Asset-pack path checks passed: sibling outputs, overlapping roots and symlink containment.',
   );
