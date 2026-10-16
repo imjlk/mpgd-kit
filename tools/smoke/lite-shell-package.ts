@@ -44,9 +44,13 @@ try {
     }),
   );
   // No workspace aliases, compiler loader, registry dependencies, or install scripts.
+  // pnpm exec resolves npm.cmd on Windows without passing a shell command string.
   run(
-    'npm',
-    ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', '--package-lock=false'],
+    'pnpm',
+    [
+      'exec', 'npm', 'install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund',
+      '--package-lock=false',
+    ],
     consumer,
   );
   const manifest: unknown = JSON.parse(
