@@ -3873,7 +3873,8 @@ function resolvePublishedTemplateDependencyVersion(
     return `^${cliVersion}`;
   }
 
-  const version = packageJson?.devDependencies?.[packageName];
+  const version = packageJson?.dependencies?.[packageName]
+    ?? packageJson?.devDependencies?.[packageName];
 
   return version !== undefined && version !== 'workspace:*' && isValidDependencyVersion(version)
     ? version
@@ -4047,6 +4048,7 @@ interface PackageJson {
   readonly name?: string;
   readonly version?: string;
   readonly scripts?: Record<string, string>;
+  readonly dependencies?: Record<string, string>;
   readonly devDependencies?: Record<string, string>;
 }
 
