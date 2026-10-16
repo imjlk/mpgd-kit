@@ -1,5 +1,11 @@
 # @mpgd/cli
 
+## 0.49.1 — 2026-10-16
+
+### Fixed
+
+- [a95a29f5](https://github.com/imjlk/mpgd-kit/commit/a95a29f567267680cd3fe41fbbe4b9b75d29ccda) Fix Windows asset-pack path containment so sibling output directories are accepted while overlapping source/output roots and symlinked output paths remain rejected. — Thanks @imjlk!
+
 ## 0.49.0 — 2026-10-16
 
 ### Changed
