@@ -48,7 +48,13 @@ try {
   run(
     'pnpm',
     [
-      'exec', 'npm', 'install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund',
+      'exec',
+      'npm',
+      'install',
+      '--offline',
+      '--ignore-scripts',
+      '--no-audit',
+      '--no-fund',
       '--package-lock=false',
     ],
     consumer,
