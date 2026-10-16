@@ -53,10 +53,12 @@ fix and publish the defective package, then rerun against the corrected version.
 
 The plain-Node `.mjs` harness is a documented published-JavaScript consumer
 exception, checked by `tsconfig.bootstrap-js.json`. Its bootstrap installs pinned
-`npm-package-arg` and `yaml` from public npm to validate dependency specs, workspace
-overrides, catalogs and package extensions before installing the generated game.
+`npm-package-arg` and `yaml` from public npm to validate every generated manifest,
+including child apps, plus workspace overrides, catalogs and package extensions
+before installing the generated game.
 Only registry versions, ranges, tags and npm aliases are accepted; Git, local
 paths, tarball URLs and local patches fail the check. No repository dependency
-or compiler loader is used by this bootstrap. Its policy regressions are
+or compiler loader is used by this bootstrap. Transient metadata request failures
+and server errors share the bounded publication retry loop. Its policy regressions are
 authored in TypeScript and run in the prepared contracts suite. Changes limited
 to this harness and workflow do not require a publishable-package changeset.

@@ -11,6 +11,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   writeFileSync,
@@ -125,6 +126,26 @@ export function assertConsumerMetadata(metadata, parseSpec) {
   }
 }
 
+/** Validate the entire freshly generated tree before pnpm installs apps/* too.
+ * @param {string} directory
+ * @param {typeof import('npm-package-arg').resolve} parseSpec */
+export function assertGeneratedManifests(directory, parseSpec) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name);
+    assert.ok(!entry.isSymbolicLink(), `Generated consumer contains a source link: ${path}`);
+    if (entry.isDirectory()) {
+      assert.notEqual(
+        entry.name,
+        'node_modules',
+        'Generated consumer must start without installed dependencies',
+      );
+      assertGeneratedManifests(path, parseSpec);
+    } else if (entry.isFile() && entry.name === 'package.json') {
+      assertConsumerMetadata(JSON.parse(readFileSync(path, 'utf8')), parseSpec);
+    }
+  }
+}
+
 /** @param {string} name @param {string} version
  * @param {typeof fetch} [request]
  * @param {() => Promise<unknown>} [pause] */
@@ -144,15 +165,29 @@ export async function publishedMetadata(
     // version endpoint. Require both full and abbreviated install metadata.
     const versions = await Promise.all(
       ['application/json', 'application/vnd.npm.install-v1+json'].map(async (accept) => {
-        const response = await request(`${registry}${escapedName}`, {
-          headers: { accept },
-          signal: AbortSignal.timeout(30_000),
-        });
-        if (!response.ok) {
-          assert.ok([404, 429, 503].includes(response.status), `npm metadata failed: ${response.status}`);
-          return undefined;
+        let document;
+        try {
+          const response = await request(`${registry}${escapedName}`, {
+            headers: { accept },
+            signal: AbortSignal.timeout(30_000),
+          });
+          if (!response.ok) {
+            assert.ok(
+              [404, 408, 429].includes(response.status) || response.status >= 500,
+              `npm metadata failed: ${response.status}`,
+            );
+            return undefined;
+          }
+          document = await response.json();
+        } catch (error) {
+          // fetch reports DNS/socket failures as TypeError and aborts as named
+          // errors. Metadata assertions below deliberately remain fatal.
+          if (error instanceof TypeError
+            || (error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name))) {
+            return undefined;
+          }
+          throw error;
         }
-        const document = await response.json();
         assert.equal(document.name, name);
         const metadata = document.versions?.[version];
         if (metadata === undefined) {
@@ -284,7 +319,7 @@ async function main() {
     bootstrap,
   );
   const manifest = JSON.parse(readFileSync(join(game, 'package.json'), 'utf8'));
-  assertConsumerMetadata(manifest, packageArg.resolve);
+  assertGeneratedManifests(game, packageArg.resolve);
   assertConsumerMetadata(
     yaml.parse(readFileSync(join(game, 'pnpm-workspace.yaml'), 'utf8')),
     packageArg.resolve,

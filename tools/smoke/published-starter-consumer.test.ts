@@ -8,6 +8,7 @@ import { parse as parseYaml } from 'yaml';
 
 import {
   assertConsumerMetadata,
+  assertGeneratedManifests,
   assertOutsideKit,
   assertRegistryOnly,
   consumerEnvironment,
@@ -92,6 +93,41 @@ await test('checkout executable aliases are removed from the consumer PATH', () 
   }
 });
 
+await test('publication retries network timeouts and transient registry responses', async () => {
+  const name = '@mpgd/cli';
+  const version = '0.50.1';
+  const dist = { integrity: 'sha512-fixture', tarball: 'https://registry.npmjs.org/cli.tgz' };
+  let pauses = 0;
+  const metadata = await publishedMetadata(name, version, async () => {
+    if (pauses === 0) {
+      throw new TypeError('fetch failed: socket closed');
+    }
+    if (pauses === 1) {
+      return new Response('', { status: 500 });
+    }
+    if (pauses === 2) {
+      return new Response('', { status: 502 });
+    }
+    if (pauses === 3) {
+      throw new DOMException('request timed out', 'TimeoutError');
+    }
+    if (pauses === 4) {
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.error(new TypeError('socket closed while reading metadata'));
+        },
+      }));
+    }
+    return Response.json({ name, versions: { [version]: { name, version, dist } } });
+  }, () => {
+    pauses++;
+    return Promise.resolve();
+  });
+  assert.equal(pauses, 5);
+  assert.deepEqual(metadata, { name, version, ...dist });
+  await assert.rejects(publishedMetadata(name, version, async () => new Response('', { status: 401 })), /npm metadata failed: 401/);
+});
+
 await test('consumer dependencies cannot be replaced with local or remote source', () => {
   for (const spec of ['0.9.12', '^1.2.3', '>=1 <3', 'latest', 'npm:@mpgd/cli@0.50.1']) {
     assertRegistryOnly({ '@mpgd/cli': spec }, packageArg.resolve);
@@ -125,6 +161,29 @@ await test('workspace overrides, catalogs and extensions cannot inject other sou
     assert.throws(() => assertConsumerMetadata(metadata, packageArg.resolve));
   }
   assert.throws(() => assertConsumerMetadata(parseYaml('overrides:\n  pkg: "gitlab:org/pkg"\n'), packageArg.resolve));
+});
+
+await test('all generated workspace manifests are validated before installation', () => {
+  const fixture = mkdtempSync(resolve(tmpdir(), 'mpgd-consumer-manifests-'));
+  try {
+    const app = resolve(fixture, 'apps/target-ait');
+    mkdirSync(app, { recursive: true });
+    writeFileSync(
+      resolve(fixture, 'package.json'),
+      JSON.stringify({ dependencies: { pkg: '^1.0.0' } }),
+    );
+    writeFileSync(
+      resolve(app, 'package.json'),
+      JSON.stringify({ devDependencies: { pkg: '2.0.0' } }),
+    );
+    assertGeneratedManifests(fixture, packageArg.resolve);
+    for (const spec of ['gitlab:org/pkg', '../pkg', 'https://example.com/pkg.tgz']) {
+      writeFileSync(resolve(app, 'package.json'), JSON.stringify({ dependencies: { pkg: spec } }));
+      assert.throws(() => assertGeneratedManifests(fixture, packageArg.resolve));
+    }
+  } finally {
+    rmSync(fixture, { recursive: true, force: true });
+  }
 });
 
 await test('containment distinguishes siblings and ancestors', () => {
