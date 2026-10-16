@@ -6,6 +6,9 @@ param(
     [Parameter(Mandatory = $true)][string]$SourceMetadata,
     [Parameter(Mandatory = $true)][ValidateSet('x64', 'ARM64')][string]$Architecture,
     [string]$ModulePath,
+    [ValidateSet('.github/workflows/ci.yml', '.github/workflows/published-starters.yml')]
+    [string]$SourceWorkflow = '.github/workflows/ci.yml',
+    [ValidatePattern('^[a-f0-9]{40}$')][string]$SourceGitSha = $env:GITHUB_SHA,
     [ValidateRange(10, 120)][int]$ObserveSeconds = 30
 )
 Set-StrictMode -Version Latest
@@ -16,14 +19,14 @@ if ([string]::IsNullOrWhiteSpace($ModulePath)) {
 Import-Module (Join-Path $PSScriptRoot 'WindowsMsixSmoke.psm1') -Force
 Import-Module $ModulePath -Force
 $build = Get-Content -LiteralPath $SourceMetadata -Raw | ConvertFrom-Json
-if ($build.sourceGitSha -cne $env:GITHUB_SHA -or $build.runId -ne $env:GITHUB_RUN_ID -or
+if ($build.sourceGitSha -cne $SourceGitSha -or $build.runId -ne $env:GITHUB_RUN_ID -or
     $build.architecture -cne $Architecture -or $build.template -cne $env:MPGD_WINDOWS_SMOKE_TEMPLATE) {
     throw 'KIT acceptance requires this run, template and exact checkout.'
 }
 if ((Get-FileHash -LiteralPath $ModulePath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $build.toolingSha256) {
     throw 'Acceptance tooling differs from the packed CLI consumer artifact.'
 }
-$source = @{ GitSha = $build.sourceGitSha; RunId = $build.runId; Owner = 'kit-generated-starter'; Workflow = '.github/workflows/ci.yml' }
+$source = @{ GitSha = $build.sourceGitSha; RunId = $build.runId; Owner = 'kit-generated-starter'; Workflow = $SourceWorkflow }
 $inspect = {
     param($Directory, $Receipt)
     $bundle = Join-Path $Directory 'wwwroot\assets\game.js'

@@ -189,7 +189,8 @@
     "smoke:cli-tooling-migration": "node tools/run-ttsx.mjs packages/cli/src/tooling-migration.test.ts",
     "test:template-tools": "node tools/run-ttsx.mjs tools/smoke/template-typescript-tools.ts",
     "validate:javascript-policy": "node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/policy/javascript-policy.ts",
-    "smoke:lite-shell:package": "node tools/run-ttsx.mjs tools/smoke/lite-shell-package.ts"
+    "smoke:lite-shell:package": "node tools/run-ttsx.mjs tools/smoke/lite-shell-package.ts",
+    "test:published-starter": "node tools/run-ttsx.mjs tools/smoke/published-starter-consumer.test.ts"
   },
   "devDependencies": {
     "@mpgd/adapter-devvit": "workspace:*",
@@ -210,8 +211,13 @@
     "@ttsc/strip": "0.32.1",
     "@ttsc/unplugin": "0.32.1",
     "@types/node": "^24.0.0",
+    "@types/npm-package-arg": "6.1.4",
     "acorn": "8.17.0",
     "esbuild": "0.28.1",
+    "npm-package-arg": "13.0.2",
+    "parse5": "7.3.0",
+    "postcss": "8.5.28",
+    "postcss-value-parser": "4.2.0",
     "sharp": "^0.35.5",
     "ttsc": "0.32.1",
     "typescript": "7.0.2",
@@ -219,8 +225,6 @@
     "undici": "^7.29.1",
     "vite": "^8.1.3",
     "vitest": "^4.0.0",
-    "parse5": "7.3.0",
-    "postcss": "8.5.28",
-    "postcss-value-parser": "4.2.0"
+    "yaml": "2.9.0"
   }
 }

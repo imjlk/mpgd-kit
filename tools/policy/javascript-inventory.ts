@@ -3,6 +3,11 @@ import type { JavaScriptEntry } from './javascript-policy.js';
 // Exact paths: legacy backlog cannot admit newly authored JavaScript.
 export const javascriptInventory = [
   {
+    file: 'tools/smoke/published-starter-consumer.mjs',
+    disposition: 'runtime-exception',
+    reason: 'Public npm consumer runs without repository dependencies, compiler hooks or workspace aliases; checked by the bootstrap JS project.',
+  },
+  {
     file: 'tools/workspace/kit-dependency-links.mjs',
     disposition: 'runtime-exception',
     reason: 'Dependency ownership inspection must run before broken compiler dependency links are repaired; checked by the bootstrap JS project.',

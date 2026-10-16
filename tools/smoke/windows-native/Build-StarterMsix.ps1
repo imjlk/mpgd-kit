@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string]$GameDirectory,
-    [Parameter(Mandatory = $true)][string]$OutputDirectory
+    [Parameter(Mandatory = $true)][string]$OutputDirectory,
+    [ValidatePattern('^[a-f0-9]{40}$')][string]$SourceGitSha = $env:GITHUB_SHA
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -39,7 +40,7 @@ foreach ($arch in @('x64', 'ARM64')) {
     if ($LASTEXITCODE -ne 0) { throw "WinUI $arch MSIX build failed." }
     Copy-Item -LiteralPath (Join-Path $hostRoot 'packages.lock.json') -Destination (Join-Path $destination 'packages.lock.json')
     @{
-        architecture = $arch; sourceGitSha = $env:GITHUB_SHA; runId = $env:GITHUB_RUN_ID
+        architecture = $arch; sourceGitSha = $SourceGitSha; runId = $env:GITHUB_RUN_ID
         gameBundleSha256 = $gameHash; toolingSha256 = $toolingHash
         origin = 'KIT CLI generated game'; template = $env:MPGD_WINDOWS_SMOKE_TEMPLATE
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $destination 'package-build.json') -Encoding UTF8
