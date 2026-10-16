@@ -79,7 +79,11 @@ export function assertRegistryOnly(dependencies, parseSpec) {
   for (const [name, spec] of Object.entries(dependencies)) {
     assert.equal(typeof spec, 'string', `Invalid dependency spec for ${name}`);
     const parsed = parseSpec(name, spec);
-    assert.equal(parsed.registry, true, `Consumer dependency must use the public registry: ${name}@${spec}`);
+    assert.equal(
+      parsed.registry,
+      true,
+      `Consumer dependency must use the public registry: ${name}@${spec}`,
+    );
   }
 }
 
@@ -90,7 +94,9 @@ export function assertRegistryOnly(dependencies, parseSpec) {
 export function assertConsumerMetadata(metadata, parseSpec) {
   assert.ok(metadata && typeof metadata === 'object' && !Array.isArray(metadata));
   for (const [key, value] of Object.entries(metadata)) {
-    if (['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'catalog'].includes(key)) {
+    if (['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'catalog'].includes(
+      key,
+    )) {
       assertRegistryOnly(value, parseSpec);
     } else if (key === 'overrides' || key === 'resolutions') {
       assert.ok(value && typeof value === 'object' && !Array.isArray(value));
@@ -279,7 +285,10 @@ async function main() {
   );
   const manifest = JSON.parse(readFileSync(join(game, 'package.json'), 'utf8'));
   assertConsumerMetadata(manifest, packageArg.resolve);
-  assertConsumerMetadata(yaml.parse(readFileSync(join(game, 'pnpm-workspace.yaml'), 'utf8')), packageArg.resolve);
+  assertConsumerMetadata(
+    yaml.parse(readFileSync(join(game, 'pnpm-workspace.yaml'), 'utf8')),
+    packageArg.resolve,
+  );
   if (template === 'lite') {
     assert.ok(manifest.dependencies['@mpgd/lite-shell']);
     assert.equal(manifest.dependencies.phaser, undefined);

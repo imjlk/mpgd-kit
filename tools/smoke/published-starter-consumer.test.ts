@@ -7,8 +7,8 @@ import packageArg from 'npm-package-arg';
 import { parse as parseYaml } from 'yaml';
 
 import {
-  assertOutsideKit,
   assertConsumerMetadata,
+  assertOutsideKit,
   assertRegistryOnly,
   consumerEnvironment,
   exactVersion,
