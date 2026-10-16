@@ -10,7 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { deflateRawSync } from 'node:zlib';
 
 import {
@@ -149,7 +149,7 @@ function readSourceFile(rootPath: string, entryPath: string): Buffer {
   }
   const relativeToRoot = relative(realpathSync(rootPath), realpathSync(current));
   // Exact '..' components only: names like '..dots' stay inside the root.
-  if (relativeToRoot === '..' || relativeToRoot.startsWith('../') || isAbsolute(relativeToRoot)) {
+  if (relativeToRoot === '..' || relativeToRoot.startsWith(`..${sep}`) || isAbsolute(relativeToRoot)) {
     throw new Error(`Pack source path escapes the source root: ${entryPath}`);
   }
   const data = readFileSync(current);
@@ -256,7 +256,7 @@ export function buildAssetPacks(options: {
     if (isAbsolute(step)) {
       return false;
     }
-    return step === '' || (step !== '..' && !step.startsWith('../'));
+    return step === '' || (step !== '..' && !step.startsWith(`..${sep}`));
   };
   if (overlaps(realOutPath, realRootPath) || overlaps(realRootPath, realOutPath)) {
     throw new Error(
