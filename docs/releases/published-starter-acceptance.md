@@ -7,8 +7,9 @@ on native x64 and ARM64 Windows runners. Its final gate fails if any required
 matrix job fails, is cancelled, or is unexpectedly skipped.
 
 The release publisher records its actual verified checkout SHA and CLI/create-game
-versions in a same-run artifact. The consumer checks out that exact commit and waits briefly for those exact public
-npm versions to become visible. It never falls back to `latest`. PR runs use
+versions in a same-run artifact. The consumer checks out that exact commit and
+allows about six minutes of retries for those exact public npm versions to become
+visible after publication. It never falls back to `latest`. PR runs use
 their base commit's released versions; manual runs may supply exact stable
 `cli_version` and `create_version` inputs. Generated manifests remain unchanged;
 an older pair fails if its generated CLI range now selects a different version.
@@ -32,7 +33,8 @@ fixture bridge behavior, not real Store login, purchases or Store submission.
 
 Artifacts retain requested versions and npm integrity metadata, installed direct
 dependency versions, the generated lockfile, command logs and bundle hashes for
-30 days. Native receipts identify the actual checked-out source commit and this
+30 days. Requested versions are retained even when npm metadata is unavailable.
+Native receipts identify the actual checked-out source commit and this
 workflow; unsigned MSIX packages are retained for 7 days. Failures remain visible
 as failed workflow runs; this test does not undo a published npm version.
 

@@ -83,7 +83,8 @@ export function assertRegistryOnly(text) {
 
 /** @param {string} name @param {string} version */
 async function publishedMetadata(name, version) {
-  for (let attempt = 0; attempt < 12; attempt++) {
+  // npm's public metadata cache can lag a successful publish by five minutes.
+  for (let attempt = 0; attempt < 36; attempt++) {
     const response = await fetch(`${registry}${encodeURIComponent(name)}/${version}`, {
       signal: AbortSignal.timeout(30_000),
     });
@@ -96,7 +97,7 @@ async function publishedMetadata(name, version) {
       return { name, version, integrity: metadata.dist.integrity, tarball: metadata.dist.tarball };
     }
     assert.ok([404, 429, 503].includes(response.status), `npm metadata failed: ${response.status}`);
-    if (attempt < 11) {
+    if (attempt < 35) {
       await new Promise((done) => setTimeout(done, 10_000));
     }
   }
@@ -121,6 +122,7 @@ async function main() {
     'Consumer must be outside the Kit checkout',
   );
   assertOutsideKit(output);
+  console.info(`Published consumer evidence: ${output}`);
   const bootstrap = join(output, 'path with spaces', 'bootstrap');
   const game = join(output, 'path with spaces', 'game');
   mkdirSync(bootstrap, { recursive: true });
@@ -154,10 +156,17 @@ async function main() {
     assert.equal(child.status, 0, log);
     return child.stdout;
   }
-  const expected = await Promise.all([
-    publishedMetadata('@mpgd/cli', cliVersion),
-    publishedMetadata('@mpgd/create-game', createVersion),
-  ]);
+  const requested = [
+    { name: '@mpgd/cli', version: cliVersion },
+    { name: '@mpgd/create-game', version: createVersion },
+  ];
+  writeFileSync(
+    join(output, 'requested.json'),
+    JSON.stringify({ template, expected: requested }, null, 2),
+  );
+  const expected = await Promise.all(
+    requested.map(({ name, version }) => publishedMetadata(name, version)),
+  );
   writeFileSync(join(output, 'requested.json'), JSON.stringify({ template, expected }, null, 2));
   writeFileSync(
     join(bootstrap, 'package.json'),
