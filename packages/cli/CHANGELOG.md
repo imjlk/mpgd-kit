@@ -1,5 +1,11 @@
 # @mpgd/cli
 
+## 0.50.1 — 2026-10-17
+
+### Fixed
+
+- [a4279dcd](https://github.com/imjlk/mpgd-kit/commit/a4279dcdc1f30e5f45efa93124288dc44685b88e) Read independently versioned runtime dependencies from the published CLI manifest when generating standalone Phaser and Lite games, instead of substituting the CLI version for packages such as `@mpgd/platform` and `@mpgd/target-config`. — Thanks @imjlk!
+
 ## 0.50.0 — 2026-10-16
 
 ### Added
