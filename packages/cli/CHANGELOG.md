@@ -1,6 +1,14 @@
 # @mpgd/cli
 
-## 0.49.1 — 2026-10-16
+## 0.50.0 — 2026-10-16
+
+### Added
+
+- [94fcb2b4](https://github.com/imjlk/mpgd-kit/commit/94fcb2b458d4d8860741ffaf87ff47aaa98b47d7) Enable standalone Lite game generation with the independently versioned
+  `@mpgd/lite-shell` package. Record its version in the packed CLI manifest so
+  generation outside a Kit checkout never substitutes the CLI version. Validate
+  the shell's installed ESM and NodeNext declarations and exercise packed Lite
+  consumers in Windows acceptance. — Thanks @imjlk!
 
 ### Fixed
 
