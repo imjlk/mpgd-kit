@@ -1,7 +1,6 @@
 {
   "name": "@mpgd/lite-shell",
   "version": "0.1.0",
-  "private": true,
   "description": "Renderer-agnostic lightweight game shell (no Phaser): DPR-aware stage, scroll-safe tap input, idle-sleeping frame loop, and font subset loading. Ships a Canvas2D renderer.",
   "license": "MIT",
   "repository": {

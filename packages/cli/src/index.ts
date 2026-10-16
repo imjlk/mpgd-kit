@@ -3595,10 +3595,6 @@ function createGameApp(input: {
   const appDir = resolveAppDirectory(input.directory);
   const gameName = path.basename(appDir);
 
-  if (input.template === 'lite' && !input.workspace) {
-    throw new Error('The lite template requires --workspace until @mpgd/lite-shell is published.');
-  }
-
   assertValidGameName(gameName);
 
   const packageName = input.packageName ?? gameName;

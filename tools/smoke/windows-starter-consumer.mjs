@@ -36,18 +36,17 @@ function run(command, args, cwd = repoRoot, environment = process.env) {
 
 run(process.execPath, [join(repoRoot, 'packages/cli/dist/bin.js'),
   'game', 'create', gameRoot, '--kit-path', repoRoot, '--microsoft-store',
-  ...(template === 'lite' ? ['--template', 'lite', '--workspace'] : [])]);
+  ...(template === 'lite' ? ['--template', 'lite'] : [])]);
 if (template === 'lite') {
   const manifest = JSON.parse(readFileSync(join(gameRoot, 'package.json'), 'utf8'));
-  assert.equal(manifest.dependencies['@mpgd/lite-shell'], 'workspace:*');
+  assert.equal(manifest.dependencies['@mpgd/lite-shell'], `^${JSON.parse(readFileSync(join(repoRoot, 'packages/lite-shell/package.json'), 'utf8')).version}`);
   assert.equal(manifest.dependencies.phaser, undefined, 'Lite consumer must not depend on Phaser');
 }
 
 // Install the current PR's publishable artifacts, without workspace links or
 // depending on their versions already existing in the public registry.
-// lite-shell is private: exercise its supported workspace consumer instead.
 const overrides = [];
-for (const root of template === 'lite' ? [] : ['packages', 'adapters', 'native-plugins', 'backend']) {
+for (const root of ['packages', 'adapters', 'native-plugins', 'backend']) {
   if (!existsSync(join(repoRoot, root))) continue;
   for (const entry of readdirSync(join(repoRoot, root), { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
@@ -101,9 +100,9 @@ buildSync({
 writeFileSync(join(outputRoot, 'result.json'), `${JSON.stringify({
   platform: process.platform,
   template,
-  dependencyMode: template === 'lite' ? 'workspace' : 'packed',
+  dependencyMode: 'packed',
   node: process.version,
-  checks: ['create', `${template === 'lite' ? 'workspace' : 'packed'}-install`, 'frozen-install', 'consumer-native-tooling', 'typecheck', 'web-build',
+  checks: ['create', 'packed-install', 'frozen-install', 'consumer-native-tooling', 'typecheck', 'web-build',
     'microsoft-store-pwa-build', 'microsoft-store-pwa-smoke'],
   scope: 'KIT generated consumer and Microsoft Store PWA; CI packages this game in a WinUI host for native x64/ARM64 launch checks.',
 }, null, 2)}\n`);

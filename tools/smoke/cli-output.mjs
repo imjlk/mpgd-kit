@@ -79,8 +79,16 @@ try {
     .map((file) => readFileSync(path.join(liteRoot, file), 'utf8')).join('\n');
   assert.doesNotMatch(liteGuidance, /Build a Phaser|Phaser scenes|src\/scenes|Keep Phaser-loadable/);
   assert.match(liteGuidance, /Canvas2D/);
+  const standaloneLiteRoot = path.join(fixtureRoot, 'standalone-lite');
+  const standaloneLite = spawnSync(process.execPath, [
+    'packages/cli/dist/bin.js', 'game', 'create', standaloneLiteRoot, '--template', 'lite',
+  ], { cwd: root, encoding: 'utf8', timeout: 180_000 });
+  assert.equal(standaloneLite.status, 0, standaloneLite.stderr);
+  const standaloneLitePackage = JSON.parse(readFileSync(path.join(standaloneLiteRoot, 'package.json'), 'utf8'));
+  const shellVersion = JSON.parse(readFileSync(path.join(root, 'packages/lite-shell/package.json'), 'utf8')).version;
+  assert.equal(standaloneLitePackage.dependencies['@mpgd/lite-shell'], `^${shellVersion}`);
+  assert.equal(standaloneLitePackage.dependencies.phaser, undefined);
   for (const [args, message] of [
-    [['--template', 'lite'], /requires --workspace/],
     [['--template', 'pixi'], /Unsupported --template pixi/],
     [['--template', 'lite', '--renderer', 'svg'], /implemented lite renderers: canvas/],
     [['--renderer', 'canvas'], /only available with --template lite/],
