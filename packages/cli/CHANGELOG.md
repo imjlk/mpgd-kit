@@ -1,5 +1,19 @@
 # @mpgd/cli
 
+## 0.50.0 — 2026-10-16
+
+### Added
+
+- [94fcb2b4](https://github.com/imjlk/mpgd-kit/commit/94fcb2b458d4d8860741ffaf87ff47aaa98b47d7) Enable standalone Lite game generation with the independently versioned
+  `@mpgd/lite-shell` package. Record its version in the packed CLI manifest so
+  generation outside a Kit checkout never substitutes the CLI version. Validate
+  the shell's installed ESM and NodeNext declarations and exercise packed Lite
+  consumers in Windows acceptance. — Thanks @imjlk!
+
+### Fixed
+
+- [a95a29f5](https://github.com/imjlk/mpgd-kit/commit/a95a29f567267680cd3fe41fbbe4b9b75d29ccda) Fix Windows asset-pack path containment so sibling output directories are accepted while overlapping source/output roots and symlinked output paths remain rejected. — Thanks @imjlk!
+
 ## 0.49.0 — 2026-10-16
 
 ### Changed
