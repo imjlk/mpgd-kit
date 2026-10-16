@@ -3,9 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { delimiter, resolve } from 'node:path';
 import { test } from 'node:test';
+import packageArg from 'npm-package-arg';
+import { parse as parseYaml } from 'yaml';
 
 import {
   assertOutsideKit,
+  assertConsumerMetadata,
   assertRegistryOnly,
   consumerEnvironment,
   exactVersion,
@@ -90,10 +93,38 @@ await test('checkout executable aliases are removed from the consumer PATH', () 
 });
 
 await test('consumer dependencies cannot be replaced with local or remote source', () => {
-  assertRegistryOnly("overrides:\n  '@xmldom/xmldom': '0.9.12'\n");
-  for (const spec of ['workspace:*', 'file:../packs/a.tgz', 'link:C:/kit', 'github:imjlk/mpgd-kit', 'https://example.com/a.tgz']) {
-    assert.throws(() => assertRegistryOnly(JSON.stringify({ '@mpgd/cli': spec })));
+  for (const spec of ['0.9.12', '^1.2.3', '>=1 <3', 'latest', 'npm:@mpgd/cli@0.50.1']) {
+    assertRegistryOnly({ '@mpgd/cli': spec }, packageArg.resolve);
   }
+  for (const spec of [
+    'workspace:*', 'file:../packs/a.tgz', 'link:C:/kit', 'portal:../kit', 'patch:pkg@1.0.0',
+    'github:imjlk/mpgd-kit', 'gitlab:org/pkg', 'bitbucket:org/pkg', 'org/pkg#main',
+    'git://github.com/org/pkg.git', 'git+https://github.com/org/pkg.git',
+    'git@github.com:org/pkg.git', 'ssh://git@github.com/org/pkg.git',
+    'https://example.com/a.tgz', 'https://registry.npmjs.org/a/-/a-1.0.0.tgz',
+    '../pkg', './pkg', '/tmp/pkg', 'C:\\kit', '\\\\server\\share', '~/pkg', 'pkg.tgz',
+    'npm:pkg@file:../pkg',
+  ]) {
+    assert.throws(() => assertRegistryOnly({ '@mpgd/cli': spec }, packageArg.resolve), spec);
+  }
+});
+
+await test('workspace overrides, catalogs and extensions cannot inject other sources', () => {
+  assertConsumerMetadata(parseYaml("packages: ['.', 'apps/*']\nallowBuilds: { esbuild: true }\noverrides: { '@xmldom/xmldom': '0.9.12' }"), packageArg.resolve);
+  for (const metadata of [
+    { dependencies: { pkg: '../pkg' } },
+    { devDependencies: { pkg: 'org/pkg' } },
+    { optionalDependencies: { pkg: 'gitlab:org/pkg' } },
+    { peerDependencies: { pkg: 'file:../pkg' } },
+    { pnpm: { overrides: { 'parent>pkg': 'git://github.com/org/pkg.git' } } },
+    { catalog: { pkg: 'bitbucket:org/pkg' } },
+    { catalogs: { test: { pkg: '../pkg' } } },
+    { packageExtensions: { 'parent@*': { dependencies: { pkg: 'link:../pkg' } } } },
+    { patchedDependencies: { 'pkg@1.0.0': 'patches/pkg.patch' } },
+  ]) {
+    assert.throws(() => assertConsumerMetadata(metadata, packageArg.resolve));
+  }
+  assert.throws(() => assertConsumerMetadata(parseYaml('overrides:\n  pkg: "gitlab:org/pkg"\n'), packageArg.resolve));
 });
 
 await test('containment distinguishes siblings and ancestors', () => {

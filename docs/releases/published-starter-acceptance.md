@@ -51,7 +51,12 @@ signing, installation and cleanup only run on isolated GitHub Windows runners.
 Do not replace registry packages with local tarballs to make this check pass:
 fix and publish the defective package, then rerun against the corrected version.
 
-The dependency-free `.mjs` harness is a documented published-JavaScript consumer
-exception, checked by `tsconfig.bootstrap-js.json`. Its policy regressions are
+The plain-Node `.mjs` harness is a documented published-JavaScript consumer
+exception, checked by `tsconfig.bootstrap-js.json`. Its bootstrap installs pinned
+`npm-package-arg` and `yaml` from public npm to validate dependency specs, workspace
+overrides, catalogs and package extensions before installing the generated game.
+Only registry versions, ranges, tags and npm aliases are accepted; Git, local
+paths, tarball URLs and local patches fail the check. No repository dependency
+or compiler loader is used by this bootstrap. Its policy regressions are
 authored in TypeScript and run in the prepared contracts suite. Changes limited
 to this harness and workflow do not require a publishable-package changeset.

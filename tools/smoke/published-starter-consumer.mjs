@@ -71,14 +71,52 @@ export function consumerEnvironment(source, checkout) {
     : value]));
 }
 
-/** Reject local package sources, including overrides left by a developer checkout.
- * @param {string} text */
-export function assertRegistryOnly(text) {
-  assert.doesNotMatch(
-    text,
-    /(?:workspace:|file:|link:|portal:|patch:|git\+|github:|https?:\/\/(?!registry\.npmjs\.org\/))/i,
-    'Consumer dependency metadata must use the public registry only',
-  );
+/** Reject every non-registry package spec, including hosted Git shorthand.
+ * @param {unknown} dependencies
+ * @param {typeof import('npm-package-arg').resolve} parseSpec */
+export function assertRegistryOnly(dependencies, parseSpec) {
+  assert.ok(dependencies && typeof dependencies === 'object' && !Array.isArray(dependencies));
+  for (const [name, spec] of Object.entries(dependencies)) {
+    assert.equal(typeof spec, 'string', `Invalid dependency spec for ${name}`);
+    const parsed = parseSpec(name, spec);
+    assert.equal(parsed.registry, true, `Consumer dependency must use the public registry: ${name}@${spec}`);
+  }
+}
+
+/** Inspect manifest and pnpm dependency maps without interpreting ordinary
+ * workspace globs, build permissions or script strings as package sources.
+ * @param {unknown} metadata
+ * @param {typeof import('npm-package-arg').resolve} parseSpec */
+export function assertConsumerMetadata(metadata, parseSpec) {
+  assert.ok(metadata && typeof metadata === 'object' && !Array.isArray(metadata));
+  for (const [key, value] of Object.entries(metadata)) {
+    if (['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'catalog'].includes(key)) {
+      assertRegistryOnly(value, parseSpec);
+    } else if (key === 'overrides' || key === 'resolutions') {
+      assert.ok(value && typeof value === 'object' && !Array.isArray(value));
+      // Override selectors can contain parent/range syntax; only their target
+      // values are dependency specs.
+      for (const spec of Object.values(value)) {
+        assertRegistryOnly({ 'consumer-override': spec }, parseSpec);
+      }
+    } else if (key === 'catalogs') {
+      assert.ok(value && typeof value === 'object' && !Array.isArray(value));
+      for (const catalog of Object.values(value)) {
+        assertRegistryOnly(catalog, parseSpec);
+      }
+    } else if (key === 'patchedDependencies') {
+      assert.deepEqual(value, {}, 'Published consumers must not apply local patches');
+    } else if (key === 'pnpm' || key === 'packageExtensions') {
+      if (key === 'pnpm') {
+        assertConsumerMetadata(value, parseSpec);
+      } else {
+        assert.ok(value && typeof value === 'object' && !Array.isArray(value));
+        for (const extension of Object.values(value)) {
+          assertConsumerMetadata(extension, parseSpec);
+        }
+      }
+    }
+  }
 }
 
 /** @param {string} name @param {string} version
@@ -205,7 +243,12 @@ async function main() {
         private: true,
         type: 'module',
         packageManager: 'pnpm@11.7.0',
-        dependencies: { '@mpgd/cli': cliVersion, '@mpgd/create-game': createVersion },
+        dependencies: {
+          '@mpgd/cli': cliVersion,
+          '@mpgd/create-game': createVersion,
+          'npm-package-arg': '13.0.2',
+          yaml: '2.9.0',
+        },
       },
       null,
       2,
@@ -217,6 +260,10 @@ async function main() {
   );
   run(pnpm, ['install', '--no-frozen-lockfile'], bootstrap);
   const bootstrapRequire = createRequire(join(bootstrap, 'package.json'));
+  /** @type {typeof import('npm-package-arg')} */
+  const packageArg = bootstrapRequire('npm-package-arg');
+  /** @type {typeof import('yaml')} */
+  const yaml = bootstrapRequire('yaml');
   const creatorRoot = dirname(dirname(bootstrapRequire.resolve('@mpgd/create-game')));
   const creatorRequire = createRequire(join(creatorRoot, 'package.json'));
   const creatorCliRoot = dirname(dirname(creatorRequire.resolve('@mpgd/cli')));
@@ -231,10 +278,8 @@ async function main() {
     bootstrap,
   );
   const manifest = JSON.parse(readFileSync(join(game, 'package.json'), 'utf8'));
-  for (const key of ['dependencies', 'devDependencies', 'optionalDependencies', 'pnpm']) {
-    assertRegistryOnly(JSON.stringify(manifest[key] ?? {}));
-  }
-  assertRegistryOnly(readFileSync(join(game, 'pnpm-workspace.yaml'), 'utf8'));
+  assertConsumerMetadata(manifest, packageArg.resolve);
+  assertConsumerMetadata(yaml.parse(readFileSync(join(game, 'pnpm-workspace.yaml'), 'utf8')), packageArg.resolve);
   if (template === 'lite') {
     assert.ok(manifest.dependencies['@mpgd/lite-shell']);
     assert.equal(manifest.dependencies.phaser, undefined);

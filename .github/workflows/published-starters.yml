@@ -52,11 +52,11 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           RELEASE_RUN: ${{ github.event.workflow_run.id }}
         run: |
-          state=$(gh api "repos/$REPOSITORY/actions/runs/$RELEASE_RUN/jobs" --jq '.jobs[] | select(.name == "publish") | .conclusion')
+          state=$(gh api "repos/$REPOSITORY/actions/runs/$RELEASE_RUN/jobs" --jq '[([.jobs[] | select(.name == "preflight") | .conclusion][0]), ([.jobs[] | select(.name == "publish") | .conclusion][0])] | join(":")')
           case "$state" in
-            success) echo 'eligible=true' >> "$GITHUB_OUTPUT" ;;
-            skipped) echo 'eligible=false' >> "$GITHUB_OUTPUT" ;;
-            *) echo "Unexpected release publish state: $state"; exit 1 ;;
+            success:success) echo 'eligible=true' >> "$GITHUB_OUTPUT" ;;
+            success:skipped) echo 'eligible=false' >> "$GITHUB_OUTPUT" ;;
+            *) echo "Unexpected release preflight:publish state: $state"; exit 1 ;;
           esac
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: ${{ steps.release.outputs.eligible == 'true' }}
