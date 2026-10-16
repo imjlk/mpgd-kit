@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { resolveNativeCommandLaunch } from '../../packages/cli/dist/command-launcher.js';
 
 const root = fileURLToPath(new URL('../..', import.meta.url));
 for (const entry of [
@@ -22,6 +24,50 @@ for (const entry of [
 }
 const fixtureRoot = realpathSync(mkdtempSync(path.join(tmpdir(), 'mpgd-cli-source-root-')));
 try {
+  // Exercise the packed manifest outside any Kit checkout. Running the source
+  // CLI with --kit-path masks missing published dependency versions.
+  const packedRoot = path.join(fixtureRoot, 'packed');
+  mkdirSync(packedRoot);
+  const packLaunch = resolveNativeCommandLaunch({
+    command: 'pnpm',
+    args: ['pack', '--pack-destination', packedRoot],
+    environment: process.env,
+  });
+  const packed = spawnSync(packLaunch.command, [...packLaunch.args], {
+    cwd: path.join(root, 'packages/cli'), encoding: 'utf8', timeout: 180_000,
+  });
+  assert.ifError(packed.error);
+  assert.equal(packed.status, 0, packed.stderr);
+  const cliVersion = JSON.parse(readFileSync(path.join(root, 'packages/cli/package.json'), 'utf8')).version;
+  const extracted = spawnSync('tar', ['-xf', path.join(packedRoot, `mpgd-cli-${cliVersion}.tgz`), '-C', packedRoot], {
+    encoding: 'utf8', timeout: 180_000,
+  });
+  assert.ifError(extracted.error);
+  assert.equal(extracted.status, 0, extracted.stderr);
+  const installedCli = path.join(packedRoot, 'package');
+  // Reuse runtime dependencies only; the tested CLI files and manifest are
+  // copied from the tarball, so packageRoot/cwd cannot discover Kit sources.
+  symlinkSync(path.join(root, 'packages/cli/node_modules'), path.join(installedCli, 'node_modules'), 'junction');
+  const packedManifest = JSON.parse(readFileSync(path.join(installedCli, 'package.json'), 'utf8'));
+  const publishedVersions = { ...packedManifest.devDependencies, ...packedManifest.dependencies, '@mpgd/cli': `^${cliVersion}` };
+  const isolatedEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+    !/^(?:MPGD_|NODE_OPTIONS$|NODE_PATH$|TTSC_RUNNER_PROJECT$)/i.test(key)));
+  for (const template of ['phaser', 'lite']) {
+    const game = path.join(fixtureRoot, `packed-${template}`);
+    const generated = spawnSync(process.execPath, [path.join(installedCli, 'dist/bin.js'),
+      'game', 'create', game, '--template', template, '--microsoft-store'], {
+      cwd: fixtureRoot, env: isolatedEnv, encoding: 'utf8', timeout: 180_000,
+    });
+    assert.ifError(generated.error);
+    assert.equal(generated.status, 0, generated.stderr);
+    const manifest = JSON.parse(readFileSync(path.join(game, 'package.json'), 'utf8'));
+    assert.notEqual(publishedVersions['@mpgd/platform'], `^${cliVersion}`, 'Fixture must use independently versioned packages');
+    for (const [name, version] of Object.entries({ ...manifest.dependencies, ...manifest.devDependencies })) {
+      if (name.startsWith('@mpgd/')) {
+        assert.equal(version, publishedVersions[name], `${template}: wrong public version for ${name}`);
+      }
+    }
+  }
   for (const workspace of [false, true]) {
     const gameRoot = path.join(fixtureRoot, workspace ? 'workspace-game' : 'standalone-game');
     const result = spawnSync(process.execPath, [
