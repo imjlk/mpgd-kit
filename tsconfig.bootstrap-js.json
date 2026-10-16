@@ -9,6 +9,7 @@
     ]
   },
   "include": [
+    "tools/smoke/published-starter-consumer.mjs",
     "tools/ci/native-scope.mjs",
     "tools/ci/verify-coverage.mjs",
     "tools/workspace/kit-dependency-links.mjs",

@@ -19,6 +19,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 export const preparedGroups = Object.freeze({
   contracts: [
     'test:tooling',
+    'test:published-starter',
     'test:ttsx-assertions',
     'test:cli-output',
     'test:icons',

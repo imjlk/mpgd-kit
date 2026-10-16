@@ -189,7 +189,8 @@
     "smoke:cli-tooling-migration": "node tools/run-ttsx.mjs packages/cli/src/tooling-migration.test.ts",
     "test:template-tools": "node tools/run-ttsx.mjs tools/smoke/template-typescript-tools.ts",
     "validate:javascript-policy": "node tools/run-ttsx.mjs --project tsconfig.maintenance-tools.json tools/policy/javascript-policy.ts",
-    "smoke:lite-shell:package": "node tools/run-ttsx.mjs tools/smoke/lite-shell-package.ts"
+    "smoke:lite-shell:package": "node tools/run-ttsx.mjs tools/smoke/lite-shell-package.ts",
+    "test:published-starter": "node tools/run-ttsx.mjs tools/smoke/published-starter-consumer.test.ts"
   },
   "devDependencies": {
     "@mpgd/adapter-devvit": "workspace:*",

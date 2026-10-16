@@ -1,0 +1,227 @@
+name: published-starters
+
+on:
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      cli_version:
+        description: Exact published CLI version (empty uses the selected commit)
+        type: string
+        default: ''
+      create_version:
+        description: Exact published create-game version (empty uses the selected commit)
+        type: string
+        default: ''
+  pull_request:
+    paths:
+      - '.github/workflows/published-starters.yml'
+      - '.github/workflows/release.yml'
+      - 'tools/smoke/published-starter-consumer*'
+      - 'tools/smoke/windows-native/**'
+      - 'apps/target-windows-native-smoke/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: published-starters-${{ github.event.pull_request.number || github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  source:
+    if: ${{ github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      eligible: ${{ steps.release.outputs.eligible || steps.local.outputs.eligible }}
+      sha: ${{ steps.metadata.outputs.sha || steps.local.outputs.sha }}
+      cli: ${{ steps.metadata.outputs.cli || steps.local.outputs.cli }}
+      creator: ${{ steps.metadata.outputs.creator || steps.local.outputs.creator }}
+    steps:
+      - name: Ignore release runs skipped because main moved
+        id: release
+        if: ${{ github.event_name == 'workflow_run' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_RUN: ${{ github.event.workflow_run.id }}
+        run: |
+          state=$(gh api "repos/$REPOSITORY/actions/runs/$RELEASE_RUN/jobs" --jq '.jobs[] | select(.name == "publish") | .conclusion')
+          case "$state" in
+            success) echo 'eligible=true' >> "$GITHUB_OUTPUT" ;;
+            skipped) echo 'eligible=false' >> "$GITHUB_OUTPUT" ;;
+            *) echo "Unexpected release publish state: $state"; exit 1 ;;
+          esac
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: ${{ steps.release.outputs.eligible == 'true' }}
+        with:
+          name: release-consumer-source
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: source
+      - name: Read the actual release checkout and versions
+        id: metadata
+        if: ${{ steps.release.outputs.eligible == 'true' }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const source = JSON.parse(readFileSync('source/release-consumer-source.json', 'utf8'));
+          assert.match(source.sha, /^[a-f0-9]{40}$/);
+          for (const key of ['cli', 'creator']) assert.match(source[key], /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
+          appendFileSync(process.env.GITHUB_OUTPUT, `sha=${source.sha}\ncli=${source.cli}\ncreator=${source.creator}\n`);
+          NODE
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: ${{ github.event_name != 'workflow_run' }}
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select PR or manual public versions
+        id: local
+        if: ${{ github.event_name != 'workflow_run' }}
+        shell: pwsh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CLI_VERSION: ${{ inputs.cli_version }}
+          CREATE_VERSION: ${{ inputs.create_version }}
+        run: |
+          $ref = if ($env:BASE_SHA) { $env:BASE_SHA } else { 'HEAD' }
+          $cli = if ($env:CLI_VERSION) { $env:CLI_VERSION } else { (git show "${ref}:packages/cli/package.json" | ConvertFrom-Json).version }
+          $creator = if ($env:CREATE_VERSION) { $env:CREATE_VERSION } else { (git show "${ref}:packages/create-game/package.json" | ConvertFrom-Json).version }
+          foreach ($version in @($cli, $creator)) {
+            if ($version -cnotmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { throw 'Expected exact stable npm versions.' }
+          }
+          "eligible=true" >> $env:GITHUB_OUTPUT
+          "sha=$env:GITHUB_SHA" >> $env:GITHUB_OUTPUT
+          "cli=$cli" >> $env:GITHUB_OUTPUT
+          "creator=$creator" >> $env:GITHUB_OUTPUT
+
+  consumer:
+    needs: source
+    if: ${{ needs.source.outputs.eligible == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        template: [phaser, lite]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+      # No repository pnpm install/build: the consumer must work using npm alone.
+      - name: Generate and build from the public npm registry
+        run: mise exec -- node tools/smoke/published-starter-consumer.mjs
+        env:
+          MPGD_PUBLISHED_ROOT: ${{ runner.temp }}/published-starter
+          MPGD_PUBLISHED_TEMPLATE: ${{ matrix.template }}
+          MPGD_PUBLISHED_SOURCE_SHA: ${{ needs.source.outputs.sha }}
+          MPGD_PUBLISHED_CLI_VERSION: ${{ needs.source.outputs.cli }}
+          MPGD_PUBLISHED_CREATE_VERSION: ${{ needs.source.outputs.creator }}
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        if: ${{ runner.os == 'Windows' }}
+        with:
+          dotnet-version: 8.0.425
+      - uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2.0.0
+        if: ${{ runner.os == 'Windows' }}
+      - name: Package the registry consumer in the CI WinUI host
+        if: ${{ runner.os == 'Windows' }}
+        shell: powershell
+        env:
+          STARTER_ROOT: ${{ runner.temp }}/published-starter/path with spaces/game
+          NATIVE_OUTPUT: ${{ runner.temp }}/published-starter/native
+          MPGD_WINDOWS_SMOKE_TEMPLATE: ${{ matrix.template }}
+          SOURCE_SHA: ${{ needs.source.outputs.sha }}
+        run: ./tools/smoke/windows-native/Build-StarterMsix.ps1 -GameDirectory $env:STARTER_ROOT -OutputDirectory $env:NATIVE_OUTPUT -SourceGitSha $env:SOURCE_SHA
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ runner.os == 'Windows' }}
+        with:
+          name: published-native-packages-${{ matrix.template }}
+          path: ${{ runner.temp }}/published-starter/native/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain public package versions, lockfile and diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: published-consumer-${{ matrix.os }}-${{ matrix.template }}
+          path: |
+            ${{ runner.temp }}/published-starter/requested.json
+            ${{ runner.temp }}/published-starter/installed.json
+            ${{ runner.temp }}/published-starter/consumer-lock.yaml
+            ${{ runner.temp }}/published-starter/commands.log
+            ${{ runner.temp }}/published-starter/result.json
+          if-no-files-found: warn
+          retention-days: 30
+
+  native:
+    needs: [source, consumer]
+    strategy:
+      fail-fast: false
+      matrix:
+        template: [phaser, lite]
+        architecture: [x64, ARM64]
+        include:
+          - architecture: x64
+            runner: windows-latest
+          - architecture: ARM64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: published-native-packages-${{ matrix.template }}
+          path: ${{ runner.temp }}/native-packages
+      - name: Install and activate the public-package game on its native CPU
+        shell: powershell
+        env:
+          NATIVE_ARCH: ${{ matrix.architecture }}
+          MPGD_WINDOWS_SMOKE_TEMPLATE: ${{ matrix.template }}
+          PACKAGE_ROOT: ${{ runner.temp }}/native-packages/${{ matrix.architecture }}
+          RECEIPT_ROOT: ${{ runner.temp }}/native-receipts/${{ matrix.architecture }}
+          NATIVE_MODULE: ${{ runner.temp }}/native-packages/native-tooling/WindowsMsixAcceptance.psm1
+          SOURCE_SHA: ${{ needs.source.outputs.sha }}
+        run: ./tools/smoke/windows-native/Invoke-WindowsMsixSmoke.ps1 -PackageDirectory $env:PACKAGE_ROOT -OutputDirectory $env:RECEIPT_ROOT -SourceMetadata (Join-Path $env:PACKAGE_ROOT 'package-build.json') -Architecture $env:NATIVE_ARCH -ModulePath $env:NATIVE_MODULE -SourceWorkflow '.github/workflows/published-starters.yml' -SourceGitSha $env:SOURCE_SHA
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ always() }}
+        with:
+          name: published-native-${{ matrix.template }}-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/native-receipts/${{ matrix.architecture }}/
+          if-no-files-found: warn
+          retention-days: 30
+
+  published-starters-required:
+    if: ${{ always() && (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository)) }}
+    needs: [source, consumer, native]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Require every consumer and native matrix entry
+        run: |
+          node --input-type=module <<'NODE'
+          const jobs = JSON.parse(process.env.RESULTS);
+          if (jobs.source.result === 'success' && jobs.source.outputs.eligible === 'false') {
+            console.log('Release intentionally skipped because main moved.');
+          } else {
+            for (const [name, job] of Object.entries(jobs)) {
+              if (job.result !== 'success') throw new Error(name + ' result is ' + job.result);
+            }
+          }
+          NODE
