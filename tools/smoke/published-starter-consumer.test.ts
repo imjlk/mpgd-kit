@@ -10,6 +10,7 @@ import {
   consumerEnvironment,
   exactVersion,
   isWithin,
+  publishedMetadata,
 } from './published-starter-consumer.mjs';
 
 await test('consumer drops source loaders, credentials and checkout executables', () => {
@@ -45,6 +46,31 @@ await test('only immutable stable versions are accepted', () => {
   for (const version of ['latest', '^0.50.0', '0.50.0;echo nope', '../local', '01.2.3', '1.0.0-beta.1']) {
     assert.throws(() => exactVersion(version));
   }
+});
+
+await test('publication waits for both full and abbreviated install metadata', async () => {
+  const name = '@mpgd/cli';
+  const version = '0.50.1';
+  const dist = { integrity: 'sha512-fixture', tarball: 'https://registry.npmjs.org/cli.tgz' };
+  let pauses = 0;
+  const requests: string[] = [];
+  const metadata = await publishedMetadata(name, version, async (input, init) => {
+      assert.equal(String(input), 'https://registry.npmjs.org/@mpgd%2Fcli');
+    const accept = new Headers(init?.headers).get('accept') ?? '';
+    requests.push(accept);
+    const visible = accept === 'application/json' || pauses > 0;
+    return Response.json({
+      name,
+      'dist-tags': { latest: version },
+      versions: visible ? { [version]: { name, version, dist } } : {},
+    });
+  }, () => {
+    pauses++;
+    return Promise.resolve();
+  });
+  assert.equal(pauses, 1);
+  assert.deepEqual(new Set(requests), new Set(['application/json', 'application/vnd.npm.install-v1+json']));
+  assert.deepEqual(metadata, { name, version, ...dist });
 });
 
 await test('checkout executable aliases are removed from the consumer PATH', () => {

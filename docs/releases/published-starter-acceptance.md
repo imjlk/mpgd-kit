@@ -9,7 +9,8 @@ matrix job fails, is cancelled, or is unexpectedly skipped.
 The release publisher records its actual verified checkout SHA and CLI/create-game
 versions in a same-run artifact. The consumer checks out that exact commit and
 allows about six minutes of retries for those exact public npm versions to become
-visible after publication. It never falls back to `latest`. PR runs use
+visible in both full and abbreviated package-manager metadata after publication.
+It never falls back to `latest`. PR runs use
 their base commit's released versions; manual runs may supply exact stable
 `cli_version` and `create_version` inputs. Generated manifests remain unchanged;
 an older pair fails if its generated CLI range now selects a different version.

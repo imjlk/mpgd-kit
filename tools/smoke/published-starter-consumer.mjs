@@ -81,24 +81,54 @@ export function assertRegistryOnly(text) {
   );
 }
 
-/** @param {string} name @param {string} version */
-async function publishedMetadata(name, version) {
+/** @param {string} name @param {string} version
+ * @param {typeof fetch} [request]
+ * @param {() => Promise<unknown>} [pause] */
+export async function publishedMetadata(
+  name,
+  version,
+  request = fetch,
+  pause = () => new Promise((done) => setTimeout(done, 10_000)),
+) {
+  // Match pnpm's scoped-package URL, including its CDN cache key.
+  const escapedName = name.startsWith('@')
+    ? `@${encodeURIComponent(name.slice(1))}`
+    : encodeURIComponent(name);
   // npm's public metadata cache can lag a successful publish by five minutes.
   for (let attempt = 0; attempt < 36; attempt++) {
-    const response = await fetch(`${registry}${encodeURIComponent(name)}/${version}`, {
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (response.ok) {
-      const metadata = await response.json();
-      assert.equal(metadata.name, name);
-      assert.equal(metadata.version, version);
-      assert.ok(metadata.dist?.integrity, `No npm integrity for ${name}`);
-      assert.ok(metadata.dist.tarball.startsWith(registry), 'Unexpected tarball registry');
-      return { name, version, integrity: metadata.dist.integrity, tarball: metadata.dist.tarball };
+    // Package managers consume package lists, whose caches can lag the single-
+    // version endpoint. Require both full and abbreviated install metadata.
+    const versions = await Promise.all(
+      ['application/json', 'application/vnd.npm.install-v1+json'].map(async (accept) => {
+        const response = await request(`${registry}${escapedName}`, {
+          headers: { accept },
+          signal: AbortSignal.timeout(30_000),
+        });
+        if (!response.ok) {
+          assert.ok([404, 429, 503].includes(response.status), `npm metadata failed: ${response.status}`);
+          return undefined;
+        }
+        const document = await response.json();
+        assert.equal(document.name, name);
+        const metadata = document.versions?.[version];
+        if (metadata === undefined) {
+          return undefined;
+        }
+        assert.equal(metadata.name, name);
+        assert.equal(metadata.version, version);
+        assert.ok(metadata.dist?.integrity, `No npm integrity for ${name}`);
+        assert.ok(metadata.dist.tarball.startsWith(registry), 'Unexpected tarball registry');
+        return { name, version, integrity: metadata.dist.integrity, tarball: metadata.dist.tarball };
+      }),
+    );
+    const [full, abbreviated] = versions;
+    if (full !== undefined && abbreviated !== undefined) {
+      assert.equal(full.integrity, abbreviated.integrity, 'npm metadata integrity differs');
+      assert.equal(full.tarball, abbreviated.tarball, 'npm metadata tarball differs');
+      return full;
     }
-    assert.ok([404, 429, 503].includes(response.status), `npm metadata failed: ${response.status}`);
     if (attempt < 35) {
-      await new Promise((done) => setTimeout(done, 10_000));
+      await pause();
     }
   }
   throw new Error(`Published package did not become visible: ${name}@${version}`);
