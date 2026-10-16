@@ -4,6 +4,10 @@ Renderer-agnostic lightweight game shell (no Phaser): DPR-aware stage, scroll-sa
 tap input, idle-sleeping frame loop, font subset loading, and a Canvas2D renderer.
 Built for inline surfaces such as Reddit Devvit posts.
 
+```sh
+npm install @mpgd/lite-shell
+```
+
 ```ts
 import { createCanvasRenderer, createLiteShell, loadFontSubset } from '@mpgd/lite-shell';
 
@@ -42,4 +46,4 @@ build tooling (the kit itself needs Node 24 and pnpm 11 via corepack). Outside a
 full workspace install, `pnpm build:standalone` (`tsc -p tsconfig.build.json`)
 emits the same `dist/`.
 
-See `docs/LITE_TEMPLATE.md` in the mpgd-kit repo for details.
+See the [Lite template guide](https://github.com/imjlk/mpgd-kit/blob/main/docs/LITE_TEMPLATE.md) for details.

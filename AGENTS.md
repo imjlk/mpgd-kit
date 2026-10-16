@@ -64,6 +64,10 @@ Platform SDK imports belong only in:
 - After the initial local publish, configure npm Trusted Publishing/OIDC for `.github/workflows/release.yml` and use Sampo changesets for subsequent releases.
 - `@mpgd/adapter-devvit` was initial-published as `0.1.0` and has npm Trusted Publishing/OIDC configured for `.github/workflows/release.yml`; keep that setting aligned before relying on automated Devvit adapter releases.
 
+`@mpgd/lite-shell` was initial-published as `0.1.0`; its Trusted Publisher is
+`imjlk/mpgd-kit` / `release.yml`. Keep its independent Sampo entry and packed
+consumer checks when changing its release or template integration.
+
 ## Preferred Commands
 
 - `pnpm check`

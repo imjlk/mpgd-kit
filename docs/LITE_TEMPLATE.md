@@ -12,9 +12,12 @@ the renderer changes.
 ## Create a lite game
 
 ```sh
-mpgd game create my-game --template lite --workspace --kit-path <mpgd-kit>
-mpgd game create my-game --template lite --renderer canvas --workspace --kit-path <mpgd-kit>
+mpgd game create my-game --template lite
+mpgd game create my-game --template lite --renderer canvas
 ```
+
+Add `--workspace --kit-path <mpgd-kit>` when developing against a local Kit checkout.
+Standalone games install the public `@mpgd/lite-shell` package.
 
 `--renderer` names a `LiteRenderer` implementation. `canvas` (Canvas2D) ships
 today; `dom` and `svg` are reserved extension points (see below). Passing
@@ -135,34 +138,33 @@ Phaser absent from every chunk and `matter-js` loaded on demand.
 
 ## Windows consumer verification
 
-The Windows CI matrix generates both the Phaser packed consumer and the lite
-workspace consumer with `--microsoft-store`. Each goes through dependency install,
+The Windows CI matrix generates both the Phaser and Lite packed consumers with `--microsoft-store`. Each goes through dependency install,
 frozen install, type checking, web/PWA build, and native WinUI packaging. Separate
 x64 and ARM64 runners install and activate each generated MSIX, checking its game
 bundle hash, non-empty canvas, boot errors, and native bridge contracts. Native
 artifacts and receipts include the template name so results cannot be mixed.
 
-The lite lane uses `--template lite --workspace --kit-path ...` while
-`@mpgd/lite-shell` remains private. Run the generation/build portion locally with
-`MPGD_WINDOWS_SMOKE_TEMPLATE=lite pnpm smoke:windows-starter` in a disposable
-checkout after building KIT packages. The generated workspace install rewrites
-dependency links in that checkout's workspace packages. The smoke command checks
-and compiles KIT tools before installation, then reuses that checked emit for
-nested target commands. Native package
-installation runs on isolated CI machines.
+Both lanes install the current commit's tarballs with local overrides, without
+workspace source links. Run the generation/build portion locally with
+`MPGD_WINDOWS_SMOKE_TEMPLATE=lite pnpm smoke:windows-starter` after building Kit
+packages. Native package installation runs on isolated CI machines.
 
 ## Publishing status
 
-`@mpgd/lite-shell` 0.1.0 builds ESM JavaScript and
-`.d.ts` files to `dist/` (`pnpm --filter @mpgd/lite-shell build`, or
-`pnpm build:standalone` without a full workspace install; consumers need
-Node >= 20), uses
-explicit `.js` relative imports so plain Node ESM can load it, and its test
-script imports the built output as a consumer would. Per `AGENTS.md`, the
-maintainer registers it with one local initial publish of `0.1.0` and then adds
-its Sampo release-group entry and npm Trusted Publishing before automated
-releases. The package stays private until that registration is complete.
-Until then, generate lite games with `--workspace --kit-path <mpgd-kit>`.
-The CLI rejects non-workspace lite generation before writing a project.
+`@mpgd/lite-shell` is independently versioned, starting at `0.1.0`. It ships ESM
+JavaScript, `.d.ts` declarations, README and MIT license; consuming Node tools
+require Node >= 20. Build with `pnpm --filter @mpgd/lite-shell build`, or use
+`pnpm build:standalone` inside the package without a full workspace install.
+
+`pnpm smoke:lite-shell:package` installs the tarball in an isolated consumer,
+loads it in plain Node, checks strict NodeNext declarations, and verifies that
+the packed CLI records the shell version independently of its own release line.
+
+The initial release is recorded in [the 0.1.0 receipt](./releases/lite-shell-0.1.0.md).
+Subsequent releases use Sampo changesets and npm Trusted Publishing for
+`imjlk/mpgd-kit`'s `release.yml` workflow. The CLI supports both standalone and
+workspace Lite generation; previously released CLI versions through `0.49.0`
+retain the workspace-only guard, so use the release containing this change.
+
 See [Game Project Models](./GAME_PROJECT_MODELS.md#workspace-games-and-kit-dependency-links)
 for how a workspace game's install re-links kit packages and how to restore them.
