@@ -116,7 +116,14 @@ check('every root ttsc config and the shared tsconfig are toolchain inputs', () 
     /^(?:lint|strip)\.config\.[cm]?[jt]s$/u.test(name),
   );
   assert.ok(rootTtscConfigs.length >= 2, 'expected the root lint and strip configs');
-  for (const file of [...rootTtscConfigs, 'tsconfig.base.json', 'pnpm-lock.yaml']) {
+  for (const file of [
+    ...rootTtscConfigs,
+    'tsconfig.base.json',
+    'tsconfig.tools.json',
+    'tsconfig.package-tools.json',
+    'tsconfig.native-build-package.json',
+    'pnpm-lock.yaml',
+  ]) {
     assert.ok(
       (packageBuildToolchainFiles as readonly string[]).includes(file),
       `${file} must invalidate package builds`,

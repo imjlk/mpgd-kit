@@ -67,6 +67,13 @@ JavaScript exceptions; `validate:starter-workflow` rejects them.
 and tests independent of generated i18n or built package output, so pre-build CI
 can still run them. They also remain included in the full tools check.
 
+`build:packages` uses `tsconfig.package-tools.json` to check and execute its
+orchestration and imported helpers without first compiling every unrelated tool,
+test and package source. Those helpers remain covered by the full tools check in
+`pnpm check`. Every selected package still builds from scratch through `ttsc`
+and the stock TypeScript declaration emitter, and the CLI native builder retains
+its own checked project. The Windows compiler concurrency limit is unchanged.
+
 ## Updating the toolchain
 
 1. Start from the current integration branch in an isolated worktree. Read its

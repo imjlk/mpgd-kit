@@ -93,7 +93,7 @@
     "game:icons:generate": "MPGD_PLATFORM_TARGETS_FILE=${MPGD_PLATFORM_TARGETS_FILE:-examples/phaser-starter/mpgd.targets.json} node tools/run-ttsx.mjs tools/icons/run.ts generate",
     "game:icons:verify": "MPGD_PLATFORM_TARGETS_FILE=${MPGD_PLATFORM_TARGETS_FILE:-examples/phaser-starter/mpgd.targets.json} node tools/run-ttsx.mjs tools/icons/run.ts verify",
     "game:icons:inspect": "MPGD_PLATFORM_TARGETS_FILE=${MPGD_PLATFORM_TARGETS_FILE:-examples/phaser-starter/mpgd.targets.json} node tools/run-ttsx.mjs tools/icons/run.ts inspect",
-    "build:packages": "pnpm i18n:build && node tools/run-ttsx.mjs tools/package/build-packages.ts",
+    "build:packages": "pnpm i18n:build && node tools/run-ttsx.mjs --project tsconfig.package-tools.json tools/package/build-packages.ts",
     "pack:packages": "pnpm build:packages && pnpm pack:packages:prepared",
     "pack:packages:prepared": "node tools/run-ttsx.mjs tools/package/pack-packages.ts && pnpm smoke:tutorial:package && pnpm smoke:lite-shell:package",
     "smoke:target": "MPGD_PLATFORM_TARGETS_FILE=${MPGD_PLATFORM_TARGETS_FILE:-examples/phaser-starter/mpgd.targets.json} node tools/run-ttsx.mjs tools/smoke/verify-target-artifacts.ts",
