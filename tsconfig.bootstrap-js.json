@@ -12,6 +12,7 @@
     "tools/smoke/published-starter-consumer.mjs",
     "tools/ci/native-scope.mjs",
     "tools/ci/verify-coverage.mjs",
+    "tools/ci/windows-timings.mjs",
     "tools/workspace/kit-dependency-links.mjs",
     "tools/workspace/relink-kit-workspace.mjs"
   ]

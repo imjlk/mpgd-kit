@@ -949,13 +949,13 @@ jobs:
             apps/target-devvit/dist/**
           retention-days: 7
 
-  build-windows-starter:
+  prepare-windows-starter:
     if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
     needs: prepare
     strategy:
       fail-fast: false
       matrix:
-        template: [phaser, lite]
+        task: [tooling, packages]
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -972,9 +972,94 @@ jobs:
           path: node_modules/.cache/ttsc/plugins
           key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml', '.mise.toml') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
-      - run: mise exec -- pnpm test:tooling
+      # Separate checkouts let these independent compilers run concurrently
+      # without sharing source ownership state or repeating either workload.
+      - if: ${{ matrix.task == 'tooling' }}
+        run: mise exec -- pnpm test:tooling
       # Build on Windows: Linux-produced dist would hide path regressions.
-      - run: mise exec -- pnpm build:packages
+      - if: ${{ matrix.task == 'packages' }}
+        run: mise exec -- pnpm build:packages
+      - name: Archive the Windows package build
+        if: ${{ matrix.task == 'packages' }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = Join-Path $env:RUNNER_TEMP 'windows-kit-build'
+          New-Item -ItemType Directory -Force -Path $output | Out-Null
+          $paths = @(foreach ($root in @('packages', 'adapters', 'native-plugins', 'backend')) {
+            if (Test-Path -LiteralPath $root) {
+              Get-ChildItem -LiteralPath $root -Directory | ForEach-Object {
+                if (Test-Path -LiteralPath (Join-Path $_.FullName 'dist')) { "$root/$($_.Name)/dist" }
+              }
+            }
+          })
+          if ($paths.Count -eq 0 -or !(Test-Path 'packages/cli/dist/bin.js')) { throw 'Windows package build is incomplete.' }
+          $archive = Join-Path $output 'package-dist.tgz'
+          $list = Join-Path $output 'dist-paths.txt'
+          $paths | Set-Content -LiteralPath $list -Encoding utf8NoBOM
+          tar -czf $archive -T $list
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to archive Windows package dist.' }
+          @{
+            schemaVersion = 1
+            gitSha = $env:GITHUB_SHA
+            runId = $env:GITHUB_RUN_ID
+            platform = $env:RUNNER_OS
+            architecture = $env:RUNNER_ARCH
+            archiveSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'source.json') -Encoding utf8NoBOM
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ matrix.task == 'packages' }}
+        with:
+          name: windows-package-dist-${{ github.sha }}
+          overwrite: true
+          compression-level: 0
+          path: |
+            ${{ runner.temp }}/windows-kit-build/package-dist.tgz
+            ${{ runner.temp }}/windows-kit-build/source.json
+          if-no-files-found: error
+          retention-days: 1
+
+  build-windows-starter:
+    if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
+    needs: [prepare, prepare-windows-starter]
+    strategy:
+      fail-fast: false
+      matrix:
+        template: [phaser, lite]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+      - run: mise exec -- pnpm install --frozen-lockfile
+      - name: Cache Windows ttsc plugins
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: node_modules/.cache/ttsc/plugins
+          key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml', '.mise.toml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-package-dist-${{ github.sha }}
+          path: ${{ runner.temp }}/windows-kit-build
+      - name: Verify and restore the Windows package build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $inputDirectory = Join-Path $env:RUNNER_TEMP 'windows-kit-build'
+          $source = Get-Content -LiteralPath (Join-Path $inputDirectory 'source.json') -Raw | ConvertFrom-Json
+          $archive = Join-Path $inputDirectory 'package-dist.tgz'
+          if ($source.schemaVersion -ne 1 -or $source.gitSha -cne $env:GITHUB_SHA -or $source.runId -cne $env:GITHUB_RUN_ID -or $source.platform -cne 'Windows' -or $source.architecture -cne $env:RUNNER_ARCH) {
+            throw 'Windows package build does not belong to this checkout, run and architecture.'
+          }
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $source.archiveSha256) { throw 'Windows package archive hash mismatch.' }
+          tar -xzf $archive
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path 'packages/cli/dist/bin.js')) { throw 'Failed to restore Windows package dist.' }
+      # Generate source-owned i18n inputs and compile tools in this checkout.
+      # Only Windows package dist crosses jobs; no node_modules or tool emits do.
+      - run: mise exec -- pnpm i18n:build
       - name: Generate, install, check and build the Store starter
         run: mise exec -- pnpm smoke:windows-starter
         env:
@@ -1072,9 +1157,12 @@ jobs:
     # Keep one stable required check. An unexpectedly skipped dependency must
     # fail the workflow rather than leave a green-looking partial CI run.
     if: ${{ always() }}
-    needs: [prepare, docs-validation, test-focused, test-browser, compile-tools, test-prepared, build-web-targets, build-windows-starter, test-windows-native-starter, build-android, build-ios, build-ait, build-devvit]
+    needs: [prepare, docs-validation, test-focused, test-browser, compile-tools, test-prepared, build-web-targets, prepare-windows-starter, build-windows-starter, test-windows-native-starter, build-android, build-ios, build-ait, build-devvit]
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
     env:
       EVENT_NAME: ${{ github.event_name }}
       METADATA_ONLY: ${{ needs.prepare.outputs.release_pr_metadata_only }}
@@ -1089,6 +1177,7 @@ jobs:
       COMPILE_RESULT: ${{ needs.compile-tools.result }}
       PREPARED_RESULT: ${{ needs.test-prepared.result }}
       WEB_TARGETS_RESULT: ${{ needs.build-web-targets.result }}
+      WINDOWS_PREPARE_RESULT: ${{ needs.prepare-windows-starter.result }}
       WINDOWS_STARTER_RESULT: ${{ needs.build-windows-starter.result }}
       WINDOWS_NATIVE_RESULT: ${{ needs.test-windows-native-starter.result }}
       ANDROID_RESULT: ${{ needs.build-android.result }}
@@ -1103,6 +1192,22 @@ jobs:
       - name: Verify expected CI coverage
         id: verify-coverage
         run: node tools/ci/verify-coverage.mjs
+      - name: Report Windows CI timings
+        if: ${{ always() }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node tools/ci/windows-timings.mjs
+      - name: Retain Windows CI timings
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-ci-timings
+          overwrite: true
+          path: ${{ runner.temp }}/windows-ci-timings.json
+          if-no-files-found: warn
+          retention-days: 30
       - name: Attest the exact tested PR merge tree
         id: tested-merge
         if: ${{ !cancelled() && steps.verify-coverage.outcome == 'success' && github.event_name == 'pull_request' }}
