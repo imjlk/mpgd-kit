@@ -12,7 +12,7 @@
     },
     {
       "name": "selectBuildablePackages",
-      "file": "tools/package/build-packages.ts"
+      "file": "tools/package/build-plan.ts"
     },
     {
       "name": "npmPackDryRun",

@@ -16,6 +16,7 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { buildSync } from 'esbuild';
 
 import { runInDependencyOrder } from './build-scheduler';
+import { planPackageShard, selectBuildablePackages } from './build-plan';
 import {
   createInputFingerprints,
   isReusableBuild,
@@ -37,8 +38,18 @@ const fingerprintDir = join(cacheDir, 'fingerprints');
 // MPGD_REBUILD_PACKAGES=1 forces a full rebuild.
 const reuseUnchanged = process.argv.includes('--reuse-unchanged')
   && process.env.MPGD_REBUILD_PACKAGES !== '1';
-const requestedPackageNames = process.argv.slice(2).filter((arg) => arg !== '--reuse-unchanged');
-const packages = selectBuildablePackages(discoverBuildablePackages(), requestedPackageNames);
+const buildArgs = process.argv.slice(2).filter((arg) => arg !== '--reuse-unchanged');
+const shardArgs = buildArgs.filter((arg) => arg.startsWith('--shard='));
+if (shardArgs.length > 1 || (shardArgs.length > 0 && (buildArgs.length !== 1 || process.argv.includes('--reuse-unchanged')))) {
+  throw new Error('A package shard must build fresh and cannot be combined with package names.');
+}
+const availablePackages = discoverBuildablePackages();
+const shardName = shardArgs[0]?.slice('--shard='.length);
+const shardPlan = shardName === undefined
+  ? undefined
+  : planPackageShard(availablePackages, shardName);
+const packages = shardPlan?.packages ?? (buildArgs.length === 0
+  ? availablePackages : selectBuildablePackages(availablePackages, buildArgs));
 const packagePaths = Object.fromEntries(
   packages.map((workspacePackage) => [
     workspacePackage.name,
@@ -72,6 +83,11 @@ const nativeBuilderEntry = join(
 );
 
 mkdirSync(fingerprintDir, { recursive: true });
+// An interrupted build must not leave a successful shard manifest behind.
+const shardManifest = join(cacheDir, 'shard.json');
+if (shardPlan !== undefined) {
+  rmSync(shardManifest, { force: true });
+}
 const inputFingerprints = createInputFingerprints(discoverBuildablePackages(), {
   toolchainFiles: packageBuildToolchainFiles,
   kitHead: cleanKitHead,
@@ -122,8 +138,16 @@ await runInDependencyOrder(
     })),
   ],
   concurrency,
-  (task) => task.build(),
+  async (task) => {
+    const started = Date.now();
+    await task.build();
+    process.stdout.write(`[package-build] ${task.name}: ${((Date.now() - started) / 1000).toFixed(1)}s\n`);
+  },
 );
+
+if (shardPlan !== undefined) {
+  writeFileSync(shardManifest, `${JSON.stringify(shardPlan.manifest, null, 2)}\n`);
+}
 
 if (reuseUnchanged) {
   console.log(`Reused ${reusedPackages.length} of ${packages.length} unchanged package builds.`);
@@ -288,47 +312,6 @@ function buildPackagedNativeTarget(workspacePackage: WorkspacePackage, distDir: 
     kitDirty: worktreeStatus.length > 0,
     packageVersion,
   }, null, 2)}\n`);
-}
-
-function selectBuildablePackages(
-  available: readonly WorkspacePackage[],
-  requestedNames: readonly string[],
-): WorkspacePackage[] {
-  if (requestedNames.length === 0) {
-    return [...available];
-  }
-
-  const byName = new Map(
-    available.map((workspacePackage) => [workspacePackage.name, workspacePackage]),
-  );
-  const selected = new Set<string>();
-
-  for (const name of requestedNames) {
-    select(name);
-  }
-
-  return available.filter((workspacePackage) => selected.has(workspacePackage.name));
-
-  function select(name: string): void {
-    if (selected.has(name)) {
-      return;
-    }
-
-    const workspacePackage = byName.get(name);
-
-    if (workspacePackage === undefined) {
-      throw new Error(`Unknown buildable workspace package: ${name}`);
-    }
-
-    selected.add(name);
-    for (const [dependency, version] of Object.entries(
-      workspacePackage.packageJson.dependencies ?? {},
-    )) {
-      if (version.startsWith('workspace:') && byName.has(dependency)) {
-        select(dependency);
-      }
-    }
-  }
 }
 
 function packageBuildConcurrency(value: string | undefined): number {

@@ -11,6 +11,7 @@ import type { WorkspacePackage } from './workspace';
  */
 export const packageBuildToolchainFiles = [
   'tools/package/build-packages.ts',
+  'tools/package/build-plan.ts',
   'tools/package/build-fingerprint.ts',
   'tools/package/build-scheduler.ts',
   'tools/package/workspace.ts',
