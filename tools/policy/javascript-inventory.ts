@@ -288,6 +288,11 @@ export const javascriptInventory = [
     reason: 'Existing JavaScript orchestration or test awaiting a typed migration; this is not a runtime exception.',
   },
   {
+    file: 'tools/ci/windows-timings.mjs',
+    disposition: 'runtime-exception',
+    reason: 'Reports timings in the checkout-only CI gate without dependencies or a TypeScript loader; checked by the JS boundary project.',
+  },
+  {
     file: 'tools/deploy/store-tooling-packed-consumer.mjs',
     disposition: 'runtime-exception',
     reason: 'Plain Node consumer verifies shipped JavaScript without TypeScript loaders or workspace source aliases.',

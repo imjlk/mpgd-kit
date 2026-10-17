@@ -38,6 +38,26 @@ To run the non-installing regression checks locally on Windows:
 The policy applies only to that process. Actual packaging/signing/installing require isolated GitHub
 Windows runners. The shared ci workflow runs the full consumer and native matrix for prepared scope.
 
+## Shared Windows build and timing evidence
+
+The `prepare-windows-starter` job runs tooling tests and builds Kit once on Windows. It archives
+only package `dist` directories. Both Phaser and Lite consumer jobs download that same-run artifact
+and verify its commit, run, Windows architecture and archive SHA-256 before extracting it. Each
+consumer installs its own dependencies, generates i18n inputs and compiles its tools locally;
+`node_modules`, compiler ownership state and tool emits never cross jobs. The package build remains
+Windows-native so Linux output cannot hide Windows path regressions.
+
+Both consumers still generate and build their own game and MSIX packages. All four Phaser/Lite ×
+x64/ARM64 installed-startup checks remain required, as does the shared producer. A failed or skipped
+required job fails `ci-required`.
+
+The final gate reports job and step durations in its summary and retains `windows-ci-timings.json`
+for 30 days. It reads only the current run attempt, including failed jobs. Runner seconds sum Windows
+job durations; elapsed seconds span the first Windows job start to the last completion, including
+gaps between jobs. These measure different costs: sharing the build reduces duplicate work but adds
+an artifact handoff and another runner setup. Compare both before claiming a wall-time improvement.
+Timing collection is best effort and does not replace the required coverage checks.
+
 ## Reuse from game CI
 
 Locate the module through the installed CLI subpath, then Import-Module that absolute path in
