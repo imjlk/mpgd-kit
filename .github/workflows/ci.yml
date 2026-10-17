@@ -949,13 +949,33 @@ jobs:
             apps/target-devvit/dist/**
           retention-days: 7
 
+  # Tooling remains mandatory at ci-required, but consumers only need package dist.
+  test-windows-tooling:
+    if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
+    needs: prepare
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+      - run: mise exec -- pnpm install --frozen-lockfile
+      - name: Cache Windows ttsc plugins
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: node_modules/.cache/ttsc/plugins
+          key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml', '.mise.toml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
+      - run: mise exec -- pnpm test:tooling
+
   prepare-windows-starter:
     if: ${{ needs.prepare.outputs.release_pr_metadata_only != 'true' && needs.prepare.outputs.docs_only != 'true' && needs.prepare.outputs.run_prepared == 'true' }}
     needs: prepare
     strategy:
       fail-fast: false
       matrix:
-        task: [tooling, starter, remaining]
+        task: [starter, remaining]
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -974,13 +994,9 @@ jobs:
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
       # Separate checkouts let these independent compilers run concurrently
       # without sharing compiler source ownership state. Each dist has one owner.
-      - if: ${{ matrix.task == 'tooling' }}
-        run: mise exec -- pnpm test:tooling
       # Build on Windows: Linux-produced dist would hide path regressions.
-      - if: ${{ matrix.task != 'tooling' }}
-        run: mise exec -- pnpm build:packages --shard=${{ matrix.task }}
+      - run: mise exec -- pnpm build:packages --shard=${{ matrix.task }}
       - name: Archive the Windows package build
-        if: ${{ matrix.task != 'tooling' }}
         shell: pwsh
         env:
           MPGD_PACKAGE_SHARD: ${{ matrix.task }}
@@ -1011,7 +1027,6 @@ jobs:
             archiveSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output "source-$($plan.shard).json") -Encoding utf8NoBOM
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ matrix.task != 'tooling' }}
         with:
           name: windows-package-dist-${{ github.sha }}-${{ matrix.task }}
           overwrite: true
@@ -1179,7 +1194,7 @@ jobs:
     # Keep one stable required check. An unexpectedly skipped dependency must
     # fail the workflow rather than leave a green-looking partial CI run.
     if: ${{ always() }}
-    needs: [prepare, docs-validation, test-focused, test-browser, compile-tools, test-prepared, build-web-targets, prepare-windows-starter, build-windows-starter, test-windows-native-starter, build-android, build-ios, build-ait, build-devvit]
+    needs: [prepare, docs-validation, test-focused, test-browser, compile-tools, test-prepared, build-web-targets, test-windows-tooling, prepare-windows-starter, build-windows-starter, test-windows-native-starter, build-android, build-ios, build-ait, build-devvit]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -1199,6 +1214,7 @@ jobs:
       COMPILE_RESULT: ${{ needs.compile-tools.result }}
       PREPARED_RESULT: ${{ needs.test-prepared.result }}
       WEB_TARGETS_RESULT: ${{ needs.build-web-targets.result }}
+      WINDOWS_TOOLING_RESULT: ${{ needs.test-windows-tooling.result }}
       WINDOWS_PREPARE_RESULT: ${{ needs.prepare-windows-starter.result }}
       WINDOWS_STARTER_RESULT: ${{ needs.build-windows-starter.result }}
       WINDOWS_NATIVE_RESULT: ${{ needs.test-windows-native-starter.result }}

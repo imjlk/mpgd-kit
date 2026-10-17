@@ -64,6 +64,8 @@ both shard identities, hashes, matching inventories and disjoint, exhaustive
 ownership before extraction. Compiler emits and node_modules never cross runners.
 The normal `build:packages` command still rebuilds the entire workspace.
 Package task durations are printed to CI logs to expose the remaining bottlenecks.
+Windows tooling tests run independently of the package producers and consumers;
+`ci-required` still rejects missing, skipped or failing tooling coverage.
 
 Existing JavaScript is not automatically an approved exception. Review ordinary
 scripts when touching them and convert those without a runtime constraint. This

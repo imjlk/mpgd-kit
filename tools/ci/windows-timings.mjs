@@ -21,7 +21,7 @@ function duration(entry) {
 
 /** @param {readonly Job[]} source */
 export function windowsTimings(source) {
-  const jobs = source.filter((job) => /^(?:prepare-windows-starter|build-windows-starter|test-windows-native-starter)(?: \(|$)/.test(job.name))
+  const jobs = source.filter((job) => /^(?:test-windows-tooling|prepare-windows-starter|build-windows-starter|test-windows-native-starter)(?: \(|$)/.test(job.name))
     .map((job) => ({
       name: job.name,
       status: job.status,

@@ -16,6 +16,7 @@ test('full scope requires every prepared group and target build', () => {
   assert.equal(expected['test-prepared'], 'success');
   assert.equal(expected['build-ios'], 'success');
   assert.equal(expected['prepare-windows-starter'], 'success');
+  assert.equal(expected['test-windows-tooling'], 'success');
   assert.equal(expected['build-windows-starter'], 'success');
   assert.equal(expected['test-windows-native-starter'], 'success');
   assert.equal(expected['test-focused'], 'skipped');
@@ -39,6 +40,8 @@ test('native scope requires focused and both platform builds, not unrelated suit
 test('a skipped, failed, cancelled or missing Windows check cannot pass full CI', () => {
   const actual = actualResults(expectedCoverage(base));
   for (const status of ['skipped', 'failure', 'cancelled', undefined]) {
+    const tooling = verifyCoverage({ ...base, ...actual, WINDOWS_TOOLING_RESULT: status });
+    assert.match(tooling.mismatches.join(' '), /test-windows-tooling should be success/);
     const preparation = verifyCoverage({ ...base, ...actual, WINDOWS_PREPARE_RESULT: status });
     assert.match(preparation.mismatches.join(' '), /prepare-windows-starter should be success/);
     const incomplete = verifyCoverage({ ...base, ...actual, WINDOWS_STARTER_RESULT: status });
@@ -78,6 +81,7 @@ function actualResults(expected) {
     PREPARED_RESULT: expected['test-prepared'],
     WEB_TARGETS_RESULT: expected['build-web-targets'],
     WINDOWS_PREPARE_RESULT: expected['prepare-windows-starter'],
+    WINDOWS_TOOLING_RESULT: expected['test-windows-tooling'],
     WINDOWS_STARTER_RESULT: expected['build-windows-starter'],
     WINDOWS_NATIVE_RESULT: expected['test-windows-native-starter'],
     ANDROID_RESULT: expected['build-android'],
