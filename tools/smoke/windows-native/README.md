@@ -40,8 +40,9 @@ Windows runners. The shared ci workflow runs the full consumer and native matrix
 
 ## Shared Windows build and timing evidence
 
-The `prepare-windows-starter` job runs tooling tests and builds Kit once on Windows. It archives
-only package `dist` directories. Both Phaser and Lite consumer jobs download that same-run artifact
+The `prepare-windows-starter` matrix runs tooling tests and builds Kit once each on separate Windows
+runners, in parallel. Only the package leg archives `dist` directories. Both Phaser and Lite consumer
+jobs wait for both preparation legs and download that same-run artifact
 and verify its commit, run, Windows architecture and archive SHA-256 before extracting it. Each
 consumer installs its own dependencies, generates i18n inputs and compiles its tools locally;
 `node_modules`, compiler ownership state and tool emits never cross jobs. The package build remains

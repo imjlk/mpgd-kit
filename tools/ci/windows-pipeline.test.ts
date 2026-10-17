@@ -19,14 +19,18 @@ const entry = (name: string, start: number, end: number) => ({
 await test('Windows report distinguishes runner cost from elapsed fan-out time', () => {
   const result = windowsTimings([
     entry('prepare', 0, 500),
-    { ...entry('prepare-windows-starter', 10, 100), steps: [entry('build packages', 20, 90)] },
+    {
+      ...entry('prepare-windows-starter (packages)', 10, 100),
+      steps: [entry('build packages', 20, 90)],
+    },
+    entry('prepare-windows-starter (tooling)', 10, 50),
     entry('build-windows-starter (phaser)', 110, 160),
     entry('build-windows-starter (lite)', 110, 180),
     entry('test-windows-native-starter (lite, ARM64)', 190, 220),
     entry('published-starters-required', 1, 999),
   ]);
-  assert.equal(result.jobs.length, 4);
-  assert.equal(result.runnerSeconds, 240);
+  assert.equal(result.jobs.length, 5);
+  assert.equal(result.runnerSeconds, 280);
   assert.equal(result.elapsedSeconds, 210);
   assert.equal(result.jobs[0]?.steps[0]?.seconds, 70);
 });
