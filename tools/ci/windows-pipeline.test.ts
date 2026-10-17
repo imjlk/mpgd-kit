@@ -88,6 +88,10 @@ await test('Windows package transfer preserves dist and rejects wrong provenance
       writeFileSync(join(producer, path), content);
     };
     fixture('packages/cli/dist/bin.js', 'fixture CLI');
+    fixture('packages/cli/dist/index.js', 'fixture index');
+    fixture('packages/cli/dist/index.d.ts', 'export {};');
+    fixture('adapters/web/dist/index.js', 'fixture adapter index');
+    fixture('adapters/web/dist/index.d.ts', 'export {};');
     fixture('adapters/web/dist/nested/file with spaces.js', 'fixture adapter');
     fixture('packages/cli/node_modules/private-cache', 'must stay local');
     fixture('node_modules/.cache/ttsc/emit/ownership', 'must stay local');
@@ -99,6 +103,7 @@ await test('Windows package transfer preserves dist and rejects wrong provenance
       GITHUB_RUN_ID: '123',
       RUNNER_OS: 'Windows',
       RUNNER_ARCH: 'X64',
+      MPGD_PACKAGE_SHARD: 'starter',
     };
     const execute = (source: string, cwd: string) => {
       const result = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', source], {
@@ -107,11 +112,27 @@ await test('Windows package transfer preserves dist and rejects wrong provenance
       assert.ifError(result.error);
       return result;
     };
-    const archived = execute(archiveScript, producer);
-    assert.equal(archived.status, 0, archived.stderr);
-    const metadataPath = join(evidence, 'windows-kit-build/source.json');
+    const inventory = ['packages/cli/dist', 'adapters/web/dist'];
+    // If all packages become starter dependencies, the other shard is empty.
+    environment.MPGD_PACKAGE_SHARD = 'remaining';
+    fixture('node_modules/.cache/mpgd-package-build/shard.json', JSON.stringify({ shard: 'remaining', owned: [], inventory }));
+    const empty = execute(archiveScript, producer);
+    assert.equal(empty.status, 0, empty.stderr);
+    const emptyList = spawnSync('tar', ['-tf', join(evidence, 'windows-kit-build/package-dist-remaining.tgz')], { encoding: 'utf8' });
+    assert.equal(emptyList.status, 0, emptyList.stderr);
+    assert.equal(emptyList.stdout.trim(), '');
+    for (const [shard, path] of [['starter', inventory[0]], ['remaining', inventory[1]]] as const) {
+      environment.MPGD_PACKAGE_SHARD = shard;
+      fixture('node_modules/.cache/mpgd-package-build/shard.json', JSON.stringify({ shard, owned: [path], inventory }));
+      const archived = execute(archiveScript, producer);
+      assert.equal(archived.status, 0, archived.stderr);
+      const listed = spawnSync('tar', ['-tf', join(evidence, `windows-kit-build/package-dist-${shard}.tgz`)], { encoding: 'utf8' });
+      assert.equal(listed.status, 0, listed.stderr);
+      assert.ok(listed.stdout.trim().split(/\r?\n/u).every((entry) => entry.startsWith(`${path}/`)), 'archive only contains its owned dist');
+    }
+    const metadataPath = join(evidence, 'windows-kit-build/source-starter.json');
     const originalMetadata = readFileSync(metadataPath, 'utf8');
-    for (const [key, value] of Object.entries({ gitSha: 'b'.repeat(40), runId: '124', platform: 'Linux', architecture: 'ARM64' })) {
+    for (const [key, value] of Object.entries({ gitSha: 'b'.repeat(40), runId: '124', platform: 'Linux', architecture: 'ARM64', shard: 'remaining', schemaVersion: 1 })) {
       const metadata: unknown = JSON.parse(originalMetadata);
       assert.ok(isObject(metadata));
       metadata[key] = value;
@@ -122,7 +143,29 @@ await test('Windows package transfer preserves dist and rejects wrong provenance
       assert.equal(existsSync(join(consumer, 'packages')), false);
     }
     writeFileSync(metadataPath, originalMetadata);
-    const archivePath = join(evidence, 'windows-kit-build/package-dist.tgz');
+    const secondMetadataPath = join(evidence, 'windows-kit-build/source-remaining.json');
+    const secondMetadata = readFileSync(secondMetadataPath, 'utf8');
+    rmSync(secondMetadataPath);
+    assert.notEqual(execute(restoreScript, consumer).status, 0, 'both shards are required');
+    assert.equal(existsSync(join(consumer, 'packages')), false);
+    writeFileSync(secondMetadataPath, secondMetadata);
+    for (const [key, value, diagnostic] of [
+      ['owned', ['packages/cli/dist'], /overlapping/],
+      ['owned', [], /coverage is incomplete/],
+      ['inventory', ['adapters/web/dist'], /inventories disagree/],
+    ] as const) {
+      const metadata: unknown = JSON.parse(secondMetadata);
+      assert.ok(isObject(metadata));
+      metadata[key] = value;
+      writeFileSync(secondMetadataPath, JSON.stringify(metadata));
+      const rejected = execute(restoreScript, consumer);
+      assert.notEqual(rejected.status, 0);
+      assert.match(rejected.stderr, diagnostic);
+      assert.equal(existsSync(join(consumer, 'packages')), false);
+    }
+    writeFileSync(secondMetadataPath, secondMetadata);
+    // Corruption in the SECOND shard must be rejected before the first is extracted.
+    const archivePath = join(evidence, 'windows-kit-build/package-dist-remaining.tgz');
     const originalArchive = readFileSync(archivePath);
     writeFileSync(archivePath, 'corrupt');
     const corrupt = execute(restoreScript, consumer);

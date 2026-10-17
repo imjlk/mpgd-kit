@@ -955,7 +955,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        task: [tooling, packages]
+        task: [tooling, starter, remaining]
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -973,49 +973,52 @@ jobs:
           key: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-${{ hashFiles('pnpm-lock.yaml', '.mise.toml') }}
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
       # Separate checkouts let these independent compilers run concurrently
-      # without sharing source ownership state or repeating either workload.
+      # without sharing compiler source ownership state. Each dist has one owner.
       - if: ${{ matrix.task == 'tooling' }}
         run: mise exec -- pnpm test:tooling
       # Build on Windows: Linux-produced dist would hide path regressions.
-      - if: ${{ matrix.task == 'packages' }}
-        run: mise exec -- pnpm build:packages
+      - if: ${{ matrix.task != 'tooling' }}
+        run: mise exec -- pnpm build:packages --shard=${{ matrix.task }}
       - name: Archive the Windows package build
-        if: ${{ matrix.task == 'packages' }}
+        if: ${{ matrix.task != 'tooling' }}
         shell: pwsh
+        env:
+          MPGD_PACKAGE_SHARD: ${{ matrix.task }}
         run: |
           $ErrorActionPreference = 'Stop'
           $output = Join-Path $env:RUNNER_TEMP 'windows-kit-build'
           New-Item -ItemType Directory -Force -Path $output | Out-Null
-          $paths = @(foreach ($root in @('packages', 'adapters', 'native-plugins', 'backend')) {
-            if (Test-Path -LiteralPath $root) {
-              Get-ChildItem -LiteralPath $root -Directory | ForEach-Object {
-                if (Test-Path -LiteralPath (Join-Path $_.FullName 'dist')) { "$root/$($_.Name)/dist" }
-              }
-            }
-          })
-          if ($paths.Count -eq 0 -or !(Test-Path 'packages/cli/dist/bin.js')) { throw 'Windows package build is incomplete.' }
-          $archive = Join-Path $output 'package-dist.tgz'
+          $plan = Get-Content 'node_modules/.cache/mpgd-package-build/shard.json' -Raw | ConvertFrom-Json
+          if ($plan.shard -cne $env:MPGD_PACKAGE_SHARD -or $plan.shard -cnotin @('starter', 'remaining')) { throw 'Wrong Windows package shard.' }
+          $paths = @($plan.owned)
+          foreach ($path in $paths) {
+            if (!(Test-Path "$path/index.js") -or !(Test-Path "$path/index.d.ts")) { throw "Windows package build is incomplete: $path" }
+          }
+          $archive = Join-Path $output "package-dist-$($plan.shard).tgz"
           $list = Join-Path $output 'dist-paths.txt'
-          $paths | Set-Content -LiteralPath $list -Encoding utf8NoBOM
+          [System.IO.File]::WriteAllLines($list, [string[]]$paths, [System.Text.UTF8Encoding]::new($false))
           tar -czf $archive -T $list
           if ($LASTEXITCODE -ne 0) { throw 'Failed to archive Windows package dist.' }
           @{
-            schemaVersion = 1
+            schemaVersion = 2
+            shard = $plan.shard
+            owned = $paths
+            inventory = @($plan.inventory)
             gitSha = $env:GITHUB_SHA
             runId = $env:GITHUB_RUN_ID
             platform = $env:RUNNER_OS
             architecture = $env:RUNNER_ARCH
             archiveSha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'source.json') -Encoding utf8NoBOM
+          } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output "source-$($plan.shard).json") -Encoding utf8NoBOM
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ matrix.task == 'packages' }}
+        if: ${{ matrix.task != 'tooling' }}
         with:
-          name: windows-package-dist-${{ github.sha }}
+          name: windows-package-dist-${{ github.sha }}-${{ matrix.task }}
           overwrite: true
           compression-level: 0
           path: |
-            ${{ runner.temp }}/windows-kit-build/package-dist.tgz
-            ${{ runner.temp }}/windows-kit-build/source.json
+            ${{ runner.temp }}/windows-kit-build/package-dist-${{ matrix.task }}.tgz
+            ${{ runner.temp }}/windows-kit-build/source-${{ matrix.task }}.json
           if-no-files-found: error
           retention-days: 1
 
@@ -1042,21 +1045,40 @@ jobs:
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-ttsc-plugins-
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: windows-package-dist-${{ github.sha }}
+          pattern: windows-package-dist-${{ github.sha }}-*
+          merge-multiple: true
           path: ${{ runner.temp }}/windows-kit-build
       - name: Verify and restore the Windows package build
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $inputDirectory = Join-Path $env:RUNNER_TEMP 'windows-kit-build'
-          $source = Get-Content -LiteralPath (Join-Path $inputDirectory 'source.json') -Raw | ConvertFrom-Json
-          $archive = Join-Path $inputDirectory 'package-dist.tgz'
-          if ($source.schemaVersion -ne 1 -or $source.gitSha -cne $env:GITHUB_SHA -or $source.runId -cne $env:GITHUB_RUN_ID -or $source.platform -cne 'Windows' -or $source.architecture -cne $env:RUNNER_ARCH) {
-            throw 'Windows package build does not belong to this checkout, run and architecture.'
+          $owned = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+          $inventory = $null
+          # Validate BOTH manifests and archives before extracting either shard.
+          foreach ($shard in @('starter', 'remaining')) {
+            $source = Get-Content -LiteralPath (Join-Path $inputDirectory "source-$shard.json") -Raw | ConvertFrom-Json
+            $archive = Join-Path $inputDirectory "package-dist-$shard.tgz"
+            if ($source.schemaVersion -ne 2 -or $source.shard -cne $shard -or $source.gitSha -cne $env:GITHUB_SHA -or $source.runId -cne $env:GITHUB_RUN_ID -or $source.platform -cne 'Windows' -or $source.architecture -cne $env:RUNNER_ARCH) {
+              throw 'Windows package build does not belong to this checkout, run, shard and architecture.'
+            }
+            if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $source.archiveSha256) { throw 'Windows package archive hash mismatch.' }
+            $expected = @($source.inventory | Sort-Object -CaseSensitive)
+            if ($expected.Count -eq 0 -or ($inventory -ne $null -and ($inventory -join "`n") -cne ($expected -join "`n"))) { throw 'Windows package inventories disagree.' }
+            $inventory = $expected
+            foreach ($path in @($source.owned)) {
+              if ($path -cnotmatch '^(packages|adapters|native-plugins|backend)/[a-zA-Z0-9][a-zA-Z0-9._-]*/dist$' -or !$owned.Add($path)) { throw 'Invalid or overlapping Windows package ownership.' }
+            }
           }
-          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -cne $source.archiveSha256) { throw 'Windows package archive hash mismatch.' }
-          tar -xzf $archive
-          if ($LASTEXITCODE -ne 0 -or !(Test-Path 'packages/cli/dist/bin.js')) { throw 'Failed to restore Windows package dist.' }
+          if (!$owned.SetEquals([string[]]$inventory)) { throw 'Windows package coverage is incomplete.' }
+          foreach ($shard in @('starter', 'remaining')) {
+            tar -xzf (Join-Path $inputDirectory "package-dist-$shard.tgz")
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to restore Windows package dist.' }
+          }
+          foreach ($path in $inventory) {
+            if (!(Test-Path "$path/index.js") -or !(Test-Path "$path/index.d.ts")) { throw "Restored Windows package is incomplete: $path" }
+          }
+          if (!(Test-Path 'packages/cli/dist/bin.js')) { throw 'Failed to restore Windows CLI.' }
       # Generate source-owned i18n inputs and compile tools in this checkout.
       # Only Windows package dist crosses jobs; no node_modules or tool emits do.
       - run: mise exec -- pnpm i18n:build
