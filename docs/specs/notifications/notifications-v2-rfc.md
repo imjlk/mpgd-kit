@@ -1334,9 +1334,9 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     - the partner API documents no recipient-level code, including none for
       a missing agreement (checked 2026-10-19). A deployment names the codes
       it observes (`agreementErrorCodes`, then `recipientErrorCodes`,
-      checked before every built-in code, 4095 included, on HTTP 200 and
-      the refusing statuses below; HTTP 429 is `rate-limited` and 5xx, 408,
-      and 425 are `ambiguous` whatever the body says); any other code is `rejected` with reason
+      checked before every built-in code, 4095 included, on any status
+      except HTTP 429, which is `rate-limited`, and 5xx, 408, and 425, which
+      are `ambiguous`, whatever the body says); any other code is `rejected` with reason
       `recipient` on HTTP 200 (not `ambiguous`: an `ambiguous` row is
       replayed after every lease with no attempt cap, so a code that fails
       the same way would be sent again for as long as the key is kept), `configuration` on HTTP 400, 401, 403, 404,
