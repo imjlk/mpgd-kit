@@ -84,6 +84,9 @@ export interface LocalNotificationSdkSchema {
 /** A local notification as `getPending` and the listeners report it. */
 export interface LocalNotificationSdkEntry {
   readonly id: number;
+  /** `getPending` reports these; the provider restores an evicted reminder from them. */
+  readonly title?: string;
+  readonly body?: string;
   readonly extra?: unknown;
 }
 

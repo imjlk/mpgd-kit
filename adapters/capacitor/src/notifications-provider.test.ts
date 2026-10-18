@@ -16,6 +16,7 @@ import {
   capacitorAdvertisingActionTypeId,
   capacitorLocalNotificationId,
   capacitorNotificationChannelId,
+  capacitorSettingsReturnTimeoutMs,
   createCapacitorNotificationProvider,
   type CreateCapacitorNotificationProviderInput,
 } from './notifications-provider.js';
@@ -204,9 +205,38 @@ describe('Capacitor notifications provider: permission', () => {
   });
 
   it('reads the push plugin when the local plugin is absent', async () => {
-    const { provider, sdks } = setup({ sdkLocal: false });
+    const { provider, sdks } = setup({
+      sdkLocal: false,
+      topics: topics.filter((topic) => topic.purpose !== 'advertising'),
+    });
     grant(sdks);
+    expect((await provider.getCapabilities()).availability).toBe('available');
     expect((await provider.getPermission({ topics: [] })).app).toBe('granted');
+  });
+
+  it('is configuration-required without the local plugin when the catalog maps advertising', async () => {
+    const { provider, sdks } = setup({ platform: 'ios', sdkLocal: false });
+    grant(sdks);
+    expect((await provider.getCapabilities()).availability).toBe('configuration-required');
+    for (const call of [
+      () => provider.getPermission({ topics: ['friend-challenge'] }),
+      () => provider.requestPermission({ topics: ['friend-challenge'] }),
+      () => provider.register!(),
+    ]) {
+      await expect(call()).rejects.toMatchObject({
+        code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
+        message: expect.stringContaining('@capacitor/local-notifications'),
+      });
+    }
+    expect(sdks.prompts).toBe(0);
+    // An advertising topic this target does not map needs no opt-out action.
+    const unmapped = setup({
+      platform: 'ios',
+      sdkLocal: false,
+      topics: topics.map(({ mapping, ...topic }) =>
+        topic.purpose === 'advertising' ? topic : { ...topic, ...(mapping === undefined ? {} : { mapping }) }),
+    });
+    expect((await unmapped.provider.getCapabilities()).availability).toBe('available');
   });
 
   it('turns an unknown plugin state into a retryable failure', async () => {
@@ -301,10 +331,44 @@ describe('Capacitor notifications provider: permission', () => {
   it('answers unavailable for a topic outside the resolved catalog without prompting', async () => {
     const { provider, sdks } = setup();
     expect(await provider.requestPermission({ topics: ['unknown', 'unknown'] })).toEqual({
-      snapshot: { app: 'prompt', topics: { unknown: 'prompt' } },
+      snapshot: { app: 'prompt', topics: { unknown: 'unsupported' } },
       outcomes: { unknown: 'unavailable' },
     });
     expect(sdks.prompts).toBe(0);
+  });
+
+  it('treats a declared topic without a mapping for this target as unavailable here', async () => {
+    const unmapped: NotificationTopicDeclaration = {
+      id: 'season-pass',
+      purpose: 'requested',
+      channels: ['local', 'remote'],
+      route: '/season',
+    };
+    const { provider, sdks } = setup({ topics: [...topics, unmapped] });
+    grant(sdks);
+    expect(await provider.getPermission({ topics: ['season-pass', 'energy-full'] })).toEqual({
+      app: 'granted',
+      topics: { 'season-pass': 'unsupported', 'energy-full': 'granted' },
+    });
+    expect(await provider.scheduleLocal?.({ ...reminder, topic: 'season-pass' }))
+      .toEqual({ status: 'unsupported' });
+    await settle();
+    expect(sdks.channels.map((channel) => channel.id)).not.toContain('mpgd-requested');
+    const events: NotificationEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    sdks.emitPush('notificationActionPerformed', {
+      actionId: 'tap', notification: { data: { topic: 'season-pass', route: '/season' } },
+    });
+    sdks.emitLocal('localNotificationActionPerformed', {
+      actionId: 'tap',
+      notification: {
+        id: 9, extra: { mpgdKey: 'k', mpgdTopic: 'season-pass', mpgdFireAt: '2026-10-12T06:00:00Z' },
+      },
+    });
+    expect(events).toEqual([
+      { type: 'opened', channel: 'remote', source: 'warm', route: '/season' },
+      { type: 'opened', channel: 'local', source: 'warm' },
+    ]);
   });
 
   it('refuses topics that are not a list of ids', async () => {
@@ -358,6 +422,36 @@ describe('Capacitor notifications provider: endpoints', () => {
       code: 'NOTIFICATIONS_CONFIGURATION_REQUIRED',
       hostCode: 'UNIMPLEMENTED',
     });
+  });
+
+  it('announces a changed Firebase installation id when the app returns', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'android' });
+    let installationId = 'fid-1';
+    const push: PushSdk = Object.assign(Object.create(sdks.push!) as PushSdk, {
+      getInstallationId: async () => ({ installationId }),
+    });
+    const provider = createCapacitorNotificationProvider({
+      platform: 'android', topics, push, local: sdks.local!, app: sdks.app,
+      address: 'fcm-installation', timeZone: () => undefined, locale: () => undefined,
+    });
+    const events: NotificationEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    await provider.register?.();
+    // A token is not this provider's address.
+    sdks.emitPush('tokenReceived', { token: 'tok-1' });
+    sdks.app.setActive(true);
+    await settle();
+    expect(events).toEqual([]);
+    installationId = 'fid-2';
+    sdks.app.setActive(true);
+    await settle();
+    expect(events).toEqual([{
+      type: 'endpoint-changed',
+      registration: {
+        provider: 'fcm',
+        address: { kind: 'fcm-installation', value: 'fid-2', permission: 'prompt' },
+      },
+    }]);
   });
 
   it('registers a Firebase installation id when configured to', async () => {
@@ -755,6 +849,29 @@ describe('Capacitor notifications provider: local reminders', () => {
     expect(sdks.localOperations.at(-1)).toEqual({ op: 'cancel', key: 'energy', topic: 'energy-full' });
     // The foreign notification stays pending.
     expect((await sdks.local!.getPending()).notifications.map((entry) => entry.id)).toEqual([id]);
+  });
+
+  it('puts the evicted reminder back when scheduling the nearer one fails', async () => {
+    const { provider, sdks } = setup({ platform: 'ios' });
+    grant(sdks);
+    for (let id = 1; id <= 63; id += 1) {
+      sdks.addForeignPending(id);
+    }
+    await provider.scheduleLocal?.({ ...reminder, key: 'far', fireAt: '2026-10-20T00:00:00Z', route: '/far' });
+    sdks.failNext('local.schedule', new Error('native'));
+    await expect(provider.scheduleLocal?.({ ...reminder, key: 'near' })).rejects.toMatchObject({
+      code: 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
+    });
+    expect(await provider.listLocal?.()).toEqual([
+      { key: 'far', topic: 'energy-full', fireAt: '2026-10-20T00:00:00Z' },
+    ]);
+    const restored = sdks.scheduled.at(-1);
+    expect(restored).toMatchObject({
+      title: 'Energy full',
+      body: 'Your energy is full.',
+      extra: { mpgdKey: 'far', mpgdRoute: '/far' },
+      isExactNotification: false,
+    });
   });
 
   it('keeps at most 64 pending on iOS, the nearest ones', async () => {
@@ -1191,6 +1308,25 @@ describe('Capacitor notifications provider: opens and events', () => {
     expect(errors).toEqual([new Error('listener')]);
   });
 
+  it('buffers again while no listener is attached, for the next subscriber', () => {
+    const { provider, sdks } = setup();
+    const first: NotificationEvent[] = [];
+    const leave = provider.subscribe((event) => first.push(event));
+    leave();
+    // Between two scenes: the open waits instead of being dropped.
+    sdks.tap({ channel: 'remote', topic: 'friend-challenge', route: '/?entry=friend-challenge' });
+    const next: NotificationEvent[] = [];
+    provider.subscribe((event) => next.push(event));
+    const other: NotificationEvent[] = [];
+    provider.subscribe((event) => other.push(event));
+    expect(first).toEqual([]);
+    expect(next).toEqual([{
+      type: 'opened', channel: 'remote', source: 'warm', topic: 'friend-challenge', route: '/?entry=friend-challenge',
+    }]);
+    // Delivered once: a second subscriber attached meanwhile does not get it again.
+    expect(other).toEqual([]);
+  });
+
   it('keeps the opens when the buffer overflows before the first subscriber', () => {
     const { provider, sdks } = setup();
     sdks.tap({ channel: 'remote', topic: 'friend-challenge' });
@@ -1238,6 +1374,7 @@ describe('Capacitor notifications provider: settings', () => {
       settingsLeaveTimeoutMs: 1_000,
       settingsReturnTimeoutMs: 5_000,
     });
+    expect(capacitorSettingsReturnTimeoutMs).toBe(120_000);
     const stayed = provider.openSettings!();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(await stayed).toBe('opened');

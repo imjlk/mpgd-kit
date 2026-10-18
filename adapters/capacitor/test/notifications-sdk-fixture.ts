@@ -227,7 +227,12 @@ export function createFakeNotificationSdks(input: FakeNotificationSdksInput): Fa
     async getPending() {
       await failure('local.getPending');
       return {
-        notifications: [...pending.values()].map((entry) => ({ id: entry.id, extra: { ...entry.extra } })),
+        // As the plugin reports them: id, title, body, and extra.
+        notifications: [...pending.values()].map((entry) => ({
+          id: entry.id,
+          ...('title' in entry ? { title: entry.title, body: entry.body } : {}),
+          extra: { ...entry.extra },
+        })),
       };
     },
     async createChannel(channel) {

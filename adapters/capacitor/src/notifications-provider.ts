@@ -64,7 +64,7 @@ export const capacitorIosMaxPendingLocalNotifications = 64;
 /** How long `openSettings` waits for the app to leave for the settings screen. */
 export const capacitorSettingsLeaveTimeoutMs = 5_000;
 /** How long `openSettings` waits for the player to come back from settings. */
-export const capacitorSettingsReturnTimeoutMs = 600_000;
+export const capacitorSettingsReturnTimeoutMs = 120_000;
 
 export type CapacitorNotificationAppEvents = Pick<AppPlugin, 'addListener'>;
 
@@ -214,8 +214,38 @@ export function createCapacitorNotificationProvider(
   }
   const topics = [...input.topics];
   const topicById = new Map(topics.map((topic) => [topic.id, topic]));
-  const channels = collectChannels(topics, input.channels ?? {});
+  /**
+   * The topic this target maps. A topic the catalog declares without a
+   * mapping for this target, as `resolveNotificationTopicsForTarget` keeps
+   * it, is not available here: it reads `unsupported`, a request answers
+   * `unavailable`, it schedules nothing, gets no channel, and an open naming
+   * it carries no topic, as the reference runtime treats it.
+   */
+  const mappedTopic = (id: string | undefined): NotificationTopicDeclaration | undefined => {
+    const declared = id === undefined ? undefined : topicById.get(id);
+    return declared?.mapping === undefined ? undefined : declared;
+  };
+  const mappedTopics = topics.filter((topic) => topic.mapping !== undefined);
+  const channels = collectChannels(mappedTopics, input.channels ?? {});
   const unsupported = push === undefined && local === undefined;
+  // RFC "Advertising rules": an advertising push carries the opt-out action,
+  // which this provider registers through the local plugin (the iOS
+  // category, and the action type a shell renders on Android). Without it,
+  // remote advertising would go out without the action, so the provider is
+  // `configuration-required`, as a registry mismatch makes a provider.
+  const optOutMissing = push !== undefined && local === undefined
+    && mappedTopics.some((topic) => topic.purpose === 'advertising');
+  const configurationIssue = optOutMissing
+    ? 'Capacitor notifications: the catalog maps an advertising topic, whose opt-out action '
+      + 'needs @capacitor/local-notifications; install both plugins.'
+    : undefined;
+  const assertConfigured = (): void => {
+    if (configurationIssue !== undefined) {
+      throw new NotificationError('NOTIFICATIONS_CONFIGURATION_REQUIRED', {
+        message: configurationIssue,
+      });
+    }
+  };
   const promptLimit = platform === 'ios' ? 1 : (input.androidPromptLimit ?? 2);
   const app = input.app === undefined ? App : input.app;
   const reportError = (error: unknown): void => {
@@ -234,8 +264,11 @@ export function createCapacitorNotificationProvider(
   const listeners = new Set<(event: NotificationEvent) => void>();
   let buffer: NotificationEvent[] = [];
   let subscribed = false;
+  // Events wait whenever no listener is attached, not only before the first:
+  // the gateway's bridge detaches when its last listener leaves, so a game
+  // that subscribes per scene would otherwise lose an open between scenes.
   const dispatch = (event: NotificationEvent): void => {
-    if (!subscribed) {
+    if (listeners.size === 0) {
       buffer.push(event);
       if (buffer.length > eventBufferLimit) {
         // Keep the opens: a cold-start open must not be lost to later events.
@@ -272,6 +305,25 @@ export function createCapacitorNotificationProvider(
   }
   const getInstallationId = push?.getInstallationId?.bind(push);
   let tokenFailureReported = false;
+  /** The address last registered or announced, to notice an installation id that changed. */
+  let lastAddress: string | undefined;
+  /**
+   * Firebase announces a new token, not a new installation id, so for
+   * `fcm-installation` the provider reads the id again on each return to
+   * the foreground and announces a change as `endpoint-changed`.
+   */
+  const checkInstallationId = async (): Promise<void> => {
+    if (addressKind !== 'fcm-installation' || getInstallationId === undefined
+      || lastAddress === undefined) {
+      return;
+    }
+    const { installationId } = await getInstallationId();
+    if (typeof installationId !== 'string' || installationId === '' || installationId === lastAddress) {
+      return;
+    }
+    lastAddress = installationId;
+    dispatch({ type: 'endpoint-changed', registration: await registrationOf(installationId) });
+  };
   let lastObserved: NotificationPermissionState | undefined;
   /**
    * The OS dialog in flight, whose answer settles `lastObserved`; a request
@@ -306,7 +358,9 @@ export function createCapacitorNotificationProvider(
     state: NotificationPermissionState,
   ): NotificationPermissionSnapshot => ({
     app: state,
-    topics: Object.fromEntries(requested.map((topic) => [topic, state])),
+    topics: Object.fromEntries(
+      requested.map((topic) => [topic, mappedTopic(topic) === undefined ? 'unsupported' : state]),
+    ),
   });
 
   // Settings round trips and permission changes made outside the game.
@@ -324,6 +378,7 @@ export function createCapacitorNotificationProvider(
     // A push-only provider has no local reminder to retry the setup from.
     ensureChannels().catch(reportSetupFailure);
     ensureActionTypes().catch(reportSetupFailure);
+    checkInstallationId().catch(reportError);
     resumeCheck = resumeCheck.then(async () => {
       const before = lastObserved;
       const generation = requests;
@@ -340,7 +395,7 @@ export function createCapacitorNotificationProvider(
         // Changed in system settings: no plugin reports it as an event.
         dispatch({
           type: 'permission-changed',
-          snapshot: snapshotOf(topics.map((topic) => topic.id), state),
+          snapshot: snapshotOf(mappedTopics.map((topic) => topic.id), state),
         });
       }
     }).catch(reportError);
@@ -364,8 +419,7 @@ export function createCapacitorNotificationProvider(
 
   /** The declared topic a push names; the payload is untrusted. */
   const declaredTopicOf = (data: Record<string, unknown>): NotificationTopicDeclaration | undefined => {
-    const id = stringOf(data[capacitorNotificationDataKeys.topic]);
-    return id === undefined ? undefined : topicById.get(id);
+    return mappedTopic(stringOf(data[capacitorNotificationDataKeys.topic]));
   };
   const openedFromPush = (actionId: string, notification: PushSdkNotification | undefined): void => {
     const data = isRecord(notification?.data) ? notification.data : {};
@@ -404,11 +458,12 @@ export function createCapacitorNotificationProvider(
       // Not one of this provider's reminders, or not an open.
       return;
     }
+    const topic = mappedTopic(entry.topic)?.id;
     dispatch({
       type: 'opened',
       channel: 'local',
       source: subscribed ? 'warm' : 'cold',
-      topic: entry.topic,
+      ...(topic === undefined ? {} : { topic }),
       ...(entry.route === undefined ? {} : { route: entry.route }),
     });
   };
@@ -429,6 +484,7 @@ export function createCapacitorNotificationProvider(
       }
       const { token } = event;
       tokenFailureReported = false;
+      lastAddress = token;
       // A rotated token goes out at once, with the permission this provider
       // last read: a permission changes only in system settings, and the
       // return from there reads it again. During a request (iOS issues the
@@ -461,7 +517,12 @@ export function createCapacitorNotificationProvider(
       local.addListener('localNotificationReceived', (notification) => {
         const entry = readLocalEntry(notification);
         if (entry !== undefined) {
-          dispatch({ type: 'received', channel: 'local', topic: entry.topic });
+          const topic = mappedTopic(entry.topic)?.id;
+          dispatch({
+            type: 'received',
+            channel: 'local',
+            ...(topic === undefined ? {} : { topic }),
+          });
         }
       }),
     );
@@ -512,7 +573,7 @@ export function createCapacitorNotificationProvider(
   let actionTypesReady: Promise<void> | undefined;
   // The call sets every iOS category at once, so a catalog without
   // advertising leaves the shell's categories alone.
-  const needsOptOut = topics.some((topic) => topic.purpose === 'advertising');
+  const needsOptOut = mappedTopics.some((topic) => topic.purpose === 'advertising');
   const ensureActionTypes = (): Promise<void> => {
     if (!needsOptOut) {
       return Promise.resolve();
@@ -555,7 +616,11 @@ export function createCapacitorNotificationProvider(
   };
 
   const capabilities = (): NotificationCapabilities => ({
-    availability: unsupported ? 'unsupported' : 'available',
+    availability: unsupported
+      ? 'unsupported'
+      : configurationIssue === undefined
+        ? 'available'
+        : 'configuration-required',
     permission: {
       scope: 'app',
       prompt: 'os',
@@ -585,19 +650,19 @@ export function createCapacitorNotificationProvider(
 
   const readPending = async (sdk: LocalNotificationSdk): Promise<{
     readonly all: readonly LocalNotificationSdkEntry[];
-    readonly ours: readonly (LocalNotificationEntry & { readonly id: number })[];
+    readonly ours: readonly PendingReminder[];
   }> => {
     const result = await callSdk(() => sdk.getPending());
     const all = Array.isArray(result?.notifications) ? result.notifications : [];
-    const ours: (LocalNotificationEntry & { readonly id: number })[] = [];
+    const ours: PendingReminder[] = [];
     for (const notification of all) {
       const entry = readLocalEntry(notification);
       if (entry !== undefined) {
         ours.push({
+          ...entry,
           id: notification.id,
-          key: entry.key,
-          topic: entry.topic,
-          fireAt: entry.fireAt,
+          ...(typeof notification.title === 'string' ? { title: notification.title } : {}),
+          ...(typeof notification.body === 'string' ? { body: notification.body } : {}),
         });
       }
     }
@@ -623,6 +688,7 @@ export function createCapacitorNotificationProvider(
     const pending = await readPending(sdk);
     const existing = pending.ours.find((entry) => entry.key === checked.key);
     const maxPending = platform === 'ios' ? capacitorIosMaxPendingLocalNotifications : undefined;
+    let evicted: PendingReminder | undefined;
     if (existing === undefined && maxPending !== undefined
       && pending.all.length >= maxPending) {
       // Keep the nearest: the farthest of this provider's reminders
@@ -632,9 +698,63 @@ export function createCapacitorNotificationProvider(
         return { status: 'capacity-exceeded' };
       }
       await callSdk(() => sdk.cancel({ notifications: [{ id: farthest.id }] }));
+      evicted = farthest;
     }
     const id = existing?.id ?? freeId(checked.key, pending.all);
     const route = checked.route ?? declared.route;
+    try {
+      await scheduleOne(sdk, checked, declared, id, fireAt, route);
+    } catch (error) {
+      // The new reminder failed after the farthest gave way: put that one back.
+      if (evicted !== undefined) {
+        await restore(sdk, evicted);
+      }
+      throw error;
+    }
+    return { status: existing === undefined ? 'scheduled' : 'replaced' };
+  };
+
+  /** Puts an evicted reminder back as `getPending` reported it; reports when it cannot. */
+  const restore = async (sdk: LocalNotificationSdk, entry: PendingReminder): Promise<void> => {
+    if (entry.title === undefined || entry.body === undefined) {
+      reportError(
+        new Error(`Capacitor notifications: could not restore the reminder ${entry.key}.`),
+      );
+      return;
+    }
+    const declared = topicById.get(entry.topic);
+    try {
+      await callSdk(() => sdk.schedule({
+        notifications: [{
+          id: entry.id,
+          title: entry.title ?? '',
+          body: entry.body ?? '',
+          schedule: { at: new Date(entry.fireAt), allowWhileIdle: true },
+          extra: {
+            [extraKeys.key]: entry.key,
+            [extraKeys.topic]: entry.topic,
+            [extraKeys.fireAt]: entry.fireAt,
+            ...(entry.route === undefined ? {} : { [extraKeys.route]: entry.route }),
+          },
+          ...(platform === 'android' && declared !== undefined
+            ? { channelId: capacitorNotificationChannelId(declared) }
+            : {}),
+          isExactNotification: false,
+        }],
+      }));
+    } catch (error) {
+      reportError(error);
+    }
+  };
+
+  const scheduleOne = async (
+    sdk: LocalNotificationSdk,
+    checked: LocalNotificationRequest,
+    declared: NotificationTopicDeclaration,
+    id: number,
+    fireAt: string,
+    route: string | undefined,
+  ): Promise<void> => {
     await callSdk(() => sdk.schedule({
       notifications: [{
         id,
@@ -655,7 +775,6 @@ export function createCapacitorNotificationProvider(
         isExactNotification: false,
       }],
     }));
-    return { status: existing === undefined ? 'scheduled' : 'replaced' };
   };
 
   const provider: CapacitorNotificationProvider = {
@@ -666,10 +785,12 @@ export function createCapacitorNotificationProvider(
     },
     async getPermission(request) {
       const requested = topicsOf(request);
+      assertConfigured();
       return snapshotOf(requested, await readAppState());
     },
     async requestPermission(request) {
       const requested = topicsOf(request);
+      assertConfigured();
       const outcomes: Record<string, NotificationPermissionOutcome> = {};
       if (askPermission === undefined) {
         for (const topic of requested) {
@@ -677,7 +798,7 @@ export function createCapacitorNotificationProvider(
         }
         return { snapshot: snapshotOf(requested, 'unsupported'), outcomes };
       }
-      const askable = requested.filter((topic) => topicById.get(topic)?.mapping !== undefined);
+      const askable = requested.filter((topic) => mappedTopic(topic) !== undefined);
       for (const topic of requested) {
         outcomes[topic] = 'unavailable';
       }
@@ -751,6 +872,7 @@ export function createCapacitorNotificationProvider(
       ? {}
       : {
           async register(): Promise<NotificationEndpointRegistration | null> {
+            assertConfigured();
             let value: string;
             try {
               value = addressKind === 'fcm-installation' && getInstallationId !== undefined
@@ -774,6 +896,7 @@ export function createCapacitorNotificationProvider(
               return null;
             }
             tokenFailureReported = false;
+            lastAddress = value;
             return registrationOf(value);
           },
         }),
@@ -790,7 +913,7 @@ export function createCapacitorNotificationProvider(
                 cause: error,
               });
             }
-            const declared = topicById.get(checked.topic);
+            const declared = mappedTopic(checked.topic);
             if (declared === undefined || declared.purpose === 'advertising') {
               // Outside the resolved catalog it has no channel, as a request
               // for it answers `unavailable`; and a device-scheduled
@@ -867,12 +990,14 @@ export function createCapacitorNotificationProvider(
       return 'opened';
     },
     subscribe(listener) {
+      const first = listeners.size === 0;
       listeners.add(listener);
-      if (!subscribed) {
-        subscribed = true;
+      // `source` reads `cold` only for opens before the first subscriber ever.
+      subscribed = true;
+      if (first) {
         const drained = buffer;
         buffer = [];
-        // Every buffered event reaches the first subscriber exactly once.
+        // Every buffered event reaches the next subscriber exactly once.
         for (const event of drained) {
           try {
             listener(event);
@@ -952,6 +1077,13 @@ interface PermissionDialogAnswer {
   readonly request: number;
   readonly before: NotificationPermissionState;
   readonly after: NotificationPermissionState;
+}
+
+/** One of this provider's pending reminders, as `getPending` reported it. */
+interface PendingReminder extends LocalEntryExtra {
+  readonly id: number;
+  readonly title?: string;
+  readonly body?: string;
 }
 
 interface LocalEntryExtra extends LocalNotificationEntry {

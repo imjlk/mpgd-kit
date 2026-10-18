@@ -218,11 +218,13 @@ is created, which is how a cold-start open reaches it.
   one out when the app is not native, the shell has no native implementation,
   or the import fails. Without both the provider is `unsupported`; without the
   push plugin it declares no remote delivery; without the local plugin it
-  declares no local reminders, registers no advertising opt-out category, and
-  reads the permission through the push plugin, which answers `granted` on
-  Android 12 and lower whatever the setting is. A game with advertising topics
-  installs both. iOS remote notifications go through FCM, which relays to
-  APNs.
+  declares no local reminders and reads the permission through the push
+  plugin, which answers `granted` on Android 12 and lower whatever the setting
+  is. **Advertising needs both plugins:** the opt-out action every advertising
+  push carries is registered through the local plugin, so a push-only shell
+  whose catalog maps an advertising topic is `configuration-required` (its
+  reads, requests, and `register()` throw `NOTIFICATIONS_CONFIGURATION_REQUIRED`).
+  iOS remote notifications go through FCM, which relays to APNs.
 - **Gateway.** `createCapacitorNotificationServiceProvider` (or
   `createNotificationServiceProvider` over another provider) registers the
   nine `notifications.v2.*` methods. The gateway then exposes
@@ -258,15 +260,21 @@ is created, which is how a cold-start open reaches it.
     the topic's Android channel. Operations run one at a time, in call order.
   - iOS keeps at most 64 pending, so the provider keeps the nearest: at the
     ceiling it cancels the farthest of its reminders before it schedules a
-    nearer one. Android declares no ceiling, but its alarm manager refuses an
-    app with about 500 pending alarms.
+    nearer one, and puts the farthest back when that schedule fails. Android
+    declares no ceiling, but its alarm manager refuses an app with about 500
+    pending alarms.
 - **Channels.** Each topic posts to its mapping's `channelId`, or to
   `mpgd-service`, `mpgd-requested`, or `mpgd-advertising` by purpose
   (`capacitorNotificationChannelId`). Creating the provider throws when a
   channel would mix advertising with other topics, so a player can always turn
   advertising off in system settings. Name the channels with the `channels`
   option.
-- **Opens.** A tap becomes one `opened` event, buffered until the first
+- **Topics.** Only topics this target maps count. A topic the catalog declares
+  without a mapping for the target reads `unsupported`, answers `unavailable`
+  to a request and `unsupported` to `scheduleLocal`, gets no channel, and an
+  open naming it carries no topic.
+- **Opens.** A tap becomes one `opened` event, kept whenever no listener is
+  attached (before the first subscriber, and between two) for the next
   subscriber. A push carries its topic and route in the data keys `topic` and
   `route` (`capacitorNotificationDataKeys`); its other string entries, except
   the transport's own keys (`from`, `collapse_key`, `google.*`, `gcm.*`, and
@@ -292,13 +300,16 @@ is created, which is how a cold-start open reaches it.
   passes `openSettings` (for example a small native method); without it
   `permission.settings` is `false` and `openSettings` answers `unavailable`.
   The provider resolves `openSettings` only once the app is back in the
-  foreground, after at most ten minutes, or after five seconds when the app
-  never left.
+  foreground, after at most two minutes (`settingsReturnTimeoutMs`), or after
+  five seconds when the app never left.
 - **Endpoints.** `register()` answers the FCM token with the device
   permission, locale, and time zone, or `null` while Firebase cannot issue one
   yet; a token Firebase issues later arrives as `endpoint-changed`. Pass
   `address: 'fcm-installation'` with a `PushSdk` whose `getInstallationId`
-  issues Firebase installation ids to register those instead. The messaging
+  issues Firebase installation ids to register those instead; Firebase
+  announces no installation id change, so the provider reads the id again on
+  each return to the foreground and announces a change as `endpoint-changed`.
+  The messaging
   plugin has no such method, and its proxy cannot be told apart from one that
   has, so with the plain plugin `register()` answers
   `NOTIFICATIONS_CONFIGURATION_REQUIRED`.
