@@ -281,6 +281,11 @@ export function createCapacitorNotificationProvider(
     readonly before: NotificationPermissionState;
     readonly after: NotificationPermissionState;
   }> | undefined;
+  /** The answer of the last dialog that settled. */
+  let lastAnswer: {
+    readonly before: NotificationPermissionState;
+    readonly after: NotificationPermissionState;
+  } | undefined;
   /** Counts requests, so a read that overlapped one cannot settle `lastObserved` after it. */
   let requests = 0;
   const readAppState = async (): Promise<NotificationPermissionState> => {
@@ -323,6 +328,7 @@ export function createCapacitorNotificationProvider(
     ensureActionTypes().catch(reportSetupFailure);
     resumeCheck = resumeCheck.then(async () => {
       const before = lastObserved;
+      const generation = requests;
       // A request's own dialog also takes the app out of the foreground (the
       // iOS alert, the Android permission activity); the request reports that
       // answer itself.
@@ -330,8 +336,9 @@ export function createCapacitorNotificationProvider(
         return;
       }
       const state = await readAppState();
-      // A request that began during the read reports its own answer.
-      if (state !== before && requesting === undefined) {
+      // A request that began, or even ended, during the read reports its own
+      // answer.
+      if (state !== before && requesting === undefined && generation === requests) {
         // Changed in system settings: no plugin reports it as an event.
         dispatch({
           type: 'permission-changed',
@@ -513,7 +520,8 @@ export function createCapacitorNotificationProvider(
       return Promise.resolve();
     }
     actionTypesReady ??= Promise.resolve()
-      .then(() => local?.registerActionTypes({
+      .then(async () => {
+        await local?.registerActionTypes({
         types: [{
           id: capacitorAdvertisingActionTypeId,
           actions: [{
@@ -522,7 +530,9 @@ export function createCapacitorNotificationProvider(
             foreground: true,
           }],
         }],
-      }))
+        });
+        setupFailureReported = false;
+      })
       .catch((error: unknown) => {
         actionTypesReady = undefined;
         throw error;
@@ -675,9 +685,13 @@ export function createCapacitorNotificationProvider(
       }
       let answer = requesting;
       if (answer === undefined) {
+        const generation = requests;
         const before = await readAppState();
-        // Another request may have opened the dialog during that read.
-        answer = requesting;
+        // Another request may have opened the dialog during that read, or
+        // opened and closed it: then this call shares that answer instead
+        // of asking again from a state read before it.
+        answer = requesting
+          ?? (generation === requests || lastAnswer === undefined ? undefined : Promise.resolve(lastAnswer));
         if (answer === undefined && before === 'blocked') {
           // Only settings can change it; the dialog would not show.
           for (const topic of askable) {
@@ -695,7 +709,8 @@ export function createCapacitorNotificationProvider(
             await callSdk(askPermission);
             const after = await readAppState();
             lastObserved = after;
-            return { before, after };
+            lastAnswer = { before, after };
+            return lastAnswer;
           })();
           requesting = asked;
           const clear = (): void => {

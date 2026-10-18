@@ -545,6 +545,66 @@ describe('Capacitor notifications provider: events around a request', () => {
     expect(errors).toEqual([new Error('first'), new Error('second')]);
   });
 
+  it('shares the answer of a dialog that opened and closed during its own first read', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'android' });
+    let hold: ((state: { readonly display: 'prompt' }) => void) | undefined;
+    let calls = 0;
+    const local: LocalNotificationSdk = {
+      ...sdks.local!,
+      checkPermissions: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return new Promise((resolve) => {
+            hold = resolve;
+          });
+        }
+        return { display: sdks.osState };
+      },
+    };
+    const provider = createCapacitorNotificationProvider({
+      platform: 'android', topics, push: sdks.push!, local, app: null,
+    });
+    const late = provider.requestPermission({ topics: ['energy-full'] });
+    sdks.queuePrompt('granted');
+    const early = await provider.requestPermission({ topics: ['friend-challenge'] });
+    hold?.({ display: 'prompt' });
+    expect((await late).outcomes).toEqual({ 'energy-full': 'granted' });
+    expect(early.outcomes).toEqual({ 'friend-challenge': 'granted' });
+    expect(sdks.prompts).toBe(1);
+  });
+
+  it('announces no change for a return whose read overlapped a request', async () => {
+    const sdks = createFakeNotificationSdks({ platform: 'android' });
+    let hold: ((state: { readonly display: 'granted' }) => void) | undefined;
+    let calls = 0;
+    const local: LocalNotificationSdk = {
+      ...sdks.local!,
+      checkPermissions: async () => {
+        calls += 1;
+        if (calls === 2) {
+          return new Promise((resolve) => {
+            hold = resolve;
+          });
+        }
+        return { display: sdks.osState };
+      },
+    };
+    const provider = createCapacitorNotificationProvider({
+      platform: 'android', topics, push: sdks.push!, local, app: sdks.app,
+    });
+    const events: NotificationEvent[] = [];
+    provider.subscribe((event) => events.push(event));
+    await provider.getPermission({ topics: [] });
+    // The return's read hangs while a request runs and answers.
+    sdks.app.setActive(true);
+    await settle();
+    sdks.queuePrompt('granted');
+    await provider.requestPermission({ topics: ['energy-full'] });
+    hold?.({ display: 'granted' });
+    await settle();
+    expect(events).toEqual([]);
+  });
+
   it('stops waiting for a request that failed', async () => {
     const { provider, sdks } = setup({ platform: 'ios' });
     const events: NotificationEvent[] = [];
