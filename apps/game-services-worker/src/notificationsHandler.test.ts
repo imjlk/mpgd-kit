@@ -597,7 +597,10 @@ try {
     [settingsOnly, /needs both the AIT_PARTNER_MTLS binding and MPGD_AIT_NOTIFICATIONS/u],
     [bindingOnly, /needs both the AIT_PARTNER_MTLS binding and MPGD_AIT_NOTIFICATIONS/u],
     [noIdentity, /needs the GAME_SERVICES_NOTIFICATIONS_IDENTITY binding/u],
-    [{ ...aitEnv, MPGD_AIT_NOTIFICATIONS: { recipientKey: 'phone' } }, /recipientKey must be/u],
+    [
+      { ...aitEnv, MPGD_AIT_NOTIFICATIONS: { recipientKey: 'phone' } },
+      /^MPGD_AIT_NOTIFICATIONS\.recipientKey must be/u,
+    ],
     [
       { ...aitEnv, MPGD_AIT_NOTIFICATIONS: { recipientKey: 'toss-user', agreementCodes: ['x'] } },
       /has no field agreementCodes/u,

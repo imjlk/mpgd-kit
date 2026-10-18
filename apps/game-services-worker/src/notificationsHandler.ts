@@ -164,12 +164,10 @@ export function workerNotificationProviders(
         'The Apps in Toss provider needs the GAME_SERVICES_NOTIFICATIONS_IDENTITY binding to resolve recipients.',
       );
     }
+    const settings = aitProviderSettings(aitSettings);
     let provider: ReturnType<typeof createAitFunctionalMessageDeliveryProvider>;
     try {
-      provider = createAitFunctionalMessageDeliveryProvider({
-        ...aitProviderSettings(aitSettings),
-        mtls: env.AIT_PARTNER_MTLS,
-      });
+      provider = createAitFunctionalMessageDeliveryProvider({ ...settings, mtls: env.AIT_PARTNER_MTLS });
     } catch (error) {
       // The provider checks the base URL and the timeout range; name the setting they came from.
       throw new Error(
