@@ -99,6 +99,8 @@ const defaultClaimLeaseSeconds = 300;
 const maxLedgerAttempts = 8;
 /** Settling an answer the provider already gave is retried harder, so it is not replayed. */
 const maxCompleteAttempts = 24;
+/** The longest wait between ambiguous replays. */
+const maxAmbiguousLeaseMs = 3_600_000;
 /** Longest accepted text for ids, locales, links, and versions. */
 const maxTextLength = 2048;
 /** Longest accepted device address value. */
@@ -946,6 +948,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       provider: row.provider,
       ...(row.installationId === undefined ? {} : { installationId: row.installationId }),
       ...(before.firstAttemptedAt === undefined ? {} : { firstAttemptedAt: before.firstAttemptedAt }),
+      ...(before.ambiguousAttempts === undefined ? {} : { ambiguousAttempts: before.ambiguousAttempts }),
     };
     if (decision.status === 'deferred') {
       await complete(
@@ -999,7 +1002,11 @@ export function createNotificationService(input: CreateNotificationServiceInput)
       case 'ambiguous': {
         // The provider may have sent it: the claim is kept for the lease.
         const kept = row.state.status === 'in-flight' ? row.state : undefined;
-        const leaseUntil = answeredAt + leaseMs;
+        // Each ambiguous answer doubles the wait before the next replay, up to
+        // an hour: a provider without an idempotency key may show every replay.
+        const ambiguousAttempts = (row.ambiguousAttempts ?? 0) + 1;
+        const leaseUntil = answeredAt
+          + Math.min(leaseMs * 2 ** (ambiguousAttempts - 1), Math.max(leaseMs, maxAmbiguousLeaseMs));
         // The replay window started at the claim that reached the provider (or an earlier one).
         const firstAttemptedAt = row.firstAttemptedAt ?? formatNotificationInstant(at);
         if (isNotificationRowAbandoned({ ...row, firstAttemptedAt }, leaseUntil)) {
@@ -1021,6 +1028,7 @@ export function createNotificationService(input: CreateNotificationServiceInput)
               ...base,
               ...backoff,
               firstAttemptedAt,
+              ambiguousAttempts,
               state: {
                 status: 'in-flight',
                 leaseUntil: formatNotificationInstant(leaseUntil),
@@ -1621,6 +1629,13 @@ function sendInputIssue(request: Readonly<Record<string, unknown>>): string | un
     const issue = notificationTemplateDataIssue(request.data, { stringsOnly: true });
     if (issue !== undefined) {
       return `data: ${issue}`;
+    }
+    // An open carries its topic and route in these keys; routing data never overrides them.
+    const reserved = Object.keys(request.data as object).find(
+      (key) => key === 'topic' || key === 'route',
+    );
+    if (reserved !== undefined) {
+      return `data: the key ${reserved} is reserved for the open's own ${reserved}`;
     }
   }
   for (const name of ['provider', 'locale', 'link'] as const) {

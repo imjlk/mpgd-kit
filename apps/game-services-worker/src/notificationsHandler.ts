@@ -289,7 +289,7 @@ export function createNotificationsFetchHandler(
       try {
         parsed = await readBody(request);
       } catch {
-        // The client went away mid-body.
+        // The body could not be read (the client went away, the stream broke).
         parsed = undefined;
       }
       if (parsed === 'too-large') {
@@ -519,7 +519,7 @@ async function readBody(
       }
       size += value.byteLength;
       if (size > maxBodyBytes) {
-        await reader.cancel();
+        await reader.cancel().catch(() => undefined);
         return 'too-large';
       }
       chunks.push(value);
@@ -582,7 +582,8 @@ function errorName(error: unknown): string {
  */
 function describeFailure(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return `${errorName(error)}: ${message.length > 120 ? `${message.slice(0, 120)}…` : message}`;
+  const characters = Array.from(message);
+  return `${errorName(error)}: ${characters.length > 120 ? `${characters.slice(0, 120).join('')}…` : message}`;
 }
 
 function json(body: unknown, status: number, headers: Readonly<Record<string, string>>): Response {

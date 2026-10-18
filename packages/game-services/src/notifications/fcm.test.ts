@@ -146,32 +146,37 @@ const request: NotificationRemoteDeliveryRequest = {
       },
       data: {
         offer: 'autumn',
-        'mpgd.topic': 'sale',
-        'mpgd.route': '/shop',
-        'mpgd.actions': JSON.stringify([
-          { id: 'advertising-opt-out', title: '수신거부', route: '/settings/ads' },
-        ]),
+        topic: 'sale',
+        route: '/shop',
       },
       android: { ttl: '32400s', notification: { channel_id: 'promotions' } },
       apns: {
         headers: { 'apns-expiration': String(Date.parse('2026-10-19T12:00:00Z') / 1000) },
-        payload: { aps: { category: 'advertising-opt-out' } },
+        payload: { aps: { category: 'mpgd-advertising' } },
       },
     },
   });
   const { expiresAt: _expiresAt, ...unexpiring } = request;
   const plain = buildFcmMessage({
     ...unexpiring,
-    topic: { ...request.topic, mapping: {} },
+    topic: {
+      id: 'friend-challenge',
+      purpose: 'service',
+      channels: ['remote'],
+      route: '/',
+      mapping: {},
+    },
     content: { title: 'T', body: 'B', route: '/', source: 'catalog' },
     data: {},
   });
+  // Without a channelId a push posts to the purpose's default channel, and only advertising names a category.
   assert.deepEqual(plain, {
     status: 'ready',
     message: {
       token: 'device-token',
       notification: { title: 'T', body: 'B' },
-      data: { 'mpgd.topic': 'sale', 'mpgd.route': '/' },
+      data: { topic: 'friend-challenge', route: '/' },
+      android: { notification: { channel_id: 'mpgd-service' } },
     },
   });
   for (const [change, reason] of [
@@ -187,7 +192,8 @@ const request: NotificationRemoteDeliveryRequest = {
     ],
     [{ recipient: { kind: 'platform-user', id: 'u' } }, /registration tokens/u],
     [{ content: { route: '/', source: 'host-template' } }, /title and a body/u],
-    [{ data: { 'mpgd.route': '/evil' } }, /reserved/u],
+    [{ data: { route: '/evil' } }, /reserved/u],
+    [{ data: { topic: 'other' } }, /reserved/u],
     [{ data: { 'google.c.a.e': '1' } }, /reserved/u],
     [{ data: { from: 'x' } }, /reserved/u],
     [{ data: { big: 'x'.repeat(5000) } }, /at most 3840/u],
@@ -377,7 +383,7 @@ const request: NotificationRemoteDeliveryRequest = {
   // An invalid message is never sent.
   const unsent = fakeGoogle({});
   assert.deepEqual(
-    await createFcmDeliveryProvider({ serviceAccount, fetch: unsent.fetch, now }).send({ ...request, data: { 'mpgd.x': '1' } }),
+    await createFcmDeliveryProvider({ serviceAccount, fetch: unsent.fetch, now }).send({ ...request, data: { topic: 'x' } }),
     { status: 'rejected', reason: 'configuration', providerCode: 'INVALID_MESSAGE' },
   );
   assert.equal(unsent.exchanges.length, 0);

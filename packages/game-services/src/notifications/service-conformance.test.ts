@@ -298,7 +298,7 @@ for (const vector of vectors) {
     createBackend: createServiceBackend,
   });
   assert.ok(
-    result.status === 'passed' || result.status === 'skipped',
+    result.status === 'passed',
     `${vector.vector}: ${JSON.stringify(result.failures, null, 2)}`,
   );
   ran += 1;

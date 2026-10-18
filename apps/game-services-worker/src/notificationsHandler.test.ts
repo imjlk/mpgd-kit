@@ -258,7 +258,7 @@ try {
     sends.map((send) => [send.token, send.channel]),
     [
       ['tok-a', 'social'],
-      ['tok-b', undefined],
+      ['tok-b', 'mpgd-service'],
     ],
   );
   assert.ok(sends[0]?.body.includes('Mina님이 도전했어요.'));

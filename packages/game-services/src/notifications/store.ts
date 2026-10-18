@@ -145,6 +145,8 @@ export interface NotificationSendRow {
    * earlier value, so ambiguous replays stop 24 hours after a real attempt.
    */
   readonly firstAttemptedAt?: string;
+  /** Ambiguous answers so far; each doubles the lease before the next replay. */
+  readonly ambiguousAttempts?: number;
 }
 
 /** A send key's stored state. */

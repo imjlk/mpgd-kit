@@ -937,7 +937,10 @@ player's account would deliver that player's notifications to the device.
 
 - **Device endpoints.** One is keyed by provider and installation id. The
   installation id is the authenticated game-services session's (the guest
-  session's) installation id, never a value from the request body. An endpoint
+  session's) installation id, never a value from the request body. The
+  identity service must vouch for it (issue it, or bind it to the session
+  it issued): a client that could pick another installation's id could
+  move that installation's endpoint to itself. An endpoint
   holds the current address, the device's permission, and `lastRegisteredAt`.
   - A new address for the same installation replaces the old one.
   - An address is unique per provider.
@@ -1086,7 +1089,9 @@ for Devvit.
 
 - **Bounds and reserved prefixes.** Inputs follow the v1 bounds (see
   [Reminders](#reminders)). Keys that start with `reminder:` or `notice:` are
-  reserved for the scheduler and throw `NOTIFICATIONS_INVALID_INPUT`.
+  reserved for the scheduler and throw `NOTIFICATIONS_INVALID_INPUT`, and so
+  do the routing `data` keys `topic` and `route`, which an open carries for
+  itself.
 - **Binding.** The backend binds each stored key to a fingerprint of the
   request. The resolved address is left out, so a replay after a token
   rotation still matches.
@@ -1301,8 +1306,11 @@ Every provider answer maps to one of five kinds:
   - The scheduler also replays a direct send's row once its lease expired,
     so a send whose caller never retries still settles, and so does a row
     whose holder failed before the provider call.
-  - Replays stop a day after the first attempt: the row stays `in-flight`
-    until its key's retention ends, and the backend reports it.
+  - Each ambiguous answer doubles the lease before the next replay (from
+    the claim lease up to an hour), because a provider without an
+    idempotency key may show every replay. Replays stop a day after the
+    first attempt: the row stays `in-flight` until its key's retention
+    ends, and the backend reports it.
   - One rule covers every claimer. `deferred` would also claim that nothing
     was sent, which an `ambiguous` answer cannot prove.
 
@@ -1341,14 +1349,16 @@ recipient's key. Examples are Apps in Toss per-channel `fail` lists and Devvit
     `apns-expiration` header. A message that would expire within a second
     is not sent (`rejected`, provider code `MESSAGE_EXPIRED`), because FCM
     reads a time to live of 0 as "deliver now if the device is reachable".
-  - **Payload.** The gate's title and body are the FCM `notification`.
-    `data` carries the send's routing data and the reserved keys
-    `mpgd.topic`, `mpgd.route`, and, when the content has actions,
-    `mpgd.actions` (JSON). Android uses the mapping's `channelId`, and iOS
-    gets the first action's id as the APNs category. Routing data may not
-    use the `mpgd.` prefix or FCM's reserved keys.
-  - **Fan-out.** It goes through a queue, since one Worker invocation has a
-    subrequest limit, and the gate runs when the queued call is made.
+  - **Payload.** The gate's title and body are the FCM `notification`, and
+    `data` carries the send's routing data with the topic id in `topic` and
+    its root-relative route in `route`, as the
+    [Capacitor provider](#profile-capacitor) reads them. Android posts to
+    the mapping's `channelId`, else to `mpgd-service`, `mpgd-requested`, or
+    `mpgd-advertising` by purpose. An advertising send names the iOS
+    category `mpgd-advertising` in `apns.payload.aps.category`, whose
+    opt-out action the app registers. An Android FCM notification message
+    cannot carry actions; the shell renders advertising natively (C1). FCM's
+    reserved data keys are refused before the send.
 - **Apps in Toss.**
   - **Transport.** `sendFunctionalMessage` over mTLS, with the template set
     code and context, one recipient per call in the first wave.
@@ -1843,7 +1853,6 @@ publishable package carries a Sampo changeset.
 | P3 | `@mpgd/adapter-devvit`: game-rendered opt-in and opt-out through the server bridge, a client-side `identity.requestUpgrade` over `showLoginPrompt()`, and a delivery provider over `enqueue` with per-send links inside the Devvit server | |
 | S1 | `@mpgd/game-services` and the Worker: provider registry, endpoint registry bound to the game-services session, consent records and the notices API, policy gate, FCM delivery provider with expiry, D1 migrations, retention purges, authenticated routes, dead and stale endpoint handling | No endpoints, no consent records |
 | S2 | Reminders: client intent API with routing and set-time checks, server scheduler (D1 and Cron) with pacing and backoff, notice sending, Devvit scheduler path | No reminders |
-
 | C1 | CLI and templates: `--providers notifications`, plugin wiring through `@mpgd/*` packages only, Firebase setup guide, the `advertisingRules` setting, a notice topic, a sample consent screen for advertising and night consent, docs | |
 
 **What S1 landed.**

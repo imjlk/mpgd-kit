@@ -1,7 +1,4 @@
-import {
-  referenceNotificationProviders,
-  type NotificationAction,
-} from '@mpgd/platform/notifications';
+import { referenceNotificationProviders } from '@mpgd/platform/notifications';
 
 import type {
   NotificationRemoteDeliveryAnswer,
@@ -18,20 +15,25 @@ import type { NotificationProviderRegistration } from './registry.js';
  * crypto). iOS devices register through Firebase Messaging, so FCM relays to
  * APNs.
  *
- * Payload: the gate's title and body as the FCM `notification`; `data`
- * carries the send's routing data plus `mpgd.topic`, `mpgd.route`, and, when
- * the content has actions (the advertising opt-out under the Korean rules),
- * `mpgd.actions` as JSON. Android uses the mapping's `channelId`; iOS gets the
- * first action's id as the APNs category. An expiry becomes `android.ttl` and
- * the `apns-expiration` header.
+ * Payload, as the Capacitor provider reads it (RFC "Capacitor"): the gate's
+ * title and body as the FCM `notification`; `data` carries the send's routing
+ * data plus `topic` (the topic id) and `route` (its root-relative route).
+ * Android posts to the mapping's `channelId`, else to `mpgd-service`,
+ * `mpgd-requested`, or `mpgd-advertising` by purpose. An advertising send
+ * names the iOS category `mpgd-advertising`, whose opt-out action the app
+ * registers; an Android FCM notification message cannot carry actions, so
+ * the shell renders advertising natively (C1). An expiry becomes
+ * `android.ttl` and the `apns-expiration` header.
  */
 
 export const fcmMessagingScope = 'https://www.googleapis.com/auth/firebase.messaging';
 export const fcmTokenEndpoint = 'https://oauth2.googleapis.com/token';
 /** The FCM HTTP v1 API takes registration tokens; installation ids are not a send target. */
 export const fcmAddressKinds = Object.freeze(['fcm-token'] as const);
-/** Data keys this provider writes; a send's routing data may not use the prefix. */
-export const fcmReservedDataPrefix = 'mpgd.';
+/** Data keys this provider writes; a send's routing data may not use them. */
+export const fcmReservedDataKeys = Object.freeze(['topic', 'route'] as const);
+/** The iOS notification category of advertising, which carries the opt-out action. */
+export const fcmAdvertisingCategory = 'mpgd-advertising';
 /**
  * FCM's 4,096-byte limit, less room for what FCM and APNs add on the way
  * (the `aps` wrapper and FCM's own keys), so a message this check passes is
@@ -333,14 +335,13 @@ export function buildFcmMessage(request: NotificationRemoteDeliveryRequest): Fcm
     }
     data[key] = value;
   }
-  data[`${fcmReservedDataPrefix}topic`] = request.topic.id;
-  data[`${fcmReservedDataPrefix}route`] = content.route;
-  const actions: readonly NotificationAction[] = content.actions ?? [];
-  if (actions.length > 0) {
-    data[`${fcmReservedDataPrefix}actions`] = JSON.stringify(actions);
-  }
+  data.topic = request.topic.id;
+  data.route = content.route;
   const notification = { title: content.title, body: content.body };
-  const channelId = request.topic.mapping?.['channelId'];
+  const mapped = request.topic.mapping?.['channelId'];
+  const channelId = typeof mapped === 'string' && mapped !== ''
+    ? mapped
+    : `mpgd-${request.topic.purpose}`;
   const expiresAt = request.expiresAt === undefined ? undefined : Date.parse(request.expiresAt);
   const at = Date.parse(request.at);
   if (expiresAt !== undefined && (!Number.isFinite(expiresAt) || !Number.isFinite(at))) {
@@ -360,11 +361,9 @@ export function buildFcmMessage(request: NotificationRemoteDeliveryRequest): Fcm
   }
   const android: Record<string, unknown> = {
     ...(expiresAt === undefined ? {} : { ttl: `${Math.floor((expiresAt - at) / 1000)}s` }),
-    ...(typeof channelId === 'string' && channelId !== ''
-      ? { notification: { channel_id: channelId } }
-      : {}),
+    notification: { channel_id: channelId },
   };
-  const category = actions[0]?.id;
+  const category = request.topic.purpose === 'advertising' ? fcmAdvertisingCategory : undefined;
   const apns: Record<string, unknown> = {
     ...(expiresAt === undefined
       ? {}
@@ -569,12 +568,12 @@ function isFirebaseProjectId(id: string): boolean {
     && new RegExp(`^(?:${label}(?:\\.${label})*:)?${label}$`, 'u').test(id);
 }
 
-/** FCM's reserved data keys (`from`, `message_type`, and any `google` or `gcm` prefix), this provider's, and keys a plain object cannot hold. */
+/** FCM's reserved data keys (`from`, `message_type`, and any `google` or `gcm` prefix), `topic` and `route`, and keys a plain object cannot hold. */
 function isReservedDataKey(key: string): boolean {
   const lower = key.toLowerCase();
   return key === ''
     || key === '__proto__'
-    || key.startsWith(fcmReservedDataPrefix)
+    || (fcmReservedDataKeys as readonly string[]).includes(key)
     || lower === 'from'
     || lower === 'notification'
     || lower === 'message_type'

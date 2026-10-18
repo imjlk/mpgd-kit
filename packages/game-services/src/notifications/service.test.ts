@@ -375,6 +375,7 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
     { idempotencyKey: 'notice:x', player: 'p-1', topic: 'friend-challenge' },
     { idempotencyKey: 'k', player: 'p-1', topic: 'friend-challenge', extra: true },
     { idempotencyKey: 'k', player: 'p-1', topic: 'friend-challenge', data: { n: 1 } },
+    { idempotencyKey: 'k', player: 'p-1', topic: 'friend-challenge', data: { route: '/x' } },
     { idempotencyKey: 'k', player: '', topic: 'friend-challenge' },
     { idempotencyKey: 'k', player: 'p-1', topic: 'consent-notice' },
   ]) {
@@ -781,7 +782,8 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
     }
     answers.length = 0;
   }
-  assert.ok(replays >= 280 && replays <= 288, `replayed for about a day: ${replays}`);
+  // Leases double from five minutes to an hour: about 26 replays in the day.
+  assert.ok(replays >= 20 && replays <= 30, `replayed with backoff for about a day: ${replays}`);
   assert.deepEqual((await service.dispatchDue()).results, []);
   // The row whose replays end is reported once, with where it is.
   assert.deepEqual(
@@ -1187,6 +1189,7 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
     { status: 'rejected', reason: 'configuration', providerCode: 'SENDER_ID_MISMATCH' },
     { status: 'rejected', reason: 'recipient' },
     { status: 'rejected', reason: 'agreement' },
+    { status: 'rejected', reason: 'configuration', providerCode: 'MESSAGE_EXPIRED' },
   ]);
   const reports: string[] = [];
   const store = createInMemoryNotificationStore();
@@ -1207,7 +1210,7 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
       address: { kind: 'fcm-token', value: 'tok', permission: 'granted' },
     },
   });
-  for (const key of ['rj-1', 'rj-2', 'rj-3']) {
+  for (const key of ['rj-1', 'rj-2', 'rj-3', 'rj-4']) {
     assert.deepEqual(
       await service.deliver({ idempotencyKey: key, player: 'p-1', topic: 'friend-challenge' }),
       { status: 'unavailable', reason: 'provider-rejected' },

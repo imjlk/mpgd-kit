@@ -194,7 +194,8 @@ queue = "mpgd-notifications"
 max_retries = 5
 dead_letter_queue = "mpgd-notifications-dead"
 
-# Purges and due replays (25 sends per run unless MPGD_NOTIFICATIONS_DUE_BATCH says otherwise).
+# Purges and due replays (25 sends per run unless MPGD_NOTIFICATIONS_DUE_BATCH says otherwise;
+# each send costs several subrequests, so larger batches need the paid plan's limit).
 [triggers]
 crons = ["*/5 * * * *"]
 ```
@@ -207,7 +208,9 @@ pnpm --dir apps/game-services-worker exec wrangler secret put FCM_SERVICE_ACCOUN
 
 - **Sessions.** `authenticateNotificationSession({ authorization })` returns
   `{ playerId, sessionId, installationId, expiresAt? }`. The installation is
-  the session's, never a request field. `sessionId` stays the same across
+  the session's, never a request field, and the identity service vouches
+  for it (it issued the id, or bound it to the session); a client-chosen id
+  could take over another installation's endpoint. `sessionId` stays the same across
   refreshes. Call `endNotificationSession({ sessionId })` on the service
   binding at logout or revocation. `expiresAt` is when the whole session
   (its refresh family) ends, not when one access token expires: the
