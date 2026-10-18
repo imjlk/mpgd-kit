@@ -202,7 +202,6 @@ export function createCapacitorNotificationProvider(
   // The provider registers FCM tokens only. `fcm-installation` addresses are
   // reserved: FCM HTTP v1 cannot send to a Firebase installation id, so the
   // game-services sender refuses them.
-  const addressKind = 'fcm-token';
   const topics = [...input.topics];
   const topicById = new Map(topics.map((topic) => [topic.id, topic]));
   /**
@@ -274,14 +273,20 @@ export function createCapacitorNotificationProvider(
       }
       return;
     }
-    for (const listener of [...listeners]) {
+    deliver(event, [...listeners]);
+  };
+  function deliver(
+    event: NotificationEvent,
+    targets: readonly ((event: NotificationEvent) => void)[],
+  ): void {
+    for (const target of targets) {
       try {
-        listener(event);
+        target(event);
       } catch (error) {
         reportError(error);
       }
     }
-  };
+  }
 
   // Permission. It is read from the local plugin, which reflects the system
   // setting on every Android version, and asked through the push plugin,
@@ -386,7 +391,7 @@ export function createCapacitorNotificationProvider(
     const locale = (input.locale ?? defaultLocale)();
     return {
       provider: providerId,
-      address: { kind: addressKind, value, permission },
+      address: { kind: 'fcm-token', value, permission },
       ...(locale === undefined || locale === '' ? {} : { locale }),
       ...(timeZone === undefined || timeZone === '' ? {} : { timeZone }),
     };
@@ -969,18 +974,17 @@ export function createCapacitorNotificationProvider(
         // order: an event dispatched while the buffer drains queues behind it
         // and then reaches every listener attached by then, as a live one does.
         draining = true;
-        let backlog = buffer.length;
+        // The backlog is taken whole, so an eviction while it drains touches
+        // only events dispatched meanwhile. The listener cannot leave during
+        // the drain: it runs inside this `subscribe` call, before the call
+        // returns its unsubscribe.
+        const backlog = buffer.splice(0);
         try {
+          for (const event of backlog) {
+            deliver(event, [listener]);
+          }
           for (let event = buffer.shift(); event !== undefined; event = buffer.shift()) {
-            const targets = backlog > 0 ? [listener] : [...listeners];
-            backlog -= 1;
-            for (const target of targets) {
-              try {
-                target(event);
-              } catch (error) {
-                reportError(error);
-              }
-            }
+            deliver(event, [...listeners]);
           }
         } finally {
           draining = false;

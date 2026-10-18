@@ -1329,17 +1329,19 @@ describe('Capacitor notifications provider: opens and events', () => {
   it('delivers an event dispatched during the drain to a subscriber added during it', () => {
     const { provider, sdks } = setup();
     sdks.tap({ channel: 'remote', topic: 'friend-challenge' });
+    const first: (string | undefined)[] = [];
     const second: (string | undefined)[] = [];
     let added = false;
     provider.subscribe((event) => {
+      first.push(event.type === 'opened' ? event.topic : event.type);
       if (!added) {
         added = true;
         provider.subscribe((later) => second.push(later.type === 'opened' ? later.topic : later.type));
         sdks.tap({ channel: 'remote', topic: 'energy-full' });
       }
-      void event;
     });
     // The backlog stays the first subscriber's; the later tap reaches both.
+    expect(first).toEqual(['friend-challenge', 'energy-full']);
     expect(second).toEqual(['energy-full']);
   });
 
