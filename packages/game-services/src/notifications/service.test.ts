@@ -745,13 +745,12 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
       alreadyProcessed: false,
     },
   );
-  // A row whose claim never lands is not sent; it stays queued and runs once the lease ends.
+  // A row whose claim never lands is not sent: the caller is told to retry,
+  // and the stored row runs once its lease ends.
   conflicts = 1000;
-  assert.deepEqual(
-    await service.deliver({ idempotencyKey: 'c-2', player: 'p-1', topic: 'friend-challenge' }),
-    {
-      status: 'in-flight',
-    },
+  await expectCode(
+    service.deliver({ idempotencyKey: 'c-2', player: 'p-1', topic: 'friend-challenge' }),
+    'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE',
   );
   conflicts = 0;
   assert.equal(fcm.calls.length, 1);
@@ -1055,6 +1054,89 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
     ),
     'NOTIFICATIONS_INVALID_INPUT',
   );
+}
+
+// Failures in a replay: a released row backs off, a failing send is counted, history never forces a replay.
+{
+  const time = clock('2026-10-19T03:00:00Z');
+  let readFails = 0;
+  let historyFails = 0;
+  const platform = fakeProvider('platform', [{ status: 'rate-limited', retryAfterSeconds: 60 }]);
+  const inner = createInMemoryNotificationStore();
+  const store: NotificationStore = {
+    ...inner,
+    async addHistory(entry) {
+      if (historyFails > 0) {
+        historyFails -= 1;
+        throw new Error('history down');
+      }
+      return inner.addHistory(entry);
+    },
+  };
+  const errors: string[] = [];
+  const service = createNotificationService({
+    store,
+    registry: createNotificationProviderRegistry([
+      {
+        entry: {
+          ...platformEntry,
+          permission: { ...platformEntry.permission, serverReadable: true },
+        },
+        delivery: {
+          id: 'platform',
+          send: (request) => platform.send(request),
+          async readPermission() {
+            if (readFails > 0) {
+              readFails -= 1;
+              throw new Error('host down');
+            }
+            return 'granted';
+          },
+        },
+        targets: ['web'],
+      },
+    ]),
+    catalog: vectorCatalog([{ ...serviceTopic, copy: { ko: { title: 'T', body: 'B' } } }]),
+    resolvePlatformRecipient: () => 'u-1',
+    now: time.now,
+    random: () => 0,
+    onError: (_error, context) => {
+      errors.push(`${context.operation}:${context.provider ?? ''}:${context.rowKey ?? ''}`);
+    },
+  });
+  // Rate-limited first: the row waits 60 s and keeps its first attempt time.
+  assert.equal(
+    (await service.deliver({ idempotencyKey: 'rf-1', player: 'p-1', topic: 'friend-challenge' })).status,
+    'deferred',
+  );
+  const firstAttempt = inner.inspect().sends[0]?.rows[0]?.firstAttemptedAt;
+  assert.equal(firstAttempt, '2026-10-19T03:00:00Z');
+  // The replay's host read fails: the send counts as failed, the row is put back for a minute.
+  time.advance(60);
+  readFails = 1;
+  assert.deepEqual(await service.dispatchDue(), {
+    results: [],
+    failed: 1,
+  });
+  assert.deepEqual(errors, ['dispatchDue::']);
+  time.advance(30);
+  assert.deepEqual(await service.dispatchDue(), { results: [], failed: 0 });
+  time.advance(31);
+  // The history write fails three times; the delivery still settles, once.
+  historyFails = 3;
+  const [delivered] = (await service.dispatchDue()).results;
+  assert.deepEqual(delivered?.outcome, { status: 'delivered', alreadyProcessed: false });
+  assert.equal(errors.filter((entry) => entry.startsWith('history.add')).length, 3);
+  assert.equal(inner.inspect().sends[0]?.rows[0]?.firstAttemptedAt, firstAttempt);
+  time.advance(600);
+  assert.deepEqual(await service.dispatchDue(), { results: [], failed: 0 });
+  assert.equal(platform.calls.length, 2);
+  // A queue job for a long installation id is still a valid job.
+  await service.dispatch({
+    sendKey: 'rf-1',
+    provider: 'platform',
+    rowKey: `rf-1:${'%E4%B8%AD'.repeat(2048)}`,
+  });
 }
 
 console.info('Notifications service unit tests passed.');

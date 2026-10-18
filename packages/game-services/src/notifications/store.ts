@@ -128,8 +128,6 @@ export type NotificationSendRowState =
       readonly attempted: boolean;
       /** When the latest holder claimed it to call the provider. */
       readonly attemptedAt?: string;
-      /** When it was first claimed to call the provider; replays stop 24 hours later. */
-      readonly firstAttemptedAt?: string;
     };
 
 /** One recipient's ledger delivery of a send. */
@@ -141,6 +139,11 @@ export interface NotificationSendRow {
   readonly installationId?: string;
   readonly state: NotificationSendRowState;
   readonly rateLimit?: NotificationRateLimitState;
+  /**
+   * When the row was first claimed to call the provider. It survives a
+   * rate-limit deferral, so ambiguous replays stop 24 hours after it.
+   */
+  readonly firstAttemptedAt?: string;
 }
 
 /** A send key's stored state. */
@@ -149,7 +152,11 @@ export interface NotificationStoredSend {
   readonly fingerprint: string;
   readonly request: NotificationStoredSendRequest;
   readonly origin: NotificationSendOrigin;
-  /** Whether the scheduler replays its attempted in-flight rows; a direct caller does otherwise. */
+  /**
+   * Whether a scheduler item (a reminder or a notice) or a due replay owns
+   * the send. Every in-flight row whose lease ended is due either way; S2's
+   * scheduler reads the flag for its own items.
+   */
   readonly scheduled: boolean;
   readonly rows: readonly NotificationSendRow[];
   /** Held while the first evaluation runs, before any row exists. */
@@ -341,12 +348,21 @@ function rowDueAt(row: NotificationSendRow): number | undefined {
     return undefined;
   }
   const lease = Date.parse(row.state.leaseUntil);
-  if (!row.state.attempted || row.state.firstAttemptedAt === undefined) {
+  if (!row.state.attempted || row.firstAttemptedAt === undefined) {
     return lease;
   }
   // The provider may have sent it every time: replays stop after a day, and
   // the row stays in flight until its key's retention ends.
-  return lease - Date.parse(row.state.firstAttemptedAt) < ambiguousReplayMs ? lease : undefined;
+  return isNotificationRowAbandoned(row, lease) ? undefined : lease;
+}
+
+/**
+ * Whether an attempted row is past its replays: its lease would end a day
+ * or more after its first attempt.
+ */
+export function isNotificationRowAbandoned(row: NotificationSendRow, leaseUntil: number): boolean {
+  return row.firstAttemptedAt !== undefined
+    && leaseUntil - Date.parse(row.firstAttemptedAt) >= ambiguousReplayMs;
 }
 
 /**
@@ -357,11 +373,7 @@ function rowDueAt(row: NotificationSendRow): number | undefined {
  * send, or a direct platform send whose caller never retries. Ambiguous
  * replays stop 24 hours after the first attempt.
  */
-export function isNotificationRowDue(
-  _send: Pick<NotificationStoredSend, 'scheduled'>,
-  row: NotificationSendRow,
-  at: number,
-): boolean {
+export function isNotificationRowDue(row: NotificationSendRow, at: number): boolean {
   const due = rowDueAt(row);
   return due !== undefined && due <= at;
 }
