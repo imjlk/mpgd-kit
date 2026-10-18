@@ -885,7 +885,8 @@ routed exactly once, by whichever reader comes first:
   `home` for that launch.
 - When the game asks for the launch intent first (before its runtime
   starts, or because it exposes no `notificationsV2`), the intent routes the
-  launch, and no `opened` event is emitted for it.
+  launch from the landing route's parameters (the page URL need not carry
+  them), and no `opened` event is emitted for it.
 
 Both come from one parser over one read of the launch URL per host bridge
 (the adapter's internal `readAitNotificationLanding`), so a page URL change

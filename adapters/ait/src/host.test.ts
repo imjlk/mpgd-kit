@@ -5121,6 +5121,23 @@ describe('AIT launch intent', () => {
     await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({ entry: 'home' });
   });
 
+  it('routes a push launch from its landing route when the intent comes first and the page URL lacks it', async () => {
+    stubSearch('');
+    const bridge = createAitHostBridge({
+      notificationTopics,
+      dependencies: createDependencies({
+        readInitialUrl: () => 'intoss://ttokdoku/daily?entry=daily&puzzleId=p-9&referrer=inbox',
+      }),
+    });
+    await expect(request(bridge, 'presentation.getLaunchIntent', {})).resolves.toEqual({
+      entry: 'daily',
+      puzzleId: 'p-9',
+    });
+    const events: unknown[] = [];
+    bridge.notificationsV2?.subscribe((envelope) => events.push(envelope));
+    expect(events).toEqual([]);
+  });
+
   it('routes a push launch through the launch intent when the game asks first, never losing it', async () => {
     stubSearch('?entry=daily&referrer=push');
     const bridge = createAitHostBridge({ notificationTopics, dependencies: createDependencies() });

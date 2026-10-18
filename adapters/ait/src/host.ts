@@ -354,6 +354,8 @@ export function createAitHostBridge(
   const observedNotifications: AitNotificationProvider = {
     ...notifications,
     async requestPermission(request) {
+      // A request that throws records nothing here: v1 asks one topic at a
+      // time, and its next request reaches the host again.
       const result = await notifications.requestPermission(request);
       for (const [topic, outcome] of Object.entries(result.outcomes)) {
         if (outcome === 'granted' || outcome === 'already-granted') {
@@ -527,12 +529,18 @@ export function createAitHostBridge(
         return ok(request, { status: 'unavailable', reloadExpected: false });
 
       case 'presentation.getLaunchIntent': {
-        const notificationOpen = notifications.deliversLandingOpens()
-          && readAitNotificationLanding(readLaunchUrl()) !== undefined;
-        return ok(
-          request,
-          notificationOpen && !claimLanding('intent') ? { entry: 'home' } : getLaunchIntent(),
-        );
+        const landing = notifications.deliversLandingOpens()
+          ? readAitNotificationLanding(readLaunchUrl())
+          : undefined;
+        if (landing === undefined) {
+          return ok(request, getLaunchIntent());
+        }
+        if (!claimLanding('intent')) {
+          return ok(request, { entry: 'home' });
+        }
+        // The intent routes this notification launch: read the landing
+        // route's parameters, which the page URL need not carry.
+        return ok(request, getLaunchIntent(landingSearch(landing.route)));
       }
 
       case 'presentation.requestGameSurface':
@@ -1390,8 +1398,8 @@ function readDeviceTimeZone(): string | undefined {
  * that the provider's cold `opened` event already routed answers `home`
  * before this is called (RFC "Opens"), so one launch is never routed twice.
  */
-function getLaunchIntent(): LaunchIntent {
-  const params = inboundSearchParams();
+function getLaunchIntent(search?: string): LaunchIntent {
+  const params = inboundSearchParams(search);
   const challengeToken = boundedParam(params.get('challengeToken'));
   const puzzleId = boundedParam(params.get('puzzleId'));
   const requestedEntry = boundedParam(params.get('entry'));
@@ -1424,8 +1432,19 @@ function readInboundShare(): { readonly puzzleId?: string; readonly challengeTok
       };
 }
 
-function inboundSearchParams(): URLSearchParams {
-  const params = new URLSearchParams(globalThis.location?.search ?? '');
+/** The query of a landing route, or `undefined` when it has none, so the page URL's is read. */
+function landingSearch(route: string | undefined): string | undefined {
+  if (route === undefined) {
+    return undefined;
+  }
+  const hashIndex = route.indexOf('#');
+  const beforeHash = hashIndex < 0 ? route : route.slice(0, hashIndex);
+  const queryIndex = beforeHash.indexOf('?');
+  return queryIndex < 0 ? undefined : beforeHash.slice(queryIndex);
+}
+
+function inboundSearchParams(search?: string): URLSearchParams {
+  const params = new URLSearchParams(search ?? globalThis.location?.search ?? '');
   const nested = params.get('queryParams');
 
   if (nested !== null && nested.length <= maximumNestedQueryParamsJsonLength) {
