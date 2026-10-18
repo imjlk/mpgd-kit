@@ -4,6 +4,7 @@ import {
   createNotificationProviderRegistry,
   createNotificationService,
   createNotificationServiceCatalog,
+  NotificationConsentRateLimitError,
   parseFcmServiceAccount,
   type NotificationDispatchJob,
   type NotificationProviderRegistration,
@@ -568,7 +569,14 @@ function errorResponse(error: unknown, corsHeaders: Readonly<Record<string, stri
     return json(
       { error: error.code, ...(status < 500 ? { message: error.message } : {}) },
       status,
-      error.retryable ? { ...corsHeaders, 'Retry-After': '5' } : corsHeaders,
+      error.retryable
+        ? {
+            ...corsHeaders,
+            'Retry-After': String(
+              error instanceof NotificationConsentRateLimitError ? error.retryAfterSeconds : 5,
+            ),
+          }
+        : corsHeaders,
     );
   }
   console.error('Notifications route failed:', describeFailure(error));

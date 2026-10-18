@@ -970,7 +970,7 @@ player's account would deliver that player's notifications to the device.
 
 ### Consent records {#consent-records}
 
-The backend stores the [runtime's records](#runtime) as written, dated by
+The backend stores the [runtime's records](#runtime), dated by
 its own clock, so notices and the latest record never depend on a client
 clock:
 
@@ -980,6 +980,22 @@ clock:
 | `host-agreement` (per topic) | Client report with evidence, for example `apps-in-toss.notification-agreement.v1`; or a provider answer that the recipient has not agreed (`source: 'provider'`) | Hint; the host still enforces on send |
 | `topic-preference` | Authenticated player action, including accepting a host agreement for a `requested` topic | Authoritative |
 | `advertising`, `night` | Authenticated player action with the consent text version | Authoritative |
+
+Every send reads the player's whole history, so client writes are bounded:
+
+- **Repeats.** A record whose state, source, and text version match the
+  player's latest record of the same kind and topic is not written. The
+  backend answers that latest record, which keeps its own date and evidence.
+  A repeat is not a new consent, so it lists no notice and does not restart
+  the re-confirmation count.
+- **Daily cap.** A player may add at most 200 client records in any rolling
+  24 hours. Records from a provider answer do not count. Past the cap the
+  backend answers `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE` (retryable) with
+  `Retry-After` set to when the oldest counted record leaves the window. A
+  repeat is still answered, since it writes nothing.
+- **Concurrency.** Both rules read the history before the write, so writes
+  that race may store a repeat or pass the cap by a few records.
+- **Compaction.** Pruning old records is left to S2.
 
 When the deployment enables the Korean rules, each `advertising` or `night`
 record also yields the notices the law requires. The due dates are pure

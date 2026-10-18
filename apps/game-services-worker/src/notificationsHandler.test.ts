@@ -67,6 +67,7 @@ const catalog = {
 const sessions: Readonly<Record<string, { playerId: string; sessionId: string; installationId: string }>> = {
   'Bearer player-1': { playerId: 'p-1', sessionId: 's-1', installationId: 'install-1' },
   'Bearer player-1-ios': { playerId: 'p-1', sessionId: 's-2', installationId: 'install-2' },
+  'Bearer chatty': { playerId: 'p-chatty', sessionId: 's-chatty', installationId: 'install-chatty' },
   'Bearer broken': { playerId: '', sessionId: 's', installationId: 'i' } as never,
   'Bearer bad-expiry': { playerId: 'p-9', sessionId: 's-9', installationId: 'i-9', expiresAt: 'tomorrow' } as never,
 };
@@ -236,6 +237,31 @@ try {
   assert.equal(
     ((await call('/consent', { authorization: 'Bearer player-1' })).body.records as unknown[]).length,
     1,
+  );
+  // A client writing consent in a loop is capped per day and told when to retry.
+  const toggle = (index: number) =>
+    call('/consent', {
+      authorization: 'Bearer chatty',
+      body: {
+        record: {
+          kind: 'topic-preference',
+          topic: 'friend-challenge',
+          state: index % 2 === 0 ? 'granted' : 'withdrawn',
+          source: 'player',
+        },
+      },
+    });
+  for (let index = 0; index < 200; index += 1) {
+    assert.equal((await toggle(index)).status, 200);
+  }
+  const capped = await toggle(200);
+  assert.deepEqual(
+    [capped.status, capped.body.error],
+    [503, 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE'],
+  );
+  assert.ok(
+    Number(capped.headers.get('retry-after')) > 86_000,
+    capped.headers.get('retry-after') ?? 'no Retry-After',
   );
   // Without the Korean rules there are no notices to list or record.
   assert.deepEqual((await call('/notices', { authorization: 'Bearer player-1' })).body.notices, []);

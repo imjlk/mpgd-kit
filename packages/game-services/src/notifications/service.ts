@@ -110,6 +110,12 @@ const maxAddressLength = 4096;
 const maxRowKeyLength = maxTextLength + 1 + 9 * maxTextLength;
 /** Largest consent evidence envelope, as JSON. */
 const maxEvidenceBytes = 16_384;
+/**
+ * Client-written consent records a player may add per rolling day. It is
+ * generous: it only stops a client that writes in a loop, since every send
+ * reads the player's whole history.
+ */
+export const maxClientNotificationConsentRecordsPerDay = 200;
 
 /** An authenticated game-services session, as the deployment's identity service resolves it. */
 export interface NotificationSession {
@@ -195,7 +201,13 @@ export interface NotificationDueResult {
 export interface NotificationService {
   /** The registry entries and served targets the backend publishes. */
   providers(): NotificationProviderRegistrySnapshot;
-  /** Appends a consent record for the session's player, dated by the backend. */
+  /**
+   * Appends a consent record for the session's player, dated by the backend.
+   * A repeat of the player's latest record for the same kind and topic
+   * answers that record unwritten, and a player past
+   * `maxClientNotificationConsentRecordsPerDay` gets a
+   * `NotificationConsentRateLimitError`.
+   */
   recordConsent(session: NotificationSession, record: unknown): Promise<NotificationConsentRecord>;
   listConsent(session: NotificationSession): Promise<readonly NotificationConsentRecord[]>;
   /**
@@ -231,6 +243,22 @@ export interface NotificationService {
   }>;
   /** Forgets keys after 30 days, the history past the limit windows, and dead or stale endpoints. */
   purge(): Promise<NotificationPurgeCounts>;
+}
+
+/**
+ * A player wrote more consent records than one rolling day allows. It is
+ * retryable after `retryAfterSeconds`, when the oldest counted record leaves
+ * the window.
+ */
+export class NotificationConsentRateLimitError extends NotificationError {
+  readonly retryAfterSeconds: number;
+
+  constructor(retryAfterSeconds: number) {
+    super('NOTIFICATIONS_TEMPORARILY_UNAVAILABLE', {
+      message: `Too many consent records today; retry in ${retryAfterSeconds} s.`,
+    });
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
 }
 
 /** A gate caller error (such as missing template data): the send cannot be made as asked. */
@@ -1307,6 +1335,27 @@ export function createNotificationService(input: CreateNotificationServiceInput)
         || (checked.evidence !== undefined && new TextEncoder().encode(JSON.stringify(checked.evidence)).length > maxEvidenceBytes)
       ) {
         throw invalidInput('A consent record field is out of bounds.');
+      }
+      const history = await store.listConsent(player);
+      // A repeat of the latest record for the kind and topic is not written
+      // again: a client that resends its report changes nothing. Evidence is
+      // not compared, so the first record keeps its own.
+      const latest = latestNotificationConsent(history, checked.kind, checked.topic);
+      if (
+        latest !== undefined
+        && latest.state === checked.state
+        && latest.source === checked.source
+        && latest.textVersion === checked.textVersion
+      ) {
+        return latest;
+      }
+      const windowStart = Date.parse(at) - dayMs;
+      const counted = history.filter((entry) => entry.source !== 'provider' && Date.parse(entry.at) > windowStart);
+      const oldest = counted[counted.length - maxClientNotificationConsentRecordsPerDay];
+      if (oldest !== undefined) {
+        throw new NotificationConsentRateLimitError(
+          Math.max(1, Math.ceil((Date.parse(oldest.at) - windowStart) / secondMs)),
+        );
       }
       const { at: _at, ...withoutAt } = checked;
       return store.appendConsent({ player, record: withoutAt as NotificationConsentRecordInput, at });

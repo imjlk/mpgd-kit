@@ -19,6 +19,8 @@ import {
 } from './registry.js';
 import {
   createNotificationService,
+  maxClientNotificationConsentRecordsPerDay,
+  NotificationConsentRateLimitError,
   type NotificationDispatchJob,
   type NotificationSession,
 } from './service.js';
@@ -447,6 +449,122 @@ async function expectCode(promise: Promise<unknown>, code: string, message?: str
   assert.deepEqual(await service.listConsent(session('p-2')), []);
   // Without the Korean rules no notice is listed or recorded.
   assert.deepEqual(await service.listNotices(session('p-1')), []);
+}
+
+// Consent writes are bounded: an identical repeat is not written, and a player has a daily cap.
+{
+  const time = clock('2026-10-19T03:00:00Z');
+  const store = createInMemoryNotificationStore();
+  const service = createNotificationService({
+    store,
+    registry: createNotificationProviderRegistry([]),
+    catalog: vectorCatalog([]),
+    now: time.now,
+  });
+  const report = (state: string, extra: Readonly<Record<string, unknown>> = {}) =>
+    service.recordConsent(session('p-1'), {
+      kind: 'host-agreement',
+      topic: 't',
+      state,
+      source: 'client-report',
+      ...extra,
+    });
+  const first = await report('granted', { evidence: { schema: 'e.v1', payload: { value: 1 } } });
+  time.advance(60);
+  // Same kind, topic, state, source, and text version: the stored record answers, unwritten.
+  assert.deepEqual(
+    await report('granted', { evidence: { schema: 'e.v1', payload: { value: 2 } } }),
+    first,
+  );
+  assert.equal((await service.listConsent(session('p-1'))).length, 1);
+  // A different topic, kind, or state is written.
+  await service.recordConsent(session('p-1'), {
+    kind: 'host-agreement',
+    topic: 'u',
+    state: 'granted',
+    source: 'client-report',
+  });
+  await report('denied');
+  await report('granted');
+  // Only the latest record is compared: granted again after the denial was written above.
+  assert.equal((await service.listConsent(session('p-1'))).length, 4);
+  // A new text version is a new record; the same one again is not.
+  await service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  await service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  await service.recordConsent(session('p-1'), {
+    kind: 'advertising',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v2',
+  });
+  assert.equal((await service.listConsent(session('p-1'))).length, 6);
+
+  // The cap counts client records over a rolling day; provider records do not count.
+  const capped = createInMemoryNotificationStore();
+  const capService = createNotificationService({
+    store: capped,
+    registry: createNotificationProviderRegistry([]),
+    catalog: vectorCatalog([]),
+    now: time.now,
+  });
+  await capped.appendConsent({
+    player: 'p-1',
+    record: { kind: 'host-agreement', topic: 'x', state: 'denied', source: 'provider' },
+    at: time.now(),
+  });
+  time.advance(1);
+  const firstWrite = time.now();
+  for (let index = 0; index < maxClientNotificationConsentRecordsPerDay; index += 1) {
+    await capService.recordConsent(session('p-1'), {
+      kind: 'topic-preference',
+      topic: 't',
+      state: index % 2 === 0 ? 'granted' : 'withdrawn',
+      source: 'player',
+    });
+    time.advance(60);
+  }
+  const refused = await capService
+    .recordConsent(session('p-1'), { kind: 'night', state: 'granted', source: 'player', textVersion: 'v1' })
+    .then(() => undefined, (error: unknown) => error);
+  assert.ok(refused instanceof NotificationConsentRateLimitError);
+  assert.equal(refused.code, 'NOTIFICATIONS_TEMPORARILY_UNAVAILABLE');
+  assert.equal(refused.retryable, true);
+  // The first write leaves the window a day after it was made.
+  const expected = Math.ceil((Date.parse(firstWrite) + 86_400_000 - Date.parse(time.now())) / 1000);
+  assert.equal(refused.retryAfterSeconds, expected);
+  // An identical repeat still answers while capped, since it writes nothing.
+  assert.equal(
+    (await capService.recordConsent(session('p-1'), { kind: 'topic-preference', topic: 't', state: 'withdrawn', source: 'player' })).state,
+    'withdrawn',
+  );
+  // Another player is not capped, and the player is again once the first write leaves the window.
+  await capService.recordConsent(session('p-2'), {
+    kind: 'night',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  time.advance(expected);
+  await capService.recordConsent(session('p-1'), {
+    kind: 'night',
+    state: 'granted',
+    source: 'player',
+    textVersion: 'v1',
+  });
+  assert.equal(
+    (await capService.listConsent(session('p-1'))).length,
+    maxClientNotificationConsentRecordsPerDay + 2,
+  );
 }
 
 // Notices under the Korean rules: recorded only while listed, and named to the millisecond.
