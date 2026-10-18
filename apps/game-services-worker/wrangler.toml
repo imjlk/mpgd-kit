@@ -177,8 +177,9 @@ head_sampling_rate = 1
 # entrypoint = "NotificationSessions"
 #
 # Apps in Toss functional messages (the ait target): the partner API client
-# certificate, the provider settings, and the identity service that answers a
-# player's Toss user key.
+# certificate, the provider settings (a var, under [vars]), and the identity
+# service that answers a player's Toss user key (any entrypoint with
+# resolveNotificationRecipient; the name below is an example).
 #
 # MPGD_AIT_NOTIFICATIONS = { recipientKey = "toss-user" }
 #
