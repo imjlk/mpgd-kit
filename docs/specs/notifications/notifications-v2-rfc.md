@@ -852,8 +852,8 @@ Local reminders use inexact timing:
 - Android 14 denies `SCHEDULE_EXACT_ALARM` by default to new installs, Play
   restricts `USE_EXACT_ALARM` to alarm and calendar apps, and a game reminder
   does not need minute precision.
-- The Capacitor shell removes `SCHEDULE_EXACT_ALARM` from the merged manifest
-  (the template does so from C1), and the provider schedules with
+- The app removes `SCHEDULE_EXACT_ALARM` from its merged manifest (C1's
+  template is to do it for generated games), and the provider schedules with
   `isExactNotification: false` and `allowWhileIdle: true`, so a reminder
   still fires in Android's Doze mode.
 - The provider keeps at most `local.maxPending` reminders, keeping the

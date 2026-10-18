@@ -284,10 +284,11 @@ for (const name of notificationPlugins) {
   }
 }
 /**
- * Source without comments, so a doc line neither satisfies nor trips a check.
- * One pass that keeps string and template literals whole, so a `/*` or `//`
- * inside one does not swallow code. (A regex literal holding a quote could
- * still confuse it; none of the checked sources has one.)
+ * Source without comments, for the provider's own flag checks only. One pass
+ * that keeps string and template literals whole, so a `/*` or `//` inside one
+ * does not swallow code. A regex literal holding a quote or a backtick would
+ * put it out of step, so it runs only on `notifications-provider.ts`, which
+ * has none; the import scan and the CLI starter check read the raw text.
  */
 const codeOf = (source: string): string => source.replace(
   /("(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|`(?:\\.|[^`\\])*`)|\/\*[\s\S]*?\*\/|\/\/[^\n]*/gu,
@@ -318,18 +319,20 @@ for (const [path, packageManifest] of pushNotificationsManifests) {
   }
 }
 assert.doesNotMatch(
-  codeOf(shellStarter),
+  shellStarter,
   /@capacitor\/push-notifications/u,
   'The CLI shell starter must not install @capacitor/push-notifications',
 );
 // The base entry's module graph stays free of the optional peers: no other
 // module imports them (or one of their subpaths), a notifications module, or
-// the package's own notifications subpath.
-const quote = '["\'`]';
+// the package's own notifications subpath. Matched as import syntax (`from`,
+// a bare `import`, or `import(`) with a quoted specifier, so prose that names
+// a module in backticks does not trip it.
+const quote = '["\']';
 const notificationsSpecifier = new RegExp(
-  `${quote}(?:(?:${notificationPlugins.map((name) => name.replace('/', '\\/')).join('|')})(?:\\/[^"'\`]*)?`
+  `(?:\\bfrom\\s*|\\bimport\\s*\\(?\\s*)${quote}(?:(?:${notificationPlugins.map((name) => name.replace('/', '\\/')).join('|')})(?:\\/[^"'\`]*)?`
     + `|(?:\\.\\.?\\/)+(?:[^"'\`]*\\/)?notifications[^"'\`]*`
-    + `|@mpgd\\/adapter-capacitor\\/notifications)${quote}`,
+    + `|${String(adapterPackage['name']).replace('/', '\\/')}\\/notifications(?:\\/[^"']*)?)${quote}`,
   'u',
 );
 const scanned: string[] = [];
@@ -344,7 +347,7 @@ for (const file of readdirSync(new URL('../adapters/capacitor/src/', import.meta
   }
   scanned.push(path);
   assert.doesNotMatch(
-    codeOf(read(`adapters/capacitor/src/${path}`)),
+    read(`adapters/capacitor/src/${path}`),
     notificationsSpecifier,
     `adapters/capacitor/src/${path}: only the notifications subpath may import the notification plugins or modules`,
   );
