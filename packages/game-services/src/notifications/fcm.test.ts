@@ -1,0 +1,441 @@
+import assert from 'node:assert/strict';
+
+import type { NotificationRemoteDeliveryRequest } from './delivery-provider.js';
+import {
+  buildFcmMessage,
+  classifyFcmError,
+  createFcmAccessTokenSource,
+  createFcmDeliveryProvider,
+  createFcmProviderRegistration,
+  fcmMessagingScope,
+  fcmTokenEndpoint,
+  parseFcmServiceAccount,
+} from './fcm.js';
+
+// A key generated for this run only: no real Firebase credential is involved.
+const keys = await crypto.subtle.generateKey(
+  {
+    name: 'RSASSA-PKCS1-v1_5',
+    modulusLength: 2048,
+    publicExponent: new Uint8Array([1, 0, 1]),
+    hash: 'SHA-256',
+  },
+  true,
+  ['sign', 'verify'],
+);
+const pkcs8 = new Uint8Array(await crypto.subtle.exportKey('pkcs8', keys.privateKey));
+const pem = `-----BEGIN PRIVATE KEY-----\n${
+  btoa(String.fromCharCode(...pkcs8)).match(/.{1,64}/gu)?.join('\n') ?? ''
+}\n-----END PRIVATE KEY-----\n`;
+const keyFile = JSON.stringify({
+  type: 'service_account',
+  project_id: 'mpgd-test-project',
+  private_key_id: 'test-key-1',
+  private_key: pem,
+  client_email: 'fcm-sender@mpgd-test-project.iam.gserviceaccount.com',
+});
+const serviceAccount = parseFcmServiceAccount(keyFile);
+
+assert.deepEqual(
+  { ...serviceAccount, privateKey: serviceAccount.privateKey === pem },
+  {
+    projectId: 'mpgd-test-project',
+    clientEmail: 'fcm-sender@mpgd-test-project.iam.gserviceaccount.com',
+    privateKey: true,
+    privateKeyId: 'test-key-1',
+  },
+);
+for (const bad of [
+  '{',
+  '[]',
+  JSON.stringify({ project_id: 'p' }),
+  JSON.stringify({ ...JSON.parse(keyFile), type: 'authorized_user' }),
+]) {
+  assert.throws(
+    () => parseFcmServiceAccount(bad),
+    (error: unknown) => {
+      assert.ok(error instanceof TypeError);
+      assert.ok(!error.message.includes('BEGIN PRIVATE KEY'));
+      return true;
+    },
+  );
+}
+
+function decodeSegment(segment: string): unknown {
+  const padded = segment.replace(/-/gu, '+').replace(/_/gu, '/');
+  return JSON.parse(atob(padded + '='.repeat((4 - (padded.length % 4)) % 4)));
+}
+
+async function verifyJwt(assertion: string): Promise<{ readonly header: unknown; readonly claims: unknown }> {
+  const [header = '', claims = '', signature = ''] = assertion.split('.');
+  const bytes = Uint8Array.from(
+    atob(
+      signature.replace(/-/gu, '+').replace(/_/gu, '/') + '='.repeat((4 - (signature.length % 4)) % 4),
+    ),
+    (char) => char.charCodeAt(0),
+  );
+  assert.ok(
+    await crypto.subtle.verify('RSASSA-PKCS1-v1_5', keys.publicKey, bytes, new TextEncoder().encode(`${header}.${claims}`)),
+    'the JWT verifies with the service account key',
+  );
+  return { header: decodeSegment(header), claims: decodeSegment(claims) };
+}
+
+interface Exchange {
+  readonly url: string;
+  readonly init: RequestInit;
+}
+
+function fakeGoogle(handlers: {
+  token?: (exchange: Exchange) => Response | Promise<Response>;
+  send?: (exchange: Exchange) => Response | Promise<Response>;
+}) {
+  const exchanges: Exchange[] = [];
+  let tokens = 0;
+  const fetch = async (url: string, init: RequestInit): Promise<Response> => {
+    const exchange = { url, init };
+    exchanges.push(exchange);
+    if (url === fcmTokenEndpoint) {
+      tokens += 1;
+      return handlers.token?.(exchange) ?? Response.json({ access_token: `token-${tokens}`, expires_in: 3599, token_type: 'Bearer' });
+    }
+    return handlers.send?.(exchange) ?? Response.json({ name: 'projects/mpgd-test-project/messages/1' });
+  };
+  return { fetch, exchanges, tokenCount: () => tokens };
+}
+
+const request: NotificationRemoteDeliveryRequest = {
+  idempotencyKey: 'send-1:install-1',
+  sendKey: 'send-1',
+  provider: 'fcm',
+  player: 'p-1',
+  topic: {
+    id: 'sale',
+    purpose: 'advertising',
+    channels: ['remote'],
+    route: '/shop',
+    optOutRoute: '/settings/ads',
+    mapping: { channelId: 'promotions' },
+  },
+  recipient: {
+    kind: 'device',
+    installationId: 'install-1',
+    address: { kind: 'fcm-token', value: 'device-token' },
+  },
+  content: {
+    title: '(광고) 세일',
+    body: '(광고) 02-000-0000\n세일 중\n무료 수신거부: 수신거부 버튼',
+    route: '/shop',
+    actions: [{ id: 'advertising-opt-out', title: '수신거부', route: '/settings/ads' }],
+    source: 'catalog',
+  },
+  expiresAt: '2026-10-19T12:00:00Z',
+  data: { offer: 'autumn' },
+  at: '2026-10-19T03:00:00Z',
+};
+
+// The message: content, data, channel, expiry as android.ttl and apns-expiration, and the opt-out category.
+{
+  const built = buildFcmMessage(request);
+  assert.deepEqual(built, {
+    status: 'ready',
+    message: {
+      token: 'device-token',
+      notification: {
+        title: '(광고) 세일',
+        body: '(광고) 02-000-0000\n세일 중\n무료 수신거부: 수신거부 버튼',
+      },
+      data: {
+        offer: 'autumn',
+        'mpgd.topic': 'sale',
+        'mpgd.route': '/shop',
+        'mpgd.actions': JSON.stringify([
+          { id: 'advertising-opt-out', title: '수신거부', route: '/settings/ads' },
+        ]),
+      },
+      android: { ttl: '32400s', notification: { channel_id: 'promotions' } },
+      apns: {
+        headers: { 'apns-expiration': String(Date.parse('2026-10-19T12:00:00Z') / 1000) },
+        payload: { aps: { category: 'advertising-opt-out' } },
+      },
+    },
+  });
+  const { expiresAt: _expiresAt, ...unexpiring } = request;
+  const plain = buildFcmMessage({
+    ...unexpiring,
+    topic: { ...request.topic, mapping: {} },
+    content: { title: 'T', body: 'B', route: '/', source: 'catalog' },
+    data: {},
+  });
+  assert.deepEqual(plain, {
+    status: 'ready',
+    message: {
+      token: 'device-token',
+      notification: { title: 'T', body: 'B' },
+      data: { 'mpgd.topic': 'sale', 'mpgd.route': '/' },
+    },
+  });
+  for (const [change, reason] of [
+    [
+      {
+        recipient: {
+          kind: 'device',
+          installationId: 'i',
+          address: { kind: 'fcm-installation', value: 'fid' },
+        },
+      },
+      /registration tokens/u,
+    ],
+    [{ recipient: { kind: 'platform-user', id: 'u' } }, /registration tokens/u],
+    [{ content: { route: '/', source: 'host-template' } }, /title and a body/u],
+    [{ data: { 'mpgd.route': '/evil' } }, /reserved/u],
+    [{ data: { 'google.c.a.e': '1' } }, /reserved/u],
+    [{ data: { from: 'x' } }, /reserved/u],
+    [{ data: { big: 'x'.repeat(5000) } }, /4096/u],
+  ] as const) {
+    const result = buildFcmMessage({ ...request, ...change } as NotificationRemoteDeliveryRequest);
+    assert.equal(result.status, 'invalid');
+    assert.match(result.status === 'invalid' ? result.reason : '', reason);
+  }
+}
+
+// Error mapping (RFC "Delivery providers").
+{
+  const fcmError = (status: number, errorCode: string | undefined, extra: object[] = []) => ({
+    status,
+    body: {
+      error: {
+        code: status,
+        status: errorCode === undefined ? 'UNKNOWN' : 'FAILED',
+        details: [
+          ...(errorCode === undefined ? [] : [{ '@type': 'type.googleapis.com/google.firebase.fcm.v1.FcmError', errorCode }]),
+          ...extra,
+        ],
+      },
+    },
+  });
+  assert.deepEqual(classifyFcmError(fcmError(404, 'UNREGISTERED')), { status: 'unregistered' });
+  assert.deepEqual(classifyFcmError(fcmError(400, 'INVALID_ARGUMENT')), { status: 'unregistered' });
+  assert.deepEqual(
+    classifyFcmError(
+      fcmError(400, 'INVALID_ARGUMENT', [
+        {
+          '@type': 'type.googleapis.com/google.rpc.BadRequest',
+          fieldViolations: [{ field: 'message.token', description: 'Invalid registration token' }],
+        },
+      ]),
+    ),
+    { status: 'unregistered' },
+  );
+  assert.deepEqual(
+    classifyFcmError(
+      fcmError(400, 'INVALID_ARGUMENT', [
+        {
+          '@type': 'type.googleapis.com/google.rpc.BadRequest',
+          fieldViolations: [{ field: 'message.android.ttl' }],
+        },
+      ]),
+    ),
+    { status: 'rejected', reason: 'configuration', providerCode: 'INVALID_ARGUMENT' },
+  );
+  assert.deepEqual(
+    classifyFcmError({ ...fcmError(429, 'QUOTA_EXCEEDED'), retryAfterSeconds: 120 }),
+    {
+      status: 'rate-limited',
+      retryAfterSeconds: 120,
+    },
+  );
+  assert.deepEqual(classifyFcmError(fcmError(429, 'QUOTA_EXCEEDED')), {
+    status: 'rate-limited',
+    retryAfterSeconds: 60,
+  });
+  assert.deepEqual(classifyFcmError(fcmError(503, 'UNAVAILABLE')), {
+    status: 'ambiguous',
+    providerCode: 'UNAVAILABLE',
+  });
+  assert.deepEqual(classifyFcmError(fcmError(500, 'INTERNAL')), {
+    status: 'ambiguous',
+    providerCode: 'INTERNAL',
+  });
+  for (const code of ['SENDER_ID_MISMATCH', 'THIRD_PARTY_AUTH_ERROR']) {
+    assert.deepEqual(classifyFcmError(fcmError(403, code)), {
+      status: 'rejected',
+      reason: 'configuration',
+      providerCode: code,
+    });
+  }
+  assert.deepEqual(classifyFcmError({ status: 502, body: 'Bad gateway' }), {
+    status: 'ambiguous',
+    providerCode: 'HTTP_502',
+  });
+  assert.deepEqual(classifyFcmError({ status: 429, body: undefined }), {
+    status: 'rate-limited',
+    retryAfterSeconds: 60,
+  });
+  assert.deepEqual(
+    classifyFcmError({ status: 400, body: { error: { status: 'FAILED_PRECONDITION' } } }),
+    {
+      status: 'rejected',
+      reason: 'configuration',
+      providerCode: 'FAILED_PRECONDITION',
+    },
+  );
+}
+
+// Sends: one signed token for many sends, refreshed before it expires, and minted again after a 401.
+{
+  let now = Date.parse('2026-10-19T03:00:00Z');
+  const google = fakeGoogle({});
+  const provider = createFcmDeliveryProvider({
+    serviceAccount,
+    fetch: google.fetch,
+    now: () => now,
+  });
+  assert.equal(provider.id, 'fcm');
+  assert.deepEqual(await provider.send(request), {
+    status: 'accepted',
+    providerMessageId: 'projects/mpgd-test-project/messages/1',
+  });
+  assert.deepEqual(await provider.send(request), {
+    status: 'accepted',
+    providerMessageId: 'projects/mpgd-test-project/messages/1',
+  });
+  assert.equal(google.tokenCount(), 1);
+  const [tokenRequest, send] = google.exchanges;
+  const form = new URLSearchParams(String(tokenRequest?.init.body));
+  assert.equal(form.get('grant_type'), 'urn:ietf:params:oauth:grant-type:jwt-bearer');
+  const jwt = await verifyJwt(form.get('assertion') ?? '');
+  assert.deepEqual(jwt.header, { alg: 'RS256', typ: 'JWT', kid: 'test-key-1' });
+  assert.deepEqual(jwt.claims, {
+    iss: serviceAccount.clientEmail,
+    scope: fcmMessagingScope,
+    aud: fcmTokenEndpoint,
+    iat: now / 1000,
+    exp: now / 1000 + 3600,
+  });
+  assert.equal(send?.url, 'https://fcm.googleapis.com/v1/projects/mpgd-test-project/messages:send');
+  assert.equal(new Headers(send?.init.headers).get('authorization'), 'Bearer token-1');
+  assert.deepEqual(JSON.parse(String(send?.init.body)), {
+    message: (buildFcmMessage(request) as { message: unknown }).message,
+  });
+  // 55 minutes later the cached token is within its refresh margin.
+  now += 55 * 60 * 1000;
+  await provider.send(request);
+  assert.equal(google.tokenCount(), 2);
+  // Concurrent sends share one token request.
+  const concurrent = fakeGoogle({});
+  const shared = createFcmDeliveryProvider({
+    serviceAccount,
+    fetch: concurrent.fetch,
+    now: () => now,
+  });
+  await Promise.all([shared.send(request), shared.send(request), shared.send(request)]);
+  assert.equal(concurrent.tokenCount(), 1);
+
+  let unauthorized = 1;
+  const revoked = fakeGoogle({
+    send: () => {
+      if (unauthorized > 0) {
+        unauthorized -= 1;
+        return Response.json({ error: { code: 401, status: 'UNAUTHENTICATED' } }, { status: 401 });
+      }
+      return Response.json({ name: 'm-2' });
+    },
+  });
+  const retrying = createFcmDeliveryProvider({
+    serviceAccount,
+    fetch: revoked.fetch,
+    now: () => now,
+  });
+  assert.deepEqual(await retrying.send(request), { status: 'accepted', providerMessageId: 'm-2' });
+  assert.equal(revoked.tokenCount(), 2);
+  const alwaysUnauthorized = fakeGoogle({
+    send: () => Response.json({ error: { code: 401, status: 'UNAUTHENTICATED' } }, { status: 401 }),
+  });
+  assert.deepEqual(
+    await createFcmDeliveryProvider({ serviceAccount, fetch: alwaysUnauthorized.fetch, now: () => now }).send(request),
+    { status: 'rejected', reason: 'configuration', providerCode: 'UNAUTHENTICATED' },
+  );
+}
+
+// Failures before or around the send.
+{
+  const now = () => Date.parse('2026-10-19T03:00:00Z');
+  const send = (google: ReturnType<typeof fakeGoogle>) =>
+    createFcmDeliveryProvider({ serviceAccount, fetch: google.fetch, now }).send(request);
+  // An invalid message is never sent.
+  const unsent = fakeGoogle({});
+  assert.deepEqual(
+    await createFcmDeliveryProvider({ serviceAccount, fetch: unsent.fetch, now }).send({ ...request, data: { 'mpgd.x': '1' } }),
+    { status: 'rejected', reason: 'configuration', providerCode: 'INVALID_MESSAGE' },
+  );
+  assert.equal(unsent.exchanges.length, 0);
+  // A refused grant is configuration; an unavailable token endpoint sent nothing and waits.
+  assert.deepEqual(
+    await send(fakeGoogle({ token: () => Response.json({ error: 'invalid_grant' }, { status: 400 }) })),
+    { status: 'rejected', reason: 'configuration', providerCode: 'TOKEN_INVALID_GRANT' },
+  );
+  assert.deepEqual(
+    await send(fakeGoogle({ token: () => new Response('down', { status: 503, headers: { 'retry-after': '30' } }) })),
+    { status: 'rate-limited', retryAfterSeconds: 30 },
+  );
+  assert.deepEqual(
+    await send(fakeGoogle({ token: () => Promise.reject(new TypeError('fetch failed')) })),
+    { status: 'rate-limited', retryAfterSeconds: 60 },
+  );
+  // A dropped send connection may have delivered.
+  assert.deepEqual(
+    await send(fakeGoogle({ send: () => Promise.reject(new TypeError('fetch failed')) })),
+    { status: 'ambiguous', providerCode: 'NETWORK_ERROR' },
+  );
+  assert.deepEqual(
+    await send(fakeGoogle({
+      send: () => Response.json(
+        { error: { code: 429, details: [{ errorCode: 'QUOTA_EXCEEDED' }] } },
+        { status: 429, headers: { 'retry-after': '90' } },
+      ),
+    })),
+    { status: 'rate-limited', retryAfterSeconds: 90 },
+  );
+  // A token source that failed is not cached.
+  let fail = true;
+  const flaky = fakeGoogle({
+    token: () => {
+      if (fail) {
+        fail = false;
+        return new Response('down', { status: 500 });
+      }
+      return Response.json({ access_token: 'late-token', expires_in: 3600 });
+    },
+  });
+  const tokens = createFcmAccessTokenSource({ serviceAccount, fetch: flaky.fetch, now });
+  await assert.rejects(tokens.get(), { name: 'FcmAccessTokenError', retryable: true });
+  assert.equal(await tokens.get(), 'late-token');
+  // A key that cannot be imported names no key material.
+  const broken = createFcmAccessTokenSource({
+    serviceAccount: {
+      ...serviceAccount,
+      privateKey: '-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----',
+    },
+    fetch: flaky.fetch,
+    now,
+  });
+  await assert.rejects(broken.get(), /could not be imported/u);
+  assert.throws(
+    () => createFcmDeliveryProvider({ serviceAccount, projectId: 'Bad Project' }),
+    /project id/u,
+  );
+}
+
+// The registration wires FCM into the registry for android and ios, registration tokens only.
+{
+  const registration = createFcmProviderRegistration({
+    serviceAccount,
+    fetch: fakeGoogle({}).fetch,
+  });
+  assert.equal(registration.entry.provider, 'fcm');
+  assert.deepEqual(registration.targets, ['android', 'ios']);
+  assert.deepEqual(registration.addressKinds, ['fcm-token']);
+}
+
+console.info('FCM delivery provider tests passed.');
