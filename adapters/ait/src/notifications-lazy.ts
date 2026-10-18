@@ -6,6 +6,9 @@ import type { CreateAitBridgeNotificationProviderInput } from './notifications-b
 
 type Loaded = typeof import('./notifications-bridge.js');
 
+/** Delays before the client retries a failed load on its own while subscribers wait. */
+const retryDelaysMs = [1_000, 4_000, 15_000];
+
 /**
  * The game side of notifications v2 on Apps in Toss, in a separate chunk.
  * The bridge provider and its validators (`@mpgd/bridge/notifications`,
@@ -30,25 +33,46 @@ export function createLazyAitBridgeNotificationProvider(
 ): NotificationProvider {
   let loaded: Loaded | undefined;
   let loading: Promise<Loaded> | undefined;
+  let retries = 0;
   const waiting = new Set<(module: Loaded) => void>();
+  const attachWaiting = (module: Loaded): void => {
+    const attaches = [...waiting];
+    waiting.clear();
+    for (const attach of attaches) {
+      try {
+        attach(module);
+      } catch (error) {
+        // One host subscribe that throws must not keep the others waiting.
+        console.warn('AIT notifications subscriber could not attach.', error);
+      }
+    }
+  };
   const load = (): Promise<Loaded> => {
     if (loading !== undefined) {
       return loading;
     }
-    const current = import('./notifications-bridge.js').then((module) => {
-      loaded = module;
-      for (const attach of [...waiting]) {
-        attach(module);
-      }
-      waiting.clear();
-      return module;
-    });
+    const current = import('./notifications-bridge.js');
     loading = current;
-    current.catch(() => {
-      if (loading === current) {
-        loading = undefined;
-      }
-    });
+    current.then(
+      (module) => {
+        loaded = module;
+        attachWaiting(module);
+      },
+      () => {
+        if (loading === current) {
+          loading = undefined;
+        }
+        // Waiting subscribers would otherwise depend on a later call to
+        // load again: retry a few times on our own.
+        const delay = retryDelaysMs[retries];
+        if (waiting.size > 0 && delay !== undefined) {
+          retries += 1;
+          setTimeout(() => {
+            void load().catch(() => {});
+          }, delay);
+        }
+      },
+    );
     return current;
   };
   let bridged: NotificationProvider | undefined;
@@ -86,12 +110,21 @@ export function createLazyAitBridgeNotificationProvider(
         if (closed) {
           return;
         }
-        detach = input.subscribe((envelope: BridgeNotificationsEvent) => {
+        const unsubscribe = input.subscribe((envelope: BridgeNotificationsEvent) => {
+          if (closed) {
+            return;
+          }
           const event = module.readAitBridgeNotificationEvent(envelope);
           if (event !== undefined) {
             listener(event);
           }
         });
+        if (closed) {
+          // The listener left during the host's synchronous replay.
+          unsubscribe();
+        } else {
+          detach = unsubscribe;
+        }
       };
       if (loaded === undefined) {
         waiting.add(attach);

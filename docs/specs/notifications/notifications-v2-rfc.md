@@ -880,9 +880,13 @@ Every open becomes one `opened` event with a route:
 On `landing-url` hosts, a launch whose referrer is `push` or `inbox` is
 routed exactly once, by whichever reader comes first:
 
-- When the game's notifications runtime subscribes first, the cold `opened`
-  event carries the route, and `presentation.getLaunchIntent()` answers
-  `home` for that launch.
+- When the game's notifications runtime's subscription reaches the host
+  first, the cold `opened` event carries the route, and
+  `presentation.getLaunchIntent()` answers `home` for that launch. On Apps
+  in Toss the game side attaches once its notifications client has loaded
+  (it starts loading when the gateway is created), so a game that wants the
+  event starts its runtime and lets it subscribe before it reads the
+  launch intent.
 - When the game asks for the launch intent first (before its runtime
   starts, or because it exposes no `notificationsV2`), the intent routes the
   launch from the landing route's parameters (the page URL need not carry
