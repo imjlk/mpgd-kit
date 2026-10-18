@@ -9,7 +9,7 @@ export type FakeAitAgreementAnswer =
   | { readonly kind: 'event'; readonly type: AitNotificationAgreementResult; readonly sync?: boolean }
   /** The sheet never answers, so the provider's settle timer decides. */
   | { readonly kind: 'silent' }
-  | { readonly kind: 'error'; readonly error: unknown }
+  | { readonly kind: 'error'; readonly error: unknown; readonly sync?: boolean }
   /** `requestAgreement` itself throws, as it does on a Toss app too old for it. */
   | { readonly kind: 'throw'; readonly error: unknown };
 
@@ -68,7 +68,7 @@ export function createFakeAitNotificationHost(
           void request.onError(answer.error);
         }
       };
-      if (answer.kind === 'event' && answer.sync === true) {
+      if (answer.kind !== 'silent' && answer.sync === true) {
         deliver();
       } else {
         queueMicrotask(deliver);

@@ -156,15 +156,17 @@ type AgreementAnswer =
  * - **Requests.** Each topic that needs an agreement gets its own sheet, one
  *   at a time. `newAgreement` is `granted`, `alreadyAgreed`
  *   `already-granted`, and `agreementRejected` `denied`; the snapshot carries
- *   the decided state. No answer within 120 seconds is `dismissed`.
- *   `TERMS_DISAGREED_MEMBER` is the `action-required` outcome with
- *   `requiredAction: 'host-settings'`, for that topic and the remaining ones,
- *   which are not prompted. A too-old Toss app throws
- *   `NOTIFICATIONS_HOST_VERSION_UNSUPPORTED` before any sheet,
- *   `NOTIFICATION_AGREEMENT_FAILED` (a bad template code) throws
+ *   the decided state. No answer within 120 seconds is `dismissed`, and so
+ *   are the topics after it, which are not prompted. `TERMS_DISAGREED_MEMBER`
+ *   is the `action-required` outcome with `requiredAction: 'host-settings'`,
+ *   for that topic and the remaining ones, which are not prompted either. A
+ *   too-old Toss app throws `NOTIFICATIONS_HOST_VERSION_UNSUPPORTED` before
+ *   any sheet, `NOTIFICATION_AGREEMENT_FAILED` (a bad template code) throws
  *   `NOTIFICATIONS_CONFIGURATION_REQUIRED` with that `hostCode`, and any other
- *   host error throws `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`. The SDK's
- *   cleanup function is always called.
+ *   host error throws `NOTIFICATIONS_TEMPORARILY_UNAVAILABLE`. A failure after
+ *   an earlier topic of the same request was answered does not throw: that
+ *   answer and its evidence are returned, and the failed and remaining topics
+ *   are `dismissed`. The SDK's cleanup function is always called.
  * - **Evidence.** A request with a decided answer carries an
  *   `apps-in-toss.notification-agreement.v1` envelope with each answered
  *   topic's template set code and SDK event, for the backend's
@@ -180,9 +182,7 @@ export function createAitNotificationProvider(
   const topics = normalizeAitNotificationTopics(input.topics);
   const timeoutMs = normalizeAgreementTimeout(input.agreementTimeoutMs);
   const { sdk } = input;
-  const listeners = new Set<(event: NotificationEvent) => void>();
   let landingRead = false;
-  let buffered: NotificationEvent[] = [];
   // One agreement sheet at a time: the SDK keeps a callback per call, and two
   // sheets at once would leave the player answering the wrong one.
   let promptChain: Promise<unknown> = Promise.resolve();
@@ -227,47 +227,66 @@ export function createAitNotificationProvider(
     },
     async requestPermission(request) {
       const requested = unique(request.topics);
-      const outcomes: Record<NotificationTopicId, NotificationPermissionOutcome> = {};
+      // Maps, so a topic id such as `__proto__` stays an ordinary key.
+      const outcomes = new Map<NotificationTopicId, NotificationPermissionOutcome>();
       const decided = new Map<NotificationTopicId, NotificationPermissionState>();
-      const askable: NotificationTopicId[] = [];
+      const askable: { readonly topic: NotificationTopicId; readonly mapping: AitNotificationTopicMapping }[] = [];
       for (const topic of requested) {
         const mapping = topics.get(topic);
         if (mapping === undefined) {
-          outcomes[topic] = 'unavailable';
+          outcomes.set(topic, 'unavailable');
         } else if (mapping.agreement === 'none') {
-          outcomes[topic] = 'already-granted';
+          outcomes.set(topic, 'already-granted');
         } else {
-          askable.push(topic);
+          askable.push({ topic, mapping });
         }
       }
       if (askable.length > 0 && !hostSupportsAgreement()) {
         throw hostVersionUnsupported();
       }
-      const evidence: Record<string, string> = {};
+      const evidence = new Map<string, string>();
       let requiredAction: NotificationPermissionResult['requiredAction'];
-      for (const topic of askable) {
-        if (requiredAction !== undefined) {
-          // The personalization terms are the member's, not the template's:
-          // every later sheet would answer the same, so none is shown.
-          outcomes[topic] = 'action-required';
+      // Once a sheet goes unanswered, fails, or the member's terms block every
+      // sheet, the remaining topics are not prompted: they answer the same
+      // outcome without reaching the host (dismissed, or action-required).
+      let remaining: NotificationPermissionOutcome | undefined;
+      for (const { topic, mapping } of askable) {
+        if (remaining !== undefined) {
+          outcomes.set(topic, remaining);
           continue;
         }
-        const mapping = topics.get(topic) as AitNotificationTopicMapping;
-        const answer = await ask(mapping.templateSetCode);
+        let answer: AgreementAnswer;
+        try {
+          answer = await ask(mapping.templateSetCode);
+        } catch (error) {
+          if (decided.size === 0) {
+            throw error;
+          }
+          // An earlier sheet in this request was answered, and the host keeps
+          // that agreement: report it rather than lose its evidence. This
+          // topic and the rest were not decided, so the next request asks again.
+          console.warn('AIT notification agreement failed after earlier answers.', error);
+          outcomes.set(topic, 'dismissed');
+          remaining = 'dismissed';
+          continue;
+        }
         switch (answer.kind) {
           case 'timeout':
-            outcomes[topic] = 'dismissed';
+            outcomes.set(topic, 'dismissed');
+            remaining = 'dismissed';
             break;
           case 'terms-declined':
-            outcomes[topic] = 'action-required';
+            // The personalization terms are the member's, not the template's.
+            outcomes.set(topic, 'action-required');
             requiredAction = 'host-settings';
+            remaining = 'action-required';
             break;
           case 'answered': {
             const outcome = agreementOutcome(answer.result);
-            outcomes[topic] = outcome;
+            outcomes.set(topic, outcome);
             decided.set(topic, outcome === 'denied' ? 'denied' : 'granted');
-            evidence[`templateSetCode:${topic}`] = mapping.templateSetCode;
-            evidence[`result:${topic}`] = answer.result;
+            evidence.set(`templateSetCode:${topic}`, mapping.templateSetCode);
+            evidence.set(`result:${topic}`, answer.result);
             break;
           }
         }
@@ -279,21 +298,25 @@ export function createAitNotificationProvider(
       };
       return {
         snapshot,
-        outcomes,
+        outcomes: Object.fromEntries(outcomes),
         ...(requiredAction === undefined ? {} : { requiredAction }),
         ...(decided.size === 0
           ? {}
           : {
               evidence: {
                 schema: aitNotificationAgreementEvidenceSchema,
-                payload: { provider: aitNotificationProviderId, ...evidence },
+                payload: { provider: aitNotificationProviderId, ...Object.fromEntries(evidence) },
               },
             }),
       };
     },
-    async register(): Promise<NotificationEndpointRegistration> {
-      const timeZone = readOptional(input.timeZone);
-      const locale = readOptional(input.locale);
+    async register(): Promise<NotificationEndpointRegistration | null> {
+      if (topics.size === 0) {
+        // Nothing is mapped, so there is nothing the server could send.
+        return null;
+      }
+      const timeZone = readOptional(() => input.timeZone?.());
+      const locale = readOptional(() => input.locale?.());
       return {
         provider: aitNotificationProviderId,
         address: { kind: 'platform-user' },
@@ -306,22 +329,17 @@ export function createAitNotificationProvider(
       return 'unavailable';
     },
     subscribe(listener) {
-      listeners.add(listener);
+      // The only event is the launch's cold open: a Toss message opens the
+      // mini-app with a new launch, so nothing arrives later, and the open
+      // goes to the first subscriber only.
       if (!landingRead) {
         landingRead = true;
-        const landing = readAitNotificationLanding(readOptional(sdk.readInitialUrl));
+        const landing = readAitNotificationLanding(readOptional(() => sdk.readInitialUrl()));
         if (landing !== undefined) {
-          buffered.push(toOpenedEvent(landing));
-        }
-        const drained = buffered;
-        buffered = [];
-        for (const event of drained) {
-          deliver(listener, event);
+          deliver(listener, toOpenedEvent(landing));
         }
       }
-      return () => {
-        listeners.delete(listener);
-      };
+      return () => {};
     },
   };
 }
@@ -486,10 +504,7 @@ function unique(topics: readonly NotificationTopicId[]): NotificationTopicId[] {
   return [...new Set(topics)];
 }
 
-function readOptional(read: (() => string | undefined) | undefined): string | undefined {
-  if (read === undefined) {
-    return undefined;
-  }
+function readOptional(read: () => string | undefined): string | undefined {
   try {
     const value = read();
     return typeof value === 'string' && value.length > 0 ? value : undefined;
@@ -546,7 +561,7 @@ export function readAitNotificationLanding(url: string | undefined): AitNotifica
     }
     kept.push(piece);
   }
-  if (referrer !== 'push' && referrer !== 'inbox') {
+  if (referrer === undefined || !isLandingReferrer(referrer)) {
     return undefined;
   }
   const route = normalizeRootRelativeRoute(
@@ -555,6 +570,10 @@ export function readAitNotificationLanding(url: string | undefined): AitNotifica
   return route === undefined || route.length > maximumLandingRouteLength
     ? { referrer }
     : { referrer, route };
+}
+
+function isLandingReferrer(value: string): value is AitNotificationLandingReferrer {
+  return (aitNotificationLandingReferrers as readonly string[]).includes(value);
 }
 
 /**

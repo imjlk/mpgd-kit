@@ -240,6 +240,132 @@ describe('Apps in Toss notifications provider', () => {
     expect(maxOpen).toBe(1);
   });
 
+  it('returns earlier answers and their evidence when a later sheet fails', async () => {
+    const { host, provider } = setup();
+    host.queue({ kind: 'event', type: 'agreementRejected' });
+    host.queue({ kind: 'error', error: { code: 'NOTIFICATION_AGREEMENT_FAILED' } });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const result = await provider.requestPermission({
+        topics: ['energy-full', 'friend-challenge', 'receipt'],
+      });
+      expect(result).toEqual({
+        snapshot: { topics: { 'energy-full': 'denied', 'friend-challenge': 'unknown', receipt: 'granted' } },
+        outcomes: { 'energy-full': 'denied', 'friend-challenge': 'dismissed', receipt: 'already-granted' },
+        evidence: {
+          schema: aitNotificationAgreementEvidenceSchema,
+          payload: {
+            provider: 'apps-in-toss',
+            'templateSetCode:energy-full': 'my-game-energy-full',
+            'result:energy-full': 'agreementRejected',
+          },
+        },
+      });
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(host.cleanups).toBe(2);
+  });
+
+  it('prompts no further topic after an unanswered sheet', async () => {
+    vi.useFakeTimers();
+    const { host, provider } = setup();
+    host.queue({ kind: 'silent' });
+    const pending = provider.requestPermission({ topics: ['energy-full', 'friend-challenge'] });
+    await vi.advanceTimersByTimeAsync(120_000);
+    await expect(pending).resolves.toMatchObject({
+      outcomes: { 'energy-full': 'dismissed', 'friend-challenge': 'dismissed' },
+    });
+    expect(host.calls).toEqual(['my-game-energy-full']);
+  });
+
+  it('cleans up a sheet that fails before it returns its cleanup function', async () => {
+    const { host, provider } = setup();
+    host.queue({ kind: 'error', error: { code: 'TERMS_DISAGREED_MEMBER' }, sync: true });
+    await expect(provider.requestPermission({ topics: ['energy-full'] }))
+      .resolves.toMatchObject({ outcomes: { 'energy-full': 'action-required' } });
+    expect(host.cleanups).toBe(1);
+    expect(host.open).toBe(0);
+  });
+
+  it('survives a throwing cleanup, support probe, and listener', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const throwingCleanup = createAitNotificationProvider({
+        sdk: {
+          requestAgreement: Object.assign(
+            (request: Parameters<ReturnType<typeof createFakeAitNotificationHost>['sdk']['requestAgreement']>[0]) => {
+              queueMicrotask(() => request.onEvent({ type: 'newAgreement' }));
+              return () => {
+                throw new Error('cleanup failed');
+              };
+            },
+            { isSupported: () => true },
+          ),
+          readInitialUrl: () => 'intoss://my-game/?referrer=push',
+        },
+        topics,
+      });
+      await expect(throwingCleanup.requestPermission({ topics: ['energy-full'] }))
+        .resolves.toMatchObject({ outcomes: { 'energy-full': 'granted' } });
+      expect(() => throwingCleanup.subscribe(() => {
+        throw new Error('listener failed');
+      })).not.toThrow();
+
+      const throwingProbe = createAitNotificationProvider({
+        sdk: {
+          ...createFakeAitNotificationHost().sdk,
+          requestAgreement: Object.assign(() => () => {}, {
+            isSupported: () => {
+              throw new Error('no probe');
+            },
+          }),
+        },
+        topics,
+      });
+      await expect(throwingProbe.getPermission({ topics: ['energy-full'] }))
+        .resolves.toEqual({ topics: { 'energy-full': 'unsupported' } });
+      expect(warn).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('caps the agreement timeout at 120 seconds', async () => {
+    vi.useFakeTimers();
+    const host = createFakeAitNotificationHost();
+    const provider = createAitNotificationProvider({
+      sdk: host.sdk,
+      topics,
+      agreementTimeoutMs: 10 * 60_000,
+    });
+    host.queue({ kind: 'silent' });
+    const pending = provider.requestPermission({ topics: ['energy-full'] });
+    await vi.advanceTimersByTimeAsync(120_000);
+    await expect(pending).resolves.toMatchObject({ outcomes: { 'energy-full': 'dismissed' } });
+    for (const agreementTimeoutMs of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => createAitNotificationProvider({ sdk: host.sdk, topics, agreementTimeoutMs }))
+        .toThrow(/positive/u);
+    }
+  });
+
+  it('keeps a topic id such as __proto__ an ordinary key', async () => {
+    const host = createFakeAitNotificationHost();
+    const provider = createAitNotificationProvider({
+      sdk: host.sdk,
+      topics: JSON.parse('{"__proto__":{"templateSetCode":"my-game-proto","agreement":"none"}}') as never,
+    });
+    const result = await provider.requestPermission({ topics: ['__proto__'] });
+    expect(Object.keys(result.outcomes)).toEqual(['__proto__']);
+    expect(Object.getPrototypeOf(result.outcomes)).toBe(Object.prototype);
+  });
+
+  it('registers nothing while no topic is mapped', async () => {
+    const provider = createAitNotificationProvider({ sdk: createFakeAitNotificationHost().sdk, topics: {} });
+    await expect(provider.register?.()).resolves.toBeNull();
+  });
+
   it('registers the platform user with the device zone', async () => {
     const { provider } = setup();
     await expect(provider.register?.()).resolves.toEqual({
@@ -256,7 +382,8 @@ describe('Apps in Toss notifications provider', () => {
     const { provider } = setup({ initialUrl: 'intoss://my-game/daily?entry=daily&referrer=inbox' });
     const first: NotificationEvent[] = [];
     const second: NotificationEvent[] = [];
-    provider.subscribe((event) => first.push(event));
+    const unsubscribe = provider.subscribe((event) => first.push(event));
+    unsubscribe();
     provider.subscribe((event) => second.push(event));
     expect(first).toEqual([
       { type: 'opened', channel: 'remote', source: 'cold', referrer: 'inbox', route: '/daily?entry=daily' },
