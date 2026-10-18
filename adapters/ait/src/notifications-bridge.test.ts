@@ -109,6 +109,10 @@ describe('Apps in Toss notifications v2 over the game bridge', () => {
     const events: NotificationEvent[] = [];
     provider.subscribe((event) => events.push(event));
     provider.subscribe((event) => events.push(event));
+    // The bridge client loads on first use; the open the host emitted while
+    // it loaded is kept and delivered once it is validated.
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(events).toEqual([
       { type: 'opened', channel: 'remote', source: 'cold', referrer: 'push', route: '/daily' },
     ]);
@@ -146,9 +150,19 @@ describe('Apps in Toss notifications v2 over the game bridge', () => {
         requestNotificationAgreement: createFakeAitNotificationHost().sdk.requestAgreement,
       }),
     });
-    await expect(gatewayOver(unconfigured).getCapabilities()).resolves.toMatchObject({
-      notifications: { availability: 'configuration-required', remote: { supported: true } },
-      providerAvailability: { pushNotifications: 'configuration-required' },
+    // Without a mapped topic the host offers no channel, so the gateway
+    // exposes no notificationsV2 and loads no bridge client.
+    expect(unconfigured.notificationsV2).toBeUndefined();
+    const gateway = gatewayOver(unconfigured);
+    expect(gateway.notificationsV2).toBeUndefined();
+    const capabilities = await gateway.getCapabilities();
+    expect(capabilities.notifications).toBeUndefined();
+    // The host still answers the v2 methods for a caller that asks anyway.
+    await expect(unconfigured.request(request('notifications.v2.getCapabilities', {
+      protocol: 'mpgd.notifications.v2',
+    }))).resolves.toMatchObject({
+      ok: true,
+      data: { capabilities: { availability: 'configuration-required' } },
     });
   });
 

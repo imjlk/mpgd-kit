@@ -265,23 +265,34 @@ export function createAitBridgeNotificationProvider(
     },
     subscribe(listener) {
       return input.subscribe((envelope) => {
-        const protocol: unknown = typeof envelope === 'object' && envelope !== null
-          ? (envelope as { readonly protocol?: unknown }).protocol
-          : undefined;
-        if (typeof protocol === 'string' && protocol !== bridgeNotificationsEventProtocol) {
-          return;
+        const event = readAitBridgeNotificationEvent(envelope);
+        if (event !== undefined) {
+          listener(event);
         }
-        let event: NotificationEvent;
-        try {
-          event = assertNotificationEventEnvelope(envelope).event;
-        } catch (error) {
-          console.warn('AIT bridge delivered an invalid notifications event.', error);
-          return;
-        }
-        listener(event);
       });
     },
   };
+}
+
+/**
+ * The event a bridge envelope carries, or `undefined` for an envelope of
+ * another protocol (not ours to judge) or an invalid one (dropped with a
+ * warning). An envelope without a protocol is malformed and reaches the
+ * validator.
+ */
+export function readAitBridgeNotificationEvent(envelope: unknown): NotificationEvent | undefined {
+  const protocol: unknown = typeof envelope === 'object' && envelope !== null
+    ? (envelope as { readonly protocol?: unknown }).protocol
+    : undefined;
+  if (typeof protocol === 'string' && protocol !== bridgeNotificationsEventProtocol) {
+    return undefined;
+  }
+  try {
+    return assertNotificationEventEnvelope(envelope).event;
+  } catch (error) {
+    console.warn('AIT bridge delivered an invalid notifications event.', error);
+    return undefined;
+  }
 }
 
 /** The host codes the bridge carries; the host handler names only these in a message. */

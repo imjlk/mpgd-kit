@@ -98,6 +98,8 @@ export interface CreateAitNotificationProviderInput {
 export interface AitNotificationProvider extends NotificationProvider {
   /** Whether `topic` has an Apps in Toss mapping. */
   hasTopic(topic: NotificationTopicId): boolean;
+  /** Whether any topic is mapped. */
+  hasTopics(): boolean;
   /**
    * Whether a push or inbox launch becomes the cold `opened` event: landing
    * opens are on and a topic is mapped. The launch intent leaves such a
@@ -234,6 +236,7 @@ export function createAitNotificationProvider(
   return {
     provider: aitNotificationProviderId,
     hasTopic: (topic) => topics.has(topic),
+    hasTopics: () => topics.size > 0,
     deliversLandingOpens: () => landingOpens,
     async getCapabilities() {
       return createAitNotificationCapabilities(

@@ -449,9 +449,11 @@ export function createAitHostBridge(
     commerceV2: {
       subscribe: (listener) => commerceV2.subscribe(listener),
     },
-    notificationsV2: {
-      subscribe: (listener) => notificationsV2.subscribe(listener),
-    },
+    // Offered only while a topic is mapped, so a game without notifications
+    // exposes no notificationsV2 and never loads the bridge client.
+    ...(notifications.hasTopics()
+      ? { notificationsV2: { subscribe: (listener) => notificationsV2.subscribe(listener) } }
+      : {}),
     async request(input) {
       try {
         return await handleRequest(parseBridgeRequest(input));

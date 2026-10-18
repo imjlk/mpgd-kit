@@ -44,17 +44,15 @@ import {
   isCommerceCapabilities,
   type CommerceProvider,
 } from '@mpgd/platform/commerce';
-import {
-  createUnsupportedNotificationCapabilities,
-  type NotificationCapabilities,
-  type NotificationProvider,
-} from '@mpgd/platform/notifications';
+// Types only: the notifications validators load with the bridge client
+// (`./notifications-lazy`), so a game whose host offers no notifications
+// channel carries none of them.
+import type { NotificationCapabilities, NotificationProvider } from '@mpgd/platform/notifications';
 
 import { createAitBridgeCommerceProvider } from './commerce-bridge.js';
 import { aitCommerceStoreId, createAitCommerceCapabilities } from './commerce-provider.js';
 import { createAitLifecycleAdapter } from './lifecycle.js';
-import { createAitBridgeNotificationProvider } from './notifications-bridge.js';
-import { aitNotificationProviderId } from './notifications-provider.js';
+import { createLazyAitBridgeNotificationProvider } from './notifications-lazy.js';
 import { normalizeAitAppName, readAitShareRequest } from './share-link.js';
 
 export interface GamePlatformBridge {
@@ -209,7 +207,7 @@ export function createAitPlatformGateway(input: {
   const notificationEventSource = commerceBridge?.notificationsV2;
   const notificationsV2: NotificationProvider | undefined = notificationEventSource === undefined
     ? undefined
-    : createAitBridgeNotificationProvider({
+    : createLazyAitBridgeNotificationProvider({
         provider: aitNotificationProviderId,
         request: (method, payload) => requestOn(commerceBridge, method, payload),
         subscribe: (listener) => notificationEventSource.subscribe(listener),
@@ -385,6 +383,28 @@ function toGatewayCapabilities(
   return capabilities as unknown as PlatformCapabilities;
 }
 
+/** The Apps in Toss provider id (`aitNotificationProviderId`), kept here so the gateway loads no provider code. */
+const aitNotificationProviderId = 'apps-in-toss';
+
+/** `createUnsupportedNotificationCapabilities`, without loading `@mpgd/platform/notifications`. */
+function unsupportedNotificationCapabilities(): NotificationCapabilities {
+  return {
+    availability: 'unsupported',
+    permission: {
+      scope: 'app',
+      prompt: 'os',
+      readable: true,
+      serverReadable: false,
+      allowance: 'persistent',
+      userGesture: false,
+      settings: false,
+    },
+    remote: { supported: false, purposes: [], addressing: 'none', content: 'free-form' },
+    local: { supported: false },
+    open: 'none',
+  };
+}
+
 /** Bound on one notifications capability read, as `withTargetAvailability` bounds it. */
 const notificationCapabilityReadTimeoutMs = 3_000;
 
@@ -424,7 +444,7 @@ async function readNotificationCapabilities(
     } else if (failure.retryable !== true && unsupportedNotificationReadCodes.has(failure.code)) {
       availability = 'unsupported';
     }
-    return { ...createUnsupportedNotificationCapabilities(), availability };
+    return { ...unsupportedNotificationCapabilities(), availability };
   } finally {
     if (timer !== undefined) {
       clearTimeout(timer);
