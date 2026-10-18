@@ -1695,7 +1695,7 @@ listed fields of each item asserted:
 | `os-permission-dismissed` | On a device-addressed provider, a dismissed dialog leaves the state and counts no denial; no consent record |
 | `os-permission-revoked-in-settings` | A permission turned off in system settings raises no event: the next read reports `blocked`, registers the endpoint again with permission `blocked`, and cancels the pending local reminder; a new reminder answers `permission-required` without a prompt; the only consent record is the player's topic preference |
 | `local-schedule-never-prompts` | Scheduling without permission returns `permission-required` and shows nothing |
-| `local-capacity-keeps-nearest` | With `local.maxPending` at iOS's limit, 64, the nearest reminders stay, whatever order they were set in: a reminder later than every pending one answers `capacity-exceeded`, and each earlier one is scheduled while the farthest pending one is cancelled |
+| `local-capacity-keeps-nearest` | With `local.maxPending` 64, iOS's limit, the nearest reminders stay, whatever order they were set in: a reminder later than every pending one answers `capacity-exceeded`, and each earlier one is scheduled while the farthest pending one is cancelled |
 | `host-agreement-recorded` | Unreadable host: agreement recorded with its evidence and the implied topic preference, read back as granted after a restart; `already-granted` adds no record |
 | `host-agreement-then-withdrawn` | A withdrawn preference suppresses despite the agreement; accepting the sheet again re-enables the topic |
 | `host-service-topic-without-agreement` | A service template without an agreement statement reads granted and delivers with no prompt or record |

@@ -1,7 +1,7 @@
 {
   "vector": "local-capacity-keeps-nearest",
   "protocol": "2.0.0-draft.1",
-  "summary": "A host that keeps at most 64 pending local notifications (iOS's limit, 64) keeps the nearest: a reminder later than every pending one answers capacity-exceeded, and each earlier one is scheduled while the farthest pending one is cancelled, whatever order they were scheduled in.",
+  "summary": "A host that keeps at most 64 pending local notifications (iOS's limit) keeps the nearest: a reminder later than every pending one answers capacity-exceeded, and each earlier one is scheduled while the farthest pending one is cancelled, whatever order they were scheduled in.",
   "appliesTo": [
     {
       "path": "local.maxPending",
