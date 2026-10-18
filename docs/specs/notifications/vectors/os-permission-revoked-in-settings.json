@@ -1,0 +1,206 @@
+{
+  "vector": "os-permission-revoked-in-settings",
+  "protocol": "2.0.0-draft.1",
+  "summary": "A permission the player turns off in system settings, which raises no event, is read as blocked on the next read: the endpoint is registered again with it, the pending local reminder is cancelled, and a new one answers permission-required without a prompt.",
+  "appliesTo": [
+    {
+      "path": "permission.prompt",
+      "equals": "os"
+    },
+    {
+      "path": "permission.readable",
+      "equals": true
+    },
+    {
+      "path": "local.supported",
+      "equals": true
+    },
+    {
+      "path": "remote.addressing",
+      "equals": "device"
+    }
+  ],
+  "profile": {
+    "provider": "fixture.os-fcm",
+    "capabilities": {
+      "availability": "available",
+      "permission": {
+        "scope": "app",
+        "prompt": "os",
+        "readable": true,
+        "serverReadable": false,
+        "allowance": "persistent",
+        "userGesture": false,
+        "promptLimit": 2,
+        "settings": true
+      },
+      "remote": {
+        "supported": true,
+        "purposes": [
+          "service",
+          "requested",
+          "advertising"
+        ],
+        "addressing": "device",
+        "content": "free-form"
+      },
+      "local": {
+        "supported": true,
+        "maxPending": 64
+      },
+      "open": "payload"
+    }
+  },
+  "catalog": [
+    {
+      "id": "energy-full",
+      "purpose": "requested",
+      "channels": [
+        "local",
+        "remote"
+      ],
+      "route": "/?entry=continue",
+      "copy": {
+        "ko": {
+          "title": "에너지 충전 완료",
+          "body": "에너지가 가득 찼어요."
+        },
+        "en": {
+          "title": "Energy full",
+          "body": "Your energy is full."
+        }
+      },
+      "mapping": {
+        "channelId": "reminders"
+      }
+    }
+  ],
+  "context": {
+    "player": "p-1",
+    "now": "2026-10-12T03:00:00Z",
+    "timeZone": "Asia/Seoul"
+  },
+  "steps": [
+    {
+      "actor": "runtime",
+      "action": "start"
+    },
+    {
+      "actor": "backend",
+      "action": "authenticate",
+      "player": "p-1"
+    },
+    {
+      "actor": "host",
+      "action": "issueEndpoint",
+      "endpoint": {
+        "kind": "fcm-token",
+        "value": "tok-1"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "queuePrompt",
+      "result": "granted"
+    },
+    {
+      "actor": "game",
+      "action": "requestPermission",
+      "input": {
+        "topics": [
+          "energy-full"
+        ],
+        "gesture": true
+      },
+      "returns": {
+        "outcomes": {
+          "energy-full": "granted"
+        }
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setTopicPreference",
+      "input": {
+        "topic": "energy-full",
+        "enabled": true
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setReminder",
+      "input": {
+        "key": "energy",
+        "topic": "energy-full",
+        "fireAt": "2026-10-12T06:00:00Z"
+      },
+      "returns": {
+        "route": "local",
+        "status": "scheduled"
+      }
+    },
+    {
+      "actor": "host",
+      "action": "setPermission",
+      "state": "blocked"
+    },
+    {
+      "actor": "game",
+      "action": "getPermission",
+      "input": {
+        "topics": [
+          "energy-full"
+        ]
+      },
+      "returns": {
+        "app": "blocked",
+        "topics": {
+          "energy-full": "blocked"
+        }
+      }
+    },
+    {
+      "actor": "game",
+      "action": "setReminder",
+      "input": {
+        "key": "energy-2",
+        "topic": "energy-full",
+        "fireAt": "2026-10-12T07:00:00Z"
+      },
+      "returns": {
+        "route": "local",
+        "status": "permission-required"
+      }
+    }
+  ],
+  "expect": {
+    "prompts": 1,
+    "endpoints": [
+      {
+        "provider": "fixture.os-fcm",
+        "kind": "fcm-token",
+        "value": "tok-1",
+        "permission": "blocked",
+        "player": "p-1",
+        "status": "valid"
+      }
+    ],
+    "local": {
+      "operations": [
+        {
+          "op": "schedule",
+          "key": "energy",
+          "topic": "energy-full",
+          "fireAt": "2026-10-12T06:00:00Z",
+          "exact": false
+        },
+        {
+          "op": "cancel",
+          "key": "energy"
+        }
+      ],
+      "pending": []
+    },
+    "reminders": []
+  }
+}
